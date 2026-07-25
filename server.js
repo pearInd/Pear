@@ -1114,7 +1114,7 @@ app.get("/api/img-proxy", proxyLimiter, async (req, res) => {
    Requires GEMINI_API_KEY (https://aistudio.google.com/apikey) in .env.        */
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_CLASSIFY_URL =
-  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
+  `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 async function fetchImageAsBase64(imageUrl) {
   const resp = await fetch(imageUrl);
