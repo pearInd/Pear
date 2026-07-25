@@ -169,8 +169,11 @@ const isOriginAllowed = (origin, reqHost) => {
    `allowed ? 204 : 403`) and the real POST (403 with ACAO: "null") — which the
    browser surfaces as a CORS failure (ERR_FAILED) exactly as reported. This is
    the ONLY origin-lock bypass; every other /api route keeps the existing
-   DECART_ALLOWED_ORIGINS enforcement below, completely untouched. */
-const PUBLIC_API_PATHS = new Set(["/classify-images"]);   // mount-relative (see app.use("/api", …) below)
+   DECART_ALLOWED_ORIGINS enforcement below, completely untouched.
+   /api/send-otp and /api/verify-otp get the same bypass: the fitting-room
+   iframe is embedded on third-party store domains, so its identity-gate calls
+   hit this same origin-lock 403 there too. */
+const PUBLIC_API_PATHS = new Set(["/classify-images", "/send-otp", "/verify-otp"]);   // mount-relative (see app.use("/api", …) below)
 
 app.use("/api", (req, res, next) => {
   const origin = req.headers.origin || "";
