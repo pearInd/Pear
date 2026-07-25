@@ -1125,7 +1125,8 @@ async function fetchImageAsBase64(imageUrl) {
 }
 
 async function classifyFrontBack(imageUrl) {
-  const { base64, mimeType } = await fetchImageAsBase64(imageUrl);
+  const secureUrl = imageUrl.replace(/^http:\/\//, 'https://');
+  const { base64, mimeType } = await fetchImageAsBase64(secureUrl);
   const resp = await fetch(GEMINI_CLASSIFY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1192,8 +1193,12 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     return res.status(503).json({ error: "gemini_unconfigured", message: "GEMINI_API_KEY not set." });
   }
 
+  const uniqueUrls = [...new Map(
+      images.map(url => [url.split('?')[0], url])
+  ).values()];
+
   const results = [];
-  for (const url of images) {
+  for (const url of uniqueUrls) {
     try {
       let classification = await getCachedClassification(url);
       if (!classification) {
