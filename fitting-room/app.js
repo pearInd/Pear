@@ -4052,31 +4052,9 @@ async function submitIdentity() {
   const deviceId = getDeviceId() || newUuid();
   if (btn) btn.disabled = true;
 
-  try {
-    const res = await fetch("/api/send-otp", {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ email, name }),
-    });
-    const data = await res.json().catch(() => null);
-
-    if (res.ok && data?.ok) {
-      if (btn) btn.disabled = false;
-      PEAR_OTP_PENDING = { deviceId, name, email };
-      setupOtpScreen();
-      showOtpScreen(email);
-      return;
-    }
-
-    // Rate limited / bad input → surface it, let the visitor retry from the gate.
-    if (btn) btn.disabled = false;
-    return showErr((data && (data.message || data.error)) || "שליחת קוד האימות נכשלה — נסה שוב.");
-  } catch (err) {
-    // Network error / API server down — never a dead end.
-    if (btn) btn.disabled = false;
-    console.warn("[identity] send-otp failed:", err?.message || err);
-    showErr("שגיאת רשת — נסה שוב.");
-  }
+  // TODO: re-enable OTP when domain is verified
+  await finishRegistration(deviceId, name, email);
+  if (btn) btn.disabled = false;
 }
 
 /**

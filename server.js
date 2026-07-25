@@ -586,7 +586,7 @@ function publicUser(u) {
 const otpStore = new Map();      // normalized email -> { code, expires }
 const otpAttempts = new Map();   // normalized email -> { count, windowStart }
 const OTP_TTL_MS = 60_000;
-const OTP_MAX_PER_HOUR = 3;
+const OTP_MAX_PER_HOUR = 10;
 
 function otpRateLimited(email) {
   const now = Date.now();
@@ -622,7 +622,7 @@ app.post("/api/send-otp", userLimiter, async (req, res) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "PEAR Virtual Try-On <onboarding@resend.dev>",
+        from: "PEAR Virtual Try-On <noreply@pear-ai.io>",
         to: email,
         subject: `קוד האימות שלך: ${code}`,
         html: `
