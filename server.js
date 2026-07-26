@@ -127,7 +127,7 @@ const userLimiter     = rateLimit({ windowMs: 60_000, max: 20 });   // user regi
 const trackLimiter    = rateLimit({ windowMs: 60_000, max: 60 });   // analytics ping
 const proxyLimiter    = rateLimit({ windowMs: 60_000, max: 120 });  // image proxy
 const authLimiter     = rateLimit({ windowMs: 60_000, max: 10 });   // admin login - brake password guessing
-const classifyLimiter = rateLimit({ windowMs: 60_000, max: 20 });   // garment front/back classification - calls Gemini
+const classifyLimiter = rateLimit({ windowMs: 60_000, max: 200 });   // garment front/back classification - calls Gemini
 const storeCatalogLimiter = rateLimit({ windowMs: 60_000, max: 30 }); // "Complete the Look" store-scoped catalog reads
 
 /* ── CORS enforcement ────────────────────────────────────────────────────────
