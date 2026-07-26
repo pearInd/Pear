@@ -1309,6 +1309,13 @@ app.get("/widget/guide", (req, res) => {
   res.sendFile(path.join(__dirname, "widget/pear-widget-guide.html"));
 });
 
+/* Root redirect - index.html no longer exists, so send visitors straight to the
+   fitting room instead of falling through to a 404. Registered before the static
+   middleware so it takes priority over any static-file resolution for "/". */
+app.get("/", (req, res) => {
+  res.redirect("/fitting-room/");
+});
+
 /* ── Static hosting ──────────────────────────────────────────────────────── */
 const uiRoot = __dirname;
 
