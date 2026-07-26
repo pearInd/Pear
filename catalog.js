@@ -1,26 +1,26 @@
 /* ============================================================
-   MERIDIAN — shared catalog data + garment SVG generator.
+   MERIDIAN - shared catalog data + garment SVG generator.
    Loaded before store.js (homepage) and product.js (product page)
    so both render from a single source of truth. Plain globals,
    no build step.
    ============================================================ */
 "use strict";
 
-/* ── real product imagery — clean white-background packshots ──
+/* ── real product imagery - clean white-background packshots ──
    Every imageUrl below is a flat-lay / ghost-mannequin product shot on a pure
-   (or near-pure) WHITE background — no model, no scene, no text — so Decart
+   (or near-pure) WHITE background - no model, no scene, no text - so Decart
    Lucy VTON can cleanly isolate the garment boundary. Sourced from openly
    hotlinkable retail/CDN endpoints; each was downloaded and VISUALLY verified
    (not just checked for HTTP 200). If any URL ever fails to load, garmentImg()
    falls back to the procedural garmentSVG() (itself pure-white) so the layout
-   never breaks. Mirror of pear-demo/app.js PEAR_CATALOG — keep the two in sync. */
+   never breaks. Mirror of pear-demo/app.js PEAR_CATALOG - keep the two in sync. */
 
 /* ── catalog ──
    schema: id, name, price, category, type, subType, color, isNew, fav, imageUrl */
 /* ── variant data ──
    Each variant carries only { color, label }.
    No per-variant image: the product-page color picker renders garmentSVG()
-   (procedurally generated, same composition for every color — pixel-accurate).
+   (procedurally generated, same composition for every color - pixel-accurate).
    The top-level imageUrl is the VTON reference + store-catalog thumbnail only. */
 
 const PRODUCTS = [
@@ -78,7 +78,7 @@ const PRODUCTS = [
   {
     id: 6, name: "Strata Longsleeve", price: 128, category: "Shirts", type: "shirt", subType: "long_sleeve",
     color: "#2b2b30", isNew: true, fav: true,
-    // Opt into the STRICT two-view gate — Strata ships a real Back photo (below), so
+    // Opt into the STRICT two-view gate - Strata ships a real Back photo (below), so
     // it satisfies front+back and stays try-on-able. Mirrors PEAR_CATALOG id 6.
     requireBothViews: true,
     imageUrl: "https://www.universalcolours.com/cdn/shop/files/LongSleeveTee-CharcoalBlack-1.jpg?v=1732626199&width=1024",
@@ -86,10 +86,10 @@ const PRODUCTS = [
        A per-product `images` array is the single source of truth for the PDP
        gallery. Each entry is { url, label } (a plain URL string is also accepted
        and auto-labelled "View N"). ANY product gains a thumbnail gallery just by
-       listing 2+ images here — the renderer in product.js is fully generic and
+       listing 2+ images here - the renderer in product.js is fully generic and
        hard-codes nothing about this item. universalcolours -1/-3/-4 = front
        packshot / back-on-model / fabric+logo detail macro. No true side profile
-       exists for this item, so it is omitted — never faked. */
+       exists for this item, so it is omitted - never faked. */
     images: [
       { url: "https://www.universalcolours.com/cdn/shop/files/LongSleeveTee-CharcoalBlack-1.jpg?v=1732626199&width=1024", label: "Front"  },
       { url: "https://www.universalcolours.com/cdn/shop/files/LongSleeveTee-CharcoalBlack-3.jpg?v=1732626199&width=1024", label: "Back"   },
@@ -220,11 +220,11 @@ const PRODUCTS = [
 
 /* ── product imagery policy ───────────────────────────────────────────────────
    A product gets a multi-thumbnail gallery ONLY from REAL photos it actually
-   ships — declared as an `images` array (see Strata, id 6) or the legacy
+   ships - declared as an `images` array (see Strata, id 6) or the legacy
    `gallery` map. We do NOT synthesize placeholder angles (a random stock photo is
    not the garment, and a duplicated front is a fake angle). Products with a single
-   real photo therefore show one accurate view — the recolourable garmentSVG on the
-   PDP — with no thumbnail rail, which is the correct graceful state. To give any
+   real photo therefore show one accurate view - the recolourable garmentSVG on the
+   PDP - with no thumbnail rail, which is the correct graceful state. To give any
    product a real gallery, add its true photos to an `images: [{url,label,angle}]`
    array here and the PDP + PEAR angle handoff light up automatically. */
 
@@ -240,14 +240,14 @@ const SIZES = ["S", "M", "L", "XL"];
    ordered [{ url, label }] list from whichever shape a product declares, so the
    renderer never has to branch per product:
 
-     1. p.images  — preferred. An array of { url, label } objects (or plain URL
+     1. p.images  - preferred. An array of { url, label } objects (or plain URL
                     strings, auto-labelled "View N"). Add 2+ entries to ANY
-                    product and it gets a gallery — nothing else to touch.
-     2. p.gallery — legacy angle map { front, back, side, detail }; kept working
+                    product and it gets a gallery - nothing else to touch.
+     2. p.gallery - legacy angle map { front, back, side, detail }; kept working
                     for backward compatibility, front falling back to imageUrl.
-     3. p.imageUrl — a single packshot → a one-image list.
+     3. p.imageUrl - a single packshot → a one-image list.
 
-   Angles/views with no real photo are simply omitted — never duplicated or
+   Angles/views with no real photo are simply omitted - never duplicated or
    faked. Consumed by the storefront PDP (product.js). */
 const GALLERY_ANGLES = ["front", "back", "side", "detail"];
 const ANGLE_LABEL = { front: "Front", back: "Back", side: "Side", detail: "Detail" };
@@ -266,7 +266,7 @@ function imageAngleKey(it, i) {
 function productImages(p) {
   if (!p) return [];
 
-  // 1) explicit images array — strings or { url, label, angle? } objects
+  // 1) explicit images array - strings or { url, label, angle? } objects
   if (Array.isArray(p.images) && p.images.length) {
     return p.images
       .map((it, i) => (typeof it === "string"
@@ -296,15 +296,15 @@ function productGallery(p) { return productImages(p); }
    (vs. the procedural recolour SVG). Single-image products stay on the SVG. */
 function hasPhotoGallery(p) { return productImages(p).length >= 2; }
 
-/* ── Two-view (front / back) completeness — shared source of truth ────────────
+/* ── Two-view (front / back) completeness - shared source of truth ────────────
    The PEAR VTON model treats FRONT and BACK as the two canonical garment views.
-   hasView() reports whether a product ships a REAL image for an angle — never a
+   hasView() reports whether a product ships a REAL image for an angle - never a
    duplicated or faked one, since productImages() already omits absent angles. A
    product is "fully documented" only when it ships BOTH a real front AND a real
    back. These predicates are mirrored verbatim in fitting-room/app.js so the
    storefront PDP and the live fitting room judge completeness identically.
 
-   Design note (per product decision): the gate is GRACEFUL by default — a missing
+   Design note (per product decision): the gate is GRACEFUL by default - a missing
    back never blocks try-on; the front image stands in and a prompt clause steers
    the rear render. Only a product that OPTS IN with `requireBothViews: true` is
    hard-blocked when it lacks a real back view. Nothing in the catalog sets this
@@ -315,7 +315,7 @@ function hasFrontView(p) { return hasView(p, "front"); }
 /* Back counts as available when the product ships a REAL back photo OR carries a
    mirrored-front back reference (backFromFront, populated by the init loop below).
    The mirror is deliberately kept OUT of productImages() so it never adds a
-   duplicated front to the PDP thumbnail strip — it only satisfies the try-on gate
+   duplicated front to the PDP thumbnail strip - it only satisfies the try-on gate
    and the two-view chip. */
 function hasBackView(p)  { return hasView(p, "back") || !!(p && p.backFromFront); }
 function hasBothViews(p) { return hasFrontView(p) && hasBackView(p); }
@@ -331,7 +331,7 @@ function tryOnBlockReason(p) {
 }
 function canTryOn(p) { return !tryOnBlockReason(p); }
 
-/* ── Back-view auto-fill (storefront mirror) — parity with PEAR_CATALOG ────────
+/* ── Back-view auto-fill (storefront mirror) - parity with PEAR_CATALOG ────────
    Every real product's own front image doubles as its Back try-on reference, so the
    two-view chip reads complete and the PEAR handoff has a populated Back asset. We
    store it on `backFromFront` (a plain reference URL) rather than pushing it into
@@ -352,7 +352,7 @@ function shade(hex, p) {
   return "#" + (0x1000000 + mix(R) * 0x10000 + mix(G) * 0x100 + mix(B)).toString(16).slice(1);
 }
 
-/* ── garment SVG generation — studio flat-lay style ─────────────────────────
+/* ── garment SVG generation - studio flat-lay style ─────────────────────────
    Every output is a self-contained SVG with:
      • pure-white (#fff) background → no photo, no model, no background noise
      • CSS drop-shadow → subtle product-photography depth
@@ -361,7 +361,7 @@ function shade(hex, p) {
        waistband, belt loops, fly, pocket seams, knee creases, hem stitching)
      • two-stop gradient fill + highlight sheen overlay
    Used by the store catalog cards, product detail page, try-on panel, and
-   PEAR catalog thumbnails — single source of truth for all garment visuals. */
+   PEAR catalog thumbnails - single source of truth for all garment visuals. */
 
 const SHIRT_PATHS = {
   sleeveless:   "M92 50 Q110 64 128 50 L144 62 Q151 92 151 122 L151 236 L69 236 L69 122 Q69 92 76 62 Z",
@@ -497,7 +497,7 @@ function garmentSVG(p) {
    Renders the product's real imageUrl. If the CDN image fails to load (404,
    offline, blocked), the inline garmentSVG() is revealed instead so the
    storefront layout never breaks. Fully inline-styled so it fills whatever
-   media box the SVG previously occupied — no storefront CSS changes needed.
+   media box the SVG previously occupied - no storefront CSS changes needed.
    `fit` = object-fit (default "cover"). */
 function garmentImg(p, opts = {}) {
   const fit = opts.fit || "cover";

@@ -1,19 +1,19 @@
 /* ============================================================================
-   PEAR — Luxury micro-interaction layer  (iOS / macOS-grade polish)
+   PEAR - Luxury micro-interaction layer  (iOS / macOS-grade polish)
    ----------------------------------------------------------------------------
    ADDITIVE ONLY. Mirrors the contract of mobile-ux.js: this file never touches
    app.js state, the Decart VTON / billing flow, or any existing id/class/state
    hook. It only *adds* theatre on top of the existing DOM.
 
    Features
-     1. Add-to-Cart micro-interaction — press → spinner (800ms) → a mini garment
+     1. Add-to-Cart micro-interaction - press → spinner (800ms) → a mini garment
         clone flies along a 3D Bézier arc into the header cart, which jiggles;
         the button morphs to a checkmark and back.
-     2. Bitten-Pear screen transition — a vector pear masks the view, a chunk
+     2. Bitten-Pear screen transition - a vector pear masks the view, a chunk
         snaps out of its side, then it bursts open to reveal Screen 2.
-     3. Ambient side rails — vertical editorial tracks that parallax to scroll
+     3. Ambient side rails - vertical editorial tracks that parallax to scroll
         and pointer, filling desktop/tablet margins without clutter.
-     4. Universal polish — magnetic button content, floating-label fields,
+     4. Universal polish - magnetic button content, floating-label fields,
         a top-center spring "cart" toast, and a metallic skeleton utility.
 
    Palette: logo-matched ivory canvas + crisp luxury black, with PEAR GREEN
@@ -49,7 +49,7 @@
      unchanged and still defined in index.html / style.css. */
 
   /* ──────────────────────────────────────────────────────────────────────────
-     1 · ADD TO CART  — spinner → 3D-arc fly → cart jiggle → checkmark → reset
+     1 · ADD TO CART  - spinner → 3D-arc fly → cart jiggle → checkmark → reset
      ────────────────────────────────────────────────────────────────────────── */
   function initCart() {
     const btn   = $("addToCartBtn");
@@ -79,7 +79,7 @@
       const garment = (window.pearGetActiveGarment && window.pearGetActiveGarment()) || {};
 
       if (inIframe()) {
-        // Embedded in a store (e.g. fox.co.il) — hand the garment off to the host
+        // Embedded in a store (e.g. fox.co.il) - hand the garment off to the host
         // page's own cart. pear-widget.js listens for this and calls /cart/add.js.
         window.parent.postMessage({
           type: "PEAR_ADD_TO_CART",
@@ -100,7 +100,7 @@
       busy = true;
       btn.setAttribute("aria-busy", "true");
 
-      if (reduce) {                         // no theatre — just confirm
+      if (reduce) {                         // no theatre - just confirm
         land();
         btn.classList.add("is-done");
         setTimeout(() => { btn.classList.remove("is-done"); btn.removeAttribute("aria-busy"); busy = false; }, 1100);
@@ -160,7 +160,7 @@
     setTimeout(() => { if (clone.isConnected) { clone.remove(); onLand && onLand(); } }, 1200);
   }
 
-  /* Top-center spring toast — reserved for cart confirmations so the existing
+  /* Top-center spring toast - reserved for cart confirmations so the existing
      bottom measurement toasts (app.js → toast()) are left exactly as they are. */
   let cartToastEl = null, cartToastTimer = 0;
   function springToast(msg) {
@@ -181,7 +181,7 @@
   }
 
   /* ──────────────────────────────────────────────────────────────────────────
-     4a · FLOATING LABELS + MICRO-INERTIA — the label glides up + tints when
+     4a · FLOATING LABELS + MICRO-INERTIA - the label glides up + tints when
      focused/filled, and (while focused, desktop pointers) drifts magnetically
      toward the cursor via --lblx/--lbly, giving the field tangible weight.
      Driven purely by classes/vars so app.js's input listeners stay untouched.
@@ -198,7 +198,7 @@
       input.addEventListener("input", sync);
       sync();
 
-      // magnetic micro-inertia — only while the field is focused, on fine pointers
+      // magnetic micro-inertia - only while the field is focused, on fine pointers
       if (label && fine && !reduce) {
         let raf = 0;
         const reset = () => { label.style.setProperty("--lblx", "0px"); label.style.setProperty("--lbly", "0px"); };
@@ -220,7 +220,7 @@
   }
 
   /* ──────────────────────────────────────────────────────────────────────────
-     LIQUID-GLASS DYNAMIC BACKGROUND — inertial mesh parallax (transform only).
+     LIQUID-GLASS DYNAMIC BACKGROUND - inertial mesh parallax (transform only).
      The mesh eases toward a pointer/tilt-derived target each frame; the rAF loop
      runs ONLY while settling, so there is zero idle cost.
      ────────────────────────────────────────────────────────────────────────── */
@@ -248,7 +248,7 @@
         kick();
       }, { passive: true });
     } else if (window.DeviceOrientationEvent) {
-      // mobile: subtle tilt parallax (no permission prompt — inert if denied)
+      // mobile: subtle tilt parallax (no permission prompt - inert if denied)
       window.addEventListener("deviceorientation", (ev) => {
         const clamp = (v) => Math.max(-1, Math.min(1, v));
         tx = clamp((ev.gamma || 0) / 30) * AMP;
@@ -258,7 +258,7 @@
     }
   }
 
-  /* 4b · METALLIC SKELETON — shimmer garment thumbnails until their image loads. */
+  /* 4b · METALLIC SKELETON - shimmer garment thumbnails until their image loads. */
   function initSkeletons() {
     const media = $("activeGarmentMedia");
     if (!media || !("MutationObserver" in window)) return;
@@ -277,7 +277,7 @@
     tag();
   }
 
-  /* 4c · MAGNETIC BUTTONS — the inner content drifts toward the cursor.
+  /* 4c · MAGNETIC BUTTONS - the inner content drifts toward the cursor.
      We move the *content*, never the button box, so the existing transform-based
      hover / press / pulse states keep working untouched. Desktop pointers only. */
   function initMagnetic() {

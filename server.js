@@ -1,15 +1,15 @@
 /* =============================================================================
-   PEAR / MERIDIAN — secure backend proxy for Decart Lucy VTON (realtime)
+   PEAR / MERIDIAN - secure backend proxy for Decart Lucy VTON (realtime)
    -----------------------------------------------------------------------------
    Token-minting strategy (three-tier waterfall, most to least specific):
 
-     Tier 1 — SDK  : decart.tokens.create({ expiresIn, allowedModels })
-     Tier 2 — REST : POST https://api.decart.ai/v1/realtime/tokens
-     Tier 3 — REST : POST https://api.decart.ai/v1/client/tokens
+     Tier 1 - SDK  : decart.tokens.create({ expiresIn, allowedModels })
+     Tier 2 - REST : POST https://api.decart.ai/v1/realtime/tokens
+     Tier 3 - REST : POST https://api.decart.ai/v1/client/tokens
 
    Each tier logs the full Decart response body on failure so the exact
    upstream error is visible in the server terminal.  The browser always
-   receives a clean JSON object — either { apiKey, expiresAt, model } or
+   receives a clean JSON object - either { apiKey, expiresAt, model } or
    { error, message, decart_status, decart_body }.
 
    Endpoints exposed by this server:
@@ -71,7 +71,7 @@ app.use((req, res, next) => {
   const isAdmin = /(^|\/)admin(\.html|\.js|\.css)?(\/|$)/i.test(req.path);
   // The fitting room is embedded cross-origin by the pear-widget.js modal on
   // third-party store pages, so it (and the widget assets) must be frameable
-  // from anywhere. It is a public, unauthenticated surface — the clickjacking
+  // from anywhere. It is a public, unauthenticated surface - the clickjacking
   // protections stay in force on the admin dashboard and the rest of the site.
   const isEmbeddable = /^\/(fitting-room|widget)(\/|$)/i.test(req.path);
   if (isAdmin) {
@@ -83,7 +83,7 @@ app.use((req, res, next) => {
     // Same no-store guarantee as /admin above: the fitting-room HTML/JS/CSS iterate
     // fast (active demo work) and are embedded via <iframe>/<script src> on third-party
     // pages we don't control the caching of, so nothing here should ever be served
-    // from a browser/CDN/proxy cache — every load must hit the origin fresh. Query
+    // from a browser/CDN/proxy cache - every load must hit the origin fresh. Query
     // strings (id/itemType/color/img) are irrelevant once caching is off outright.
     res.header("Cache-Control", "no-store, no-cache, must-revalidate");
   } else {
@@ -114,24 +114,24 @@ function rateLimit({ windowMs, max }) {
     }
     if (arr.length > max) {
       res.set("Retry-After", String(Math.ceil(windowMs / 1000)));
-      return res.status(429).json({ error: "rate_limited", message: "Too many requests — slow down." });
+      return res.status(429).json({ error: "rate_limited", message: "Too many requests - slow down." });
     }
     next();
   };
 }
 
 // Per-surface limiters (generous enough to never bother a real user).
-const tokenLimiter    = rateLimit({ windowMs: 60_000, max: 30 });   // ek_ token mint — costs money
+const tokenLimiter    = rateLimit({ windowMs: 60_000, max: 30 });   // ek_ token mint - costs money
 const sessionLimiter  = rateLimit({ windowMs: 60_000, max: 40 });   // session-log ingest
 const userLimiter     = rateLimit({ windowMs: 60_000, max: 20 });   // user registration
 const trackLimiter    = rateLimit({ windowMs: 60_000, max: 60 });   // analytics ping
 const proxyLimiter    = rateLimit({ windowMs: 60_000, max: 120 });  // image proxy
-const authLimiter     = rateLimit({ windowMs: 60_000, max: 10 });   // admin login — brake password guessing
-const classifyLimiter = rateLimit({ windowMs: 60_000, max: 20 });   // garment front/back classification — calls Gemini
+const authLimiter     = rateLimit({ windowMs: 60_000, max: 10 });   // admin login - brake password guessing
+const classifyLimiter = rateLimit({ windowMs: 60_000, max: 20 });   // garment front/back classification - calls Gemini
 const storeCatalogLimiter = rateLimit({ windowMs: 60_000, max: 30 }); // "Complete the Look" store-scoped catalog reads
 
 /* ── CORS enforcement ────────────────────────────────────────────────────────
-   The fitting room is PUBLICLY ACCESSIBLE to any anonymous visitor — no login
+   The fitting room is PUBLICLY ACCESSIBLE to any anonymous visitor - no login
    or account is required. CORS is used solely to ensure API calls originate
    from our storefront domain, not from third-party scrapers or abusers.
 
@@ -141,7 +141,7 @@ const storeCatalogLimiter = rateLimit({ windowMs: 60_000, max: 30 }); // "Comple
    missing env var never silently breaks a live deployment.
 
    WebRTC transport: DTLS/SRTP is mandated by the WebRTC spec and enforced by
-   the browser — all peer-connection media is end-to-end encrypted regardless
+   the browser - all peer-connection media is end-to-end encrypted regardless
    of this server's config.
    Zero-retention: this proxy never receives, buffers, or persists user images,
    WebRTC frames, or body measurements.  It only mints short-lived ek_ tokens;
@@ -150,7 +150,7 @@ const ORIGINS_LOCKED = ALLOWED_ORIGINS.length > 0;
 
 const isOriginAllowed = (origin, reqHost) => {
   if (!origin) return true;              // same-origin / server-to-server requests
-  if (!ORIGINS_LOCKED) return true;      // open fallback — env var not configured yet
+  if (!ORIGINS_LOCKED) return true;      // open fallback - env var not configured yet
   if (ALLOWED_ORIGINS.includes(origin)) return true;
   // Auto-allow the server's own host so a fetch() from /fitting-room/ to
   // /api/realtime-token always works on any Vercel URL, preview deployment,
@@ -161,19 +161,19 @@ const isOriginAllowed = (origin, reqHost) => {
 };
 
 /* /api/classify-images is called cross-origin FROM the third-party store's own
-   domain (fox.co.il, etc.) by widget/pear-widget.js's classifyImages() — by
+   domain (fox.co.il, etc.) by widget/pear-widget.js's classifyImages() - by
    design that call must succeed from ANY storefront, unlike the rest of /api
    which is deliberately locked to our own storefront via DECART_ALLOWED_ORIGINS.
    When ORIGINS_LOCKED is on and the store's origin isn't allowlisted, the
-   origin-lock below used to reject it — both the OPTIONS preflight (403, via
-   `allowed ? 204 : 403`) and the real POST (403 with ACAO: "null") — which the
+   origin-lock below used to reject it - both the OPTIONS preflight (403, via
+   `allowed ? 204 : 403`) and the real POST (403 with ACAO: "null") - which the
    browser surfaces as a CORS failure (ERR_FAILED) exactly as reported. This is
    the ONLY origin-lock bypass; every other /api route keeps the existing
    DECART_ALLOWED_ORIGINS enforcement below, completely untouched.
    /api/send-otp and /api/verify-otp get the same bypass: the fitting-room
    iframe is embedded on third-party store domains, so its identity-gate calls
    hit this same origin-lock 403 there too. /api/users/relink is the monthly
-   re-auth's device-relink step (Case 3 — new device, email already
+   re-auth's device-relink step (Case 3 - new device, email already
    registered) and runs from that same embedded identity-gate flow, so it
    needs the identical bypass. */
 const PUBLIC_API_PATHS = new Set(["/classify-images", "/send-otp", "/verify-otp", "/users/relink"]);   // mount-relative (see app.use("/api", …) below)
@@ -207,7 +207,7 @@ app.use("/api", (req, res, next) => {
   next();
 });
 
-/* ── SDK client (holds the permanent key — never sent to the browser) ─────── */
+/* ── SDK client (holds the permanent key - never sent to the browser) ─────── */
 let decart = null;
 if (API_KEY && /^(?:one)?dct_|^dct_last-/.test(API_KEY)) {
   try {
@@ -236,7 +236,7 @@ async function trySDK() {
     token = await decart.tokens.create(opts);
   } catch (errScoped) {
     console.warn(`[tier1-sdk] scoped create failed: ${errScoped?.message || errScoped}`);
-    token = await decart.tokens.create();   // bare call — no scope
+    token = await decart.tokens.create();   // bare call - no scope
   }
 
   if (!token?.apiKey) throw Object.assign(new Error("SDK returned no apiKey"), { tier: "sdk" });
@@ -319,7 +319,7 @@ async function mintTokenWaterfall() {
     }
   }
 
-  // All tiers exhausted — surface the last error
+  // All tiers exhausted - surface the last error
   const err = lastErr || new Error("All token-mint strategies failed");
   err.allFailed = true;
   throw err;
@@ -327,7 +327,7 @@ async function mintTokenWaterfall() {
 
 /* ── Express handler ─────────────────────────────────────────────────────── */
 async function mintToken(req, res) {
-  console.log(`[realtime-token] ${req.method} ${req.originalUrl} — request received`);
+  console.log(`[realtime-token] ${req.method} ${req.originalUrl} - request received`);
   if (!API_KEY) {
     return res.status(503).json({
       error:   "decart_unconfigured",
@@ -396,7 +396,7 @@ app.post("/api/track-tryon", trackLimiter, async (req, res) => {
 /* ── Debug: verify Sheets env vars and write a test row (admin-only) ──────────
    Gated behind requireAdminAuth: it previously exposed the Google Sheet ID and the
    service-account email to any anonymous caller and let anyone write test rows.
-   Env-var VALUES are no longer echoed — only presence — even to admins. */
+   Env-var VALUES are no longer echoed - only presence - even to admins. */
 app.get("/api/test-sheets", requireAdminAuth, async (req, res) => {
   const sheetId = process.env.GOOGLE_SHEET_ID;
   const email   = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
@@ -407,18 +407,18 @@ app.get("/api/test-sheets", requireAdminAuth, async (req, res) => {
     GOOGLE_PRIVATE_KEY:           key     ? "✓ present" : "✗ MISSING",
   };
   if (!sheetId || !email || !key) {
-    return res.json({ ok: false, envCheck, error: "Missing env vars — check Vercel settings" });
+    return res.json({ ok: false, envCheck, error: "Missing env vars - check Vercel settings" });
   }
   try {
     await logTryOn({ garmentId: "test", garmentName: "TEST", garmentType: "test", subType: "test", size: "test", ip: req.ip });
-    res.json({ ok: true, envCheck, message: "Row written successfully — check the sheet!" });
+    res.json({ ok: true, envCheck, message: "Row written successfully - check the sheet!" });
   } catch (err) {
     res.json({ ok: false, envCheck, error: err?.message });
   }
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   ADMIN DASHBOARD — session-log ingest + read API (OPEN ACCESS)
+   ADMIN DASHBOARD - session-log ingest + read API (OPEN ACCESS)
    ---------------------------------------------------------------------------
    The password/login gate has been removed: the admin endpoints below respond
    directly with no auth header required. Session rows persist in Supabase
@@ -429,8 +429,8 @@ app.get("/api/test-sheets", requireAdminAuth, async (req, res) => {
    Durable storage via Supabase (Postgres). Survives cold starts, redeploys,
    and is shared across all server instances. Requires the `sessions` table
    created by supabase_setup.sql and two env vars:
-     SUPABASE_URL              — from Supabase Dashboard → Settings → API
-     SUPABASE_SERVICE_ROLE_KEY — from Supabase Dashboard → Settings → API
+     SUPABASE_URL              - from Supabase Dashboard → Settings → API
+     SUPABASE_SERVICE_ROLE_KEY - from Supabase Dashboard → Settings → API
    ──────────────────────────────────────────────────────────────────────────── */
 console.log(`[sessions] storage backend: ${supabase ? "Supabase" : "DISABLED (env vars missing)"}`);
 
@@ -448,11 +448,11 @@ function storageUnavailable(res) {
   return true;
 }
 
-/* ── Admin auth middleware — verifies Supabase Auth JWT + admin allowlist ───────
+/* ── Admin auth middleware - verifies Supabase Auth JWT + admin allowlist ───────
    Two independent checks, both required:
-     1. AUTHENTICATION — the Bearer token is a valid, unexpired Supabase Auth JWT
+     1. AUTHENTICATION - the Bearer token is a valid, unexpired Supabase Auth JWT
         (verified server-side via getUser()).
-     2. AUTHORIZATION  — the token's verified email is in ADMIN_EMAILS. This is the
+     2. AUTHORIZATION  - the token's verified email is in ADMIN_EMAILS. This is the
         critical second gate: the fitting room ships the PUBLIC anon key, so anyone
         who signs up against it gets a valid JWT. Without the allowlist, "logged in"
         would equal "admin" and any member of the public could read all PII and wipe
@@ -472,10 +472,10 @@ async function requireAdminAuth(req, res, next) {
     }
     const email = (user.email || "").toLowerCase();
     if (ADMIN_EMAILS.length === 0) {
-      // Allowlist not configured — fail OPEN for backward compatibility, but shout
+      // Allowlist not configured - fail OPEN for backward compatibility, but shout
       // about it. Configure ADMIN_EMAILS to close this hole (see the env comment).
       console.warn(
-        `[admin-auth] ⚠ ADMIN_EMAILS is empty — authorizing ANY authenticated user ` +
+        `[admin-auth] ⚠ ADMIN_EMAILS is empty - authorizing ANY authenticated user ` +
         `(${email || "unknown"}). Set ADMIN_EMAILS to restrict admin access.`
       );
     } else if (!ADMIN_EMAILS.includes(email)) {
@@ -513,15 +513,15 @@ async function clearSessionLogs() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   USER IDENTITY — first-time visitors enter name + email once; the browser is
+   USER IDENTITY - first-time visitors enter name + email once; the browser is
    then remembered via a client-generated device_id (localStorage 'pear_device_id').
    On return visits the client looks the user up by device_id and skips the form,
    so new measurements just attach to the existing profile via sessions.user_id.
    ══════════════════════════════════════════════════════════════════════════ */
 /* device_id is NOT unique (a shared/QA browser can legitimately attach to several
-   different email-identified profiles over its lifetime — see V3 migration), so
+   different email-identified profiles over its lifetime - see V3 migration), so
    this can no longer assume a single row. Used by GET/PATCH /api/users/:deviceId
-   for returning-device auto-login and the measurements refresh — never by
+   for returning-device auto-login and the measurements refresh - never by
    createUser's identification logic, which must go by email alone. Returns the
    most recently touched row, an accepted tradeoff for the auto-login convenience
    (see fitting-room/app.js setupIdentityGate comment). */
@@ -538,7 +538,7 @@ async function findUserByDeviceId(deviceId) {
 }
 
 /* Email is the human-facing UNIQUE identity (a person keeps their address across
-   browsers/devices) — enforced both here in application logic AND by a UNIQUE
+   browsers/devices) - enforced both here in application logic AND by a UNIQUE
    index in the database (see supabase_setup_v6.sql). We store and compare it
    normalized to trimmed lowercase so "Dana@Example.com" and "dana@example.com "
    both resolve to the same user. */
@@ -552,7 +552,7 @@ async function findUserByEmail(email) {
   // .limit(1) BEFORE reading a single row: if pre-existing legacy rows (from
   // before email became the identity key) normalize to the same address, a bare
   // .maybeSingle() throws "multiple rows returned" and every lookup for that
-  // email 500s — masquerading as "the whole feature doesn't work." Taking the
+  // email 500s - masquerading as "the whole feature doesn't work." Taking the
   // most recent of any duplicates keeps this working even before that legacy
   // data is cleaned up.
   const { data, error } = await supabase
@@ -568,10 +568,10 @@ async function findUserByEmail(email) {
 
 /* Shape a user row for the client. NOTE: this used to strip email as PII (an
    unauthenticated endpoint never returned it). The returning-user profile panel
-   now needs to display email, so it's included — device_id is an unguessable
+   now needs to display email, so it's included - device_id is an unguessable
    client-generated UUID that already proves "this is the browser that
    registered", a comparable trust level to what already gates the account.
-   height/weight live directly on `users` now (see supabase_setup_v7.sql) —
+   height/weight live directly on `users` now (see supabase_setup_v7.sql) -
    the single source of truth for "this person's current measurements";
    `sessions` stays the append-only try-on log. */
 function publicUser(u) {
@@ -584,9 +584,9 @@ function publicUser(u) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   EMAIL OTP VERIFICATION — first-time visitors (no remembered device_id) must
+   EMAIL OTP VERIFICATION - first-time visitors (no remembered device_id) must
    verify their email with a 6-digit code before their user row is created.
-   Codes live in memory only (otpStore) — reset on server restart is an
+   Codes live in memory only (otpStore) - reset on server restart is an
    accepted tradeoff (see fitting-room/app.js verifyOtp/resendOtp). Sending
    goes through Resend (RESEND_API_KEY); returning visitors never hit this. */
 const otpStore = new Map();      // normalized email -> { code, expires }
@@ -613,7 +613,7 @@ app.post("/api/send-otp", userLimiter, async (req, res) => {
     return res.status(400).json({ ok: false, error: "missing_fields", message: "email and name are required." });
   }
   if (otpRateLimited(email)) {
-    return res.status(429).json({ ok: false, error: "rate_limited", message: "יותר מדי בקשות — נסה שוב בעוד שעה." });
+    return res.status(429).json({ ok: false, error: "rate_limited", message: "יותר מדי בקשות - נסה שוב בעוד שעה." });
   }
 
   const code = Math.floor(100000 + Math.random() * 900000);
@@ -672,8 +672,8 @@ app.post("/api/verify-otp", userLimiter, (req, res) => {
   res.json({ ok: true });
 });
 
-/* POST /api/users — identify (or create) a user by EMAIL. Email is the ONLY
-   lookup key here — device_id is never consulted for identification, it is
+/* POST /api/users - identify (or create) a user by EMAIL. Email is the ONLY
+   lookup key here - device_id is never consulted for identification, it is
    purely an audit field written/refreshed on the matched row. This is
    deliberate: an earlier version checked device_id FIRST ("known browser →
    return its profile"), which meant typing a different name/email into the
@@ -700,7 +700,7 @@ async function createUser(req, res) {
     String(a || "").trim().toLowerCase() === String(c || "").trim().toLowerCase();
 
   // Same person, matching name → re-link this device to their profile (an audit
-  // update only — never used for lookup) and hand back their saved measurements.
+  // update only - never used for lookup) and hand back their saved measurements.
   // Different name on the same email → BLOCK; that email is taken. Shared by both
   // the normal path and the insert-race fallback below.
   const respondForExistingEmail = async (row) => {
@@ -734,7 +734,7 @@ async function createUser(req, res) {
 
     if (error) {
       // Race: another request registered the SAME EMAIL between our check and this
-      // insert (email now has a UNIQUE index — see supabase_setup_v6.sql). Re-run
+      // insert (email now has a UNIQUE index - see supabase_setup_v6.sql). Re-run
       // the same email-match/block decision against the row that won the race.
       const raced = await findUserByEmail(email);
       if (raced) {
@@ -752,7 +752,7 @@ async function createUser(req, res) {
   }
 }
 
-/* GET /api/users/:deviceId — return the user for this device_id, or 404. */
+/* GET /api/users/:deviceId - return the user for this device_id, or 404. */
 async function getUserByDevice(req, res) {
   if (storageUnavailable(res)) return;
   res.set("Cache-Control", "no-store, no-cache, must-revalidate");
@@ -768,7 +768,7 @@ async function getUserByDevice(req, res) {
   }
 }
 
-/* PATCH /api/users/:deviceId — update this device's user row with a fresh
+/* PATCH /api/users/:deviceId - update this device's user row with a fresh
    height/weight (the monthly returning-user measurements refresh). Same
    sane-range bounds as the client's isSaneProfile()/calculateSize() gate, so
    the server never persists a value the form itself would reject. */
@@ -803,12 +803,12 @@ async function updateUserMeasurements(req, res) {
   }
 }
 
-/* PATCH /api/users/relink — client-side monthly re-auth, Case 3: a NEW device
+/* PATCH /api/users/relink - client-side monthly re-auth, Case 3: a NEW device
    submitted a name+email that POST /api/users found already registered to a
    different device (409/email_taken). By the time the client calls this, it
    has already verified a fresh OTP for that exact email (see
    fitting-room/app.js relinkExistingDevice), so re-pointing device_id at the
-   existing account is safe — same trust bar as createUser's own
+   existing account is safe - same trust bar as createUser's own
    sameName-match auto-relink above, just without requiring the name to match
    too, since OTP ownership of the email is the stronger proof here. */
 async function relinkUserDevice(req, res) {
@@ -834,7 +834,7 @@ async function relinkUserDevice(req, res) {
   }
 }
 
-/* GET /api/admin/users — open access. Returns every user with their total
+/* GET /api/admin/users - open access. Returns every user with their total
    measurement (session) count, newest user first. */
 async function getUsersWithCounts(_req, res) {
   if (storageUnavailable(res)) return;
@@ -866,8 +866,8 @@ async function getUsersWithCounts(_req, res) {
   }
 }
 
-/* GET /api/admin/stats/averages — admin-only. Average height/weight across all
-   users that have both measurements set (users.height/weight, not sessions —
+/* GET /api/admin/stats/averages - admin-only. Average height/weight across all
+   users that have both measurements set (users.height/weight, not sessions -
    see publicUser comment: those columns are the single current-measurement
    source of truth per user). */
 async function getAverageMeasurements(_req, res) {
@@ -970,7 +970,7 @@ app.get("/api/sessions", requireAdminAuth, getSessions);
 app.delete("/api/sessions", requireAdminAuth, clearSessions);
 
 /* Back-compat aliases (older clients / earlier code paths).
-   SECURITY: these MUST carry the same guards as the canonical routes above — the
+   SECURITY: these MUST carry the same guards as the canonical routes above - the
    GET/DELETE aliases previously had NO auth, which fully bypassed the admin gate
    (unauthenticated read of all data + wipe of the entire table). */
 app.post("/api/session-log",      sessionLimiter, saveSession);
@@ -981,7 +981,7 @@ app.delete("/api/admin/sessions", requireAdminAuth, clearSessions);
    public GET returns non-PII fields only; the admin list is auth-gated. */
 app.post("/api/users",            userLimiter, createUser);
 // NOTE: /api/users/relink must be registered BEFORE the /:deviceId param
-// route below — otherwise Express would match "relink" as a deviceId value
+// route below - otherwise Express would match "relink" as a deviceId value
 // and this handler would never be reached.
 app.patch("/api/users/relink",    userLimiter, relinkUserDevice);
 app.get("/api/users/:deviceId",   getUserByDevice);
@@ -990,12 +990,12 @@ app.get("/api/admin/users",       requireAdminAuth, getUsersWithCounts);
 
 /* Pre-login allowlist check: the admin login page calls this before requesting a
    magic link so only ADMIN_EMAILS + ADMIN_PASSWORDS matches ever trigger a
-   Supabase email send. Returns only { allowed: true|false } — no PII, no
+   Supabase email send. Returns only { allowed: true|false } - no PII, no
    token, no session. POST with a JSON body (not GET query params) so the
-   password is never written into a URL — URLs land in server/proxy access
+   password is never written into a URL - URLs land in server/proxy access
    logs and browser history in plaintext, which a query-string password would
    leak into. ADMIN_PASSWORDS must list one password per ADMIN_EMAILS entry,
-   in the SAME ORDER (index i pairs with index i). Rate limited — this is a
+   in the SAME ORDER (index i pairs with index i). Rate limited - this is a
    password-guessing target. */
 app.post("/api/admin/check-auth", authLimiter, (req, res) => {
   const email    = (req.body?.email || "").toLowerCase().trim();
@@ -1022,10 +1022,10 @@ app.post("/api/admin/check-auth", authLimiter, (req, res) => {
   res.json({ allowed: true });
 });
 
-/* ── In-memory image cache — avoids re-fetching the same CDN image within a warm
+/* ── In-memory image cache - avoids re-fetching the same CDN image within a warm
    Lambda container. Keyed by full URL; evicts oldest entry when the cap is hit.
    Vercel's CDN also caches the HTTP response (via Cache-Control), so Decart's
-   server often hits the edge cache on repeat fetches — this cache additionally
+   server often hits the edge cache on repeat fetches - this cache additionally
    cuts Lambda execution time for the first in-process hit. */
 const imgCache = new Map();
 const IMG_CACHE_MAX = 50;
@@ -1033,7 +1033,7 @@ const IMG_CACHE_MAX = 50;
 /* ── Image-proxy SSRF guard ────────────────────────────────────────────────────
    The proxy fetches an arbitrary caller-supplied URL server-side. We block
    private/internal network ranges (where SSRF is dangerous), but allow any
-   public http(s) host — including plain HTTP — so widget garments from any
+   public http(s) host - including plain HTTP - so widget garments from any
    store load without manual allowlist additions.
    Blocked ranges:
      • loopback:      127.0.0.0/8
@@ -1062,7 +1062,7 @@ function isPrivateHost(hostname) {
     if (a === 172 && b >= 16 && b <= 31)  return true;  // private B
     if (a === 192 && b === 168)           return true;  // private C
     if (a === 169 && b === 254)           return true;  // link-local / metadata
-    return true; // all other bare IP literals — block by default
+    return true; // all other bare IP literals - block by default
   }
 
   return false;
@@ -1073,20 +1073,20 @@ function isPrivateHost(hostname) {
    CDN images over http://) even though the request-validation above it already
    advertises "http(s)" and accepts both. SSRF protection is about the
    DESTINATION host (isPrivateHost, unchanged below), not the transport, so
-   allowing http: here doesn't weaken it — it just stops rejecting legitimate
+   allowing http: here doesn't weaken it - it just stops rejecting legitimate
    public images that happen not to be TLS. */
 function isProxyHostAllowed(hostname, protocol) {
   if (protocol !== "https:" && protocol !== "http:") return false;
   return !isPrivateHost(hostname);
 }
 
-/* ── Image proxy — fetches garment images server-side to sidestep CORS restrictions
+/* ── Image proxy - fetches garment images server-side to sidestep CORS restrictions
    on CDN hosts (cdn.suitsupply.com, img.magnific.com, etc.) that block browser
    cross-origin fetch.  The Decart SDK calls fetch(imageUrl) internally when you
    pass a URL string to rtClient.set(), which fails for those CDNs.  By proxying
    through this endpoint the browser always makes a same-origin request, and the
    server (no CORS restriction) retrieves the image and pipes it back as a Blob.
-   The client then passes the Blob directly to rtClient.set() — no CDN fetch needed.
+   The client then passes the Blob directly to rtClient.set() - no CDN fetch needed.
    ─────────────────────────────────────────────────────────────────────────────── */
 app.get("/api/img-proxy", proxyLimiter, async (req, res) => {
   const raw = req.query.url;
@@ -1102,7 +1102,7 @@ app.get("/api/img-proxy", proxyLimiter, async (req, res) => {
     return res.status(400).json({ error: "invalid_url", message: "url must be an absolute http(s) URL" });
   }
 
-  // SSRF guard — block private/internal hosts; http(s) both allowed (see isProxyHostAllowed).
+  // SSRF guard - block private/internal hosts; http(s) both allowed (see isProxyHostAllowed).
   if (!isProxyHostAllowed(parsed.hostname, parsed.protocol)) {
     console.warn(`[img-proxy] blocked disallowed host: "${parsed.hostname}" (protocol: ${parsed.protocol})`);
     return res.status(403).json({ error: "host_not_allowed", message: "This image host is not permitted." });
@@ -1150,7 +1150,7 @@ app.get("/api/img-proxy", proxyLimiter, async (req, res) => {
 /* ── Garment front/back classification (Gemini + Supabase cache) ────────────────
    Classifies a garment product photo as depicting the front or back of the item.
    Backed by the garment_cache table (see supabase_setup_v5.sql) so the same CDN
-   image is never re-classified — shared with scanner/scan-store.js, which writes
+   image is never re-classified - shared with scanner/scan-store.js, which writes
    to the same table during a bulk store crawl.
    Requires GEMINI_API_KEY (https://aistudio.google.com/apikey) in .env.        */
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
@@ -1210,14 +1210,14 @@ async function saveClassification(imageUrl, classification) {
   if (error) console.warn("[garment_cache] write failed:", error.message);
 }
 
-/* POST /api/classify-images — { images: string[] } → { results: ("front"|"back")[] },
+/* POST /api/classify-images - { images: string[] } → { results: ("front"|"back")[] },
    one result per input URL, in order. Cache-first; uncached images are classified via
    Gemini and written back to garment_cache. A single image's classification failure
    falls back to "front" rather than failing the whole batch. */
 app.post("/api/classify-images", classifyLimiter, async (req, res) => {
   console.log('[classify] Received images:', req.body.images);
   // Belt-and-suspenders alongside the PUBLIC_API_PATHS bypass in the shared /api
-  // CORS middleware above (which already sets these for this path) — explicit
+  // CORS middleware above (which already sets these for this path) - explicit
   // here too so this endpoint's cross-origin behavior doesn't silently depend on
   // that middleware never changing.
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1256,10 +1256,10 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
   res.json({ results });
 });
 
-/* POST /api/store-catalog — { domain, type } → { items: [{ image_url, classification }] }
+/* POST /api/store-catalog - { domain, type } → { items: [{ image_url, classification }] }
    Backs "Complete the Look" for a widget/store session (see fetchStoreLookItems in
    fitting-room/app.js): recommends garments already cached for the SAME store domain
-   instead of the hardcoded demo PEAR_CATALOG — a real shopper should never be shown
+   instead of the hardcoded demo PEAR_CATALOG - a real shopper should never be shown
    stock photos of unrelated merchandise. `type` is accepted but NOT filtered on here:
    garment_cache's `classification` column is front|back (see classifyFrontBack above),
    not a garment category, so the client filters these same rows by category itself
@@ -1271,7 +1271,7 @@ app.post("/api/store-catalog", storeCatalogLimiter, async (req, res) => {
     return res.status(400).json({ error: "missing_domain", message: "domain is required." });
   }
   if (!supabase) {
-    return res.json({ items: [] });   // DB not configured — empty result, not an error the caller must handle
+    return res.json({ items: [] });   // DB not configured - empty result, not an error the caller must handle
   }
   try {
     const { data, error } = await supabase
@@ -1288,14 +1288,14 @@ app.post("/api/store-catalog", storeCatalogLimiter, async (req, res) => {
 });
 
 app.all("/api/*", (req, res) => {
-  // Previously silent — a 404 here left zero trace in the server logs, making
+  // Previously silent - a 404 here left zero trace in the server logs, making
   // it impossible to tell an unmatched API route from a client-side failure.
-  console.warn(`[api] 404 — no route matched: ${req.method} ${req.originalUrl}`);
+  console.warn(`[api] 404 - no route matched: ${req.method} ${req.originalUrl}`);
   res.status(404).json({ error: "not_found", message: `No API route for ${req.method} ${req.path}` });
 });
 
 /* ── Embeddable widget (pear-widget.js) ────────────────────────────────────
-   Served with an explicit route so it carries CORS + cache headers — stores
+   Served with an explicit route so it carries CORS + cache headers - stores
    embed it with a plain <script src> from any origin. */
 app.get("/widget/pear-widget.js", (req, res) => {
   res.setHeader("Content-Type", "application/javascript");
@@ -1315,7 +1315,7 @@ const uiRoot = __dirname;
 /* serve-static for all assets (JS, CSS, images, fonts…) */
 app.use(express.static(uiRoot, { extensions: ["html"], index: false }));
 
-/* Page router — resolves every URL to the right HTML file under ui/ */
+/* Page router - resolves every URL to the right HTML file under ui/ */
 app.use((req, res) => {
   const candidates = [
     path.join(uiRoot, req.path),                     // exact file
@@ -1331,26 +1331,26 @@ app.use((req, res) => {
       }
     } catch {}
   }
-  // Unreachable in practice — candidate 4 (root index.html) always exists, so this
+  // Unreachable in practice - candidate 4 (root index.html) always exists, so this
   // route never actually 404s; logged anyway in case that ever changes.
-  console.warn(`[page-router] 404 — no file resolved for ${req.method} ${req.path}`);
+  console.warn(`[page-router] 404 - no file resolved for ${req.method} ${req.path}`);
   res.status(404).json({ error: "not_found", path: req.path });
 });
 
-/* ── Start (local only — Vercel manages its own listener) ────────────────── */
+/* ── Start (local only - Vercel manages its own listener) ────────────────── */
 if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log("\n────────────────────────────────────────────────────────");
     console.log(`  PEAR VTON server → http://localhost:${PORT}`);
     console.log(`  Storefront  : http://localhost:${PORT}/`);
     console.log(`  Fitting room: http://localhost:${PORT}/fitting-room/   ← OPEN THIS`);
-    console.log(`  Decart      : ${decart ? `SDK ready (${VTON_MODEL}, TTL ${TOKEN_TTL}s)` : "SDK not ready — will use REST fallback"}`);
-    console.log(`  Key source  : ${KEY_SOURCE || "(none — set DECART_API_KEY in .env)"}`);
+    console.log(`  Decart      : ${decart ? `SDK ready (${VTON_MODEL}, TTL ${TOKEN_TTL}s)` : "SDK not ready - will use REST fallback"}`);
+    console.log(`  Key source  : ${KEY_SOURCE || "(none - set DECART_API_KEY in .env)"}`);
     console.log(`  REST order  : ${REST_ENDPOINTS.join(" → ")}`);
     if (ORIGINS_LOCKED) {
       console.log(`  Origin lock : ${ALLOWED_ORIGINS.join(", ")}`);
     } else {
-      console.warn("  ⚠ CORS open : DECART_ALLOWED_ORIGINS not set — all origins allowed.");
+      console.warn("  ⚠ CORS open : DECART_ALLOWED_ORIGINS not set - all origins allowed.");
       console.warn("    Set it in .env or Vercel env vars before going to production:");
       console.warn("    DECART_ALLOWED_ORIGINS=https://yourstore.vercel.app");
     }

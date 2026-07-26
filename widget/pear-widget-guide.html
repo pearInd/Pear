@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PEAR — Virtual Try-On · תא המדידה של העתיד</title>
-<meta name="description" content="PEAR Virtual Try-On — מדידה וירטואלית מבוססת AI לחנויות אופנה. מודדים בבית, קונים בביטחון.">
+<title>PEAR - Virtual Try-On · תא המדידה של העתיד</title>
+<meta name="description" content="PEAR Virtual Try-On - מדידה וירטואלית מבוססת AI לחנויות אופנה. מודדים בבית, קונים בביטחון.">
 
 <!-- ════════════════════════════════════════════════════════════════
      FONTS · Heebo (Hebrew UI) + JetBrains Mono (code, numerals)
@@ -57,7 +57,7 @@
   .view { display: none; }
   .view.active { display: block; }
 
-  /* ── Scroll reveal (cosmetic only — a safety sweep guarantees visibility) ── */
+  /* ── Scroll reveal (cosmetic only - a safety sweep guarantees visibility) ── */
   .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s cubic-bezier(.2,.6,.2,1), transform .6s cubic-bezier(.2,.6,.2,1); }
   .reveal.in { opacity: 1; transform: none; }
 
@@ -144,12 +144,12 @@
   /* ── Testimonial highlight marker ── */
   mark.hl { background: linear-gradient(transparent 55%, rgb(16 185 129 / .28) 55%); color: inherit; font-weight: 800; padding: 0 .1em; }
 
-  /* ── 3D stage: a FIXED full-viewport layer — the pear travels the whole
+  /* ── 3D stage: a FIXED full-viewport layer - the pear travels the whole
        overview page with the scroll. pointer-events:none keeps every click
        working; hidden on mobile (perf) and while the docs view is open. ── */
   /* The pear rides a FIXED layer BEHIND all content (z:-1), above the page
      backdrop (z:-2). Because the UI panels are translucent liquid glass, the
-     pear shows softly THROUGH / around them while text stays crisp on top —
+     pear shows softly THROUGH / around them while text stays crisp on top -
      so it can never obscure what you're reading. */
   #pearStage { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
   #pearStage canvas { width: 100%; height: 100%; display: block; }
@@ -253,7 +253,7 @@
 
   <!-- ══════════ HERO · copy + social proof + 3D-tilt product mockup ══════════ -->
   <section id="hero" data-hud="פתיחה" class="relative overflow-hidden border-b border-white/50">
-    <!-- quiet top aura (drifts on scroll — parallax depth layer) -->
+    <!-- quiet top aura (drifts on scroll - parallax depth layer) -->
     <div class="parallax-blob pointer-events-none absolute inset-x-0 -top-40 h-96 bg-[radial-gradient(ellipse_50%_100%_at_50%_0%,rgb(16_185_129/0.08),transparent_70%)]" data-speed=".35"></div>
 
 
@@ -272,7 +272,7 @@
         </h1>
 
         <p class="max-w-xl mx-auto lg:mx-0 text-lg sm:text-xl text-slate-500 leading-relaxed mb-8">
-          PEAR מלביש את הבגד על הלקוח בזמן אמת, ממליץ מידה מדויקת — ומוריד החזרות.
+          PEAR מלביש את הבגד על הלקוח בזמן אמת, ממליץ מידה מדויקת - ומוריד החזרות.
           <span class="font-semibold text-slate-700">מודדים בבית, קונים בביטחון.</span>
         </p>
 
@@ -280,7 +280,7 @@
         <div class="flex flex-wrap items-center justify-center lg:justify-start gap-3 mb-4">
           <button data-scroll="playground"
              class="cta-glow inline-flex items-center gap-2 rounded-xl bg-pear-600 text-white font-bold px-7 py-3.5 shadow-btn hover:bg-pear-700 hover:-translate-y-0.5 transition-all">
-            ✨ נסו את הסימולטור — 30 שניות
+            ✨ נסו את הסימולטור - 30 שניות
           </button>
           <button data-scroll="demo"
              class="inline-flex items-center gap-2 rounded-xl glass text-slate-700 font-bold px-7 py-3.5 hover:-translate-y-0.5 transition-all">
@@ -293,7 +293,7 @@
         <div class="flex flex-wrap items-center justify-center lg:justify-start gap-x-5 gap-y-2">
           <span class="text-sm text-slate-500">מחקרי שוק: <span class="font-bold text-slate-700">עד ~25% מהזמנות האופנה מוחזרות</span></span>
           <span class="w-px h-4 bg-slate-200 hidden sm:block"></span>
-          <span class="text-sm text-slate-500">אי-התאמת מידה — <span class="font-bold text-slate-700">סיבת ההחזרה מס' 1</span></span>
+          <span class="text-sm text-slate-500">אי-התאמת מידה - <span class="font-bold text-slate-700">סיבת ההחזרה מס' 1</span></span>
           <span class="w-px h-4 bg-slate-200 hidden sm:block"></span>
           <span class="text-sm text-slate-500">הטמעה ב<span class="font-bold text-slate-700">שורת קוד אחת</span></span>
         </div>
@@ -328,7 +328,7 @@
       <h2 data-split class="text-3xl sm:text-5xl font-black text-slate-900 tracking-tight mb-5">
         מודדים<span class="text-pear-500">.</span> מתאימים<span class="text-sky-500">.</span> ממירים<span class="text-violet-500">.</span>
       </h2>
-      <p class="text-slate-500 text-lg">שלוש יכולות, צבע לכל אחת — וכולן עובדות באותו וויג'ט אחד שמוטמע בשורת קוד.</p>
+      <p class="text-slate-500 text-lg">שלוש יכולות, צבע לכל אחת - וכולן עובדות באותו וויג'ט אחד שמוטמע בשורת קוד.</p>
     </div>
 
     <!-- category legend -->
@@ -347,7 +347,7 @@
         <h3 class="text-2xl font-extrabold text-slate-900 mb-3">הלבשה פוטוריאליסטית בזמן אמת</h3>
         <p class="text-slate-500 leading-relaxed max-w-md mb-6">
           מנועי <span class="font-mono text-sm">Nano Banana 2</span> ו-<span class="font-mono text-sm">Decart Lucy</span> מלבישים את הבגד
-          על תמונת הלקוח לפי גזרה אמיתית ונקודות גוף — כולל חזית וגב, ישירות בדפדפן.
+          על תמונת הלקוח לפי גזרה אמיתית ונקודות גוף - כולל חזית וגב, ישירות בדפדפן.
         </p>
         <!-- mini visual: front/back chips -->
         <div class="flex gap-2">
@@ -371,21 +371,21 @@
       <div class="bento reveal md:col-span-4 rounded-3xl glass border border-sky-100/70 p-7" data-tone="sky">
         <span class="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold text-sky-700 bg-sky-50 border border-sky-100 rounded-full px-2.5 py-1 mb-4">FIT · PROFILE</span>
         <h3 class="text-lg font-extrabold text-slate-900 mb-2">פרופיל גוף נשמר</h3>
-        <p class="text-sm text-slate-500 leading-relaxed">בביקור הבא PEAR כבר מכיר את המידות — מדידה אחת, קניות בכל החנות.</p>
+        <p class="text-sm text-slate-500 leading-relaxed">בביקור הבא PEAR כבר מכיר את המידות - מדידה אחת, קניות בכל החנות.</p>
       </div>
 
       <!-- Recommendations (violet, small) -->
       <div class="bento reveal md:col-span-4 rounded-3xl glass border border-violet-100/70 p-7" data-tone="violet">
         <span class="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold text-violet-700 bg-violet-50 border border-violet-100 rounded-full px-2.5 py-1 mb-4">CONVERT · AI STYLIST</span>
         <h3 class="text-lg font-extrabold text-slate-900 mb-2">אאוטפיטים והמלצות</h3>
-        <p class="text-sm text-slate-500 leading-relaxed">ה-AI מרכיב לוק שלם מהקטלוג — פריטים משלימים שמעלים סל ממוצע.</p>
+        <p class="text-sm text-slate-500 leading-relaxed">ה-AI מרכיב לוק שלם מהקטלוג - פריטים משלימים שמעלים סל ממוצע.</p>
       </div>
 
       <!-- Inventory sync (violet, small) -->
       <div class="bento reveal md:col-span-4 rounded-3xl glass border border-violet-100/70 p-7" data-tone="violet">
         <span class="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold text-violet-700 bg-white border border-violet-100 rounded-full px-2.5 py-1 mb-4">CONVERT · INVENTORY</span>
         <h3 class="text-lg font-extrabold text-slate-900 mb-2">סנכרון מלאי חכם</h3>
-        <p class="text-sm text-slate-500 leading-relaxed">התראות חוסרים בזמן אמת — הלקוח לא יתאהב בפריט שאזל, והמלאי הנעול מ-Bracketing משתחרר.</p>
+        <p class="text-sm text-slate-500 leading-relaxed">התראות חוסרים בזמן אמת - הלקוח לא יתאהב בפריט שאזל, והמלאי הנעול מ-Bracketing משתחרר.</p>
       </div>
     </div>
   </section>
@@ -396,7 +396,7 @@
       <div class="max-w-2xl mx-auto text-center mb-12 reveal">
         <p class="text-xs font-mono font-semibold tracking-[0.2em] text-pear-600 uppercase mb-3">Playground · בלי הרשמה</p>
         <h2 data-split class="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight mb-4">נסו את מנוע המידות. עכשיו.</h2>
-        <p class="text-slate-500 text-lg">זהו בדיוק החישוב שהלקוחות שלכם יקבלו בדף המוצר — הזינו נתונים וקבלו מידה.</p>
+        <p class="text-slate-500 text-lg">זהו בדיוק החישוב שהלקוחות שלכם יקבלו בדף המוצר - הזינו נתונים וקבלו מידה.</p>
       </div>
 
       <div class="grid lg:grid-cols-2 gap-8 items-stretch max-w-4xl mx-auto">
@@ -470,7 +470,7 @@
       <div class="max-w-2xl mb-12 reveal">
         <p class="text-xs font-mono font-semibold tracking-[0.2em] text-pear-400 uppercase mb-3">סיור של 2 דקות</p>
         <h2 data-split class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-4">כך זה נראה ללקוח שלכם</h2>
-        <p class="text-slate-400 text-lg">מהעמוד מוצר ועד תמונת לבוש — חוויה חלקה, ישירות בדפדפן, ללא אפליקציה.</p>
+        <p class="text-slate-400 text-lg">מהעמוד מוצר ועד תמונת לבוש - חוויה חלקה, ישירות בדפדפן, ללא אפליקציה.</p>
       </div>
       <div class="reveal relative">
         <div class="parallax-blob pointer-events-none absolute -inset-6 bg-[radial-gradient(ellipse_at_center,rgb(16_185_129/0.14),transparent_70%)] blur-2xl" data-speed="-.15" aria-hidden="true"></div>
@@ -485,14 +485,14 @@
     <div class="max-w-2xl mx-auto text-center mb-14 reveal">
       <p class="text-xs font-mono font-semibold tracking-[0.2em] text-pear-600 uppercase mb-3">נתוני שוק</p>
       <h2 data-split class="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight mb-4">מה שמחקרי השוק מראים</h2>
-      <p class="text-slate-500 text-lg">הפער בין המסך למציאות עולה למותגי אופנה ביוקר — וזו בדיוק הבעיה ש-PEAR נבנתה כדי לפתור.</p>
+      <p class="text-slate-500 text-lg">הפער בין המסך למציאות עולה למותגי אופנה ביוקר - וזו בדיוק הבעיה ש-PEAR נבנתה כדי לפתור.</p>
     </div>
 
     <!-- Industry-research stat cards (findings, not client results) -->
     <div class="grid sm:grid-cols-3 gap-5 mb-8">
       <div class="reveal rounded-2xl glass-dark text-white p-7 text-center">
         <p class="font-mono text-4xl font-black text-pear-400 mb-2"><span class="stat-num" data-to="25" data-prefix="~" data-suffix="%">~25%</span></p>
-        <p class="text-sm text-slate-300">שיעור ההחזרות באופנה מקוונת — מהגבוהים באיקומרס</p>
+        <p class="text-sm text-slate-300">שיעור ההחזרות באופנה מקוונת - מהגבוהים באיקומרס</p>
       </div>
       <div class="reveal rounded-2xl glass-dark text-white p-7 text-center">
         <p class="font-mono text-4xl font-black text-pear-400 mb-2">#1</p>
@@ -500,16 +500,16 @@
       </div>
       <div class="reveal rounded-2xl glass-dark text-white p-7 text-center">
         <p class="font-mono text-2xl font-black text-pear-400 mb-2 mt-3">Bracketing</p>
-        <p class="text-sm text-slate-300">קונים מזמינים כמה מידות ומחזירים את העודף — ונועלים מלאי מבוקש</p>
+        <p class="text-sm text-slate-300">קונים מזמינים כמה מידות ומחזירים את העודף - ונועלים מלאי מבוקש</p>
       </div>
     </div>
 
-    <!-- Product potential — forward-looking, focused on capability (no clients) -->
+    <!-- Product potential - forward-looking, focused on capability (no clients) -->
     <div class="reveal rounded-3xl glass p-8 sm:p-10 text-center max-w-3xl mx-auto">
       <p class="text-lg sm:text-xl text-slate-700 leading-relaxed font-medium">
         PEAR הופכת את חוסר הוודאות הזה לביטחון:
         <span class="text-pear-700 font-bold">מדידה חזותית מבוססת AI</span>
-        שמאפשרת לכל קונה לראות את הבגד על עצמו ולקבל את המידה המדויקת — עוד לפני התשלום.
+        שמאפשרת לכל קונה לראות את הבגד על עצמו ולקבל את המידה המדויקת - עוד לפני התשלום.
       </p>
       <p class="text-xs font-mono tracking-widest text-slate-400 uppercase mt-6">הפוטנציאל · פחות החזרות · יותר המרות · קונים בטוחים</p>
     </div>
@@ -550,7 +550,7 @@
       <h1 class="text-3xl sm:text-5xl font-black text-slate-900 tracking-tight mb-5">מדריך הטמעת הוויג'ט</h1>
       <p class="text-lg text-slate-500 leading-relaxed">
         הטמעת הוויג'ט של PEAR לוקחת <span class="font-semibold text-slate-700">פחות מ-5 דקות</span> ולא דורשת
-        שינויים בארכיטקטורת האתר. שלושה שלבים — והלקוחות שלכם מודדים.
+        שינויים בארכיטקטורת האתר. שלושה שלבים - והלקוחות שלכם מודדים.
       </p>
     </div>
   </section>
@@ -566,7 +566,7 @@
       <div class="rounded-2xl glass p-7">
         <p class="text-slate-600 mb-6">
           הוויג'ט הוא סקריפט JavaScript קל-משקל שנטען אסינכרונית ואינו משפיע על מהירות האתר.
-          אין תלות בפלטפורמה — הוא עובד עם כל פלטפורמות האיקומרס:
+          אין תלות בפלטפורמה - הוא עובד עם כל פלטפורמות האיקומרס:
         </p>
         <div class="flex flex-wrap gap-2">
           <span class="font-mono text-xs px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-600">Shopify</span>
@@ -589,7 +589,7 @@
         <div class="rounded-2xl glass overflow-hidden">
           <div class="p-7 pb-5">
             <h3 class="font-bold text-slate-900 text-lg mb-1.5">שלב 1 · הוספת סקריפט המערכת (CDN)</h3>
-            <p class="text-sm text-slate-500">הדביקו את השורה הבאה לפני תג <code class="font-mono text-xs bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5 text-slate-700" dir="ltr">&lt;/body&gt;</code> — פעם אחת, בכל עמודי המוצר.</p>
+            <p class="text-sm text-slate-500">הדביקו את השורה הבאה לפני תג <code class="font-mono text-xs bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5 text-slate-700" dir="ltr">&lt;/body&gt;</code> - פעם אחת, בכל עמודי המוצר.</p>
           </div>
           <div class="mx-7 mb-7 rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
             <div class="flex items-center justify-between px-4 py-2.5 bg-slate-900 border-b border-slate-800" dir="ltr">
@@ -605,7 +605,7 @@
         <div class="rounded-2xl glass overflow-hidden">
           <div class="p-7 pb-5">
             <h3 class="font-bold text-slate-900 text-lg mb-1.5">שלב 2 · מיקום כפתור המדידה בדף המוצר</h3>
-            <p class="text-sm text-slate-500">הניחו את הקונטיינר בכל מקום בעמוד המוצר — לרוב מתחת לבורר המידות. הוויג'ט יעצב את עצמו בהתאם למקום.</p>
+            <p class="text-sm text-slate-500">הניחו את הקונטיינר בכל מקום בעמוד המוצר - לרוב מתחת לבורר המידות. הוויג'ט יעצב את עצמו בהתאם למקום.</p>
           </div>
           <div class="mx-7 mb-7 rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
             <div class="flex items-center justify-between px-4 py-2.5 bg-slate-900 border-b border-slate-800" dir="ltr">
@@ -624,7 +624,7 @@
         <div class="rounded-2xl glass overflow-hidden">
           <div class="p-7 pb-5">
             <h3 class="font-bold text-slate-900 text-lg mb-1.5">שלב 3 · אתחול והגדרות מותאמות אישית</h3>
-            <p class="text-sm text-slate-500">שליטה מלאה על שפה, ערכת נושא, טקסט הכפתור ו-callbacks — הכל מאובייקט קונפיגורציה אחד.</p>
+            <p class="text-sm text-slate-500">שליטה מלאה על שפה, ערכת נושא, טקסט הכפתור ו-callbacks - הכל מאובייקט קונפיגורציה אחד.</p>
           </div>
           <div class="mx-7 mb-7 rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
             <div class="flex items-center justify-between px-4 py-2.5 bg-slate-900 border-b border-slate-800" dir="ltr">
@@ -666,7 +666,7 @@
             ✨ מדוד על הגוף שלך עכשיו
           </button>
           <p id="previewNote" class="text-center text-xs text-slate-400 mt-3 opacity-0 transition-opacity duration-300">
-            כאן נפתח חלון המדידה של PEAR — בזמן אמת, בלי לעזוב את העמוד
+            כאן נפתח חלון המדידה של PEAR - בזמן אמת, בלי לעזוב את העמוד
           </p>
         </div>
       </div>
@@ -697,7 +697,7 @@
 <!-- Toast (copy feedback etc.) -->
 <div id="toast" class="fixed bottom-6 inset-x-0 mx-auto w-max max-w-[90vw] z-[60] rounded-xl bg-slate-900 text-white text-sm font-semibold px-5 py-3 shadow-lift opacity-0 translate-y-3 transition-all duration-300 pointer-events-none" role="status"></div>
 
-<!-- GSAP + ScrollTrigger — the cinematic scroll engine -->
+<!-- GSAP + ScrollTrigger - the cinematic scroll engine -->
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
 
@@ -756,7 +756,7 @@ document.querySelectorAll('.copy-btn').forEach((btn) => {
       showToast('הקוד הועתק ללוח ✓');
       setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
     } catch {
-      showToast('ההעתקה נכשלה — העתיקו ידנית');
+      showToast('ההעתקה נכשלה - העתיקו ידנית');
     }
   });
 });
@@ -814,8 +814,8 @@ function computeSize(h, w, garment) {
   const SIZES = ['S', 'M', 'L', 'XL', 'XXL', '3XL'];
   let idx = 5;
   for (const [limit, i] of bands) if (bmi < limit) { idx = i; break; }
-  if (garment === 'tee'   && idx > 0) idx -= 0;              // oversize cut — true to size
-  if (garment === 'jeans' && bmi > 24) idx += 0;             // slim cut — keep strict
+  if (garment === 'tee'   && idx > 0) idx -= 0;              // oversize cut - true to size
+  if (garment === 'jeans' && bmi > 24) idx += 0;             // slim cut - keep strict
   if (garment === 'dress' && idx > 0 && bmi < 20) idx -= 1;  // midi runs large
   idx = Math.max(0, Math.min(SIZES.length - 1, idx));
   const conf = Math.round(88 + Math.random() * 9);           // demo confidence 88–97%
@@ -823,9 +823,9 @@ function computeSize(h, w, garment) {
 }
 
 const NOTES = {
-  tee:   'גזרת אוברסייז — ההמלצה שומרת על נפילה רפויה בלי להיראות ענקית.',
-  jeans: 'גזרת סלים — ההמלצה מקפידה על היקף מותן מדויק לפני אורך.',
-  dress: 'שמלת מידי — נלקח בחשבון שהדגם נוטה למידות גדולות.',
+  tee:   'גזרת אוברסייז - ההמלצה שומרת על נפילה רפויה בלי להיראות ענקית.',
+  jeans: 'גזרת סלים - ההמלצה מקפידה על היקף מותן מדויק לפני אורך.',
+  dress: 'שמלת מידי - נלקח בחשבון שהדגם נוטה למידות גדולות.',
 };
 
 document.getElementById('simBtn').addEventListener('click', () => {
@@ -932,7 +932,7 @@ try {
     gsap.registerPlugin(ScrollTrigger);
 
     /* Split every [data-split] headline into word spans (nested colored
-       spans survive — we walk text nodes recursively), then unfold each
+       spans survive - we walk text nodes recursively), then unfold each
        word as the headline scrolls in. */
     document.querySelectorAll('#view-overview [data-split]').forEach((el) => {
       (function walk(node) {
@@ -960,7 +960,7 @@ try {
         gsap.fromTo(eyebrow, { x: 26, opacity: 0 },
           { x: 0, opacity: 1, duration: .6, ease: 'power2.out', scrollTrigger: trig });
 
-      /* The subtitle (next sibling) "opens up" — a soft upward mask-wipe.
+      /* The subtitle (next sibling) "opens up" - a soft upward mask-wipe.
          Skip ones already handled by the .reveal system to avoid double-play. */
       const sub = el.nextElementSibling;
       if (sub && sub.tagName === 'P' && !sub.classList.contains('reveal'))
@@ -970,7 +970,7 @@ try {
             duration: 1.05, ease: 'power3.out', delay: .28, scrollTrigger: trig });
     });
 
-    /* Glowing stat counters — numbers count up when they enter view. */
+    /* Glowing stat counters - numbers count up when they enter view. */
     document.querySelectorAll('.stat-num').forEach((el) => {
       const to = parseFloat(el.dataset.to), dec = +(el.dataset.dec || 0);
       const pre = el.dataset.prefix || '', suf = el.dataset.suffix || '';
@@ -980,7 +980,7 @@ try {
         onUpdate: () => { el.textContent = pre + st.v.toFixed(dec) + suf; } });
     });
 
-    /* Magnetic primary CTAs — the button leans toward the cursor. */
+    /* Magnetic primary CTAs - the button leans toward the cursor. */
     document.querySelectorAll('.cta-glow').forEach((btn) => {
       btn.addEventListener('mousemove', (e) => {
         const r = btn.getBoundingClientRect();
@@ -1038,22 +1038,22 @@ try {
   }
 } catch (e) { console.warn('[PEAR] cinematics skipped:', e?.message || e); }
 
-/* ── 10 · Boot — after ALL definitions above ──────────────────── */
+/* ── 10 · Boot - after ALL definitions above ──────────────────── */
 window.addEventListener('hashchange', () => renderView(currentView()));
 renderView(currentView(), { scroll: false });
-setTimeout(revealAll, 1500);          // safety net — nothing may remain invisible
+setTimeout(revealAll, 1500);          // safety net - nothing may remain invisible
 </script>
 
 <!-- ════════════════════════════════════════════════════════════════
      3D SCENE · a PHOTOREAL pear that TRAVELS the page with the scroll.
-     Realism stack (all procedural — zero asset downloads):
+     Realism stack (all procedural - zero asset downloads):
        • high-res LatheGeometry (128 segs) + organic vertex noise, so the
          silhouette is asymmetric like real fruit;
        • canvas-generated skin: green gradient + russet sun-blush +
          thousands of lenticel speckles → color, bump AND roughness maps;
        • MeshPhysicalMaterial with sheen (subsurface feel) + light
          clearcoat (waxy skin), lit by a PMREM RoomEnvironment (IBL) and
-         ACES filmic tone mapping — the PBR combo that reads "real";
+         ACES filmic tone mapping - the PBR combo that reads "real";
        • bent stem (tube along a curve) + a leaf.
      Travel: GSAP ScrollTrigger waypoints per section fly the pear across
      the FIXED full-viewport canvas as each chapter enters; mouse leans
@@ -1132,7 +1132,7 @@ try {
 
     /* Derive a proper TANGENT-SPACE NORMAL MAP from the speckle/bump canvas
        (Sobel gradients → per-texel surface normal). Real normals catch the
-       lights far more convincingly than a scalar bumpScale — this is the main
+       lights far more convincingly than a scalar bumpScale - this is the main
        lift toward a photoreal skin without shipping a scanned asset. */
     function makeNormalMap(srcCanvas, strength) {
       const w = srcCanvas.width, h = srcCanvas.height;
@@ -1236,7 +1236,7 @@ try {
       /* Scroll-SCRUBBED travel: each section owns a segment that eases `state`
          from the previous waypoint to its own as that section scrolls up through
          the viewport. Because the tween is scrubbed (tied to scroll position, not
-         a fixed clock), the pear tracks the scrollbar DIRECTLY — a fast fling drags
+         a fixed clock), the pear tracks the scrollbar DIRECTLY - a fast fling drags
          it along in real time instead of leaving it frozen while a timed tween
          plays catch-up. `scrub: 0.8` keeps a soft ~0.8s weight without lag-to-a-stop. */
       for (let i = 1; i < WPS.length; i++) {
@@ -1249,7 +1249,7 @@ try {
           { x, y, s, spin, ease: 'none', immediateRender: false,
             scrollTrigger: { trigger: el, start: 'top 78%', end: 'top 38%', scrub: 0.8 } });
       }
-      /* companions belong to the hero only — shrink away when it exits */
+      /* companions belong to the hero only - shrink away when it exits */
       ScrollTrigger.create({
         trigger: '#hero', start: 'bottom 75%',
         onEnter: () => [compA, compB].forEach((c) =>
@@ -1325,11 +1325,11 @@ try {
 
       /* hero pear: slow lerp (0.02) toward the active waypoint = weighty,
          unhurried motion. Gentle float, slow drift-spin, feather-light mouse
-         lean — so it reads as a real fruit hanging in space, not a fast toy.
+         lean - so it reads as a real fruit hanging in space, not a fast toy.
          Skipped during the intro, when GSAP owns the pear's drop-in. */
       if (introDone) {
         /* State is already scroll-scrubbed (weighty); this lerp is just a light
-           low-pass so micro-steps stay buttery — fast enough (0.12) that the pear
+           low-pass so micro-steps stay buttery - fast enough (0.12) that the pear
            never visibly trails the scroll, so it can't look "stuck" on a fast fling. */
         pear.position.x += (state.x + mx * 0.3 - pear.position.x) * 0.12;
         pear.position.y += (state.y + Math.sin(t * 0.55) * 0.16 - pear.position.y) * 0.12;

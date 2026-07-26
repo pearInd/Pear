@@ -1,5 +1,5 @@
 -- =============================================================================
--- PEAR · Supabase Setup V2 — returning-user identification
+-- PEAR · Supabase Setup V2 - returning-user identification
 -- =============================================================================
 --
 -- WHAT THIS DOES (and why it is SAFE to run on a live database)
@@ -12,7 +12,7 @@
 --   3. Adds an index on users.device_id for fast lookup.
 --   4. Enables RLS + a service_role full-access policy (mirrors `sessions`).
 --
--- Every statement uses IF NOT EXISTS / IF EXISTS so the file is idempotent —
+-- Every statement uses IF NOT EXISTS / IF EXISTS so the file is idempotent -
 -- re-running it never errors and never destroys data.
 --
 -- HOW TO RUN
@@ -21,7 +21,7 @@
 -- 2. Paste this ENTIRE file.
 -- 3. Click Run (Cmd/Ctrl + Enter). Expect "Success. No rows returned."
 --
--- (Credentials live in .env as SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY — already
+-- (Credentials live in .env as SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY - already
 --  configured for this project; nothing to change there.)
 -- =============================================================================
 

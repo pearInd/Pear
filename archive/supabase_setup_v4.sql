@@ -1,17 +1,17 @@
 -- =============================================================================
--- PEAR · Supabase Setup V4 — merge duplicate accounts left by the old bug
+-- PEAR · Supabase Setup V4 - merge duplicate accounts left by the old bug
 -- =============================================================================
 --
 -- WHY THIS MIGRATION EXISTS
 -- ─────────────────────────
 -- Before phone became the identity key, the old code created a SEPARATE `users`
--- row per browser/device — so testing the same real phone number from more than
+-- row per browser/device - so testing the same real phone number from more than
 -- one browser (or across the various bugs fixed today) left several `users` rows
 -- for the SAME person, each with its own slice of `sessions` history. Now that
--- lookups go by phone, the lookup finds ONE of those rows — often not the one
--- your measurements are attached to — so it "recognizes" you but shows nothing.
+-- lookups go by phone, the lookup finds ONE of those rows - often not the one
+-- your measurements are attached to - so it "recognizes" you but shows nothing.
 --
--- WHAT THIS DOES (safe — no measurement data is deleted, only merged)
+-- WHAT THIS DOES (safe - no measurement data is deleted, only merged)
 -- ─────────────────────────────────────────────────────────────────────
 --   1. Normalizes every phone to digits-only (safe to re-run even if V3 already
 --      did this).
@@ -19,10 +19,10 @@
 --      registered row as the "canonical" one, re-points every `sessions` row
 --      from the other duplicate(s) onto it (so ALL of a person's measurement
 --      history ends up under ONE account), then removes the now-empty
---      duplicate `users` rows. Every session row is kept — none are deleted.
---   3. Drops the old UNIQUE constraint on device_id (same as V3 — safe to
+--      duplicate `users` rows. Every session row is kept - none are deleted.
+--   3. Drops the old UNIQUE constraint on device_id (same as V3 - safe to
 --      re-run if V3 already did it, or if it silently didn't).
---   4. Creates the UNIQUE index on phone — this can only succeed once step 2
+--   4. Creates the UNIQUE index on phone - this can only succeed once step 2
 --      has actually removed the duplicates, which is the whole point of this
 --      file.
 --
@@ -30,7 +30,7 @@
 -- ──────────
 -- 1. Open https://supabase.com → your project → SQL Editor → New query.
 -- 2. Paste this ENTIRE file.
--- 3. Click Run (Cmd/Ctrl + Enter). Read the result — if step 4 errors, run:
+-- 3. Click Run (Cmd/Ctrl + Enter). Read the result - if step 4 errors, run:
 --       SELECT phone, COUNT(*) FROM users GROUP BY phone HAVING COUNT(*) > 1;
 --    and tell me what it returns.
 -- =============================================================================

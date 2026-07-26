@@ -1,11 +1,11 @@
 /**
- * config.js — Single source of truth for the PEAR fitting room.
+ * config.js - Single source of truth for the PEAR fitting room.
  * ----------------------------------------------------------------------------
  * Every configurable timing and endpoint the client uses lives HERE and nowhere
  * else. `app.js` imports these derived constants; it must not redefine them.
  *
  * ⚠️ Endpoints are served by the secure proxy in `../server.js`. The browser
- *    only ever talks to these same-origin paths — it never holds the permanent
+ *    only ever talks to these same-origin paths - it never holds the permanent
  *    `dct_` key; it receives short-lived `ek_` tokens from `TOKEN_ENDPOINT`.
  *
  * @typedef {Object} PearConfig
@@ -16,7 +16,7 @@
  * @property {string}   HEALTH_ENDPOINT         Same-origin proxy health route used by the pre-use check.
  * @property {string[]} SDK_URLS                Ordered Decart SDK CDN fallbacks.
  * @property {number}   PLAYOUT_DELAY_HINT      Chromium RTCRtpReceiver.playoutDelayHint (seconds). 0 = render ASAP.
- * @property {boolean}  PREFER_LOW_LATENCY_CODEC Opt-in SDP codec-preference munge (default OFF — see note below).
+ * @property {boolean}  PREFER_LOW_LATENCY_CODEC Opt-in SDP codec-preference munge (default OFF - see note below).
  * @property {string[]} CODEC_PREFERENCE        Codec order tried when the munge flag is ON (reorder only, never remove).
  * @property {number}   VIDEO_TARGET_BITRATE_KBPS Max video bitrate forced into the m=video SDP (b=AS, kbps). 0 disables the munge.
  */
@@ -42,39 +42,39 @@ export const CONFIG = Object.freeze({
      ⚠️ Scope reality check: the ~1s a user perceives in the Lucy-VTON feed is
      dominated by SERVER-SIDE neural inference + network RTT, neither of which is
      tunable from the browser. The knobs below only trim the CLIENT jitter buffer
-     / decode path — a real but bounded win (tens of ms). They are applied via a
+     / decode path - a real but bounded win (tens of ms). They are applied via a
      native-RTCPeerConnection hook in app.js because the SDK (LiveKit) owns the
      peer connection; app.js never sees the receiver or SDP directly. */
   PLAYOUT_DELAY_HINT: 0,            // seconds; 0 = decode+render immediately, no anti-jitter buffering (Chromium only)
   PREFER_LOW_LATENCY_CODEC: true,   // SDP munge ON: codec reorder + b=AS / b=TIAS bandwidth injection.
   // H264 is hardware-decoded on virtually all modern devices (iOS, Android, Windows, Mac);
-  // VP8 is software-decoded on most mobile — putting H264 first cuts decode CPU + latency.
+  // VP8 is software-decoded on most mobile - putting H264 first cuts decode CPU + latency.
   CODEC_PREFERENCE: Object.freeze(["H264", "VP8"]),
 
   /* Cap our OUTGOING camera bitrate to 2 Mbps (applied via b=AS / b=TIAS in
      setLocalDescription only). Lower encode bitrate → less data per frame → faster
      upload to Decart's servers → lower first-dressed-frame latency.
      768×440 @ 2 Mbps is still sharp; 4 Mbps was overshooting for this resolution.
-     NOT applied to setRemoteDescription — Decart's send rate is determined server-side
+     NOT applied to setRemoteDescription - Decart's send rate is determined server-side
      via RTCP feedback; the b= line in an answer SDP doesn't override it. */
   VIDEO_TARGET_BITRATE_KBPS: 2000,
 
-  /* ── "Upload Your Own Garment" — client-side detection + crop tuning ─────────
+  /* ── "Upload Your Own Garment" - client-side detection + crop tuning ─────────
      Every timing / threshold the upload → detect → crop flow uses lives HERE (per
      the project's "zero hardcoded timings" rule); app.js reads CONFIG.UPLOAD and
      never redefines these.
 
-     DETECTOR CHOICE — vanilla canvas, not MediaPipe. MediaPipe's shipped Object
+     DETECTOR CHOICE - vanilla canvas, not MediaPipe. MediaPipe's shipped Object
      Detector model (EfficientDet/COCO) has NO apparel classes ("clothing/top/
      bottom/dress" aren't in COCO), so it cannot reliably box garments, and it adds
-     a multi-MB WASM+model CDN dependency that can 404 — against this codebase's
+     a multi-MB WASM+model CDN dependency that can 404 - against this codebase's
      "bulletproof, self-contained, no external path to break" ethos. Instead we use
      a dependency-free background-subtraction + connected-components pass
      (detectGarments() in app.js): estimate the background colour from the image
      border, mask the foreground, dilate to close gaps, then label blobs into
      garment bounding boxes. It runs fully offline and handles flat-lays, white
      backgrounds AND model-worn photos. Swap in MediaPipe later by adding its CDN
-     URL here and replacing detectGarments()'s body — the rest of the flow is
+     URL here and replacing detectGarments()'s body - the rest of the flow is
      detector-agnostic (it only consumes {xmin,ymin,width,height} boxes). */
   UPLOAD: Object.freeze({
     MAX_BYTES:               12 * 1024 * 1024, // reject uploads larger than 12 MB
@@ -83,7 +83,7 @@ export const CONFIG = Object.freeze({
     DETECT_MAX_DIM:          512,   // downscale the longest side to this before analysis (speed)
     BG_SAMPLE_BAND:          0.06,  // fraction of each edge sampled to estimate the background colour
     FG_DIFF_THRESHOLD:       46,    // Euclidean RGB distance from bg above which a pixel is "foreground"
-    DILATE_RADIUS:           3,     // morphological dilation (downscaled px) — closes gaps so one garment = one blob
+    DILATE_RADIUS:           3,     // morphological dilation (downscaled px) - closes gaps so one garment = one blob
     MIN_BOX_AREA_FRAC:       0.015, // ignore foreground blobs smaller than this fraction of the image
     MAX_BOX_AREA_FRAC:       0.985, // ignore blobs that fill essentially the whole frame (bg-estimate failure)
     MIN_BOX_DIM_FRAC:        0.05,  // ignore slivers thinner than this fraction of the image in either axis

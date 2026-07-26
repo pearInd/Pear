@@ -1,17 +1,17 @@
 /* ============================================================================
-   PEAR — Monochrome "Liquid Glass" theme
+   PEAR - Monochrome "Liquid Glass" theme
    Black & white frosted-glass surfaces · a single pear-green accent
    Fluid hover lift (desktop) + tactile press (mobile/touch) · RTL-aware
    Type: Inter / Urbanist
    NOTE: pure styling + micro-interaction layer. Every existing id / class /
    state hook (.reveal .show .live .show-live .show-result .is-live .is-active
-   .is-duo .is-complete .mock) is preserved 1:1 — no logic touched.
+   .is-duo .is-complete .mock) is preserved 1:1 - no logic touched.
    ============================================================================ */
 
 :root {
   /* ── pear-green accent (the only colour) ── */
-  --pear:        #1a1a1c;   /* signature pear green — fills / borders / glow */
-  --pear-deep:   #0a0a0b;   /* darker pear — text on light glass */
+  --pear:        #1a1a1c;   /* signature pear green - fills / borders / glow */
+  --pear-deep:   #0a0a0b;   /* darker pear - text on light glass */
   --pear-soft:   rgba(141, 182, 0, .12);
   --pear-tint:   rgba(141, 182, 0, .16);
   --pear-ring:   rgba(141, 182, 0, .22);
@@ -51,7 +51,7 @@
   /* signature fluid easing */
   --ease:       cubic-bezier(.16, 1, .3, 1);
 
-  /* ── PEAR brand wordmark — Didot with elegant serif fallbacks. NOT a web font:
+  /* ── PEAR brand wordmark - Didot with elegant serif fallbacks. NOT a web font:
      Apple devices render true Didot; elsewhere it falls back to Bodoni MT /
      Cochin / Georgia serif. Applied ONLY to literal "PEAR"/"pear" brand text. */
   --pear-wordmark: 'Didot', 'Didot LT STD', 'Bodoni MT', 'Cochin', 'Georgia', serif;
@@ -69,7 +69,7 @@ html, body {
   text-rendering: optimizeLegibility;
 }
 
-/* ── ambient backdrop — soft grey light with a faint pear-green wash ─────── */
+/* ── ambient backdrop - soft grey light with a faint pear-green wash ─────── */
 body {
   position: relative;
   min-height: 100vh;
@@ -119,7 +119,7 @@ h1, h2, h3, h4 {
 .screen { display: none; min-height: 100vh; min-height: 100dvh; position: relative; z-index: 1; }
 .screen.active { display: block; animation: fade .5s var(--ease) both; }
 
-/* Returning-device pre-paint gate (Feature 5 fix) — set synchronously by the
+/* Returning-device pre-paint gate (Feature 5 fix) - set synchronously by the
    inline script at the top of <body>, BEFORE #screen-calculator's default
    .active state ever paints, whenever this browser has a remembered
    pear_device_id. Force-hides the gate/measurement screen while app.js
@@ -194,7 +194,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 36%);
   mix-blend-mode: overlay;
 }
-/* env-mapped specular highlight — follows the pointer (vars set in app.js) */
+/* env-mapped specular highlight - follows the pointer (vars set in app.js) */
 #screen-calculator .container::after {
   content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
   border-radius: inherit; opacity: 0; mix-blend-mode: soft-light;
@@ -272,7 +272,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .error-result .size-display { font-size: 1.2rem; -webkit-text-fill-color: var(--ink); color: var(--ink); }
 
 /* ── buttons (frosted capsules) ────────────────────────────────────────── */
-/* primary action — translucent pear-green glass */
+/* primary action - translucent pear-green glass */
 .btn-primary {
   width: 100%; margin-top: 20px; padding: 15px 24px;
   border: 1px solid rgba(141, 182, 0, .35); border-radius: var(--pill);
@@ -309,7 +309,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .btn-ghost:hover { background: rgba(255, 255, 255, .78); transform: translateY(-3px) scale(1.02); box-shadow: var(--shadow); }
 .btn-ghost:active { transform: scale(.96); }
 
-/* ── "Update Measurements" CTA — always-available secondary action on the size
+/* ── "Update Measurements" CTA - always-available secondary action on the size
    screen (the user's dashboard). Pear-green outline pill, quieter than the primary
    Continue button but clearly interactive. ── */
 .btn-update-measure {
@@ -332,7 +332,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .btn-update-measure:active { transform: scale(.96); }
 .btn-update-measure:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--pear-ring), var(--shadow-soft); }
 
-/* ── shared circular icon badge — used by the "demo already used" screen (see
+/* ── shared circular icon badge - used by the "demo already used" screen (see
    #screen-locked in index.html); originally introduced for the 30-day
    re-measure reminder modal, which was replaced by the mandatory monthly
    measurements-refresh form (see PROFILE / MEASUREMENTS section in app.js). ── */
@@ -354,7 +354,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .measurements-refresh-notice[hidden] { display: none; }
 
-/* ── conditional optional fields — fluid "Liquid Glass" expandable panel ───
+/* ── conditional optional fields - fluid "Liquid Glass" expandable panel ───
    No display:none toggle. The panel is always in the DOM and opens organically
    via max-height + opacity + transform + visibility, so the card stretches
    downward smoothly instead of snapping. app.js toggles .is-expanded. ░░ */
@@ -391,7 +391,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .focus-calc-hint[hidden] { display: none; }
 
-/* ── OTP verification screen — same frosted-glass card language as the
+/* ── OTP verification screen - same frosted-glass card language as the
    identity gate it's inserted after (Screen 1, first-time visitors only). ── */
 .otp-card { display: grid; gap: 13px; }
 .otp-card[hidden] { display: none; }
@@ -424,7 +424,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 #btn-resend-otp { margin-top: 0; width: 100%; }
 
 /* ════════════════════════════════════════════════════════════════════════
-   SCREEN 1 — Editorial split-screen (cinematic lookbook + glass size card)
+   SCREEN 1 - Editorial split-screen (cinematic lookbook + glass size card)
    ════════════════════════════════════════════════════════════════════════ */
 .calc-shell {
   max-width: 1180px;
@@ -453,7 +453,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   object-fit: cover; object-position: 50% 22%;
   filter: grayscale(1) contrast(1.05) brightness(.92);   /* strict B&W */
 }
-/* layered scrim — pure black gradients + a faint pear-green top glow */
+/* layered scrim - pure black gradients + a faint pear-green top glow */
 .calc-editorial__scrim {
   position: absolute; inset: 0; z-index: 1;
   background:
@@ -529,14 +529,14 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   SCREEN 2 — fitting room
+   SCREEN 2 - fitting room
    ════════════════════════════════════════════════════════════════════════ */
 
-/* product-isolation status bar — frosted white glass, pear-green cues */
+/* product-isolation status bar - frosted white glass, pear-green cues */
 .focus-bar {
   position: sticky; top: 0; z-index: 30;
   display: flex; align-items: center; gap: 12px;
-  padding: 22px clamp(16px,5vw,36px);   /* was 15px — sat too close to the viewport's top edge */
+  padding: 22px clamp(16px,5vw,36px);   /* was 15px - sat too close to the viewport's top edge */
   background: linear-gradient(135deg, rgba(255,255,255,.6), rgba(255,255,255,.4));
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--ink);
@@ -544,7 +544,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   box-shadow: var(--shadow-soft);
   font-size: .95rem; font-weight: 600;
   /* On the BASE rule (not just the mobile/is-scrolled overrides) so scrolling
-     back UP also animates at every width — previously only the ≤768px block
+     back UP also animates at every width - previously only the ≤768px block
      and .is-scrolled itself declared this, so desktop widths snapped instantly
      the moment .is-scrolled was removed instead of tweening back. This is the
      RETRACTING direction (is-scrolled → base): a smooth, no-overshoot ease,
@@ -562,7 +562,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   70% { box-shadow: 0 0 0 10px rgba(141,182,0,0); }
   100% { box-shadow: 0 0 0 0 rgba(141,182,0,0); }
 }
-/* Arrival flourish — a quick overshoot pop the instant the dot lands in its
+/* Arrival flourish - a quick overshoot pop the instant the dot lands in its
    flush position, layered on top of (not replacing) the constant ambient
    pulse above; the two animate different properties so they never fight. */
 @keyframes dotPop {
@@ -586,11 +586,11 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   padding: 24px clamp(16px,5vw,36px) 0;
   max-width: 760px; margin: 0 auto;
 }
-/* Back to Store — frosted-glass pill matching the room theme */
+/* Back to Store - frosted-glass pill matching the room theme */
 .back-to-store {
   align-self: center;
   display: inline-flex; align-items: center; gap: 6px;
-  min-width: 0;   /* LAYOUT FIX: let this pill itself shrink inside the nav zone —
+  min-width: 0;   /* LAYOUT FIX: let this pill itself shrink inside the nav zone -
                      without this it refused to shrink below its label's natural
                      width and spilled out of the nav box into the brand lockup. */
   padding: 7px 13px;
@@ -609,7 +609,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   border-color: rgba(141, 182, 0, .55);
   box-shadow: 0 8px 22px rgba(141, 182, 0, .2);
 }
-.back-to-store svg  { flex: none; }   /* icon is fixed-size — only the label may shrink */
+.back-to-store svg  { flex: none; }   /* icon is fixed-size - only the label may shrink */
 /* LAYOUT FIX: truncate the label with an ellipsis instead of letting it overflow
    the pill (which is what was visually overlapping the pear logo). min-width:0
    lets the flex-item span shrink at all; the rest is standard ellipsis truncation. */
@@ -618,12 +618,12 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* Edit Measurements — same frosted pill language as Back to Store, but
+/* Edit Measurements - same frosted pill language as Back to Store, but
    pear-green accented (an action, not a navigation link). */
 .btn-edit-measurements {
   align-self: center;
   display: inline-flex; align-items: center; gap: 6px;
-  min-width: 0;   /* LAYOUT FIX: this is the button the logo was overlapping — same
+  min-width: 0;   /* LAYOUT FIX: this is the button the logo was overlapping - same
                      shrink-instead-of-spill fix as .back-to-store above. */
   padding: 7px 13px; margin: 0; border: 0;
   border-radius: var(--pill);
@@ -631,7 +631,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   border: 1px solid rgba(141, 182, 0, .35);
   /* LEGIBILITY FIX: var(--pear-deep) (#5f7d00) on var(--pear-tint) over the page's
-     cream backdrop computes to only ~4.08:1 contrast — under the 4.5:1 WCAG AA
+     cream backdrop computes to only ~4.08:1 contrast - under the 4.5:1 WCAG AA
      minimum for text this size/weight. #4a6300 on the same background is ~5.9:1.
      Scoped to just this button rather than changing --pear-deep globally (that
      variable is the app's one shared accent color, used well beyond the header). */
@@ -646,15 +646,15 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   box-shadow: 0 8px 22px rgba(141, 182, 0, .2);
 }
 .btn-edit-measurements:active { transform: scale(.96); }
-.btn-edit-measurements svg  { flex: none; }   /* icon is fixed-size — only the label may shrink */
-/* LAYOUT FIX: same ellipsis-truncation fix as .back-to-store span — this label no
+.btn-edit-measurements svg  { flex: none; }   /* icon is fixed-size - only the label may shrink */
+/* LAYOUT FIX: same ellipsis-truncation fix as .back-to-store span - this label no
    longer overflows the button into the neighbouring logo/title zone. */
 .btn-edit-measurements span {
   line-height: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* NOTE: the old ≤480px rule that hid these buttons' text (icon-only fallback)
-   was removed — the 2-row mobile header (see the "SMALL-PHONE HEADER" block
+   was removed - the 2-row mobile header (see the "SMALL-PHONE HEADER" block
    further down) gives both buttons their own row/column, so the full label
    ("חזרה לחנות" / "עריכת מידות") always fits and stays visible instead of
    collapsing to an icon. */
@@ -673,7 +673,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   color: var(--muted); font-size: .84rem; line-height: 1.2; max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* Removed everywhere, not just mobile — a bare grey dot with no label reads
+/* Removed everywhere, not just mobile - a bare grey dot with no label reads
    as a stray UI fragment next to the cart button (it already had a comment
    below calling it purely decorative and hiding it at <=768px; this just
    drops the width condition). setConn() (app.js) still updates it defensively
@@ -688,7 +688,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
 
-/* active garment chip — floating glass tile */
+/* active garment chip - floating glass tile */
 .active-garment {
   display: flex; align-items: center; gap: 16px;
   padding: 14px; margin-bottom: 22px;
@@ -715,10 +715,10 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }
 .ag-duo > span { border: 1px solid var(--glass-border); border-radius: 9px; overflow: hidden; }
 
-/* ── camera card — premium rounded glass-framed stage ──────────────────── */
+/* ── camera card - premium rounded glass-framed stage ──────────────────── */
 .camera-card {
   position: relative; width: 100%; max-width: 470px; margin: 0 auto;
-  /* Responsive stage — no rigid 3/4 lock. A gentle portrait default (less
+  /* Responsive stage - no rigid 3/4 lock. A gentle portrait default (less
      zoom/crop than 3/4) that never outgrows the viewport; the desktop rule
      further down widens it so landscape webcams show with minimal crop. */
   aspect-ratio: 4 / 5; max-height: min(78vh, 640px); border-radius: 24px;
@@ -749,12 +749,12 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .camera-card.show-live #webcam { visibility: hidden; }
 .camera-card.show-live .camera-card__guide { display: none; }
 
-/* ── Colour swatches — variant bubbles pinned to the camera stage ─────────────
+/* ── Colour swatches - variant bubbles pinned to the camera stage ─────────────
    The only floating gallery control left on the live stage. Pinned to the inline-start
    edge, vertically centred, ABOVE the live #aiVideo (z-index 7 > the video) so the colour
    can be switched mid-stream. Absolutely positioned and out of flow, so the swatch strip
    appearing/disappearing between products NEVER reflows the video stage.
-   (The old vertical perspective / AI-mode rail was removed — AI Combined is now the sole,
+   (The old vertical perspective / AI-mode rail was removed - AI Combined is now the sole,
    hardcoded try-on mode, applied automatically with no on-screen picker.) */
 .product-gallery {
   position: absolute;
@@ -768,7 +768,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   gap: 8px;
 }
 
-/* Colour swatch strip — a glass pill of round variant bubbles. */
+/* Colour swatch strip - a glass pill of round variant bubbles. */
 .product-swatches {
   display: flex;
   align-items: center;
@@ -852,7 +852,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .camera-card.live .camera-card__guide { display: block; }
 .camera-card.show-result .camera-card__guide { display: none; }
 
-/* ── strict 5-second live countdown — the visible token kill-clock ──────────
+/* ── strict 5-second live countdown - the visible token kill-clock ──────────
    A frosted disc whose conic ring drains pear-green → empty as the seconds tick,
    flipping to a pulsing red in the final second. Driven by --cd-frac + .is-final
    from app.js (showLiveCountdown / tickLiveCountdown). */
@@ -889,7 +889,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   50%      { box-shadow: 0 6px 22px rgba(0,0,0,.34), inset 0 0 0 1px rgba(255,90,90,.75), 0 0 0 9px rgba(255,90,90,0); }
 }
 
-/* placeholder (camera off) — frosted glass */
+/* placeholder (camera off) - frosted glass */
 .camera-card__placeholder {
   position: absolute; inset: 0; z-index: 7;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
@@ -960,7 +960,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   display: flex; flex-direction: column; align-items: center; gap: 14px;
   max-width: 470px; margin: 24px auto 0;
 }
-/* "Go Live" — inviting translucent pear-green glass capsule */
+/* "Go Live" - inviting translucent pear-green glass capsule */
 .btn-capture {
   width: 100%; display: flex; flex-direction: column; align-items: center; gap: 2px;
   padding: 16px 24px; border: 1px solid rgba(141, 182, 0, .35); border-radius: var(--pill);
@@ -981,7 +981,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--muted-2); border-color: var(--glass-line); box-shadow: none; cursor: not-allowed;
 }
-/* "Stop" — clean monochrome black glass capsule */
+/* "Stop" - clean monochrome black glass capsule */
 .btn-capture.is-live {
   background: var(--glass-dark);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
@@ -1030,7 +1030,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   transform: scale(1.06);
 }
 
-/* ── catalog panel — floating glass "bubble" overlay holding glass tiles ── */
+/* ── catalog panel - floating glass "bubble" overlay holding glass tiles ── */
 .catalog-panel,
 .garment-selector-bubble {
   margin-top: 46px; padding: 22px clamp(16px, 4vw, 26px);
@@ -1091,7 +1091,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .cat-item--blocked { opacity: .82; }
 .cat-item--blocked .cat-item__media { filter: grayscale(.28); }
 
-/* ── complete the look — glass cards ───────────────────────────────────── */
+/* ── complete the look - glass cards ───────────────────────────────────── */
 .complete-look { margin-top: 48px; }
 .complete-look[hidden] { display: none; }
 .complete-look__head { margin-bottom: 18px; }
@@ -1099,7 +1099,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .cl-title span { color: var(--pear-deep); font-weight: 700; }
 .cl-sub { margin: 5px 0 0; color: var(--muted); font-size: .9rem; }
 
-/* Non-scrolling positioning reference for the arrows below — ONLY #clTrack
+/* Non-scrolling positioning reference for the arrows below - ONLY #clTrack
    itself scrolls, so the arrows (its siblings here) stay pinned to the
    carousel's edges regardless of how far the cards have scrolled, instead of
    scrolling away with the content. */
@@ -1112,7 +1112,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }
 .cl-track::-webkit-scrollbar { height: 0; width: 0; display: none; }
 
-/* Desktop-only mouse/trackpad scroll arrows — same pear-tint/pear-deep glass-pill
+/* Desktop-only mouse/trackpad scroll arrows - same pear-tint/pear-deep glass-pill
    language as .cl-card__look ("Add to Look") so they read as part of the same
    design system rather than a bolted-on control. display:none by default (touch
    devices already have native horizontal swipe); enabled only at desktop widths
@@ -1140,10 +1140,10 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .cl-arrow:active { transform: translateY(-50%) scale(.94); }
 .cl-arrow svg { flex: none; }
 /* Plain left/right (not inset-inline-start/end): these buttons scroll the
-   PHYSICAL viewport left/right (see the JS — scrollBy({left}) is a physical-axis
+   PHYSICAL viewport left/right (see the JS - scrollBy({left}) is a physical-axis
    API regardless of RTL), so "left arrow" must always be the button on the
    visual left, independent of the page's RTL reading direction.
-   NEGATIVE offsets — push the buttons OUTSIDE .cl-track-wrap's own box (which
+   NEGATIVE offsets - push the buttons OUTSIDE .cl-track-wrap's own box (which
    exactly matches the visible card area) instead of overlapping the first/last
    card. .complete-look/.container have no overflow:hidden in their ancestor
    chain, so this negative offset is never clipped. */
@@ -1174,7 +1174,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .cl-card__cat { display: block; font-size: .68rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--pear-deep); }
 .cl-card__name { font-family: "Urbanist"; font-size: .98rem; font-weight: 800; margin: 4px 0; color: var(--ink); }
 .cl-card__price { font-size: .84rem; color: var(--ink); font-weight: 600; }
-/* "Complete the Look" CTA — translucent pear-green glass capsule */
+/* "Complete the Look" CTA - translucent pear-green glass capsule */
 .cl-card__look {
   margin: 10px; padding: 11px 14px; border: 1px solid rgba(141, 182, 0, .35); border-radius: var(--pill);
   background: var(--pear-tint);
@@ -1225,7 +1225,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .post-session-actions .btn-watch,
 .post-session-actions .btn-download { flex: 1; width: auto; min-width: 0; }
 
-/* "Watch Again" — translucent pear-green glass capsule (primary replay) */
+/* "Watch Again" - translucent pear-green glass capsule (primary replay) */
 .btn-watch {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   padding: 14px 24px; border: 1px solid rgba(141, 182, 0, .35); border-radius: var(--pill);
@@ -1241,7 +1241,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .btn-watch__icon { font-size: 1.15rem; }
 .btn-watch__en { font-size: .74rem; opacity: .8; letter-spacing: .06em; }
 
-/* "Download Video" — frosted monochrome glass capsule (secondary save) */
+/* "Download Video" - frosted monochrome glass capsule (secondary save) */
 .btn-download {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   padding: 14px 24px; border: 1px solid var(--glass-border); border-radius: var(--pill);
@@ -1257,12 +1257,12 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .btn-download__en { font-size: .74rem; opacity: .8; letter-spacing: .06em; }
 
 /* ════════════════════════════════════════════════════════════════════════
-   "Finished height + weight" — cool cascading reveal of the optional fields
+   "Finished height + weight" - cool cascading reveal of the optional fields
    ─────────────────────────────────────────────────────────────────────────
    When both mandatory fields become valid, app.js adds .is-expanded. The panel
    itself stretches open (above); on top of that each optional row pops up in
    sequence (slight elastic overshoot) so the form feels like it is "filling
-   up", inviting the user to keep going — or to continue. ░░ */
+   up", inviting the user to keep going - or to continue. ░░ */
 .optional-fields.is-expanded > * {
   animation: pearPopIn .55s cubic-bezier(.34, 1.56, .64, 1) both;
 }
@@ -1315,14 +1315,14 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }   /* +16px grid gap ≈ 26px */
 .result-actions .result-box { margin-top: 0; transition-delay: .06s; }   /* tray owns the top gap */
 
-/* staggered liquid entry — the size box first, the Continue button just after */
+/* staggered liquid entry - the size box first, the Continue button just after */
 #btn-next-screen {
   opacity: 0; transform: translateY(12px) scale(.98);
   /* This ID selector outranks .btn-primary's `transition: all .4s var(--ease)` for the
-     WHOLE `transition` property (ID beats class — the cascade doesn't merge the two
+     WHOLE `transition` property (ID beats class - the cascade doesn't merge the two
      lists, it replaces one with the other). `color` was missing from this list, so the
      text colour (grey ↔ pear-green on disabled/enabled) snapped instantly while the
-     pill's background/border/glow eased in — a jarring, out-of-sync flash on the exact
+     pill's background/border/glow eased in - a jarring, out-of-sync flash on the exact
      moment the button becomes clickable. Included here to keep every property in sync. */
   transition: opacity .6s cubic-bezier(.25, 1, .5, 1),
               transform .6s cubic-bezier(.25, 1, .5, 1),
@@ -1334,7 +1334,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 #btn-next-screen:hover:not(:disabled)  { transform: translateY(-2px); }   /* keep id-level hover/press */
 #btn-next-screen:active:not(:disabled) { transform: scale(.96); }
 
-/* once a size exists the Continue button breathes a soft pear glow — "you can go" */
+/* once a size exists the Continue button breathes a soft pear glow - "you can go" */
 #btn-next-screen:not(:disabled) { animation: continueInvite 2.6s ease-in-out infinite; }
 #btn-next-screen:hover:not(:disabled),
 #btn-next-screen:focus-visible:not(:disabled) { animation: none; }
@@ -1344,7 +1344,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   🍐 PEAR LOADER — shown whenever the app is loading something
+   🍐 PEAR LOADER - shown whenever the app is loading something
    A juicy pear bounces with squash-&-stretch over a soft contact shadow.
    Used inside #scanOverlay (go-live render) and the camera-start overlay.
    ════════════════════════════════════════════════════════════════════════ */
@@ -1392,7 +1392,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   PEAR Live-Action Gallery & Retake Pod — unified liquid-glass capsule (Screen 2)
+   PEAR Live-Action Gallery & Retake Pod - unified liquid-glass capsule (Screen 2)
    A single floating pod: Retake capsule + a horizontal swipeable tray of
    "Live Photo" try-on clips (local 5s blobs, poster-backed for persistence).
    ════════════════════════════════════════════════════════════════════════ */
@@ -1415,7 +1415,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .pip-title { font-size: 1.04rem; font-weight: 800; margin: 0; }
 .pip-title span { color: var(--pear-deep); font-weight: 700; font-size: .84rem; }
 
-/* Apple glass-pill Retake button — transparent, frosted reflection, ↺ icon */
+/* Apple glass-pill Retake button - transparent, frosted reflection, ↺ icon */
 .pip-retake {
   margin-inline-start: auto;
   display: inline-flex; align-items: center; gap: 7px;
@@ -1483,7 +1483,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 16px;
 }
 
-/* absolute blurred micro-badge: "Name — Size" */
+/* absolute blurred micro-badge: "Name - Size" */
 .live-gallery-item__badge {
   position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 2;
   display: flex; align-items: center; gap: 7px;
@@ -1501,7 +1501,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   letter-spacing: .02em; color: var(--pear);
 }
 
-/* tap-to-view lightbox — full-size glass overlay (image or looping clip) */
+/* tap-to-view lightbox - full-size glass overlay (image or looping clip) */
 .pear-lightbox { position: fixed; inset: 0; z-index: 200; display: none; align-items: center; justify-content: center; padding: 24px; }
 .pear-lightbox.show { display: flex; animation: fade .35s var(--ease) both; }
 .pear-lightbox__backdrop {
@@ -1567,7 +1567,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .plb-btn--live:hover { background: #9cca00; }
 .plb-btn--live .plb-btn__en { opacity: .6; }
 
-/* ── active replay glow — the tile currently playing in #aiVideo ── */
+/* ── active replay glow - the tile currently playing in #aiVideo ── */
 .live-gallery-item.is-playing {
   border-color: var(--pear);
   box-shadow: 0 0 0 2px var(--pear-ring), 0 10px 28px rgba(141,182,0,.3), var(--shadow-lift);
@@ -1665,7 +1665,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   Extra micro-motion — premium entrance + ambient life
+   Extra micro-motion - premium entrance + ambient life
    ════════════════════════════════════════════════════════════════════════ */
 @keyframes riseIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 
@@ -1676,7 +1676,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 #screen-calculator.active #sizeForm > .form-group:nth-child(1) { animation: riseIn .6s var(--ease) both; animation-delay: .27s; }
 #screen-calculator.active #sizeForm > .form-group:nth-child(2) { animation: riseIn .6s var(--ease) both; animation-delay: .34s; }
 
-/* editorial photo — slow cinematic Ken Burns drift */
+/* editorial photo - slow cinematic Ken Burns drift */
 .calc-editorial__img { animation: kenBurns 24s ease-in-out infinite alternate; }
 @keyframes kenBurns {
   from { transform: scale(1)    translate(0, 0); }
@@ -1702,7 +1702,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .btn-watch:hover::after { animation: btnShine .9s var(--ease); }
 @keyframes btnShine { from { left: -130%; } to { left: 140%; } }
 
-/* progress bar — a travelling light sheen rides the fill */
+/* progress bar - a travelling light sheen rides the fill */
 .step-progress-fill { position: relative; overflow: hidden; }
 .step-progress-fill::after {
   content: ""; position: absolute; inset: 0;
@@ -1735,12 +1735,12 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   ✦ MOBILE EXPERIENCE LAYER — app-like phone UI + orchestrated motion
+   ✦ MOBILE EXPERIENCE LAYER - app-like phone UI + orchestrated motion
    ─────────────────────────────────────────────────────────────────────────
    Additive only. Extends the Monochrome Liquid-Glass identity for touch:
    an immersive camera stage, a sticky/shrinking header, a swipeable catalog,
    and a layer of tactile motion (scroll-reveal, ripple, spring presses, live
-   aura). Every existing id/class/state hook is preserved — JS logic untouched.
+   aura). Every existing id/class/state hook is preserved - JS logic untouched.
    ════════════════════════════════════════════════════════════════════════ */
 
 :root {
@@ -1784,14 +1784,14 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 @media (max-width: 768px) {
 
   /* sticky, frosted app chrome that compacts as you scroll into the stage.
-     DEAD-SPACE FIX: top/bottom padding trimmed (was 14px/14px, scrolled 8px/8px) —
+     DEAD-SPACE FIX: top/bottom padding trimmed (was 14px/14px, scrolled 8px/8px) -
      the row's own content height was already carrying the visual weight; this was
      pure extra air above/below it. */
   .app-header {
     position: sticky; top: 0; z-index: 40;
     max-width: none; margin: 0;
     padding: calc(8px + var(--safe-t)) clamp(16px, 5vw, 22px) 8px;
-    gap: 8px;   /* was the base rule's 12px — tighter, more compact on phones */
+    gap: 8px;   /* was the base rule's 12px - tighter, more compact on phones */
     background: linear-gradient(180deg, rgba(247,247,246,.88), rgba(247,247,246,.30));
     -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
     border-bottom: 1px solid transparent;
@@ -1801,9 +1801,9 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
     border-bottom-color: var(--glass-border);
     box-shadow: 0 6px 20px rgba(0, 0, 0, .06);
   }
-  /* in focus mode the .focus-bar already owns the sticky top slot — don't stack two */
+  /* in focus mode the .focus-bar already owns the sticky top slot - don't stack two */
   .focus-bar:not([hidden]) ~ .app-header { position: static; }
-  /* PROMINENCE FIX: was 1.26rem/1.1rem (scrolled) — scaled up so the wordmark reads
+  /* PROMINENCE FIX: was 1.26rem/1.1rem (scrolled) - scaled up so the wordmark reads
      as the header's visual anchor instead of getting lost in the trimmed padding. */
   .app-header__brand { font-size: 1.4rem; transition: font-size .45s var(--ease); }
   .app-header.is-scrolled .app-header__brand { font-size: 1.2rem; }
@@ -1815,7 +1815,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   }
   .personal-title { font-size: 1.5rem; line-height: 1.18; margin: 6px 0 20px; }
 
-  /* ── immersive camera stage — near-full-bleed, deeper, alive ── */
+  /* ── immersive camera stage - near-full-bleed, deeper, alive ── */
   .camera-card {
     max-width: 100%;
     border-radius: 30px;
@@ -1872,7 +1872,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   SMALL PHONE  (≤ 480px) — declutter + tune
+   SMALL PHONE  (≤ 480px) - declutter + tune
    ════════════════════════════════════════════════════════════════════════ */
 @media (max-width: 480px) {
   .personal-title { font-size: 1.34rem; }
@@ -1929,7 +1929,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }
 .cart-btn__count.is-empty { transform: scale(0); opacity: 0; }
 
-/* ── Profile button (Feature 3) — fixed top-right corner, always visible in the
+/* ── Profile button (Feature 3) - fixed top-right corner, always visible in the
    fitting room once a user is known. Same frosted-circle language as .cart-btn,
    pear-green accented. z-index sits above the camera stage (highest in-camera
    z-index is 9, see .camera-card__* rules) but below any modal/overlay
@@ -1946,7 +1946,7 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   transition: box-shadow .3s var(--ease), background .3s var(--ease),
               top .3s var(--ease), width .3s var(--ease), height .3s var(--ease),
               /* Asymmetric like the focus-bar padding above: a springy pop
-                 OUT of view, a calmer ease back IN — set on the base rule so
+                 OUT of view, a calmer ease back IN - set on the base rule so
                  it's the "returning to visible" direction's timing; the
                  disappear rule below overrides both with its own pop. */
               transform .35s var(--ease), opacity .35s var(--ease);
@@ -1957,11 +1957,11 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 
 /* STICKING/OVERLAP FIX: .profile-btn is position:fixed at a CONSTANT top offset,
    independent of .app-header's own scroll-triggered compaction (padding shrinks,
-   see .app-header.is-scrolled) — so as the header shrank on scroll, the button
+   see .app-header.is-scrolled) - so as the header shrank on scroll, the button
    stayed rigidly where it started, drifting out of sync with (and at some scroll
    positions, overlapping) header/focus-bar content that had since moved up under
    it. body.is-scrolled is set by the SAME scroll listener that drives
-   .app-header.is-scrolled (see mobile-ux.js) — .profile-btn can't use a sibling
+   .app-header.is-scrolled (see mobile-ux.js) - .profile-btn can't use a sibling
    selector off .app-header directly (it comes BEFORE it in the DOM; combinators
    only select forward), so this shared flag on <body> is what lets it react. */
 @media (max-width: 768px) {
@@ -1972,9 +1972,9 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }
 
 /* Vertically center the avatar on the focus-bar's own content row while
-   they're both visible together (focus mode, unscrolled — once scrolled the
+   they're both visible together (focus mode, unscrolled - once scrolled the
    avatar is faded out, see below, so no alignment to worry about there).
-   .focus-bar is now 22px vertical padding (bumped from 15px — the bar sat too
+   .focus-bar is now 22px vertical padding (bumped from 15px - the bar sat too
    close to the viewport's top edge) + a ~24.6px content row (the badge is the
    tallest child: 5px+5px padding + a ~14.6px line) = ~68.6px tall, centered at
    ~34px from the top. The avatar's own base top:16px + half its 40px height =
@@ -1987,14 +1987,14 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 }
 
 /* Focus mode + scrolled: the focus-bar's item-name/dot needs the WHOLE right
-   edge (flush, zero gutter — see .focus-bar.is-scrolled below). Tried
-   relocating the avatar to the opposite corner instead — it crowded the size
+   edge (flush, zero gutter - see .focus-bar.is-scrolled below). Tried
+   relocating the avatar to the opposite corner instead - it crowded the size
    badge sitting there and read as cramped. Simplest clean fix: fade the
    avatar out while scrolled; it's still one tap away (fades back in the
    instant the user scrolls back up, off the same class toggle). Applies at
-   ANY width, not just mobile — desktop needs the same flush edge. Scale, not
+   ANY width, not just mobile - desktop needs the same flush edge. Scale, not
    just opacity, so it reads as a deliberate "tuck away" rather than a flat
-   dissolve — and its own transition (a quick, snappy --spring) so vanishing
+   dissolve - and its own transition (a quick, snappy --spring) so vanishing
    is brisk while the reappear (base rule above, --ease, no overshoot) is a
    calmer grow-in. */
 body.focus-mode.is-scrolled .profile-btn {
@@ -2018,7 +2018,7 @@ body.focus-mode.is-scrolled .profile-btn {
 }
 .profile-dropdown[hidden] { display: none; }
 
-/* ── identity section — centred: big initials circle, full name, email ── */
+/* ── identity section - centred: big initials circle, full name, email ── */
 .profile-dropdown__identity {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   text-align: center; padding-bottom: 12px;
@@ -2040,7 +2040,7 @@ body.focus-mode.is-scrolled .profile-btn {
 
 .profile-dropdown__divider { height: 1px; margin: 4px 0 8px; background: var(--glass-line); }
 
-/* ── measurements section — right-aligned rows ── */
+/* ── measurements section - right-aligned rows ── */
 .profile-dropdown__measurements { text-align: right; }
 .profile-dropdown__row {
   display: flex; align-items: baseline; gap: 6px; padding: 4px 0;
@@ -2156,15 +2156,15 @@ body.focus-mode.is-scrolled .profile-btn {
   box-shadow: 0 3px 10px rgba(141,182,0,.4);
 }
 
-/* ── 2 · "LIQUID BRAND APERTURE" transition — GPU-ONLY (transform + opacity) ──
+/* ── 2 · "LIQUID BRAND APERTURE" transition - GPU-ONLY (transform + opacity) ──
    Hardware-acceleration protocol: NOTHING that triggers layout/paint is animated
    (no width/height/clip-path/border-radius/SVG-r). Three composited layers:
-     · __bg    — heavy glass backdrop (opacity only)
-     · __shape — the brand logo        (transform scale + opacity)
-     · __flood — pear-green aperture    (transform scale + opacity)
+     · __bg    - heavy glass backdrop (opacity only)
+     · __shape - the brand logo        (transform scale + opacity)
+     · __flood - pear-green aperture    (transform scale + opacity)
    The flood is ONE viewport-sized ellipse promoted to its own GPU layer; it
    scales up to mask the screen, then scales out + fades like a camera aperture.
-   NO secondary "bite" shape exists any more — it was deleted entirely. */
+   NO secondary "bite" shape exists any more - it was deleted entirely. */
 .pear-transition {
   position: fixed; inset: 0; z-index: 9000;
   display: grid; place-items: center; pointer-events: none;
@@ -2195,7 +2195,7 @@ body.focus-mode.is-scrolled .profile-btn {
    scaled from the centre. transform + opacity only. */
 .pear-transition__flood {
   position: fixed; inset: 0;
-  border-radius: 50%;                        /* static — never animated */
+  border-radius: 50%;                        /* static - never animated */
   background:
     radial-gradient(circle at 50% 42%, #a4d000 0%, var(--pear) 52%, var(--pear-deep) 100%);
   transform-origin: 50% 50%;
@@ -2204,13 +2204,13 @@ body.focus-mode.is-scrolled .profile-btn {
   will-change: transform, opacity;
   backface-visibility: hidden; -webkit-backface-visibility: hidden;
 }
-/* ── Cinematic 1200ms sequence — Intro → Flood → (swap) → Aperture reveal ────
+/* ── Cinematic 1200ms sequence - Intro → Flood → (swap) → Aperture reveal ────
    Phase 1  INTRO    (0–400ms):   logo scales up + fades in over the glass bg.
    Phase 2  FLOOD    (400–700ms): the pear-green ellipse scales up to fully mask
             the viewport; the logo + bg fade out underneath, hidden by the flood.
    Phase 3  SWAP     (≈700ms):    app.js swaps screens while 100% covered (rAF).
    Phase 4  APERTURE (700–1200ms): the flood scales to ×3.5 and fades out on the
-            Apple curve — a luxury aperture opening onto the try-on room. */
+            Apple curve - a luxury aperture opening onto the try-on room. */
 .pear-transition.is-playing .pear-transition__bg {
   animation: apBg 1.2s linear both;
 }
@@ -2235,11 +2235,11 @@ body.focus-mode.is-scrolled .profile-btn {
   100% { transform: translate3d(0,0,0) scale(1)   rotate(0deg);  opacity: 1; }
 }
 @keyframes apLogoOut { to { opacity: 0; } }   /* covered by the flood as it fades */
-@keyframes apFloodIn {        /* liquid flood — seals the viewport from the centre */
+@keyframes apFloodIn {        /* liquid flood - seals the viewport from the centre */
   0%   { transform: translate3d(0,0,0) scale(0);   opacity: 1; }
   100% { transform: translate3d(0,0,0) scale(1.7); opacity: 1; }   /* >diagonal → full cover */
 }
-@keyframes apFloodOut {       /* cinematic aperture — scale out + fade, Apple curve */
+@keyframes apFloodOut {       /* cinematic aperture - scale out + fade, Apple curve */
   0%   { transform: translate3d(0,0,0) scale(1.7); opacity: 1; }
   100% { transform: translate3d(0,0,0) scale(3.5); opacity: 0; }
 }
@@ -2261,7 +2261,7 @@ body.focus-mode.is-scrolled .profile-btn {
 }
 @keyframes luxShimmer { from { background-position: 180% 0; } to { background-position: -60% 0; } }
 
-/* ── 4 · Magnetic buttons — animate the inner content drift smoothly ───── */
+/* ── 4 · Magnetic buttons - animate the inner content drift smoothly ───── */
 .lux-magnetic > * { transition: transform .45s var(--power); }
 .lux-magnetic:active > * { transition-duration: .12s; }
 
@@ -2272,12 +2272,12 @@ body.focus-mode.is-scrolled .profile-btn {
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   ✦ BRAND PALETTE — logo-matched ivory + crisp black + PEAR-GREEN accent
+   ✦ BRAND PALETTE - logo-matched ivory + crisp black + PEAR-GREEN accent
    ─────────────────────────────────────────────────────────────────────────
    Strictly three colours, derived from the brand assets:
-     • Canvas      — warm luxury IVORY (the logo's cream ground).
-     • Type / lines— crisp luxury BLACK (the logo's line-art ink).
-     • Accent      — vibrant PEAR GREEN (#8DB600), reserved for interactive,
+     • Canvas      - warm luxury IVORY (the logo's cream ground).
+     • Type / lines- crisp luxury BLACK (the logo's line-art ink).
+     • Accent      - vibrant PEAR GREEN (#8DB600), reserved for interactive,
                      active and highlight moments only (buttons, focus, live,
                      active tiles, results, progress). NO other accent colours.
    This block lives LAST so it is the single source of truth for the palette.
@@ -2293,7 +2293,7 @@ body.focus-mode.is-scrolled .profile-btn {
   --muted:  #6c665b;
   --muted-2:#a89f8d;
 
-  /* PEAR-GREEN accent family — the one sanctioned accent */
+  /* PEAR-GREEN accent family - the one sanctioned accent */
   --pear:      #8DB600;
   --pear-deep: #5f7d00;
   --pear-soft: rgba(141, 182, 0, .10);
@@ -2319,7 +2319,7 @@ body {
     linear-gradient(180deg, #f4eee1 0%, #ece4d2 52%, #f1ebdd 100%);
   background-attachment: fixed;
 }
-/* ambient orbs: one warm sand, one faint pear-green — subtle, never an accent */
+/* ambient orbs: one warm sand, one faint pear-green - subtle, never an accent */
 body::before { background: radial-gradient(circle at 30% 30%, rgba(141, 182, 0, .26), transparent 65%); }
 body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92, .22), transparent 65%); }
 
@@ -2329,7 +2329,7 @@ body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92,
   color: var(--ink); margin-inline-end: 4px;
 }
 
-/* ── ADD-TO-CART CTA — pear-green physical-glass feedback ────────────────── */
+/* ── ADD-TO-CART CTA - pear-green physical-glass feedback ────────────────── */
 .btn-add-cart {
   border-color: rgba(141, 182, 0, .40);
   background: linear-gradient(135deg, rgba(141, 182, 0, .20), rgba(141, 182, 0, .08));
@@ -2352,7 +2352,7 @@ body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92,
 
 .cart-btn__count {
   /* LEGIBILITY FIX: the lighter end of the old pear→pear-deep gradient put white
-     text at ~2.4:1 contrast — well under the 4.5:1 AA minimum. A flat
+     text at ~2.4:1 contrast - well under the 4.5:1 AA minimum. A flat
      --pear-deep keeps the same brand color family at a safe ~4.75:1. */
   background: var(--pear-deep);
   box-shadow: 0 3px 10px rgba(141, 182, 0, .45);
@@ -2367,7 +2367,7 @@ body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92,
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   ✦ OVERFLOW ISOLATION — content can never collide with the ambient rails
+   ✦ OVERFLOW ISOLATION - content can never collide with the ambient rails
    ─────────────────────────────────────────────────────────────────────────
    The rails are fixed at the viewport edges (z-index 0, strictly behind the
    content). The only at-risk element is the full-bleed sticky focus bar, whose
@@ -2384,7 +2384,7 @@ body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92,
 /* once the rails appear (≥1340px) keep every full-width bar inside the gutter.
    Split left/right instead of the symmetric padding-inline shorthand: the
    right side only ever needs to clear the fixed avatar (40px + 16px inset =
-   56px), which the wide rail clamp badly over-reserved — dot+text ended up
+   56px), which the wide rail clamp badly over-reserved - dot+text ended up
    with a big dead gap before the avatar instead of sitting close to it. Left
    keeps the full rail clamp (still guards the badge side). */
 @media (min-width: 1340px) {
@@ -2394,7 +2394,7 @@ body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92,
   }
 }
 
-/* ── Real-logo loaders (/pear-logo.png) — replace the emoji pear ──────────── */
+/* ── Real-logo loaders (/pear-logo.png) - replace the emoji pear ──────────── */
 img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
 /* the loader sits on the DARK scan overlay → render the black logo as white */
 .scan-overlay img.pear-loader__fruit {
@@ -2402,7 +2402,7 @@ img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   ✦ LIQUID-GLASS DYNAMIC BACKGROUND — mouse/tilt-reactive ambient mesh
+   ✦ LIQUID-GLASS DYNAMIC BACKGROUND - mouse/tilt-reactive ambient mesh
    A single GPU layer (transform/opacity only) of blurred light blobs. JS gives
    it an inertial translate3d so it reads like light moving under liquid glass.
    ════════════════════════════════════════════════════════════════════════ */
@@ -2427,7 +2427,7 @@ img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
   50%      { box-shadow: 0 0 0 6px rgba(141, 182, 0, .12), 0 10px 30px rgba(141, 182, 0, .30); }
 }
 
-/* ── Micro-inertia floating label — glides magnetically toward the cursor ── */
+/* ── Micro-inertia floating label - glides magnetically toward the cursor ── */
 .lux-field > label {
   transform-origin: center;
   transform: translate3d(var(--lblx, 0px), var(--lbly, 0px), 0);
@@ -2442,15 +2442,15 @@ img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
 .lux-field.is-focus > label { color: var(--pear); }
 
 /* ════════════════════════════════════════════════════════════════════════
-   "UPLOAD YOUR OWN GARMENT" — upload card · detection overlay · boxes
+   "UPLOAD YOUR OWN GARMENT" - upload card · detection overlay · boxes
    ────────────────────────────────────────────────────────────────────────
    Its own Luxury white / royal-blue accent (scoped --royal* tokens), kept
    distinct from the app's pear-green so the upload flow reads as a special,
    premium action while the rest of the room is untouched.
    ════════════════════════════════════════════════════════════════════════ */
 :root {
-  --royal:      #0b3c95;                 /* MERIDIAN royal blue — borders / text */
-  --royal-lift: #2b6bff;                 /* brighter royal — glow / active state */
+  --royal:      #0b3c95;                 /* MERIDIAN royal blue - borders / text */
+  --royal-lift: #2b6bff;                 /* brighter royal - glow / active state */
   --royal-soft: rgba(43, 107, 255, .14);
   --royal-ring: rgba(43, 107, 255, .30);
   --royal-glow: rgba(43, 107, 255, .55);
@@ -2530,7 +2530,7 @@ img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
 .gd-close:hover { transform: scale(1.08) rotate(90deg); background: var(--royal-soft); }
 .gd-close:active { transform: scale(.94); }
 
-/* ── TOP / BOTTOM segmented toggle (outfit mode) — luxury pill control ──────── */
+/* ── TOP / BOTTOM segmented toggle (outfit mode) - luxury pill control ──────── */
 .gd-tabs {
   position: relative; align-self: center; display: grid; grid-template-columns: 1fr 1fr;
   width: min(300px, 100%); padding: 4px; border-radius: var(--pill);
@@ -2563,7 +2563,7 @@ img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
 .gd-frame { position: relative; display: inline-block; line-height: 0; border-radius: 16px; overflow: hidden; box-shadow: var(--shadow-soft); }
 .gd-frame__img { display: block; max-width: 100%; max-height: min(64vh, 560px); width: auto; height: auto; }
 
-/* ── focus scrim — subtle dark tint over the whole image (viewfinder mode) ──── */
+/* ── focus scrim - subtle dark tint over the whole image (viewfinder mode) ──── */
 .gd-scrim {
   position: absolute; inset: 0; z-index: 1; pointer-events: none;
   background: rgba(6,14,32,.44);
@@ -2575,7 +2575,7 @@ img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
 
 .gd-boxes { position: absolute; inset: 0; z-index: 2; }
 
-/* ── viewfinder bracket — no harsh border; rounded corner crosshairs + glow ── */
+/* ── viewfinder bracket - no harsh border; rounded corner crosshairs + glow ── */
 .gd-box {
   position: absolute; margin: 0; padding: 0; cursor: pointer;
   background: transparent; border: none; border-radius: 16px;
@@ -2617,7 +2617,7 @@ img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
   filter: drop-shadow(0 0 10px rgba(43,107,255,.9));
 }
 
-/* label badge ("עליון · Top" / "תחתון · Bottom" / "מלא · Full-body") — always shown
+/* label badge ("עליון · Top" / "תחתון · Bottom" / "מלא · Full-body") - always shown
    so overlapping garments are unambiguous; lights up on hover. */
 .gd-box__label {
   position: absolute; top: 8px; inset-inline-start: 8px;
@@ -2686,7 +2686,7 @@ body.gd-open { overflow: hidden; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   ✦ PEAR BRAND PASS — Didot wordmark · raster logo · camera stage · guide
+   ✦ PEAR BRAND PASS - Didot wordmark · raster logo · camera stage · guide
    ════════════════════════════════════════════════════════════════════════ */
 
 /* Didot serif on literal PEAR/pear brand text ONLY (never MERIDIAN). */
@@ -2698,10 +2698,10 @@ body.gd-open { overflow: hidden; }
   font-family: var(--pear-wordmark);
 }
 
-/* Header layout — three GENUINE flex siblings on one row: nav (right in RTL) ·
+/* Header layout - three GENUINE flex siblings on one row: nav (right in RTL) ·
    brand-lockup (centre) · actions (left in RTL). This replaces an earlier
    design where the lockup was pulled out of flex flow via position:absolute
-   and centred across the full header width — that made overlap with nav/
+   and centred across the full header width - that made overlap with nav/
    actions a geometry problem (nothing pushed it aside when they grew), which
    is exactly what caused the edit-measurements button to render on top of the
    subtitle text. With all three as real flex items again, ordinary
@@ -2720,7 +2720,7 @@ body.gd-open { overflow: hidden; }
 .app-header__actions .cart-btn { margin: 0; }   /* zone handles placement now */
 
 /* Brand lockup: logo + title/subtitle as one row. Logo is FIRST in DOM order,
-   so in this RTL document it renders at the lockup's visual RIGHT edge — i.e.
+   so in this RTL document it renders at the lockup's visual RIGHT edge - i.e.
    to the right of "PEAR" / the subtitle, vertically centred via
    align-items:center. flex:0 1 auto + min-width:0 lets the whole lockup
    shrink (and its title text ellipsize, see .app-header__brand/__sub) rather
@@ -2733,7 +2733,7 @@ body.gd-open { overflow: hidden; }
   gap: 3px; min-width: 0;
 }
 /* Header mark is a raster <img>; height-driven so its portrait width stays
-   proportional. flex:none — the logo never shrinks/distorts; only the text
+   proportional. flex:none - the logo never shrinks/distorts; only the text
    beside it truncates under pressure. */
 .brand-mark {
   width: auto; height: 38px; object-fit: contain; margin: 0; align-self: center; flex: none;
@@ -2746,28 +2746,28 @@ body.gd-open { overflow: hidden; }
 }
 
 /* Phone: keep the logo proportional to the compacting sticky header.
-   PROMINENCE FIX: was 32px/28px (scrolled) — scaled up to match the larger wordmark above. */
+   PROMINENCE FIX: was 32px/28px (scrolled) - scaled up to match the larger wordmark above. */
 @media (max-width: 768px) {
   .brand-mark { height: 36px; }
   .app-header.is-scrolled .brand-mark { height: 30px; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   ✦ MOBILE HEADER (≤768px, tightened further ≤480px) — ONE compact flex row
+   ✦ MOBILE HEADER (≤768px, tightened further ≤480px) - ONE compact flex row
    ─────────────────────────────────────────────────────────────────────────
    SUPERSEDES a previous ≤480px design that deliberately split the header
    into TWO rows (CSS Grid, back-to-store/edit-measurements each in their own
    row/track) specifically so their full text labels never had to truncate.
    That is a real, considered trade-off this reverses on explicit, repeated
-   instruction for "a clean, compact layout ... tight gap" in ONE row — there
+   instruction for "a clean, compact layout ... tight gap" in ONE row - there
    simply isn't room for "חזרה לחנות" + "עריכת מידות" as full text AND the
    logo AND the cart on one line at ~360-480px, so the nav buttons go
    icon-only here instead (label kept in the DOM + aria-label, just visually
-   hidden — screen readers/accessibility name are unaffected). If the 2-row
+   hidden - screen readers/accessibility name are unaffected). If the 2-row
    full-label layout is ever preferred again, that's a one-line revert of
    this block, not a rebuild. ════════════════════════════════════════════ */
 @media (max-width: 768px) {
-  /* Between 480-768px the buttons still share the base flex row — keep their
+  /* Between 480-768px the buttons still share the base flex row - keep their
      labels from ever ellipsis-truncating there too. */
   .back-to-store span,
   .btn-edit-measurements span {
@@ -2776,7 +2776,7 @@ body.gd-open { overflow: hidden; }
 }
 
 @media (max-width: 480px) {
-  /* No display:grid override here anymore — .app-header stays the ordinary
+  /* No display:grid override here anymore - .app-header stays the ordinary
      flex row from the base rule (line ~533: display:flex;
      justify-content:space-between), and .app-header__nav/.app-header__actions
      stay the ordinary flex zones from the general rule further up (~line
@@ -2789,7 +2789,7 @@ body.gd-open { overflow: hidden; }
   .app-header__nav { gap: 6px; }
 
   /* Icon-only: hide the label, keep the icon + the button's own aria-label
-     (accessible name is unaffected — only the VISIBLE text is hidden). */
+     (accessible name is unaffected - only the VISIBLE text is hidden). */
   .back-to-store,
   .btn-edit-measurements {
     padding: 7px; min-width: 32px; min-height: 32px; justify-content: center;
@@ -2797,7 +2797,7 @@ body.gd-open { overflow: hidden; }
   .back-to-store span,
   .btn-edit-measurements span { display: none; }
 
-  /* PROMINENCE FIX: was 16px/20px (logo) — now that the nav buttons are icon-only
+  /* PROMINENCE FIX: was 16px/20px (logo) - now that the nav buttons are icon-only
      (freeing up real width in this row), scale both up so PEAR + the mark read as
      the header's visual anchor instead of sitting small next to the icon buttons. */
   .app-header__brand { font-size: 21px; }
@@ -2826,10 +2826,10 @@ body.gd-open { overflow: hidden; }
    so its text/badge never render under the fixed, always-visible profile
    button. The garment name truncates to a single line with ellipsis instead
    of overflowing or wrapping. Same reservation now also applied at the
-   481-768px range below (previously only ≤480px had it — the profile button
+   481-768px range below (previously only ≤480px had it - the profile button
    is 40px + a 16px offset there, i.e. wider than the 34px it shrinks to once
    scrolled, so the gutter has to clear the LARGER, pre-scroll size). This is
-   the UNSCROLLED gutter only — see the is-scrolled rule below for why it
+   the UNSCROLLED gutter only - see the is-scrolled rule below for why it
    drops to a true 0 instead of just shrinking further. */
 @media (max-width: 480px) {
   .focus-bar { padding-right: 52px; font-size: 12px; flex-wrap: nowrap; }
@@ -2839,16 +2839,16 @@ body.gd-open { overflow: hidden; }
 }
 
 /* EDGE-ALIGNED, ALWAYS (was: centered when idle, edge-aligned only once scrolled).
-   That toggle is GONE — it was the actual bug. Centering the dot+text+badge group
+   That toggle is GONE - it was the actual bug. Centering the dot+text+badge group
    used .focus-bar's own padding-right (60px, reserved for the profile button) as
    one wall of the centering box, while the LEFT side only had the base ~16-20px
-   padding — so "centered" meant centered inside an ASYMMETRIC box, which reads as
+   padding - so "centered" meant centered inside an ASYMMETRIC box, which reads as
    visually wrong (neither centered nor edge-aligned) regardless of scroll state.
    That's what looked broken in every screenshot, not just the un-scrolled one.
    Fix: flex-start (RTL = visual right, alongside the badge) unconditionally.
    Range is <=1339px, not <=768px: this used to stop at the old mobile
    breakpoint, leaving 769-1339px (a very ordinary desktop/laptop width) with
-   NO gutter at all — the unscrolled avatar (40px + 16px inset = 56px) sat
+   NO gutter at all - the unscrolled avatar (40px + 16px inset = 56px) sat
    directly on top of the dot/text there, nothing pushing them apart, since
    the >=1340px ambient-rail gutter below hasn't kicked in yet either. */
 @media (max-width: 1339px) {
@@ -2859,31 +2859,31 @@ body.gd-open { overflow: hidden; }
 }
 
 /* Once scrolled, the avatar fades out (see body.focus-mode.is-scrolled
-   .profile-btn above) instead of sharing the edge — so the gutter it used to
+   .profile-btn above) instead of sharing the edge - so the gutter it used to
    reserve (mobile's 60px above, or the ≥1340px ambient-rail gutter below) is
    no longer needed. A literal 0 read as clipped/cramped in practice (the dot
-   sitting flush on the physical screen edge, no breathing room) — 14px is
+   sitting flush on the physical screen edge, no breathing room) - 14px is
    the smallest edge inset already used elsewhere in this file (the ≤480px
    profile-btn), so it stays visually "flush" without touching the glass.
-   Deliberately UNSCOPED by width — a compound class selector (0,2,0) beats a
+   Deliberately UNSCOPED by width - a compound class selector (0,2,0) beats a
    plain `.focus-bar` rule (0,1,0) regardless of which media query it's in or
    its source order, so this wins at every breakpoint, including inside
    `@media (min-width:1340px)` above. That's intentional: the rail-collision
-   bug that gutter guards against only ever hit the STATIC, unscrolled bar —
+   bug that gutter guards against only ever hit the STATIC, unscrolled bar -
    the scrolled bar is a distinct compact-chrome state, sitting above the
    rails with its own frosted/blurred background.
    ARRIVING direction gets its OWN transition (a CSS transition's timing is
    taken from the after-change style, so base ≠ is-scrolled can genuinely
    differ): a small spring overshoot, distinct from the calm ease-out on the
-   way back (base rule above) — the classic "confident snap in, gentle settle
+   way back (base rule above) - the classic "confident snap in, gentle settle
    out" asymmetry premium UI uses instead of one flat curve both ways. */
 .focus-bar.is-scrolled { padding-right: 14px; transition: padding .55s var(--spring); }
 
 /* ════════════════════════════════════════════════════════════════════════
-   ✦ CAMERA — flip control · front-only mirror · orientation-adaptive stage
+   ✦ CAMERA - flip control · front-only mirror · orientation-adaptive stage
    ════════════════════════════════════════════════════════════════════════ */
 
-/* Flip front/rear — floating glass icon pinned to the free (inline-end) corner,
+/* Flip front/rear - floating glass icon pinned to the free (inline-end) corner,
    opposite the LIVE badge and the swatch rail. Shown only in the live preview;
    hidden the moment a billed session / result / clip takes over the stage. */
 .camera-card__flip {
@@ -2910,7 +2910,7 @@ body.gd-open { overflow: hidden; }
    preview must read true so background text isn't reversed. (JS sets data-facing.) */
 .camera-card[data-facing="environment"] #webcam { transform: none; }
 
-/* Orientation-adaptive stage (display only — Decart still receives 512×288). Once the
+/* Orientation-adaptive stage (display only - Decart still receives 512×288). Once the
    real stream reports its shape, the card follows it so the preview isn't over-cropped:
    portrait on a phone held upright, wider when the feed is landscape. */
 .camera-card[data-orientation="portrait"]  { aspect-ratio: 3 / 4; }

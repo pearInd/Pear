@@ -1,5 +1,5 @@
 -- =============================================================================
--- PEAR · Supabase Setup V7 — height/weight move onto users (returning-user profile)
+-- PEAR · Supabase Setup V7 - height/weight move onto users (returning-user profile)
 -- =============================================================================
 --
 -- WHY THIS MIGRATION EXISTS

@@ -1,5 +1,5 @@
 -- =============================================================================
--- PEAR · Supabase Setup — paste this entire file into the SQL Editor and run it
+-- PEAR · Supabase Setup - paste this entire file into the SQL Editor and run it
 -- =============================================================================
 --
 -- WHERE TO FIND THE SQL EDITOR
@@ -10,7 +10,7 @@
 -- 4. Click "New query" (top-left of the editor pane).
 -- 5. Paste the entire contents of this file into the editor.
 -- 6. Click "Run" (or press Cmd/Ctrl + Enter).
--- 7. You should see "Success. No rows returned." — the table is ready.
+-- 7. You should see "Success. No rows returned." - the table is ready.
 --
 -- WHERE TO FIND YOUR CREDENTIALS
 -- ────────────────────────────────
@@ -41,7 +41,7 @@ CREATE TABLE sessions (
   -- Session identity (anonymised UUID minted client-side)
   session_id    TEXT        NOT NULL DEFAULT '',
 
-  -- Body measurements (nullable — user may not provide all values)
+  -- Body measurements (nullable - user may not provide all values)
   height        NUMERIC(6,2),   -- cm
   weight        NUMERIC(6,2),   -- kg
   chest         NUMERIC(6,2),   -- cm
@@ -71,7 +71,7 @@ CREATE INDEX idx_sessions_created_at ON sessions (created_at DESC);
 -- ── Row Level Security ────────────────────────────────────────────────────────
 -- Enable RLS so no public anonymous reads/writes are possible.
 -- The service role key used by the server bypasses RLS entirely, so it can
--- read and write freely without a matching policy — but we add an explicit
+-- read and write freely without a matching policy - but we add an explicit
 -- policy anyway to make the intent clear and to allow future tooling.
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
 

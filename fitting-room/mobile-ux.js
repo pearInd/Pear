@@ -1,15 +1,15 @@
 /* ============================================================================
-   mobile-ux.js — PEAR fitting room · additive touch-interaction layer
+   mobile-ux.js - PEAR fitting room · additive touch-interaction layer
    ----------------------------------------------------------------------------
    PURE ENHANCEMENT. This file only ADDS classes and decorative nodes. It never
    reads, writes, or interferes with app.js state, the Decart session, billing,
    or any existing id/class/state hook. Safe to remove with zero functional loss.
 
    It provides four things the phone UI was missing:
-     1. Scroll-reveal — Screen-2 blocks rise + fade in as they enter the viewport.
-     2. Sticky-header shrink — the app header compacts once you scroll into the stage.
-     3. Tap ripple — a soft pear-tinted ripple blooms from the touch point.
-     4. Haptics — a 7ms tick on key controls (Android; iOS silently ignores).
+     1. Scroll-reveal - Screen-2 blocks rise + fade in as they enter the viewport.
+     2. Sticky-header shrink - the app header compacts once you scroll into the stage.
+     3. Tap ripple - a soft pear-tinted ripple blooms from the touch point.
+     4. Haptics - a 7ms tick on key controls (Android; iOS silently ignores).
 
    All motion is gated behind prefers-reduced-motion. Reveal classes are added by
    JS only, so with JS disabled (or reduced motion) every block stays fully visible.
@@ -68,7 +68,7 @@
       const scrolled = scrollY > 12;
       // .profile-btn is position:fixed and sits BEFORE .app-header in the DOM (see
       // index.html), so a `.app-header.is-scrolled ~ .profile-btn` sibling selector
-      // can't reach it — CSS combinators only select forward. A shared flag on
+      // can't reach it - CSS combinators only select forward. A shared flag on
       // <body> lets ANY component react to the same scroll threshold regardless of
       // its position in the document (see style.css: body.is-scrolled .profile-btn).
       document.body.classList.toggle("is-scrolled", scrolled);

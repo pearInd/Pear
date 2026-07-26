@@ -1,5 +1,5 @@
 /* ============================================================
-   MERIDIAN — Product Detail View (product.html)
+   MERIDIAN - Product Detail View (product.html)
    Reads ?id=N, renders the garment, and hands off to the PEAR
    Camera (calculator-first flow) via URL query parameters.
    Depends on catalog.js (PRODUCTS, SUBTYPE_LABEL, SIZES, shade, garmentSVG).
@@ -33,7 +33,7 @@ function showToast(html) {
 /* ── product-page color display ──────────────────────────────────────────────
    garmentSVG() (from catalog.js) generates a procedural garment in any hex
    color. It always shows the correct garment shape (subType) and the exact
-   selected color — same composition every time, zero jarring image swaps.
+   selected color - same composition every time, zero jarring image swaps.
    The canonical imageUrl is reserved for the VTON reference payload only. */
 function pdpSvgOf(color) {
   const wrap = "display:flex;align-items:center;justify-content:center;"
@@ -60,7 +60,7 @@ function pearUrl(p, color, angle) {
   return `${PEAR_PATH}?${new URLSearchParams(params).toString()}`;
 }
 
-/* The angle key of the thumbnail the shopper currently has open — this is the
+/* The angle key of the thumbnail the shopper currently has open - this is the
    piece of gallery state the try-on needs, so the AI renders THAT side. */
 function activeAngleKey() {
   const imgs = productImages(product);
@@ -110,7 +110,7 @@ function render() {
         <div class="pdp__sizes" id="sizes"></div>
       </div>
 
-      <!-- Two-view (front/back) completeness indicator — mirrors the fitting-room badge -->
+      <!-- Two-view (front/back) completeness indicator - mirrors the fitting-room badge -->
       ${viewStatusChip(product)}
 
       <!-- Prominent Virtual Try-On CTA, directly below the product image column -->
@@ -124,7 +124,7 @@ function render() {
 
       <ul class="pdp__perks">
         <li>Free shipping &amp; returns</li>
-        <li>Try before you buy — virtually</li>
+        <li>Try before you buy - virtually</li>
         <li>Spring 2026 collection</li>
       </ul>
     </section>`;
@@ -156,7 +156,7 @@ function renderSwatches() {
     b.addEventListener("click", () => {
       activeColor = b.dataset.color;
       // SVG media (single-image products) OR the hidden broken-image fallback
-      // (gallery products) — update whichever is present. In gallery mode the
+      // (gallery products) - update whichever is present. In gallery mode the
       // photos are fixed, so the swatch just tracks activeColor for the handoff.
       const svg = $("#pdpSvg");
       if (svg) svg.innerHTML = pdpSvgOf(activeColor);
@@ -181,11 +181,11 @@ function renderSizes() {
 
 /* ── Multi-image product gallery (main viewport + thumbnail strip) ────────────
    Fully generic: driven only by productImages(product) + activeImageIndex, so
-   EVERY product with 2+ images renders a gallery — nothing is hard-coded to a
+   EVERY product with 2+ images renders a gallery - nothing is hard-coded to a
    specific item. Products with a single image never reach here (the
    hasPhotoGallery() gate in render() keeps them on the recolour SVG), so the
    strip is never empty or broken. Clicking a thumbnail crossfades the main
-   viewport and moves the active border — a real retail PDP gallery. */
+   viewport and moves the active border - a real retail PDP gallery. */
 function renderProductGallery(p) {
   const host = $("#pdpGallery");
   if (!host) return;
@@ -202,7 +202,7 @@ function renderProductGallery(p) {
                   data-index="${i}" data-angle="${img.angle}"
                   role="option" aria-selected="${i === activeImageIndex}"
                   aria-label="${img.label} view">
-            <img src="${img.url}" alt="${p.name} — ${img.label}" loading="lazy" decoding="async"
+            <img src="${img.url}" alt="${p.name} - ${img.label}" loading="lazy" decoding="async"
                  onerror="this.closest('.product-thumb')?.setAttribute('hidden','');">
             <span class="product-thumb__label">${img.label}</span>
           </button>
@@ -211,7 +211,7 @@ function renderProductGallery(p) {
     <div class="pdp__stage">
       <span class="pdp__badge"${p.isNew ? "" : " hidden"}>New Arrival</span>
       <img class="pdp__main" id="pdpMain" style="grid-area:1/1" src="${current.url}"
-           alt="${p.name} — ${current.label}" decoding="async"
+           alt="${p.name} - ${current.label}" decoding="async"
            onerror="this.style.display='none';var f=this.parentNode.querySelector('.pdp__main-fallback');if(f)f.style.display='flex';">
       <span class="pdp__main-fallback" style="grid-area:1/1;display:none;width:100%;height:100%;align-items:center;justify-content:center">${pdpSvgOf(activeColor)}</span>
     </div>`;
@@ -245,7 +245,7 @@ function setActiveImage(p, index) {
     main.classList.add("is-fade");
     setTimeout(() => {
       main.src = url;
-      main.alt = `${p.name} — ${label}`;
+      main.alt = `${p.name} - ${label}`;
       main.style.display = "";                            // restore if a prior view had errored
       if (fallback) fallback.style.display = "none";
       main.classList.remove("is-fade");
@@ -284,7 +284,7 @@ function launchPear() {
   // Two-view gate: graceful by default (front stands in for a missing back), but a
   // product flagged requireBothViews is hard-blocked until it ships a real back view.
   const blockReason = tryOnBlockReason(product);
-  if (blockReason) { showToast(`<b>Try-on unavailable</b> — ${blockReason}`); return; }
+  if (blockReason) { showToast(`<b>Try-on unavailable</b> - ${blockReason}`); return; }
 
   const angle = activeAngleKey();                 // ← current gallery selection drives the try-on view
   const url = pearUrl(product, activeColor, angle);
@@ -299,7 +299,7 @@ function launchPear() {
     img:      product.imageUrl || "(none)",
   };
 
-  console.group("[PEAR] launchPear() — handoff debug");
+  console.group("[PEAR] launchPear() - handoff debug");
   console.log("product :", product.name, `(id=${product.id})`);
   console.log("type    :", product.type, "| subType:", product.subType);
   console.log("color   :", activeColor, "| size:", activeSize);
@@ -310,13 +310,13 @@ function launchPear() {
   console.groupEnd();
 
   if (!product.imageUrl) {
-    console.warn("[PEAR] launchPear() — product.imageUrl is empty; the VTON model will have no garment reference image.");
+    console.warn("[PEAR] launchPear() - product.imageUrl is empty; the VTON model will have no garment reference image.");
   }
 
   try {
     localStorage.setItem(LS_TRYON, JSON.stringify(payload));
   } catch (_) {}
-  showToast(`Launching <b>PEAR Camera</b> — ${product.name} · ${angle} view…`);
+  showToast(`Launching <b>PEAR Camera</b> - ${product.name} · ${angle} view…`);
   setTimeout(() => { location.href = url; }, 600);
 }
 

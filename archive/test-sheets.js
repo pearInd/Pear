@@ -15,4 +15,4 @@ if (!id || !email || !key) process.exit(1);
 
 console.log("\nWriting test row to sheet…");
 await logTryOn({ garmentName: "Test Item", size: "M" });
-console.log("Done — check the sheet for a 'Test Item' row with M=1 (or incremented).");
+console.log("Done - check the sheet for a 'Test Item' row with M=1 (or incremented).");
