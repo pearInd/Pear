@@ -3609,6 +3609,33 @@ function stampMeasurementsDate() {
   try { localStorage.setItem(PEAR_LAST_MEASUREMENTS_KEY, new Date().toISOString()); } catch {}
 }
 
+/* =============================================================================
+   MONTHLY RE-AUTHENTICATION
+   -----------------------------------------------------------------------------
+   Separate clock from PEAR_LAST_MEASUREMENTS_KEY above: that one governs "does
+   this browser need to re-confirm height/weight", this one governs "does this
+   browser need to re-prove it owns the email on this device" (identity gate +
+   OTP), independent of whether the measurements happen to still be fresh. A
+   known device with a stale auth date is re-gated (see setupIdentityGate)
+   even if its measurements are otherwise within their 30-day window.
+   ============================================================================= */
+const PEAR_LAST_AUTH_KEY = "pear_last_auth_date";
+const AUTH_REFRESH_MS    = 30 * 24 * 60 * 60 * 1000;   // 30 days
+
+function isAuthRefreshDue() {
+  try {
+    const raw = localStorage.getItem(PEAR_LAST_AUTH_KEY);
+    if (!raw) return true;
+    const ts = Date.parse(raw);
+    if (!Number.isFinite(ts)) return true;
+    return (Date.now() - ts) >= AUTH_REFRESH_MS;
+  } catch { return true; }
+}
+
+function stampAuthDate() {
+  try { localStorage.setItem(PEAR_LAST_AUTH_KEY, new Date().toISOString()); } catch {}
+}
+
 /* In-memory returning-user profile — populated by routeUser() from a GET
    /api/users/:deviceId lookup or a POST /api/users registration/auto-login.
    Powers the profile button/dropdown (Feature 3) and the measurements PATCH. */
@@ -3617,6 +3644,12 @@ let PEAR_USER = null;   // { id, name, email, height, weight } | null
 /* Pending first-time registration awaiting OTP verification (see
    submitIdentity/verifyOtp below). Null whenever #screen-otp isn't showing. */
 let PEAR_OTP_PENDING = null;   // { deviceId, name, email } | null
+
+/* Set by showIdentityGate() when a KNOWN device's 30-day auth window lapsed
+   (monthly re-auth — Case 2). Holds the server profile so submitIdentity()/
+   verifyOtp() know to re-authenticate this existing user (stamp + routeUser)
+   instead of registering a new one. Null for every other identity-gate path. */
+let PEAR_REAUTH_USER = null;   // { id, name, email, height, weight } | null
 let otpCountdownTimer = null;
 const OTP_COUNTDOWN_SECONDS = 60;
 
@@ -3777,6 +3810,7 @@ function logoutUser() {
   try {
     localStorage.removeItem(PEAR_DEVICE_KEY);
     localStorage.removeItem(PEAR_LAST_MEASUREMENTS_KEY);
+    localStorage.removeItem(PEAR_LAST_AUTH_KEY);
     localStorage.removeItem("pear_body_profile");   // legacy cache key, harmless if absent
     localStorage.removeItem("pear_fit_gallery");
     localStorage.removeItem("pear_cart_count");
@@ -3810,14 +3844,25 @@ function setupProfileButton() {
 }
 
 /* Show the name/email gate and wire its controls (idempotent — safe to call
-   more than once). Hides the measurement form until the visitor registers. */
-function showIdentityGate() {
+   more than once). Hides the measurement form until the visitor registers.
+   opts.reauth + opts.user (Case 2 — known device, stale auth date): prefills
+   name/email from the server profile and arms PEAR_REAUTH_USER so
+   submitIdentity()/verifyOtp() re-authenticate this same user instead of
+   registering a new one. */
+function showIdentityGate(opts) {
   clearReturningCheckGate();
   const idForm   = $("identityForm");
   const sizeForm = $("sizeForm");
   // Inline display overrides #sizeForm's CSS `display:grid` (see showSizeForm).
   if (idForm)   { idForm.hidden = false;  idForm.style.display = "";     }
   if (sizeForm) { sizeForm.hidden = true; sizeForm.style.display = "none"; }
+
+  PEAR_REAUTH_USER = (opts && opts.reauth && opts.user) ? opts.user : null;
+  if (PEAR_REAUTH_USER) {
+    const nameEl  = $("userName"), emailEl = $("userEmail");
+    if (nameEl)  nameEl.value  = PEAR_REAUTH_USER.name  || "";
+    if (emailEl) emailEl.value = PEAR_REAUTH_USER.email || "";
+  }
 
   const btn   = $("btn-identity-continue");
   const errEl = $("identityError");
@@ -3861,6 +3906,16 @@ async function setupIdentityGate() {
     if (res.status === 200) {
       const data = await res.json().catch(() => null);
       if (data && data.ok && data.user) {
+        // Case 2 — known device whose 30-day auth window lapsed (or never
+        // stamped, e.g. a device that registered before this feature shipped):
+        // re-gate with OTP before trusting this device again, rather than
+        // routing straight in. Case 1 (auth still fresh) falls through to the
+        // existing auto-login routing unchanged.
+        if (isAuthRefreshDue()) {
+          console.log("[PEAR] known device, auth refresh due → re-auth gate:", data.user.name);
+          showIdentityGate({ reauth: true, user: data.user });
+          return;
+        }
         console.log("[PEAR] known device → auto-login user:", data.user.name, "→", data.user.id);
         routeUser(data.user);   // Feature 1/2 routing — camera, refresh form, or gate never shown
         return;
@@ -3926,6 +3981,40 @@ function hideOtpScreen() {
   if (heading)  heading.hidden = false;
   if (subtitle) subtitle.hidden = false;
   PEAR_OTP_PENDING = null;
+  PEAR_REAUTH_USER = null;
+}
+
+/* Case 3 — new device, email already registered to a DIFFERENT device (POST
+   /api/users just returned 409/email_taken). The OTP for this exact email has
+   already been verified (see verifyOtp → finishRegistration), so this device
+   has proven ownership of the address — relink it to the existing account
+   rather than dead-ending on "email taken". */
+async function relinkExistingDevice(deviceId, email) {
+  const errEl = $("otp-error");
+  toast("האימייל הזה כבר רשום — שלחנו קוד לאימות זהות");
+  try {
+    const res = await fetch("/api/users/relink", {
+      method:  "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ email, deviceId }),
+    });
+    const data = await res.json().catch(() => null);
+
+    if (res.ok && data && data.id) {
+      setDeviceId(deviceId);
+      stampAuthDate();
+      console.log("[identity] relinked device to existing user:", data.name, "→", data.id);
+      hideOtpScreen();
+      routeUser(data);
+      return;
+    }
+
+    console.warn("[identity] relink failed (status", res.status, ")");
+    if (errEl) { errEl.textContent = "שיוך המכשיר נכשל — נסה שוב."; errEl.hidden = false; }
+  } catch (err) {
+    console.warn("[identity] relink request failed:", err?.message || err);
+    if (errEl) { errEl.textContent = "שגיאת רשת — נסה שוב."; errEl.hidden = false; }
+  }
 }
 
 /* Shared with submitIdentity's own INFRA-failure degrade path: create the
@@ -3941,6 +4030,7 @@ async function finishRegistration(deviceId, name, email) {
 
     if (res.ok && data?.ok) {
       setDeviceId(deviceId);
+      stampAuthDate();
       console.log(
         "[identity] " + (data.matched === "email" ? "auto-login (name+email)" : "registered") +
         " user:", data.user?.name, "→", data.user?.id
@@ -3950,11 +4040,14 @@ async function finishRegistration(deviceId, name, email) {
       return;
     }
 
+    if (res.status === 409 && data?.error === "email_taken") {
+      await relinkExistingDevice(deviceId, email);
+      return;
+    }
+
     if (res.status === 409 || res.status === 400 || res.status === 422) {
       const errEl = $("otp-error");
-      const msg = data?.error === "email_taken"
-        ? "כתובת אימייל זו כבר רשומה למשתמש אחר."
-        : ((data && (data.message || data.error)) || "נא לבדוק את הפרטים ולנסות שוב.");
+      const msg = (data && (data.message || data.error)) || "נא לבדוק את הפרטים ולנסות שוב.";
       if (errEl) { errEl.textContent = msg; errEl.hidden = false; }
       return;
     }
@@ -3969,6 +4062,19 @@ async function finishRegistration(deviceId, name, email) {
     hideOtpScreen();
     showSizeForm();
   }
+}
+
+/* Case 2 — known device, OTP re-auth just verified: no server write needed,
+   the device_id already points at this user. Stamp today's auth date and
+   route exactly like a fresh auto-login (camera, or the measurements-refresh
+   form if that clock separately lapsed). */
+async function finishReauth() {
+  const user = PEAR_REAUTH_USER;
+  PEAR_REAUTH_USER = null;
+  stampAuthDate();
+  console.log("[identity] re-auth verified:", user?.name, "→", user?.id);
+  hideOtpScreen();
+  routeUser(user);
 }
 
 async function verifyOtp(code) {
@@ -3988,6 +4094,10 @@ async function verifyOtp(code) {
     const data = await res.json().catch(() => null);
 
     if (data?.ok) {
+      if (PEAR_REAUTH_USER) {
+        await finishReauth();
+        return;
+      }
       const { deviceId, name, email } = PEAR_OTP_PENDING;
       await finishRegistration(deviceId, name, email);
       return;

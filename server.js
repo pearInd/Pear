@@ -172,8 +172,11 @@ const isOriginAllowed = (origin, reqHost) => {
    DECART_ALLOWED_ORIGINS enforcement below, completely untouched.
    /api/send-otp and /api/verify-otp get the same bypass: the fitting-room
    iframe is embedded on third-party store domains, so its identity-gate calls
-   hit this same origin-lock 403 there too. */
-const PUBLIC_API_PATHS = new Set(["/classify-images", "/send-otp", "/verify-otp"]);   // mount-relative (see app.use("/api", …) below)
+   hit this same origin-lock 403 there too. /api/users/relink is the monthly
+   re-auth's device-relink step (Case 3 — new device, email already
+   registered) and runs from that same embedded identity-gate flow, so it
+   needs the identical bypass. */
+const PUBLIC_API_PATHS = new Set(["/classify-images", "/send-otp", "/verify-otp", "/users/relink"]);   // mount-relative (see app.use("/api", …) below)
 
 app.use("/api", (req, res, next) => {
   const origin = req.headers.origin || "";
@@ -800,6 +803,37 @@ async function updateUserMeasurements(req, res) {
   }
 }
 
+/* PATCH /api/users/relink — client-side monthly re-auth, Case 3: a NEW device
+   submitted a name+email that POST /api/users found already registered to a
+   different device (409/email_taken). By the time the client calls this, it
+   has already verified a fresh OTP for that exact email (see
+   fitting-room/app.js relinkExistingDevice), so re-pointing device_id at the
+   existing account is safe — same trust bar as createUser's own
+   sameName-match auto-relink above, just without requiring the name to match
+   too, since OTP ownership of the email is the stronger proof here. */
+async function relinkUserDevice(req, res) {
+  if (storageUnavailable(res)) return;
+  const email    = normalizeEmail(req.body?.email);
+  const deviceId = String(req.body?.deviceId || "").trim().slice(0, 64);
+  if (!email || !deviceId) {
+    return res.status(400).json({ ok: false, error: "missing_fields", message: "email and deviceId are required." });
+  }
+
+  try {
+    const user = await findUserByEmail(email);
+    if (!user) return res.status(404).json({ ok: false, error: "not_found" });
+
+    const { error } = await supabase.from("users").update({ device_id: deviceId }).eq("id", user.id);
+    if (error) throw new Error(error.message);
+
+    console.log(`[users] relinked device "${deviceId}" to user ${user.id} (${email})`);
+    res.json({ id: user.id, name: user.name, email: user.email, height: user.height, weight: user.weight });
+  } catch (err) {
+    console.error("[users] relink failed:", err?.message);
+    res.status(500).json({ ok: false, error: err?.message });
+  }
+}
+
 /* GET /api/admin/users — open access. Returns every user with their total
    measurement (session) count, newest user first. */
 async function getUsersWithCounts(_req, res) {
@@ -946,6 +980,10 @@ app.delete("/api/admin/sessions", requireAdminAuth, clearSessions);
 /* User identity routes (returning-visitor recognition). POST is rate limited; the
    public GET returns non-PII fields only; the admin list is auth-gated. */
 app.post("/api/users",            userLimiter, createUser);
+// NOTE: /api/users/relink must be registered BEFORE the /:deviceId param
+// route below — otherwise Express would match "relink" as a deviceId value
+// and this handler would never be reached.
+app.patch("/api/users/relink",    userLimiter, relinkUserDevice);
 app.get("/api/users/:deviceId",   getUserByDevice);
 app.patch("/api/users/:deviceId", userLimiter, updateUserMeasurements);
 app.get("/api/admin/users",       requireAdminAuth, getUsersWithCounts);
