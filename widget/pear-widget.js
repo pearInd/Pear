@@ -36,8 +36,8 @@
         garment via URL params (garment_url / garment_type / garment_name),
         plus garment_url_back so the live Back view warps from a real rear photo
         instead of a prompt-steered guess off the front image, and a
-        garment_images list (all gallery photos, front-sorted) that powers a
-        thumbnail switcher above the camera in the fitting room.
+        garment_images list (all gallery photos, front-sorted) the fitting room
+        derives its front/back pair from - there is no user-facing picker.
 
    Back-image discovery (opt-in, best-effort): an explicit data-pear-back on the
    product <img> or its container wins; otherwise the widget falls back to the
@@ -370,9 +370,9 @@
     return entries;
   }
 
-  /* Collect every distinct product-gallery photo for the fitting-room thumbnail
-     switcher. The primary (og:image / scraped front) is forced first so it stays the
-     loaded-on-open garment; gallery thumbnails follow in DOM order. De-duped on the
+  /* Collect every distinct product-gallery photo for the fitting room's automatic
+     front/back resolution. The primary (og:image / scraped front) is forced first so it
+     stays the loaded-on-open garment; gallery thumbnails follow in DOM order. De-duped on the
      path (CDNs vary query params), decorative images excluded.
 
      Also filtered to the SAME PRODUCT as primaryUrl (via extractProductId): `root`
@@ -541,8 +541,8 @@
   }
 
   /* Re-order the gallery so front images lead and back images follow - the
-     fitting room's garment_url/garment_url_back and thumbnail switcher assume
-     index 0/1 are front/back, which only holds once the classifier's results
+     fitting room's garment_url/garment_url_back and its automatic AI Combined
+     pairing assume index 0/1 are front/back, which only holds once the classifier's results
      are folded in (raw DOM order is not reliable). Anything the classifier
      didn't call front/back keeps its relative order after those two. */
   function sortByFrontBack(urls, results) {
@@ -580,8 +580,8 @@
       "&garment_type=" + encodeURIComponent(garment.type) +
       "&garment_name=" + encodeURIComponent(garment.name) +
       (garment.back ? "&garment_url_back=" + encodeURIComponent(garment.back) : "") +
-      /* All gallery photos (each encoded, comma-joined) → fitting-room thumbnail
-         switcher. Sent only when there's more than one distinct image. */
+      /* All gallery photos (each encoded, comma-joined) → the fitting room's
+         automatic front/back pairing. Sent only when there's more than one distinct image. */
       (garment.images && garment.images.length > 1
         ? "&garment_images=" + garment.images.map(encodeURIComponent).join(",") : "") +
       (garment.variantId ? "&garment_variant_id=" + encodeURIComponent(garment.variantId) : "") +
