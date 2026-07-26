@@ -2441,7 +2441,7 @@ const _stitchCache = new Map();   // `${frontUrl} ${backUrl}` → Promise<Blob|n
 
 /* Decode a garment URL into an ImageBitmap without tainting the canvas: http(s) CDN
    URLs go through the same-origin proxy (exactly like the live reference path); data:
-   and blob: URLs (custom uploads) are fetched directly — both yield a decodable Blob. */
+   and blob: URLs (custom uploads) are fetched directly - both yield a decodable Blob. */
 async function loadGarmentBitmap(url) {
   if (!url) throw new Error("no image url");
   let blob;
@@ -2454,7 +2454,7 @@ async function loadGarmentBitmap(url) {
   return await createImageBitmap(blob);
 }
 
-/* object-fit: cover — fill the target rect (cropping overflow), preserving aspect ratio,
+/* object-fit: cover - fill the target rect (cropping overflow), preserving aspect ratio,
    so a portrait packshot never squashes into its half of the reference. */
 function drawImageCover(ctx, img, dx, dy, dw, dh) {
   const scale = Math.max(dw / img.width, dh / img.height);
@@ -2512,7 +2512,7 @@ function stitchReferenceBlob(frontUrl, backUrl) {
 
       // FIXED 2048×1024 framing: 924px FRONT box | 200px black bar | 924px BACK box.
       const boxW = COMBINED_BOX, H = COMBINED_H;
-      const rightX = boxW + COMBINED_SEP;           // 1124 — start of the back box (after the bar)
+      const rightX = boxW + COMBINED_SEP;           // 1124 - start of the back box (after the bar)
 
       const off    = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(COMBINED_W, COMBINED_H) : null;
       const canvas = off || Object.assign(document.createElement("canvas"), { width: COMBINED_W, height: COMBINED_H });
@@ -2528,7 +2528,7 @@ function stitchReferenceBlob(frontUrl, backUrl) {
       const innerW = boxW - pad * 2, innerH = H - pad * 2;
 
       // Left = FRONT, clipped to its box so a wide packshot can't bleed toward (or across)
-      // the black bar — the boundary must stay impermeable.
+      // the black bar - the boundary must stay impermeable.
       ctx.save();
       ctx.beginPath(); ctx.rect(0, 0, boxW, H); ctx.clip();
       drawImageCover(ctx, front, pad, pad, innerW, innerH);
@@ -2540,26 +2540,26 @@ function stitchReferenceBlob(frontUrl, backUrl) {
       drawImageCover(ctx, back, rightX + pad, pad, innerW, innerH);
       ctx.restore();
 
-      // High-contrast 200px SOLID BLACK separator bar — the diffusion "no-man's-land".
+      // High-contrast 200px SOLID BLACK separator bar - the diffusion "no-man's-land".
       ctx.fillStyle = "#000000";
       ctx.fillRect(boxW, 0, COMBINED_SEP, COMBINED_H);
 
       // Hard architectural markers: "FRONT" white box in the TOP-LEFT of the front box, "BACK"
       // white box in the TOP-RIGHT of the back box. The prompt names these + forbids rendering
       // the marker text on the garment (see ANGLE_CLAUSE.combined exclusive instruction set).
-      const fontPx = Math.round(COMBINED_H * 0.06);   // ~61px — larger, harder-to-ignore marker
+      const fontPx = Math.round(COMBINED_H * 0.06);   // ~61px - larger, harder-to-ignore marker
       const inset  = Math.round(COMBINED_H * 0.02);   // ~20px from the edges
       drawSectionLabel(ctx, "FRONT", inset, inset, fontPx, "left");                // top-left of FRONT box
       drawSectionLabel(ctx, "BACK",  COMBINED_W - inset, inset, fontPx, "right");  // top-right of BACK box
       front.close?.(); back.close?.();             // release decoded bitmaps
 
-      // quality 0.95 — retain each view's fine graphics/detail at this high resolution.
+      // quality 0.95 - retain each view's fine graphics/detail at this high resolution.
       return off
         ? await off.convertToBlob({ type: "image/jpeg", quality: 0.95 })
         : await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.95));
     } catch (e) {
       console.warn("[PEAR] stitchReferenceBlob failed:", e?.message || e);
-      _stitchCache.delete(key);   // never cache a failure — allow a later retry
+      _stitchCache.delete(key);   // never cache a failure - allow a later retry
       return null;
     }
   })();
@@ -2568,15 +2568,15 @@ function stitchReferenceBlob(frontUrl, backUrl) {
   return job;
 }
 
-/* ── Full-Look compositor — "TOP + BOTTOM Stitched Reference" ─────────────────
+/* ── Full-Look compositor - "TOP + BOTTOM Stitched Reference" ─────────────────
    Same rigid-geometry technique as stitchReferenceBlob (front|back), but stacked
    VERTICALLY: the TOP garment (shirt) boxed into the upper half, the BOTTOM garment
    (trousers) boxed into the lower half, separated by the same wide black no-man's-land
    bar + gutter. WHY THIS EXISTS: Decart's realtime set() only forwards ONE image
-   ({prompt, enhance, image} — setInputSchema strips anything else), so a text-only
+   ({prompt, enhance, image} - setInputSchema strips anything else), so a text-only
    description of the second garment (no visual reference) is weakly obeyed by the
    diffusion model and visually reads as "replaced" rather than "layered". Giving BOTH
-   garments an actual pixel reference — even split across one image — is what makes
+   garments an actual pixel reference - even split across one image - is what makes
    the second garment actually render. Returns ONE JPEG Blob for rtClient.set({ image }).
    Memoized per top+bottom URL pair; falls back to null (caller falls back to the
    top-only reference) on any decode/composite failure. */
@@ -2590,7 +2590,7 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
  * into the upper half (inset by a 44px black gutter) + "TOP" white marker, a WIDE 200px
  * opaque black separator bar, BOTTOM boxed into the lower half (same gutter) + "BOTTOM"
  * white marker. Same rigid geometry + wide bar + gutter that keeps the front/back stitch
- * from bleeding — here it keeps the shirt and pants from bleeding into each other.
+ * from bleeding - here it keeps the shirt and pants from bleeding into each other.
  * @param {string} topUrl     upper-body garment image URL (http(s)/data:/blob:)
  * @param {string} bottomUrl  lower-body garment image URL
  * @returns {Promise<Blob|null>}  JPEG Blob, or null on any failure (caller falls back
@@ -2630,7 +2630,7 @@ function stitchLookBlob(topUrl, bottomUrl) {
       drawImageCover(ctx, bottom, pad, bottomY + pad, innerW, innerH);
       ctx.restore();
 
-      // High-contrast 200px SOLID BLACK separator bar — the diffusion "no-man's-land".
+      // High-contrast 200px SOLID BLACK separator bar - the diffusion "no-man's-land".
       ctx.fillStyle = "#000000";
       ctx.fillRect(0, boxH, W, LOOK_SEP);
 
@@ -2646,7 +2646,7 @@ function stitchLookBlob(topUrl, bottomUrl) {
         : await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.95));
     } catch (e) {
       console.warn("[PEAR] stitchLookBlob failed:", e?.message || e);
-      _lookStitchCache.delete(key);   // never cache a failure — allow a later retry
+      _lookStitchCache.delete(key);   // never cache a failure - allow a later retry
       return null;
     }
   })();
@@ -2667,17 +2667,17 @@ function stitchLookBlob(topUrl, bottomUrl) {
 function garmentImageRef(cdnUrl) {
   if (!cdnUrl) return undefined;
   // "Upload Your Own Garment": a cropped custom garment is a self-contained
-  // data:/blob: URL — it is NOT a fetchable http(s) CDN URL, so it must be handed
+  // data:/blob: URL - it is NOT a fetchable http(s) CDN URL, so it must be handed
   // to the SDK verbatim. Routing it through /api/img-proxy (which fetches a remote
   // URL) would corrupt it. Pass it straight through.
   if (/^(data:|blob:)/i.test(cdnUrl)) return cdnUrl;
   const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
   if (isLocal) {
-    console.log("[PEAR] garmentImageRef() — localhost, using raw CDN URL:", cdnUrl);
+    console.log("[PEAR] garmentImageRef() - localhost, using raw CDN URL:", cdnUrl);
     return cdnUrl;
   }
   const ref = `${location.origin}/api/img-proxy?url=${encodeURIComponent(cdnUrl)}`;
-  console.log("[PEAR] garmentImageRef() — proxied ref:", ref, "for CDN URL:", cdnUrl);
+  console.log("[PEAR] garmentImageRef() - proxied ref:", ref, "for CDN URL:", cdnUrl);
   return ref;
 }
 
@@ -2690,29 +2690,29 @@ function abbrevImg(ref) {
   return ref.length > 100 ? ref.slice(0, 100) + "…" : ref;
 }
 
-/* ── Multi-Image Product Gallery — variant + angle resolution + prompt steering ──
+/* ── Multi-Image Product Gallery - variant + angle resolution + prompt steering ──
    ONE lookup chain feeds the whole UI and the live WebRTC sync, so no item, colour
    or angle can ever empty the gallery state. galleryOf() resolves, in priority order:
-     1. item.variants[activeColor]  — the nested per-colour gallery (real store schema)
-     2. item.images                 — a flat { front, back, side } gallery object
-     3. item.img / item.imgBack     — the legacy single-image + optional back fields
+     1. item.variants[activeColor]  - the nested per-colour gallery (real store schema)
+     2. item.images                 - a flat { front, back, side } gallery object
+     3. item.img / item.imgBack     - the legacy single-image + optional back fields
    Whatever shape an item uses, it normalizes to one { front, back?, side?, detail? }
    map. A missing angle transparently falls back to the front image (+ a prompt clause),
-   so EVERY garment and EVERY colour supports the full Front/Back/Side workflow — the
+   so EVERY garment and EVERY colour supports the full Front/Back/Side workflow - the
    rail is never empty and never hides. Angles/labels are data-driven and extensible. */
-const ANGLES = ["front", "back", "side", "detail"];   // ordered render/priority list — extend freely
+const ANGLES = ["front", "back", "side", "detail"];   // ordered render/priority list - extend freely
 /* Angles usable as an actual VTON warp reference (a full garment presented on a body).
-   `detail` is a close-up macro — perfect for product inspection, wrong as a try-on
-   reference — so it is inspection-only: it is never fed to rtClient.set() and never
+   `detail` is a close-up macro - perfect for product inspection, wrong as a try-on
+   reference - so it is inspection-only: it is never fed to rtClient.set() and never
    appears in the live rail. Only WEARABLE angles hot-swap the stream. */
 const WEARABLE_ANGLES = ["front", "back", "side"];
-/* "AI Combined View" — a SYNTHETIC pseudo-angle, deliberately NOT in ANGLES/WEARABLE_ANGLES.
+/* "AI Combined View" - a SYNTHETIC pseudo-angle, deliberately NOT in ANGLES/WEARABLE_ANGLES.
    Instead of one gallery image it feeds Lucy a single STITCHED reference (front | 2px
    separator | back) plus a composite prompt clause, so ONE live stream shows the correct
    half as the user turns. Offered only when the item ships a real, DISTINCT back photo
    (canCombineViews). Handled explicitly everywhere currentAngle is switched on. */
 const COMBINED_ANGLE = "combined";
-/* "AI Auto" — Context-Aware Asset Switching, the anti-bleeding architecture that REPLACES
+/* "AI Auto" - Context-Aware Asset Switching, the anti-bleeding architecture that REPLACES
    stitching with per-orientation references: both the front and back assets are pre-cached
    as Blobs, an OrientationWatcher reads the local camera, and the live session hot-swaps
    rtClient.set({ image }) to the SINGLE matching asset the instant the user turns. The model
@@ -2723,7 +2723,7 @@ const COMBINED_ANGLE = "combined";
    angle-sensitive resolver reads effectiveAngle() so auto mode transparently reuses the
    entire existing front/back pipeline (images, clauses, fallbacks). */
 const AUTO_ANGLE = "auto";
-let autoOrientation = "front";        // "front" | "back" — the side the user shows the camera
+let autoOrientation = "front";        // "front" | "back" - the side the user shows the camera
 /* The angle every resolver should ACT on: auto mode delegates to the detected orientation,
    every other mode is what the user picked. */
 function effectiveAngle() { return currentAngle === AUTO_ANGLE ? autoOrientation : currentAngle; }
@@ -2771,17 +2771,17 @@ function anglesOf(item) { const g = galleryOf(item); return ANGLES.filter((a) =>
 
 /* Angles the LIVE rail offers: only WEARABLE ones the item actually ships. Excludes
    inspection-only angles (e.g. `detail`), which are shown on the storefront PDP gallery
-   but are never a warp target — feeding a close-up macro to the VTON model degrades it. */
+   but are never a warp target - feeding a close-up macro to the VTON model degrades it. */
 function wearableAnglesOf(item) { const g = galleryOf(item); return WEARABLE_ANGLES.filter((a) => g[a]); }
 
-/* ── Two-view (front / back) completeness — mirrors catalog.js ────────────────
+/* ── Two-view (front / back) completeness - mirrors catalog.js ────────────────
    FRONT and BACK are the two canonical VTON views. hasFrontView/hasBackView report
    whether the item ships a REAL dedicated image for that angle (galleryOf() only
-   ever exposes a real asset — the front-fallback for `back` happens later, at warp
+   ever exposes a real asset - the front-fallback for `back` happens later, at warp
    time in activeImageOf(), not here). "Fully documented" = both real views. Kept in
    lockstep with the storefront predicates of the same name in catalog.js.
 
-   Gate policy (per product decision): GRACEFUL by default — a missing back never
+   Gate policy (per product decision): GRACEFUL by default - a missing back never
    blocks going live; the front reference + ANGLE_CLAUSE.back render the rear. Only
    an item that OPTS IN with `requireBothViews: true` is hard-blocked when it lacks a
    real back. Uploaded/custom garments are single-view by nature and are never
@@ -2800,7 +2800,7 @@ function itemBlockReason(item) {
 }
 
 /* Reason the CURRENT subject (a full look, else the active single garment) can't go
-   live — checks BOTH halves of a look. Returns null when go-live is allowed. */
+   live - checks BOTH halves of a look. Returns null when go-live is allowed. */
 function liveBlockReason() {
   const look = resolveLook();
   if (look) return itemBlockReason(look.top) || itemBlockReason(look.bottom);
@@ -2809,7 +2809,7 @@ function liveBlockReason() {
 
 /* The EXACT source image fed to the AI for the active angle. Falls back to the front
    asset when the active angle has no dedicated image, so a Back/Side toggle never
-   breaks — it reuses the front reference and lets the prompt clause steer the warp.
+   breaks - it reuses the front reference and lets the prompt clause steer the warp.
    effectiveAngle() makes AI Auto transparent: the detected orientation picks the asset. */
 function activeImageOf(item) {
   if (!item) return undefined;
@@ -2817,7 +2817,7 @@ function activeImageOf(item) {
   return g[effectiveAngle()] || g.front || item.img;
 }
 
-/* True when the active angle has its OWN dedicated image (not a front fallback) — for
+/* True when the active angle has its OWN dedicated image (not a front fallback) - for
    a single garment or BOTH halves of a full look. Drives the "real image" UI hint. */
 function hasDedicatedAngle(item) {
   const a = effectiveAngle();
@@ -2826,40 +2826,40 @@ function hasDedicatedAngle(item) {
   return !!(item && galleryOf(item)[a]);
 }
 
-/* Angle-oriented prompt clauses. Switching the image alone isn't enough — Lucy
+/* Angle-oriented prompt clauses. Switching the image alone isn't enough - Lucy
    regenerates every frame, so the prompt must ALSO name the viewing angle or the
    model keeps rendering a front. Front needs no clause. */
 const ANGLE_CLAUSE = {
   front: "",
   // Back, REAL rear reference: the active image IS a dedicated back photo. Tell Lucy to
-  // REPRODUCE it — and pin the print's size/position to the reference so the graphic
+  // REPRODUCE it - and pin the print's size/position to the reference so the graphic
   // doesn't drift, rescale or re-center between frames (the back-alignment ask).
-  backReal: " The person is seen from BEHIND — rear view, turned around, the back of the body facing the camera. This reference photo shows the BACK of the garment: reproduce it faithfully — its back panel, rear yoke, back collar, rear hemline and especially any back graphics, prints, logos or lettering — keeping each element at the SAME size, height and horizontal position on the garment as in the reference, wrapping naturally around the body. Do not move, rescale, re-center or omit the back print, and do NOT render the front of the garment.",
-  // Back, INFERRED rear: no dedicated back photo — the active image is the FRONT, so Lucy
+  backReal: " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera. This reference photo shows the BACK of the garment: reproduce it faithfully - its back panel, rear yoke, back collar, rear hemline and especially any back graphics, prints, logos or lettering - keeping each element at the SAME size, height and horizontal position on the garment as in the reference, wrapping naturally around the body. Do not move, rescale, re-center or omit the back print, and do NOT render the front of the garment.",
+  // Back, INFERRED rear: no dedicated back photo - the active image is the FRONT, so Lucy
   // must infer a plausible rear from it (graceful fallback; placement can't be pinned).
-  backInferred: " The person is seen from BEHIND — rear view, turned around, the back of the body facing the camera. Render the BACK of the garment: its back panel, rear yoke, back collar, rear hemline and any back graphics, prints or seams, wrapping naturally around the body from the rear. This reference photo shows the front, so infer the corresponding rear; do NOT render the front of the garment.",
-  side:  " The person is viewed from the SIDE in profile: render the garment's side profile — shoulder line, sleeve, side seam and the way the fabric drapes along the flank — in an accurate three-quarter/profile perspective.",
-  // AI Combined View — AGGRESSIVE "exclusive mode": the reference is one stitched image with a
+  backInferred: " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera. Render the BACK of the garment: its back panel, rear yoke, back collar, rear hemline and any back graphics, prints or seams, wrapping naturally around the body from the rear. This reference photo shows the front, so infer the corresponding rear; do NOT render the front of the garment.",
+  side:  " The person is viewed from the SIDE in profile: render the garment's side profile - shoulder line, sleeve, side seam and the way the fabric drapes along the flank - in an accurate three-quarter/profile perspective.",
+  // AI Combined View - AGGRESSIVE "exclusive mode": the reference is one stitched image with a
   // FRONT box (left, white "FRONT" marker), a black no-man's-land bar, and a BACK box (right,
   // white "BACK" marker). The instruction forbids blending across the bar (the bleeding fix),
   // pins each labeled section as the ONLY valid source for its orientation, then forbids
   // rendering the marker text onto the garment.
   // AI Auto, facing camera: the reference is ONE clean front asset (no composite), so the
-  // clause pins it explicitly as the front and forbids inventing rear details — the
+  // clause pins it explicitly as the front and forbids inventing rear details - the
   // orientation contract that makes Context-Aware Asset Switching bleed-proof.
   autoFront:
     " This reference photo shows the FRONT of the garment. The person is facing the camera:" +
-    " reproduce the garment's front faithfully — its front panel, collar, closure, hemline and" +
-    " any front graphics, prints, logos or lettering — keeping each element at the SAME size," +
+    " reproduce the garment's front faithfully - its front panel, collar, closure, hemline and" +
+    " any front graphics, prints, logos or lettering - keeping each element at the SAME size," +
     " height and horizontal position as in the reference. Do NOT render the back of the garment.",
   combined:
     " This image is two completely separate garment photographs, each isolated inside its own black-framed panel and divided by a WIDE solid-black separator band that is a strict no-man's-land." +
     " The two panels are distinct, mutually exclusive garment views. The LEFT panel marked 'FRONT' is the ONLY valid source for frontal renders. The RIGHT panel marked 'BACK' is the ONLY valid source for rear renders. Treat the black band and black frames as an impassable wall: you are strictly forbidden from sampling, blending, copying or bleeding ANY pixel from one panel into the other. When the user faces the camera, use ONLY the 'FRONT' panel and completely ignore the 'BACK' panel. When the user turns away, use ONLY the 'BACK' panel and completely ignore the 'FRONT' panel. Mixing the two panels is an invalid render." +
     " Reproduce the selected panel's garment with 100% fidelity to its graphics and layout." +
-    " The 'FRONT' and 'BACK' text markers and the black frames/band are architectural guides only — never render that text, the frames or the band onto the clothing or the person.",
+    " The 'FRONT' and 'BACK' text markers and the black frames/band are architectural guides only - never render that text, the frames or the band onto the clothing or the person.",
 };
 
-/* Full-Look composite clause — the counterpart of ANGLE_CLAUSE.combined for
+/* Full-Look composite clause - the counterpart of ANGLE_CLAUSE.combined for
    stitchLookBlob(). The reference image is now TWO stacked, isolated garment photos
    (TOP over BOTTOM) rather than one image + a text-only description of the second
    garment, so the model has an actual pixel reference for BOTH the shirt and the
@@ -2868,23 +2868,23 @@ const ANGLE_CLAUSE = {
 const LOOK_CLAUSE =
   " This image is two completely separate garment photographs stacked vertically, each isolated inside its own black-framed panel and divided by a WIDE solid-black separator band that is a strict no-man's-land." +
   " The two panels are distinct, mutually exclusive garment views. The panel marked 'TOP' is the ONLY valid source for the upper-body garment. The panel marked 'BOTTOM' is the ONLY valid source for the lower-body garment. Treat the black band and black frames as an impassable wall: you are strictly forbidden from sampling, blending, copying or bleeding ANY pixel from one panel into the other." +
-  " Reproduce EACH panel's garment with 100% fidelity to its color, fabric and graphics — rendering the 'TOP' panel's garment on the person's upper body AND the 'BOTTOM' panel's garment on the person's lower body AT THE SAME TIME, in a single photorealistic pass. Neither garment replaces the other; both must be visible simultaneously." +
-  " The 'TOP' and 'BOTTOM' text markers and the black frames/band are architectural guides only — never render that text, the frames or the band onto the clothing or the person.";
+  " Reproduce EACH panel's garment with 100% fidelity to its color, fabric and graphics - rendering the 'TOP' panel's garment on the person's upper body AND the 'BOTTOM' panel's garment on the person's lower body AT THE SAME TIME, in a single photorealistic pass. Neither garment replaces the other; both must be visible simultaneously." +
+  " The 'TOP' and 'BOTTOM' text markers and the black frames/band are architectural guides only - never render that text, the frames or the band onto the clothing or the person.";
 
 /* Custom upload, BACK angle, NO back photo supplied → a stronger inferred-rear than the
    generic backInferred. Product-approved wording: a clean, plain rear (front graphics
    stripped) that keeps the front's fabric/colour/seams/drape. The "negative prompt" is
    folded IN as an inline clause because Decart's realtime set() accepts only
-   { prompt, image, enhance } — there is NO separate negative_prompt field to pass. */
+   { prompt, image, enhance } - there is NO separate negative_prompt field to pass. */
 const CUSTOM_BACK_INFERRED =
-  " The person is seen from BEHIND — rear view, turned around, the back of the body facing the camera." +
+  " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera." +
   " Render the BACK of this custom garment. The back of the garment must be a clean, plain version of the" +
   " front's fabric and color, strictly without the front graphics or logos. Maintain the same seams," +
   " material texture, and drape as the front view. Do not mirror front-specific details to the back." +
-  " Negative constraint — avoid printing, logos, or graphic motifs on the back side.";
+  " Negative constraint - avoid printing, logos, or graphic motifs on the back side.";
 /* A REAL rear reference = a back image that DIFFERS from the front. A mirrored front
    (catalog auto-fill at load, or the graceful front-fallback) has g.back === g.front and
-   is NOT a true back photo — so it must NOT claim "reproduce the back" steering. Only a
+   is NOT a true back photo - so it must NOT claim "reproduce the back" steering. Only a
    distinct back asset (a storefront data-pear-back, or a catalog item's real rear photo)
    qualifies. For a full look, BOTH halves must ship a real back. */
 function activeBackIsReal(item) {
@@ -2895,11 +2895,11 @@ function activeBackIsReal(item) {
 }
 
 /* Whether the "AI Combined View" (stitched front+back reference) is MEANINGFUL for the
-   current subject. It needs a real front AND a real, DISTINCT back photo — a mirrored
+   current subject. It needs a real front AND a real, DISTINCT back photo - a mirrored
    front (g.back === g.front, the catalog auto-fill / graceful fallback) is pointless to
    stitch, so it must NOT offer the mode. Same realness test as activeBackIsReal; for a
    full look BOTH halves must qualify. Today only an item shipping a genuine rear asset
-   (e.g. Strata) exposes the AI button — deliberately consistent with the two-view gate. */
+   (e.g. Strata) exposes the AI button - deliberately consistent with the two-view gate. */
 function canCombineViews(item) {
   const ok = (it) => { if (!it) return false; const g = galleryOf(it); return !!(g.front && g.back && g.back !== g.front); };
   const look = resolveLook();
@@ -2908,10 +2908,10 @@ function canCombineViews(item) {
 }
 
 /* Pick the angle clause for the active view. Back splits on whether a REAL back photo is
-   in play (backReal — reproduce + pin the print's placement) vs a mirrored/inferred front
+   in play (backReal - reproduce + pin the print's placement) vs a mirrored/inferred front
    (backInferred). `item` is the single garment; for a full look it's resolved internally. */
 function angleClause(item) {
-  // AI Combined View — the image IS a stitched front|back composite, so the steering is
+  // AI Combined View - the image IS a stitched front|back composite, so the steering is
   // the composite clause (which half to use for which orientation), not a per-angle one.
   if (currentAngle === COMBINED_ANGLE) return ANGLE_CLAUSE.combined;
   const angle = effectiveAngle();      // AI Auto resolves to the DETECTED orientation
@@ -2925,7 +2925,7 @@ function angleClause(item) {
     return ANGLE_CLAUSE.backInferred;
   }
   // AI Auto, facing the camera: unlike the plain front tab (no clause), pin the reference
-  // explicitly as the garment FRONT — the mode's whole contract is one unambiguous side.
+  // explicitly as the garment FRONT - the mode's whole contract is one unambiguous side.
   if (currentAngle === AUTO_ANGLE) return ANGLE_CLAUSE.autoFront;
   return ANGLE_CLAUSE[angle] || "";
 }
@@ -2943,14 +2943,14 @@ async function referenceImageFor(item, activeImg = activeImageOf(item)) {
     const g = galleryOf(item);
     const blob = await stitchReferenceBlob(g.front || item.img, g.back || g.front || item.img);
     if (blob) return blob;                 // Blob → set({ image }) accepts it directly
-    console.warn("[PEAR] AI Combined View — stitch failed; falling back to front reference");
+    console.warn("[PEAR] AI Combined View - stitch failed; falling back to front reference");
   }
-  // AI Auto — the pre-cached Blob for the DETECTED orientation (activeImg already resolved
+  // AI Auto - the pre-cached Blob for the DETECTED orientation (activeImg already resolved
   // through effectiveAngle()). Sending bytes, not a URL, is what makes the swap instant.
   if (currentAngle === AUTO_ANGLE) {
     const blob = await garmentBlobCached(activeImg);
     if (blob) return blob;
-    console.warn("[PEAR] AI Auto — Blob pre-cache miss; falling back to proxied URL reference");
+    console.warn("[PEAR] AI Auto - Blob pre-cache miss; falling back to proxied URL reference");
   }
   return garmentImageRef(activeImg);
 }
@@ -2966,11 +2966,11 @@ async function applyGarment(item) {
     ...(imageRef ? { image: imageRef } : {}),
   };
 
-  console.group("[PEAR] applyGarment() — VTON payload debug");
+  console.group("[PEAR] applyGarment() - VTON payload debug");
   console.log("garment  :", item.name, `(id=${item.id}, type=${item.garmentType}${item.custom ? ", custom upload" : ""})`);
   console.log("angle    :", currentAngle,
     currentAngle === COMBINED_ANGLE ? "(stitched front+back composite reference)"
-      : currentAngle === AUTO_ANGLE ? `(AI Auto — detected orientation: ${autoOrientation}, pre-cached Blob)`
+      : currentAngle === AUTO_ANGLE ? `(AI Auto - detected orientation: ${autoOrientation}, pre-cached Blob)`
       : hasDedicatedAngle(item) ? "(dedicated gallery image)" : "(front fallback + prompt)");
   console.log("subType  :", item.subType, "| color:", item.color);
   console.log("img URL  :", abbrevImg(activeImg));   // data: URLs abbreviated so a base64 blob can't flood the console
@@ -2978,7 +2978,7 @@ async function applyGarment(item) {
   console.log("prompt   :", payload.prompt);
   console.groupEnd();
 
-  if (!imageRef) console.warn("[PEAR] applyGarment() — no img URL; prompt-only.");
+  if (!imageRef) console.warn("[PEAR] applyGarment() - no img URL; prompt-only.");
 
   await rtClient.set(payload);
 }
@@ -3010,7 +3010,7 @@ function getAnatomicalAnchor() {
   if (legs)  details.push(`inseam ${legs}cm`);
   if (details.length) sentence += ` Exact body measurements: ${details.join(", ")}.`;
 
-  sentence += " Fit the garment strictly to these specific anatomical proportions — zero generic guessing, maximum physical fidelity.";
+  sentence += " Fit the garment strictly to these specific anatomical proportions - zero generic guessing, maximum physical fidelity.";
   return sentence;
 }
 
@@ -3032,8 +3032,8 @@ function getSizeDelta() {
  * Translate a numeric size delta into a highly descriptive, textile-specific fit
  * modifier. The language is intentionally dense so the VTON engine has minimal
  * room for interpretation.
- * @param {number} delta    — getSizeDelta() result (negative = smaller, positive = larger)
- * @param {string} garmentType — "upper_body" | "lower_body"
+ * @param {number} delta    - getSizeDelta() result (negative = smaller, positive = larger)
+ * @param {string} garmentType - "upper_body" | "lower_body"
  * @returns {string}
  */
 function getFitModifier(delta, garmentType) {
@@ -3066,13 +3066,13 @@ const HEM_DETAIL = " Preserve the garment's printed graphics, logos, and text, a
    drift (e.g. trying a shirt silently restyles the user's real pants). These hard
    "do not touch" instructions pin the untouched layer to the live camera so a
    top swap edits ONLY the top, and a bottom swap edits ONLY the bottom. */
-const KEEP_BOTTOMS = " Keep the person's existing lower body exactly as it is in the live camera — do not change, recolor, restyle, or re-render the trousers, shorts, skirt, shoes, or anything below the waist.";
-const KEEP_TOP     = " Keep the person's existing upper body exactly as it is in the live camera — do not change, recolor, restyle, or re-render the shirt, top, jacket, or anything above the waist.";
+const KEEP_BOTTOMS = " Keep the person's existing lower body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the trousers, shorts, skirt, shoes, or anything below the waist.";
+const KEEP_TOP     = " Keep the person's existing upper body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the shirt, top, jacket, or anything above the waist.";
 
 /* Universal hard negative appended to EVERY prompt (per product spec). Bars the opposite
    view's signature details from leaking in when the back is being rendered. In AI Combined
    View, the per-segment orientation steering (which half = front/back, and when to use each)
-   lives in the composite ANGLE_CLAUSE.combined clause — the model auto-switches from it. */
+   lives in the composite ANGLE_CLAUSE.combined clause - the model auto-switches from it. */
 const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like logos or front-pockets) when the BACK view is requested.";
 
 function buildPrompt(item) {
@@ -3102,7 +3102,7 @@ function buildPrompt(item) {
  * Prompt for a user-uploaded ("custom") garment. The cropped image is passed as the
  * reference (image: dataURL) so the instruction tells the model to replicate the
  * exact garment shown, rather than a named catalog color/subType.
- * @param {object} item — a custom item ({ custom:true, garmentType, img, color })
+ * @param {object} item - a custom item ({ custom:true, garmentType, img, color })
  * @returns {string}
  */
 function buildCustomPrompt(item) {
@@ -3110,7 +3110,7 @@ function buildCustomPrompt(item) {
   const delta  = getSizeDelta();
   const fitMod = getFitModifier(delta, item.garmentType);
   const suffix = HARD_NEGATIVE;
-  const ref = "the exact garment shown in the reference image — a custom uploaded garment — replicating its precise color, pattern, print, fabric texture and silhouette";
+  const ref = "the exact garment shown in the reference image - a custom uploaded garment - replicating its precise color, pattern, print, fabric texture and silhouette";
 
   if (item.garmentType === "lower_body") {
     return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_TOP}${suffix}`
@@ -3131,18 +3131,18 @@ async function applyActive() {
   const look = resolveLook();        // non-null only when activeOutfit has top AND bottom
   if (look) await applyLook(look.top, look.bottom);
   else await applyGarment(activeItem);
-  isGarmentApplied = true;           // rtClient.set() resolved — the NEXT rendered frame is dressed
+  isGarmentApplied = true;           // rtClient.set() resolved - the NEXT rendered frame is dressed
 }
 
 /**
- * Render BOTH garments of a verified look in ONE realtime set() call — never two
+ * Render BOTH garments of a verified look in ONE realtime set() call - never two
  * sequential requests (that would double-spend the strict 5s window). The unified
  * prompt names the shirt AND the pants, so the model renders the full outfit in a
  * single pass / one stream.
  *
  * SDK reality (verified against @decartai/sdk@0.1.5 `setInputSchema`): realtime
  * set() accepts exactly { prompt, enhance, image } and STRIPS unknown keys, so only
- * ONE reference image reaches the model today — a text-only description of a garment
+ * ONE reference image reaches the model today - a text-only description of a garment
  * with no pixel reference renders weakly (or not at all), which is what made "Add to
  * Look" look like it REPLACED the current garment instead of layering it. So the ONE
  * image we send is a stitchLookBlob() composite of BOTH garments (TOP over BOTTOM),
@@ -3158,10 +3158,10 @@ async function applyLook(top, bottom) {
   // Gallery sync: resolve each half against the active angle first.
   const topImg = activeImageOf(top), bottomImg = activeImageOf(bottom);
 
-  // The SDK forwards exactly ONE image ({prompt, enhance, image} — extra keys are
+  // The SDK forwards exactly ONE image ({prompt, enhance, image} - extra keys are
   // stripped), so a text-only description of the second garment gets a real pixel
   // reference for the top but none for the bottom, and the model renders only the
-  // top — visually indistinguishable from "replace". stitchLookBlob() gives BOTH
+  // top - visually indistinguishable from "replace". stitchLookBlob() gives BOTH
   // garments an actual reference by compositing them (TOP over BOTTOM) into the
   // single image the SDK does forward. Skip it for the AI Combined/Auto angle
   // modes, which already need that one image slot for their own front/back stitch.
@@ -3172,14 +3172,14 @@ async function applyLook(top, bottom) {
     : buildLookPrompt(top, bottom) + angleClause();
 
   if (!primaryImage) {
-    // Stitch unavailable (combined/auto angle) or failed to decode — fall back to the
+    // Stitch unavailable (combined/auto angle) or failed to decode - fall back to the
     // single top reference so the live session is never left without ANY image.
     if (canStitchLook) console.warn("[PEAR] look stitch failed; falling back to top-only reference");
     primaryImage = (await referenceImageFor(top, topImg)) ?? null;
   }
   const images = [topImg, bottomImg].filter(Boolean).map(garmentImageRef).filter(Boolean);
 
-  // ONE combined payload — both garments, one pass, same session.
+  // ONE combined payload - both garments, one pass, same session.
   const payload = {
     prompt,
     enhance: false,
@@ -3194,7 +3194,7 @@ async function applyLook(top, bottom) {
   try {
     await rtClient.set(payload);
   } catch (e) {
-    // A stricter SDK build may reject the enriched shape — retry with the minimal contract.
+    // A stricter SDK build may reject the enriched shape - retry with the minimal contract.
     console.warn("look payload rejected, retrying minimal:", e?.message || e);
     await rtClient.set({ prompt, image: primaryImage, enhance: false });
   }
@@ -3223,7 +3223,7 @@ function buildLookPrompt(top, bottom) {
 }
 
 /* =============================================================================
-   Size Override Selector — Screen 2 (Try-On room)
+   Size Override Selector - Screen 2 (Try-On room)
    ─────────────────────────────────────────────────────────────────────────
    A glassmorphism button row (XS / S / M / L / XL / XXL / 3XL) injected below
    the active-garment chip. The button matching currentUserSize is highlighted by default.
@@ -3241,22 +3241,22 @@ function injectSizeSelector() {
     const s = document.createElement("style");
     s.id = "pearSizeSelectorStyles";
     s.textContent = `
-      /* Liquid-glass size selector — matches the liquid-glass theme in style.css.
+      /* Liquid-glass size selector - matches the liquid-glass theme in style.css.
          Light refractive pod, glass pill tiles, pear-green active glow.
 
-         LAYOUT FIX: this used to be ONE flex row — label, the button group, and
+         LAYOUT FIX: this used to be ONE flex row - label, the button group, and
          the "★ recommended" hint all as direct flex children of a single
          align-items:center container with border-radius:100px (a full stadium
          shape). That only looks right if everything fits on one line. With 7
          sizes (SIZE_SCALE: XS/S/M/L/XL/XXL/3XL) plus the label and hint, a
-         narrow phone screen doesn't have room for that — .pear-sz-btns wraps
+         narrow phone screen doesn't have room for that - .pear-sz-btns wraps
          its own buttons onto 2-3 lines internally, and because it was still
          just ONE item in an align-items:center row, the label and hint floated
-         to the VERTICAL CENTER of that now-tall wrapped block — landing
+         to the VERTICAL CENTER of that now-tall wrapped block - landing
          visually in the MIDDLE row of buttons instead of staying put, and the
          100px stadium radius around 3 wrapped rows read as a broken blob
          rather than a pill.
-         Fix: split into two always-separate rows — a header row (label + hint,
+         Fix: split into two always-separate rows - a header row (label + hint,
          never touched by however many rows the buttons wrap to) stacked above
          a button-grid row. A normal card radius replaces the stadium shape,
          since this can genuinely be 1-3 rows tall depending on screen width. */
@@ -3264,7 +3264,7 @@ function injectSizeSelector() {
         display: flex;
         flex-direction: column;
         gap: 8px;
-        /* SPACING FIX: bottom margin was 4px — barely any air before the camera
+        /* SPACING FIX: bottom margin was 4px - barely any air before the camera
            stage directly below this pod. 20px gives it real breathing room. */
         margin: 14px 0 20px;
         padding: 12px 16px;
@@ -3291,15 +3291,15 @@ function injectSizeSelector() {
         flex-shrink: 0;
       }
       /* SYMMETRY FIX: was a plain flex-wrap row with no justify-content (default
-         flex-start) and no fixed per-button width — with all 7 SIZE_SCALE entries
+         flex-start) and no fixed per-button width - with all 7 SIZE_SCALE entries
          (XS/S/M/L/XL/XXL/3XL), that let however many happened to fit on line 1 (6)
          wrap the single leftover (3XL) onto line 2, stuck to one edge with a big
          empty gap beside it. Two changes fix this together:
-           • each button's flex-basis is pinned to calc(25% - 4.5px) — exactly
-             ("100% - 3 gaps of 6px" / 4) — so rows are ALWAYS a clean 4-then-3
+           • each button's flex-basis is pinned to calc(25% - 4.5px) - exactly
+             ("100% - 3 gaps of 6px" / 4) - so rows are ALWAYS a clean 4-then-3
              split for these 7 sizes, not whatever the browser's organic wrap
              happens to land on.
-           • justify-content:center centers each row's own content — including
+           • justify-content:center centers each row's own content - including
              the short 3-item second row, which now sits centered instead of
              flush to one side. */
       .pear-sz-btns {
@@ -3310,7 +3310,7 @@ function injectSizeSelector() {
       }
       .pear-sz-btn {
         /* flex-basis pinned to a quarter-row (minus its share of the 6px gaps) so
-           these 7 buttons always land as a clean 4-then-3 split — see the
+           these 7 buttons always land as a clean 4-then-3 split - see the
            SYMMETRY FIX note on .pear-sz-btns above. min-width stays as a floor for
            very narrow screens where 25% would otherwise shrink below readable. */
         flex: 0 1 calc(25% - 4.5px);
@@ -3350,7 +3350,7 @@ function injectSizeSelector() {
         50%      { box-shadow: 0 0 0 3px rgba(141,182,0,0.30), 0 10px 28px rgba(141,182,0,0.34), inset 0 0 18px rgba(141,182,0,0.28); }
       }
       .pear-sz-hint {
-        /* margin-left:auto removed — .pear-sz-head's own justify-content:space-between
+        /* margin-left:auto removed - .pear-sz-head's own justify-content:space-between
            now positions this, no longer needs to fight for its own space. */
         font-size: 10px;
         font-weight: 600;
@@ -3399,10 +3399,10 @@ function injectSizeSelector() {
 }
 
 /**
- * Switch the active try-on size, refresh button highlight states, and — if a
- * WebRTC session is currently live — push a new prompt payload immediately so
+ * Switch the active try-on size, refresh button highlight states, and - if a
+ * WebRTC session is currently live - push a new prompt payload immediately so
  * the garment resizes in real-time without restarting the connection.
- * @param {string} size — one of SIZE_SCALE ('S'|'M'|'L'|'XL'|'XXL')
+ * @param {string} size - one of SIZE_SCALE ('S'|'M'|'L'|'XL'|'XXL')
  */
 function setSizeOverride(size) {
   activeTryOnSize = size;
@@ -3422,16 +3422,16 @@ function setSizeOverride(size) {
   if (!currentUserSize || baseIdx === -1) {
     toast(`מידה שנבחרה: <b>${size}</b>`);
   } else if (pickIdx < baseIdx) {
-    toast(`מידה <b>${size}</b> — הלבוש יראה הדוק יותר`);
+    toast(`מידה <b>${size}</b> - הלבוש יראה הדוק יותר`);
   } else if (pickIdx > baseIdx) {
-    toast(`מידה <b>${size}</b> — הלבוש יראה גדול יותר`);
+    toast(`מידה <b>${size}</b> - הלבוש יראה גדול יותר`);
   } else {
-    toast(`מידה <b>${size}</b> — התאמה מדויקת`);
+    toast(`מידה <b>${size}</b> - התאמה מדויקת`);
   }
 }
 
 /* =============================================================================
-   Analytics — fire-and-forget try-on event (backend appends to Google Sheets)
+   Analytics - fire-and-forget try-on event (backend appends to Google Sheets)
    No PII is sent: only garment metadata and the recommended size.
    ============================================================================= */
 function logTryOnAnalytics(item, size) {
@@ -3458,7 +3458,7 @@ function logTryOnAnalytics(item, size) {
 }
 
 /* =============================================================================
-   Admin dashboard — anonymized session log
+   Admin dashboard - anonymized session log
    One stable, anonymous id per browser session (NO name/email/PII). It lets the
    admin dashboard group multiple try-ons by the same visitor without ever
    identifying who they are.
@@ -3479,11 +3479,11 @@ const PEAR_SESSION_ID = (() => {
    -----------------------------------------------------------------------------
    First-time visitors enter name + email ONCE. We generate a persistent device
    id (localStorage 'pear_device_id') and create a user server-side. On every
-   later visit we find that device id, load the profile, and skip the form — new
+   later visit we find that device id, load the profile, and skip the form - new
    measurements just attach to the existing user via sessions.user_id.
    ============================================================================= */
 const PEAR_DEVICE_KEY = "pear_device_id";
-let PEAR_USER_ID = null;   // users.id once known — stamped onto each saved session
+let PEAR_USER_ID = null;   // users.id once known - stamped onto each saved session
 
 function getDeviceId() {
   try { return localStorage.getItem(PEAR_DEVICE_KEY) || ""; } catch { return ""; }
@@ -3497,39 +3497,39 @@ function newUuid() {
 }
 
 /* =============================================================================
-   DEMO MODE — scoped to ONE specific embed, never the general product
+   DEMO MODE - scoped to ONE specific embed, never the general product
    -----------------------------------------------------------------------------
    The fitting room is shared infrastructure: the SAME app.js/index.html serves
    real merchant embeds and the main platform (full name/email registration,
    no measurement limit) AND the public marketing-site demo widget on
    pear-platform.vercel.app (no registration, one measurement per browser).
 
-   The two must never be conflated, so this is opt-in and explicit — a plain
+   The two must never be conflated, so this is opt-in and explicit - a plain
    `?pear_demo=1` in the fitting-room URL, which ONLY widget/pear-widget.js
    ever adds, and ONLY when its own <script> tag carries
    data-pear-demo="true" (set on the marketing site's embed alone; every other
-   embed — the main app, any real merchant — gets full registration by
+   embed - the main app, any real merchant - gets full registration by
    default, exactly as if this feature didn't exist). Nothing below this line
    changes when DEMO_MODE is false.
    ============================================================================= */
 const DEMO_MODE = new URLSearchParams(location.search).get("pear_demo") === "1";
 
 /* =============================================================================
-   ONE-TIME PUBLIC DEMO LOCK — active ONLY when DEMO_MODE is true
+   ONE-TIME PUBLIC DEMO LOCK - active ONLY when DEMO_MODE is true
    -----------------------------------------------------------------------------
    This public demo permits exactly one virtual measurement per browser. The
-   FIRST completed try-on (a look actually saved to the gallery — see
+   FIRST completed try-on (a look actually saved to the gallery - see
    lockDemoAfterFirstMeasurement, called from stopLive()/beginFreezeHold())
    sets 'pear_demo_measured' in localStorage. Every entry point that can start
    a camera stream, recompute a size, or re-enter the fitting room checks it
    first (init(), goToFitting(), startCamera(), onRetake(), replayFitLive()).
    isDemoLocked() short-circuits to false outside DEMO_MODE, so none of those
-   guards can ever fire for the main app / a real merchant — an authenticated
+   guards can ever fire for the main app / a real merchant - an authenticated
    production user can always re-measure and update their profile.
 
    This iframe and the host page's "מדוד וירטואלית" trigger button
    (widget/pear-widget.js) run on DIFFERENT origins, so they each have their
-   OWN localStorage — postMessage is the only channel between them. We notify
+   OWN localStorage - postMessage is the only channel between them. We notify
    the parent the instant the lock is set so the outer button locks too,
    without the host page needing a reload.
    ============================================================================= */
@@ -3549,7 +3549,7 @@ function notifyParentDemoLocked() {
   } catch {}
 }
 
-/* Full-screen takeover — replaces Screen 1/2 entirely. Used both on load for a
+/* Full-screen takeover - replaces Screen 1/2 entirely. Used both on load for a
    returning (already-locked) visitor and by every "tried to restart" guard. */
 function showDemoLockedScreen() {
   $("screen-calculator")?.classList.remove("active");
@@ -3559,7 +3559,7 @@ function showDemoLockedScreen() {
 
 /* Called once, right after the FIRST look is successfully saved to the
    gallery. Persists the lock and flips in-memory state so every guard below
-   takes effect immediately — but does NOT navigate away from the result the
+   takes effect immediately - but does NOT navigate away from the result the
    user is currently looking at; that would yank away the try-on they just
    finished. The lock only blocks the NEXT attempt (reload, retake, edit
    measurements, …). */
@@ -3573,16 +3573,16 @@ function lockDemoAfterFirstMeasurement() {
 /* =============================================================================
    RETURNING-USER PROFILE + MONTHLY MEASUREMENTS REFRESH
    -----------------------------------------------------------------------------
-   height/weight now live on the `users` row itself (supabase_setup_v7.sql) —
+   height/weight now live on the `users` row itself (supabase_setup_v7.sql) -
    GET/PATCH /api/users/:deviceId are the single source of truth, no local
    height/weight cache. `pear_last_measurements_date` is a lightweight LOCAL
    clock for "did THIS browser confirm/refresh measurements in the last 30
-   days" — a fresh device that logs into a known profile still needs to answer
+   days" - a fresh device that logs into a known profile still needs to answer
    that question once before skipping Screen 1 on every later visit.
 
    Bounds mirror calculateSize()'s "mandatoryReady" gate exactly (height
-   130–240 cm, weight 35–220 kg) — also enforced server-side in
-   updateUserMeasurements() — so no out-of-range value survives the round-trip.
+   130–240 cm, weight 35–220 kg) - also enforced server-side in
+   updateUserMeasurements() - so no out-of-range value survives the round-trip.
    ============================================================================= */
 const PEAR_LAST_MEASUREMENTS_KEY = "pear_last_measurements_date";
 const MEASUREMENTS_REFRESH_MS    = 30 * 24 * 60 * 60 * 1000;   // 30 days
@@ -3636,7 +3636,7 @@ function stampAuthDate() {
   try { localStorage.setItem(PEAR_LAST_AUTH_KEY, new Date().toISOString()); } catch {}
 }
 
-/* In-memory returning-user profile — populated by routeUser() from a GET
+/* In-memory returning-user profile - populated by routeUser() from a GET
    /api/users/:deviceId lookup or a POST /api/users registration/auto-login.
    Powers the profile button/dropdown (Feature 3) and the measurements PATCH. */
 let PEAR_USER = null;   // { id, name, email, height, weight } | null
@@ -3646,7 +3646,7 @@ let PEAR_USER = null;   // { id, name, email, height, weight } | null
 let PEAR_OTP_PENDING = null;   // { deviceId, name, email } | null
 
 /* Set by showIdentityGate() when a KNOWN device's 30-day auth window lapsed
-   (monthly re-auth — Case 2). Holds the server profile so submitIdentity()/
+   (monthly re-auth - Case 2). Holds the server profile so submitIdentity()/
    verifyOtp() know to re-authenticate this existing user (stamp + routeUser)
    instead of registering a new one. Null for every other identity-gate path. */
 let PEAR_REAUTH_USER = null;   // { id, name, email, height, weight } | null
@@ -3659,14 +3659,14 @@ function hideAllScreen1Forms() {
   if (sizeForm) { sizeForm.hidden = true; sizeForm.style.display = "none"; }
 }
 
-/* Reveal Screen 1's measurement form — prefilled from PEAR_USER when a profile
+/* Reveal Screen 1's measurement form - prefilled from PEAR_USER when a profile
    exists, with the "עבר חודש" nudge banner when opts.refreshNotice is set
    (a known profile whose 30-day window lapsed; never shown to a brand-new
    visitor who has no profile yet). Recomputes so a prefilled visitor sees
    their size immediately. */
 /* Lift the pre-paint force-hide (see the inline script + html.pear-returning-
  * check rule in style.css) the instant we're about to reveal #screen-calculator
- * for real — whether that's the identity gate (unknown/404 device) or the
+ * for real - whether that's the identity gate (unknown/404 device) or the
  * measurement form (no/stale profile). The fast path (known device, fresh
  * profile) never calls this: it goes straight to goToFitting() and
  * #screen-calculator is simply never shown. */
@@ -3692,15 +3692,15 @@ function showSizeForm(opts) {
 }
 
 /* THE single decision point for what a visitor sees once we know who they are
-   (a known device on page load — setupIdentityGate — or a fresh
-   registration/auto-login — submitIdentity). user is the raw `user` object
+   (a known device on page load - setupIdentityGate - or a fresh
+   registration/auto-login - submitIdentity). user is the raw `user` object
    from the /api/users response, or null/undefined on infra failure.
 
      No profile at all       → Screen 1's measurement form, plain (first-time
                                 visitor, or a known profile that never finished
                                 sizing).
      Profile, refresh due    → Screen 1's measurement form, WITH the "עבר חודש"
-                                nudge banner, prefilled — the visitor cannot
+                                nudge banner, prefilled - the visitor cannot
                                 reach the camera without confirming/updating.
      Profile, refresh NOT due → Screen 1 is never shown; prefill straight into
                                 calculateSize() and transition into the camera. */
@@ -3716,7 +3716,7 @@ function routeUser(user) {
     const setIf = (id, v) => { const el = $(id); if (el && v != null && v !== "") el.value = String(v); };
     setIf("height", user.height); setIf("weight", user.weight);
     try { calculateSize(); } catch {}
-    // instant:true — this visitor never saw Screen 1 (pre-paint gate kept
+    // instant:true - this visitor never saw Screen 1 (pre-paint gate kept
     // #screen-calculator hidden the whole time), so skip the branded transition
     // and land directly on the camera with zero visible animation/delay.
     goToFitting({ instant: true });
@@ -3746,7 +3746,7 @@ async function persistMeasurementsIfLoggedIn(height, weight) {
   }
 }
 
-/* Screen 1's "Continue →" action (button click AND Enter-to-submit — see
+/* Screen 1's "Continue →" action (button click AND Enter-to-submit - see
    onMeasurementKeydown). Persists the just-entered measurements server-side
    for a logged-in returning/new user before transitioning into the room. */
 async function onSizeFormContinue() {
@@ -3755,7 +3755,7 @@ async function onSizeFormContinue() {
 }
 
 /* =============================================================================
-   PROFILE BUTTON (Feature 3) — top-right corner, always visible in the fitting
+   PROFILE BUTTON (Feature 3) - top-right corner, always visible in the fitting
    room once a user is known. Click reveals name/email/height/weight + logout.
    Hidden entirely while PEAR_USER is null (nothing to show pre-login).
    ============================================================================= */
@@ -3781,17 +3781,17 @@ function updateProfileButton() {
   if (avatar) avatar.textContent = initials;
 
   const nameEl = $("profileName"), emailEl = $("profileEmail");
-  if (nameEl) nameEl.textContent = PEAR_USER.name || "—";
-  if (emailEl) emailEl.textContent = PEAR_USER.email || "—";
+  if (nameEl) nameEl.textContent = PEAR_USER.name || "-";
+  if (emailEl) emailEl.textContent = PEAR_USER.email || "-";
 
   const heightEl = $("profileHeight"), weightEl = $("profileWeight");
-  if (heightEl) heightEl.textContent = PEAR_USER.height != null ? `${PEAR_USER.height} ס"מ` : "—";
-  if (weightEl) weightEl.textContent = PEAR_USER.weight != null ? `${PEAR_USER.weight} ק"ג` : "—";
+  if (heightEl) heightEl.textContent = PEAR_USER.height != null ? `${PEAR_USER.height} ס"מ` : "-";
+  if (weightEl) weightEl.textContent = PEAR_USER.weight != null ? `${PEAR_USER.weight} ק"ג` : "-";
 
   const sizeEl = $("profileSize");
   if (sizeEl) {
     const sizeText = $("final-size-text");
-    sizeEl.textContent = (sizeText && sizeText.innerText.trim()) || currentUserSize || "—";
+    sizeEl.textContent = (sizeText && sizeText.innerText.trim()) || currentUserSize || "-";
   }
 }
 
@@ -3803,7 +3803,7 @@ function toggleProfileDropdown() {
   p.hidden ? openProfileDropdown() : closeProfileDropdown();
 }
 
-/* "התנתקות" — clear everything that identifies this browser (device id, the
+/* "התנתקות" - clear everything that identifies this browser (device id, the
  * measurements-refresh clock, and the legacy pre-refactor body-profile cache
  * key some browsers may still carry) and reload, landing fresh on the gate. */
 function logoutUser() {
@@ -3830,7 +3830,7 @@ function setupProfileButton() {
     logoutBtn.dataset.wired = "1";
     logoutBtn.addEventListener("click", logoutUser);
   }
-  // Outside click closes the dropdown (idempotent — one document-level listener).
+  // Outside click closes the dropdown (idempotent - one document-level listener).
   if (!setupProfileButton._wired) {
     setupProfileButton._wired = true;
     document.addEventListener("click", (e) => {
@@ -3843,9 +3843,9 @@ function setupProfileButton() {
   updateProfileButton();
 }
 
-/* Show the name/email gate and wire its controls (idempotent — safe to call
+/* Show the name/email gate and wire its controls (idempotent - safe to call
    more than once). Hides the measurement form until the visitor registers.
-   opts.reauth + opts.user (Case 2 — known device, stale auth date): prefills
+   opts.reauth + opts.user (Case 2 - known device, stale auth date): prefills
    name/email from the server profile and arms PEAR_REAUTH_USER so
    submitIdentity()/verifyOtp() re-authenticate this same user instead of
    registering a new one. */
@@ -3885,7 +3885,7 @@ function showIdentityGate(opts) {
 
 /* Step 0 for EVERY visit. NOTE: this re-adds a device-id auto-skip that an
    earlier version deliberately removed (see git history / server.js comments
-   on findUserByDeviceId) — a shared/QA browser typing a DIFFERENT name+email
+   on findUserByDeviceId) - a shared/QA browser typing a DIFFERENT name+email
    into the gate after another visitor already registered on it will silently
    land in the fitting room under the wrong identity instead of being asked to
    confirm. Accepted as a known tradeoff per explicit product decision; if that
@@ -3906,7 +3906,7 @@ async function setupIdentityGate() {
     if (res.status === 200) {
       const data = await res.json().catch(() => null);
       if (data && data.ok && data.user) {
-        // Case 2 — known device whose 30-day auth window lapsed (or never
+        // Case 2 - known device whose 30-day auth window lapsed (or never
         // stamped, e.g. a device that registered before this feature shipped):
         // re-gate with OTP before trusting this device again, rather than
         // routing straight in. Case 1 (auth still fresh) falls through to the
@@ -3917,7 +3917,7 @@ async function setupIdentityGate() {
           return;
         }
         console.log("[PEAR] known device → auto-login user:", data.user.name, "→", data.user.id);
-        routeUser(data.user);   // Feature 1/2 routing — camera, refresh form, or gate never shown
+        routeUser(data.user);   // Feature 1/2 routing - camera, refresh form, or gate never shown
         return;
       }
       console.log("[PEAR] lookup returned 200 but no usable user payload → showing gate");
@@ -3932,7 +3932,7 @@ async function setupIdentityGate() {
 }
 
 /* =============================================================================
-   EMAIL OTP VERIFICATION — inserted between the identity gate and the
+   EMAIL OTP VERIFICATION - inserted between the identity gate and the
    measurement form for first-time visitors only (submitIdentity below only
    ever runs when setupIdentityGate() decided this device has no usable
    profile, so there's no separate "first-time" branch to gate here).
@@ -3960,7 +3960,7 @@ function showOtpScreen(email) {
   if (idForm)  { idForm.hidden = true; idForm.style.display = "none"; }
   if (otpForm) { otpForm.hidden = false; otpForm.style.display = ""; }
   // The shared Screen-1 heading/subtitle (also used by the identity gate and
-  // measurement form) don't belong on the OTP step — hide them for its duration.
+  // measurement form) don't belong on the OTP step - hide them for its duration.
   const heading = $("calcHeading"), subtitle = $("calcSubtitle");
   if (heading)  heading.hidden = true;
   if (subtitle) subtitle.hidden = true;
@@ -3984,14 +3984,14 @@ function hideOtpScreen() {
   PEAR_REAUTH_USER = null;
 }
 
-/* Case 3 — new device, email already registered to a DIFFERENT device (POST
+/* Case 3 - new device, email already registered to a DIFFERENT device (POST
    /api/users just returned 409/email_taken). The OTP for this exact email has
    already been verified (see verifyOtp → finishRegistration), so this device
-   has proven ownership of the address — relink it to the existing account
+   has proven ownership of the address - relink it to the existing account
    rather than dead-ending on "email taken". */
 async function relinkExistingDevice(deviceId, email) {
   const errEl = $("otp-error");
-  toast("האימייל הזה כבר רשום — שלחנו קוד לאימות זהות");
+  toast("האימייל הזה כבר רשום - שלחנו קוד לאימות זהות");
   try {
     const res = await fetch("/api/users/relink", {
       method:  "PATCH",
@@ -4010,10 +4010,10 @@ async function relinkExistingDevice(deviceId, email) {
     }
 
     console.warn("[identity] relink failed (status", res.status, ")");
-    if (errEl) { errEl.textContent = "שיוך המכשיר נכשל — נסה שוב."; errEl.hidden = false; }
+    if (errEl) { errEl.textContent = "שיוך המכשיר נכשל - נסה שוב."; errEl.hidden = false; }
   } catch (err) {
     console.warn("[identity] relink request failed:", err?.message || err);
-    if (errEl) { errEl.textContent = "שגיאת רשת — נסה שוב."; errEl.hidden = false; }
+    if (errEl) { errEl.textContent = "שגיאת רשת - נסה שוב."; errEl.hidden = false; }
   }
 }
 
@@ -4052,7 +4052,7 @@ async function finishRegistration(deviceId, name, email) {
       return;
     }
 
-    console.warn("[identity] save unavailable (status", res.status, ") — proceeding without server profile");
+    console.warn("[identity] save unavailable (status", res.status, ") - proceeding without server profile");
     setDeviceId(deviceId);
     hideOtpScreen();
     showSizeForm();
@@ -4064,7 +4064,7 @@ async function finishRegistration(deviceId, name, email) {
   }
 }
 
-/* Case 2 — known device, OTP re-auth just verified: no server write needed,
+/* Case 2 - known device, OTP re-auth just verified: no server write needed,
    the device_id already points at this user. Stamp today's auth date and
    route exactly like a fresh auto-login (camera, or the measurements-refresh
    form if that clock separately lapsed). */
@@ -4080,7 +4080,7 @@ async function finishReauth() {
 async function verifyOtp(code) {
   const errEl = $("otp-error");
   const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.hidden = false; } };
-  if (!PEAR_OTP_PENDING) return showErr("משהו השתבש — נא לשלוח קוד חדש.");
+  if (!PEAR_OTP_PENDING) return showErr("משהו השתבש - נא לשלוח קוד חדש.");
   if (!/^\d{6}$/.test(code)) return showErr("נא להזין קוד בן 6 ספרות.");
 
   const btn = $("btn-verify-otp");
@@ -4110,7 +4110,7 @@ async function verifyOtp(code) {
     }
   } catch (err) {
     console.warn("[otp] verify failed:", err?.message || err);
-    showErr("שגיאת רשת — נסה שוב.");
+    showErr("שגיאת רשת - נסה שוב.");
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -4135,12 +4135,12 @@ async function resendOtp() {
       toast("קוד חדש נשלח");
     } else {
       const errEl = $("otp-error");
-      if (errEl) { errEl.textContent = (data && (data.message || data.error)) || "שליחת הקוד נכשלה — נסה שוב."; errEl.hidden = false; }
+      if (errEl) { errEl.textContent = (data && (data.message || data.error)) || "שליחת הקוד נכשלה - נסה שוב."; errEl.hidden = false; }
     }
   } catch (err) {
     console.warn("[otp] resend failed:", err?.message || err);
     const errEl = $("otp-error");
-    if (errEl) { errEl.textContent = "שגיאת רשת — נסה שוב."; errEl.hidden = false; }
+    if (errEl) { errEl.textContent = "שגיאת רשת - נסה שוב."; errEl.hidden = false; }
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -4206,12 +4206,12 @@ async function submitIdentity() {
 
     // Rate limited / bad input → surface it, let the visitor retry from the gate.
     if (btn) btn.disabled = false;
-    return showErr((data && (data.message || data.error)) || "שליחת קוד האימות נכשלה — נסה שוב.");
+    return showErr((data && (data.message || data.error)) || "שליחת קוד האימות נכשלה - נסה שוב.");
   } catch (err) {
-    // Network error / API server down — never a dead end.
+    // Network error / API server down - never a dead end.
     if (btn) btn.disabled = false;
     console.warn("[identity] send-otp failed:", err?.message || err);
-    showErr("שגיאת רשת — נסה שוב.");
+    showErr("שגיאת רשת - נסה שוב.");
   }
 }
 
@@ -4220,8 +4220,8 @@ async function submitIdentity() {
  * store. Fired when the size calculator is submitted (see goToFitting), so we
  * capture intent even if the user never starts the camera. Optional measurements
  * are sent as null when blank.
- * @param {object|null} item — the garment (id/name read off it)
- * @param {string}      size — the CALCULATED size (S/M/L/XL…)
+ * @param {object|null} item - the garment (id/name read off it)
+ * @param {string}      size - the CALCULATED size (S/M/L/XL…)
  */
 function logSessionMeasurements(item, size) {
   const num = (id) => { const el = $(id); return el && el.value ? parseFloat(el.value) : null; };
@@ -4260,9 +4260,9 @@ function onLiveToggle() {
   else goLive();
 }
 
-/* ── Billed window — armed by the FIRST rendered Decart frame ─────────────────
+/* ── Billed window - armed by the FIRST rendered Decart frame ─────────────────
    The 5s / 10-credit clock, the on-screen countdown, and the hard disconnect are all
-   armed HERE, from the first frame Decart actually renders — never at connect or set().
+   armed HERE, from the first frame Decart actually renders - never at connect or set().
    That makes the billed window measure real generation, not handshake/warm-up time.
    Idempotent (billingStarted) and sessionGen-guarded, so it fires exactly once per
    session and never for one that has already been torn down. */
@@ -4272,7 +4272,7 @@ function startBillingWindow(gen) {
   billingStarted = true;
 
   // Start recording from the SAME event that starts billing (the first DRESSED frame)
-  // so the encoded clip and the billed window cover exactly the same span — no gap
+  // so the encoded clip and the billed window cover exactly the same span - no gap
   // for applyActive()'s rtClient.set() round-trip to eat into the recorded duration.
   startRecording();
 
@@ -4281,23 +4281,23 @@ function startBillingWindow(gen) {
 
   // STATE TRANSITION: Loading (w/ timer) → Model Ready → Start 5s capture. Everything
   // above this line only runs once armFirstFrameBilling has VERIFIED a real, non-black
-  // AI-rendered frame — so this is the exact instant the model is "fully initialized."
+  // AI-rendered frame - so this is the exact instant the model is "fully initialized."
   // Reveal the live stage + retire the loading overlay HERE (not earlier in goLive())
   // so the user never sees a "ready" UI before there's real content behind it.
   stopScanTimer();
   $("scanOverlay").hidden = true;
   card().classList.add("show-live");
-  // Feature 2 — start recording HERE, on the exact frame that arms billing, so the
+  // Feature 2 - start recording HERE, on the exact frame that arms billing, so the
   // encoded clip always matches the billed 5s window (no black warm-up frames at the
-  // front — see the BLACK-FRAME FIX note in startRecording, and the isDressedFrame
+  // front - see the BLACK-FRAME FIX note in startRecording, and the isDressedFrame
   // check above that now guarantees this frame really is dressed content).
   startRecording();
 
-  console.log("[PEAR] First verified AI frame — billing + 5s capture started (" +
+  console.log("[PEAR] First verified AI frame - billing + 5s capture started (" +
     (LIVE_DURATION_MS / 1000) + "s / " + CREDITS_PER_SESSION + " credits)");
 
   // Visual countdown over the full VIDEO_LENGTH_MS experience. Drift-tolerant: the hard
-  // stop below — not this ticker — is the source of truth for when billing actually ends.
+  // stop below - not this ticker - is the source of truth for when billing actually ends.
   const timerGen = gen;
   const totalSec = Math.round(VIDEO_LENGTH_MS / 1000);
   hideLiveCountdown();                  // clear any stale ticker before arming a fresh one
@@ -4310,17 +4310,17 @@ function startBillingWindow(gen) {
   }, 1000);
 
   // Hard BILLING stop EXACTLY LIVE_DURATION_MS after the first frame. Time-based, so it
-  // still fires even if frames stall or stop arriving early — no credit can leak past it.
+  // still fires even if frames stall or stop arriving early - no credit can leak past it.
   liveDurationTimer = setTimeout(() => {
     if (sessionGen !== timerGen) return;   // a manual Stop already tore this session down
-    console.log("[PEAR] Billing ended — disconnecting Decart (" + LIVE_DURATION_MS + "ms ≈ " +
+    console.log("[PEAR] Billing ended - disconnecting Decart (" + LIVE_DURATION_MS + "ms ≈ " +
       CREDITS_PER_SESSION + " credits @ " + CREDITS_PER_SECOND + "/s)" +
       (VIDEO_LENGTH_MS > LIVE_DURATION_MS ? ", holding frozen frame to " + VIDEO_LENGTH_MS + "ms" : ""));
     beginFreezeHold();
   }, LIVE_DURATION_MS);
 }
 
-/* Fire the billed window ONCE — at the first frame #aiVideo presents that is VERIFIED
+/* Fire the billed window ONCE - at the first frame #aiVideo presents that is VERIFIED
    to be real AI-rendered output, not just "a frame decoded". Model ready == fully
    initialized here means "the remote track is actually producing dressed content", so
    we reuse sampleVideoLuma()'s black-frame test (same thresholds as the local-camera
@@ -4328,10 +4328,10 @@ function startBillingWindow(gen) {
 
    PRECISION-TIMING FIX: the remote WebRTC track can start delivering frames (and
    requestVideoFrameCallback/videoWidth can go non-zero) up to ~1s BEFORE Decart's model
-   finishes warming up server-side — that gap was previously a black/blank placeholder
+   finishes warming up server-side - that gap was previously a black/blank placeholder
    frame (see the BLACK-FRAME FIX note in startRecording). The old code fired billing on
-   THAT first decoded frame regardless of content, so the 5s countdown — and the
-   recorder, gated on the same signal below — could start while the model hadn't
+   THAT first decoded frame regardless of content, so the 5s countdown - and the
+   recorder, gated on the same signal below - could start while the model hadn't
    actually produced anything yet, shaving real seconds off the useful captured window.
    Now we keep checking subsequent frames (via the same rVFC/rAF mechanism) until one
    verifiably isn't black, and ONLY that frame arms billing.
@@ -4354,16 +4354,16 @@ function armFirstFrameBilling(video, gen) {
     dressedFrameReady = true;            // model-ready signal shared with the recorder (startRecording)
     startBillingWindow(gen);
   };
-  // TWO independent gates, both required before firing — each closes a gap the other
+  // TWO independent gates, both required before firing - each closes a gap the other
   // doesn't cover:
-  //  (1) isGarmentApplied — rtClient.set() has resolved, so this can't be a stray
+  //  (1) isGarmentApplied - rtClient.set() has resolved, so this can't be a stray
   //      raw/undressed passthrough frame that arrived before the apply request even
   //      went out.
-  //  (2) isDressedFrame() — the frame is verified non-black, so it can't be the ~1s of
+  //  (2) isDressedFrame() - the frame is verified non-black, so it can't be the ~1s of
   //      blank/black placeholder Decart's server can still emit for a beat AFTER the
   //      apply was acknowledged (see the BLACK-FRAME FIX note in startRecording).
   // Re-checked on every subsequent decoded frame (rVFC, or the rAF poll below where
-  // rVFC is unavailable) until both hold, THEN fire — so billing, the countdown, and
+  // rVFC is unavailable) until both hold, THEN fire - so billing, the countdown, and
   // recording (started together in startBillingWindow) all begin on the first frame
   // that is genuinely ready, never before.
   const frameReady = () => {
@@ -4406,27 +4406,27 @@ function armFirstFrameBilling(video, gen) {
 async function goLive() {
   if (busy || isLive()) return;
 
-  // Two-view gate — runs BEFORE any token mint / WebRTC connect / billing. Graceful
+  // Two-view gate - runs BEFORE any token mint / WebRTC connect / billing. Graceful
   // by default; only opt-in requireBothViews items (or a garment with no front) are
   // blocked. Bail out with a toast and never open a session for a blocked garment.
   const blockReason = liveBlockReason();
   if (blockReason) { toast(blockReason); return; }
 
-  busy = true;                         // Task 10 — claim the flow before ANY await
+  busy = true;                         // Task 10 - claim the flow before ANY await
   $("captureBtn").disabled = true;
   $("camError").hidden = true;
   exitClipReplay();                    // clear any history clip before a real session takes #aiVideo
-  clearRecording();                    // Feature 2 — drop any previous clip + button
+  clearRecording();                    // Feature 2 - drop any previous clip + button
   card().classList.remove("show-result");  // drop any frozen snapshot so the live feed isn't covered by #resultCanvas
 
   try {
-    // Health probe is a soft warning only — fire-and-forget so it never serialises
+    // Health probe is a soft warning only - fire-and-forget so it never serialises
     // into the go-live path. If the network is down, WebRTC / token steps will fail
     // with a real error that is caught and shown to the user.
     ensureOnline().then(online => {
       if (!online) {
-        console.warn("[go-live] health probe returned offline — proceeding anyway");
-        toast("בדיקת קישוריות לא הצליחה — ממשיכים בניסיון חיבור");
+        console.warn("[go-live] health probe returned offline - proceeding anyway");
+        toast("בדיקת קישוריות לא הצליחה - ממשיכים בניסיון חיבור");
       }
     });
 
@@ -4436,38 +4436,38 @@ async function goLive() {
     // Runs AFTER the camera is live but BEFORE any token mint / WebRTC connect /
     // billing. Streaming a black feed to Decart would burn the full
     // CREDITS_PER_SESSION for a render nobody can use, so if the local webcam is a
-    // black screen (lens covered, camera off, privacy shutter) we bail out here —
-    // no /api/realtime-token, no connectRealtime(), no credits — and tell the user
+    // black screen (lens covered, camera off, privacy shutter) we bail out here -
+    // no /api/realtime-token, no connectRealtime(), no credits - and tell the user
     // exactly what to fix. cameraLooksBlack() only inspects local pixels; it sends
     // nothing to any API.
     if (await cameraLooksBlack()) {
       showCamError("זוהה מסך שחור. הפעל את המצלמה או הסר חסימה מהעדשה כדי להמשיך. " +
         "(Black screen detected. Please turn on your camera or remove any obstacles to proceed.)");
-      toast("📷 מסך שחור — המדידה לא הופעלה כדי לחסוך קרדיטים");
+      toast("📷 מסך שחור - המדידה לא הופעלה כדי לחסוך קרדיטים");
       return;   // finally{} resets busy + the capture button; no billed session opened
     }
 
     // AI Auto: warm the front+back Blob cache NOW so both assets download in parallel
-    // with the WebRTC handshake — the first orientation flip then costs zero fetches.
+    // with the WebRTC handshake - the first orientation flip then costs zero fetches.
     if (currentAngle === AUTO_ANGLE) { autoOrientation = "front"; prewarmOrientationAssets(); }
 
     // LOADING state: overlay + a live elapsed-time counter (generic copy, no model/
-    // vendor names — see startScanTimer). Runs until startBillingWindow() confirms
-    // Model Ready and hides it — see the state-transition comment there.
+    // vendor names - see startScanTimer). Runs until startBillingWindow() confirms
+    // Model Ready and hides it - see the state-transition comment there.
     $("scanOverlay").hidden = false;
     startScanTimer();
 
-    // 1) mint ek_ token + open the WebRTC session. NOTE: billing no longer starts here —
+    // 1) mint ek_ token + open the WebRTC session. NOTE: billing no longer starts here -
     //    the WebRTC session is open, but the billed 5s window is armed by the FIRST
     //    rendered Decart frame (onRemoteStream → armFirstFrameBilling), not at connect.
     await connectRealtime();
     await waitConnected(CONNECT_TIMEOUT_MS);
-    console.log("[PEAR] Decart connected — waiting for first frame");
+    console.log("[PEAR] Decart connected - waiting for first frame");
 
-    // 2) apply on the live stream — the full look (shirt + pants, ONE payload) when
+    // 2) apply on the live stream - the full look (shirt + pants, ONE payload) when
     //    activeOutfit has both slots filled, else the single active garment. Same session.
     await applyActive();               // rtClient.set({ prompt, image(s), enhance:false })
-    // Log every garment being worn — both top AND bottom when a full look is active.
+    // Log every garment being worn - both top AND bottom when a full look is active.
     const _trackSize = activeTryOnSize || currentUserSize;
     const _look = resolveLook();
     if (_look) {
@@ -4477,20 +4477,20 @@ async function goLive() {
       logTryOnAnalytics(activeItem, _trackSize);
     }
 
-    // 3) "Stop" becomes available immediately — the user can always bail out of a slow
+    // 3) "Stop" becomes available immediately - the user can always bail out of a slow
     //    connect/warm-up rather than being stuck watching the loading timer with no
     //    escape hatch. NOTE: the scanOverlay/"show-live" reveal itself is NOT done here
-    //    anymore — that only happens once startBillingWindow() verifies Model Ready
+    //    anymore - that only happens once startBillingWindow() verifies Model Ready
     //    (see the state-transition comment there), so the user never sees "ready" UI
     //    before there's real AI content behind it.
     setLiveControls(true);
     syncOrientationWatcher();          // AI Auto: begin monitoring the user's orientation
-    // Feature 2 — recording is now started in startBillingWindow(), on the same first
+    // Feature 2 - recording is now started in startBillingWindow(), on the same first
     // DRESSED frame that arms billing, so the encoded clip always matches the billed window.
     startStatsMonitor();               // diagnostic getStats poller (DevTools console; no billing effect)
 
     // The BILLED window (countdown + hard disconnect at LIVE_DURATION_MS) is NOT armed
-    // here anymore — it arms on the first rendered Decart frame via onRemoteStream →
+    // here anymore - it arms on the first rendered Decart frame via onRemoteStream →
     // armFirstFrameBilling → startBillingWindow, so connect + warm-up time is never billed.
     // The only timer armed here is a SAFETY net: if that first frame never arrives, nothing
     // else would cap the open session, so tear it down after FIRST_FRAME_TIMEOUT_MS. It is
@@ -4502,18 +4502,18 @@ async function goLive() {
       firstFrameGuardTimer = setTimeout(() => {
         firstFrameGuardTimer = null;
         if (sessionGen !== guardGen || billingStarted) return;   // session moved on / billing already ticking
-        console.warn("[PEAR] No first frame within " + FIRST_FRAME_TIMEOUT_MS + "ms — tearing down (no idle billing)");
-        stopScanTimer();                // model never became ready — retire the loading UI here
+        console.warn("[PEAR] No first frame within " + FIRST_FRAME_TIMEOUT_MS + "ms - tearing down (no idle billing)");
+        stopScanTimer();                // model never became ready - retire the loading UI here
         $("scanOverlay").hidden = true;
         stopLive();
-        showCamError("החיבור לא הניב תמונה — נסה שוב.");
+        showCamError("החיבור לא הניב תמונה - נסה שוב.");
         setConn("error");
       }, FIRST_FRAME_TIMEOUT_MS);
     }
 
     toast("✨ מדידה חיה · סרטון " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות");
   } catch (err) {
-    stopLive();                        // close any partial session — no idle billing
+    stopLive();                        // close any partial session - no idle billing
     console.error("[go-live] failed:", err?.message || String(err));
     if (DEMO_FLAG) {
       await renderMockDemo(activeItem);
@@ -4524,9 +4524,9 @@ async function goLive() {
     }
   } finally {
     // Only force-hide the loading overlay here on a FAILURE path (never got to a live
-    // session — isLive() false). On success the session is already connected and we're
+    // session - isLive() false). On success the session is already connected and we're
     // just waiting on the model's first verified frame, so leave the overlay + ticking
-    // timer showing — startBillingWindow() (Model Ready) is what closes them, not this.
+    // timer showing - startBillingWindow() (Model Ready) is what closes them, not this.
     if (!isLive()) { stopScanTimer(); $("scanOverlay").hidden = true; }
     busy = false;
     if (!isLive()) $("captureBtn").disabled = !localStream;
@@ -4546,7 +4546,7 @@ function stopLive() {
   try {
     if (isLive()) {
       frozen = freezeFinalFrame();                 // paints #resultCanvas, returns its dataURL
-      const size = activeTryOnSize || currentUserSize || "—";
+      const size = activeTryOnSize || currentUserSize || "-";
       lastFitTs = saveFitToGallery(frozen || captureLiveFrame(), currentLookName(), size,
                                    activeItem && activeItem.id);
       if (lastFitTs) lockDemoAfterFirstMeasurement();   // first successful save → one-time demo used
@@ -4566,7 +4566,7 @@ function stopLive() {
    on that frozen frame until VIDEO_LENGTH_MS so the saved/replayed clip is the full
    5s WITHOUT any extra token spend. The remaining tail is finalized by
    finalizeVideoClip(). A manual Stop / tab-hide during the live phase still uses the
-   plain stopLive()→teardown() path (an early, shorter clip — the user chose to stop). */
+   plain stopLive()→teardown() path (an early, shorter clip - the user chose to stop). */
 function beginFreezeHold() {
   // 1) Grab the last dressed frame BEFORE disconnecting (needs the live #aiVideo).
   recordHoldSrc = captureHoldFrame();
@@ -4576,13 +4576,13 @@ function beginFreezeHold() {
   let frozen = null;
   try {
     frozen = freezeFinalFrame();
-    const size = activeTryOnSize || currentUserSize || "—";
+    const size = activeTryOnSize || currentUserSize || "-";
     lastFitTs = saveFitToGallery(frozen || captureLiveFrame(), currentLookName(), size,
                                  activeItem && activeItem.id);
     if (lastFitTs) lockDemoAfterFirstMeasurement();   // first successful save → one-time demo used
   } catch (_) {}
 
-  // 3) Kill Decart billing immediately (tokens stop at LIVE_DURATION_MS) — but leave
+  // 3) Kill Decart billing immediately (tokens stop at LIVE_DURATION_MS) - but leave
   //    the recorder, paint loop and countdown alive for the frozen-hold tail.
   stopBilling();
 
@@ -4619,7 +4619,7 @@ function captureHoldFrame() {
   return cv;
 }
 
-/* Stop ONLY the billable Decart session — a subset of teardown() that deliberately
+/* Stop ONLY the billable Decart session - a subset of teardown() that deliberately
    leaves the recorder, paint loop, countdown and finalize timer running so the
    frozen-hold tail can complete. Bumps sessionGen so any late SDK callback no-ops. */
 function stopBilling() {
@@ -4653,7 +4653,7 @@ function finalizeVideoClip() {
    resolution and return its JPEG dataURL. Doubles as (1) the frozen "masterpiece"
    shown via .show-result and (2) the high-quality poster saved to Previous Fits.
    Prefers the AI-edited feed; falls back to the mirrored webcam. Returns null if
-   no frame is paintable — must NEVER throw into the teardown path. */
+   no frame is paintable - must NEVER throw into the teardown path. */
 function freezeFinalFrame() {
   const ai = $("aiVideo");
   const webcam = $("webcam");
@@ -4716,7 +4716,7 @@ function setLiveControls(live) {
 }
 
 /* =============================================================================
-   Feature 2 — Download the 5-second fitting clip (MediaRecorder)
+   Feature 2 - Download the 5-second fitting clip (MediaRecorder)
    ─────────────────────────────────────────────────────────────────────────
    We record the INCOMING AI-edited WebRTC stream (the dressed output the user
    actually wants), not the raw webcam. Recording starts when the first edited
@@ -4725,11 +4725,11 @@ function setLiveControls(live) {
    "Download Video" button. Everything is torn down/revoked on the next session.
    ============================================================================= */
 /* Codec selection is platform-aware (mobile download fix):
-   • MOBILE — try H.264 MP4 first. iOS Photos / Android galleries natively save MP4,
+   • MOBILE - try H.264 MP4 first. iOS Photos / Android galleries natively save MP4,
      and the MP4 container carries a correct duration header, which kills the
      "broken 14-second clip" bug WebM exhibits (WebM from MediaRecorder ships no
      top-level duration, so phone players show a bogus/black length).
-   • DESKTOP — keep the proven VP8/WebM path (Chrome/Firefox encode the canvas track
+   • DESKTOP - keep the proven VP8/WebM path (Chrome/Firefox encode the canvas track
      into .webm most reliably; a missing/unsupported codec is what left the file
      black). MP4 stays as a tail fallback either way.
    Every candidate is feature-tested via isTypeSupported before use. */
@@ -4747,7 +4747,7 @@ function pickRecorderMime() {
 /**
  * Start recording the REMOTE Lucy-VTON output shown in #aiVideo (NOT the local
  * camera). We continuously paint the remote frames onto an off-DOM canvas and
- * record canvas.captureStream(), which guarantees real encoded pixels — recording
+ * record canvas.captureStream(), which guarantees real encoded pixels - recording
  * a raw remote WebRTC track directly produces a black video in Chromium. The clip
  * is video-only and is force-stopped by stopRecording() when the user presses Stop.
  * Idempotent within a session.
@@ -4767,10 +4767,10 @@ function startRecording() {
   recordCanvas.height = video.videoHeight || LIVE_H;
   const ctx = recordCanvas.getContext("2d", { alpha: false });
 
-  // iOS Safari only stabilised canvas.captureStream in 15.4 — if it's missing, bail
+  // iOS Safari only stabilised canvas.captureStream in 15.4 - if it's missing, bail
   // cleanly so the live try-on itself is unaffected (we just skip the downloadable clip).
   if (typeof recordCanvas.captureStream !== "function") {
-    console.warn("canvas.captureStream unsupported — clip recording disabled on this device");
+    console.warn("canvas.captureStream unsupported - clip recording disabled on this device");
     stopPaintLoop();
     return;
   }
@@ -4778,9 +4778,9 @@ function startRecording() {
   // BLACK-FRAME FIX: the Decart server takes ~1s to warm up before the first
   // dressed frame arrives. If we start the recorder at go-live, the clip begins
   // with ~1s of solid black canvas, so any looped replay (gallery tile / modal)
-  // opens on a black screen — this was the "Previous Fits black screen" symptom.
-  // Instead we ARM the recorder lazily — only once the first REAL frame has been
-  // painted — so the saved Live Photo contains dressed frames exclusively.
+  // opens on a black screen - this was the "Previous Fits black screen" symptom.
+  // Instead we ARM the recorder lazily - only once the first REAL frame has been
+  // painted - so the saved Live Photo contains dressed frames exclusively.
   const beginRecorder = () => {
     if (mediaRecorder) return;
     const captured = recordCanvas.captureStream(30);   // 30 fps, video-only
@@ -4808,7 +4808,7 @@ function startRecording() {
     if (recordHold && recordHoldSrc) {
       // FROZEN-HOLD phase: Decart is disconnected (billing stopped); keep repainting
       // the captured final frame so canvas.captureStream keeps emitting and the clip
-      // grows to VIDEO_LENGTH_MS. beginRecorder() is idempotent — it covers the case
+      // grows to VIDEO_LENGTH_MS. beginRecorder() is idempotent - it covers the case
       // where the first real frame only arrived right at the billing cap.
       try { ctx.drawImage(recordHoldSrc, 0, 0, recordCanvas.width, recordCanvas.height); beginRecorder(); } catch (_) {}
     } else {
@@ -4841,7 +4841,7 @@ function stopReplay() {
 }
 
 /**
- * Force-stop the recorder. Called by teardown (on Stop / tab-hide / unload) —
+ * Force-stop the recorder. Called by teardown (on Stop / tab-hide / unload) -
  * idempotent. onstop → finalizeRecording builds the downloadable clip.
  */
 function stopRecording() {
@@ -4853,7 +4853,7 @@ function stopRecording() {
 }
 
 /* =============================================================================
-   Replay Zone — dedicated, premium UI injected below the camera card
+   Replay Zone - dedicated, premium UI injected below the camera card
    ─────────────────────────────────────────────────────────────────────────
    Once the 5-second clip is finalised we surface a glassmorphism "Replay Zone"
    directly below #cameraCard. It holds a proper <video> element with native
@@ -4867,7 +4867,7 @@ function injectReplayStyles() {
   const s = document.createElement("style");
   s.id = "pearReplayStyles";
   s.textContent = `
-    /* ── PEAR Replay Zone — "Your Try-On" review card (pear-green theme) ── */
+    /* ── PEAR Replay Zone - "Your Try-On" review card (pear-green theme) ── */
     #pearReplayZone {
       margin-top: 20px;
       border-radius: 24px;
@@ -4896,7 +4896,7 @@ function injectReplayStyles() {
       gap: 12px;
       margin: 2px 4px 14px;
     }
-    /* garment name — now the prominent title (left, in RTL flow) */
+    /* garment name - now the prominent title (left, in RTL flow) */
     .pear-rz-title {
       font-family: "Urbanist", sans-serif;
       font-size: 1.06rem;
@@ -5076,12 +5076,12 @@ function finalizeRecording() {
 }
 
 /**
- * Save the recorded clip locally — mobile-first (mobile download fix).
+ * Save the recorded clip locally - mobile-first (mobile download fix).
  *
  * On phones the classic `<a download>` is unreliable: iOS Safari ignores the
  * download attribute entirely (it just navigates to the blob, often playing it
  * inline), so the clip never lands in Photos. The robust path is the Web Share API
- * with a File — that opens the native share sheet whose "Save Video" action drops
+ * with a File - that opens the native share sheet whose "Save Video" action drops
  * the clip straight into the iOS/Android gallery. We only reach for it when the
  * platform reports it can actually share THIS file, and we fall back to the anchor
  * download on desktop or when sharing is unavailable/declined.
@@ -5104,13 +5104,13 @@ async function downloadRecording() {
       if (navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
-          title: "PEAR — מדידה וירטואלית",
+          title: "PEAR - מדידה וירטואלית",
           text: "הלוק שלי מ-PEAR · PEAR virtual fitting",
         });
-        return;                                   // saved/shared — done
+        return;                                   // saved/shared - done
       }
     } catch (err) {
-      if (err && err.name === "AbortError") return;   // user dismissed the sheet — not an error
+      if (err && err.name === "AbortError") return;   // user dismissed the sheet - not an error
       console.warn("share failed, falling back to download:", err?.message || err);
       // fall through to the anchor download below
     }
@@ -5187,11 +5187,11 @@ function recommendFor(item) {
   const lum = (hex) => { const f = parseInt(hex.slice(1), 16); return (0.299 * (f >> 16) + 0.587 * ((f >> 8) & 255) + 0.114 * (f & 255)) / 255; };
   const base = lum(item.color);
   return PEAR_CATALOG
-    // STRICT catalog match — a recommendation must be:
+    // STRICT catalog match - a recommendation must be:
     //   • the complementary category (shirt ⇄ pants),
     //   • a DIFFERENT product than the one being worn,
     //   • a real, purchasable item with a valid front image, and
-    //   • not blocked/incomplete — itemBlockReason() is the same gate as go-live, so
+    //   • not blocked/incomplete - itemBlockReason() is the same gate as go-live, so
     //     the Gatekeeper "Incomplete Test" entry (id 99) and any item missing required
     //     imagery are never suggested. Nothing fictional or unavailable can slip in.
     .filter((x) => x.type === want && x.id !== item.id && !!x.img && !itemBlockReason(x))
@@ -5203,7 +5203,7 @@ function recommendFor(item) {
 
 /* Keyword-guess a scanned garment_cache image's category from its URL. garment_cache
    only stores { image_url, classification } and `classification` there means
-   front|back (see classifyFrontBack in server.js) — it carries no garment-category
+   front|back (see classifyFrontBack in server.js) - it carries no garment-category
    signal, so this is the only classifier we have for store items. Returns "shirt" |
    "pants" (the SAME vocabulary as PEAR_CATALOG.type) so a store item can flow through
    toItem()/slotOf()/recommendFor's card rendering exactly like a catalog item. */
@@ -5216,15 +5216,15 @@ function guessTypeFromUrl(url) {
 
 /* Real-store "Complete the Look" source. A widget embed on an actual store
    (window.__pearStoreDomain set by parseHandoff() the moment a garment_url handoff
-   arrives) must recommend items from THAT store — never the hardcoded demo
+   arrives) must recommend items from THAT store - never the hardcoded demo
    PEAR_CATALOG, which is stock/placeholder imagery unrelated to any real retailer.
    Demo/catalog sessions (no storeDomain) keep the existing recommendFor() behavior
    unchanged. A store session that has no cached items yet (or the fetch fails)
-   returns [] rather than ever falling back to the demo catalog — renderCompleteTheLook
+   returns [] rather than ever falling back to the demo catalog - renderCompleteTheLook
    hides the section entirely in that case (see Step 5 requirement). */
 async function fetchStoreLookItems(currentItem) {
   const domain = window.__pearStoreDomain;
-  if (!domain) return recommendFor(currentItem);   // demo/catalog mode — existing behavior
+  if (!domain) return recommendFor(currentItem);   // demo/catalog mode - existing behavior
 
   const wantType = currentItem.garmentType === "lower_body" ? "shirt" : "pants";
   try {
@@ -5247,19 +5247,19 @@ async function fetchStoreLookItems(currentItem) {
       .filter((it) => it.type === wantType)
       .slice(0, 4);
   } catch (e) {
-    console.warn("[PEAR] fetchStoreLookItems failed — hiding Complete the Look:", e?.message || e);
+    console.warn("[PEAR] fetchStoreLookItems failed - hiding Complete the Look:", e?.message || e);
     return [];
   }
 }
 
-/* data-look is now an INDEX into this array, not a PEAR_CATALOG id — a store item's
+/* data-look is now an INDEX into this array, not a PEAR_CATALOG id - a store item's
    "id" is its image_url (a string, and one we'd rather not stuff into an HTML
    attribute verbatim), so both catalog and store recs are looked up the same safe
    way. Rebuilt on every render; stale after the section next re-renders. */
 let _lookCards = [];
 
 /* Guards against a slow store-catalog fetch resolving AFTER a newer garment has
-   already been activated (rapid re-clicks) — the stale response is discarded rather
+   already been activated (rapid re-clicks) - the stale response is discarded rather
    than clobbering the section with recommendations for the wrong item. */
 let _lookRenderToken = 0;
 
@@ -5271,7 +5271,7 @@ async function renderCompleteTheLook(item) {
   _lookCards = recs;
   // Conditional render (requirement 3): when there's NO real complementary product
   // (demo catalog has none, or the store's garment_cache has nothing cached yet for
-  // this domain), hide the whole section — never an empty shell, placeholder, or the
+  // this domain), hide the whole section - never an empty shell, placeholder, or the
   // wrong category, and never a demo-catalog fallback during a real store session.
   // .complete-look[hidden] { display: none; } in style.css makes this an actual
   // display:none, not just an ARIA-hidden section.
@@ -5299,7 +5299,7 @@ async function renderCompleteTheLook(item) {
 /* Corner badge on a catalog card conveying its two-view completeness at a glance:
    a filled dot = a real image ships for that view, hollow = rendered from the front.
    A ✓ pill marks fully-documented (front+back) items; a blocked item (opt-in strict
-   without a back) shows a lock. Purely informational — the actual gate lives in
+   without a back) shows a lock. Purely informational - the actual gate lives in
    goLive()/liveBlockReason(). */
 function viewBadge(p) {
   const front = hasFrontView(p), back = hasBackView(p);
@@ -5315,7 +5315,7 @@ function viewBadge(p) {
 }
 
 function renderCatalogPanel() {
-  // "Upload Your Own Garment" — the first, prominent tile in the garment selector.
+  // "Upload Your Own Garment" - the first, prominent tile in the garment selector.
   // Clicking it opens the native file picker (delegated [data-upload] handler).
   const uploadCard = `
     <div class="cat-item cat-item--upload" data-upload role="button" tabindex="0"
@@ -5351,7 +5351,7 @@ function highlightCatalog(id) {
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════
-   "UPLOAD YOUR OWN GARMENT" — detect · select · crop · inject
+   "UPLOAD YOUR OWN GARMENT" - detect · select · crop · inject
    ─────────────────────────────────────────────────────────────────────────────
    Flow:  upload card → file picker → handleGarmentFile() validates + loads the
    image → runDetection() opens the overlay and runs detectGarments() (a vanilla,
@@ -5372,8 +5372,8 @@ let activeSide     = "top"; // which sub-region the outfit toggle currently targ
    NEXT confirmed crop to the right slot; customFrontItem is the live custom garment a
    later back crop attaches to as imgBack. With both, galleryOf() exposes { front, back }
    and the existing angle hot-swap (activeImageOf → g.back, angleClause → backReal) drives
-   a CLEAN single-view rear reference — no stitching, so the front print can't bleed. */
-let uploadTarget    = "front";  // "front" | "back" — which slot the next confirmed crop fills
+   a CLEAN single-view rear reference - no stitching, so the front print can't bleed. */
+let uploadTarget    = "front";  // "front" | "back" - which slot the next confirmed crop fills
 let customFrontItem = null;     // the live custom item awaiting an optional back crop
 
 /** Open the native file picker (reset value so re-picking the SAME file re-fires change).
@@ -5399,7 +5399,7 @@ function onGarmentFileChosen(e) {
  */
 function handleGarmentFile(file) {
   const U = CONFIG.UPLOAD;
-  if (!/^image\//i.test(file.type)) { toast("קובץ לא נתמך — בחר/י תמונה"); return; }
+  if (!/^image\//i.test(file.type)) { toast("קובץ לא נתמך - בחר/י תמונה"); return; }
   if (file.size > U.MAX_BYTES) {
     toast(`התמונה גדולה מדי (מקסימום ${Math.round(U.MAX_BYTES / (1024 * 1024))}MB)`);
     return;
@@ -5410,7 +5410,7 @@ function handleGarmentFile(file) {
     const img = new Image();
     // Same-origin data URL → canvas stays untainted, so getImageData()/toDataURL() work.
     img.onload = () => runDetection(img);
-    img.onerror = () => toast("טעינת התמונה נכשלה — נסה/י תמונה אחרת");
+    img.onerror = () => toast("טעינת התמונה נכשלה - נסה/י תמונה אחרת");
     img.src = String(reader.result);
   };
   reader.onerror = () => toast("קריאת הקובץ נכשלה");
@@ -5420,7 +5420,7 @@ function handleGarmentFile(file) {
 /**
  * Open the overlay in its loading state, paint the image, then (after a short,
  * config-driven delay so the modal can render) run the synchronous detect pass and
- * draw the boxes — or the empty state when nothing is found.
+ * draw the boxes - or the empty state when nothing is found.
  * @param {HTMLImageElement} img
  */
 function runDetection(img) {
@@ -5491,7 +5491,7 @@ function showDetectEmpty() {
  * Draw a clickable royal-blue box over each detection. Coordinates are expressed
  * as PERCENTAGES of the natural image size, and .gd-boxes overlaps the rendered
  * image exactly (its .gd-frame parent wraps only the <img>), so the mapping is
- * scale-independent — no recompute on resize needed.
+ * scale-independent - no recompute on resize needed.
  * @param {Array<{xmin:number,ymin:number,width:number,height:number}>} boxes
  */
 const GARMENT_LABEL_HE = { "Top": "עליון", "Bottom": "תחתון", "Full-body": "מלא" };
@@ -5512,7 +5512,7 @@ function renderDetectionBoxes(boxes) {
   }).join("");
 }
 
-/* ── OUTFIT MODE — one bracket + a TOP/BOTTOM segmented toggle ────────────────
+/* ── OUTFIT MODE - one bracket + a TOP/BOTTOM segmented toggle ────────────────
    For a full worn outfit we show a single bracket whose position/size + label snap
    between the outfit's TOP and BOTTOM sub-regions when the toggle changes. Switching
    sides mutates the SAME element's inline bounds so the CSS transition animates the
@@ -5573,7 +5573,7 @@ function positionOutfitBox() {
   if (lbl) lbl.innerHTML = `<b>${he}</b><span>${en}</span>`;
 }
 
-/** Toggle handler — snap the bracket + crop target between the TOP and BOTTOM regions. */
+/** Toggle handler - snap the bracket + crop target between the TOP and BOTTOM regions. */
 function setActiveSide(side) {
   if (side !== "top" && side !== "bottom" || !detectedOutfit) return;
   activeSide = side;
@@ -5595,7 +5595,7 @@ function updateTabsUI() {
  * The user picked a box: crop the chosen region (the active TOP/BOTTOM sub-region in
  * outfit mode, else the tapped garment), build a "custom" item and route it through
  * the normal setActiveItem() path. Then close the overlay and nudge the user to go live.
- * @param {number} index — index into detectedBoxes (ignored in outfit mode)
+ * @param {number} index - index into detectedBoxes (ignored in outfit mode)
  */
 function selectDetectedGarment(index) {
   if (!uploadedImg) return;
@@ -5622,7 +5622,7 @@ function selectDetectedGarment(index) {
   // ── BACK view: attach to the pending front item as imgBack (no new item) ──────
   // galleryOf() now exposes { front, back }, so the live Back tab hot-swaps THIS crop
   // as a clean single-view reference (activeImageOf → g.back) and angleClause() upgrades
-  // to backReal ("reproduce the real back faithfully"). gtype is irrelevant here — the
+  // to backReal ("reproduce the real back faithfully"). gtype is irrelevant here - the
   // back always belongs to the same garment/slot as its front.
   if (uploadTarget === "back" && customFrontItem) {
     customFrontItem.imgBack = crop.dataUrl;
@@ -5630,7 +5630,7 @@ function selectDetectedGarment(index) {
       closeGarmentDetect();
       uploadTarget = "front";
       setActiveItem(customFrontItem);                  // re-render: Back tab is now a REAL view (no AI badge)
-      toast(`נוספה תמונת גב · back view added — <b>Front + Back</b> מוכן`);
+      toast(`נוספה תמונת גב · back view added - <b>Front + Back</b> מוכן`);
     }, CONFIG.UPLOAD.PICK_ANIM_MS);
     return;
   }
@@ -5656,7 +5656,7 @@ function selectDetectedGarment(index) {
     setActiveItem(item);                               // fills its slot, paints chip, resets to live
     const cc = $("cameraCard");
     if (cc) cc.scrollIntoView({ behavior: "smooth", block: "center" });
-    toast(`נבחר בגד מותאם — הוסף/י <b>תמונת גב</b> או שנשלים אותה ב־AI`);
+    toast(`נבחר בגד מותאם - הוסף/י <b>תמונת גב</b> או שנשלים אותה ב־AI`);
   }, CONFIG.UPLOAD.PICK_ANIM_MS);
 }
 
@@ -5790,7 +5790,7 @@ function refineGarments(boxes, iw, ih, U) {
   for (const b of boxes) {
     const aspect = b.width / Math.max(1, b.height);
     // A person-shaped blob (tall + narrow) = a full worn OUTFIT. Even when it fills
-    // the frame we no longer emit a dead-end "Full-body" box — we mark it as an
+    // the frame we no longer emit a dead-end "Full-body" box - we mark it as an
     // outfit carrying TOP and BOTTOM sub-regions so the UI can toggle between them.
     const person = b.height >= ih * U.PERSON_MIN_HEIGHT_FRAC && aspect <= U.PERSON_MAX_ASPECT;
     if (person) {
@@ -5807,7 +5807,7 @@ function refineGarments(boxes, iw, ih, U) {
  * Build an OUTFIT detection from a full-figure box: one box that keeps the whole
  * figure bounds plus geometric TOP (upper ~SPLIT_TOP_FRAC) and BOTTOM (from
  * ~SPLIT_BOTTOM_FRAC down to the feet) sub-regions. The UI's TOP/BOTTOM toggle
- * snaps the visible bracket — and the crop — between these two sub-regions.
+ * snaps the visible bracket - and the crop - between these two sub-regions.
  */
 function makeOutfit(b, U) {
   const topH = Math.round(b.height * U.SPLIT_TOP_FRAC);
@@ -5856,7 +5856,7 @@ function dilateMask(mask, w, h, r) {
 
 /**
  * Merge boxes that overlap strongly (IoU > iouThresh) or where one largely contains
- * another — collapses fragments of one garment while keeping distinct items apart.
+ * another - collapses fragments of one garment while keeping distinct items apart.
  * @param {Array<{x:number,y:number,w:number,h:number,area:number}>} boxes (sorted by area desc)
  * @param {number} iouThresh
  * @returns {Array} merged boxes
@@ -5888,7 +5888,7 @@ function mergeBoxes(boxes, iouThresh) {
 /**
  * Guess whether a boxed garment is a top or a bottom. Bottoms (trousers/shorts) are
  * typically tall + narrow and sit lower in frame; everything else defaults to a top.
- * A best-effort heuristic — the generic custom prompt keeps either choice safe.
+ * A best-effort heuristic - the generic custom prompt keeps either choice safe.
  * @returns {"upper_body"|"lower_body"}
  */
 function guessGarmentType(box, iw, ih) {
@@ -5907,7 +5907,7 @@ function guessGarmentType(box, iw, ih) {
  * @returns {{dataUrl:string, color:string, aspect:number}}
  */
 /**
- * Mild in-place unsharp mask (3x3) on a canvas context — lifts the edge gradients of
+ * Mild in-place unsharp mask (3x3) on a canvas context - lifts the edge gradients of
  * logos/prints/text against the fabric so they read as sharper landmarks in the
  * reference image handed to Lucy. RGB only; alpha is passed through. Border pixels drop
  * the missing neighbour weights (they're background, so the slight brightening is moot).
@@ -5981,7 +5981,7 @@ function averageColor(ctx, w, h) {
 /* ── self-contained studio garment SVG ───────────────────────────────────────
    catalog.js is not loaded in the PEAR demo, so this duplicates the same
    shape data and rendering logic locally.  Output is always a white-background
-   flat-lay with a CSS drop-shadow — no Unsplash, no model, no background. */
+   flat-lay with a CSS drop-shadow - no Unsplash, no model, no background. */
 const _SHIRT_PATHS = {
   sleeveless:   "M92 50 Q110 64 128 50 L144 62 Q151 92 151 122 L151 236 L69 236 L69 122 Q69 92 76 62 Z",
   short_sleeve: "M88 50 Q110 66 132 50 L170 68 L188 122 L166 130 L152 106 L152 236 L68 236 L68 106 L54 130 L32 122 L50 68 Z",
@@ -6161,7 +6161,7 @@ function colorName(hex) {
  * @returns {void}
  */
 /* =============================================================================
-   PEAR Live-Action Gallery — client-side "Live Photo" history (zero server cost)
+   PEAR Live-Action Gallery - client-side "Live Photo" history (zero server cost)
    ─────────────────────────────────────────────────────────────────────────
    Each fit stores TWO things:
      • a tiny JPEG poster  → persisted to localStorage (survives reload)
@@ -6173,8 +6173,8 @@ function colorName(hex) {
    static poster (Apple Live Photos degrade the same way). Render is pure DOM.
    ============================================================================= */
 const GALLERY_KEY = "pear_fit_gallery";
-const GALLERY_MAX = 18;                 // poster cap — stays well under the localStorage quota
-const CLIP_MAX = 12;                    // in-memory clip cap — bounds blob memory per session
+const GALLERY_MAX = 18;                 // poster cap - stays well under the localStorage quota
+const CLIP_MAX = 12;                    // in-memory clip cap - bounds blob memory per session
 
 const liveClips = new Map();            // ts → object URL of the 5s clip (this session only)
 let lastFitTs = null;                   // ts of the entry awaiting its clip from finalizeRecording
@@ -6208,7 +6208,7 @@ function dropClip(ts) {
 
 /* Grab the current dressed frame as a small JPEG data-URL (the poster). Prefers
    the live AI-edited stream; falls back to the (mirrored) raw webcam. Returns
-   null if no frame is available — capture must never throw into teardown. */
+   null if no frame is available - capture must never throw into teardown. */
 function captureLiveFrame() {
   const ai = $("aiVideo");
   const webcam = $("webcam");
@@ -6247,7 +6247,7 @@ function saveFitToGallery(imageSrc, garmentName, size, itemId) {
   const arr = readGallery();
   // itemId lets the gallery modal's "Try again live" restore the exact garment
   // and open a fresh 5s session. null when the look isn't a single catalog item.
-  arr.push({ img: imageSrc, name: garmentName || "Look", size: size || "—", ts,
+  arr.push({ img: imageSrc, name: garmentName || "Look", size: size || "-", ts,
              itemId: (itemId == null ? null : itemId) });
   while (arr.length > GALLERY_MAX) { const old = arr.shift(); dropClip(old.ts); }
   writeGallery(arr);
@@ -6262,7 +6262,7 @@ function saveFitToGallery(imageSrc, garmentName, size, itemId) {
 function addFitFromLive() {
   const img = captureLiveFrame();
   if (!img) return;
-  const size = activeTryOnSize || currentUserSize || "—";
+  const size = activeTryOnSize || currentUserSize || "-";
   lastFitTs = saveFitToGallery(img, currentLookName(), size);
 }
 
@@ -6323,7 +6323,7 @@ function toggleCompareSelect(ts) {
   else if (compareSel.size >= 2) { toast("ניתן להשוות שתי מדידות בלבד"); return; }
   else compareSel.add(ts);
   syncCompareUI();
-  // Open the split-screen comparison the instant a 2nd look is picked — no extra
+  // Open the split-screen comparison the instant a 2nd look is picked - no extra
   // tap on the "Compare" pill (which now just acts as a re-open affordance).
   if (compareSel.size === 2) openCompareOverlay();
 }
@@ -6340,14 +6340,14 @@ function syncCompareUI() {
 
 /* ── Compare overlay: page-scroll lock ───────────────────────────────────────
    .pear-compare-overlay is position:fixed, so without this a mobile swipe over the
-   comparison scrolls the catalog UNDERNEATH it — the split-screen appears to drift
+   comparison scrolls the catalog UNDERNEATH it - the split-screen appears to drift
    off its own backdrop. Freeze the page while the modal owns the screen and restore
    the caller's original value verbatim on close. Null = not currently locked, which
    also makes a second openCompareOverlay() (the "Compare" pill re-opening an already
    open overlay) a no-op instead of clobbering the saved value with "hidden". */
 let compareScrollLock = null;
 function lockPageScroll() {
-  if (compareScrollLock !== null) return;          // already locked — don't overwrite the saved value
+  if (compareScrollLock !== null) return;          // already locked - don't overwrite the saved value
   compareScrollLock = document.body.style.overflow;
   document.body.style.overflow = "hidden";
 }
@@ -6362,11 +6362,11 @@ function unlockPageScroll() {
 
    CONTAINER RESOLUTION: #pearCompare is `position: fixed; inset: 0` (style.css
    .pear-compare-overlay), so it is already viewport-anchored and contributes
-   nothing to document scroll — window.scrollTo()/scrollIntoView() on it (or on
+   nothing to document scroll - window.scrollTo()/scrollIntoView() on it (or on
    document/body) would be a guaranteed no-op, which is exactly why a plain
    window-scroll approach can't work here. The element that genuinely scrolls is
    .pcmp__panel (`max-height: 92vh; overflow-y: auto`), so instead of manually
-   walking up to find it, we call scrollIntoView() on #compareSplit — the native
+   walking up to find it, we call scrollIntoView() on #compareSplit - the native
    API already walks the ancestor chain and scrolls whichever real container
    (panel, or the window, on a layout where nothing overflows) needs it. That is
    a real scroll on mobile, where the two cells stack tall and the second
@@ -6376,11 +6376,11 @@ function unlockPageScroll() {
    THE ACTUAL BUG (deployed build): .pcmp__panel plays its own CSS entrance
    animation on open (galleryItemIn .45s: translateY(14px) scale(.96) → none).
    The previous fix used two nested requestAnimationFrame calls (~2 frames,
-   ~32ms) as its "DOM is laid out" check — but that only proves a layout/paint
+   ~32ms) as its "DOM is laid out" check - but that only proves a layout/paint
    has happened, NOT that the panel's transform animation has settled. Calling
    scrollIntoView() while an ANCESTOR is still mid CSS-transform computes the
    scroll target from that transient (shrunk/shifted) geometry, not the final
-   one — so on the one case that matters (mobile, panel taller than 92vh, an
+   one - so on the one case that matters (mobile, panel taller than 92vh, an
    internal scroll is actually required) it was landing on the wrong offset,
    which read as "the auto-scroll does nothing." Fix: wait for the entrance
    animation to actually finish (animationend), with a timeout fallback in case
@@ -6391,7 +6391,7 @@ function unlockPageScroll() {
    short-circuits straight to a single rAF since there's no entrance transform
    to race against). Guards scrollIntoView's existence for any environment
    where it might not be implemented. */
-const PANEL_ENTRANCE_MS = 520;   // .pcmp__panel's galleryItemIn is .45s — padded well past that
+const PANEL_ENTRANCE_MS = 520;   // .pcmp__panel's galleryItemIn is .45s - padded well past that
 function scrollCompareIntoView() {
   const split = $("compareSplit");
   if (!split || typeof split.scrollIntoView !== "function") return;
@@ -6410,7 +6410,7 @@ function scrollCompareIntoView() {
 
   const panel = $("pearCompare")?.querySelector(".pcmp__panel");
   if (reduce || !panel) {
-    // No entrance transform to race (motion reduced, or markup changed) —
+    // No entrance transform to race (motion reduced, or markup changed) -
     // one rAF is enough to guarantee the just-injected DOM has laid out.
     requestAnimationFrame(doScroll);
     return;
@@ -6521,9 +6521,9 @@ function closeFitLightbox() {
 
 /* Tap a history card → the large interactive modal (Image 1 layout): the saved
    high-quality snapshot/clip, garment name, size badge, and the action row:
-     • צפה שוב · Replay      — loop the saved clip for FREE (zero tokens)
-     • מדוד שוב · Try again live — restore the garment + open a fresh 5s session
-     • הורד · Download       — save the recorded clip (only when one exists) */
+     • צפה שוב · Replay      - loop the saved clip for FREE (zero tokens)
+     • מדוד שוב · Try again live - restore the garment + open a fresh 5s session
+     • הורד · Download       - save the recorded clip (only when one exists) */
 function openFitLightbox(idx) {
   const it = readGallery()[idx];
   if (!it) return;
@@ -6555,13 +6555,13 @@ function openFitLightbox(idx) {
     lb.addEventListener("click", (e) => {
       if (e.target.closest("[data-lb-close]"))  { closeFitLightbox(); return; }
       if (e.target.closest("[data-lb-replay]")) {
-        // FREE replay — loop the saved clip in the main player, then close the modal.
+        // FREE replay - loop the saved clip in the main player, then close the modal.
         const cur = lightboxIt; const url = cur ? liveClips.get(cur.ts) : null;
         if (url) { closeFitLightbox(); playClipInMainPlayer(url, readGallery().findIndex((g) => g.ts === cur.ts), cur.ts); }
         return;
       }
       if (e.target.closest("[data-lb-live]"))   { const cur = lightboxIt; closeFitLightbox(); replayFitLive(cur); return; }
-      // [data-lb-dl] is a plain <a download> — let the browser handle it.
+      // [data-lb-dl] is a plain <a download> - let the browser handle it.
     });
   }
   const clip = liveClips.get(it.ts);
@@ -6572,7 +6572,7 @@ function openFitLightbox(idx) {
   lb.querySelector(".pear-lightbox__size").textContent = it.size;
 
   // Replay + Download only make sense when the in-memory clip still exists
-  // (it's gone after a reload — posters survive, blobs don't).
+  // (it's gone after a reload - posters survive, blobs don't).
   const replayBtn = lb.querySelector("[data-lb-replay]");
   if (replayBtn) replayBtn.hidden = !clip;
   const dlBtn = lb.querySelector("[data-lb-dl]");
@@ -6586,7 +6586,7 @@ function openFitLightbox(idx) {
   lb.classList.add("show");
 }
 
-/* "Try again live" — restore the exact garment this fit was captured with (when
+/* "Try again live" - restore the exact garment this fit was captured with (when
    still in the catalog) and open a fresh, optimized 5-second live session. */
 function replayFitLive(it) {
   if (isDemoLocked()) { toast("כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!"); return; }
@@ -6601,11 +6601,11 @@ function replayFitLive(it) {
   goLive();                                         // fresh 5s WebRTC try-on (billing starts here)
 }
 
-/* Retake — stop a running session (auto-saving the look) or clear a frozen
+/* Retake - stop a running session (auto-saving the look) or clear a frozen
    result, then return to the live-camera standby. */
 function onRetake() {
   if (isLive()) {
-    stopLive();   // saves, then resets the button — see stopLive
+    stopLive();   // saves, then resets the button - see stopLive
   } else if (isDemoLocked()) {
     toast("כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!");
     return;
@@ -6617,10 +6617,10 @@ function onRetake() {
 }
 
 function init() {
-  // One-time public demo — strict check BEFORE anything else runs: no camera
+  // One-time public demo - strict check BEFORE anything else runs: no camera
   // wiring, no identity gate, no size-form listeners, nothing. A returning
   // visitor who already completed their demo measurement sees only the
-  // locked screen. (No-op outside DEMO_MODE — see isDemoLocked().)
+  // locked screen. (No-op outside DEMO_MODE - see isDemoLocked().)
   if (isDemoLocked()) {
     demoLocked = true;
     showDemoLockedScreen();
@@ -6631,7 +6631,7 @@ function init() {
   updateProgress();
 
   const handoff = parseHandoff();
-  console.group("[PEAR] init() — fitting room startup");
+  console.group("[PEAR] init() - fitting room startup");
   console.log("mode    :", handoff ? `focus (garment: ${handoff.name})` : "catalog (no garment in URL)");
   console.log("SDK URLs:", CONFIG.SDK_URLS);
   console.log("token @ :", CONFIG.TOKEN_ENDPOINT, "| health @:", CONFIG.HEALTH_ENDPOINT);
@@ -6643,10 +6643,10 @@ function init() {
 
   if (handoff) {
     const hint = $("focusCalcHint");
-    if (hint) { hint.hidden = false; hint.innerHTML = `נבחר הפריט <strong>${handoff.name}</strong> — מלא מידות כדי להמשיך למדידה הוירטואלית.`; }
+    if (hint) { hint.hidden = false; hint.innerHTML = `נבחר הפריט <strong>${handoff.name}</strong> - מלא מידות כדי להמשיך למדידה הוירטואלית.`; }
   }
 
-  // Identity gate — ALWAYS Step 0 for the main app / a real merchant embed
+  // Identity gate - ALWAYS Step 0 for the main app / a real merchant embed
   // (device-id auto-login / measurements-refresh routing happens in
   // setupIdentityGate → routeUser). Two exceptions skip straight to the size
   // form's flow instead: DEMO_MODE (the marketing-site widget demo) always
@@ -6654,13 +6654,13 @@ function init() {
   // shows the "already used" screen instead once spent.
   //
   // BUGFIX: this previously called showSizeForm() unconditionally here, which
-  // never actually called setupIdentityGate() at all — despite the comment
+  // never actually called setupIdentityGate() at all - despite the comment
   // above (and the pre-paint html.pear-returning-check gate in index.html)
   // describing exactly that flow. showSizeForm() immediately clears the
   // pre-paint hide (clearReturningCheckGate()) and reveals Screen 1's
   // measurement form BEFORE the device-id lookup even started, so every
-  // visitor — including an already-known returning device with a fresh
-  // profile — flashed Screen 1 first and only reached the camera once the
+  // visitor - including an already-known returning device with a fresh
+  // profile - flashed Screen 1 first and only reached the camera once the
   // (now redundant) async check resolved. Calling setupIdentityGate() here
   // restores the real routing: unknown/new device → identity gate; known
   // device, stale/missing profile → size form; known device, fresh profile →
@@ -6673,14 +6673,14 @@ function init() {
     setupIdentityGate();
   }
 
-  // Permanent "Update Measurements" CTA + "Edit Measurements" Screen 2 CTA —
+  // Permanent "Update Measurements" CTA + "Edit Measurements" Screen 2 CTA -
   // main-app-only. A gated demo visitor gets exactly one measurement, so these
   // secondary re-measure entry points stay unwired/hidden in that mode instead
   // of offering a way around the one-time limit within a single widget open.
   if (DEMO_GATE) {
     const em = $("btn-edit-measurements");   if (em) em.style.display = "none";
   } else {
-    // "Edit Measurements" — always-visible Screen 2 CTA. A returning visitor whose
+    // "Edit Measurements" - always-visible Screen 2 CTA. A returning visitor whose
     // fresh profile skipped Screen 1 entirely may never have seen it; this brings
     // it up pre-filled.
     $("btn-edit-measurements")?.addEventListener("click", () => {
@@ -6693,11 +6693,11 @@ function init() {
 
   document.querySelectorAll("#sizeForm input").forEach((i) => {
     i.addEventListener("input", calculateSize);
-    i.addEventListener("keydown", onMeasurementKeydown);   // Task 5 — Enter to proceed
+    i.addEventListener("keydown", onMeasurementKeydown);   // Task 5 - Enter to proceed
   });
   $("btn-next-screen").addEventListener("click", onSizeFormContinue);
 
-  // Explicit open only — startCamera() is also called from flipCamera() and
+  // Explicit open only - startCamera() is also called from flipCamera() and
   // reinitCameraForOrientation(), where the page shouldn't jump since the user is
   // already looking at the camera. rAF lets the newly-.live layout (card grows,
   // Go-Live button enables) settle before we measure it.
@@ -6713,20 +6713,20 @@ function init() {
   window.addEventListener("orientationchange", reinitCameraForOrientation);
   $("retakeBtn").addEventListener("click", onRetake);
 
-  // Colour swatches — delegated over the (dynamically rebuilt) bubbles so one listener
+  // Colour swatches - delegated over the (dynamically rebuilt) bubbles so one listener
   // survives every re-render; setColor() re-renders the strip against the chosen colour's
   // own images and hot-swaps the live stream in place. (The perspective / AI-mode rail was
-  // removed — AI Combined is applied automatically, so there is no angle picker to wire.)
+  // removed - AI Combined is applied automatically, so there is no angle picker to wire.)
   const swatches = $("productSwatches");
   if (swatches) swatches.addEventListener("click", (e) => {
     const b = e.target.closest(".pg-swatch");
     if (b) setColor(b.dataset.color);
   });
 
-  // Complete-the-Look carousel — desktop-only arrow buttons (CSS hides them
+  // Complete-the-Look carousel - desktop-only arrow buttons (CSS hides them
   // below 1024px; wiring them unconditionally here is harmless on touch, they're
   // just never visible/clickable there). scrollBy({left}) is a PHYSICAL-axis
-  // operation per spec — it always scrolls the viewport visually left/right
+  // operation per spec - it always scrolls the viewport visually left/right
   // regardless of the page's RTL direction, so no RTL sign-flipping is needed:
   // the left button simply scrolls left, the right button scrolls right.
   // ~2 cards per click (.cl-card flex-basis 182px + .cl-track gap 16px).
@@ -6738,7 +6738,7 @@ function init() {
     $("clTrack")?.scrollBy({ left: CL_SCROLL_PX, behavior: "smooth" });
   });
 
-  // PEAR Live-Action Gallery — render persisted looks + wire tray/clear/retake
+  // PEAR Live-Action Gallery - render persisted looks + wire tray/clear/retake
   loadGallery();
   const galleryTrack = $("galleryTrack");
   if (galleryTrack) {
@@ -6763,7 +6763,7 @@ function init() {
   const galleryClear = $("galleryClear");
   if (galleryClear) galleryClear.addEventListener("click", clearGallery);
 
-  // Compare mode — open the split-screen overlay; close via ✕ / backdrop / Esc
+  // Compare mode - open the split-screen overlay; close via ✕ / backdrop / Esc
   const compareBar = $("compareBar");
   if (compareBar) compareBar.addEventListener("click", openCompareOverlay);
   const compareOverlay = $("pearCompare");
@@ -6792,7 +6792,7 @@ function init() {
     if (b) selectDetectedGarment(Number(b.dataset.box));
   });
 
-  // TOP / BOTTOM segmented toggle (outfit mode) — snap the bracket between regions.
+  // TOP / BOTTOM segmented toggle (outfit mode) - snap the bracket between regions.
   const gdTabs = $("gdTabs");
   if (gdTabs) gdTabs.addEventListener("click", (e) => {
     const t = e.target.closest(".gd-tab");
@@ -6806,10 +6806,10 @@ function init() {
   });
 
   document.addEventListener("click", (e) => {
-    // "Upload Your Own Garment" card — open the native file picker.
+    // "Upload Your Own Garment" card - open the native file picker.
     if (e.target.closest("[data-upload]")) { openGarmentUpload(); return; }
 
-    // "Add to Look" (הוסף ללוק) — drop this recommendation into its slot beside the
+    // "Add to Look" (הוסף ללוק) - drop this recommendation into its slot beside the
     // active garment (additive; keeps the opposite category). toItem() rebuilds the
     // full record so image URL, metadata AND category (garmentType → top|bottom) are
     // always extracted, regardless of where on the card the user tapped. data-look is
@@ -6844,7 +6844,7 @@ if (document.readyState === "loading") document.addEventListener("DOMContentLoad
 else init();
 
 /* ════════════════════════════════════════════════════════════════════════
-   UI ONLY — subtle 3D parallax tilt on the Screen-1 size card.
+   UI ONLY - subtle 3D parallax tilt on the Screen-1 size card.
    Purely decorative; does not touch the try-on flow, tokens, or live window.
    Tracks the pointer across #screen-calculator .container and maps it to a
    gentle rotateX/rotateY, resetting smoothly on leave / touchend. Disabled
