@@ -765,9 +765,11 @@ function parseHandoff() {
     const wType   = (q.get("garment_type") || "tops").toLowerCase();
     const isPants = wType === "pants" || wType === "bottoms";
     // Multi-image gallery: the widget forwards ALL product photos as a comma-joined
-    // list of individually-encoded URLs (?garment_images=). The first is the primary
-    // garment (kept in sync with garment_url); the full list drives the thumbnail
-    // switcher above the camera (renderPearImageSwitcher). Absent → single-image flow.
+    // list of individually-encoded URLs (?garment_images=), ALREADY sorted front-first
+    // (pear-widget.js classifies them through /api/classify-images). Photo 1 is the
+    // primary garment (kept in sync with garment_url), photo 2 is its rear view. Both
+    // are resolved automatically below — the user never picks a photo (the thumbnail
+    // switcher this list used to drive was removed).
     const imagesRaw = q.get("garment_images");
     let pearImages;
     if (imagesRaw) {
@@ -776,6 +778,11 @@ function parseHandoff() {
         .filter((u) => /^https?:\/\//i.test(u));
       if (!pearImages.length) pearImages = undefined;
     }
+    // The gallery's own back view: photo 2, as long as it's a DISTINCT URL from the
+    // front (an identical pair is a mirrored front — pointless to stitch, and
+    // canCombineViews() would reject it anyway). Undefined for a single-image handoff.
+    const galleryBack = (pearImages && pearImages[1] && pearImages[1] !== pearImages[0])
+      ? pearImages[1] : undefined;
     const result = {
       id: null, custom: true,
       name: q.get("garment_name") || "Garment",
@@ -784,9 +791,12 @@ function parseHandoff() {
       color: "#8a8f98",                     // neutral placeholder; the image is the reference
       img: (pearImages && pearImages[0]) || widgetUrl,   // first gallery photo = primary
       pearImages,                           // full gallery list (undefined when single-image)
-      // Dual-View: optional back-of-garment asset the storefront can pass alongside the
-      // front. Absent → the Back toggle falls back to the front image + prompt steering.
-      imgBack: q.get("garment_url_back") || q.get("imgBack") || undefined,
+      // Dual-View back asset, resolved with ZERO user input (there is no photo picker):
+      // an explicit ?garment_url_back= / ?imgBack= wins, else the gallery's second photo.
+      // A real, DISTINCT back is exactly what makes canCombineViews() true, which is what
+      // flips renderPerspectiveSelector() into AI Combined automatically. When neither
+      // exists the item stays single-view (front image + prompt steering) — never blocked.
+      imgBack: q.get("garment_url_back") || q.get("imgBack") || galleryBack,
       // Opt-in strict gate: the widget forwards ?require_both_views=1 when the embed
       // sets data-pear-require-both-views. Hard-blocks go-live unless a real back
       // image arrived (custom garments are otherwise ungated — see liveBlockReason).
@@ -1033,8 +1043,9 @@ function enterRoom() {
   // hides otherwise — so we never force an empty section visible here.
   // AI Combined is the only mode now, so the storefront's front/back/side deep-link
   // angle no longer matters — renderPerspectiveSelector() sets currentAngle itself.
+  // (No photo switcher to render either: the front/back pair comes straight from the
+  // handoff gallery, so the combined view is selected without any user input.)
   renderPerspectiveSelector();
-  renderPearImageSwitcher();   // widget multi-image row above the camera (no-op unless 2+ photos)
   setConn("idle");
 
   // Reset the size override to the Screen-1 recommendation and rebuild the selector UI.
@@ -1126,91 +1137,16 @@ function hotSwapIfLive(toastMsg) {
   if (toastMsg) toast(toastMsg);
 }
 
-/* ── Widget multi-image switcher ─────────────────────────────────────────────
-   A horizontal row of product-photo thumbnails pinned ABOVE the camera, shown ONLY
-   for a storefront widget handoff that forwarded 2+ gallery photos (?garment_images=
-   → activeItem.pearImages). Tapping a thumbnail makes that photo the active FRONT
-   reference and hot-swaps the live stream in place (same session, same ek_ token)
-   through the very pipeline the angle rail uses — no reconnect. Never renders for
-   catalog browsing (no pearImages), so it can't disturb the normal flow. The row's
-   CSS is injected once and fully self-contained. */
-function ensurePearSwitcherStyles() {
-  if (document.getElementById("pear-image-switcher-styles")) return;
-  const s = document.createElement("style");
-  s.id = "pear-image-switcher-styles";
-  s.textContent =
-    ".pear-image-switcher{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;" +
-      "margin:0 auto 12px;padding:0 8px;max-width:100%;}" +
-    // Each thumb is a caption cell: 56×56 image with the חזית/גב/תמונה N label below it.
-    // Opacity marks state (active 1 / inactive .55); the black frame marks the active photo.
-    ".pear-image-switcher__thumb{display:flex;flex-direction:column;align-items:center;" +
-      "gap:4px;width:56px;padding:0;flex:0 0 auto;background:none;border:none;" +
-      "cursor:pointer;opacity:.55;transition:opacity .15s;}" +
-    ".pear-image-switcher__thumb.is-active{opacity:1;}" +
-    ".pear-image-switcher__thumb img{width:56px;height:56px;object-fit:cover;display:block;" +
-      "border-radius:8px;border:2px solid transparent;box-sizing:border-box;}" +
-    ".pear-image-switcher__thumb.is-active img{border-color:#000;}" +
-    ".pear-image-switcher__label{font-size:11px;line-height:1.1;text-align:center;color:#888;}";
-  document.head.appendChild(s);
-}
-
-/* Thumbnail caption by gallery position: photo 1 = front, photo 2 = back, the rest
-   numbered. Shared shape with the widget popup labels so both surfaces read the same. */
-function pearImageLabel(i) {
-  return i === 0 ? "חזית" : i === 1 ? "גב" : "תמונה " + (i + 1);
-}
-
-function renderPearImageSwitcher() {
-  const card = $("cameraCard");
-  let row = $("pearImageSwitcher");
-  const imgs = (activeItem && activeItem.pearImages) || [];
-
-  // Fewer than 2 photos (or no camera stage) → nothing to switch between.
-  if (!card || imgs.length < 2) { if (row) row.hidden = true; return; }
-
-  ensurePearSwitcherStyles();
-  if (!row) {
-    row = document.createElement("div");
-    row.id = "pearImageSwitcher";
-    row.className = "pear-image-switcher";
-    row.setAttribute("role", "group");
-    row.setAttribute("aria-label", "תמונות המוצר · Product images");
-    card.parentNode.insertBefore(row, card);   // ABOVE the camera stage
-    // Delegated click — bound once to the stable row, survives every re-render.
-    row.addEventListener("click", (e) => {
-      const b = e.target.closest("button[data-pear-idx]");
-      if (!b) return;
-      const list = (activeItem && activeItem.pearImages) || [];
-      const u = list[+b.getAttribute("data-pear-idx")];
-      if (u) selectPearImage(u);
-    });
-  }
-  row.hidden = false;
-
-  const current = (activeImageOf(activeItem) || "").split("?")[0];
-  row.innerHTML = imgs.map((u, i) => {
-    const on = u.split("?")[0] === current;
-    const label = pearImageLabel(i);
-    return `<button type="button" class="pear-image-switcher__thumb${on ? " is-active" : ""}" ` +
-           `data-pear-idx="${i}" aria-pressed="${on}" title="${label}">` +
-           `<img src="${u}" alt="${label}" loading="lazy" decoding="async">` +
-           `<span class="pear-image-switcher__label">${label}</span>` +
-           `</button>`;
-  }).join("");
-}
-
-/* Swap the active garment to a chosen product photo: it becomes the FRONT asset
-   (currentAngle reset to front so it renders directly), the rails re-render, and the
-   live session re-warps in place. No-op without an active item or on a re-tap. */
-function selectPearImage(url) {
-  if (!activeItem || !url || activeItem.img === url) return;
-  activeItem.img = url;
-  currentAngle = "front";
-  renderActiveGarment();
-  renderPerspectiveSelector();
-  renderPearImageSwitcher();
-  hotSwapIfLive("מחליף תמונת מוצר · switching product image");
-}
+/* ── Widget multi-image switcher — REMOVED ───────────────────────────────────
+   There used to be a row of product-photo thumbnails (חזית / גב / תמונה N) pinned above
+   the camera, letting the user hand-pick which forwarded gallery photo (?garment_images=)
+   became the FRONT reference. Picking views is not the shopper's job: the front/back pair
+   is now resolved automatically at handoff time (parseHandoff → img = photo 1,
+   imgBack = photo 2, already classified front-first by pear-widget.js) and
+   renderPerspectiveSelector() then turns that pair into AI Combined on its own. So the row,
+   its injected CSS, its caption helper and selectPearImage() are all gone — no photo
+   picker, no front/back toggle, nothing for the user to get wrong. `pearImages` survives
+   on the item purely as the source those two assets are derived from. */
 
 /* Widget → fitting-room, post-open correction: pear-widget.js now opens this room
    immediately on its DOM-order guess (see openModal()'s click handler) instead of
@@ -1227,24 +1163,30 @@ window.addEventListener("message", (e) => {
   if (!activeItem || !front) return;
   if (activeItem.img === front && activeItem.imgBack === back) return;
   activeItem.img = front;
-  activeItem.imgBack = back || activeItem.imgBack;
   if (Array.isArray(e.data.garment_images) && e.data.garment_images.length) {
     activeItem.pearImages = e.data.garment_images;
   }
-  currentAngle = "front";
+  // Back asset, same automatic rule as parseHandoff() — the classifier's own answer
+  // wins, else the (re-sorted) gallery's second photo, else whatever we already had.
+  // Never left unresolved: a real, distinct back is what keeps AI Combined engaged.
+  const imgs = activeItem.pearImages;
+  const galleryBack = (imgs && imgs[1] && imgs[1] !== front) ? imgs[1] : undefined;
+  activeItem.imgBack = back || galleryBack || activeItem.imgBack;
+  // currentAngle is deliberately NOT set here: renderPerspectiveSelector() re-derives
+  // it (COMBINED when the corrected pair qualifies, else front) with no user input.
   renderActiveGarment();
   renderPerspectiveSelector();
-  renderPearImageSwitcher();
   hotSwapIfLive("מעדכן תמונת בגד · updating garment view");
 });
 
 /* Sync the live product gallery for the active item + colour. AI Combined is the ONLY
-   try-on mode now — there is NO on-screen angle/mode picker (the perspective rail and its
-   #perspectiveSelector element were removed). This just hardcodes currentAngle — COMBINED
-   when the item ships a real, distinct back (canCombineViews), else a silent "front"
-   fallback so every item stays try-on-able — and refreshes the colour swatch strip.
-   setAngle() and the orientation-watcher engine remain in the file but are no longer
-   wired to any UI. (Name kept as-is: still called from every item/colour swap.) */
+   try-on mode now — there is NO on-screen angle/mode picker and NO photo switcher (the
+   perspective rail with its #perspectiveSelector element and the #pearImageSwitcher
+   thumbnail row were both removed). This just hardcodes currentAngle — COMBINED when the
+   item ships a real, distinct back (canCombineViews), else a silent "front" fallback so
+   every item stays try-on-able — and refreshes the colour swatch strip. setAngle() and the
+   orientation-watcher engine remain in the file but are no longer wired to any UI.
+   (Name kept as-is: still called from every item/colour swap.) */
 function renderPerspectiveSelector() {
   if (activeItem) currentAngle = canCombineViews(activeItem) ? COMBINED_ANGLE : "front";
   renderColorSwatches();
