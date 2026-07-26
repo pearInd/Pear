@@ -1,5 +1,5 @@
 /* ============================================================
-   MERIDIAN storefront — vanilla JS (no build, no dependencies)
+   MERIDIAN storefront - vanilla JS (no build, no dependencies)
    Modules: announcement ticker · hero ticker · New Arrivals grid ·
    Lookbook collage · filterable catalog · Customer Favorites carousel ·
    PEAR Camera handoff → ./pear-demo/index.html (root-relative)
@@ -14,7 +14,7 @@ const LS_TRYON  = "pear_tryon";
 const LS_BAG    = "meridian_bag";
 const LS_CUSTOM = "pear_custom_garment";   // handoff channel for an uploaded garment (data URL is too big for a query param)
 
-/* ── "Upload Your Own Garment" — externalized config (this storefront has no
+/* ── "Upload Your Own Garment" - externalized config (this storefront has no
    config.js; store.js is its app.js, so its tunables live here, mirroring
    fitting-room/config.js → CONFIG.UPLOAD). Every timing / threshold the upload →
    detect → crop → handoff flow uses lives HERE and nowhere else.
@@ -22,7 +22,7 @@ const LS_CUSTOM = "pear_custom_garment";   // handoff channel for an uploaded ga
    Detector: dependency-free canvas background-subtraction + connected-components
    (see detectGarments). Chosen over MediaPipe Object Detector because its shipped
    COCO/EfficientDet model has NO apparel classes ("clothing/top/bottom/dress"
-   aren't in COCO) and it adds a multi-MB WASM+model CDN dependency that can 404 —
+   aren't in COCO) and it adds a multi-MB WASM+model CDN dependency that can 404 -
    against this store's "layout never breaks" ethos. Swap MediaPipe in later by
    replacing detectGarments()'s body; the rest of the flow only consumes boxes. */
 const STORE_UPLOAD = Object.freeze({
@@ -30,7 +30,7 @@ const STORE_UPLOAD = Object.freeze({
   DETECT_MAX_DIM:         512,   // downscale the longest side to this before analysis
   BG_SAMPLE_BAND:         0.06,  // fraction of each edge sampled to estimate the background colour
   FG_DIFF_THRESHOLD:      46,    // Euclidean RGB distance from bg above which a pixel is "foreground"
-  DILATE_RADIUS:          3,     // morphological dilation (downscaled px) — closes gaps so one garment = one blob
+  DILATE_RADIUS:          3,     // morphological dilation (downscaled px) - closes gaps so one garment = one blob
   MIN_BOX_AREA_FRAC:      0.015, // ignore foreground blobs smaller than this fraction of the image
   MAX_BOX_AREA_FRAC:      0.985, // ignore blobs that fill essentially the whole frame (bg-estimate failure)
   MIN_BOX_DIM_FRAC:       0.05,  // ignore slivers thinner than this fraction of the image in either axis
@@ -157,7 +157,7 @@ function uploadCardHTML(i) {
   </article>`;
 }
 
-/* ── New Arrivals (static) — 4 newest products + the Upload Your Own card ── */
+/* ── New Arrivals (static) - 4 newest products + the Upload Your Own card ── */
 function renderNew() {
   const cards = PRODUCTS.filter((p) => p.isNew).slice(0, 4).map((p, i) => cardHTML(p, i)).join("");
   newGrid.innerHTML = cards + uploadCardHTML(4);
@@ -209,12 +209,12 @@ function pearUrl(p, embed) {
 function launchPearCamera(p) {
   const color = p.color.replace("#", "");
   try { localStorage.setItem(LS_TRYON, JSON.stringify({ itemType: p.type, subType: p.subType, color, name: p.name })); } catch (_) {}
-  showToast(`Launching full <b>PEAR Camera</b> — ${p.name}…`);
+  showToast(`Launching full <b>PEAR Camera</b> - ${p.name}…`);
   setTimeout(() => { window.location.href = pearUrl(p, false); }, 650);
 }
 
 /* ============================================================
-   TRY-ON VIEW — product-isolated in-store camera + Complete the Look
+   TRY-ON VIEW - product-isolated in-store camera + Complete the Look
    ============================================================ */
 const tryonEl    = $("#tryon");
 const statusEl    = $("#tryonStatus");
@@ -247,7 +247,7 @@ function recommendFor(p) {
     .map((r) => r.item);
 }
 
-/* Status bar — isolates and presents the selected garment beside the feed. */
+/* Status bar - isolates and presents the selected garment beside the feed. */
 function renderTryOnStatus(p) {
   statusEl.innerHTML = `
     <div class="tryon__swatch" style="--c:${p.color}">${garmentSVG(p)}</div>
@@ -266,7 +266,7 @@ function renderTryOnStatus(p) {
     </div>`;
 }
 
-/* Complete the Look slider — mini-thumbnails + quick-swap. */
+/* Complete the Look slider - mini-thumbnails + quick-swap. */
 function renderRecommendations(p) {
   const recs = recommendFor(p);
   const wantHe = p.type === "shirt" ? "מכנסיים תואמים" : "חולצות תואמות";
@@ -383,7 +383,7 @@ function buildTickers() {
 }
 
 /* ============================================================
-   "UPLOAD YOUR OWN GARMENT" — detect · select · crop · hand off
+   "UPLOAD YOUR OWN GARMENT" - detect · select · crop · hand off
    ------------------------------------------------------------
    Flow:  upload card → file picker → handleGarmentFile() validates + loads the
    image → runDetection() opens the overlay and runs detectGarments() (a vanilla,
@@ -414,7 +414,7 @@ function onGarmentFileChosen(e) {
 /** Validate the picked file (type + size), decode it, then run detection. */
 function handleGarmentFile(file) {
   const U = STORE_UPLOAD;
-  if (!/^image\//i.test(file.type)) { showToast("Unsupported file — please choose an image"); return; }
+  if (!/^image\//i.test(file.type)) { showToast("Unsupported file - please choose an image"); return; }
   if (file.size > U.MAX_BYTES) {
     showToast(`Image is too large (max ${Math.round(U.MAX_BYTES / (1024 * 1024))}MB)`);
     return;
@@ -423,7 +423,7 @@ function handleGarmentFile(file) {
   reader.onload = () => {
     const img = new Image();
     img.onload  = () => runDetection(img);
-    img.onerror = () => showToast("Could not load that image — try another");
+    img.onerror = () => showToast("Could not load that image - try another");
     img.src = String(reader.result);   // same-origin data URL → canvas stays untainted
   };
   reader.onerror = () => showToast("Could not read that file");
@@ -513,7 +513,7 @@ function renderDetectionBoxes(boxes) {
   }).join("");
 }
 
-/* ── OUTFIT MODE — one bracket + a TOP/BOTTOM segmented toggle ────────────────
+/* ── OUTFIT MODE - one bracket + a TOP/BOTTOM segmented toggle ────────────────
    A full worn outfit shows a single bracket whose bounds + label snap between the
    outfit's TOP and BOTTOM sub-regions when the toggle changes. Switching sides
    mutates the SAME element's inline bounds so the CSS transition animates the move
@@ -574,7 +574,7 @@ function positionOutfitBox() {
   if (lbl) lbl.innerHTML = `<b>${title}</b>`;
 }
 
-/** Toggle handler — snap the bracket + crop target between the TOP and BOTTOM regions. */
+/** Toggle handler - snap the bracket + crop target between the TOP and BOTTOM regions. */
 function setActiveSide(side) {
   if (side !== "top" && side !== "bottom" || !detectedOutfit) return;
   activeSide = side;
@@ -639,10 +639,10 @@ function launchCustomGarment(item) {
       img: item.img, garmentType: item.garmentType, color: item.color, name: item.name, custom: true,
     }));
   } catch (_) {
-    showToast("That crop is too large to hand off — try a smaller image");
+    showToast("That crop is too large to hand off - try a smaller image");
     return;
   }
-  showToast("Launching <b>PEAR Camera</b> — your garment…");
+  showToast("Launching <b>PEAR Camera</b> - your garment…");
   setTimeout(() => { window.location.href = `${PEAR_PATH}?custom=1`; }, STORE_UPLOAD.LAUNCH_DELAY_MS);
 }
 
@@ -774,7 +774,7 @@ function refineGarments(boxes, iw, ih, U) {
   for (const b of boxes) {
     const aspect = b.width / Math.max(1, b.height);
     // A person-shaped blob (tall + narrow) = a full worn OUTFIT. Even when it fills
-    // the frame we no longer emit a dead-end "Full-body" box — we mark it as an outfit
+    // the frame we no longer emit a dead-end "Full-body" box - we mark it as an outfit
     // carrying TOP + BOTTOM sub-regions so the UI can toggle between them.
     const person = b.height >= ih * U.PERSON_MIN_HEIGHT_FRAC && aspect <= U.PERSON_MAX_ASPECT;
     if (person) {
@@ -835,7 +835,7 @@ function dilateMask(mask, w, h, r) {
 
 /**
  * Merge boxes that overlap strongly (IoU > iouThresh) or where one largely contains
- * another — collapses fragments of one garment while keeping distinct items apart.
+ * another - collapses fragments of one garment while keeping distinct items apart.
  */
 function mergeBoxes(boxes, iouThresh) {
   const out = [];
@@ -928,10 +928,10 @@ function init() {
 
   // delegated clicks
   document.addEventListener("click", (e) => {
-    // "Upload Your Own Garment" card / button — open the native file picker.
+    // "Upload Your Own Garment" card / button - open the native file picker.
     if (e.target.closest("[data-upload]")) { openGarmentUpload(); return; }
 
-    // TOP / BOTTOM segmented toggle (outfit mode) — snap the bracket between regions.
+    // TOP / BOTTOM segmented toggle (outfit mode) - snap the bracket between regions.
     const tab = e.target.closest(".gd-tab");
     if (tab) { setActiveSide(tab.dataset.side); return; }
 
@@ -976,7 +976,7 @@ function init() {
     }
   });
 
-  // "Upload Your Own Garment" — file input + keyboard access on the (role=button) card.
+  // "Upload Your Own Garment" - file input + keyboard access on the (role=button) card.
   const uploadInput = $("#garmentUploadInput");
   if (uploadInput) uploadInput.addEventListener("change", onGarmentFileChosen);
   document.addEventListener("keydown", (e) => {
@@ -1001,7 +1001,7 @@ function init() {
     showToast(n ? `Your bag holds <b>${n}</b> ${n === 1 ? "item" : "items"}` : "Your bag is empty");
   });
 
-  $("#newsForm").addEventListener("submit", (e) => { e.preventDefault(); e.target.reset(); showToast("Thanks — you're <b>subscribed</b>!"); });
+  $("#newsForm").addEventListener("submit", (e) => { e.preventDefault(); e.target.reset(); showToast("Thanks - you're <b>subscribed</b>!"); });
 
   window.addEventListener("hashchange", routeFromHash);
 

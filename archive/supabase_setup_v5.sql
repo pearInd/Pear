@@ -1,5 +1,5 @@
 -- =============================================================================
--- PEAR · Supabase Setup V5 — garment_cache (front/back classification cache)
+-- PEAR · Supabase Setup V5 - garment_cache (front/back classification cache)
 -- =============================================================================
 --
 -- WHY THIS MIGRATION EXISTS
@@ -7,7 +7,7 @@
 -- Both scanner/scan-store.js (bulk store crawl on Railway) and the widget's
 -- POST /api/classify-images call Gemini to classify a garment product photo
 -- as "front" or "back". Gemini calls cost money and are rate-limited, so every
--- classified image URL is cached here — a URL classified once by either the
+-- classified image URL is cached here - a URL classified once by either the
 -- scanner or the live widget is never re-classified by the other.
 --
 -- HOW TO RUN

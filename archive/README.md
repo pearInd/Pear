@@ -1,4 +1,4 @@
-# PEAR — Virtual Fitting Room 👕👖
+# PEAR - Virtual Fitting Room 👕👖
 
 > **PEAR** (חדר הלבשה וירטואלי) is a browser-based virtual try-on demo. A user enters their body
 > measurements, gets a recommended clothing size, then sees garments rendered live onto their body
@@ -11,17 +11,17 @@ The UI is in **Hebrew (RTL)**.
 ---
 
 ## ✨ Features
-- **Smart size calculator** — recommends a size (S/M/L/XL) from height + weight, refined by optional
+- **Smart size calculator** - recommends a size (S/M/L/XL) from height + weight, refined by optional
   chest / waist / leg measurements, using a weighted penalty match against a Zara-style size chart.
-- **Live virtual try-on** — webcam feed with [MediaPipe Pose](https://google.github.io/mediapipe/)
+- **Live virtual try-on** - webcam feed with [MediaPipe Pose](https://google.github.io/mediapipe/)
   body tracking; garments are warped onto the body in real time.
-- **Built-in garment catalog** — shirts (sleeveless / short / long sleeve) and pants (slim / regular /
-  wide) generated as inline SVG — no external image assets or CORS issues.
-- **Upload your own** — drop in an image and it becomes a fabric texture mapped onto the chosen
+- **Built-in garment catalog** - shirts (sleeveless / short / long sleeve) and pants (slim / regular /
+  wide) generated as inline SVG - no external image assets or CORS issues.
+- **Upload your own** - drop in an image and it becomes a fabric texture mapped onto the chosen
   garment silhouette.
-- **Mesh-based cloth warping** — triangle affine warp follows shoulders, elbows, hips, knees, and
+- **Mesh-based cloth warping** - triangle affine warp follows shoulders, elbows, hips, knees, and
   ankles so clothes bend with the body.
-- **Polished premium UI** — animated progress, validity checks, screen transitions, scan-line camera
+- **Polished premium UI** - animated progress, validity checks, screen transitions, scan-line camera
   overlay, fullscreen preview, and a floating camera button.
 
 ---
@@ -54,7 +54,7 @@ Then open **http://localhost:8000** and allow camera access when prompted.
 
 The app is a two-screen single-page flow.
 
-### Screen 1 — Size Calculator
+### Screen 1 - Size Calculator
 1. Enter **height** and **weight** (required); optionally **chest**, **waist**, and **leg length**.
 2. Each size in the chart accrues a *penalty* based on how far your measurements fall outside its
    range (height/weight weighted ×2, optional measurements ×0.5).
@@ -62,7 +62,7 @@ The app is a two-screen single-page flow.
    "out of range." Implausible inputs are rejected outright.
 4. The size unlocks the "continue" button and is carried into the fitting room as a width multiplier.
 
-### Screen 2 — Virtual Fitting Room
+### Screen 2 - Virtual Fitting Room
 1. Pick a shirt and/or pants from the catalog (or upload your own image).
 2. Start the camera. MediaPipe Pose detects 33 body landmarks per frame.
 3. For each frame, `onResults()`:
@@ -84,7 +84,7 @@ The app is a two-screen single-page flow.
 | Language             | Vanilla JavaScript (no framework, no bundler)                    |
 | Pose tracking        | [`@mediapipe/pose`](https://www.npmjs.com/package/@mediapipe/pose) (via jsDelivr CDN) |
 | Camera loop          | [`@mediapipe/camera_utils`](https://www.npmjs.com/package/@mediapipe/camera_utils)    |
-| Rendering            | HTML5 Canvas 2D — affine triangle warping                       |
+| Rendering            | HTML5 Canvas 2D - affine triangle warping                       |
 | Garment art          | Inline SVG (data URIs), procedurally colored                    |
 | Styling              | Hand-written CSS (custom properties, RTL, keyframe animations)  |
 
@@ -119,18 +119,18 @@ PEAR/
 
 A few constants you can tweak in `app.js`:
 
-- `WHITE_THRESHOLD` (`240`) — how aggressively white pixels become transparent on uploads.
-- `SIZE_MULTIPLIERS` — garment width scaling per size.
-- `PANTS_FIT_SCALE` (`slim 1.25 / regular 1.45 / wide 1.70`) — leg width per fit.
-- Smoothing `alpha` values in `onResults()` — higher = snappier, lower = smoother.
-- `pose.setOptions({ modelComplexity: 2, ... })` — drop to `1` for more FPS on weak hardware.
+- `WHITE_THRESHOLD` (`240`) - how aggressively white pixels become transparent on uploads.
+- `SIZE_MULTIPLIERS` - garment width scaling per size.
+- `PANTS_FIT_SCALE` (`slim 1.25 / regular 1.45 / wide 1.70`) - leg width per fit.
+- Smoothing `alpha` values in `onResults()` - higher = snappier, lower = smoother.
+- `pose.setOptions({ modelComplexity: 2, ... })` - drop to `1` for more FPS on weak hardware.
 
 ---
 
 ## ⚠️ Notes & Limitations
 
 - This is a **demo / proof-of-concept**, not a production garment-fitting product.
-- Garment warping is a 2D approximation — it doesn't model true 3D drape, occlusion, or fabric physics.
+- Garment warping is a 2D approximation - it doesn't model true 3D drape, occlusion, or fabric physics.
 - Best results: well-lit room, full or upper body in frame, facing the camera.
 - Size recommendations are based on a generic chart and shouldn't be treated as exact fitting advice.
 - Camera access and the CDN-hosted ML model require a secure/local context and internet on first load.
@@ -139,4 +139,4 @@ A few constants you can tweak in `app.js`:
 
 ## 📜 License
 
-No license file is currently included — treat as all rights reserved unless the owner specifies otherwise.
+No license file is currently included - treat as all rights reserved unless the owner specifies otherwise.

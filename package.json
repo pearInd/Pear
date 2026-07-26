@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "PEAR / MERIDIAN — photorealistic Virtual Try-On powered by Decart Lucy VTON (realtime), fronted by a secure ephemeral-token proxy so the permanent dct_ API key never reaches the browser.",
+  "description": "PEAR / MERIDIAN - photorealistic Virtual Try-On powered by Decart Lucy VTON (realtime), fronted by a secure ephemeral-token proxy so the permanent dct_ API key never reaches the browser.",
   "engines": {
     "node": ">=22.0.0"
   },

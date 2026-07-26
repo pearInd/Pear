@@ -1,5 +1,5 @@
 /* =============================================================================
-   PEAR · Admin Dashboard — matched to the fitting-room "Liquid Glass" aesthetic
+   PEAR · Admin Dashboard - matched to the fitting-room "Liquid Glass" aesthetic
    -----------------------------------------------------------------------------
    COLORS ARE NOT RE-INVENTED HERE. The :root block below is copied verbatim from
    fitting-room/style.css so the admin dashboard draws from the exact same palette.
@@ -10,14 +10,14 @@
 
 :root {
   /* ── pear-green accent (the only colour) ── */
-  --pear:        #1a1a1c;   /* signature pear green — fills / borders / glow */
-  --pear-deep:   #0a0a0b;   /* darker pear — text on light glass */
+  --pear:        #1a1a1c;   /* signature pear green - fills / borders / glow */
+  --pear-deep:   #0a0a0b;   /* darker pear - text on light glass */
   --pear-soft:   rgba(141, 182, 0, .12);
   --pear-tint:   rgba(141, 182, 0, .16);
   --pear-ring:   rgba(141, 182, 0, .22);
   --pear-glow:   rgba(141, 182, 0, .50);
 
-  /* solid form of the rgb(141,182,0) pear green already used above — for
+  /* solid form of the rgb(141,182,0) pear green already used above - for
      numbers / bars / accents that need a full-opacity fill (not a new colour). */
   --pear-green:  #8db600;
 
@@ -68,7 +68,7 @@ html, body {
   text-rendering: optimizeLegibility;
 }
 
-/* ── ambient backdrop — identical soft grey light + faint pear-green wash ─── */
+/* ── ambient backdrop - identical soft grey light + faint pear-green wash ─── */
 body {
   position: relative;
   min-height: 100vh;
@@ -80,7 +80,7 @@ body {
   background-attachment: fixed;
   overflow-x: hidden;
 }
-/* slow-drifting frosted orbs — the same organic motion beneath the glass */
+/* slow-drifting frosted orbs - the same organic motion beneath the glass */
 body::before,
 body::after {
   content: "";
@@ -126,7 +126,7 @@ h1, h2, h3, h4 {
   gap: 26px;
 }
 
-/* ── Top navbar — frosted-glass bar, PEAR wordmark, green dot (fitting-room) ─ */
+/* ── Top navbar - frosted-glass bar, PEAR wordmark, green dot (fitting-room) ─ */
 .dash-top {
   display: flex;
   align-items: center;
@@ -151,7 +151,7 @@ h1, h2, h3, h4 {
   color: var(--pear-green);           /* the pear/sage green wordmark */
   padding-inline-end: 14px;
 }
-/* pear-green accent dot — mirrors the fitting-room focus-bar / list bullet */
+/* pear-green accent dot - mirrors the fitting-room focus-bar / list bullet */
 .dash-top__mark::after {
   content: "";
   position: absolute;
@@ -163,7 +163,7 @@ h1, h2, h3, h4 {
 .dash-top__sub { color: var(--muted); font-size: .84rem; font-weight: 600; }
 .dash-top__actions { display: flex; gap: 10px; }
 
-/* ── Buttons — frosted-glass capsules (fitting-room .btn-ghost) ───────────── */
+/* ── Buttons - frosted-glass capsules (fitting-room .btn-ghost) ───────────── */
 .dash-btn {
   padding: 11px 20px;
   border: 1px solid var(--glass-border);
@@ -190,7 +190,7 @@ h1, h2, h3, h4 {
 .dash-btn:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--pear-ring), var(--shadow-soft); }
 .dash-btn:disabled { opacity: .55; cursor: not-allowed; transform: none; box-shadow: none; }
 
-/* ── Section card — floating frosted-glass pane (fitting-room container) ───── */
+/* ── Section card - floating frosted-glass pane (fitting-room container) ───── */
 .card {
   position: relative;
   background: var(--glass);
@@ -201,7 +201,7 @@ h1, h2, h3, h4 {
   box-shadow: var(--shadow);
   padding: clamp(20px, 3vw, 28px);
 }
-/* section title — Urbanist heading with a pear-green accent dot */
+/* section title - Urbanist heading with a pear-green accent dot */
 .card__title {
   display: flex;
   align-items: center;
@@ -256,7 +256,7 @@ h1, h2, h3, h4 {
   color: var(--muted);
 }
 
-/* ── Tables (shared across Users + Sessions) — light glass headers ────────── */
+/* ── Tables (shared across Users + Sessions) - light glass headers ────────── */
 .table-scroll { width: 100%; overflow-x: auto; }
 .data-table {
   width: 100%;
@@ -271,7 +271,7 @@ h1, h2, h3, h4 {
   letter-spacing: .1em;
   text-transform: uppercase;
   color: var(--pear-deep);            /* muted-dark label, like form dividers */
-  background: var(--pear-soft);       /* faint pear-green tint — never black */
+  background: var(--pear-soft);       /* faint pear-green tint - never black */
   padding: 12px 14px;
   border-bottom: 1px solid var(--glass-line);
   white-space: nowrap;
@@ -293,7 +293,7 @@ h1, h2, h3, h4 {
 .garment-name { font-weight: 600; color: var(--ink); }
 .garment-id { display: inline-block; margin-inline-start: 8px; font-size: .75rem; color: var(--muted-2); }
 
-/* count / size pill — pear-tinted glass badge (fitting-room focus-bar badge) */
+/* count / size pill - pear-tinted glass badge (fitting-room focus-bar badge) */
 .size-badge {
   display: inline-block;
   min-width: 30px;
@@ -329,7 +329,7 @@ h1, h2, h3, h4 {
   box-shadow: var(--shadow-soft);
   overflow: hidden;
 }
-/* proportional pear-green fill behind each row — magnitude at a glance */
+/* proportional pear-green fill behind each row - magnitude at a glance */
 .rank-item__bar {
   position: absolute;
   inset: 0 auto 0 0;
@@ -360,10 +360,10 @@ h1, h2, h3, h4 {
   white-space: nowrap;
 }
 
-/* ── "הצג הכל" trigger buttons — sit below each limited list/table ────────── */
+/* ── "הצג הכל" trigger buttons - sit below each limited list/table ────────── */
 .full-page-trigger { margin-top: 14px; }
 
-/* ── Full-page overlay — same surfaces/colors as the dashboard, but a fixed
+/* ── Full-page overlay - same surfaces/colors as the dashboard, but a fixed
    full-viewport layer so it reads as its own screen. ─────────────────────── */
 .full-page-view {
   position: fixed;
@@ -556,7 +556,7 @@ h1, h2, h3, h4 {
   border-color: rgba(141,182,0,.6);
 }
 
-/* Each OTP step is its own <form> inside the card — stack its fields/buttons. */
+/* Each OTP step is its own <form> inside the card - stack its fields/buttons. */
 #emailForm, #codeForm {
   display: flex;
   flex-direction: column;

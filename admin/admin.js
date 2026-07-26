@@ -1,5 +1,5 @@
 /* =============================================================================
-   PEAR Admin Dashboard — client logic with Supabase Auth login gate
+   PEAR Admin Dashboard - client logic with Supabase Auth login gate
    -----------------------------------------------------------------------------
    • Login gate: email + password are checked server-side against ADMIN_EMAILS /
      ADMIN_PASSWORDS (see server.js /api/admin/check-auth) BEFORE a one-time
@@ -9,7 +9,7 @@
    • On page load: getSession() → if valid session, skip to dashboard.
    • All data fetches carry a Bearer token; server verifies via getUser().
    -----------------------------------------------------------------------------
-   SUPABASE SETTINGS — one-time manual configuration required for magic-link login:
+   SUPABASE SETTINGS - one-time manual configuration required for magic-link login:
 
      1. Enable the email provider:
         Supabase Dashboard → Authentication → Providers → Email
@@ -33,8 +33,8 @@
      Supabase users can request a link. Add admin accounts under
      Authentication → Users, and list their emails in the server's ADMIN_EMAILS
      env var. Also set ADMIN_PASSWORDS with one password per email, in the SAME
-     ORDER as ADMIN_EMAILS — index i in ADMIN_EMAILS pairs with index i in
-     ADMIN_PASSWORDS (the server enforces both — see server.js).
+     ORDER as ADMIN_EMAILS - index i in ADMIN_EMAILS pairs with index i in
+     ADMIN_PASSWORDS (the server enforces both - see server.js).
    ============================================================================= */
 (() => {
   "use strict";
@@ -44,7 +44,7 @@
 
   const adminSupabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-  /* ── Login view markup — single screen, magic-link ──────────────────────────
+  /* ── Login view markup - single screen, magic-link ──────────────────────────
      One card: email field + כניסה עם קישור לאימייל button. After signInWithOtp succeeds a
      confirmation message appears below the button; onAuthStateChange (see init)
      loads the dashboard once the admin clicks the emailed link. */
@@ -165,11 +165,11 @@
       <div class="section-card">
         <div class="averages-row">
           <div class="avg-card">
-            <span class="avg-num" id="statAvgHeight">—</span>
+            <span class="avg-num" id="statAvgHeight">-</span>
             <span class="avg-label">AVERAGE HEIGHT</span>
           </div>
           <div class="avg-card">
-            <span class="avg-num" id="statAvgWeight">—</span>
+            <span class="avg-num" id="statAvgWeight">-</span>
             <span class="avg-label">AVERAGE WEIGHT</span>
           </div>
         </div>
@@ -186,7 +186,7 @@
     </div>`;
   }
 
-  /* ── Show login form — single screen, magic-link ────────────────────────────
+  /* ── Show login form - single screen, magic-link ────────────────────────────
      email → server-side ADMIN_EMAILS check → signInWithOtp → confirmation msg.
      The admin clicks the emailed link; onAuthStateChange (see init) fires
      SIGNED_IN and loads the dashboard. */
@@ -221,7 +221,7 @@
       // Verify BOTH email and password against the server-side allowlist before
       // requesting a magic link, so only verified admins trigger a Supabase
       // email send. Sent as a POST body (not a GET query string) so the
-      // password never lands in a URL — URLs get written to server/proxy
+      // password never lands in a URL - URLs get written to server/proxy
       // access logs and browser history in plaintext.
       try {
         const check = await fetch("/api/admin/check-auth", {
@@ -246,7 +246,7 @@
           shouldCreateUser: false,
           // DOMAIN FIX: was hardcoded to pear-web-demo.vercel.app, which is a
           // separate/broken Vercel deployment this project doesn't control (see
-          // troubleshooting notes) — magic-link emails were bouncing admins to a
+          // troubleshooting notes) - magic-link emails were bouncing admins to a
           // stale build. window.location.origin always matches whatever domain
           // this page was actually loaded from, so it self-corrects if the
           // domain situation changes again. NOTE: this exact origin must also be
@@ -256,7 +256,7 @@
         },
       });
 
-      // Log status only — never the response body (may carry session material).
+      // Log status only - never the response body (may carry session material).
       console.log('[admin-login] Supabase error:', error);
       if (error) {
         console.warn("[auth] magic-link request failed:", error?.status || "", error?.name || "error");
@@ -276,7 +276,7 @@
     startDashboard(accessToken);
   }
 
-  /* ── All dashboard logic — unchanged except every fetch is authed ────────── */
+  /* ── All dashboard logic - unchanged except every fetch is authed ────────── */
   function startDashboard(accessToken) {
     const $ = (id) => document.getElementById(id);
 
@@ -301,7 +301,7 @@
       showLogin();
     });
 
-    /* ── Full-page overlay (הצג הכל) — shows ALL items for one section ───── */
+    /* ── Full-page overlay (הצג הכל) - shows ALL items for one section ───── */
     function showFullPage(title, htmlContent) {
       const overlay = $("fullPageView");
       const titleEl = $("fullPageTitle");
@@ -345,7 +345,7 @@
       }
     });
 
-    /* ── Data fetch helpers — reused by the dashboard (limited) views AND the
+    /* ── Data fetch helpers - reused by the dashboard (limited) views AND the
        "הצג הכל" full-page overlays, which always pull fresh data. ─────────── */
     async function fetchAllSessions() {
       const url = "/api/sessions?_=" + Date.now();
@@ -408,7 +408,7 @@
     }
 
     function val(v, unit) {
-      if (v === "" || v === null || v === undefined) return "—";
+      if (v === "" || v === null || v === undefined) return "-";
       return esc(v) + (unit || "");
     }
 
@@ -416,17 +416,17 @@
       const size = (s.size || "").trim();
       return size
         ? `<span class="size-badge">${esc(size.toUpperCase())}</span>`
-        : `<span class="size-badge size-badge--none">—</span>`;
+        : `<span class="size-badge size-badge--none">-</span>`;
     }
 
     function garmentCell(s) {
-      const name = s.garment_name || "—";
+      const name = s.garment_name || "-";
       const id   = s.garment_id ? `<span class="garment-id">${esc(s.garment_id)}</span>` : "";
       return `<span class="garment-name">${esc(name)}</span>${id}`;
     }
 
     function timeCell(ts) {
-      if (!ts) return "—";
+      if (!ts) return "-";
       const d = new Date(ts);
       if (isNaN(d)) return esc(ts);
       return d.toLocaleString(undefined, {
@@ -436,7 +436,7 @@
     }
 
     function shortId(id) {
-      if (!id) return "—";
+      if (!id) return "-";
       return id.length > 14 ? id.slice(0, 8) + "…" + id.slice(-4) : id;
     }
 
@@ -451,7 +451,7 @@
         `</tr>`;
     }
 
-    /* sessions arrive newest-first from the API — "latest 10" is simply the head. */
+    /* sessions arrive newest-first from the API - "latest 10" is simply the head. */
     function renderRows(sessions) {
       const tbody   = $("sessionRows");
       const emptyEl = $("emptyState");
@@ -539,8 +539,8 @@
 
     function userRowHTML(u) {
       return `<tr>` +
-        `<td>${esc(u.name || "—")}</td>` +
-        `<td>${esc(u.email || "—")}</td>` +
+        `<td>${esc(u.name || "-")}</td>` +
+        `<td>${esc(u.email || "-")}</td>` +
         `<td><span class="size-badge">${esc(String(u.session_count ?? 0))}</span></td>` +
         `<td class="cell-time">${esc(timeCell(u.created_at))}</td>` +
         `</tr>`;
@@ -571,7 +571,7 @@
       }
     }
 
-    /* average height/weight across all users — GET /api/admin/stats/averages */
+    /* average height/weight across all users - GET /api/admin/stats/averages */
     async function loadAverages() {
       try {
         const url = "/api/admin/stats/averages?_=" + Date.now();
@@ -581,14 +581,14 @@
         if (!res.ok || !data) return;
         const heightEl = $("statAvgHeight");
         const weightEl = $("statAvgWeight");
-        if (heightEl) heightEl.textContent = data.avgHeight != null ? `${data.avgHeight} ס"מ` : "—";
-        if (weightEl) weightEl.textContent = data.avgWeight != null ? `${data.avgWeight} ק"ג` : "—";
+        if (heightEl) heightEl.textContent = data.avgHeight != null ? `${data.avgHeight} ס"מ` : "-";
+        if (weightEl) weightEl.textContent = data.avgWeight != null ? `${data.avgWeight} ק"ג` : "-";
       } catch (err) {
         console.error("[admin] loadAverages failed:", err);
       }
     }
 
-    /* ── "הצג הכל" handlers — each fetches fresh data and opens the full-page
+    /* ── "הצג הכל" handlers - each fetches fresh data and opens the full-page
        overlay with every item for that section (no limit). ─────────────── */
     function fullPageErrorHTML(err) {
       return `<p class="error" role="alert">${esc("Could not load data: " + (err.message || err))}</p>`;
@@ -653,7 +653,7 @@
   /* ── Entry point: check existing session, show login or dashboard ────────── */
   async function init() {
     // Magic-link return: when the admin clicks the emailed link, Supabase
-    // restores the session on page load and fires SIGNED_IN — load the dashboard.
+    // restores the session on page load and fires SIGNED_IN - load the dashboard.
     adminSupabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_IN" && session) {
         showDashboard(session.access_token);

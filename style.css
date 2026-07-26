@@ -1,11 +1,11 @@
 /* ============================================================
-   MERIDIAN — cinematic, high-density premium storefront
+   MERIDIAN - cinematic, high-density premium storefront
    Palette: white · royal blue (#0B3C95) blocks · light blue-gray layers
    Type: Inter
    ============================================================ */
 
 :root {
-  /* PEAR brand wordmark — Didot serif, PEAR/pear text only (never MERIDIAN) */
+  /* PEAR brand wordmark - Didot serif, PEAR/pear text only (never MERIDIAN) */
   --pear-wordmark: 'Didot', 'Didot LT STD', 'Bodoni MT', 'Cochin', 'Georgia', serif;
   --blue:        #0b3c95;
   --blue-deep:   #082e73;
@@ -234,7 +234,7 @@ em { font-style: normal; }
 .stat span { font-size: 13px; color: rgba(255,255,255,0.7); }
 
 /* ============================================================
-   CUSTOMER FAVORITES — CAROUSEL
+   CUSTOMER FAVORITES - CAROUSEL
    ============================================================ */
 .favs .sec__head { margin-bottom: 30px; }
 .carousel__nav { display: flex; gap: 10px; }
@@ -262,7 +262,7 @@ em { font-style: normal; }
 .footer__col h4 { font-size: 13px; font-weight: 700; letter-spacing: 0.5px; color: #fff; margin-bottom: 16px; }
 .footer__col a { display: block; font-size: 14px; padding: 5px 0; transition: color 0.2s; }
 .footer__col a:hover { color: #fff; }
-/* Admin Console — same size/style as the other footer links; just inline-flex so
+/* Admin Console - same size/style as the other footer links; just inline-flex so
    the green pear 🍐 aligns with the text. Scoped as `.footer__col a.footer__admin`
    to match the specificity of the generic `.footer__col a` rule above. */
 .footer__col a.footer__admin {
@@ -287,7 +287,7 @@ em { font-style: normal; }
 .toast b { color: #9fc0ff; font-weight: 700; }
 
 /* ============================================================
-   TRY-ON VIEW — product-isolated camera + Complete the Look
+   TRY-ON VIEW - product-isolated camera + Complete the Look
    ============================================================ */
 body.tryon-open { overflow: hidden; }
 
@@ -603,7 +603,7 @@ body.net-modal-open { overflow: hidden; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   "UPLOAD YOUR OWN GARMENT" — 5th New-Arrivals card + detection overlay
+   "UPLOAD YOUR OWN GARMENT" - 5th New-Arrivals card + detection overlay
    Reuses the storefront's royal-blue tokens (--blue / --blue-bright) so the
    feature is native to the Luxury white / royal-blue theme.
    ════════════════════════════════════════════════════════════════════════ */
@@ -667,7 +667,7 @@ body.net-modal-open { overflow: hidden; }
 .gd-close:hover { transform: scale(1.08) rotate(90deg); background: var(--blue-tint); }
 .gd-close:active { transform: scale(0.94); }
 
-/* ── TOP / BOTTOM segmented toggle (outfit mode) — luxury pill control ──────── */
+/* ── TOP / BOTTOM segmented toggle (outfit mode) - luxury pill control ──────── */
 .gd-tabs {
   position: relative; align-self: center; display: grid; grid-template-columns: 1fr 1fr;
   width: min(300px, 100%); padding: 4px; border-radius: 100px;
@@ -696,7 +696,7 @@ body.net-modal-open { overflow: hidden; }
 .gd-frame { position: relative; display: inline-block; line-height: 0; border-radius: 14px; overflow: hidden; box-shadow: 0 8px 24px -12px rgba(6,18,45,0.4); }
 .gd-frame__img { display: block; max-width: 100%; max-height: min(64vh, 560px); width: auto; height: auto; }
 
-/* ── focus scrim — subtle dark tint over the whole image (viewfinder mode) ──── */
+/* ── focus scrim - subtle dark tint over the whole image (viewfinder mode) ──── */
 .gd-scrim {
   position: absolute; inset: 0; z-index: 1; pointer-events: none;
   background: rgba(6,18,45,0.44);
@@ -708,7 +708,7 @@ body.net-modal-open { overflow: hidden; }
 
 .gd-boxes { position: absolute; inset: 0; z-index: 2; }
 
-/* ── viewfinder bracket — no harsh border; rounded corner crosshairs + glow ── */
+/* ── viewfinder bracket - no harsh border; rounded corner crosshairs + glow ── */
 .gd-box {
   position: absolute; margin: 0; padding: 0; cursor: pointer;
   background: transparent; border: none; border-radius: 16px;
@@ -750,7 +750,7 @@ body.net-modal-open { overflow: hidden; }
   filter: drop-shadow(0 0 10px rgba(65,105,225,0.9));
 }
 
-/* label badge ("Top" / "Bottom" / "Full-body") — always shown so overlapping
+/* label badge ("Top" / "Bottom" / "Full-body") - always shown so overlapping
    garments are unambiguous; lights up royal-blue on hover. */
 .gd-box__label {
   position: absolute; top: 8px; left: 8px;
@@ -815,5 +815,5 @@ body.gd-open { overflow: hidden; }
   .gd-scrim { background: rgba(6,18,45,0.32); }
 }
 
-/* PEAR wordmark — Didot on literal PEAR text (feature name), not MERIDIAN */
+/* PEAR wordmark - Didot on literal PEAR text (feature name), not MERIDIAN */
 .pear-wordmark { font-family: var(--pear-wordmark); }

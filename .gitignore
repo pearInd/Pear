@@ -1,7 +1,7 @@
 # dependencies
 node_modules/
 
-# secrets — NEVER commit the real Decart key
+# secrets - NEVER commit the real Decart key
 .env
 .env.local
 
@@ -12,7 +12,7 @@ npm-debug.log*
 Thumbs.db
 .vercel
 
-# local session store (test data — not committed)
+# local session store (test data - not committed)
 sessions.json
 data/
 .env*

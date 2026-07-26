@@ -1,15 +1,15 @@
 /* ============================================================================
-   PEAR Widget — embeddable virtual try-on button for any store
+   PEAR Widget - embeddable virtual try-on button for any store
    ----------------------------------------------------------------------------
-   TWO WAYS TO EMBED — both work standalone: no build step, no extra setup,
+   TWO WAYS TO EMBED - both work standalone: no build step, no extra setup,
    just swap STORE_KEY for your key.
 
-   1) SCRIPT TAG (permanent — paste ONE line into your product page/template):
+   1) SCRIPT TAG (permanent - paste ONE line into your product page/template):
 
         <script src="https://pear-web-demo-sigma.vercel.app/widget/pear-widget.js"
                 data-pear-key="STORE_KEY"></script>
 
-   2) BROWSER CONSOLE (instant test on ANY live site — no code changes). Open
+   2) BROWSER CONSOLE (instant test on ANY live site - no code changes). Open
       DevTools → Console on a product page and paste:
 
         var s=document.createElement('script');
@@ -32,7 +32,7 @@
      3. On click, classifies the full gallery via the PEAR server (so every visit
         contributes to the server's front/back cache), sorts the images front-
         first/back-second, then immediately opens a fullscreen modal with the
-        PEAR fitting room in an iframe — no picker popup — handing over the
+        PEAR fitting room in an iframe - no picker popup - handing over the
         garment via URL params (garment_url / garment_type / garment_name),
         plus garment_url_back so the live Back view warps from a real rear photo
         instead of a prompt-steered guess off the front image, and a
@@ -51,7 +51,7 @@
 (function (w, d) {
   "use strict";
 
-  /* Re-embed guard — a page that includes the script twice (or a store re-runs it
+  /* Re-embed guard - a page that includes the script twice (or a store re-runs it
      on purpose, e.g. after an SPA navigation swaps the DOM) reinjects rather than
      silently no-oping: __pearReinject clears the idempotency stamps and re-scans
      the page so buttons come back instead of staying gone for the rest of the
@@ -67,7 +67,7 @@
   // deployment this project no longer controls/deploys to (see troubleshooting
   // notes). This constant only matters when the normal script.src resolution
   // below fails (no document.currentScript AND no matching <script> tag found
-  // in the DOM — a rare embed pattern) — but if it ever DOES kick in, it must
+  // in the DOM - a rare embed pattern) - but if it ever DOES kick in, it must
   // point at a domain that's actually current, or every API call/iframe src
   // the widget builds would silently target a stale build.
   var FALLBACK_BASE = "https://pear-web-demo-sigma.vercel.app";
@@ -97,17 +97,17 @@
      marketing site): when data-pear-demo-gate is the EXACT string "true", the
      fitting room skips its normal name/phone registration and allows exactly one
      measurement per browser, then shows a friendly "already used" screen instead
-     of the camera. Config-driven ONLY — never a hostname/domain check — so a
+     of the camera. Config-driven ONLY - never a hostname/domain check - so a
      normal store embed (no attribute) always gets the regular, unlimited,
      server-backed flow untouched.
      Strict-equality on purpose (not "present and not false"): a bare attribute
      (data-pear-demo-gate with no value → getAttribute() returns ""), a stray
-     placeholder, or any other value must all evaluate to false — only the
+     placeholder, or any other value must all evaluate to false - only the
      literal "true" turns this on. */
   var DEMO_GATE = !!script && script.getAttribute("data-pear-demo-gate") === "true";
   var DEMO_GATE_KEY = "pear_demo_gated_measured";
 
-  /* This is the PARENT PAGE's own localStorage — a different origin from the
+  /* This is the PARENT PAGE's own localStorage - a different origin from the
      fitting-room iframe (PEAR_BASE) in the general case, so it can only reflect
      a lock this same host page already learned about (either from a previous
      load, persisted here, or via the "message" listener wired below once the
@@ -120,10 +120,10 @@
     try { w.localStorage.setItem(DEMO_GATE_KEY, "true"); } catch (_) {}
   }
 
-  /* ── demo mode — opt-in, explicit, OFF by default ─────────────────────────
+  /* ── demo mode - opt-in, explicit, OFF by default ─────────────────────────
      A SEPARATE, older one-time-lock mechanism that coexists with DEMO_GATE above
      (fitting-room/app.js reads both `demo_gate=1` and `pear_demo=1` as distinct,
-     parallel triggers — see openModal()'s query-string builder below). Demo
+     parallel triggers - see openModal()'s query-string builder below). Demo
      behavior only activates when the embedding page's own <script> tag
      explicitly opts in:
        <script src="…/pear-widget.js" data-pear-key="…" data-pear-demo="true">
@@ -132,12 +132,12 @@
   var _demoAttr = script ? script.getAttribute("data-pear-demo") : null;
   var DEMO_MODE = _demoAttr === "true" || _demoAttr === "1";
 
-  /* ── one-time public demo lock — active ONLY when DEMO_MODE is true ──────
+  /* ── one-time public demo lock - active ONLY when DEMO_MODE is true ──────
      This host page and the fitting-room iframe (PEAR_BASE, a DIFFERENT origin)
      each have their OWN localStorage, so they can't share this flag directly.
      The fitting room sets its own copy the instant a first look is saved and
      posts a message here so every trigger button on THIS page locks too,
-     with no reload — see the "message" listener near the bottom of this file. */
+     with no reload - see the "message" listener near the bottom of this file. */
   var PEAR_DEMO_LOCK_KEY = "pear_demo_measured";
   var injectedButtons = [];
 
@@ -154,7 +154,7 @@
     btn.textContent = isHebrewPage() ? "כבר ביצעת מדידה" : "Already Measured";
   }
   // Named distinctly from DEMO_GATE's lockAllButtons() below (two coexisting
-  // mechanisms with two different button-tracking approaches — this one walks
+  // mechanisms with two different button-tracking approaches - this one walks
   // the injectedButtons array; DEMO_GATE's queries .pear-widget-btn directly).
   function lockAllDemoModeButtons() {
     for (var i = 0; i < injectedButtons.length; i++) lockButton(injectedButtons[i]);
@@ -182,7 +182,7 @@
     ".product-photo img"
   ].join(", ");
 
-  /* Gallery-thumbnail selectors — every product photo we can hand the fitting room
+  /* Gallery-thumbnail selectors - every product photo we can hand the fitting room
      as a switchable reference (garment_images). Covers Shopify (product__media-list),
      WooCommerce/generic (.thumbnails, .product-thumbnails), and the common carousels
      (Slick, Swiper). */
@@ -193,7 +193,7 @@
     "[data-thumbnail] img",
     ".slick-slide img",
     ".swiper-slide img",
-    // Shopify gallery variants seen on fox.co.il and similar themes — the
+    // Shopify gallery variants seen on fox.co.il and similar themes - the
     // plain ".product__media-list img"/.slick-slide selectors above miss
     // these markup shapes (media wrapped in <li> or gated by data attrs
     // instead of a list container, or images identified only by their CDN
@@ -207,7 +207,7 @@
     'img[src*="cdn.shopify.com/s/files"]'
   ].join(", ");
 
-  /* Known single-product gallery containers — checked BEFORE the ancestor
+  /* Known single-product gallery containers - checked BEFORE the ancestor
      walk-up in findGarmentForButton() (see resolvePrimaryProductImage). These
      are page-wide selectors, only reliable on a genuine single-product page. */
   var PRODUCT_GALLERY_SELECTORS = [
@@ -253,17 +253,17 @@
     return (el && el.getAttribute && el.getAttribute(name)) || "";
   }
 
-  /* Normalise for comparison — CDNs vary query params, so match on the path only. */
+  /* Normalise for comparison - CDNs vary query params, so match on the path only. */
   function samePhoto(a, b) {
     return (a || "").split("?")[0] === (b || "").split("?")[0];
   }
 
   /* Extract a "same product" identifier from a CDN image URL so gallery
      collection can tell this product's photos apart from a sibling product's.
-     Shopify (fox.co.il included) — and most storefront CDNs — embed a long
+     Shopify (fox.co.il included) - and most storefront CDNs - embed a long
      numeric id somewhere in the path/filename (product id, variant id, or an
      asset id scoped to the product); the longest run of 6+ digits is that id.
-     Returns "" when no such run is found (e.g. filenames are plain words) —
+     Returns "" when no such run is found (e.g. filenames are plain words) -
      callers must treat that as "no signal" rather than "no match", so stores
      without numeric ids in their CDN paths aren't over-filtered. */
   function extractProductId(url) {
@@ -278,7 +278,7 @@
     return readAttr(img, name) || readAttr(img.parentElement, name);
   }
 
-  /* Shopify (and Shopify-alike) variant id — read off the store's own Add-to-Cart
+  /* Shopify (and Shopify-alike) variant id - read off the store's own Add-to-Cart
      form so the fitting room's "הוסף לסל" button can hand it back for a real
      /cart/add.js call. Prefer the id scoped to THIS button's own form (multi-
      product pages); fall back to a page-wide lookup for bare PDPs. */
@@ -290,7 +290,7 @@
   }
 
   /* Fall back to the next distinct product-gallery image as an approximate rear
-     reference (best-effort — gallery order is a storefront convention, not a rule). */
+     reference (best-effort - gallery order is a storefront convention, not a rule). */
   function findGalleryBack(primaryUrl, root) {
     var sel = (root || d).querySelectorAll(PRODUCT_IMG_SELECTORS);
     for (var i = 0; i < sel.length; i++) {
@@ -304,7 +304,7 @@
     return "";
   }
 
-  /* ── STEP 1 — scan the page for garment images ──────────────────────────── */
+  /* ── STEP 1 - scan the page for garment images ──────────────────────────── */
   function findProductImages() {
     var found = [];
     var seen = [];
@@ -316,21 +316,21 @@
       found.push(img);
     }
 
-    /* Priority 1 — the og:image, when a visible <img> carries the same URL. */
+    /* Priority 1 - the og:image, when a visible <img> carries the same URL. */
     var og = d.querySelector('meta[property="og:image"]');
     var ogUrl = og && og.content ? og.content : "";
     if (ogUrl) {
       var imgs = d.querySelectorAll("img");
       for (var i = 0; i < imgs.length; i++) {
         var src = imgs[i].currentSrc || imgs[i].src || "";
-        /* match on the path part — CDNs often vary query params / protocol */
+        /* match on the path part - CDNs often vary query params / protocol */
         if (src && (src === ogUrl || src.split("?")[0] === ogUrl.split("?")[0])) {
           push(imgs[i]);
         }
       }
     }
 
-    /* Priority 2 — well-known product-image selectors. */
+    /* Priority 2 - well-known product-image selectors. */
     if (!found.length) {
       var sel = d.querySelectorAll(PRODUCT_IMG_SELECTORS);
       for (var j = 0; j < sel.length; j++) {
@@ -341,7 +341,7 @@
       }
     }
 
-    /* Priority 3 — any big image that doesn't look like chrome/logo. */
+    /* Priority 3 - any big image that doesn't look like chrome/logo. */
     if (!found.length) {
       var all = d.querySelectorAll("img");
       for (var k = 0; k < all.length; k++) {
@@ -377,10 +377,10 @@
 
      Also filtered to the SAME PRODUCT as primaryUrl (via extractProductId): `root`
      scopes the THUMB_SELECTORS query, but a root that's climbed too high (a shared
-     grid/collection container — see findGarmentForButton's ancestor walk-up) or a
+     grid/collection container - see findGarmentForButton's ancestor walk-up) or a
      deliberately page-wide root can still surface a sibling product's thumbnails.
      The id check is the second, independent line of defense against that. Only
-     enforced when BOTH images carry an extractable id and they disagree — a
+     enforced when BOTH images carry an extractable id and they disagree - a
      mismatch is a different product; "no id on one side" is treated as no signal
      so stores without numeric CDN ids aren't over-filtered. */
   function collectGalleryImages(primaryUrl, root) {
@@ -392,7 +392,7 @@
       var path = u.split("?")[0];
       if (seenPaths.indexOf(path) !== -1) return;
       var candId = extractProductId(u);
-      if (primaryId && candId && candId !== primaryId) return;   // different product — skip
+      if (primaryId && candId && candId !== primaryId) return;   // different product - skip
       seenPaths.push(path);
       urls.push(u);
     }
@@ -411,7 +411,7 @@
   function injectStyles() {
     if (d.querySelector("style.pear-widget-styles")) return;
     var css =
-      /* Styled to read as a native "Add to Cart" button — sits inline in the product
+      /* Styled to read as a native "Add to Cart" button - sits inline in the product
          form (no longer floated over the image), and CHANGE-5 sizing copies the real
          cart button's width/height/font-size/radius on top of this at inject time. */
       ".pear-widget-btn{" +
@@ -458,7 +458,7 @@
      postMessage rather than shared localStorage, since the host page and
      PEAR_BASE are generally different origins. Only wired at all when this
      embed opted into data-pear-demo-gate. Every PEAR button on the page is
-     locked together — a multi-product page can have one per Add-to-Cart
+     locked together - a multi-product page can have one per Add-to-Cart
      button, but the gate is one measurement for the whole visit, not per
      button. */
   function applyLockedButtonState(btn) {
@@ -477,7 +477,7 @@
   if (DEMO_GATE) {
     w.addEventListener("message", function (e) {
       /* Trust only messages from PEAR_BASE (the fitting-room origin) carrying
-         our specific lock signal — never act on arbitrary postMessage traffic
+         our specific lock signal - never act on arbitrary postMessage traffic
          from other embeds/frames sharing the host page. */
       if (e.origin !== PEAR_BASE) return;
       if (!e.data || e.data.type !== "pear-demo-gate-locked") return;
@@ -488,7 +488,7 @@
 
   /* ── toast (Add-to-Cart confirmation/error) ───────────────────────────────
      Own z-index sits ABOVE the fitting-room overlay (999999) so it's visible
-     while the modal is still open — the click that triggers it happens inside
+     while the modal is still open - the click that triggers it happens inside
      the iframe, before the shopper closes the modal. */
   var toastEl = null, toastTimer = 0;
   function showToast(msg) {
@@ -508,13 +508,13 @@
   }
 
   /* ── front/back classification (Gemini, via the PEAR server) ──────────────────
-     Called on every PEAR button click — even a single-image product — so every
+     Called on every PEAR button click - even a single-image product - so every
      visit contributes to the Supabase cache (garment_cache), not just the ones
      where the shopper reaches the multi-photo popup. Asks the server which
      images are the garment's front vs. back (POST /api/classify-images) instead
      of assuming images[0] is the front and images[1] the back. Cache-backed
      server-side, so repeat visits to the same product are instant. On any
-     failure — network, timeout, missing Gemini key — the caller falls back to
+     failure - network, timeout, missing Gemini key - the caller falls back to
      DOM order. */
   function classifyImages(urls) {
     var endpoint = PEAR_BASE + "/api/classify-images";
@@ -540,7 +540,7 @@
     return { front: front || urls[0], back: back || urls[1] || undefined };
   }
 
-  /* Re-order the gallery so front images lead and back images follow — the
+  /* Re-order the gallery so front images lead and back images follow - the
      fitting room's garment_url/garment_url_back and thumbnail switcher assume
      index 0/1 are front/back, which only holds once the classifier's results
      are folded in (raw DOM order is not reliable). Anything the classifier
@@ -555,7 +555,7 @@
     return front.concat(back, other);
   }
 
-  /* ── STEP 3 — fullscreen modal with the fitting-room iframe ─────────────── */
+  /* ── STEP 3 - fullscreen modal with the fitting-room iframe ─────────────── */
   var activeOverlay = null;
   var activeIframe = null;
   var escHandler = null;
@@ -588,13 +588,13 @@
       (REQUIRE_BOTH_VIEWS ? "&require_both_views=1" : "") +
       (DEMO_GATE ? "&demo_gate=1" : "") +
       (STORE_KEY ? "&pear_key=" + encodeURIComponent(STORE_KEY) : "") +
-      /* Tells the fitting room to skip registration + apply the one-time lock —
+      /* Tells the fitting room to skip registration + apply the one-time lock -
          see the "demo mode" block above. Only ever set for the marketing-site
          embed; every other embed (main app, real merchants) omits it entirely.
-         Independent of DEMO_GATE above — the two are separate, coexisting triggers. */
+         Independent of DEMO_GATE above - the two are separate, coexisting triggers. */
       (DEMO_MODE ? "&pear_demo=1" : "");
     var src = PEAR_BASE + "/fitting-room/?" + params;
-    console.log("[PEAR widget] openModal() — iframe src:", src);
+    console.log("[PEAR widget] openModal() - iframe src:", src);
 
     var overlay = d.createElement("div");
     overlay.className = "pear-widget-overlay";
@@ -606,7 +606,7 @@
     /* the fitting room needs webcam access inside the cross-origin iframe */
     iframe.setAttribute("allow", "camera; microphone; fullscreen");
     /* Cross-origin iframes fire "load" even on a 404 response body (it's still a valid
-       HTML document), so this can't distinguish 200 from 404 — but it confirms the
+       HTML document), so this can't distinguish 200 from 404 - but it confirms the
        browser at least reached PEAR_BASE and got SOME response back for `src`. */
     iframe.addEventListener("load", function () {
       console.log("[PEAR widget] fitting-room iframe fired 'load' for:", src);
@@ -640,9 +640,9 @@
     return iframe;
   }
 
-  /* ── STEP 2 — locate the store's Add-to-Cart button(s) ───────────────────────
+  /* ── STEP 2 - locate the store's Add-to-Cart button(s) ───────────────────────
      Three tiers, all combined and de-duped so EVERY cart button on the page is
-     covered — a PDP has one, a collection / quick-shop grid has many:
+     covered - a PDP has one, a collection / quick-shop grid has many:
        1. submit/add controls inside cart <form>s (Shopify's canonical markup),
        2. well-known Add-to-Cart selectors (Shopify / WooCommerce / generic themes),
        3. any <button> whose visible text reads like "add to cart" (EN + HE + buy-now). */
@@ -659,7 +659,7 @@
   function findAllAddToCartButtons() {
     var out = [];
     function add(b) { if (b && out.indexOf(b) === -1) out.push(b); }
-    /* Priority 1 — the cart form's Add button. Shopify's canonical markup is
+    /* Priority 1 - the cart form's Add button. Shopify's canonical markup is
        button[name="add"] inside form[action="/cart/add"], so match that FIRST,
        then fall back to any other submit control in a cart form. */
     var forms = d.querySelectorAll('form[action*="/cart"]');
@@ -669,10 +669,10 @@
       var submitBtns = forms[i].querySelectorAll('button[type="submit"]');
       for (var f = 0; f < submitBtns.length; f++) add(submitBtns[f]);
     }
-    /* Priority 2 — known Add-to-Cart selectors. */
+    /* Priority 2 - known Add-to-Cart selectors. */
     var known = d.querySelectorAll(ATC_SELECTORS);
     for (var s = 0; s < known.length; s++) add(known[s]);
-    /* Priority 3 — button text heuristic. */
+    /* Priority 3 - button text heuristic. */
     var btns = d.querySelectorAll("button");
     for (var j = 0; j < btns.length; j++) {
       var t = (btns[j].textContent || "").trim().toLowerCase();
@@ -684,7 +684,7 @@
     return out;
   }
 
-  /* CHANGE 1 — button label follows the page language: Hebrew/RTL storefronts get
+  /* CHANGE 1 - button label follows the page language: Hebrew/RTL storefronts get
      the Hebrew label, everything else the English one. Also drives the locked
      ("already measured") label, so both states speak the same language. */
   function isHebrewPage() {
@@ -701,7 +701,7 @@
 
   /* ── per-button garment resolution ──────────────────────────────────────────
      On a multi-product page each Add-to-Cart belongs to its OWN product, so the
-     PEAR button beside it must open THAT product — not one page-wide garment. Walk
+     PEAR button beside it must open THAT product - not one page-wide garment. Walk
      up from the cart button to the tightest ancestor that contains a product image
      (its card) and read the garment from there; if none is found within a few
      levels, fall back to the page's primary product image. */
@@ -739,10 +739,10 @@
   }
 
   /* Resolve the single most reliable product image on THIS page, tried in order:
-       1. og:image meta tag — the most reliable signal there is, but PAGE-WIDE
+       1. og:image meta tag - the most reliable signal there is, but PAGE-WIDE
           (it describes the page, not any one card), so it's only trustworthy
           on a genuine single-product page.
-       2. Known single-product gallery containers (PRODUCT_GALLERY_SELECTORS) —
+       2. Known single-product gallery containers (PRODUCT_GALLERY_SELECTORS) -
           same page-wide caveat as above.
      Returns "" when neither is present, so the caller falls back to the
      per-button ancestor walk-up, which is the only signal actually scoped to
@@ -764,7 +764,7 @@
   }
 
   function findGarmentForButton(btn) {
-    // Priority 1/2 — og:image, then known product-gallery containers.
+    // Priority 1/2 - og:image, then known product-gallery containers.
     var primaryUrl = resolvePrimaryProductImage();
     if (primaryUrl) {
       var pgName = getGarmentName();
@@ -779,7 +779,7 @@
       };
     }
 
-    // Priority 3 — ancestor walk-up (see pickProductImageIn/collectGalleryImages
+    // Priority 3 - ancestor walk-up (see pickProductImageIn/collectGalleryImages
     // header comments for how this is scoped and filtered).
     var node = btn.parentElement;
     for (var depth = 0; depth < 10 && node; depth++) {
@@ -801,7 +801,7 @@
       }
       node = node.parentElement;
     }
-    /* Fallback — the page's primary product image (og:image → selectors → largest). */
+    /* Fallback - the page's primary product image (og:image → selectors → largest). */
     var primary = findProductImages()[0];
     if (primary && primary.url) {
       var pname = getGarmentName();
@@ -816,7 +816,7 @@
     return null;
   }
 
-  /* CHANGE 5 + CHANGE 3 — smart sizing: copy the real Add-to-Cart button's rendered
+  /* CHANGE 5 + CHANGE 3 - smart sizing: copy the real Add-to-Cart button's rendered
      box + type metrics so the PEAR button looks native, AND copy the exact vertical
      metrics (line-height + top/bottom padding) with box-sizing:border-box + display:
      block so the two buttons end up the SAME height on every theme. */
@@ -859,9 +859,9 @@
     return null;
   }
 
-  /* ── STEP 2b — inject a native-looking try-on button next to each Add-to-Cart ──
+  /* ── STEP 2b - inject a native-looking try-on button next to each Add-to-Cart ──
      A PEAR button is inserted as the next sibling AFTER each cart button (or after the
-     whole quantity row — see findQtyRow), wired to that button's own product. Idempotent:
+     whole quantity row - see findQtyRow), wired to that button's own product. Idempotent:
      the cart button is stamped data-pear-injected="true" so repeat passes never double it. */
   function makePearButton(garment) {
     var btn = d.createElement("button");
@@ -870,17 +870,17 @@
     btn.textContent = getButtonText();
 
     /* Demo-gate: render already-locked and skip wiring the click handler
-       entirely when this browser has already spent its one measurement —
+       entirely when this browser has already spent its one measurement -
        covers a fresh page load after the lock was set on a previous visit. */
     if (DEMO_GATE && isDemoGateLockedLocally()) {
       applyLockedButtonState(btn);
       return btn;
     }
 
-    // Demo-mode's separate one-time lock (coexists with demo-gate above — see the
+    // Demo-mode's separate one-time lock (coexists with demo-gate above - see the
     // "demo mode" block near the top of this file).
     if (isDemoLocked()) {
-      /* Locked from a previous visit on this browser+origin — render disabled from
+      /* Locked from a previous visit on this browser+origin - render disabled from
          the start; a genuinely disabled <button> never dispatches click events, so
          no extra guard is needed inside the handler below. */
       lockButton(btn);
@@ -894,12 +894,12 @@
            clicks). Disabled styling is UI; this is the actual gate. */
         if (DEMO_GATE && isDemoGateLockedLocally()) return;
 
-        /* Open the fitting room INSTANTLY on DOM order (no waiting on the server) —
+        /* Open the fitting room INSTANTLY on DOM order (no waiting on the server) -
            the ~1-7s classify-images round trip used to block the modal from opening
            at all, which felt like the button was broken. Classification now runs in
            parallel and, if it disagrees with the DOM-order guess, silently corrects
            the live garment via postMessage once it resolves (see fitting-room/app.js's
-           PEAR_UPDATE_GARMENT listener) — the shopper sees the room immediately and
+           PEAR_UPDATE_GARMENT listener) - the shopper sees the room immediately and
            the front/back swap (if any) lands a moment later without a reconnect. */
         var imgs = (garment.images && garment.images.length) ? garment.images : [garment.url];
         var openedIframe = openModal({ url: imgs[0], type: garment.category, name: garment.name, back: imgs[1], images: imgs, variantId: garment.variantId });
@@ -978,7 +978,7 @@
     }
   }
 
-  /* Global re-inject hook — invoked by the re-embed guard at the top of the IIFE
+  /* Global re-inject hook - invoked by the re-embed guard at the top of the IIFE
      when the widget script runs a second time on the same page. Clears the
      idempotency stamp so injectAllButtons() treats every Add-to-Cart button as
      unseen and reattaches a PEAR button next to it. */
@@ -990,7 +990,7 @@
   };
 
   /* Fitting room (PEAR_BASE, a different origin) posts this the instant a visitor's
-     FIRST look is saved, so every trigger button on this page locks immediately —
+     FIRST look is saved, so every trigger button on this page locks immediately -
      no reload, no polling. Origin-checked against the same base the iframe itself
      was opened from, so only the actual PEAR fitting room can trigger this. */
   w.addEventListener("message", function (e) {
@@ -1025,7 +1025,7 @@
       showToast(isHebrewPage() ? "הפריט נוסף לסל!" : "Added to cart!");
     }).catch(function (err) {
       console.warn("[PEAR widget] /cart/add.js failed:", err && err.message);
-      showToast(isHebrewPage() ? "לא הצלחנו להוסיף לסל אוטומטית — נסה/י ידנית" : "Couldn't add to cart automatically — please add it manually");
+      showToast(isHebrewPage() ? "לא הצלחנו להוסיף לסל אוטומטית - נסה/י ידנית" : "Couldn't add to cart automatically - please add it manually");
     });
   });
 
@@ -1043,8 +1043,8 @@
   var _observing = false;
   function boot() {
     injectAllButtons();
-    /* Re-inject as the DOM changes — infinite scroll, tab/filter switches, quick-
-       shop modals — so dynamically added products get their button too. Injection
+    /* Re-inject as the DOM changes - infinite scroll, tab/filter switches, quick-
+       shop modals - so dynamically added products get their button too. Injection
        is idempotent (data-pear-injected), so the observer converges immediately. */
     if (!_observing && w.MutationObserver && d.body) {
       _observing = true;

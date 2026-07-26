@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "PEAR — standalone store crawler that finds product images and classifies front/back via Gemini, caching results in Supabase.",
+  "description": "PEAR - standalone store crawler that finds product images and classifies front/back via Gemini, caching results in Supabase.",
   "engines": {
     "node": ">=20.0.0"
   },

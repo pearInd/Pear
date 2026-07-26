@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 /* =============================================================================
-   PEAR — Store Scanner
+   PEAR - Store Scanner
    -----------------------------------------------------------------------------
    Standalone crawler (runs on Railway, independent of the main PEAR server).
    Crawls a storefront, finds every product page, collects garment images, and
-   classifies each one as front/back via Gemini — caching results in Supabase's
+   classifies each one as front/back via Gemini - caching results in Supabase's
    garment_cache table so repeat scans never re-classify the same image.
 
    No browser involved. Shopify stores (detected via a "Shopify"/"shopify"
    substring on the homepage) are scanned through the /products.json catalog
-   API — every product and its full image list, paginated, no page-by-page
+   API - every product and its full image list, paginated, no page-by-page
    scraping needed. Everything else falls back to fetching each product page
    as plain HTML and pulling image URLs out with regex (<img src>, <img
    data-src> for lazy-loaded images, <meta property="og:image" content>). This
    works on any host with no Chrome/Chromium install (Railway's Nix-based
-   Chromium install proved unreliable) — the tradeoff on the HTML-scrape path
+   Chromium install proved unreliable) - the tradeoff on the HTML-scrape path
    is that images injected purely by client-side JavaScript after page load
    won't be found, since the HTML is never rendered.
 
@@ -24,18 +24,18 @@
 
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
-// Node.js 20+ has built-in fetch — no node-fetch dependency needed.
+// Node.js 20+ has built-in fetch - no node-fetch dependency needed.
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 if (!GEMINI_API_KEY) {
-  console.error("✗ GEMINI_API_KEY is not set — copy .env.example to .env and fill it in.");
+  console.error("✗ GEMINI_API_KEY is not set - copy .env.example to .env and fill it in.");
   process.exit(1);
 }
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("✗ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set — copy .env.example to .env and fill them in.");
+  console.error("✗ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set - copy .env.example to .env and fill them in.");
   process.exit(1);
 }
 
@@ -59,7 +59,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 
 const GEMINI_URL =
   `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
-const GEMINI_RATE_LIMIT_MS = 8000; // delay between sequential Gemini calls — free tier is 15 req/min
+const GEMINI_RATE_LIMIT_MS = 8000; // delay between sequential Gemini calls - free tier is 15 req/min
 
 const PRODUCT_LINK_PATTERNS = ["/products/", "/product/", "/item/", "/p/", "/shop/"];
 const EXCLUDE_IMG_SRC = ["logo", "icon", "sprite", "placeholder", "banner", "avatar"];
@@ -120,12 +120,12 @@ function findProductLinks(html, baseUrl) {
 
 /* Every garment image referenced in a product page's raw HTML:
      - <img src="...">
-     - <img data-src="..."> (lazy-loaded images — most themes swap this into
+     - <img data-src="..."> (lazy-loaded images - most themes swap this into
        src via JS on scroll, so the real image only lives here pre-render)
      - <meta property="og:image" content="...">
    De-duplicated and filtered against EXCLUDE_IMG_SRC. Note: without rendering
-   the page there's no way to read naturalWidth/naturalHeight, so — unlike a
-   browser-driven crawl — this can't filter by rendered image size; it relies
+   the page there's no way to read naturalWidth/naturalHeight, so - unlike a
+   browser-driven crawl - this can't filter by rendered image size; it relies
    entirely on the src/filename exclusion list to skip decorative chrome. */
 function findProductImages(html, baseUrl) {
   const urls = [];
@@ -225,7 +225,7 @@ async function classifyFrontBack(imageUrl) {
   return answer.includes("back") ? "back" : "front";
 }
 
-/* Gemini's free tier is 15 requests/minute — even the 5s inter-request delay
+/* Gemini's free tier is 15 requests/minute - even the 5s inter-request delay
    below can trip a 429 occasionally. On a 429, wait 60s and retry once; if
    still rate-limited (or fails for any other reason), skip the image and
    default to "front" rather than blocking the scan. */
@@ -236,7 +236,7 @@ async function classifyWithRetry(imageUrl, retries = 2) {
       return result;
     } catch (e) {
       if (e.message.includes("429") && i < retries - 1) {
-        console.log("Rate limited — waiting 60s...");
+        console.log("Rate limited - waiting 60s...");
         await sleep(60000);
       } else {
         return "front";
@@ -248,7 +248,7 @@ async function classifyWithRetry(imageUrl, retries = 2) {
 
 /* ── Shopify JSON catalog ─────────────────────────────────────────────────────
    Shopify storefronts expose every product (with its full image list) at
-   /products.json — paginated, 250/page — so a Shopify store never needs its
+   /products.json - paginated, 250/page - so a Shopify store never needs its
    product pages scraped at all. Detected via a plain substring check on the
    homepage HTML for "Shopify"/"shopify" (the theme's asset URLs, the
    Shopify.shop JS global, etc. reliably contain it). */
@@ -305,7 +305,7 @@ async function classifyAndTally(imageUrl, index, counters, total) {
     console.log(`Image ${index + 1}: ${classification}${cached ? " (cached)" : " (new)"}`);
   } catch (err) {
     counters.total++;
-    console.warn(`Image ${index + 1}: classification failed — ${err.message}`);
+    console.warn(`Image ${index + 1}: classification failed - ${err.message}`);
   }
 
   if (counters.total % 10 === 0) {
@@ -357,7 +357,7 @@ async function main() {
 
   let images, productCount;
   if (isShopify) {
-    console.log("Detected Shopify store — using /products.json catalog API\n");
+    console.log("Detected Shopify store - using /products.json catalog API\n");
     const { images: shopifyImages, productCount: count } = await scanShopify(storeUrl);
     productCount = count;
 

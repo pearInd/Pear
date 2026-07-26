@@ -1,14 +1,14 @@
-# PEAR — UI Consolidation & Structural Cleanup Design
+# PEAR - UI Consolidation & Structural Cleanup Design
 
 **Date:** 2026-06-13
 **Status:** Approved
-**Scope:** Cosmetic / structural only — zero changes to functional logic, WebRTC streaming, or security model.
+**Scope:** Cosmetic / structural only - zero changes to functional logic, WebRTC streaming, or security model.
 
 ---
 
 ## 1. Goal
 
-Consolidate all browser-facing files into a single `/ui/` folder, rename the fitting-room URL from `/pear-demo/` to `/fitting-room/`, move secondary documentation to `/docs/`, and remove decorative noise from the three main code files — making the project root clean, professional, and conventionally structured.
+Consolidate all browser-facing files into a single `/ui/` folder, rename the fitting-room URL from `/pear-demo/` to `/fitting-room/`, move secondary documentation to `/docs/`, and remove decorative noise from the three main code files - making the project root clean, professional, and conventionally structured.
 
 ---
 
@@ -68,18 +68,18 @@ All moves are pure renames/relocations. Zero content changes on any moved file.
 
 ### Why no internal path changes are needed
 
-- All `fitting-room/` internal references are same-folder relative (`app.js`, `style.css`, `config.js`) — depth does not change.
+- All `fitting-room/` internal references are same-folder relative (`app.js`, `style.css`, `config.js`) - depth does not change.
 - `ui/fitting-room/config.js` → `app.js` import stays `./config.js`.
 - `ui/index.html` → `style.css`, `catalog.js`, `store.js` stay relative, still valid.
-- API endpoints (`/api/realtime-token`, `/api/health`, etc.) are same-origin absolute paths — unaffected by any file relocation.
+- API endpoints (`/api/realtime-token`, `/api/health`, etc.) are same-origin absolute paths - unaffected by any file relocation.
 
 ---
 
 ## 4. Code Changes
 
-### 4.1 `server.js` — 4 surgical edits
+### 4.1 `server.js` - 4 surgical edits
 
-**Edit 1 — Static file root** (line ~242):
+**Edit 1 - Static file root** (line ~242):
 ```js
 // Before
 app.use(express.static(__dirname, { extensions: ["html"] }));
@@ -88,7 +88,7 @@ app.use(express.static(__dirname, { extensions: ["html"] }));
 app.use(express.static(path.join(__dirname, "ui"), { extensions: ["html"] }));
 ```
 
-**Edit 2 — Wildcard fallback path resolution** (3 occurrences, lines ~252-264):
+**Edit 2 - Wildcard fallback path resolution** (3 occurrences, lines ~252-264):
 ```js
 // Before
 const target   = path.join(__dirname, rel);
@@ -102,7 +102,7 @@ const dirIndex = path.join(uiRoot, req.path, "index.html");
 res.sendFile(path.join(uiRoot, "index.html"), ...);
 ```
 
-**Edit 3 — Startup log** (line ~276):
+**Edit 3 - Startup log** (line ~276):
 ```js
 // Before
 console.log(`  Fitting room: http://localhost:${PORT}/pear-demo/   ← OPEN THIS`);
@@ -111,24 +111,24 @@ console.log(`  Fitting room: http://localhost:${PORT}/pear-demo/   ← OPEN THIS
 console.log(`  Fitting room: http://localhost:${PORT}/fitting-room/   ← OPEN THIS`);
 ```
 
-**Edit 4 — Remove decorative ASCII header** (lines 1-19):
+**Edit 4 - Remove decorative ASCII header** (lines 1-19):
 Replace the 20-line tier-waterfall comment block with a single clean description line. All functional inline comments inside the functions are kept.
 
-### 4.2 `vercel.json` — 1 change
+### 4.2 `vercel.json` - 1 change
 
 ```json
-// Before — 7 individual entries
+// Before - 7 individual entries
 "includeFiles": [
   "index.html", "product.html", "style.css",
   "catalog.js", "store.js", "product.js",
   "pear-demo/**", "lib/**"
 ]
 
-// After — 2 globs
+// After - 2 globs
 "includeFiles": ["ui/**", "lib/**"]
 ```
 
-### 4.3 `ui/fitting-room/app.js` — cosmetic cleanup only
+### 4.3 `ui/fitting-room/app.js` - cosmetic cleanup only
 
 Items removed:
 - Decorative `/* ══════════════ */` section-divider banners (≈30 lines of pure decoration)
@@ -142,7 +142,7 @@ Items kept intact (untouched):
 - Size calculator, outfit slot logic, size override selector
 - All event listeners and lifecycle hooks
 
-### 4.4 `ui/fitting-room/config.js` — 1 comment line
+### 4.4 `ui/fitting-room/config.js` - 1 comment line
 
 ```js
 // Before
@@ -152,13 +152,13 @@ Items kept intact (untouched):
 * ⚠️ Endpoints are served by the secure proxy in `../../server.js`.
 ```
 
-### 4.5 `ui/style.css` and `ui/fitting-room/style.css` — no changes
+### 4.5 `ui/style.css` and `ui/fitting-room/style.css` - no changes
 
 Both files are already clean and compact. No dead rules, no commented-out code, no unused selectors.
 
 ---
 
-## 5. Invariants — Guaranteed Untouched
+## 5. Invariants - Guaranteed Untouched
 
 | Area | What stays |
 |---|---|
@@ -170,7 +170,7 @@ Both files are already clean and compact. No dead rules, no commented-out code, 
 | Outfit logic | `activeOutfit`, `slotOf`, `resolveLook`, `addToLook` |
 | MediaRecorder | Canvas-mirror record path, `finalizeRecording`, `downloadRecording` |
 | All API routes | `/api/realtime-token`, `/api/tryon`, `/api/health`, `/api/track-tryon`, `/api/speed-probe` |
-| Storefront logic | `catalog.js`, `store.js`, `product.js` — zero changes |
+| Storefront logic | `catalog.js`, `store.js`, `product.js` - zero changes |
 
 ---
 

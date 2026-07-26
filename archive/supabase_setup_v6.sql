@@ -1,12 +1,12 @@
 -- =============================================================================
--- PEAR · Supabase Setup V6 — replace phone identity with email
+-- PEAR · Supabase Setup V6 - replace phone identity with email
 -- =============================================================================
 --
 -- WHY THIS MIGRATION EXISTS
 -- ─────────────────────────
 -- The identity gate now asks for name + EMAIL instead of name + phone (see
 -- server.js normalizeEmail()/findUserByEmail() and fitting-room/app.js
--- submitIdentity()). Email replaces phone as the unique identity key — same
+-- submitIdentity()). Email replaces phone as the unique identity key - same
 -- role phone played since supabase_setup_v3.sql, just a different field.
 --
 -- WHAT THIS DOES (safe to run on a live database)
@@ -14,7 +14,7 @@
 --   1. Adds the new `email` column.
 --   2. Drops the old UNIQUE index on phone (must happen before the column can
 --      be dropped) and then drops the `phone` column itself.
---   3. Adds a UNIQUE index on email — the real identity constraint, enforced
+--   3. Adds a UNIQUE index on email - the real identity constraint, enforced
 --      at the database level (defense in depth alongside the application
 --      check in POST /api/users).
 --

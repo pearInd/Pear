@@ -1,6 +1,6 @@
 <!--
 ===============================================================================
-  PEAR / MERIDIAN — SECURITY AUDIT REPORT
+  PEAR / MERIDIAN - SECURITY AUDIT REPORT
   Admin dashboard + backend API (server.js, admin.js, admin.html, lib/*,
   fitting-room/app.js)
   -----------------------------------------------------------------------------
@@ -11,14 +11,14 @@
                 security, and admin-specific risks (clickjacking, audit logging,
                 destructive actions).
 
-  EXECUTIVE SUMMARY — issues found by severity
+  EXECUTIVE SUMMARY - issues found by severity
     CRITICAL : 4   (all fixed in code; 2 require an out-of-band key revocation)
     HIGH     : 2   (all fixed in code)
     MEDIUM   : 4   (3 fixed in code, 1 documented)
     LOW      : 5   (3 fixed in code, 2 accepted risk)
 
   HEADLINE FINDINGS
-    • CRIT-1  GET/DELETE /api/admin/sessions had NO auth middleware — anyone on
+    • CRIT-1  GET/DELETE /api/admin/sessions had NO auth middleware - anyone on
               the internet could read every session row and wipe the whole table
               with an unauthenticated request. FIXED.
     • CRIT-2  requireAdminAuth checked authentication but not authorization: any
@@ -30,21 +30,21 @@
     • HIGH-1  /api/img-proxy was a Server-Side Request Forgery primitive (fetched
               any caller-supplied URL). FIXED with a CDN host allowlist.
 
-  ⚠ REQUIRED MANUAL ACTIONS (cannot be done from code — do these now):
+  ⚠ REQUIRED MANUAL ACTIONS (cannot be done from code - do these now):
     1. Revoke/rotate BOTH leaked Decart keys on https://platform.decart.ai:
          - dct_pearwww_kgYAhEHnig…  (committed in app.js history, commit 89cc4bb)
          - dct_last-one_hUguLSbP…   (committed in .env.example until this audit)
     2. Set ADMIN_EMAILS in your Vercel project env vars (Settings → Environment
        Variables) to your admin account email(s), comma-separated. Without it in
        production the admin API falls OPEN to any authenticated user (see CRIT-2).
-    3. (Recommended) Rotate the Supabase service_role key — it lives only in the
+    3. (Recommended) Rotate the Supabase service_role key - it lives only in the
        gitignored .env today, but rotate if it was ever pasted anywhere shared.
     4. (Recommended) Purge the leaked keys from git history (git filter-repo /
        BFG) and force-push, so the keys disappear from clones/forks.
 ===============================================================================
 -->
 
-# PEAR — Security Audit Report
+# PEAR - Security Audit Report
 
 **Date:** 2026-07-03 · **Scope:** admin dashboard + all backend endpoints
 (`server.js`, `admin.js`, `admin.html`, `lib/supabase.js`, `lib/sheets.js`,
@@ -63,14 +63,14 @@
 | **Total**| **15** | **10** | **3** | **2** |
 
 All CRITICAL and HIGH code defects are fixed. The two remaining CRITICAL items are
-leaked API keys that **must be revoked on the Decart platform** — code can stop
+leaked API keys that **must be revoked on the Decart platform** - code can stop
 using them (done) but cannot invalidate them.
 
 ---
 
 ## 2. Findings
 
-### CRIT-1 — Unauthenticated admin alias routes (full read + table wipe)
+### CRIT-1 - Unauthenticated admin alias routes (full read + table wipe)
 **Severity:** CRITICAL · **Status:** ✅ FIXED
 
 **Description.** The canonical routes were guarded, but the back-compat aliases were not:
@@ -82,7 +82,7 @@ app.delete("/api/admin/sessions", clearSessions);  // ← NO AUTH
 ```
 **Exploit scenario.** Any anonymous caller runs `GET /api/admin/sessions` to
 exfiltrate every session row (measurements, garments, timestamps, session IDs), or
-`DELETE /api/admin/sessions` to permanently destroy all analytics data — no token
+`DELETE /api/admin/sessions` to permanently destroy all analytics data - no token
 required. This completely nullifies the login gate.
 
 **Fix applied.** Both aliases now carry `requireAdminAuth`. Verified at runtime:
@@ -90,7 +90,7 @@ unauthenticated `GET`/`DELETE /api/admin/sessions` now return **HTTP 401**.
 
 ---
 
-### CRIT-2 — Authentication accepted as authorization (any signed-up user = admin)
+### CRIT-2 - Authentication accepted as authorization (any signed-up user = admin)
 **Severity:** CRITICAL · **Status:** ✅ FIXED (with a documented fail-open default)
 
 **Description.** `requireAdminAuth` verified the Supabase JWT with `getUser()` but
@@ -115,8 +115,8 @@ verified email is attached to `req.adminEmail` for audit logging.
 
 ---
 
-### CRIT-3 — Permanent Decart API key committed in git history (`app.js`)
-**Severity:** CRITICAL · **Status:** ⚠ MITIGATED — key must be revoked
+### CRIT-3 - Permanent Decart API key committed in git history (`app.js`)
+**Severity:** CRITICAL · **Status:** ⚠ MITIGATED - key must be revoked
 
 **Description.** Commit `89cc4bb` ("use direct API key in app.js") hardcoded a
 permanent client-side key:
@@ -133,8 +133,8 @@ platform.decart.ai and purge it from history (BFG/filter-repo).
 
 ---
 
-### CRIT-4 — Real Decart key committed in tracked `.env.example`
-**Severity:** CRITICAL · **Status:** ✅ FIXED in code — key must be revoked
+### CRIT-4 - Real Decart key committed in tracked `.env.example`
+**Severity:** CRITICAL · **Status:** ✅ FIXED in code - key must be revoked
 
 **Description.** `.env.example` is tracked in git and contained a real, valid-format
 permanent key: `dct_last-one_hUguLSbP…` (distinct from the live key). Example files
@@ -146,18 +146,18 @@ platform.decart.ai and purge it from history.
 
 ---
 
-### HIGH-1 — Server-Side Request Forgery (SSRF) in `/api/img-proxy`
+### HIGH-1 - Server-Side Request Forgery (SSRF) in `/api/img-proxy`
 **Severity:** HIGH · **Status:** ✅ FIXED
 
 **Description.** `/api/img-proxy?url=` fetched **any** caller-supplied http(s) URL
 server-side and returned the body (with `Access-Control-Allow-Origin: *`). Only the
-protocol was validated — no host restriction.
+protocol was validated - no host restriction.
 
 **Exploit scenario.** `GET /api/img-proxy?url=http://169.254.169.254/latest/meta-data/`
 to reach cloud metadata, or point it at internal services / `localhost`, or abuse the
 server as an anonymizing open relay to burn your bandwidth.
 
-**Fix applied.** Added `isProxyHostAllowed()` — a hard allowlist of the exact retail
+**Fix applied.** Added `isProxyHostAllowed()` - a hard allowlist of the exact retail
 CDN hosts the catalog uses (`cdn.suitsupply.com`, `image.hm.com`,
 `images.unsplash.com`, `*.shopifycdn.com`, `*.shopify.com`, `img.magnific.com`,
 `img.freepik.com`, `live.staticflickr.com`, `www.universalcolours.com`), plus an
@@ -166,7 +166,7 @@ metadata IP, `localhost`, and arbitrary hosts → **403**; allowlisted CDN → p
 
 ---
 
-### HIGH-2 — Open debug endpoint leaks secrets and allows arbitrary writes
+### HIGH-2 - Open debug endpoint leaks secrets and allows arbitrary writes
 **Severity:** HIGH · **Status:** ✅ FIXED
 
 **Description.** `GET /api/test-sheets` was unauthenticated and echoed the
@@ -183,7 +183,7 @@ unauthenticated call → **401**.
 
 ---
 
-### MED-1 — No rate limiting (registration spam / table flood / token-cost abuse)
+### MED-1 - No rate limiting (registration spam / table flood / token-cost abuse)
 **Severity:** MEDIUM · **Status:** ✅ FIXED (best-effort)
 
 **Description.** `POST /api/users`, `POST /api/sessions`, `POST /api/track-tryon`,
@@ -193,13 +193,13 @@ thousands of fake users, flood the sessions table, or spam the (billable) token 
 **Fix applied.** Added a lightweight in-memory sliding-window limiter per client IP:
 token mint 30/min, sessions 40/min, users 20/min, track 60/min, img-proxy 120/min
 (HTTP 429 on exceed). **Limitation:** on Vercel each warm instance keeps its own
-counters, so this is a casual-abuse brake, not a distributed guarantee — for hard
+counters, so this is a casual-abuse brake, not a distributed guarantee - for hard
 limits put Upstash/Redis or the platform WAF in front. Supabase Auth also applies its
 own server-side rate limiting to admin login attempts.
 
 ---
 
-### MED-2 — Clickjacking: admin page could be framed
+### MED-2 - Clickjacking: admin page could be framed
 **Severity:** MEDIUM · **Status:** ✅ FIXED
 
 **Description.** No `X-Frame-Options` / CSP `frame-ancestors` was set, so `admin.html`
@@ -215,7 +215,7 @@ on `admin.html` at runtime.
 
 ---
 
-### MED-3 — Unauthenticated PII exposure via `GET /api/users/:deviceId`
+### MED-3 - Unauthenticated PII exposure via `GET /api/users/:deviceId`
 **Severity:** MEDIUM · **Status:** ✅ FIXED
 
 **Description.** The public returning-visitor lookup returned the **entire** user row,
@@ -224,18 +224,18 @@ random UUIDs (so mass enumeration is hard), but any leaked/shared device ID expo
 from an unauthenticated endpoint.
 
 **Fix applied.** Added `publicUser()` which strips the row to `{ id, name, created_at }`
-— the only fields the client needs to recognize a returning visitor. Phone numbers are
+- the only fields the client needs to recognize a returning visitor. Phone numbers are
 now returned **only** by the auth-gated admin API. Applied to both the device lookup and
 the `POST /api/users` response.
 
 ---
 
-### MED-4 — CORS falls open to all origins when `DECART_ALLOWED_ORIGINS` is unset
+### MED-4 - CORS falls open to all origins when `DECART_ALLOWED_ORIGINS` is unset
 **Severity:** MEDIUM · **Status:** 📝 DOCUMENTED / MITIGATED
 
 **Description.** When `DECART_ALLOWED_ORIGINS` is empty, `isOriginAllowed()` reflects
 any `Origin`. CORS does not protect against non-browser clients (curl ignores it) and
-the API uses bearer tokens rather than cookies, so this is not a direct auth bypass —
+the API uses bearer tokens rather than cookies, so this is not a direct auth bypass -
 but it removes a layer of storefront-origin enforcement.
 
 **Assessment / action.** The production `.env` already sets
@@ -245,12 +245,12 @@ production configuration.
 
 ---
 
-### LOW-1 — Verbose auth debug logging leaked the admin token to the console
+### LOW-1 - Verbose auth debug logging leaked the admin token to the console
 **Severity:** LOW · **Status:** ✅ FIXED
 
 **Description.** `admin.js` logged `JSON.stringify({ data, error })` from
 `signInWithPassword`, which includes `data.session.access_token` /`refresh_token`, plus
-the anon-key prefix and confirmed email — persisting live admin credentials in the
+the anon-key prefix and confirmed email - persisting live admin credentials in the
 browser console.
 
 **Fix applied.** Removed the verbose block; sign-in failures now log only a status code
@@ -258,7 +258,7 @@ and error name, never tokens or keys.
 
 ---
 
-### LOW-2 — `/api/health` information disclosure
+### LOW-2 - `/api/health` information disclosure
 **Severity:** LOW · **Status:** ✅ ACCEPTED RISK
 
 `/api/health` returns `{ decart, model, keySource, ttl }`. This is low-value
@@ -267,7 +267,7 @@ probe. Left unchanged.
 
 ---
 
-### LOW-3 — No audit logging of destructive admin actions
+### LOW-3 - No audit logging of destructive admin actions
 **Severity:** LOW · **Status:** ✅ FIXED
 
 `clearSessions` now logs the authenticated admin's email
@@ -275,18 +275,18 @@ probe. Left unchanged.
 
 ---
 
-### LOW-4 — Admin session stored in `localStorage` (XSS token theft)
+### LOW-4 - Admin session stored in `localStorage` (XSS token theft)
 **Severity:** LOW · **Status:** ✅ MITIGATED / ACCEPTED
 
 Supabase Auth stores the session in `localStorage` by default, which is readable by any
 XSS. The admin dashboard renders **all** user-supplied fields (name, phone, garment
 name, size, IDs) through an HTML-escaping helper (`esc()`), so no stored-XSS sink was
-found — the token-theft precondition is mitigated. Moving to cookie-based sessions would
+found - the token-theft precondition is mitigated. Moving to cookie-based sessions would
 be a larger architectural change; accepted for now with escaping as the control.
 
 ---
 
-### LOW-5 — Missing HSTS / transport hardening
+### LOW-5 - Missing HSTS / transport hardening
 **Severity:** LOW · **Status:** ✅ FIXED
 
 `Strict-Transport-Security` is now emitted on all responses. HTTPS itself is enforced by
@@ -294,7 +294,7 @@ the Vercel platform (HTTP is redirected to HTTPS).
 
 ---
 
-## 3. Checked — no vulnerability / no change needed
+## 3. Checked - no vulnerability / no change needed
 
 - **SQL injection:** All DB access uses the Supabase JS client with parameterized
   `.eq()/.insert()/.select()` calls. No raw SQL string concatenation exists anywhere in
@@ -311,7 +311,7 @@ the Vercel platform (HTTP is redirected to HTTPS).
   with a service-role-only policy.
 - **Token expiry / re-auth:** `admin.js` re-reads the session on each request
   (`getSession()` → auto-refreshed token) and, on any `401`, signs out and returns to
-  the login screen — it does not silently fail open. A working logout
+  the login screen - it does not silently fail open. A working logout
   (`auth.signOut()`) is present. The destructive "Clear all" action is behind a
   `confirm()` dialog.
 
@@ -320,7 +320,7 @@ the Vercel platform (HTTP is redirected to HTTPS).
 ## 4. What was NOT changed, and why
 
 1. **The two leaked Decart keys are not (and cannot be) invalidated from code.** Revoke
-   them on platform.decart.ai and purge git history — this requires access to your
+   them on platform.decart.ai and purge git history - this requires access to your
    Decart account and a history rewrite/force-push, which are owner actions.
 2. **`ADMIN_EMAILS` fail-open default was kept** (warn instead of hard-deny when unset)
    to avoid locking you out of production before the env var is deployed. Recommend
@@ -343,7 +343,7 @@ the Vercel platform (HTTP is redirected to HTTPS).
 |------|--------|
 | `server.js` | Admin allowlist (`ADMIN_EMAILS`) + authorization in `requireAdminAuth`; auth added to `/api/admin/sessions` aliases; SSRF host-allowlist on `/api/img-proxy`; per-route rate limiters; global + admin-strict security headers; `/api/test-sheets` gated and value-redacted; public user responses stripped of PII; admin-action audit logging |
 | `admin.js` | Removed verbose auth debug logging that leaked the session token / anon key |
-| `.env` | Added `ADMIN_EMAILS` (seeded with owner email) — gitignored |
+| `.env` | Added `ADMIN_EMAILS` (seeded with owner email) - gitignored |
 | `.env.example` | Replaced the real Decart key with a placeholder; added `ADMIN_EMAILS` |
 | `SECURITY_AUDIT.md` | This report |
 

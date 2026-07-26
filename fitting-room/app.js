@@ -1,17 +1,17 @@
 /* ============================================================================
-   PEAR — Virtual fitting room (Lucy VTON realtime, LIVE-first)
+   PEAR - Virtual fitting room (Lucy VTON realtime, LIVE-first)
    ----------------------------------------------------------------------------
    Screen 1  Size calculator (required) ─► Screen 2  Isolated try-on room.
 
    Engine: Decart Lucy VTON realtime ("lucy-vton-latest") over WebRTC (LiveKit).
    Verified against @decartai/sdk@0.1.5:
-     • createDecartClient({ apiKey })  — apiKey is a short-lived ek_ token minted
+     • createDecartClient({ apiKey })  - apiKey is a short-lived ek_ token minted
        by the backend (/api/realtime-token); the permanent dct_ key never reaches
        the browser.
      • client.realtime.connect(stream, { model, mirror, onRemoteStream,
                                          onConnectionChange })
      • ConnectionState: connecting|connected|generating|disconnected|reconnecting
-     • rtClient.set({ prompt, image, enhance })  — image may be an http(s) URL
+     • rtClient.set({ prompt, image, enhance })  - image may be an http(s) URL
      • rtClient.on("error", …)
 
    Flow: enter room → start camera → connect realtime (badge turns green when the
@@ -23,7 +23,7 @@
 "use strict";
 
 /* ── configuration (Task 8/9) ─────────────────────────────────────────────────
-   All timings and endpoints come from config.js — the single source of truth.
+   All timings and endpoints come from config.js - the single source of truth.
    The browser NEVER holds the permanent dct_ key: the secure proxy (server.js)
    mints a short-lived, scoped, origin-locked ek_ token on demand via
    TOKEN_ENDPOINT, fetched the instant the user goes live (see mintEphemeralToken).
@@ -46,9 +46,9 @@ const DEMO_FLAG = new URLSearchParams(location.search).get("demo") === "1";
 
 /* ── Public demo-widget one-time gate (opt-in, isolated from the main app) ───
    Config-driven via ?demo_gate=1, forwarded by widget/pear-widget.js only when
-   the embed sets data-pear-demo-gate — never a hostname/domain check, so this
+   the embed sets data-pear-demo-gate - never a hostname/domain check, so this
    can never misfire for a real store's own embed. When DEMO_GATE is false
-   (every normal visit — direct app use, or a widget embed without the demo
+   (every normal visit - direct app use, or a widget embed without the demo
    attribute) every branch below is skipped entirely and existing behavior is
    unchanged. */
 const DEMO_GATE = new URLSearchParams(location.search).get("demo_gate") === "1";
@@ -63,14 +63,14 @@ function isDemoGateLocked() {
    (widget/pear-widget.js) so it can lock its on-page button immediately. A
    postMessage (not shared localStorage) is required here because the iframe
    (PEAR_BASE) and the host marketing/store page are generally different
-   origins — the message carries no sensitive data, just a lock signal. */
+   origins - the message carries no sensitive data, just a lock signal. */
 function lockDemoGate() {
   if (!DEMO_GATE) return;
   try { localStorage.setItem(DEMO_GATE_KEY, "true"); } catch {}
   try { window.parent.postMessage({ type: "pear-demo-gate-locked" }, "*"); } catch {}
 }
 
-/* Friendly one-time-used screen for demo mode — injected on demand so shipping
+/* Friendly one-time-used screen for demo mode - injected on demand so shipping
    this needs no index.html/style.css changes. Only ever reachable when
    DEMO_GATE is true; the main app never calls this. */
 function showDemoGateLockedMessage() {
@@ -97,15 +97,15 @@ function showDemoGateLockedMessage() {
 
 /* ── Strict live-session lifecycle (credit spend lives here) ─────────────────
    Two windows, set EQUAL so the whole clip is genuine live motion:
-     • LIVE_DURATION_MS — the BILLED Decart inference window. Credits accrue here.
-     • VIDEO_LENGTH_MS  — the on-screen experience + saved clip length.
+     • LIVE_DURATION_MS - the BILLED Decart inference window. Credits accrue here.
+     • VIDEO_LENGTH_MS  - the on-screen experience + saved clip length.
 
    When VIDEO_LENGTH_MS == LIVE_DURATION_MS the frozen-frame hold collapses to zero,
-   so the recorded video is the FULL live take — no freeze, no loop, no slow-mo. (To
+   so the recorded video is the FULL live take - no freeze, no loop, no slow-mo. (To
    bring the freeze tail back, set VIDEO_LENGTH_MS > LIVE_DURATION_MS; the recorder
    then holds the final dressed frame for the difference at no extra billing.)
 
-   BILLING MODEL — Decart charges CREDITS_PER_SECOND credits for every second of
+   BILLING MODEL - Decart charges CREDITS_PER_SECOND credits for every second of
    video generation. The session is HARD-CAPPED at LIVE_DURATION_MS by a setTimeout
    (goLive → liveDurationTimer) that disconnects Decart the instant the window closes,
    so the credits consumed per session are deterministic:
@@ -113,7 +113,7 @@ function showDemoGateLockedMessage() {
       credits/session = CREDITS_PER_SECOND × (LIVE_DURATION_MS / 1000)
                       = 2 × (5000 / 1000) = 10 credits per 5-second session.
 
-   ⚠️ CRITICAL — the SDK does NOT honour model.fps / model.width / model.height on
+   ⚠️ CRITICAL - the SDK does NOT honour model.fps / model.width / model.height on
    Chromium. Its mirror path uses MediaStreamTrackProcessor (passes every frame
    through, ignoring fps) and its LiveKit publisher hardcodes maxFramerate:30. So
    the ONLY reliable throttle is OUR OWN: createThrottledInputStream() repaints the
@@ -121,27 +121,27 @@ function showDemoGateLockedMessage() {
    SDK that capture stream. The numbers below are therefore actually enforced.
 
    LIVE_FPS is the LOCAL camera-capture rate (kept higher for a smooth preview);
-   LIVE_INFERENCE_FPS is what the throttler downsamples to before the SDK sees it —
+   LIVE_INFERENCE_FPS is what the throttler downsamples to before the SDK sees it -
    it trims per-frame upload/encode work but does NOT change the per-second credit
    bill, which is governed solely by LIVE_DURATION_MS. */
 const LIVE_DURATION_MS    = 5000;   // BILLED Decart window = 5s → hard-capped session; 2 credits/s × 5s = 10 credits
 const VIDEO_LENGTH_MS     = 5000;   // == LIVE_DURATION_MS → frozen-hold tail is zero; the 5s clip is all real live motion
 const LIVE_FPS            = 15;     // local getUserMedia capture rate (smooth preview; throttled to LIVE_INFERENCE_FPS)
-const LIVE_INFERENCE_FPS  = 10;     // frames/s handed to Decart — trims per-frame upload/encode; credits are per-SECOND, not per-frame
-                                    //   ENFORCED client-side by createThrottledInputStream() — the SDK's own fps cap is a no-op on Chromium.
+const LIVE_INFERENCE_FPS  = 10;     // frames/s handed to Decart - trims per-frame upload/encode; credits are per-SECOND, not per-frame
+                                    //   ENFORCED client-side by createThrottledInputStream() - the SDK's own fps cap is a no-op on Chromium.
 
 /* ── Credit model (Decart bills per second of generation) ────────────────────
    CREDITS_PER_SECOND is the Decart rate; CREDITS_PER_SESSION is DERIVED from the
-   hard-capped LIVE_DURATION_MS so the two can never drift — change the duration and
+   hard-capped LIVE_DURATION_MS so the two can never drift - change the duration and
    the per-session cost recomputes automatically. A 5-second session = exactly 10. */
 const CREDITS_PER_SECOND  = 2;
 const CREDITS_PER_SESSION = CREDITS_PER_SECOND * (LIVE_DURATION_MS / 1000);   // 2 × 5 = 10 credits
 
 /* Safety cap on the wait for Decart's FIRST generated frame. The billed window
-   (LIVE_DURATION_MS) is now armed BY that first frame, not by connect — so if a frame
+   (LIVE_DURATION_MS) is now armed BY that first frame, not by connect - so if a frame
    never arrives (dead session / server stall) nothing else would cap the open session.
    This bounds how long the WebRTC session may stay open with no frame before we tear it
-   down, so it can never bill indefinitely. Generous — real warm-up is ~1s. */
+   down, so it can never bill indefinitely. Generous - real warm-up is ~1s. */
 const FIRST_FRAME_TIMEOUT_MS = 15000;
 
 /* ── Black-screen / camera-off gate (credit saver) ───────────────────────────
@@ -152,24 +152,24 @@ const FIRST_FRAME_TIMEOUT_MS = 15000;
    render, so this pays for itself the first time a user forgets to uncover the lens.
 
    Two independent signals, sampled from a tiny downscaled canvas (cheap, runs in a
-   few ms). A frame is judged "black" if EITHER holds — both thresholds are extreme
+   few ms). A frame is judged "black" if EITHER holds - both thresholds are extreme
    enough that even a dim, poorly-lit but genuinely open camera clears them, so we
    don't false-block a paying user:
-     • CAMERA_BLACK_AVG_LUMA   — mean Rec.601 luma (0-255) at/below this ⇒ effectively black.
-     • CAMERA_BLACK_PIXEL_FRAC — fraction of near-black pixels at/above this ⇒ covered/off.
+     • CAMERA_BLACK_AVG_LUMA   - mean Rec.601 luma (0-255) at/below this ⇒ effectively black.
+     • CAMERA_BLACK_PIXEL_FRAC - fraction of near-black pixels at/above this ⇒ covered/off.
    We take the BRIGHTEST of a few spaced samples (auto-exposure warm-up can emit a
    transient black frame right after play()), so only a persistently black feed blocks. */
 const CAMERA_BLACK_AVG_LUMA   = 12;     // mean luma ≤ 12/255 ⇒ black feed
 const CAMERA_BLACK_PIXEL_CUT  = 16;     // a pixel counts as "near-black" when its luma < this
 const CAMERA_BLACK_PIXEL_FRAC = 0.985;  // ≥ 98.5% near-black pixels ⇒ covered lens / camera off
 const CAMERA_BLACK_SAMPLES    = 5;      // frames to sample before judging (keep the brightest)
-const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples — spans ~300ms of exposure warm-up
+const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples - spans ~300ms of exposure warm-up
 // NOTE: the four thresholds above are also reused by armFirstFrameBilling() below to
-// verify the FIRST REMOTE (AI-rendered) frame isn't a black warm-up placeholder — same
+// verify the FIRST REMOTE (AI-rendered) frame isn't a black warm-up placeholder - same
 // "is this frame black" test, just pointed at a different <video> element.
 
 /* Capture + inference resolution. The SDK never forwards model.width/height to the
-   session, so resolution MUST be enforced at the track level too — the throttler
+   session, so resolution MUST be enforced at the track level too - the throttler
    downscales the canvas to LIVE_W×LIVE_H before capture, so Decart receives this
    size rather than the camera's native frame. LOWERED to 512×288 (16:9) to cut
    quality/upload/encode overhead per the cost trade. Tokens scale with FRAMES, not
@@ -177,19 +177,19 @@ const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples — spans ~300ms 
 const LIVE_W = 512, LIVE_H = 288;
 
 /* Mobile detection (Feature 2 / mobile download fix). Drives two choices:
-   (1) the MediaRecorder container — phone galleries reliably ingest H.264 MP4 but
-       frequently reject WebM; (2) the save path — iOS Safari ignores <a download>,
+   (1) the MediaRecorder container - phone galleries reliably ingest H.264 MP4 but
+       frequently reject WebM; (2) the save path - iOS Safari ignores <a download>,
        so on mobile we hand the clip to the native share sheet ("Save Video" → gallery).
    iPadOS reports its platform as "Mac", so a touch-capable Mac counts as mobile too. */
 const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
   (/Mac/.test(navigator.platform) && navigator.maxTouchPoints > 1);
 
 /* ──────────────────────────────────────────────────────────────────────────
-   REAL-TIME LATENCY HOOK — client jitter-buffer trim (best-effort)
+   REAL-TIME LATENCY HOOK - client jitter-buffer trim (best-effort)
    ----------------------------------------------------------------------------
    WHY A HOOK: the Decart SDK (LiveKit under the hood) owns the RTCPeerConnection,
    its receivers, and the SDP. app.js only ever receives the finished MediaStream
-   via onRemoteStream — a MediaStream exposes tracks, NOT RTCRtpReceivers or SDP.
+   via onRemoteStream - a MediaStream exposes tracks, NOT RTCRtpReceivers or SDP.
    So the only way to reach the remote receiver (for playoutDelayHint) and the
    SDP (for the optional codec munge) is to wrap the *native* RTCPeerConnection
    ONCE, here at module load, BEFORE the SDK is dynamically imported in
@@ -213,7 +213,7 @@ const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
   function mungeSdpBandwidth(sdp) {
     try {
       if (typeof sdp !== "string") return sdp;
-      // 0 (or falsy) disables the bandwidth munge entirely — leave SDP untouched.
+      // 0 (or falsy) disables the bandwidth munge entirely - leave SDP untouched.
       if (!VIDEO_TARGET_BITRATE_KBPS) return sdp;
       const kbps = VIDEO_TARGET_BITRATE_KBPS;
       const bps  = kbps * 1000;
@@ -282,7 +282,7 @@ const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
       });
     } catch (_) {}
 
-    // (1) playoutDelayHint = 0 — flush the client jitter buffer immediately on every
+    // (1) playoutDelayHint = 0 - flush the client jitter buffer immediately on every
     //     incoming video track. Chromium-only; the `in` guard silently no-ops elsewhere.
     pc.addEventListener("track", (e) => {
       try {
@@ -293,7 +293,7 @@ const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
       } catch (_) {}
     });
 
-    // (2) SDP munge — applied to setLocalDescription ONLY (our offer / our camera bitrate cap).
+    // (2) SDP munge - applied to setLocalDescription ONLY (our offer / our camera bitrate cap).
     //     The remote description is NOT munged: b=AS in an answer SDP doesn't override
     //     Decart's send rate (the server determines that via RTCP feedback) and could
     //     confuse SDP parsing. Codec-preference reorder is optional (PREFER_LOW_LATENCY_CODEC).
@@ -323,7 +323,7 @@ const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
 })();
 
 /* =============================================================================
-   WebRTC live-stats monitor — diagnostic ONLY (zero effect on the session/billing)
+   WebRTC live-stats monitor - diagnostic ONLY (zero effect on the session/billing)
    ─────────────────────────────────────────────────────────────────────────────
    Polls getStats() once a second on every active peer connection while a session
    is live and logs the inbound-rtp VIDEO numbers that reveal WHERE lag comes from:
@@ -351,13 +351,13 @@ function startStatsMonitor() {
     const pcs = window.__pearPCs ? Array.from(window.__pearPCs) : [];
     for (const pc of pcs) {
       if (!pc || typeof pc.getStats !== "function") continue;
-      // Only the receiving (subscriber) pc carries inbound video — others skip silently.
+      // Only the receiving (subscriber) pc carries inbound video - others skip silently.
       try {
         const report = await pc.getStats();
         report.forEach((s) => {
           if (s.type !== "inbound-rtp" || s.kind !== "video") return;
           const now   = { bytes: s.bytesReceived || 0, frames: s.framesDecoded || 0 };
-          let kbps = "—", fpsDelta = "—";
+          let kbps = "-", fpsDelta = "-";
           if (_lastStatsSample) {
             kbps     = Math.round(((now.bytes  - _lastStatsSample.bytes)  * 8) / 1000);  // ~1s window
             fpsDelta = now.frames - _lastStatsSample.frames;
@@ -365,9 +365,9 @@ function startStatsMonitor() {
           _lastStatsSample = now;
           console.log(
             `[PEAR webrtc] in-video · ${kbps}kbps · decoded/s:${fpsDelta} · ` +
-            `fps:${s.framesPerSecond ?? "—"} · dropped:${s.framesDropped ?? 0} · ` +
-            `lost:${s.packetsLost ?? 0} · jitter:${s.jitter != null ? (s.jitter * 1000).toFixed(0) + "ms" : "—"} · ` +
-            `decode:${s.totalDecodeTime != null ? s.totalDecodeTime.toFixed(2) + "s" : "—"}`
+            `fps:${s.framesPerSecond ?? "-"} · dropped:${s.framesDropped ?? 0} · ` +
+            `lost:${s.packetsLost ?? 0} · jitter:${s.jitter != null ? (s.jitter * 1000).toFixed(0) + "ms" : "-"} · ` +
+            `decode:${s.totalDecodeTime != null ? s.totalDecodeTime.toFixed(2) + "s" : "-"}`
           );
         });
       } catch (_) {}
@@ -382,13 +382,13 @@ function stopStatsMonitor() {
 
 /* ── embedded catalog ──────────────────────────────────────────────────────── */
 /* Catalog item shape: { id, name, price, type, subType, color, img, imgBack?, images?, variants? }.
-   `img` is the FRONT asset (required — every legacy consumer reads it: catalog cards,
+   `img` is the FRONT asset (required - every legacy consumer reads it: catalog cards,
    thumbnails, store handoff). Product angles can be supplied THREE ways, all merged by
    galleryOf() into one { front, back?, side?, detail? } map (highest priority first):
      1. variants:{ <colour>: { swatch?, front, back?, side?, detail? }, … }
-        — the full nested per-colour gallery (real store schema). The active colour is
+        - the full nested per-colour gallery (real store schema). The active colour is
           chosen via the swatch strip; 2+ colours light up the swatches automatically.
-     2. images:{ front?, back?, side?, detail? } — a single flat gallery object.
+     2. images:{ front?, back?, side?, detail? } - a single flat gallery object.
      3. legacy `img` (front) + `imgBack` (back).
    The angle rail renders for EVERY item and EVERY colour: an angle with no dedicated
    photo falls back to the front image (+ a prompt clause) rather than disappearing, so
@@ -409,15 +409,15 @@ const PEAR_CATALOG = [
   { id: 5,  name: "Circuit Tee",       price: 90,  type: "shirt", subType: "short_sleeve", color: "#149c7a",
     img: "https://burst.shopifycdn.com/photos/teal-t-shirt.jpg?width=1600&format=pjpg&quality=90" },
   { id: 6,  name: "Strata Longsleeve", price: 128, type: "shirt", subType: "long_sleeve",  color: "#2b2b30",
-    // Multi-angle hero — assets VISUALLY verified (not just HTTP 200): -1 = front
+    // Multi-angle hero - assets VISUALLY verified (not just HTTP 200): -1 = front
     // packshot (clean white bg → best VTON reference), -3 = back on model, -4 = fabric/
     // logo detail macro. NOTE: -2 is a front-on-model shot (NOT a back) and this item has
-    // no true side profile — so neither `back` nor `side` may claim them. galleryOf()
+    // no true side profile - so neither `back` nor `side` may claim them. galleryOf()
     // merges img (front) + imgBack (back) + images{} → { front, back, detail }. `detail`
-    // is inspection-only (a macro, never a warp target — see WEARABLE_ANGLES).
+    // is inspection-only (a macro, never a warp target - see WEARABLE_ANGLES).
     // requireBothViews: opt into the STRICT two-view gate (front+back mandatory).
     // Strata is the one catalog item that ships a real back photo, so it satisfies
-    // the gate and stays fully try-on-able — this is the demonstrable "valid" path.
+    // the gate and stays fully try-on-able - this is the demonstrable "valid" path.
     // Remove the flag to fall back to graceful (front-fallback) behavior.
     requireBothViews: true,
     img:     "https://www.universalcolours.com/cdn/shop/files/LongSleeveTee-CharcoalBlack-1.jpg?v=1732626199&width=2048",
@@ -448,7 +448,7 @@ const PEAR_CATALOG = [
      Proves the two-view gate end-to-end: it OPTS INTO strict (requireBothViews) but
      ships NO back image, so liveBlockReason() rejects it, renderCatalogPanel() adds
      .cat-item--blocked, and viewBadge() renders the 🔒 state. `img` reuses a verified
-     catalog packshot purely as a thumbnail placeholder — this item is never actually
+     catalog packshot purely as a thumbnail placeholder - this item is never actually
      warped (go-live is blocked, so no VTON reference is ever sent). Delete this one
      object to hide the test. */
   { id: 99, name: "Urban Bomber Jacket (Incomplete Test)", price: 168, type: "shirt", subType: "long_sleeve",
@@ -461,7 +461,7 @@ const PEAR_CATALOG = [
    in the live rail without a per-item rear photo shoot. For any item that ships no
    dedicated rear asset we MIRROR its own front image into imgBack. This is a UI/label
    change, NOT a downgrade to the try-on: the live engine already received this exact
-   front image as the Back reference under the previous graceful fallback — mirroring
+   front image as the Back reference under the previous graceful fallback - mirroring
    just (a) flips the Back tab from "AI-inferred fallback" to a populated view and
    (b) satisfies any requireBothViews gate. angleClause()/ANGLE_CLAUSE.back still steers
    Lucy to render the rear from it. EXCLUSIONS: the mock test item (id 99) is left
@@ -489,14 +489,14 @@ let activeTryOnSize = null;   // size the user has selected in the Screen 2 over
 let activeItem = null;
 let focusMode = false;
 
-/* Multi-Image Product Gallery Sync — which product angle the live engine is warping.
+/* Multi-Image Product Gallery Sync - which product angle the live engine is warping.
    The SINGLE rtClient session is reused across switches: changing the angle only
    re-issues rtClient.set() with the matching gallery image + an angle-oriented prompt
    clause. It NEVER reconnects, re-mints a token, or touches the strict live window. */
-let currentAngle = "front";   // "front" | "back" | "side" (extensible — see ANGLES) — spec's activeAngle
+let currentAngle = "front";   // "front" | "back" | "side" (extensible - see ANGLES) - spec's activeAngle
 let activeColor  = null;      // active variant/colour key, or null when the item ships no named variants
 
-/* "Complete the Look" — incremental outfit state (the SINGLE source of truth).
+/* "Complete the Look" - incremental outfit state (the SINGLE source of truth).
    activeOutfit holds at most ONE upper-body garment (top) and ONE lower-body
    garment (bottom). Selecting/adding a garment fills its OWN slot and NEVER clears
    the opposite one, so "Add to Look" (הוסף ללוק) is purely additive: adding pants
@@ -514,16 +514,16 @@ let connState = "idle";
 let connecting = false;
 let busy = false;
 
-/* Pre-minted ek_ token cache — populated by warmupSDKAndToken() on room entry so
+/* Pre-minted ek_ token cache - populated by warmupSDKAndToken() on room entry so
    mintEphemeralToken() can skip the network round-trip at go-live time. */
 let _tokenCache = null; // { apiKey: string, expiresAt: number } | null
 
-/* Bug 3 — consecutive-session state.
+/* Bug 3 - consecutive-session state.
    `sessionGen` is a monotonic generation counter bumped on every connect and
    every teardown. The realtime SDK fires callbacks (onConnectionChange /
    onRemoteStream) asynchronously, so a torn-down client can still emit a late
    "disconnected" that would poison the NEXT session's connState. Each set of
-   callbacks captures the generation it was born in and no-ops once it's stale —
+   callbacks captures the generation it was born in and no-ops once it's stale -
    this is what lets the room be re-entered infinitely without a page refresh.
    `realtimeInput` holds the per-session CLONE of the camera tracks handed to the
    SDK, so when the SDK stops ITS tracks on disconnect our persistent preview
@@ -533,40 +533,40 @@ let realtimeInput = null;
 /* Active client-side FPS/resolution throttle wrapping the camera before the SDK.
    { stream, dispose }; dispose() is called in teardown() so its paint loop, hidden
    <video> and cloned source track are released with the session (see
-   createThrottledInputStream — this is what actually enforces the token budget). */
+   createThrottledInputStream - this is what actually enforces the token budget). */
 let inputThrottle = null;
 
-/* Feature 2 — MediaRecorder capture of the REMOTE Lucy-VTON output.
+/* Feature 2 - MediaRecorder capture of the REMOTE Lucy-VTON output.
    We do NOT record the raw remote WebRTC track directly (Chromium often encodes
    a remote track as a black frame) nor the local camera. Instead we mirror the
    on-screen remote frames (#aiVideo) onto a canvas and record canvas.captureStream
-   — guaranteeing real, encoded pixels in the downloaded clip. Video-only. */
+   - guaranteeing real, encoded pixels in the downloaded clip. Video-only. */
 let mediaRecorder = null;
 let recordedChunks = [];
 let recordedUrl = null;
-let recordedBlob = null;     // the finalized clip Blob — kept so we can build a File for the share sheet
+let recordedBlob = null;     // the finalized clip Blob - kept so we can build a File for the share sheet
 let recorderMime = null;     // the container/codec MediaRecorder actually negotiated (mp4 vs webm)
 let recordCanvas = null;     // off-DOM canvas mirroring the remote VTON frames
 let recordRaf = 0;           // requestAnimationFrame handle for the paint loop
 let recordingActive = false; // guards the paint loop + single-start per session
 let replayActive = false;   // true while the user is watching the cached local replay
-let liveDurationTimer = null;  // BILLING cap handle — fires at LIVE_DURATION_MS to disconnect Decart + freeze
+let liveDurationTimer = null;  // BILLING cap handle - fires at LIVE_DURATION_MS to disconnect Decart + freeze
 let liveCountdownInterval = null;  // 1s tick handle driving the on-screen countdown overlay
 let videoFinalizeTimer = null; // fires at VIDEO_LENGTH_MS to stop the recorder + finalize the frozen-hold clip
 let recordHold = false;        // true once billing stopped & the recorder is holding the frozen final frame
 let recordHoldSrc = null;      // off-DOM canvas holding the frozen final dressed frame the recorder repaints during the hold
-let firstFrameGuardTimer = null; // safety timeout — tears the session down if Decart's first frame never arrives (no billing cap otherwise)
+let firstFrameGuardTimer = null; // safety timeout - tears the session down if Decart's first frame never arrives (no billing cap otherwise)
 let billingStarted = false;      // guards startBillingWindow() so it arms the billed window ONCE per session, on the first rendered frame
 let dressedFrameReady = false;   // true once #aiVideo has shown a VERIFIED non-black AI-rendered frame this
-                                  // session — the single "model ready" signal shared by billing/countdown
+                                  // session - the single "model ready" signal shared by billing/countdown
                                   // (armFirstFrameBilling/startBillingWindow) AND the recorder (startRecording)
-let isGarmentApplied = false;    // true once rtClient.set() has resolved — gates billing/recording to the first DRESSED frame, not raw passthrough
+let isGarmentApplied = false;    // true once rtClient.set() has resolved - gates billing/recording to the first DRESSED frame, not raw passthrough
 
 /** @returns {boolean} true while a billable realtime session is active. */
 const isLive = () => connState === "connected" || connState === "generating";
 
 /* =============================================================================
-   SCREEN 1 — Size / measurement calculator
+   SCREEN 1 - Size / measurement calculator
    ============================================================================= */
 const ZARA_SIZE_CHART = [
   { size: "S",  minHeight: 160, maxHeight: 172, minWeight: 55, maxWeight: 65,  minChest: 88,  maxChest: 94,  minWaist: 74, maxWaist: 80,  minLegs: 94,  maxLegs: 98  },
@@ -575,10 +575,10 @@ const ZARA_SIZE_CHART = [
   { size: "XL", minHeight: 184, maxHeight: 195, minWeight: 85, maxWeight: 100, minChest: 110, maxChest: 118, minWaist: 96, maxWaist: 106, minLegs: 106, maxLegs: 112 },
 ];
 
-/* Ordered size scale — full range used by the override selector and delta math. */
+/* Ordered size scale - full range used by the override selector and delta math. */
 const SIZE_SCALE = ["XS", "S", "M", "L", "XL", "XXL", "3XL"];
 
-/* Task 6 — conditional input flow: the optional fields stay hidden until BOTH
+/* Task 6 - conditional input flow: the optional fields stay hidden until BOTH
    mandatory fields (height + weight) hold sane, in-range values. */
 function setOptionalVisible(show) {
   const box = $("optionalFields");
@@ -587,7 +587,7 @@ function setOptionalVisible(show) {
   if (show === expanded) return;              // no-op if already in desired state
   // Pure CSS-driven expansion (see .optional-fields / .is-expanded in style.css):
   // toggling the class lets the panel stretch open / collapse fluidly rather than
-  // snapping via a display toggle — no layout jump.
+  // snapping via a display toggle - no layout jump.
   if (show) {
     box.classList.add("is-expanded");
   } else {
@@ -599,8 +599,8 @@ function setOptionalVisible(show) {
 
 /**
  * Recompute the recommended size from the form inputs (Zara chart, penalty-scored).
- * Drives the result box, the "continue" button enabled-state, and — via
- * setOptionalVisible — the conditional reveal of the optional measurement fields.
+ * Drives the result box, the "continue" button enabled-state, and - via
+ * setOptionalVisible - the conditional reveal of the optional measurement fields.
  * Re-run on every input event. Pure UI/state; no network.
  * @returns {void}
  */
@@ -653,7 +653,7 @@ function calculateSize() {
 
   if (minPenalty > MAX_ALLOWED_PENALTY) {
     // Measurements don't match any chart row exactly, but we still let the user
-    // proceed — the fitting room works without a size recommendation, it just
+    // proceed - the fitting room works without a size recommendation, it just
     // won't show a size badge. bestSize still holds the closest row found.
     resultLabel.innerText = "קירוב מידה מומלץ:";
     sizeResult.innerText = bestSize;
@@ -681,7 +681,7 @@ function updateProgress() {
   if (label) label.innerText = pct + "%";
 }
 
-/* Task 5 — Enter on any measurement input: if a size is ready, proceed straight to
+/* Task 5 - Enter on any measurement input: if a size is ready, proceed straight to
    the virtual fitting room; otherwise advance focus to the next field so the user
    can keep filling the form naturally with the keyboard. */
 function onMeasurementKeydown(e) {
@@ -693,7 +693,7 @@ function onMeasurementKeydown(e) {
   if (nextBtn && !nextBtn.disabled) { onSizeFormContinue(); return; }
 
   const inputs = [...document.querySelectorAll("#sizeForm input")]
-    // visible inputs only — and skip the optional panel while it's collapsed
+    // visible inputs only - and skip the optional panel while it's collapsed
     // (visibility:hidden keeps offsetParent set, so check the panel state too).
     .filter((el) => el.offsetParent !== null && !el.closest(".optional-fields:not(.is-expanded)"));
   const idx = inputs.indexOf(e.target);
@@ -717,7 +717,7 @@ function parseHandoff() {
   };
 
   // "Upload Your Own Garment" handoff from the storefront. The cropped garment is a
-  // data URL — far too large for a query param — so the storefront stashes it in
+  // data URL - far too large for a query param - so the storefront stashes it in
   // localStorage ("pear_custom_garment") and flags the deep-link with ?custom=1.
   // We reconstruct it here as a "custom" focus-mode item (Screen 2 Active Item),
   // handled downstream exactly like a catalog garment (buildCustomPrompt, the
@@ -737,11 +737,11 @@ function parseHandoff() {
           color: raw.color || "#0B3C95",
           img: raw.img,                      // cropped garment data URL (rtClient image)
         };
-        console.log("[PEAR] parseHandoff() — custom uploaded garment:", { ...result, img: "data:… (custom crop)" });
+        console.log("[PEAR] parseHandoff() - custom uploaded garment:", { ...result, img: "data:… (custom crop)" });
         return result;
       }
-      console.warn("[PEAR] parseHandoff() — ?custom=1 but no stored garment; falling through");
-    } catch (e) { console.warn("[PEAR] parseHandoff() — custom garment parse failed:", e && e.message); }
+      console.warn("[PEAR] parseHandoff() - ?custom=1 but no stored garment; falling through");
+    } catch (e) { console.warn("[PEAR] parseHandoff() - custom garment parse failed:", e && e.message); }
   }
 
   // PEAR widget embed handoff (widget/pear-widget.js on a third-party store):
@@ -760,7 +760,7 @@ function parseHandoff() {
     // store (see fetchStoreLookItems). The garment's own CDN host IS the store's
     // domain, so stash it globally the moment we know we're in a widget embed.
     try { window.__pearStoreDomain = new URL(widgetUrl).hostname; }
-    catch (e) { console.warn("[PEAR] parseHandoff() — could not derive store domain from garment_url:", e?.message || e); }
+    catch (e) { console.warn("[PEAR] parseHandoff() - could not derive store domain from garment_url:", e?.message || e); }
 
     const wType   = (q.get("garment_type") || "tops").toLowerCase();
     const isPants = wType === "pants" || wType === "bottoms";
@@ -799,15 +799,15 @@ function parseHandoff() {
       imgBack: q.get("garment_url_back") || q.get("imgBack") || galleryBack,
       // Opt-in strict gate: the widget forwards ?require_both_views=1 when the embed
       // sets data-pear-require-both-views. Hard-blocks go-live unless a real back
-      // image arrived (custom garments are otherwise ungated — see liveBlockReason).
+      // image arrived (custom garments are otherwise ungated - see liveBlockReason).
       requireBothViews: q.get("require_both_views") === "1",
-      // Shopify variant id (widget reads it off the store's own Add-to-Cart form) —
+      // Shopify variant id (widget reads it off the store's own Add-to-Cart form) -
       // carried through so the "הוסף לסל" button here can hand it back to the
       // storefront's own /cart/add.js call (see pear-widget.js's PEAR_ADD_TO_CART listener).
       variantId: q.get("garment_variant_id") || undefined,
       angle: readAngle(),
     };
-    console.log("[PEAR] parseHandoff() — widget embed garment:", result);
+    console.log("[PEAR] parseHandoff() - widget embed garment:", result);
     return result;
   }
 
@@ -816,18 +816,18 @@ function parseHandoff() {
 
   const type = (q.get("type") || q.get("itemType") || (fromCatalog && fromCatalog.type) || "").toLowerCase();
 
-  console.group("[PEAR] parseHandoff() — URL params debug");
+  console.group("[PEAR] parseHandoff() - URL params debug");
   console.log("full URL     :", location.href);
   console.log("id param     :", q.get("id"), "→ parsed:", id);
   console.log("type param   :", q.get("type") || "(none)");
-  console.log("itemType     :", q.get("itemType") || "(none)", "→ resolved type:", type || "(EMPTY — focus mode disabled)");
+  console.log("itemType     :", q.get("itemType") || "(none)", "→ resolved type:", type || "(EMPTY - focus mode disabled)");
   console.log("subType      :", q.get("subType") || "(none)");
   console.log("angle        :", q.get("angle") || "(none)", "→ resolved:", readAngle());
   console.log("color        :", q.get("color") || "(none)");
   console.log("name         :", q.get("name") || "(none)");
   console.log("img          :", q.get("img") ? q.get("img").slice(0, 80) + "…" : "(none)");
   console.log("fromCatalog  :", fromCatalog ? fromCatalog.name : "(not found in PEAR_CATALOG)");
-  if (!type) console.warn("[PEAR] parseHandoff() — no type resolved; focus mode OFF (catalog view will show)");
+  if (!type) console.warn("[PEAR] parseHandoff() - no type resolved; focus mode OFF (catalog view will show)");
   console.groupEnd();
 
   if (!type) return null;
@@ -842,10 +842,10 @@ function parseHandoff() {
     img: q.get("img") || (fromCatalog ? fromCatalog.img : ""),
     // Dual-View back asset: explicit ?imgBack= wins, else the catalog entry's imgBack.
     imgBack: q.get("imgBack") || (fromCatalog ? fromCatalog.imgBack : undefined) || undefined,
-    // The PDP gallery angle to open on (front|back|side) — see enterRoom().
+    // The PDP gallery angle to open on (front|back|side) - see enterRoom().
     angle: readAngle(),
   };
-  console.log("[PEAR] parseHandoff() — resolved handoff:", result);
+  console.log("[PEAR] parseHandoff() - resolved handoff:", result);
   return result;
 }
 
@@ -858,11 +858,11 @@ function toItem(raw) {
    ============================================================================= */
 /* The actual Screen 1 → Screen 2 transition. Height/weight persistence (server
  * PATCH for a logged-in user + the pear_last_measurements_date stamp) happens
- * BEFORE this is called — see onSizeFormContinue()/updateMeasurementsNow() —
+ * BEFORE this is called - see onSizeFormContinue()/updateMeasurementsNow() -
  * and routeUser() calls this directly for a returning visitor whose profile
  * is still within the 30-day window (nothing new to persist). */
 /**
- * @param {{instant?: boolean}} [opts] — instant:true skips the branded Bitten-
+ * @param {{instant?: boolean}} [opts] - instant:true skips the branded Bitten-
  *   Pear transition entirely (straight commitSwap(), no ~1.2s animation). Used
  *   ONLY by routeUser()'s silent fast-path re-login (a known device with a
  *   fresh profile): that visitor never saw Screen 1 at all, so playing the
@@ -877,19 +877,19 @@ function goToFitting(opts) {
   // (set by lockDemoGate() below on a prior call). Without this check, the
   // in-room "back" button (backToCalculator()) lets the visitor return to the
   // size form and call goToFitting() again in the SAME session, re-entering
-  // the camera indefinitely — the lock was being set but never read back.
+  // the camera indefinitely - the lock was being set but never read back.
   if (DEMO_GATE && isDemoGateLocked()) {
     showDemoGateLockedMessage();
     return;
   }
 
-  // NOTE: declared but not yet read anywhere below — looks like the other half of
+  // NOTE: declared but not yet read anywhere below - looks like the other half of
   // this change (an opts.skipProfileSave gate on whatever it was meant to guard)
   // didn't survive a stash conflict. Kept rather than dropped since deleting it
   // risks discarding intended-but-incomplete work; flagging for a follow-up rather
   // than guessing at the missing behavior.
   const skipProfileSave = !!(opts && opts.skipProfileSave);
-  // Log to Sheets the moment the user presses the button — always fire, even without handoff
+  // Log to Sheets the moment the user presses the button - always fire, even without handoff
   const _handoff = parseHandoff();
   const _payload = {
     garmentId:   _handoff?.id      ?? "",
@@ -908,7 +908,7 @@ function goToFitting(opts) {
     .then(data => { if (!data.ok) console.error("[analytics] sheet write failed:", data.error); })
     .catch(err  => console.error("[analytics] fetch failed:", err));
 
-  // Admin dashboard — capture measurements + intent HERE, at the size-calculator
+  // Admin dashboard - capture measurements + intent HERE, at the size-calculator
   // submit, BEFORE the camera ever starts. This records users who size up even if
   // they never go live. Garment comes from the store handoff; size is the
   // calculated recommendation.
@@ -917,12 +917,12 @@ function goToFitting(opts) {
     currentUserSize
   );
 
-  // Demo-gate mode: this is the visitor's one measurement — spend it now, right
+  // Demo-gate mode: this is the visitor's one measurement - spend it now, right
   // as they commit to entering the try-on room.
   lockDemoGate();
 
 
-  // The actual screen swap — deferred to the mid-point of the Bitten-Pear
+  // The actual screen swap - deferred to the mid-point of the Bitten-Pear
   // transition so the change happens fully behind the opaque pear mask.
   const commitSwap = () => {
     try {
@@ -938,7 +938,7 @@ function goToFitting(opts) {
         $("screen-calculator").classList.remove("active");
         $("screen-fitting").classList.add("active");
       } catch (_) {}
-      toast("שגיאה בטעינת חדר המדידה — " + (err?.message || "נסה לרענן את הדף"));
+      toast("שגיאה בטעינת חדר המדידה - " + (err?.message || "נסה לרענן את הדף"));
     }
   };
 
@@ -947,7 +947,7 @@ function goToFitting(opts) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
-   Bitten-Pear transition orchestrator — rAF-driven, promise-sequenced lifecycle.
+   Bitten-Pear transition orchestrator - rAF-driven, promise-sequenced lifecycle.
    Single source of truth for BOTH the Continue-button click and the Enter-key
    path. All motion is GPU-composited (transform/opacity, see style.css); JS only
    arms the overlay and decouples the heavy DOM screen-swap into the HOLD window,
@@ -977,7 +977,7 @@ function playPearTransition(commitSwap) {
 
   return new Promise((resolve) => {
     // Double-rAF: flush the reset style on one frame, then start the keyframes on
-    // the next — guarantees a clean restart with no first-frame flash, and anchors
+    // the next - guarantees a clean restart with no first-frame flash, and anchors
     // our JS timeline to the same frame the animation begins.
     requestAnimationFrame(() => {
       requestAnimationFrame((startTs) => {
@@ -987,7 +987,7 @@ function playPearTransition(commitSwap) {
         const tick = (now) => {
           const elapsed = now - startTs;
 
-          // Swap during the HOLD — never while the GPU is mid-render on the exit.
+          // Swap during the HOLD - never while the GPU is mid-render on the exit.
           if (!swapped && elapsed >= SWAP_AT_MS) {
             swapped = true;
             commitSwap();
@@ -1040,11 +1040,15 @@ function enterRoom() {
 
   // #completeLook visibility is owned by renderCompleteTheLook() (invoked from
   // setActiveItem above): it un-hides ONLY when real catalog complements exist, and
-  // hides otherwise — so we never force an empty section visible here.
+  // hides otherwise - so we never force an empty section visible here.
   // AI Combined is the only mode now, so the storefront's front/back/side deep-link
+<<<<<<< HEAD
   // angle no longer matters — renderPerspectiveSelector() sets currentAngle itself.
   // (No photo switcher to render either: the front/back pair comes straight from the
   // handoff gallery, so the combined view is selected without any user input.)
+=======
+  // angle no longer matters - renderPerspectiveSelector() sets currentAngle itself.
+>>>>>>> 714379c4c286f3ba1de53a7e2574050028aed3f4
   renderPerspectiveSelector();
   setConn("idle");
 
@@ -1064,7 +1068,7 @@ function setActiveItem(item, opts = {}) {
 
   // ADDITIVE write: fill ONLY this garment's slot (top|bottom) and leave the
   // opposite slot untouched. Picking a different shirt replaces the top; adding
-  // pants fills the bottom while KEEPING the shirt — the whole point of the
+  // pants fills the bottom while KEEPING the shirt - the whole point of the
   // incremental "Add to Look" outfit.
   activeOutfit[slotOf(item)] = item;
 
@@ -1092,13 +1096,13 @@ window.pearGetActiveGarment = function () {
 };
 
 /* =============================================================================
-   Multi-Image Product Gallery Sync — colour swatches + perspective rail
+   Multi-Image Product Gallery Sync - colour swatches + perspective rail
    ─────────────────────────────────────────────────────────────────────────
    Switching a COLOUR or an ANGLE never reconnects: while a billable session is live
    we re-issue the garment through the existing applyActive() pipeline (one
    rtClient.set(), same session, same ek_ token, same strict window); otherwise we
    just remember the choice so the next go-live opens on it. The rail renders for
-   EVERY garment and EVERY colour — angles with no dedicated photo fall back to the
+   EVERY garment and EVERY colour - angles with no dedicated photo fall back to the
    front image + a prompt clause, so the UI can never empty out (the bug this fixes).
    ============================================================================= */
 function setAngle(angle) {
@@ -1129,7 +1133,7 @@ function setColor(color) {
 }
 
 /* Shared live hot-swap: re-issue the active garment through the existing applyActive()
-   pipeline (one rtClient.set() — no reconnect, no extra handshake/token, no layout shift).
+   pipeline (one rtClient.set() - no reconnect, no extra handshake/token, no layout shift).
    No-op when not live. */
 function hotSwapIfLive(toastMsg) {
   if (!isLive()) return;
@@ -1137,6 +1141,7 @@ function hotSwapIfLive(toastMsg) {
   if (toastMsg) toast(toastMsg);
 }
 
+<<<<<<< HEAD
 /* ── Widget multi-image switcher — REMOVED ───────────────────────────────────
    There used to be a row of product-photo thumbnails (חזית / גב / תמונה N) pinned above
    the camera, letting the user hand-pick which forwarded gallery photo (?garment_images=)
@@ -1147,12 +1152,99 @@ function hotSwapIfLive(toastMsg) {
    its injected CSS, its caption helper and selectPearImage() are all gone — no photo
    picker, no front/back toggle, nothing for the user to get wrong. `pearImages` survives
    on the item purely as the source those two assets are derived from. */
+=======
+/* ── Widget multi-image switcher ─────────────────────────────────────────────
+   A horizontal row of product-photo thumbnails pinned ABOVE the camera, shown ONLY
+   for a storefront widget handoff that forwarded 2+ gallery photos (?garment_images=
+   → activeItem.pearImages). Tapping a thumbnail makes that photo the active FRONT
+   reference and hot-swaps the live stream in place (same session, same ek_ token)
+   through the very pipeline the angle rail uses - no reconnect. Never renders for
+   catalog browsing (no pearImages), so it can't disturb the normal flow. The row's
+   CSS is injected once and fully self-contained. */
+function ensurePearSwitcherStyles() {
+  if (document.getElementById("pear-image-switcher-styles")) return;
+  const s = document.createElement("style");
+  s.id = "pear-image-switcher-styles";
+  s.textContent =
+    ".pear-image-switcher{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;" +
+      "margin:0 auto 12px;padding:0 8px;max-width:100%;}" +
+    // Each thumb is a caption cell: 56×56 image with the חזית/גב/תמונה N label below it.
+    // Opacity marks state (active 1 / inactive .55); the black frame marks the active photo.
+    ".pear-image-switcher__thumb{display:flex;flex-direction:column;align-items:center;" +
+      "gap:4px;width:56px;padding:0;flex:0 0 auto;background:none;border:none;" +
+      "cursor:pointer;opacity:.55;transition:opacity .15s;}" +
+    ".pear-image-switcher__thumb.is-active{opacity:1;}" +
+    ".pear-image-switcher__thumb img{width:56px;height:56px;object-fit:cover;display:block;" +
+      "border-radius:8px;border:2px solid transparent;box-sizing:border-box;}" +
+    ".pear-image-switcher__thumb.is-active img{border-color:#000;}" +
+    ".pear-image-switcher__label{font-size:11px;line-height:1.1;text-align:center;color:#888;}";
+  document.head.appendChild(s);
+}
+
+/* Thumbnail caption by gallery position: photo 1 = front, photo 2 = back, the rest
+   numbered. Shared shape with the widget popup labels so both surfaces read the same. */
+function pearImageLabel(i) {
+  return i === 0 ? "חזית" : i === 1 ? "גב" : "תמונה " + (i + 1);
+}
+
+function renderPearImageSwitcher() {
+  const card = $("cameraCard");
+  let row = $("pearImageSwitcher");
+  const imgs = (activeItem && activeItem.pearImages) || [];
+
+  // Fewer than 2 photos (or no camera stage) → nothing to switch between.
+  if (!card || imgs.length < 2) { if (row) row.hidden = true; return; }
+
+  ensurePearSwitcherStyles();
+  if (!row) {
+    row = document.createElement("div");
+    row.id = "pearImageSwitcher";
+    row.className = "pear-image-switcher";
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", "תמונות המוצר · Product images");
+    card.parentNode.insertBefore(row, card);   // ABOVE the camera stage
+    // Delegated click - bound once to the stable row, survives every re-render.
+    row.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-pear-idx]");
+      if (!b) return;
+      const list = (activeItem && activeItem.pearImages) || [];
+      const u = list[+b.getAttribute("data-pear-idx")];
+      if (u) selectPearImage(u);
+    });
+  }
+  row.hidden = false;
+
+  const current = (activeImageOf(activeItem) || "").split("?")[0];
+  row.innerHTML = imgs.map((u, i) => {
+    const on = u.split("?")[0] === current;
+    const label = pearImageLabel(i);
+    return `<button type="button" class="pear-image-switcher__thumb${on ? " is-active" : ""}" ` +
+           `data-pear-idx="${i}" aria-pressed="${on}" title="${label}">` +
+           `<img src="${u}" alt="${label}" loading="lazy" decoding="async">` +
+           `<span class="pear-image-switcher__label">${label}</span>` +
+           `</button>`;
+  }).join("");
+}
+
+/* Swap the active garment to a chosen product photo: it becomes the FRONT asset
+   (currentAngle reset to front so it renders directly), the rails re-render, and the
+   live session re-warps in place. No-op without an active item or on a re-tap. */
+function selectPearImage(url) {
+  if (!activeItem || !url || activeItem.img === url) return;
+  activeItem.img = url;
+  currentAngle = "front";
+  renderActiveGarment();
+  renderPerspectiveSelector();
+  renderPearImageSwitcher();
+  hotSwapIfLive("מחליף תמונת מוצר · switching product image");
+}
+>>>>>>> 714379c4c286f3ba1de53a7e2574050028aed3f4
 
 /* Widget → fitting-room, post-open correction: pear-widget.js now opens this room
    immediately on its DOM-order guess (see openModal()'s click handler) instead of
    waiting ~1-7s on /api/classify-images first. When that classification resolves and
    disagrees with the guess already showing, the widget posts this message so the
-   room can silently swap to the real front/back — no reconnect, no reopening the
+   room can silently swap to the real front/back - no reconnect, no reopening the
    modal. Trusted only from the embedding parent frame (we don't know the host's
    origin ahead of time, so e.source is the check, same as any iframe↔parent bridge). */
 window.addEventListener("message", (e) => {
@@ -1180,6 +1272,7 @@ window.addEventListener("message", (e) => {
 });
 
 /* Sync the live product gallery for the active item + colour. AI Combined is the ONLY
+<<<<<<< HEAD
    try-on mode now — there is NO on-screen angle/mode picker and NO photo switcher (the
    perspective rail with its #perspectiveSelector element and the #pearImageSwitcher
    thumbnail row were both removed). This just hardcodes currentAngle — COMBINED when the
@@ -1187,12 +1280,20 @@ window.addEventListener("message", (e) => {
    every item stays try-on-able — and refreshes the colour swatch strip. setAngle() and the
    orientation-watcher engine remain in the file but are no longer wired to any UI.
    (Name kept as-is: still called from every item/colour swap.) */
+=======
+   try-on mode now - there is NO on-screen angle/mode picker (the perspective rail and its
+   #perspectiveSelector element were removed). This just hardcodes currentAngle - COMBINED
+   when the item ships a real, distinct back (canCombineViews), else a silent "front"
+   fallback so every item stays try-on-able - and refreshes the colour swatch strip.
+   setAngle() and the orientation-watcher engine remain in the file but are no longer
+   wired to any UI. (Name kept as-is: still called from every item/colour swap.) */
+>>>>>>> 714379c4c286f3ba1de53a7e2574050028aed3f4
 function renderPerspectiveSelector() {
   if (activeItem) currentAngle = canCombineViews(activeItem) ? COMBINED_ANGLE : "front";
   renderColorSwatches();
 }
 
-/* Colour swatch strip — shown only when the active item defines 2+ named variants.
+/* Colour swatch strip - shown only when the active item defines 2+ named variants.
    Clicking a bubble re-renders the whole gallery against that colour's own angle images. */
 function renderColorSwatches() {
   const wrap = $("productSwatches");
@@ -1214,7 +1315,7 @@ function renderColorSwatches() {
 /**
  * Paint the "active garment" chip. With a single garment it shows that piece; once
  * the outfit is complete (top + bottom) it shows BOTH halves so the user can SEE
- * that adding a piece kept the other one — the additive look is never hidden.
+ * that adding a piece kept the other one - the additive look is never hidden.
  * @returns {void}
  */
 function renderActiveGarment() {
@@ -1242,11 +1343,11 @@ function renderActiveGarment() {
 }
 
 /* =============================================================================
-   "Complete the Look" — incremental "Add to Look" (הוסף ללוק)
+   "Complete the Look" - incremental "Add to Look" (הוסף ללוק)
    ─────────────────────────────────────────────────────────────────────────
    addToLook() is fired from a recommendation card. It drops the chosen complement
    into ITS slot (top|bottom) beside whatever is already on, WITHOUT clearing the
-   opposite slot, then — if a session is already live — restyles the whole outfit
+   opposite slot, then - if a session is already live - restyles the whole outfit
    in place. The strict 5s window, countdown, recording and reset logic are all
    untouched; this only changes WHICH garments the existing goLive flow applies.
    ============================================================================= */
@@ -1264,10 +1365,10 @@ function addToLook(piece) {
     toast(`לוק מלא: <b>${activeOutfit.top.name}</b> + <b>${activeOutfit.bottom.name}</b>`);
   } else {
     $("completeLook").classList.remove("is-complete");
-    toast(`נוסף ללוק: <b>${piece.name}</b> — הוסף/י פריט מהקטגוריה המשלימה ללוק מלא`);
+    toast(`נוסף ללוק: <b>${piece.name}</b> - הוסף/י פריט מהקטגוריה המשלימה ללוק מלא`);
   }
 
-  // Mid-session: restyle the live feed in place — the FULL look (both garments in
+  // Mid-session: restyle the live feed in place - the FULL look (both garments in
   // ONE payload) when complete, else just the updated garment. Same 5s session.
   if (isLive()) applyActive().catch((e) => console.warn("add to look:", e?.message || e));
 }
@@ -1291,7 +1392,7 @@ function resolveLook() {
    ============================================================================= */
 const card = () => $("cameraCard");
 
-/* Task 10 — re-entrancy guard: getUserMedia is async, so two quick callers
+/* Task 10 - re-entrancy guard: getUserMedia is async, so two quick callers
    (e.g. the "enable camera" button AND Go Live) could each open a separate
    camera stream before localStream is assigned. We cache the in-flight promise
    so concurrent callers share ONE permission prompt and ONE MediaStream. */
@@ -1303,7 +1404,7 @@ let cameraStartPromise = null;
  * stream (or the same pending request) instead of prompting twice.
  * @returns {Promise<boolean>} true once the camera is live, false on failure/denial.
  */
-/* 🍐 Pear loader — a juicy bouncing pear shown over the camera card whenever the
+/* 🍐 Pear loader - a juicy bouncing pear shown over the camera card whenever the
    app is busy loading (opening the camera, etc). Purely a visual cue; additive
    DOM, removed as soon as the load resolves. The go-live render reuses the pear
    baked into #scanOverlay. */
@@ -1330,7 +1431,7 @@ function hidePearLoader() {
 /* Build getUserMedia video constraints for the CURRENT device + physical orientation.
    - Phones: request an orientation-matched aspect (portrait 9:16 / landscape 16:9) so the
      selfie preview fills the viewport without stretch, squish, or heavy crop.
-   - Desktop: keep the compact landscape hint (512×288) — desktop webcams are landscape.
+   - Desktop: keep the compact landscape hint (512×288) - desktop webcams are landscape.
    `aspectRatio` is an *ideal* (best-effort); whatever the browser actually returns is then
    measured in loadedmetadata and the stage adapts. createThrottledInputStream() still
    downscales to LIVE_W×LIVE_H before Decart, so the billed input is never affected. */
@@ -1372,11 +1473,11 @@ async function startCamera(facing = cameraFacing) {
       });
       const v = $("webcam");
       v.srcObject = localStream;
-      // Reflect the active camera so CSS mirrors ONLY the front ("user") feed —
+      // Reflect the active camera so CSS mirrors ONLY the front ("user") feed -
       // the rear camera must not mirror, or background text would read backwards.
       card().dataset.facing = facing;
       // Detect portrait vs landscape from the real stream once metadata arrives and
-      // adapt the on-screen stage. Display only — Decart's 512×288 input is untouched.
+      // adapt the on-screen stage. Display only - Decart's 512×288 input is untouched.
       v.onloadedmetadata = () => {
         const vw = v.videoWidth, vh = v.videoHeight;
         if (!vw || !vh) return;
@@ -1391,7 +1492,7 @@ async function startCamera(facing = cameraFacing) {
       return true;
     } catch (err) {
       showCamError("לא ניתן לגשת למצלמה: " + (err && err.message ? err.message : err) +
-        " — ודא הרשאת מצלמה ושהאתר מוגש מ-localhost/https.");
+        " - ודא הרשאת מצלמה ושהאתר מוגש מ-localhost/https.");
       return false;
     } finally {
       hidePearLoader();
@@ -1404,7 +1505,7 @@ async function startCamera(facing = cameraFacing) {
 
 /* Sample ONE frame of ANY <video> element into a tiny downscaled canvas and measure
    how dark it is. Returns { ready, avgLuma, blackFrac }:
-     • ready=false  → no decoded frame yet (videoWidth 0 / not paintable) — caller
+     • ready=false  → no decoded frame yet (videoWidth 0 / not paintable) - caller
                       must NOT treat this as black, only as "can't judge yet".
      • avgLuma      → mean Rec.601 luma across the frame (0-255).
      • blackFrac    → fraction of pixels below CAMERA_BLACK_PIXEL_CUT (near-black).
@@ -1416,7 +1517,7 @@ async function startCamera(facing = cameraFacing) {
 function sampleVideoLuma(v) {
   if (!v || !v.videoWidth || !v.videoHeight) return { ready: false, avgLuma: 0, blackFrac: 1 };
   try {
-    const cw = 64, ch = 36;                       // downscaled probe — cheap, enough for a luma verdict
+    const cw = 64, ch = 36;                       // downscaled probe - cheap, enough for a luma verdict
     const cnv = document.createElement("canvas");
     cnv.width = cw; cnv.height = ch;
     const ctx = cnv.getContext("2d", { willReadFrequently: true });
@@ -1425,24 +1526,24 @@ function sampleVideoLuma(v) {
     const total = cw * ch;
     let sum = 0, black = 0;
     for (let i = 0; i < data.length; i += 4) {
-      // Rec.601 luma — matches how "brightness" reads to the human eye.
+      // Rec.601 luma - matches how "brightness" reads to the human eye.
       const luma = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
       sum += luma;
       if (luma < CAMERA_BLACK_PIXEL_CUT) black++;
     }
     return { ready: true, avgLuma: sum / total, blackFrac: black / total };
   } catch (_) {
-    return { ready: false, avgLuma: 0, blackFrac: 1 };   // fail open — never block on a probe error
+    return { ready: false, avgLuma: 0, blackFrac: 1 };   // fail open - never block on a probe error
   }
 }
 
 /* Black-screen / camera-off verdict for the CREDIT-SAVING gate in goLive().
-   Sends nothing to any API — it only inspects local webcam pixels. Samples a few
+   Sends nothing to any API - it only inspects local webcam pixels. Samples a few
    frames (CAMERA_BLACK_SAMPLES) spaced by CAMERA_BLACK_SAMPLE_MS and keeps the
    BRIGHTEST one, so a single transient black frame during auto-exposure warm-up
-   doesn't trip the gate — only a persistently black feed does.
+   doesn't trip the gate - only a persistently black feed does.
    Returns true ONLY when we have a real, paintable frame that is black; if we never
-   get a decodable frame we return false (fail open — let the normal connect path and
+   get a decodable frame we return false (fail open - let the normal connect path and
    its FIRST_FRAME_TIMEOUT_MS safety net handle a truly dead camera). */
 async function cameraLooksBlack() {
   let sawFrame = false;
@@ -1461,7 +1562,7 @@ async function cameraLooksBlack() {
   if (!sawFrame) return false;   // couldn't judge → don't block here; connect path guards a dead camera
   const isBlack = bestLuma <= CAMERA_BLACK_AVG_LUMA || bestBlackFrac >= CAMERA_BLACK_PIXEL_FRAC;
   if (isBlack) {
-    console.warn("[PEAR] Black-screen gate tripped — skipping billed session " +
+    console.warn("[PEAR] Black-screen gate tripped - skipping billed session " +
       "(avgLuma=" + bestLuma.toFixed(1) + " ≤ " + CAMERA_BLACK_AVG_LUMA +
       " or blackFrac=" + bestBlackFrac.toFixed(3) + " ≥ " + CAMERA_BLACK_PIXEL_FRAC + ")");
   }
@@ -1470,7 +1571,7 @@ async function cameraLooksBlack() {
 
 /* Flip between the front ("user") and rear ("environment") camera. Stops ALL current
    preview tracks before requesting the new device so single-camera machines don't
-   throw "device in use". Disabled while a billed session is live — we never swap the
+   throw "device in use". Disabled while a billed session is live - we never swap the
    camera mid-generation, so the Decart throttler/connect are left completely untouched. */
 async function flipCamera() {
   if (isLive()) return;                        // never flip during a billed session
@@ -1492,7 +1593,7 @@ async function flipCamera() {
   }
 }
 
-/* Rotate handling — when the device flips between portrait and landscape, re-request the
+/* Rotate handling - when the device flips between portrait and landscape, re-request the
    PREVIEW stream so its capture aspect follows the new orientation (no stretch on rotate).
    Guards: only when the camera is open, never during a billed session (would break the
    Decart stream), and never mid-flip. Fires only on a real portrait↔landscape flip, so it
@@ -1501,27 +1602,27 @@ async function flipCamera() {
    RACE FIX (Portrait→Landscape→Portrait, fast): the old version fired startCamera(facing)
    without awaiting it, relying on the localStream-null check alone for idempotency. A
    getUserMedia() re-request takes real time (the camera has to physically reconfigure for
-   the new aspect ratio), and most devices only allow ONE open capture session per camera —
+   the new aspect ratio), and most devices only allow ONE open capture session per camera -
    so if the user rotated back again before that call resolved, startCamera()'s own shared
    cameraStartPromise guard (`if (cameraStartPromise) return cameraStartPromise;`) made the
    second reinit call just return the FIRST (still-pending, now-stale) request instead of
-   ever issuing a fresh one — leaving the stream permanently mismatched with the device's
+   ever issuing a fresh one - leaving the stream permanently mismatched with the device's
    actual final orientation (e.g. a landscape-shaped stream squeezed via object-fit:cover
    into the portrait-aspect .camera-card box → heavily cropped on the sides, exactly the
    "narrows into an unwanted tall format" symptom).
 
-   Fix: this is now async and properly sequential — each startCamera() call is fully
+   Fix: this is now async and properly sequential - each startCamera() call is fully
    awaited before another can start, so cameraStartPromise is always settled (and thus
    never short-circuits a new call) by the time we'd issue one. reinitInFlight/reinitPending
    coalesce any rotations that happen WHILE a re-request is in flight (including the two
    listeners below both firing for one physical rotation) into a single trailing re-run
-   instead of trying to overlap getUserMedia() calls on the same camera hardware — so the
+   instead of trying to overlap getUserMedia() calls on the same camera hardware - so the
    stream always converges on whatever orientation the device is ACTUALLY in once things
    settle, no matter how many times it flipped in between. */
 let reinitInFlight = false;   // a stop+reopen sequence is actively running
 let reinitPending  = false;   // another rotation arrived while one was already running
 async function reinitCameraForOrientation() {
-  if (!localStream) return;                 // camera not open — nothing to re-init
+  if (!localStream) return;                 // camera not open - nothing to re-init
   if (isLive()) return;                     // never swap the stream mid-generation
   if ($("flipCamBtn")?.disabled) return;    // a flip is already switching cameras
 
@@ -1541,7 +1642,7 @@ async function reinitCameraForOrientation() {
 }
 
 /* Smoothly bring the camera stage into a comfortable reading position after the user
-   opens the camera — replaces the old `cameraCard.scrollIntoView({ block: "start" })`,
+   opens the camera - replaces the old `cameraCard.scrollIntoView({ block: "start" })`,
    which glued the card to the very top edge (and on mobile, partly UNDER the sticky
    header) and over-scrolled past the Go-Live button below it.
 
@@ -1552,12 +1653,12 @@ async function reinitCameraForOrientation() {
    Two constraints, both measured live (no hardcoded pixel guesses):
      A) the camera top should sit just below whatever sticky chrome is on screen right
         now (the mobile sticky .app-header, or .focus-bar in a focused/deep-link entry)
-        plus a bit of breathing room — the "offset" this fix introduces.
+        plus a bit of breathing room - the "offset" this fix introduces.
      B) the Go-Live button's bottom edge should stay above the viewport's bottom edge.
    When both fit on screen (the common case), (A) alone already satisfies (B), so the
    camera top lands just under the header exactly as requested. On a very short
-   viewport where the two can't both fit, we favour (B) — showing the actionable
-   button — over glueing the camera to the exact offset. */
+   viewport where the two can't both fit, we favour (B) - showing the actionable
+   button - over glueing the camera to the exact offset. */
 function scrollToCamera() {
   const stage = $("cameraCard");
   if (!stage) return;
@@ -1570,7 +1671,7 @@ function scrollToCamera() {
     .find((el) => el && !el.hidden && getComputedStyle(el).position === "sticky");
   const stickyH = stickyBar ? stickyBar.getBoundingClientRect().height : 0;
 
-  const BREATHING_ROOM = 56;   // px of air below the sticky chrome — the comfortable offset
+  const BREATHING_ROOM = 56;   // px of air below the sticky chrome - the comfortable offset
   const BOTTOM_PAD     = 24;   // px of air above the viewport's bottom edge for the button
   const topOffset = stickyH + BREATHING_ROOM;
 
@@ -1581,7 +1682,7 @@ function scrollToCamera() {
   if (cta) {
     const ctaRect = cta.getBoundingClientRect();
     const scrollB = window.scrollY + ctaRect.bottom - window.innerHeight + BOTTOM_PAD;  // (B) button bottom → on-screen
-    target = Math.max(scrollA, scrollB);   // whichever needs MORE scroll wins — see constraints above
+    target = Math.max(scrollA, scrollB);   // whichever needs MORE scroll wins - see constraints above
   }
 
   const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
@@ -1591,7 +1692,7 @@ function scrollToCamera() {
 /* ── Loading-state elapsed timer (#scanOverlay / #scanSub) ───────────────────
    LOADING (w/ timer) → Model Ready → Start 5s capture. Ticks a live mm:ss counter
    for as long as the loading overlay is up (goLive() start → startBillingWindow()'s
-   Model Ready reveal, or an earlier failure/timeout — see those call sites for
+   Model Ready reveal, or an earlier failure/timeout - see those call sites for
    start/stop wiring). Copy is deliberately generic: never names the underlying AI
    vendor/model, just what the user is waiting for. */
 let scanTimerInterval = null;
@@ -1624,7 +1725,7 @@ function resetToLive() {
   if (!isLive()) clearRecording();   // revoke replay URL + hide post-session buttons when no active API session
   exitClipReplay();                  // drop any history-clip playing in #aiVideo
   card().classList.remove("show-result");
-  stopScanTimer();                   // defensive — never leave the loading counter ticking in the background
+  stopScanTimer();                   // defensive - never leave the loading counter ticking in the background
   $("scanOverlay").hidden = true;
   // #retakeBtn now lives in the .pear-interaction-pod; its visibility is governed
   // by the pod (shown once history exists), so it's no longer toggled here.
@@ -1632,22 +1733,22 @@ function resetToLive() {
 }
 
 /* =============================================================================
-   Decart Lucy VTON realtime — connection
+   Decart Lucy VTON realtime - connection
    ─────────────────────────────────────
    SECURITY: the browser never holds the permanent dct_ key. At the moment the
         user goes live we fetch a short-lived, scoped ek_ token from the secure
         proxy (/api/realtime-token) and hand THAT to createDecartClient().
 
-   NOTE: models.realtime() does not exist in @decartai/sdk@0.1.5 — the model is
+   NOTE: models.realtime() does not exist in @decartai/sdk@0.1.5 - the model is
         passed as the plain object below (name "lucy-vton-latest" + stream opts).
    ============================================================================= */
 async function loadSDK() {
   let lastErr;
   for (const url of SDK_URLS) {
-    console.log("[PEAR] loadSDK() — importing", url);
+    console.log("[PEAR] loadSDK() - importing", url);
     try {
       const mod = await import(/* @vite-ignore */ url);
-      console.log("[PEAR] loadSDK() — loaded OK from", url);
+      console.log("[PEAR] loadSDK() - loaded OK from", url);
       return mod;
     }
     catch (e) { lastErr = e; console.warn("SDK load failed from", url, e?.message || e); }
@@ -1701,13 +1802,13 @@ async function mintEphemeralToken() {
   // Fast path: reuse cached token if still valid (30s safety margin before expiry).
   const now = Date.now();
   if (_tokenCache && _tokenCache.expiresAt > now + 30_000) {
-    console.log("[PEAR] mintEphemeralToken() — cached ek_ token reused (expires in",
+    console.log("[PEAR] mintEphemeralToken() - cached ek_ token reused (expires in",
       Math.round((_tokenCache.expiresAt - now) / 1000), "s)");
     return _tokenCache.apiKey;
   }
-  _tokenCache = null; // stale or absent — fetch fresh
+  _tokenCache = null; // stale or absent - fetch fresh
 
-  console.log("[PEAR] mintEphemeralToken() — POST", TOKEN_ENDPOINT);
+  console.log("[PEAR] mintEphemeralToken() - POST", TOKEN_ENDPOINT);
   let resp;
   try {
     resp = await fetch(TOKEN_ENDPOINT, {
@@ -1715,7 +1816,7 @@ async function mintEphemeralToken() {
       headers: { "Content-Type": "application/json" },
     });
   } catch (e) {
-    console.error("[PEAR] mintEphemeralToken() — network error (server unreachable?):", e?.message || e);
+    console.error("[PEAR] mintEphemeralToken() - network error (server unreachable?):", e?.message || e);
     throw new Error("לא ניתן להגיע לשרת הטוקנים (" + (e?.message || e) + ")");
   }
 
@@ -1725,18 +1826,18 @@ async function mintEphemeralToken() {
   if (resp.status === 405) {
     const port = window.location.port;
     const where = port && port !== "3000"
-      ? `port ${port} — open the fitting room at http://localhost:3000/fitting-room/ instead`
-      : "a separate file server — open the fitting room via the Express server on port 3000";
+      ? `port ${port} - open the fitting room at http://localhost:3000/fitting-room/ instead`
+      : "a separate file server - open the fitting room via the Express server on port 3000";
     throw new Error(`HTTP 405: fitting room is served by ${where}.`);
   }
 
-  console.log("[PEAR] mintEphemeralToken() — server responded HTTP", resp.status, "|",
+  console.log("[PEAR] mintEphemeralToken() - server responded HTTP", resp.status, "|",
     resp.ok ? "OK" : "FAILED",
     "| body keys:", Object.keys(data).join(", ") || "(empty)");
 
   if (!resp.ok || data.error) {
     const detail = data.message || data.error || `HTTP ${resp.status}`;
-    console.error("[PEAR] mintEphemeralToken() — token mint failed:", detail,
+    console.error("[PEAR] mintEphemeralToken() - token mint failed:", detail,
       "\n  Full server response:", data,
       resp.status !== 405
         ? "\n  → Check that DECART_API_KEY in .env is set to a valid dct_… key from platform.decart.ai"
@@ -1744,11 +1845,11 @@ async function mintEphemeralToken() {
     throw new Error("מינטינג טוקן נכשל: " + detail);
   }
   if (!data.apiKey) {
-    console.error("[PEAR] mintEphemeralToken() — response OK but no apiKey field:", data);
+    console.error("[PEAR] mintEphemeralToken() - response OK but no apiKey field:", data);
     throw new Error("השרת לא החזיר טוקן ek_ תקין.");
   }
   const preview = data.apiKey.slice(0, 8);
-  console.log("[PEAR] mintEphemeralToken() — token received, starts with:", preview + "…",
+  console.log("[PEAR] mintEphemeralToken() - token received, starts with:", preview + "…",
     "| model:", data.model || "(not in response)",
     "| expiresAt:", data.expiresAt || "(not in response)");
 
@@ -1763,7 +1864,7 @@ async function mintEphemeralToken() {
 }
 
 /**
- * Task 2 — graceful pre-use connectivity check.
+ * Task 2 - graceful pre-use connectivity check.
  * Lucy VTON is realtime/online-only. Before the user initiates a live fitting we
  * confirm the network path to our own server is up (a fast, same-origin probe of
  * HEALTH_ENDPOINT, bounded by HEALTH_PROBE_TIMEOUT_MS). This turns a cryptic
@@ -1772,23 +1873,23 @@ async function mintEphemeralToken() {
  * @returns {Promise<boolean>} true if the server is reachable, false if offline/timed-out.
  */
 async function ensureOnline() {
-  if (!navigator.onLine) { console.log("[PEAR] ensureOnline() — navigator.onLine is false, skipping probe"); return false; }
-  console.log("[PEAR] ensureOnline() — GET", HEALTH_ENDPOINT);
+  if (!navigator.onLine) { console.log("[PEAR] ensureOnline() - navigator.onLine is false, skipping probe"); return false; }
+  console.log("[PEAR] ensureOnline() - GET", HEALTH_ENDPOINT);
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), HEALTH_PROBE_TIMEOUT_MS);
     const resp = await fetch(HEALTH_ENDPOINT, { method: "GET", cache: "no-store", signal: ctrl.signal });
     clearTimeout(timer);
-    console.log("[PEAR] ensureOnline() — response", resp.status, resp.ok ? "OK" : "FAILED");
+    console.log("[PEAR] ensureOnline() - response", resp.status, resp.ok ? "OK" : "FAILED");
     return resp.ok;
   } catch (e) {
-    console.warn("[PEAR] ensureOnline() — probe failed:", e?.message || e);
+    console.warn("[PEAR] ensureOnline() - probe failed:", e?.message || e);
     return false;                               // unreachable / timed out → treat as offline
   }
 }
 
 /* =============================================================================
-   Client-side FPS + resolution throttle — THE token-budget enforcer
+   Client-side FPS + resolution throttle - THE token-budget enforcer
    ─────────────────────────────────────────────────────────────────────────────
    WHY THIS EXISTS: @decartai/sdk@0.1.5 silently ignores model.fps and
    model.width/height on Chromium:
@@ -1805,31 +1906,31 @@ async function ensureOnline() {
    We also flip horizontally here so the SDK's mirror:"auto" no-ops on the canvas
    track (it has no facingMode) and the edited feed stays a correct selfie view.
 
-   Returns { stream, dispose }. dispose() MUST run in teardown() — it clears the
+   Returns { stream, dispose }. dispose() MUST run in teardown() - it clears the
    paint timer, stops the canvas track, and stops the cloned source track it owns.
    ============================================================================= */
 /* ── Resource/token-usage optimization ────────────────────────────────────────
    This is the ONE place raw camera frames become the payload Decart bills on, so
    it's where "minimal frame/token usage" is actually enforced, not a place that
-   needed new code — it already does exactly that:
-     • fps capped to LIVE_INFERENCE_FPS (10) — the camera can capture faster (LIVE_FPS
+   needed new code - it already does exactly that:
+     • fps capped to LIVE_INFERENCE_FPS (10) - the camera can capture faster (LIVE_FPS
        =15 for a smooth local preview), but only 10 frames/sec ever leave the browser.
-     • resolution capped to LIVE_W×LIVE_H (512×288) — every frame is downscaled before
+     • resolution capped to LIVE_W×LIVE_H (512×288) - every frame is downscaled before
        it's sent, regardless of the camera's native resolution.
-     • captureStream(0) + a single requestFrame() per tick — the output track emits
+     • captureStream(0) + a single requestFrame() per tick - the output track emits
        EXACTLY fps frames/sec, never more; there is no separate/duplicate capture path
        sending additional raw frames anywhere.
    NOTE on "keypoints/pose data instead of frames": this app streams live video to
-   Decart's Lucy VTON realtime diffusion model over WebRTC — there is no pose/landmark
+   Decart's Lucy VTON realtime diffusion model over WebRTC - there is no pose/landmark
    API in this pipeline to swap frames for (that would be a different, MediaPipe-style
    architecture; see project history). The real lever here is exactly what's already
    enforced above: fewer frames/sec, smaller frames, no redundant capture. */
 function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width = LIVE_W, height = LIVE_H } = {}) {
   const srcTrack = srcStream.getVideoTracks()[0];
-  // No video track (camera failed) — hand the stream back untouched; nothing to throttle.
+  // No video track (camera failed) - hand the stream back untouched; nothing to throttle.
   if (!srcTrack) return { stream: srcStream, dispose: () => {} };
 
-  // Best-effort native constraint first — some devices honour it and trim work
+  // Best-effort native constraint first - some devices honour it and trim work
   // upstream. The canvas throttle below is the guarantee regardless of the result.
   try {
     srcTrack.applyConstraints({
@@ -1902,7 +2003,7 @@ function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width
  * Mint an ephemeral ek_ token and open ONE Decart Lucy VTON realtime session
  * over WebRTC. Any stale/dropped client is disconnected first so no orphaned
  * server-side session keeps billing. SECURITY: the permanent dct_ key never
- * reaches the browser — only the short-lived ek_ token from the proxy does.
+ * reaches the browser - only the short-lived ek_ token from the proxy does.
  * @returns {Promise<void>}
  */
 async function connectRealtime() {
@@ -1927,7 +2028,7 @@ async function connectRealtime() {
   }
 
   // Bug 3 fix: claim a fresh generation. Callbacks below capture `gen` and bail
-  // out the moment a teardown/new-connect bumps sessionGen — so a late callback
+  // out the moment a teardown/new-connect bumps sessionGen - so a late callback
   // from a previous client can never stomp this session's state. We also reset
   // connState to "connecting" here so waitConnected() can't observe a stale
   // terminal value ("disconnected") left behind by the prior session.
@@ -1944,29 +2045,29 @@ async function connectRealtime() {
   isGarmentApplied = false;
   if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
 
-  console.log("[PEAR] connectRealtime() — stage 1/4: loading SDK from CDN…");
+  console.log("[PEAR] connectRealtime() - stage 1/4: loading SDK from CDN…");
   try {
     /* ── load SDK ─────────────────────────────────────────────────────────── */
     const { createDecartClient } = await loadSDK();
-    console.log("[PEAR] connectRealtime() — stage 2/4: SDK loaded. Minting ephemeral token…");
+    console.log("[PEAR] connectRealtime() - stage 2/4: SDK loaded. Minting ephemeral token…");
 
     /* ── mint a short-lived ek_ token from the secure proxy (only now, never on
-          page load) — the permanent dct_ key stays server-side ─────────────── */
+          page load) - the permanent dct_ key stays server-side ─────────────── */
     const ekToken = await mintEphemeralToken();
 
-    // A teardown may have fired while we were awaiting the SDK/token — abort.
+    // A teardown may have fired while we were awaiting the SDK/token - abort.
     if (gen !== sessionGen) return;
-    console.log("[PEAR] connectRealtime() — stage 3/4: token OK. Creating Decart client…");
+    console.log("[PEAR] connectRealtime() - stage 3/4: token OK. Creating Decart client…");
 
     /* ── create client with the ephemeral token ───────────────────────────── */
     const client = createDecartClient({ apiKey: ekToken });
-    console.log("[PEAR] connectRealtime() — stage 4/4: opening WebRTC session (waiting for 'connected')…");
+    console.log("[PEAR] connectRealtime() - stage 4/4: opening WebRTC session (waiting for 'connected')…");
 
     /* Bug 3 fix: work off a CLONE of the camera tracks so disconnect/teardown never
        stops localStream (our persistent preview). The clone is OWNED by the throttle,
        which stops it on dispose().
        BILLING FIX: route that clone through createThrottledInputStream() so the SDK
-       receives a canvas capture pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H — the
+       receives a canvas capture pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H - the
        SDK's own fps/resolution caps are no-ops on Chromium (see the throttler note). */
     const camClone = new MediaStream(localStream.getVideoTracks().map((t) => t.clone()));
     inputThrottle = createThrottledInputStream(camClone, {
@@ -1980,7 +2081,7 @@ async function connectRealtime() {
       model: {
         name: "lucy-vton-latest",
         urlPath: "/v1/stream",
-        // NOTE: these are advisory only — the SDK ignores model.fps/width/height on
+        // NOTE: these are advisory only - the SDK ignores model.fps/width/height on
         // Chromium. The REAL cap is enforced upstream by createThrottledInputStream()
         // (canvas pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H). Kept in sync so any
         // SDK build that DOES honour them agrees with the throttle.
@@ -2004,9 +2105,9 @@ async function connectRealtime() {
         aiVideo.style.transform = "translateZ(0)";
         aiVideo.play().catch(() => {});
         // BILLING START: the 5s / 10-credit window begins at the FIRST DRESSED frame
-        // Decart actually renders to #aiVideo here — NOT at connect and NOT merely at
+        // Decart actually renders to #aiVideo here - NOT at connect and NOT merely at
         // set() being called, but once it has resolved AND a frame reflecting it has
-        // decoded — so the handshake + server warm-up + styling round-trip is never
+        // decoded - so the handshake + server warm-up + styling round-trip is never
         // billed. Idempotent + sessionGen-guarded inside startBillingWindow, so a
         // stale/duplicate stream can't re-arm it. Recording (Feature 2) is armed from
         // the same call, inside startBillingWindow, so both cover the identical span.
@@ -2019,7 +2120,7 @@ async function connectRealtime() {
       },
     });
 
-    // If a teardown landed during connect(), immediately close this orphan — and
+    // If a teardown landed during connect(), immediately close this orphan - and
     // dispose the throttle so its paint loop / cloned camera track don't outlive it.
     if (gen !== sessionGen) {
       try { rtClient.disconnect(); } catch (_) {}
@@ -2036,7 +2137,7 @@ async function connectRealtime() {
 
     connState = (rtClient.getConnectionState && rtClient.getConnectionState()) || "connected";
     setConn(connState);
-    console.log("[PEAR] connectRealtime() — WebRTC session open. connState:", connState);
+    console.log("[PEAR] connectRealtime() - WebRTC session open. connState:", connState);
 
   } catch (err) {
     console.error("[connectRealtime] failed at stage:", err?.message || String(err), err);
@@ -2053,7 +2154,7 @@ async function connectRealtime() {
  * @returns {void}
  */
 function teardown() {
-  // Cancel the 5s auto-teardown timer before bumping the generation — order matters:
+  // Cancel the 5s auto-teardown timer before bumping the generation - order matters:
   // clearing first means the timer callback (which checks sessionGen) can never fire
   // concurrently with this teardown, even on the same tick.
   if (liveDurationTimer) { clearTimeout(liveDurationTimer); liveDurationTimer = null; }
@@ -2079,11 +2180,11 @@ function teardown() {
   // Stop the diagnostic stats poller before the pc is torn down.
   stopStatsMonitor();
 
-  // Retire the AI Auto orientation watcher with the session — it samples the camera and
+  // Retire the AI Auto orientation watcher with the session - it samples the camera and
   // issues live set() swaps, so it must never outlive isLive().
   if (orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; }
 
-  // Feature 2 — flush the recorder while the edited tracks are still live, so the
+  // Feature 2 - flush the recorder while the edited tracks are still live, so the
   // download clip is finalized before disconnect ends the stream.
   stopRecording();
 
@@ -2093,7 +2194,7 @@ function teardown() {
   }
 
   // Bug 3 fix: stop this session's cloned camera tracks (the WebRTC sender side).
-  // localStream — the real camera/preview — is intentionally left running.
+  // localStream - the real camera/preview - is intentionally left running.
   // The throttle owns the canvas track AND the cloned source track, so dispose it
   // first (stops the paint loop + both tracks), then null the input stream handle.
   if (inputThrottle) {
@@ -2133,17 +2234,17 @@ function waitConnected(timeout) {
 /**
  * Fetch a garment image via /api/img-proxy so the Decart SDK receives a Blob
  * rather than a raw CDN URL.  The SDK's imageToBase64() calls fetch(url) on any
- * http/https string — which fails for CDNs (suitsupply, magnific, etc.) that don't
+ * http/https string - which fails for CDNs (suitsupply, magnific, etc.) that don't
  * send CORS headers.  Routing through our same-origin proxy avoids that entirely.
  * Returns null on any error so the caller can fall back to the raw URL or prompt-only.
  */
 async function fetchGarmentBlob(imgUrl) {
   if (!imgUrl) return null;
   const proxyUrl = `/api/img-proxy?url=${encodeURIComponent(imgUrl)}`;
-  console.log("[PEAR] fetchGarmentBlob() — GET", proxyUrl);
+  console.log("[PEAR] fetchGarmentBlob() - GET", proxyUrl);
   try {
     const resp = await fetch(proxyUrl);
-    console.log("[PEAR] fetchGarmentBlob() — response", resp.status, resp.ok ? "OK" : "FAILED", "for", imgUrl);
+    console.log("[PEAR] fetchGarmentBlob() - response", resp.status, resp.ok ? "OK" : "FAILED", "for", imgUrl);
     if (!resp.ok) {
       console.warn("[PEAR] img-proxy returned", resp.status, "for", imgUrl);
       return null;
@@ -2155,12 +2256,12 @@ async function fetchGarmentBlob(imgUrl) {
   }
 }
 
-/* ── Context-Aware Asset Switching — pre-cached per-orientation Blobs ─────────
+/* ── Context-Aware Asset Switching - pre-cached per-orientation Blobs ─────────
    The instant-swap guarantee: rtClient.set({ image }) accepts a Blob directly, and a Blob
-   ships the bytes over the already-open session — Decart never has to fetch a URL server-
+   ships the bytes over the already-open session - Decart never has to fetch a URL server-
    side (the 20-25s worst case that motivated /api/img-proxy). Pre-fetching BOTH orientation
    assets the moment AI Auto is armed means an orientation flip costs exactly one in-flight
-   set() — no fetch, no reconnect, no flicker; the model transitions over a few frames.
+   set() - no fetch, no reconnect, no flicker; the model transitions over a few frames.
    Memoized per URL, and a failed fetch is never cached (same policy as _stitchCache). */
 const _assetBlobCache = new Map();   // url → Promise<Blob|null>
 
@@ -2173,7 +2274,7 @@ function garmentBlobCached(url) {
       const blob = /^(data:|blob:)/i.test(url)
         ? await (await fetch(url)).blob()
         : await fetchGarmentBlob(url);
-      if (!blob) _assetBlobCache.delete(url);      // never cache a failure — allow a retry
+      if (!blob) _assetBlobCache.delete(url);      // never cache a failure - allow a retry
       return blob;
     } catch (e) {
       console.warn("[PEAR] asset pre-cache failed:", e?.message || e);
@@ -2186,7 +2287,7 @@ function garmentBlobCached(url) {
 }
 
 /* Warm the cache with the front AND back assets of the active subject (both halves of a
-   full look) — fire-and-forget from setAngle/goLive so the fetches overlap the user's
+   full look) - fire-and-forget from setAngle/goLive so the fetches overlap the user's
    next action (or the WebRTC handshake) instead of serialising into the first swap. */
 function prewarmOrientationAssets() {
   const look = resolveLook();
@@ -2198,17 +2299,17 @@ function prewarmOrientationAssets() {
   }
 }
 
-/* ── Context-Aware Asset Switching — OrientationWatcher ───────────────────────
-   Watches the LOCAL camera (localStream — the raw preview feed, NOT the AI output) and
+/* ── Context-Aware Asset Switching - OrientationWatcher ───────────────────────
+   Watches the LOCAL camera (localStream - the raw preview feed, NOT the AI output) and
    flips autoOrientation between "front" and "back" as the user turns, hot-swapping the
    matching pre-cached reference through the normal applyActive() → rtClient.set() path
-   (same session, no reconnect, no flicker — the model transitions over a few frames).
+   (same session, no reconnect, no flicker - the model transitions over a few frames).
 
    Detection engines, best-first:
-     1. Native FaceDetector (Shape Detection API) — zero-dependency, fast; face present →
+     1. Native FaceDetector (Shape Detection API) - zero-dependency, fast; face present →
         the user faces the camera. Demoted permanently after one runtime failure (some
         builds expose the class but throw NotSupportedError at detect()).
-     2. Skin-ratio heuristic — % of skin-tone pixels in the head band (upper 45%, central
+     2. Skin-ratio heuristic - % of skin-tone pixels in the head band (upper 45%, central
         50%) of a tiny 96×96 frame. A frontal face shows far more skin than the back of a
         head. DUAL thresholds (≥10% → front, ≤4% → back, dead-band between) so ambiguous
         profile frames vote nothing instead of flapping.
@@ -2216,18 +2317,18 @@ function prewarmOrientationAssets() {
    Anti-flap discipline (what makes auto-switching stable enough for a live session):
      • ORIENT_CONFIRM consecutive agreeing votes to flip (~750ms confirm latency);
      • ORIENT_COOLDOWN_MS minimum gap between live set() swaps;
-     • a single in-flight guard — the 4Hz sampler itself is the retry loop, so a turn
+     • a single in-flight guard - the 4Hz sampler itself is the retry loop, so a turn
        completed mid-swap is picked up by the very next confirmed vote.
    The watcher never touches the camera track (shared with the preview); stop() only
    detaches its own <video> sampler. Lifecycle is owned by syncOrientationWatcher(). */
-const ORIENT_SAMPLE_MS   = 250;   // ~4 analyses/s — cheap on a 96px canvas
+const ORIENT_SAMPLE_MS   = 250;   // ~4 analyses/s - cheap on a 96px canvas
 const ORIENT_CONFIRM     = 3;     // consecutive agreeing samples to flip (~750ms)
 const ORIENT_COOLDOWN_MS = 1500;  // min gap between live reference swaps (anti-flap)
-const ORIENT_SIZE        = 96;    // analysis canvas edge — tiny on purpose
+const ORIENT_SIZE        = 96;    // analysis canvas edge - tiny on purpose
 
 let orientWatcher = null;         // { stop } while running, else null
 
-/* Idempotent lifecycle gate — safe to call from ANY state change (angle switch, item swap,
+/* Idempotent lifecycle gate - safe to call from ANY state change (angle switch, item swap,
    go-live, teardown): starts the watcher when AI Auto is live-armed, retires it otherwise. */
 function syncOrientationWatcher() {
   const want = currentAngle === AUTO_ANGLE && isLive() && canCombineViews(activeItem) && !!localStream;
@@ -2237,9 +2338,9 @@ function syncOrientationWatcher() {
 
 function createOrientationWatcher() {
   const track = localStream && localStream.getVideoTracks()[0];
-  if (!track) return null;                       // no camera yet — sync will retry later
+  if (!track) return null;                       // no camera yet - sync will retry later
 
-  // Private sampler onto the SAME track the preview uses — reading is free, and we never
+  // Private sampler onto the SAME track the preview uses - reading is free, and we never
   // stop the track itself (it belongs to the shared preview camera).
   const video = document.createElement("video");
   video.muted = true; video.playsInline = true; video.autoplay = true;
@@ -2254,7 +2355,7 @@ function createOrientationWatcher() {
     ? (() => { try { return new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch (_) { return null; } })()
     : null;
   let fdBroken = false;
-  console.log("[PEAR] AI Auto — orientation watcher armed (engine:",
+  console.log("[PEAR] AI Auto - orientation watcher armed (engine:",
     faceDetector ? "FaceDetector + skin-ratio fallback)" : "skin-ratio heuristic)");
 
   let lastVote = null, streak = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
@@ -2270,12 +2371,12 @@ function createOrientationWatcher() {
       try {
         const faces = await faceDetector.detect(canvas);
         return faces.length > 0 ? "front" : "back";
-      } catch (_) { fdBroken = true; console.log("[PEAR] AI Auto — FaceDetector unavailable at runtime; using skin-ratio heuristic"); }
+      } catch (_) { fdBroken = true; console.log("[PEAR] AI Auto - FaceDetector unavailable at runtime; using skin-ratio heuristic"); }
     }
     return skinRatioVote();
   }
 
-  /* Skin-tone share of the head band. Classic RGB skin rule — coarse, but the dual
+  /* Skin-tone share of the head band. Classic RGB skin rule - coarse, but the dual
      thresholds + confirm streak absorb its noise. */
   function skinRatioVote() {
     const x = Math.round(ORIENT_SIZE * 0.25), w = Math.round(ORIENT_SIZE * 0.5);
@@ -2291,24 +2392,24 @@ function createOrientationWatcher() {
     const ratio = skin / total;
     if (ratio >= 0.10) return "front";
     if (ratio <= 0.04) return "back";
-    return null;                                  // ambiguous (profile/transition) — abstain
+    return null;                                  // ambiguous (profile/transition) - abstain
   }
 
   /* Confirmed flip → repaint the rail (orient chip + source preview) and hot-swap the live
      reference. The sampler keeps voting during the swap, so a turn completed mid-flight is
-     re-confirmed and applied by a later tick — no queue needed. */
+     re-confirmed and applied by a later tick - no queue needed. */
   async function maybeSwap(next) {
     if (applying || Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS) return;
     if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) return;
     applying = true;
     lastSwapAt = Date.now();
     autoOrientation = next;
-    console.log("[PEAR] AI Auto — orientation flip →", next.toUpperCase());
+    console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase());
     renderPerspectiveSelector();
     const sel = $("perspectiveSelector");
     if (sel) sel.classList.add("is-syncing");
     try {
-      await applyActive();                       // one rtClient.set() — pre-cached Blob payload
+      await applyActive();                       // one rtClient.set() - pre-cached Blob payload
       toast(next === "back" ? "מציג גב · Back view" : "מציג חזית · Front view");
     } catch (e) {
       console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
@@ -2336,12 +2437,12 @@ function createOrientationWatcher() {
       disposed = true;
       clearInterval(timer);
       try { video.pause(); } catch (_) {}
-      video.srcObject = null;                    // detach only — the track is the preview's
+      video.srcObject = null;                    // detach only - the track is the preview's
     },
   };
 }
 
-/* ── AI Combined View — "Stitched Reference" compositor ───────────────────────
+/* ── AI Combined View - "Stitched Reference" compositor ───────────────────────
    Draws the FRONT view into a rigid 924×1024 box on the LEFT and the BACK view into a
    rigid 924×1024 box on the RIGHT of a FIXED 2048×1024 canvas, separated by a WIDE 200px
    high-contrast SOLID BLACK BAR (a "no-man's-land") with a 44px black gutter framing each
@@ -2350,7 +2451,7 @@ function createOrientationWatcher() {
    marker. Returns ONE JPEG Blob for rtClient.set({ image }) (the realtime SDK accepts
    Blob | File | string). The matching COMBINED prompt clause (ANGLE_CLAUSE.combined) is an
    aggressive "exclusive mode" instruction: each labeled section is the ONLY valid source for
-   its orientation and blending pixels across the bar is strictly forbidden — so a single live
+   its orientation and blending pixels across the bar is strictly forbidden - so a single live
    pass renders the front while the user faces the camera and the back once they turn away,
    without the two views bleeding into each other.
 

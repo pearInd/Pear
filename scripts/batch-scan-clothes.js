@@ -1,42 +1,42 @@
 #!/usr/bin/env node
 /* =============================================================================
-   PEAR — Clothes Front/Back Batch Scanner (one-time offline job)
+   PEAR - Clothes Front/Back Batch Scanner (one-time offline job)
    -----------------------------------------------------------------------------
-   Reads every product image out of the real catalog (catalog.js — the same
+   Reads every product image out of the real catalog (catalog.js - the same
    PRODUCTS array + productImages() normalizer the storefront and PDP render
    from), classifies each one as front/back/both/unknown via the Gemini Vision
    API, and persists the results into a static clothes_metadata.json at the
-   repo root. The live app is meant to read that JSON directly — no Gemini
+   repo root. The live app is meant to read that JSON directly - no Gemini
    calls, no latency, no per-request cost at runtime.
 
    Resumable: on startup it loads any existing clothes_metadata.json and skips
    image/item pairs already recorded there, so a run that dies partway through
    (rate limit, network blip, Ctrl+C) can just be re-run and it picks up where
    it left off. Every successful classification is flushed to disk immediately
-   (atomic write via temp-file + rename) — a crash never loses more than the
+   (atomic write via temp-file + rename) - a crash never loses more than the
    one in-flight item.
 
    Cost note: several catalog entries intentionally share the same placeholder
    imageUrl (see catalog.js comments). The same photo is never sent to Gemini
-   twice — a per-imageUrl cache seeded from clothes_metadata.json (and kept
+   twice - a per-imageUrl cache seeded from clothes_metadata.json (and kept
    warm during the run) reuses the first classification for every later item
    that points at the same URL.
 
    Git sync: on startup, `git pull --ff-only` so the scan runs against the
-   latest catalog.js/clothes_metadata.json — it refuses to run over a dirty
+   latest catalog.js/clothes_metadata.json - it refuses to run over a dirty
    working tree (won't guess whether to stash/commit your in-progress edits)
    and refuses a non-fast-forward pull (won't auto-merge divergent history in
    an unattended script). When the run finishes, if clothes_metadata.json
-   actually changed it's committed (that file only — never `git add -A`) and
+   actually changed it's committed (that file only - never `git add -A`) and
    pushed. A push failure leaves the commit local and safe; it's never
    force-pushed and a git failure never discards the classification work
    already flushed to disk. Skip this whole layer with --no-git, or keep the
    commit local (no push) with --no-push.
 
    Test / dry-run mode: --test (alias --dry-run) classifies exactly ONE sample
-   image by default — a known-good real "front" photo baked into this file, so
+   image by default - a known-good real "front" photo baked into this file, so
    you get a real answer without needing the catalog or a passing/failing
-   guess — prints Gemini's exact JSON response plus a schema-validation
+   guess - prints Gemini's exact JSON response plus a schema-validation
    checklist, and touches NOTHING else: clothes_metadata.json is never read or
    written, errors.log is never written, and git is never touched (no pull, no
    commit, no push). Use it to confirm your GEMINI_API_KEY and model are
@@ -59,16 +59,16 @@
      node scripts/batch-scan-clothes.js --catalog=./catalog.js --out=./clothes_metadata.json
 
    Requires GEMINI_API_KEY in .env (see .env.example). Optional GEMINI_MODEL
-   env var overrides the model (default: gemini-flash-lite-latest — the Flash
+   env var overrides the model (default: gemini-flash-lite-latest - the Flash
    LITE tier, for maximum speed/cost efficiency on a job that's just "front or
    back", plus Google's rolling "-latest" alias so it keeps working as pinned
    preview names get retired for new callers over time. On this project,
    gemini-2.5-flash-lite came back 404 "no longer available to new users" and
-   gemini-2.0-flash-lite came back 429 with a 0 free-tier quota — both dead
+   gemini-2.0-flash-lite came back 429 with a 0 free-tier quota - both dead
    ends despite being named in Google's docs; gemini-flash-lite-latest is the
    one that actually resolves and serves requests today. Pin an explicit
    dated model instead if you need reproducible results across runs, but
-   verify it against your own key first — model availability is clearly
+   verify it against your own key first - model availability is clearly
    shifting under new keys/projects).
    ============================================================================= */
 
@@ -145,7 +145,7 @@ const MODEL = process.env.GEMINI_MODEL || "gemini-flash-lite-latest";
 /* Known-good defaults for --test with no other flags: one real front and one
    real back image from this catalog (confirmed by an earlier full scan), so
    the default smoke test exercises both branches with a real expected answer
-   — no catalog.js load required, so it also works if catalog.js is broken. */
+   - no catalog.js load required, so it also works if catalog.js is broken. */
 const DEFAULT_TEST_SAMPLES = [
   {
     itemId: "1",
@@ -161,7 +161,7 @@ const DEFAULT_TEST_SAMPLES = [
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 if (!GEMINI_API_KEY) {
-  console.error("✗ GEMINI_API_KEY is not set — copy .env.example to .env and fill it in.");
+  console.error("✗ GEMINI_API_KEY is not set - copy .env.example to .env and fill it in.");
   console.error("  Get / rotate a key at https://aistudio.google.com/apikey");
   process.exit(1);
 }
@@ -196,7 +196,7 @@ const CLASSIFICATION_SCHEMA = {
 };
 
 const PROMPT = `You are a garment-photo classifier for an e-commerce catalog.
-Look ONLY at the clothing item in this image — ignore any human model, mannequin, background, or watermark.
+Look ONLY at the clothing item in this image - ignore any human model, mannequin, background, or watermark.
 Decide which side of the GARMENT is facing the camera:
 
 - "front": the garment's front (chest/waistband area, buttons, zipper, front pockets) faces the camera.
@@ -216,7 +216,7 @@ function resumeKey(t) {
 }
 
 /* catalog.js is a plain browser-global script (no import/export, no DOM
-   access) — running it in a fresh vm context and pulling PRODUCTS +
+   access) - running it in a fresh vm context and pulling PRODUCTS +
    productImages() out the other side reuses the exact same gallery logic
    the storefront renders from, instead of re-deriving it here. */
 function loadCatalog(catalogPath) {
@@ -258,7 +258,7 @@ function loadExistingResults(outPath) {
   } catch {
     const backupPath = `${outPath}.corrupt-${Date.now()}.bak`;
     fs.copyFileSync(outPath, backupPath);
-    console.warn(`⚠ ${outPath} was not valid JSON — backed up to ${backupPath} and starting fresh.`);
+    console.warn(`⚠ ${outPath} was not valid JSON - backed up to ${backupPath} and starting fresh.`);
     return map;
   }
   for (const item of payload.items || []) {
@@ -353,7 +353,7 @@ async function classifyImage(base64, mimeType) {
 }
 
 /* Retries transient failures (network blips, 429s) with backoff. On final
-   failure it throws — the caller logs to errors.log and leaves the item
+   failure it throws - the caller logs to errors.log and leaves the item
    unrecorded so the next run retries it automatically.
 
    Backoff is tunable because test mode wants the opposite tradeoff from a
@@ -372,7 +372,7 @@ async function classifyWithRetry(target, { maxRetries = MAX_RETRIES, rateLimitBa
       const isRateLimit = /429|RESOURCE_EXHAUSTED|rate.?limit/i.test(msg);
       if (attempt < maxRetries) {
         const backoff = isRateLimit ? rateLimitBackoffMs * attempt : otherBackoffMs * attempt;
-        console.warn(`  ⚠ attempt ${attempt} failed (${msg}) — retrying in ${Math.round(backoff / 1000)}s...`);
+        console.warn(`  ⚠ attempt ${attempt} failed (${msg}) - retrying in ${Math.round(backoff / 1000)}s...`);
         await sleep(backoff);
       }
     }
@@ -381,7 +381,7 @@ async function classifyWithRetry(target, { maxRetries = MAX_RETRIES, rateLimitBa
 }
 
 /* ── git sync ──
-   execFileSync (argv array, no shell) rather than execSync(string) — avoids
+   execFileSync (argv array, no shell) rather than execSync(string) - avoids
    shell-quoting pitfalls entirely (commit messages, paths with spaces) since
    arguments go straight to the git process. */
 function git(gitArgs) {
@@ -418,20 +418,20 @@ function hasUpstream() {
    Deliberately conservative for an unattended script: refuses to run over a
    dirty tree (won't guess whether to stash or commit someone else's
    in-progress edits) and uses --ff-only (won't fabricate a merge commit if
-   history has diverged — that needs a human). Either case aborts the whole
+   history has diverged - that needs a human). Either case aborts the whole
    run rather than scanning against a workspace that might not match origin. */
 function gitPullLatest() {
   if (!isGitRepo()) {
-    console.warn("⚠ Not inside a git repository — skipping git pull (--no-git to silence this).");
+    console.warn("⚠ Not inside a git repository - skipping git pull (--no-git to silence this).");
     return;
   }
   if (!hasUpstream()) {
-    console.warn("⚠ Current branch has no upstream configured — skipping git pull.");
+    console.warn("⚠ Current branch has no upstream configured - skipping git pull.");
     return;
   }
   if (!isWorkingTreeClean()) {
     throw new Error(
-      "Working tree has uncommitted changes — commit or stash them first.\n" +
+      "Working tree has uncommitted changes - commit or stash them first.\n" +
         "  (auto-pull refuses to run over a dirty tree so it never clobbers in-progress work)\n" +
         git(["status", "--short"])
     );
@@ -443,7 +443,7 @@ function gitPullLatest() {
 
 /* Commits + pushes ONLY clothes_metadata.json (never `git add -A`, so any
    other dirty files are left untouched) and only if that file actually
-   changed — resumed runs where everything was already cached produce no
+   changed - resumed runs where everything was already cached produce no
    commit. A push failure (e.g. someone else pushed in the meantime) is
    reported clearly but never force-pushed; the commit stays local and safe,
    and the classification data was already durable on disk regardless. */
@@ -452,7 +452,7 @@ function gitCommitAndPush(outPath) {
 
   const relPath = path.relative(ROOT, outPath).split(path.sep).join("/");
   if (!hasUncommittedChangesTo(relPath)) {
-    console.log(`\nNo changes to ${relPath} — nothing to commit.`);
+    console.log(`\nNo changes to ${relPath} - nothing to commit.`);
     return;
   }
 
@@ -464,11 +464,11 @@ function gitCommitAndPush(outPath) {
   git(["commit", "-m", message]);
 
   if (NO_PUSH) {
-    console.log("→ --no-push set — commit left local, not pushed.");
+    console.log("→ --no-push set - commit left local, not pushed.");
     return;
   }
   if (!hasUpstream()) {
-    console.warn("⚠ No upstream configured — commit left local. Push manually once (e.g. git push -u origin <branch>).");
+    console.warn("⚠ No upstream configured - commit left local. Push manually once (e.g. git push -u origin <branch>).");
     return;
   }
 
@@ -477,26 +477,26 @@ function gitCommitAndPush(outPath) {
     const out = git(["push"]);
     console.log(`  ${out.trim() || "(pushed)"}`);
   } catch (err) {
-    console.error("✗ git push failed — the commit is saved locally but NOT pushed.");
+    console.error("✗ git push failed - the commit is saved locally but NOT pushed.");
     console.error(`  ${err.stderr || err.message}`);
-    console.error("  Resolve manually (e.g. git pull --rebase && git push) — the classification data is safe on disk either way.");
+    console.error("  Resolve manually (e.g. git pull --rebase && git push) - the classification data is safe on disk either way.");
   }
 }
 
 /* ── test / dry-run mode ──
    Classifies 1-2 sample images and prints Gemini's exact response plus a
    validation checklist. Deliberately never touches clothes_metadata.json,
-   errors.log, or git — safe to run any number of times while wiring up a
+   errors.log, or git - safe to run any number of times while wiring up a
    new API key or model. */
 async function runTestMode() {
-  console.log(`PEAR clothes batch-scan — TEST MODE (model ${MODEL})`);
+  console.log(`PEAR clothes batch-scan - TEST MODE (model ${MODEL})`);
   console.log("Nothing will be saved: clothes_metadata.json/errors.log are not touched, and git is not touched.\n");
 
   let samples;
   if (TEST_URL) {
     samples = [{ itemId: "test", imageUrl: TEST_URL, expectedView: TEST_EXPECT?.[0] || null }];
   } else if (TEST_LIMIT > DEFAULT_TEST_SAMPLES.length) {
-    // More samples requested than the built-in pair can cover — fall through
+    // More samples requested than the built-in pair can cover - fall through
     // to real catalog images instead (requires catalog.js).
     const { PRODUCTS, productImages } = loadCatalog(CATALOG_PATH);
     const targets = buildScanTargets(PRODUCTS, productImages).slice(0, TEST_LIMIT);
@@ -562,12 +562,12 @@ async function runTestMode() {
   console.log("─".repeat(70));
   console.log(`Test mode done. ${passed}/${samples.length} sample(s) passed validation.`);
   console.log("clothes_metadata.json, errors.log, and git were not touched.");
-  console.log(passed === samples.length ? "Looks good — run without --test to scan the full catalog." : "Investigate before running the full scan.");
+  console.log(passed === samples.length ? "Looks good - run without --test to scan the full catalog." : "Investigate before running the full scan.");
 }
 
 /* ── main ── */
 async function main() {
-  console.log(`PEAR clothes batch-scan — model ${MODEL}, ~${RPM} req/min`);
+  console.log(`PEAR clothes batch-scan - model ${MODEL}, ~${RPM} req/min`);
   console.log(`Catalog: ${CATALOG_PATH}`);
   console.log(`Output:  ${OUT_PATH}`);
   console.log(`Errors:  ${ERROR_LOG_PATH}\n`);
@@ -585,7 +585,7 @@ async function main() {
   }
 
   const pending = targets.filter((t) => !resultsMap.has(resumeKey(t)));
-  console.log(`${targets.length - pending.length} already recorded — skipping.`);
+  console.log(`${targets.length - pending.length} already recorded - skipping.`);
   console.log(`${pending.length} to process this run.\n`);
 
   let ok = 0;
@@ -604,16 +604,16 @@ async function main() {
         detectedView: cached.detectedView,
         confidenceScore: cached.confidenceScore,
         garmentType: cached.garmentType,
-        notes: `${cached.notes} (reused — same image already classified for item ${cached.itemId})`,
+        notes: `${cached.notes} (reused - same image already classified for item ${cached.itemId})`,
       };
       resultsMap.set(resumeKey(target), entry);
       persistResults(OUT_PATH, MODEL, resultsMap);
       reused++;
-      console.log(`${label} — reused "${entry.detectedView}" from cache, no API call`);
+      console.log(`${label} - reused "${entry.detectedView}" from cache, no API call`);
       continue;
     }
 
-    console.log(`${label} — classifying ${target.imageUrl}`);
+    console.log(`${label} - classifying ${target.imageUrl}`);
     try {
       const classification = await classifyWithRetry(target);
       const entry = { itemId: target.itemId, imageUrl: target.imageUrl, ...classification };
@@ -625,7 +625,7 @@ async function main() {
     } catch (err) {
       failed++;
       logError(ERROR_LOG_PATH, target, err);
-      console.warn(`  ✗ failed: ${err.message} — logged, will retry on next run`);
+      console.warn(`  ✗ failed: ${err.message} - logged, will retry on next run`);
     }
 
     if (i < pending.length - 1) await sleep(DELAY_MS);

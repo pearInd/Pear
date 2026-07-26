@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="MERIDIAN — modern premium essentials, fitted instantly with the PEAR Camera." />
-  <title>MERIDIAN — Modern Premium Essentials</title>
+  <meta name="description" content="MERIDIAN - modern premium essentials, fitted instantly with the PEAR Camera." />
+  <title>MERIDIAN - Modern Premium Essentials</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -56,13 +56,13 @@
         poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='9'%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23082e73'/%3E%3Cstop offset='1' stop-color='%230b3c95'/%3E%3C/linearGradient%3E%3Crect width='16' height='9' fill='url(%23g)'/%3E%3C/svg%3E"
       >
         <!-- Drop your own loop in the project root as hero-loop.mp4 for full control.
-             Optional — its absence (404) is expected in a fresh checkout, not a bug:
+             Optional - its absence (404) is expected in a fresh checkout, not a bug:
              the browser just moves on to try the next <source>, and if none resolve,
              the script below + the always-present .vhero__fallback CSS gradient behind
              this element carry the whole hero background. -->
         <source src="./hero-loop.mp4" type="video/mp4" />
         <!-- NOTE: the previous stock-loop <source> here (a direct Pexels CDN hotlink)
-             now returns 403 — that CDN doesn't guarantee those direct file URLs stay
+             now returns 403 - that CDN doesn't guarantee those direct file URLs stay
              live indefinitely, so hotlinking one is inherently fragile. Removed rather
              than swapped for another guessed-at URL that could just as easily break
              again; drop a real, licensed hero-loop.mp4 above for full control, or add
@@ -74,16 +74,16 @@
 
     <!-- Hero-video graceful-degradation. Deliberately a tiny, self-contained inline
          script (not folded into store.js) so it can never be delayed/blocked by
-         anything else on the page, and nothing else can be blocked by it either —
+         anything else on the page, and nothing else can be blocked by it either -
          it touches only this one <video> element and never throws past its own
          try/catch.
          The "error" event on a <video> fires on the ELEMENT ITSELF (not each
          <source>) once every candidate source has been tried and none was
-         playable — exactly the "all sources exhausted" signal. What a browser
+         playable - exactly the "all sources exhausted" signal. What a browser
          renders at that point (still the poster? a broken-media glyph? nothing?)
          is inconsistent across engines, so rather than trust that, we explicitly
          hide the video and let the always-present .vhero__fallback CSS gradient
-         (a sibling, already sitting behind it — see style.css) carry the whole
+         (a sibling, already sitting behind it - see style.css) carry the whole
          hero background on its own. This never blocks page rendering: it's a
          passive listener that only runs later, if/when the browser decides the
          video has truly failed. -->
@@ -102,7 +102,7 @@
       <h1 class="vhero__title">Wardrobe<br />in&nbsp;<em>Motion.</em></h1>
       <p class="vhero__text">
         Premium essentials, captured in movement. Preview every piece on yourself
-        in seconds with the PEAR Camera — the fitting room, reimagined.
+        in seconds with the PEAR Camera - the fitting room, reimagined.
       </p>
       <div class="vhero__cta">
         <a class="btn btn--white" href="#new" data-filter="new">Shop New Arrivals</a>
@@ -128,7 +128,7 @@
     </div>
   </section>
 
-  <!-- ░░ LOOKBOOK — solid royal-blue color block ░░ -->
+  <!-- ░░ LOOKBOOK - solid royal-blue color block ░░ -->
   <section class="sec sec--blue lookbook" id="lookbook">
     <div class="wrap">
       <header class="lookbook__head">
@@ -136,7 +136,7 @@
         <h2 class="lookbook__title">The 2026 Lookbook</h2>
         <p class="lookbook__text">
           A study in modern tailoring and considered color. Curated looks from across the
-          collection — every garment ready to try on instantly.
+          collection - every garment ready to try on instantly.
         </p>
       </header>
       <div class="look" id="lookGrid"></div>
@@ -156,7 +156,7 @@
     </div>
   </section>
 
-  <!-- ░░ CATALOG — light gray-blue ░░ -->
+  <!-- ░░ CATALOG - light gray-blue ░░ -->
   <main class="sec sec--gray" id="catalog">
     <div class="wrap">
       <header class="sec__head sec__head--catalog">
@@ -176,7 +176,7 @@
     </div>
   </main>
 
-  <!-- ░░ CUSTOMER FAVORITES — carousel (white) ░░ -->
+  <!-- ░░ CUSTOMER FAVORITES - carousel (white) ░░ -->
   <section class="sec sec--white favs">
     <div class="wrap">
       <header class="sec__head">
@@ -258,7 +258,7 @@
         </div>
       </div>
 
-      <!-- Complete the Look — cross-category recommendation engine -->
+      <!-- Complete the Look - cross-category recommendation engine -->
       <section class="ctl" aria-labelledby="ctlTitle">
         <header class="ctl__head">
           <div>
@@ -274,7 +274,7 @@
     </div>
   </div>
 
-  <!-- ░░ "Upload Your Own Garment" — hidden native file input ░░
+  <!-- ░░ "Upload Your Own Garment" - hidden native file input ░░
        Driven programmatically by the New-Arrivals upload card (store.js). -->
   <input type="file" id="garmentUploadInput" accept="image/*" hidden aria-hidden="true" />
 
@@ -295,7 +295,7 @@
         <button class="gd-close" id="gdClose" type="button" aria-label="Close" data-gd-close>✕</button>
       </header>
 
-      <!-- TOP / BOTTOM segmented toggle — shown only for a full worn outfit; snaps the
+      <!-- TOP / BOTTOM segmented toggle - shown only for a full worn outfit; snaps the
            bounding box between the top-garment and bottom-garment sub-regions. -->
       <div class="gd-tabs" id="gdTabs" role="tablist" aria-label="Garment type" data-active="top" hidden>
         <button class="gd-tab is-active" type="button" role="tab" data-side="top" aria-selected="true">Top</button>
@@ -305,10 +305,10 @@
 
       <div class="gd-stage" id="gdStage">
         <!-- .gd-frame wraps ONLY the image so .gd-boxes { inset:0 } overlaps the
-             rendered image exactly — box coords are % of natural size, scale-free. -->
+             rendered image exactly - box coords are % of natural size, scale-free. -->
         <div class="gd-frame" id="gdFrame">
           <img class="gd-frame__img" id="gdImage" alt="Your uploaded image" decoding="async" />
-          <!-- focus scrim — dims the whole image; each bracket clears its own zone on hover -->
+          <!-- focus scrim - dims the whole image; each bracket clears its own zone on hover -->
           <div class="gd-scrim" aria-hidden="true"></div>
           <div class="gd-boxes" id="gdBoxes"></div>
 
@@ -319,7 +319,7 @@
           </div>
         </div>
 
-        <!-- empty state — no garments detected -->
+        <!-- empty state - no garments detected -->
         <div class="gd-empty" id="gdEmpty" hidden>
           <span class="gd-empty__icon" aria-hidden="true">🔍</span>
           <p class="gd-empty__text">No garments detected.<br /><span>Please try another clear image.</span></p>
