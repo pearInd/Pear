@@ -557,6 +557,7 @@
 
   /* ── STEP 3 — fullscreen modal with the fitting-room iframe ─────────────── */
   var activeOverlay = null;
+  var activeIframe = null;
   var escHandler = null;
 
   function closeModal() {
@@ -564,6 +565,7 @@
       activeOverlay.parentNode.removeChild(activeOverlay);
     }
     activeOverlay = null;
+    activeIframe = null;
     if (escHandler) {
       d.removeEventListener("keydown", escHandler);
       escHandler = null;
@@ -634,6 +636,8 @@
     overlay.appendChild(close);
     d.body.appendChild(overlay);
     activeOverlay = overlay;
+    activeIframe = iframe;
+    return iframe;
   }
 
   /* ── STEP 2 — locate the store's Add-to-Cart button(s) ───────────────────────
@@ -890,20 +894,34 @@
            clicks). Disabled styling is UI; this is the actual gate. */
         if (DEMO_GATE && isDemoGateLockedLocally()) return;
 
-        /* Classify the full gallery, sort front-first/back-second, then open the
-           fitting room immediately with everything — no picker popup. */
+        /* Open the fitting room INSTANTLY on DOM order (no waiting on the server) —
+           the ~1-7s classify-images round trip used to block the modal from opening
+           at all, which felt like the button was broken. Classification now runs in
+           parallel and, if it disagrees with the DOM-order guess, silently corrects
+           the live garment via postMessage once it resolves (see fitting-room/app.js's
+           PEAR_UPDATE_GARMENT listener) — the shopper sees the room immediately and
+           the front/back swap (if any) lands a moment later without a reconnect. */
         var imgs = (garment.images && garment.images.length) ? garment.images : [garment.url];
-        var originalText = btn.textContent;
-        btn.textContent = "מזהה בגד...";
+        var openedIframe = openModal({ url: imgs[0], type: garment.category, name: garment.name, back: imgs[1], images: imgs, variantId: garment.variantId });
+
         classifyImages(imgs).then(function (results) {
-          btn.textContent = originalText;
           var sorted = sortByFrontBack(imgs, results);
           var resolved = resolveFrontBack(imgs, results);
-          openModal({ url: resolved.front, type: garment.category, name: garment.name, back: resolved.back, images: sorted, variantId: garment.variantId });
+          /* Only push a correction if the classifier actually disagrees with the DOM-order
+             guess already showing, and only into the SAME modal that triggered this call
+             (the shopper may have closed it, or opened a different product, in the meantime). */
+          if (activeIframe === openedIframe && (resolved.front !== imgs[0] || resolved.back !== imgs[1])) {
+            try {
+              openedIframe.contentWindow.postMessage({
+                type: "PEAR_UPDATE_GARMENT",
+                garment_url: resolved.front,
+                garment_back: resolved.back,
+                garment_images: sorted
+              }, PEAR_BASE);
+            } catch (_) {}
+          }
         }).catch(function (err) {
           console.warn("[PEAR widget] classify-images failed, using DOM order as-is:", err && err.message);
-          btn.textContent = originalText;
-          openModal({ url: imgs[0], type: garment.category, name: garment.name, back: imgs[1], images: imgs, variantId: garment.variantId });
         });
       });
     }

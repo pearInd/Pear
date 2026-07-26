@@ -1212,6 +1212,32 @@ function selectPearImage(url) {
   hotSwapIfLive("מחליף תמונת מוצר · switching product image");
 }
 
+/* Widget → fitting-room, post-open correction: pear-widget.js now opens this room
+   immediately on its DOM-order guess (see openModal()'s click handler) instead of
+   waiting ~1-7s on /api/classify-images first. When that classification resolves and
+   disagrees with the guess already showing, the widget posts this message so the
+   room can silently swap to the real front/back — no reconnect, no reopening the
+   modal. Trusted only from the embedding parent frame (we don't know the host's
+   origin ahead of time, so e.source is the check, same as any iframe↔parent bridge). */
+window.addEventListener("message", (e) => {
+  if (e.source !== window.parent) return;
+  if (!e.data || e.data.type !== "PEAR_UPDATE_GARMENT") return;
+  const front = e.data.garment_url;
+  const back = e.data.garment_back;
+  if (!activeItem || !front) return;
+  if (activeItem.img === front && activeItem.imgBack === back) return;
+  activeItem.img = front;
+  activeItem.imgBack = back || activeItem.imgBack;
+  if (Array.isArray(e.data.garment_images) && e.data.garment_images.length) {
+    activeItem.pearImages = e.data.garment_images;
+  }
+  currentAngle = "front";
+  renderActiveGarment();
+  renderPerspectiveSelector();
+  renderPearImageSwitcher();
+  hotSwapIfLive("מעדכן תמונת בגד · updating garment view");
+});
+
 /* Sync the live product gallery for the active item + colour. AI Combined is the ONLY
    try-on mode now — there is NO on-screen angle/mode picker (the perspective rail and its
    #perspectiveSelector element were removed). This just hardcodes currentAngle — COMBINED
