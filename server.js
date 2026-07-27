@@ -1120,10 +1120,34 @@ app.get("/api/img-proxy", proxyLimiter, async (req, res) => {
   }
 
   try {
+    /* Browser-like request headers. A bare "PEAR-VTON-Proxy/1.0" UA with no Accept
+       is a common 403 trigger on storefront CDNs (Shopify-backed shops such as
+       fox.co.il, Akamai/Cloudflare-fronted retail CDNs) that bot-filter unknown
+       agents - which surfaced here as "the back image never loads" even though the
+       URL is perfectly valid in a browser tab. Sending a normal Accept + a real UA
+       + an origin-matched Referer makes the proxy look like the page's own <img>
+       fetch. redirect:"follow" is Node's default but pinned explicitly so a CDN's
+       301 to a signed/regional URL can never be mistaken for a failure. */
     const upstream = await fetch(parsed.href, {
-      headers: { "User-Agent": "PEAR-VTON-Proxy/1.0" },
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                      "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 PEAR-VTON-Proxy/1.0",
+        /* JPEG/PNG only, deliberately - NOT the usual browser Accept. Shopify (and
+           most retail CDNs) content-negotiate on this header, so advertising
+           webp/avif makes them transcode and return webp/avif bytes. Those decode
+           fine in a browser, but in AI Auto mode the raw Blob is handed straight to
+           Decart's realtime set(), and its image pipeline is not documented to accept
+           them. Verified empirically against cdn.shopify.com, universalcolours.com,
+           burst.shopifycdn.com and image.hm.com: with this Accept all four return
+           image/jpeg, while a webp-advertising Accept flips three of them to webp. */
+        "Accept": "image/jpeg,image/png,*/*;q=0.5",
+        "Accept-Language": "en-US,en;q=0.9,he;q=0.8",
+        "Referer": parsed.origin + "/",
+      },
     });
     if (!upstream.ok) {
+      console.warn(`[img-proxy] upstream HTTP ${upstream.status} for ${parsed.href}`);
       return res.status(502).json({
         error: "upstream_error",
         message: `Upstream returned HTTP ${upstream.status} for ${parsed.href}`,
@@ -1131,6 +1155,33 @@ app.get("/api/img-proxy", proxyLimiter, async (req, res) => {
     }
     const contentType = upstream.headers.get("content-type") || "image/jpeg";
     const buffer = Buffer.from(await upstream.arrayBuffer());
+
+    /* Content-type gate. Without this, a CDN that answers a hotlink block or a
+       soft-404 with an HTML body + HTTP 200 gets cached and returned here as if it
+       were an image; the browser then fails deep inside createImageBitmap() with an
+       opaque decode error, and the back view silently degrades to front-only. Reject
+       it at the proxy instead, where the reason is visible in the logs.
+
+       DENY-list, not an allow-list, deliberately: plenty of storefront CDNs serve
+       perfectly valid JPEG/WebP bytes as application/octet-stream (or omit the header
+       and get our "image/jpeg" default), so requiring `image/*` would reject real
+       garment photos and re-create the very bug this is meant to catch. Only bodies
+       that are provably NOT an image are refused. */
+    if (/^(text\/|application\/(json|xml|xhtml))/i.test(contentType)) {
+      console.warn(
+        `[img-proxy] non-image content-type "${contentType}" (${buffer.length} bytes) for ${parsed.href} ` +
+        `- likely a hotlink block or soft-404 page`
+      );
+      return res.status(502).json({
+        error: "not_an_image",
+        message: `Upstream returned "${contentType}", not an image, for ${parsed.href}`,
+      });
+    }
+    if (!buffer.length) {
+      console.warn(`[img-proxy] empty body for ${parsed.href}`);
+      return res.status(502).json({ error: "empty_body", message: `Upstream returned 0 bytes for ${parsed.href}` });
+    }
+    console.log(`[img-proxy] ✓ ${contentType} · ${buffer.length.toLocaleString()} bytes · ${parsed.href}`);
 
     // Populate in-process cache (oldest-first eviction at cap).
     if (imgCache.size >= IMG_CACHE_MAX) imgCache.delete(imgCache.keys().next().value);

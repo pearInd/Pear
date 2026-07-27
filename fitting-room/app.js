@@ -807,6 +807,19 @@ function parseHandoff() {
       variantId: q.get("garment_variant_id") || undefined,
       angle: readAngle(),
     };
+    // CHECK B instrumentation - the exact point imgBack is resolved, showing which of
+    // the three sources won, so a blank back can be traced to its origin immediately.
+    console.log("[PEAR] parseHandoff() - back-image resolution:", {
+      garment_url_back: q.get("garment_url_back") || "(absent)",
+      imgBack_param:    q.get("imgBack") || "(absent)",
+      galleryBack:      galleryBack || "(absent)",
+      resolved_imgBack: result.imgBack || "(NONE - back view will be unavailable)",
+      distinct_from_front: !!(result.imgBack && result.imgBack !== result.img),
+    });
+    if (!result.imgBack) {
+      console.error("[PEAR] CRITICAL: no back image in handoff - the garment is single-view, " +
+                    "so turning around cannot render a real rear photo.");
+    }
     console.log("[PEAR] parseHandoff() - widget embed garment:", result);
     return result;
   }
@@ -1176,22 +1189,62 @@ window.addEventListener("message", (e) => {
   const galleryBack = (imgs && imgs[1] && imgs[1] !== front) ? imgs[1] : undefined;
   activeItem.imgBack = back || galleryBack || activeItem.imgBack;
   // currentAngle is deliberately NOT set here: renderPerspectiveSelector() re-derives
-  // it (COMBINED when the corrected pair qualifies, else front) with no user input.
+  // it (AI Auto when the corrected pair qualifies, else front) with no user input.
   renderActiveGarment();
   renderPerspectiveSelector();
+  console.log("[PEAR] PEAR_UPDATE_GARMENT applied - front:", abbrevImg(activeItem.img),
+    "| back:", abbrevImg(activeItem.imgBack) || "(none)", "| mode:", currentAngle);
+
+  /* Race guard (FIX 4). The widget opens this room immediately on a DOM-order guess
+     and only posts the classifier's real front/back 1-7s later, so the corrected back
+     URL can land AFTER goLive() already pre-warmed the Blob cache (or after a stitch
+     was memoized against the OLD pair). Both caches are keyed by URL, so the corrected
+     pair is simply a different key - nothing stale is reused - but the NEW back would
+     otherwise not be fetched until the first turn, adding a visible stall exactly when
+     the user turns around. Re-warming here makes the corrected rear photo resident
+     before it is needed. hotSwapIfLive() below then re-issues the reference in place. */
+  prewarmOrientationAssets();
   hotSwapIfLive("מעדכן תמונת בגד · updating garment view");
 });
 
-/* Sync the live product gallery for the active item + colour. AI Combined is the ONLY
-   try-on mode now — there is NO on-screen angle/mode picker and NO photo switcher (the
-   perspective rail with its #perspectiveSelector element and the #pearImageSwitcher
-   thumbnail row were both removed). This just hardcodes currentAngle — COMBINED when the
-   item ships a real, distinct back (canCombineViews), else a silent "front" fallback so
-   every item stays try-on-able — and refreshes the colour swatch strip. setAngle() and the
-   orientation-watcher engine remain in the file but are no longer wired to any UI.
+/* Sync the live product gallery for the active item + colour. There is NO on-screen
+   angle/mode picker and NO photo switcher (the perspective rail with its
+   #perspectiveSelector element and the #pearImageSwitcher thumbnail row were both
+   removed) — the try-on mode is derived here with no user input:
+     • AI Auto (AUTO_ANGLE)  — the item ships a real, DISTINCT back photo. The
+       OrientationWatcher swaps the live reference between the front and back assets
+       as the shopper turns. This is the mode that makes a rear view actually render.
+     • "front"               — single-view item; nothing to switch to.
+     • AI Combined           — NOT selected here; goLive() falls back to it only when
+       the orientation watcher cannot arm (see the mode-settling block there).
+   setAngle() remains in the file but is not wired to any UI.
    (Name kept as-is: still called from every item/colour swap.) */
 function renderPerspectiveSelector() {
-  if (activeItem) currentAngle = canCombineViews(activeItem) ? COMBINED_ANGLE : "front";
+  /* ── THE BLANK-BACK FIX (mode selection) ──────────────────────────────────────
+     This used to hardcode COMBINED_ANGLE, which is why the back view rendered
+     blank/garbled. COMBINED feeds Lucy ONE stitched 2048×1024 image (front | black
+     bar | back) and *asks the prompt* to pick the correct half as the user turns.
+     Lucy VTON regenerates every frame from that single reference and has no notion
+     of "panels" and no state for "the user turned around" - so on a turn it is left
+     interpreting a reference that is half front, half back and part solid black bar,
+     and renders nothing usable. No amount of prompt wording fixes that, because the
+     mechanism it depends on does not exist in the model.
+
+     AUTO_ANGLE is the architecture this file already documents as the replacement
+     ("Context-Aware Asset Switching... the model only ever sees ONE orientation at a
+     time, so front/back cross-contamination is impossible BY CONSTRUCTION"). It was
+     fully implemented but unreachable: nothing ever set it, so the whole
+     OrientationWatcher / prewarm path was dead code. Selecting it here is what makes
+     a turn actually swap in the real rear photo: the watcher reads the local camera,
+     and on a confirmed flip applyActive() re-issues rtClient.set() with the CLEAN
+     back Blob plus ANGLE_CLAUSE.backReal ("reproduce the BACK... do NOT render the
+     front"). One unambiguous side, one unambiguous instruction.
+
+     Degradation is safe in both directions: if the watcher cannot arm, goLive()
+     falls back to the stitched COMBINED reference; if detection simply never fires,
+     effectiveAngle() stays "front" - identical to the front-only behaviour that
+     already worked. */
+  if (activeItem) currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
   renderColorSwatches();
 }
 
@@ -2169,17 +2222,66 @@ async function fetchGarmentBlob(imgUrl) {
    anonymous cross-origin GET even without img-proxy's SSRF/CORS handling, so this
    recovers cases the proxy alone gives up on - specifically the "back image never
    arrives" failure mode this backs (see prewarmOrientationAssets/maybeSwap). */
-async function fetchWithFallback(url) {
+async function fetchWithFallback(url, attempts = 3) {
   if (!url) return null;
-  try {
-    const blob = await fetchGarmentBlob(url);        // via /api/img-proxy
-    if (blob) return blob;
-  } catch (e) {}
-  try {
-    const resp = await fetch(url);                   // raw CDN URL, no proxy
-    if (resp.ok) return await resp.blob();
-  } catch (e) {}
+  for (let i = 1; i <= attempts; i++) {
+    // Route 1 - our own /api/img-proxy (CORS-clean, SSRF-guarded, content-type checked).
+    try {
+      const blob = await fetchGarmentBlob(url);
+      if (blob) return blob;
+    } catch (e) {
+      console.warn(`[PEAR] fetchWithFallback attempt ${i}/${attempts} - proxy threw:`, e?.message || e);
+    }
+    // Route 2 - the raw CDN URL. Only works for CDNs that send permissive CORS
+    // headers, but when the proxy is the thing that's broken (rate limit, cold
+    // lambda, upstream bot-filter) this is a genuinely independent path.
+    try {
+      const resp = await fetch(url, { mode: "cors", credentials: "omit" });
+      if (resp.ok) {
+        const blob = await resp.blob();
+        if (blob && blob.size > 0) return blob;
+      }
+    } catch (e) {
+      console.warn(`[PEAR] fetchWithFallback attempt ${i}/${attempts} - direct CDN threw:`, e?.message || e);
+    }
+    // Linear backoff between rounds - a cold serverless proxy or a transient CDN
+    // blip usually clears within a second; there is no point hammering it faster.
+    if (i < attempts) await new Promise((r) => setTimeout(r, 400 * i));
+  }
+  console.error(`[PEAR] CRITICAL: image fetch failed after ${attempts} attempts (proxy + direct):`, url);
   return null;
+}
+
+/* Guarantee the bytes handed to Decart are a format its image pipeline definitely
+   accepts. /api/img-proxy already asks CDNs for JPEG/PNG, but two paths can still
+   yield something else: the raw-CDN fallback inside fetchWithFallback() uses the
+   BROWSER's own Accept (which advertises webp/avif), and a store whose master asset
+   is natively webp/avif has nothing to transcode from. In AI Auto mode the Blob goes
+   to rtClient.set({ image }) verbatim, so an exotic format there is a silent
+   "back view didn't render". JPEG and PNG pass through untouched - PNG deliberately
+   so, because flattening a transparent cut-out garment to JPEG would paint its
+   background solid black. Anything else is re-encoded to JPEG. */
+async function normalizeToSupportedImage(blob) {
+  if (!blob || /^image\/(jpeg|png)$/i.test(blob.type || "")) return blob;
+  try {
+    const bmp = await createImageBitmap(blob);
+    const off = typeof OffscreenCanvas !== "undefined"
+      ? new OffscreenCanvas(bmp.width, bmp.height)
+      : Object.assign(document.createElement("canvas"), { width: bmp.width, height: bmp.height });
+    const ctx = off.getContext("2d", { alpha: false });
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close?.();
+    const out = off.convertToBlob
+      ? await off.convertToBlob({ type: "image/jpeg", quality: 0.95 })
+      : await new Promise((res) => off.toBlob(res, "image/jpeg", 0.95));
+    if (out && out.size) {
+      console.log(`[PEAR] normalized ${blob.type || "unknown"} → image/jpeg (${out.size.toLocaleString()} bytes)`);
+      return out;
+    }
+  } catch (e) {
+    console.warn("[PEAR] image normalization failed, passing original through:", e?.message || e);
+  }
+  return blob;   // better to send the original than nothing
 }
 
 /* ── Context-Aware Asset Switching - pre-cached per-orientation Blobs ─────────
@@ -2201,12 +2303,16 @@ function garmentBlobCached(url) {
   console.log('[PEAR] garmentBlobCached result:', 'miss');
   const job = (async () => {
     try {
-      // data:/blob: URLs (custom uploads) decode locally; http(s) rides the same-origin proxy.
-      const blob = /^(data:|blob:)/i.test(url)
+      // data:/blob: URLs (custom uploads) decode locally; http(s) rides the same-origin
+      // proxy with a raw-CDN fallback and retries. This is the path AI Auto uses for
+      // EVERY orientation swap, so a single transient proxy failure here is exactly
+      // what a blank back view looks like to the user - it must not be a one-shot fetch.
+      const raw = /^(data:|blob:)/i.test(url)
         ? await (await fetch(url)).blob()
-        : await fetchGarmentBlob(url);
-      if (!blob) _assetBlobCache.delete(url);      // never cache a failure - allow a retry
-      return blob;
+        : await fetchWithFallback(url);
+      if (!raw) { _assetBlobCache.delete(url); return null; }   // never cache a failure - allow a retry
+      // These bytes go straight to rtClient.set({ image }) in AI Auto mode.
+      return await normalizeToSupportedImage(raw);
     } catch (e) {
       console.warn("[PEAR] asset pre-cache failed:", e?.message || e);
       _assetBlobCache.delete(url);
@@ -2227,21 +2333,23 @@ function prewarmOrientationAssets() {
     const g = galleryOf(it);
     const frontUrl = g.front || it.img;
     const backUrl = (g.back && g.back !== g.front) ? g.back : undefined;
-    console.log('[PEAR] prewarm started for:', frontUrl, backUrl);
+    console.log('[PEAR] prewarm started for:', abbrevImg(frontUrl), '| back:', abbrevImg(backUrl));
     garmentBlobCached(frontUrl).then((frontBlob) => {
-      console.log('[PEAR] prewarm front blob:', frontBlob ? 'ok' : 'FAILED');
+      console.log('[PEAR] prewarm front blob:', frontBlob ? `ok (${frontBlob.size.toLocaleString()} bytes)` : 'FAILED');
     });
+    // garmentBlobCached() now retries through the proxy AND the raw CDN internally
+    // (fetchWithFallback), so no extra fallback layer is needed here - a null result
+    // means all 3 rounds on both routes failed, which is a real, reportable failure.
     if (backUrl) {
-      garmentBlobCached(backUrl).then(async (backBlob) => {
-        if (!backBlob) {
-          console.warn("[PEAR] prewarm back blob - img-proxy fetch failed, trying raw CDN URL:", backUrl);
-          backBlob = await fetchWithFallback(backUrl);
-          if (backBlob) _assetBlobCache.set(backUrl, Promise.resolve(backBlob));   // seed cache so the live swap hits it
+      garmentBlobCached(backUrl).then((backBlob) => {
+        if (backBlob) {
+          console.log(`[PEAR] prewarm back blob: ok (${backBlob.size.toLocaleString()} bytes) - turning around will render the real rear photo`);
+        } else {
+          console.error("[PEAR] CRITICAL: back blob prewarm failed after all retries -", backUrl);
         }
-        console.log('[PEAR] prewarm back blob:', backBlob ? 'ok' : 'FAILED');
       });
     } else {
-      console.log('[PEAR] prewarm back blob:', 'FAILED');
+      console.warn('[PEAR] prewarm back blob: SKIPPED - this garment has no distinct back image');
     }
   }
 }
@@ -2349,17 +2457,19 @@ function createOrientationWatcher() {
     if (applying || Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS) return;
     if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) return;
 
+    /* Verify the rear asset is actually in hand BEFORE committing the flip. Swapping
+       first and discovering the Blob is missing afterwards is what produced a blank
+       back: the prompt would already be steering "render the BACK" while the model
+       still held the front reference. garmentBlobCached() retries internally through
+       the proxy AND the raw CDN, so reaching null here means every route failed - do
+       not stack another retry loop on top of it or the user stands there turned
+       around for ~10s with no feedback. */
+    const gNow = galleryOf(activeItem);
+    const backUrl = (gNow.back && gNow.back !== gNow.front) ? gNow.back : undefined;
     if (next === "back") {
-      const g = galleryOf(activeItem);
-      const backUrl = (g.back && g.back !== g.front) ? g.back : undefined;
-      let backBlob = await garmentBlobCached(backUrl);
-      if (!backBlob && backUrl) {
-        console.warn("[PEAR] AI Auto - back blob missing, retrying fetch:", backUrl);
-        backBlob = await fetchWithFallback(backUrl);
-        if (backBlob) _assetBlobCache.set(backUrl, Promise.resolve(backBlob));
-      }
+      const backBlob = await garmentBlobCached(backUrl);
       if (!backBlob) {
-        console.warn("[PEAR] AI Auto - back image unavailable after retry; staying on front");
+        console.error("[PEAR] CRITICAL: back image unavailable at flip time; staying on front -", backUrl);
         lastSwapAt = Date.now();          // throttle repeat toasts while turned away
         toast("תמונת הגב אינה זמינה");
         return;                           // keep showing the front instead of a blank/failed swap
@@ -2369,9 +2479,8 @@ function createOrientationWatcher() {
     applying = true;
     lastSwapAt = Date.now();
     autoOrientation = next;
-    console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase());
-    console.log('[PEAR] orientation changed to:', next);
-    console.log('[PEAR] applying image:', next === 'back' ? activeItem.imgBack : activeItem.img);
+    console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase(),
+      "| reference:", abbrevImg(next === "back" ? backUrl : (gNow.front || activeItem.img)));
     renderPerspectiveSelector();
     const sel = $("perspectiveSelector");
     if (sel) sel.classList.add("is-syncing");
@@ -2452,16 +2561,25 @@ const _stitchCache = new Map();   // `${frontUrl} ${backUrl}` → Promise<Blob|n
 /* Decode a garment URL into an ImageBitmap without tainting the canvas: http(s) CDN
    URLs go through the same-origin proxy (exactly like the live reference path); data:
    and blob: URLs (custom uploads) are fetched directly - both yield a decodable Blob. */
-async function loadGarmentBitmap(url) {
+async function loadGarmentBitmap(url, attempts = 3) {
   if (!url) throw new Error("no image url");
   let blob;
   if (/^(data:|blob:)/i.test(url)) {
     blob = await (await fetch(url)).blob();
   } else {
-    blob = await fetchWithFallback(url);       // /api/img-proxy, then a raw CDN retry on failure
+    blob = await fetchWithFallback(url, attempts);   // /api/img-proxy, then raw CDN, × attempts
   }
   if (!blob) throw new Error("image fetch failed: " + abbrevImg(url));
-  return await createImageBitmap(blob);
+  // Decode failures are reported separately from fetch failures: a blob that arrived
+  // but won't decode means the bytes are not a usable image (hotlink-block HTML, a
+  // truncated response, an unsupported codec), which is a different fix than a 404.
+  try {
+    return await createImageBitmap(blob);
+  } catch (e) {
+    throw new Error(
+      `image decoded failed (${blob.type || "unknown type"}, ${blob.size} bytes): ` + abbrevImg(url)
+    );
+  }
 }
 
 /* object-fit: cover - fill the target rect (cropping overflow), preserving aspect ratio,
@@ -2518,7 +2636,22 @@ function stitchReferenceBlob(frontUrl, backUrl) {
 
   const job = (async () => {
     try {
-      const [front, back] = await Promise.all([loadGarmentBitmap(frontUrl), loadGarmentBitmap(backUrl)]);
+      /* Front and back are loaded SEPARATELY (not one Promise.all) so a failure names
+         the side that actually broke. Under Promise.all a rejected back was
+         indistinguishable from a rejected front in the logs, which is what made this
+         failure so hard to pin down: the stitch just returned null and the live
+         session silently degraded to a front-only reference.
+         The back gets a cheap single-attempt try first; only if THAT fails do we tell
+         the user we're retrying and spend the full 3-attempt budget on it. */
+      const front = await loadGarmentBitmap(frontUrl);
+      let back = null;
+      try {
+        back = await loadGarmentBitmap(backUrl, 1);
+      } catch (firstErr) {
+        console.warn("[PEAR] back bitmap first attempt failed, retrying:", firstErr?.message || firstErr);
+        toast("טוען תמונת גב…");
+        back = await loadGarmentBitmap(backUrl, 3);   // throws → caught below as CRITICAL
+      }
 
       // FIXED 2048×1024 framing: 924px FRONT box | 200px black bar | 924px BACK box.
       const boxW = COMBINED_BOX, H = COMBINED_H;
@@ -2564,11 +2697,22 @@ function stitchReferenceBlob(frontUrl, backUrl) {
       front.close?.(); back.close?.();             // release decoded bitmaps
 
       // quality 0.95 - retain each view's fine graphics/detail at this high resolution.
-      return off
+      const outBlob = off
         ? await off.convertToBlob({ type: "image/jpeg", quality: 0.95 })
         : await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.95));
+      if (!outBlob || !outBlob.size) throw new Error("canvas produced an empty blob");
+      console.log(
+        `[PEAR] ✓ stitched front+back reference · ${COMBINED_W}×${COMBINED_H} · ` +
+        `${outBlob.size.toLocaleString()} bytes · back=${abbrevImg(backUrl)}`
+      );
+      return outBlob;
     } catch (e) {
-      console.warn("[PEAR] stitchReferenceBlob failed:", e?.message || e);
+      // LOUD on purpose. This is the exact point where "the back view goes blank"
+      // used to happen invisibly: the stitch returned null, referenceImageFor()
+      // quietly fell back to a front-only reference, and Lucy then had no rear
+      // pixels to render at all. It is an error, not a warning.
+      console.error("[PEAR] CRITICAL: back bitmap failed - stitched reference unavailable:",
+        e?.message || e, "\n  front:", abbrevImg(frontUrl), "\n  back :", abbrevImg(backUrl));
       _stitchCache.delete(key);   // never cache a failure - allow a later retry
       return null;
     }
@@ -2863,8 +3007,10 @@ const ANGLE_CLAUSE = {
     " any front graphics, prints, logos or lettering - keeping each element at the SAME size," +
     " height and horizontal position as in the reference. Do NOT render the back of the garment.",
   combined:
-    " This image is two completely separate garment photographs, each isolated inside its own black-framed panel and divided by a WIDE solid-black separator band that is a strict no-man's-land." +
-    " The two panels are distinct, mutually exclusive garment views. The LEFT panel marked 'FRONT' is the ONLY valid source for frontal renders. The RIGHT panel marked 'BACK' is the ONLY valid source for rear renders. Treat the black band and black frames as an impassable wall: you are strictly forbidden from sampling, blending, copying or bleeding ANY pixel from one panel into the other. When the user faces the camera, use ONLY the 'FRONT' panel and completely ignore the 'BACK' panel. When the user turns away, use ONLY the 'BACK' panel and completely ignore the 'FRONT' panel. Mixing the two panels is an invalid render." +
+    " This image is two photographs of the SAME single garment, showing its two different sides, each isolated inside its own black-framed panel and divided by a WIDE solid-black separator band that is a strict no-man's-land." +
+    " The LEFT panel marked 'FRONT' is the FRONT of the garment. The RIGHT panel marked 'BACK' is the BACK of the SAME garment. They are not two different garments and not two different products - they are one garment seen from the front and from behind." +
+    " The LEFT 'FRONT' panel is the ONLY valid source for frontal renders. The RIGHT 'BACK' panel is the ONLY valid source for rear renders. Treat the black band and black frames as an impassable wall: you are strictly forbidden from sampling, blending, copying or bleeding ANY pixel from one panel into the other." +
+    " When the person faces the camera, dress them using ONLY the LEFT 'FRONT' panel and completely ignore the RIGHT panel. When the person turns around and their back faces the camera, dress them using ONLY the RIGHT 'BACK' panel - render its back panel, rear yoke, back collar, rear hemline and any back graphics, prints or lettering - and completely ignore the LEFT panel. Mixing the two panels is an invalid render." +
     " Reproduce the selected panel's garment with 100% fidelity to its graphics and layout." +
     " The 'FRONT' and 'BACK' text markers and the black frames/band are architectural guides only - never render that text, the frames or the band onto the clothing or the person.",
 };
@@ -4481,6 +4627,22 @@ async function goLive() {
     await connectRealtime();
     await waitConnected(CONNECT_TIMEOUT_MS);
     console.log("[PEAR] Decart connected - waiting for first frame");
+
+    /* Settle the try-on mode BEFORE the first reference is built, so exactly one
+       rtClient.set() is issued for it. AI Auto is the mode that actually renders a
+       real rear photo on a turn, but it depends on the OrientationWatcher being able
+       to sample the local camera. If the watcher can't arm (no video track, sampler
+       blocked), AI Auto would silently pin the session to the front asset forever -
+       which is precisely the blank-back symptom. In that case fall back to the
+       stitched front|back composite, which needs no camera analysis at all. */
+    syncOrientationWatcher();
+    if (currentAngle === AUTO_ANGLE && !orientWatcher && canCombineViews(activeItem)) {
+      console.warn("[PEAR] AI Auto watcher unavailable - falling back to AI Combined stitched reference");
+      currentAngle = COMBINED_ANGLE;
+    }
+    console.log("[PEAR] try-on mode:", currentAngle,
+      currentAngle === AUTO_ANGLE ? "(per-orientation asset switching - watcher armed)"
+        : currentAngle === COMBINED_ANGLE ? "(stitched front|back composite)" : "(front only)");
 
     // 2) apply on the live stream - the full look (shirt + pants, ONE payload) when
     //    activeOutfit has both slots filled, else the single active garment. Same session.
