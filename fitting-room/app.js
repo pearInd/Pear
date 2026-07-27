@@ -2428,8 +2428,16 @@ function createOrientationWatcher() {
         // Cross-check a positive face hit against skin-ratio: fastMode detection on a
         // downscaled 96px frame can false-positive on hair/occiput texture, which would
         // otherwise pin every vote to "front" forever with no way to recover. A strong
-        // independent "back" signal from skin-ratio overrides that false positive.
-        if (faces.length > 0) return skinRatioVote() === "back" ? "back" : "front";
+        // independent "back" signal from skin-ratio overrides that false positive; but an
+        // ambiguous (dead-band) skin-ratio reading must abstain too, NOT collapse to
+        // "front" - otherwise a stray false-positive face hit during a genuine turn resets
+        // the confirmation streak on a reading that was never actually confident.
+        if (faces.length > 0) {
+          const skinVote = skinRatioVote();
+          if (skinVote === "back") return "back";
+          if (skinVote === "front") return "front";
+          return null;                          // dead-band - abstain, let the streak stand
+        }
         return "back";
       } catch (_) { fdBroken = true; console.log("[PEAR] AI Auto - FaceDetector unavailable at runtime; using skin-ratio heuristic"); }
     }
