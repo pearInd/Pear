@@ -2410,6 +2410,7 @@ function createOrientationWatcher() {
     ? (() => { try { return new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch (_) { return null; } })()
     : null;
   let fdBroken = false;
+  let lastSkinRatio = null;   // [PEAR][DEBUG-ORIENT] temporary - raw ratio captured by skinRatioVote() for classify() to log; remove alongside the DEBUG-ORIENT log lines below
   console.log("[PEAR] AI Auto - orientation watcher armed (engine:",
     faceDetector ? "FaceDetector + skin-ratio fallback)" : "skin-ratio heuristic)");
 
@@ -2434,14 +2435,21 @@ function createOrientationWatcher() {
         // the confirmation streak on a reading that was never actually confident.
         if (faces.length > 0) {
           const skinVote = skinRatioVote();
+          // [PEAR][DEBUG-ORIENT] temporary - remove once real numbers are captured
+          console.log(`[PEAR][DEBUG-ORIENT] faceDetected=true skinRatio=${lastSkinRatio != null ? lastSkinRatio.toFixed(4) : "n/a"} vote=${skinVote === null ? "null(abstain)" : skinVote}`);
           if (skinVote === "back") return "back";
           if (skinVote === "front") return "front";
           return null;                          // dead-band - abstain, let the streak stand
         }
+        // [PEAR][DEBUG-ORIENT] temporary - remove once real numbers are captured
+        console.log("[PEAR][DEBUG-ORIENT] faceDetected=false skinRatio=n/a(skipped) vote=back");
         return "back";
       } catch (_) { fdBroken = true; console.log("[PEAR] AI Auto - FaceDetector unavailable at runtime; using skin-ratio heuristic"); }
     }
-    return skinRatioVote();
+    const fallbackVote = skinRatioVote();
+    // [PEAR][DEBUG-ORIENT] temporary - remove once real numbers are captured
+    console.log(`[PEAR][DEBUG-ORIENT] faceDetected=n/a skinRatio=${lastSkinRatio != null ? lastSkinRatio.toFixed(4) : "n/a"} vote=${fallbackVote === null ? "null(abstain)" : fallbackVote}`);
+    return fallbackVote;
   }
 
   /* Skin-tone share of the head band. Classic RGB skin rule - coarse, but the dual
@@ -2458,6 +2466,7 @@ function createOrientationWatcher() {
       if (r > 95 && g > 40 && b > 20 && mx - mn > 15 && Math.abs(r - g) > 15 && r > g && r > b) skin++;
     }
     const ratio = skin / total;
+    lastSkinRatio = ratio;   // [PEAR][DEBUG-ORIENT] temporary - captured for classify()'s log lines
     if (ratio >= 0.10) return "front";
     if (ratio <= 0.04) return "back";
     return null;                                  // ambiguous (profile/transition) - abstain
