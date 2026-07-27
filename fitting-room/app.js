@@ -2411,6 +2411,12 @@ function createOrientationWatcher() {
     : null;
   let fdBroken = false;
   let lastSkinRatio = null;   // [PEAR][DEBUG-ORIENT] temporary - raw ratio captured by skinRatioVote() for classify() to log; remove alongside the DEBUG-ORIENT log lines below
+  // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - session-wide min/max/histogram, remove alongside the summary logging below
+  let skinRatioMin = Infinity, skinRatioMax = -Infinity;
+  const voteHistogram = { front: 0, back: 0, abstain: 0 };
+  function logOrientSummary(tag) {
+    console.log(`[PEAR][DEBUG-ORIENT-SUMMARY]${tag} min=${skinRatioMin === Infinity ? "n/a" : skinRatioMin.toFixed(4)} max=${skinRatioMax === -Infinity ? "n/a" : skinRatioMax.toFixed(4)} voteHistogram={front: ${voteHistogram.front}, back: ${voteHistogram.back}, abstain: ${voteHistogram.abstain}} faceDetectorEngine=${!faceDetector ? "unavailable(FaceDetector unsupported in this browser)" : fdBroken ? "broke-at-runtime(fell back to skin-ratio)" : "active"}`);
+  }
   console.log("[PEAR] AI Auto - orientation watcher armed (engine:",
     faceDetector ? "FaceDetector + skin-ratio fallback)" : "skin-ratio heuristic)");
 
@@ -2467,6 +2473,9 @@ function createOrientationWatcher() {
     }
     const ratio = skin / total;
     lastSkinRatio = ratio;   // [PEAR][DEBUG-ORIENT] temporary - captured for classify()'s log lines
+    // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - session-wide range, remove alongside the summary logging
+    if (ratio < skinRatioMin) skinRatioMin = ratio;
+    if (ratio > skinRatioMax) skinRatioMax = ratio;
     if (ratio >= 0.10) return "front";
     if (ratio <= 0.04) return "back";
     return null;                                  // ambiguous (profile/transition) - abstain
@@ -2522,6 +2531,8 @@ function createOrientationWatcher() {
     sampling = true;
     try {
       const vote = await classify();
+      // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - tally every tick's outcome, remove alongside the summary logging
+      voteHistogram[vote === "front" ? "front" : vote === "back" ? "back" : "abstain"]++;
       if (vote) {
         streak = vote === lastVote ? streak + 1 : 1;
         lastVote = vote;
@@ -2530,10 +2541,16 @@ function createOrientationWatcher() {
     } catch (_) {} finally { sampling = false; }
   }, ORIENT_SAMPLE_MS);
 
+  // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - periodic checkpoint so we don't have to catch the
+  // exact right moment in the raw per-tick log; remove alongside the rest of this instrumentation
+  const summaryTimer = setInterval(() => logOrientSummary(""), 2000);
+
   return {
     stop() {
       disposed = true;
       clearInterval(timer);
+      clearInterval(summaryTimer);
+      logOrientSummary(" (session end)");   // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - final tally
       try { video.pause(); } catch (_) {}
       video.srcObject = null;                    // detach only - the track is the preview's
     },
