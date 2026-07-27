@@ -2417,6 +2417,25 @@ function createOrientationWatcher() {
   function logOrientSummary(tag) {
     console.log(`[PEAR][DEBUG-ORIENT-SUMMARY]${tag} min=${skinRatioMin === Infinity ? "n/a" : skinRatioMin.toFixed(4)} max=${skinRatioMax === -Infinity ? "n/a" : skinRatioMax.toFixed(4)} voteHistogram={front: ${voteHistogram.front}, back: ${voteHistogram.back}, abstain: ${voteHistogram.abstain}} faceDetectorEngine=${!faceDetector ? "unavailable(FaceDetector unsupported in this browser)" : fdBroken ? "broke-at-runtime(fell back to skin-ratio)" : "active"}`);
   }
+  // [PEAR][DEBUG-ORIENT-SNAPSHOT] temporary - visual capture of the exact sub-rect skinRatioVote()
+  // samples (same x/w/h formula, independently recomputed here so skinRatioVote() itself stays
+  // untouched), so we can SEE whether it's background/hair/neck-skin driving the ratio. Remove
+  // alongside the rest of this instrumentation.
+  const snapX = Math.round(ORIENT_SIZE * 0.25), snapW = Math.round(ORIENT_SIZE * 0.5), snapH = Math.round(ORIENT_SIZE * 0.45);
+  const snapCanvas = document.createElement("canvas");
+  snapCanvas.width = snapW; snapCanvas.height = snapH;
+  const snapCtx = snapCanvas.getContext("2d");
+  function logOrientSnapshot() {
+    try {
+      snapCtx.drawImage(canvas, snapX, 0, snapW, snapH, 0, 0, snapW, snapH);
+      const dataUrl = snapCanvas.toDataURL("image/png");
+      // Chrome/Edge devtools image preview trick - renders inline via the CSS background.
+      console.log("%c ", `font-size:1px; padding:${snapH * 3}px ${snapW * 3}px; background:url(${dataUrl}) no-repeat center/contain; border:1px solid magenta;`);
+      console.log("[PEAR][DEBUG-ORIENT-SNAPSHOT] sampled sub-rect dataURL (paste into a new tab if the preview above doesn't render):", dataUrl);
+    } catch (e) {
+      console.warn("[PEAR][DEBUG-ORIENT-SNAPSHOT] capture failed:", e?.message || e);
+    }
+  }
   console.log("[PEAR] AI Auto - orientation watcher armed (engine:",
     faceDetector ? "FaceDetector + skin-ratio fallback)" : "skin-ratio heuristic)");
 
@@ -2543,7 +2562,7 @@ function createOrientationWatcher() {
 
   // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - periodic checkpoint so we don't have to catch the
   // exact right moment in the raw per-tick log; remove alongside the rest of this instrumentation
-  const summaryTimer = setInterval(() => logOrientSummary(""), 2000);
+  const summaryTimer = setInterval(() => { logOrientSummary(""); logOrientSnapshot(); }, 2000);
 
   return {
     stop() {
@@ -2551,6 +2570,7 @@ function createOrientationWatcher() {
       clearInterval(timer);
       clearInterval(summaryTimer);
       logOrientSummary(" (session end)");   // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - final tally
+      logOrientSnapshot();                  // [PEAR][DEBUG-ORIENT-SNAPSHOT] temporary - final capture
       try { video.pause(); } catch (_) {}
       video.srcObject = null;                    // detach only - the track is the preview's
     },
