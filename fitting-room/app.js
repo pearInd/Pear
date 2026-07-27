@@ -2377,7 +2377,7 @@ function prewarmOrientationAssets() {
    The watcher never touches the camera track (shared with the preview); stop() only
    detaches its own <video> sampler. Lifecycle is owned by syncOrientationWatcher(). */
 const ORIENT_SAMPLE_MS   = 250;   // ~4 analyses/s - cheap on a 96px canvas
-const ORIENT_CONFIRM     = 3;     // consecutive agreeing samples to flip (~750ms)
+const ORIENT_CONFIRM     = 1;     // consecutive agreeing samples to flip - instant switch, no confirm delay
 const ORIENT_COOLDOWN_MS = 1500;  // min gap between live reference swaps (anti-flap)
 const ORIENT_SIZE        = 96;    // analysis canvas edge - tiny on purpose
 
