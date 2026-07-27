@@ -309,6 +309,7 @@
      reference (best-effort - gallery order is a storefront convention, not a rule). */
   function findGalleryBack(primaryUrl, root) {
     var shopifyId = getShopifyProductId();
+    var primaryRegexId = extractProductId(primaryUrl);
     var sel = (root || d).querySelectorAll(PRODUCT_IMG_SELECTORS);
     for (var i = 0; i < sel.length; i++) {
       var el = sel[i];
@@ -316,7 +317,11 @@
       if (!el || el.tagName !== "IMG") continue;
       var src = el.currentSrc || el.src || "";
       if (!src || isExcludedSrc(src) || samePhoto(src, primaryUrl)) continue;
-      if (shopifyId && src.indexOf(shopifyId) === -1) continue;   // different product - skip
+      // Same confirm-don't-veto logic as collectGalleryImages - see its comment.
+      if (!(shopifyId && src.indexOf(shopifyId) !== -1)) {
+        var candId = extractProductId(src);
+        if (primaryRegexId && candId && candId !== primaryRegexId) continue;   // different product - skip
+      }
       return src;
     }
     return "";
@@ -402,26 +407,28 @@
   function collectGalleryImages(primaryUrl, root) {
     var urls = [];
     var seenPaths = [];
-    /* Ground-truth product id (Shopify) takes over the filter outright, and treats
-       a non-match as a real rejection, not just a "no signal" - this call is often
-       made with root=d (whole document, see resolvePrimaryProductImage's og:image
-       path), so on a page with related/recommended-product rails using the same
-       THUMB_SELECTORS markup, the regex-only heuristic below could otherwise admit
-       a sibling product's photo whenever its filename didn't yield an extractable
-       id. The primary image is always kept regardless - it was already resolved
-       as THIS product's photo by the caller. */
+    /* Ground-truth product id (Shopify) is a CONFIRMING signal, not a veto: when
+       a candidate's URL contains it, that's a strong same-product match, but its
+       ABSENCE is not proof of a different product - most Shopify themes (fox.co.il
+       included, see the test image "1823292409-1.jpg") name CDN files after an
+       asset/media id, never the product's own internal id, so requiring a literal
+       substring match rejected every real gallery thumbnail and collapsed the
+       gallery down to just the primary image. Fall back to the regex heuristic
+       (extractProductId) - which IS validated against fox.co.il's naming scheme -
+       whenever the Shopify id doesn't literally appear; only reject on an actual
+       regex-id disagreement. The primary image is always kept regardless - it was
+       already resolved as THIS product's photo by the caller. */
     var shopifyId = getShopifyProductId();
-    var primaryId = shopifyId || extractProductId(primaryUrl);
+    var primaryRegexId = extractProductId(primaryUrl);
     function add(u, isPrimary) {
       if (!u || isExcludedSrc(u)) return;
       var path = u.split("?")[0];
       if (seenPaths.indexOf(path) !== -1) return;
       if (!isPrimary) {
-        if (shopifyId) {
-          if (u.indexOf(shopifyId) === -1) return;   // ground truth - must actually match
-        } else {
+        var confirmedByShopifyId = shopifyId && u.indexOf(shopifyId) !== -1;
+        if (!confirmedByShopifyId) {
           var candId = extractProductId(u);
-          if (primaryId && candId && candId !== primaryId) return;   // different product - skip
+          if (primaryRegexId && candId && candId !== primaryRegexId) return;   // different product - skip
         }
       }
       seenPaths.push(path);
@@ -435,6 +442,7 @@
       if (!el || el.tagName !== "IMG") continue;
       add(el.currentSrc || el.src || "");
     }
+    console.log("[PEAR widget] collectGalleryImages() - collected " + urls.length + " image(s):", urls);
     return urls;
   }
 
@@ -933,11 +941,14 @@
            PEAR_UPDATE_GARMENT listener) - the shopper sees the room immediately and
            the front/back swap (if any) lands a moment later without a reconnect. */
         var imgs = (garment.images && garment.images.length) ? garment.images : [garment.url];
+        console.log("[PEAR widget] button click - sending " + imgs.length + " image(s) to classify-images:", imgs);
         var openedIframe = openModal({ url: imgs[0], type: garment.category, name: garment.name, back: imgs[1], images: imgs, variantId: garment.variantId });
 
         classifyImages(imgs).then(function (results) {
+          console.log("[PEAR widget] classify-images results (" + results.length + "):", results);
           var sorted = sortByFrontBack(imgs, results);
           var resolved = resolveFrontBack(imgs, results);
+          console.log("[PEAR widget] resolved front/back:", resolved);
           /* Only push a correction if the classifier actually disagrees with the DOM-order
              guess already showing, and only into the SAME modal that triggered this call
              (the shopper may have closed it, or opened a different product, in the meantime). */
