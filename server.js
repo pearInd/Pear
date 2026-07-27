@@ -1174,7 +1174,22 @@ async function classifyFrontBack(imageUrl) {
     body: JSON.stringify({
       contents: [{
         parts: [
-          { text: "Is this the front or the back of the garment? Answer with exactly one word: front or back" },
+          { text:
+              "You are analyzing a clothing product image.\n" +
+              "Look carefully at the garment only, ignore any model or person.\n\n" +
+              "FRONT indicators:\n" +
+              "- Buttons, zipper, or collar visible from the front\n" +
+              "- Chest pocket, front logo, or front design\n" +
+              "- Neckline visible from the front\n" +
+              "- The main/primary view of the garment\n\n" +
+              "BACK indicators:\n" +
+              "- Back seam or back panel visible\n" +
+              "- Back of collar or back neckline\n" +
+              "- Back zipper or back design\n" +
+              "- The reverse/secondary view of the garment\n\n" +
+              "If this is a detail shot, side view, or lifestyle image\n" +
+              "(not clearly front or back) — answer 'front' as default.\n\n" +
+              "Answer with exactly one word: front or back" },
           { inline_data: { mime_type: mimeType, data: base64 } },
         ],
       }],

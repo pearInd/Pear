@@ -1027,6 +1027,9 @@ function enterRoom() {
     focusMode = true;
     document.body.classList.add("focus-mode");
     setActiveItem(toItem(handoff), { silent: true });
+    const params = new URLSearchParams(location.search);
+    console.log('[PEAR] garment_back param:', params.get('garment_url_back'));
+    console.log('[PEAR] activeItem.imgBack set to:', activeItem?.imgBack);
     $("focusBar").hidden = false;
     $("catalogPanel").hidden = true;
     if (currentUserSize) $("focusSizeBadge").innerText = "מידה " + currentUserSize;
@@ -2160,6 +2163,25 @@ async function fetchGarmentBlob(imgUrl) {
   }
 }
 
+/* Fallback for a garment fetch that fails through /api/img-proxy (upstream error,
+   proxy rate limit, transient network blip): retry once via the proxy, then fall
+   back to fetching the raw CDN URL directly from the browser. Some CDNs allow an
+   anonymous cross-origin GET even without img-proxy's SSRF/CORS handling, so this
+   recovers cases the proxy alone gives up on - specifically the "back image never
+   arrives" failure mode this backs (see prewarmOrientationAssets/maybeSwap). */
+async function fetchWithFallback(url) {
+  if (!url) return null;
+  try {
+    const blob = await fetchGarmentBlob(url);        // via /api/img-proxy
+    if (blob) return blob;
+  } catch (e) {}
+  try {
+    const resp = await fetch(url);                   // raw CDN URL, no proxy
+    if (resp.ok) return await resp.blob();
+  } catch (e) {}
+  return null;
+}
+
 /* ── Context-Aware Asset Switching - pre-cached per-orientation Blobs ─────────
    The instant-swap guarantee: rtClient.set({ image }) accepts a Blob directly, and a Blob
    ships the bytes over the already-open session - Decart never has to fetch a URL server-
@@ -2210,7 +2232,12 @@ function prewarmOrientationAssets() {
       console.log('[PEAR] prewarm front blob:', frontBlob ? 'ok' : 'FAILED');
     });
     if (backUrl) {
-      garmentBlobCached(backUrl).then((backBlob) => {
+      garmentBlobCached(backUrl).then(async (backBlob) => {
+        if (!backBlob) {
+          console.warn("[PEAR] prewarm back blob - img-proxy fetch failed, trying raw CDN URL:", backUrl);
+          backBlob = await fetchWithFallback(backUrl);
+          if (backBlob) _assetBlobCache.set(backUrl, Promise.resolve(backBlob));   // seed cache so the live swap hits it
+        }
         console.log('[PEAR] prewarm back blob:', backBlob ? 'ok' : 'FAILED');
       });
     } else {
@@ -2321,6 +2348,24 @@ function createOrientationWatcher() {
   async function maybeSwap(next) {
     if (applying || Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS) return;
     if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) return;
+
+    if (next === "back") {
+      const g = galleryOf(activeItem);
+      const backUrl = (g.back && g.back !== g.front) ? g.back : undefined;
+      let backBlob = await garmentBlobCached(backUrl);
+      if (!backBlob && backUrl) {
+        console.warn("[PEAR] AI Auto - back blob missing, retrying fetch:", backUrl);
+        backBlob = await fetchWithFallback(backUrl);
+        if (backBlob) _assetBlobCache.set(backUrl, Promise.resolve(backBlob));
+      }
+      if (!backBlob) {
+        console.warn("[PEAR] AI Auto - back image unavailable after retry; staying on front");
+        lastSwapAt = Date.now();          // throttle repeat toasts while turned away
+        toast("תמונת הגב אינה זמינה");
+        return;                           // keep showing the front instead of a blank/failed swap
+      }
+    }
+
     applying = true;
     lastSwapAt = Date.now();
     autoOrientation = next;

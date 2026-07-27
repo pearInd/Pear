@@ -963,7 +963,10 @@
           console.log("[PEAR widget] classify-images results (" + results.length + "):", results);
           var sorted = sortByFrontBack(imgs, results);
           var resolved = resolveFrontBack(imgs, results);
+          var frontUrl = resolved.front, backUrl = resolved.back;
           console.log("[PEAR widget] resolved front/back:", resolved);
+          console.log("[PEAR widget] front:", frontUrl);
+          console.log("[PEAR widget] back:", backUrl);
           /* Only push a correction if the classifier actually disagrees with the DOM-order
              guess already showing, and only into the SAME modal that triggered this call
              (the shopper may have closed it, or opened a different product, in the meantime). */
