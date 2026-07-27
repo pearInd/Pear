@@ -420,6 +420,9 @@
        already resolved as THIS product's photo by the caller. */
     var shopifyId = getShopifyProductId();
     var primaryRegexId = extractProductId(primaryUrl);
+    console.log('[PEAR] primary URL:', primaryUrl);
+    console.log('[PEAR] shopifyId:', shopifyId);
+    var rejected = [];
     function add(u, isPrimary) {
       if (!u || isExcludedSrc(u)) return;
       var path = u.split("?")[0];
@@ -428,7 +431,10 @@
         var confirmedByShopifyId = shopifyId && u.indexOf(shopifyId) !== -1;
         if (!confirmedByShopifyId) {
           var candId = extractProductId(u);
-          if (primaryRegexId && candId && candId !== primaryRegexId) return;   // different product - skip
+          if (primaryRegexId && candId && candId !== primaryRegexId) {
+            rejected.push(u);
+            return;   // different product - skip
+          }
         }
       }
       seenPaths.push(path);
@@ -436,13 +442,19 @@
     }
     add(primaryUrl, true);
     var imgs = (root || d).querySelectorAll(THUMB_SELECTORS);
+    var candidates = [];
     for (var i = 0; i < imgs.length; i++) {
       var el = imgs[i];
       if (el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
       if (!el || el.tagName !== "IMG") continue;
-      add(el.currentSrc || el.src || "");
+      var src = el.currentSrc || el.src || "";
+      candidates.push(src);
+      add(src);
     }
-    console.log("[PEAR widget] collectGalleryImages() - collected " + urls.length + " image(s):", urls);
+    console.log('[PEAR] THUMB_SELECTORS matched', imgs.length, 'element(s) under root:', root || d);
+    console.log('[PEAR] all candidates before filter:', candidates);
+    console.log('[PEAR] rejected by id filter:', rejected);
+    console.log('[PEAR] candidates after filter:', urls);
     return urls;
   }
 
@@ -808,6 +820,7 @@
     if (primaryUrl) {
       var pgName = getGarmentName();
       var pgImages = collectGalleryImages(primaryUrl, d);
+      console.log('[PEAR] final imgs array:', pgImages);
       return {
         url: primaryUrl,
         back: findGalleryBack(primaryUrl, d),
@@ -828,6 +841,7 @@
         if (url && !isExcludedSrc(url)) {
           var name = cardNameFor(node, img);
           var cardImages = collectGalleryImages(url, node);
+          console.log('[PEAR] final imgs array:', cardImages);
           return {
             url: url,
             back: explicitAttr(img, "data-pear-back") || findGalleryBack(url, node),
@@ -845,6 +859,7 @@
     if (primary && primary.url) {
       var pname = getGarmentName();
       var fallbackImages = collectGalleryImages(primary.url, d);
+      console.log('[PEAR] final imgs array:', fallbackImages);
       return {
         url: primary.url, back: primary.back,
         images: fallbackImages,
