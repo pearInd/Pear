@@ -2458,7 +2458,7 @@ async function loadGarmentBitmap(url) {
   if (/^(data:|blob:)/i.test(url)) {
     blob = await (await fetch(url)).blob();
   } else {
-    blob = await fetchGarmentBlob(url);        // via /api/img-proxy → CORS-clean, decodable
+    blob = await fetchWithFallback(url);       // /api/img-proxy, then a raw CDN retry on failure
   }
   if (!blob) throw new Error("image fetch failed: " + abbrevImg(url));
   return await createImageBitmap(blob);
@@ -2954,6 +2954,7 @@ async function referenceImageFor(item, activeImg = activeImageOf(item)) {
     const blob = await stitchReferenceBlob(g.front || item.img, g.back || g.front || item.img);
     if (blob) return blob;                 // Blob → set({ image }) accepts it directly
     console.warn("[PEAR] AI Combined View - stitch failed; falling back to front reference");
+    toast("תמונת הגב אינה זמינה");        // canCombineViews() already confirmed a real back exists - this is a fetch failure, not a missing photo
   }
   // AI Auto - the pre-cached Blob for the DETECTED orientation (activeImg already resolved
   // through effectiveAngle()). Sending bytes, not a URL, is what makes the swap instant.
