@@ -2138,7 +2138,8 @@ function waitConnected(timeout) {
  * Returns null on any error so the caller can fall back to the raw URL or prompt-only.
  */
 async function fetchGarmentBlob(imgUrl) {
-  if (!imgUrl) return null;
+  console.log('[PEAR] fetchGarmentBlob url:', imgUrl);
+  if (!imgUrl) { console.log('[PEAR] fetchGarmentBlob result:', 'NULL'); return null; }
   const proxyUrl = `/api/img-proxy?url=${encodeURIComponent(imgUrl)}`;
   console.log("[PEAR] fetchGarmentBlob() - GET", proxyUrl);
   try {
@@ -2146,11 +2147,15 @@ async function fetchGarmentBlob(imgUrl) {
     console.log("[PEAR] fetchGarmentBlob() - response", resp.status, resp.ok ? "OK" : "FAILED", "for", imgUrl);
     if (!resp.ok) {
       console.warn("[PEAR] img-proxy returned", resp.status, "for", imgUrl);
+      console.log('[PEAR] fetchGarmentBlob result:', 'NULL');
       return null;
     }
-    return await resp.blob();
+    const blob = await resp.blob();
+    console.log('[PEAR] fetchGarmentBlob result:', blob ? 'success' : 'NULL');
+    return blob;
   } catch (e) {
     console.warn("[PEAR] img-proxy fetch error:", e?.message || e);
+    console.log('[PEAR] fetchGarmentBlob result:', 'NULL');
     return null;
   }
 }
@@ -2165,8 +2170,13 @@ async function fetchGarmentBlob(imgUrl) {
 const _assetBlobCache = new Map();   // url → Promise<Blob|null>
 
 function garmentBlobCached(url) {
-  if (!url) return Promise.resolve(null);
-  if (_assetBlobCache.has(url)) return _assetBlobCache.get(url);
+  console.log('[PEAR] garmentBlobCached url:', url);
+  if (!url) { console.log('[PEAR] garmentBlobCached result:', 'miss'); return Promise.resolve(null); }
+  if (_assetBlobCache.has(url)) {
+    console.log('[PEAR] garmentBlobCached result:', 'hit');
+    return _assetBlobCache.get(url);
+  }
+  console.log('[PEAR] garmentBlobCached result:', 'miss');
   const job = (async () => {
     try {
       // data:/blob: URLs (custom uploads) decode locally; http(s) rides the same-origin proxy.
@@ -2193,8 +2203,19 @@ function prewarmOrientationAssets() {
   for (const it of (look ? [look.top, look.bottom] : [activeItem])) {
     if (!it) continue;
     const g = galleryOf(it);
-    garmentBlobCached(g.front || it.img);
-    if (g.back && g.back !== g.front) garmentBlobCached(g.back);
+    const frontUrl = g.front || it.img;
+    const backUrl = (g.back && g.back !== g.front) ? g.back : undefined;
+    console.log('[PEAR] prewarm started for:', frontUrl, backUrl);
+    garmentBlobCached(frontUrl).then((frontBlob) => {
+      console.log('[PEAR] prewarm front blob:', frontBlob ? 'ok' : 'FAILED');
+    });
+    if (backUrl) {
+      garmentBlobCached(backUrl).then((backBlob) => {
+        console.log('[PEAR] prewarm back blob:', backBlob ? 'ok' : 'FAILED');
+      });
+    } else {
+      console.log('[PEAR] prewarm back blob:', 'FAILED');
+    }
   }
 }
 
@@ -2304,6 +2325,8 @@ function createOrientationWatcher() {
     lastSwapAt = Date.now();
     autoOrientation = next;
     console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase());
+    console.log('[PEAR] orientation changed to:', next);
+    console.log('[PEAR] applying image:', next === 'back' ? activeItem.imgBack : activeItem.img);
     renderPerspectiveSelector();
     const sel = $("perspectiveSelector");
     if (sel) sel.classList.add("is-syncing");
@@ -2902,6 +2925,13 @@ async function applyGarment(item) {
 
   const activeImg = activeImageOf(item);
   const imageRef  = await referenceImageFor(item, activeImg);   // Blob for combined, URL otherwise
+
+  if (effectiveAngle() === "back") {
+    const isBlob = typeof Blob !== "undefined" && imageRef instanceof Blob;
+    console.log('[PEAR] applyGarment image:', activeImg);
+    console.log('[PEAR] applyGarment blob:', isBlob ? 'ok' : 'NULL - will use URL fallback');
+  }
+
   const payload = {
     prompt: buildPrompt(item) + angleClause(item),
     enhance: false,
