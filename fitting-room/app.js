@@ -2425,7 +2425,12 @@ function createOrientationWatcher() {
     if (faceDetector && !fdBroken) {
       try {
         const faces = await faceDetector.detect(canvas);
-        return faces.length > 0 ? "front" : "back";
+        // Cross-check a positive face hit against skin-ratio: fastMode detection on a
+        // downscaled 96px frame can false-positive on hair/occiput texture, which would
+        // otherwise pin every vote to "front" forever with no way to recover. A strong
+        // independent "back" signal from skin-ratio overrides that false positive.
+        if (faces.length > 0) return skinRatioVote() === "back" ? "back" : "front";
+        return "back";
       } catch (_) { fdBroken = true; console.log("[PEAR] AI Auto - FaceDetector unavailable at runtime; using skin-ratio heuristic"); }
     }
     return skinRatioVote();
