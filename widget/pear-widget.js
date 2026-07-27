@@ -274,6 +274,22 @@
     return matches.reduce(function (longest, m) { return m.length > longest.length ? m : longest; });
   }
 
+  /* Ground-truth product id straight from the store's own page data, when the
+     platform exposes one - far more reliable than guessing a numeric run out of
+     a CDN filename (extractProductId above), which can't tell a product id from
+     an unrelated asset/variant id that happens to also be 6+ digits. Currently
+     Shopify only (window.ShopifyAnalytics.meta.product.id, or the older
+     window.meta.product.id some themes still expose); "" means no signal, same
+     contract as extractProductId, so non-Shopify stores fall back to it untouched. */
+  function getShopifyProductId() {
+    try {
+      var id = (w.ShopifyAnalytics && w.ShopifyAnalytics.meta && w.ShopifyAnalytics.meta.product &&
+                 w.ShopifyAnalytics.meta.product.id) ||
+                (w.meta && w.meta.product && w.meta.product.id);
+      return id ? String(id) : "";
+    } catch (_) { return ""; }
+  }
+
   function explicitAttr(img, name) {
     return readAttr(img, name) || readAttr(img.parentElement, name);
   }
@@ -292,6 +308,7 @@
   /* Fall back to the next distinct product-gallery image as an approximate rear
      reference (best-effort - gallery order is a storefront convention, not a rule). */
   function findGalleryBack(primaryUrl, root) {
+    var shopifyId = getShopifyProductId();
     var sel = (root || d).querySelectorAll(PRODUCT_IMG_SELECTORS);
     for (var i = 0; i < sel.length; i++) {
       var el = sel[i];
@@ -299,6 +316,7 @@
       if (!el || el.tagName !== "IMG") continue;
       var src = el.currentSrc || el.src || "";
       if (!src || isExcludedSrc(src) || samePhoto(src, primaryUrl)) continue;
+      if (shopifyId && src.indexOf(shopifyId) === -1) continue;   // different product - skip
       return src;
     }
     return "";
@@ -375,28 +393,41 @@
      stays the loaded-on-open garment; gallery thumbnails follow in DOM order. De-duped on the
      path (CDNs vary query params), decorative images excluded.
 
-     Also filtered to the SAME PRODUCT as primaryUrl (via extractProductId): `root`
-     scopes the THUMB_SELECTORS query, but a root that's climbed too high (a shared
-     grid/collection container - see findGarmentForButton's ancestor walk-up) or a
-     deliberately page-wide root can still surface a sibling product's thumbnails.
-     The id check is the second, independent line of defense against that. Only
-     enforced when BOTH images carry an extractable id and they disagree - a
-     mismatch is a different product; "no id on one side" is treated as no signal
-     so stores without numeric CDN ids aren't over-filtered. */
+     Also filtered to the SAME PRODUCT as primaryUrl: `root` scopes the THUMB_SELECTORS
+     query, but a root that's climbed too high (a shared grid/collection container -
+     see findGarmentForButton's ancestor walk-up) or a deliberately page-wide root
+     can still surface a sibling product's thumbnails. The id check below is the
+     second, independent line of defense against that - see getShopifyProductId /
+     extractProductId's own comments for how the two id sources differ. */
   function collectGalleryImages(primaryUrl, root) {
     var urls = [];
     var seenPaths = [];
-    var primaryId = extractProductId(primaryUrl);
-    function add(u) {
+    /* Ground-truth product id (Shopify) takes over the filter outright, and treats
+       a non-match as a real rejection, not just a "no signal" - this call is often
+       made with root=d (whole document, see resolvePrimaryProductImage's og:image
+       path), so on a page with related/recommended-product rails using the same
+       THUMB_SELECTORS markup, the regex-only heuristic below could otherwise admit
+       a sibling product's photo whenever its filename didn't yield an extractable
+       id. The primary image is always kept regardless - it was already resolved
+       as THIS product's photo by the caller. */
+    var shopifyId = getShopifyProductId();
+    var primaryId = shopifyId || extractProductId(primaryUrl);
+    function add(u, isPrimary) {
       if (!u || isExcludedSrc(u)) return;
       var path = u.split("?")[0];
       if (seenPaths.indexOf(path) !== -1) return;
-      var candId = extractProductId(u);
-      if (primaryId && candId && candId !== primaryId) return;   // different product - skip
+      if (!isPrimary) {
+        if (shopifyId) {
+          if (u.indexOf(shopifyId) === -1) return;   // ground truth - must actually match
+        } else {
+          var candId = extractProductId(u);
+          if (primaryId && candId && candId !== primaryId) return;   // different product - skip
+        }
+      }
       seenPaths.push(path);
       urls.push(u);
     }
-    add(primaryUrl);
+    add(primaryUrl, true);
     var imgs = (root || d).querySelectorAll(THUMB_SELECTORS);
     for (var i = 0; i < imgs.length; i++) {
       var el = imgs[i];
