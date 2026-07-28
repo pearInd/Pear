@@ -2404,6 +2404,64 @@ function prewarmOrientationAssets() {
   }
 }
 
+/**
+ * Mandatory Pre-load & Validation Gate - AWAITED, unlike prewarmOrientationAssets()
+ * above (which is deliberately fire-and-forget for opportunistic early warming while
+ * the shopper is still browsing). This is the hard gate goLive() blocks on: fetch,
+ * decode, AND content-validate every garment asset (both halves of a full look, when
+ * one is active) BEFORE the billed Decart/WebRTC session opens. The point is to catch
+ * a broken/missing BACK asset here - narrowing this run to front-only - instead of
+ * discovering it mid-session on the shopper's first turn, which is what "blank back
+ * view" looked like from the outside. Updates #scanSub with live progress per item/side.
+ * @returns {Promise<{ ok: boolean, hasBack: boolean }>}
+ *   ok=false      → at least one item's FRONT is unusable - goLive() must abort entirely
+ *                    (there is no reasonable fallback for a missing front).
+ *   hasBack=false → at least one item's BACK is missing/broken - goLive() should proceed
+ *                    FRONT-ONLY rather than arm AI Auto/AI Combined with a known-bad asset.
+ */
+async function preloadGarmentAssets() {
+  const look = resolveLook();
+  const items = (look ? [look.top, look.bottom] : [activeItem]).filter(Boolean);
+  const el = $("scanSub");
+  const setText = (msg) => { if (el) el.textContent = msg; };
+
+  let ok = true, hasBack = true;
+  for (const item of items) {
+    const g = galleryOf(item);
+    const front = g.front || item.img;
+    const back  = (g.back && g.back !== g.front) ? g.back : undefined;
+    const label = item.name || item.garmentType || "garment";
+
+    setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front […]`);
+    const frontBlob = front ? await garmentBlobCached(front) : null;
+    setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front [${frontBlob ? "OK" : "FAIL"}]`);
+    if (!frontBlob) {
+      console.error("[PEAR] CRITICAL: GARMENT_FRONT failed pre-load validation -", label, front);
+      ok = false;
+      continue;   // keep checking the rest so every failure gets logged, not just the first
+    }
+
+    if (!back) { hasBack = false; continue; }
+
+    setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back […]`);
+    const backBlob = await garmentBlobCached(back);
+    let backOk = !!backBlob;
+    if (backOk) {
+      try {
+        const probe = await createImageBitmap(backBlob);
+        if (await bitmapLooksFlat(probe)) { backOk = false; _assetBlobCache.delete(back); }
+        probe.close?.();
+      } catch (_) { /* fail open on probe error - the fetch itself already succeeded */ }
+    }
+    setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back [${backOk ? "OK" : "FAIL"}]`);
+    if (!backOk) {
+      console.warn("[PEAR] GARMENT_BACK failed pre-load validation - proceeding FRONT-ONLY -", label, back);
+      hasBack = false;
+    }
+  }
+  return { ok, hasBack };
+}
+
 /* ── Context-Aware Asset Switching - OrientationWatcher ───────────────────────
    Watches the LOCAL camera (localStream - the raw preview feed, NOT the AI output) and
    flips autoOrientation between "front" and "back" as the user turns, hot-swapping the
@@ -4861,10 +4919,35 @@ async function goLive() {
        falls back to AI Combined for runs where the watcher genuinely can't arm THIS
        time - never as a permanent, silent downgrade. */
     currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
+    if (currentAngle === AUTO_ANGLE) autoOrientation = "front";
 
-    // AI Auto: warm the front+back Blob cache NOW so both assets download in parallel
-    // with the WebRTC handshake - the first orientation flip then costs zero fetches.
-    if (currentAngle === AUTO_ANGLE) { autoOrientation = "front"; prewarmOrientationAssets(); }
+    /* ── Mandatory Pre-load & Validation Gate ─────────────────────────────────
+       Blocks HERE, before any token mint / WebRTC connect / billing, until every
+       garment asset this run needs is fetched, decoded, and content-validated.
+       Previously the back Blob was only awaited lazily inside maybeSwap() at the
+       moment of the FIRST turn - correct, but it meant a slow or genuinely broken
+       back asset was discovered mid-session, after the shopper had already turned
+       around: exactly what "blank back view" looked like from the outside. Doing
+       it here means that failure surfaces (or is gracefully absorbed into a
+       front-only run) BEFORE any camera/Decart resource - and any billing - is
+       spent, never as a mid-turn surprise. */
+    if (currentAngle === AUTO_ANGLE) {
+      $("scanOverlay").hidden = false;
+      const preload = await preloadGarmentAssets();
+      if (!preload.ok) {
+        $("scanOverlay").hidden = true;
+        showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
+        toast("⚠ טעינת תמונת הבגד נכשלה");
+        return;   // finally{} resets busy + the capture button; no billed session opened
+      }
+      if (!preload.hasBack) {
+        // Known-bad/missing back BEFORE go-live - don't arm AI Auto (or let goLive's
+        // later watcher-arm fallback reach for AI Combined) with an asset we already
+        // know is broken. Front-only is a fully supported, never-blocked mode.
+        currentAngle = "front";
+        toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
+      }
+    }
 
     // LOADING state: overlay + a live elapsed-time counter (generic copy, no model/
     // vendor names - see startScanTimer). Runs until startBillingWindow() confirms
@@ -4880,12 +4963,14 @@ async function goLive() {
     console.log("[PEAR] Decart connected - waiting for first frame");
 
     /* Settle the try-on mode BEFORE the first reference is built, so exactly one
-       rtClient.set() is issued for it. AI Auto is the mode that actually renders a
-       real rear photo on a turn, but it depends on the OrientationWatcher being able
-       to sample the local camera. If the watcher can't arm (no video track, sampler
-       blocked), AI Auto would silently pin the session to the front asset forever -
-       which is precisely the blank-back symptom. In that case fall back to the
-       stitched front|back composite, which needs no camera analysis at all. */
+       rtClient.set() is issued for it. This is a SECOND, independent guard from the
+       pre-load gate above: that one validates the ASSET (is the back image itself
+       fetchable/decodable/real); this one validates the WATCHER (can the local camera
+       actually be sampled). AI Auto needs both. If currentAngle is already "front"
+       here, the pre-load gate already made that call and this block is a no-op. If
+       it's still AUTO_ANGLE but the watcher can't arm (no video track, sampler
+       blocked), fall back to the stitched front|back composite, which needs no
+       camera analysis at all. */
     syncOrientationWatcher();
     if (currentAngle === AUTO_ANGLE && !orientWatcher && canCombineViews(activeItem)) {
       console.warn("[PEAR] AI Auto watcher unavailable - falling back to AI Combined stitched reference");
