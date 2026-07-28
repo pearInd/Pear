@@ -1041,10 +1041,10 @@ function enterRoom() {
   // #completeLook visibility is owned by renderCompleteTheLook() (invoked from
   // setActiveItem above): it un-hides ONLY when real catalog complements exist, and
   // hides otherwise - so we never force an empty section visible here.
-  // AI Combined is the only mode now, so the storefront's front/back/side deep-link
-  // angle no longer matters — renderPerspectiveSelector() sets currentAngle itself.
-  // (No photo switcher to render either: the front/back pair comes straight from the
-  // handoff gallery, so the combined view is selected without any user input.)
+  // renderPerspectiveSelector() hardcodes currentAngle itself (AI Auto when a real back
+  // exists, else front), so the storefront's front/back/side deep-link angle no longer
+  // matters. (No photo switcher to render either: the front/back pair comes straight
+  // from the handoff gallery, so the mode is selected without any user input.)
   renderPerspectiveSelector();
   setConn("idle");
 
@@ -1168,27 +1168,44 @@ window.addEventListener("message", (e) => {
   }
   // Back asset, same automatic rule as parseHandoff() — the classifier's own answer
   // wins, else the (re-sorted) gallery's second photo, else whatever we already had.
-  // Never left unresolved: a real, distinct back is what keeps AI Combined engaged.
+  // Never left unresolved: a real, distinct back is what keeps AI Auto engaged.
   const imgs = activeItem.pearImages;
   const galleryBack = (imgs && imgs[1] && imgs[1] !== front) ? imgs[1] : undefined;
   activeItem.imgBack = back || galleryBack || activeItem.imgBack;
   // currentAngle is deliberately NOT set here: renderPerspectiveSelector() re-derives
-  // it (COMBINED when the corrected pair qualifies, else front) with no user input.
+  // it (AUTO when the corrected pair qualifies, else front) with no user input.
   renderActiveGarment();
   renderPerspectiveSelector();
   hotSwapIfLive("מעדכן תמונת בגד · updating garment view");
 });
 
-/* Sync the live product gallery for the active item + colour. AI Combined is the ONLY
-   try-on mode now — there is NO on-screen angle/mode picker and NO photo switcher (the
-   perspective rail with its #perspectiveSelector element and the #pearImageSwitcher
-   thumbnail row were both removed). This just hardcodes currentAngle — COMBINED when the
-   item ships a real, distinct back (canCombineViews), else a silent "front" fallback so
-   every item stays try-on-able — and refreshes the colour swatch strip. setAngle() and the
-   orientation-watcher engine remain in the file but are no longer wired to any UI.
+/* Sync the live product gallery for the active item + colour. AI Auto (Context-Aware
+   Asset Switching) is the default try-on mode when the item ships a real, distinct back
+   — there is NO on-screen angle/mode picker and NO photo switcher (the perspective rail
+   with its #perspectiveSelector element and the #pearImageSwitcher thumbnail row were
+   both removed). This hardcodes currentAngle — AUTO when canCombineViews(), else a
+   silent "front" fallback so every item stays try-on-able — arms the orientation watcher
+   (idempotent; see syncOrientationWatcher's own contract) and refreshes the colour
+   swatch strip. setAngle() remains in the file but is no longer wired to any UI.
+
+   AUTO replaced the single-shot AI Combined default (see canCombineViews/ANGLE_CLAUSE.combined
+   for the still-intact machinery): a stitched front|back reference asks the LIVE diffusion
+   model to infer the shopper's pose from a STATIC image every frame, which proved unreliable
+   in practice — the back half rendered blank or wrong once the shopper actually turned
+   around. AUTO instead reads the real local camera via OrientationWatcher and hot-swaps in
+   the ONE matching pre-cached asset, so there is never a second view in the reference for
+   the model to misread or bleed from.
    (Name kept as-is: still called from every item/colour swap.) */
 function renderPerspectiveSelector() {
-  if (activeItem) currentAngle = canCombineViews(activeItem) ? COMBINED_ANGLE : "front";
+  if (activeItem) {
+    const wasAuto = currentAngle === AUTO_ANGLE;
+    currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
+    if (currentAngle === AUTO_ANGLE && !wasAuto) {
+      autoOrientation = "front";               // every auto session (re)arms facing the camera
+      prewarmOrientationAssets();              // fire-and-forget: both Blobs cached before the first turn
+    }
+  }
+  syncOrientationWatcher();                    // idempotent - starts/stops the webcam orientation monitor
   renderColorSwatches();
 }
 
