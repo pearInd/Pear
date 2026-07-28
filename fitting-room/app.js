@@ -2440,17 +2440,23 @@ function prewarmOrientationAssets() {
    ORIENT_LOCK_FRAMES consecutive agreeing samples AND enough elapsed time
    (ORIENT_LOCK_MS) to rule out a momentary head turn or a single misread. At the
    default 250ms sample rate the two thresholds land at the same ~4s mark by design
-   (16 × 250ms = 4000ms) - ORIENT_LOCK_MS is a robustness backstop for a throttled/
+   (10 × 250ms = 2500ms) - ORIENT_LOCK_MS is a robustness backstop for a throttled/
    backgrounded tab where setInterval ticks slip, not an independent faster path. A
-   confirmed transition logs "[VTON State]: LOCKED_FRONT"/"LOCKED_BACK" so it's obvious
-   in the console exactly when (and how rarely) the lock actually moves.
+   confirmed transition logs "[VTON Pipeline] Current Active State: ..." so it's
+   obvious in the console exactly when (and how rarely) the lock actually moves.
    The watcher never touches the camera track (shared with the preview); stop() only
    detaches its own <video> sampler. Lifecycle is owned by syncOrientationWatcher(). */
-const ORIENT_SAMPLE_MS   = 250;   // ~4 analyses/s - cheap on a 96px canvas
-const ORIENT_LOCK_FRAMES = 16;    // consecutive agreeing samples to unlock (~4s @ 250ms/sample)
-const ORIENT_LOCK_MS     = 4000;  // OR this much sustained agreement - whichever comes first (see note above)
-const ORIENT_COOLDOWN_MS = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
-const ORIENT_SIZE        = 96;    // analysis canvas edge - tiny on purpose
+const ORIENT_SAMPLE_MS      = 250;   // ~4 analyses/s - cheap on a 96px canvas
+const ORIENT_LOCK_FRAMES    = 10;    // consecutive agreeing samples to unlock (~2.5s @ 250ms/sample)
+const ORIENT_LOCK_MS        = 2500;  // OR this much sustained agreement - whichever comes first (see note above)
+const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
+const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
+const ORIENT_SIZE           = 96;    // analysis canvas edge - tiny on purpose
+// Explicit 2-state enum for the per-orientation lock (a DIFFERENT axis from
+// AUTO_ANGLE/COMBINED_ANGLE/"front" above, which is which TOP-LEVEL try-on mode is
+// active - this is which SIDE of the garment AUTO_ANGLE mode is currently locked to).
+const FRONT_MODE = "FRONT_MODE";
+const BACK_MODE  = "BACK_MODE";
 // TEMPORARY - single compact per-tick log line for tuning the thresholds above; flip
 // off (or delete the ORIENT_DEBUG block below) once the values are settled.
 const ORIENT_DEBUG          = true;
@@ -2528,6 +2534,21 @@ function createOrientationWatcher() {
   const track = localStream && localStream.getVideoTracks()[0];
   if (!track) return null;                       // no camera yet - sync will retry later
 
+  /* ── Explicit, immutable per-session asset mapping (zero ambiguity) ───────────
+     Resolved ONCE here, when AI Auto arms for this session - NOT re-derived from
+     galleryOf(activeItem) on every vote/swap. A mid-rotation mutation of activeItem
+     (color swap, item swap) can no longer shift what "front"/"back" mean partway
+     through a turn; this watcher instance always maps to the exact two assets it
+     started with. Every reference this watcher ever hands to rtClient.set() comes
+     from ONE of these two constants - GARMENT_BACK is never routed to FRONT_MODE's
+     payload and GARMENT_FRONT is never routed to BACK_MODE's, by construction (see
+     maybeSwap below). GARMENT_BACK is undefined when there's no real, distinct back
+     photo - canCombineViews() already gates this watcher's existence on that being
+     true, so this is a belt-and-suspenders capture, not the source of that decision. */
+  const gInit = galleryOf(activeItem);
+  const GARMENT_FRONT = gInit.front || activeItem.img;
+  const GARMENT_BACK  = (gInit.back && gInit.back !== gInit.front) ? gInit.back : undefined;
+
   // Private sampler onto the SAME track the preview uses - reading is free, and we never
   // stop the track itself (it belongs to the shared preview camera).
   const video = document.createElement("video");
@@ -2543,17 +2564,43 @@ function createOrientationWatcher() {
     ? (() => { try { return new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch (_) { return null; } })()
     : null;
   let fdBroken = false;
-  let lastSkinRatio = null;   // surfaced in the ORIENT_DEBUG log line only
+  let lastSkinRatio = null;        // surfaced in the ORIENT_DEBUG log line only
+  let lastConfidence = 0;          // 0..1, surfaced in the ORIENT_DEBUG log line only
   console.log("[PEAR] AI Auto - orientation watcher armed (engine:",
-    faceDetector ? "FaceDetector)" : "skin-ratio heuristic)");
-  console.log(`[VTON State]: LOCKED_${autoOrientation.toUpperCase()}`);   // initial lock, always FRONT
+    faceDetector ? "FaceDetector)" : "skin-ratio heuristic)",
+    "| GARMENT_FRONT:", abbrevImg(GARMENT_FRONT), "| GARMENT_BACK:", GARMENT_BACK ? abbrevImg(GARMENT_BACK) : "(none)");
+
+  /* vtonState mirrors autoOrientation (the module-level value effectiveAngle()/
+     activeImageOf() read) as the explicit FRONT_MODE/BACK_MODE enum requested for
+     logging/tracking - two names for the same fact, kept in lockstep only inside
+     logVtonState() below so there is exactly one place that can drift. */
+  function logVtonState() {
+    const state = autoOrientation === "back" ? BACK_MODE : FRONT_MODE;
+    console.log(`[VTON Pipeline] Current Active State: ${state} | Applied Asset: ${state === BACK_MODE ? "GARMENT_BACK" : "GARMENT_FRONT"}`);
+  }
+  logVtonState();   // initial state, always FRONT_MODE / GARMENT_FRONT (goLive() just reset autoOrientation)
 
   let lastVote = null, streak = 0, streakSince = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
 
-  /* One vote: "front" | "back" | null (abstain). Face detection is authoritative when
-     available - detected ⇒ front, not detected ⇒ back, no second-guessing here. The
-     hysteresis in the sampler loop below (not this function) is what absorbs a stray
-     misread, so this stays one direct rule per engine. */
+  /* Numeric confidence (0..1) for a skin-ratio vote: 0 right AT the classification
+     threshold, saturating to 1 by double the threshold's margin into "obviously this
+     side" territory. Gated against ORIENT_CONFIDENCE_MIN below so a read that JUST
+     barely crossed the line doesn't count as confident - only the original dead-band
+     used to do that; this makes the bar explicit and tunable. FaceDetector has no
+     numeric confidence in the Shape Detection API spec - a positive/negative
+     detection is treated as a fixed 1.0, which is what "the browser found a face at
+     all in fastMode" already implies. */
+  function skinConfidence(ratio, vote) {
+    if (vote === "front") return Math.min(1, (ratio - 0.10) / 0.10);   // saturates by ratio=0.20
+    if (vote === "back")  return Math.min(1, (0.04 - ratio) / 0.04);   // saturates by ratio=0
+    return 0;
+  }
+
+  /* One vote: "front" | "back" | null (abstain - includes a read that crossed the
+     raw threshold but didn't clear ORIENT_CONFIDENCE_MIN). Face detection is
+     authoritative when available - detected ⇒ front, not detected ⇒ back, no
+     second-guessing here. The lock in the sampler loop below (not this function) is
+     what absorbs a stray misread, so this stays one direct rule per engine. */
   async function classify() {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) return null;
@@ -2563,6 +2610,7 @@ function createOrientationWatcher() {
     if (faceDetector && !fdBroken) {
       try {
         const faces = await faceDetector.detect(canvas);
+        lastConfidence = 1;   // binary API - no partial score to report
         return faces.length > 0 ? "front" : "back";
       } catch (_) {
         fdBroken = true;
@@ -2573,7 +2621,7 @@ function createOrientationWatcher() {
   }
 
   /* Skin-tone share of the head band. Classic RGB skin rule - coarse, but the dual
-     thresholds + confirm streak absorb its noise. */
+     thresholds + confidence gate + lock absorb its noise. */
   function skinRatioVote() {
     const x = Math.round(ORIENT_SIZE * 0.25), w = Math.round(ORIENT_SIZE * 0.5);
     const h = Math.round(ORIENT_SIZE * 0.45);
@@ -2587,31 +2635,36 @@ function createOrientationWatcher() {
     }
     const ratio = skin / total;
     lastSkinRatio = ratio;
-    if (ratio >= 0.10) return "front";
-    if (ratio <= 0.04) return "back";
-    return null;                                  // ambiguous (profile/transition) - abstain
+    const vote = ratio >= 0.10 ? "front" : ratio <= 0.04 ? "back" : null;
+    if (!vote) { lastConfidence = 0; return null; }         // ambiguous (profile/transition) - abstain
+    lastConfidence = skinConfidence(ratio, vote);
+    return lastConfidence >= ORIENT_CONFIDENCE_MIN ? vote : null;   // crossed the line, not confidently
   }
 
-  /* Confirmed flip → cross-fade + hot-swap the live reference. The sampler keeps voting
-     during the swap, so a turn completed mid-flight is re-confirmed and applied by a
-     later tick - no queue needed. */
+  /* Confirmed flip → cross-fade + hot-swap the live reference, using ONLY the frozen
+     GARMENT_FRONT/GARMENT_BACK captured above - never a value re-derived elsewhere.
+     The sampler keeps voting during the swap, so a turn completed mid-flight is
+     re-confirmed and applied by a later tick - no queue needed. */
   async function maybeSwap(next) {
     if (applying || Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS) return;
     if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) return;
 
-    /* Verify the rear asset is actually in hand BEFORE committing the flip. Swapping
-       first and discovering the Blob is missing afterwards is what produced a blank
-       back: the prompt would already be steering "render the BACK" while the model
-       still held the front reference. garmentBlobCached() retries internally through
-       the proxy AND the raw CDN, so reaching null here means every route failed - do
-       not stack another retry loop on top of it or the user stands there turned
-       around for ~10s with no feedback. */
-    const gNow = galleryOf(activeItem);
-    const backUrl = (gNow.back && gNow.back !== gNow.front) ? gNow.back : undefined;
+    /* Fallback guard: verify GARMENT_BACK is fully loaded AND valid BEFORE committing
+       the flip - never switch to BACK_MODE (or wipe the current overlay) on a missing
+       or broken asset; FRONT_MODE simply stays active. Swapping first and discovering
+       the Blob is missing afterwards is what produced a blank back: the prompt would
+       already be steering "render the BACK" while the model still held the front
+       reference. garmentBlobCached() retries internally through the proxy AND the
+       raw CDN, so reaching null here means every route failed. */
     if (next === "back") {
-      const backBlob = await garmentBlobCached(backUrl);
+      if (!GARMENT_BACK) {
+        console.error("[PEAR] CRITICAL: no GARMENT_BACK asset for this item; staying in FRONT_MODE");
+        lastSwapAt = Date.now();
+        return;
+      }
+      const backBlob = await garmentBlobCached(GARMENT_BACK);
       if (!backBlob) {
-        console.error("[PEAR] CRITICAL: back image unavailable at flip time; staying on front -", backUrl);
+        console.error("[PEAR] CRITICAL: GARMENT_BACK unavailable at flip time; staying in FRONT_MODE -", GARMENT_BACK);
         lastSwapAt = Date.now();          // throttle repeat toasts while turned away
         toast("תמונת הגב אינה זמינה");
         return;                           // keep showing the front instead of a blank/failed swap
@@ -2628,8 +2681,8 @@ function createOrientationWatcher() {
         probe.close?.();
       } catch (_) { /* probe failure - fail open, let the already-validated Blob through */ }
       if (backLooksFlat) {
-        console.error("[PEAR] CRITICAL: back image decoded but looks like a blank/solid-color placeholder (no garment texture); staying on front -", backUrl);
-        _assetBlobCache.delete(backUrl);   // don't keep serving this bad asset from cache
+        console.error("[PEAR] CRITICAL: GARMENT_BACK decoded but looks like a blank/solid-color placeholder (no garment texture); staying in FRONT_MODE -", GARMENT_BACK);
+        _assetBlobCache.delete(GARMENT_BACK);   // don't keep serving this bad asset from cache
         lastSwapAt = Date.now();
         toast("תמונת הגב אינה תקינה");
         return;
@@ -2639,10 +2692,10 @@ function createOrientationWatcher() {
     applying = true;
     lastSwapAt = Date.now();
     autoOrientation = next;
-    console.log(`[VTON State]: LOCKED_${next.toUpperCase()}`);
+    logVtonState();
     orientFadeFreeze();                   // freeze the last good frame BEFORE the reference changes
     console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase(),
-      "| reference:", abbrevImg(next === "back" ? backUrl : (gNow.front || activeItem.img)));
+      "| reference:", abbrevImg(next === "back" ? GARMENT_BACK : GARMENT_FRONT));
     renderPerspectiveSelector();
     try {
       await applyActive();                       // one rtClient.set() - pre-cached Blob payload
@@ -2672,13 +2725,14 @@ function createOrientationWatcher() {
 
       if (ORIENT_DEBUG) {
         const confidence = faceDetector && !fdBroken
-          ? `face:${vote ?? "none"}`
-          : `skin:${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}`;
+          ? `face:${vote ?? "none"}(${(lastConfidence * 100).toFixed(0)}%)`
+          : `skin:${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}(${(lastConfidence * 100).toFixed(0)}% conf)`;
         // Status reflects the LOCK, not the raw per-frame vote: "locked" covers both a
         // clean agreeing vote AND a disagreeing one that hasn't cleared the threshold
         // yet - i.e. exactly the case that used to flip the reference frame-by-frame.
         const status = confirmed ? "SWITCHING" : needsSwitch ? "waiting-to-switch" : "locked";
-        console.log(`[PEAR][ORIENT] [VTON State]: LOCKED_${autoOrientation.toUpperCase()} | confidence=${confidence} | ${status}` +
+        const state = autoOrientation === "back" ? BACK_MODE : FRONT_MODE;
+        console.log(`[PEAR][ORIENT] state=${state} | confidence=${confidence} | ${status}` +
           (needsSwitch ? ` (${streak}/${ORIENT_LOCK_FRAMES}f, ${held}/${ORIENT_LOCK_MS}ms)` : ""));
       }
 
@@ -4796,6 +4850,18 @@ async function goLive() {
       return;   // finally{} resets busy + the capture button; no billed session opened
     }
 
+    /* BUG FIX (cross-run mode persistence): a PREVIOUS session in this same page load
+       may have downgraded currentAngle to COMBINED_ANGLE below (watcher couldn't arm
+       that time) - and since renderPerspectiveSelector() is only re-run on an item/
+       colour swap, NOT on every go-live, that downgrade used to stick for every
+       subsequent run until the shopper happened to touch something else. That is
+       exactly the "run 1 fine, run 2/3 broken" pattern: whichever mode Run 1 ended up
+       on kept being reused, not re-attempted. Re-derive fresh from canCombineViews()
+       on EVERY go-live so each run gets its own honest attempt at AI Auto, and only
+       falls back to AI Combined for runs where the watcher genuinely can't arm THIS
+       time - never as a permanent, silent downgrade. */
+    currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
+
     // AI Auto: warm the front+back Blob cache NOW so both assets download in parallel
     // with the WebRTC handshake - the first orientation flip then costs zero fetches.
     if (currentAngle === AUTO_ANGLE) { autoOrientation = "front"; prewarmOrientationAssets(); }
@@ -4825,9 +4891,9 @@ async function goLive() {
       console.warn("[PEAR] AI Auto watcher unavailable - falling back to AI Combined stitched reference");
       currentAngle = COMBINED_ANGLE;
     }
-    console.log(`[VTON State]: MODE=${currentAngle}`,
-      currentAngle === AUTO_ANGLE ? "(per-orientation asset switching - watcher armed; front/back is a live LOCK, see [VTON State]: LOCKED_* below)"
-        : currentAngle === COMBINED_ANGLE ? "(stitched front|back composite - watcher did NOT arm; front/back switching is model-inferred, not client-controlled)"
+    console.log(`[VTON Pipeline] Top-level mode this run: ${currentAngle}`,
+      currentAngle === AUTO_ANGLE ? "(per-orientation asset switching - watcher armed; FRONT_MODE/BACK_MODE is a live lock, see [VTON Pipeline] Current Active State below)"
+        : currentAngle === COMBINED_ANGLE ? "(stitched front|back composite - watcher did NOT arm THIS run; front/back switching is model-inferred, not client-controlled)"
         : "(front only)");
 
     // 2) apply on the live stream - the full look (shirt + pants, ONE payload) when
