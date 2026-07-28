@@ -2297,6 +2297,43 @@ async function normalizeToSupportedImage(blob) {
   return blob;   // better to send the original than nothing
 }
 
+/* Cheap "is this basically a solid color?" check - catches a broken-image/gray
+   placeholder graphic that fetches and decodes perfectly fine (so every check above
+   this one passes) but has no real garment texture in it: a bad classification, or a
+   CDN that soft-404s a missing photo with a plain filler image instead of a real HTTP
+   error. Downscales to a tiny 32×32 canvas and measures luma standard deviation across
+   it - a real product photo has meaningfully varied texture/shading even in a tight
+   crop; a flat placeholder fill does not. Used to keep a bad back-view asset from
+   silently reaching the live session and reading to the shopper as "blank back view".
+   Fails OPEN (false) on any probe error - never block a genuinely good image because
+   the cheap check itself hiccuped. */
+const FLAT_IMAGE_STDDEV_MIN = 4;   // luma std-dev below this reads as a flat/solid fill
+async function bitmapLooksFlat(bitmap) {
+  try {
+    const cw = 32, ch = 32;
+    const off = typeof OffscreenCanvas !== "undefined"
+      ? new OffscreenCanvas(cw, ch)
+      : Object.assign(document.createElement("canvas"), { width: cw, height: ch });
+    const ctx = off.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bitmap, 0, 0, cw, ch);
+    const data = ctx.getImageData(0, 0, cw, ch).data;
+    const total = cw * ch;
+    const lumas = new Float32Array(total);
+    let sum = 0;
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+      const luma = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+      lumas[p] = luma; sum += luma;
+    }
+    const mean = sum / total;
+    let variance = 0;
+    for (let p = 0; p < total; p++) { const d = lumas[p] - mean; variance += d * d; }
+    return Math.sqrt(variance / total) < FLAT_IMAGE_STDDEV_MIN;
+  } catch (e) {
+    console.warn("[PEAR] bitmapLooksFlat() probe failed, assuming the image is fine:", e?.message || e);
+    return false;
+  }
+}
+
 /* ── Context-Aware Asset Switching - pre-cached per-orientation Blobs ─────────
    The instant-swap guarantee: rtClient.set({ image }) accepts a Blob directly, and a Blob
    ships the bytes over the already-open session - Decart never has to fetch a URL server-
@@ -2388,21 +2425,32 @@ function prewarmOrientationAssets() {
    arguing with each other every tick.
 
    Anti-flap discipline (this is what stops the view from flapping back and forth):
-     • a flip needs ORIENT_CONFIRM_FRAMES consecutive agreeing votes OR
-       ORIENT_CONFIRM_MS of sustained agreement, whichever comes first - a real turn
+     • a flip needs ORIENT_LOCK_FRAMES consecutive agreeing votes OR
+       ORIENT_LOCK_MS of sustained agreement, whichever comes first - a real turn
        satisfies both quickly; a single noisy frame satisfies neither;
      • ORIENT_COOLDOWN_MS minimum gap between actual live set() swaps, on top of that;
      • a single in-flight guard - the sampler itself is the retry loop, so a turn
        completed mid-swap is picked up by the very next confirmed vote;
      • abstains (null votes) never reset an in-progress streak - only a genuinely
        DISAGREEING vote does.
+
+   STATE LOCK MODEL: autoOrientation is a LOCK, not a live readout - once locked to
+   FRONT or BACK, every tick that disagrees only accumulates evidence (streak/held);
+   it does NOT touch the rendered reference until that evidence clears BOTH
+   ORIENT_LOCK_FRAMES consecutive agreeing samples AND enough elapsed time
+   (ORIENT_LOCK_MS) to rule out a momentary head turn or a single misread. At the
+   default 250ms sample rate the two thresholds land at the same ~4s mark by design
+   (16 × 250ms = 4000ms) - ORIENT_LOCK_MS is a robustness backstop for a throttled/
+   backgrounded tab where setInterval ticks slip, not an independent faster path. A
+   confirmed transition logs "[VTON State]: LOCKED_FRONT"/"LOCKED_BACK" so it's obvious
+   in the console exactly when (and how rarely) the lock actually moves.
    The watcher never touches the camera track (shared with the preview); stop() only
    detaches its own <video> sampler. Lifecycle is owned by syncOrientationWatcher(). */
-const ORIENT_SAMPLE_MS      = 250;   // ~4 analyses/s - cheap on a 96px canvas
-const ORIENT_CONFIRM_FRAMES = 4;     // consecutive agreeing samples to flip (~1s @ 250ms/sample)
-const ORIENT_CONFIRM_MS     = 900;   // OR this much sustained agreement - whichever comes first
-const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap)
-const ORIENT_SIZE           = 96;    // analysis canvas edge - tiny on purpose
+const ORIENT_SAMPLE_MS   = 250;   // ~4 analyses/s - cheap on a 96px canvas
+const ORIENT_LOCK_FRAMES = 16;    // consecutive agreeing samples to unlock (~4s @ 250ms/sample)
+const ORIENT_LOCK_MS     = 4000;  // OR this much sustained agreement - whichever comes first (see note above)
+const ORIENT_COOLDOWN_MS = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
+const ORIENT_SIZE        = 96;    // analysis canvas edge - tiny on purpose
 // TEMPORARY - single compact per-tick log line for tuning the thresholds above; flip
 // off (or delete the ORIENT_DEBUG block below) once the values are settled.
 const ORIENT_DEBUG          = true;
@@ -2498,6 +2546,7 @@ function createOrientationWatcher() {
   let lastSkinRatio = null;   // surfaced in the ORIENT_DEBUG log line only
   console.log("[PEAR] AI Auto - orientation watcher armed (engine:",
     faceDetector ? "FaceDetector)" : "skin-ratio heuristic)");
+  console.log(`[VTON State]: LOCKED_${autoOrientation.toUpperCase()}`);   // initial lock, always FRONT
 
   let lastVote = null, streak = 0, streakSince = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
 
@@ -2567,11 +2616,30 @@ function createOrientationWatcher() {
         toast("תמונת הגב אינה זמינה");
         return;                           // keep showing the front instead of a blank/failed swap
       }
+      // Content check: a Blob can fetch/decode fine and still be a broken-image/
+      // gray placeholder graphic (bad classification, a soft-404 from the CDN) - that
+      // reaches the live session as a real image with no garment texture in it,
+      // which reads to the shopper as "the back view is blank". Reject it the same
+      // way as a failed fetch, so we never commit to showing a solid-fill panel.
+      let backLooksFlat = false;
+      try {
+        const probe = await createImageBitmap(backBlob);
+        backLooksFlat = await bitmapLooksFlat(probe);
+        probe.close?.();
+      } catch (_) { /* probe failure - fail open, let the already-validated Blob through */ }
+      if (backLooksFlat) {
+        console.error("[PEAR] CRITICAL: back image decoded but looks like a blank/solid-color placeholder (no garment texture); staying on front -", backUrl);
+        _assetBlobCache.delete(backUrl);   // don't keep serving this bad asset from cache
+        lastSwapAt = Date.now();
+        toast("תמונת הגב אינה תקינה");
+        return;
+      }
     }
 
     applying = true;
     lastSwapAt = Date.now();
     autoOrientation = next;
+    console.log(`[VTON State]: LOCKED_${next.toUpperCase()}`);
     orientFadeFreeze();                   // freeze the last good frame BEFORE the reference changes
     console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase(),
       "| reference:", abbrevImg(next === "back" ? backUrl : (gNow.front || activeItem.img)));
@@ -2600,15 +2668,18 @@ function createOrientationWatcher() {
       }
       const held = lastVote ? Date.now() - streakSince : 0;
       const needsSwitch = !!lastVote && lastVote !== autoOrientation;
-      const confirmed = needsSwitch && (streak >= ORIENT_CONFIRM_FRAMES || held >= ORIENT_CONFIRM_MS);
+      const confirmed = needsSwitch && (streak >= ORIENT_LOCK_FRAMES || held >= ORIENT_LOCK_MS);
 
       if (ORIENT_DEBUG) {
         const confidence = faceDetector && !fdBroken
           ? `face:${vote ?? "none"}`
           : `skin:${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}`;
+        // Status reflects the LOCK, not the raw per-frame vote: "locked" covers both a
+        // clean agreeing vote AND a disagreeing one that hasn't cleared the threshold
+        // yet - i.e. exactly the case that used to flip the reference frame-by-frame.
         const status = confirmed ? "SWITCHING" : needsSwitch ? "waiting-to-switch" : "locked";
-        console.log(`[PEAR][ORIENT] mode=${autoOrientation} | confidence=${confidence} | ${status}` +
-          (needsSwitch ? ` (${streak}/${ORIENT_CONFIRM_FRAMES}f, ${held}/${ORIENT_CONFIRM_MS}ms)` : ""));
+        console.log(`[PEAR][ORIENT] [VTON State]: LOCKED_${autoOrientation.toUpperCase()} | confidence=${confidence} | ${status}` +
+          (needsSwitch ? ` (${streak}/${ORIENT_LOCK_FRAMES}f, ${held}/${ORIENT_LOCK_MS}ms)` : ""));
       }
 
       if (confirmed) await maybeSwap(lastVote);
@@ -2758,6 +2829,13 @@ function stitchReferenceBlob(frontUrl, backUrl) {
         console.warn("[PEAR] back bitmap first attempt failed, retrying:", firstErr?.message || firstErr);
         toast("טוען תמונת גב…");
         back = await loadGarmentBitmap(backUrl, 3);   // throws → caught below as CRITICAL
+      }
+      // A Blob can fetch/decode fine and still be a broken-image/gray placeholder with
+      // no real garment texture (bad classification, CDN soft-404). Treat that exactly
+      // like a decode failure - falling through to the CRITICAL catch below rather than
+      // baking a solid-color BACK panel into the composite.
+      if (await bitmapLooksFlat(back)) {
+        throw new Error("back image decoded but looks like a blank/solid-color placeholder, not real garment texture");
       }
 
       // FIXED 2048×1024 framing: 924px FRONT box | 200px black bar | 924px BACK box.
@@ -4747,9 +4825,10 @@ async function goLive() {
       console.warn("[PEAR] AI Auto watcher unavailable - falling back to AI Combined stitched reference");
       currentAngle = COMBINED_ANGLE;
     }
-    console.log("[PEAR] try-on mode:", currentAngle,
-      currentAngle === AUTO_ANGLE ? "(per-orientation asset switching - watcher armed)"
-        : currentAngle === COMBINED_ANGLE ? "(stitched front|back composite)" : "(front only)");
+    console.log(`[VTON State]: MODE=${currentAngle}`,
+      currentAngle === AUTO_ANGLE ? "(per-orientation asset switching - watcher armed; front/back is a live LOCK, see [VTON State]: LOCKED_* below)"
+        : currentAngle === COMBINED_ANGLE ? "(stitched front|back composite - watcher did NOT arm; front/back switching is model-inferred, not client-controlled)"
+        : "(front only)");
 
     // 2) apply on the live stream - the full look (shirt + pants, ONE payload) when
     //    activeOutfit has both slots filled, else the single active garment. Same session.
