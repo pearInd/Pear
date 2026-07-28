@@ -582,13 +582,24 @@
     });
   }
 
+  /* THE ROOT CAUSE of "back view renders as a plain/print-less garment": this used to
+     fall back to urls[1] (the second gallery photo) as "the back" whenever NO image
+     was actually classified "back" by Gemini. For an item whose gallery is entirely
+     front-view photos (different angles/crops of the SAME front, e.g. a t-shirt with
+     no back-of-garment product photo at all - a very common real case), that silently
+     hands the SECOND FRONT PHOTO to the live session labeled as the back. It passes
+     every fetch/decode/flatness check fine (it's a perfectly valid image, just the
+     wrong content) and reaches Lucy with "this reference shows the BACK - do NOT
+     render the front" - so the model suppresses the graphic it can actually see,
+     producing exactly the blank/print-less back that was reported. Only trust an
+     image Gemini actually called "back"; never guess from position. */
   function resolveFrontBack(urls, results) {
     var front, back;
     for (var i = 0; i < urls.length; i++) {
       if (results[i] === "front" && !front) front = urls[i];
       else if (results[i] === "back" && !back) back = urls[i];
     }
-    return { front: front || urls[0], back: back || urls[1] || undefined };
+    return { front: front || urls[0], back: back };
   }
 
   /* Re-order the gallery so front images lead and back images follow - the

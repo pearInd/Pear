@@ -1182,12 +1182,17 @@ window.addEventListener("message", (e) => {
   if (Array.isArray(e.data.garment_images) && e.data.garment_images.length) {
     activeItem.pearImages = e.data.garment_images;
   }
-  // Back asset, same automatic rule as parseHandoff() — the classifier's own answer
-  // wins, else the (re-sorted) gallery's second photo, else whatever we already had.
-  // Never left unresolved: a real, distinct back is what keeps AI Auto engaged.
-  const imgs = activeItem.pearImages;
-  const galleryBack = (imgs && imgs[1] && imgs[1] !== front) ? imgs[1] : undefined;
-  activeItem.imgBack = back || galleryBack || activeItem.imgBack;
+  // Back asset: TRUST the classifier's verdict completely now, including when it's
+  // undefined - that means Gemini genuinely found no back-view photo in this item's
+  // gallery (e.g. every photo is a front-view crop/angle, which is common for a
+  // front-only print). This used to fall back to the gallery's second photo when
+  // `back` was empty - the actual root cause of "back view renders print-less": a
+  // second FRONT photo would get silently mislabeled as the back, pass every
+  // fetch/decode/flatness check (it's a perfectly valid image, just the wrong
+  // content), and reach Lucy prompted as "this is the BACK, do NOT render the front"
+  // - so the model suppressed the graphic it could actually see. No fallback here
+  // anymore; resolveFrontBack() in pear-widget.js is the single source of truth.
+  activeItem.imgBack = back;
   // currentAngle is deliberately NOT set here: renderPerspectiveSelector() re-derives
   // it (AI Auto when the corrected pair qualifies, else front) with no user input.
   renderActiveGarment();
