@@ -794,7 +794,7 @@ function parseHandoff() {
       // Dual-View back asset, resolved with ZERO user input (there is no photo picker):
       // an explicit ?garment_url_back= / ?imgBack= wins, else the gallery's second photo.
       // A real, DISTINCT back is exactly what makes canCombineViews() true, which is what
-      // flips renderPerspectiveSelector() into AI Combined automatically. When neither
+      // flips renderPerspectiveSelector() into AI Auto automatically. When neither
       // exists the item stays single-view (front image + prompt steering) — never blocked.
       imgBack: q.get("garment_url_back") || q.get("imgBack") || galleryBack,
       // Opt-in strict gate: the widget forwards ?require_both_views=1 when the embed
@@ -1120,9 +1120,9 @@ window.pearGetActiveGarment = function () {
 function setAngle(angle) {
   // Every wearable angle is always selectable (a missing photo falls back to the front
   // image + prompt steering); `detail` is inspection-only and never a live warp target.
-  // "combined" (AI Combined View) and "auto" (Context-Aware Asset Switching) are
-  // selectable only while the item ships a real, distinct back (canCombineViews).
-  const isSynthetic = (angle === COMBINED_ANGLE || angle === AUTO_ANGLE) && canCombineViews(activeItem);
+  // "auto" (Context-Aware Asset Switching) is selectable only while the item ships a
+  // real, distinct back (canCombineViews).
+  const isSynthetic = angle === AUTO_ANGLE && canCombineViews(activeItem);
   const next = (WEARABLE_ANGLES.includes(angle) || isSynthetic) ? angle : "front";
   if (next === currentAngle) return;
   currentAngle = next;
@@ -1136,7 +1136,7 @@ function setAngle(angle) {
 }
 
 /* Colour/variant swap. Re-renders the swatch strip against the NEW colour's own gallery,
-   then hot-swaps the live stream in place. AI Combined mode is preserved across the swap. */
+   then hot-swaps the live stream in place. AI Auto mode is preserved across the swap. */
 function setColor(color) {
   if (!colorsOf(activeItem).includes(color) || color === activeColor) return;
   activeColor = color;
@@ -1159,7 +1159,7 @@ function hotSwapIfLive(toastMsg) {
    became the FRONT reference. Picking views is not the shopper's job: the front/back pair
    is now resolved automatically at handoff time (parseHandoff → img = photo 1,
    imgBack = photo 2, already classified front-first by pear-widget.js) and
-   renderPerspectiveSelector() then turns that pair into AI Combined on its own. So the row,
+   renderPerspectiveSelector() then turns that pair into AI Auto on its own. So the row,
    its injected CSS, its caption helper and selectPearImage() are all gone — no photo
    picker, no front/back toggle, nothing for the user to get wrong. `pearImages` survives
    on the item purely as the source those two assets are derived from. */
@@ -1214,9 +1214,9 @@ window.addEventListener("message", (e) => {
      • AI Auto (AUTO_ANGLE)  — the item ships a real, DISTINCT back photo. The
        OrientationWatcher swaps the live reference between the front and back assets
        as the shopper turns. This is the mode that makes a rear view actually render.
-     • "front"               — single-view item; nothing to switch to.
-     • AI Combined           — NOT selected here; goLive() falls back to it only when
-       the orientation watcher cannot arm (see the mode-settling block there).
+     • "front"               — single-view item, OR the item's OrientationWatcher
+       couldn't arm this run (goLive()'s mode-settling block downgrades to this after
+       a retry - see there; there is no stitched-composite fallback anymore).
    setAngle() remains in the file but is not wired to any UI.
 
    Also (re)syncs the OrientationWatcher on every call, not just at go-live: without
@@ -1245,10 +1245,12 @@ function renderPerspectiveSelector() {
      back Blob plus ANGLE_CLAUSE.backReal ("reproduce the BACK... do NOT render the
      front"). One unambiguous side, one unambiguous instruction.
 
-     Degradation is safe in both directions: if the watcher cannot arm, goLive()
-     falls back to the stitched COMBINED reference; if detection simply never fires,
-     effectiveAngle() stays "front" - identical to the front-only behaviour that
-     already worked. */
+     Degradation is safe in both directions: if the watcher cannot arm (after a
+     retry - see goLive()'s mode-settling block), currentAngle downgrades to plain
+     "front" - never a stitched composite, which was tried and removed after it
+     produced double-logo/duplicated-garment renders (see the AUTO_ANGLE doc comment
+     above ANGLES for why). If detection simply never fires, effectiveAngle() stays
+     "front" too - identical to the front-only behaviour that already worked. */
   if (activeItem) {
     const wasAuto = currentAngle === AUTO_ANGLE;
     currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
@@ -2340,7 +2342,8 @@ async function bitmapLooksFlat(bitmap) {
    side (the 20-25s worst case that motivated /api/img-proxy). Pre-fetching BOTH orientation
    assets the moment AI Auto is armed means an orientation flip costs exactly one in-flight
    set() - no fetch, no reconnect, no flicker; the model transitions over a few frames.
-   Memoized per URL, and a failed fetch is never cached (same policy as _stitchCache). */
+   Memoized per URL, and a failed fetch is never cached, so a later retry isn't stuck
+   serving the same failure forever. */
 const _assetBlobCache = new Map();   // url → Promise<Blob|null>
 
 function garmentBlobCached(url) {
@@ -2417,7 +2420,7 @@ function prewarmOrientationAssets() {
  *   ok=false      → at least one item's FRONT is unusable - goLive() must abort entirely
  *                    (there is no reasonable fallback for a missing front).
  *   hasBack=false → at least one item's BACK is missing/broken - goLive() should proceed
- *                    FRONT-ONLY rather than arm AI Auto/AI Combined with a known-bad asset.
+ *                    FRONT-ONLY rather than arm AI Auto with a known-bad asset.
  */
 async function preloadGarmentAssets() {
   const look = resolveLook();
@@ -2511,8 +2514,8 @@ const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidenc
 const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
 const ORIENT_SIZE           = 96;    // analysis canvas edge - tiny on purpose
 // Explicit 2-state enum for the per-orientation lock (a DIFFERENT axis from
-// AUTO_ANGLE/COMBINED_ANGLE/"front" above, which is which TOP-LEVEL try-on mode is
-// active - this is which SIDE of the garment AUTO_ANGLE mode is currently locked to).
+// AUTO_ANGLE/"front" above, which is which TOP-LEVEL try-on mode is active - this
+// is which SIDE of the garment AUTO_ANGLE mode is currently locked to).
 const FRONT_MODE = "FRONT_MODE";
 const BACK_MODE  = "BACK_MODE";
 // TEMPORARY - single compact per-tick log line for tuning the thresholds above; flip
@@ -2808,46 +2811,6 @@ function createOrientationWatcher() {
   };
 }
 
-/* ── AI Combined View - "Stitched Reference" compositor ───────────────────────
-   Draws the FRONT view into a rigid 924×1024 box on the LEFT and the BACK view into a
-   rigid 924×1024 box on the RIGHT of a FIXED 2048×1024 canvas, separated by a WIDE 200px
-   high-contrast SOLID BLACK BAR (a "no-man's-land") with a 44px black gutter framing each
-   view, plus a high-contrast WHITE label box
-   ("FRONT" top-left, "BACK" top-right) burned into each section as a hard architectural
-   marker. Returns ONE JPEG Blob for rtClient.set({ image }) (the realtime SDK accepts
-   Blob | File | string). The matching COMBINED prompt clause (ANGLE_CLAUSE.combined) is an
-   aggressive "exclusive mode" instruction: each labeled section is the ONLY valid source for
-   its orientation and blending pixels across the bar is strictly forbidden - so a single live
-   pass renders the front while the user faces the camera and the back once they turn away,
-   without the two views bleeding into each other.
-
-   WHY A WIDE 200px BLACK BAR + GUTTER (composite-bleeding fix): Lucy 2.1 is a diffusion model,
-   so a hairline separator does nothing to stop cross-attention from bleeding the back view
-   onto the front. A wide, fully-opaque black band is a hard, low-information region the
-   model reads as a scene boundary, so it segments the two views cleanly; the extra 44px
-   gutter frames each view as an isolated panel whose pixels never even touch the band. Each
-   image is clipped to its own column so a wide packshot can't overflow into or across the bar.
-
-   High-performance: both images decode off the main thread via createImageBitmap
-   and composite on an OffscreenCanvas when available; the finished Blob is
-   memoized per front+back URL pair, so repeated go-lives / hot-swaps of the same
-   garment never re-stitch. Cross-origin CDN images route through /api/img-proxy
-   (same-origin, ACAO:*), so the canvas is never tainted and toBlob() can't throw. */
-/* FIXED high-res framing (rigid geometry defeats front/back bleeding): a 2048×1024 canvas =
-   FRONT box (left, 924×1024) + 200px SOLID BLACK separator (no-man's-land) + BACK box (right,
-   924×1024), each view further inset by a 44px black gutter. Each view is clipped to its box so
-   a wide packshot can never overflow into or across the bar, and the wide opaque band is a hard,
-   low-information scene boundary the diffusion model refuses to blend across. */
-/* Strengthened geometry (front/back bleeding fix): a WIDE 200px black separator band plus a
-   44px black GUTTER framing every view. Widening the band from 100 to 200px enlarges the
-   low-information scene boundary the diffusion model refuses to blend across; the gutter turns
-   each view into an isolated black-framed panel so no garment pixel ever touches the shared
-   centre - the two levels of separation compound. */
-const COMBINED_W   = 2048, COMBINED_H = 1024, COMBINED_SEP = 200;
-const COMBINED_PAD = 44;                                // black gutter framing each view (isolated panel)
-const COMBINED_BOX = (COMBINED_W - COMBINED_SEP) / 2;   // 924px per view box
-const _stitchCache = new Map();   // `${frontUrl} ${backUrl}` → Promise<Blob|null>
-
 /* Decode a garment URL into an ImageBitmap without tainting the canvas: http(s) CDN
    URLs go through the same-origin proxy (exactly like the live reference path); data:
    and blob: URLs (custom uploads) are fetched directly - both yield a decodable Blob. */
@@ -2908,119 +2871,8 @@ function drawSectionLabel(ctx, text, anchorX, top, fontPx, align) {
   ctx.restore();
 }
 
-/**
- * Stitch a front + back garment asset into ONE fixed 2048×1024 reference Blob: FRONT boxed
- * on the left (924×1024, inset by a 44px black gutter) + "FRONT" white marker, a WIDE 200px
- * opaque black separator bar, BACK boxed on the right (924×1024, same gutter) + "BACK" white
- * marker. Rigid geometry + the wide bar + the gutter give the
- * diffusion model a hard boundary it won't blend across (the front/back bleeding fix).
- * @param {string} frontUrl  front garment image URL (http(s)/data:/blob:)
- * @param {string} backUrl   back garment image URL
- * @returns {Promise<Blob|null>}  JPEG Blob, or null on any failure (caller falls back
- *   to the plain front reference so the live session is never left without one).
- */
-function stitchReferenceBlob(frontUrl, backUrl) {
-  if (!frontUrl || !backUrl) return Promise.resolve(null);
-  const key = `${frontUrl} ${backUrl}`;
-  if (_stitchCache.has(key)) return _stitchCache.get(key);
-
-  const job = (async () => {
-    try {
-      /* Front and back are loaded SEPARATELY (not one Promise.all) so a failure names
-         the side that actually broke. Under Promise.all a rejected back was
-         indistinguishable from a rejected front in the logs, which is what made this
-         failure so hard to pin down: the stitch just returned null and the live
-         session silently degraded to a front-only reference.
-         The back gets a cheap single-attempt try first; only if THAT fails do we tell
-         the user we're retrying and spend the full 3-attempt budget on it. */
-      const front = await loadGarmentBitmap(frontUrl);
-      let back = null;
-      try {
-        back = await loadGarmentBitmap(backUrl, 1);
-      } catch (firstErr) {
-        console.warn("[PEAR] back bitmap first attempt failed, retrying:", firstErr?.message || firstErr);
-        toast("טוען תמונת גב…");
-        back = await loadGarmentBitmap(backUrl, 3);   // throws → caught below as CRITICAL
-      }
-      // A Blob can fetch/decode fine and still be a broken-image/gray placeholder with
-      // no real garment texture (bad classification, CDN soft-404). Treat that exactly
-      // like a decode failure - falling through to the CRITICAL catch below rather than
-      // baking a solid-color BACK panel into the composite.
-      if (await bitmapLooksFlat(back)) {
-        throw new Error("back image decoded but looks like a blank/solid-color placeholder, not real garment texture");
-      }
-
-      // FIXED 2048×1024 framing: 924px FRONT box | 200px black bar | 924px BACK box.
-      const boxW = COMBINED_BOX, H = COMBINED_H;
-      const rightX = boxW + COMBINED_SEP;           // 1124 - start of the back box (after the bar)
-
-      const off    = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(COMBINED_W, COMBINED_H) : null;
-      const canvas = off || Object.assign(document.createElement("canvas"), { width: COMBINED_W, height: COMBINED_H });
-      const ctx    = canvas.getContext("2d");
-
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, COMBINED_W, COMBINED_H);
-
-      // Each view is drawn into an inset rect so a black GUTTER frames it on all four sides:
-      // the garment becomes an isolated panel whose pixels never touch the centre bar (or any
-      // edge), and the clip to the full box still guards against sub-pixel overflow.
-      const pad = COMBINED_PAD;
-      const innerW = boxW - pad * 2, innerH = H - pad * 2;
-
-      // Left = FRONT, clipped to its box so a wide packshot can't bleed toward (or across)
-      // the black bar - the boundary must stay impermeable.
-      ctx.save();
-      ctx.beginPath(); ctx.rect(0, 0, boxW, H); ctx.clip();
-      drawImageCover(ctx, front, pad, pad, innerW, innerH);
-      ctx.restore();
-
-      // Right = BACK, clipped to its box (starts after the bar).
-      ctx.save();
-      ctx.beginPath(); ctx.rect(rightX, 0, boxW, H); ctx.clip();
-      drawImageCover(ctx, back, rightX + pad, pad, innerW, innerH);
-      ctx.restore();
-
-      // High-contrast 200px SOLID BLACK separator bar - the diffusion "no-man's-land".
-      ctx.fillStyle = "#000000";
-      ctx.fillRect(boxW, 0, COMBINED_SEP, COMBINED_H);
-
-      // Hard architectural markers: "FRONT" white box in the TOP-LEFT of the front box, "BACK"
-      // white box in the TOP-RIGHT of the back box. The prompt names these + forbids rendering
-      // the marker text on the garment (see ANGLE_CLAUSE.combined exclusive instruction set).
-      const fontPx = Math.round(COMBINED_H * 0.06);   // ~61px - larger, harder-to-ignore marker
-      const inset  = Math.round(COMBINED_H * 0.02);   // ~20px from the edges
-      drawSectionLabel(ctx, "FRONT", inset, inset, fontPx, "left");                // top-left of FRONT box
-      drawSectionLabel(ctx, "BACK",  COMBINED_W - inset, inset, fontPx, "right");  // top-right of BACK box
-      front.close?.(); back.close?.();             // release decoded bitmaps
-
-      // quality 0.95 - retain each view's fine graphics/detail at this high resolution.
-      const outBlob = off
-        ? await off.convertToBlob({ type: "image/jpeg", quality: 0.95 })
-        : await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.95));
-      if (!outBlob || !outBlob.size) throw new Error("canvas produced an empty blob");
-      console.log(
-        `[PEAR] ✓ stitched front+back reference · ${COMBINED_W}×${COMBINED_H} · ` +
-        `${outBlob.size.toLocaleString()} bytes · back=${abbrevImg(backUrl)}`
-      );
-      return outBlob;
-    } catch (e) {
-      // LOUD on purpose. This is the exact point where "the back view goes blank"
-      // used to happen invisibly: the stitch returned null, referenceImageFor()
-      // quietly fell back to a front-only reference, and Lucy then had no rear
-      // pixels to render at all. It is an error, not a warning.
-      console.error("[PEAR] CRITICAL: back bitmap failed - stitched reference unavailable:",
-        e?.message || e, "\n  front:", abbrevImg(frontUrl), "\n  back :", abbrevImg(backUrl));
-      _stitchCache.delete(key);   // never cache a failure - allow a later retry
-      return null;
-    }
-  })();
-
-  _stitchCache.set(key, job);
-  return job;
-}
-
 /* ── Full-Look compositor - "TOP + BOTTOM Stitched Reference" ─────────────────
-   Same rigid-geometry technique as stitchReferenceBlob (front|back), but stacked
+   Same rigid-geometry technique the removed front|back stitcher used, but stacked
    VERTICALLY: the TOP garment (shirt) boxed into the upper half, the BOTTOM garment
    (trousers) boxed into the lower half, separated by the same wide black no-man's-land
    bar + gutter. WHY THIS EXISTS: Decart's realtime set() only forwards ONE image
@@ -3157,29 +3009,29 @@ const ANGLES = ["front", "back", "side", "detail"];   // ordered render/priority
    reference - so it is inspection-only: it is never fed to rtClient.set() and never
    appears in the live rail. Only WEARABLE angles hot-swap the stream. */
 const WEARABLE_ANGLES = ["front", "back", "side"];
-/* "AI Combined View" - a SYNTHETIC pseudo-angle, deliberately NOT in ANGLES/WEARABLE_ANGLES.
-   Instead of one gallery image it feeds Lucy a single STITCHED reference (front | 2px
-   separator | back) plus a composite prompt clause, so ONE live stream shows the correct
-   half as the user turns. Offered only when the item ships a real, DISTINCT back photo
-   (canCombineViews). Handled explicitly everywhere currentAngle is switched on. */
-const COMBINED_ANGLE = "combined";
-/* "AI Auto" - Context-Aware Asset Switching, the anti-bleeding architecture that REPLACES
-   stitching with per-orientation references: both the front and back assets are pre-cached
-   as Blobs, an OrientationWatcher reads the local camera, and the live session hot-swaps
-   rtClient.set({ image }) to the SINGLE matching asset the instant the user turns. The model
-   only ever sees ONE orientation at a time, so front/back cross-contamination is impossible
-   by construction (there is no second view in the reference to bleed from). Like COMBINED,
-   it is a synthetic pseudo-angle offered only when canCombineViews() (a real, distinct back
-   photo exists). `autoOrientation` is the watcher-detected side currently in play; every
-   angle-sensitive resolver reads effectiveAngle() so auto mode transparently reuses the
-   entire existing front/back pipeline (images, clauses, fallbacks). */
+/* "AI Auto" - Context-Aware Asset Switching: both the front and back assets are
+   pre-cached as Blobs, an OrientationWatcher reads the local camera, and the live
+   session hot-swaps rtClient.set({ image }) to the SINGLE matching asset the instant
+   the user turns. The model only ever sees ONE orientation at a time, so front/back
+   cross-contamination is impossible by construction (there is no second view in the
+   reference to bleed from). A synthetic pseudo-angle, deliberately NOT in ANGLES/
+   WEARABLE_ANGLES, offered only when canCombineViews() (a real, distinct back photo
+   exists) - and only while its OrientationWatcher can actually arm; see goLive()'s
+   mode-settling block, which falls back to plain "front" (never a stitched
+   composite - that approach was tried and removed, see git history, after it
+   produced double-logo/duplicated-garment renders: Lucy has no concept of "panels"
+   and would attempt to map both halves onto the body at once) if the watcher can't
+   sample the camera. `autoOrientation` is the watcher-detected side currently in
+   play; every angle-sensitive resolver reads effectiveAngle() so auto mode
+   transparently reuses the entire existing front/back pipeline (images, clauses,
+   fallbacks). */
 const AUTO_ANGLE = "auto";
 let autoOrientation = "front";        // "front" | "back" - the side the user shows the camera
 /* The angle every resolver should ACT on: auto mode delegates to the detected orientation,
    every other mode is what the user picked. */
 function effectiveAngle() { return currentAngle === AUTO_ANGLE ? autoOrientation : currentAngle; }
-const ANGLE_LABEL_HE = { front: "חזית", back: "גב",   side: "צד",   detail: "פרט",   combined: "משולב AI",  auto: "אוטומטי AI" };
-const ANGLE_LABEL_EN = { front: "Front", back: "Back", side: "Side", detail: "Detail", combined: "AI Combined", auto: "AI Auto" };
+const ANGLE_LABEL_HE = { front: "חזית", back: "גב",   side: "צד",   detail: "פרט",   auto: "אוטומטי AI" };
+const ANGLE_LABEL_EN = { front: "Front", back: "Back", side: "Side", detail: "Detail", auto: "AI Auto" };
 
 /** Ordered list of variant/colour keys an item ships (empty when it has no variants). */
 function colorsOf(item) {
@@ -3290,11 +3142,6 @@ const ANGLE_CLAUSE = {
   // must infer a plausible rear from it (graceful fallback; placement can't be pinned).
   backInferred: " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera. Render the BACK of the garment: its back panel, rear yoke, back collar, rear hemline and any back graphics, prints or seams, wrapping naturally around the body from the rear. This reference photo shows the front, so infer the corresponding rear; do NOT render the front of the garment.",
   side:  " The person is viewed from the SIDE in profile: render the garment's side profile - shoulder line, sleeve, side seam and the way the fabric drapes along the flank - in an accurate three-quarter/profile perspective.",
-  // AI Combined View - AGGRESSIVE "exclusive mode": the reference is one stitched image with a
-  // FRONT box (left, white "FRONT" marker), a black no-man's-land bar, and a BACK box (right,
-  // white "BACK" marker). The instruction forbids blending across the bar (the bleeding fix),
-  // pins each labeled section as the ONLY valid source for its orientation, then forbids
-  // rendering the marker text onto the garment.
   // AI Auto, facing camera: the reference is ONE clean front asset (no composite), so the
   // clause pins it explicitly as the front and forbids inventing rear details - the
   // orientation contract that makes Context-Aware Asset Switching bleed-proof.
@@ -3303,17 +3150,10 @@ const ANGLE_CLAUSE = {
     " reproduce the garment's front faithfully - its front panel, collar, closure, hemline and" +
     " any front graphics, prints, logos or lettering - keeping each element at the SAME size," +
     " height and horizontal position as in the reference. Do NOT render the back of the garment.",
-  combined:
-    " This image is two photographs of the SAME single garment, showing its two different sides, each isolated inside its own black-framed panel and divided by a WIDE solid-black separator band that is a strict no-man's-land." +
-    " The LEFT panel marked 'FRONT' is the FRONT of the garment. The RIGHT panel marked 'BACK' is the BACK of the SAME garment. They are not two different garments and not two different products - they are one garment seen from the front and from behind." +
-    " The LEFT 'FRONT' panel is the ONLY valid source for frontal renders. The RIGHT 'BACK' panel is the ONLY valid source for rear renders. Treat the black band and black frames as an impassable wall: you are strictly forbidden from sampling, blending, copying or bleeding ANY pixel from one panel into the other." +
-    " When the person faces the camera, dress them using ONLY the LEFT 'FRONT' panel and completely ignore the RIGHT panel. When the person turns around and their back faces the camera, dress them using ONLY the RIGHT 'BACK' panel - render its back panel, rear yoke, back collar, rear hemline and any back graphics, prints or lettering - and completely ignore the LEFT panel. Mixing the two panels is an invalid render." +
-    " Reproduce the selected panel's garment with 100% fidelity to its graphics and layout." +
-    " The 'FRONT' and 'BACK' text markers and the black frames/band are architectural guides only - never render that text, the frames or the band onto the clothing or the person.",
 };
 
-/* Full-Look composite clause - the counterpart of ANGLE_CLAUSE.combined for
-   stitchLookBlob(). The reference image is now TWO stacked, isolated garment photos
+/* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
+   orientation). The reference image is TWO stacked, isolated garment photos
    (TOP over BOTTOM) rather than one image + a text-only description of the second
    garment, so the model has an actual pixel reference for BOTH the shirt and the
    pants and can render them together instead of favoring only the visually-referenced
@@ -3347,12 +3187,13 @@ function activeBackIsReal(item) {
   return real(item);
 }
 
-/* Whether the "AI Combined View" (stitched front+back reference) is MEANINGFUL for the
-   current subject. It needs a real front AND a real, DISTINCT back photo - a mirrored
-   front (g.back === g.front, the catalog auto-fill / graceful fallback) is pointless to
-   stitch, so it must NOT offer the mode. Same realness test as activeBackIsReal; for a
-   full look BOTH halves must qualify. Today only an item shipping a genuine rear asset
-   (e.g. Strata) exposes the AI button - deliberately consistent with the two-view gate. */
+/* Whether "AI Auto" (Context-Aware Asset Switching) is MEANINGFUL for the current
+   subject. It needs a real front AND a real, DISTINCT back photo - a mirrored front
+   (g.back === g.front, the catalog auto-fill / graceful fallback) has nothing for the
+   watcher to switch TO, so it must NOT offer the mode. Same realness test as
+   activeBackIsReal; for a full look BOTH halves must qualify. Today only an item
+   shipping a genuine rear asset (e.g. Strata) exposes it - deliberately consistent
+   with the two-view gate. */
 function canCombineViews(item) {
   const ok = (it) => { if (!it) return false; const g = galleryOf(it); return !!(g.front && g.back && g.back !== g.front); };
   const look = resolveLook();
@@ -3364,9 +3205,6 @@ function canCombineViews(item) {
    in play (backReal - reproduce + pin the print's placement) vs a mirrored/inferred front
    (backInferred). `item` is the single garment; for a full look it's resolved internally. */
 function angleClause(item) {
-  // AI Combined View - the image IS a stitched front|back composite, so the steering is
-  // the composite clause (which half to use for which orientation), not a per-angle one.
-  if (currentAngle === COMBINED_ANGLE) return ANGLE_CLAUSE.combined;
   const angle = effectiveAngle();      // AI Auto resolves to the DETECTED orientation
   if (angle === "back") {
     // Dual asset (front + a REAL back photo, incl. a user's uploaded back) → reproduce it.
@@ -3385,20 +3223,12 @@ function angleClause(item) {
 
 /**
  * Resolve the reference image handed to rtClient.set({ image }) for the active view.
- * Normal angles → the proxied gallery URL (garmentImageRef, a string). AI Combined
- * View → a freshly stitched front|back Blob (memoized). Falls back to the plain front
- * reference if stitching fails, so a live session is never left without a reference.
+ * Normal angles → the proxied gallery URL (garmentImageRef, a string). AI Auto → the
+ * pre-cached per-orientation Blob (garmentBlobCached), never a combined image.
  * @param {object} item @param {string} [activeImg] pre-resolved activeImageOf(item)
  * @returns {Promise<Blob|string|undefined>}
  */
 async function referenceImageFor(item, activeImg = activeImageOf(item)) {
-  if (currentAngle === COMBINED_ANGLE) {
-    const g = galleryOf(item);
-    const blob = await stitchReferenceBlob(g.front || item.img, g.back || g.front || item.img);
-    if (blob) return blob;                 // Blob → set({ image }) accepts it directly
-    console.warn("[PEAR] AI Combined View - stitch failed; falling back to front reference");
-    toast("תמונת הגב אינה זמינה");        // canCombineViews() already confirmed a real back exists - this is a fetch failure, not a missing photo
-  }
   // AI Auto - the pre-cached Blob for the DETECTED orientation (activeImg already resolved
   // through effectiveAngle()). Sending bytes, not a URL, is what makes the swap instant.
   if (currentAngle === AUTO_ANGLE) {
@@ -3430,8 +3260,7 @@ async function applyGarment(item) {
   console.group("[PEAR] applyGarment() - VTON payload debug");
   console.log("garment  :", item.name, `(id=${item.id}, type=${item.garmentType}${item.custom ? ", custom upload" : ""})`);
   console.log("angle    :", currentAngle,
-    currentAngle === COMBINED_ANGLE ? "(stitched front+back composite reference)"
-      : currentAngle === AUTO_ANGLE ? `(AI Auto - detected orientation: ${autoOrientation}, pre-cached Blob)`
+    currentAngle === AUTO_ANGLE ? `(AI Auto - detected orientation: ${autoOrientation}, pre-cached Blob)`
       : hasDedicatedAngle(item) ? "(dedicated gallery image)" : "(front fallback + prompt)");
   console.log("subType  :", item.subType, "| color:", item.color);
   console.log("img URL  :", abbrevImg(activeImg));   // data: URLs abbreviated so a base64 blob can't flood the console
@@ -3531,9 +3360,9 @@ const KEEP_BOTTOMS = " Keep the person's existing lower body exactly as it is in
 const KEEP_TOP     = " Keep the person's existing upper body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the shirt, top, jacket, or anything above the waist.";
 
 /* Universal hard negative appended to EVERY prompt (per product spec). Bars the opposite
-   view's signature details from leaking in when the back is being rendered. In AI Combined
-   View, the per-segment orientation steering (which half = front/back, and when to use each)
-   lives in the composite ANGLE_CLAUSE.combined clause - the model auto-switches from it. */
+   view's signature details from leaking in when the back is being rendered - a belt-and-
+   suspenders backstop alongside ANGLE_CLAUSE.backReal/backInferred's own "do NOT render
+   the front" instruction. */
 const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like logos or front-pockets) when the BACK view is requested.";
 
 function buildPrompt(item) {
@@ -3624,16 +3453,16 @@ async function applyLook(top, bottom) {
   // reference for the top but none for the bottom, and the model renders only the
   // top - visually indistinguishable from "replace". stitchLookBlob() gives BOTH
   // garments an actual reference by compositing them (TOP over BOTTOM) into the
-  // single image the SDK does forward. Skip it for the AI Combined/Auto angle
-  // modes, which already need that one image slot for their own front/back stitch.
-  const canStitchLook = currentAngle !== COMBINED_ANGLE && currentAngle !== AUTO_ANGLE;
+  // single image the SDK does forward. Skip it for AI Auto, which already needs
+  // that one image slot for its own per-orientation front/back Blob.
+  const canStitchLook = currentAngle !== AUTO_ANGLE;
   let primaryImage = canStitchLook ? await stitchLookBlob(topImg, bottomImg) : null;
   const prompt = primaryImage
     ? buildLookPrompt(top, bottom) + LOOK_CLAUSE
     : buildLookPrompt(top, bottom) + angleClause();
 
   if (!primaryImage) {
-    // Stitch unavailable (combined/auto angle) or failed to decode - fall back to the
+    // Stitch unavailable (AI Auto angle) or failed to decode - fall back to the
     // single top reference so the live session is never left without ANY image.
     if (canStitchLook) console.warn("[PEAR] look stitch failed; falling back to top-only reference");
     primaryImage = (await referenceImageFor(top, topImg)) ?? null;
@@ -4909,15 +4738,14 @@ async function goLive() {
     }
 
     /* BUG FIX (cross-run mode persistence): a PREVIOUS session in this same page load
-       may have downgraded currentAngle to COMBINED_ANGLE below (watcher couldn't arm
-       that time) - and since renderPerspectiveSelector() is only re-run on an item/
-       colour swap, NOT on every go-live, that downgrade used to stick for every
-       subsequent run until the shopper happened to touch something else. That is
-       exactly the "run 1 fine, run 2/3 broken" pattern: whichever mode Run 1 ended up
-       on kept being reused, not re-attempted. Re-derive fresh from canCombineViews()
-       on EVERY go-live so each run gets its own honest attempt at AI Auto, and only
-       falls back to AI Combined for runs where the watcher genuinely can't arm THIS
-       time - never as a permanent, silent downgrade. */
+       may have downgraded currentAngle to "front" below (watcher couldn't arm that
+       time) - and since renderPerspectiveSelector() is only re-run on an item/colour
+       swap, NOT on every go-live, that downgrade used to stick for every subsequent
+       run until the shopper happened to touch something else. That is exactly the
+       "run 1 fine, run 2/3 broken" pattern: whichever mode Run 1 ended up on kept
+       being reused, not re-attempted. Re-derive fresh from canCombineViews() on
+       EVERY go-live so each run gets its own honest attempt at AI Auto, rather than
+       inheriting a downgrade from a run that's already over. */
     currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
     if (currentAngle === AUTO_ANGLE) autoOrientation = "front";
 
@@ -4941,9 +4769,8 @@ async function goLive() {
         return;   // finally{} resets busy + the capture button; no billed session opened
       }
       if (!preload.hasBack) {
-        // Known-bad/missing back BEFORE go-live - don't arm AI Auto (or let goLive's
-        // later watcher-arm fallback reach for AI Combined) with an asset we already
-        // know is broken. Front-only is a fully supported, never-blocked mode.
+        // Known-bad/missing back BEFORE go-live - don't arm AI Auto with an asset we
+        // already know is broken. Front-only is a fully supported, never-blocked mode.
         currentAngle = "front";
         toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
       }
@@ -4967,18 +4794,34 @@ async function goLive() {
        pre-load gate above: that one validates the ASSET (is the back image itself
        fetchable/decodable/real); this one validates the WATCHER (can the local camera
        actually be sampled). AI Auto needs both. If currentAngle is already "front"
-       here, the pre-load gate already made that call and this block is a no-op. If
-       it's still AUTO_ANGLE but the watcher can't arm (no video track, sampler
-       blocked), fall back to the stitched front|back composite, which needs no
-       camera analysis at all. */
+       here, the pre-load gate already made that call and this block is a no-op.
+
+       RETRY, DON'T IMMEDIATELY DEGRADE: a failure to arm right after connect is
+       usually a transient timing hiccup (the video track settling right as the
+       WebRTC handshake lands) rather than a real hardware absence - cameraLooksBlack()
+       already proved a live camera earlier in this same call. A few short retries
+       give that a chance to resolve before giving up.
+
+       If it still can't arm, fall back to plain "front" - NEVER a stitched front|back
+       composite (that used to be the fallback here). A single 2048×1024 combined
+       image asks Lucy - a diffusion model with no concept of "panels" - to decide
+       which half to render every single frame, and it would frequently render
+       fragments of BOTH at once: the double-logo/duplicated-garment symptom. Front-
+       only has no such failure mode - it's the exact same single, unambiguous
+       reference AI Auto already uses for FRONT_MODE, just without the ability to
+       switch to the back. */
     syncOrientationWatcher();
-    if (currentAngle === AUTO_ANGLE && !orientWatcher && canCombineViews(activeItem)) {
-      console.warn("[PEAR] AI Auto watcher unavailable - falling back to AI Combined stitched reference");
-      currentAngle = COMBINED_ANGLE;
+    for (let attempt = 1; attempt <= 3 && currentAngle === AUTO_ANGLE && !orientWatcher; attempt++) {
+      await new Promise((r) => setTimeout(r, 200));
+      syncOrientationWatcher();
+    }
+    if (currentAngle === AUTO_ANGLE && !orientWatcher) {
+      console.warn("[PEAR] AI Auto watcher unavailable after retry - proceeding FRONT-ONLY (never a stitched composite)");
+      currentAngle = "front";
+      toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
     }
     console.log(`[VTON Pipeline] Top-level mode this run: ${currentAngle}`,
       currentAngle === AUTO_ANGLE ? "(per-orientation asset switching - watcher armed; FRONT_MODE/BACK_MODE is a live lock, see [VTON Pipeline] Current Active State below)"
-        : currentAngle === COMBINED_ANGLE ? "(stitched front|back composite - watcher did NOT arm THIS run; front/back switching is model-inferred, not client-controlled)"
         : "(front only)");
 
     // 2) apply on the live stream - the full look (shirt + pants, ONE payload) when
@@ -7233,7 +7076,7 @@ function init() {
   // Colour swatches - delegated over the (dynamically rebuilt) bubbles so one listener
   // survives every re-render; setColor() re-renders the strip against the chosen colour's
   // own images and hot-swaps the live stream in place. (The perspective / AI-mode rail was
-  // removed - AI Combined is applied automatically, so there is no angle picker to wire.)
+  // removed - AI Auto is applied automatically, so there is no angle picker to wire.)
   const swatches = $("productSwatches");
   if (swatches) swatches.addEventListener("click", (e) => {
     const b = e.target.closest(".pg-swatch");
