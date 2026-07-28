@@ -2371,28 +2371,41 @@ function prewarmOrientationAssets() {
    Watches the LOCAL camera (localStream - the raw preview feed, NOT the AI output) and
    flips autoOrientation between "front" and "back" as the user turns, hot-swapping the
    matching pre-cached reference through the normal applyActive() → rtClient.set() path
-   (same session, no reconnect, no flicker - the model transitions over a few frames).
+   (same session, no reconnect - a brief cross-fade overlay masks the swap instead of a
+   jarring cut, see orientFadeFreeze/orientFadeReveal below).
 
-   Detection engines, best-first:
-     1. Native FaceDetector (Shape Detection API) - zero-dependency, fast; face present →
-        the user faces the camera. Demoted permanently after one runtime failure (some
-        builds expose the class but throw NotSupportedError at detect()).
-     2. Skin-ratio heuristic - % of skin-tone pixels in the head band (upper 45%, central
-        50%) of a tiny 96×96 frame. A frontal face shows far more skin than the back of a
-        head. DUAL thresholds (≥10% → front, ≤4% → back, dead-band between) so ambiguous
-        profile frames vote nothing instead of flapping.
+   Detection engine: native FaceDetector (Shape Detection API) when available - a
+   detected face means the user is facing the camera (FRONT); no face means the back
+   of the head/body is showing (BACK). Demoted permanently after one runtime failure
+   (some builds expose the class but throw NotSupportedError at detect()). Browsers
+   without FaceDetector fall back to a skin-ratio heuristic: % of skin-tone pixels in
+   the head band (upper 45%, central 50%) of a tiny 96×96 frame - a frontal face shows
+   far more skin than the back of a head. DUAL thresholds (≥10% → front, ≤4% → back,
+   dead-band between) so an ambiguous profile frame abstains instead of voting.
+   A single stray misread (e.g. a false-positive face hit on hair texture) is deliberately
+   NOT cross-checked here against a second engine - the hysteresis below is what absorbs
+   that noise, so classify() stays one simple, direct rule instead of two engines
+   arguing with each other every tick.
 
-   Anti-flap discipline (what makes auto-switching stable enough for a live session):
-     • ORIENT_CONFIRM consecutive agreeing votes to flip (~750ms confirm latency);
-     • ORIENT_COOLDOWN_MS minimum gap between live set() swaps;
-     • a single in-flight guard - the 4Hz sampler itself is the retry loop, so a turn
-       completed mid-swap is picked up by the very next confirmed vote.
+   Anti-flap discipline (this is what stops the view from flapping back and forth):
+     • a flip needs ORIENT_CONFIRM_FRAMES consecutive agreeing votes OR
+       ORIENT_CONFIRM_MS of sustained agreement, whichever comes first - a real turn
+       satisfies both quickly; a single noisy frame satisfies neither;
+     • ORIENT_COOLDOWN_MS minimum gap between actual live set() swaps, on top of that;
+     • a single in-flight guard - the sampler itself is the retry loop, so a turn
+       completed mid-swap is picked up by the very next confirmed vote;
+     • abstains (null votes) never reset an in-progress streak - only a genuinely
+       DISAGREEING vote does.
    The watcher never touches the camera track (shared with the preview); stop() only
    detaches its own <video> sampler. Lifecycle is owned by syncOrientationWatcher(). */
-const ORIENT_SAMPLE_MS   = 250;   // ~4 analyses/s - cheap on a 96px canvas
-const ORIENT_CONFIRM     = 1;     // consecutive agreeing samples to flip - instant switch, no confirm delay
-const ORIENT_COOLDOWN_MS = 1500;  // min gap between live reference swaps (anti-flap)
-const ORIENT_SIZE        = 96;    // analysis canvas edge - tiny on purpose
+const ORIENT_SAMPLE_MS      = 250;   // ~4 analyses/s - cheap on a 96px canvas
+const ORIENT_CONFIRM_FRAMES = 4;     // consecutive agreeing samples to flip (~1s @ 250ms/sample)
+const ORIENT_CONFIRM_MS     = 900;   // OR this much sustained agreement - whichever comes first
+const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap)
+const ORIENT_SIZE           = 96;    // analysis canvas edge - tiny on purpose
+// TEMPORARY - single compact per-tick log line for tuning the thresholds above; flip
+// off (or delete the ORIENT_DEBUG block below) once the values are settled.
+const ORIENT_DEBUG          = true;
 
 let orientWatcher = null;         // { stop } while running, else null
 
@@ -2402,6 +2415,65 @@ function syncOrientationWatcher() {
   const want = currentAngle === AUTO_ANGLE && isLive() && canCombineViews(activeItem) && !!localStream;
   if (want && !orientWatcher) orientWatcher = createOrientationWatcher();
   else if (!want && orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; }
+}
+
+/* ── Orientation-swap cross-fade ──────────────────────────────────────────────
+   A confirmed flip re-issues rtClient.set() with a new reference, but the live #aiVideo
+   stream needs a few remote-rendered frames to catch up - cutting straight to that reads
+   as a jarring replace, not a garment turning with the body. This freezes the CURRENT
+   #aiVideo frame onto a canvas pinned exactly over it (same position/size/mirroring),
+   holds it at full opacity while the swap is in flight, then cross-fades it out over
+   ORIENT_FADE_MS once Decart has had a moment to render the new side - the frozen frame
+   IS the "anchor" while the live feed underneath catches up and is revealed. One canvas
+   draw + a CSS opacity transition; no per-frame cost. */
+const ORIENT_FADE_MS      = 260;   // cross-fade duration - fast, not jarring
+const ORIENT_FADE_HOLD_MS = 150;   // grace period after set() resolves before revealing, so the
+                                    // frame the fade uncovers is actually the NEW side, not the old one
+let _orientFadeCanvas = null;
+
+function orientFadeEl() {
+  if (_orientFadeCanvas) return _orientFadeCanvas;
+  const card = $("cameraCard");
+  if (!card) return null;
+  if (!document.getElementById("pear-orient-fade-styles")) {
+    const s = document.createElement("style");
+    s.id = "pear-orient-fade-styles";
+    s.textContent =
+      // transform:none (NOT the generic .camera-card mirroring rule) - #aiVideo itself is
+      // set to transform:none once live ("the edited feed is already correctly oriented",
+      // see onRemoteStream), and this overlay must line up pixel-for-pixel with THAT frame.
+      "#orientFadeCanvas{position:absolute;inset:0;width:100%;height:100%;" +
+      "object-fit:cover;transform:none;z-index:6;pointer-events:none;" +
+      `opacity:0;transition:opacity ${ORIENT_FADE_MS}ms ease-out;}`;
+    document.head.appendChild(s);
+  }
+  const c = document.createElement("canvas");
+  c.id = "orientFadeCanvas";
+  card.appendChild(c);
+  _orientFadeCanvas = c;
+  return c;
+}
+
+/* Snapshot the live #aiVideo frame into the overlay and show it at full opacity with NO
+   transition (an instant cut onto a frame identical to what's already showing is
+   invisible). Call BEFORE issuing the swap. */
+function orientFadeFreeze() {
+  const ai = $("aiVideo");
+  const c = orientFadeEl();
+  if (!ai || !c || !ai.videoWidth) return;
+  c.width = ai.videoWidth; c.height = ai.videoHeight;
+  c.getContext("2d").drawImage(ai, 0, 0, c.width, c.height);
+  c.style.transition = "none";
+  c.style.opacity = "1";
+  void c.offsetWidth;              // flush so the transition below re-arms
+  c.style.transition = `opacity ${ORIENT_FADE_MS}ms ease-out`;
+}
+
+/* Fade the frozen overlay back out, revealing the (by now updated) live feed underneath.
+   Call AFTER the swap's rtClient.set() has resolved (+ a short ORIENT_FADE_HOLD_MS). */
+function orientFadeReveal() {
+  if (!_orientFadeCanvas) return;
+  _orientFadeCanvas.style.opacity = "0";
 }
 
 function createOrientationWatcher() {
@@ -2423,38 +2495,16 @@ function createOrientationWatcher() {
     ? (() => { try { return new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch (_) { return null; } })()
     : null;
   let fdBroken = false;
-  let lastSkinRatio = null;   // [PEAR][DEBUG-ORIENT] temporary - raw ratio captured by skinRatioVote() for classify() to log; remove alongside the DEBUG-ORIENT log lines below
-  // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - session-wide min/max/histogram, remove alongside the summary logging below
-  let skinRatioMin = Infinity, skinRatioMax = -Infinity;
-  const voteHistogram = { front: 0, back: 0, abstain: 0 };
-  function logOrientSummary(tag) {
-    console.log(`[PEAR][DEBUG-ORIENT-SUMMARY]${tag} min=${skinRatioMin === Infinity ? "n/a" : skinRatioMin.toFixed(4)} max=${skinRatioMax === -Infinity ? "n/a" : skinRatioMax.toFixed(4)} voteHistogram={front: ${voteHistogram.front}, back: ${voteHistogram.back}, abstain: ${voteHistogram.abstain}} faceDetectorEngine=${!faceDetector ? "unavailable(FaceDetector unsupported in this browser)" : fdBroken ? "broke-at-runtime(fell back to skin-ratio)" : "active"}`);
-  }
-  // [PEAR][DEBUG-ORIENT-SNAPSHOT] temporary - visual capture of the exact sub-rect skinRatioVote()
-  // samples (same x/w/h formula, independently recomputed here so skinRatioVote() itself stays
-  // untouched), so we can SEE whether it's background/hair/neck-skin driving the ratio. Remove
-  // alongside the rest of this instrumentation.
-  const snapX = Math.round(ORIENT_SIZE * 0.25), snapW = Math.round(ORIENT_SIZE * 0.5), snapH = Math.round(ORIENT_SIZE * 0.45);
-  const snapCanvas = document.createElement("canvas");
-  snapCanvas.width = snapW; snapCanvas.height = snapH;
-  const snapCtx = snapCanvas.getContext("2d");
-  function logOrientSnapshot() {
-    try {
-      snapCtx.drawImage(canvas, snapX, 0, snapW, snapH, 0, 0, snapW, snapH);
-      const dataUrl = snapCanvas.toDataURL("image/png");
-      // Chrome/Edge devtools image preview trick - renders inline via the CSS background.
-      console.log("%c ", `font-size:1px; padding:${snapH * 3}px ${snapW * 3}px; background:url(${dataUrl}) no-repeat center/contain; border:1px solid magenta;`);
-      console.log("[PEAR][DEBUG-ORIENT-SNAPSHOT] sampled sub-rect dataURL (paste into a new tab if the preview above doesn't render):", dataUrl);
-    } catch (e) {
-      console.warn("[PEAR][DEBUG-ORIENT-SNAPSHOT] capture failed:", e?.message || e);
-    }
-  }
+  let lastSkinRatio = null;   // surfaced in the ORIENT_DEBUG log line only
   console.log("[PEAR] AI Auto - orientation watcher armed (engine:",
-    faceDetector ? "FaceDetector + skin-ratio fallback)" : "skin-ratio heuristic)");
+    faceDetector ? "FaceDetector)" : "skin-ratio heuristic)");
 
-  let lastVote = null, streak = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
+  let lastVote = null, streak = 0, streakSince = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
 
-  /* One vote: "front" | "back" | null (abstain). */
+  /* One vote: "front" | "back" | null (abstain). Face detection is authoritative when
+     available - detected ⇒ front, not detected ⇒ back, no second-guessing here. The
+     hysteresis in the sampler loop below (not this function) is what absorbs a stray
+     misread, so this stays one direct rule per engine. */
   async function classify() {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) return null;
@@ -2464,30 +2514,13 @@ function createOrientationWatcher() {
     if (faceDetector && !fdBroken) {
       try {
         const faces = await faceDetector.detect(canvas);
-        // Cross-check a positive face hit against skin-ratio: fastMode detection on a
-        // downscaled 96px frame can false-positive on hair/occiput texture, which would
-        // otherwise pin every vote to "front" forever with no way to recover. A strong
-        // independent "back" signal from skin-ratio overrides that false positive; but an
-        // ambiguous (dead-band) skin-ratio reading must abstain too, NOT collapse to
-        // "front" - otherwise a stray false-positive face hit during a genuine turn resets
-        // the confirmation streak on a reading that was never actually confident.
-        if (faces.length > 0) {
-          const skinVote = skinRatioVote();
-          // [PEAR][DEBUG-ORIENT] temporary - remove once real numbers are captured
-          console.log(`[PEAR][DEBUG-ORIENT] faceDetected=true skinRatio=${lastSkinRatio != null ? lastSkinRatio.toFixed(4) : "n/a"} vote=${skinVote === null ? "null(abstain)" : skinVote}`);
-          if (skinVote === "back") return "back";
-          if (skinVote === "front") return "front";
-          return null;                          // dead-band - abstain, let the streak stand
-        }
-        // [PEAR][DEBUG-ORIENT] temporary - remove once real numbers are captured
-        console.log("[PEAR][DEBUG-ORIENT] faceDetected=false skinRatio=n/a(skipped) vote=back");
-        return "back";
-      } catch (_) { fdBroken = true; console.log("[PEAR] AI Auto - FaceDetector unavailable at runtime; using skin-ratio heuristic"); }
+        return faces.length > 0 ? "front" : "back";
+      } catch (_) {
+        fdBroken = true;
+        console.log("[PEAR] AI Auto - FaceDetector unavailable at runtime; using skin-ratio heuristic");
+      }
     }
-    const fallbackVote = skinRatioVote();
-    // [PEAR][DEBUG-ORIENT] temporary - remove once real numbers are captured
-    console.log(`[PEAR][DEBUG-ORIENT] faceDetected=n/a skinRatio=${lastSkinRatio != null ? lastSkinRatio.toFixed(4) : "n/a"} vote=${fallbackVote === null ? "null(abstain)" : fallbackVote}`);
-    return fallbackVote;
+    return skinRatioVote();
   }
 
   /* Skin-tone share of the head band. Classic RGB skin rule - coarse, but the dual
@@ -2504,18 +2537,15 @@ function createOrientationWatcher() {
       if (r > 95 && g > 40 && b > 20 && mx - mn > 15 && Math.abs(r - g) > 15 && r > g && r > b) skin++;
     }
     const ratio = skin / total;
-    lastSkinRatio = ratio;   // [PEAR][DEBUG-ORIENT] temporary - captured for classify()'s log lines
-    // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - session-wide range, remove alongside the summary logging
-    if (ratio < skinRatioMin) skinRatioMin = ratio;
-    if (ratio > skinRatioMax) skinRatioMax = ratio;
+    lastSkinRatio = ratio;
     if (ratio >= 0.10) return "front";
     if (ratio <= 0.04) return "back";
     return null;                                  // ambiguous (profile/transition) - abstain
   }
 
-  /* Confirmed flip → repaint the rail (orient chip + source preview) and hot-swap the live
-     reference. The sampler keeps voting during the swap, so a turn completed mid-flight is
-     re-confirmed and applied by a later tick - no queue needed. */
+  /* Confirmed flip → cross-fade + hot-swap the live reference. The sampler keeps voting
+     during the swap, so a turn completed mid-flight is re-confirmed and applied by a
+     later tick - no queue needed. */
   async function maybeSwap(next) {
     if (applying || Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS) return;
     if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) return;
@@ -2542,18 +2572,19 @@ function createOrientationWatcher() {
     applying = true;
     lastSwapAt = Date.now();
     autoOrientation = next;
+    orientFadeFreeze();                   // freeze the last good frame BEFORE the reference changes
     console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase(),
       "| reference:", abbrevImg(next === "back" ? backUrl : (gNow.front || activeItem.img)));
     renderPerspectiveSelector();
-    const sel = $("perspectiveSelector");
-    if (sel) sel.classList.add("is-syncing");
     try {
       await applyActive();                       // one rtClient.set() - pre-cached Blob payload
+      await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));   // let the new frame actually land
+      orientFadeReveal();
       toast(next === "back" ? "מציג גב · Back view" : "מציג חזית · Front view");
     } catch (e) {
       console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
+      orientFadeReveal();                         // never leave the frozen overlay stuck up on failure
     } finally {
-      if (sel) sel.classList.remove("is-syncing");
       applying = false;
     }
   }
@@ -2563,27 +2594,31 @@ function createOrientationWatcher() {
     sampling = true;
     try {
       const vote = await classify();
-      // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - tally every tick's outcome, remove alongside the summary logging
-      voteHistogram[vote === "front" ? "front" : vote === "back" ? "back" : "abstain"]++;
       if (vote) {
-        streak = vote === lastVote ? streak + 1 : 1;
-        lastVote = vote;
-        if (vote !== autoOrientation && streak >= ORIENT_CONFIRM) await maybeSwap(vote);
+        if (vote === lastVote) streak++;
+        else { lastVote = vote; streak = 1; streakSince = Date.now(); }
       }
+      const held = lastVote ? Date.now() - streakSince : 0;
+      const needsSwitch = !!lastVote && lastVote !== autoOrientation;
+      const confirmed = needsSwitch && (streak >= ORIENT_CONFIRM_FRAMES || held >= ORIENT_CONFIRM_MS);
+
+      if (ORIENT_DEBUG) {
+        const confidence = faceDetector && !fdBroken
+          ? `face:${vote ?? "none"}`
+          : `skin:${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}`;
+        const status = confirmed ? "SWITCHING" : needsSwitch ? "waiting-to-switch" : "locked";
+        console.log(`[PEAR][ORIENT] mode=${autoOrientation} | confidence=${confidence} | ${status}` +
+          (needsSwitch ? ` (${streak}/${ORIENT_CONFIRM_FRAMES}f, ${held}/${ORIENT_CONFIRM_MS}ms)` : ""));
+      }
+
+      if (confirmed) await maybeSwap(lastVote);
     } catch (_) {} finally { sampling = false; }
   }, ORIENT_SAMPLE_MS);
-
-  // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - periodic checkpoint so we don't have to catch the
-  // exact right moment in the raw per-tick log; remove alongside the rest of this instrumentation
-  const summaryTimer = setInterval(() => { logOrientSummary(""); logOrientSnapshot(); }, 2000);
 
   return {
     stop() {
       disposed = true;
       clearInterval(timer);
-      clearInterval(summaryTimer);
-      logOrientSummary(" (session end)");   // [PEAR][DEBUG-ORIENT-SUMMARY] temporary - final tally
-      logOrientSnapshot();                  // [PEAR][DEBUG-ORIENT-SNAPSHOT] temporary - final capture
       try { video.pause(); } catch (_) {}
       video.srcObject = null;                    // detach only - the track is the preview's
     },
