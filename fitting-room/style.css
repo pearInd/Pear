@@ -708,6 +708,31 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .active-garment__name { display: block; font-family: "Urbanist"; font-size: 1.05rem; font-weight: 800; margin: 2px 0; color: var(--ink); }
 .active-garment__type { font-size: .82rem; color: var(--muted); }
 
+/* ── COMBINED (FRONT|BACK) composite thumbnail ─────────────────────────────
+   The chip's default media box is a 60px square whose <img> is object-fit:cover
+   (see the shared product-media rule further down). A composite is roughly 2:1,
+   so cover would crop it to a slice of the FRONT panel and hide the back entirely
+   - exactly what this thumbnail exists to show. Widen the box to the composite's
+   own proportions and switch to `contain` so both panels stay fully visible.
+   `contain` letterboxes rather than crops, hence the neutral backing colour. */
+.active-garment.is-composite .active-garment__media {
+  width: 132px;                  /* ≈2.2:1 against the 60px height - matches the stitch */
+  background: rgba(20, 20, 22, .06);
+}
+.active-garment.is-composite .active-garment__media img {
+  object-fit: contain;           /* show BOTH panels, never crop to one */
+  object-position: center;       /* override the default `center top` framing */
+  padding: 2px;                  /* keeps the outer panel edges off the rounded corners */
+}
+/* The chip lifts on hover and the shared rule scales product images; a contained
+   composite has visible letterbox margins, so that zoom reads as a wobble. */
+.active-garment.is-composite:hover .active-garment__media img { transform: none; }
+
+@media (max-width: 380px) {
+  /* Narrow phones: the name/type column needs the room more than the thumbnail does. */
+  .active-garment.is-composite .active-garment__media { width: 104px; }
+}
+
 /* Full-look duo chip */
 .active-garment.is-duo .active-garment__media { width: 120px; }
 .active-garment__media > span.ag-duo {

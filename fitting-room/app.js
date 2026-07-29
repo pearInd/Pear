@@ -1083,7 +1083,18 @@ function enterRoom() {
   warmupSDKAndToken();
 }
 
+/* Release a composite preview object URL. Called on every item swap so the blob backing
+   the "Now fitting" thumbnail is freed rather than pinned for the page's lifetime. Safe
+   to call on an item that never had one. */
+function releaseCompositePreview(item) {
+  if (!item || !item._compositeObjectUrl) return;
+  try { URL.revokeObjectURL(item._compositeObjectUrl); } catch (_) {}
+  item._compositeObjectUrl = null;
+}
+
 function setActiveItem(item, opts = {}) {
+  // Swapping away from a garment: free its preview blob unless it IS the incoming one.
+  if (activeItem && activeItem !== item) releaseCompositePreview(activeItem);
   activeItem = item;
   // Reset the active colour to the new item's first variant (null when it has none) so
   // the swatch strip + gallery always resolve to a valid colour for THIS product.
@@ -1333,6 +1344,7 @@ function renderActiveGarment() {
     $("activeGarmentType").innerText = "לוק מלא · חולצה + מכנסיים";
     if (eyebrow) eyebrow.innerText = "לוק מלא · Full look";
     chip.classList.add("is-duo");
+    chip.classList.remove("is-composite");   // duo owns the wide layout in this branch
   } else {
     const item = activeItem;
     $("activeGarmentMedia").innerHTML = garmentThumb(item);
@@ -1342,6 +1354,11 @@ function renderActiveGarment() {
       : (item.garmentType === "lower_body" ? "מכנסיים · " : "חולצה · ") + (SUBTYPE_LABEL_HE[item.subType] || "");
     if (eyebrow) eyebrow.innerText = "פריט נמדד · Now fitting";
     chip.classList.remove("is-duo");
+    /* A composite is ~2:1, so the 60px square + object-fit:cover the chip normally uses
+       would crop it down to a slice of the FRONT panel - the back would be invisible,
+       which is the opposite of the point. `is-composite` widens the box and switches
+       the image to object-fit:contain so both panels read clearly. */
+    chip.classList.toggle("is-composite", thumbIsComposite(item));
   }
 }
 
@@ -3771,7 +3788,19 @@ async function referenceImageFor(item, activeImg = activeImageOf(item)) {
     }
     const g = galleryOf(item);
     const composite = await createGarmentComposite(g.front || item.img, distinctBackOf(item, g));
-    if (composite) return composite;
+    if (composite) {
+      /* Surface a locally-built composite in the "Now fitting" chip too, so the chip
+         always shows what the model is actually looking at - not the front photo for a
+         catalog item and the composite for a widget handover. One object URL per item;
+         the previous one is revoked so a colour/item swap cannot leak them. */
+      if (!item._compositeObjectUrl) {
+        try {
+          item._compositeObjectUrl = URL.createObjectURL(composite);
+          renderActiveGarment();
+        } catch (_) { /* non-fatal: the chip just keeps showing the front photo */ }
+      }
+      return composite;
+    }
     console.warn("[PEAR] composite unavailable - falling back to the single-asset reference for", effectiveAngle());
   }
   // AI Auto - the pre-cached Blob for the DETECTED orientation (activeImg already resolved
@@ -7019,10 +7048,29 @@ function _garmentSVG(item) {
   </svg>`;
 }
 
+/* The image the "Now fitting" chip should show. Prefers the COMBINED composite when
+   one exists, so the chip shows the shopper the same FRONT|BACK reference the model is
+   actually working from - previously it showed only the front photo, which understated
+   what the try-on had to work with and gave no hint that a back view was in play.
+     · item.composite            - the data URL the widget stitched and handed over
+     · item._compositeObjectUrl  - an object URL for a composite the fitting room built
+                                   itself (catalog items, or a widget handover without one)
+   Falls back to the plain front photo when neither exists (single-view garments). */
+function thumbSrcOf(item) {
+  if (!item) return "";
+  return item.composite || item._compositeObjectUrl || item.img || "";
+}
+
+/** True when the chip is showing a wide FRONT|BACK composite rather than one photo. */
+function thumbIsComposite(item) {
+  return !!(item && (item.composite || item._compositeObjectUrl));
+}
+
 function garmentThumb(item) {
   const base = "display:block;width:100%;height:100%;overflow:hidden;";
-  if (item.img) {
-    return `<span style="${base}"><img src="${item.img}" alt="${item.name}" loading="lazy" decoding="async"></span>`;
+  const src = thumbSrcOf(item);
+  if (src) {
+    return `<span style="${base}"><img src="${src}" alt="${item.name}" loading="lazy" decoding="async"></span>`;
   }
   return `<span style="${base}background:#f7f7f8;">${_garmentSVG(item)}</span>`;
 }
