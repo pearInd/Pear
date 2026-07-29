@@ -1130,7 +1130,7 @@ function setAngle(angle) {
   if (next === currentAngle) return;
   currentAngle = next;
   if (next === AUTO_ANGLE) {
-    autoOrientation = "front";               // every auto session opens facing the camera
+    autoOrientation = null;                  // PENDING - acquired from the camera, not assumed
     prewarmOrientationAssets();              // fire-and-forget: both Blobs cached before the first turn
   }
   syncOrientationWatcher();                  // start/stop the webcam orientation monitor
@@ -1269,7 +1269,7 @@ function renderPerspectiveSelector() {
     const wasAuto = currentAngle === AUTO_ANGLE;
     currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
     if (currentAngle === AUTO_ANGLE && !wasAuto) {
-      autoOrientation = "front";               // every fresh auto session (re)arms facing the camera
+      autoOrientation = null;                  // PENDING - no startup FRONT lock; the camera decides
       prewarmOrientationAssets();              // fire-and-forget: both Blobs cached before the first turn
     }
   }
@@ -2509,11 +2509,25 @@ async function preloadGarmentAssets() {
      • abstains (null votes) never reset an in-progress streak - only a genuinely
        DISAGREEING vote does.
 
-   STATE LOCK MODEL: autoOrientation is a LOCK, not a live readout - once locked to
-   FRONT or BACK, every tick that disagrees only accumulates evidence (streak/held);
-   it does NOT touch the rendered reference until that evidence clears BOTH
-   ORIENT_LOCK_FRAMES consecutive agreeing samples AND enough elapsed time
-   (ORIENT_LOCK_MS) to rule out a momentary head turn or a single misread. At the
+   STATE LOCK MODEL (three states: PENDING → FRONT | BACK). The session BOOTS in
+   PENDING_MODE - the orientation is unresolved, not assumed - and the first pair of
+   agreeing confident samples (ORIENT_ACQUIRE_FRAMES, ~500ms) acquires the real one.
+   Both garment assets are already fetched, decoded and validated before this point
+   (preloadGarmentAssets() gates go-live on it), so acquisition can apply EITHER side
+   immediately; PENDING renders the front provisionally only because that is what is
+   already on the wire at connect.
+
+   Acquisition and flipping are separate transitions with separate bars on purpose.
+   The anti-flap thresholds below exist to protect a CONFIRMED reading from noise;
+   applying them to the first reading protected nothing and simply delayed it, which
+   is what made a shopper who went live already turned around watch the front render
+   on their back for the first few seconds.
+
+   Once acquired, autoOrientation is a LOCK, not a live readout - every tick that
+   disagrees only accumulates evidence (streak/held); it does NOT touch the rendered
+   reference until that evidence clears BOTH ORIENT_LOCK_FRAMES consecutive agreeing
+   samples AND enough elapsed time (ORIENT_LOCK_MS) to rule out a momentary head turn
+   or a single misread. At the
    default 250ms sample rate the two thresholds land at the same ~4s mark by design
    (10 × 250ms = 2500ms) - ORIENT_LOCK_MS is a robustness backstop for a throttled/
    backgrounded tab where setInterval ticks slip, not an independent faster path. A
@@ -2524,14 +2538,34 @@ async function preloadGarmentAssets() {
 const ORIENT_SAMPLE_MS      = 250;   // ~4 analyses/s - cheap on a 96px canvas
 const ORIENT_LOCK_FRAMES    = 10;    // consecutive agreeing samples to unlock (~2.5s @ 250ms/sample)
 const ORIENT_LOCK_MS        = 2500;  // OR this much sustained agreement - whichever comes first (see note above)
+/* FIRST acquisition only - see PENDING_MODE below. Deliberately far lower than
+   ORIENT_LOCK_FRAMES: that threshold's job is to stop a CONFIRMED state from
+   flapping, and until the first reading lands there is no confirmed state to
+   protect. Two agreeing confident samples (~500ms) is enough to establish one, and
+   paying the full 2.5s anti-flap cost for it is what made a shopper who was already
+   turned around watch the FRONT render on their back for the first few seconds. */
+const ORIENT_ACQUIRE_FRAMES = 2;
 const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
 const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
 const ORIENT_SIZE           = 96;    // analysis canvas edge - tiny on purpose
-// Explicit 2-state enum for the per-orientation lock (a DIFFERENT axis from
-// AUTO_ANGLE/"front" above, which is which TOP-LEVEL try-on mode is active - this
-// is which SIDE of the garment AUTO_ANGLE mode is currently locked to).
+// Explicit enum for the per-orientation lock (a DIFFERENT axis from AUTO_ANGLE/"front"
+// above, which is which TOP-LEVEL try-on mode is active - this is which SIDE of the
+// garment AUTO_ANGLE mode is currently locked to).
 const FRONT_MODE = "FRONT_MODE";
 const BACK_MODE  = "BACK_MODE";
+/* Third state, and the one that removes the startup FRONT lock: the session now boots
+   with the orientation UNRESOLVED rather than asserting "the shopper is facing me".
+   Both assets are already resident by this point (preloadGarmentAssets() blocks
+   go-live on fetching AND validating both), so whichever side the first confident
+   sample reports can be applied immediately - there is no front-biased warm-up.
+
+   PENDING renders the FRONT reference provisionally, because that is what
+   applyActive() already put on the wire at connect and because a shopper who just
+   finished a camera-based measurement is nearly always facing the lens. The
+   difference from the old behaviour is that this is a PROVISIONAL render, corrected
+   within ~500ms, instead of a locked state that needed 2.5s+ of sustained
+   disagreement to leave. */
+const PENDING_MODE = "PENDING_MODE";
 // TEMPORARY - single compact per-tick log line for tuning the thresholds above; flip
 // off (or delete the ORIENT_DEBUG block below) once the values are settled.
 const ORIENT_DEBUG          = true;
@@ -2645,15 +2679,21 @@ function createOrientationWatcher() {
     faceDetector ? "FaceDetector)" : "skin-ratio heuristic)",
     "| GARMENT_FRONT:", abbrevImg(GARMENT_FRONT), "| GARMENT_BACK:", GARMENT_BACK ? abbrevImg(GARMENT_BACK) : "(none)");
 
-  /* vtonState mirrors autoOrientation (the module-level value effectiveAngle()/
-     activeImageOf() read) as the explicit FRONT_MODE/BACK_MODE enum requested for
-     logging/tracking - two names for the same fact, kept in lockstep only inside
-     logVtonState() below so there is exactly one place that can drift. */
+  /* The lock's state as the explicit enum, via the shared vtonState() resolver so
+     PENDING/FRONT/BACK is reported from exactly one place. While PENDING the applied
+     asset is GARMENT_FRONT (effectiveAngle() resolves null → "front"), but it is
+     labelled provisional so a log reader can tell an unacquired state from a
+     confirmed front - the distinction this whole three-state model exists for. */
   function logVtonState() {
-    const state = autoOrientation === "back" ? BACK_MODE : FRONT_MODE;
-    console.log(`[VTON Pipeline] Current Active State: ${state} | Applied Asset: ${state === BACK_MODE ? "GARMENT_BACK" : "GARMENT_FRONT"}`);
+    const state = vtonState();
+    const asset = autoOrientation === "back" ? "GARMENT_BACK" : "GARMENT_FRONT";
+    console.log(`[VTON Pipeline] Current Active State: ${state} | Applied Asset: ${asset}` +
+      (state === PENDING_MODE ? " (provisional - awaiting first orientation sample)" : ""));
   }
-  logVtonState();   // initial state, always FRONT_MODE / GARMENT_FRONT (goLive() just reset autoOrientation)
+  /* Initial state is PENDING, not FRONT: both assets are already fetched, decoded and
+     validated (preloadGarmentAssets() gates go-live on it), so the watcher can apply
+     either side the moment it has a reading - no front-biased warm-up. */
+  logVtonState();
 
   let lastVote = null, streak = 0, streakSince = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
 
@@ -2731,16 +2771,30 @@ function createOrientationWatcher() {
        already be steering "render the BACK" while the model still held the front
        reference. garmentBlobCached() retries internally through the proxy AND the
        raw CDN, so reaching null here means every route failed. */
+    /* An unusable back during ACQUISITION settles the lock to FRONT rather than
+       leaving it PENDING. Without this the session would stay unresolved forever:
+       every tick re-confirms "back", every attempt fails on the same broken asset,
+       and the shopper gets a toast every cooldown. Front-only is the documented
+       graceful degradation - make it the confirmed state and stop re-litigating it. */
+    const settleFrontOnBackFailure = () => {
+      lastSwapAt = Date.now();            // throttle repeat toasts while turned away
+      if (autoOrientation === null) {
+        autoOrientation = "front";
+        logVtonState();
+        renderPerspectiveSelector();
+      }
+    };
+
     if (next === "back") {
       if (!GARMENT_BACK) {
-        console.error("[PEAR] CRITICAL: no GARMENT_BACK asset for this item; staying in FRONT_MODE");
-        lastSwapAt = Date.now();
+        console.error("[PEAR] CRITICAL: no GARMENT_BACK asset for this item; holding FRONT_MODE");
+        settleFrontOnBackFailure();
         return;
       }
       const backBlob = await garmentBlobCached(GARMENT_BACK);
       if (!backBlob) {
-        console.error("[PEAR] CRITICAL: GARMENT_BACK unavailable at flip time; staying in FRONT_MODE -", GARMENT_BACK);
-        lastSwapAt = Date.now();          // throttle repeat toasts while turned away
+        console.error("[PEAR] CRITICAL: GARMENT_BACK unavailable at flip time; holding FRONT_MODE -", GARMENT_BACK);
+        settleFrontOnBackFailure();
         toast("תמונת הגב אינה זמינה");
         return;                           // keep showing the front instead of a blank/failed swap
       }
@@ -2756,9 +2810,9 @@ function createOrientationWatcher() {
         probe.close?.();
       } catch (_) { /* probe failure - fail open, let the already-validated Blob through */ }
       if (backLooksFlat) {
-        console.error("[PEAR] CRITICAL: GARMENT_BACK decoded but looks like a blank/solid-color placeholder (no garment texture); staying in FRONT_MODE -", GARMENT_BACK);
+        console.error("[PEAR] CRITICAL: GARMENT_BACK decoded but looks like a blank/solid-color placeholder (no garment texture); holding FRONT_MODE -", GARMENT_BACK);
         _assetBlobCache.delete(GARMENT_BACK);   // don't keep serving this bad asset from cache
-        lastSwapAt = Date.now();
+        settleFrontOnBackFailure();
         toast("תמונת הגב אינה תקינה");
         return;
       }
@@ -2795,8 +2849,25 @@ function createOrientationWatcher() {
         else { lastVote = vote; streak = 1; streakSince = Date.now(); }
       }
       const held = lastVote ? Date.now() - streakSince : 0;
-      const needsSwitch = !!lastVote && lastVote !== autoOrientation;
-      const confirmed = needsSwitch && (streak >= ORIENT_LOCK_FRAMES || held >= ORIENT_LOCK_MS);
+      /* Two DIFFERENT transitions, with deliberately different bars:
+
+         ACQUIRING (autoOrientation === null, PENDING_MODE) - establishing the first
+         reading of the session. There is no confirmed state to protect, so the full
+         anti-flap threshold buys nothing and costs the shopper 2.5s of the wrong side
+         rendered on their body. Two agreeing confident samples settle it.
+
+         FLIPPING (a side is already locked) - un-doing a confirmed reading, which is
+         exactly what the hysteresis exists for. Unchanged: ORIENT_LOCK_FRAMES
+         consecutive agreeing votes OR ORIENT_LOCK_MS of sustained agreement.
+
+         Note `acquiring` also makes needsSwitch true when the first vote happens to be
+         "front": the lock still has to MOVE (null → "front") for the state to become
+         confirmed, and that transition must be recorded rather than silently skipped. */
+      const acquiring = autoOrientation === null;
+      const needsSwitch = !!lastVote && (acquiring || lastVote !== autoOrientation);
+      const confirmed = needsSwitch && (acquiring
+        ? streak >= ORIENT_ACQUIRE_FRAMES
+        : (streak >= ORIENT_LOCK_FRAMES || held >= ORIENT_LOCK_MS));
 
       if (ORIENT_DEBUG) {
         const confidence = faceDetector && !fdBroken
@@ -2805,10 +2876,15 @@ function createOrientationWatcher() {
         // Status reflects the LOCK, not the raw per-frame vote: "locked" covers both a
         // clean agreeing vote AND a disagreeing one that hasn't cleared the threshold
         // yet - i.e. exactly the case that used to flip the reference frame-by-frame.
-        const status = confirmed ? "SWITCHING" : needsSwitch ? "waiting-to-switch" : "locked";
-        const state = autoOrientation === "back" ? BACK_MODE : FRONT_MODE;
-        console.log(`[PEAR][ORIENT] state=${state} | confidence=${confidence} | ${status}` +
-          (needsSwitch ? ` (${streak}/${ORIENT_LOCK_FRAMES}f, ${held}/${ORIENT_LOCK_MS}ms)` : ""));
+        const status = confirmed ? (acquiring ? "ACQUIRING" : "SWITCHING")
+          : needsSwitch ? (acquiring ? "waiting-to-acquire" : "waiting-to-switch") : "locked";
+        // Progress is reported against whichever threshold actually applies, so the
+        // debug line never shows a pending state counting toward a bar it isn't using.
+        const progress = acquiring
+          ? ` (${streak}/${ORIENT_ACQUIRE_FRAMES}f)`
+          : ` (${streak}/${ORIENT_LOCK_FRAMES}f, ${held}/${ORIENT_LOCK_MS}ms)`;
+        console.log(`[PEAR][ORIENT] state=${vtonState()} | confidence=${confidence} | ${status}` +
+          (needsSwitch ? progress : ""));
       }
 
       if (confirmed) await maybeSwap(lastVote);
@@ -3040,10 +3116,27 @@ const WEARABLE_ANGLES = ["front", "back", "side"];
    transparently reuses the entire existing front/back pipeline (images, clauses,
    fallbacks). */
 const AUTO_ANGLE = "auto";
-let autoOrientation = "front";        // "front" | "back" - the side the user shows the camera
-/* The angle every resolver should ACT on: auto mode delegates to the detected orientation,
-   every other mode is what the user picked. */
-function effectiveAngle() { return currentAngle === AUTO_ANGLE ? autoOrientation : currentAngle; }
+/* "front" | "back" - the side the user shows the camera - or NULL for "not yet
+   acquired" (PENDING_MODE). Null is the boot value on purpose: the session no longer
+   opens by ASSERTING the shopper faces the camera, it opens with the question still
+   open and answers it from the first confident sample. See PENDING_MODE. */
+let autoOrientation = null;
+/* The angle every resolver should ACT on: auto mode delegates to the detected
+   orientation, every other mode is what the user picked. PENDING (null) resolves to
+   "front" for RENDERING only - the provisional reference, not a lock; the watcher's
+   needsSwitch/confirmed logic reads autoOrientation directly so it can tell "pending"
+   apart from "confirmed front", which is the whole point of the third state. */
+function effectiveAngle() {
+  if (currentAngle !== AUTO_ANGLE) return currentAngle;
+  return autoOrientation || "front";
+}
+/* The lock's own state, as the explicit enum (PENDING/FRONT/BACK). Single source of
+   truth for every log line and debug readout, so the three-state model can never
+   drift back into being reported as two. */
+function vtonState() {
+  if (currentAngle !== AUTO_ANGLE) return null;
+  return autoOrientation === "back" ? BACK_MODE : autoOrientation === "front" ? FRONT_MODE : PENDING_MODE;
+}
 const ANGLE_LABEL_HE = { front: "חזית", back: "גב",   side: "צד",   detail: "פרט",   auto: "אוטומטי AI" };
 const ANGLE_LABEL_EN = { front: "Front", back: "Back", side: "Side", detail: "Detail", auto: "AI Auto" };
 
@@ -3274,7 +3367,7 @@ async function applyGarment(item) {
   console.group("[PEAR] applyGarment() - VTON payload debug");
   console.log("garment  :", item.name, `(id=${item.id}, type=${item.garmentType}${item.custom ? ", custom upload" : ""})`);
   console.log("angle    :", currentAngle,
-    currentAngle === AUTO_ANGLE ? `(AI Auto - detected orientation: ${autoOrientation}, pre-cached Blob)`
+    currentAngle === AUTO_ANGLE ? `(AI Auto - ${vtonState()}, resolved angle: ${effectiveAngle()}, pre-cached Blob)`
       : hasDedicatedAngle(item) ? "(dedicated gallery image)" : "(front fallback + prompt)");
   console.log("subType  :", item.subType, "| color:", item.color);
   console.log("img URL  :", abbrevImg(activeImg));   // data: URLs abbreviated so a base64 blob can't flood the console
@@ -4761,7 +4854,15 @@ async function goLive() {
        EVERY go-live so each run gets its own honest attempt at AI Auto, rather than
        inheriting a downgrade from a run that's already over. */
     currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
-    if (currentAngle === AUTO_ANGLE) autoOrientation = "front";
+    /* Boot the lock UNRESOLVED (PENDING_MODE), not FRONT. This used to assert
+       "the shopper is facing the camera" before a single frame had been sampled,
+       and because the watcher's needsSwitch test compares against autoOrientation,
+       that assumption was indistinguishable from a CONFIRMED reading - so a shopper
+       who went live already turned around had to clear the full anti-flap threshold
+       (10 frames / 2.5s) before the back asset was applied, watching the front
+       render on their back until then. PENDING resolves from the first confident
+       sample instead (ORIENT_ACQUIRE_FRAMES, ~500ms). */
+    if (currentAngle === AUTO_ANGLE) autoOrientation = null;
 
     /* ── Mandatory Pre-load & Validation Gate ─────────────────────────────────
        Blocks HERE, before any token mint / WebRTC connect / billing, until every
