@@ -164,12 +164,59 @@ function findProductImages(html, baseUrl) {
 
 /* ── Supabase cache ──────────────────────────────────────────────────────── */
 
+/* Canonical cache key - MUST match canonicalImageUrl() in server.js and
+   pear_canonical_url() in archive/supabase_setup_v9.sql. Keying on the raw image_url
+   is what let one photograph occupy several rows under different URL spellings, which
+   then disagreed about front vs back. */
+const RESIZER_RE = /\/(?:_next\/image|cdn-cgi\/image|_vercel\/image|imgproxy|thumbor|resize)\b|[?&]url=/i;
+const PRESENTATION_PARAMS = new Set([
+  "width", "height", "w", "h", "size", "quality", "q", "dpr", "format", "fm",
+  "crop", "fit", "scale", "v", "ver", "version", "t", "cache", "_",
+]);
+
+function canonicalImageUrl(url, depth = 0) {
+  if (!url || typeof url !== "string") return "";
+  if (/^(data:|blob:)/i.test(url)) return url;
+  if (RESIZER_RE.test(url) && depth < 3) {
+    const m = /[?&]url=([^&]+)/i.exec(url);
+    if (m) {
+      let inner = m[1];
+      try { inner = decodeURIComponent(inner); } catch {}
+      try { inner = new URL(inner, url).toString(); } catch {}
+      return canonicalImageUrl(inner, depth + 1);
+    }
+    return url.toLowerCase();
+  }
+  let u;
+  try { u = new URL(url); } catch { return url.split("?")[0].toLowerCase(); }
+  u.protocol = "https:";
+  u.hostname = u.hostname.toLowerCase();
+  u.hash = "";
+  for (const key of [...u.searchParams.keys()]) {
+    if (PRESENTATION_PARAMS.has(key.toLowerCase())) u.searchParams.delete(key);
+  }
+  u.pathname = u.pathname
+    .replace(/_(?:pico|icon|thumb|small|compact|medium|large|grande|master|\d{1,4}x(?:\d{1,4})?)(?:_crop_[a-z]+)?(?=\.(?:jpe?g|png|webp|gif)$)/i, "")
+    .replace(/-(\d{2,3})x(\d{2,3})(?=\.(?:jpe?g|png|webp|gif)$)/i, (m, a, b) =>
+      (parseInt(a, 10) <= 600 && parseInt(b, 10) <= 600) ? "" : m);
+  return u.toString().toLowerCase();
+}
+
 async function getCachedClassification(imageUrl) {
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("garment_cache")
     .select("classification")
-    .eq("image_url", imageUrl)
+    .eq("canonical_url", canonicalImageUrl(imageUrl))
+    .limit(1)
     .maybeSingle();
+  if (error && /column .* does not exist|Could not find the/i.test(error.message || "")) {
+    ({ data, error } = await supabase
+      .from("garment_cache")
+      .select("classification")
+      .eq("image_url", imageUrl)
+      .limit(1)
+      .maybeSingle());
+  }
   if (error) {
     console.warn(`  ⚠ garment_cache read failed: ${error.message}`);
     return null;
@@ -185,12 +232,13 @@ async function saveClassification(imageUrl, classification, meta = {}) {
   const base = { image_url: imageUrl, classification };
   const enriched = {
     ...base,
+    canonical_url: canonicalImageUrl(imageUrl),   // one row per PHOTOGRAPH, not per URL
     confidence: Number.isFinite(meta.confidence) ? meta.confidence : null,
     source: meta.source || "gemini",
     cue: meta.cue || null,
     product_url: meta.productUrl || null,
   };
-  let { error } = await supabase.from("garment_cache").upsert([enriched], { onConflict: "image_url" });
+  let { error } = await supabase.from("garment_cache").upsert([enriched], { onConflict: "canonical_url" });
   if (error && /column .* does not exist|Could not find the/i.test(error.message || "")) {
     console.warn("  ⚠ garment_cache V8 columns absent - run archive/supabase_setup_v8.sql");
     ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));

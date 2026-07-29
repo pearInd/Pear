@@ -15,6 +15,9 @@
      view-resolution  Which photo becomes the front, which becomes the back, and
                       where the back came from - including the guards that refuse
                       a "back" that is really the front.
+     composite        The Stitched Garment Composite layout contract: FRONT panel
+                      left, BACK panel right, spec geometry, divider, centred labels,
+                      size cap, and null (never a half-drawn reference) on failure.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -29,6 +32,7 @@ import { fileURLToPath } from "node:url";
 const SUITES = [
   ["url-identity", "url-identity.test.mjs"],
   ["view-resolution", "view-resolution.test.mjs"],
+  ["composite", "composite.test.mjs"],
   ["widget-dom", "widget-dom.test.mjs"],
 ];
 

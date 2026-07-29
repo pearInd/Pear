@@ -113,6 +113,16 @@
   var _reqBoth = script ? script.getAttribute("data-pear-require-both-views") : null;
   var REQUIRE_BOTH_VIEWS = _reqBoth !== null && _reqBoth !== "false";
 
+  /* Stitched Garment Composite: the fitting room builds ONE reference image with the
+     FRONT and BACK panels side by side and labelled, and names the panel to render
+     per the detected orientation (see createGarmentComposite in fitting-room/app.js).
+     On by default there; a store can force the older per-orientation single-asset
+     path with data-pear-composite="false" without waiting on a redeploy, which is the
+     escape hatch if double-rendering shows up on a particular catalog. */
+  var _composite = script ? script.getAttribute("data-pear-composite") : null;
+  var COMPOSITE_PARAM = _composite === null ? ""
+    : (_composite === "false" || _composite === "0") ? "0" : "1";
+
   /* Opt-in strict one-time measurement gate for public demo embeds (e.g. the
      marketing site): when data-pear-demo-gate is the EXACT string "true", the
      fitting room skips its normal name/phone registration and allows exactly one
@@ -1003,6 +1013,7 @@
       (garment.images && garment.images.length > 1
         ? "&garment_images=" + garment.images.map(encodeURIComponent).join(",") : "") +
       (garment.variantId ? "&garment_variant_id=" + encodeURIComponent(garment.variantId) : "") +
+      (COMPOSITE_PARAM ? "&composite=" + COMPOSITE_PARAM : "") +
       (REQUIRE_BOTH_VIEWS ? "&require_both_views=1" : "") +
       (DEMO_GATE ? "&demo_gate=1" : "") +
       (STORE_KEY ? "&pear_key=" + encodeURIComponent(STORE_KEY) : "") +

@@ -1347,13 +1347,35 @@ async function classifyFrontBack(imageUrl) {
   return view === "back" ? "back" : "front";
 }
 
+/* Cache lookups key on the CANONICAL url, not the raw one. Keying on the raw URL is
+   what filled garment_cache with one row per URL spelling of the same photograph -
+   see archive/supabase_setup_v9.sql for how that produced a single photo classified
+   as BOTH front and back, and therefore bound as both views at try-on time.
+   Falls back to an exact image_url match when canonical_url does not exist yet, so
+   this deploys safely before the V9 migration is applied. */
+async function garmentCacheQuery(imageUrl, columns) {
+  const canonical = canonicalImageUrl(imageUrl);
+  let { data, error } = await supabase
+    .from("garment_cache")
+    .select(columns)
+    .eq("canonical_url", canonical)
+    .limit(1)
+    .maybeSingle();
+
+  if (error && /column .* does not exist|Could not find the/i.test(error.message || "")) {
+    ({ data, error } = await supabase
+      .from("garment_cache")
+      .select(columns)
+      .eq("image_url", imageUrl)
+      .limit(1)
+      .maybeSingle());
+  }
+  return { data, error };
+}
+
 async function getCachedClassification(imageUrl) {
   if (!supabase) return null;
-  const { data, error } = await supabase
-    .from("garment_cache")
-    .select("classification")
-    .eq("image_url", imageUrl)
-    .maybeSingle();
+  const { data, error } = await garmentCacheQuery(imageUrl, "classification");
   if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
   return data ? data.classification : null;
 }
@@ -1363,11 +1385,7 @@ async function getCachedClassification(imageUrl) {
    been applied, so this deploy is safe to ship BEFORE the SQL runs. */
 async function getCachedClassificationDetailed(imageUrl) {
   if (!supabase) return null;
-  const { data, error } = await supabase
-    .from("garment_cache")
-    .select("classification, confidence, source, cue")
-    .eq("image_url", imageUrl)
-    .maybeSingle();
+  const { data, error } = await garmentCacheQuery(imageUrl, "classification, confidence, source, cue");
   if (error) {
     if (/column .* does not exist/i.test(error.message || "")) {
       const classification = await getCachedClassification(imageUrl);
@@ -1394,16 +1412,72 @@ async function saveClassification(imageUrl, classification, meta = {}) {
   const base = { image_url: imageUrl, classification };
   const enriched = {
     ...base,
+    // One row per PHOTOGRAPH. onConflict targets canonical_url so a second URL
+    // spelling UPDATES the existing row instead of inserting a rival one that can
+    // disagree about front vs back (see archive/supabase_setup_v9.sql).
+    canonical_url: canonicalImageUrl(imageUrl),
     confidence: Number.isFinite(meta.confidence) ? meta.confidence : null,
     source: meta.source || "gemini",
     cue: meta.cue || null,
+    ...(meta.productUrl ? { product_url: meta.productUrl } : {}),
   };
-  let { error } = await supabase.from("garment_cache").upsert([enriched], { onConflict: "image_url" });
+  let { error } = await supabase.from("garment_cache").upsert([enriched], { onConflict: "canonical_url" });
   if (error && /column .* does not exist|Could not find the/i.test(error.message || "")) {
     console.warn("[garment_cache] v8 columns absent - run archive/supabase_setup_v8.sql for full diagnostics");
     ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));
   }
   if (error) console.warn("[garment_cache] write failed:", error.message);
+}
+
+/* Per-product view lookup: the ONE front and ONE back this product is known to have,
+   deduplicated by canonical URL. This is the query the try-on pipeline actually wants
+   - "give me this garment's two views" - rather than reassembling them from whatever
+   URL spellings happened to be scraped on this particular page visit.
+
+   Picks the single most trustworthy row per side rather than the first one returned:
+   a storefront's own markup outranks a model verdict, which outranks an ambiguous
+   one, which outranks a rate-limit default. Ties break on confidence, then recency.
+   Returns {} when the product is unknown or the V8/V9 columns are absent.
+   @returns {Promise<{front?: string, back?: string}>} */
+const SOURCE_TRUST = { dom_hint: 1, gemini: 2, synthetic: 3, uncertain: 4, fallback: 5 };
+
+async function getProductViews(productUrl) {
+  if (!supabase || !productUrl) return {};
+  const { data, error } = await supabase
+    .from("garment_cache")
+    .select("image_url, canonical_url, classification, confidence, source")
+    .eq("product_url", productUrl)
+    .limit(50);
+  if (error) {
+    if (!/column .* does not exist|Could not find the/i.test(error.message || "")) {
+      console.warn("[garment_cache] product view query failed:", error.message);
+    }
+    return {};
+  }
+  const best = {};
+  const seen = new Set();
+  for (const row of data || []) {
+    // Defence in depth: even if pre-V9 duplicate rows survive, only the first
+    // canonical spelling of a photo is considered.
+    const canon = row.canonical_url || canonicalImageUrl(row.image_url);
+    if (seen.has(canon)) continue;
+    seen.add(canon);
+
+    const side = row.classification === "back" ? "back" : "front";
+    const rank = [
+      SOURCE_TRUST[row.source] ?? 6,
+      -(Number.isFinite(row.confidence) ? row.confidence : 0),
+    ];
+    if (!best[side] || rank[0] < best[side].rank[0] ||
+        (rank[0] === best[side].rank[0] && rank[1] < best[side].rank[1])) {
+      best[side] = { url: row.image_url, rank };
+    }
+  }
+  const out = {};
+  if (best.front) out.front = best.front.url;
+  // Never hand back a "back" that is the same photograph as the front.
+  if (best.back && !(out.front && sameImage(best.back.url, out.front))) out.back = best.back.url;
+  return out;
 }
 
 /* ── Generated rear view - the single-image fallback ────────────────────────────
@@ -1673,6 +1747,22 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
   }
 
   const views = resolveGarmentViews({ images: uniqueUrls, records, scrapedFront, scrapedBack });
+
+  /* Nothing found on THIS page visit, but the cache may already know this product's
+     rear photo from a previous visit or a scanner crawl - a lazy gallery that failed
+     to expose slide 2 today does not mean the back does not exist. Queried per product
+     and deduplicated by canonical URL (getProductViews), so it cannot resurrect one of
+     the duplicate rows that caused the conflict in the first place. Cheaper and more
+     accurate than generating a rear, so it is tried first. */
+  if (!views.back && req.body?.page_url) {
+    const known = await getProductViews(req.body.page_url);
+    if (known.back && !sameImage(known.back, views.front)) {
+      views.back = known.back;
+      views.back_source = "cache";
+      console.log("[classify-images] back recovered from garment_cache for this product:",
+        String(known.back).slice(0, 120));
+    }
+  }
 
   /* Single-image fallback: no rear photo anywhere in the gallery → generate one from
      the front so the shopper still gets a real rear reference when they turn around

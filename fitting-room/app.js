@@ -2426,6 +2426,14 @@ function prewarmOrientationAssets() {
     } else {
       console.warn('[PEAR] prewarm back blob: SKIPPED - this garment has no distinct back image');
     }
+    /* Composite mode: warm the STITCHED reference too. It is what actually reaches
+       rtClient.set(), and building it needs both bitmaps decoded - doing that lazily
+       on the first frame would stall exactly the moment the session goes live. */
+    if (backUrl && COMPOSITE_MODE && !look) {
+      createGarmentComposite(frontUrl, backUrl).then((c) => {
+        console.log('[PEAR] prewarm composite:', c ? `ok (${(c.size / 1024).toFixed(0)}KB)` : 'FAILED - will fall back to single-asset');
+      });
+    }
   }
 }
 
@@ -3017,7 +3025,12 @@ function drawSectionLabel(ctx, text, anchorX, top, fontPx, align) {
   const padX = Math.round(fontPx * 0.5), padY = Math.round(fontPx * 0.32);
   const boxW = Math.round(ctx.measureText(text).width) + padX * 2;
   const boxH = fontPx + padY * 2;
-  const x = align === "right" ? Math.round(anchorX - boxW) : Math.round(anchorX);
+  /* "center" anchors the box's MIDPOINT at anchorX - required by the side-by-side
+     composite, where each label must sit centred over its own panel. "right" anchors
+     the right edge, anything else (incl. "left") the left edge. */
+  const x = align === "right"  ? Math.round(anchorX - boxW)
+          : align === "center" ? Math.round(anchorX - boxW / 2)
+          : Math.round(anchorX);
   const r = Math.round(boxH * 0.18);
   const hasRound = typeof ctx.roundRect === "function";
 
@@ -3048,6 +3061,172 @@ const LOOK_W   = 1024, LOOK_H = 2048, LOOK_SEP = 200;
 const LOOK_PAD = 44;                                // black gutter framing each half (isolated panel)
 const LOOK_BOX = (LOOK_H - LOOK_SEP) / 2;           // 924px per half
 const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Blob|null>
+
+/* ── Stitched Garment Composite Engine ───────────────────────────────────────────
+   ONE reference image carrying BOTH views: FRONT on the left, BACK on the right,
+   split by a divider and stamped with hard "FRONT"/"BACK" markers.
+
+   HISTORY, because it matters when reading this. A front|back composite existed
+   before and was removed in 23f5953 for producing double-logo / duplicated-garment
+   renders: it fed Lucy a stitched image and asked the PROMPT to pick the correct
+   half as the shopper turned, and a diffusion model with no notion of "panels"
+   frequently rendered fragments of both.
+
+   Two things are different now, which is why this is worth building rather than a
+   repeat of that:
+     1. LABELLED PANELS. The old bar was unmarked. This stamps each half with a
+        high-contrast marker and the clause names the panel explicitly ("render ONLY
+        the panel marked FRONT"). That exact technique is already load-bearing and
+        working in this file for TOP/BOTTOM full looks (see LOOK_CLAUSE) - the
+        precedent is in-repo, not theoretical.
+     2. A RELIABLE ORIENTATION SIGNAL. The old version had none, so the prompt had to
+        be ambiguous about which half applied. The OrientationWatcher now produces a
+        confirmed FRONT/BACK lock, so the clause names ONE panel at a time and the
+        model is never asked to choose.
+
+   A real benefit falls out of this: the image is constant across a turn, so an
+   orientation flip is a PROMPT-ONLY set() - no image re-upload, no re-fetch.
+
+   Gated by COMPOSITE_MODE. If double-rendering reappears, flip that off and the
+   per-orientation single-asset path (AI Auto) is back, unchanged. */
+/* THE KILL SWITCH. Composite mode is the default per the current product decision.
+   If double-logo / duplicated-garment rendering reappears - the symptom that got the
+   previous front|back stitcher removed - append ?composite=0 to the fitting-room URL
+   (or flip COMPOSITE_DEFAULT) and the per-orientation single-asset path is restored
+   with no other change. Keep both paths working; do not delete one for the other. */
+const COMPOSITE_DEFAULT = true;
+const COMPOSITE_MODE = (() => {
+  try {
+    const q = new URLSearchParams(location.search).get("composite");
+    if (q === "0" || q === "false") return false;
+    if (q === "1" || q === "true")  return true;
+  } catch (_) {}
+  return COMPOSITE_DEFAULT;
+})();
+
+const COMPOSITE_MAX_W   = 2048;   // cap on the stitched output - Decart gains nothing from more
+const COMPOSITE_DIVIDER = 4;      // divider line width in px (spec: 2-4px)
+const COMPOSITE_GUTTER  = 64;     // total gap between the two panels, divider centred in it
+const _compositeCache = new Map();   // `${frontUrl} ${backUrl}` → Promise<Blob|null>
+
+/**
+ * Stitch a garment's FRONT and BACK photos into one side-by-side composite.
+ *
+ * Layout (per spec): front LEFT, back RIGHT, canvas height = max(frontH, backH),
+ * total width = frontW + backW + divider padding, a solid vertical divider centred
+ * in the gutter, and a centred "FRONT" / "BACK" label over each panel.
+ *
+ * Both images are first scaled to a COMMON height (the taller of the two) preserving
+ * aspect ratio - the width formula then uses those drawn widths. Mixing a 1000px and
+ * an 800px panel side by side would otherwise imply the two garments are different
+ * sizes, which is exactly the kind of ambiguity this image exists to remove. The
+ * result is capped at COMPOSITE_MAX_W.
+ *
+ * @param {string} frontImageUrl  front-view image (http(s)/data:/blob:)
+ * @param {string} backImageUrl   back-view image
+ * @param {{as?: "blob"|"dataURL", labelPlacement?: "over"|"below"}} [opts]
+ *   as             - "blob" (default; what rtClient.set({ image }) takes) or "dataURL"
+ *   labelPlacement - "over" (default) keeps canvas height exactly max(frontH, backH)
+ *                    as specified; "below" adds a label band under the panels, which
+ *                    keeps text off the garment itself
+ * @returns {Promise<Blob|string|null>} null on any decode/fetch failure, so the caller
+ *   can fall back to the single-asset path rather than going live with no reference.
+ */
+function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
+  if (!frontImageUrl || !backImageUrl) return Promise.resolve(null);
+  const { as = "blob", labelPlacement = "over" } = opts;
+  const key = `${frontImageUrl} ${backImageUrl} ${as} ${labelPlacement}`;
+  if (_compositeCache.has(key)) return _compositeCache.get(key);
+
+  const job = (async () => {
+    try {
+      const [front, back] = await Promise.all([
+        loadGarmentBitmap(frontImageUrl),
+        loadGarmentBitmap(backImageUrl),
+      ]);
+
+      // 1. Common height, aspect preserved - see the doc comment for why.
+      const panelH = Math.max(front.height, back.height);
+      const frontW = Math.round(front.width  * (panelH / front.height));
+      const backW  = Math.round(back.width   * (panelH / back.height));
+
+      // 2. Spec geometry: width = frontW + backW + gutter, height = max(h).
+      let totalW = frontW + backW + COMPOSITE_GUTTER;
+      let totalH = panelH;
+      const labelBand = labelPlacement === "below" ? Math.round(panelH * 0.11) : 0;
+      totalH += labelBand;
+
+      // 3. Cap the output - a 5000px composite costs upload time and buys nothing.
+      const scale = Math.min(1, COMPOSITE_MAX_W / totalW);
+      const W  = Math.round(totalW * scale);
+      const H  = Math.round(totalH * scale);
+      const fW = Math.round(frontW * scale);
+      const bW = Math.round(backW  * scale);
+      const gut = Math.round(COMPOSITE_GUTTER * scale);
+      const pH = H - Math.round(labelBand * scale);
+
+      const off    = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(W, H) : null;
+      const canvas = off || Object.assign(document.createElement("canvas"), { width: W, height: H });
+      const ctx    = canvas.getContext("2d");
+
+      // Neutral mid-grey field: a white background can read as garment fabric on a
+      // white packshot, and pure black hid the divider on dark garments.
+      ctx.fillStyle = "#3a3a3a";
+      ctx.fillRect(0, 0, W, H);
+
+      // 4. FRONT panel on the LEFT, clipped so a wide packshot cannot cross the gutter.
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, 0, fW, pH); ctx.clip();
+      drawImageCover(ctx, front, 0, 0, fW, pH);
+      ctx.restore();
+
+      // 5. BACK panel on the RIGHT, same clip discipline.
+      const backX = fW + gut;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(backX, 0, bW, pH); ctx.clip();
+      drawImageCover(ctx, back, backX, 0, bW, pH);
+      ctx.restore();
+
+      // 6. Vertical divider, centred in the gutter. The dark gutter either side is the
+      //    actual separation; the light line makes the boundary unmistakable.
+      const dividerW = Math.max(2, Math.round(COMPOSITE_DIVIDER * scale));
+      ctx.fillStyle = "#e8e8e8";
+      ctx.fillRect(Math.round(fW + gut / 2 - dividerW / 2), 0, dividerW, pH);
+
+      // 7. Labels. Centred over each panel (or in the band below it).
+      const fontPx = Math.max(18, Math.round(W * 0.035));
+      const labelY = labelPlacement === "below"
+        ? pH + Math.round((H - pH) / 2 - fontPx * 0.82)
+        : Math.round(pH * 0.035);
+      drawSectionLabel(ctx, "FRONT", Math.round(fW / 2), labelY, fontPx, "center");
+      drawSectionLabel(ctx, "BACK",  Math.round(backX + bW / 2), labelY, fontPx, "center");
+
+      front.close?.(); back.close?.();            // release decoded bitmaps
+
+      const blob = off
+        ? await off.convertToBlob({ type: "image/jpeg", quality: 0.95 })
+        : await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.95));
+
+      console.log(`[PEAR] composite built: ${W}×${H} · FRONT ${fW}px | BACK ${bW}px · ` +
+        `${blob ? (blob.size / 1024).toFixed(0) + "KB" : "no blob"}`);
+
+      if (as !== "dataURL") return blob;
+      return await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result);
+        fr.onerror = () => rej(fr.error);
+        fr.readAsDataURL(blob);
+      });
+    } catch (e) {
+      console.warn("[PEAR] createGarmentComposite failed:", e?.message || e);
+      _compositeCache.delete(key);   // never cache a failure - allow a later retry
+      return null;
+    }
+  })();
+
+  _compositeCache.set(key, job);
+  return job;
+}
 
 /**
  * Stitch a TOP + BOTTOM garment asset into ONE fixed 1024×2048 reference Blob: TOP boxed
@@ -3435,6 +3614,43 @@ const ANGLE_CLAUSE = {
     " height and horizontal position as in the reference. Do NOT render the back of the garment.",
 };
 
+/* ── Stitched Garment Composite - orientation clauses ────────────────────────────
+   Deliberately modelled on LOOK_CLAUSE below, which is the in-repo proof that a
+   labelled two-panel reference works with this model: name the panels, forbid
+   cross-panel sampling in absolute terms, and state that the markers are guides that
+   must never be painted onto the garment.
+
+   The critical difference from the composite that was removed in 23f5953: that one
+   left the model to decide which half applied. Here the OrientationWatcher has
+   already resolved that, so exactly ONE panel is ever named as the source, and the
+   other is explicitly excluded. The model is never asked to choose. */
+const COMPOSITE_BASE_CLAUSE =
+  " The reference image is ONE picture containing TWO separate photographs of the SAME garment, side by side," +
+  " divided by a vertical line: the LEFT panel is marked 'FRONT' and shows the garment's front," +
+  " the RIGHT panel is marked 'BACK' and shows the garment's back." +
+  " Treat the divider as an impassable wall - never blend, merge or copy any detail from one panel into the other," +
+  " and never render both panels' designs on the same surface of the garment." +
+  " The 'FRONT' and 'BACK' text markers and the divider line are architectural guides only:" +
+  " never render that text, the line or the panel edges onto the clothing or the person.";
+
+const COMPOSITE_CLAUSE = {
+  front:
+    COMPOSITE_BASE_CLAUSE +
+    " The person is FACING the camera. Use ONLY the LEFT panel marked 'FRONT' as the source for what you render." +
+    " Reproduce that panel's garment faithfully - its front panel, collar, closure, hemline and any front graphics," +
+    " prints, logos or lettering - keeping each element at the SAME size, height and horizontal position as in that panel." +
+    " IGNORE the right 'BACK' panel completely: none of its content may appear anywhere in the output.",
+  back:
+    COMPOSITE_BASE_CLAUSE +
+    " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera." +
+    " Use ONLY the RIGHT panel marked 'BACK' as the source for what you render." +
+    " Reproduce that panel's garment faithfully - its back panel, rear yoke, back collar, rear hemline and especially" +
+    " any back graphics, prints, logos or lettering - keeping each element at the SAME size, height and horizontal" +
+    " position as in that panel, wrapping naturally around the body." +
+    " IGNORE the left 'FRONT' panel completely: the front chest print, front logo, buttons, placket and zipper shown" +
+    " there must NOT appear on the back you render.",
+};
+
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
    orientation). The reference image is TWO stacked, isolated garment photos
    (TOP over BOTTOM) rather than one image + a text-only description of the second
@@ -3487,7 +3703,22 @@ function canCombineViews(item) {
 /* Pick the angle clause for the active view. Back splits on whether a REAL back photo is
    in play (backReal - reproduce + pin the print's placement) vs a mirrored/inferred front
    (backInferred). `item` is the single garment; for a full look it's resolved internally. */
+/* Whether THIS render should use the stitched composite. Single predicate so
+   angleClause() and referenceImageFor() can never disagree about which reference the
+   model is looking at - a clause describing two labelled panels sent alongside a
+   single-view image would be worse than either option on its own. Requires a real,
+   distinct back (distinctBackOf) and the auto orientation lock, since the clause names
+   one panel based on the detected side. */
+function compositeActiveFor(item) {
+  return COMPOSITE_MODE && currentAngle === AUTO_ANGLE && !resolveLook() && !!distinctBackOf(item);
+}
+
 function angleClause(item) {
+  // Composite mode: the reference carries BOTH views, so the clause names the panel
+  // matching the detected orientation and excludes the other outright.
+  if (compositeActiveFor(item)) {
+    return effectiveAngle() === "back" ? COMPOSITE_CLAUSE.back : COMPOSITE_CLAUSE.front;
+  }
   const angle = effectiveAngle();      // AI Auto resolves to the DETECTED orientation
   if (angle === "back") {
     // Dual asset (front + a REAL back photo, incl. a user's uploaded back) → reproduce it.
@@ -3512,6 +3743,17 @@ function angleClause(item) {
  * @returns {Promise<Blob|string|undefined>}
  */
 async function referenceImageFor(item, activeImg = activeImageOf(item)) {
+  /* Composite mode: ONE stitched FRONT|BACK reference for the whole session. Because
+     the image is identical for both orientations, a confirmed turn re-issues set()
+     with only the clause changed - the Blob is memoized, so there is no re-fetch and
+     no re-upload of pixels. Falls through to the per-orientation single asset if the
+     stitch fails, which is the pre-composite behaviour and always safe. */
+  if (compositeActiveFor(item)) {
+    const g = galleryOf(item);
+    const composite = await createGarmentComposite(g.front || item.img, distinctBackOf(item, g));
+    if (composite) return composite;
+    console.warn("[PEAR] composite unavailable - falling back to the single-asset reference for", effectiveAngle());
+  }
   // AI Auto - the pre-cached Blob for the DETECTED orientation (activeImg already resolved
   // through effectiveAngle()). Sending bytes, not a URL, is what makes the swap instant.
   if (currentAngle === AUTO_ANGLE) {
