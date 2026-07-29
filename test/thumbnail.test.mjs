@@ -41,7 +41,7 @@ const sandbox = {
   SUBTYPE_LABEL_HE: {},
 };
 const api = new Function(...Object.keys(sandbox),
-  code + "\nreturn { thumbSrcOf, thumbIsComposite, garmentThumb };")(...Object.values(sandbox));
+  code + "\nreturn { thumbSrcOf, thumbIsComposite, thumbIsPending, garmentThumb };")(...Object.values(sandbox));
 
 const COMPOSITE = "data:image/jpeg;base64,/9j/COMPOSITE";
 const FRONT = "https://cdn.shopify.com/s/files/tee-1.jpg";
@@ -61,6 +61,17 @@ console.log("\n── composite detection (drives the CSS class) ──");
 check("true for a handed-over composite", api.thumbIsComposite({ composite: COMPOSITE }) === true);
 check("true for a locally-built composite", api.thumbIsComposite({ _compositeObjectUrl: "blob:x" }) === true);
 check("false for a front-only garment", api.thumbIsComposite({ img: FRONT }) === false);
+
+console.log("\n── pending (\"finding/generating a back view\") detection ──");
+check("true while awaiting the widget's correction", api.thumbIsPending({ img: FRONT, _awaitingBackCorrection: true }) === true);
+check("true while a local composite is building", api.thumbIsPending({ img: FRONT, _compositeBuilding: true }) === true);
+check("false for a plain front-only garment with neither flag", api.thumbIsPending({ img: FRONT }) === false);
+check("STRUCTURALLY false once a real composite exists, even if a flag is stale",
+  api.thumbIsPending({ img: FRONT, composite: COMPOSITE, _awaitingBackCorrection: true }) === false,
+  "a stale _awaitingBackCorrection must never re-show the spinner over a real composite");
+check("STRUCTURALLY false for a locally-built composite too, same stale-flag guarantee",
+  api.thumbIsPending({ img: FRONT, _compositeObjectUrl: "blob:x", _compositeBuilding: true }) === false);
+check("null-safe", api.thumbIsPending(null) === false);
 
 console.log("\n── rendered markup ──");
 const html = api.garmentThumb({ composite: COMPOSITE, img: FRONT, name: "Tee" });
@@ -86,6 +97,13 @@ check("background is a flat light color (design token), not a translucent overla
 check("default (non-composite) thumbnails still use cover",
   /\.active-garment__media img[^{]*\{[^}]*object-fit:\s*cover/.test(CSS.replace(/\.active-garment\.is-composite[\s\S]*?\}/g, "")));
 check("a narrow-screen size is defined", /max-width:\s*380px/.test(CSS) && /is-composite/.test(rule));
+
+console.log("\n── CSS contract for the \"generating back view\" pending indicator ──");
+const pendingRule = CSS.slice(CSS.indexOf(".active-garment.is-pending"), CSS.indexOf("/* Full-look duo chip */"));
+check("is-pending rule block exists", pendingRule.length > 0 && pendingRule.startsWith(".active-garment.is-pending"));
+check("draws a spinner (rotate keyframe) rather than static-only styling",
+  /@keyframes\s+\S+\s*\{[^}]*rotate\(360deg\)/.test(pendingRule), pendingRule.slice(0, 100));
+check("respects prefers-reduced-motion", /@media \(prefers-reduced-motion:\s*reduce\)/.test(pendingRule));
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);

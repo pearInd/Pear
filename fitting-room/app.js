@@ -1326,6 +1326,26 @@ function setActiveItem(item, opts = {}) {
   activeOutfit[slotOf(item)] = item;
 
   $("focusItemName").innerText = item.name;
+  /* Widget handoff (custom:true) that opened with NO back yet: the widget's own
+     classify+synthesize round trip is still running on the STORE page (measured in
+     production: ~2.5s when a durable/warm cache answers it, ~27s on a genuine cold
+     generation) and will correct this via PEAR_UPDATE_GARMENT whenever it finishes.
+     Flag it so renderActiveGarment() can show that something is actively happening
+     instead of a bare front photo that is indistinguishable from "no back exists".
+     A bounded timeout clears it if nothing ever arrives (a failed round trip, or a
+     genuinely single-view product with no widget correction coming at all) so the
+     indicator cannot spin forever. */
+  if (item._awaitingBackTimer) { clearTimeout(item._awaitingBackTimer); item._awaitingBackTimer = null; }
+  item._awaitingBackCorrection = !!(item.custom && !item.composite && !distinctBackOf(item));
+  if (item._awaitingBackCorrection) {
+    item._awaitingBackTimer = setTimeout(() => {
+      item._awaitingBackTimer = null;
+      if (!item._awaitingBackCorrection) return;   // already resolved by the time this fired
+      item._awaitingBackCorrection = false;
+      console.log("[PEAR] gave up waiting for a back-view correction after 35s -", item.name);
+      if (activeItem === item) renderActiveGarment();
+    }, 35000);
+  }
   renderActiveGarment();             // shows either the single item or the full look
   // Fire-and-forget: builds the FRONT|BACK composite the instant a distinct back is
   // already known (e.g. an inline ?garment_url_back=), instead of waiting for go-live.
@@ -1423,6 +1443,16 @@ window.addEventListener("message", (e) => {
   if (!activeItem || !front) return;
   const composite = typeof e.data.garment_composite === "string" && e.data.garment_composite
     ? e.data.garment_composite : undefined;
+  /* The widget's classify+synthesize round trip has now FINISHED, whatever it found -
+     stop showing "waiting for a back view" regardless of the unchanged early-return
+     below (a message confirming "no back exists" still means the wait is over; the
+     chip should stop looking like something is in progress). Read BEFORE clearing, so
+     the unchanged branch below knows whether it owes a repaint purely for the spinner. */
+  const wasAwaitingBack = !!activeItem?._awaitingBackCorrection;
+  if (activeItem) {
+    if (activeItem._awaitingBackTimer) { clearTimeout(activeItem._awaitingBackTimer); activeItem._awaitingBackTimer = null; }
+    activeItem._awaitingBackCorrection = false;
+  }
   /* THE "BANNER STILL SHOWS FRONT" BUG. This used to bail out here whenever front/back
      matched what activeItem already held, WITHOUT looking at whether a composite had
      arrived. pear-widget.js builds the composite AFTER /api/classify-images resolves -
@@ -1435,7 +1465,12 @@ window.addEventListener("message", (e) => {
      photo for the entire session, every time DOM detection happened to be right. */
   const unchanged = activeItem.img === front && activeItem.imgBack === back &&
     (composite === undefined || activeItem.composite === composite);
-  if (unchanged) return;
+  if (unchanged) {
+    // Nothing about the garment itself changed, but if the chip was showing the
+    // "waiting" indicator it still needs one repaint to clear it.
+    if (wasAwaitingBack) renderActiveGarment();
+    return;
+  }
   activeItem.img = front;
   if (Array.isArray(e.data.garment_images) && e.data.garment_images.length) {
     activeItem.pearImages = e.data.garment_images;
@@ -1600,6 +1635,13 @@ function renderActiveGarment() {
        which is the opposite of the point. `is-composite` widens the box and switches
        the image to object-fit:contain so both panels read clearly. */
     chip.classList.toggle("is-composite", thumbIsComposite(item));
+    /* THE "LOOKS BROKEN" FIX: a fresh synthesis measured ~27s in production (Gemini
+       image generation is genuinely slow) - long enough that a bare front photo with
+       no indication anything is happening reads as "this doesn't work", not "still
+       loading". `is-pending` shows a visible spinner over the thumbnail for exactly
+       that window; thumbIsPending() is structurally false the instant a real
+       composite exists, so this can never fight with is-composite above. */
+    chip.classList.toggle("is-pending", thumbIsPending(item));
   }
 }
 
@@ -7318,6 +7360,16 @@ function thumbSrcOf(item) {
 /** True when the chip is showing a wide FRONT|BACK composite rather than one photo. */
 function thumbIsComposite(item) {
   return !!(item && (item.composite || item._compositeObjectUrl));
+}
+
+/* True while the chip should show the "finding/generating a back view" indicator.
+   Structurally impossible to show alongside an actual composite, regardless of
+   whether _awaitingBackCorrection/_compositeBuilding happen to still read true for
+   some other reason (a stale flag some future edit forgets to clear) - once a real
+   composite exists there is nothing left to wait for, full stop. */
+function thumbIsPending(item) {
+  if (!item || thumbIsComposite(item)) return false;
+  return !!(item._awaitingBackCorrection || item._compositeBuilding);
 }
 
 function garmentThumb(item) {

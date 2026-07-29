@@ -1524,11 +1524,113 @@ const SYNTH_BACK_PROMPT =
   "- No text, watermarks, captions or annotations anywhere in the image.\n" +
   "- Output a single photorealistic image of the garment's back, nothing else.";
 
+/* ── Durable persistence for generated rear views ────────────────────────────────
+   MEASURED IN PRODUCTION: a fresh synthesis takes ~27s (Gemini image generation is
+   genuinely slow); a request the in-process synthBackCache above can answer takes
+   ~2.5s. The gap between those two numbers is why a shopper can open the room, look
+   at the chip, and still see the front photo alone - the composite is real, it just
+   hasn't finished yet, with nothing telling them so.
+
+   synthBackCache alone cannot make this "always" fast: it is a plain in-memory Map,
+   which means (a) EVERY cold start - a serverless function that has scaled to zero or
+   simply rotated - starts it empty, and (b) concurrent shoppers on the SAME popular
+   product routinely land on DIFFERENT warm instances that do not share memory, each
+   paying the full 27s independently. A synthesized image was never saved anywhere
+   that survives past the process that generated it.
+
+   This adds a durable layer underneath the in-memory one: the generated PNG is
+   uploaded to Supabase Storage at a path DETERMINISTIC in the front photo's canonical
+   URL (a SHA-256 hash of it), so the very next request for that same product - from
+   ANY instance, after ANY amount of time - can serve the existing object with one
+   HEAD request instead of regenerating. The bucket is auto-created on first use (a
+   service-role key can do this without any dashboard step); if Storage is
+   unavailable or misconfigured for any reason, every call here fails soft and the
+   existing in-memory-cache + inline-data-URL behavior is exactly what runs - this
+   can only improve on today, never regress it. */
+const SYNTH_STORAGE_BUCKET = process.env.PEAR_SYNTH_BUCKET || "garment-synth-backs";
+let synthBucketReady = null;   // null=unchecked, Promise while checking, true/false once known
+
+async function ensureSynthBucket() {
+  if (!supabase) return false;   // expected/normal in local dev - not an error to log or retry
+  if (synthBucketReady !== null) return synthBucketReady;
+  synthBucketReady = (async () => {
+    try {
+      const { data: buckets, error: listErr } = await supabase.storage.listBuckets();
+      if (listErr) throw listErr;
+      if (buckets?.some((b) => b.name === SYNTH_STORAGE_BUCKET)) return true;
+      const { error: createErr } = await supabase.storage.createBucket(SYNTH_STORAGE_BUCKET, {
+        public: true,
+        fileSizeLimit: "5MB",
+      });
+      // A second concurrent cold start racing to create the same bucket is a real,
+      // benign case - not a failure.
+      if (createErr && !/already exists/i.test(createErr.message || "")) throw createErr;
+      console.log(`[synth-back] Supabase Storage bucket "${SYNTH_STORAGE_BUCKET}" ready`);
+      return true;
+    } catch (err) {
+      console.warn("[synth-back] durable storage unavailable, falling back to in-memory-only cache:", err?.message || err);
+      return false;
+    }
+  })();
+  return synthBucketReady;
+}
+
+/* Deterministic object path for a front photo, so a second request for the same
+   product finds the first request's upload without any database lookup at all - the
+   Storage CDN itself IS the cache index. */
+function synthStorageKey(frontUrl, ext = "png") {
+  const hash = crypto.createHash("sha256").update(canonicalImageUrl(frontUrl)).digest("hex");
+  return `${hash}.${ext}`;
+}
+
+async function fetchDurableSynthBack(frontUrl) {
+  if (!supabase || !(await ensureSynthBucket())) return null;
+  try {
+    const key = synthStorageKey(frontUrl);
+    const { data } = supabase.storage.from(SYNTH_STORAGE_BUCKET).getPublicUrl(key);
+    if (!data?.publicUrl) return null;
+    // getPublicUrl() only builds the URL string - it never checks the object exists.
+    // A HEAD request is the actual existence check, and doubles as the "is this
+    // durable asset still reachable" proof before handing it to a live session.
+    const head = await fetch(data.publicUrl, { method: "HEAD" });
+    if (!head.ok) return null;
+    console.log(`[synth-back] ✓ durable hit - serving previously generated rear view for ${frontUrl.slice(0, 120)}`);
+    return data.publicUrl;
+  } catch (err) {
+    console.warn("[synth-back] durable lookup failed (non-fatal):", err?.message || err);
+    return null;
+  }
+}
+
+async function saveDurableSynthBack(frontUrl, base64, mime) {
+  if (!supabase || !(await ensureSynthBucket())) return null;
+  try {
+    const ext = /png/i.test(mime) ? "png" : /webp/i.test(mime) ? "webp" : "jpg";
+    const key = synthStorageKey(frontUrl, ext);
+    const buffer = Buffer.from(base64, "base64");
+    const { error } = await supabase.storage.from(SYNTH_STORAGE_BUCKET)
+      .upload(key, buffer, { contentType: mime, upsert: true, cacheControl: "31536000" });
+    if (error) throw error;
+    const { data } = supabase.storage.from(SYNTH_STORAGE_BUCKET).getPublicUrl(key);
+    console.log(`[synth-back] ✓ persisted durably (${Math.round(buffer.length / 1024)} KB) for ${frontUrl.slice(0, 120)}`);
+    return data?.publicUrl || null;
+  } catch (err) {
+    console.warn("[synth-back] durable save failed (non-fatal - serving the inline result instead):", err?.message || err);
+    return null;
+  }
+}
+
 async function synthesizeBackView(frontUrl) {
   if (!SYNTH_BACK_ENABLED || !GEMINI_API_KEY || !frontUrl) return null;
   if (synthBackCache.has(frontUrl)) return synthBackCache.get(frontUrl);
 
   const job = (async () => {
+    // Durable hit first: this is the path that makes the SECOND-and-later request
+    // for a given product fast regardless of cold starts or which instance answers
+    // it - the actual fix for "it should always be there", not just a faster retry.
+    const durable = await fetchDurableSynthBack(frontUrl);
+    if (durable) return durable;
+
     try {
       const { base64, mimeType } = await fetchImageAsBase64(frontUrl.replace(/^http:\/\//, "https://"));
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
@@ -1555,7 +1657,15 @@ async function synthesizeBackView(frontUrl) {
       }
       const mime = inline.mime_type || inline.mimeType || "image/png";
       console.log(`[synth-back] ✓ generated rear view (${Math.round(inline.data.length * 0.75 / 1024)} KB, ${mime}) for ${frontUrl.slice(0, 120)}`);
-      return `data:${mime};base64,${inline.data}`;
+
+      // Persist BEFORE returning, so a competing concurrent request that lands on the
+      // durable-hit check moments later already finds it - and so THIS response can
+      // itself hand back a light https URL instead of a several-hundred-KB data: URL
+      // (lighter over postMessage, and it can flow through the existing img-proxy /
+      // canonicalImageUrl paths exactly like any other CDN photo). Falls back to the
+      // inline data URL, unchanged from before, if the upload itself fails.
+      const durableUrl = await saveDurableSynthBack(frontUrl, inline.data, mime);
+      return durableUrl || `data:${mime};base64,${inline.data}`;
     } catch (err) {
       console.warn("[synth-back] failed:", err?.message || err);
       return null;

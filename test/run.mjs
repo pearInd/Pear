@@ -38,6 +38,7 @@ const SUITES = [
   ["thumbnail", "thumbnail.test.mjs"],
   ["composite-handoff", "composite-handoff.test.mjs"],
   ["eager-composite", "eager-composite.test.mjs"],
+  ["pending-flag", "pending-flag.test.mjs"],
 ];
 
 let failed = 0;

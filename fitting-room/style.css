@@ -739,6 +739,38 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   .active-garment.is-composite .active-garment__media { width: 96px; }
 }
 
+/* ── "finding/generating a back view" indicator ────────────────────────────
+   A fresh synthesis measured ~27s in production (Gemini image generation is
+   genuinely slow) - long enough that a bare, static front photo with no signal
+   that anything is happening reads as broken, not as loading. This overlays a
+   spinner on the (still-visible, still front-photo) thumbnail for that window.
+   thumbIsPending() in app.js guarantees this and .is-composite are mutually
+   exclusive, so there is no state where both rules could visually collide. */
+.active-garment.is-pending .active-garment__media {
+  position: relative;
+}
+.active-garment.is-pending .active-garment__media::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: rgba(16, 16, 18, .38);
+  display: flex;   /* the spinner itself is drawn by ::before below, layered via z-index */
+}
+.active-garment.is-pending .active-garment__media::before {
+  content: "";
+  position: absolute; top: 50%; left: 50%; z-index: 1;
+  width: 18px; height: 18px; margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255, 255, 255, .35);
+  border-top-color: #fff;
+  animation: pear-pending-spin .8s linear infinite;
+}
+@keyframes pear-pending-spin { to { transform: rotate(360deg); } }
+/* Respect reduced-motion: keep the dimmed overlay (still communicates "in
+   progress") but drop the spin so the indicator doesn't fight that preference. */
+@media (prefers-reduced-motion: reduce) {
+  .active-garment.is-pending .active-garment__media::before { animation: none; }
+}
+
 /* Full-look duo chip */
 .active-garment.is-duo .active-garment__media { width: 120px; }
 .active-garment__media > span.ag-duo {

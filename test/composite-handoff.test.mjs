@@ -134,5 +134,56 @@ console.log("\n── ordinary case: front/back DO change (pre-existing behaviou
   check("still re-renders with no composite involved", calls.includes("renderActiveGarment"));
 }
 
+console.log("\n── the \"waiting for a back view\" flag is cleared the instant a message arrives ──");
+{
+  // Awaiting AND the message brings a real change - covered by the "THE BUG" case
+  // above (renderActiveGarment fires regardless). This isolates the flag itself.
+  const item = {
+    img: "https://cdn.test/front.jpg", imgBack: "https://cdn.test/back.jpg",
+    _awaitingBackCorrection: true, _awaitingBackTimer: "FAKE_TIMER_ID",
+  };
+  const { activeItem: after } = run(item, {
+    type: "PEAR_UPDATE_GARMENT",
+    garment_url: "https://cdn.test/front.jpg",
+    garment_back: "https://cdn.test/back.jpg",
+    garment_composite: "data:image/jpeg;base64,/9j/NEW",
+  });
+  check("flag cleared once the round trip's answer arrives", after._awaitingBackCorrection === false);
+  check("pending timer reference cleared (no dangling handle)", after._awaitingBackTimer === null);
+}
+
+console.log("\n── THE SPINNER FIX: an 'unchanged' message must still clear a visible spinner ──");
+{
+  // The widget's round trip finished and found NOTHING to correct (e.g. back_source:
+  // "none" - a genuinely single-view product with synthesis declined/failed). Front/
+  // back/composite are all identical to what's already showing, so the OLD unchanged
+  // early-return would skip the render entirely - leaving the spinner spinning forever
+  // even though the wait is actually over.
+  const item = {
+    img: "https://cdn.test/front.jpg", imgBack: undefined,
+    _awaitingBackCorrection: true,
+  };
+  const { calls } = run(item, {
+    type: "PEAR_UPDATE_GARMENT",
+    garment_url: "https://cdn.test/front.jpg",
+    garment_back: undefined,
+  });
+  check("a repaint IS issued purely to clear the spinner", calls.includes("renderActiveGarment"),
+    JSON.stringify(calls));
+}
+
+console.log("\n── the ORIGINAL no-op case still issues zero repaints (not a regression) ──");
+{
+  // Same as above, but the flag was NOT set (a normal, already-settled item) - the
+  // fix above must not turn every unchanged message into a repaint.
+  const item = { img: "https://cdn.test/front.jpg", imgBack: "https://cdn.test/back.jpg" };
+  const { calls } = run(item, {
+    type: "PEAR_UPDATE_GARMENT",
+    garment_url: "https://cdn.test/front.jpg",
+    garment_back: "https://cdn.test/back.jpg",
+  });
+  check("no repaint when nothing changed AND nothing was pending", calls.length === 0, JSON.stringify(calls));
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);
