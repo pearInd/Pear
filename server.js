@@ -1517,9 +1517,28 @@ const PRESENTATION_PARAMS = new Set([
   "crop", "fit", "scale", "v", "ver", "version", "t", "cache", "_",
 ]);
 
-function canonicalImageUrl(url) {
+/* Resizer endpoints keep the REAL asset in a `url=` param; their own path is the same
+   for every image on the site, so canonicalising on the path alone would make every
+   product photo compare equal. Recurse into the wrapped URL. */
+const RESIZER_RE = /\/(?:_next\/image|cdn-cgi\/image|_vercel\/image|imgproxy|thumbor|resize)\b|[?&]url=/i;
+
+function canonicalImageUrl(url, depth = 0) {
   if (!url || typeof url !== "string") return "";
   if (/^(data:|blob:)/i.test(url)) return url;
+  if (RESIZER_RE.test(url) && depth < 3) {
+    const m = /[?&]url=([^&]+)/i.exec(url);
+    if (m) {
+      let inner = m[1];
+      try { inner = decodeURIComponent(inner); } catch {}
+      /* The wrapped url= is usually a ROOT-RELATIVE path ("/p/tee.jpg"). Resolve it
+         against the resizer's own origin, or the same photo referenced directly
+         elsewhere in the gallery would canonicalise differently and the two could be
+         paired as front/back - the very bug this function exists to prevent. */
+      try { inner = new URL(inner, url).toString(); } catch {}
+      return canonicalImageUrl(inner, depth + 1);
+    }
+    return url.toLowerCase();
+  }
   let u;
   try {
     u = new URL(url);

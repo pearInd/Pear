@@ -345,8 +345,18 @@
        WooCommerce  shirt-300x300.jpg         → shirt.jpg
      The Woo rewrite is restricted to thumbnail-scale dimensions on purpose: a real
      asset legitimately named "poster-1920x1080.jpg" must not be rewritten into a 404. */
+  /* Image-RESIZER endpoints carry the real asset in a `url=` param and REQUIRE their
+     sizing params: Next.js /_next/image answers HTTP 400 ("w is required") without
+     `w`, and Cloudflare/imgproxy-style paths encode the transform in the path itself.
+     Stripping those yields a broken URL, not a bigger image - so these are returned
+     untouched. Caught by fixture E in the widget harness; without this guard every
+     Next.js-hosted storefront would hand the API un-fetchable image URLs. */
+  var RESIZER_RE = /\/(?:_next\/image|cdn-cgi\/image|_vercel\/image|imgproxy|thumbor|resize)\b|[?&]url=/i;
+  function isResizerUrl(u) { return RESIZER_RE.test(u || ""); }
+
   function upgradeImageUrl(url) {
     if (!url || /^data:/i.test(url)) return url;
+    if (isResizerUrl(url)) return url;
     var out = url;
     // Shopify size suffix, immediately before the extension.
     out = out.replace(
@@ -473,9 +483,26 @@
      the back. upgradeImageUrl() already strips the size markers, so canonicalising
      through it makes those three collapse to one identity.
      Mirrors canonicalImageUrl() in fitting-room/app.js - keep the two in lockstep. */
-  function canonicalPhoto(u) {
+  function canonicalPhoto(u, depth) {
     if (!u) return "";
     if (/^data:/i.test(u)) return u;
+    /* Resizer endpoints: the identity is the `url=` param (the REAL asset), not the
+       endpoint path. Keying on the path would make every image on a Next.js store
+       canonicalise to ".../_next/image" - collapsing an entire product gallery into a
+       single entry and silently destroying the back photo. Recurse into the wrapped
+       URL instead; depth-limited because a resizer can legally wrap another. */
+    if (isResizerUrl(u)) {
+      var m = /[?&]url=([^&]+)/i.exec(u);
+      if (m && (depth || 0) < 3) {
+        var inner = m[1];
+        try { inner = decodeURIComponent(inner); } catch (_) {}
+        // Root-relative url= resolved against the resizer's own origin, so the wrapped
+        // form and a direct reference to the same photo canonicalise identically.
+        try { inner = new URL(inner, u).href; } catch (_) {}
+        return canonicalPhoto(inner, (depth || 0) + 1);
+      }
+      return u.toLowerCase();     // transform encoded in the path - compare whole
+    }
     return upgradeImageUrl(u).split("?")[0].toLowerCase();
   }
   function samePhoto(a, b) {
@@ -569,6 +596,22 @@
         console.log("[PEAR] back image identified from DOM signals:", src, "| label:", label.trim().slice(0, 80));
         return src;
       }
+    }
+    /* Also scan the theme's <noscript> gallery copy. On a gallery that renders nothing
+       until interacted with, those are the ONLY product images present - the element
+       loop above has nothing to walk, so a rear photo named "…-rear.jpg" in there was
+       invisible to this function. No element means no alt/label to read, so the
+       filename is the only signal available (caught by fixture B in the harness). */
+    var nsUrls = noscriptImageUrls(scope);
+    for (var n = 0; n < nsUrls.length; n++) {
+      var nsSrc = nsUrls[n];
+      if (samePhoto(nsSrc, primaryUrl) || !looksLikeBackImage(nsSrc, "")) continue;
+      if (!(shopifyId && nsSrc.indexOf(shopifyId) !== -1)) {
+        var nsId = extractProductId(nsSrc);
+        if (primaryRegexId && nsId && nsId !== primaryRegexId) continue;
+      }
+      console.log("[PEAR] back image identified from <noscript> gallery:", nsSrc);
+      return nsSrc;
     }
     return "";
   }

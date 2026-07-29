@@ -2821,6 +2821,20 @@ function createOrientationWatcher() {
     if (applying || Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS) return;
     if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) return;
 
+    /* ACQUIRING the side that is ALREADY on the wire is a state record, not a swap.
+       PENDING renders the front (effectiveAngle() resolves null → "front") and
+       applyActive() already sent that reference at connect, so the common case - the
+       shopper is facing the camera when the session opens - would otherwise spend a
+       redundant rtClient.set() and cross-fade the view for zero visual change, right
+       at go-live. Record the lock and return. */
+    if (autoOrientation === null && next === "front") {
+      autoOrientation = "front";
+      console.log("[PEAR] AI Auto - orientation ACQUIRED → FRONT (already rendered; no swap issued)");
+      logVtonState();
+      renderPerspectiveSelector();
+      return;
+    }
+
     /* Fallback guard: verify GARMENT_BACK is fully loaded AND valid BEFORE committing
        the flip - never switch to BACK_MODE (or wipe the current overlay) on a missing
        or broken asset; FRONT_MODE simply stays active. Swapping first and discovering
@@ -3163,9 +3177,27 @@ const PRESENTATION_PARAMS = new Set([
   "crop", "fit", "scale", "v", "ver", "version", "t", "cache", "_",
 ]);
 
-function canonicalImageUrl(url) {
+/* Image-resizer endpoints (Next.js /_next/image, Cloudflare /cdn-cgi/image, imgproxy)
+   carry the REAL asset in a `url=` param. Their own path is identical for every image
+   on the site, so canonicalising on the path would make every product photo compare
+   equal - collapsing a gallery to one entry and destroying the back reference. */
+const RESIZER_RE = /\/(?:_next\/image|cdn-cgi\/image|_vercel\/image|imgproxy|thumbor|resize)\b|[?&]url=/i;
+
+function canonicalImageUrl(url, depth = 0) {
   if (!url || typeof url !== "string") return "";
   if (/^(data:|blob:)/i.test(url)) return url;
+  if (RESIZER_RE.test(url) && depth < 3) {
+    const m = /[?&]url=([^&]+)/i.exec(url);
+    if (m) {
+      let inner = m[1];
+      try { inner = decodeURIComponent(inner); } catch (_) {}
+      /* Resolve a root-relative url= against the resizer's own origin, so the wrapped
+         form and a direct reference to the same photo canonicalise identically. */
+      try { inner = new URL(inner, new URL(url, location.href)).toString(); } catch (_) {}
+      return canonicalImageUrl(inner, depth + 1);
+    }
+    return url.toLowerCase();                   // transform encoded in the path
+  }
   let u;
   try {
     u = new URL(url, location.href);
@@ -3198,13 +3230,23 @@ function sameImage(a, b) {
 /** The item's back asset ONLY when it is a genuinely different photograph from the
  *  front; undefined otherwise. Single chokepoint for that question, so a future
  *  caller cannot reintroduce a raw string compare. */
+/* Warn once per offending pair. These predicates run on every applyGarment/render, so
+   an unguarded warn would bury the console in duplicates - and this message needs to
+   stay findable, since it names the exact condition that used to put the front print
+   on the back. */
+const _warnedSamePhotoPairs = new Set();
+
 function distinctBackOf(item, g = galleryOf(item)) {
   if (!g || !g.back) return undefined;
   const front = g.front || (item && item.img);
   if (front && sameImage(g.back, front)) {
-    console.warn("[PEAR] back asset is the SAME photo as the front (different URL spelling) -",
-      "treating this item as single-view rather than binding the front as a back reference.",
-      "\n  front:", abbrevImg(front), "\n  back :", abbrevImg(g.back));
+    const key = canonicalImageUrl(front) + "|" + canonicalImageUrl(g.back);
+    if (!_warnedSamePhotoPairs.has(key)) {
+      _warnedSamePhotoPairs.add(key);
+      console.warn("[PEAR] back asset is the SAME photo as the front (different URL spelling) -",
+        "treating this item as single-view rather than binding the front as a back reference.",
+        "\n  front:", abbrevImg(front), "\n  back :", abbrevImg(g.back));
+    }
     return undefined;
   }
   return g.back;

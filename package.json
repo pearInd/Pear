@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "test": "node test/run.mjs",
     "scan": "node scanner/scan-store.js",
     "scan:clothes": "node scripts/batch-scan-clothes.js"
   },
@@ -20,5 +21,8 @@
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "googleapis": "^144.0.0"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3"
   }
 }
