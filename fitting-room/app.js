@@ -781,7 +781,13 @@ function parseHandoff() {
     // The gallery's own back view: photo 2, as long as it's a DISTINCT URL from the
     // front (an identical pair is a mirrored front — pointless to stitch, and
     // canCombineViews() would reject it anyway). Undefined for a single-image handoff.
-    const galleryBack = (pearImages && pearImages[1] && pearImages[1] !== pearImages[0])
+    /* Canonical comparison (sameImage), not string equality. The gallery routinely
+       carries one photo under two spellings - ?width=800 vs ?width=1400, ?v= cache
+       busters, a _800x filename suffix - and a raw !== call let that pair through as
+       "front + back". The session then went live with the FRONT photo bound as the
+       back reference and the "reproduce the BACK, do NOT render the front" clause
+       attached to it, which is what duplicated the chest print onto the back. */
+    const galleryBack = (pearImages && pearImages[1] && !sameImage(pearImages[1], pearImages[0]))
       ? pearImages[1] : undefined;
     const result = {
       id: null, custom: true,
@@ -817,7 +823,9 @@ function parseHandoff() {
       imgBack_param:    q.get("imgBack") || "(absent)",
       galleryBack:      galleryBack || "(absent)",
       resolved_imgBack: abbrevImg(result.imgBack) || "(NONE - back view will be unavailable)",
-      distinct_from_front: !!(result.imgBack && result.imgBack !== result.img),
+      // Canonical comparison, not string equality: ?width=/?v=/_800x spellings of the
+      // SAME photo must report as NOT distinct, or the front gets bound as the back.
+      distinct_from_front: !!(result.imgBack && !sameImage(result.imgBack, result.img)),
     });
     if (!result.imgBack) {
       console.error("[PEAR] CRITICAL: no back image in handoff - the garment is single-view, " +
@@ -2399,7 +2407,7 @@ function prewarmOrientationAssets() {
     if (!it) continue;
     const g = galleryOf(it);
     const frontUrl = g.front || it.img;
-    const backUrl = (g.back && g.back !== g.front) ? g.back : undefined;
+    const backUrl = distinctBackOf(it, g);
     console.log('[PEAR] prewarm started for:', abbrevImg(frontUrl), '| back:', abbrevImg(backUrl));
     garmentBlobCached(frontUrl).then((frontBlob) => {
       console.log('[PEAR] prewarm front blob:', frontBlob ? `ok (${frontBlob.size.toLocaleString()} bytes)` : 'FAILED');
@@ -2446,7 +2454,7 @@ async function preloadGarmentAssets() {
   for (const item of items) {
     const g = galleryOf(item);
     const front = g.front || item.img;
-    const back  = (g.back && g.back !== g.front) ? g.back : undefined;
+    const back  = distinctBackOf(item, g);
     const label = item.name || item.garmentType || "garment";
 
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front […]`);
@@ -2487,17 +2495,19 @@ async function preloadGarmentAssets() {
    jarring cut, see orientFadeFreeze/orientFadeReveal below).
 
    Detection engine: native FaceDetector (Shape Detection API) when available - a
-   detected face means the user is facing the camera (FRONT); no face means the back
-   of the head/body is showing (BACK). Demoted permanently after one runtime failure
-   (some builds expose the class but throw NotSupportedError at detect()). Browsers
-   without FaceDetector fall back to a skin-ratio heuristic: % of skin-tone pixels in
-   the head band (upper 45%, central 50%) of a tiny 96×96 frame - a frontal face shows
-   far more skin than the back of a head. DUAL thresholds (≥10% → front, ≤4% → back,
-   dead-band between) so an ambiguous profile frame abstains instead of voting.
-   A single stray misread (e.g. a false-positive face hit on hair texture) is deliberately
-   NOT cross-checked here against a second engine - the hysteresis below is what absorbs
-   that noise, so classify() stays one simple, direct rule instead of two engines
-   arguing with each other every tick.
+   detected face means the user is facing the camera (FRONT). Demoted permanently after
+   one runtime failure (some builds expose the class but throw NotSupportedError at
+   detect()). Browsers without FaceDetector fall back to a skin-ratio heuristic: % of
+   skin-tone pixels in the head band (upper 45%, central 50%) of a tiny 96×96 frame - a
+   frontal face shows far more skin than the back of a head. DUAL thresholds (≥10% →
+   front, ≤4% → back, dead-band between) so an ambiguous profile frame abstains instead
+   of voting.
+
+   ASYMMETRIC CORROBORATION: a face DETECTED is taken at face value; a face NOT DETECTED
+   is cross-checked against the skin histogram before it may vote BACK, and the tick
+   abstains when the two disagree. The two directions have very different error rates -
+   see classify()'s comment for why hysteresis alone could not fix this (the failures
+   are systematic, not random, so the streak accumulates rather than cancelling).
 
    Anti-flap discipline (this is what stops the view from flapping back and forth):
      • a flip needs ORIENT_LOCK_FRAMES consecutive agreeing votes OR
@@ -2547,7 +2557,8 @@ const ORIENT_LOCK_MS        = 2500;  // OR this much sustained agreement - which
 const ORIENT_ACQUIRE_FRAMES = 2;
 const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
 const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
-const ORIENT_SIZE           = 96;    // analysis canvas edge - tiny on purpose
+const ORIENT_SIZE           = 96;    // skin-histogram canvas edge - tiny on purpose (per-pixel loop)
+const ORIENT_FACE_SIZE      = 256;   // face-detection canvas edge - 96px is too small to detect a face reliably
 // Explicit enum for the per-orientation lock (a DIFFERENT axis from AUTO_ANGLE/"front"
 // above, which is which TOP-LEVEL try-on mode is active - this is which SIDE of the
 // garment AUTO_ANGLE mode is currently locked to).
@@ -2656,7 +2667,10 @@ function createOrientationWatcher() {
      true, so this is a belt-and-suspenders capture, not the source of that decision. */
   const gInit = galleryOf(activeItem);
   const GARMENT_FRONT = gInit.front || activeItem.img;
-  const GARMENT_BACK  = (gInit.back && gInit.back !== gInit.front) ? gInit.back : undefined;
+  /* distinctBackOf() - never a raw string compare. Two URL spellings of the SAME
+     photo must not qualify here: binding the front photo as GARMENT_BACK is what put
+     the chest print on the back (see canonicalImageUrl's comment). */
+  const GARMENT_BACK  = distinctBackOf(activeItem, gInit);
 
   // Private sampler onto the SAME track the preview uses - reading is free, and we never
   // stop the track itself (it belongs to the shared preview camera).
@@ -2668,6 +2682,17 @@ function createOrientationWatcher() {
   const canvas = document.createElement("canvas");
   canvas.width = ORIENT_SIZE; canvas.height = ORIENT_SIZE;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+  /* Separate, LARGER canvas for face detection. The 96px analysis canvas is right for
+     the skin-ratio histogram (it is a per-pixel loop and wants to stay cheap) but is
+     marginal for FaceDetector: at typical webcam framing the head occupies well under
+     a third of the frame, so on a 96px canvas the face is ~20-25px - around the point
+     where detectors start missing it. Every one of those misses used to become a
+     full-confidence "BACK" vote. Face detection runs on this one instead; the skin
+     histogram keeps the small one. */
+  const faceCanvas = document.createElement("canvas");
+  faceCanvas.width = ORIENT_FACE_SIZE; faceCanvas.height = ORIENT_FACE_SIZE;
+  const faceCtx = faceCanvas.getContext("2d", { willReadFrequently: true });
 
   const faceDetector = typeof FaceDetector !== "undefined"
     ? (() => { try { return new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch (_) { return null; } })()
@@ -2711,11 +2736,30 @@ function createOrientationWatcher() {
     return 0;
   }
 
-  /* One vote: "front" | "back" | null (abstain - includes a read that crossed the
-     raw threshold but didn't clear ORIENT_CONFIDENCE_MIN). Face detection is
-     authoritative when available - detected ⇒ front, not detected ⇒ back, no
-     second-guessing here. The lock in the sampler loop below (not this function) is
-     what absorbs a stray misread, so this stays one direct rule per engine. */
+  /* One vote: "front" | "back" | null (abstain - includes a read that crossed the raw
+     threshold but didn't clear ORIENT_CONFIDENCE_MIN).
+
+     THE MISDETECTION FIX - the two directions are NOT equally reliable, and this used
+     to treat them as if they were ("detected ⇒ front, not detected ⇒ back, no
+     second-guessing"). A face DETECTED is strong evidence: false positives on hair or
+     a shoulder are rare. A face NOT detected is weak evidence, because it is the
+     outcome of every ordinary failure too - dim room, backlight, user stands too far
+     back, motion blur while turning, a hand across the face, a steep head tilt. The
+     old code scored that absence at confidence 1.0.
+
+     The earlier comment argued the hysteresis downstream absorbs a stray misread,
+     which is true for RANDOM noise - but these failures are SYSTEMATIC. In a poorly
+     lit room FaceDetector misses on every single frame, so the streak does not cancel
+     out; it accumulates, clears ORIENT_LOCK_FRAMES, and confirms a BACK flip while the
+     shopper is still facing the camera. That is the reported misidentification, and no
+     amount of hysteresis can fix a biased signal.
+
+     So a face-absent vote is now CORROBORATED against the skin histogram before it
+     counts. A genuine back-of-head shows hair, fabric and neck - little skin in the
+     head band. A missed face still shows a face's worth of skin. When the two signals
+     disagree the tick ABSTAINS (null), which neither flips the state nor resets the
+     streak - the watcher simply waits for an unambiguous frame. A face-PRESENT vote is
+     still taken at face value: it is the direction that doesn't need a second opinion. */
   async function classify() {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) return null;
@@ -2724,9 +2768,22 @@ function createOrientationWatcher() {
 
     if (faceDetector && !fdBroken) {
       try {
-        const faces = await faceDetector.detect(canvas);
-        lastConfidence = 1;   // binary API - no partial score to report
-        return faces.length > 0 ? "front" : "back";
+        const fs = Math.max(ORIENT_FACE_SIZE / vw, ORIENT_FACE_SIZE / vh);
+        faceCtx.drawImage(video, (ORIENT_FACE_SIZE - vw * fs) / 2, (ORIENT_FACE_SIZE - vh * fs) / 2, vw * fs, vh * fs);
+        const faces = await faceDetector.detect(faceCanvas);
+        if (faces.length > 0) {
+          lastConfidence = 1;               // binary API - no partial score to report
+          lastSkinRatio = null;
+          return "front";
+        }
+        /* No face. Corroborate before calling it a back. skinRatioVote() populates
+           lastSkinRatio/lastConfidence, so the debug line shows both engines. */
+        const corroboration = skinRatioVote();
+        if (corroboration === "back") return "back";          // both engines agree
+        // Skin says "there is a face here" (or is ambiguous) while the detector found
+        // none - the likeliest reading is a MISSED face, not a turned back. Abstain.
+        lastConfidence = 0;
+        return null;
       } catch (_) {
         fdBroken = true;
         console.log("[PEAR] AI Auto - FaceDetector unavailable at runtime; using skin-ratio heuristic");
@@ -3083,6 +3140,76 @@ function abbrevImg(ref) {
   return ref.length > 100 ? ref.slice(0, 100) + "…" : ref;
 }
 
+/* ── Canonical image identity ────────────────────────────────────────────────────
+   THE "FRONT PRINT RENDERED ON THE BACK" BUG. Six separate places decide whether an
+   item ships a REAL, DISTINCT back photo, and every one of them compared raw URL
+   strings (`g.back !== g.front`). Storefront CDNs serve the SAME photo under many
+   URLs - a size param (?width=800 vs ?width=1400), a cache-busting version (?v=), a
+   filename size suffix (_800x.jpg), a protocol or host-case difference. Two spellings
+   of one photo therefore passed every "distinct" test, so a session could go live in
+   AI Auto with the FRONT photo bound as the back reference - and then
+   ANGLE_CLAUSE.backReal tells Lucy "this reference shows the BACK: reproduce it... do
+   NOT render the front" while showing it the front. The model does exactly as asked
+   with what it was given: it reproduces the chest print, on the back.
+
+   canonicalImageUrl() reduces a URL to the ASSET it identifies, so sameImage() can
+   answer "are these two references the same photograph?" instead of "are these two
+   strings equal?". Deliberately conservative - it only strips parameters that are
+   known to be presentation/cache concerns, never anything that could select a
+   different asset. data:/blob: URLs are compared verbatim (a generated rear view is
+   its own asset and has no meaningful canonical form). */
+const PRESENTATION_PARAMS = new Set([
+  "width", "height", "w", "h", "size", "quality", "q", "dpr", "format", "fm",
+  "crop", "fit", "scale", "v", "ver", "version", "t", "cache", "_",
+]);
+
+function canonicalImageUrl(url) {
+  if (!url || typeof url !== "string") return "";
+  if (/^(data:|blob:)/i.test(url)) return url;
+  let u;
+  try {
+    u = new URL(url, location.href);
+  } catch (_) {
+    return url.split("?")[0].toLowerCase();     // unparseable - fall back to the bare path
+  }
+  u.protocol = "https:";                        // http/https of the same asset are the same asset
+  u.hostname = u.hostname.toLowerCase();
+  u.hash = "";
+  for (const key of [...u.searchParams.keys()]) {
+    if (PRESENTATION_PARAMS.has(key.toLowerCase())) u.searchParams.delete(key);
+  }
+  // CDN size suffix baked into the filename (Shopify _800x.jpg / _small.jpg /
+  // _100x100_crop_center.jpg, WooCommerce -300x300.jpg at thumbnail scale). Mirrors
+  // upgradeImageUrl() in pear-widget.js - keep the two in lockstep.
+  u.pathname = u.pathname
+    .replace(/_(?:pico|icon|thumb|small|compact|medium|large|grande|master|\d{1,4}x(?:\d{1,4})?)(?:_crop_[a-z]+)?(?=\.(?:jpe?g|png|webp|gif)$)/i, "")
+    .replace(/-(\d{2,3})x(\d{2,3})(?=\.(?:jpe?g|png|webp|gif)$)/i, (m, a, b) =>
+      (parseInt(a, 10) <= 600 && parseInt(b, 10) <= 600) ? "" : m);
+  return u.toString().toLowerCase();
+}
+
+/** True when two URLs identify the SAME photograph. Use this - never `a !== b` - for
+ *  any "is the back really a different image from the front" decision. */
+function sameImage(a, b) {
+  if (!a || !b) return false;
+  return canonicalImageUrl(a) === canonicalImageUrl(b);
+}
+
+/** The item's back asset ONLY when it is a genuinely different photograph from the
+ *  front; undefined otherwise. Single chokepoint for that question, so a future
+ *  caller cannot reintroduce a raw string compare. */
+function distinctBackOf(item, g = galleryOf(item)) {
+  if (!g || !g.back) return undefined;
+  const front = g.front || (item && item.img);
+  if (front && sameImage(g.back, front)) {
+    console.warn("[PEAR] back asset is the SAME photo as the front (different URL spelling) -",
+      "treating this item as single-view rather than binding the front as a back reference.",
+      "\n  front:", abbrevImg(front), "\n  back :", abbrevImg(g.back));
+    return undefined;
+  }
+  return g.back;
+}
+
 /* ── Multi-Image Product Gallery - variant + angle resolution + prompt steering ──
    ONE lookup chain feeds the whole UI and the live WebRTC sync, so no item, colour
    or angle can ever empty the gallery state. galleryOf() resolves, in priority order:
@@ -3245,9 +3372,16 @@ const ANGLE_CLAUSE = {
   // REPRODUCE it - and pin the print's size/position to the reference so the graphic
   // doesn't drift, rescale or re-center between frames (the back-alignment ask).
   backReal: " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera. This reference photo shows the BACK of the garment: reproduce it faithfully - its back panel, rear yoke, back collar, rear hemline and especially any back graphics, prints, logos or lettering - keeping each element at the SAME size, height and horizontal position on the garment as in the reference, wrapping naturally around the body. Do not move, rescale, re-center or omit the back print, and do NOT render the front of the garment.",
-  // Back, INFERRED rear: no dedicated back photo - the active image is the FRONT, so Lucy
-  // must infer a plausible rear from it (graceful fallback; placement can't be pinned).
-  backInferred: " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera. Render the BACK of the garment: its back panel, rear yoke, back collar, rear hemline and any back graphics, prints or seams, wrapping naturally around the body from the rear. This reference photo shows the front, so infer the corresponding rear; do NOT render the front of the garment.",
+  /* Back, INFERRED rear: no dedicated back photo - the active image IS the front, so
+     Lucy must infer a plausible rear from it (graceful fallback; placement can't be
+     pinned). THE PRINT-DUPLICATION FIX: the previous wording asked for "any back
+     graphics, prints or seams" while the only graphic in view was the FRONT chest
+     print - so the model dutifully reproduced that print on the back. The reference
+     is now named as the front explicitly, front-only elements are enumerated as
+     forbidden (the model cannot avoid what it hasn't been told to avoid), and the
+     default rear is stated as PLAIN. Mirrors CUSTOM_BACK_INFERRED, which already
+     carried this constraint and did not exhibit the bug. */
+  backInferred: " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera. Render the BACK of the garment: its back panel, rear yoke, back collar, rear hemline and the seams the cut implies, wrapping naturally around the body from the rear. This reference photo shows the FRONT of the garment, so you must INFER the corresponding rear from it. The back is a clean, plain expression of the same fabric, colour and texture: do NOT copy, mirror, repeat or relocate the front chest print, front logo, front lettering, buttons, placket, zipper or front pockets onto the back. Unless the garment's cut clearly implies a back panel print, the back carries NO graphic at all. Do NOT render the front of the garment.",
   side:  " The person is viewed from the SIDE in profile: render the garment's side profile - shoulder line, sleeve, side seam and the way the fabric drapes along the flank - in an accurate three-quarter/profile perspective.",
   // AI Auto, facing camera: the reference is ONE clean front asset (no composite), so the
   // clause pins it explicitly as the front and forbids inventing rear details - the
@@ -3288,7 +3422,7 @@ const CUSTOM_BACK_INFERRED =
    distinct back asset (a storefront data-pear-back, or a catalog item's real rear photo)
    qualifies. For a full look, BOTH halves must ship a real back. */
 function activeBackIsReal(item) {
-  const real = (it) => { if (!it) return false; const g = galleryOf(it); return !!(g.back && g.back !== g.front); };
+  const real = (it) => !!distinctBackOf(it);
   const look = resolveLook();
   if (look) return real(look.top) && real(look.bottom);
   return real(item);
@@ -3302,7 +3436,7 @@ function activeBackIsReal(item) {
    shipping a genuine rear asset (e.g. Strata) exposes it - deliberately consistent
    with the two-view gate. */
 function canCombineViews(item) {
-  const ok = (it) => { if (!it) return false; const g = galleryOf(it); return !!(g.front && g.back && g.back !== g.front); };
+  const ok = (it) => { if (!it) return false; const g = galleryOf(it); return !!(g.front && distinctBackOf(it, g)); };
   const look = resolveLook();
   if (look) return ok(look.top) && ok(look.bottom);
   return ok(item);
@@ -3351,6 +3485,31 @@ async function applyGarment(item) {
 
   const activeImg = activeImageOf(item);
   const imageRef  = await referenceImageFor(item, activeImg);   // Blob for combined, URL otherwise
+
+  /* ── STRICT ORIENTATION/ASSET BINDING (last line of defence) ──────────────────
+     The pairing that produces "the chest print is rendered on the back" is a BACK
+     clause sent with the FRONT photo: the clause says "this reference shows the BACK
+     - reproduce it faithfully, do NOT render the front", so the model faithfully
+     reproduces the only thing it can see, which is the front graphic.
+
+     angleClause() already picks backReal vs backInferred correctly, and
+     distinctBackOf() now stops the two from being confused upstream. This asserts the
+     invariant at the single point where the prompt and the image are married, so any
+     future path that reintroduces the mismatch is caught here rather than in a
+     shopper's live session. Detection only - it never silently rewrites the payload,
+     because the correct recovery differs by cause and guessing one would hide the bug. */
+  if (effectiveAngle() === "back") {
+    const g = galleryOf(item);
+    const realBack = distinctBackOf(item, g);
+    if (realBack && !sameImage(activeImg, realBack)) {
+      console.error("[PEAR] BINDING VIOLATION: back angle active but the reference is not the back asset.",
+        "\n  reference:", abbrevImg(activeImg), "\n  expected :", abbrevImg(realBack));
+    }
+    if (!realBack && activeBackIsReal(item)) {
+      console.error("[PEAR] BINDING VIOLATION: 'reproduce the BACK' steering with no distinct back asset -",
+        "the front would be reproduced as the back. Item:", item.name);
+    }
+  }
 
   if (effectiveAngle() === "back") {
     const isBlob = typeof Blob !== "undefined" && imageRef instanceof Blob;

@@ -464,9 +464,22 @@
     return bits.join(" ");
   }
 
-  /* Normalise for comparison - CDNs vary query params, so match on the path only. */
+  /* Normalise for comparison. Matching on the bare path was not enough: the SAME photo
+     routinely appears in a gallery as "shirt.jpg", "shirt_800x.jpg" and
+     "shirt_100x100_crop_center.jpg", which have three different paths. Two spellings of
+     one photo getting through as a front/back PAIR is what bound the front image as the
+     back reference downstream - and the fitting room then asked the model to
+     "reproduce the BACK" while showing it the front, duplicating the chest print onto
+     the back. upgradeImageUrl() already strips the size markers, so canonicalising
+     through it makes those three collapse to one identity.
+     Mirrors canonicalImageUrl() in fitting-room/app.js - keep the two in lockstep. */
+  function canonicalPhoto(u) {
+    if (!u) return "";
+    if (/^data:/i.test(u)) return u;
+    return upgradeImageUrl(u).split("?")[0].toLowerCase();
+  }
   function samePhoto(a, b) {
-    return (a || "").split("?")[0] === (b || "").split("?")[0];
+    return !!a && !!b && canonicalPhoto(a) === canonicalPhoto(b);
   }
 
   /* Console-safe URL: a server-generated rear view arrives as a data: URL of a few
@@ -660,7 +673,11 @@
     var rejected = [];
     function add(u, isPrimary) {
       if (!u || isExcludedSrc(u)) return;
-      var path = u.split("?")[0];
+      /* Canonical identity, not the bare path: "shirt.jpg", "shirt_800x.jpg" and
+         "shirt_100x100_crop_center.jpg" are ONE photo with three paths, and letting
+         two of them through as separate gallery entries is what allowed a front/back
+         "pair" that is really the same image twice. */
+      var path = canonicalPhoto(u);
       if (seenPaths.indexOf(path) !== -1) return;
       if (!isPrimary) {
         var confirmedByShopifyId = shopifyId && u.indexOf(shopifyId) !== -1;
@@ -1270,7 +1287,7 @@
            exact blank-back failure resolveFrontBack() below was written to stop. With
            no DOM evidence the room opens front-only and the classifier's verdict (or a
            generated rear) lands a moment later via PEAR_UPDATE_GARMENT. */
-        var openBack = garment.back && garment.back !== imgs[0] ? garment.back : undefined;
+        var openBack = (garment.back && !samePhoto(garment.back, imgs[0])) ? garment.back : undefined;
         console.log("[PEAR widget] button click - " + imgs.length + " image(s) to classify:", imgs,
           "| DOM-identified back:", openBack || "(none - server will resolve/synthesize)");
         var openedIframe = openModal({

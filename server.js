@@ -1506,15 +1506,64 @@ async function synthesizeBackView(frontUrl) {
    Note what is NOT here: "the second gallery image". Positional guessing is the
    documented root cause of the print-less back - it hands a FRONT photo to the live
    session labelled "back", and the model then suppresses the graphic it can see. */
+/* Canonical image identity - keep in lockstep with canonicalImageUrl() in
+   fitting-room/app.js and canonicalPhoto() in pear-widget.js. A storefront CDN serves
+   one photo under many URLs (?width=800 vs ?width=1400, ?v= cache busters, _800x
+   filename suffixes). Comparing raw strings let two spellings of the SAME photo be
+   returned as a front/back PAIR, and the fitting room then bound the front image as
+   the back reference - which is what duplicated the chest print onto the back view. */
+const PRESENTATION_PARAMS = new Set([
+  "width", "height", "w", "h", "size", "quality", "q", "dpr", "format", "fm",
+  "crop", "fit", "scale", "v", "ver", "version", "t", "cache", "_",
+]);
+
+function canonicalImageUrl(url) {
+  if (!url || typeof url !== "string") return "";
+  if (/^(data:|blob:)/i.test(url)) return url;
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return url.split("?")[0].toLowerCase();
+  }
+  u.protocol = "https:";
+  u.hostname = u.hostname.toLowerCase();
+  u.hash = "";
+  for (const key of [...u.searchParams.keys()]) {
+    if (PRESENTATION_PARAMS.has(key.toLowerCase())) u.searchParams.delete(key);
+  }
+  u.pathname = u.pathname
+    .replace(/_(?:pico|icon|thumb|small|compact|medium|large|grande|master|\d{1,4}x(?:\d{1,4})?)(?:_crop_[a-z]+)?(?=\.(?:jpe?g|png|webp|gif)$)/i, "")
+    .replace(/-(\d{2,3})x(\d{2,3})(?=\.(?:jpe?g|png|webp|gif)$)/i, (m, a, b) =>
+      (parseInt(a, 10) <= 600 && parseInt(b, 10) <= 600) ? "" : m);
+  return u.toString().toLowerCase();
+}
+
+/** True when two URLs identify the SAME photograph. */
+function sameImage(a, b) {
+  if (!a || !b) return false;
+  return canonicalImageUrl(a) === canonicalImageUrl(b);
+}
+
 function resolveGarmentViews({ images, records, scrapedFront, scrapedBack }) {
   const front =
     images.find((u, i) => records[i]?.view === "front") ||
     scrapedFront ||
     images[0];
 
-  if (scrapedBack) return { front, back: scrapedBack, back_source: "dom" };
+  /* A "back" that is really the front under a different URL spelling is WORSE than no
+     back at all: it passes every downstream distinctness check and then reaches the
+     model paired with "reproduce the BACK, do NOT render the front". Fall through to
+     the classifier (and then to generation) instead of trusting it. */
+  if (scrapedBack && !sameImage(scrapedBack, front)) {
+    return { front, back: scrapedBack, back_source: "dom" };
+  }
+  if (scrapedBack) {
+    console.warn("[classify-images] DOM back is the same photo as the front (different URL spelling) - ignoring it:",
+      String(scrapedBack).slice(0, 120));
+  }
 
-  const classified = images.find((u, i) => records[i]?.view === "back" && u !== front);
+  const classified = images.find((u, i) => records[i]?.view === "back" && !sameImage(u, front));
   if (classified) return { front, back: classified, back_source: "classifier" };
 
   return { front, back: "", back_source: "none" };
