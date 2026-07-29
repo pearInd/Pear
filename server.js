@@ -1216,6 +1216,39 @@ async function fetchImageAsBase64(imageUrl) {
   return { base64: buffer.toString("base64"), mimeType: contentType };
 }
 
+/* ── Short-lived memoization for fetchImageAsBase64() ─────────────────────────────
+   SAFE SPEED WIN #1 (part of "make loading as fast as possible without damaging the
+   system"). NOT a durable cache - garment_cache/Storage already own that at the
+   RESULT level. This exists purely to stop the SAME image's bytes being fetched
+   twice from the CDN back-to-back within one classify-images request: for a
+   single-photo product, classifyFrontBackDetailed() fetches the front photo to
+   classify it, and moments later synthesizeBackView() fetches THE SAME photo again
+   to generate its rear view - identical bytes, same URL, re-downloaded for no
+   reason. Every millisecond shaved off the fetch is a millisecond off the total
+   wait, and unlike the Gemini generation call itself, this part is pure I/O with
+   zero risk to output quality - nothing about what gets generated changes, only
+   how many times the input bytes cross the network first.
+   Short 60s TTL is deliberate: long enough to cover one request's lifetime (classify
+   → resolve → synthesize typically completes well under a minute), short enough that
+   this can never masquerade as a durable cache or serve meaningfully stale bytes to
+   an unrelated later visit. */
+const _imageBytesCache = new Map();   // canonical url → { value: Promise<{base64,mimeType}>, at: number }
+const IMAGE_BYTES_TTL_MS = 60_000;
+const IMAGE_BYTES_CACHE_MAX = 200;
+
+function fetchImageAsBase64Cached(imageUrl) {
+  const key = canonicalImageUrl(imageUrl) || imageUrl;
+  const hit = _imageBytesCache.get(key);
+  if (hit && Date.now() - hit.at < IMAGE_BYTES_TTL_MS) return hit.value;
+  const value = fetchImageAsBase64(imageUrl);
+  value.catch(() => _imageBytesCache.delete(key));   // never cache a failed fetch
+  _imageBytesCache.set(key, { value, at: Date.now() });
+  if (_imageBytesCache.size > IMAGE_BYTES_CACHE_MAX) {
+    _imageBytesCache.delete(_imageBytesCache.keys().next().value);   // oldest-first eviction
+  }
+  return value;
+}
+
 /* ── Strict front/back system prompt ────────────────────────────────────────────
    REWRITTEN. The previous prompt had two defects that both surface downstream as
    "the back view doesn't render":
@@ -1283,7 +1316,7 @@ Respond ONLY with JSON matching this schema:
    @returns {Promise<{view:"front"|"back"|"uncertain", confidence:number, cue:string}>} */
 async function classifyFrontBackDetailed(imageUrl) {
   const secureUrl = imageUrl.replace(/^http:\/\//, 'https://');
-  const { base64, mimeType } = await fetchImageAsBase64(secureUrl);
+  const { base64, mimeType } = await fetchImageAsBase64Cached(secureUrl);
   const resp = await fetch(GEMINI_CLASSIFY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1632,7 +1665,11 @@ async function synthesizeBackView(frontUrl) {
     if (durable) return durable;
 
     try {
-      const { base64, mimeType } = await fetchImageAsBase64(frontUrl.replace(/^http:\/\//, "https://"));
+      // Cached: this is the SAME front photo classifyFrontBackDetailed() almost
+      // certainly just fetched moments ago (the single-image case that lands here is
+      // exactly "one photo, already classified as front, no back found") - the memo
+      // above skips a redundant CDN round trip for it.
+      const { base64, mimeType } = await fetchImageAsBase64Cached(frontUrl.replace(/^http:\/\//, "https://"));
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
       const resp = await fetch(url, {
         method: "POST",

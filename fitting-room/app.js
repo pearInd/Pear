@@ -1643,6 +1643,24 @@ function renderActiveGarment() {
        composite exists, so this can never fight with is-composite above. */
     chip.classList.toggle("is-pending", thumbIsPending(item));
   }
+  syncCaptureButtonPendingState();
+}
+
+/* Visual half of the go-live gate (the FUNCTIONAL half is livePendingReason() inside
+   goLive() itself, which is the actual authority - this only has to look right).
+   Deliberately does NOT touch captureBtn.disabled: that property already has several
+   independent, carefully-ordered owners elsewhere (camera availability, the Task 10
+   busy re-entrancy guard, the live/not-live toggle) and this function does not know
+   -and should not need to know- the current state of any of them. A separate CSS
+   class + pointer-events:none achieves the same "can't be clicked" result as a purely
+   ADDITIVE layer on top, so it can never clobber or race with those other owners -
+   whichever of them last touched .disabled keeps winning once this class clears. */
+function syncCaptureButtonPendingState() {
+  const btn = $("captureBtn");
+  if (!btn) return;
+  const pending = !!livePendingReason();
+  btn.classList.toggle("is-pending-back", pending);
+  btn.setAttribute("aria-busy", pending ? "true" : "false");
 }
 
 /* =============================================================================
@@ -3876,6 +3894,39 @@ function liveBlockReason() {
   return itemBlockReason(activeItem);
 }
 
+/* Reason go-live should WAIT - or null when nothing is pending. Deliberately SEPARATE
+   from itemBlockReason()/liveBlockReason() above: those describe a PERMANENT
+   structural deficiency (no images at all, an opted-in required back genuinely
+   missing) and are also read by the catalog grid to grey out tiles before a shopper
+   has even picked an item. This describes a TRANSIENT in-flight state instead - the
+   widget's classify+synthesize round trip on the store page, or this room's own local
+   composite stitch - that resolves on its own within a bounded window (the 35s
+   give-up timeout armed in setActiveItem()) and has no meaning for an item that
+   hasn't been activated yet. Mixing the two would incorrectly greyed-out a catalog
+   tile over async state that belongs only to whichever item is currently active.
+
+   THE GATE: measured in production, a fresh back-view synthesis takes ~27-30s. Going
+   live before it resolves would either (a) start the session already turned-around-
+   ready with only a front reference and the weaker inferred-rear prompt clause, or
+   (b) start AI Auto with no distinct back to switch to at all - in both cases the
+   shopper pays for/starts a session that can't yet show what the corrected back-view
+   pipeline was built to show. Blocking go-live until this clears (or gives up) is
+   what makes the composite something the shopper's session actually uses, not a
+   improvement that only helps if they happen to wait on their own. */
+function itemPendingReason(item) {
+  if (!item) return null;
+  if (item._awaitingBackCorrection)
+    return "עדיין מחפשים תצוגת גב לבגד, רק רגע · Still finding a back view for this item";
+  if (item._compositeBuilding)
+    return "מכינים תצוגה משולבת, רק רגע · Preparing the combined view";
+  return null;
+}
+function livePendingReason() {
+  const look = resolveLook();
+  if (look) return itemPendingReason(look.top) || itemPendingReason(look.bottom);
+  return itemPendingReason(activeItem);
+}
+
 /* The EXACT source image fed to the AI for the active angle. Falls back to the front
    asset when the active angle has no dedicated image, so a Back/Side toggle never
    breaks - it reuses the front reference and lets the prompt clause steer the warp.
@@ -5596,6 +5647,13 @@ async function goLive() {
   // blocked. Bail out with a toast and never open a session for a blocked garment.
   const blockReason = liveBlockReason();
   if (blockReason) { toast(blockReason); return; }
+
+  // See itemPendingReason()'s doc comment for why this is a separate check from the
+  // one above. Re-evaluated fresh on every click, so a shopper who waits (or whose
+  // 35s give-up timeout fires) and clicks again sails straight through with no
+  // special-casing needed here.
+  const pendingReason = livePendingReason();
+  if (pendingReason) { toast(pendingReason); return; }
 
   busy = true;                         // Task 10 - claim the flow before ANY await
   $("captureBtn").disabled = true;

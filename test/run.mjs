@@ -39,6 +39,8 @@ const SUITES = [
   ["composite-handoff", "composite-handoff.test.mjs"],
   ["eager-composite", "eager-composite.test.mjs"],
   ["pending-flag", "pending-flag.test.mjs"],
+  ["pending-gate", "pending-gate.test.mjs"],
+  ["image-bytes-cache", "image-bytes-cache.test.mjs"],
 ];
 
 let failed = 0;

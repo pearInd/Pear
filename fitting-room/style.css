@@ -1057,6 +1057,45 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
   box-shadow: 0 12px 32px rgba(0, 0, 0, .22);
 }
 .btn-capture.is-live:active:not(:disabled) { transform: scale(.96); }
+
+/* ── go-live gate: "still finding/generating a back view" ─────────────────────
+   The FUNCTIONAL gate is livePendingReason() inside goLive() itself (a click here
+   is rejected with a toast regardless of this class ever applying) - this is the
+   visual half, so a shopper sees WHY the button won't respond instead of tapping
+   it and getting only a toast. Deliberately independent of the :disabled attribute
+   (see syncCaptureButtonPendingState()'s comment in app.js for why) - own
+   pointer-events:none is what actually blocks the click at the CSS layer, own
+   opacity/cursor mimic the :disabled look without touching that attribute's
+   several other independent owners. `:not(.is-pending-back)` on the pre-existing
+   hover/active rules above would also work but is more invasive to touch; higher
+   specificity here wins the same result additively. */
+.btn-capture.is-pending-back {
+  pointer-events: none;
+  opacity: .55;
+  cursor: not-allowed;
+  animation: none !important;   /* stop the mobile "capInvite" attention pulse while waiting */
+}
+.btn-capture.is-pending-back:hover,
+.btn-capture.is-pending-back:active {
+  transform: none;
+}
+.btn-capture.is-pending-back .btn-capture__icon {
+  position: relative;
+  visibility: hidden;   /* keep the layout box; the spinner below replaces the icon */
+}
+.btn-capture.is-pending-back .btn-capture__icon::after {
+  content: "";
+  position: absolute; top: 50%; left: 50%; visibility: visible;
+  width: 16px; height: 16px; margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  border: 2px solid rgba(10, 10, 11, .18);
+  border-top-color: var(--pear-deep);
+  animation: pear-pending-spin .8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn-capture.is-pending-back .btn-capture__icon::after { animation: none; }
+}
+
 .btn-capture__icon { font-size: 1.2rem; }
 .btn-capture__label { font-family: "Urbanist"; font-weight: 800; font-size: 1.05rem; }
 .btn-capture__en { font-size: .74rem; opacity: .85; letter-spacing: .06em; }
