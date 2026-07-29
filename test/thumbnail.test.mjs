@@ -73,11 +73,16 @@ check("no imagery falls back to the inline SVG placeholder",
 
 console.log("\n── CSS contract for the wide composite thumbnail ──");
 const rule = CSS.slice(CSS.indexOf(".active-garment.is-composite"), CSS.indexOf("/* Full-look duo chip */"));
-check("is-composite widens the media box", /\.active-garment\.is-composite \.active-garment__media \{[^}]*width:/.test(CSS), rule.slice(0, 80));
+check("is-composite widens the media box (fallback width, pre-aspect-ratio browsers)",
+  /\.active-garment\.is-composite \.active-garment__media \{[^}]*width:/.test(CSS), rule.slice(0, 80));
+check("aspect-ratio drives the wide layout in modern browsers",
+  /\.active-garment\.is-composite \.active-garment__media \{[^}]*aspect-ratio:\s*2\s*\/\s*1/.test(CSS));
 check("image switches to object-fit: contain (both panels visible)",
   /\.active-garment\.is-composite[^{]*img \{[^}]*object-fit:\s*contain/.test(CSS));
 check("object-position overridden from the default `center top`",
   /\.active-garment\.is-composite[^{]*img \{[^}]*object-position:\s*center/.test(CSS));
+check("background is a flat light color (design token), not a translucent overlay",
+  /\.active-garment\.is-composite \.active-garment__media \{[^}]*background:\s*var\(--bg\)/.test(CSS));
 check("default (non-composite) thumbnails still use cover",
   /\.active-garment__media img[^{]*\{[^}]*object-fit:\s*cover/.test(CSS.replace(/\.active-garment\.is-composite[\s\S]*?\}/g, "")));
 check("a narrow-screen size is defined", /max-width:\s*380px/.test(CSS) && /is-composite/.test(rule));

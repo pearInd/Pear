@@ -1199,7 +1199,21 @@ window.addEventListener("message", (e) => {
   const front = e.data.garment_url;
   const back = e.data.garment_back;
   if (!activeItem || !front) return;
-  if (activeItem.img === front && activeItem.imgBack === back) return;
+  const composite = typeof e.data.garment_composite === "string" && e.data.garment_composite
+    ? e.data.garment_composite : undefined;
+  /* THE "BANNER STILL SHOWS FRONT" BUG. This used to bail out here whenever front/back
+     matched what activeItem already held, WITHOUT looking at whether a composite had
+     arrived. pear-widget.js builds the composite AFTER /api/classify-images resolves -
+     strictly later than the initial DOM-order guess this room opens on - so on any
+     store where the DOM back-detection already agrees with the classifier (increasingly
+     the common case; see findGalleryBack in pear-widget.js), img/imgBack never change
+     between the initial open and this message. That message is nonetheless the ONLY
+     delivery of garment_composite - and the old guard discarded it, unread, before this
+     line. The chip (and the model's actual reference) then stayed on the single front
+     photo for the entire session, every time DOM detection happened to be right. */
+  const unchanged = activeItem.img === front && activeItem.imgBack === back &&
+    (composite === undefined || activeItem.composite === composite);
+  if (unchanged) return;
   activeItem.img = front;
   if (Array.isArray(e.data.garment_images) && e.data.garment_images.length) {
     activeItem.pearImages = e.data.garment_images;
@@ -1226,8 +1240,8 @@ window.addEventListener("message", (e) => {
      the composite the shopper gets is the exact image the widget produced rather
      than a second, independently built one. A data: URL, so every downstream path
      (garmentBlobCached, garmentImageRef) already handles it without a proxy hop. */
-  if (typeof e.data.garment_composite === "string" && e.data.garment_composite) {
-    activeItem.composite = e.data.garment_composite;
+  if (composite) {
+    activeItem.composite = composite;
     console.log("[PEAR] COMBINED composite received from the widget:",
       abbrevImg(activeItem.composite));
   }

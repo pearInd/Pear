@@ -716,8 +716,13 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
    own proportions and switch to `contain` so both panels stay fully visible.
    `contain` letterboxes rather than crops, hence the neutral backing colour. */
 .active-garment.is-composite .active-garment__media {
-  width: 132px;                  /* ≈2.2:1 against the 60px height - matches the stitch */
-  background: rgba(20, 20, 22, .06);
+  /* aspect-ratio is the actual sizing mechanism (2:1 ≈ createGarmentComposite's real
+     output - two similarly-shaped garment photos side by side); the width is a plain
+     fallback for the ~4% of browsers without aspect-ratio support, computed off the
+     SAME ratio against the row's fixed 60px height so the two never disagree. */
+  width: 120px;
+  aspect-ratio: 2 / 1;
+  background: var(--bg);         /* flat light gray - reads clearly under `contain`, unlike a translucent overlay */
 }
 .active-garment.is-composite .active-garment__media img {
   object-fit: contain;           /* show BOTH panels, never crop to one */
@@ -729,8 +734,9 @@ html[dir="rtl"] .calc-editorial { border-radius: var(--radius-lg) 0 0 var(--radi
 .active-garment.is-composite:hover .active-garment__media img { transform: none; }
 
 @media (max-width: 380px) {
-  /* Narrow phones: the name/type column needs the room more than the thumbnail does. */
-  .active-garment.is-composite .active-garment__media { width: 104px; }
+  /* Narrow phones: the name/type column needs the room more than the thumbnail does.
+     aspect-ratio is unchanged, so this only affects the fallback width. */
+  .active-garment.is-composite .active-garment__media { width: 96px; }
 }
 
 /* Full-look duo chip */
