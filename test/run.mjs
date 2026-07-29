@@ -37,6 +37,7 @@ const SUITES = [
   ["widget-combined", "widget-combined.test.mjs"],
   ["thumbnail", "thumbnail.test.mjs"],
   ["composite-handoff", "composite-handoff.test.mjs"],
+  ["eager-composite", "eager-composite.test.mjs"],
 ];
 
 let failed = 0;

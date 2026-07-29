@@ -56,6 +56,10 @@ function run(activeItemInit, messageData) {
     renderPerspectiveSelector: () => localCalls.push("renderPerspectiveSelector"),
     prewarmOrientationAssets: () => localCalls.push("prewarmOrientationAssets"),
     hotSwapIfLive: (msg) => localCalls.push("hotSwapIfLive:" + msg),
+    // Real behaviour (build a local composite when only imgBack arrived) is covered
+    // by test/eager-composite.test.mjs; this suite is specifically about the
+    // early-return/change-detection logic, so a call-recording stub is enough here.
+    ensureActiveGarmentComposite: (item) => localCalls.push("ensureActiveGarmentComposite:" + (item && item.name)),
     abbrevImg: (u) => (u ? String(u).slice(0, 20) : "(none)"),
     currentAngle: "auto",   // read only for the trailing console.log line
     console,

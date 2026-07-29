@@ -1265,6 +1265,52 @@ function releaseCompositePreview(item) {
   item._compositeObjectUrl = null;
 }
 
+/* ── EAGER composite for the "Now fitting" chip ───────────────────────────────
+   THE BUG THIS FIXES: the chip showed the front photo alone until the shopper
+   pressed go-live, then switched to the FRONT|BACK composite - because the ONLY
+   code that ever built one lived inside referenceImageFor(), which only runs from
+   applyGarment(), which only runs as part of the live-session flow. Nothing built
+   a composite at the moment the item was actually chosen (enterRoom → setActiveItem,
+   or the widget's post-open correction) - so the chip's first paint, and every paint
+   before go-live, was structurally front-only regardless of whether a back existed.
+
+   This decouples the CHIP from the live-session machinery entirely: the instant a
+   distinct back is known - whichever of the two ways it arrives - build the
+   composite and repaint, with no dependency on whether the shopper has gone live.
+     1. The widget hands over a ready-made composite (garment_composite in the
+        PEAR_UPDATE_GARMENT listener) - already applied there directly, no work here.
+     2. Only imgBack is known (an inline ?garment_url_back= at enterRoom() time, or a
+        classifier verdict that arrived without a composite) - THIS function builds
+        one locally, same code path applyGarment() already trusted for the live
+        reference, just no longer gated behind pressing go-live.
+   Guarded so it never fires twice for the same item and never clobbers a composite
+   that has since arrived through the other path while this one was still building. */
+function ensureActiveGarmentComposite(item) {
+  if (!item || item.composite || item._compositeObjectUrl || item._compositeBuilding) return;
+  const g = galleryOf(item);
+  const back = distinctBackOf(item, g);
+  if (!back) return;   // no distinct back yet - nothing to compose (not an error; may arrive later)
+
+  item._compositeBuilding = true;
+  createGarmentComposite(g.front || item.img, back).then((composite) => {
+    item._compositeBuilding = false;
+    if (!composite) return;   // createGarmentComposite already logs its own failure reason
+    // Stale by the time it resolved: something else populated a composite on this
+    // SAME item object in the meantime (e.g. the widget's postMessage won the race) -
+    // never overwrite a real one with a redundant local rebuild.
+    if (item.composite || item._compositeObjectUrl) return;
+    try {
+      item._compositeObjectUrl = URL.createObjectURL(composite);
+    } catch (e) {
+      console.warn("[PEAR] ensureActiveGarmentComposite: createObjectURL failed:", e?.message || e);
+      return;
+    }
+    // Only repaint if this item is STILL the one on screen - the shopper may have
+    // swapped garments while this was building.
+    if (activeItem === item) renderActiveGarment();
+  });
+}
+
 function setActiveItem(item, opts = {}) {
   // Swapping away from a garment: free its preview blob unless it IS the incoming one.
   if (activeItem && activeItem !== item) releaseCompositePreview(activeItem);
@@ -1281,6 +1327,9 @@ function setActiveItem(item, opts = {}) {
 
   $("focusItemName").innerText = item.name;
   renderActiveGarment();             // shows either the single item or the full look
+  // Fire-and-forget: builds the FRONT|BACK composite the instant a distinct back is
+  // already known (e.g. an inline ?garment_url_back=), instead of waiting for go-live.
+  ensureActiveGarmentComposite(item);
   renderCompleteTheLook(item);
   highlightCatalog(item.id);
   renderPerspectiveSelector();       // rebuild angle tabs + source preview for the new selection
@@ -1421,6 +1470,11 @@ window.addEventListener("message", (e) => {
   // currentAngle is deliberately NOT set here: renderPerspectiveSelector() re-derives
   // it (AI Auto when the corrected pair qualifies, else front) with no user input.
   renderActiveGarment();
+  // The widget's own composite (if it sent one) is already applied above. When it
+  // didn't - imgBack alone arrived, e.g. a classifier verdict without a stitched
+  // asset - build one locally right now rather than waiting for go-live. No-ops
+  // instantly if activeItem.composite is already set.
+  ensureActiveGarmentComposite(activeItem);
   renderPerspectiveSelector();
   console.log("[PEAR] PEAR_UPDATE_GARMENT applied - front:", abbrevImg(activeItem.img),
     "| back:", abbrevImg(activeItem.imgBack) || "(none)",
