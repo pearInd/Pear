@@ -1216,44 +1216,135 @@ async function fetchImageAsBase64(imageUrl) {
   return { base64: buffer.toString("base64"), mimeType: contentType };
 }
 
-async function classifyFrontBack(imageUrl) {
+/* ── Strict front/back system prompt ────────────────────────────────────────────
+   REWRITTEN. The previous prompt had two defects that both surface downstream as
+   "the back view doesn't render":
+
+   1. It collapsed EVERY ambiguous case into "front" ("If this is a detail shot,
+      side view, or lifestyle image … answer 'front' as default"). A genuine rear
+      photo shot at a slight angle, cropped to the shoulders, or worn by a model in
+      a lifestyle setting therefore came back "front" - so the product looked
+      single-view, canCombineViews() stayed false, and turning around never swapped
+      in a rear reference. Ambiguity is now reported as `uncertain` with a
+      confidence score; only the CALLER decides how to treat it, and that decision
+      is visible in the logs and in garment_cache.source instead of being silently
+      baked into the model's answer.
+   2. It leaned on cues that are ambiguous by construction. A collar, a neckline and
+      a zipper all exist on both sides of most garments, so "collar visible" is not
+      evidence of anything. The rules below are restricted to cues that appear on
+      exactly ONE side.
+
+   Output is strict JSON via responseMimeType, so a chatty model can't break parsing
+   (the old `answer.includes("back")` also matched "this is not the back", silently
+   inverting the verdict). */
+const FRONT_BACK_SYSTEM_PROMPT = `You are a garment-orientation classifier for a virtual try-on pipeline. You decide which SIDE of a garment a product photograph shows.
+
+Judge the GARMENT, not the photo's role in the gallery. Never reason about whether an image "looks like the main product shot" - primary/secondary ordering is a merchandising choice and carries no information about orientation.
+
+If a person is wearing the garment, their body orientation is the strongest signal available:
+- Face, eyes or front torso visible toward the camera -> the garment's FRONT.
+- Back of the head, nape of the neck, or shoulder blades toward the camera -> the garment's BACK.
+
+DECISIVE FRONT cues (each appears only on the front):
+- Buttons, button placket, full-length zipper closure, snaps, tie closure
+- Chest pocket, breast logo, front graphic or lettering read the right way round
+- V-neck, scoop or crew neckline seen as an open curve (the neck opening faces you)
+- Front fly, coin pocket, belt loops seen with the fly
+- Bra cups, front cutouts, wrap-front overlap
+
+DECISIVE BACK cues (each appears only on the back):
+- Centre-back seam running vertically down the panel
+- Back yoke (a horizontal seam across the upper back)
+- Rear neckline as a shallow, closed curve with the collar standing away from you
+- Sewn-in neck label / size tag visible on the inside of the rear collar
+- Back graphic, player name/number, spine lettering
+- Rear pockets on trousers, back darts, a back vent on a jacket or coat
+- Back zipper on a dress (short, upper-centre) or a rear keyhole/cutout
+
+TRICKY CASES - follow these exactly:
+- Neck label visible = BACK. A sewn label sits at the rear collar; this cue outranks a partially visible neckline.
+- Side or 3/4 profile: decide by which cues you can actually SEE. If decisive cues from one side are visible, answer that side. If neither is legible, answer "uncertain".
+- Flat-lay / packshot with no model: use the seam and closure cues above.
+- Close-up detail / fabric macro / accessory-only shot with no orientation cue: answer "uncertain".
+- Folded garment, hanger shot from the side, or a photo where the garment is mostly occluded: answer "uncertain".
+- Do NOT guess. "uncertain" is a correct, useful answer; a wrong "front" makes a real rear photo unusable, and a wrong "back" makes the try-on render the wrong side.
+
+Report confidence honestly:
+- 0.9-1.0  one or more decisive cues, clearly legible
+- 0.7-0.89 one decisive cue, partially occluded or low resolution
+- below 0.7 inference from weak cues only -> you must answer "uncertain"
+
+Respond ONLY with JSON matching this schema:
+{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>"}`;
+
+/* Classify one image. Returns the full record - the caller decides what an
+   `uncertain` verdict means (see resolveGarmentViews), rather than the prompt
+   quietly rounding it to "front" the way the old version did.
+   @returns {Promise<{view:"front"|"back"|"uncertain", confidence:number, cue:string}>} */
+async function classifyFrontBackDetailed(imageUrl) {
   const secureUrl = imageUrl.replace(/^http:\/\//, 'https://');
   const { base64, mimeType } = await fetchImageAsBase64(secureUrl);
   const resp = await fetch(GEMINI_CLASSIFY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      systemInstruction: { parts: [{ text: FRONT_BACK_SYSTEM_PROMPT }] },
       contents: [{
         parts: [
-          { text:
-              "You are analyzing a clothing product image.\n" +
-              "Look carefully at the garment only, ignore any model or person.\n\n" +
-              "FRONT indicators:\n" +
-              "- Buttons, zipper, or collar visible from the front\n" +
-              "- Chest pocket, front logo, or front design\n" +
-              "- Neckline visible from the front\n" +
-              "- The main/primary view of the garment\n\n" +
-              "BACK indicators:\n" +
-              "- Back seam or back panel visible\n" +
-              "- Back of collar or back neckline\n" +
-              "- Back zipper or back design\n" +
-              "- The reverse/secondary view of the garment\n\n" +
-              "If this is a detail shot, side view, or lifestyle image\n" +
-              "(not clearly front or back) — answer 'front' as default.\n\n" +
-              "Answer with exactly one word: front or back" },
+          { text: "Classify which side of the garment this photograph shows." },
           { inline_data: { mime_type: mimeType, data: base64 } },
         ],
       }],
+      generationConfig: {
+        // Deterministic: the same product photo must not classify differently between
+        // the scanner's crawl and the widget's live call, or the cache and the live
+        // session disagree about which image is the back.
+        temperature: 0,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            view:       { type: "STRING", enum: ["front", "back", "uncertain"] },
+            confidence: { type: "NUMBER" },
+            cue:        { type: "STRING" },
+          },
+          required: ["view", "confidence"],
+        },
+      },
     }),
   });
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`Gemini ${resp.status}: ${text.slice(0, 200)}`);
+    // 429 is the rate-limit case the diagnostics single out - name it explicitly so a
+    // throttled crawl is distinguishable from a genuine classification failure in logs.
+    const err = new Error(`Gemini ${resp.status}: ${text.slice(0, 200)}`);
+    err.status = resp.status;
+    err.rateLimited = resp.status === 429;
+    throw err;
   }
   const data = await resp.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  const answer = text.trim().toLowerCase();
-  return answer.includes("back") ? "back" : "front";
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // responseMimeType should make this unreachable; treat a malformed body as
+    // uncertain rather than string-matching it (the old .includes("back") test read
+    // "not the back" as a back).
+    console.warn(`[classify] unparseable Gemini body for ${secureUrl}: ${text.slice(0, 120)}`);
+    return { view: "uncertain", confidence: 0, cue: "unparseable response" };
+  }
+  const view = ["front", "back", "uncertain"].includes(parsed?.view) ? parsed.view : "uncertain";
+  const confidence = Number.isFinite(parsed?.confidence) ? Math.max(0, Math.min(1, parsed.confidence)) : 0;
+  return { view, confidence, cue: typeof parsed?.cue === "string" ? parsed.cue.slice(0, 120) : "" };
+}
+
+/* Back-compat wrapper: the front|back-only contract the scanner and the cache read
+   path still speak. `uncertain` maps to "front" HERE, at the call site, where the
+   collapse is explicit and greppable - not inside the prompt. */
+async function classifyFrontBack(imageUrl) {
+  const { view } = await classifyFrontBackDetailed(imageUrl);
+  return view === "back" ? "back" : "front";
 }
 
 async function getCachedClassification(imageUrl) {
@@ -1267,19 +1358,181 @@ async function getCachedClassification(imageUrl) {
   return data ? data.classification : null;
 }
 
-async function saveClassification(imageUrl, classification) {
-  if (!supabase) return;
+/* Same row, but with the diagnostic columns added in supabase_setup_v8.sql
+   (confidence / source / cue). Falls back to the v5 shape when the migration hasn't
+   been applied, so this deploy is safe to ship BEFORE the SQL runs. */
+async function getCachedClassificationDetailed(imageUrl) {
+  if (!supabase) return null;
   const { data, error } = await supabase
     .from("garment_cache")
-    .upsert([{ image_url: imageUrl, classification }], { onConflict: "image_url" });
-  console.log('[classify] Supabase save result:', data, error);
+    .select("classification, confidence, source, cue")
+    .eq("image_url", imageUrl)
+    .maybeSingle();
+  if (error) {
+    if (/column .* does not exist/i.test(error.message || "")) {
+      const classification = await getCachedClassification(imageUrl);
+      return classification ? { classification, confidence: null, source: "legacy", cue: "" } : null;
+    }
+    console.warn("[garment_cache] read failed:", error.message);
+    return null;
+  }
+  return data || null;
+}
+
+/* Persist a verdict WITH its provenance. `source` is the column that makes the
+   diagnostics in supabase_setup_v8.sql answerable: before it existed, a row saying
+   "front" could equally be a confident Gemini verdict, an ambiguous image rounded
+   down, or a rate-limited request that silently defaulted - three very different
+   bugs that looked identical in the table.
+     gemini    - a real model verdict (confidence is meaningful)
+     dom_hint  - the storefront's own markup named the view (filename/alt)
+     synthetic - a generated rear view (see synthesizeBackView)
+     fallback  - classification failed/was throttled; the value is a DEFAULT, not a verdict
+   Writes degrade to the v5 column set when the migration hasn't run yet. */
+async function saveClassification(imageUrl, classification, meta = {}) {
+  if (!supabase) return;
+  const base = { image_url: imageUrl, classification };
+  const enriched = {
+    ...base,
+    confidence: Number.isFinite(meta.confidence) ? meta.confidence : null,
+    source: meta.source || "gemini",
+    cue: meta.cue || null,
+  };
+  let { error } = await supabase.from("garment_cache").upsert([enriched], { onConflict: "image_url" });
+  if (error && /column .* does not exist|Could not find the/i.test(error.message || "")) {
+    console.warn("[garment_cache] v8 columns absent - run archive/supabase_setup_v8.sql for full diagnostics");
+    ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));
+  }
   if (error) console.warn("[garment_cache] write failed:", error.message);
 }
 
-/* POST /api/classify-images - { images: string[] } → { results: ("front"|"back")[] },
-   one result per input URL, in order. Cache-first; uncached images are classified via
-   Gemini and written back to garment_cache. A single image's classification failure
-   falls back to "front" rather than failing the whole batch. */
+/* ── Generated rear view - the single-image fallback ────────────────────────────
+   Most PDPs ship one photo: the front. There is no rear reference to swap to, so the
+   fitting room's canCombineViews() is false, AI Auto never arms, and turning around
+   leaves Lucy inferring a rear from a front reference frame-by-frame - which is what
+   the shopper sees as an empty/print-less back.
+
+   This synthesises the missing asset ONCE, from the front photo, and returns it as a
+   data: URL. That shape is deliberate: fitting-room/app.js's garmentBlobCached()
+   already decodes data:/blob: locally (no /api/img-proxy hop, no CDN round trip, no
+   storage bucket to provision), and garmentImageRef() passes them through verbatim.
+   Downstream nothing else changes - the generated rear is a distinct URL, so
+   canCombineViews() flips true and the OrientationWatcher arms exactly as it does for
+   a real rear photo.
+
+   Guard rails:
+     • Opt-in per request (synthesize_back), and the widget only asks when its DOM
+       scrape found no rear photo - a real back is never overridden by a generated one.
+     • PEAR_SYNTH_BACK=0 kills it globally without a redeploy of the widget.
+     • Memoised per front URL for the process lifetime, so a hot product costs one
+       generation, not one per shopper.
+     • The client still validates it: preloadGarmentAssets() decodes the blob and runs
+       bitmapLooksFlat() on it, so a degenerate generation is rejected and the run
+       proceeds front-only rather than going live with a blank rear. */
+const GEMINI_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image";
+const SYNTH_BACK_ENABLED = process.env.PEAR_SYNTH_BACK !== "0";
+const synthBackCache = new Map();   // frontUrl → Promise<dataUrl|null>
+const SYNTH_CACHE_MAX = 100;
+
+const SYNTH_BACK_PROMPT =
+  "Generate the BACK view of the garment shown in this product photograph.\n\n" +
+  "Reproduce the same garment, same cut, same fabric, same colour and the same lighting and " +
+  "background style as the reference, photographed from directly behind at the same distance " +
+  "and framing - a matching product shot of the reverse side.\n\n" +
+  "Rules:\n" +
+  "- Keep the silhouette, proportions, sleeve length, hem length and fabric texture identical.\n" +
+  "- Render the rear construction the garment would actually have: centre-back seam or yoke, " +
+  "the rear neckline and the back of the collar, rear hemline, and back darts or vents where the cut implies them.\n" +
+  "- Do NOT copy front-only features onto the back: no buttons, no front placket, no zipper, " +
+  "no chest pocket, no front graphic, no front lettering.\n" +
+  "- If the front carries a print or logo, the back is PLAIN in that garment's fabric and colour " +
+  "unless the cut clearly implies a back panel print. Never mirror the front graphic.\n" +
+  "- No text, watermarks, captions or annotations anywhere in the image.\n" +
+  "- Output a single photorealistic image of the garment's back, nothing else.";
+
+async function synthesizeBackView(frontUrl) {
+  if (!SYNTH_BACK_ENABLED || !GEMINI_API_KEY || !frontUrl) return null;
+  if (synthBackCache.has(frontUrl)) return synthBackCache.get(frontUrl);
+
+  const job = (async () => {
+    try {
+      const { base64, mimeType } = await fetchImageAsBase64(frontUrl.replace(/^http:\/\//, "https://"));
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: SYNTH_BACK_PROMPT }, { inline_data: { mime_type: mimeType, data: base64 } }] }],
+          generationConfig: { temperature: 0.2 },
+        }),
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        console.warn(`[synth-back] ${GEMINI_IMAGE_MODEL} HTTP ${resp.status}: ${text.slice(0, 200)}`);
+        return null;
+      }
+      const data = await resp.json();
+      const parts = data?.candidates?.[0]?.content?.parts || [];
+      const imagePart = parts.find((p) => p?.inline_data?.data || p?.inlineData?.data);
+      const inline = imagePart?.inline_data || imagePart?.inlineData;
+      if (!inline?.data) {
+        console.warn("[synth-back] no image part in response for", frontUrl.slice(0, 120));
+        return null;
+      }
+      const mime = inline.mime_type || inline.mimeType || "image/png";
+      console.log(`[synth-back] ✓ generated rear view (${Math.round(inline.data.length * 0.75 / 1024)} KB, ${mime}) for ${frontUrl.slice(0, 120)}`);
+      return `data:${mime};base64,${inline.data}`;
+    } catch (err) {
+      console.warn("[synth-back] failed:", err?.message || err);
+      return null;
+    }
+  })();
+
+  // Never cache a failure - a transient error must not disable the fallback for the
+  // lifetime of the process.
+  job.then((r) => { if (!r) synthBackCache.delete(frontUrl); });
+  if (synthBackCache.size >= SYNTH_CACHE_MAX) synthBackCache.delete(synthBackCache.keys().next().value);
+  synthBackCache.set(frontUrl, job);
+  return job;
+}
+
+/* Resolve the pair the widget/fitting room actually consume, from every signal
+   available, highest-trust first. Returns the pair plus `back_source`, which is what
+   makes a blank back diagnosable from one log line instead of a Supabase dig:
+     dom        - the storefront's markup named the rear photo
+     classifier - Gemini identified a rear photo in the gallery
+     synthetic  - no rear photo existed; one was generated from the front
+     none       - no rear reference at all; the room runs front-only (graceful)
+   Note what is NOT here: "the second gallery image". Positional guessing is the
+   documented root cause of the print-less back - it hands a FRONT photo to the live
+   session labelled "back", and the model then suppresses the graphic it can see. */
+function resolveGarmentViews({ images, records, scrapedFront, scrapedBack }) {
+  const front =
+    images.find((u, i) => records[i]?.view === "front") ||
+    scrapedFront ||
+    images[0];
+
+  if (scrapedBack) return { front, back: scrapedBack, back_source: "dom" };
+
+  const classified = images.find((u, i) => records[i]?.view === "back" && u !== front);
+  if (classified) return { front, back: classified, back_source: "classifier" };
+
+  return { front, back: "", back_source: "none" };
+}
+
+/* POST /api/classify-images
+   Request (all fields optional except `images`):
+     { images: string[],            // the scraped gallery, DOM order
+       front_image_url?: string,    // the widget's own scraped front
+       back_image_url?:  string,    // a rear photo the DOM positively identified
+       synthesize_back?: boolean,   // generate a rear when none was found
+       page_url?: string, store_key?: string }   // diagnostics only
+   Response:
+     { results: ("front"|"back")[],   // one per input URL, in order (legacy contract)
+       front_image_url, back_image_url, back_source, uncertain_count }
+   Cache-first; uncached images are classified via Gemini and written back to
+   garment_cache with their provenance. A single image's classification failure is
+   recorded as a FALLBACK (never cached as a verdict) rather than failing the batch. */
 app.post("/api/classify-images", classifyLimiter, async (req, res) => {
   console.log('[classify] Received images:', req.body.images);
   // Belt-and-suspenders alongside the PUBLIC_API_PATHS bypass in the shared /api
@@ -1300,26 +1553,87 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     return res.status(503).json({ error: "gemini_unconfigured", message: "GEMINI_API_KEY not set." });
   }
 
+  const scrapedFront = typeof req.body?.front_image_url === "string" ? req.body.front_image_url : "";
+  const scrapedBack  = typeof req.body?.back_image_url === "string" ? req.body.back_image_url : "";
+  const wantSynth    = req.body?.synthesize_back === true;
+
   const uniqueUrls = [...new Map(
       images.map(url => [url.split('?')[0], url])
   ).values()];
 
-  const results = [];
+  /* One record per URL. `view` drives resolution; `source` records HOW the value was
+     arrived at, so a "front" that is really a throttled request is never mistaken for
+     a verdict - the specific failure mode that makes a real rear photo disappear. */
+  const records = [];
+  let rateLimited = 0;
   for (const url of uniqueUrls) {
+    // A rear photo the storefront's own markup named needs no model call.
+    if (scrapedBack && url === scrapedBack) {
+      records.push({ view: "back", confidence: 1, source: "dom_hint", cue: "storefront markup" });
+      continue;
+    }
     try {
-      let classification = await getCachedClassification(url);
-      if (!classification) {
-        classification = await classifyFrontBack(url);
-        await saveClassification(url, classification);
-        await new Promise((r) => setTimeout(r, 1100)); // stay under Gemini's 60 RPM
+      const cached = await getCachedClassificationDetailed(url);
+      if (cached) {
+        records.push({
+          view: cached.classification,
+          confidence: Number.isFinite(cached.confidence) ? cached.confidence : null,
+          source: cached.source || "legacy",
+          cue: cached.cue || "",
+          cached: true,
+        });
+        continue;
       }
-      results.push(classification);
+      const rec = await classifyFrontBackDetailed(url);
+      // Persist the model's own verdict, `uncertain` included - collapsing it to
+      // "front" in the cache is what made an ambiguous rear photo permanently
+      // invisible to every later visitor. The CHECK constraint in v5 only allows
+      // front|back, so an uncertain row is stored as front and flagged via source.
+      await saveClassification(
+        url,
+        rec.view === "back" ? "back" : "front",
+        { confidence: rec.confidence, source: rec.view === "uncertain" ? "uncertain" : "gemini", cue: rec.cue }
+      );
+      records.push({ ...rec, source: rec.view === "uncertain" ? "uncertain" : "gemini" });
+      await new Promise((r) => setTimeout(r, 1100)); // stay under Gemini's 60 RPM
     } catch (err) {
-      console.error(`[classify-images] failed for ${url}:`, err?.message || err);
-      results.push("front");
+      if (err?.rateLimited) rateLimited++;
+      console.error(`[classify-images] ${err?.rateLimited ? "RATE LIMITED" : "failed"} for ${url}:`, err?.message || err);
+      // NOT cached, and explicitly marked a fallback - this is a default, not a verdict.
+      records.push({ view: "uncertain", confidence: 0, source: "fallback", cue: err?.message || "error" });
     }
   }
-  res.json({ results });
+
+  const views = resolveGarmentViews({ images: uniqueUrls, records, scrapedFront, scrapedBack });
+
+  /* Single-image fallback: no rear photo anywhere in the gallery → generate one from
+     the front so the shopper still gets a real rear reference when they turn around
+     (see synthesizeBackView). Opt-in per request; never replaces a real back. */
+  if (!views.back && wantSynth && views.front) {
+    const synth = await synthesizeBackView(views.front);
+    if (synth) { views.back = synth; views.back_source = "synthetic"; }
+  }
+
+  const uncertainCount = records.filter((r) => r.view === "uncertain").length;
+  console.log(
+    `[classify-images] ${uniqueUrls.length} image(s) · back_source=${views.back_source} · ` +
+    `uncertain=${uncertainCount}${rateLimited ? ` · rate-limited=${rateLimited}` : ""}` +
+    (req.body?.page_url ? ` · ${String(req.body.page_url).slice(0, 120)}` : "")
+  );
+  if (views.back_source === "none") {
+    console.warn("[classify-images] NO BACK VIEW resolved - the try-on will run front-only. " +
+      `front=${String(views.front).slice(0, 120)}`);
+  }
+
+  res.json({
+    // Legacy contract: front|back only, one per input URL, in order. `uncertain`
+    // collapses to "front" HERE, at the boundary, so older widget builds are unaffected.
+    results: records.map((r) => (r.view === "back" ? "back" : "front")),
+    front_image_url: views.front,
+    back_image_url: views.back,
+    back_source: views.back_source,
+    uncertain_count: uncertainCount,
+  });
 });
 
 /* POST /api/store-catalog - { domain, type } → { items: [{ image_url, classification }] }

@@ -753,7 +753,7 @@ function parseHandoff() {
   // through the normal applyGarment → rtClient.set() pipeline. custom:true makes
   // buildCustomPrompt() point the model at the reference image itself instead of
   // a catalog color/subType we don't have.
-  const widgetUrl = q.get("garment_url");
+  const widgetUrl = q.get("garment_url") || q.get("front_image_url");
   if (widgetUrl) {
     // Real-store session marker: "Complete the Look" must never recommend the
     // hardcoded demo PEAR_CATALOG when the fitting room is embedded on an actual
@@ -796,7 +796,9 @@ function parseHandoff() {
       // A real, DISTINCT back is exactly what makes canCombineViews() true, which is what
       // flips renderPerspectiveSelector() into AI Auto automatically. When neither
       // exists the item stays single-view (front image + prompt steering) — never blocked.
-      imgBack: q.get("garment_url_back") || q.get("imgBack") || galleryBack,
+      // `back_image_url` is the v2 spelling pear-widget.js now sends alongside the
+      // original name; both carry the same value, so either build of the widget works.
+      imgBack: q.get("garment_url_back") || q.get("back_image_url") || q.get("imgBack") || galleryBack,
       // Opt-in strict gate: the widget forwards ?require_both_views=1 when the embed
       // sets data-pear-require-both-views. Hard-blocks go-live unless a real back
       // image arrived (custom garments are otherwise ungated - see liveBlockReason).
@@ -811,9 +813,10 @@ function parseHandoff() {
     // the three sources won, so a blank back can be traced to its origin immediately.
     console.log("[PEAR] parseHandoff() - back-image resolution:", {
       garment_url_back: q.get("garment_url_back") || "(absent)",
+      back_image_url:   q.get("back_image_url") || "(absent)",
       imgBack_param:    q.get("imgBack") || "(absent)",
       galleryBack:      galleryBack || "(absent)",
-      resolved_imgBack: result.imgBack || "(NONE - back view will be unavailable)",
+      resolved_imgBack: abbrevImg(result.imgBack) || "(NONE - back view will be unavailable)",
       distinct_from_front: !!(result.imgBack && result.imgBack !== result.img),
     });
     if (!result.imgBack) {
@@ -1193,12 +1196,18 @@ window.addEventListener("message", (e) => {
   // - so the model suppressed the graphic it could actually see. No fallback here
   // anymore; resolveFrontBack() in pear-widget.js is the single source of truth.
   activeItem.imgBack = back;
+  /* Provenance of that back, straight from /api/classify-images (dom | classifier |
+     synthetic | none). Purely diagnostic - a generated rear is treated exactly like a
+     photographed one downstream, because by the time it gets here it IS a real,
+     distinct image asset that preloadGarmentAssets() will validate like any other. */
+  activeItem.backSource = e.data.garment_back_source || "unknown";
   // currentAngle is deliberately NOT set here: renderPerspectiveSelector() re-derives
   // it (AI Auto when the corrected pair qualifies, else front) with no user input.
   renderActiveGarment();
   renderPerspectiveSelector();
   console.log("[PEAR] PEAR_UPDATE_GARMENT applied - front:", abbrevImg(activeItem.img),
-    "| back:", abbrevImg(activeItem.imgBack) || "(none)", "| mode:", currentAngle);
+    "| back:", abbrevImg(activeItem.imgBack) || "(none)",
+    "| back source:", activeItem.backSource, "| mode:", currentAngle);
 
   /* Race guard (FIX 4). The widget opens this room immediately on a DOM-order guess
      and only posts the classifier's real front/back 1-7s later, so the corrected back

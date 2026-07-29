@@ -177,10 +177,24 @@ async function getCachedClassification(imageUrl) {
   return data ? data.classification : null;
 }
 
-async function saveClassification(imageUrl, classification) {
-  const { error } = await supabase
-    .from("garment_cache")
-    .upsert([{ image_url: imageUrl, classification }], { onConflict: "image_url" });
+/* Writes the verdict WITH its provenance (see archive/supabase_setup_v8.sql for what
+   each `source` value means and the diagnostic queries it unlocks). Degrades to the
+   V5 column set when that migration hasn't been applied yet, so this scanner is safe
+   to deploy before the SQL runs. */
+async function saveClassification(imageUrl, classification, meta = {}) {
+  const base = { image_url: imageUrl, classification };
+  const enriched = {
+    ...base,
+    confidence: Number.isFinite(meta.confidence) ? meta.confidence : null,
+    source: meta.source || "gemini",
+    cue: meta.cue || null,
+    product_url: meta.productUrl || null,
+  };
+  let { error } = await supabase.from("garment_cache").upsert([enriched], { onConflict: "image_url" });
+  if (error && /column .* does not exist|Could not find the/i.test(error.message || "")) {
+    console.warn("  ⚠ garment_cache V8 columns absent - run archive/supabase_setup_v8.sql");
+    ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));
+  }
   if (error) console.warn(`  ⚠ garment_cache write failed: ${error.message}`);
 }
 
@@ -193,57 +207,137 @@ async function fetchImageAsBase64(imageUrl) {
   return buffer.toString("base64");
 }
 
+/* ── Strict front/back system prompt ────────────────────────────────────────────
+   MUST STAY IN LOCKSTEP with FRONT_BACK_SYSTEM_PROMPT in server.js. The scanner is
+   a standalone package (own package.json, deployed separately to Railway) so it
+   cannot import from the main server - but both write to the SAME garment_cache
+   table, so a drift between the two prompts means the crawl and the live widget
+   disagree about which photo is the back of the same product.
+
+   The prompt this replaces ended with "answer with exactly one word: front or
+   back" and no guidance at all, so every ambiguous rear shot - angled, cropped,
+   lifestyle - resolved to whichever word the model reached for first. See
+   archive/BACK-VIEW-DIAGNOSTICS.md §2 for why that reads downstream as a garment
+   with no back view. */
+const FRONT_BACK_SYSTEM_PROMPT = `You are a garment-orientation classifier for a virtual try-on pipeline. You decide which SIDE of a garment a product photograph shows.
+
+Judge the GARMENT, not the photo's role in the gallery. Never reason about whether an image "looks like the main product shot" - primary/secondary ordering is a merchandising choice and carries no information about orientation.
+
+If a person is wearing the garment, their body orientation is the strongest signal available:
+- Face, eyes or front torso visible toward the camera -> the garment's FRONT.
+- Back of the head, nape of the neck, or shoulder blades toward the camera -> the garment's BACK.
+
+DECISIVE FRONT cues (each appears only on the front):
+- Buttons, button placket, full-length zipper closure, snaps, tie closure
+- Chest pocket, breast logo, front graphic or lettering read the right way round
+- V-neck, scoop or crew neckline seen as an open curve (the neck opening faces you)
+- Front fly, coin pocket, belt loops seen with the fly
+- Bra cups, front cutouts, wrap-front overlap
+
+DECISIVE BACK cues (each appears only on the back):
+- Centre-back seam running vertically down the panel
+- Back yoke (a horizontal seam across the upper back)
+- Rear neckline as a shallow, closed curve with the collar standing away from you
+- Sewn-in neck label / size tag visible on the inside of the rear collar
+- Back graphic, player name/number, spine lettering
+- Rear pockets on trousers, back darts, a back vent on a jacket or coat
+- Back zipper on a dress (short, upper-centre) or a rear keyhole/cutout
+
+TRICKY CASES - follow these exactly:
+- Neck label visible = BACK. A sewn label sits at the rear collar; this cue outranks a partially visible neckline.
+- Side or 3/4 profile: decide by which cues you can actually SEE. If decisive cues from one side are visible, answer that side. If neither is legible, answer "uncertain".
+- Flat-lay / packshot with no model: use the seam and closure cues above.
+- Close-up detail / fabric macro / accessory-only shot with no orientation cue: answer "uncertain".
+- Folded garment, hanger shot from the side, or a photo where the garment is mostly occluded: answer "uncertain".
+- Do NOT guess. "uncertain" is a correct, useful answer; a wrong "front" makes a real rear photo unusable, and a wrong "back" makes the try-on render the wrong side.
+
+Report confidence honestly:
+- 0.9-1.0  one or more decisive cues, clearly legible
+- 0.7-0.89 one decisive cue, partially occluded or low resolution
+- below 0.7 inference from weak cues only -> you must answer "uncertain"
+
+Respond ONLY with JSON matching this schema:
+{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>"}`;
+
+/** @returns {Promise<{view:"front"|"back"|"uncertain", confidence:number, cue:string}>} */
 async function classifyFrontBack(imageUrl) {
   const base64 = await fetchImageAsBase64(imageUrl);
   const resp = await fetch(GEMINI_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      systemInstruction: { parts: [{ text: FRONT_BACK_SYSTEM_PROMPT }] },
       contents: [
         {
           role: "user",
           parts: [
             { inline_data: { mime_type: "image/jpeg", data: base64 } },
-            {
-              text:
-                "Look at this clothing/garment image carefully. Ignore any model or person. Focus only on the garment itself. Is the GARMENT showing its front side or its back side? Answer with exactly one word: front or back",
-            },
+            { text: "Classify which side of the garment this photograph shows." },
           ],
         },
       ],
+      // temperature 0 + a response schema: the crawl and the live widget must reach
+      // the same verdict for the same photo, and JSON removes the old
+      // answer.includes("back") trap (which also matched "not the back").
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: "OBJECT",
+          properties: {
+            view:       { type: "STRING", enum: ["front", "back", "uncertain"] },
+            confidence: { type: "NUMBER" },
+            cue:        { type: "STRING" },
+          },
+          required: ["view", "confidence"],
+        },
+      },
     }),
   });
-  console.log('Gemini status:', resp.status);
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`Gemini ${resp.status}: ${text.slice(0, 200)}`);
+    const err = new Error(`Gemini ${resp.status}: ${text.slice(0, 200)}`);
+    err.status = resp.status;
+    err.rateLimited = resp.status === 429;
+    throw err;
   }
   const data = await resp.json();
-  console.log('Gemini raw:', JSON.stringify(data));
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  const answer = text.trim().toLowerCase();
-  return answer.includes("back") ? "back" : "front";
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { view: "uncertain", confidence: 0, cue: "unparseable response" };
+  }
+  const view = ["front", "back", "uncertain"].includes(parsed?.view) ? parsed.view : "uncertain";
+  const confidence = Number.isFinite(parsed?.confidence) ? Math.max(0, Math.min(1, parsed.confidence)) : 0;
+  return { view, confidence, cue: typeof parsed?.cue === "string" ? parsed.cue.slice(0, 120) : "" };
 }
 
-/* Gemini's free tier is 15 requests/minute - even the 5s inter-request delay
-   below can trip a 429 occasionally. On a 429, wait 60s and retry once; if
-   still rate-limited (or fails for any other reason), skip the image and
-   default to "front" rather than blocking the scan. */
+/* Gemini's free tier is 15 requests/minute - even the 8s inter-request delay
+   below can trip a 429 occasionally. On a 429, wait 60s and retry once.
+
+   THE CACHE-POISONING FIX: this used to `return "front"` on exhaustion, and the
+   caller then WROTE that to garment_cache - permanently, and indistinguishably
+   from a real verdict. Every subsequent scan and every live widget call read that
+   row as "this photo is the front", so a genuine rear photo throttled out during
+   one crawl became invisible to the whole product forever. The failure is now
+   returned as a distinct `fallback` record which the caller refuses to cache. */
 async function classifyWithRetry(imageUrl, retries = 2) {
   for (let i = 0; i < retries; i++) {
     try {
-      const result = await classifyFrontBack(imageUrl);
-      return result;
+      return await classifyFrontBack(imageUrl);
     } catch (e) {
-      if (e.message.includes("429") && i < retries - 1) {
+      if (e.rateLimited && i < retries - 1) {
         console.log("Rate limited - waiting 60s...");
         await sleep(60000);
       } else {
-        return "front";
+        console.warn(`  ⚠ classification ${e.rateLimited ? "RATE LIMITED" : "failed"} - not cached: ${e.message}`);
+        return { view: "uncertain", confidence: 0, cue: e.message.slice(0, 120), fallback: true };
       }
     }
   }
-  return "front";
+  return { view: "uncertain", confidence: 0, cue: "retries exhausted", fallback: true };
 }
 
 /* ── Shopify JSON catalog ─────────────────────────────────────────────────────
@@ -271,7 +365,14 @@ async function scanShopify(baseUrl) {
     for (const product of data.products) {
       for (const image of product.images || []) {
         if (image.src) {
-          allImages.push({ url: image.src, productTitle: product.title });
+          allImages.push({
+            url: image.src,
+            productTitle: product.title,
+            // Groups a product's photos in garment_cache so "which products have
+            // ZERO back images" is a one-query answer (D1 in supabase_setup_v8.sql)
+            // instead of a regex over CDN filenames.
+            productUrl: product.handle ? `${baseUrl}/products/${product.handle}` : null,
+          });
         }
       }
     }
@@ -286,15 +387,32 @@ async function scanShopify(baseUrl) {
 
 /* ── classification tally (shared by both crawl paths) ──────────────────── */
 
-async function classifyAndTally(imageUrl, index, counters, total) {
+async function classifyAndTally(imageUrl, index, counters, total, productUrl) {
   try {
     let classification = await getCachedClassification(imageUrl);
     let cached = !!classification;
 
     if (!classification) {
       console.log(`Classifying image ${index + 1}/${total}...`);
-      classification = await classifyWithRetry(imageUrl);
-      await saveClassification(imageUrl, classification);
+      const rec = await classifyWithRetry(imageUrl);
+      // A throttled/failed call is a DEFAULT, not a verdict - counted as skipped and
+      // deliberately NOT cached, so the next scan retries it instead of inheriting a
+      // fabricated "front" forever (see classifyWithRetry's comment).
+      if (rec.fallback) {
+        counters.total++;
+        counters.skipped++;
+        console.log(`Image ${index + 1}: SKIPPED (not cached - will retry next scan)`);
+        await sleep(GEMINI_RATE_LIMIT_MS);
+        return;
+      }
+      classification = rec.view === "back" ? "back" : "front";
+      if (rec.view === "uncertain") counters.uncertain++;
+      await saveClassification(imageUrl, classification, {
+        confidence: rec.confidence,
+        source: rec.view === "uncertain" ? "uncertain" : "gemini",
+        cue: rec.cue,
+        productUrl,
+      });
       await sleep(GEMINI_RATE_LIMIT_MS);
     }
 
@@ -351,7 +469,12 @@ async function scanHtml(homeHtml, baseUrl) {
 async function main() {
   console.log(`Scanning store: ${storeUrl}\n`);
 
-  const counters = { total: 0, front: 0, back: 0, cached: 0 };
+  const counters = { total: 0, front: 0, back: 0, cached: 0, uncertain: 0, skipped: 0 };
+  /* image URL → the product page it belongs to. Populated on the Shopify path (the
+     catalog API hands us the product handle); the HTML-scrape path has no reliable
+     product grouping, so those rows keep product_url NULL and fall back to the
+     CDN-id grouping in D1b. */
+  const productUrlByImage = new Map();
   const homeHtml = await fetchHtml(storeUrl);
   const isShopify = homeHtml.includes("Shopify") || homeHtml.includes("shopify");
 
@@ -373,6 +496,7 @@ async function main() {
       if (isExcludedSrc(abs) || seen.has(abs)) continue;
       seen.add(abs);
       images.push(abs);
+      if (item.productUrl) productUrlByImage.set(abs, item.productUrl);
     }
     console.log(`Found ${productCount} products with ${images.length} images`);
   } else {
@@ -384,12 +508,31 @@ async function main() {
 
   console.log("Classifying...");
   for (let j = 0; j < images.length; j++) {
-    await classifyAndTally(images[j], j, counters, images.length);
+    await classifyAndTally(images[j], j, counters, images.length, productUrlByImage.get(images[j]));
   }
 
   console.log(
-    `\nDone. Total: ${counters.total} images | ${counters.front} front | ${counters.back} back | ${counters.cached} cached`
+    `\nDone. Total: ${counters.total} images | ${counters.front} front | ${counters.back} back | ` +
+    `${counters.cached} cached | ${counters.uncertain} uncertain | ${counters.skipped} skipped`
   );
+  /* The number that predicts whether the live widget can render a back view at all.
+     A crawl that finds almost no backs means the store's rear photos are not being
+     collected or not being recognised - see archive/BACK-VIEW-DIAGNOSTICS.md. */
+  const classified = counters.front + counters.back;
+  if (classified) {
+    const pct = ((counters.back / classified) * 100).toFixed(1);
+    console.log(`Back-view coverage: ${pct}% (${counters.back}/${classified})`);
+    if (counters.back / classified < 0.1) {
+      console.warn(
+        "⚠ Back-view coverage under 10% - most products will render front-only.\n" +
+        "  Run the D0/D1 diagnostics in archive/supabase_setup_v8.sql to tell a catalog\n" +
+        "  gap (no rear photos exist) from a classification failure."
+      );
+    }
+  }
+  if (counters.skipped) {
+    console.warn(`⚠ ${counters.skipped} image(s) skipped (throttled/failed) - NOT cached; re-run to classify them.`);
+  }
 }
 
 main().catch((err) => {

@@ -23,6 +23,15 @@
    What it does:
      1. Scans the host page for the product image (og:image → known product-image
         selectors → generic large-image heuristic) and its gallery thumbnails.
+        Every candidate is read through imageUrlsFrom(), which pulls the REAL asset
+        out of lazy-gallery attributes (data-src / srcset / data-zoom-image / a
+        <noscript> copy of the markup) rather than the rendered src alone. That is
+        what makes the BACK photo discoverable at all: on a Shopify slick/swiper or
+        WooCommerce FlexSlider gallery only the active slide has a usable src, so
+        reading src alone found exactly one image - the front - and the rear view
+        never became a candidate. URLs are also upgraded past the CDN's thumbnail
+        size suffix (…_100x100_crop_center.jpg → ….jpg), since a 100px rear photo
+        has no legible print left to warp.
      2. Injects a "VIRTUAL FIT" button ("מדוד וירטואלית" on Hebrew/RTL pages)
         styled like a native Add-to-Cart button, placed right AFTER *every*
         Add-to-Cart button on the page (falls back to just below the product
@@ -39,10 +48,21 @@
         garment_images list (all gallery photos, front-sorted) the fitting room
         derives its front/back pair from - there is no user-facing picker.
 
-   Back-image discovery (opt-in, best-effort): an explicit data-pear-back on the
-   product <img> or its container wins; otherwise the widget falls back to the
-   next distinct product-gallery image. data-pear-front, when present, overrides
-   the scraped front URL.
+   Back-image discovery, highest-trust first:
+     1. an explicit data-pear-back on the product <img> or its container;
+     2. a gallery image that POSITIVELY identifies itself as the rear view - its
+        filename ("…_back.jpg", "…-rear-2.jpg"), its alt text, or its thumbnail
+        label, in English or Hebrew (looksLikeBackImage);
+     3. the server's classifier verdict, applied post-open via PEAR_UPDATE_GARMENT;
+     4. a rear view GENERATED from the front photo, when the product genuinely
+        ships only one image (back_source: "synthetic" - see /api/classify-images).
+   data-pear-front, when present, overrides the scraped front URL.
+
+   Explicitly NOT in that list: "the second gallery photo". Positional guessing is
+   the documented root cause of the print-less back view - on a gallery that is all
+   front-view crops it labels a FRONT photo as the back, and the model then receives
+   "this is the BACK, do NOT render the front" and suppresses the only graphic it
+   can see. No back is claimed without positive evidence.
 
    Self-contained: no globals leak (everything lives in this IIFE), all CSS is
    injected via a single <style class="pear-widget-styles"> tag, and every class
@@ -174,6 +194,10 @@
   /* src substrings that mark an image as decorative, never a garment */
   var EXCLUDE_SRC = ["logo", "icon", "sprite", "placeholder", "blank", "pixel"];
 
+  /* Upper bound on the gallery forwarded to /api/classify-images - see the cap note
+     in collectGalleryImages() for why an unbounded list is a latency problem. */
+  var MAX_GALLERY_IMAGES = 8;
+
   var PRODUCT_IMG_SELECTORS = [
     ".product-image img",
     ".product__media img",
@@ -247,15 +271,210 @@
   /* ── back-image discovery helpers ───────────────────────────────────────────
      A garment's rear photo lets the fitting room warp the Back view from a real
      reference (e.g. a jersey's back print) instead of inferring it from the front.
-     Priority: explicit data-pear-back on the img/container → next distinct product-
-     gallery image. data-pear-front, when set, overrides the scraped front URL. */
+     Priority: explicit data-pear-back on the img/container → a gallery image whose
+     URL/alt POSITIVELY reads as a rear shot. data-pear-front, when set, overrides
+     the scraped front URL.
+
+     Deliberately NOT in that list: "the second gallery image". Positional guessing
+     is the documented root cause of the blank/print-less back view (see
+     resolveFrontBack below) - on a gallery that's entirely front-view crops it hands
+     a FRONT photo to the live session labeled "back", which then reaches Lucy with
+     "do NOT render the front" and suppresses the only graphic it can see. A DOM-side
+     back is only claimed on positive evidence; everything else defers to the
+     server-side classifier. */
   function readAttr(el, name) {
     return (el && el.getAttribute && el.getAttribute(name)) || "";
+  }
+
+  /* ── lazy-gallery URL extraction ──────────────────────────────────────────────
+     THE SCRAPER'S ACTUAL BLIND SPOT. Reading `currentSrc || src` only sees images the
+     browser has already decoded - on the ecommerce galleries this widget targets
+     (Shopify slick/swiper, WooCommerce FlexSlider, every "lazyload" plugin) only the
+     ACTIVE slide has a real src; every off-screen slide - which is where the back
+     photo lives - carries a 1×1 gif, a blurred base64 placeholder, or nothing at all,
+     and holds its true URL in data-src/srcset/<noscript> until it scrolls into view.
+     That is why a product page reliably yielded exactly one image (the front) and the
+     rear view was never even a candidate.
+
+     Order matters: the FIRST usable candidate wins, so explicit full-size attributes
+     (zoom/large) are checked before the rendered src, which is often a thumbnail. */
+  var LAZY_SRC_ATTRS = [
+    "data-zoom-image", "data-zoom-src", "data-large_image", "data-full",
+    "data-image", "data-master", "data-photoswipe-src",
+    "data-src", "data-original", "data-lazy", "data-lazy-src", "data-thumb"
+  ];
+  var LAZY_SRCSET_ATTRS = ["srcset", "data-srcset", "data-lazy-srcset"];
+
+  /* Placeholder pixels/blurs that lazy loaders park in `src` - never a garment. */
+  function isPlaceholderSrc(u) {
+    if (!u) return true;
+    if (/^data:/i.test(u)) return true;                       // inline blur/1×1 gif
+    return /(^|\/)(1x1|blank|spacer|transparent|loading|lazy)[.\-_]/i.test(u);
+  }
+
+  /* Pick the highest-resolution entry out of a srcset ("url 400w, url 1200w" or
+     "url 1x, url 2x"). A bare, descriptor-less single URL is returned as-is. */
+  function largestFromSrcset(value) {
+    if (!value) return "";
+    var parts = value.split(",");
+    var bestUrl = "", bestWeight = -1;
+    for (var i = 0; i < parts.length; i++) {
+      var bits = parts[i].trim().split(/\s+/);
+      if (!bits[0]) continue;
+      var d = bits[1] || "";
+      var weight = 0;
+      if (/w$/i.test(d))      weight = parseFloat(d);
+      else if (/x$/i.test(d)) weight = parseFloat(d) * 1000;   // 2x ranks above any plain width
+      if (weight > bestWeight) { bestWeight = weight; bestUrl = bits[0]; }
+    }
+    return bestUrl;
+  }
+
+  /* Protocol-relative ("//cdn…") and root-relative ("/files/…") srcs are extremely
+     common in lazy attributes; the API and the fitting room both need absolute URLs. */
+  function absolutize(u) {
+    if (!u) return "";
+    try { return new URL(u, d.baseURI || w.location.href).href; } catch (_) { return ""; }
+  }
+
+  /* Storefront CDNs encode the RENDERED size into the filename, so a gallery
+     thumbnail scraped as-is is a 100px image. Handing that to the VTON model as the
+     back reference is its own flavour of "blank back" - there is no print left to
+     read at that size. Rewrite to the original asset:
+       Shopify  shirt_100x100_crop_center.jpg → shirt.jpg  (+ drop ?width=/&height=)
+       WooCommerce  shirt-300x300.jpg         → shirt.jpg
+     The Woo rewrite is restricted to thumbnail-scale dimensions on purpose: a real
+     asset legitimately named "poster-1920x1080.jpg" must not be rewritten into a 404. */
+  function upgradeImageUrl(url) {
+    if (!url || /^data:/i.test(url)) return url;
+    var out = url;
+    // Shopify size suffix, immediately before the extension.
+    out = out.replace(
+      /_(?:pico|icon|thumb|small|compact|medium|large|grande|master|\d{1,4}x(?:\d{1,4})?)(?:_crop_[a-z]+)?(?=\.(?:jpe?g|png|webp|gif)\b)/i,
+      ""
+    );
+    // WooCommerce/WordPress size suffix - thumbnail scale only (both dims ≤ 600).
+    out = out.replace(/-(\d{2,3})x(\d{2,3})(?=\.(?:jpe?g|png|webp|gif)\b)/i, function (m, a, b) {
+      return (parseInt(a, 10) <= 600 && parseInt(b, 10) <= 600) ? "" : m;
+    });
+    // Resize query params (Shopify's newer CDN, Next/image-style loaders).
+    out = out.replace(/([?&])(?:width|height|w|h|size)=\d+(&|$)/gi, "$1").replace(/[?&]+$/, "");
+    return out;
+  }
+
+  /* Every URL an <img>/<source>/<a> element could be hiding, best-first, absolute
+     and resolution-upgraded. */
+  function imageUrlsFrom(el) {
+    var out = [];
+    function push(u) {
+      u = absolutize(u);
+      if (!u || isPlaceholderSrc(u) || isExcludedSrc(u)) return;
+      u = upgradeImageUrl(u);
+      if (out.indexOf(u) === -1) out.push(u);
+    }
+    if (!el || !el.getAttribute) return out;
+    for (var i = 0; i < LAZY_SRC_ATTRS.length; i++) push(readAttr(el, LAZY_SRC_ATTRS[i]));
+    for (var j = 0; j < LAZY_SRCSET_ATTRS.length; j++) push(largestFromSrcset(readAttr(el, LAZY_SRCSET_ATTRS[j])));
+    // The rendered src last: it's the most likely to be a placeholder or a thumbnail.
+    push(el.currentSrc || el.src || "");
+    // <picture><source srcset> siblings - the <img> itself may carry only a fallback.
+    var pic = el.parentElement;
+    if (pic && pic.tagName === "PICTURE") {
+      var sources = pic.querySelectorAll("source");
+      for (var s = 0; s < sources.length; s++) {
+        for (var k = 0; k < LAZY_SRCSET_ATTRS.length; k++) {
+          push(largestFromSrcset(readAttr(sources[s], LAZY_SRCSET_ATTRS[k])));
+        }
+      }
+    }
+    return out;
+  }
+
+  /* The single best URL for an element (first candidate), "" when it has none. */
+  function bestImageUrl(el) {
+    var urls = imageUrlsFrom(el);
+    return urls.length ? urls[0] : "";
+  }
+
+  /* <noscript> gallery fallbacks. Lazy-loading themes ship the REAL <img> markup
+     inside <noscript> for crawlers/JS-off visitors, which makes it the single most
+     reliable source of a full gallery on a page whose slides haven't rendered yet.
+     Its contents are inert text to the parser, so pull the srcs out with a regex
+     rather than querySelector. */
+  function noscriptImageUrls(root) {
+    var out = [];
+    var tags = (root || d).querySelectorAll("noscript");
+    for (var i = 0; i < tags.length && i < 40; i++) {
+      var html = tags[i].textContent || "";
+      if (html.indexOf("<img") === -1) continue;
+      var re = /<img[^>]+?(?:data-src|srcset|src)\s*=\s*["']([^"']+)["']/gi;
+      var m;
+      while ((m = re.exec(html)) !== null) {
+        var u = absolutize(largestFromSrcset(m[1]) || m[1]);
+        if (!u || isPlaceholderSrc(u) || isExcludedSrc(u)) continue;
+        u = upgradeImageUrl(u);
+        if (out.indexOf(u) === -1) out.push(u);
+      }
+    }
+    return out;
+  }
+
+  /* ── positive back-view signals ───────────────────────────────────────────────
+     Storefronts that shoot a rear photo almost always SAY so - in the filename
+     ("…_back.jpg", "…-rear-2.jpg", "…_b.jpg"), in the alt text ("Model wearing …,
+     back view"), or on the thumbnail's own label. These are free, instant and
+     require no Gemini round trip, so they run first and give the widget a real
+     back_image_url to hand over on the very first open.
+     Hebrew: "גב" is matched only when NOT followed by another Hebrew letter, so
+     "גב" (back) hits and "גבוה" (tall) does not. */
+  var BACK_WORD_RE  = /(^|[^a-z0-9])(back|backside|rear|behind)([^a-z0-9]|$)/i;
+  var BACK_FILE_RE  = /[_\-.](b|bk|back|rear)[_\-.]?\d*\.(?:jpe?g|png|webp|gif)\b/i;
+  var BACK_HE_RE    = /(?:גב|אחורי|מאחור)(?![א-ת])/;
+  var FRONT_WORD_RE = /(^|[^a-z0-9])(front|face|frontside)([^a-z0-9]|$)/i;
+
+  /* Only the filename is tested for the English word, never the whole URL: a store
+     hosted under "…/backend/" or a CDN path containing "rearrange" would otherwise
+     mark every single photo as a back view. */
+  function fileNameOf(url) {
+    var path = (url || "").split("?")[0];
+    var slash = path.lastIndexOf("/");
+    return slash === -1 ? path : path.slice(slash + 1);
+  }
+
+  function looksLikeBackImage(url, text) {
+    var file = fileNameOf(url);
+    if (BACK_FILE_RE.test(file)) return true;
+    if (BACK_WORD_RE.test(file) && !FRONT_WORD_RE.test(file)) return true;
+    var t = (text || "").trim();
+    if (!t) return false;
+    if (BACK_HE_RE.test(t)) return true;
+    return BACK_WORD_RE.test(t) && !FRONT_WORD_RE.test(t);
+  }
+
+  /* Text a gallery image carries about itself - alt, title, aria-label, and the
+     thumbnail button/link wrapping it (themes often label the swatch, not the img). */
+  function labelTextFor(el) {
+    if (!el) return "";
+    var bits = [readAttr(el, "alt"), readAttr(el, "title"), readAttr(el, "aria-label")];
+    var p = el.parentElement;
+    for (var depth = 0; depth < 2 && p; depth++) {
+      bits.push(readAttr(p, "title"), readAttr(p, "aria-label"), readAttr(p, "data-alt"));
+      p = p.parentElement;
+    }
+    return bits.join(" ");
   }
 
   /* Normalise for comparison - CDNs vary query params, so match on the path only. */
   function samePhoto(a, b) {
     return (a || "").split("?")[0] === (b || "").split("?")[0];
+  }
+
+  /* Console-safe URL: a server-generated rear view arrives as a data: URL of a few
+     hundred KB, which would flood DevTools if logged raw. */
+  function abbrevUrl(u) {
+    if (!u) return "(none)";
+    if (/^data:/i.test(u)) return "data:… (" + u.length.toLocaleString() + " chars, generated rear view)";
+    return u.length > 120 ? u.slice(0, 120) + "…" : u;
   }
 
   /* Extract a "same product" identifier from a CDN image URL so gallery
@@ -305,24 +524,38 @@
     return input ? input.value : "";
   }
 
-  /* Fall back to the next distinct product-gallery image as an approximate rear
-     reference (best-effort - gallery order is a storefront convention, not a rule). */
+  /* Scan the product gallery for an image that POSITIVELY identifies itself as the
+     rear view (filename / alt / thumbnail label - see looksLikeBackImage). Returns ""
+     when nothing does, which is a meaningful answer: it tells the caller "this DOM
+     has no evidence of a back photo", and the server-side classifier - not a
+     positional guess - decides from there.
+
+     Scans both the thumbnail strip (where a lazy gallery keeps its off-screen slides)
+     and the main product-image selectors, since themes split the two differently. */
   function findGalleryBack(primaryUrl, root) {
     var shopifyId = getShopifyProductId();
     var primaryRegexId = extractProductId(primaryUrl);
-    var sel = (root || d).querySelectorAll(PRODUCT_IMG_SELECTORS);
+    var scope = root || d;
+    var sel = scope.querySelectorAll(THUMB_SELECTORS + ", " + PRODUCT_IMG_SELECTORS);
     for (var i = 0; i < sel.length; i++) {
       var el = sel[i];
       if (el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
       if (!el || el.tagName !== "IMG") continue;
-      var src = el.currentSrc || el.src || "";
-      if (!src || isExcludedSrc(src) || samePhoto(src, primaryUrl)) continue;
-      // Same confirm-don't-veto logic as collectGalleryImages - see its comment.
-      if (!(shopifyId && src.indexOf(shopifyId) !== -1)) {
-        var candId = extractProductId(src);
-        if (primaryRegexId && candId && candId !== primaryRegexId) continue;   // different product - skip
+      var urls = imageUrlsFrom(el);
+      if (!urls.length) continue;
+      var label = labelTextFor(el);
+      for (var u = 0; u < urls.length; u++) {
+        var src = urls[u];
+        if (samePhoto(src, primaryUrl)) continue;
+        if (!looksLikeBackImage(src, label)) continue;
+        // Same confirm-don't-veto logic as collectGalleryImages - see its comment.
+        if (!(shopifyId && src.indexOf(shopifyId) !== -1)) {
+          var candId = extractProductId(src);
+          if (primaryRegexId && candId && candId !== primaryRegexId) continue;   // different product - skip
+        }
+        console.log("[PEAR] back image identified from DOM signals:", src, "| label:", label.trim().slice(0, 80));
+        return src;
       }
-      return src;
     }
     return "";
   }
@@ -374,12 +607,14 @@
     }
 
     /* og:image wins as the garment URL for the page's primary image; an explicit
-       data-pear-back (or data-pear-front override) is captured per image. */
+       data-pear-back (or data-pear-front override) is captured per image. Non-explicit
+       URLs go through imageUrlsFrom() so a lazy <img> resolves to its real, full-size
+       asset instead of a placeholder pixel or a 100px thumbnail. */
     var entries = found.map(function (img, idx) {
       return {
         img: img,
         url: explicitAttr(img, "data-pear-front") ||
-             ((idx === 0 && ogUrl) ? ogUrl : (img.currentSrc || img.src)),
+             ((idx === 0 && ogUrl) ? upgradeImageUrl(absolutize(ogUrl)) : bestImageUrl(img)),
         back: explicitAttr(img, "data-pear-back")
       };
     });
@@ -441,20 +676,43 @@
       urls.push(u);
     }
     add(primaryUrl, true);
-    var imgs = (root || d).querySelectorAll(THUMB_SELECTORS);
+    var scope = root || d;
+    var imgs = scope.querySelectorAll(THUMB_SELECTORS);
     var candidates = [];
     for (var i = 0; i < imgs.length; i++) {
       var el = imgs[i];
       if (el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
       if (!el || el.tagName !== "IMG") continue;
-      var src = el.currentSrc || el.src || "";
-      candidates.push(src);
-      add(src);
+      /* Every URL this element carries, not just the rendered src - on a lazy gallery
+         the off-screen slides (i.e. the back view) have only data-src/srcset. The
+         first candidate is the best one; the rest are added too because a theme can
+         put the full-size asset in one attribute and the only *distinct* photo in
+         another, and de-duplication upstream makes extra candidates harmless. */
+      var urlsFor = imageUrlsFrom(el);
+      for (var u = 0; u < urlsFor.length; u++) {
+        candidates.push(urlsFor[u]);
+        add(urlsFor[u]);
+      }
     }
-    console.log('[PEAR] THUMB_SELECTORS matched', imgs.length, 'element(s) under root:', root || d);
+    /* Last resort for galleries that render NOTHING until interacted with: the
+       theme's own <noscript> copy of the gallery markup. */
+    var ns = noscriptImageUrls(scope);
+    for (var n = 0; n < ns.length; n++) { candidates.push(ns[n]); add(ns[n]); }
+
+    console.log('[PEAR] THUMB_SELECTORS matched', imgs.length, 'element(s) under root:', scope);
     console.log('[PEAR] all candidates before filter:', candidates);
     console.log('[PEAR] rejected by id filter:', rejected);
     console.log('[PEAR] candidates after filter:', urls);
+
+    /* Cap the list. Better lazy-attribute extraction legitimately surfaces 15-30
+       photos on a rich PDP, and /api/classify-images spends ~1.1s per UNCACHED image
+       (Gemini rate limit) - an uncapped gallery turns the post-open correction into a
+       30s wait, long after the shopper has gone live on the DOM-order guess. The
+       front/back pair is always inside the first few gallery photos. */
+    if (urls.length > MAX_GALLERY_IMAGES) {
+      console.log('[PEAR] gallery capped at', MAX_GALLERY_IMAGES, 'of', urls.length, 'images');
+      urls = urls.slice(0, MAX_GALLERY_IMAGES);
+    }
     return urls;
   }
 
@@ -566,19 +824,46 @@
      of assuming images[0] is the front and images[1] the back. Cache-backed
      server-side, so repeat visits to the same product are instant. On any
      failure - network, timeout, missing Gemini key - the caller falls back to
-     DOM order. */
-  function classifyImages(urls) {
+     DOM order.
+
+     PAYLOAD (v2 - back-view aware). Alongside the raw `images` gallery the widget now
+     sends what its own DOM scrape concluded:
+       front_image_url  - the scraped front (og:image / primary product image)
+       back_image_url   - a rear photo the DOM POSITIVELY identified (filename/alt),
+                          or "" when the page gave no such evidence
+       synthesize_back  - true only in that "" case: permission for the server to
+                          generate an inferred rear from the front (see /api/classify-
+                          images' back-view resolution block). Never sent when a real
+                          back exists, so a genuine rear photo is never overridden by
+                          a generated one, and no generation is billed for a product
+                          that already ships two views.
+     RESPONSE: the legacy { results } array plus a resolved
+     { front_image_url, back_image_url, back_source } pair. Older widget builds ignore
+     the new fields; this build prefers them and falls back to resolveFrontBack(). */
+  function classifyImages(urls, hint) {
     var endpoint = PEAR_BASE + "/api/classify-images";
+    var scrapedBack = (hint && hint.back) || "";
     return fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ images: urls })
+      body: JSON.stringify({
+        images: urls,
+        front_image_url: (hint && hint.front) || urls[0] || "",
+        back_image_url: scrapedBack,
+        synthesize_back: !scrapedBack,
+        page_url: w.location ? w.location.href : "",
+        store_key: STORE_KEY || undefined
+      })
     }).then(function (r) {
       if (!r.ok) throw new Error("classify-images HTTP " + r.status);
       return r.json();
     }).then(function (data) {
-      var results = (data && data.results) || [];
-      return results;
+      return {
+        results: (data && data.results) || [],
+        front: (data && data.front_image_url) || "",
+        back: (data && data.back_image_url) || "",
+        backSource: (data && data.back_source) || "none"
+      };
     });
   }
 
@@ -637,11 +922,22 @@
   function openModal(garment) {
     closeModal(); // never stack two modals
 
+    /* A generated rear view is a data: URL - far past any browser's URL length limit,
+       and it would be re-encoded into the iframe src for nothing. Those only ever
+       travel via the PEAR_UPDATE_GARMENT postMessage correction (structured clone,
+       no length limit); the query string carries http(s) URLs only. */
+    var backParam = (garment.back && !/^data:/i.test(garment.back)) ? garment.back : "";
+
     var params =
       "garment_url=" + encodeURIComponent(garment.url) +
       "&garment_type=" + encodeURIComponent(garment.type) +
       "&garment_name=" + encodeURIComponent(garment.name) +
-      (garment.back ? "&garment_url_back=" + encodeURIComponent(garment.back) : "") +
+      (backParam ? "&garment_url_back=" + encodeURIComponent(backParam) : "") +
+      /* Explicit v2 aliases - same values, named the way the API/product schema names
+         them. parseHandoff() accepts either spelling, so an older fitting-room build
+         still reads garment_url/garment_url_back above. */
+      "&front_image_url=" + encodeURIComponent(garment.url) +
+      (backParam ? "&back_image_url=" + encodeURIComponent(backParam) : "") +
       /* All gallery photos (each encoded, comma-joined) → the fitting room's
          automatic front/back pairing. Sent only when there's more than one distinct image. */
       (garment.images && garment.images.length > 1
@@ -771,7 +1067,7 @@
     var el = root.querySelector && root.querySelector(PRODUCT_IMG_SELECTORS);
     if (el) {
       if (el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
-      if (el && el.tagName === "IMG" && !isExcludedSrc(el.currentSrc || el.src)) return el;
+      if (el && el.tagName === "IMG" && bestImageUrl(el)) return el;
     }
     /* else the largest non-decorative <img> inside this container (collection cards
        rarely use the PDP selectors above, so size is the reliable signal) */
@@ -779,8 +1075,8 @@
     var best = null, bestArea = -1;
     for (var i = 0; i < imgs.length; i++) {
       var im = imgs[i];
-      var src = im.currentSrc || im.src || "";
-      if (!src || isExcludedSrc(src)) continue;
+      var src = bestImageUrl(im);
+      if (!src) continue;
       var area = (im.naturalWidth || im.width || 1) * (im.naturalHeight || im.height || 1);
       if (area > bestArea) { bestArea = area; best = im; }
     }
@@ -811,15 +1107,15 @@
      ONE product and so remains the resolver for collection/grid pages. */
   function resolvePrimaryProductImage() {
     var og = d.querySelector('meta[property="og:image"]');
-    var ogUrl = og && og.content ? og.content : "";
-    if (ogUrl && !isExcludedSrc(ogUrl)) return ogUrl;
+    var ogUrl = og && og.content ? absolutize(og.content) : "";
+    if (ogUrl && !isExcludedSrc(ogUrl)) return upgradeImageUrl(ogUrl);
 
     var el = d.querySelector(PRODUCT_GALLERY_SELECTORS);
     if (el) {
       if (el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
       if (el && el.tagName === "IMG") {
-        var src = el.currentSrc || el.src || "";
-        if (src && !isExcludedSrc(src)) return src;
+        var src = bestImageUrl(el);
+        if (src) return src;
       }
     }
     return "";
@@ -848,7 +1144,7 @@
     for (var depth = 0; depth < 10 && node; depth++) {
       var img = pickProductImageIn(node);
       if (img) {
-        var url = explicitAttr(img, "data-pear-front") || (img.currentSrc || img.src) || "";
+        var url = explicitAttr(img, "data-pear-front") || bestImageUrl(img);
         if (url && !isExcludedSrc(url)) {
           var name = cardNameFor(node, img);
           var cardImages = collectGalleryImages(url, node);
@@ -967,26 +1263,43 @@
            PEAR_UPDATE_GARMENT listener) - the shopper sees the room immediately and
            the front/back swap (if any) lands a moment later without a reconnect. */
         var imgs = (garment.images && garment.images.length) ? garment.images : [garment.url];
-        console.log("[PEAR widget] button click - sending " + imgs.length + " image(s) to classify-images:", imgs);
-        var openedIframe = openModal({ url: imgs[0], type: garment.category, name: garment.name, back: imgs[1], images: imgs, variantId: garment.variantId });
+        /* The instant-open back. ONLY a DOM-identified rear photo (garment.back) is
+           handed over here - never imgs[1]. Opening on the second gallery photo was a
+           positional guess that, on a front-only gallery, labels a FRONT photo as the
+           back and reaches Lucy as "this is the BACK, do NOT render the front" - the
+           exact blank-back failure resolveFrontBack() below was written to stop. With
+           no DOM evidence the room opens front-only and the classifier's verdict (or a
+           generated rear) lands a moment later via PEAR_UPDATE_GARMENT. */
+        var openBack = garment.back && garment.back !== imgs[0] ? garment.back : undefined;
+        console.log("[PEAR widget] button click - " + imgs.length + " image(s) to classify:", imgs,
+          "| DOM-identified back:", openBack || "(none - server will resolve/synthesize)");
+        var openedIframe = openModal({
+          url: imgs[0], type: garment.category, name: garment.name,
+          back: openBack, images: imgs, variantId: garment.variantId
+        });
 
-        classifyImages(imgs).then(function (results) {
+        classifyImages(imgs, { front: imgs[0], back: openBack }).then(function (res) {
+          var results = res.results;
           console.log("[PEAR widget] classify-images results (" + results.length + "):", results);
           var sorted = sortByFrontBack(imgs, results);
-          var resolved = resolveFrontBack(imgs, results);
-          var frontUrl = resolved.front, backUrl = resolved.back;
-          console.log("[PEAR widget] resolved front/back:", resolved);
-          console.log("[PEAR widget] front:", frontUrl);
-          console.log("[PEAR widget] back:", backUrl);
-          /* Only push a correction if the classifier actually disagrees with the DOM-order
-             guess already showing, and only into the SAME modal that triggered this call
-             (the shopper may have closed it, or opened a different product, in the meantime). */
-          if (activeIframe === openedIframe && (resolved.front !== imgs[0] || resolved.back !== imgs[1])) {
+          var local = resolveFrontBack(imgs, results);
+          /* Server-resolved pair wins when present: it folds in the DOM hints, the
+             classifier AND the generated-rear fallback (back_source tells which).
+             Falls back to the local resolution for older/failing server builds. */
+          var frontUrl = res.front || local.front;
+          var backUrl  = res.back  || local.back;
+          console.log("[PEAR widget] resolved front:", frontUrl);
+          console.log("[PEAR widget] resolved back :", abbrevUrl(backUrl), "| source:", res.backSource);
+          /* Only push a correction if this actually changes what the room is showing,
+             and only into the SAME modal that triggered the call (the shopper may have
+             closed it, or opened a different product, in the meantime). */
+          if (activeIframe === openedIframe && (frontUrl !== imgs[0] || backUrl !== openBack)) {
             try {
               openedIframe.contentWindow.postMessage({
                 type: "PEAR_UPDATE_GARMENT",
-                garment_url: resolved.front,
-                garment_back: resolved.back,
+                garment_url: frontUrl,
+                garment_back: backUrl || undefined,
+                garment_back_source: res.backSource,
                 garment_images: sorted
               }, PEAR_BASE);
             } catch (_) {}
