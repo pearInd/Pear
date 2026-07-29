@@ -166,6 +166,15 @@ const I18N = {
   lockedHeadline:            { he: "תודה שניסית<br>את PEAR", en: "Thank you for trying<br>PEAR" },
   lockedHeading:             { he: "המדידה כבר בוצעה", en: "Measurement already completed" },
   lockedSubtitle:            { he: "כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!", en: "You've already completed your virtual fitting in this demo. Thank you!" },
+
+  resultLabelDefault:       { he: "המידה המומלצת עבורך:", en: "Your recommended size:" },
+  resultLabelError:         { he: "שגיאה בנתונים:", en: "Data error:" },
+  sizeResultInvalid:        { he: "נתונים לא הגיוניים", en: "Values out of range" },
+  bestSizeOutOfRange:       { he: "מידה מחוץ לטווח", en: "Size out of range" },
+  resultLabelApprox:        { he: "קירוב מידה מומלץ:", en: "Closest size match:" },
+  errNameRequired:          { he: "נא להזין שם מלא.", en: "Please enter your full name." },
+  errEmailInvalid:          { he: "נא להזין כתובת אימייל תקינה.", en: "Please enter a valid email address." },
+  errGenericRetry:          { he: "נא לבדוק את הפרטים ולנסות שוב.", en: "Please check your details and try again." },
 };
 
 function getActiveLang() {
@@ -174,6 +183,16 @@ function getActiveLang() {
     if (stored) return stored;
   } catch {}
   return window.__PEAR_DEFAULT_LANG__ === "he" ? "he" : "en";
+}
+
+/* Looks up a single dictionary entry for the active language - for strings
+   app.js sets itself at runtime (form validation, result labels) rather than
+   static markup, which the data-i18n/-placeholder/-aria walk above already
+   covers. Falls back to Hebrew if the key or language is ever missing. */
+function t(key) {
+  const entry = I18N[key];
+  if (!entry) return "";
+  return entry[getActiveLang()] || entry.he;
 }
 
 /* Walks every tagged node and swaps in the active language's copy. Re-run on
@@ -775,7 +794,7 @@ function calculateSize() {
 
   resultBox.classList.remove("show", "error-result");
   if (resultActions) resultActions.classList.remove("is-ready");   // collapse the tray
-  resultLabel.innerText = "המידה המומלצת עבורך:";
+  resultLabel.innerText = t("resultLabelDefault");
   nextBtn.disabled = true;
   currentUserSize = null;
   updateProgress();
@@ -783,14 +802,14 @@ function calculateSize() {
   if (!height || !weight) return;
 
   if (height > 240 || height < 130 || weight > 220 || weight < 35) {
-    resultLabel.innerText = "שגיאה בנתונים:";
-    sizeResult.innerText = "נתונים לא הגיוניים";
+    resultLabel.innerText = t("resultLabelError");
+    sizeResult.innerText = t("sizeResultInvalid");
     resultBox.classList.add("show", "error-result");
     if (resultActions) resultActions.classList.add("is-ready");
     return;
   }
 
-  let bestSize = "מידה מחוץ לטווח", minPenalty = Infinity;
+  let bestSize = t("bestSizeOutOfRange"), minPenalty = Infinity;
   const MAX_ALLOWED_PENALTY = 35;
 
   ZARA_SIZE_CHART.forEach((row) => {
@@ -809,7 +828,7 @@ function calculateSize() {
     // Measurements don't match any chart row exactly, but we still let the user
     // proceed - the fitting room works without a size recommendation, it just
     // won't show a size badge. bestSize still holds the closest row found.
-    resultLabel.innerText = "קירוב מידה מומלץ:";
+    resultLabel.innerText = t("resultLabelApprox");
     sizeResult.innerText = bestSize;
     resultBox.classList.add("show");
     if (resultActions) resultActions.classList.add("is-ready");
@@ -4509,7 +4528,7 @@ async function finishRegistration(deviceId, name, email) {
 
     if (res.status === 409 || res.status === 400 || res.status === 422) {
       const errEl = $("otp-error");
-      const msg = (data && (data.message || data.error)) || "נא לבדוק את הפרטים ולנסות שוב.";
+      const msg = (data && (data.message || data.error)) || t("errGenericRetry");
       if (errEl) { errEl.textContent = msg; errEl.hidden = false; }
       return;
     }
@@ -4642,8 +4661,8 @@ async function submitIdentity() {
 
   const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.hidden = false; } };
 
-  if (name.length < 2)  return showErr("נא להזין שם מלא.");
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showErr("נא להזין כתובת אימייל תקינה.");
+  if (name.length < 2)  return showErr(t("errNameRequired"));
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showErr(t("errEmailInvalid"));
   if (errEl) errEl.hidden = true;
 
   // Reuse the existing device id when re-registering (404 recovery); otherwise mint one.
