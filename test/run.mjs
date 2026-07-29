@@ -34,6 +34,7 @@ const SUITES = [
   ["view-resolution", "view-resolution.test.mjs"],
   ["composite", "composite.test.mjs"],
   ["widget-dom", "widget-dom.test.mjs"],
+  ["widget-combined", "widget-combined.test.mjs"],
 ];
 
 let failed = 0;

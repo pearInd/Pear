@@ -786,6 +786,183 @@
     return urls;
   }
 
+  /* ── Shopify product JSON - the authoritative gallery ─────────────────────────
+     Every Shopify storefront (FOX included) serves the current product as JSON at
+     <product-path>.js. It lists EVERY image at full resolution, in catalog order,
+     with no lazy-loading, no placeholder pixels and no thumbnail suffixes - i.e. it
+     sidesteps the entire class of DOM-scraping problems the selectors below exist to
+     work around. Same-origin, so a console-injected widget can read it directly.
+
+     Used as an ADDITIVE source, not a replacement: it only exists on Shopify product
+     pages, and the DOM scrape still covers everything else (and quick-shop grids where
+     the page path is not the product's). Fetched once at boot so a click never waits. */
+  var _shopifyGallery = null;      // string[] once resolved, [] when unavailable
+
+  function loadShopifyProductJSON() {
+    if (_shopifyGallery) return Promise.resolve(_shopifyGallery);
+    var path = w.location.pathname.split("?")[0].replace(/\/$/, "");
+    if (path.indexOf("/products/") === -1) { _shopifyGallery = []; return Promise.resolve(_shopifyGallery); }
+    return fetch(path + ".js", { credentials: "same-origin" })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (p) {
+        var imgs = [];
+        var list = (p && p.images) || [];
+        for (var i = 0; i < list.length; i++) {
+          var u = absolutize(typeof list[i] === "string" ? list[i] : (list[i] && list[i].src));
+          if (u && !isExcludedSrc(u)) imgs.push(upgradeImageUrl(u));
+        }
+        _shopifyGallery = imgs;
+        console.log("[PEAR] Shopify product JSON:", imgs.length, "image(s) for", p && p.title);
+        return imgs;
+      })
+      .catch(function (e) {
+        console.log("[PEAR] Shopify product JSON unavailable (not a Shopify PDP?):", e && e.message);
+        _shopifyGallery = [];
+        return _shopifyGallery;
+      });
+  }
+
+  /* ── COMBINED composite - built here, on the store page ───────────────────────
+     Layout contract is IDENTICAL to createGarmentComposite() in fitting-room/app.js
+     (front left, back right, height = max(h), width = frontW + backW + gutter, a
+     divider centred in the gutter, centred FRONT/BACK labels). The two must stay in
+     lockstep - they are separate bundles with no shared module system, the same way
+     canonicalPhoto/canonicalImageUrl are already triplicated across this repo.
+
+     CANVAS TAINTING is the reason this is not naive. Drawing a store CDN image via an
+     <img> tag taints the canvas and makes toBlob()/toDataURL() throw SecurityError on
+     most storefront CDNs. So the bytes are fetched through PEAR's own /api/img-proxy,
+     which answers with Access-Control-Allow-Origin: * - a CORS-readable response
+     produces an untainted canvas, and the proxy also solves the hotlink-blocking that
+     defeats a direct CDN fetch from a third-party origin. */
+  var COMPOSITE_MAX_W   = 2048;
+  var COMPOSITE_DIVIDER = 4;
+  var COMPOSITE_GUTTER  = 64;
+
+  function proxied(url) {
+    if (/^(data:|blob:)/i.test(url)) return url;
+    return PEAR_BASE + "/api/img-proxy?url=" + encodeURIComponent(url);
+  }
+
+  /* Decoded bitmap with an untainted-canvas guarantee. Tries the proxy first, then the
+     raw CDN - some CDNs are CORS-open and some block the proxy, so neither route alone
+     is reliable across arbitrary stores. */
+  function loadBitmapCORS(url) {
+    function decode(u, mode) {
+      return fetch(u, mode ? { mode: mode } : undefined)
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.blob(); })
+        .then(function (b) {
+          if (w.createImageBitmap) return w.createImageBitmap(b);
+          // Safari <15 has no createImageBitmap: fall back to an object URL + <img>,
+          // which is same-origin (blob:) and therefore also untainted.
+          return new Promise(function (res, rej) {
+            var img = new Image();
+            var obj = URL.createObjectURL(b);
+            img.onload = function () { URL.revokeObjectURL(obj); res(img); };
+            img.onerror = function () { URL.revokeObjectURL(obj); rej(new Error("decode failed")); };
+            img.src = obj;
+          });
+        });
+    }
+    if (/^(data:|blob:)/i.test(url)) return decode(url);
+    return decode(proxied(url)).catch(function (e) {
+      console.warn("[PEAR] composite: proxy fetch failed for", abbrevUrl(url), "-", e && e.message, "; trying the CDN directly");
+      return decode(url, "cors");
+    });
+  }
+
+  function drawCover(ctx, img, dx, dy, dw, dh) {
+    var iw = img.width, ih = img.height;
+    var scale = Math.max(dw / iw, dh / ih);
+    var wpx = iw * scale, hpx = ih * scale;
+    ctx.drawImage(img, dx + (dw - wpx) / 2, dy + (dh - hpx) / 2, wpx, hpx);
+  }
+
+  /* High-contrast marker box - the model reads these as the panel's identity, so they
+     are deliberately loud: white plate, black border, black bold text. */
+  function drawLabel(ctx, text, centerX, top, fontPx) {
+    ctx.save();
+    ctx.font = "800 " + fontPx + "px system-ui, -apple-system, 'Segoe UI', Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    var padX = Math.round(fontPx * 0.5), padY = Math.round(fontPx * 0.32);
+    var boxW = Math.round(ctx.measureText(text).width) + padX * 2;
+    var boxH = fontPx + padY * 2;
+    var x = Math.round(centerX - boxW / 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#000000";
+    ctx.lineWidth = Math.max(2, Math.round(fontPx * 0.06));
+    ctx.fillRect(x, top, boxW, boxH);
+    ctx.strokeRect(x, top, boxW, boxH);
+    ctx.fillStyle = "#000000";
+    ctx.fillText(text, x + boxW / 2, top + boxH / 2);
+    ctx.restore();
+  }
+
+  /* Stitch FRONT + BACK into one labelled reference. Resolves to a data URL (the form
+     that survives postMessage to the fitting-room iframe), or "" on any failure - the
+     caller then falls back to handing over the two URLs separately rather than going
+     live with nothing. */
+  function createGarmentComposite(frontUrl, backUrl) {
+    if (!frontUrl || !backUrl) return Promise.resolve("");
+    return Promise.all([loadBitmapCORS(frontUrl), loadBitmapCORS(backUrl)])
+      .then(function (imgs) {
+        var front = imgs[0], back = imgs[1];
+        // Common height first, aspect preserved: two panels of different heights would
+        // imply two differently-sized garments.
+        var panelH = Math.max(front.height, back.height);
+        var frontW = Math.round(front.width * (panelH / front.height));
+        var backW  = Math.round(back.width  * (panelH / back.height));
+
+        var totalW = frontW + backW + COMPOSITE_GUTTER;
+        var scale  = Math.min(1, COMPOSITE_MAX_W / totalW);
+        var W = Math.round(totalW * scale), H = Math.round(panelH * scale);
+        var fW = Math.round(frontW * scale), bW = Math.round(backW * scale);
+        var gut = Math.round(COMPOSITE_GUTTER * scale);
+
+        var canvas = d.createElement("canvas");
+        canvas.width = W; canvas.height = H;
+        var ctx = canvas.getContext("2d");
+
+        ctx.fillStyle = "#3a3a3a";      // neutral field - white reads as fabric on a packshot
+        ctx.fillRect(0, 0, W, H);
+
+        ctx.save(); ctx.beginPath(); ctx.rect(0, 0, fW, H); ctx.clip();
+        drawCover(ctx, front, 0, 0, fW, H);
+        ctx.restore();
+
+        var backX = fW + gut;
+        ctx.save(); ctx.beginPath(); ctx.rect(backX, 0, bW, H); ctx.clip();
+        drawCover(ctx, back, backX, 0, bW, H);
+        ctx.restore();
+
+        var dividerW = Math.max(2, Math.round(COMPOSITE_DIVIDER * scale));
+        ctx.fillStyle = "#e8e8e8";
+        ctx.fillRect(Math.round(fW + gut / 2 - dividerW / 2), 0, dividerW, H);
+
+        var fontPx = Math.max(18, Math.round(W * 0.035));
+        var labelY = Math.round(H * 0.035);
+        drawLabel(ctx, "FRONT", Math.round(fW / 2), labelY, fontPx);
+        drawLabel(ctx, "BACK",  Math.round(backX + bW / 2), labelY, fontPx);
+
+        if (front.close) front.close();
+        if (back.close) back.close();
+
+        // toDataURL throws SecurityError on a tainted canvas - which is exactly what
+        // the CORS-proxied fetch above prevents. Caught so a taint never breaks the
+        // try-on; the caller falls back to the two-URL handover.
+        var dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+        console.log("[PEAR] COMBINED composite built: " + W + "×" + H +
+          " · FRONT " + fW + "px | BACK " + bW + "px · " + Math.round(dataUrl.length / 1365) + "KB");
+        return dataUrl;
+      })
+      .catch(function (e) {
+        console.warn("[PEAR] createGarmentComposite failed:", e && e.message,
+          "- falling back to separate front/back handover");
+        return "";
+      });
+  }
+
   /* ── shared widget CSS (single removable style tag) ─────────────────────── */
   function injectStyles() {
     if (d.querySelector("style.pear-widget-styles")) return;
@@ -801,6 +978,13 @@
         "font-family:inherit;line-height:1.2;" +
       "}" +
       ".pear-widget-btn:hover{background:#222;}" +
+      /* Floating variant - used only when the page has no cart button AND no <h1>
+         (see injectFallbackButton). z-index sits below the try-on overlay (999999). */
+      ".pear-widget-btn-floating{" +
+        "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);" +
+        "width:auto;min-width:220px;margin:0;z-index:999998;" +
+        "box-shadow:0 6px 24px rgba(0,0,0,0.35);border-radius:999px;" +
+      "}" +
       ".pear-widget-btn:disabled,.pear-widget-btn:disabled:hover{" +
         "background:#ccc;color:#666;cursor:not-allowed;" +
       "}" +
@@ -1205,7 +1389,13 @@
         images: pgImages,
         name: pgName,
         category: detectCategory(pgName),
-        variantId: extractVariantId(btn)
+        variantId: extractVariantId(btn),
+        /* This garment came from PAGE-WIDE signals (og:image / the single-product
+           gallery), so the page's own Shopify product JSON describes the same product
+           and its images can be merged in at click time. NOT set on the ancestor
+           walk-up path below, where the button belongs to one card among many and the
+           page-level product would be a different garment entirely. */
+        pageScoped: true
       };
     }
 
@@ -1334,6 +1524,25 @@
            PEAR_UPDATE_GARMENT listener) - the shopper sees the room immediately and
            the front/back swap (if any) lands a moment later without a reconnect. */
         var imgs = (garment.images && garment.images.length) ? garment.images : [garment.url];
+        /* Merge the Shopify product JSON gallery (prefetched at boot) - full-resolution,
+           complete, and immune to every lazy-loading trick the DOM scrape has to work
+           around. Only for a page-scoped garment: on a grid, the page product is not
+           this card's product. De-duped canonically, so a photo already found in the
+           DOM is not added twice under a different URL spelling. */
+        if (garment.pageScoped && _shopifyGallery && _shopifyGallery.length) {
+          var merged = imgs.slice();
+          for (var si = 0; si < _shopifyGallery.length; si++) {
+            var cand = _shopifyGallery[si], dup = false;
+            for (var mi = 0; mi < merged.length; mi++) {
+              if (samePhoto(cand, merged[mi])) { dup = true; break; }
+            }
+            if (!dup) merged.push(cand);
+          }
+          if (merged.length !== imgs.length) {
+            console.log("[PEAR] merged Shopify JSON gallery:", imgs.length, "→", merged.length, "image(s)");
+          }
+          imgs = merged.slice(0, MAX_GALLERY_IMAGES);
+        }
         /* The instant-open back. ONLY a DOM-identified rear photo (garment.back) is
            handed over here - never imgs[1]. Opening on the second gallery photo was a
            positional guess that, on a front-only gallery, labels a FRONT photo as the
@@ -1349,34 +1558,72 @@
           back: openBack, images: imgs, variantId: garment.variantId
         });
 
+        /* ── COMBINED pipeline ────────────────────────────────────────────────────
+           The try-on engine receives ONE unified composite and nothing else. The
+           sequence is fixed by a real dependency, not by preference:
+
+             1. classify  - the gallery URLs go to /api/classify-images, which returns
+                            WHICH image is the front and which is the back. This step
+                            is unavoidable and cannot be replaced by the composite: you
+                            cannot stitch a front|back pair before knowing which photo
+                            is which. It exchanges URLs and a label - it is metadata,
+                            not a render, and no individual image is ever handed to the
+                            model as a try-on reference.
+             2. synthesize - single-view product? the server generates the rear from
+                            the front (synthesizeBackView) so step 3 always has a pair.
+             3. combine   - both views stitched into ONE labelled canvas here.
+             4. hand over - ONLY that composite goes to the fitting room / Decart.
+
+           Sent by postMessage rather than the iframe URL because a composite data URL
+           is far past any browser's URL length limit. */
         classifyImages(imgs, { front: imgs[0], back: openBack }).then(function (res) {
           var results = res.results;
           console.log("[PEAR widget] classify-images results (" + results.length + "):", results);
           var sorted = sortByFrontBack(imgs, results);
           var local = resolveFrontBack(imgs, results);
           /* Server-resolved pair wins when present: it folds in the DOM hints, the
-             classifier AND the generated-rear fallback (back_source tells which).
-             Falls back to the local resolution for older/failing server builds. */
+             classifier, the per-product cache AND the generated-rear fallback
+             (back_source tells which). Falls back to the local resolution for
+             older/failing server builds. */
           var frontUrl = res.front || local.front;
           var backUrl  = res.back  || local.back;
-          console.log("[PEAR widget] resolved front:", frontUrl);
+          console.log("[PEAR widget] resolved front:", abbrevUrl(frontUrl));
           console.log("[PEAR widget] resolved back :", abbrevUrl(backUrl), "| source:", res.backSource);
-          /* Only push a correction if this actually changes what the room is showing,
-             and only into the SAME modal that triggered the call (the shopper may have
-             closed it, or opened a different product, in the meantime). */
-          if (activeIframe === openedIframe && (frontUrl !== imgs[0] || backUrl !== openBack)) {
+
+          if (!backUrl) {
+            /* No back anywhere - not in the DOM, not from the classifier, not in the
+               per-product cache, and generation was declined or failed. There is
+               nothing to combine, so hand over front-only; the fitting room's own
+               inferred-rear clause covers the turn. */
+            console.warn("[PEAR widget] no back view available - handing over FRONT-ONLY (no composite possible)");
+          }
+
+          return createGarmentComposite(frontUrl, backUrl).then(function (composite) {
+            if (composite) {
+              console.log("[PEAR widget] COMBINED payload ready - handing the single composite to the try-on engine");
+            }
+            /* Only push a correction if this actually changes what the room is showing,
+               and only into the SAME modal that triggered the call (the shopper may have
+               closed it, or opened a different product, in the meantime). */
+            if (activeIframe !== openedIframe) return;
+            if (!composite && frontUrl === imgs[0] && backUrl === openBack) return;
             try {
               openedIframe.contentWindow.postMessage({
                 type: "PEAR_UPDATE_GARMENT",
                 garment_url: frontUrl,
                 garment_back: backUrl || undefined,
                 garment_back_source: res.backSource,
+                /* The unified COMBINED reference. When present the fitting room uses
+                   THIS as the model reference and skips its own stitching entirely -
+                   the front/back URLs above remain only as provenance and as the
+                   fallback if the composite is unusable. */
+                garment_composite: composite || undefined,
                 garment_images: sorted
               }, PEAR_BASE);
             } catch (_) {}
-          }
+          });
         }).catch(function (err) {
-          console.warn("[PEAR widget] classify-images failed, using DOM order as-is:", err && err.message);
+          console.warn("[PEAR widget] combined pipeline failed, using DOM order as-is:", err && err.message);
         });
       });
     }
@@ -1419,8 +1666,18 @@
       variantId: extractVariantId(null)
     });
     var h1 = d.querySelector("h1");
-    if (h1 && h1.parentNode) h1.parentNode.insertBefore(btn, h1.nextSibling);
-    else d.body.appendChild(btn);
+    if (h1 && h1.parentNode) {
+      h1.parentNode.insertBefore(btn, h1.nextSibling);
+    } else {
+      /* Last resort: a FLOATING button. Appending to <body> put a full-width block
+         button at the very bottom of the document, where it is effectively invisible -
+         which reads as "the widget did nothing" in exactly the console-injection
+         testing this path exists for. Pinned bottom-centre instead, above the page's
+         own chrome but below the try-on overlay's z-index. */
+      btn.className += " pear-widget-btn-floating";
+      d.body.appendChild(btn);
+      console.log("[PEAR] no cart button and no <h1> - injected the FLOATING try-on button");
+    }
   }
 
   /* Inject beside every cart button; fall back to the <h1> when there are none. */
@@ -1497,6 +1754,10 @@
 
   var _observing = false;
   function boot() {
+    /* Kick the Shopify product JSON fetch at boot so a click never waits on it.
+       Fire-and-forget: the result is merged opportunistically, and its absence
+       (non-Shopify store, collection page) changes nothing. */
+    loadShopifyProductJSON();
     injectAllButtons();
     /* Re-inject as the DOM changes - infinite scroll, tab/filter switches, quick-
        shop modals - so dynamically added products get their button too. Injection

@@ -1209,6 +1209,17 @@ window.addEventListener("message", (e) => {
      photographed one downstream, because by the time it gets here it IS a real,
      distinct image asset that preloadGarmentAssets() will validate like any other. */
   activeItem.backSource = e.data.garment_back_source || "unknown";
+  /* Unified COMBINED reference, stitched by the widget on the store page (see
+     createGarmentComposite in pear-widget.js). When present it IS the model
+     reference - referenceImageFor() uses it verbatim and skips stitching again, so
+     the composite the shopper gets is the exact image the widget produced rather
+     than a second, independently built one. A data: URL, so every downstream path
+     (garmentBlobCached, garmentImageRef) already handles it without a proxy hop. */
+  if (typeof e.data.garment_composite === "string" && e.data.garment_composite) {
+    activeItem.composite = e.data.garment_composite;
+    console.log("[PEAR] COMBINED composite received from the widget:",
+      abbrevImg(activeItem.composite));
+  }
   // currentAngle is deliberately NOT set here: renderPerspectiveSelector() re-derives
   // it (AI Auto when the corrected pair qualifies, else front) with no user input.
   renderActiveGarment();
@@ -3749,6 +3760,15 @@ async function referenceImageFor(item, activeImg = activeImageOf(item)) {
      no re-upload of pixels. Falls through to the per-orientation single asset if the
      stitch fails, which is the pre-composite behaviour and always safe. */
   if (compositeActiveFor(item)) {
+    /* Prefer the composite the WIDGET already built and handed over: it is the exact
+       image the store page produced, so there is no second stitch, no re-fetch of two
+       CDN assets, and no chance of the two builders disagreeing. Decoded locally -
+       it is a data: URL. */
+    if (item.composite) {
+      const handed = await garmentBlobCached(item.composite);
+      if (handed) return handed;
+      console.warn("[PEAR] handed-over composite failed to decode - rebuilding locally");
+    }
     const g = galleryOf(item);
     const composite = await createGarmentComposite(g.front || item.img, distinctBackOf(item, g));
     if (composite) return composite;
