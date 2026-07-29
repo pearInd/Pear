@@ -9,7 +9,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="PEAR">
-    <title>PEAR - חדר הלבשה וירטואלי</title>
+    <title data-i18n="docTitle">PEAR - חדר הלבשה וירטואלי</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -75,12 +75,12 @@
       <div class="calc-editorial__scrim"></div>
       <div class="calc-editorial__content">
         <span class="calc-editorial__kicker">PEAR · Atelier</span>
-        <h1 class="calc-editorial__headline">המידה שלך,<br>בדיוק מושלם</h1>
-        <p class="calc-editorial__lead">חדר הלבשה וירטואלי בזמן אמת - הלוק נמדד על הגוף שלך, מתוך נתונים ולא ניחושים.</p>
+        <h1 class="calc-editorial__headline" data-i18n="calcHeadline">המידה שלך,<br>בדיוק מושלם</h1>
+        <p class="calc-editorial__lead" data-i18n="calcLead">חדר הלבשה וירטואלי בזמן אמת - הלוק נמדד על הגוף שלך, מתוך נתונים ולא ניחושים.</p>
         <ul class="calc-editorial__list">
-          <li>התאמת מידה אלגוריתמית מדויקת</li>
-          <li>מדידה חיה של הבגד על הגוף</li>
-          <li>שמירה והורדה של הלוק</li>
+          <li data-i18n="calcListAlgo">התאמת מידה אלגוריתמית מדויקת</li>
+          <li data-i18n="calcListLive">מדידה חיה של הבגד על הגוף</li>
+          <li data-i18n="calcListSave">שמירה והורדה של הלוק</li>
         </ul>
         <span class="calc-editorial__meta">Lookbook № 01 - Monochrome Capsule</span>
       </div>
@@ -90,7 +90,7 @@
     <div class="calc-main">
     <div class="step-progress">
         <div class="step-progress-label">
-            <span>שלב 1 מתוך 2 · Size</span>
+            <span><span data-i18n="stepLabel">שלב 1 מתוך 2</span> · Size</span>
             <span id="progressPercent">0%</span>
         </div>
         <div class="step-progress-track">
@@ -101,8 +101,8 @@
     <div class="container">
         <div class="focus-calc-hint" id="focusCalcHint" hidden></div>
         <span class="kicker">PEAR · Personal Fit Engine</span>
-        <h2 id="calcHeading">התאמת מידה אישית</h2>
-        <p class="subtitle" id="calcSubtitle">הזן נתונים – האלגוריתם יחשב את המידה המדויקת עבורך</p>
+        <h2 id="calcHeading" data-i18n="calcHeading">התאמת מידה אישית</h2>
+        <p class="subtitle" id="calcSubtitle" data-i18n="calcSubtitle">הזן נתונים – האלגוריתם יחשב את המידה המדויקת עבורך</p>
 
         <!-- ░░ Identity gate - the TRUE default view (app.js). The DOM must never
              paint the measurement form before JS has decided where to route the
@@ -113,18 +113,18 @@
              never the reverse, so there is no flash of the wrong step on load. ░░ -->
         <form id="identityForm" autocomplete="off">
             <div class="form-group">
-                <label for="userName"><span class="required">*</span>שם מלא:</label>
-                <input type="text" id="userName" autocomplete="name" placeholder="לדוגמה: דנה כהן">
+                <label for="userName"><span class="required">*</span><span data-i18n="labelFullName">שם מלא:</span></label>
+                <input type="text" id="userName" autocomplete="name" placeholder="לדוגמה: דנה כהן" data-i18n-placeholder="placeholderName">
             </div>
             <div class="form-group">
-                <label for="userEmail"><span class="required">*</span>אימייל:</label>
-                <input type="email" id="userEmail" autocomplete="email" inputmode="email" placeholder="לדוגמה: dana@example.com">
+                <label for="userEmail"><span class="required">*</span><span data-i18n="labelEmail">אימייל:</span></label>
+                <input type="email" id="userEmail" autocomplete="email" inputmode="email" placeholder="לדוגמה: dana@example.com" data-i18n-placeholder="placeholderEmail">
             </div>
             <!-- Plain container: must NOT use .result-actions (that class stays
                  collapsed/invisible until the size-calc adds .is-ready, which would
                  permanently hide this Continue button). -->
             <div id="identityActions" style="margin-top:14px">
-                <button id="btn-identity-continue" type="button" class="btn-primary">המשך →</button>
+                <button id="btn-identity-continue" type="button" class="btn-primary" data-i18n="btnContinue">המשך →</button>
                 <p id="identityError" class="login-error" role="alert" hidden style="margin-top:10px"></p>
             </div>
         </form>
@@ -134,14 +134,14 @@
              gate above. Sits between the identity gate and #sizeForm; skipped
              entirely for returning devices. ░░ -->
         <div id="screen-otp" class="otp-card" hidden style="display:none">
-            <h2>אימות אימייל</h2>
+            <h2 data-i18n="otpTitle">אימות אימייל</h2>
             <p id="otp-email-hint">שלחנו קוד ל: </p>
             <input id="otpInput" type="text" inputmode="numeric"
                    maxlength="6" pattern="[0-9]*"
-                   placeholder="הכנס קוד בן 6 ספרות" autocomplete="one-time-code">
+                   placeholder="הכנס קוד בן 6 ספרות" autocomplete="one-time-code" data-i18n-placeholder="otpPlaceholder">
             <div id="otp-countdown">60 שניות נותרו</div>
-            <button id="btn-verify-otp" type="button" class="btn-primary">אמת קוד</button>
-            <button id="btn-resend-otp" type="button" class="btn-ghost">שלח קוד חדש</button>
+            <button id="btn-verify-otp" type="button" class="btn-primary" data-i18n="btnVerifyOtp">אמת קוד</button>
+            <button id="btn-resend-otp" type="button" class="btn-ghost" data-i18n="btnResendOtp">שלח קוד חדש</button>
             <p id="otp-error" class="login-error" role="alert" hidden></p>
         </div>
 
@@ -149,15 +149,15 @@
             <!-- Monthly measurements-refresh nudge - shown only when a known,
                  30+ day-stale profile forces this form open (see routeUser/
                  showSizeForm in app.js). Hidden the rest of the time. -->
-            <p id="measurementsRefreshNotice" class="measurements-refresh-notice" hidden>עדכן את המידות שלך - עבר חודש מהפעם האחרונה</p>
+            <p id="measurementsRefreshNotice" class="measurements-refresh-notice" hidden data-i18n="measurementsRefreshNotice">עדכן את המידות שלך - עבר חודש מהפעם האחרונה</p>
             <!-- ░░ Mandatory inputs - always visible (idle state) ░░ -->
             <div class="form-group">
-                <label for="height"><span class="required">*</span>גובה (בס"מ):</label>
-                <input type="number" id="height" min="100" max="300" placeholder="לדוגמה: 175">
+                <label for="height"><span class="required">*</span><span data-i18n="labelHeight">גובה (בס"מ):</span></label>
+                <input type="number" id="height" min="100" max="300" placeholder="לדוגמה: 175" data-i18n-placeholder="placeholderHeight">
             </div>
             <div class="form-group">
-                <label for="weight"><span class="required">*</span>משקל (בק"ג):</label>
-                <input type="number" id="weight" min="30" max="250" placeholder="לדוגמה: 68">
+                <label for="weight"><span class="required">*</span><span data-i18n="labelWeight">משקל (בק"ג):</span></label>
+                <input type="number" id="weight" min="30" max="250" placeholder="לדוגמה: 68" data-i18n-placeholder="placeholderWeight">
             </div>
 
             <!-- ░░ Result + Continue - appear directly below Weight once both
@@ -169,26 +169,26 @@
                     <div class="size-display" id="sizeResult">-</div>
                 </div>
 
-                <button id="btn-next-screen" type="button" class="btn-primary" disabled>המשך לחדר המדידה הוירטואלי →</button>
+                <button id="btn-next-screen" type="button" class="btn-primary" disabled data-i18n="btnNextScreen">המשך לחדר המדידה הוירטואלי →</button>
             </div>
 
             <!-- ░░ Optional "Fine-tune your fit" tray - pushed to the bottom,
                  revealed below the result as a secondary, optional action.
                  Stays hidden until BOTH mandatory fields are valid (Task 6). ░░ -->
             <div class="optional-fields optional-fields-container" id="optionalFields">
-                <div class="section-divider"><span>כוונון עדין · Fine-tune your fit</span></div>
+                <div class="section-divider"><span><span data-i18n="fineTuneLabel">כוונון עדין</span> <span data-i18n-hide-on-en>· Fine-tune your fit</span></span></div>
 
                 <div class="form-group">
-                    <label for="chest">היקף חזה (בס"מ) <span class="optional">(אופציונלי)</span>:</label>
-                    <input type="number" id="chest" min="50" max="150" placeholder="לדוגמה: 94">
+                    <label for="chest"><span data-i18n="labelChest">היקף חזה (בס"מ)</span> <span class="optional" data-i18n="optionalTag">(אופציונלי)</span>:</label>
+                    <input type="number" id="chest" min="50" max="150" placeholder="לדוגמה: 94" data-i18n-placeholder="placeholderChest">
                 </div>
                 <div class="form-group">
-                    <label for="waist">היקף מותניים (בס"מ) <span class="optional">(אופציונלי)</span>:</label>
-                    <input type="number" id="waist" min="40" max="150" placeholder="לדוגמה: 80">
+                    <label for="waist"><span data-i18n="labelWaist">היקף מותניים (בס"מ)</span> <span class="optional" data-i18n="optionalTag">(אופציונלי)</span>:</label>
+                    <input type="number" id="waist" min="40" max="150" placeholder="לדוגמה: 80" data-i18n-placeholder="placeholderWaist">
                 </div>
                 <div class="form-group">
-                    <label for="legs">אורך רגליים (בס"מ) <span class="optional">(אופציונלי)</span>:</label>
-                    <input type="number" id="legs" min="50" max="120" placeholder="לדוגמה: 102">
+                    <label for="legs"><span data-i18n="labelLegs">אורך רגליים (בס"מ)</span> <span class="optional" data-i18n="optionalTag">(אופציונלי)</span>:</label>
+                    <input type="number" id="legs" min="50" max="120" placeholder="לדוגמה: 102" data-i18n-placeholder="placeholderLegs">
                 </div>
             </div>
         </form>
@@ -208,7 +208,7 @@
          stays put regardless of scroll/camera state; z-index sits above the camera
          stage but below any modal/overlay. ░░ -->
     <button class="profile-btn" id="profileBtn" type="button" hidden
-            aria-label="פרופיל משתמש · User profile" aria-haspopup="true">
+            aria-label="פרופיל משתמש · User profile" aria-haspopup="true" data-i18n-aria="profileAria">
         <span class="profile-btn__initial" id="profileInitial">?</span>
     </button>
     <div class="profile-dropdown" id="profileDropdown" role="menu" hidden>
@@ -220,26 +220,26 @@
         <div class="profile-dropdown__divider"></div>
         <div class="profile-dropdown__measurements">
             <div class="profile-dropdown__row">
-                <span class="profile-dropdown__label">גובה:</span>
+                <span class="profile-dropdown__label" data-i18n="profileLabelHeight">גובה:</span>
                 <span class="profile-dropdown__value" id="profileHeight"></span>
             </div>
             <div class="profile-dropdown__row">
-                <span class="profile-dropdown__label">משקל:</span>
+                <span class="profile-dropdown__label" data-i18n="profileLabelWeight">משקל:</span>
                 <span class="profile-dropdown__value" id="profileWeight"></span>
             </div>
             <div class="profile-dropdown__row">
-                <span class="profile-dropdown__label">מידה:</span>
+                <span class="profile-dropdown__label" data-i18n="profileLabelSize">מידה:</span>
                 <span class="profile-dropdown__value" id="profileSize"></span>
             </div>
         </div>
         <div class="profile-dropdown__divider"></div>
-        <button class="profile-dropdown__logout" id="profileLogoutBtn" type="button">התנתקות</button>
+        <button class="profile-dropdown__logout" id="profileLogoutBtn" type="button" data-i18n="profileLogout">התנתקות</button>
     </div>
 
     <!-- Pear-green product-isolation status bar (focus mode only) -->
     <div class="focus-bar" id="focusBar" hidden>
         <span class="focus-bar__dot"></span>
-        <span class="focus-bar__text">מדידת פריט ממוקדת: <strong id="focusItemName">-</strong></span>
+        <span class="focus-bar__text"><span data-i18n="focusBarPrefix">מדידת פריט ממוקדת:</span> <strong id="focusItemName">-</strong></span>
         <span class="focus-bar__badge" id="focusSizeBadge"></span>
     </div>
 
@@ -248,26 +248,26 @@
         <div class="app-header__nav">
         <!-- Back to Store - breaks out of any iframe (target="_top") and returns
              to the storefront homepage. -->
-        <a class="back-to-store" href="/" target="_top" aria-label="חזרה לחנות · Back to store">
+        <a class="back-to-store" href="/" target="_top" aria-label="חזרה לחנות · Back to store" data-i18n-aria="backToStoreAria">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
                  stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M4 9.5 5.4 4h13.2L20 9.5"/>
                 <path d="M4.5 9.5h15V19a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1V9.5Z"/>
                 <path d="M10 20v-5h4v5"/>
             </svg>
-            <span>חזרה לחנות</span>
+            <span data-i18n="backToStoreLabel">חזרה לחנות</span>
         </a>
         <!-- Edit Measurements - always visible in the fitting room so a returning
              visitor whose profile was applied automatically (see routeUser in
              app.js) can jump back and correct it without hunting for it. -->
         <button class="btn-edit-measurements" id="btn-edit-measurements" type="button"
-                aria-label="עריכת מידות · Edit measurements">
+                aria-label="עריכת מידות · Edit measurements" data-i18n-aria="editMeasurementsAria">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
                  stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M12 20h9"/>
                 <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>
             </svg>
-            <span>עריכת מידות</span>
+            <span data-i18n="editMeasurementsLabel">עריכת מידות</span>
         </button>
         </div><!-- /.app-header__nav -->
 
@@ -283,13 +283,13 @@
             <span class="app-header__titles">
                 <span class="app-header__brand">PEAR</span>
                 <!-- CONTENT CLEANUP: dropped the "· Lucy VTON" provider suffix -->
-                <span class="app-header__sub">חדר הלבשה וירטואלי</span>
+                <span class="app-header__sub" data-i18n="appHeaderSub">חדר הלבשה וירטואלי</span>
             </span>
         </div>
 
         <!-- Actions zone (end / left in RTL): cart + engine status dot -->
         <div class="app-header__actions">
-        <button class="cart-btn" id="cartBtn" type="button" aria-label="סל קניות · Shopping cart">
+        <button class="cart-btn" id="cartBtn" type="button" aria-label="סל קניות · Shopping cart" data-i18n-aria="cartBtnAria">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M6 8h12l-1 11.5a1.5 1.5 0 0 1-1.5 1.4H8.5A1.5 1.5 0 0 1 7 19.5L6 8Z"></path>
                 <path d="M9 8V6.4a3 3 0 0 1 6 0V8"></path>
@@ -301,13 +301,13 @@
     </div>
 
     <div class="container fitting-container">
-        <h2 class="personal-title">ככה המידה <span id="final-size-text"></span> נראית עליך</h2>
+        <h2 class="personal-title"><span data-i18n="personalTitlePrefix">ככה המידה</span> <span id="final-size-text"></span> <span data-i18n="personalTitleSuffix">נראית עליך</span></h2>
 
         <!-- Active garment chip -->
         <div class="active-garment" id="activeGarment" hidden>
             <div class="active-garment__media" id="activeGarmentMedia"></div>
             <div class="active-garment__meta">
-                <span class="active-garment__eyebrow">פריט נמדד · Now fitting</span>
+                <span class="active-garment__eyebrow"><span data-i18n="activeGarmentEyebrow">פריט נמדד</span> <span data-i18n-hide-on-en>· Now fitting</span></span>
                 <strong class="active-garment__name" id="activeGarmentName">-</strong>
                 <span class="active-garment__type" id="activeGarmentType"></span>
             </div>
@@ -320,7 +320,7 @@
             <!-- Flip front/rear camera - floating glass control, preview only
                  (hidden during the billed live session). -->
             <button class="camera-card__flip" id="flipCamBtn" type="button"
-                    aria-label="הפוך מצלמה · Flip camera" title="הפוך מצלמה">
+                    aria-label="הפוך מצלמה · Flip camera" title="הפוך מצלמה" data-i18n-aria="flipCamAria">
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
                      stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M11 19H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>
@@ -339,7 +339,7 @@
                  hardcoded try-on mode, applied automatically with no on-screen picker. -->
             <div class="product-gallery" id="productGallery">
                 <div class="product-swatches" id="productSwatches" role="radiogroup"
-                     aria-label="צבע · Colour" hidden></div>
+                     aria-label="צבע · Colour" hidden data-i18n-aria="swatchesAria"></div>
             </div>
 
             <video id="webcam" playsinline autoplay muted></video>
@@ -354,7 +354,7 @@
                  Shown only while .show-live; ticks 5→1 then auto-freezes. -->
             <div class="live-countdown" id="liveCountdown" hidden aria-live="polite">
                 <span class="live-countdown__num" id="liveCountdownNum">5</span>
-                <span class="live-countdown__label">שניות · sec</span>
+                <span class="live-countdown__label"><span data-i18n="liveCountdownLabel">שניות</span> <span data-i18n-hide-on-en>· sec</span></span>
             </div>
 
             <!-- luxury AI scanning overlay - the LOADING state. Stays visible from go-live
@@ -366,7 +366,7 @@
                     <img class="pear-loader__fruit" src="/pear-logo.png" alt="" width="48">
                     <div class="pear-loader__shadow"></div>
                 </div>
-                <div class="scan-overlay__text">מכין את חדר ההלבשה הוירטואלי<span class="dots"><i>.</i><i>.</i><i>.</i></span></div>
+                <div class="scan-overlay__text"><span data-i18n="scanOverlayText">מכין את חדר ההלבשה הוירטואלי</span><span class="dots"><i>.</i><i>.</i><i>.</i></span></div>
                 <!-- CONTENT CLEANUP: generic, provider-free copy - never names the underlying
                      AI vendor/model. Ticking mm:ss elapsed counter is written here every
                      second by startScanTimer()/updateScanTimer() in app.js for as long as
@@ -376,8 +376,8 @@
 
             <div class="camera-card__placeholder" id="camPlaceholder">
                 <div class="camera-card__icon">📷</div>
-                <p>כדי להתחיל במדידה, נשמח לקבל גישה למצלמה. אל דאגה, הצילום משמש למדידת מידות הגוף בלבד ואינו נשמר בשרתים שלנו.</p>
-                <button class="btn-primary" id="startCamBtn">הפעלת מצלמה לתחילת מדידה</button>
+                <p data-i18n="camPlaceholderText">כדי להתחיל במדידה, נשמח לקבל גישה למצלמה. אל דאגה, הצילום משמש למדידת מידות הגוף בלבד ואינו נשמר בשרתים שלנו.</p>
+                <button class="btn-primary" id="startCamBtn" data-i18n="startCamBtn">הפעלת מצלמה לתחילת מדידה</button>
             </div>
 
             <div class="camera-card__error" id="camError" hidden></div>
@@ -387,18 +387,18 @@
         <div class="cam-controls">
             <button class="btn-capture" id="captureBtn" disabled>
                 <span class="btn-capture__icon">📸</span>
-                <span class="btn-capture__label">מתחילים במדידה</span>
-                <span class="btn-capture__en">Go Live</span>
+                <span class="btn-capture__label" data-i18n="captureBtnLabel">מתחילים במדידה</span>
+                <span class="btn-capture__en" data-i18n-hide-on-en>Go Live</span>
             </button>
             <!-- #retakeBtn now lives inside the unified .pear-interaction-pod below -->
         </div>
 
         <!-- ░░ Add to Cart - high-end morphing action (spinner → fly → checkmark) ░░ -->
         <div class="add-cart-row">
-            <button class="btn-add-cart" id="addToCartBtn" type="button" aria-label="הוסף לסל">
+            <button class="btn-add-cart" id="addToCartBtn" type="button" aria-label="הוסף לסל" data-i18n-aria="addToCartAria">
                 <span class="bac__label">
                     <span class="bac__icon" aria-hidden="true">＋</span>
-                    הוסף לסל <span class="bac__en">· Add to Cart</span>
+                    <span data-i18n="addToCartLabel">הוסף לסל</span> <span class="bac__en" data-i18n-hide-on-en>· Add to Cart</span>
                 </span>
                 <span class="bac__spinner" aria-hidden="true"></span>
                 <span class="bac__check" aria-hidden="true">✓</span>
@@ -407,14 +407,14 @@
 
         <!-- ░░ Catalog (only when entering WITHOUT a focused product) ░░ -->
         <section class="catalog-panel" id="catalogPanel" hidden>
-            <h3 class="catalog-title">בחר בגד מהקטלוג</h3>
+            <h3 class="catalog-title" data-i18n="catalogTitle">בחר בגד מהקטלוג</h3>
             <div class="catalog-grid" id="catalogGrid"></div>
         </section>
 
         <!-- ░░ Complete the Look - cross-category recommendations ░░ -->
         <section class="complete-look" id="completeLook" hidden>
             <div class="complete-look__head">
-                <h3 class="cl-title">השלמת הלוק <span>· Complete the Look</span></h3>
+                <h3 class="cl-title"><span data-i18n="clTitle">השלמת הלוק</span> <span data-i18n-hide-on-en>· Complete the Look</span></h3>
                 <p class="cl-sub" id="clSub"></p>
             </div>
             <!-- Desktop-only scroll arrows (style.css: .cl-arrow, @media min-width:1024px).
@@ -429,14 +429,14 @@
                      MIRRORED glyph for rendering - "‹" was visually showing as "›" and vice
                      versa. SVG paths aren't text runs, so they're never subject to the
                      Unicode Bidi Algorithm and can't flip like this. -->
-                <button class="cl-arrow cl-arrow--prev" id="clArrowPrev" type="button" aria-label="גלול שמאלה · Scroll left">
+                <button class="cl-arrow cl-arrow--prev" id="clArrowPrev" type="button" aria-label="גלול שמאלה · Scroll left" data-i18n-aria="clArrowPrevAria">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
                          stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M15 6l-6 6 6 6"/>
                     </svg>
                 </button>
                 <div class="cl-track" id="clTrack"></div>
-                <button class="cl-arrow cl-arrow--next" id="clArrowNext" type="button" aria-label="גלול ימינה · Scroll right">
+                <button class="cl-arrow cl-arrow--next" id="clArrowNext" type="button" aria-label="גלול ימינה · Scroll right" data-i18n-aria="clArrowNextAria">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
                          stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M9 6l6 6-6 6"/>
@@ -448,38 +448,38 @@
         <!-- ░░ PEAR Live-Action Gallery & Retake Pod - unified glass capsule ░░
              Retake capsule + horizontal "Live Photo" history (5s VTON clips,
              captured locally - zero server video cost). ░░ -->
-        <section class="pear-interaction-pod" id="pearGallery" aria-label="גלריית מדידות" hidden>
+        <section class="pear-interaction-pod" id="pearGallery" aria-label="גלריית מדידות" hidden data-i18n-aria="pearGalleryAria">
             <div class="pip-head">
                 <span class="pip-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 4v4h4"></path><path d="M12 8v4l3 2"></path>
                     </svg>
                 </span>
-                <h3 class="pip-title">מדידות קודמות <span>· Previous Fits</span></h3>
+                <h3 class="pip-title"><span data-i18n="pipTitle">מדידות קודמות</span> <span data-i18n-hide-on-en>· Previous Fits</span></h3>
                 <button class="pip-retake" id="retakeBtn" type="button">
                     <span class="pip-retake__icon" aria-hidden="true">↺</span>
-                    <span>מדוד שוב</span>
-                    <span class="pip-retake__en">Retake</span>
+                    <span data-i18n="pipRetakeLabel">מדוד שוב</span>
+                    <span class="pip-retake__en" data-i18n-hide-on-en>Retake</span>
                 </button>
-                <button class="pip-clear" id="galleryClear" type="button" title="נקה גלריה">נקה</button>
+                <button class="pip-clear" id="galleryClear" type="button" title="נקה גלריה" data-i18n="galleryClearLabel">נקה</button>
             </div>
             <div class="pear-gallery-track" id="galleryTrack"></div>
 
             <!-- Floating "Compare Looks" pill - slides up when exactly 2 fits are selected -->
             <button class="pear-compare-bar" id="compareBar" type="button" hidden>
                 <span class="pear-compare-bar__icon" aria-hidden="true">⤢</span>
-                <span>השוואה בין המראה הנבחר</span>
-                <span class="pear-compare-bar__en">Compare Looks</span>
+                <span data-i18n="compareBarLabel">השוואה בין המראה הנבחר</span>
+                <span class="pear-compare-bar__en" data-i18n-hide-on-en>Compare Looks</span>
             </button>
         </section>
 
         <!-- ░░ Compare Fits - split-screen liquid-glass overlay ░░ -->
-        <div class="pear-compare-overlay" id="pearCompare" role="dialog" aria-modal="true" aria-label="השוואת מדידות" hidden>
+        <div class="pear-compare-overlay" id="pearCompare" role="dialog" aria-modal="true" aria-label="השוואת מדידות" hidden data-i18n-aria="pearCompareAria">
             <div class="pcmp__backdrop" data-compare-close></div>
             <div class="pcmp__panel" role="document">
                 <header class="pcmp__head">
-                    <h3 class="pcmp__title">השוואת מדידות <span>· Compare Fits</span></h3>
-                    <button class="pcmp__close" id="compareClose" type="button" aria-label="סגור" data-compare-close>✕</button>
+                    <h3 class="pcmp__title"><span data-i18n="pcmpTitle">השוואת מדידות</span> <span data-i18n-hide-on-en>· Compare Fits</span></h3>
+                    <button class="pcmp__close" id="compareClose" type="button" aria-label="סגור" data-compare-close data-i18n-aria="ariaClose">✕</button>
                 </header>
                 <div class="pcmp__split" id="compareSplit"></div>
             </div>
@@ -497,26 +497,26 @@
      that garment, closes the overlay, and sets it as the Active Item. Luxury
      white / royal-blue theme (scoped --royal tokens in style.css). -->
 <div class="gd-overlay" id="garmentDetect" role="dialog" aria-modal="true"
-     aria-label="בחירת בגד מהתמונה שהעלית" hidden>
+     aria-label="בחירת בגד מהתמונה שהעלית" hidden data-i18n-aria="garmentDetectAria">
   <div class="gd-overlay__backdrop" data-gd-close></div>
   <div class="gd-overlay__panel" role="document">
     <header class="gd-head">
       <div class="gd-head__text">
         <span class="gd-eyebrow">PEAR · Detect</span>
-        <h3 class="gd-title">בחר/י את הבגד <span>· Select a garment</span></h3>
+        <h3 class="gd-title"><span data-i18n="gdTitle">בחר/י את הבגד</span> <span data-i18n-hide-on-en>· Select a garment</span></h3>
         <p class="gd-sub" id="gdSub">מזהה בגדים בתמונה…</p>
       </div>
-      <button class="gd-close" id="gdClose" type="button" aria-label="סגור" data-gd-close>✕</button>
+      <button class="gd-close" id="gdClose" type="button" aria-label="סגור" data-gd-close data-i18n-aria="ariaClose">✕</button>
     </header>
 
     <!-- TOP / BOTTOM segmented toggle - shown only for a full worn outfit; snaps the
          bounding box between the top-garment and bottom-garment sub-regions. -->
-    <div class="gd-tabs" id="gdTabs" role="tablist" aria-label="בחירת סוג בגד" data-active="top" hidden>
+    <div class="gd-tabs" id="gdTabs" role="tablist" aria-label="בחירת סוג בגד" data-active="top" hidden data-i18n-aria="gdTabsAria">
       <button class="gd-tab is-active" type="button" role="tab" data-side="top" aria-selected="true">
-        <span>עליון</span><small>Top</small>
+        <span data-i18n="gdTabTop">עליון</span><small data-i18n-hide-on-en>Top</small>
       </button>
       <button class="gd-tab" type="button" role="tab" data-side="bottom" aria-selected="false">
-        <span>תחתון</span><small>Bottom</small>
+        <span data-i18n="gdTabBottom">תחתון</span><small data-i18n-hide-on-en>Bottom</small>
       </button>
       <span class="gd-tabs__ind" aria-hidden="true"></span>
     </div>
@@ -533,19 +533,19 @@
         <!-- detecting spinner (over the image) -->
         <div class="gd-loading" id="gdLoading">
           <span class="gd-spinner" aria-hidden="true"></span>
-          <span class="gd-loading__label">מזהה בגדים…</span>
+          <span class="gd-loading__label" data-i18n="gdLoadingLabel">מזהה בגדים…</span>
         </div>
       </div>
 
       <!-- empty state - no garments detected -->
       <div class="gd-empty" id="gdEmpty" hidden>
         <span class="gd-empty__icon" aria-hidden="true">🔍</span>
-        <p class="gd-empty__text">לא זוהו בגדים בתמונה.<br><span>Please try another clear image.</span></p>
-        <button class="btn-primary gd-empty__retry" id="gdRetry" type="button">בחר/י תמונה אחרת</button>
+        <p class="gd-empty__text"><span data-i18n="gdEmptyText">לא זוהו בגדים בתמונה.</span><br><span>Please try another clear image.</span></p>
+        <button class="btn-primary gd-empty__retry" id="gdRetry" type="button" data-i18n="gdRetryBtn">בחר/י תמונה אחרת</button>
       </div>
     </div>
 
-    <p class="gd-hint" id="gdHint">לחצ/י על המסגרת הכחולה סביב הבגד שתרצה/י למדוד</p>
+    <p class="gd-hint" id="gdHint" data-i18n="gdHint">לחצ/י על המסגרת הכחולה סביב הבגד שתרצה/י למדוד</p>
   </div>
 </div>
 
@@ -565,8 +565,8 @@
       <div class="calc-editorial__scrim"></div>
       <div class="calc-editorial__content">
         <span class="calc-editorial__kicker">PEAR · Atelier</span>
-        <h1 class="calc-editorial__headline">תודה שניסית<br>את PEAR</h1>
-        <p class="calc-editorial__lead">חדר הלבשה וירטואלי בזמן אמת - הלוק נמדד על הגוף שלך, מתוך נתונים ולא ניחושים.</p>
+        <h1 class="calc-editorial__headline" data-i18n="lockedHeadline">תודה שניסית<br>את PEAR</h1>
+        <p class="calc-editorial__lead" data-i18n="calcLead">חדר הלבשה וירטואלי בזמן אמת - הלוק נמדד על הגוף שלך, מתוך נתונים ולא ניחושים.</p>
         <span class="calc-editorial__meta">Lookbook № 01 - Monochrome Capsule</span>
       </div>
     </aside>
@@ -580,14 +580,15 @@
           </svg>
         </div>
         <span class="kicker">PEAR · Personal Fit Engine</span>
-        <h2>המדידה כבר בוצעה</h2>
-        <p class="subtitle">כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!</p>
+        <h2 data-i18n="lockedHeading">המדידה כבר בוצעה</h2>
+        <p class="subtitle" data-i18n="lockedSubtitle">כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!</p>
       </div>
     </div>
   </div>
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<button class="pear-lang-toggle" id="langToggle" type="button" aria-label="Switch language · החלף שפה">EN · עברית</button>
 
 <script type="module" src="app.js?v=13"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
