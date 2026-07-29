@@ -41,6 +41,8 @@ const SUITES = [
   ["pending-flag", "pending-flag.test.mjs"],
   ["pending-gate", "pending-gate.test.mjs"],
   ["image-bytes-cache", "image-bytes-cache.test.mjs"],
+  ["angle-race", "angle-race.test.mjs"],
+  ["preload-composite", "preload-composite.test.mjs"],
 ];
 
 let failed = 0;

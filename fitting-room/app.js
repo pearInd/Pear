@@ -2819,6 +2819,44 @@ async function preloadGarmentAssets() {
     if (!backOk) {
       console.warn("[PEAR] GARMENT_BACK failed pre-load validation - proceeding FRONT-ONLY -", label, back);
       hasBack = false;
+      continue;   // no point validating a composite built from a back we already rejected
+    }
+
+    /* THE GAP THIS CLOSES. This gate's entire job is "block go-live until every
+       asset THIS RUN NEEDS is ready" - but until now it validated the plain
+       front/back Blobs from the OLDER per-orientation AI Auto path and stopped
+       there, with zero awareness that COMPOSITE_MODE (the default) actually feeds
+       Lucy a DIFFERENT reference: the stitched FRONT|BACK image. Front and back
+       individually validating fine says nothing about whether the composite built
+       FROM them exists yet or decoded cleanly.
+       prewarmOrientationAssets() already kicks off this exact build in the
+       background the moment AI Auto becomes eligible (fire-and-forget, for the
+       common case where it finishes well before go-live is even clicked) - but
+       fire-and-forget has no floor. A shopper who taps go-live before it finishes
+       (right as a widget correction lands and the button unblocks) previously
+       sailed straight past this gate, connected, and the composite only got
+       built - AWAITED, but no longer BEFORE billing/connect - inside the first
+       applyGarment() call once already live. That is a strictly worse place for a
+       multi-second build to happen for the first time, and is the most direct
+       mechanical explanation for a first live session behaving differently from a
+       later one on the exact same item: this call is a no-op cache hit if the
+       prewarm already finished, and the actual missing wait if it had not. */
+    if (compositeActiveFor(item)) {
+      setText(`מכינים תצוגה משולבת… · Preparing combined view… ${label} […]`);
+      let composite = null;
+      if (item.composite) {
+        // Prefer the widget's own composite (it is the exact image the store page
+        // produced); a decode failure here is not fatal - fall through and build
+        // one locally, same as referenceImageFor() already does at apply time.
+        composite = await garmentBlobCached(item.composite);
+        if (!composite) console.warn("[PEAR] handed-over composite failed to decode during preload -", label);
+      }
+      if (!composite) composite = await createGarmentComposite(front, back);
+      setText(`מכינים תצוגה משולבת… · Preparing combined view… ${label} [${composite ? "OK" : "FAIL"}]`);
+      if (!composite) {
+        console.warn("[PEAR] COMPOSITE failed pre-load validation - proceeding FRONT-ONLY -", label);
+        hasBack = false;   // same degrade path as a broken back blob - never go live on an unvalidated reference
+      }
     }
   }
   return { ok, hasBack };
@@ -4075,13 +4113,20 @@ function compositeActiveFor(item) {
   return COMPOSITE_MODE && currentAngle === AUTO_ANGLE && !resolveLook() && !!distinctBackOf(item);
 }
 
-function angleClause(item) {
+/* `angleOverride`, when given, is used INSTEAD of a fresh effectiveAngle() read - see
+   applyGarment()'s "angleAtStart" comment for why: the caller may be applying a
+   snapshot taken before an async gap during which the OrientationWatcher could have
+   flipped the live orientation, and re-reading here would let the clause and the
+   already-resolved reference image drift apart. Omitted by every OTHER caller
+   (applyLook() has no per-orientation reference to race against), so this stays a
+   pure addition, not a behaviour change for them. */
+function angleClause(item, angleOverride) {
   // Composite mode: the reference carries BOTH views, so the clause names the panel
   // matching the detected orientation and excludes the other outright.
   if (compositeActiveFor(item)) {
-    return effectiveAngle() === "back" ? COMPOSITE_CLAUSE.back : COMPOSITE_CLAUSE.front;
+    return (angleOverride || effectiveAngle()) === "back" ? COMPOSITE_CLAUSE.back : COMPOSITE_CLAUSE.front;
   }
-  const angle = effectiveAngle();      // AI Auto resolves to the DETECTED orientation
+  const angle = angleOverride || effectiveAngle();      // AI Auto resolves to the DETECTED orientation
   if (angle === "back") {
     // Dual asset (front + a REAL back photo, incl. a user's uploaded back) → reproduce it.
     // AI Auto always lands here with a real back (canCombineViews gates the mode on one).
@@ -4150,6 +4195,22 @@ async function referenceImageFor(item, activeImg = activeImageOf(item)) {
 async function applyGarment(item) {
   if (!rtClient) throw new Error("not connected");
 
+  /* THE "MIXING" BUG. Snapshot the angle ONCE, synchronously, right here - before any
+     async work below. referenceImageFor() can await a real fetch/decode, or (the
+     first time a pair is used) a multi-hundred-ms composite build; the
+     OrientationWatcher's own independent 250ms sampler is free to confirm a flip and
+     mutate the live autoOrientation lock during that exact window - it has no idea
+     this call is in flight. angleClause() used to re-read effectiveAngle() AFTER
+     that await, which meant it could pick up the NEW angle while imageRef still held
+     the reference resolved for the OLD one: a front Blob paired with "reproduce the
+     BACK, do NOT render the front" steering - the front-print-on-the-back failure
+     this file already fixed once for a URL-matching reason (see canonicalImageUrl's
+     comment), reintroduced here by a bare time-of-check-to-time-of-use race instead.
+     Freezing the angle here means the image and the clause below always describe the
+     SAME side, even if a flip lands mid-await - at worst this one application is a
+     turn behind, corrected by the very next set() once the flip is observed again;
+     it can never be internally self-contradictory. */
+  const angleAtStart = effectiveAngle();
   const activeImg = activeImageOf(item);
   const imageRef  = await referenceImageFor(item, activeImg);   // Blob for combined, URL otherwise
 
@@ -4164,8 +4225,10 @@ async function applyGarment(item) {
      invariant at the single point where the prompt and the image are married, so any
      future path that reintroduces the mismatch is caught here rather than in a
      shopper's live session. Detection only - it never silently rewrites the payload,
-     because the correct recovery differs by cause and guessing one would hide the bug. */
-  if (effectiveAngle() === "back") {
+     because the correct recovery differs by cause and guessing one would hide the bug.
+     Checked against angleAtStart, not a fresh effectiveAngle() read, for the same
+     reason angleClause() below is - see this function's opening comment. */
+  if (angleAtStart === "back") {
     const g = galleryOf(item);
     const realBack = distinctBackOf(item, g);
     if (realBack && !sameImage(activeImg, realBack)) {
@@ -4178,14 +4241,14 @@ async function applyGarment(item) {
     }
   }
 
-  if (effectiveAngle() === "back") {
+  if (angleAtStart === "back") {
     const isBlob = typeof Blob !== "undefined" && imageRef instanceof Blob;
     console.log('[PEAR] applyGarment image:', activeImg);
     console.log('[PEAR] applyGarment blob:', isBlob ? 'ok' : 'NULL - will use URL fallback');
   }
 
   const payload = {
-    prompt: buildPrompt(item) + angleClause(item),
+    prompt: buildPrompt(item) + angleClause(item, angleAtStart),
     enhance: false,
     ...(imageRef ? { image: imageRef } : {}),
   };
@@ -4193,7 +4256,12 @@ async function applyGarment(item) {
   console.group("[PEAR] applyGarment() - VTON payload debug");
   console.log("garment  :", item.name, `(id=${item.id}, type=${item.garmentType}${item.custom ? ", custom upload" : ""})`);
   console.log("angle    :", currentAngle,
-    currentAngle === AUTO_ANGLE ? `(AI Auto - ${vtonState()}, resolved angle: ${effectiveAngle()}, pre-cached Blob)`
+    // angleAtStart, not a fresh effectiveAngle() read - this must report what the
+    // payload above actually used, not whatever the live orientation has become by
+    // the time this log line runs (which can differ - see this function's opening
+    // comment. A log claiming a different angle than the payload it's describing
+    // would make exactly this class of bug harder to diagnose, not easier).
+    currentAngle === AUTO_ANGLE ? `(AI Auto - ${vtonState()}, applied angle: ${angleAtStart}, pre-cached Blob)`
       : hasDedicatedAngle(item) ? "(dedicated gallery image)" : "(front fallback + prompt)");
   console.log("subType  :", item.subType, "| color:", item.color);
   console.log("img URL  :", abbrevImg(activeImg));   // data: URLs abbreviated so a base64 blob can't flood the console
