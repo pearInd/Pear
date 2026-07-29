@@ -1854,6 +1854,34 @@ app.get("/", (req, res) => {
   res.redirect("/fitting-room/");
 });
 
+/* ── Fitting room entry page (fitting-room/index.html) ───────────────────────
+   Dynamic handler (not a plain sendFile) so the page's default language can be
+   set server-side, before first paint, from the visitor's geo instead of
+   flashing the wrong language and correcting client-side. Registered before the
+   static middleware so it takes priority over static-file resolution.
+   The file is read from disk once and cached - it's a fixed asset that only
+   changes on deploy, so there's no reason to hit the filesystem per request. */
+let fittingRoomHtmlCache = null;
+function getFittingRoomHtml() {
+  if (fittingRoomHtmlCache === null) {
+    fittingRoomHtmlCache = fs.readFileSync(path.join(__dirname, "fitting-room/index.html"), "utf8");
+  }
+  return fittingRoomHtmlCache;
+}
+app.get(["/fitting-room", "/fitting-room/", "/fitting-room/index.html"], (req, res) => {
+  // x-vercel-ip-country is set by Vercel's edge network from the client's IP; it's
+  // simply absent when running locally or behind a different host - that (and
+  // every country other than Israel) defaults to English.
+  const country = String(req.headers["x-vercel-ip-country"] || "").toUpperCase();
+  const lang = country === "IL" ? "he" : "en";
+  const html = getFittingRoomHtml().replace(
+    "<head>",
+    `<head>\n    <script>window.__PEAR_DEFAULT_LANG__="${lang}"</script>`
+  );
+  res.setHeader("Content-Type", "text/html; charset=UTF-8");
+  res.send(html);
+});
+
 /* ── Static hosting ──────────────────────────────────────────────────────── */
 const uiRoot = __dirname;
 
