@@ -472,12 +472,20 @@ async function requireAdminAuth(req, res, next) {
     }
     const email = (user.email || "").toLowerCase();
     if (ADMIN_EMAILS.length === 0) {
-      // Allowlist not configured - fail OPEN for backward compatibility, but shout
-      // about it. Configure ADMIN_EMAILS to close this hole (see the env comment).
-      console.warn(
-        `[admin-auth] ⚠ ADMIN_EMAILS is empty - authorizing ANY authenticated user ` +
-        `(${email || "unknown"}). Set ADMIN_EMAILS to restrict admin access.`
+      // FAIL CLOSED. This used to fail open "for backward compatibility", which
+      // was survivable only because /api/admin/check-auth separately required a
+      // password from ADMIN_PASSWORDS before anyone could obtain a session at
+      // all. Sign-in is now plain Supabase signInWithPassword against the public
+      // anon key, so that second gate is gone: failing open here would authorize
+      // ANY Supabase Auth user in the project as a full admin.
+      console.error(
+        "[admin-auth] ADMIN_EMAILS is empty - refusing all admin access. " +
+        "Set ADMIN_EMAILS (comma-separated) in .env and in the Vercel project."
       );
+      return res.status(503).json({
+        ok: false, error: "admin_allowlist_unconfigured",
+        message: "Admin access is not configured on this deployment.",
+      });
     } else if (!ADMIN_EMAILS.includes(email)) {
       console.warn(`[admin-auth] blocked non-admin login: "${email}"`);
       return res.status(403).json({ ok: false, error: "forbidden", message: "Not an admin account." });
