@@ -445,6 +445,15 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   perspective: 1600px;   /* depth field for the 3D card tilt */
 }
 
+/* Video layout (this screen only - #screen-locked keeps the base
+   1.05fr/0.95fr + align-items:center above, sized to its own text content).
+   40% video / 60% form, and align-items:stretch so the video column matches
+   the form column's full height instead of hugging its own content. */
+#screen-calculator .calc-shell {
+  grid-template-columns: 40% 60%;
+  align-items: stretch;
+}
+
 /* ── editorial panel ──────────────────────────────────────────────────────
    REDESIGN: this used to be a separate, flush-edge pitch-black box
    (border-radius only on its outer corners) fused directly to the light
@@ -475,7 +484,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 
 /* ── LIGHT PANEL (screen-calculator only) ─────────────────────────────────
    The dark card is gone here: this is now a soft ivory/glass surface that
-   dissolves into the page canvas so the mascot side and the form side read
+   dissolves into the page canvas so the video side and the form side read
    as ONE continuous premium layout rather than two stuck-together cards.
 
    SCOPED ON PURPOSE: #screen-locked reuses .calc-editorial *with white
@@ -506,181 +515,22 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 /* ambient aura/grid - true background, absolute across the WHOLE panel */
 .calc-editorial__aura, .calc-editorial__grid { position: absolute; inset: 0; z-index: 0; }
-/* Hugs the trio instead of stretching to match the form column's height -
-   flex:none (not 1) so the wrapper sizes to its own content, and the
-   padding is modest rather than filling the whole panel. See .calc-shell's
-   align-items below for the other half of this fix: without it, the
-   PANEL itself still stretches to match .calc-main via align-items:stretch,
-   which is what produced the oversized/empty-feeling card. */
+/* Fills the whole editorial column (see #screen-calculator .calc-shell's
+   align-items:stretch below) so the video panel matches the form column's
+   height on desktop. No padding: the video should run edge-to-edge inside
+   the panel's own rounded/clipped border. */
 .calc-editorial__visual {
-  position: relative; z-index: 1; flex: none;
+  position: relative; z-index: 1; flex: 1;
   display: flex; align-items: center; justify-content: center;
-  padding: clamp(20px, 4vh, 40px) clamp(16px, 3vw, 32px);
+  overflow: hidden;
 }
-
-/* ════════════════════════════════════════════════════════════════════════
-   ✦ INTERACTIVE PEAR TRIO  ·  three distinct characters, grounded, reactive
-   ------------------------------------------------------------------------
-   STRICTLY STATE-DRIVEN: there is no ambient wandering here or in
-   hero-pass.js. Idle holds one calm resting pose; every other pose - lean
-   in on focus, weight-shift while typing, a hop on field completion, drawing
-   together with widened eyes as the form nears done, a synchronized droop
-   on a validation error - is a direct, immediate reaction to a real user
-   action. The engine still runs a per-frame spring/lerp loop (that's what
-   makes state CHANGES feel fluid instead of snapping), it just never
-   invents its own motion between events.
-
-   WHAT CSS OWNS (discrete, non-continuous only):
-     · which mouth path is visible for the current emotional beat
-     · eye / brow / cheek transitions between emotional tiers
-     · static pivots for the parts JS rotates/scales
-     · the one-shot celebration glow
-   WHAT JS OWNS (never declare these in CSS - written every frame):
-     .pear__drift  translate + rotate  (state-target position/lean, spring-smoothed)
-     .pear__squish scale               (velocity-driven squash/stretch)
-     .pear__tilt   rotate              (synchronized huddle-lean / droop sway)
-     .pear__arm/.pear__leg rotate      (pose target, spring-lagged behind the body)
-     .pear__pupils translate · .pear__lid scale · .pear__crown rotate
-     .pear__shadow scale+opacity
-
-   PIVOT PRECISION: arm/leg transform-origin is set INLINE in the HTML in
-   raw px (no transform-box:fill-box) matching each limb path's own "M"
-   start coordinate exactly - percentage/fill-box origins were only ever an
-   approximation of the shoulder/hip point, which is what let hands and feet
-   visibly swing away from the body at large rotation angles. Do not add
-   transform-box:fill-box to .pear__arm/.pear__leg; it would silently
-   override the precise inline origin with an approximate one again. ════ */
-
-.pear-trio {
-  --spring: cubic-bezier(.34, 1.56, .64, 1);
-  --silk:   cubic-bezier(.22, 1, .36, 1);
-  position: relative;
-  width: min(88%, 480px);
-}
-.pear-trio__stage { display: block; width: 100%; height: auto; overflow: visible; }
-
-/* Promote every animated layer once, up front, so a state change never
-   triggers a mid-animation layer promotion (a classic first-frame hitch). */
-.pear__drift, .pear__squish, .pear__tilt, .pear__arm, .pear__leg,
-.pear__pupils, .pear__lid, .pear__crown, .pear__shadow { will-change: transform; }
-
-/* ── PIVOTS ─────────────────────────────────────────────────────────────
-   .pear__arm / .pear__leg deliberately do NOT get transform-box:fill-box
-   here - see the precision note above. */
-.pear__drift  { transform-box: fill-box; transform-origin: 50% 85%; }   /* leans from the feet, not the belly */
-.pear__squish { transform-box: fill-box; transform-origin: 50% 92%; }   /* squash reads as compressing into the ground */
-.pear__tilt   { transform-box: fill-box; transform-origin: 50% 88%; }
-.pear__crown  { transform-box: fill-box; transform-origin: 50% 100%; }
-.pear__shadow { transform-box: fill-box; transform-origin: center; }
-.pear__lid    { transform-box: fill-box; transform-origin: center; scale: 1 0; }
-.pear__eye    { transform-box: fill-box; transform-origin: center; }
-
-/* ── EMOTIONAL ARC · discrete tiers, smoothly transitioned ────────────── */
-.pear__eye   { transition: scale .34s var(--spring); }
-.pear__brow  { transform-box: fill-box; transition: rotate .42s var(--spring), translate .42s var(--spring); }
-.pear__cheek { opacity: 0; transition: opacity .5s var(--silk); }
-.pear__glasses { opacity: .92; }
-
-.pear-trio[data-progress="1"] .pear__eye { scale: 1.08; }
-.pear-trio[data-progress="2"] .pear__eye { scale: 1.16; }
-.pear-trio.is-focused         .pear__eye { scale: 1.12; }
-.pear-trio[data-progress="1"] .pear__cheek { opacity: .34; }
-.pear-trio[data-progress="2"] .pear__cheek { opacity: .62; }
-.pear-trio.is-celebrating     .pear__cheek { opacity: .8; }
-.pear-trio[data-progress="1"] .pear__brow  { translate: 0 -2px; }
-.pear-trio[data-progress="2"] .pear__brow  { translate: 0 -4px; }
-
-/* ── mouths · one crossfades in per emotional beat ─────────────────────
-   opacity (not display) so the swap is a smooth fade rather than a hard
-   cut - the closest a fixed set of discrete mouth shapes gets to true path
-   morphing without needing every shape to share the same point count.
-   Rules are listed LOWEST to HIGHEST priority; each rule explicitly zeroes
-   every mouth it doesn't want, so a later rule always wins outright over
-   an earlier one even where both would otherwise apply (e.g. mid-typing AND
-   already at tier 2 - "happy" still wins because its rule is declared, and
-   explicitly zeroes smirk, after the typing rule). ── */
-.pear__mouth { transition: opacity .28s var(--silk); }
-.pear__mouth--soft, .pear__mouth--anticipate,
-.pear__mouth--happy, .pear__mouth--sad { opacity: 0; }
-
-/* tier 1 - a gentle building smile */
-.pear-trio[data-progress="1"] .pear__mouth--idle { opacity: 0; }
-.pear-trio[data-progress="1"] .pear__mouth--soft { opacity: 1; }
-
-/* anticipating - focused, actively typing, hovering Continue, or holding at
-   tier 2 - mouth rounds into a single wide, held "o". is-typing is folded
-   into this same rule (not a separate smirk) so there is exactly ONE mouth
-   on screen for the whole focus-through-typing stretch, never two. */
-.pear-trio.is-anticipate .pear__mouth--idle,
-.pear-trio.is-anticipate .pear__mouth--soft { opacity: 0; }
-.pear-trio.is-anticipate .pear__mouth--anticipate { opacity: 1; }
-
-/* form complete / celebrating - the open happy laugh outranks everything
-   above it */
-.pear-trio[data-progress="2"] .pear__mouth--idle,
-.pear-trio.is-celebrating     .pear__mouth--idle,
-.pear-trio[data-progress="2"] .pear__mouth--soft,
-.pear-trio.is-celebrating     .pear__mouth--soft,
-.pear-trio[data-progress="2"] .pear__mouth--anticipate,
-.pear-trio.is-celebrating     .pear__mouth--anticipate { opacity: 0; }
-.pear-trio[data-progress="2"] .pear__mouth--happy,
-.pear-trio.is-celebrating     .pear__mouth--happy { opacity: 1; }
-
-/* error outranks every other emotional beat - it is the correction cue */
-.pear-trio.is-sad .pear__mouth--idle,
-.pear-trio.is-sad .pear__mouth--soft,
-.pear-trio.is-sad .pear__mouth--anticipate,
-.pear-trio.is-sad .pear__mouth--happy { opacity: 0; }
-.pear-trio.is-sad .pear__mouth--sad { opacity: 1; }
-.pear-trio.is-sad .pear__eye  { scale: 1.2; }
-.pear-trio.is-sad .pear__cheek { opacity: .2; }
-.pear-trio.is-sad .pear__brow--l { rotate: 21deg;  translate: 0 -3px; }
-.pear-trio.is-sad .pear__brow--r { rotate: -21deg; translate: 0 -3px; }
-
-/* ── anticipation · nearing completion, or hovering Continue ──────────────
-   Independent of data-progress (hover can fire before tier 2), so it gets
-   its own tense, wide-eyed look; the actual "draw together until they
-   touch" motion is the JS drift target, this just supplies the face. */
-.pear-trio.is-anticipate .pear__eye { scale: 1.2; }
-.pear-trio.is-anticipate .pear__brow { translate: 0 -3px; }
-.pear-trio.is-anticipate .pear__cheek { opacity: .55; }
-
-/* ── lying-down / watching-the-form (mobile only, JS-gated < 768px,
-   hero-pass.js .is-lying) - the body pose itself (sink, tilt, arm/leg
-   angles) is entirely JS; this only owns the "wide, eager" eye read while
-   they watch the inputs from below. ────────────────────────────────── */
-.pear-trio.is-lying .pear__eye { scale: 1.18; }
-.pear-trio.is-lying .pear__brow { translate: 0 -3px; }
-.pear-trio.is-lying .pear__cheek { opacity: .5; }
-
-/* ── VICTORY glow · the one legitimately discrete, one-shot effect ────── */
-.pear-trio::before {
-  content: ""; position: absolute; inset: -12%; z-index: -1; border-radius: 50%;
-  background: radial-gradient(circle, var(--pear-glow), transparent 68%);
-  opacity: 0; pointer-events: none;
-}
-.pear-trio.is-celebrating::before { animation: pearGlow 1.2s var(--silk); }
-@keyframes pearGlow {
-  0%   { opacity: 0;   scale: .75; }
-  30%  { opacity: .95; scale: 1.14; }
-  100% { opacity: 0;   scale: 1.4; }
-}
-
-/* ── sparkles - driven directly by hero-pass.js via the Web Animations API,
-   NOT a CSS class-triggered @keyframes. A class-based version was tried
-   first; despite the animation being correctly recognised (name/duration/
-   delay/play-state all reported "running"), the computed opacity stayed at
-   0 through its whole first cycle in testing - JS-driven .animate() sidesteps
-   whatever cascade/timing issue that was and is directly verifiable (its
-   Promise resolves exactly when the effect finishes). Base state (invisible,
-   scale 0) is the only thing left here. ── */
-.pear__sparkle { transform-box: fill-box; transform-origin: center; scale: 0; opacity: 0; }
-
-/* ── reduced motion ─────────────────────────────────────────────────────
-   The engine checks this same query and never starts its rAF loop, so the
-   characters simply hold a neutral pose. This only needs to stop the glow. */
-@media (prefers-reduced-motion: reduce) {
-  .pear-trio::before { animation: none !important; }
+/* object-fit:contain (never cover) - the whole video frame must stay
+   visible, no cropping. Anything letterboxed around it shows the panel's
+   own cream/glass background (#screen-calculator .calc-editorial above). */
+.calc-editorial__video {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .calc-editorial__aura {
@@ -767,24 +617,27 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 @media (max-width: 920px) {
   .calc-shell { grid-template-columns: 1fr; min-height: auto; }
   .calc-editorial {
-    min-height: 0;   /* screen-locked's copy still sizes its own (mascot-less) panel naturally */
+    min-height: 0;   /* screen-locked's copy still sizes its own panel naturally */
     border-radius: var(--radius-lg);   /* fully rounded now on every width - no more RTL-specific split to keep in sync */
   }
-  /* No forced min-height here on purpose: the panel is mascot-only now, so
-     letting it size from .calc-editorial__visual's own padding + the SVG's
-     intrinsic aspect ratio IS "hug the content" - a vh-based floor would
-     just reintroduce empty space on short/wide viewports. */
-  .pear-trio { width: min(90%, 400px); }
   .calc-editorial__content { padding: 20px clamp(18px, 5vw, 30px) 24px; }
   .calc-editorial__headline { font-size: clamp(1.7rem, 7vw, 2.3rem); }
   .calc-editorial__lead { margin-bottom: 6px; }
   .calc-editorial__list { display: none; }
   .calc-main { padding-top: 6px; }
+
+  /* Stacked mobile layout: video becomes a short hero-banner strip across
+     the top (NOT the full-height column it is on desktop), form column
+     below it at full width. align-items:stretch is a desktop-only concern
+     (#screen-calculator .calc-shell above), so nothing to undo here. */
+  #screen-calculator .calc-editorial__visual {
+    flex: none;
+    height: clamp(140px, 34vw, 220px);
+  }
 }
 @media (max-width: 480px) {
   .calc-editorial__meta { display: none; }
   .calc-shell { gap: 18px; padding-block: 18px; }
-  .pear-trio { width: min(92%, 320px); }
   .calc-editorial__content {
     width: 100%;
     text-align: center;
@@ -792,13 +645,6 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   }
   .calc-editorial__headline { margin-bottom: 12px; }
   .calc-editorial__lead { max-width: 30ch; margin-inline: auto; }
-}
-@media (max-width: 768px) {
-  /* extra breathing room under the trio once they sink into the
-     "resting on elbows, watching the form" pose (hero-pass.js .is-lying) -
-     keeps legs/feet clear of the panel's own overflow:hidden edge instead
-     of the pose reading as clipped. */
-  .calc-editorial__visual { padding-bottom: clamp(28px, 6vh, 48px); }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
