@@ -172,13 +172,21 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 
 /* ── calculator card (floating frosted-glass pane) ─────────────────────── */
 #screen-calculator .container {
-  max-width: 460px;
+  /* Was 460px, capped well under .calc-main's actual ~60%-of-card column
+     width - the difference just sat as dead gutter space on both sides
+     (most visible on the left, the side away from the RTL reading start).
+     Widened to close most of that gap while .calc-main's own padding still
+     keeps some breathing room from the card edge. */
+  max-width: 560px;
   margin: 16px auto 40px;
-  /* Extra block padding (beyond the base clamp) so the form panel reads as
-     tall/roomy against the full-height video column next door, not short
-     and cramped - see the .form-group / #identityForm / #sizeForm gap
-     increases below for the other half of this. */
-  padding: clamp(40px, 6.5vw, 64px) clamp(20px, 3.2vw, 32px);
+  /* Was clamp(40px,6.5vw,64px) - inflated specifically to compensate for
+     .calc-card's old align-items:stretch forcing this column to match the
+     video's (taller) height, which just left the extra padding piled up as
+     dead space below the button instead of closing the gap. Now that
+     .calc-card uses align-items:start (each zone sizes to its own real
+     content, see above), that compensation isn't needed - back to a normal
+     generous-but-not-inflated padding. */
+  padding: clamp(28px, 4.5vw, 40px) clamp(20px, 3.2vw, 32px);
   background: linear-gradient(135deg, rgba(255,255,255,.45) 0%, rgba(255,255,255,.18) 100%);
   -webkit-backdrop-filter: var(--blur-lg);
   backdrop-filter: var(--blur-lg);
@@ -198,12 +206,17 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 36%);
   mix-blend-mode: overlay;
 }
-/* env-mapped specular highlight - follows the pointer (vars set in app.js) */
+/* env-mapped specular highlight - follows the pointer (vars set in app.js).
+   Radius bumped 420px -> 720px (user likes this effect and wants it to
+   reach further/cover more of the card on hover) - same color stops/opacity
+   percentages/mix-blend-mode/transition as before, just a bigger circle, so
+   the falloff "feel" (how quickly it fades from white core to green wash to
+   transparent) scales up proportionally instead of changing character. */
 #screen-calculator .container::after {
   content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
   border-radius: inherit; opacity: 0; mix-blend-mode: soft-light;
   background: radial-gradient(
-    420px circle at var(--mx, 50%) var(--my, 0%),
+    720px circle at var(--mx, 50%) var(--my, 0%),
     rgba(255, 255, 255, .9) 0%,
     rgba(141, 182, 0, .22) 30%,
     transparent 60%
@@ -457,12 +470,18 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   perspective: 1600px;   /* depth field for the 3D card tilt */
 }
 
-/* #screen-locked keeps the base display:grid/1.05fr-0.95fr/align-items:center
-   above (its own separate editorial + form cards, unchanged). #screen-calculator
-   no longer needs .calc-shell itself to be the 2-column grid - that split now
-   lives inside .calc-card below, so .calc-shell just stacks the card and the
-   copyright line beneath it. */
-#screen-calculator .calc-shell { display: block; }
+/* #screen-locked keeps the base display:grid/1.05fr-0.95fr/align-items:center/
+   min-height:100dvh above (its single centered thank-you card wants to fill
+   the viewport). #screen-calculator no longer needs either: the 2-column
+   split now lives inside .calc-card below, so .calc-shell just stacks the
+   card and the copyright line beneath it - and forcing it to a full
+   100dvh box left a large dead strip below the card+copyright whenever
+   their natural content was shorter than the viewport (the "excess space
+   below the button" this was one of the causes of). #screen-calculator
+   itself gets the same min-height:auto treatment below, for the same
+   reason (.screen's base rule also forces 100dvh). */
+#screen-calculator .calc-shell { display: block; min-height: auto; }
+#screen-calculator { min-height: auto; }
 
 /* ── unified card (#screen-calculator, desktop only) ───────────────────────
    The video and form used to be two independent floating cards (.calc-editorial
@@ -470,25 +489,29 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    .calc-shell's gap showing the page background between them. On desktop
    they're now one shared card shell - single radius/background/shadow/blur
    here, with the video zone stripped of its own card chrome (see the
-   #screen-calculator .calc-card .calc-editorial override below) and the two
-   zones separated only by a thin internal divider border on .calc-main.
-   Background/shadow/border/blur values are the exact ones the light
-   "editorial" panel used to carry, reused here unchanged so the card's own
-   visual language doesn't change, only where it's applied.
+   #screen-calculator .calc-card .calc-editorial override below).
 
-   Structural (columns/stretch) is unscoped by width on purpose - mobile
-   overrides grid-template-columns back to 1fr in the responsive block below
-   since .calc-editorial is hidden there. The CHROME (background/border/
-   radius/shadow/blur) is min-width-gated: mobile is explicitly out of scope
-   for this merge, so .container there keeps rendering its own original
-   standalone card look (unchanged from before this merge), same as always. */
+   align-items:start (NOT stretch) - stretch used to force .calc-editorial and
+   .calc-main to the exact same height, but the video's own intrinsic (aspect-
+   ratio-driven) height and the form's natural content height rarely actually
+   match, so whichever one was shorter ended up with a chunk of dead empty
+   space at its own bottom (below the "המשך" button on the form side, in
+   practice - the video/editorial column is normally the taller of the two).
+   With `start`, each zone is exactly as tall as its own real content and the
+   card's outer height simply follows whichever is naturally tallest - no
+   forced matching, no leftover gap. The divider between the two zones can no
+   longer be a border on the shorter .calc-main (it wouldn't reach the full
+   card height any more), so it's a ::after on .calc-card itself instead,
+   positioned at the 40/60 column split and stretched the full card height
+   independently of either zone's own height (see below). */
 #screen-calculator .calc-card {
   display: grid;
   grid-template-columns: 40% 60%;
-  align-items: stretch;
+  align-items: start;
 }
 @media (min-width: 921px) {
   #screen-calculator .calc-card {
+    position: relative;
     border-radius: var(--radius-lg);
     overflow: hidden;
     background:
@@ -497,6 +520,20 @@ html.pear-returning-check #screen-calculator { display: none !important; }
     box-shadow: 0 20px 60px rgba(94, 88, 66, .13), inset 0 1px 0 rgba(255, 255, 255, .9);
     -webkit-backdrop-filter: var(--blur-lg);
             backdrop-filter: var(--blur-lg);
+  }
+  /* the internal divider between the merged card's two zones - inset-block:0
+     spans the full card height regardless of which zone (video or form) is
+     naturally taller, inset-inline-start:40% lands it exactly on the
+     grid-template-columns split. Logical insets, not left/right, so it's
+     correct in this page's RTL direction without a separate override. */
+  #screen-calculator .calc-card::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: 40%;
+    width: 1px;
+    background: var(--glass-line);
+    pointer-events: none;
   }
   /* .container's own standalone card chrome (background/border/radius/
      shadow/blur - still declared on the base rule below for mobile's sake)
@@ -510,6 +547,16 @@ html.pear-returning-check #screen-calculator { display: none !important; }
     -webkit-backdrop-filter: none;
             backdrop-filter: none;
   }
+  /* The video's source frame is tall/portrait - at 40% of the card's width
+     its own aspect-ratio-driven height (see .calc-editorial__visual's
+     comment below) can run well past what the form's real content needs,
+     and since align-items:start above no longer force-matches the two
+     zones, that excess just became the card's overall height with nothing
+     to fill it on the form side - the real source of the leftover space
+     below the button, not the form's own padding. Capping it here bounds
+     the card to a sane height; object-fit:contain on the video (unchanged)
+     means it just letterboxes more within a shorter box, never crops. */
+  #screen-calculator .calc-card .calc-editorial { max-height: min(700px, 78vh); }
 }
 
 /* ── editorial panel ──────────────────────────────────────────────────────
@@ -577,10 +624,16 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 /* ambient aura/grid - true background, absolute across the WHOLE panel */
 .calc-editorial__aura, .calc-editorial__grid { position: absolute; inset: 0; z-index: 0; }
-/* Fills the whole editorial column (see #screen-calculator .calc-shell's
-   align-items:stretch below) so the video panel matches the form column's
-   height on desktop. No padding: the video should run edge-to-edge inside
-   the panel's own rounded/clipped border. */
+/* flex:1 fills .calc-editorial's own height - usually a no-op now that
+   .calc-card uses align-items:start (see above, .calc-editorial is no
+   longer force-stretched to match the form column), EXCEPT when the video's
+   own aspect-ratio-driven height would exceed .calc-editorial's max-height
+   cap (see the #screen-calculator .calc-card .calc-editorial rule above) -
+   there, this flex:1 is what makes the visual area actually fill that
+   shorter, capped box rather than overflowing it, so the video (still
+   object-fit:contain) letterboxes down to fit instead of spilling out.
+   No padding: the video should
+   run edge-to-edge inside the panel's own rounded/clipped border. */
 .calc-editorial__visual {
   position: relative; z-index: 1; flex: 1;
   display: flex; align-items: center; justify-content: center;
@@ -673,20 +726,17 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   display: flex; flex-direction: column; justify-content: center;
   padding: 20px clamp(16px, 3vw, 40px) 40px;
 }
-/* #screen-calculator only: top-align instead of vertically centering, so the
-   form column's content starts at the same y as the video column's top edge
-   (align-items:stretch on .calc-card gives both columns the same box
-   height - centering the form inside that box was what made its top edge
-   read as lower than the video's). #screen-locked keeps the base
-   justify-content:center above - its single centered thank-you card has no
-   video counterpart to align against. */
-#screen-calculator .calc-main { padding-top: 0; justify-content: flex-start; }
-/* the internal divider between the merged card's two zones, now that they no
-   longer have a visible page-background gap between them. border-inline-start
-   (not border-left/right) so it lands on .calc-main's edge that actually
-   touches .calc-editorial regardless of text direction - this page is RTL, so
-   that's .calc-main's right edge. */
-#screen-calculator .calc-card .calc-main { border-inline-start: 1px solid var(--glass-line); }
+/* #screen-calculator only: drop the base's top padding so the form content
+   starts flush at the row top - align-items:start on .calc-card (see above)
+   already puts both zones at the row's top edge, this just removes the
+   extra 20px .calc-main would otherwise add on top of that. #screen-locked
+   keeps the base justify-content:center above - its single centered
+   thank-you card has no video counterpart to align against.
+   padding-bottom trimmed too - .container brings its own bottom padding now
+   (see above), so the base 40px here was stacking on top of that as a
+   second layer of bottom spacing after the button, part of the same
+   leftover-space audit as the .container changes above. */
+#screen-calculator .calc-main { padding-top: 0; padding-bottom: 16px; }
 .calc-main .step-progress { width: 100%; max-width: 472px; padding-top: 12px; }
 #screen-calculator .container { margin: 0 auto 12px; }
 .calc-main__copyright {
@@ -717,8 +767,6 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      40% column - .calc-main needs the collapse to 1fr to actually take the
      freed-up width, same as .calc-shell did for the old 2-column layout. */
   #screen-calculator .calc-card { grid-template-columns: 1fr; }
-  /* No second column left to divide from on mobile. */
-  #screen-calculator .calc-card .calc-main { border-inline-start: none; }
 }
 @media (max-width: 480px) {
   .calc-editorial__meta { display: none; }
