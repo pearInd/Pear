@@ -174,7 +174,11 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 #screen-calculator .container {
   max-width: 460px;
   margin: 16px auto 40px;
-  padding: clamp(20px, 3.2vw, 32px);
+  /* Extra block padding (beyond the base clamp) so the form panel reads as
+     tall/roomy against the full-height video column next door, not short
+     and cramped - see the .form-group / #identityForm / #sizeForm gap
+     increases below for the other half of this. */
+  padding: clamp(32px, 5vw, 48px) clamp(20px, 3.2vw, 32px);
   background: linear-gradient(135deg, rgba(255,255,255,.45) 0%, rgba(255,255,255,.18) 100%);
   -webkit-backdrop-filter: var(--blur-lg);
   backdrop-filter: var(--blur-lg);
@@ -209,18 +213,22 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 #screen-calculator .container.is-tilting::after { opacity: 1; }
 #screen-calculator .container > * { position: relative; z-index: 1; }
 
-.container h2 { font-size: 1.5rem; font-weight: 800; margin: 0 0 6px; }
-.subtitle { color: var(--muted); margin: 0 0 18px; font-size: .9rem; line-height: 1.5; }
+.container h2 { font-size: 1.5rem; font-weight: 800; margin: 0 0 10px; }
+.subtitle { color: var(--muted); margin: 0 0 26px; font-size: .9rem; line-height: 1.5; }
 
-#sizeForm { display: grid; gap: 13px; }
-.form-group { display: grid; gap: 7px; }
+/* #identityForm has no gap rule of its own (unlike #sizeForm below), so its
+   two .form-group blocks previously sat flush against each other - the main
+   driver of the "cramped" identity screen. Same increased gap on both forms
+   for a consistent rhythm across the whole panel. */
+#identityForm, #sizeForm { display: grid; gap: 22px; }
+.form-group { display: grid; gap: 10px; }
 .form-group label { font-size: .85rem; font-weight: 600; color: var(--text); }
 .required { color: var(--pear-deep); margin-inline-end: 4px; font-weight: 800; }
 .optional { color: var(--muted-2); font-weight: 500; font-size: .78rem; }
 
 /* glass-inset inputs with a soft pear-green focus ring */
 .form-group input {
-  width: 100%; padding: 14px 17px;
+  width: 100%; padding: 17px 17px;
   border: 1px solid var(--glass-line); border-radius: var(--pill);
   font-size: .98rem; font-family: inherit; color: var(--ink);
   background: rgba(255, 255, 255, .35);
@@ -297,6 +305,10 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   color: var(--muted-2); border-color: var(--glass-line);
   box-shadow: none; cursor: not-allowed;
 }
+/* #screen-calculator only (identity/OTP/size-form continue buttons) gets
+   extra breathing room before the button - #screen-fitting's startCamBtn
+   keeps the base 20px, untouched. */
+#screen-calculator .btn-primary { margin-top: 30px; }
 
 .btn-ghost {
   padding: 13px 22px; border: 1px solid var(--glass-border); border-radius: var(--pill);
@@ -452,6 +464,11 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 #screen-calculator .calc-shell {
   grid-template-columns: 40% 60%;
   align-items: stretch;
+  /* Tighter than the base 28px - the video and form should read as one
+     close-set pairing, not two panels with daylight between them. Higher
+     specificity than the base rule (and the unscoped 480px gap:18px
+     override) so this wins at every width without touching #screen-locked. */
+  gap: 12px;
 }
 
 /* ── editorial panel ──────────────────────────────────────────────────────
