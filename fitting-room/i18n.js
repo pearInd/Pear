@@ -27,25 +27,35 @@
    visit) FOREVER - geo-IP never ran again, on any device/network, including
    a US VPN - because initLanguage() returns immediately once explicit+stored
    are both truthy. A server restart naturally can't fix this: the broken
-   state lives in the visitor's own browser, not on the server. The fix is
-   below: migration only ever seeds app_lang as a best-guess default, never
-   the explicit flag - only an actual click may set that. */
+   state lives in the visitor's own browser, not on the server.
+
+   Fixing the migration going forward (a plain, non-explicit app_lang seed)
+   stops NEW corruption, but does nothing for browsers that already have the
+   bad explicit=true sitting in storage from before that fix shipped - those
+   still need a one-time, fully automatic purge (see sanitizeLanguageStorage
+   below) so nobody has to open DevTools or click a toggle to get unstuck. */
 "use strict";
 
 const LANG_KEY = "app_lang";
 const LANG_EXPLICIT_KEY = "app_lang_explicit";
+const SANITIZED_KEY = "i18n_v2_sanitized";
 
-/* One-time migration from the older pear_lang key (pre geo-IP flow). Seeds
-   app_lang as a NON-explicit best guess only - it must remain fully
-   overridable by geo-IP on this boot and every boot after it, since we can't
-   actually prove the legacy value came from a deliberate click. */
-(function migrateLegacyLangKey() {
+/* One-time, fully automatic storage reset - runs at most once per browser
+   (gated by SANITIZED_KEY), the instant this module boots, no reload/dialog/
+   console command required. Wipes any language state that could be sitting
+   around from before the explicit-flag bug fix (or any earlier scheme:
+   app_lang, app_lang_explicit, the old pear_lang key) so initLanguage() below
+   always starts from a clean slate and lets geo-IP make a fresh call. Safe to
+   run unconditionally on a version-flag basis: if this browser was never
+   corrupted, clearing already-empty keys is a no-op. */
+(function sanitizeLanguageStorage() {
   try {
-    const legacy = localStorage.getItem("pear_lang");
-    if (legacy && !localStorage.getItem(LANG_KEY)) {
-      localStorage.setItem(LANG_KEY, legacy);
-    }
+    if (localStorage.getItem(SANITIZED_KEY)) return; // already done - never repeat
+    localStorage.removeItem(LANG_EXPLICIT_KEY);
+    localStorage.removeItem(LANG_KEY);
     localStorage.removeItem("pear_lang");
+    localStorage.setItem(SANITIZED_KEY, "true");
+    console.log("[PEAR i18n] Storage sanitized and fresh geo-IP evaluation initiated.");
   } catch {}
 })();
 
