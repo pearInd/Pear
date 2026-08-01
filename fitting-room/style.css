@@ -178,7 +178,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      tall/roomy against the full-height video column next door, not short
      and cramped - see the .form-group / #identityForm / #sizeForm gap
      increases below for the other half of this. */
-  padding: clamp(32px, 5vw, 48px) clamp(20px, 3.2vw, 32px);
+  padding: clamp(40px, 6.5vw, 64px) clamp(20px, 3.2vw, 32px);
   background: linear-gradient(135deg, rgba(255,255,255,.45) 0%, rgba(255,255,255,.18) 100%);
   -webkit-backdrop-filter: var(--blur-lg);
   backdrop-filter: var(--blur-lg);
@@ -213,22 +213,22 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 #screen-calculator .container.is-tilting::after { opacity: 1; }
 #screen-calculator .container > * { position: relative; z-index: 1; }
 
-.container h2 { font-size: 1.5rem; font-weight: 800; margin: 0 0 10px; }
-.subtitle { color: var(--muted); margin: 0 0 26px; font-size: .9rem; line-height: 1.5; }
+.container h2 { font-size: 1.5rem; font-weight: 800; margin: 0 0 12px; }
+.subtitle { color: var(--muted); margin: 0 0 32px; font-size: .9rem; line-height: 1.5; }
 
 /* #identityForm has no gap rule of its own (unlike #sizeForm below), so its
    two .form-group blocks previously sat flush against each other - the main
    driver of the "cramped" identity screen. Same increased gap on both forms
    for a consistent rhythm across the whole panel. */
-#identityForm, #sizeForm { display: grid; gap: 22px; }
-.form-group { display: grid; gap: 10px; }
+#identityForm, #sizeForm { display: grid; gap: 28px; }
+.form-group { display: grid; gap: 12px; }
 .form-group label { font-size: .85rem; font-weight: 600; color: var(--text); }
 .required { color: var(--pear-deep); margin-inline-end: 4px; font-weight: 800; }
 .optional { color: var(--muted-2); font-weight: 500; font-size: .78rem; }
 
 /* glass-inset inputs with a soft pear-green focus ring */
 .form-group input {
-  width: 100%; padding: 17px 17px;
+  width: 100%; padding: 19px 17px;
   border: 1px solid var(--glass-line); border-radius: var(--pill);
   font-size: .98rem; font-family: inherit; color: var(--ink);
   background: rgba(255, 255, 255, .35);
@@ -308,7 +308,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 /* #screen-calculator only (identity/OTP/size-form continue buttons) gets
    extra breathing room before the button - #screen-fitting's startCamBtn
    keeps the base 20px, untouched. */
-#screen-calculator .btn-primary { margin-top: 30px; }
+#screen-calculator .btn-primary { margin-top: 34px; }
 
 .btn-ghost {
   padding: 13px 22px; border: 1px solid var(--glass-border); border-radius: var(--pill);
@@ -543,11 +543,16 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 /* object-fit:contain (never cover) - the whole video frame must stay
    visible, no cropping. Anything letterboxed around it shows the panel's
-   own cream/glass background (#screen-calculator .calc-editorial above). */
+   own cream/glass background (#screen-calculator .calc-editorial above).
+   The scale is a mild zoom to eat into that letterboxing (the source clip
+   has a lot of empty margin around the phone mockup) - it scales the whole
+   fitted frame up around its own center, not a crop of the subject, and
+   .calc-editorial__visual's overflow:hidden trims only the excess. */
 .calc-editorial__video {
   width: 100%; height: 100%;
   object-fit: contain;
   display: block;
+  transform: scale(1.15);
 }
 
 .calc-editorial__aura {
@@ -623,11 +628,24 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   display: flex; flex-direction: column; justify-content: center;
   padding: 20px clamp(16px, 3vw, 40px) 40px;
 }
+/* #screen-calculator only: top-align instead of vertically centering, so the
+   form column's content starts at the same y as the video column's top edge
+   (align-items:stretch on .calc-shell gives both columns the same box
+   height - centering the form inside that box was what made its top edge
+   read as lower than the video's). #screen-locked keeps the base
+   justify-content:center above - its single centered thank-you card has no
+   video counterpart to align against. */
+#screen-calculator .calc-main { padding-top: 0; justify-content: flex-start; }
 .calc-main .step-progress { width: 100%; max-width: 472px; padding-top: 12px; }
-#screen-calculator .container { margin: 12px auto; }
+#screen-calculator .container { margin: 0 auto 12px; }
 .calc-main__copyright {
-  margin: 4px auto 0; text-align: center;
+  margin: 16px auto 0; text-align: center;
   font-size: .68rem; letter-spacing: .06em; color: var(--muted-2);
+  /* Direct child of .calc-shell now (see index.html) - spans both grid
+     columns so it centers under the video+form pair combined instead of
+     just the 60% form column. In the mobile single-column grid this simply
+     resolves to the one column, so no override needed there. */
+  grid-column: 1 / -1;
 }
 
 /* ── responsive ───────────────────────────────────────────────────────────── */
@@ -643,14 +661,12 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   .calc-editorial__list { display: none; }
   .calc-main { padding-top: 6px; }
 
-  /* Stacked mobile layout: video becomes a short hero-banner strip across
-     the top (NOT the full-height column it is on desktop), form column
-     below it at full width. align-items:stretch is a desktop-only concern
-     (#screen-calculator .calc-shell above), so nothing to undo here. */
-  #screen-calculator .calc-editorial__visual {
-    flex: none;
-    height: clamp(140px, 34vw, 220px);
-  }
+  /* Video panel is desktop-only - hidden outright on mobile (not shrunk to
+     a strip) rather than fighting its portrait aspect ratio into a tiny,
+     misaligned sliver. Mobile shows just the form column at full width,
+     same as before the video existed. #screen-locked has no video markup
+     in the first place, so nothing to scope away from there. */
+  #screen-calculator .calc-editorial { display: none; }
 }
 @media (max-width: 480px) {
   .calc-editorial__meta { display: none; }
