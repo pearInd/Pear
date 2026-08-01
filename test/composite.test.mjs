@@ -30,6 +30,7 @@ function extract(name, endMarker) {
   return SRC.slice(start, end);
 }
 const code =
+  extract("function sampleBackdrop", "/* object-fit: cover") +
   extract("function drawImageCover", "/* In-canvas section label") +
   extract("function drawSectionLabel", "/* ── Full-Look compositor") +
   extract("const COMPOSITE_MAX_W", "/**\n * Stitch a TOP + BOTTOM garment");
@@ -39,9 +40,14 @@ const { window } = dom;
 
 // Recording 2D context - captures the draw calls the layout contract is expressed in.
 const calls = [];
+/* Near-white studio backdrop (#f7f7f7). sampleBackdrop() reads four corners per source
+   image, so this is what the median lands on - i.e. the tests below exercise the REAL
+   sampling path, not its "couldn't read the pixels" fallback. */
+const BACKDROP_PIXEL = [247, 247, 247, 255];
 const ctxStub = new Proxy({}, {
   get(_, prop) {
     if (prop === "measureText") return (t) => ({ width: t.length * 10 });
+    if (prop === "getImageData") return () => ({ data: BACKDROP_PIXEL });
     if (prop === "canvas") return undefined;
     return (...args) => { calls.push({ op: String(prop), args }); };
   },
@@ -70,33 +76,66 @@ const sandbox = {
     return { width: 1000, height: 1000, close() {} };
   },
 };
-const fn = new Function(...Object.keys(sandbox), code + "\nreturn { createGarmentComposite, COMPOSITE_MAX_W, COMPOSITE_GUTTER };");
-const { createGarmentComposite, COMPOSITE_GUTTER } = fn(...Object.values(sandbox));
+const fn = new Function(...Object.keys(sandbox),
+  code + "\nreturn { createGarmentComposite, COMPOSITE_MAX_W, COMPOSITE_GUTTER, COMPOSITE_DIVIDER, COMPOSITE_LABEL_BAND, sampleBackdrop };");
+const { createGarmentComposite, COMPOSITE_GUTTER, COMPOSITE_DIVIDER, COMPOSITE_LABEL_BAND, sampleBackdrop } =
+  fn(...Object.values(sandbox));
+
+check("divider is off by default (COMPOSITE_DIVIDER === 0)", COMPOSITE_DIVIDER === 0, String(COMPOSITE_DIVIDER));
 
 const blob = await createGarmentComposite("https://cdn.test/tee-front.jpg", "https://cdn.test/tee-back.jpg");
 
 check("returns a Blob by default", !!blob && blob.type === "image/jpeg", JSON.stringify(blob));
 
-/* Spec: height = max(frontH, backH); width = frontW + backW + divider padding.
-   Both panels are first scaled to the common height, so with a 1000x1000 front and a
-   500x1000 back the drawn widths are 1000 and 500. */
-check("canvas height = max(frontH, backH)", canvasSize.h === 1000, JSON.stringify(canvasSize));
+/* Geometry: width = frontW + backW + gutter; height = max(frontH, backH) PLUS the label
+   band. Both panels are first scaled to the common height, so with a 1000x1000 front and
+   a 500x1000 back the drawn widths are 1000 and 500, the panel region is 1000 tall, and
+   the band adds COMPOSITE_LABEL_BAND (11%) on top. */
+const PANEL_H = 1000;
+const BAND    = Math.round(PANEL_H * COMPOSITE_LABEL_BAND);
+check("canvas height = max(frontH, backH) + label band",
+  canvasSize.h === PANEL_H + BAND, `${canvasSize.h} vs ${PANEL_H + BAND}`);
 check("canvas width = frontW + backW + gutter",
   canvasSize.w === 1000 + 500 + COMPOSITE_GUTTER, `${canvasSize.w} vs ${1500 + COMPOSITE_GUTTER}`);
 
-const draws = calls.filter((c) => c.op === "drawImage");
-check("both panels drawn", draws.length === 2, `${draws.length} drawImage calls`);
+/* Only the PANEL draws. sampleBackdrop() shares this recording context and blits each
+   source onto a scratch canvas with the 3-arg drawImage(img, 0, 0) to read its corners;
+   drawImageCover() always uses the 5-arg destination-rect form. Filtering on arity keeps
+   the layout assertions about layout. */
+const draws = calls.filter((c) => c.op === "drawImage" && c.args.length === 5);
+check("both panels drawn", draws.length === 2, `${draws.length} panel drawImage calls`);
 check("FRONT panel is on the LEFT (x < half)", draws[0] && draws[0].args[1] < canvasSize.w / 2,
   draws[0] && `x=${draws[0].args[1]}`);
 check("BACK panel is on the RIGHT (x > half)", draws[1] && draws[1].args[1] > canvasSize.w / 2,
   draws[1] && `x=${draws[1].args[1]}`);
+/* Panels occupy only the panel region, never the label band - that separation is the
+   whole point of the band, and a panel drawn to full canvas height would put garment
+   pixels under the marker text again. */
+check("panels are drawn to the panel height, not into the label band",
+  draws.every((dr) => dr.args[4] === PANEL_H), JSON.stringify(draws.map((dr) => dr.args.slice(1))));
 
+/* ── THE ARTIFACT FIX ───────────────────────────────────────────────────────
+   The old build painted a hard #e8e8e8 line down a #3a3a3a gutter: a full-height,
+   high-contrast vertical edge in the middle of a texture source, which Lucy reproduced
+   as a dark seam on the shopper's clothing. There must now be exactly ONE fillRect - the
+   backdrop flood - and no full-height sliver anywhere between the panels. */
 const rects = calls.filter((c) => c.op === "fillRect");
-const divider = rects.find((r) => r.args[2] >= 2 && r.args[2] <= 8 && r.args[3] === 1000);
-check("vertical divider drawn, 2-8px wide, full height", !!divider, JSON.stringify(rects.map(r => r.args)));
-check("divider sits between the two panels",
-  divider && Math.abs(divider.args[0] - 1000 - COMPOSITE_GUTTER / 2) < 6, divider && `x=${divider.args[0]}`);
+const dividerish = rects.filter((r) => r.args[2] > 0 && r.args[2] <= 12 && r.args[3] >= PANEL_H * 0.9);
+check("NO divider line is drawn (seamless gutter)", dividerish.length === 0,
+  JSON.stringify(dividerish.map((r) => r.args)));
+check("exactly one fillRect - the full-canvas backdrop flood",
+  rects.length === 1 && rects[0].args[2] === canvasSize.w && rects[0].args[3] === canvasSize.h,
+  JSON.stringify(rects.map((r) => r.args)));
 
+/* The gutter is filled with the packshots' OWN sampled backdrop, so the join between the
+   panels has no edge in it at all. #f7f7f7 is what BACKDROP_PIXEL medians to. */
+const fills = calls.filter((c) => c.op === "set:fillStyle").map((c) => c.args[0]);
+check("backdrop is sampled from the packshots, not a hard-coded grey",
+  fills[0] === "rgb(247, 247, 247)", JSON.stringify(fills.slice(0, 3)));
+check("the old #3a3a3a field is gone", !fills.includes("#3a3a3a"), JSON.stringify(fills));
+
+/* Labels: still drawn (the marker technique is load-bearing), still centred over their
+   own panel, but BELOW every garment pixel so no text can be composited onto the body. */
 const texts = calls.filter((c) => c.op === "fillText").map((c) => c.args[0]);
 check("FRONT label drawn", texts.includes("FRONT"), JSON.stringify(texts));
 check("BACK label drawn", texts.includes("BACK"), JSON.stringify(texts));
@@ -107,8 +146,56 @@ check("FRONT label centred over the left panel",
 check("BACK label centred over the right panel",
   backLabel && Math.abs(backLabel.args[1] - (1000 + COMPOSITE_GUTTER + 250)) < 40,
   backLabel && `x=${backLabel.args[1]}`);
+check("labels sit BELOW the garment panels, not over them",
+  frontLabel && backLabel && frontLabel.args[2] >= PANEL_H && backLabel.args[2] >= PANEL_H,
+  `FRONT y=${frontLabel && frontLabel.args[2]} BACK y=${backLabel && backLabel.args[2]} panelH=${PANEL_H}`);
 check("labels drawn AFTER the panels (not painted over)",
   calls.indexOf(frontLabel) > calls.indexOf(draws[1]));
+
+/* ── sampleBackdrop() directly ────────────────────────────────────────────────
+   It decides the colour of the gutter, which is the whole seam fix, and it has to stay
+   sane on the inputs real storefronts actually serve. */
+console.log("\n── backdrop sampling ──");
+{
+  const px = (rgb) => ({ data: [...rgb, 255] });
+  const withPixels = (seq) => {
+    let i = 0;
+    const prev = window.document.createElement;
+    window.document.createElement = (tag) => {
+      if (tag !== "canvas") return prev(tag);
+      return { set width(_) {}, set height(_) {}, get width() { return 100; }, get height() { return 100; },
+        getContext: () => ({ drawImage() {}, getImageData: () => px(seq[Math.min(i++, seq.length - 1)]) }) };
+    };
+    const out = sampleBackdrop([{ width: 100, height: 100 }, { width: 100, height: 100 }]);
+    window.document.createElement = prev;
+    return out;
+  };
+
+  check("white packshots → white gutter (invisible join)",
+    withPixels([[255, 255, 255]]).fill === "rgb(255, 255, 255)", JSON.stringify(withPixels([[255, 255, 255]])));
+  check("...and dark ink chosen for the label band on it",
+    withPixels([[255, 255, 255]]).contrast === "#101010");
+  check("dark shoot → dark gutter, light ink",
+    withPixels([[18, 18, 20]]).fill === "rgb(18, 18, 20)" && withPixels([[18, 18, 20]]).contrast === "#f5f5f5",
+    JSON.stringify(withPixels([[18, 18, 20]])));
+  /* One corner landing on a shadow, watermark or the model's elbow must not drag the
+     backdrop off-white - which is exactly what a mean would do and a median will not.
+     7 white corners + 1 black outlier across the 8 samples. */
+  check("a single outlier corner cannot skew the result (median, not mean)",
+    withPixels([[255, 255, 255], [255, 255, 255], [255, 255, 255], [255, 255, 255],
+                [255, 255, 255], [255, 255, 255], [255, 255, 255], [0, 0, 0]]).fill === "rgb(255, 255, 255)");
+  check("unreadable pixels fall back to a light neutral, never the old dark grey", (() => {
+    const prev = window.document.createElement;
+    window.document.createElement = (tag) => {
+      if (tag !== "canvas") return prev(tag);
+      return { set width(_) {}, set height(_) {}, get width() { return 10; }, get height() { return 10; },
+        getContext: () => ({ drawImage() {}, getImageData() { throw new Error("tainted"); } }) };
+    };
+    const out = sampleBackdrop([{ width: 10, height: 10 }]);
+    window.document.createElement = prev;
+    return out.fill === "#f2f2f2";
+  })());
+}
 
 /* Oversized input must be capped, keeping the aspect. */
 calls.length = 0; canvasSize = null;

@@ -33,6 +33,7 @@ function extract(startMarker, endMarker) {
 
 const code =
   extract("function releaseCompositePreview", "function setActiveItem") +
+  extract("function sampleBackdrop", "/* object-fit: cover") +
   extract("function drawImageCover", "/* In-canvas section label") +
   extract("function drawSectionLabel", "/* ── Full-Look compositor") +
   extract("const COMPOSITE_MAX_W", "/**\n * Stitch a TOP + BOTTOM garment") +
@@ -46,6 +47,10 @@ let canvasSize = null;
 const ctxStub = new Proxy({}, {
   get(_, prop) {
     if (prop === "measureText") return (t) => ({ width: t.length * 10 });
+    // sampleBackdrop() reads panel corners to pick the gutter colour - hand it a plain
+    // white studio backdrop. Layout/geometry is asserted in composite.test.mjs; this
+    // suite only needs the composite to build without throwing.
+    if (prop === "getImageData") return () => ({ data: [255, 255, 255, 255] });
     return () => {};
   },
   set() { return true; },

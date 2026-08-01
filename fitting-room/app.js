@@ -721,6 +721,22 @@ let connState = "idle";
 let connecting = false;
 let busy = false;
 
+/* ── Reference-image state for the CURRENT realtime session ───────────────────
+   What the model is holding right now, so applyGarment() can tell a genuine reference
+   change from an orientation flip that only needs new wording. In composite mode the
+   stitched FRONT|BACK image is identical across a turn, and re-uploading it mid-rotation
+   is what made the back print flicker - see the flicker-fix comment in applyGarment().
+
+   Identity, not equality: these hold the exact Blob/string that was passed to
+   rtClient.set({ image }). The composite Blob is memoized by createGarmentComposite() and
+   garmentBlobCached(), so the SAME object comes back on the next call and `===` is the
+   right test. A rebuilt or different asset is a different object and correctly forces a
+   full set(). MUST be cleared whenever a session ends or a new one opens - a stale "the
+   image is already on the wire" belief against a fresh session would leave Decart with no
+   reference at all. */
+let lastSentImageRef = null;   // the exact object last handed to set({ image })
+let rtImageOnWire = false;     // has THIS session received an image yet?
+
 /* Pre-minted ek_ token cache - populated by warmupSDKAndToken() on room entry so
    mintEphemeralToken() can skip the network round-trip at go-live time. */
 let _tokenCache = null; // { apiKey: string, expiresAt: number } | null
@@ -2405,6 +2421,12 @@ async function connectRealtime() {
   billingStarted = false;
   dressedFrameReady = false;
   isGarmentApplied = false;
+  /* A fresh session holds NO reference image, whatever the last one held. Without this
+     the first applyGarment() of the new session could match lastSentImageRef (the
+     composite Blob is memoized across sessions) and take the prompt-only path - leaving
+     Decart generating against no garment reference at all. */
+  lastSentImageRef = null;
+  rtImageOnWire = false;
   if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
 
   console.log("[PEAR] connectRealtime() - stage 1/4: loading SDK from CDN…");
@@ -2554,6 +2576,10 @@ function teardown() {
     try { rtClient.disconnect(); } catch (_) {}
     rtClient = null;
   }
+  // The session is gone, so nothing is on the wire. connectRealtime() resets these too;
+  // clearing here as well keeps the invariant true at every point the session ends.
+  lastSentImageRef = null;
+  rtImageOnWire = false;
 
   // Bug 3 fix: stop this session's cloned camera tracks (the WebRTC sender side).
   // localStream - the real camera/preview - is intentionally left running.
@@ -3412,6 +3438,55 @@ async function loadGarmentBitmap(url, attempts = 3) {
   }
 }
 
+/* ── Backdrop sampling - the fix for "a dark seam is painted on my shirt" ─────
+   Returns the colour to fill the composite's background and gutter with, sampled from
+   the packshots themselves rather than hard-coded.
+
+   Reads the four corners of each source image (garments are centred, so corners are
+   backdrop, not fabric) and takes the MEDIAN per channel. Median, not mean: one corner
+   landing on a stray shadow, a model's elbow or a watermark skews an average but cannot
+   move a median of eight samples. If the two photos disagree wildly - a white packshot
+   paired with a dark lifestyle shot - there is no single colour that hides the join, so
+   it returns the brighter of the two, which reads as studio backdrop rather than as a
+   dark band cutting through the reference.
+
+   @param {Array<ImageBitmap|HTMLImageElement>} imgs  decoded panel sources
+   @returns {{fill:string, contrast:string}} fill = backdrop; contrast = a legible
+     ink colour for that backdrop (used by the label band, and by the divider if re-enabled)
+*/
+function sampleBackdrop(imgs) {
+  const px = [];
+  for (const img of imgs) {
+    const w = img.width, h = img.height;
+    if (!w || !h) continue;
+    try {
+      const c = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(w, h)
+        : Object.assign(document.createElement("canvas"), { width: w, height: h });
+      const cx = c.getContext("2d", { willReadFrequently: true });
+      cx.drawImage(img, 0, 0);
+      const inset = Math.max(1, Math.round(Math.min(w, h) * 0.02));   // step off the very edge (JPEG ring)
+      for (const [x, y] of [[inset, inset], [w - inset, inset], [inset, h - inset], [w - inset, h - inset]]) {
+        const d = cx.getImageData(Math.min(w - 1, Math.max(0, x)), Math.min(h - 1, Math.max(0, y)), 1, 1).data;
+        px.push([d[0], d[1], d[2]]);
+      }
+    } catch (_) { /* tainted or zero-sized - just skip this source */ }
+  }
+  if (!px.length) return { fill: "#f2f2f2", contrast: "#101010" };   // neutral light, not the old dark grey
+
+  const median = (i) => {
+    const v = px.map((p) => p[i]).sort((a, b) => a - b);
+    const m = Math.floor(v.length / 2);
+    return v.length % 2 ? v[m] : Math.round((v[m - 1] + v[m]) / 2);
+  };
+  const rgb = [median(0), median(1), median(2)];
+  // Perceptual luminance - decides whether ink on this backdrop should be black or white.
+  const lum = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+  return {
+    fill: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`,
+    contrast: lum > 0.5 ? "#101010" : "#f5f5f5",
+  };
+}
+
 /* object-fit: cover - fill the target rect (cropping overflow), preserving aspect ratio,
    so a portrait packshot never squashes into its half of the reference. */
 function drawImageCover(ctx, img, dx, dy, dw, dh) {
@@ -3513,8 +3588,37 @@ const COMPOSITE_MODE = (() => {
 })();
 
 const COMPOSITE_MAX_W   = 2048;   // cap on the stitched output - Decart gains nothing from more
-const COMPOSITE_DIVIDER = 4;      // divider line width in px (spec: 2-4px)
-const COMPOSITE_GUTTER  = 64;     // total gap between the two panels, divider centred in it
+
+/* ── Why there is no drawn divider any more ──────────────────────────────────
+   The composite used to paint a #e8e8e8 line down a #3a3a3a gutter: a hard,
+   high-contrast, full-height vertical edge sitting in the exact middle of the
+   reference. Lucy is an image-conditioned diffusion model with no notion of "canvas
+   furniture" - it samples texture from the reference, and the single strongest edge in
+   that reference was the divider. It came out as a dark seam painted down the shopper's
+   clothing. Telling the prompt to ignore it helps, but the reliable fix is to not draw a
+   high-contrast edge into a texture source in the first place.
+
+   So: no line, and a gutter filled with the panels' OWN background colour (sampled at
+   runtime - see sampleBackdrop). On the white packshots that dominate storefronts the gap
+   is genuinely invisible; on a dark-background shoot it goes dark to match. Either way
+   there is no edge to mistake for a seam. Panel separation now comes from position plus
+   the prompt naming the halves, which is what COMPOSITE_PANEL_CONTRACT already asserts.
+
+   COMPOSITE_DIVIDER is kept as a switch rather than deleted: set it > 0 to paint the line
+   again (it is drawn in the sampled backdrop's contrast colour, not hard-coded grey) if a
+   future model build turns out to need the explicit boundary. */
+const COMPOSITE_DIVIDER = 0;      // 0 = seamless gap (default). >0 = divider width in px.
+const COMPOSITE_GUTTER  = 96;     // gap between panels - wider now that nothing is drawn in it
+
+/* Label band: "FRONT"/"BACK" markers live BELOW the panels, never over the garment.
+   The markers are load-bearing (the labelled-panel technique is what made this composite
+   work where the unlabelled 23f5953 one failed), so they are not removed - but text drawn
+   ON a garment is text that can be composited onto the shopper, which is the reported
+   artifact. Moving them into a dedicated band below every garment pixel keeps the panel
+   identity signal and removes the overlap. Set COMPOSITE_LABELS = false to drop them
+   entirely and rely purely on left/right position + the prompt. */
+const COMPOSITE_LABELS      = true;
+const COMPOSITE_LABEL_BAND  = 0.11;   // band height as a fraction of the panel height
 const _compositeCache = new Map();   // `${frontUrl} ${backUrl}` → Promise<Blob|null>
 
 /**
@@ -3542,9 +3646,11 @@ function describeCompositeLayout(L) {
 /**
  * Stitch a garment's FRONT and BACK photos into one side-by-side composite.
  *
- * Layout (per spec): front LEFT, back RIGHT, canvas height = max(frontH, backH),
- * total width = frontW + backW + divider padding, a solid vertical divider centred
- * in the gutter, and a centred "FRONT" / "BACK" label over each panel.
+ * Layout: front LEFT, back RIGHT, total width = frontW + backW + gutter, canvas height =
+ * max(frontH, backH) plus a label band. The gutter is filled with the packshots' own
+ * sampled backdrop and NOTHING is drawn in it, and the "FRONT" / "BACK" markers sit in the
+ * band below the panels - both so that the only hard edges in the reference belong to the
+ * garments themselves. See the COMPOSITE_DIVIDER / COMPOSITE_LABELS comments for why.
  *
  * Both images are first scaled to a COMMON height (the taller of the two) preserving
  * aspect ratio - the width formula then uses those drawn widths. Mixing a 1000px and
@@ -3554,17 +3660,17 @@ function describeCompositeLayout(L) {
  *
  * @param {string} frontImageUrl  front-view image (http(s)/data:/blob:)
  * @param {string} backImageUrl   back-view image
- * @param {{as?: "blob"|"dataURL", labelPlacement?: "over"|"below"}} [opts]
+ * @param {{as?: "blob"|"dataURL", labelPlacement?: "below"|"over"|"none"}} [opts]
  *   as             - "blob" (default; what rtClient.set({ image }) takes) or "dataURL"
- *   labelPlacement - "over" (default) keeps canvas height exactly max(frontH, backH)
- *                    as specified; "below" adds a label band under the panels, which
- *                    keeps text off the garment itself
+ *   labelPlacement - "below" (default) puts the markers in a band under the panels, off
+ *                    the garment; "over" restores the legacy on-panel stamp; "none" drops
+ *                    them and leaves the model to read the halves positionally
  * @returns {Promise<Blob|string|null>} null on any decode/fetch failure, so the caller
  *   can fall back to the single-asset path rather than going live with no reference.
  */
 function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
   if (!frontImageUrl || !backImageUrl) return Promise.resolve(null);
-  const { as = "blob", labelPlacement = "over" } = opts;
+  const { as = "blob", labelPlacement = "below" } = opts;
   const key = `${frontImageUrl} ${backImageUrl} ${as} ${labelPlacement}`;
   if (_compositeCache.has(key)) return _compositeCache.get(key);
 
@@ -3583,7 +3689,12 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
       // 2. Spec geometry: width = frontW + backW + gutter, height = max(h).
       let totalW = frontW + backW + COMPOSITE_GUTTER;
       let totalH = panelH;
-      const labelBand = labelPlacement === "below" ? Math.round(panelH * 0.11) : 0;
+      const wantLabels = COMPOSITE_LABELS && labelPlacement !== "none";
+      /* The band is what keeps marker text off the garment. "over" is still honoured for
+         any caller that explicitly asks for the old on-panel placement, but nothing does
+         by default any more - see the COMPOSITE_LABELS comment. */
+      const labelBand = wantLabels && labelPlacement !== "over"
+        ? Math.round(panelH * COMPOSITE_LABEL_BAND) : 0;
       totalH += labelBand;
 
       // 3. Cap the output - a 5000px composite costs upload time and buys nothing.
@@ -3595,13 +3706,20 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
       const gut = Math.round(COMPOSITE_GUTTER * scale);
       const pH = H - Math.round(labelBand * scale);
 
+      /* Backdrop sampled from the packshots, so the gutter is the SAME colour as the
+         background already inside each panel and the join between them has no edge for
+         the model to read as a seam. Replaces the old fixed #3a3a3a, which was a dark
+         band between two typically-white photos - the highest-contrast feature in the
+         whole reference, and the one that ended up painted on the shopper.
+         Sampled BEFORE the output canvas exists: it allocates scratch canvases of its
+         own, and doing that after would interleave allocation with drawing for no reason. */
+      const backdrop = sampleBackdrop([front, back]);
+
       const off    = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(W, H) : null;
       const canvas = off || Object.assign(document.createElement("canvas"), { width: W, height: H });
       const ctx    = canvas.getContext("2d");
 
-      // Neutral mid-grey field: a white background can read as garment fabric on a
-      // white packshot, and pure black hid the divider on dark garments.
-      ctx.fillStyle = "#3a3a3a";
+      ctx.fillStyle = backdrop.fill;
       ctx.fillRect(0, 0, W, H);
 
       // 4. FRONT panel on the LEFT, clipped so a wide packshot cannot cross the gutter.
@@ -3617,19 +3735,28 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
       drawImageCover(ctx, back, backX, 0, bW, pH);
       ctx.restore();
 
-      // 6. Vertical divider, centred in the gutter. The dark gutter either side is the
-      //    actual separation; the light line makes the boundary unmistakable.
-      const dividerW = Math.max(2, Math.round(COMPOSITE_DIVIDER * scale));
-      ctx.fillStyle = "#e8e8e8";
-      ctx.fillRect(Math.round(fW + gut / 2 - dividerW / 2), 0, dividerW, pH);
+      /* 6. Divider - OFF by default (COMPOSITE_DIVIDER = 0). The gutter is already the
+            panels' own backdrop colour, so the two halves meet with no edge at all and
+            there is nothing for the model to copy onto the shopper as a seam. When
+            re-enabled it draws in the sampled contrast ink rather than a fixed grey, so
+            it can never invert into a black bar on a dark shoot. */
+      if (COMPOSITE_DIVIDER > 0) {
+        const dividerW = Math.max(1, Math.round(COMPOSITE_DIVIDER * scale));
+        ctx.fillStyle = backdrop.contrast;
+        ctx.globalAlpha = 0.28;                       // ultra-subtle: a hint, not a hard edge
+        ctx.fillRect(Math.round(fW + gut / 2 - dividerW / 2), 0, dividerW, pH);
+        ctx.globalAlpha = 1;
+      }
 
-      // 7. Labels. Centred over each panel (or in the band below it).
+      // 7. Labels, in the band BELOW the panels - never over a garment pixel.
       const fontPx = Math.max(18, Math.round(W * 0.035));
-      const labelY = labelPlacement === "below"
-        ? pH + Math.round((H - pH) / 2 - fontPx * 0.82)
-        : Math.round(pH * 0.035);
-      drawSectionLabel(ctx, "FRONT", Math.round(fW / 2), labelY, fontPx, "center");
-      drawSectionLabel(ctx, "BACK",  Math.round(backX + bW / 2), labelY, fontPx, "center");
+      if (wantLabels) {
+        const labelY = labelBand
+          ? pH + Math.round((H - pH) / 2 - fontPx * 0.82)   // centred in the band, below every garment pixel
+          : Math.round(pH * 0.035);                          // legacy "over" placement
+        drawSectionLabel(ctx, "FRONT", Math.round(fW / 2), labelY, fontPx, "center");
+        drawSectionLabel(ctx, "BACK",  Math.round(backX + bW / 2), labelY, fontPx, "center");
+      }
 
       front.close?.(); back.close?.();            // release decoded bitmaps
 
@@ -3638,6 +3765,8 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
         : await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.95));
 
       console.log(`[PEAR] composite built: ${W}×${H} · FRONT ${fW}px | BACK ${bW}px · ` +
+        `backdrop ${backdrop.fill} · divider ${COMPOSITE_DIVIDER > 0 ? COMPOSITE_DIVIDER + "px" : "none (seamless)"} · ` +
+        `labels ${wantLabels ? (labelBand ? "below panels" : "over panels") : "off"} · ` +
         `${blob ? (blob.size / 1024).toFixed(0) + "KB" : "no blob"}`);
 
       if (as !== "dataURL") return blob;
@@ -4091,14 +4220,41 @@ const ANGLE_CLAUSE = {
    prompt describes the garment or the body. Everything downstream (COMPOSITE_SELECT,
    buildCompositePrompt) assumes this has already been said. */
 const COMPOSITE_PANEL_CONTRACT =
-  "The garment reference is a SPLIT COMPOSITE IMAGE containing two views of the SAME garment," +
-  " separated by a central vertical divider line." +
-  " LEFT PANEL, marked 'FRONT': the FRONT view of the garment." +
-  " RIGHT PANEL, marked 'BACK': the BACK view of the garment." +
-  " The divider is an impassable wall - never blend, mirror or copy any detail from one panel" +
-  " into the other, and never render both panels' designs on the same surface of the garment." +
-  " The 'FRONT' and 'BACK' markers, the divider line and the panel edges are labels for you only:" +
-  " never paint them onto the clothing or the person.";
+  "High-quality, realistic virtual try-on." +
+  " The garment reference is a SPLIT COMPOSITE IMAGE containing two views of the SAME garment," +
+  " side by side: the LEFT HALF is the FRONT view, the RIGHT HALF is the BACK view." +
+  " Treat the boundary between them as an impassable wall - never blend, mirror or copy any" +
+  " detail from one half into the other, and never render both halves' designs on the same" +
+  " surface of the garment." +
+  /* The artifact clause. Everything that is not garment in this reference - the gap between
+     the panels, the studio backdrop, the canvas edges, the marker band along the bottom -
+     is layout, and Lucy has no way to know that unless it is said. It samples texture from
+     the whole reference, which is how a divider became a seam painted down a shirt. The
+     canvas fix (seamless sampled gutter, markers moved off the garment) removes most of
+     the opportunity; this removes the rest. */
+  " IGNORE ALL CANVAS FURNITURE. The gap between the two halves, the background field, the" +
+  " outer canvas edges and the 'FRONT'/'BACK' text markers below the panels are layout" +
+  " scaffolding, NOT part of the garment. Never reproduce a boundary, divider, seam, border," +
+  " frame, band or letterform from this reference onto the clothing, the body or the scene." +
+  " The only lines you may render on the garment are its own real seams, stitching and hems.";
+
+/* Temporal contract. Appended LAST so it is the final instruction in the prompt, and
+   carried on BOTH orientations - flicker is not a back-view-only problem.
+
+   Read the honest limits here before tuning it. Lucy regenerates every frame independently;
+   there is no cross-frame state, no seed and no motion-guidance parameter exposed by
+   @decartai/sdk@0.1.5 (realtime connect takes model/fps/width/height/mirror/resolution/
+   codec, and set() takes exactly { prompt, enhance, image } - see connectRealtime()). So
+   this wording is a per-frame bias toward the same result, not a temporal filter, and it
+   cannot be one. The mechanical half of the flicker fix is in applyGarment(): a confirmed
+   turn now re-issues the PROMPT alone instead of re-uploading the reference image, so the
+   model is never briefly without a garment reference at the exact moment the shopper
+   turns. That is what actually stops the print vanishing mid-rotation. */
+const COMPOSITE_TEMPORAL =
+  " Render with smooth, temporally consistent frame-to-frame output: the garment stays" +
+  " pinned to the body with the same colour, print placement and scale in every frame," +
+  " with ZERO flickering, popping, strobing, drifting prints or missing graphics as the" +
+  " person moves or rotates. The print must never vanish, fade or re-position between frames.";
 
 /* Orientation selector. The OrientationWatcher has ALREADY resolved which way the shopper
    is facing, so exactly one panel is ever named as the source and the other is excluded in
@@ -4183,7 +4339,8 @@ function buildCompositePrompt(item, angle) {
   return (
     COMPOSITE_PANEL_CONTRACT + select +
     ` Substitute the person's current ${target} with ${desc}, reproducing its exact colour,` +
-    ` pattern, print and fabric texture. ${anchor} Render a ${fitMod}${COMPOSITE_QUALITY}.${keep}`
+    ` pattern, print and fabric texture. ${anchor} Render a ${fitMod}${COMPOSITE_QUALITY}.${keep}` +
+    COMPOSITE_TEMPORAL
   ).replace(/\s+/g, " ").trim();
 }
 
@@ -4270,7 +4427,7 @@ function angleClause(item, angleOverride, useComposite) {
   // matching the detected orientation and excludes the other outright.
   if (useComposite === undefined ? compositeActiveFor(item) : useComposite) {
     const a = (angleOverride || effectiveAngle()) === "back" ? "back" : "front";
-    return " " + COMPOSITE_PANEL_CONTRACT + COMPOSITE_SELECT[a];
+    return " " + COMPOSITE_PANEL_CONTRACT + COMPOSITE_SELECT[a] + COMPOSITE_TEMPORAL;
   }
   const angle = angleOverride || effectiveAngle();      // AI Auto resolves to the DETECTED orientation
   if (angle === "back") {
@@ -4462,7 +4619,35 @@ async function applyGarment(item) {
 
   if (!imageRef) console.warn("[PEAR] applyGarment() - no img URL; prompt-only.");
 
+  /* ── THE FLICKER FIX: a turn re-sends the PROMPT, not the picture ─────────────
+     In composite mode the reference is byte-identical across an orientation flip - one
+     stitched FRONT|BACK image serves both sides, and only the clause naming the half
+     changes. This file has claimed since the composite landed that "an orientation flip
+     is a PROMPT-ONLY set()". It was not. rtClient.set({ image }) runs the Blob through
+     imageToBase64() and ships the bytes every single time (verified in
+     @decartai/sdk@0.1.5 realtime/methods.js) - so every turn pushed a few hundred KB of
+     base64 through the datachannel and swapped the model's reference out from under
+     itself, mid-rotation, inside a 5s billed window. That is the window in which the
+     back print "flickers or disappears": the reference is being replaced at exactly the
+     moment the shopper turns.
+
+     setPrompt() takes the other path - session.sendPrompt(), which never touches the
+     image - so the reference stays exactly as it was and the flip costs one small
+     control message. Guarded on the image being UNCHANGED and already on the wire;
+     anything else (first application, a garment swap, a fallback to a single-view asset)
+     still goes through the full set(). enhance:false must be passed explicitly:
+     setPromptInputSchema defaults it to TRUE, unlike set(). */
+  const sameImageOnWire = imageRef && lastSentImageRef === imageRef && rtImageOnWire;
+  if (sameImageOnWire) {
+    console.log("[PEAR] prompt-only update - reference unchanged, image NOT re-uploaded",
+      `(${angleAtStart})`);
+    await rtClient.setPrompt(payload.prompt, { enhance: false });
+    return;
+  }
+
   await rtClient.set(payload);
+  lastSentImageRef = imageRef || null;
+  rtImageOnWire = !!imageRef;
 }
 
 /**
@@ -4680,6 +4865,12 @@ async function applyLook(top, bottom) {
     console.warn("look payload rejected, retrying minimal:", e?.message || e);
     await rtClient.set({ prompt, image: primaryImage, enhance: false });
   }
+  /* Keep the reference tracker honest: a look sends its OWN stitched image, so whatever
+     applyGarment() last recorded is no longer what the model holds. Without this, going
+     look → single garment could match a stale lastSentImageRef and take the prompt-only
+     path against the wrong reference. */
+  lastSentImageRef = primaryImage || null;
+  rtImageOnWire = !!primaryImage;
 }
 
 /**
@@ -6207,6 +6398,7 @@ function stopBilling() {
   sessionGen++;                         // neutralise in-flight onRemoteStream/onConnectionChange
   stopStatsMonitor();
   if (rtClient) { try { rtClient.disconnect(); } catch (_) {} rtClient = null; }
+  lastSentImageRef = null; rtImageOnWire = false;   // session over - nothing is on the wire
   if (inputThrottle) { try { inputThrottle.dispose(); } catch (_) {} inputThrottle = null; }
   if (realtimeInput) { try { realtimeInput.getTracks().forEach((t) => t.stop()); } catch (_) {} realtimeInput = null; }
   const ai = $("aiVideo");

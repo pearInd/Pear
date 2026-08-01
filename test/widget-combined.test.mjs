@@ -137,10 +137,12 @@ console.log("=== A. front + back present -> single composite handed over ===");
   });
   const msg = r.posted[r.posted.length - 1];
   check("A1 composite was built", !!r.canvasSize, JSON.stringify(r.canvasSize));
-  check("A2 FRONT panel drawn left, BACK panel right", (() => {
-    const imgs = r.drawn.filter((c) => c.op === "drawImage");
-    return imgs.length === 2 && imgs[0].args[1] < imgs[1].args[1];
-  })(), JSON.stringify(r.drawn.filter((c) => c.op === "drawImage").map((c) => c.args.slice(1, 3))));
+  /* Panel draws only - 5-arg drawImage(img, dx, dy, dw, dh). sampleBackdrop() shares the
+     recording context and blits each source with the 3-arg form to read its corners. */
+  const panelDraws = r.drawn.filter((c) => c.op === "drawImage" && c.args.length === 5);
+  check("A2 FRONT panel drawn left, BACK panel right",
+    panelDraws.length === 2 && panelDraws[0].args[1] < panelDraws[1].args[1],
+    JSON.stringify(panelDraws.map((c) => c.args.slice(1, 3))));
   const texts = r.drawn.filter((c) => c.op === "fillText").map((c) => c.args[0]);
   check("A3 FRONT and BACK labels drawn", texts.includes("FRONT") && texts.includes("BACK"), JSON.stringify(texts));
   check("A4 composite handed to the try-on engine",

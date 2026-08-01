@@ -174,14 +174,36 @@ console.log("\n── the panel contract states LEFT=FRONT / RIGHT=BACK, matchin
      fitting-room/app.js and pear-widget.js. The prompt asserts that ordering to Decart in
      words; if the stitcher's panel order is ever flipped without flipping this sentence,
      every back render silently reads the wrong half. */
-  check("LEFT PANEL is declared the FRONT view",
-    /LEFT PANEL, marked 'FRONT': the FRONT view of the garment/.test(clause));
-  check("RIGHT PANEL is declared the BACK view",
-    /RIGHT PANEL, marked 'BACK': the BACK view of the garment/.test(clause));
+  check("LEFT half is declared the FRONT view",
+    /the LEFT HALF is the FRONT view/.test(clause), clause.slice(0, 260));
+  check("RIGHT half is declared the BACK view",
+    /the RIGHT HALF is the BACK view/.test(clause), clause.slice(0, 260));
   const drawsFrontLeft = /ctx\.rect\(0, 0, fW, pH\)[\s\S]{0,80}drawImageCover\(ctx, front/.test(SRC);
   const drawsBackRight = /const backX = fW \+ gut;[\s\S]{0,160}drawImageCover\(ctx, back, backX/.test(SRC);
   check("...and the stitcher actually draws FRONT left / BACK right", drawsFrontLeft && drawsBackRight,
     `frontLeft=${drawsFrontLeft} backRight=${drawsBackRight}`);
+}
+
+console.log("\n── artifact + temporal clauses ride on BOTH orientations ──");
+{
+  /* Two live bugs are addressed in words as well as pixels, and both are orientation-
+     agnostic: a divider painted onto a shirt happens facing forward too, and flicker is
+     not a back-only problem. If either clause ever ends up on one branch only, the bug
+     comes back on the other half of every session. */
+  for (const angle of ["front", "back"]) {
+    const clause = run({ effectiveAngleReturns: angle, angleOverride: angle, distinctBack: "https://cdn.test/back.jpg" });
+    check(`${angle}: tells the model to ignore canvas furniture`,
+      /IGNORE ALL CANVAS FURNITURE/.test(clause) &&
+      /Never reproduce a boundary, divider, seam, border, frame, band or letterform/.test(clause),
+      clause.slice(0, 260));
+    check(`${angle}: names the garment's own seams as the only legal lines`,
+      /only lines you may render on the garment are its own real seams, stitching and hems/.test(clause));
+    check(`${angle}: asks for temporally consistent output`,
+      /temporally consistent frame-to-frame output/.test(clause) && /ZERO flickering/.test(clause),
+      clause.slice(-260));
+    check(`${angle}: forbids the print vanishing between frames`,
+      /print must never vanish, fade or re-position between frames/.test(clause));
+  }
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

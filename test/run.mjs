@@ -16,8 +16,14 @@
                       where the back came from - including the guards that refuse
                       a "back" that is really the front.
      composite        The Stitched Garment Composite layout contract: FRONT panel
-                      left, BACK panel right, spec geometry, divider, centred labels,
-                      size cap, and null (never a half-drawn reference) on failure.
+                      left, BACK panel right, spec geometry, size cap, and null
+                      (never a half-drawn reference) on failure. Also the ARTIFACT
+                      contract - a seamless sampled gutter with NO divider drawn, and
+                      markers in a band below the garments - because a hard edge or
+                      text inside the reference comes back painted on the shopper.
+     prompt-only-flip A turn re-sends the prompt, never the reference image. Re-
+                      uploading the composite mid-rotation is what made the back print
+                      flicker and vanish inside the 5s billed window.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -43,6 +49,7 @@ const SUITES = [
   ["image-bytes-cache", "image-bytes-cache.test.mjs"],
   ["angle-race", "angle-race.test.mjs"],
   ["preload-composite", "preload-composite.test.mjs"],
+  ["prompt-only-flip", "prompt-only-flip.test.mjs"],
 ];
 
 let failed = 0;

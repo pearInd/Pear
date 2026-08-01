@@ -835,9 +835,57 @@
      which answers with Access-Control-Allow-Origin: * - a CORS-readable response
      produces an untainted canvas, and the proxy also solves the hotlink-blocking that
      defeats a direct CDN fetch from a third-party origin. */
+  /* Kept in lockstep with fitting-room/app.js - see the long comments there for WHY each
+     of these is what it is. Short version: the old build painted a #e8e8e8 line down a
+     #3a3a3a gutter and stamped the FRONT/BACK markers on top of the garments. Those were
+     the two highest-contrast features in the reference, and Lucy - which samples texture
+     from that reference with no notion of canvas furniture - reproduced them as dark
+     seams and text on the shopper's clothing. Now: nothing is drawn in the gutter, it is
+     filled with the packshots' own sampled backdrop, and the markers live in a band below
+     every garment pixel. */
   var COMPOSITE_MAX_W   = 2048;
-  var COMPOSITE_DIVIDER = 4;
-  var COMPOSITE_GUTTER  = 64;
+  var COMPOSITE_DIVIDER = 0;      // 0 = seamless gap (default). >0 = subtle divider width in px.
+  var COMPOSITE_GUTTER  = 96;
+  var COMPOSITE_LABELS  = true;   // false → no markers at all, purely positional left/right
+  var COMPOSITE_LABEL_BAND = 0.11;
+
+  /* Median corner colour across both packshots - the gutter/background fill, so the join
+     between the panels has no edge in it. Median over 8 corner samples so one shadowed or
+     watermarked corner cannot skew it. Falls back to a light neutral (never the old dark
+     grey) when the pixels cannot be read. Mirrors sampleBackdrop() in app.js. */
+  function sampleBackdrop(imgs) {
+    var px = [];
+    for (var i = 0; i < imgs.length; i++) {
+      var img = imgs[i], w = img.width, h = img.height;
+      if (!w || !h) continue;
+      try {
+        var c = d.createElement("canvas");
+        c.width = w; c.height = h;
+        var cx = c.getContext("2d", { willReadFrequently: true });
+        cx.drawImage(img, 0, 0);
+        var inset = Math.max(1, Math.round(Math.min(w, h) * 0.02));
+        var corners = [[inset, inset], [w - inset, inset], [inset, h - inset], [w - inset, h - inset]];
+        for (var k = 0; k < corners.length; k++) {
+          var x = Math.min(w - 1, Math.max(0, corners[k][0]));
+          var y = Math.min(h - 1, Math.max(0, corners[k][1]));
+          var dd = cx.getImageData(x, y, 1, 1).data;
+          px.push([dd[0], dd[1], dd[2]]);
+        }
+      } catch (_) { /* tainted or unreadable - skip this source */ }
+    }
+    if (!px.length) return { fill: "#f2f2f2", contrast: "#101010" };
+    function median(idx) {
+      var v = px.map(function (p) { return p[idx]; }).sort(function (a, b) { return a - b; });
+      var m = Math.floor(v.length / 2);
+      return v.length % 2 ? v[m] : Math.round((v[m - 1] + v[m]) / 2);
+    }
+    var rgb = [median(0), median(1), median(2)];
+    var lum = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+    return {
+      fill: "rgb(" + rgb[0] + ", " + rgb[1] + ", " + rgb[2] + ")",
+      contrast: lum > 0.5 ? "#101010" : "#f5f5f5"
+    };
+  }
 
   function proxied(url) {
     if (/^(data:|blob:)/i.test(url)) return url;
@@ -923,35 +971,53 @@
         var backW  = Math.round(back.width  * (panelH / back.height));
 
         var totalW = frontW + backW + COMPOSITE_GUTTER;
+        // Label band sits BELOW the panels, so the canvas is taller than the garments.
+        var labelBand = COMPOSITE_LABELS ? Math.round(panelH * COMPOSITE_LABEL_BAND) : 0;
         var scale  = Math.min(1, COMPOSITE_MAX_W / totalW);
-        var W = Math.round(totalW * scale), H = Math.round(panelH * scale);
+        var W = Math.round(totalW * scale), H = Math.round((panelH + labelBand) * scale);
         var fW = Math.round(frontW * scale), bW = Math.round(backW * scale);
         var gut = Math.round(COMPOSITE_GUTTER * scale);
+        var pH = H - Math.round(labelBand * scale);   // panel height, excluding the band
+
+        /* Sampled backdrop, not a fixed grey: the gutter ends up the same colour as the
+           background already inside each panel, so the two halves meet with no visible
+           edge and there is no seam for the model to paint onto the shopper. Sampled
+           before the output canvas is allocated - it uses scratch canvases of its own. */
+        var backdrop = sampleBackdrop([front, back]);
 
         var canvas = d.createElement("canvas");
         canvas.width = W; canvas.height = H;
         var ctx = canvas.getContext("2d");
 
-        ctx.fillStyle = "#3a3a3a";      // neutral field - white reads as fabric on a packshot
+        ctx.fillStyle = backdrop.fill;
         ctx.fillRect(0, 0, W, H);
 
-        ctx.save(); ctx.beginPath(); ctx.rect(0, 0, fW, H); ctx.clip();
-        drawCover(ctx, front, 0, 0, fW, H);
+        ctx.save(); ctx.beginPath(); ctx.rect(0, 0, fW, pH); ctx.clip();
+        drawCover(ctx, front, 0, 0, fW, pH);
         ctx.restore();
 
         var backX = fW + gut;
-        ctx.save(); ctx.beginPath(); ctx.rect(backX, 0, bW, H); ctx.clip();
-        drawCover(ctx, back, backX, 0, bW, H);
+        ctx.save(); ctx.beginPath(); ctx.rect(backX, 0, bW, pH); ctx.clip();
+        drawCover(ctx, back, backX, 0, bW, pH);
         ctx.restore();
 
-        var dividerW = Math.max(2, Math.round(COMPOSITE_DIVIDER * scale));
-        ctx.fillStyle = "#e8e8e8";
-        ctx.fillRect(Math.round(fW + gut / 2 - dividerW / 2), 0, dividerW, H);
+        // Divider OFF by default; when re-enabled it is a faint tint of the backdrop's
+        // contrast ink, never a hard grey bar that can invert on a dark shoot.
+        if (COMPOSITE_DIVIDER > 0) {
+          var dividerW = Math.max(1, Math.round(COMPOSITE_DIVIDER * scale));
+          ctx.fillStyle = backdrop.contrast;
+          ctx.globalAlpha = 0.28;
+          ctx.fillRect(Math.round(fW + gut / 2 - dividerW / 2), 0, dividerW, pH);
+          ctx.globalAlpha = 1;
+        }
 
         var fontPx = Math.max(18, Math.round(W * 0.035));
-        var labelY = Math.round(H * 0.035);
-        drawLabel(ctx, "FRONT", Math.round(fW / 2), labelY, fontPx);
-        drawLabel(ctx, "BACK",  Math.round(backX + bW / 2), labelY, fontPx);
+        if (COMPOSITE_LABELS) {
+          // Centred in the band UNDER the panels - never over a garment pixel.
+          var labelY = pH + Math.round((H - pH) / 2 - fontPx * 0.82);
+          drawLabel(ctx, "FRONT", Math.round(fW / 2), labelY, fontPx);
+          drawLabel(ctx, "BACK",  Math.round(backX + bW / 2), labelY, fontPx);
+        }
 
         if (front.close) front.close();
         if (back.close) back.close();
@@ -961,17 +1027,24 @@
         // try-on; the caller falls back to the two-URL handover.
         var dataUrl = canvas.toDataURL("image/jpeg", 0.92);
         console.log("[PEAR] COMBINED composite built: " + W + "×" + H +
-          " · FRONT " + fW + "px | BACK " + bW + "px · " + Math.round(dataUrl.length / 1365) + "KB");
+          " · FRONT " + fW + "px | BACK " + bW + "px · backdrop " + backdrop.fill +
+          " · divider " + (COMPOSITE_DIVIDER > 0 ? COMPOSITE_DIVIDER + "px" : "none (seamless)") +
+          " · labels " + (COMPOSITE_LABELS ? "below panels" : "off") +
+          " · " + Math.round(dataUrl.length / 1365) + "KB");
         return {
           url: dataUrl,
           /* The contract, as drawn. front_x < back_x is what makes "LEFT PANEL = FRONT"
              true; the fitting room asserts exactly that to Decart and warns if this says
-             otherwise. divider_x is the vertical line the prompt calls the wall. */
+             otherwise. panel_h is the garment region's height - anything below it is the
+             label band, which carries no garment and must never be sampled as one. */
           layout: {
             w: W, h: H,
             front_x: 0,     front_w: fW,
             back_x:  backX, back_w:  bW,
-            divider_x: Math.round(fW + gut / 2)
+            panel_h: pH,
+            divider_x: Math.round(fW + gut / 2),
+            seamless: COMPOSITE_DIVIDER === 0,
+            labels: COMPOSITE_LABELS ? "below" : "none"
           }
         };
       })
