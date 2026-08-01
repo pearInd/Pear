@@ -206,5 +206,34 @@ console.log("\n── artifact + temporal clauses ride on BOTH orientations ─�
   }
 }
 
+console.log("\n── the inpainting + rotation clamps are present, and on EVERY prompt builder ──");
+{
+  /* These two address bugs that are not orientation- or mode-specific: the model
+     regenerating the shopper's pants/background, and the virtual top dropping mid-turn.
+     A clause that only reaches the composite path leaves the single-asset, custom-upload
+     and full-look paths exposed, so assert against the SOURCE that every builder carries
+     both - a regex on one rendered clause cannot see the other three builders. */
+  const src = SRC.slice(SRC.indexOf("const STRICT_INPAINT"));
+  const builders = [
+    ["buildPrompt (catalog)", /function buildPrompt\(item\)[\s\S]*?\n}/],
+    ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item\)[\s\S]*?\n}/],
+    ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom\)[\s\S]*?\n}/],
+    ["buildCompositePrompt", /function buildCompositePrompt\(item, angle\)[\s\S]*?\n}/],
+  ];
+  for (const [name, re] of builders) {
+    const body = (SRC.match(re) || [""])[0];
+    check(`${name} applies STRICT_INPAINT`, body.includes("STRICT_INPAINT"), body.slice(-200));
+    check(`${name} applies ROTATION_CONTINUITY`, body.includes("ROTATION_CONTINUITY"), body.slice(-200));
+  }
+
+  check("STRICT_INPAINT locks face, hair, skin and background as source footage",
+    /face, hair, head, neck, hands, arms and skin/.test(src) &&
+    /entire background, room and lighting/.test(src) &&
+    /locked source footage that must pass through/.test(src));
+  check("ROTATION_CONTINUITY forbids revealing the shopper's real garment mid-turn",
+    /no frame in which it is dropped, faded, or replaced by the person's own real/.test(src) &&
+    /side-on, partially occluded, or facing away/.test(src));
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);

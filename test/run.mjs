@@ -24,6 +24,10 @@
      prompt-only-flip A turn re-sends the prompt, never the reference image. Re-
                       uploading the composite mid-rotation is what made the back print
                       flicker and vanish inside the 5s billed window.
+     turn-hold        The last dressed frame is held from the FIRST sign of a turn, not
+                      from the confirmed flip 2.5s later - the uncovered window is where
+                      the shopper's real shirt came back. Plus every release path,
+                      because a stuck hold hides the live feed entirely.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -50,6 +54,7 @@ const SUITES = [
   ["angle-race", "angle-race.test.mjs"],
   ["preload-composite", "preload-composite.test.mjs"],
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
+  ["turn-hold", "turn-hold.test.mjs"],
 ];
 
 let failed = 0;

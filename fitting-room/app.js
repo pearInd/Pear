@@ -3092,6 +3092,55 @@ function orientFadeReveal() {
   _orientFadeCanvas.style.opacity = "0";
 }
 
+/* ── Freeze THROUGH the turn, not just through the swap ───────────────────────
+   THE BUG: "when I turn around, my real shirt comes back for a moment."
+
+   The freeze above used to start inside maybeSwap() - i.e. only once the flip was
+   CONFIRMED, which is ORIENT_LOCK_FRAMES (10 samples ≈ 2.5s) after the shopper began
+   turning. It covered the reference swap and nothing else. But the reversion does not
+   happen during the swap; it happens during those 2.5 seconds BEFORE it, while the
+   shopper is mid-rotation, side-on and foreshortened, and the model is still being told
+   "the person is FACING FORWARD, use the LEFT panel". Lucy regenerates every frame, and
+   for a half-turned, partly-occluded person the most probable completion is the person as
+   actually photographed - wearing their own shirt. So the garment drops, and the freeze
+   arrives too late to hide any of it.
+
+   The hold now starts on the FIRST disagreeing vote - the earliest moment we have any
+   evidence a turn is underway - and the frame it captures is therefore still a good
+   dressed one. It ends when the swap completes, when the shopper turns back (the vote
+   returns to the locked side, so no flip is coming), or on a hard timeout.
+
+   The hysteresis itself is deliberately NOT loosened to compensate. Lowering
+   ORIENT_LOCK_FRAMES would swap the reference on a head-turn and re-introduce the
+   flapping that threshold exists to stop; this covers the same window without touching
+   the confirmation bar. */
+const ORIENT_TURN_HOLD_MAX_MS = 4000;  // hard ceiling - a stuck still frame is worse than a live one
+let _orientHoldActive = false;
+let _orientHoldTimer  = null;
+
+/* @param {"turn-detected"|"swap"} reason - which stage raised the hold, for the log only */
+function orientHoldBegin(reason) {
+  if (_orientHoldActive) return;        // NEVER re-freeze: a second snapshot this far into
+                                        // the turn would capture the degraded frame we are
+                                        // holding precisely to hide.
+  _orientHoldActive = true;
+  orientFadeFreeze();
+  if (_orientHoldTimer) clearTimeout(_orientHoldTimer);
+  _orientHoldTimer = setTimeout(() => {
+    console.warn("[PEAR] AI Auto - turn hold hit its", ORIENT_TURN_HOLD_MAX_MS + "ms ceiling; revealing the live feed");
+    orientHoldEnd("timeout");
+  }, ORIENT_TURN_HOLD_MAX_MS);
+  if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - holding last dressed frame (" + reason + ")");
+}
+
+function orientHoldEnd(reason) {
+  if (_orientHoldTimer) { clearTimeout(_orientHoldTimer); _orientHoldTimer = null; }
+  if (!_orientHoldActive) return;
+  _orientHoldActive = false;
+  orientFadeReveal();
+  if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - releasing hold (" + reason + ")");
+}
+
 function createOrientationWatcher() {
   const track = localStream && localStream.getVideoTracks()[0];
   if (!track) return null;                       // no camera yet - sync will retry later
@@ -3335,18 +3384,22 @@ function createOrientationWatcher() {
     lastSwapAt = Date.now();
     autoOrientation = next;
     logVtonState();
-    orientFadeFreeze();                   // freeze the last good frame BEFORE the reference changes
+    /* No-ops when the sampler already raised the hold on the first disagreeing vote,
+       which is the normal path - re-freezing here would replace the good dressed frame
+       we are holding with a mid-turn one. Still called because a flip can also arrive
+       without a preceding turn-detected tick (a swap forced by other state). */
+    orientHoldBegin("swap");
     console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase(),
       "| reference:", abbrevImg(next === "back" ? GARMENT_BACK : GARMENT_FRONT));
     renderPerspectiveSelector();
     try {
       await applyActive();                       // one rtClient.set() - pre-cached Blob payload
       await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));   // let the new frame actually land
-      orientFadeReveal();
+      orientHoldEnd("swap-complete");
       toast(next === "back" ? "מציג גב · Back view" : "מציג חזית · Front view");
     } catch (e) {
       console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
-      orientFadeReveal();                         // never leave the frozen overlay stuck up on failure
+      orientHoldEnd("swap-failed");               // never leave the frozen overlay stuck up on failure
     } finally {
       applying = false;
     }
@@ -3400,6 +3453,17 @@ function createOrientationWatcher() {
           (needsSwitch ? progress : ""));
       }
 
+      /* Raise the hold the INSTANT a turn looks like it is starting - one disagreeing
+         vote against a locked side - so the frame we freeze is still a good dressed one.
+         Waiting for `confirmed` is 2.5s too late; see orientHoldBegin()'s comment.
+         Excluded while ACQUIRING: there is no confirmed side to protect yet, nothing has
+         been rendered to hold, and freezing the very first frames of a session would just
+         stall the reveal. */
+      if (!acquiring && needsSwitch && !confirmed) orientHoldBegin("turn-detected");
+      /* The shopper turned back before the flip confirmed (or the signal cleared): no swap
+         is coming, so drop the hold now rather than sitting on a still until the ceiling. */
+      else if (!needsSwitch && _orientHoldActive) orientHoldEnd("turn-abandoned");
+
       if (confirmed) await maybeSwap(lastVote);
     } catch (_) {} finally { sampling = false; }
   }, ORIENT_SAMPLE_MS);
@@ -3408,6 +3472,10 @@ function createOrientationWatcher() {
     stop() {
       disposed = true;
       clearInterval(timer);
+      /* A hold raised mid-turn outlives the watcher otherwise: the sampler that would
+         have released it is gone, and the shopper is left staring at a frozen still with
+         the live feed hidden underneath it forever. */
+      orientHoldEnd("watcher-stopped");
       try { video.pause(); } catch (_) {}
       video.srcObject = null;                    // detach only - the track is the preview's
     },
@@ -4250,11 +4318,14 @@ const COMPOSITE_PANEL_CONTRACT =
    turn now re-issues the PROMPT alone instead of re-uploading the reference image, so the
    model is never briefly without a garment reference at the exact moment the shopper
    turns. That is what actually stops the print vanishing mid-rotation. */
+/* Trimmed once ROTATION_CONTINUITY landed: that clause now carries the "garment stays on
+   through the turn" half, so repeating it here only spent tokens against the panel
+   contract. What is left is the part specific to a two-panel reference - the PRINT's
+   stability, frame to frame. */
 const COMPOSITE_TEMPORAL =
-  " Render with smooth, temporally consistent frame-to-frame output: the garment stays" +
-  " pinned to the body with the same colour, print placement and scale in every frame," +
-  " with ZERO flickering, popping, strobing, drifting prints or missing graphics as the" +
-  " person moves or rotates. The print must never vanish, fade or re-position between frames.";
+  " Render with smooth, temporally consistent frame-to-frame output: the garment keeps the" +
+  " same colour, print placement and scale in every frame, with ZERO flickering, popping," +
+  " strobing or drifting. The print must never vanish, fade or re-position between frames.";
 
 /* Orientation selector. The OrientationWatcher has ALREADY resolved which way the shopper
    is facing, so exactly one panel is ever named as the source and the other is excluded in
@@ -4340,7 +4411,7 @@ function buildCompositePrompt(item, angle) {
     COMPOSITE_PANEL_CONTRACT + select +
     ` Substitute the person's current ${target} with ${desc}, reproducing its exact colour,` +
     ` pattern, print and fabric texture. ${anchor} Render a ${fitMod}${COMPOSITE_QUALITY}.${keep}` +
-    COMPOSITE_TEMPORAL
+    STRICT_INPAINT + ROTATION_CONTINUITY + COMPOSITE_TEMPORAL
   ).replace(/\s+/g, " ").trim();
 }
 
@@ -4736,6 +4807,47 @@ const HEM_DETAIL = " Preserve the garment's printed graphics, logos, and text, a
 const KEEP_BOTTOMS = " Keep the person's existing lower body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the trousers, shorts, skirt, shoes, or anything below the waist.";
 const KEEP_TOP     = " Keep the person's existing upper body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the shirt, top, jacket, or anything above the waist.";
 
+/* ── Strict garment inpainting - the hallucination clamp ──────────────────────
+   KEEP_BOTTOMS/KEEP_TOP only ever pinned the OPPOSITE GARMENT layer. Everything else in
+   frame - face, hair, hands, skin, the room behind the shopper - was simply never
+   mentioned, and Lucy regenerates the WHOLE frame on every pass. Anything the prompt does
+   not pin is a region the model is free to reinterpret, which is what "it changed my
+   pants / my background" is: not a bug in the model so much as an unstated constraint.
+
+   READ THIS BEFORE REACHING FOR A MASK. There is no mask, ROI or inpainting-region input
+   on Lucy realtime - set() takes exactly { prompt, enhance, image } (verified against
+   @decartai/sdk@0.1.5 setInputSchema, which strips everything else). A true bounding mask
+   would have to be enforced OUTSIDE the model: segment the torso locally per frame and
+   composite Decart's output over the untouched camera frame everywhere else. That is a
+   real feature - a segmentation model in the hot path at LIVE_INFERENCE_FPS - not a
+   parameter, and it is deliberately NOT what this constant is. This is the strongest
+   available lever through the one channel the API actually exposes, and it is a
+   probabilistic bias, not a guarantee. */
+const STRICT_INPAINT =
+  " STRICT GARMENT INPAINTING MODE: edit ONLY the target garment(s) named above. Every" +
+  " other pixel is locked source footage that must pass through EXACTLY as it appears in" +
+  " the live video frame - the person's face, hair, head, neck, hands, arms and skin, and" +
+  " the entire background, room and lighting. Do NOT generate, replace, restyle, recolor" +
+  " or re-render the background, or any part of the person outside the target garment(s).";
+
+/* ── Rotation continuity - the "my real shirt came back" clamp ────────────────
+   Paired with the freeze-through-the-turn hold in the OrientationWatcher (see
+   ORIENT_TURN_HOLD_MS). The hold covers the window visually; this tells the model what
+   the window is FOR, so the frames it generates during the rotation are still dressed.
+
+   The failure it addresses: mid-turn the shopper is in profile, the torso is foreshortened
+   and the face is leaving frame. With nothing in the prompt about rotation, the most
+   probable continuation for a partially-occluded person is the person as photographed -
+   i.e. their real shirt. Naming the turn as an expected, continuous state makes staying
+   dressed the likelier completion. */
+const ROTATION_CONTINUITY =
+  " The person may rotate to any angle, including turning fully away from the camera." +
+  " Throughout the rotation the virtual garment stays ON the body, continuously fitted," +
+  " with no frame in which it is dropped, faded, or replaced by the person's own real" +
+  " clothing - even while they are side-on, partially occluded, or facing away with no" +
+  " face visible. Carry it through the turn and transition smoothly to the correct side" +
+  " of the reference as the body comes around.";
+
 /* Universal hard negative appended to EVERY prompt (per product spec). Bars the opposite
    view's signature details from leaking in when the back is being rendered - a belt-and-
    suspenders backstop alongside ANGLE_CLAUSE.backReal/backInferred's own "do NOT render
@@ -4757,11 +4869,11 @@ function buildPrompt(item) {
   const suffix = HARD_NEGATIVE;   // universal hard negative (combined orientation lives in angleClause)
 
   if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${colorWord} ${sub} trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_TOP}${suffix}`
+    return `Substitute the current bottoms with ${colorWord} ${sub} trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
       .replace(/\s+/g, " ").trim();
   }
   const noun = SHIRT_NOUN[item.subType] || "top";
-  return `Substitute the current top with a ${colorWord} ${sub} ${noun}. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_BOTTOMS}${suffix}`
+  return `Substitute the current top with a ${colorWord} ${sub} ${noun}. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
     .replace(/\s+/g, " ").trim();
 }
 
@@ -4780,10 +4892,10 @@ function buildCustomPrompt(item) {
   const ref = "the exact garment shown in the reference image - a custom uploaded garment - replicating its precise color, pattern, print, fabric texture and silhouette";
 
   if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_TOP}${suffix}`
+    return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
       .replace(/\s+/g, " ").trim();
   }
-  return `Substitute the current top with ${ref}, worn on the upper body. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_BOTTOMS}${suffix}`
+  return `Substitute the current top with ${ref}, worn on the upper body. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
     .replace(/\s+/g, " ").trim();
 }
 
@@ -4891,7 +5003,11 @@ function buildLookPrompt(top, bottom) {
     `Dress the person in one complete outfit in a single pass: ` +
     `replace the top with a ${tColor} ${tSub} ${tNoun} rendered as a ${topFit}, ` +
     `and at the same time replace the bottoms with ${bColor} ${bSub} trousers rendered as a ${botFit}. ` +
-    `${anchor} Render both garments together in a single photorealistic pass${QUALITY_SUFFIX}.${suffix}`
+    `${anchor} Render both garments together in a single photorealistic pass${QUALITY_SUFFIX}.` +
+    /* A full look replaces BOTH layers, so there is no KEEP_TOP/KEEP_BOTTOMS to pin here -
+       which makes the face/hair/skin/background lock the ONLY thing standing between this
+       prompt and a regenerated room. It matters more here, not less. */
+    `${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
   ).replace(/\s+/g, " ").trim();
 }
 
@@ -6399,6 +6515,11 @@ function stopBilling() {
   stopStatsMonitor();
   if (rtClient) { try { rtClient.disconnect(); } catch (_) {} rtClient = null; }
   lastSentImageRef = null; rtImageOnWire = false;   // session over - nothing is on the wire
+  /* Unlike teardown(), this deliberately leaves the watcher and the paint loop alive for
+     the frozen-hold tail - so a turn hold raised a moment before the window closed has
+     nothing left to release it, and its overlay (z-index 6, inside #cameraCard) would sit
+     on top of that tail for the rest of the session. */
+  orientHoldEnd("billing-stopped");
   if (inputThrottle) { try { inputThrottle.dispose(); } catch (_) {} inputThrottle = null; }
   if (realtimeInput) { try { realtimeInput.getTracks().forEach((t) => t.stop()); } catch (_) {} realtimeInput = null; }
   const ai = $("aiVideo");
