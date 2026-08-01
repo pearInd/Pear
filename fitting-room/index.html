@@ -64,6 +64,13 @@
 <div id="screen-calculator" class="screen active">
   <div class="calc-shell">
 
+    <!-- ░░ Unified card (#screen-calculator only, see .calc-card in style.css) -
+         the video and form used to be two independent floating cards with a
+         visible gap/page-background between them; they're now one shared
+         card shell (one radius/background/shadow) with the two zones split
+         by a thin internal divider instead. #screen-locked doesn't use this
+         wrapper - its .calc-editorial keeps its own separate dark card. ░░ -->
+    <div class="calc-card">
     <!-- ░░ Editorial panel - a soft cream/glass surface (NOT the old dark
          card) so it blends seamlessly into the ivory page canvas and the
          form panel beside it. Sole focal point: the looping brand video.
@@ -191,11 +198,11 @@
         </form>
     </div>
     </div><!-- /.calc-main -->
+    </div><!-- /.calc-card -->
 
-    <!-- Direct child of .calc-shell (not .calc-main) and spans both grid
-         columns (grid-column:1/-1 in style.css) so it centers under the
-         video+form pair combined, instead of sitting off-center under just
-         the 60% form column. -->
+    <!-- Direct child of .calc-shell (not .calc-card) so it centers under the
+         whole merged video+form card rather than sitting inside/under just
+         one zone of it. -->
     <p class="calc-main__copyright">© 2026 PEAR · All rights reserved.</p>
   </div><!-- /.calc-shell -->
 </div>

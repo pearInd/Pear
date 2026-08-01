@@ -457,18 +457,59 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   perspective: 1600px;   /* depth field for the 3D card tilt */
 }
 
-/* Video layout (this screen only - #screen-locked keeps the base
-   1.05fr/0.95fr + align-items:center above, sized to its own text content).
-   40% video / 60% form, and align-items:stretch so the video column matches
-   the form column's full height instead of hugging its own content. */
-#screen-calculator .calc-shell {
+/* #screen-locked keeps the base display:grid/1.05fr-0.95fr/align-items:center
+   above (its own separate editorial + form cards, unchanged). #screen-calculator
+   no longer needs .calc-shell itself to be the 2-column grid - that split now
+   lives inside .calc-card below, so .calc-shell just stacks the card and the
+   copyright line beneath it. */
+#screen-calculator .calc-shell { display: block; }
+
+/* ── unified card (#screen-calculator, desktop only) ───────────────────────
+   The video and form used to be two independent floating cards (.calc-editorial
+   + .container), each with their own radius/background/shadow, separated by
+   .calc-shell's gap showing the page background between them. On desktop
+   they're now one shared card shell - single radius/background/shadow/blur
+   here, with the video zone stripped of its own card chrome (see the
+   #screen-calculator .calc-card .calc-editorial override below) and the two
+   zones separated only by a thin internal divider border on .calc-main.
+   Background/shadow/border/blur values are the exact ones the light
+   "editorial" panel used to carry, reused here unchanged so the card's own
+   visual language doesn't change, only where it's applied.
+
+   Structural (columns/stretch) is unscoped by width on purpose - mobile
+   overrides grid-template-columns back to 1fr in the responsive block below
+   since .calc-editorial is hidden there. The CHROME (background/border/
+   radius/shadow/blur) is min-width-gated: mobile is explicitly out of scope
+   for this merge, so .container there keeps rendering its own original
+   standalone card look (unchanged from before this merge), same as always. */
+#screen-calculator .calc-card {
+  display: grid;
   grid-template-columns: 40% 60%;
   align-items: stretch;
-  /* Tighter than the base 28px - the video and form should read as one
-     close-set pairing, not two panels with daylight between them. Higher
-     specificity than the base rule (and the unscoped 480px gap:18px
-     override) so this wins at every width without touching #screen-locked. */
-  gap: 12px;
+}
+@media (min-width: 921px) {
+  #screen-calculator .calc-card {
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    background:
+      linear-gradient(158deg, rgba(255, 252, 244, .92) 0%, rgba(244, 238, 225, .78) 52%, rgba(233, 238, 214, .86) 100%);
+    border: 1px solid rgba(255, 255, 255, .75);
+    box-shadow: 0 20px 60px rgba(94, 88, 66, .13), inset 0 1px 0 rgba(255, 255, 255, .9);
+    -webkit-backdrop-filter: var(--blur-lg);
+            backdrop-filter: var(--blur-lg);
+  }
+  /* .container's own standalone card chrome (background/border/radius/
+     shadow/blur - still declared on the base rule below for mobile's sake)
+     is redundant now that .calc-card supplies one shared card - zero it back
+     out so only .calc-card's edges are visible, not a second nested card
+     outline inside it. */
+  #screen-calculator .container {
+    background: none;
+    border: none;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+            backdrop-filter: none;
+  }
 }
 
 /* ── editorial panel ──────────────────────────────────────────────────────
@@ -499,21 +540,25 @@ html.pear-returning-check #screen-calculator { display: none !important; }
           backdrop-filter: var(--blur-lg);
 }
 
-/* ── LIGHT PANEL (screen-calculator only) ─────────────────────────────────
-   The dark card is gone here: this is now a soft ivory/glass surface that
-   dissolves into the page canvas so the video side and the form side read
-   as ONE continuous premium layout rather than two stuck-together cards.
+/* ── FLATTENED PANEL (screen-calculator only) ─────────────────────────────
+   .calc-editorial no longer carries its own card chrome here - the cream
+   background/border/shadow/blur that used to live on this rule moved up to
+   the shared .calc-card wrapper (see above), so this zeroes them back out
+   and lets .calc-editorial sit as a plain content zone inside the merged
+   card. .calc-card's own overflow:hidden + border-radius still clips this
+   zone to the card's rounded outer corners even though it has none of its
+   own now.
 
    SCOPED ON PURPOSE: #screen-locked reuses .calc-editorial *with white
-   copy* (.calc-editorial__content/__headline/__meta are all #fff). Making
-   the base class light would render that screen white-on-cream, i.e.
-   invisible - so the light treatment applies only to this screen and the
-   dark base above stays exactly as-is for screen-locked. ── */
-#screen-calculator .calc-editorial {
-  background:
-    linear-gradient(158deg, rgba(255, 252, 244, .92) 0%, rgba(244, 238, 225, .78) 52%, rgba(233, 238, 214, .86) 100%);
-  border: 1px solid rgba(255, 255, 255, .75);
-  box-shadow: 0 20px 60px rgba(94, 88, 66, .13), inset 0 1px 0 rgba(255, 255, 255, .9);
+   copy* (.calc-editorial__content/__headline/__meta are all #fff) and its
+   own separate dark card - the base rule above stays exactly as-is for it. ── */
+#screen-calculator .calc-card .calc-editorial {
+  border-radius: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+          backdrop-filter: none;
 }
 /* soft pear-green ambient bloom instead of the old dark vignette */
 #screen-calculator .calc-editorial__aura {
@@ -630,22 +675,23 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 /* #screen-calculator only: top-align instead of vertically centering, so the
    form column's content starts at the same y as the video column's top edge
-   (align-items:stretch on .calc-shell gives both columns the same box
+   (align-items:stretch on .calc-card gives both columns the same box
    height - centering the form inside that box was what made its top edge
    read as lower than the video's). #screen-locked keeps the base
    justify-content:center above - its single centered thank-you card has no
    video counterpart to align against. */
 #screen-calculator .calc-main { padding-top: 0; justify-content: flex-start; }
+/* the internal divider between the merged card's two zones, now that they no
+   longer have a visible page-background gap between them. border-inline-start
+   (not border-left/right) so it lands on .calc-main's edge that actually
+   touches .calc-editorial regardless of text direction - this page is RTL, so
+   that's .calc-main's right edge. */
+#screen-calculator .calc-card .calc-main { border-inline-start: 1px solid var(--glass-line); }
 .calc-main .step-progress { width: 100%; max-width: 472px; padding-top: 12px; }
 #screen-calculator .container { margin: 0 auto 12px; }
 .calc-main__copyright {
   margin: 16px auto 0; text-align: center;
   font-size: .68rem; letter-spacing: .06em; color: var(--muted-2);
-  /* Direct child of .calc-shell now (see index.html) - spans both grid
-     columns so it centers under the video+form pair combined instead of
-     just the 60% form column. In the mobile single-column grid this simply
-     resolves to the one column, so no override needed there. */
-  grid-column: 1 / -1;
 }
 
 /* ── responsive ───────────────────────────────────────────────────────────── */
@@ -667,6 +713,12 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      same as before the video existed. #screen-locked has no video markup
      in the first place, so nothing to scope away from there. */
   #screen-calculator .calc-editorial { display: none; }
+  /* With .calc-editorial gone, .calc-card would otherwise still reserve its
+     40% column - .calc-main needs the collapse to 1fr to actually take the
+     freed-up width, same as .calc-shell did for the old 2-column layout. */
+  #screen-calculator .calc-card { grid-template-columns: 1fr; }
+  /* No second column left to divide from on mobile. */
+  #screen-calculator .calc-card .calc-main { border-inline-start: none; }
 }
 @media (max-width: 480px) {
   .calc-editorial__meta { display: none; }
