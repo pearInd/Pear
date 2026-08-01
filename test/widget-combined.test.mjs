@@ -148,6 +148,17 @@ console.log("=== A. front + back present -> single composite handed over ===");
     msg && String(msg.garment_composite).slice(0, 40));
   check("A5 images fetched through the CORS proxy (untainted canvas)",
     r.requests.some((u) => u.includes("/api/img-proxy")), JSON.stringify(r.requests.slice(0, 4)));
+  /* The panel geometry travels WITH the composite. The fitting room turns this image into
+     a Decart prompt asserting "LEFT PANEL = FRONT, RIGHT PANEL = BACK"; that claim is about
+     pixels drawn here, by a copy of the stitcher living in a different bundle. Shipping the
+     geometry lets the consumer check the contract instead of assuming it, so a panel-order
+     drift surfaces in the console rather than as a back view that renders the front. */
+  const L = msg && msg.garment_composite_layout;
+  check("A6 panel layout reported alongside the composite", !!L, JSON.stringify(L));
+  check("A7 layout agrees with the prompt's LEFT=FRONT / RIGHT=BACK contract",
+    !!L && L.front_x < L.back_x && L.front_w > 0 && L.back_w > 0, JSON.stringify(L));
+  check("A8 divider sits between the two panels",
+    !!L && L.divider_x > L.front_x + L.front_w - 1 && L.divider_x <= L.back_x, JSON.stringify(L));
 }
 
 console.log("\n=== B. single-view product -> server synthesizes, then composite ===");

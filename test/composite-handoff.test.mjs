@@ -42,6 +42,13 @@ const listenerSrc = extract(
 check("extracted the PEAR_UPDATE_GARMENT listener body", listenerSrc.includes("garment_composite"),
   "marker text not found - has the listener been restructured?");
 
+/* The listener also records the widget's panel geometry and logs it through the REAL
+   describeCompositeLayout(), so pull that in rather than stubbing it - it is the check
+   that catches a stitcher whose panel order stopped matching the LEFT=FRONT / RIGHT=BACK
+   contract the Decart prompt asserts, and a stub would assert nothing about it. */
+const describeSrc = extract("function describeCompositeLayout(L) {", "\n}\n");
+const describeCompositeLayout = new Function(describeSrc + "\n}\nreturn describeCompositeLayout;")();
+
 // The listener mutates `activeItem` properties (not the binding itself), and reads the
 // module-level `activeItem` directly - so run it with `activeItem` as a real closure
 // variable via `with`-free substitution: build a tiny module wrapper.
@@ -61,6 +68,7 @@ function run(activeItemInit, messageData) {
     // early-return/change-detection logic, so a call-recording stub is enough here.
     ensureActiveGarmentComposite: (item) => localCalls.push("ensureActiveGarmentComposite:" + (item && item.name)),
     abbrevImg: (u) => (u ? String(u).slice(0, 20) : "(none)"),
+    describeCompositeLayout,   // the real one, extracted above
     currentAngle: "auto",   // read only for the trailing console.log line
     console,
     Array,
@@ -86,11 +94,42 @@ console.log("── THE BUG: composite arrives with front/back unchanged ──"
     garment_url: "https://cdn.test/front.jpg",     // SAME as before
     garment_back: "https://cdn.test/back.jpg",      // SAME as before
     garment_composite: "data:image/jpeg;base64,/9j/NEWCOMPOSITE",
+    garment_composite_layout: { w: 2048, h: 1200, front_x: 0, front_w: 992, back_x: 1056, back_w: 992, divider_x: 1024 },
   });
   check("composite IS applied even though front/back did not change",
     after.composite === "data:image/jpeg;base64,/9j/NEWCOMPOSITE", after.composite);
   check("renderActiveGarment WAS called (the chip actually updates)",
     calls.includes("renderActiveGarment"), JSON.stringify(calls));
+  /* The widget's panel geometry rides along with the composite and is kept on the item,
+     so applyGarment()'s payload log can state which half the prompt selected AND whether
+     the pixels back that claim up. */
+  check("widget panel layout captured on the item",
+    after._compositeLayout && after._compositeLayout.front_x < after._compositeLayout.back_x,
+    JSON.stringify(after._compositeLayout));
+}
+
+console.log("\n── the layout is optional: an older widget build sends none ──");
+{
+  const item = { img: "https://cdn.test/front.jpg", imgBack: "https://cdn.test/back.jpg" };
+  const { activeItem: after } = run(item, {
+    type: "PEAR_UPDATE_GARMENT",
+    garment_url: "https://cdn.test/front.jpg",
+    garment_back: "https://cdn.test/back.jpg",
+    garment_composite: "data:image/jpeg;base64,/9j/NOLAYOUT",
+  });
+  check("composite still applied with no layout attached", after.composite.endsWith("NOLAYOUT"));
+  check("layout recorded as absent rather than undefined-by-accident", after._compositeLayout === null,
+    JSON.stringify(after._compositeLayout));
+  check("describeCompositeLayout says so instead of throwing",
+    describeCompositeLayout(after._compositeLayout) === "layout: not reported",
+    describeCompositeLayout(after._compositeLayout));
+}
+
+console.log("\n── a REVERSED stitch is called out, since the prompt asserts LEFT=FRONT ──");
+{
+  const reversed = { w: 2048, h: 1200, front_x: 1056, front_w: 992, back_x: 0, back_w: 992, divider_x: 1024 };
+  check("panel-order drift surfaces as a warning in the description",
+    /PANELS REVERSED/.test(describeCompositeLayout(reversed)), describeCompositeLayout(reversed));
 }
 
 console.log("\n── a genuine no-op (same front/back, no composite, nothing new) is still skipped ──");

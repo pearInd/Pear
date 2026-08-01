@@ -899,12 +899,20 @@
     ctx.restore();
   }
 
-  /* Stitch FRONT + BACK into one labelled reference. Resolves to a data URL (the form
-     that survives postMessage to the fitting-room iframe), or "" on any failure - the
-     caller then falls back to handing over the two URLs separately rather than going
-     live with nothing. */
+  /* Stitch FRONT + BACK into one labelled reference. Resolves to
+     { url, layout } - a data URL (the form that survives postMessage to the fitting-room
+     iframe) plus the panel geometry actually drawn - or { url: "" } on any failure, in
+     which case the caller falls back to handing over the two URLs separately rather than
+     going live with nothing.
+
+     THE LAYOUT IS NOT DECORATION. The fitting room turns this image into a Decart prompt
+     that asserts "LEFT PANEL = FRONT, RIGHT PANEL = BACK" and tells the model to read one
+     named half. That assertion is about pixels drawn HERE, by a copy of the layout code
+     that lives in a different bundle from the code making the claim. Reporting the
+     geometry lets the consumer verify the contract instead of assuming it - if the panels
+     ever swap, the console says so next to the prompt that got it wrong. */
   function createGarmentComposite(frontUrl, backUrl) {
-    if (!frontUrl || !backUrl) return Promise.resolve("");
+    if (!frontUrl || !backUrl) return Promise.resolve({ url: "", layout: null });
     return Promise.all([loadBitmapCORS(frontUrl), loadBitmapCORS(backUrl)])
       .then(function (imgs) {
         var front = imgs[0], back = imgs[1];
@@ -954,12 +962,23 @@
         var dataUrl = canvas.toDataURL("image/jpeg", 0.92);
         console.log("[PEAR] COMBINED composite built: " + W + "×" + H +
           " · FRONT " + fW + "px | BACK " + bW + "px · " + Math.round(dataUrl.length / 1365) + "KB");
-        return dataUrl;
+        return {
+          url: dataUrl,
+          /* The contract, as drawn. front_x < back_x is what makes "LEFT PANEL = FRONT"
+             true; the fitting room asserts exactly that to Decart and warns if this says
+             otherwise. divider_x is the vertical line the prompt calls the wall. */
+          layout: {
+            w: W, h: H,
+            front_x: 0,     front_w: fW,
+            back_x:  backX, back_w:  bW,
+            divider_x: Math.round(fW + gut / 2)
+          }
+        };
       })
       .catch(function (e) {
         console.warn("[PEAR] createGarmentComposite failed:", e && e.message,
           "- falling back to separate front/back handover");
-        return "";
+        return { url: "", layout: null };
       });
   }
 
@@ -1598,7 +1617,8 @@
             console.warn("[PEAR widget] no back view available - handing over FRONT-ONLY (no composite possible)");
           }
 
-          return createGarmentComposite(frontUrl, backUrl).then(function (composite) {
+          return createGarmentComposite(frontUrl, backUrl).then(function (built) {
+            var composite = built && built.url;
             if (composite) {
               console.log("[PEAR widget] COMBINED payload ready - handing the single composite to the try-on engine");
             }
@@ -1618,6 +1638,10 @@
                    the front/back URLs above remain only as provenance and as the
                    fallback if the composite is unusable. */
                 garment_composite: composite || undefined,
+                /* Panel geometry of that composite, so the fitting room can verify the
+                   LEFT=FRONT / RIGHT=BACK contract it is about to assert to Decart rather
+                   than trusting that two separately-bundled stitchers still agree. */
+                garment_composite_layout: (composite && built.layout) || undefined,
                 garment_images: sorted
               }, PEAR_BASE);
             } catch (_) {}

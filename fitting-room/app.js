@@ -1533,8 +1533,15 @@ window.addEventListener("message", (e) => {
      (garmentBlobCached, garmentImageRef) already handles it without a proxy hop. */
   if (composite) {
     activeItem.composite = composite;
+    /* Panel geometry the widget actually drew. Diagnostic only - the composite is used
+       verbatim either way - but it is what turns "the back renders as the front" from a
+       guess into a readable fact, because it is the one signal that can contradict the
+       LEFT=FRONT / RIGHT=BACK contract the prompt asserts. Optional: an older widget
+       build sends no layout and describeCompositeLayout() just reports that. */
+    const layout = e.data.garment_composite_layout;
+    activeItem._compositeLayout = (layout && typeof layout === "object") ? layout : null;
     console.log("[PEAR] COMBINED composite received from the widget:",
-      abbrevImg(activeItem.composite));
+      abbrevImg(activeItem.composite), "·", describeCompositeLayout(activeItem._compositeLayout));
   }
   // currentAngle is deliberately NOT set here: renderPerspectiveSelector() re-derives
   // it (AI Auto when the corrected pair qualifies, else front) with no user input.
@@ -3511,6 +3518,28 @@ const COMPOSITE_GUTTER  = 64;     // total gap between the two panels, divider c
 const _compositeCache = new Map();   // `${frontUrl} ${backUrl}` → Promise<Blob|null>
 
 /**
+ * Human-readable summary of a composite's panel geometry - and the one place that checks
+ * the pixels actually match the contract the prompt asserts (LEFT = FRONT, RIGHT = BACK).
+ *
+ * WHY THIS IS WORTH A FUNCTION: the composite is built by two independent copies of the
+ * same layout code - createGarmentComposite() here and createGarmentComposite() in
+ * pear-widget.js - in separate bundles with no shared module system (that file's own
+ * comment says the two "must stay in lockstep"). "Must stay in lockstep" is a convention,
+ * not an invariant, and when it breaks the only symptom is a back view that renders the
+ * front. The widget now reports the geometry it drew, and a panel-order drift shows up as
+ * a console warning next to the prompt that assumes otherwise.
+ *
+ * @param {{w:number,h:number,front_x:number,front_w:number,back_x:number,back_w:number}} L
+ * @returns {string}
+ */
+function describeCompositeLayout(L) {
+  if (!L || !L.w) return "layout: not reported";
+  const leftIsFront = L.front_x < L.back_x;
+  return `${L.w}×${L.h}, FRONT x${L.front_x}+${L.front_w} | BACK x${L.back_x}+${L.back_w}` +
+    (leftIsFront ? "" : "  ⚠ PANELS REVERSED - the prompt asserts LEFT=FRONT, RIGHT=BACK");
+}
+
+/**
  * Stitch a garment's FRONT and BACK photos into one side-by-side composite.
  *
  * Layout (per spec): front LEFT, back RIGHT, canvas height = max(frontH, backH),
@@ -4058,32 +4087,105 @@ const ANGLE_CLAUSE = {
    left the model to decide which half applied. Here the OrientationWatcher has
    already resolved that, so exactly ONE panel is ever named as the source, and the
    other is explicitly excluded. The model is never asked to choose. */
-const COMPOSITE_BASE_CLAUSE =
-  " The reference image is ONE picture containing TWO separate photographs of the SAME garment, side by side," +
-  " divided by a vertical line: the LEFT panel is marked 'FRONT' and shows the garment's front," +
-  " the RIGHT panel is marked 'BACK' and shows the garment's back." +
-  " Treat the divider as an impassable wall - never blend, merge or copy any detail from one panel into the other," +
-  " and never render both panels' designs on the same surface of the garment." +
-  " The 'FRONT' and 'BACK' text markers and the divider line are architectural guides only:" +
-  " never render that text, the line or the panel edges onto the clothing or the person.";
+/* The panel contract. States WHAT the reference image is, before anything else in the
+   prompt describes the garment or the body. Everything downstream (COMPOSITE_SELECT,
+   buildCompositePrompt) assumes this has already been said. */
+const COMPOSITE_PANEL_CONTRACT =
+  "The garment reference is a SPLIT COMPOSITE IMAGE containing two views of the SAME garment," +
+  " separated by a central vertical divider line." +
+  " LEFT PANEL, marked 'FRONT': the FRONT view of the garment." +
+  " RIGHT PANEL, marked 'BACK': the BACK view of the garment." +
+  " The divider is an impassable wall - never blend, mirror or copy any detail from one panel" +
+  " into the other, and never render both panels' designs on the same surface of the garment." +
+  " The 'FRONT' and 'BACK' markers, the divider line and the panel edges are labels for you only:" +
+  " never paint them onto the clothing or the person.";
 
-const COMPOSITE_CLAUSE = {
+/* Orientation selector. The OrientationWatcher has ALREADY resolved which way the shopper
+   is facing, so exactly one panel is ever named as the source and the other is excluded in
+   absolute terms ("does not exist for this frame") rather than merely deprioritised - the
+   model is never asked to choose. The back clause is phrased as an EXTRACT-and-APPLY
+   instruction, not a "reproduce the reference" one: the task is a texture transfer from a
+   named region of the reference onto a named region of the body, and naming both ends of
+   that transfer is what the previous wording left implicit. */
+const COMPOSITE_SELECT = {
   front:
-    COMPOSITE_BASE_CLAUSE +
-    " The person is FACING the camera. Use ONLY the LEFT panel marked 'FRONT' as the source for what you render." +
-    " Reproduce that panel's garment faithfully - its front panel, collar, closure, hemline and any front graphics," +
-    " prints, logos or lettering - keeping each element at the SAME size, height and horizontal position as in that panel." +
-    " IGNORE the right 'BACK' panel completely: none of its content may appear anywhere in the output.",
+    " The person is FACING FORWARD, the front of their body toward the camera." +
+    " Apply the LEFT PANEL (FRONT view) design to the FRONT of their body: extract that panel's" +
+    " exact texture, print, graphic, logo, lettering and colour and render it on the front of the" +
+    " garment they are wearing - its front panel, collar, closure and hemline - keeping every element" +
+    " at the SAME size, height and horizontal position it has in that panel." +
+    " The RIGHT PANEL does not exist for this frame: none of its content may appear anywhere in the output.",
   back:
-    COMPOSITE_BASE_CLAUSE +
-    " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera." +
-    " Use ONLY the RIGHT panel marked 'BACK' as the source for what you render." +
-    " Reproduce that panel's garment faithfully - its back panel, rear yoke, back collar, rear hemline and especially" +
-    " any back graphics, prints, logos or lettering - keeping each element at the SAME size, height and horizontal" +
-    " position as in that panel, wrapping naturally around the body." +
-    " IGNORE the left 'FRONT' panel completely: the front chest print, front logo, buttons, placket and zipper shown" +
-    " there must NOT appear on the back you render.",
+    " The person has TURNED AROUND and is presenting their BACK to the camera - rear view, the back of" +
+    " their body toward you, no face visible." +
+    " Accurately EXTRACT the exact garment texture and print from the RIGHT PANEL (BACK view) and RENDER" +
+    " IT ONTO THE BACK of the person: its back print, graphic, logo, lettering, colour blocking, rear yoke," +
+    " back collar and rear hemline, each kept at the SAME size, height and horizontal position it has in" +
+    " that panel, wrapping naturally around the torso and following the fabric as they move." +
+    " The LEFT PANEL (FRONT view) does not exist for this frame: its chest print, front logo, front" +
+    " lettering, buttons, placket, zipper and front pockets must NOT appear anywhere on the back you render.",
 };
+
+/* Trimmed photorealism tail for composite mode, replacing QUALITY_SUFFIX + HEM_DETAIL.
+   Two reasons, both specific to a two-panel reference:
+     • LENGTH. Those two constants alone run ~660 characters of boilerplate that competes
+       with the panel contract for the model's attention (see buildCompositePrompt).
+     • CONTRADICTION. HEM_DETAIL says "preserve the garment's printed graphics, logos and
+       text at their original scale, proportion and relative position" without naming a
+       panel. Against a reference holding TWO sets of graphics that reads as "render both"
+       - the double-logo symptom that got the previous stitcher removed in 23f5953. The
+       per-panel form of that same instruction already lives inside COMPOSITE_SELECT,
+       scoped to the one panel actually in play. */
+const COMPOSITE_QUALITY =
+  ", photorealistic real-world fabric texture with visible seams and stitching, natural" +
+  " lighting matching the user's room, and natural material physics - no glitching, banding," +
+  " tearing or unnatural structural folds";
+
+/**
+ * Build the COMPLETE prompt for a split FRONT|BACK composite reference.
+ *
+ * ORDER IS THE POINT, and it is the substantive change over what this replaced.
+ * The previous shape was `buildPrompt(item) + angleClause(item)`: 1,403 characters of
+ * colour / anatomy / fit / quality / hem / hard-negative boilerplate AHEAD of the panel
+ * contract, pushing the single most important instruction in composite mode - WHICH HALF
+ * of the reference to read - past the halfway mark of a 2,636 character prompt. Lucy is a
+ * realtime diffusion model regenerating every frame from that prompt; the leading tokens
+ * dominate, so the panel contract was competing from the worst position available.
+ * Here it leads, the orientation selector follows immediately, and the garment and body
+ * description trail as qualifiers. Length is a secondary effect and a modest one (2,636 →
+ * 2,171, ~18%, from dropping QUALITY_SUFFIX + HEM_DETAIL for COMPOSITE_QUALITY) - do not
+ * mistake it for the mechanism. What changed is that nothing now precedes the contract.
+ *
+ * The garment is named as "the … shown in that panel" rather than by catalog colour alone:
+ * with real pixels for the side being rendered, the panel is the stronger reference and a
+ * bare colour word can only contradict it.
+ *
+ * @param {object} item   the active garment (catalog or custom upload)
+ * @param {"front"|"back"} angle  the orientation the payload is being built FOR - pass
+ *   applyGarment()'s frozen `angleAtStart`, never a fresh effectiveAngle() read.
+ * @returns {string}
+ */
+function buildCompositePrompt(item, angle) {
+  const select = angle === "back" ? COMPOSITE_SELECT.back : COMPOSITE_SELECT.front;
+  const lower  = item.garmentType === "lower_body";
+  const keep   = lower ? KEEP_TOP : KEEP_BOTTOMS;   // pin the layer we are NOT replacing
+  const target = lower ? "bottoms" : "top";
+
+  const sub  = SUBTYPE_PROMPT[item.subType] || "";
+  const noun = lower ? `${sub} trousers` : `${sub} ${SHIRT_NOUN[item.subType] || "top"}`;
+  // A custom upload has no catalog colour/subType to name - the panel IS the description.
+  const desc = item.custom ? "the custom garment shown in that panel"
+                           : `the ${colorName(item.color)} ${noun} shown in that panel`;
+
+  const anchor = getAnatomicalAnchor();
+  const fitMod = getFitModifier(getSizeDelta(), item.garmentType);
+
+  return (
+    COMPOSITE_PANEL_CONTRACT + select +
+    ` Substitute the person's current ${target} with ${desc}, reproducing its exact colour,` +
+    ` pattern, print and fabric texture. ${anchor} Render a ${fitMod}${COMPOSITE_QUALITY}.${keep}`
+  ).replace(/\s+/g, " ").trim();
+}
 
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
    orientation). The reference image is TWO stacked, isolated garment photos
@@ -4154,11 +4256,21 @@ function compositeActiveFor(item) {
    already-resolved reference image drift apart. Omitted by every OTHER caller
    (applyLook() has no per-orientation reference to race against), so this stays a
    pure addition, not a behaviour change for them. */
-function angleClause(item, angleOverride) {
+/* `useComposite` overrides the compositeActiveFor() guess when the CALLER already knows
+   what reference actually got resolved. That distinction is load-bearing, not cosmetic:
+   compositeActiveFor() reports whether a composite is *wanted*, while referenceImageFor()
+   can want one and still fall through to a single-asset image when the stitch or the
+   handed-over data URL fails to decode. Describing two labelled panels to a model that
+   was handed ONE photo is strictly worse than either mode on its own - it names a right
+   panel that does not exist, so there is nothing for the back instruction to point at.
+   applyGarment() therefore passes what it actually sent. Omitted elsewhere, where the
+   inferred value is correct. */
+function angleClause(item, angleOverride, useComposite) {
   // Composite mode: the reference carries BOTH views, so the clause names the panel
   // matching the detected orientation and excludes the other outright.
-  if (compositeActiveFor(item)) {
-    return (angleOverride || effectiveAngle()) === "back" ? COMPOSITE_CLAUSE.back : COMPOSITE_CLAUSE.front;
+  if (useComposite === undefined ? compositeActiveFor(item) : useComposite) {
+    const a = (angleOverride || effectiveAngle()) === "back" ? "back" : "front";
+    return " " + COMPOSITE_PANEL_CONTRACT + COMPOSITE_SELECT[a];
   }
   const angle = angleOverride || effectiveAngle();      // AI Auto resolves to the DETECTED orientation
   if (angle === "back") {
@@ -4183,7 +4295,14 @@ function angleClause(item, angleOverride) {
  * @param {object} item @param {string} [activeImg] pre-resolved activeImageOf(item)
  * @returns {Promise<Blob|string|undefined>}
  */
-async function referenceImageFor(item, activeImg = activeImageOf(item)) {
+async function referenceImageFor(item, activeImg = activeImageOf(item), out = {}) {
+  /* `out.composite` reports what this function ACTUALLY resolved, not what it set out to
+     resolve. The two diverge on every fallback path below, and the caller has to know:
+     the composite prompt describes a left and a right panel, so pairing it with a
+     single-view image leaves the whole back instruction pointing at a panel that isn't
+     there. See angleClause()'s `useComposite` comment. */
+  out.composite = false;
+
   /* Composite mode: ONE stitched FRONT|BACK reference for the whole session. Because
      the image is identical for both orientations, a confirmed turn re-issues set()
      with only the clause changed - the Blob is memoized, so there is no re-fetch and
@@ -4196,7 +4315,7 @@ async function referenceImageFor(item, activeImg = activeImageOf(item)) {
        it is a data: URL. */
     if (item.composite) {
       const handed = await garmentBlobCached(item.composite);
-      if (handed) return handed;
+      if (handed) { out.composite = true; return handed; }
       console.warn("[PEAR] handed-over composite failed to decode - rebuilding locally");
     }
     const g = galleryOf(item);
@@ -4212,9 +4331,14 @@ async function referenceImageFor(item, activeImg = activeImageOf(item)) {
           renderActiveGarment();
         } catch (_) { /* non-fatal: the chip just keeps showing the front photo */ }
       }
+      out.composite = true;
       return composite;
     }
-    console.warn("[PEAR] composite unavailable - falling back to the single-asset reference for", effectiveAngle());
+    /* Both routes to a composite failed. out.composite stays false, so applyGarment()
+       drops the panel prompt and steers the single asset below with the ordinary
+       backReal/autoFront clauses - the pre-composite behaviour, which is always safe. */
+    console.warn("[PEAR] composite unavailable - falling back to the single-asset reference for", effectiveAngle(),
+      "(prompt will drop the FRONT|BACK panel contract to match)");
   }
   // AI Auto - the pre-cached Blob for the DETECTED orientation (activeImg already resolved
   // through effectiveAngle()). Sending bytes, not a URL, is what makes the swap instant.
@@ -4246,7 +4370,9 @@ async function applyGarment(item) {
      it can never be internally self-contradictory. */
   const angleAtStart = effectiveAngle();
   const activeImg = activeImageOf(item);
-  const imageRef  = await referenceImageFor(item, activeImg);   // Blob for combined, URL otherwise
+  const refInfo   = {};                                          // ← filled in by referenceImageFor
+  const imageRef  = await referenceImageFor(item, activeImg, refInfo);   // Blob for combined, URL otherwise
+  const usingComposite = refInfo.composite === true;             // what we ACTUALLY resolved
 
   /* ── STRICT ORIENTATION/ASSET BINDING (last line of defence) ──────────────────
      The pairing that produces "the chest print is rendered on the back" is a BACK
@@ -4275,14 +4401,35 @@ async function applyGarment(item) {
     }
   }
 
+  /* ── COMPOSITE BINDING (the other half of the same invariant) ─────────────────
+     compositeActiveFor() said a composite was WANTED but referenceImageFor() came back
+     with a single-view image. That combination used to ship anyway: angleClause() asked
+     compositeActiveFor() a second time, got "yes" again, and sent "read the RIGHT panel
+     marked BACK" alongside a photo with no right panel in it - the model has no region
+     to sample and falls back to whatever it can see, which is the front. That is the
+     "back texture isn't mapped when the shopper turns" failure, arriving from the ONE
+     path where the two halves of the payload were allowed to disagree. Now the prompt is
+     chosen from what was actually resolved, and the divergence is logged rather than
+     rendered. */
+  if (compositeActiveFor(item) && !usingComposite) {
+    console.warn("[PEAR] composite WANTED but not resolved - sending the single-asset prompt instead.",
+      "\n  angle:", angleAtStart, "| reference:", abbrevImg(activeImg));
+  }
+
   if (angleAtStart === "back") {
     const isBlob = typeof Blob !== "undefined" && imageRef instanceof Blob;
     console.log('[PEAR] applyGarment image:', activeImg);
     console.log('[PEAR] applyGarment blob:', isBlob ? 'ok' : 'NULL - will use URL fallback');
   }
 
+  /* Composite mode gets a purpose-built prompt (panel contract FIRST), not the generic
+     prompt with a clause bolted on the end - see buildCompositePrompt() for why order
+     is the substantive difference. Both branches are driven by `usingComposite`, so the
+     prompt can never describe a reference other than the one on the next line. */
   const payload = {
-    prompt: buildPrompt(item) + angleClause(item, angleAtStart),
+    prompt: usingComposite
+      ? buildCompositePrompt(item, angleAtStart)
+      : buildPrompt(item) + angleClause(item, angleAtStart, false),
     enhance: false,
     ...(imageRef ? { image: imageRef } : {}),
   };
@@ -4300,6 +4447,16 @@ async function applyGarment(item) {
   console.log("subType  :", item.subType, "| color:", item.color);
   console.log("img URL  :", abbrevImg(activeImg));   // data: URLs abbreviated so a base64 blob can't flood the console
   console.log("img ref  :", abbrevImg(imageRef));
+  /* The line to read when the back doesn't render. It answers, for the payload actually
+     on the wire: is the model looking at the two-panel COMBINED image, which panel was it
+     told to read, and does the widget's stitch geometry agree with what the prompt claims
+     (LEFT=FRONT, RIGHT=BACK)? A "single-asset" here during AI Auto means the composite
+     never resolved and the warning above explains why. */
+  console.log("reference:", usingComposite
+    ? `COMBINED composite → panel ${angleAtStart === "back" ? "RIGHT/BACK" : "LEFT/FRONT"}` +
+      (item._compositeLayout ? ` · ${describeCompositeLayout(item._compositeLayout)}` : "") +
+      (item.composite ? " · built by widget" : " · built locally")
+    : "single-asset (no panel contract in the prompt)");
   console.log("prompt   :", payload.prompt);
   console.groupEnd();
 
