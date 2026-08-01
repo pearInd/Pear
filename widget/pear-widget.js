@@ -58,6 +58,30 @@
         ships only one image (back_source: "synthetic" - see /api/classify-images).
    data-pear-front, when present, overrides the scraped front URL.
 
+   Performance contract - where the time goes, and why the click is not where it goes:
+     · PRE-STITCH AT MOUNT. Nothing in classify → synthesize → stitch depends on the
+       click, so the whole chain runs at page load and is memoized on the garment
+       (prepareCombined/schedulePrewarm). The click is then a cache read. Scoped to ONE
+       page-scoped product per page load so a collection grid can't fan out; opt out
+       with data-pear-prewarm="false".
+     · SINGLE-IMAGE FAST PATH. A product with exactly one photo (measured on canonical
+       identity, so three URL spellings of one photo still count as one) has nothing to
+       classify and nothing to stitch: it resolves front-only, instantly, and the room
+       is told ?single_image=1 so it never arms its pending-back gate. A GENERATED rear
+       still upgrades the session afterwards, strictly off the critical path
+       (data-pear-synthesize-back="false" to skip that too). The single photo is never
+       duplicated into the BACK panel - see prepareCombined() for why that renders the
+       chest print on the shopper's back.
+     · RIGHT-SIZED SOURCE BYTES. upgradeImageUrl() reaches the CDN master on purpose
+       (identity + legible print), but the composite panels are ~1024px wide, so the
+       FETCH asks Shopify for a 1600px rendition instead of a 4000px master. Fetch URLs
+       are resolved through the photo's canonical identity so the speculative warm-up
+       and the real fetch are one HTTP-cached request, not two downloads.
+     · BINARY HANDOVER. The composite crosses to the iframe as a Blob over structured
+       clone, not a base64 data URL - no ~33% inflation, no re-parse on the other side.
+     · PERSISTENT CACHE. Built composites are stored in IndexedDB keyed by the canonical
+       front|back pair (24h TTL), so a re-open or a return visit re-stitches nothing.
+
    Explicitly NOT in that list: "the second gallery photo". Positional guessing is
    the documented root cause of the print-less back view - on a gallery that is all
    front-view crops it labels a FRONT photo as the back, and the model then receives
@@ -149,6 +173,31 @@
   function persistDemoGateLock() {
     try { w.localStorage.setItem(DEMO_GATE_KEY, "true"); } catch (_) {}
   }
+
+  /* ── background pre-stitch - ON by default, opt out with data-pear-prewarm="false" ──
+     The COMBINED pipeline (classify → synthesize → stitch) is the single largest
+     source of latency between the click and a usable try-on, and NONE of it depends
+     on the click: the garment, its gallery and the server's verdict are all knowable
+     the moment the page has rendered. Running it at mount turns the click into a
+     cache read - see prepareCombined()/schedulePrewarm() below.
+
+     It is opt-OUT rather than opt-in because the work is idempotent and already
+     server-cached (garment_cache), so a prewarm that the shopper never "uses" still
+     warms the cache for the next visitor. It is NOT free, though: one
+     /api/classify-images call plus two image fetches per prewarmed product, on page
+     load rather than on intent. A store that would rather pay that only on a real
+     click sets data-pear-prewarm="false" and gets the exact previous behaviour. */
+  var _prewarmAttr = script ? script.getAttribute("data-pear-prewarm") : null;
+  var PREWARM = !(_prewarmAttr === "false" || _prewarmAttr === "0");
+
+  /* Server-side rear-view GENERATION for products that ship a single photo
+     (back_source: "synthetic"). On by default - it is the only way such a product can
+     ever show a real back view. Never on the critical path: single-image products
+     resolve front-only and instantly, and a generated rear upgrades the session later
+     if it arrives (see prepareSingleImageUpgrade). data-pear-synthesize-back="false"
+     turns it off entirely for a store that does not want to pay for a generation. */
+  var _synthAttr = script ? script.getAttribute("data-pear-synthesize-back") : null;
+  var SYNTHESIZE_BACK = !(_synthAttr === "false" || _synthAttr === "0");
 
   /* ── demo mode - opt-in, explicit, OFF by default ─────────────────────────
      A SEPARATE, older one-time-lock mechanism that coexists with DEMO_GATE above
@@ -838,15 +887,94 @@
   var COMPOSITE_MAX_W   = 2048;
   var COMPOSITE_DIVIDER = 4;
   var COMPOSITE_GUTTER  = 64;
+  /* Height cap. COMPOSITE_MAX_W alone bounds the canvas only through the aspect ratio:
+     a pair of tall, narrow packshots (1000×4000 each) leaves totalW under the width cap,
+     so scale stays ~1 and the canvas comes out 2048×3969 - eight megapixels to encode
+     and base64 for a reference whose panels the model reads at ~1000px wide. Capping
+     both axes bounds the work regardless of the source aspect. 2048 is deliberately far
+     above the ~1024px each panel actually occupies, so this never undersamples. */
+  var COMPOSITE_MAX_H   = 2048;
+  /* Source-fetch cap, in px on the longest side. NOT an output size - the composite
+     geometry below is unchanged - just an upper bound on the pixels we ask the CDN to
+     send. upgradeImageUrl() deliberately strips CDN size suffixes to reach the MASTER
+     asset (a 100px thumbnail has no legible print left to warp), and on a studio catalog
+     that master is routinely a 4000px, multi-megabyte JPEG. Each composite panel is at
+     most COMPOSITE_MAX_W/2 ≈ 1024px wide, so anything past ~1.5× that is downloaded,
+     decoded and then thrown away by the scale-down. Requesting 1600 keeps a comfortable
+     oversample for the cover-crop while cutting transfer by roughly an order of
+     magnitude, which is the single biggest term in time-to-composite. */
+  var SOURCE_FETCH_MAX_PX = 1600;
 
   function proxied(url) {
     if (/^(data:|blob:)/i.test(url)) return url;
     return PEAR_BASE + "/api/img-proxy?url=" + encodeURIComponent(url);
   }
 
+  /* Ask the CDN for a right-sized rendition instead of the multi-megabyte master.
+     Restricted to Shopify's image CDN, which documents `width`/`height` query params
+     and is what this widget actually targets; every other host is returned untouched
+     rather than guessing at a resize API (a stray param can break a signed URL, and a
+     host that simply ignores it gains nothing). The sized URL is used ONLY for the
+     fetch - never stored, compared, or handed downstream - so canonicalPhoto()/
+     samePhoto() identity is completely unaffected. */
+  var SHOPIFY_CDN_RE = /(^|\.)(?:cdn\.shopify\.com|shopifycdn\.com|myshopify\.com)$/i;
+  function cdnSized(url, px) {
+    try {
+      var u = new URL(url);
+      if (!SHOPIFY_CDN_RE.test(u.hostname)) return url;
+      if (u.searchParams.has("width") || u.searchParams.has("height")) return url;
+      u.searchParams.set("width", String(px));
+      return u.href;
+    } catch (_) { return url; }
+  }
+
+  /* ── one fetch URL per PHOTO, not per URL spelling ────────────────────────────
+     The same photo reaches this file under several spellings - the DOM scrape finds
+     "…-2_back.jpg?v=9", the classifier answers with "…-2_back.jpg", a srcset carries
+     "…-2_back_800x.jpg" - and canonicalPhoto() exists precisely because those are ONE
+     asset. HTTP caching, though, keys on the literal URL, so fetching two spellings
+     downloads the image twice: measured here as the speculative warm-up below hitting
+     "?v=9" and the real fetch that followed classification hitting the bare URL, with
+     nothing shared between them.
+
+     So resolve every fetch through the photo's canonical identity and reuse whichever
+     concrete URL was seen first. The warm-up and the real fetch then agree by
+     construction, and the second is a cache hit instead of a second download. */
+  var _fetchUrlByPhoto = Object.create(null);
+  function fetchUrlFor(url) {
+    var sized = cdnSized(url, SOURCE_FETCH_MAX_PX);
+    var key = canonicalPhoto(url);
+    if (!key) return sized;
+    if (!_fetchUrlByPhoto[key]) _fetchUrlByPhoto[key] = sized;
+    return _fetchUrlByPhoto[key];
+  }
+
+  /* Speculative byte warm-up - see prepareCombined() for why this runs alongside
+     classification rather than after it. Goes through fetchUrlFor(), so the later
+     loadBitmapCORS() call resolves to the identical URL and is served from cache.
+     Never throws, never returns anything worth waiting on. */
+  var _warmed = [];
+  function warmImageBytes(url) {
+    if (!url || /^(data:|blob:)/i.test(url)) return;
+    var target = proxied(fetchUrlFor(url));
+    if (_warmed.indexOf(target) !== -1) return;
+    _warmed.push(target);
+    try { fetch(target).catch(function () {}); } catch (_) {}
+  }
+
   /* Decoded bitmap with an untainted-canvas guarantee. Tries the proxy first, then the
      raw CDN - some CDNs are CORS-open and some block the proxy, so neither route alone
-     is reliable across arbitrary stores. */
+     is reliable across arbitrary stores. Decoding goes through createImageBitmap, which
+     runs off the main thread, so a 1600px JPEG never blocks the store's own scrolling.
+
+     Deliberately NOT memoized, and the caller closes what it gets. Deduplication lives
+     one level up, on prepareCombined()'s per-garment memo, which covers the only case
+     that actually repeats (prewarm then click). Caching here instead would pin two
+     decoded bitmaps - tens of MB at these dimensions - on the STORE's page for its whole
+     lifetime, which is a poor trade for a cache that would essentially never be read:
+     a pipeline retry only happens after a failure, and a failure never leaves a usable
+     entry behind. Repeat fetches of the same URL are already absorbed by the browser's
+     HTTP cache (/api/img-proxy sends max-age=3600). */
   function loadBitmapCORS(url) {
     function decode(u, mode) {
       return fetch(u, mode ? { mode: mode } : undefined)
@@ -864,11 +992,79 @@
           });
         });
     }
-    if (/^(data:|blob:)/i.test(url)) return decode(url);
-    return decode(proxied(url)).catch(function (e) {
-      console.warn("[PEAR] composite: proxy fetch failed for", abbrevUrl(url), "-", e && e.message, "; trying the CDN directly");
-      return decode(url, "cors");
-    });
+
+    var job;
+    if (/^(data:|blob:)/i.test(url)) {
+      job = decode(url);
+    } else {
+      // Canonical fetch URL, so this is the same request the warm-up already issued.
+      var sized = fetchUrlFor(url);
+      job = decode(proxied(sized))
+        .catch(function (e) {
+          console.warn("[PEAR] composite: proxy fetch failed for", abbrevUrl(url), "-", e && e.message, "; trying the CDN directly");
+          return decode(sized, "cors");
+        })
+        .catch(function (e) {
+          /* Both routes failed on the SIZED url. When a resize hint was actually applied
+             that is a distinct, recoverable cause (a CDN that rejects the param, a
+             rendition that isn't generated yet) from "this image is unreachable", so
+             retry the untouched URL before giving up - the whole point of the hint is
+             speed, never availability. */
+          if (sized === url) throw e;
+          console.warn("[PEAR] composite: sized fetch failed for", abbrevUrl(url), "-", e && e.message, "; retrying at full size");
+          return decode(proxied(url)).catch(function () { return decode(url, "cors"); });
+        });
+    }
+
+    return job;
+  }
+
+  /* ── encode - BINARY FIRST, base64 only as a fallback ─────────────────────────
+     The composite crosses an origin boundary (store page → fitting-room iframe) by
+     postMessage, and postMessage uses structured clone, which carries a Blob natively.
+     So the base64 round trip the old code performed - encode to a data URL here, ship a
+     ~33%-inflated string, then re-parse it back into bytes in the room - was pure
+     overhead on a payload measured in hundreds of KB.
+
+     Preference order, all three producing the same pixels:
+       1. OffscreenCanvas.convertToBlob - encodes OFF the main thread. Best case.
+       2. canvas.toBlob                 - DOM canvas, async, still no base64.
+       3. canvas.toDataURL              - synchronous and base64, the last resort for
+                                          engines with neither of the above.
+     Returns { blob, dataUrl } with exactly one populated; the caller sends whichever it
+     got and the fitting room accepts both.
+
+     Format stays JPEG, NOT webp, deliberately. The bytes end up at rtClient.set({image})
+     for Decart, whose image pipeline is not documented to accept webp - the room's
+     normalizeToSupportedImage() would simply decode and re-encode it back to JPEG,
+     spending more time than the smaller transfer saved. */
+  function encodeCanvas(canvas, quality) {
+    if (canvas.convertToBlob) {
+      return canvas.convertToBlob({ type: "image/jpeg", quality: quality })
+        .then(function (blob) { return { blob: blob, dataUrl: "" }; })
+        .catch(function (e) {
+          console.warn("[PEAR] convertToBlob failed, falling back:", e && e.message);
+          return encodeCanvasFallback(canvas, quality);
+        });
+    }
+    return encodeCanvasFallback(canvas, quality);
+  }
+
+  function encodeCanvasFallback(canvas, quality) {
+    if (canvas.toBlob) {
+      return new Promise(function (res) {
+        canvas.toBlob(function (blob) {
+          res(blob ? { blob: blob, dataUrl: "" }
+                   : { blob: null, dataUrl: canvas.toDataURL("image/jpeg", quality) });
+        }, "image/jpeg", quality);
+      });
+    }
+    return Promise.resolve({ blob: null, dataUrl: canvas.toDataURL("image/jpeg", quality) });
+  }
+
+  /* Approximate byte size for logging, whichever form we ended up with. */
+  function payloadBytes(p) {
+    return p.blob ? p.blob.size : Math.round((p.dataUrl || "").length * 0.75);
   }
 
   function drawCover(ctx, img, dx, dy, dw, dh) {
@@ -899,12 +1095,102 @@
     ctx.restore();
   }
 
-  /* Stitch FRONT + BACK into one labelled reference. Resolves to a data URL (the form
-     that survives postMessage to the fitting-room iframe), or "" on any failure - the
-     caller then falls back to handing over the two URLs separately rather than going
-     live with nothing. */
+  /* ── persistent composite cache (IndexedDB) ───────────────────────────────────
+     A composite is a pure function of its front+back pair, so re-stitching one the
+     browser has already built is wasted work every time: a shopper who opens a product,
+     leaves, and comes back - or who reloads, or bounces between two products - pays the
+     full fetch+decode+stitch again for a byte-identical result.
+
+     IndexedDB rather than sessionStorage because it stores the Blob DIRECTLY. Putting
+     this in sessionStorage would mean base64-encoding the composite to a ~400KB string
+     (re-introducing exactly the inflation the binary path above exists to remove),
+     against a ~5MB origin quota shared with whatever the store itself keeps there -
+     a cache that evicts the host page's own data is not an acceptable trade.
+
+     Every operation is best-effort and failure is silent: Safari private mode, a
+     blocked-storage setting, a quota error or a browser with IDB disabled must all
+     degrade to "stitch it again", never to an error the shopper can see. */
+  var IDB_NAME = "pear-widget", IDB_STORE = "composites", IDB_VERSION = 1;
+  var COMPOSITE_TTL_MS = 24 * 60 * 60 * 1000;   // a store can re-shoot a product; don't serve last week's stitch
+  var _idb = null;
+
+  function openIDB() {
+    if (_idb) return _idb;
+    _idb = new Promise(function (res) {
+      try {
+        if (!w.indexedDB) return res(null);
+        var req = w.indexedDB.open(IDB_NAME, IDB_VERSION);
+        req.onupgradeneeded = function () {
+          try {
+            if (!req.result.objectStoreNames.contains(IDB_STORE)) req.result.createObjectStore(IDB_STORE);
+          } catch (_) {}
+        };
+        req.onsuccess = function () { res(req.result); };
+        req.onerror   = function () { res(null); };
+        req.onblocked = function () { res(null); };
+      } catch (_) { res(null); }
+    });
+    return _idb;
+  }
+
+  /* Keyed on the CANONICAL pair, not the raw URLs: canonicalPhoto() already collapses
+     the size suffixes and query-param spellings under which one photo appears many
+     times, so "the same garment reached via a different gallery URL" is a cache HIT
+     rather than a silent miss. */
+  function compositeCacheKey(frontUrl, backUrl) {
+    return canonicalPhoto(frontUrl) + "||" + canonicalPhoto(backUrl);
+  }
+
+  function idbGetComposite(key) {
+    return openIDB().then(function (db) {
+      if (!db) return null;
+      return new Promise(function (res) {
+        try {
+          var tx = db.transaction(IDB_STORE, "readonly");
+          var req = tx.objectStore(IDB_STORE).get(key);
+          req.onsuccess = function () {
+            var rec = req.result;
+            if (!rec || !rec.blob) return res(null);
+            if (Date.now() - (rec.ts || 0) > COMPOSITE_TTL_MS) return res(null);   // stale
+            res(rec.blob);
+          };
+          req.onerror = function () { res(null); };
+        } catch (_) { res(null); }
+      });
+    }).catch(function () { return null; });
+  }
+
+  function idbPutComposite(key, blob) {
+    if (!blob) return;
+    openIDB().then(function (db) {
+      if (!db) return;
+      try {
+        var tx = db.transaction(IDB_STORE, "readwrite");
+        tx.objectStore(IDB_STORE).put({ blob: blob, ts: Date.now() }, key);
+      } catch (_) {}
+    }).catch(function () {});
+  }
+
+  /* Stitch FRONT + BACK into one labelled reference. Resolves to { blob, dataUrl } (one
+     populated - see encodeCanvas), or null on any failure, in which case the caller
+     hands over the two URLs separately rather than going live with nothing. */
   function createGarmentComposite(frontUrl, backUrl) {
-    if (!frontUrl || !backUrl) return Promise.resolve("");
+    if (!frontUrl || !backUrl) return Promise.resolve(null);
+
+    var cacheKey = compositeCacheKey(frontUrl, backUrl);
+    return idbGetComposite(cacheKey).then(function (cached) {
+      if (cached) {
+        console.log("[PEAR] COMBINED composite served from the persistent cache (" +
+          Math.round(cached.size / 1024) + "KB) - no fetch, no decode, no stitch");
+        return { blob: cached, dataUrl: "" };
+      }
+      return stitchGarmentComposite(frontUrl, backUrl, cacheKey);
+    }).catch(function () {
+      return stitchGarmentComposite(frontUrl, backUrl, cacheKey);
+    });
+  }
+
+  function stitchGarmentComposite(frontUrl, backUrl, cacheKey) {
     return Promise.all([loadBitmapCORS(frontUrl), loadBitmapCORS(backUrl)])
       .then(function (imgs) {
         var front = imgs[0], back = imgs[1];
@@ -915,14 +1201,21 @@
         var backW  = Math.round(back.width  * (panelH / back.height));
 
         var totalW = frontW + backW + COMPOSITE_GUTTER;
-        var scale  = Math.min(1, COMPOSITE_MAX_W / totalW);
+        // Both axes capped - see COMPOSITE_MAX_H for why the width cap alone isn't a bound.
+        var scale  = Math.min(1, COMPOSITE_MAX_W / totalW, COMPOSITE_MAX_H / panelH);
         var W = Math.round(totalW * scale), H = Math.round(panelH * scale);
         var fW = Math.round(frontW * scale), bW = Math.round(backW * scale);
         var gut = Math.round(COMPOSITE_GUTTER * scale);
 
-        var canvas = d.createElement("canvas");
+        /* OffscreenCanvas keeps the rasterise + encode off the main thread; the DOM
+           canvas is the fallback (and the path jsdom takes in the test harness). */
+        var canvas = (typeof w.OffscreenCanvas !== "undefined")
+          ? new w.OffscreenCanvas(W, H)
+          : d.createElement("canvas");
         canvas.width = W; canvas.height = H;
-        var ctx = canvas.getContext("2d");
+        // alpha:false - the field is painted opaque below, and an opaque backing store
+        // skips per-pixel alpha compositing on every draw.
+        var ctx = canvas.getContext("2d", { alpha: false }) || canvas.getContext("2d");
 
         ctx.fillStyle = "#3a3a3a";      // neutral field - white reads as fabric on a packshot
         ctx.fillRect(0, 0, W, H);
@@ -948,18 +1241,23 @@
         if (front.close) front.close();
         if (back.close) back.close();
 
-        // toDataURL throws SecurityError on a tainted canvas - which is exactly what
-        // the CORS-proxied fetch above prevents. Caught so a taint never breaks the
-        // try-on; the caller falls back to the two-URL handover.
-        var dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-        console.log("[PEAR] COMBINED composite built: " + W + "×" + H +
-          " · FRONT " + fW + "px | BACK " + bW + "px · " + Math.round(dataUrl.length / 1365) + "KB");
-        return dataUrl;
+        // The encode throws SecurityError on a tainted canvas - which is exactly what
+        // the CORS-proxied fetch above prevents. Caught by the .catch() below so a taint
+        // never breaks the try-on; the caller falls back to the two-URL handover.
+        return encodeCanvas(canvas, 0.92).then(function (payload) {
+          console.log("[PEAR] COMBINED composite built: " + W + "×" + H +
+            " · FRONT " + fW + "px | BACK " + bW + "px · " +
+            Math.round(payloadBytes(payload) / 1024) + "KB · " +
+            (payload.blob ? "binary (no base64)" : "base64 data URL (fallback)"));
+          // Fire-and-forget: a cache write must never delay the handover.
+          if (payload.blob) idbPutComposite(cacheKey, payload.blob);
+          return payload;
+        });
       })
       .catch(function (e) {
         console.warn("[PEAR] createGarmentComposite failed:", e && e.message,
           "- falling back to separate front/back handover");
-        return "";
+        return null;
       });
   }
 
@@ -978,6 +1276,23 @@
         "font-family:inherit;line-height:1.2;" +
       "}" +
       ".pear-widget-btn:hover{background:#222;}" +
+      /* INSTANT-FEEDBACK state (see setButtonBusy). Applied synchronously inside the
+         click handler so the press registers in the same frame as the click, however
+         long the overlay behind it takes to paint. Purely additive: no layout change
+         (the button keeps its matched Add-to-Cart box), just a pressed tint plus a
+         spinner rendered in ::after so the label text is never replaced or measured. */
+      ".pear-widget-btn-busy,.pear-widget-btn-busy:hover{background:#333;cursor:progress;}" +
+      ".pear-widget-btn-busy::after{" +
+        "content:'';display:inline-block;vertical-align:middle;" +
+        "width:1em;height:1em;margin-inline-start:0.6em;border-radius:50%;" +
+        "border:2px solid rgba(255,255,255,0.35);border-top-color:#fff;" +
+        "animation:pear-widget-spin 0.7s linear infinite;" +
+      "}" +
+      "@keyframes pear-widget-spin{to{transform:rotate(360deg);}}" +
+      /* Respect a reduced-motion preference: keep the state change, drop the spin. */
+      "@media (prefers-reduced-motion:reduce){" +
+        ".pear-widget-btn-busy::after{animation:none;}" +
+      "}" +
       /* Floating variant - used only when the page has no cart button AND no <h1>
          (see injectFallbackButton). z-index sits below the try-on overlay (999999). */
       ".pear-widget-btn-floating{" +
@@ -995,6 +1310,24 @@
       ".pear-widget-frame{" +
         "width:min(480px,100vw);height:min(820px,100vh);border:none;" +
         "border-radius:16px;background:#000;" +
+        /* Hidden until the fitting room has actually loaded, so what the shopper sees
+           in the meantime is the spinner below rather than an empty black rectangle
+           that is indistinguishable from a broken embed. See revealFrame(). */
+        "opacity:0;transition:opacity 0.25s ease;" +
+      "}" +
+      ".pear-widget-frame.pear-widget-frame-ready{opacity:1;}" +
+      /* Loading affordance, painted in the SAME frame as the click (the overlay and
+         this spinner are appended synchronously in the click handler), so there is a
+         response to the tap long before the cross-origin iframe has a document. Sits
+         behind the frame and is removed the moment the room reports it loaded. */
+      ".pear-widget-loading{" +
+        "position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);" +
+        "width:44px;height:44px;border-radius:50%;pointer-events:none;" +
+        "border:3px solid rgba(255,255,255,0.2);border-top-color:#fff;" +
+        "animation:pear-widget-spin 0.8s linear infinite;" +
+      "}" +
+      "@media (prefers-reduced-motion:reduce){" +
+        ".pear-widget-loading{animation:none;border-top-color:rgba(255,255,255,0.6);}" +
       "}" +
       ".pear-widget-close{" +
         "position:absolute;top:16px;right:16px;width:40px;height:40px;" +
@@ -1035,6 +1368,26 @@
   function lockAllButtons() {
     var btns = d.querySelectorAll(".pear-widget-btn");
     for (var i = 0; i < btns.length; i++) applyLockedButtonState(btns[i]);
+  }
+
+  /* ── instant click acknowledgement ────────────────────────────────────────────
+     The click handler opens the overlay, builds an iframe and kicks off (or picks up)
+     the COMBINED pipeline. Even when every one of those is fast, the browser still has
+     to lay out and paint a fullscreen overlay before ANYTHING visibly changes - and on
+     a heavy storefront that gap is long enough to read as "the button didn't work",
+     which is what makes people click twice. Flipping a class synchronously inside the
+     handler is the one state change guaranteed to land in the same frame as the click.
+
+     Deliberately NOT `disabled`: a disabled button drops focus, which is a real
+     accessibility regression for a state that lasts a few frames. aria-busy carries
+     the same information to assistive tech without moving focus. */
+  function setButtonBusy(btn, busy) {
+    if (!btn) return;
+    try {
+      btn.classList[busy ? "add" : "remove"]("pear-widget-btn-busy");
+      if (busy) btn.setAttribute("aria-busy", "true");
+      else btn.removeAttribute("aria-busy");
+    } catch (_) {}
   }
 
   if (DEMO_GATE) {
@@ -1156,6 +1509,230 @@
     return front.concat(back, other);
   }
 
+  /* ── gallery plan - the exact image list the COMBINED pipeline runs on ────────
+     Split out of the click handler so the background prewarm and the click derive the
+     SAME list from the SAME garment object. If the two ever diverged, the click would
+     miss the prewarmed result and silently re-run the whole round trip. */
+  function galleryPlanFor(garment) {
+    var imgs = (garment.images && garment.images.length) ? garment.images : [garment.url];
+    /* Merge the Shopify product JSON gallery (prefetched at boot) - full-resolution,
+       complete, and immune to every lazy-loading trick the DOM scrape has to work
+       around. Only for a page-scoped garment: on a grid, the page product is not
+       this card's product. De-duped canonically, so a photo already found in the
+       DOM is not added twice under a different URL spelling. */
+    if (garment.pageScoped && _shopifyGallery && _shopifyGallery.length) {
+      var merged = imgs.slice();
+      for (var si = 0; si < _shopifyGallery.length; si++) {
+        var cand = _shopifyGallery[si], dup = false;
+        for (var mi = 0; mi < merged.length; mi++) {
+          if (samePhoto(cand, merged[mi])) { dup = true; break; }
+        }
+        if (!dup) merged.push(cand);
+      }
+      if (merged.length !== imgs.length) {
+        console.log("[PEAR] merged Shopify JSON gallery:", imgs.length, "→", merged.length, "image(s)");
+      }
+      imgs = merged.slice(0, MAX_GALLERY_IMAGES);
+    }
+    /* The instant-open back. ONLY a DOM-identified rear photo (garment.back) is used
+       here - never imgs[1]. Opening on the second gallery photo was a positional guess
+       that, on a front-only gallery, labels a FRONT photo as the back and reaches Lucy
+       as "this is the BACK, do NOT render the front" - the exact blank-back failure
+       resolveFrontBack() was written to stop. With no DOM evidence the room opens
+       front-only and the classifier's verdict (or a generated rear) lands a moment
+       later via PEAR_UPDATE_GARMENT. */
+    var openBack = (garment.back && !samePhoto(garment.back, imgs[0])) ? garment.back : undefined;
+
+    /* ── SINGLE-IMAGE FAST PATH ────────────────────────────────────────────────
+       A product that ships exactly ONE photo has nothing to classify: with one
+       candidate there is no front-vs-back question to answer, no second photo for the
+       classifier to find a rear in, and no pair to stitch. Running the round trip
+       anyway bought nothing and cost the shopper the full latency of it - and on a
+       cold cache, the far longer rear-synthesis leg on top.
+
+       `uniqueCount` is measured on CANONICAL identity, not raw URL count: a gallery
+       that lists one photo as "tee.jpg", "tee_800x.jpg" and "tee.jpg?v=9" is a
+       single-image product wearing three URLs, and counting strings would miss it
+       (canonicalPhoto is the same identity function samePhoto/collectGalleryImages
+       already use). The DOM back is also required to be absent - if the page did
+       positively identify a rear photo, this is not a single-image product no matter
+       how the gallery list came out. */
+    var canon = [];
+    for (var ci = 0; ci < imgs.length; ci++) {
+      var cp = canonicalPhoto(imgs[ci]);
+      if (cp && canon.indexOf(cp) === -1) canon.push(cp);
+    }
+    var singleImage = canon.length === 1 && !openBack;
+    return { imgs: imgs, openBack: openBack, singleImage: singleImage };
+  }
+
+  /* ── COMBINED pipeline ──────────────────────────────────────────────────────────
+     The try-on engine receives ONE unified composite and nothing else. The sequence is
+     fixed by a real dependency, not by preference:
+
+       1. classify  - the gallery URLs go to /api/classify-images, which returns WHICH
+                      image is the front and which is the back. This step is unavoidable
+                      and cannot be replaced by the composite: you cannot stitch a
+                      front|back pair before knowing which photo is which. It exchanges
+                      URLs and a label - it is metadata, not a render, and no individual
+                      image is ever handed to the model as a try-on reference.
+       2. synthesize - single-view product? the server generates the rear from the front
+                      (synthesizeBackView) so step 3 always has a pair.
+       3. combine   - both views stitched into ONE labelled canvas here.
+       4. hand over - ONLY that composite goes to the fitting room / Decart.
+
+     NOTHING in steps 1-3 depends on the click: the garment, its gallery and the
+     server's verdict are all knowable as soon as the page has rendered. So the whole
+     chain is memoized ON THE GARMENT OBJECT and (by default) started at mount - see
+     schedulePrewarm(). By the time the shopper clicks, this is usually an already-
+     settled promise and the composite is handed over on the next microtask instead of
+     1-7s (cache-warm) or ~27s (cold rear synthesis) later.
+
+     Memoized per garment object rather than in a keyed map because the garment is
+     built once per injected button and carries everything the plan derives from; a
+     failed run clears the memo so a click after a network blip genuinely retries.
+     @returns {Promise<{plan, front, back, backSource, sorted, composite}>} */
+  function prepareCombined(garment) {
+    if (garment._prepJob) return garment._prepJob;
+
+    var plan = galleryPlanFor(garment);
+    var imgs = plan.imgs, openBack = plan.openBack;
+
+    /* SINGLE-IMAGE FAST PATH - resolve synchronously and skip the network entirely.
+       No /api/classify-images (there is nothing to classify), no back lookup, no rear
+       synthesis, no stitch. The room already opened on this exact image, so the whole
+       "prepare" step settles on the next microtask.
+
+       What this deliberately does NOT do is duplicate the front photo into the BACK
+       panel of a composite. A composite whose two panels are the same image still
+       reaches the model with the clause "this reference shows the BACK - reproduce it
+       faithfully, do NOT render the front", so the model reproduces the only thing it
+       can see: the chest print, rendered on the shopper's back. That is the exact
+       reported failure this pipeline's guards exist to prevent - see resolveFrontBack()
+       above, canonicalPhoto()'s comment, and distinctBackOf()/sameImage() in
+       fitting-room/app.js, all of which reject a front/back pair that is one photo
+       twice. Front-only is a fully supported mode: the room renders the front reference
+       and, on a turn, switches to the "plain rear, no front graphics" inferred clause -
+       which is a correct back view rather than a duplicated one. */
+    if (plan.singleImage) {
+      console.log("[PEAR widget] SINGLE-IMAGE fast path - 1 unique photo, so nothing to " +
+        "classify and nothing to stitch. Resolving front-only, instantly." +
+        (SYNTHESIZE_BACK ? " A rear view is being generated in the background." : ""));
+      var fastJob = Promise.resolve({
+        plan: plan, front: imgs[0], back: undefined,
+        backSource: "single-image", sorted: imgs, composite: null
+      });
+      garment._prepJob = fastJob;
+      return fastJob;
+    }
+
+    console.log("[PEAR widget] COMBINED prepare - " + imgs.length + " image(s) to classify:", imgs,
+      "| DOM-identified back:", openBack || "(none - server will resolve/synthesize)");
+
+    /* Start pulling the bytes NOW, concurrently with classification, instead of after
+       it. Classification is a Gemini round trip (~1-7s warm, far longer on a cold rear
+       synthesis) during which the network sits idle, and the images it will name are
+       overwhelmingly the ones the DOM already identified - so warming them costs one
+       speculative fetch and removes the entire download from the critical path.
+
+       Deliberately a bare fetch with the result discarded: the point is to populate the
+       browser's HTTP cache (and /api/img-proxy's own in-process cache) so the real
+       loadBitmapCORS() call below is served locally. Warming a decoded BITMAP instead
+       would pin tens of MB for a URL the classifier might not even choose. Errors are
+       swallowed whole - this is an optimisation, and the real fetch does the retrying,
+       the fallback routing and the reporting. */
+    warmImageBytes(imgs[0]);
+    warmImageBytes(openBack);
+
+    var job = classifyImages(imgs, { front: imgs[0], back: openBack }).then(function (res) {
+      var results = res.results;
+      console.log("[PEAR widget] classify-images results (" + results.length + "):", results);
+      var sorted = sortByFrontBack(imgs, results);
+      var local = resolveFrontBack(imgs, results);
+      /* Server-resolved pair wins when present: it folds in the DOM hints, the
+         classifier, the per-product cache AND the generated-rear fallback
+         (back_source tells which). Falls back to the local resolution for
+         older/failing server builds. */
+      var frontUrl = res.front || local.front;
+      var backUrl  = res.back  || local.back;
+      console.log("[PEAR widget] resolved front:", abbrevUrl(frontUrl));
+      console.log("[PEAR widget] resolved back :", abbrevUrl(backUrl), "| source:", res.backSource);
+
+      if (!backUrl) {
+        /* No back anywhere - not in the DOM, not from the classifier, not in the
+           per-product cache, and generation was declined or failed. There is
+           nothing to combine, so hand over front-only; the fitting room's own
+           inferred-rear clause covers the turn. */
+        console.warn("[PEAR widget] no back view available - handing over FRONT-ONLY (no composite possible)");
+      }
+
+      return createGarmentComposite(frontUrl, backUrl).then(function (composite) {
+        if (composite) {
+          console.log("[PEAR widget] COMBINED payload ready - the single composite is prepared and cached");
+        }
+        return {
+          plan: plan, front: frontUrl, back: backUrl,
+          backSource: res.backSource, sorted: sorted, composite: composite
+        };
+      });
+    });
+
+    /* Never memoize a failure: a prewarm that lost the network must not poison the
+       click that follows it. The handler is attached to the STORED promise but the
+       stored value stays `job`, so a caller still sees the original rejection. */
+    job.catch(function () { if (garment._prepJob === job) garment._prepJob = null; });
+    garment._prepJob = job;
+    return job;
+  }
+
+  /* ── single-image UPGRADE - the slow half, moved off the critical path ────────
+     prepareCombined() resolves a single-image product front-only and instantly. This is
+     the part that was making those products feel slow: asking the server to GENERATE a
+     rear view from the front photo (back_source: "synthetic"), which costs a few
+     seconds on a warm/durable cache and ~27s on a genuine cold generation.
+
+     Keeping it, but strictly in the background, is what lets the fast path be a pure win
+     rather than a feature removal. A single-image product with a generated rear gets a
+     REAL back view - a plain, garment-accurate rear the model can reproduce - and that
+     is the only mechanism by which it can have one at all. Nothing waits on it: the room
+     is already open, already front-only, already un-blocked for go-live (?single_image=1
+     clears the pending gate), and if this resolves in time it upgrades the session in
+     place through the same PEAR_UPDATE_GARMENT correction every other path uses. If it
+     never resolves, nothing was lost.
+
+     Set data-pear-synthesize-back="false" on the embed to skip it outright - the exact
+     "no generation calls at all for single-image products" behaviour, one attribute away,
+     for a store that would rather not pay for a rear it may never show. */
+  function prepareSingleImageUpgrade(garment) {
+    if (!SYNTHESIZE_BACK) return Promise.resolve(null);
+    if (garment._upgradeJob) return garment._upgradeJob;
+
+    var p = galleryPlanFor(garment);
+    var imgs = p.imgs;
+
+    var job = classifyImages(imgs, { front: imgs[0], back: undefined }).then(function (res) {
+      var backUrl = res.back;
+      if (!backUrl) {
+        console.log("[PEAR widget] single-image upgrade: no rear view produced - staying front-only");
+        return null;
+      }
+      console.log("[PEAR widget] single-image upgrade: rear view ready (source:", res.backSource + ") - stitching");
+      return createGarmentComposite(res.front || imgs[0], backUrl).then(function (composite) {
+        return {
+          plan: p, front: res.front || imgs[0], back: backUrl,
+          backSource: res.backSource, sorted: sortByFrontBack(imgs, res.results), composite: composite
+        };
+      });
+    }).catch(function (e) {
+      console.warn("[PEAR widget] single-image upgrade failed (harmless - the room is already live front-only):",
+        e && e.message);
+      return null;
+    });
+
+    garment._upgradeJob = job;
+    return job;
+  }
+
   /* ── STEP 3 - fullscreen modal with the fitting-room iframe ─────────────── */
   var activeOverlay = null;
   var activeIframe = null;
@@ -1197,6 +1774,12 @@
       (garment.images && garment.images.length > 1
         ? "&garment_images=" + garment.images.map(encodeURIComponent).join(",") : "") +
       (garment.variantId ? "&garment_variant_id=" + encodeURIComponent(garment.variantId) : "") +
+      /* SINGLE-IMAGE FAST PATH marker. Without it the room arms its "waiting for a
+         back-view correction" indicator and spins for the full 35s give-up timeout on
+         a product that, by definition, has no correction coming - the exact "empty
+         state" this path exists to remove. With it the room opens settled: front-only,
+         no spinner, no wait. */
+      (garment.singleImage ? "&single_image=1" : "") +
       (COMPOSITE_PARAM ? "&composite=" + COMPOSITE_PARAM : "") +
       (REQUIRE_BOTH_VIEWS ? "&require_both_views=1" : "") +
       (DEMO_GATE ? "&demo_gate=1" : "") +
@@ -1212,20 +1795,42 @@
     var overlay = d.createElement("div");
     overlay.className = "pear-widget-overlay";
 
+    var spinner = d.createElement("div");
+    spinner.className = "pear-widget-loading";
+    spinner.setAttribute("aria-hidden", "true");
+
     var iframe = d.createElement("iframe");
     iframe.className = "pear-widget-frame";
     iframe.src = src;
     iframe.title = "PEAR virtual fitting room";
     /* the fitting room needs webcam access inside the cross-origin iframe */
     iframe.setAttribute("allow", "camera; microphone; fullscreen");
+
+    /* Swap the spinner for the room, once, whatever gets us there first. The safety
+       timer matters because "load" is not guaranteed to be observable on a cross-origin
+       frame in every browser/blocker combination, and a fitting room hidden behind a
+       spinner forever would be a far worse failure than showing it a beat early. */
+    var revealed = false;
+    function revealFrame(why) {
+      if (revealed) return;
+      revealed = true;
+      w.clearTimeout(revealTimer);
+      iframe.classList.add("pear-widget-frame-ready");
+      if (spinner.parentNode) spinner.parentNode.removeChild(spinner);
+      console.log("[PEAR widget] fitting room revealed (" + why + ")");
+    }
+    var revealTimer = w.setTimeout(function () { revealFrame("safety timeout"); }, 8000);
+
     /* Cross-origin iframes fire "load" even on a 404 response body (it's still a valid
        HTML document), so this can't distinguish 200 from 404 - but it confirms the
        browser at least reached PEAR_BASE and got SOME response back for `src`. */
     iframe.addEventListener("load", function () {
       console.log("[PEAR widget] fitting-room iframe fired 'load' for:", src);
+      revealFrame("iframe load");
     });
     iframe.addEventListener("error", function () {
       console.error("[PEAR widget] fitting-room iframe fired 'error' for:", src);
+      revealFrame("iframe error");   // never strand the shopper behind a spinner
     });
 
     var close = d.createElement("button");
@@ -1245,6 +1850,7 @@
     };
     d.addEventListener("keydown", escHandler);
 
+    overlay.appendChild(spinner);
     overlay.appendChild(iframe);
     overlay.appendChild(close);
     d.body.appendChild(overlay);
@@ -1516,119 +2122,149 @@
            clicks). Disabled styling is UI; this is the actual gate. */
         if (DEMO_GATE && isDemoGateLockedLocally()) return;
 
+        /* INSTANT feedback, synchronously in the click handler - before openModal()
+           does any DOM work. Everything after this point is either already cached or
+           genuinely asynchronous, so the one thing the shopper must never experience
+           is a dead button. Cleared as soon as the overlay is on screen. */
+        setButtonBusy(btn, true);
+
         /* Open the fitting room INSTANTLY on DOM order (no waiting on the server) -
            the ~1-7s classify-images round trip used to block the modal from opening
-           at all, which felt like the button was broken. Classification now runs in
-           parallel and, if it disagrees with the DOM-order guess, silently corrects
-           the live garment via postMessage once it resolves (see fitting-room/app.js's
-           PEAR_UPDATE_GARMENT listener) - the shopper sees the room immediately and
-           the front/back swap (if any) lands a moment later without a reconnect. */
-        var imgs = (garment.images && garment.images.length) ? garment.images : [garment.url];
-        /* Merge the Shopify product JSON gallery (prefetched at boot) - full-resolution,
-           complete, and immune to every lazy-loading trick the DOM scrape has to work
-           around. Only for a page-scoped garment: on a grid, the page product is not
-           this card's product. De-duped canonically, so a photo already found in the
-           DOM is not added twice under a different URL spelling. */
-        if (garment.pageScoped && _shopifyGallery && _shopifyGallery.length) {
-          var merged = imgs.slice();
-          for (var si = 0; si < _shopifyGallery.length; si++) {
-            var cand = _shopifyGallery[si], dup = false;
-            for (var mi = 0; mi < merged.length; mi++) {
-              if (samePhoto(cand, merged[mi])) { dup = true; break; }
-            }
-            if (!dup) merged.push(cand);
-          }
-          if (merged.length !== imgs.length) {
-            console.log("[PEAR] merged Shopify JSON gallery:", imgs.length, "→", merged.length, "image(s)");
-          }
-          imgs = merged.slice(0, MAX_GALLERY_IMAGES);
-        }
-        /* The instant-open back. ONLY a DOM-identified rear photo (garment.back) is
-           handed over here - never imgs[1]. Opening on the second gallery photo was a
-           positional guess that, on a front-only gallery, labels a FRONT photo as the
-           back and reaches Lucy as "this is the BACK, do NOT render the front" - the
-           exact blank-back failure resolveFrontBack() below was written to stop. With
-           no DOM evidence the room opens front-only and the classifier's verdict (or a
-           generated rear) lands a moment later via PEAR_UPDATE_GARMENT. */
-        var openBack = (garment.back && !samePhoto(garment.back, imgs[0])) ? garment.back : undefined;
-        console.log("[PEAR widget] button click - " + imgs.length + " image(s) to classify:", imgs,
-          "| DOM-identified back:", openBack || "(none - server will resolve/synthesize)");
+           at all, which felt like the button was broken. The COMBINED pipeline runs
+           independently (usually already finished - see prepareCombined/schedulePrewarm)
+           and, if it disagrees with the DOM-order guess, silently corrects the live
+           garment via postMessage (see fitting-room/app.js's PEAR_UPDATE_GARMENT
+           listener) - the shopper sees the room immediately and the front/back swap
+           (if any) lands without a reconnect. */
+        var plan = galleryPlanFor(garment);
+        var imgs = plan.imgs, openBack = plan.openBack;
+        console.log("[PEAR widget] button click - " + imgs.length + " image(s);",
+          garment._prepJob ? "COMBINED payload already prepared (prewarmed)" : "preparing COMBINED payload now");
         var openedIframe = openModal({
           url: imgs[0], type: garment.category, name: garment.name,
-          back: openBack, images: imgs, variantId: garment.variantId
+          back: openBack, images: imgs, variantId: garment.variantId,
+          singleImage: plan.singleImage
         });
+        setButtonBusy(btn, false);
 
-        /* ── COMBINED pipeline ────────────────────────────────────────────────────
-           The try-on engine receives ONE unified composite and nothing else. The
-           sequence is fixed by a real dependency, not by preference:
+        /* The composite is handed over by postMessage rather than the iframe URL
+           because a composite data URL is far past any browser's URL length limit. */
+        function handOver(out) {
+          if (!out) return;
+          /* Only push a correction if this actually changes what the room is showing,
+             and only into the SAME modal that triggered the call (the shopper may have
+             closed it, or opened a different product, in the meantime). */
+          if (activeIframe !== openedIframe) return;
+          if (!out.composite && out.front === imgs[0] && out.back === openBack) return;
+          var payload = out.composite;
+          console.log("[PEAR widget] handing the COMBINED payload to the try-on engine",
+            payload ? (payload.blob ? "(binary Blob)" : "(base64 data URL)") : "(front/back URLs only)");
+          try {
+            openedIframe.contentWindow.postMessage({
+              type: "PEAR_UPDATE_GARMENT",
+              garment_url: out.front,
+              garment_back: out.back || undefined,
+              garment_back_source: out.backSource,
+              /* The unified COMBINED reference. When present the fitting room uses THIS
+                 as the model reference and skips its own stitching entirely - the
+                 front/back URLs above remain only as provenance and as the fallback if
+                 the composite is unusable.
 
-             1. classify  - the gallery URLs go to /api/classify-images, which returns
-                            WHICH image is the front and which is the back. This step
-                            is unavoidable and cannot be replaced by the composite: you
-                            cannot stitch a front|back pair before knowing which photo
-                            is which. It exchanges URLs and a label - it is metadata,
-                            not a render, and no individual image is ever handed to the
-                            model as a try-on reference.
-             2. synthesize - single-view product? the server generates the rear from
-                            the front (synthesizeBackView) so step 3 always has a pair.
-             3. combine   - both views stitched into ONE labelled canvas here.
-             4. hand over - ONLY that composite goes to the fitting room / Decart.
+                 Sent as a Blob whenever the engine produced one: structured clone
+                 carries binary across the origin boundary natively, so this skips the
+                 base64 inflation AND the room's re-parse. garment_composite (the data
+                 URL) is populated only on engines with neither convertToBlob nor
+                 toBlob; the room accepts either, and older rooms that only know the
+                 string field still work on that fallback. */
+              garment_composite_blob: (payload && payload.blob) || undefined,
+              garment_composite: (payload && payload.dataUrl) || undefined,
+              garment_images: out.sorted
+            }, PEAR_BASE);
+          } catch (_) {}
+        }
 
-           Sent by postMessage rather than the iframe URL because a composite data URL
-           is far past any browser's URL length limit. */
-        classifyImages(imgs, { front: imgs[0], back: openBack }).then(function (res) {
-          var results = res.results;
-          console.log("[PEAR widget] classify-images results (" + results.length + "):", results);
-          var sorted = sortByFrontBack(imgs, results);
-          var local = resolveFrontBack(imgs, results);
-          /* Server-resolved pair wins when present: it folds in the DOM hints, the
-             classifier, the per-product cache AND the generated-rear fallback
-             (back_source tells which). Falls back to the local resolution for
-             older/failing server builds. */
-          var frontUrl = res.front || local.front;
-          var backUrl  = res.back  || local.back;
-          console.log("[PEAR widget] resolved front:", abbrevUrl(frontUrl));
-          console.log("[PEAR widget] resolved back :", abbrevUrl(backUrl), "| source:", res.backSource);
-
-          if (!backUrl) {
-            /* No back anywhere - not in the DOM, not from the classifier, not in the
-               per-product cache, and generation was declined or failed. There is
-               nothing to combine, so hand over front-only; the fitting room's own
-               inferred-rear clause covers the turn. */
-            console.warn("[PEAR widget] no back view available - handing over FRONT-ONLY (no composite possible)");
-          }
-
-          return createGarmentComposite(frontUrl, backUrl).then(function (composite) {
-            if (composite) {
-              console.log("[PEAR widget] COMBINED payload ready - handing the single composite to the try-on engine");
-            }
-            /* Only push a correction if this actually changes what the room is showing,
-               and only into the SAME modal that triggered the call (the shopper may have
-               closed it, or opened a different product, in the meantime). */
-            if (activeIframe !== openedIframe) return;
-            if (!composite && frontUrl === imgs[0] && backUrl === openBack) return;
-            try {
-              openedIframe.contentWindow.postMessage({
-                type: "PEAR_UPDATE_GARMENT",
-                garment_url: frontUrl,
-                garment_back: backUrl || undefined,
-                garment_back_source: res.backSource,
-                /* The unified COMBINED reference. When present the fitting room uses
-                   THIS as the model reference and skips its own stitching entirely -
-                   the front/back URLs above remain only as provenance and as the
-                   fallback if the composite is unusable. */
-                garment_composite: composite || undefined,
-                garment_images: sorted
-              }, PEAR_BASE);
-            } catch (_) {}
-          });
-        }).catch(function (err) {
+        prepareCombined(garment).then(handOver).catch(function (err) {
           console.warn("[PEAR widget] combined pipeline failed, using DOM order as-is:", err && err.message);
         });
+
+        /* Single-image products only: the generated rear view, if one materialises,
+           arrives on its own schedule and upgrades the room in place. Started here
+           rather than inside prepareCombined() precisely so that nothing above can
+           ever end up awaiting it. */
+        if (plan.singleImage) prepareSingleImageUpgrade(garment).then(handOver);
       });
     }
     injectedButtons.push(btn);
     return btn;
+  }
+
+  /* ── background pre-stitch scheduler ──────────────────────────────────────────
+     Start the COMBINED pipeline the moment a button is injected, so the composite is
+     sitting in memory before the shopper reaches for it.
+
+     Scoped tightly on purpose. A collection page injects a PEAR button next to EVERY
+     Add-to-Cart, and prewarming each one would fire dozens of classify calls and twice
+     as many image fetches on page load - a self-inflicted DoS on both the store's CDN
+     and our own API. Two guards keep that from happening:
+       · pageScoped only - the garment came from page-wide signals (og:image / the
+         single-product gallery), i.e. this is a real PDP with ONE product. The
+         ancestor walk-up path (grids, quick-shop) is never prewarmed.
+       · MAX_PREWARM distinct products per page load, keyed by front URL, so the
+         repeated page-scoped garment a grid produces collapses to a single run.
+
+     Scheduled at idle rather than inline: the store's own above-the-fold work owns the
+     main thread at mount, and nothing here is needed until a click. */
+  var MAX_PREWARM = 1;
+  var _prewarmed = [];
+
+  function schedulePrewarm(garment) {
+    if (!PREWARM || !garment || !garment.pageScoped || !garment.url) return;
+    if (DEMO_GATE && isDemoGateLockedLocally()) return;   // this browser can't try on anyway
+    if (isDemoLocked()) return;
+    var key = canonicalPhoto(garment.url);
+    if (_prewarmed.indexOf(key) !== -1) return;
+    if (_prewarmed.length >= MAX_PREWARM) return;
+    _prewarmed.push(key);
+
+    var start = function () {
+      /* Wait for the Shopify product JSON before planning the gallery: it is fetched
+         at boot and merged by galleryPlanFor(). Prewarming ahead of it would classify a
+         DOM-only list, and the click - which by then DOES see the JSON - would derive a
+         different list, miss this memo and re-run the entire round trip. Resolves
+         immediately to [] on a non-Shopify store. */
+      loadShopifyProductJSON().then(function () {
+        console.log("[PEAR widget] pre-stitching in the background for:", abbrevUrl(garment.url));
+        var t0 = (w.performance && w.performance.now) ? w.performance.now() : Date.now();
+        prepareCombined(garment).then(function (out) {
+          var t1 = (w.performance && w.performance.now) ? w.performance.now() : Date.now();
+          console.log("[PEAR widget] pre-stitch complete in " + Math.round(t1 - t0) + "ms -",
+            out.composite ? "COMBINED composite ready before the first click"
+                          : "front-only (no back view available)");
+          /* Single-image product: prepareCombined() resolved in microseconds because
+             there was nothing to do, which means the ACTUAL long pole for this product -
+             generating a rear view from the front photo - hasn't started yet. Kick it
+             here, at mount, where it has the whole browsing session to finish instead of
+             the seconds between the click and go-live. This is the single highest-value
+             prewarm in the file: it is the one job measured in tens of seconds. */
+          if (out.plan && out.plan.singleImage) {
+            console.log("[PEAR widget] single-image product - starting rear-view generation at mount");
+            prepareSingleImageUpgrade(garment).then(function (up) {
+              var t2 = (w.performance && w.performance.now) ? w.performance.now() : Date.now();
+              console.log("[PEAR widget] single-image upgrade settled in " + Math.round(t2 - t0) + "ms -",
+                up && up.composite ? "generated rear stitched and ready before the first click"
+                                   : "no rear view available - staying front-only");
+            });
+          }
+        }).catch(function (e) {
+          /* Non-fatal by construction: prepareCombined() cleared its own memo, so the
+             click runs the pipeline for real, exactly as it did before prewarming. */
+          console.warn("[PEAR widget] pre-stitch failed (the click will retry):", e && e.message);
+        });
+      });
+    };
+
+    if (w.requestIdleCallback) w.requestIdleCallback(start, { timeout: 2000 });
+    else w.setTimeout(start, 1);
   }
 
   function injectAfterButton(atcBtn) {
@@ -1638,6 +2274,7 @@
     if (!garment || !garment.url) return;   // no garment for this button → skip
     injectStyles();
     var btn = makePearButton(garment);
+    schedulePrewarm(garment);
     /* Drop AFTER the whole quantity row when the cart button shares a flex row with a
        quantity stepper; otherwise as the next sibling right after the button. */
     var qtyRow = findQtyRow(atcBtn);
@@ -1659,12 +2296,19 @@
     _fallbackDone = true;
     injectStyles();
     var name = getGarmentName();
-    var btn = makePearButton({
+    /* This path runs only when the page has NO cart button at all - a bare PDP - and
+       findProductImages() resolved from page-wide signals (og:image → product-image
+       selectors), so the garment is page-scoped in exactly the sense schedulePrewarm()
+       requires: one product, one page. */
+    var fallbackGarment = {
       url: primary.url, back: primary.back,
       images: collectGalleryImages(primary.url, d),
       name: name, category: detectCategory(name),
-      variantId: extractVariantId(null)
-    });
+      variantId: extractVariantId(null),
+      pageScoped: true
+    };
+    var btn = makePearButton(fallbackGarment);
+    schedulePrewarm(fallbackGarment);
     var h1 = d.querySelector("h1");
     if (h1 && h1.parentNode) {
       h1.parentNode.insertBefore(btn, h1.nextSibling);

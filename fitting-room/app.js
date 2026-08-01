@@ -1016,6 +1016,14 @@ function parseHandoff() {
       // sets data-pear-require-both-views. Hard-blocks go-live unless a real back
       // image arrived (custom garments are otherwise ungated - see liveBlockReason).
       requireBothViews: q.get("require_both_views") === "1",
+      /* SINGLE-IMAGE FAST PATH (widget sends ?single_image=1). The product ships exactly
+         one photo, so the widget skipped classification, the back lookup and rear
+         synthesis outright - there is no PEAR_UPDATE_GARMENT correction coming, ever.
+         setActiveItem() reads this to skip arming the "waiting for a back view"
+         indicator, which would otherwise spin for its full 35s give-up timeout on a
+         garment that is already in its final state. Front-only from the first frame,
+         with no wait and no empty state. */
+      singleImage: q.get("single_image") === "1",
       // Shopify variant id (widget reads it off the store's own Add-to-Cart form) -
       // carried through so the "הוסף לסל" button here can hand it back to the
       // storefront's own /cart/add.js call (see pear-widget.js's PEAR_ADD_TO_CART listener).
@@ -1294,9 +1302,21 @@ function enterRoom() {
    the "Now fitting" thumbnail is freed rather than pinned for the page's lifetime. Safe
    to call on an item that never had one. */
 function releaseCompositePreview(item) {
-  if (!item || !item._compositeObjectUrl) return;
-  try { URL.revokeObjectURL(item._compositeObjectUrl); } catch (_) {}
-  item._compositeObjectUrl = null;
+  if (!item) return;
+  if (item._compositeObjectUrl) {
+    try { URL.revokeObjectURL(item._compositeObjectUrl); } catch (_) {}
+    item._compositeObjectUrl = null;
+  }
+  /* The object URL wrapping a BINARY composite handed over by the widget (see the
+     PEAR_UPDATE_GARMENT listener). Same lifetime as the preview above - it is pinned
+     for as long as the item is on screen and released when we swap away from it -
+     so item.composite is cleared alongside it rather than left pointing at a revoked
+     URL that would fail to fetch on a later re-selection. */
+  if (item._compositeHandoffUrl) {
+    try { URL.revokeObjectURL(item._compositeHandoffUrl); } catch (_) {}
+    if (item.composite === item._compositeHandoffUrl) item.composite = null;
+    item._compositeHandoffUrl = null;
+  }
 }
 
 /* ── EAGER composite for the "Now fitting" chip ───────────────────────────────
@@ -1370,7 +1390,10 @@ function setActiveItem(item, opts = {}) {
      genuinely single-view product with no widget correction coming at all) so the
      indicator cannot spin forever. */
   if (item._awaitingBackTimer) { clearTimeout(item._awaitingBackTimer); item._awaitingBackTimer = null; }
-  item._awaitingBackCorrection = !!(item.custom && !item.composite && !distinctBackOf(item));
+  /* item.singleImage - the widget already determined this product has exactly one photo
+     and took the fast path, so no correction is in flight and there is nothing to wait
+     for. Anything else that reaches here without a back is still genuinely pending. */
+  item._awaitingBackCorrection = !!(item.custom && !item.singleImage && !item.composite && !distinctBackOf(item));
   if (item._awaitingBackCorrection) {
     item._awaitingBackTimer = setTimeout(() => {
       item._awaitingBackTimer = null;
@@ -1475,8 +1498,30 @@ window.addEventListener("message", (e) => {
   const front = e.data.garment_url;
   const back = e.data.garment_back;
   if (!activeItem || !front) return;
-  const composite = typeof e.data.garment_composite === "string" && e.data.garment_composite
-    ? e.data.garment_composite : undefined;
+  /* BINARY-FIRST handover. The widget now ships the stitched composite as a Blob:
+     postMessage uses structured clone, which carries binary across the origin boundary
+     natively, so the old path - base64 the canvas there, send a ~33%-inflated string,
+     re-parse it back into bytes here - was pure overhead on a several-hundred-KB
+     payload. Wrapping it in an object URL keeps this a one-line change for everything
+     downstream: item.composite has always been consumed as a URL (garmentBlobCached,
+     activeGarmentDisplayUrl), and every one of those paths already special-cases
+     `blob:` alongside `data:`.
+
+     garment_composite (the string) remains supported and is what an engine without
+     convertToBlob/toBlob still sends, so a browser on that fallback is unaffected. */
+  let composite;
+  const compositeBlob = e.data.garment_composite_blob;
+  if (compositeBlob && typeof Blob !== "undefined" && compositeBlob instanceof Blob) {
+    try {
+      composite = URL.createObjectURL(compositeBlob);
+      console.log(`[PEAR] COMBINED composite received as binary (${(compositeBlob.size / 1024).toFixed(0)}KB) - no base64 round trip`);
+    } catch (err) {
+      console.warn("[PEAR] createObjectURL failed for the handed composite:", err?.message || err);
+    }
+  }
+  if (!composite && typeof e.data.garment_composite === "string" && e.data.garment_composite) {
+    composite = e.data.garment_composite;
+  }
   /* The widget's classify+synthesize round trip has now FINISHED, whatever it found -
      stop showing "waiting for a back view" regardless of the unchanged early-return
      below (a message confirming "no back exists" still means the wait is over; the
@@ -1532,6 +1577,15 @@ window.addEventListener("message", (e) => {
      than a second, independently built one. A data: URL, so every downstream path
      (garmentBlobCached, garmentImageRef) already handles it without a proxy hop. */
   if (composite) {
+    /* Revoke the object URL from a PREVIOUS binary handover on this item before
+       replacing it - a correction can legitimately arrive more than once (a re-classify,
+       a colour swap that re-runs the widget pipeline), and each one mints a fresh URL
+       that pins its Blob in memory until revoked. Only ever revokes a URL this listener
+       created; a data: string carries no resource to release. */
+    if (activeItem._compositeHandoffUrl && activeItem._compositeHandoffUrl !== composite) {
+      try { URL.revokeObjectURL(activeItem._compositeHandoffUrl); } catch (_) {}
+    }
+    activeItem._compositeHandoffUrl = compositeBlob ? composite : null;
     activeItem.composite = composite;
     console.log("[PEAR] COMBINED composite received from the widget:",
       abbrevImg(activeItem.composite));
@@ -2828,27 +2882,48 @@ async function preloadGarmentAssets() {
     const back  = distinctBackOf(item, g);
     const label = item.name || item.garmentType || "garment";
 
+    /* CONCURRENT, not sequential. This gate is the last thing standing between the tap
+       and the billed session, and it used to await the front fetch to completion before
+       even STARTING the back one - two independent downloads of two unrelated URLs, run
+       one after the other, for no reason beyond the shape of the loop. On a phone
+       connection that doubled the visible "Scanning Garment Assets…" wait. Both are
+       kicked off here in the same tick; the awaits below just collect them, so the gate
+       now costs max(front, back) instead of front + back.
+
+       The flatness probe is chained onto the back fetch rather than awaited separately,
+       so it overlaps the front download too. Validation semantics are untouched: the
+       same three verdicts (front unusable → ok=false, back missing/broken/flat →
+       hasBack=false) come out of exactly the same checks. */
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front […]`);
-    const frontBlob = front ? await garmentBlobCached(front) : null;
+    const frontJob = front ? garmentBlobCached(front) : Promise.resolve(null);
+    const backJob  = back
+      ? garmentBlobCached(back).then(async (backBlob) => {
+          if (!backBlob) return false;
+          try {
+            const probe = await createImageBitmap(backBlob);
+            const flat = await bitmapLooksFlat(probe);
+            probe.close?.();
+            if (flat) { _assetBlobCache.delete(back); return false; }
+          } catch (_) { /* fail open on probe error - the fetch itself already succeeded */ }
+          return true;
+        })
+      : Promise.resolve(false);
+
+    const frontBlob = await frontJob;
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front [${frontBlob ? "OK" : "FAIL"}]`);
     if (!frontBlob) {
       console.error("[PEAR] CRITICAL: GARMENT_FRONT failed pre-load validation -", label, front);
       ok = false;
+      // Let the in-flight back fetch settle rather than leaving an unhandled rejection
+      // path behind; its verdict is irrelevant once the front is unusable.
+      await backJob.catch(() => false);
       continue;   // keep checking the rest so every failure gets logged, not just the first
     }
 
     if (!back) { hasBack = false; continue; }
 
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back […]`);
-    const backBlob = await garmentBlobCached(back);
-    let backOk = !!backBlob;
-    if (backOk) {
-      try {
-        const probe = await createImageBitmap(backBlob);
-        if (await bitmapLooksFlat(probe)) { backOk = false; _assetBlobCache.delete(back); }
-        probe.close?.();
-      } catch (_) { /* fail open on probe error - the fetch itself already succeeded */ }
-    }
+    const backOk = await backJob;
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back [${backOk ? "OK" : "FAIL"}]`);
     if (!backOk) {
       console.warn("[PEAR] GARMENT_BACK failed pre-load validation - proceeding FRONT-ONLY -", label, back);
@@ -3383,15 +3458,20 @@ function createOrientationWatcher() {
 
 /* Decode a garment URL into an ImageBitmap without tainting the canvas: http(s) CDN
    URLs go through the same-origin proxy (exactly like the live reference path); data:
-   and blob: URLs (custom uploads) are fetched directly - both yield a decodable Blob. */
-async function loadGarmentBitmap(url, attempts = 3) {
+   and blob: URLs (custom uploads) are fetched directly - both yield a decodable Blob.
+
+   THE BYTES COME FROM garmentBlobCached(), NOT A SECOND FETCH. This used to run its own
+   fetchWithFallback() against the same URL the Blob cache had just downloaded, so the
+   go-live path pulled every garment photo TWICE: once for the per-orientation Blob
+   (preloadGarmentAssets → garmentBlobCached) and once more, moments later, to decode it
+   for the composite. On a multi-megabyte studio packshot over a phone connection that
+   is the single most expensive redundancy in the pre-live sequence, and it sits inside
+   the gate that blocks the shopper. Sharing the memo also means the composite and the
+   AI Auto reference are built from byte-identical assets, and that a fetch failure is
+   diagnosed once rather than twice. */
+async function loadGarmentBitmap(url) {
   if (!url) throw new Error("no image url");
-  let blob;
-  if (/^(data:|blob:)/i.test(url)) {
-    blob = await (await fetch(url)).blob();
-  } else {
-    blob = await fetchWithFallback(url, attempts);   // /api/img-proxy, then raw CDN, × attempts
-  }
+  const blob = await garmentBlobCached(url);
   if (!blob) throw new Error("image fetch failed: " + abbrevImg(url));
   // Decode failures are reported separately from fetch failures: a blob that arrived
   // but won't decode means the bytes are not a usable image (hotlink-block HTML, a
@@ -3506,6 +3586,14 @@ const COMPOSITE_MODE = (() => {
 })();
 
 const COMPOSITE_MAX_W   = 2048;   // cap on the stitched output - Decart gains nothing from more
+/* Height cap, for the same reason as the width one. COMPOSITE_MAX_W bounds the canvas
+   only through the source aspect ratio: two tall, narrow packshots (1000×4000 each)
+   leave totalW under the width cap, so scale stays ~1 and the canvas comes out
+   2048×3969 - eight megapixels to rasterise and JPEG-encode for a reference whose
+   panels the model reads at ~1024px wide. Capping both axes bounds the encode cost
+   regardless of the source aspect, and 2048 sits far above the size either panel
+   actually occupies, so this can never undersample a garment. */
+const COMPOSITE_MAX_H   = 2048;
 const COMPOSITE_DIVIDER = 4;      // divider line width in px (spec: 2-4px)
 const COMPOSITE_GUTTER  = 64;     // total gap between the two panels, divider centred in it
 const _compositeCache = new Map();   // `${frontUrl} ${backUrl}` → Promise<Blob|null>
@@ -3557,8 +3645,9 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
       const labelBand = labelPlacement === "below" ? Math.round(panelH * 0.11) : 0;
       totalH += labelBand;
 
-      // 3. Cap the output - a 5000px composite costs upload time and buys nothing.
-      const scale = Math.min(1, COMPOSITE_MAX_W / totalW);
+      // 3. Cap the output on BOTH axes - a 5000px composite costs upload time and buys
+      //    nothing. See COMPOSITE_MAX_H for why the width cap alone is not a bound.
+      const scale = Math.min(1, COMPOSITE_MAX_W / totalW, COMPOSITE_MAX_H / totalH);
       const W  = Math.round(totalW * scale);
       const H  = Math.round(totalH * scale);
       const fW = Math.round(frontW * scale);
@@ -3568,7 +3657,9 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
 
       const off    = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(W, H) : null;
       const canvas = off || Object.assign(document.createElement("canvas"), { width: W, height: H });
-      const ctx    = canvas.getContext("2d");
+      // alpha:false - the field below is painted fully opaque, and an opaque backing
+      // store lets the rasteriser skip per-pixel alpha compositing on every draw.
+      const ctx    = canvas.getContext("2d", { alpha: false }) || canvas.getContext("2d");
 
       // Neutral mid-grey field: a white background can read as garment fabric on a
       // white packshot, and pure black hid the divider on dark garments.
@@ -3604,9 +3695,17 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
 
       front.close?.(); back.close?.();            // release decoded bitmaps
 
+      /* Encode quality matched to the widget's own stitcher (0.92) rather than the 0.95
+         this used. Not a quality decision so much as a consistency one: the widget's
+         composite is the PREFERRED reference whenever a handover happened
+         (referenceImageFor uses item.composite verbatim), so the model already receives
+         0.92 on the common path - this only ever built the fallback, and there is no
+         reason for the fallback to be the heavier of the two. The difference is
+         invisible on a packshot and worth ~25-30% of the bytes that have to be encoded
+         here and then pushed over the live session. */
       const blob = off
-        ? await off.convertToBlob({ type: "image/jpeg", quality: 0.95 })
-        : await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.95));
+        ? await off.convertToBlob({ type: "image/jpeg", quality: 0.92 })
+        : await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.92));
 
       console.log(`[PEAR] composite built: ${W}×${H} · FRONT ${fW}px | BACK ${bW}px · ` +
         `${blob ? (blob.size / 1024).toFixed(0) + "KB" : "no blob"}`);
