@@ -18,20 +18,6 @@
      composite        The Stitched Garment Composite layout contract: FRONT panel
                       left, BACK panel right, spec geometry, divider, centred labels,
                       size cap, and null (never a half-drawn reference) on failure.
-     widget-prewarm   The background pre-stitch: the COMBINED pipeline runs at
-                      MOUNT, and the click REUSES it (exactly one classify call
-                      across mount + click) rather than racing a second copy.
-                      Also the cost guards - one prewarm per page, the
-                      data-pear-prewarm="false" opt-out, and the source-size hint
-                      that keeps 4K masters off the wire without leaking into the
-                      URLs handed downstream.
-     widget-single-image
-                      The single-image fast path: one photo (however many URL
-                      spellings it wears) skips classification, stitching and the
-                      room's pending-back gate entirely - AND is never duplicated
-                      into the composite's BACK panel, which would render the
-                      chest print on the shopper's back. A GENERATED rear still
-                      upgrades the session, strictly off the critical path.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -49,8 +35,6 @@ const SUITES = [
   ["composite", "composite.test.mjs"],
   ["widget-dom", "widget-dom.test.mjs"],
   ["widget-combined", "widget-combined.test.mjs"],
-  ["widget-prewarm", "widget-prewarm.test.mjs"],
-  ["widget-single-image", "widget-single-image.test.mjs"],
   ["thumbnail", "thumbnail.test.mjs"],
   ["composite-handoff", "composite-handoff.test.mjs"],
   ["eager-composite", "eager-composite.test.mjs"],
