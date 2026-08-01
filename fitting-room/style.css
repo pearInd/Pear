@@ -483,79 +483,33 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 #screen-calculator .calc-shell { display: block; min-height: auto; }
 #screen-calculator { min-height: auto; }
 
-/* ── unified card (#screen-calculator, desktop only) ───────────────────────
-   The video and form used to be two independent floating cards (.calc-editorial
-   + .container), each with their own radius/background/shadow, separated by
-   .calc-shell's gap showing the page background between them. On desktop
-   they're now one shared card shell - single radius/background/shadow/blur
-   here, with the video zone stripped of its own card chrome (see the
-   #screen-calculator .calc-card .calc-editorial override below).
+/* ── two-panel layout (#screen-calculator only) ─────────────────────────────
+   .calc-card is purely structural here - just the 40/60 grid positioning the
+   video and form side by side with a tight 5px gap between them. Each panel
+   keeps its own individual card chrome (.calc-editorial and .container both
+   still declare their own radius/background/border/shadow/blur below) rather
+   than sharing one merged card shell.
 
-   align-items:start (NOT stretch) - stretch used to force .calc-editorial and
-   .calc-main to the exact same height, but the video's own intrinsic (aspect-
-   ratio-driven) height and the form's natural content height rarely actually
-   match, so whichever one was shorter ended up with a chunk of dead empty
-   space at its own bottom (below the "המשך" button on the form side, in
-   practice - the video/editorial column is normally the taller of the two).
-   With `start`, each zone is exactly as tall as its own real content and the
-   card's outer height simply follows whichever is naturally tallest - no
-   forced matching, no leftover gap. The divider between the two zones can no
-   longer be a border on the shorter .calc-main (it wouldn't reach the full
-   card height any more), so it's a ::after on .calc-card itself instead,
-   positioned at the 40/60 column split and stretched the full card height
-   independently of either zone's own height (see below). */
+   align-items:start (not stretch or center) so both panels start flush at
+   the same top y - see the #screen-calculator .calc-main padding-top:0
+   override below for the other half of that. It also means the video's own
+   intrinsic (aspect-ratio-driven) height and the form's natural content
+   height are never force-matched, so neither one gets padded out to fill
+   space it doesn't have real content for - each card is simply as tall as
+   its own content (the video's height is still bounded via .calc-editorial's
+   max-height cap below, so it can't run away regardless). */
 #screen-calculator .calc-card {
   display: grid;
   grid-template-columns: 40% 60%;
   align-items: start;
+  gap: 5px;
 }
 @media (min-width: 921px) {
-  #screen-calculator .calc-card {
-    position: relative;
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-    background:
-      linear-gradient(158deg, rgba(255, 252, 244, .92) 0%, rgba(244, 238, 225, .78) 52%, rgba(233, 238, 214, .86) 100%);
-    border: 1px solid rgba(255, 255, 255, .75);
-    box-shadow: 0 20px 60px rgba(94, 88, 66, .13), inset 0 1px 0 rgba(255, 255, 255, .9);
-    -webkit-backdrop-filter: var(--blur-lg);
-            backdrop-filter: var(--blur-lg);
-  }
-  /* the internal divider between the merged card's two zones - inset-block:0
-     spans the full card height regardless of which zone (video or form) is
-     naturally taller, inset-inline-start:40% lands it exactly on the
-     grid-template-columns split. Logical insets, not left/right, so it's
-     correct in this page's RTL direction without a separate override. */
-  #screen-calculator .calc-card::after {
-    content: "";
-    position: absolute;
-    inset-block: 0;
-    inset-inline-start: 40%;
-    width: 1px;
-    background: var(--glass-line);
-    pointer-events: none;
-  }
-  /* .container's own standalone card chrome (background/border/radius/
-     shadow/blur - still declared on the base rule below for mobile's sake)
-     is redundant now that .calc-card supplies one shared card - zero it back
-     out so only .calc-card's edges are visible, not a second nested card
-     outline inside it. */
-  #screen-calculator .container {
-    background: none;
-    border: none;
-    box-shadow: none;
-    -webkit-backdrop-filter: none;
-            backdrop-filter: none;
-  }
   /* The video's source frame is tall/portrait - at 40% of the card's width
-     its own aspect-ratio-driven height (see .calc-editorial__visual's
-     comment below) can run well past what the form's real content needs,
-     and since align-items:start above no longer force-matches the two
-     zones, that excess just became the card's overall height with nothing
-     to fill it on the form side - the real source of the leftover space
-     below the button, not the form's own padding. Capping it here bounds
-     the card to a sane height; object-fit:contain on the video (unchanged)
-     means it just letterboxes more within a shorter box, never crops. */
+     its own aspect-ratio-driven height can run well past what the form's
+     real content needs. Capping it here keeps the video card from towering
+     over the form card; object-fit:contain on the video (unchanged) means
+     it just letterboxes more within a shorter box, never crops. */
   #screen-calculator .calc-card .calc-editorial { max-height: min(700px, 78vh); }
 }
 
@@ -587,25 +541,22 @@ html.pear-returning-check #screen-calculator { display: none !important; }
           backdrop-filter: var(--blur-lg);
 }
 
-/* ── FLATTENED PANEL (screen-calculator only) ─────────────────────────────
-   .calc-editorial no longer carries its own card chrome here - the cream
-   background/border/shadow/blur that used to live on this rule moved up to
-   the shared .calc-card wrapper (see above), so this zeroes them back out
-   and lets .calc-editorial sit as a plain content zone inside the merged
-   card. .calc-card's own overflow:hidden + border-radius still clips this
-   zone to the card's rounded outer corners even though it has none of its
-   own now.
+/* ── LIGHT PANEL (screen-calculator only) ─────────────────────────────────
+   The dark card is gone here: this is now a soft ivory/glass surface that
+   dissolves into the page canvas so the video side and the form side read
+   as two related (but visually distinct) panels rather than one dark card
+   glued to a light one.
 
    SCOPED ON PURPOSE: #screen-locked reuses .calc-editorial *with white
-   copy* (.calc-editorial__content/__headline/__meta are all #fff) and its
-   own separate dark card - the base rule above stays exactly as-is for it. ── */
-#screen-calculator .calc-card .calc-editorial {
-  border-radius: 0;
-  border: none;
-  background: none;
-  box-shadow: none;
-  -webkit-backdrop-filter: none;
-          backdrop-filter: none;
+   copy* (.calc-editorial__content/__headline/__meta are all #fff). Making
+   the base class light would render that screen white-on-cream, i.e.
+   invisible - so the light treatment applies only to this screen and the
+   dark base above stays exactly as-is for screen-locked. ── */
+#screen-calculator .calc-editorial {
+  background:
+    linear-gradient(158deg, rgba(255, 252, 244, .92) 0%, rgba(244, 238, 225, .78) 52%, rgba(233, 238, 214, .86) 100%);
+  border: 1px solid rgba(255, 255, 255, .75);
+  box-shadow: 0 20px 60px rgba(94, 88, 66, .13), inset 0 1px 0 rgba(255, 255, 255, .9);
 }
 /* soft pear-green ambient bloom instead of the old dark vignette */
 #screen-calculator .calc-editorial__aura {
@@ -641,16 +592,11 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 /* object-fit:contain (never cover) - the whole video frame must stay
    visible, no cropping. Anything letterboxed around it shows the panel's
-   own cream/glass background (#screen-calculator .calc-editorial above).
-   The scale is a mild zoom to eat into that letterboxing (the source clip
-   has a lot of empty margin around the phone mockup) - it scales the whole
-   fitted frame up around its own center, not a crop of the subject, and
-   .calc-editorial__visual's overflow:hidden trims only the excess. */
+   own cream/glass background (#screen-calculator .calc-editorial above). */
 .calc-editorial__video {
   width: 100%; height: 100%;
   object-fit: contain;
   display: block;
-  transform: scale(1.15);
 }
 
 .calc-editorial__aura {
