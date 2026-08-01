@@ -54,17 +54,46 @@ const DEMO_FLAG = new URLSearchParams(location.search).get("demo") === "1";
 const DEMO_GATE = new URLSearchParams(location.search).get("demo_gate") === "1";
 const DEMO_GATE_KEY = "pear_demo_gated_measured";
 
-/* ── Language toggle ───────────────────────────────────────────────────────
-   Default language comes from the server (window.__PEAR_DEFAULT_LANG__, set in
-   server.js from the visitor's x-vercel-ip-country), overridden by whatever
-   they last picked via the toggle button.
+/* ── Language: geo-IP detection + manual toggle ──────────────────────────────
+   Boot sequence (see initLanguage() near the bottom of this section, invoked
+   at module top-level so it fires as early as possible - not gated behind
+   init()):
+     1. Apply the best guess we already have (an explicit prior toggle choice,
+        else the server's SSR guess in window.__PEAR_DEFAULT_LANG__, else "en")
+        immediately, so there's no flash of the wrong language while geo-IP
+        resolves.
+     2. Unless the visitor already made an explicit choice via the toggle,
+        kick off client-side geo-IP lookup (shared timeout budget, multiple
+        providers) and silently correct the DOM in place once it resolves.
+        Any country other than "IL", or a total lookup failure/timeout, always
+        resolves to English - this never touches navigator.language (OS/browser
+        locale is not a reliable proxy for the visitor's storefront market).
+     3. A manual toggle click always wins from that point on: it's persisted
+        with an explicit flag so no later geo-IP check on a future page load
+        can override it.
 
    Only the static markup tagged with data-i18n / data-i18n-placeholder /
    data-i18n-aria in index.html is translated here - anything app.js writes
    itself at runtime (result labels, profile fields, OTP hints, catalog/gallery
    cards, etc.) stays exactly as it already was; those call sites hardcode
    their own Hebrew and are untouched by this dictionary. */
-const PEAR_LANG_KEY = "pear_lang";
+const LANG_KEY = "app_lang";
+const LANG_EXPLICIT_KEY = "app_lang_explicit";
+
+/* One-time migration from the older pear_lang key (pre geo-IP flow), which
+   only ever got written by an explicit toggle click - safe to carry forward
+   as an explicit choice so it keeps persisting across reloads exactly as it
+   did before. */
+(function migrateLegacyLangKey() {
+  try {
+    const legacy = localStorage.getItem("pear_lang");
+    if (legacy && !localStorage.getItem(LANG_KEY)) {
+      localStorage.setItem(LANG_KEY, legacy);
+      localStorage.setItem(LANG_EXPLICIT_KEY, "true");
+    }
+    localStorage.removeItem("pear_lang");
+  } catch {}
+})();
 
 /* Hebrew is the source of truth (and the fallback if a key or lang is ever
    missing); English is a natural translation, not word-for-word. Bilingual
@@ -213,9 +242,10 @@ const I18N = {
 
 function getActiveLang() {
   try {
-    const stored = localStorage.getItem(PEAR_LANG_KEY);
-    if (stored) return stored;
+    const stored = localStorage.getItem(LANG_KEY);
+    if (stored === "he" || stored === "en") return stored;
   } catch {}
+  // Pre-geo-IP guess only (server SSR hint, or English) - never navigator.language.
   return window.__PEAR_DEFAULT_LANG__ === "he" ? "he" : "en";
 }
 
@@ -255,11 +285,125 @@ function applyI18nText(lang) {
   });
 }
 
-function applyLang(lang) {
+/* Core DOM applicator - the only place that actually writes the language to
+   the page. <html lang/dir> is safe to set immediately (the <html> element
+   exists as soon as the parser sees the opening tag); the text/placeholder/
+   aria walk needs real body content to query against, so if the document is
+   still mid-parse this defers that part to DOMContentLoaded instead of
+   silently querying an empty/partial DOM and losing the update. */
+function applyLanguage(lang) {
   document.documentElement.lang = lang;
   document.documentElement.dir = lang === "he" ? "rtl" : "ltr";
-  applyI18nText(lang);
+
+  const applyText = () => {
+    applyI18nText(lang);
+    console.log("Applying language:", lang);
+  };
+
+  if (document.body) {
+    applyText();
+  } else if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", applyText, { once: true });
+  } else {
+    applyText();
+  }
 }
+
+/* Persistence wrapper around applyLanguage(). explicit:true marks this as a
+   deliberate visitor choice (toggle click) - it's the only thing that can
+   ever stop a later geo-IP check from overriding app_lang on the next boot. */
+function setLanguage(lang, { explicit = false } = {}) {
+  try {
+    localStorage.setItem(LANG_KEY, lang);
+    if (explicit) localStorage.setItem(LANG_EXPLICIT_KEY, "true");
+  } catch {}
+  applyLanguage(lang);
+}
+
+/* ── Geo-IP country lookup ────────────────────────────────────────────────
+   Multiple independent providers race in parallel; whichever answers first
+   wins. GEO_BUDGET_MS is a SHARED ceiling across every provider combined
+   (not per-provider) so a slow VPN/mobile connection still gets the full
+   ~4s window rather than each provider eating its own separate timeout.
+   Resolves to a 2-letter ISO country code, or null if every provider fails
+   or the whole lookup blows the budget - callers must treat null as "assume
+   not Israel" per the fallback policy. */
+const GEO_PROVIDERS = [
+  { url: "https://ipapi.co/json/", parse: (d) => d && d.country_code },
+  { url: "https://ipwho.is/", parse: (d) => d && d.country_code },
+  { url: "https://get.geojs.io/v1/ip/country.json", parse: (d) => d && d.country },
+];
+const GEO_BUDGET_MS = 4000;
+
+async function detectCountryCode() {
+  const controller = new AbortController();
+
+  const attempts = GEO_PROVIDERS.map(async (provider) => {
+    const res = await fetch(provider.url, { signal: controller.signal, cache: "no-store" });
+    if (!res.ok) throw new Error(`geo-ip provider HTTP ${res.status}: ${provider.url}`);
+    const data = await res.json();
+    const code = provider.parse(data);
+    if (!code || typeof code !== "string" || code.length !== 2) {
+      throw new Error(`geo-ip provider returned no usable country: ${provider.url}`);
+    }
+    return code.toUpperCase();
+  });
+
+  const firstSuccess = (Promise.any ? Promise.any(attempts) : raceAllSettledForFirstSuccess(attempts))
+    .catch(() => null);
+
+  const budgetTimeout = new Promise((resolve) => {
+    setTimeout(() => resolve(null), GEO_BUDGET_MS);
+  });
+
+  const result = await Promise.race([firstSuccess, budgetTimeout]);
+  controller.abort(); // stop any providers still in flight, win or lose
+  return result;
+}
+
+/* Promise.any fallback for older runtimes that lack it - resolves with the
+   first attempt to fulfil, or null if every attempt rejects. */
+function raceAllSettledForFirstSuccess(promises) {
+  return new Promise((resolve) => {
+    let pending = promises.length;
+    if (!pending) { resolve(null); return; }
+    promises.forEach((p) => {
+      p.then(resolve).catch(() => { if (--pending === 0) resolve(null); });
+    });
+  });
+}
+
+/* Boot entry point - runs once, at module top-level (see the call at the end
+   of this section), independent of init()/DOMContentLoaded so the geo-IP
+   fetch fires as early in the page's life as possible. */
+function initLanguage() {
+  let explicit = false, stored = null;
+  try {
+    explicit = localStorage.getItem(LANG_EXPLICIT_KEY) === "true";
+    stored = localStorage.getItem(LANG_KEY);
+  } catch {}
+
+  // Immediate paint: an explicit prior choice, else the pre-geo-IP guess -
+  // never a flash of the raw markup default while we wait on the network.
+  const initialLang = explicit && stored ? stored : getActiveLang();
+  applyLanguage(initialLang);
+  syncLangToggleUI(initialLang);
+
+  if (explicit && stored) return; // manual choice always wins - skip geo-IP entirely
+
+  detectCountryCode().then((country) => {
+    // Re-check: the visitor may have clicked a toggle button while this was
+    // still in flight, which must win over whatever geo-IP just decided.
+    let explicitNow = false;
+    try { explicitNow = localStorage.getItem(LANG_EXPLICIT_KEY) === "true"; } catch {}
+    if (explicitNow) return;
+
+    const lang = country === "IL" ? "he" : "en"; // any failure/timeout (country===null) -> "en"
+    setLanguage(lang, { explicit: false });
+    syncLangToggleUI(lang);
+  });
+}
+initLanguage();
 
 function isDemoGateLocked() {
   if (!DEMO_GATE) return false;
@@ -4809,26 +4953,43 @@ const KEEP_TOP     = " Keep the person's existing upper body exactly as it is in
 
 /* ── Strict garment inpainting - the hallucination clamp ──────────────────────
    KEEP_BOTTOMS/KEEP_TOP only ever pinned the OPPOSITE GARMENT layer. Everything else in
-   frame - face, hair, hands, skin, the room behind the shopper - was simply never
-   mentioned, and Lucy regenerates the WHOLE frame on every pass. Anything the prompt does
-   not pin is a region the model is free to reinterpret, which is what "it changed my
-   pants / my background" is: not a bug in the model so much as an unstated constraint.
+   frame - face, hair, hands, skin, the room behind the shopper, AND the shopper's own
+   body shape/volume under the new garment - was simply never mentioned, and Lucy
+   regenerates the WHOLE frame on every pass. Anything the prompt does not pin is a
+   region the model is free to reinterpret, which is what "it changed my pants / my
+   background" - and separately, "it slimmed me down" - actually is: not a bug in the
+   model so much as an unstated constraint. The body-fidelity clause below exists
+   because the model's training prior skews toward idealized/slim proportions, so a
+   fuller torso, belly or wider waist gets quietly flattened toward that prior unless
+   the prompt explicitly forbids it every single frame.
 
-   READ THIS BEFORE REACHING FOR A MASK. There is no mask, ROI or inpainting-region input
-   on Lucy realtime - set() takes exactly { prompt, enhance, image } (verified against
-   @decartai/sdk@0.1.5 setInputSchema, which strips everything else). A true bounding mask
-   would have to be enforced OUTSIDE the model: segment the torso locally per frame and
-   composite Decart's output over the untouched camera frame everywhere else. That is a
-   real feature - a segmentation model in the hot path at LIVE_INFERENCE_FPS - not a
-   parameter, and it is deliberately NOT what this constant is. This is the strongest
-   available lever through the one channel the API actually exposes, and it is a
-   probabilistic bias, not a guarantee. */
+   READ THIS BEFORE REACHING FOR A MASK OR A CONDITIONING WEIGHT. There is no mask, ROI,
+   DensePose/depth input, ControlNet conditioning scale, or inpainting-region parameter on
+   Lucy realtime - set() takes exactly { prompt, enhance, image } (verified against
+   @decartai/sdk@0.1.5 setInputSchema, which strips everything else). The prompt text is
+   the ONLY channel this SDK exposes; there is no "mask config" or "conditioning scale" to
+   turn up. A true pixel-locked boundary would have to be enforced OUTSIDE the model:
+   segment the torso locally per frame (DensePose/SAM or similar) and composite Decart's
+   output over the untouched camera frame everywhere else. That is a real, separate
+   feature - a segmentation model in the hot path at LIVE_INFERENCE_FPS - not a parameter
+   this file can set, and it is deliberately NOT what this constant is. This is the
+   strongest available lever through the one channel the API actually exposes, and it is a
+   probabilistic bias on every generated frame, not a guarantee. */
 const STRICT_INPAINT =
   " STRICT GARMENT INPAINTING MODE: edit ONLY the target garment(s) named above. Every" +
   " other pixel is locked source footage that must pass through EXACTLY as it appears in" +
   " the live video frame - the person's face, hair, head, neck, hands, arms and skin, and" +
   " the entire background, room and lighting. Do NOT generate, replace, restyle, recolor" +
-  " or re-render the background, or any part of the person outside the target garment(s).";
+  " or re-render the background, or any part of the person outside the target garment(s)." +
+  " ABSOLUTE BODY FIDELITY: preserve the person's exact body shape, weight, volume and" +
+  " silhouette exactly as captured in the live frame, including their stomach/belly shape," +
+  " waist circumference and torso width. Do NOT flatten, slim, smooth, thin, reshape or" +
+  " idealize their physique in any way, and do NOT shrink the torso, waist or belly" +
+  " boundary inward toward a thinner baseline. If the person has a fuller figure, belly or" +
+  " wider torso, drape and stretch the garment realistically OVER their actual stomach and" +
+  " body volume - with natural fabric tension, creases and shadow folds where it meets" +
+  " their real contours, not a flat model-cut fit. Fit the garment to the body; never the" +
+  " body to the garment.";
 
 /* ── Rotation continuity - the "my real shirt came back" clamp ────────────────
    Paired with the freeze-through-the-turn hold in the OrientationWatcher (see
@@ -5632,17 +5793,31 @@ function setupProfileButton() {
   updateProfileButton();
 }
 
+/* Wires the two explicit EN / עב toggle buttons (index.html). The DOM was
+   already put in the right language by initLanguage() at module load, so
+   this only needs to (a) reflect which one is currently active and (b) turn
+   a click into an explicit, permanently-persisted choice - initLanguage()
+   itself already applied the initial state. */
+/* Uses document.getElementById directly (not the $ helper) because
+   initLanguage() calls this at module top-level, before $ (declared further
+   down with const) has been initialized. */
+function syncLangToggleUI(lang) {
+  const enBtn = document.getElementById("langToggleEn"), heBtn = document.getElementById("langToggleHe");
+  if (enBtn) enBtn.classList.toggle("is-active", lang === "en");
+  if (heBtn) heBtn.classList.toggle("is-active", lang === "he");
+}
+
 function setupLangToggle() {
-  applyLang(getActiveLang());
-  const btn = $("langToggle");
-  if (btn && !btn.dataset.wired) {
+  syncLangToggleUI(getActiveLang());
+  const enBtn = $("langToggleEn"), heBtn = $("langToggleHe");
+  [[enBtn, "en"], [heBtn, "he"]].forEach(([btn, lang]) => {
+    if (!btn || btn.dataset.wired) return;
     btn.dataset.wired = "1";
     btn.addEventListener("click", () => {
-      const next = getActiveLang() === "he" ? "en" : "he";
-      try { localStorage.setItem(PEAR_LANG_KEY, next); } catch {}
-      applyLang(next);
+      setLanguage(lang, { explicit: true });
+      syncLangToggleUI(lang);
     });
-  }
+  });
 }
 
 /* Show the name/email gate and wire its controls (idempotent - safe to call

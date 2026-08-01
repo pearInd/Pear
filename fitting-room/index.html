@@ -597,7 +597,10 @@
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<button class="pear-lang-toggle" id="langToggle" type="button" aria-label="Switch language · החלף שפה">EN · עברית</button>
+<div class="pear-lang-toggle" role="group" aria-label="Switch language · החלף שפה">
+  <button class="pear-lang-toggle__btn" id="langToggleEn" type="button" data-lang="en">EN</button>
+  <button class="pear-lang-toggle__btn" id="langToggleHe" type="button" data-lang="he">עב</button>
+</div>
 
 <script type="module" src="app.js?v=13"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky

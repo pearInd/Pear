@@ -2314,20 +2314,27 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .profile-btn[hidden] { display: none; }
 
 /* ── Language toggle - fixed top-left corner (mirrors .profile-btn's top-right),
-   same frosted-glass pill language as .pip-clear. Stage 1 infra only: this
-   flips localStorage("pear_lang") + <html lang/dir> - no strings are
-   translated yet, so the text stays a static "EN · עברית" either way. ── */
+   same frosted-glass pill language as .pip-clear. Two explicit buttons (EN / עב)
+   rather than a single flip-toggle: initLanguage() in app.js already drives the
+   active language (geo-IP on first boot, localStorage("app_lang") after that);
+   clicking either button here just makes the choice explicit and permanent. */
 .pear-lang-toggle {
   position: fixed; top: 16px; left: 16px; z-index: 100;
-  font-size: .74rem; font-weight: 700; color: var(--muted);
+  display: flex; gap: 2px;
   background: var(--glass-soft); border: 1px solid var(--glass-border); border-radius: var(--pill);
-  padding: 8px 16px; cursor: pointer;
+  padding: 4px;
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   box-shadow: var(--shadow-soft);
+}
+.pear-lang-toggle__btn {
+  font-size: .74rem; font-weight: 700; color: var(--muted);
+  background: transparent; border: none; border-radius: var(--pill);
+  padding: 6px 14px; cursor: pointer;
   transition: all .3s var(--ease);
 }
-.pear-lang-toggle:hover { color: var(--ink); background: rgba(255,255,255,.7); transform: translateY(-1px); box-shadow: var(--shadow); }
-.pear-lang-toggle:active { transform: scale(.96); }
+.pear-lang-toggle__btn:hover { color: var(--ink); }
+.pear-lang-toggle__btn:active { transform: scale(.96); }
+.pear-lang-toggle__btn.is-active { color: var(--ink); background: rgba(255,255,255,.7); box-shadow: var(--shadow); }
 
 /* STICKING/OVERLAP FIX: .profile-btn is position:fixed at a CONSTANT top offset,
    independent of .app-header's own scroll-triggered compaction (padding shrinks,
