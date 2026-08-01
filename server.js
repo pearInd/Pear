@@ -2014,10 +2014,22 @@ app.get("/", (req, res) => {
    set server-side, before first paint, from the visitor's geo instead of
    flashing the wrong language and correcting client-side. Registered before the
    static middleware so it takes priority over static-file resolution.
-   The file is read from disk once and cached - it's a fixed asset that only
-   changes on deploy, so there's no reason to hit the filesystem per request. */
+
+   The file is cached in memory ONLY on Vercel (process.env.VERCEL) - each
+   deployment there ships a fresh function bundle, so a warm serverless
+   instance can never be holding an HTML edit that isn't live yet. Locally,
+   `node --watch server.js` only restarts on changes to files in the
+   require/import graph - it does NOT see this fs.readFileSync, so caching
+   here in dev meant every index.html edit needed a manual server restart to
+   show up, and silently kept serving stale markup (missing DOM ids, old
+   button structure, etc.) until you noticed. Always re-read from disk
+   outside Vercel instead - it's one small file, on a page load, not a hot
+   path. */
 let fittingRoomHtmlCache = null;
 function getFittingRoomHtml() {
+  if (!process.env.VERCEL) {
+    return fs.readFileSync(path.join(__dirname, "fitting-room/index.html"), "utf8");
+  }
   if (fittingRoomHtmlCache === null) {
     fittingRoomHtmlCache = fs.readFileSync(path.join(__dirname, "fitting-room/index.html"), "utf8");
   }
