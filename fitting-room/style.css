@@ -502,7 +502,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   display: grid;
   grid-template-columns: 40% 60%;
   align-items: start;
-  gap: 5px;
+  gap: 2px;
 }
 @media (min-width: 921px) {
   /* The video's source frame is tall/portrait - at 40% of the card's width
@@ -557,6 +557,16 @@ html.pear-returning-check #screen-calculator { display: none !important; }
     linear-gradient(158deg, rgba(255, 252, 244, .92) 0%, rgba(244, 238, 225, .78) 52%, rgba(233, 238, 214, .86) 100%);
   border: 1px solid rgba(255, 255, 255, .75);
   box-shadow: 0 20px 60px rgba(94, 88, 66, .13), inset 0 1px 0 rgba(255, 255, 255, .9);
+  /* Flex/grid items default to min-height:auto, which refuses to shrink
+     below the content's own intrinsic size even with a max-height set (see
+     .calc-card .calc-editorial's max-height cap) - overflow:hidden on this
+     element already should neutralize that per spec, but min-height:0 here
+     is a belt-and-suspenders guarantee: without it, if the video's
+     aspect-ratio-driven intrinsic height ever won that fight, the excess
+     would spill past the cap and get clipped by this element's own
+     overflow:hidden - genuine cropping, not the harmless letterboxing
+     object-fit:contain is supposed to produce instead. */
+  min-height: 0;
 }
 /* soft pear-green ambient bloom instead of the old dark vignette */
 #screen-calculator .calc-editorial__aura {
@@ -583,10 +593,14 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    there, this flex:1 is what makes the visual area actually fill that
    shorter, capped box rather than overflowing it, so the video (still
    object-fit:contain) letterboxes down to fit instead of spilling out.
+   min-height:0 pairs with .calc-editorial's own min-height:0 above - same
+   "don't let the flex item's own auto min-size beat the capped height and
+   spill past overflow:hidden" guarantee, one level deeper in the chain.
    No padding: the video should
    run edge-to-edge inside the panel's own rounded/clipped border. */
 .calc-editorial__visual {
   position: relative; z-index: 1; flex: 1;
+  min-height: 0;
   display: flex; align-items: center; justify-content: center;
   overflow: hidden;
 }
