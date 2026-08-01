@@ -175,6 +175,40 @@ const I18N = {
   errNameRequired:          { he: "נא להזין שם מלא.", en: "Please enter your full name." },
   errEmailInvalid:          { he: "נא להזין כתובת אימייל תקינה.", en: "Please enter a valid email address." },
   errGenericRetry:          { he: "נא לבדוק את הפרטים ולנסות שוב.", en: "Please check your details and try again." },
+
+  /* ── LOCALIZATION PASS ────────────────────────────────────────────────
+     Everything below used to be a hardcoded Hebrew literal at its call
+     site, so an English visitor still got Hebrew error/status text. These
+     are the user-facing strings on the identity → OTP → camera path (the
+     flow every visitor actually walks); each call site now goes through
+     t() so it follows the active language like the rest of the UI. ── */
+
+  /* OTP / verification */
+  otpSecondsRemaining:      { he: "שניות נותרו", en: "seconds remaining" },
+  otpExpired:               { he: "הקוד פג תוקף", en: "Code expired" },
+  otpSentTo:                { he: "שלחנו קוד ל:", en: "We sent a code to:" },
+  otpAlreadyRegistered:     { he: "האימייל הזה כבר רשום - שלחנו קוד לאימות זהות", en: "This email is already registered - we've sent a code to verify it's you" },
+  otpEnter6Digits:          { he: "נא להזין קוד בן 6 ספרות.", en: "Please enter the 6-digit code." },
+  otpSomethingWrong:        { he: "משהו השתבש - נא לשלוח קוד חדש.", en: "Something went wrong - please request a new code." },
+  otpExpiredResend:         { he: "הקוד פג תוקף. שלח שוב", en: "That code expired. Send a new one" },
+  otpWrongCode:            { he: "קוד שגוי. נסה שוב", en: "Wrong code. Try again" },
+  otpResent:                { he: "קוד חדש נשלח", en: "A new code has been sent" },
+  otpResendFailed:          { he: "שליחת הקוד נכשלה - נסה שוב.", en: "Couldn't send the code - please try again." },
+  otpSendFailed:            { he: "שליחת קוד האימות נכשלה - נסה שוב.", en: "Couldn't send the verification code - please try again." },
+
+  /* identity / device linking */
+  errDeviceLinkFailed:      { he: "שיוך המכשיר נכשל - נסה שוב.", en: "Couldn't link this device - please try again." },
+  errNetworkRetry:          { he: "שגיאת רשת - נסה שוב.", en: "Network error - please try again." },
+
+  /* camera + fitting-room entry */
+  camStarting:              { he: "מפעיל מצלמה…", en: "Starting camera…" },
+  camDenied:                { he: "לא ניתן לגשת למצלמה:", en: "Couldn't access the camera:" },
+  camDeniedHint:            { he: " - ודא הרשאת מצלמה ושהאתר מוגש מ-localhost/https.", en: " - check camera permissions and that the site is served over localhost/https." },
+  errRoomLoad:              { he: "שגיאה בטעינת חדר המדידה - ", en: "Couldn't load the fitting room - " },
+  errRoomLoadRetry:         { he: "נסה לרענן את הדף", en: "try refreshing the page" },
+
+  /* demo gate */
+  demoAlreadyUsed:          { he: "כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!", en: "You've already completed your virtual fitting in this demo. Thank you!" },
 };
 
 function getActiveLang() {
@@ -261,7 +295,7 @@ function showDemoGateLockedMessage() {
       "text-align:center;gap:12px;padding:48px 24px;";
     el.innerHTML =
       '<div style="font-size:40px;">👗</div>' +
-      '<p style="font-size:16px;font-weight:600;margin:0;">כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!</p>';
+      `<p style="font-size:16px;font-weight:600;margin:0;">${t("demoAlreadyUsed")}</p>`;
     const host = $("sizeForm")?.parentElement;
     if (host) host.appendChild(el);
   }
@@ -1135,7 +1169,7 @@ function goToFitting(opts) {
         $("screen-calculator").classList.remove("active");
         $("screen-fitting").classList.add("active");
       } catch (_) {}
-      toast("שגיאה בטעינת חדר המדידה - " + (err?.message || "נסה לרענן את הדף"));
+      toast(t("errRoomLoad") + (err?.message || t("errRoomLoadRetry")));
     }
   };
 
@@ -1774,7 +1808,7 @@ function buildVideoConstraints(facing) {
 
 async function startCamera(facing = cameraFacing) {
   if (isDemoLocked()) {
-    toast("כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!");
+    toast(t("demoAlreadyUsed"));
     showDemoLockedScreen();
     return false;
   }
@@ -1782,7 +1816,7 @@ async function startCamera(facing = cameraFacing) {
   if (cameraStartPromise) return cameraStartPromise;   // a request is already in flight
 
   cameraStartPromise = (async () => {
-    showPearLoader("מפעיל מצלמה…");        // 🍐 loading cue while permission/stream opens
+    showPearLoader(t("camStarting"));        // 🍐 loading cue while permission/stream opens
     try {
       localStream = await navigator.mediaDevices.getUserMedia({
         video: buildVideoConstraints(facing),
@@ -1812,8 +1846,8 @@ async function startCamera(facing = cameraFacing) {
       $("captureBtn").disabled = false;
       return true;
     } catch (err) {
-      showCamError("לא ניתן לגשת למצלמה: " + (err && err.message ? err.message : err) +
-        " - ודא הרשאת מצלמה ושהאתר מוגש מ-localhost/https.");
+      showCamError(t("camDenied") + " " + (err && err.message ? err.message : err) +
+        t("camDeniedHint"));
       return false;
     } finally {
       hidePearLoader();
@@ -5249,7 +5283,7 @@ function startOtpCountdown() {
   stopOtpCountdown();
   let remaining = OTP_COUNTDOWN_SECONDS;
   const el = $("otp-countdown");
-  const render = () => { if (el) el.textContent = remaining > 0 ? `${remaining} שניות נותרו` : "הקוד פג תוקף"; };
+  const render = () => { if (el) el.textContent = remaining > 0 ? `${remaining} ${t("otpSecondsRemaining")}` : t("otpExpired"); };
   render();
   otpCountdownTimer = setInterval(() => {
     remaining -= 1;
@@ -5269,7 +5303,7 @@ function showOtpScreen(email) {
   if (heading)  heading.hidden = true;
   if (subtitle) subtitle.hidden = true;
   const hint = $("otp-email-hint");
-  if (hint) hint.textContent = `שלחנו קוד ל: ${email}`;
+  if (hint) hint.textContent = `${t("otpSentTo")} ${email}`;
   const input = $("otpInput");
   if (input) { input.value = ""; input.focus(); }
   const errEl = $("otp-error");
@@ -5295,7 +5329,7 @@ function hideOtpScreen() {
    rather than dead-ending on "email taken". */
 async function relinkExistingDevice(deviceId, email) {
   const errEl = $("otp-error");
-  toast("האימייל הזה כבר רשום - שלחנו קוד לאימות זהות");
+  toast(t("otpAlreadyRegistered"));
   try {
     const res = await fetch("/api/users/relink", {
       method:  "PATCH",
@@ -5314,10 +5348,10 @@ async function relinkExistingDevice(deviceId, email) {
     }
 
     console.warn("[identity] relink failed (status", res.status, ")");
-    if (errEl) { errEl.textContent = "שיוך המכשיר נכשל - נסה שוב."; errEl.hidden = false; }
+    if (errEl) { errEl.textContent = t("errDeviceLinkFailed"); errEl.hidden = false; }
   } catch (err) {
     console.warn("[identity] relink request failed:", err?.message || err);
-    if (errEl) { errEl.textContent = "שגיאת רשת - נסה שוב."; errEl.hidden = false; }
+    if (errEl) { errEl.textContent = t("errNetworkRetry"); errEl.hidden = false; }
   }
 }
 
@@ -5384,8 +5418,8 @@ async function finishReauth() {
 async function verifyOtp(code) {
   const errEl = $("otp-error");
   const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.hidden = false; } };
-  if (!PEAR_OTP_PENDING) return showErr("משהו השתבש - נא לשלוח קוד חדש.");
-  if (!/^\d{6}$/.test(code)) return showErr("נא להזין קוד בן 6 ספרות.");
+  if (!PEAR_OTP_PENDING) return showErr(t("otpSomethingWrong"));
+  if (!/^\d{6}$/.test(code)) return showErr(t("otpEnter6Digits"));
 
   const btn = $("btn-verify-otp");
   if (btn) btn.disabled = true;
@@ -5408,13 +5442,13 @@ async function verifyOtp(code) {
     }
 
     if (data?.error === "expired") {
-      showErr("הקוד פג תוקף. שלח שוב");
+      showErr(t("otpExpiredResend"));
     } else {
-      showErr("קוד שגוי. נסה שוב");
+      showErr(t("otpWrongCode"));
     }
   } catch (err) {
     console.warn("[otp] verify failed:", err?.message || err);
-    showErr("שגיאת רשת - נסה שוב.");
+    showErr(t("errNetworkRetry"));
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -5436,15 +5470,15 @@ async function resendOtp() {
       startOtpCountdown();
       const errEl = $("otp-error");
       if (errEl) errEl.hidden = true;
-      toast("קוד חדש נשלח");
+      toast(t("otpResent"));
     } else {
       const errEl = $("otp-error");
-      if (errEl) { errEl.textContent = (data && (data.message || data.error)) || "שליחת הקוד נכשלה - נסה שוב."; errEl.hidden = false; }
+      if (errEl) { errEl.textContent = (data && (data.message || data.error)) || t("otpResendFailed"); errEl.hidden = false; }
     }
   } catch (err) {
     console.warn("[otp] resend failed:", err?.message || err);
     const errEl = $("otp-error");
-    if (errEl) { errEl.textContent = "שגיאת רשת - נסה שוב."; errEl.hidden = false; }
+    if (errEl) { errEl.textContent = t("errNetworkRetry"); errEl.hidden = false; }
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -5510,12 +5544,12 @@ async function submitIdentity() {
 
     // Rate limited / bad input → surface it, let the visitor retry from the gate.
     if (btn) btn.disabled = false;
-    return showErr((data && (data.message || data.error)) || "שליחת קוד האימות נכשלה - נסה שוב.");
+    return showErr((data && (data.message || data.error)) || t("otpSendFailed"));
   } catch (err) {
     // Network error / API server down - never a dead end.
     if (btn) btn.disabled = false;
     console.warn("[identity] send-otp failed:", err?.message || err);
-    showErr("שגיאת רשת - נסה שוב.");
+    showErr(t("errNetworkRetry"));
   }
 }
 
@@ -8007,7 +8041,7 @@ function openFitLightbox(idx) {
 /* "Try again live" - restore the exact garment this fit was captured with (when
    still in the catalog) and open a fresh, optimized 5-second live session. */
 function replayFitLive(it) {
-  if (isDemoLocked()) { toast("כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!"); return; }
+  if (isDemoLocked()) { toast(t("demoAlreadyUsed")); return; }
   if (isLive()) { toast("עצור מדידה חיה כדי להתחיל מחדש"); return; }
   if (it && it.itemId != null) {
     const p = PEAR_CATALOG.find((x) => x.id === it.itemId);
@@ -8025,7 +8059,7 @@ function onRetake() {
   if (isLive()) {
     stopLive();   // saves, then resets the button - see stopLive
   } else if (isDemoLocked()) {
-    toast("כבר ביצעת את המדידה הווירטואלית שלך בדמו. תודה!");
+    toast(t("demoAlreadyUsed"));
     return;
   } else {
     resetToLive();
