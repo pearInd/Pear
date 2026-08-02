@@ -1224,11 +1224,30 @@ function setActiveItem(item, opts = {}) {
   // the swatch strip + gallery always resolve to a valid colour for THIS product.
   activeColor = colorsOf(item)[0] || null;
 
-  // ADDITIVE write: fill ONLY this garment's slot (top|bottom) and leave the
-  // opposite slot untouched. Picking a different shirt replaces the top; adding
-  // pants fills the bottom while KEEPING the shirt - the whole point of the
-  // incremental "Add to Look" outfit.
-  activeOutfit[slotOf(item)] = item;
+  /* ── Outfit slot write: REPLACE by default, ADDITIVE only on request ─────────
+     THE CROSS-ITEM MUTATION BUG ("I tried on a shirt and it changed my trousers").
+     This write used to be additive unconditionally, but its two entry points mean
+     opposite things to the shopper:
+       · "Try this on" - a catalog card, a store handoff, a custom upload, a replay.
+         ONE garment. The opposite slot must be cleared so applyActive() sends the
+         SINGLE-garment prompt, whose KEEP_TOP / KEEP_BOTTOMS clause pins the layer
+         we are not replacing to the live camera.
+       · "Add to Look" (הוסף ללוק) - the shopper is explicitly assembling an outfit,
+         so the opposite slot survives and both garments render in one pass.
+     Additively, a shopper who had EVER selected trousers left activeOutfit.bottom
+     populated for the rest of the session. Picking a shirt afterwards therefore made
+     resolveLook() return a complete look, and applyLook() substituted BOTH layers -
+     replacing real trousers the shopper never asked to try on. That is deterministic
+     state leakage, not a model hallucination: the prompt carrying KEEP_BOTTOMS was
+     simply never the one on the wire. It surfaces on stepping back because that is
+     when the lower body enters frame and the substitution becomes visible. */
+  const slot = slotOf(item);
+  activeOutfit[slot] = item;
+  if (!opts.additive) {
+    activeOutfit[slot === "top" ? "bottom" : "top"] = null;
+    const cl = $("completeLook");
+    if (cl) cl.classList.remove("is-complete");
+  }
 
   $("focusItemName").innerText = item.name;
   /* Widget handoff (custom:true) that opened with NO back yet: the widget's own
@@ -1587,10 +1606,10 @@ function syncCaptureButtonPendingState() {
 function addToLook(piece) {
   if (!piece) return;
 
-  // Additive slot write: setActiveItem fills activeOutfit[slotOf(piece)] = piece and
-  // refreshes the chip + recommendations, leaving the opposite slot intact. silent so
-  // we own the toast/apply below.
-  setActiveItem(piece, { silent: true });
+  // The ONE additive caller: this is the shopper explicitly assembling an outfit, so
+  // the opposite slot must survive. Every other setActiveItem() caller replaces the
+  // outfit - see the slot-write comment there. silent so we own the toast/apply below.
+  setActiveItem(piece, { silent: true, additive: true });
   resetToLive();
 
   if (outfitComplete()) {
@@ -4689,20 +4708,33 @@ function getSizeDelta() {
  * @param {string} garmentType - "upper_body" | "lower_body"
  * @returns {string}
  */
+/* ── Why the size-down wording is phrased the way it is ──────────────────────────
+   These strings used to describe a SILHOUETTE - "sleek athletic compression fit,
+   form-fitting tailored silhouette", "high-compression slim silhouette". A silhouette
+   is the outline of the BODY, so on a shopper who sized down, the earliest and most
+   concrete instruction in the prompt was read as "make this person's outline slim",
+   and STRICT_INPAINT's "do not flatten, slim or reshape their physique" arrived ~1,200
+   characters later to contradict it. Leading tokens dominate a realtime diffusion
+   prompt (see buildCompositePrompt), so the contradiction resolved the wrong way -
+   which is the "it compressed me into a thinner frame" report.
+   Every clause below now attributes tightness to the GARMENT and to what the FABRIC
+   does over a body whose dimensions are fixed: a smaller size stretches, pulls and
+   tensions across the shopper's real contours rather than shrinking them. Same fit
+   information, no instruction the body-fidelity clause has to fight. */
 function getFitModifier(delta, garmentType) {
   if (garmentType === "upper_body") {
-    if (delta <= -2) return "sleek athletic compression fit, form-fitting tailored silhouette with a snug contour seamlessly hugging the torso, structurally intact fabric lying smooth and flat against the body, cropped hem sitting cleanly at the natural waistline";
-    if (delta === -1) return "slim tailored athletic fit, close contour following the torso with clean structural drape, fabric lying taut but smooth with no distortion";
+    if (delta <= -2) return "deliberately undersized garment stretched taut over the body's unchanged contours, fabric under visible tension with stretch lines radiating from the shoulders and chest, hem riding at the natural waistline";
+    if (delta === -1) return "snug garment cut close to the body, fabric pulled smooth and slightly tensioned across the torso, following the shopper's real contours without compressing them";
     if (delta === 0)  return "perfectly tailored true-to-size fit, flawless natural drape with no excess fabric";
     if (delta === 1)  return "relaxed fit, slightly loose drape, comfortable room across the shoulders and chest";
     /* delta >= 2 */  return "oversized fashion-forward fit, generously dropped shoulders, easy relaxed volume through the torso, elongated hem with natural gravity drape";
   }
   /* lower_body */
-  if (delta <= -2) return "high-compression slim silhouette, fabric lying smooth and continuous from waist to ankle in a seamlessly fitted contour, structurally clean at the knee and thigh with no creasing or distortion, full-length inseam with a tailored ankle cuff";
-  if (delta === -1) return "slim tailored fit, close through the thigh and knee with a clean tapered leg, fabric draping smoothly to a narrow ankle opening";
+  if (delta <= -2) return "deliberately undersized trousers stretched taut over the legs and hips as they actually are, fabric under visible tension at the thigh and seat with stretch lines at the waistband, full-length inseam with a tight ankle cuff";
+  if (delta === -1) return "snug trousers cut close through the thigh and knee, fabric pulled smooth and slightly tensioned over the shopper's real leg shape, tapering to a narrow ankle opening";
   if (delta === 0)  return "perfectly tailored true-to-size fit, clean break at the ankle with no pooling";
   if (delta === 1)  return "relaxed wide fit, comfortable room through the thighs, natural break at the ankle";
-  /* delta >= 2 */  return "wide-leg fashion silhouette, generous volume through the thigh with a sweeping leg that breaks softly over the shoe, clean continuous fabric geometry";
+  /* delta >= 2 */  return "wide-leg garment with generous volume through the thigh and a sweeping leg that breaks softly over the shoe, clean continuous fabric geometry";
 }
 
 /* Appended to every VTON prompt to lock the engine into photorealistic output.
@@ -4831,6 +4863,9 @@ function buildCustomPrompt(item) {
     .replace(/\s+/g, " ").trim();
 }
 
+const APPLY_ATTEMPTS = 2;    // set() tries per apply - see applyActive()
+const APPLY_RETRY_MS = 200;  // gap between them; must stay well under ORIENT_TURN_HOLD_MAX_MS
+
 /**
  * Apply whatever the user is currently trying on: the FULL look (shirt + pants in
  * ONE payload) when BOTH outfit slots are filled, otherwise the single active
@@ -4839,10 +4874,31 @@ function buildCustomPrompt(item) {
  * @returns {Promise<void>}
  */
 async function applyActive() {
-  const look = resolveLook();        // non-null only when activeOutfit has top AND bottom
-  if (look) await applyLook(look.top, look.bottom);
-  else await applyGarment(activeItem);
-  isGarmentApplied = true;           // rtClient.set() resolved - the NEXT rendered frame is dressed
+  /* ── Bounded retry: a dropped set() used to cost the WHOLE session ────────────
+     Every call site fires this and forgets it (`.catch(console.warn)`), because none
+     of them - a colour tap, a mid-turn orientation flip, "Add to Look" - has anything
+     useful to do with a rejection. So a single transient rtClient.set() failure (a
+     datachannel stall, a re-negotiation blip) meant the garment silently never reached
+     the model and the shopper watched their OWN clothes for the remainder of a 5s
+     billed window, with the UI still claiming to be dressing them. That is the
+     "it dropped back to my real clothes mid-session" report.
+     Two attempts, ~200ms apart: the composite/Blob work behind applyGarment() is
+     memoized, so the retry re-sends rather than rebuilds, and the whole path stays far
+     inside the orientation watcher's ORIENT_TURN_HOLD_MAX_MS ceiling. Anything that
+     fails twice is a dead session, not a hiccup - it rethrows to the caller's log. */
+  for (let attempt = 1; attempt <= APPLY_ATTEMPTS; attempt++) {
+    try {
+      const look = resolveLook();    // non-null only when activeOutfit has top AND bottom
+      if (look) await applyLook(look.top, look.bottom);
+      else await applyGarment(activeItem);
+      isGarmentApplied = true;       // rtClient.set() resolved - the NEXT rendered frame is dressed
+      return;
+    } catch (e) {
+      if (attempt === APPLY_ATTEMPTS || !rtClient || !isLive()) throw e;
+      console.warn(`[PEAR] applyActive attempt ${attempt}/${APPLY_ATTEMPTS} failed - retrying:`, e?.message || e);
+      await new Promise((r) => setTimeout(r, APPLY_RETRY_MS));
+    }
+  }
 }
 
 /**

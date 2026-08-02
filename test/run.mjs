@@ -55,6 +55,7 @@ const SUITES = [
   ["preload-composite", "preload-composite.test.mjs"],
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
+  ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],
 ];
 
 let failed = 0;
