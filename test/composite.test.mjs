@@ -30,6 +30,10 @@ function extract(name, endMarker) {
   return SRC.slice(start, end);
 }
 const code =
+  // The bounded-LRU helpers the Blob caches use. createGarmentComposite memoises
+  // through lruSet(), so this slice has to come along or the extracted code hits a
+  // ReferenceError the moment it finishes building its first composite.
+  extract("const BLOB_CACHE_MAX", "const _assetBlobCache") +
   extract("function sampleBackdrop", "/* object-fit: cover") +
   extract("function drawImageCover", "/* In-canvas section label") +
   extract("function drawSectionLabel", "/* ── Full-Look compositor") +

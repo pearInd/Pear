@@ -82,6 +82,7 @@ function showDemoGateLockedMessage() {
   hideAllScreen1Forms();
   $("screen-calculator")?.classList.add("active");
   $("screen-fitting")?.classList.remove("active");
+  syncEditorialVideo();
 
   let el = document.getElementById("demoGateLocked");
   if (!el) {
@@ -343,13 +344,35 @@ const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
 
    Read it in DevTools → Console while trying on. It is started in goLive() and
    cleared in teardown(), so it can never run against a torn-down session.
+
+   ⚠️ OFF BY DEFAULT (production). This poller is diagnostics only - it has zero
+   effect on the session, the video, or billing - but leaving it on costs a
+   getStats() call per peer connection every second, and each call allocates a
+   full RTCStatsReport (a Map of stat objects) that is then walked and formatted
+   into a console.log. Console entries additionally retain references, which
+   keeps that garbage alive for the life of the tab. Enable it on demand:
+
+     • DevTools console:  window.__pearStatsDebug = true   (then go live)
+     • Persist across reloads:  localStorage.pear_stats_debug = "1"
+
+   Both are read at start time, so flipping the flag mid-session takes effect on
+   the next goLive() without a reload.
    ============================================================================= */
 let statsMonitorTimer = null;
 let _lastStatsSample = null;   // { ts, bytes, frames } from the previous tick, for deltas
 
+/** True only when a developer has explicitly opted in - see the block comment above. */
+function statsDebugEnabled() {
+  try {
+    if (typeof window !== "undefined" && window.__pearStatsDebug) return true;
+    return localStorage.getItem("pear_stats_debug") === "1";
+  } catch (_) { return false; }
+}
+
 function startStatsMonitor() {
   stopStatsMonitor();          // never stack two pollers
   _lastStatsSample = null;
+  if (!statsDebugEnabled()) return;   // production: no poller, no getStats(), no logging
   if (typeof window === "undefined" || !window.__pearPCs) return;
 
   statsMonitorTimer = setInterval(async () => {
@@ -974,6 +997,7 @@ function goToFitting(opts) {
       $("final-size-text").innerText = currentUserSize || "";
       $("screen-calculator").classList.remove("active");
       $("screen-fitting").classList.add("active");
+      syncEditorialVideo();
       window.scrollTo(0, 0);
       enterRoom();
     } catch (err) {
@@ -982,6 +1006,7 @@ function goToFitting(opts) {
       try {
         $("screen-calculator").classList.remove("active");
         $("screen-fitting").classList.add("active");
+        syncEditorialVideo();
       } catch (_) {}
       toast(t("errRoomLoad") + (err?.message || t("errRoomLoadRetry")));
     }
@@ -1056,9 +1081,41 @@ function playPearTransition(commitSwap) {
   });
 }
 
+/* ── Screen-1 editorial video: pause whenever it is off-screen ────────────────
+   #screen-calculator is hidden with `display: none` (.screen in style.css), but
+   that does NOT pause a playing <video> - the element stays in its playing state
+   and keeps its decoder, network buffer and frame queue alive. For a looping
+   15MB clip that meant the whole fitting-room session paid for a decode pipeline
+   nobody could see.
+
+   This derives the desired state from the DOM rather than tracking it, so it is
+   idempotent and safe to call from any transition (including the error-fallback
+   paths): calling it twice, or from a screen that never touches the video, is a
+   no-op. A missed call can only leave the previous state in place - never a
+   wrong-and-sticky one - and the next transition corrects it.
+
+   play() is only issued when the element is actually paused, and its promise is
+   swallowed: autoplay can legitimately be rejected (low-power mode, no user
+   gesture) and that must never surface as an unhandled rejection. The video is
+   decorative (aria-hidden) - if the browser declines to resume it, nothing else
+   in the flow is affected. */
+function syncEditorialVideo() {
+  const vid = document.querySelector("#screen-calculator .calc-editorial__video");
+  if (!vid) return;
+  const onCalculator = !!$("screen-calculator")?.classList.contains("active");
+  try {
+    if (onCalculator) {
+      if (vid.paused) vid.play()?.catch(() => {});
+    } else if (!vid.paused) {
+      vid.pause();
+    }
+  } catch (_) {}
+}
+
 function backToCalculator() {
   $("screen-fitting").classList.remove("active");
   $("screen-calculator").classList.add("active");
+  syncEditorialVideo();
   window.scrollTo(0, 0);
 }
 
@@ -2560,14 +2617,74 @@ async function bitmapLooksFlat(bitmap) {
    set() - no fetch, no reconnect, no flicker; the model transitions over a few frames.
    Memoized per URL, and a failed fetch is never cached, so a later retry isn't stuck
    serving the same failure forever. */
-const _assetBlobCache = new Map();   // url → Promise<Blob|null>
+/* ═══════════════════════════════════════════════════════════════════════════
+   Bounded LRU for the three Blob caches
+   ───────────────────────────────────────────────────────────────────────────
+   _assetBlobCache, _lookStitchCache and _compositeCache all previously grew
+   without limit: the only `.delete()` calls on any of them sat on the FAILURE
+   paths ("never cache a failure - allow a retry"), so every SUCCESSFUL Blob was
+   pinned for the lifetime of the page. Their keys are combinatorial - per URL,
+   per colour variant, per front/back pair, and per top×bottom look - and the
+   composites are 2048px JPEGs at quality 0.95 (several hundred KB each), so a
+   few minutes of browsing retained tens of MB that could never be reclaimed.
+
+   Map preserves insertion order, so `delete` + `set` moves a key to the
+   most-recently-used end. lruTouch() does that on every hit; lruSet() does it
+   on write and then evicts from the least-recently-used front until the cache
+   is back within MAX.
+
+   ⚠️ WHY THERE IS NO revokeObjectURL() HERE - these caches store
+   Promise<Blob|null>, NOT object-URL strings. There is nothing to revoke: a
+   Blob is reclaimed by GC once the last reference drops, which is exactly what
+   evicting the Map entry does. The object URLs that ARE derived from these
+   blobs are minted and owned elsewhere, on the item itself
+   (item._compositeObjectUrl - see createObjectURL in ensureActiveGarmentComposite),
+   and they already have a correct lifecycle of their own: releaseCompositePreview()
+   revokes them on every garment swap. Revoking those from here would be actively
+   WRONG - that URL is what the visible "Now fitting" chip is displaying (see
+   garmentThumb/displaySrcOf), so tearing it down on an unrelated cache eviction
+   would blank a thumbnail the user is still looking at. Dropping the Map entry
+   frees the bytes; the URLs stay under their existing owner's control.
+
+   Eviction is functionally invisible: an evicted key is simply rebuilt on next
+   use (a cache miss, never an error), and a job evicted while still in flight
+   still resolves normally for whoever is already awaiting it.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const BLOB_CACHE_MAX = 10;   // entries per cache
+
+/** Mark `key` as most-recently-used and return its value. Caller checks .has() first. */
+function lruTouch(map, key) {
+  const v = map.get(key);
+  map.delete(key);
+  map.set(key, v);
+  return v;
+}
+
+/** Insert as most-recently-used, then evict the oldest entries beyond `max`. */
+function lruSet(map, key, value, max = BLOB_CACHE_MAX) {
+  map.delete(key);                 // a re-set must count as fresh, not stay in place
+  map.set(key, value);
+  while (map.size > max) {
+    const oldest = map.keys().next().value;
+    const evicted = map.get(oldest);
+    map.delete(oldest);            // last reference dropped → Blob becomes GC-eligible
+    // Defensive only: these caches never hold URL strings (see the note above),
+    // but if one ever does, release it rather than leaking it.
+    if (typeof evicted === "string" && /^blob:/i.test(evicted)) {
+      try { URL.revokeObjectURL(evicted); } catch (_) {}
+    }
+  }
+  return value;
+}
+
+const _assetBlobCache = new Map();   // url → Promise<Blob|null>  (LRU-capped, see above)
 
 function garmentBlobCached(url) {
   console.log('[PEAR] garmentBlobCached url:', url);
   if (!url) { console.log('[PEAR] garmentBlobCached result:', 'miss'); return Promise.resolve(null); }
   if (_assetBlobCache.has(url)) {
     console.log('[PEAR] garmentBlobCached result:', 'hit');
-    return _assetBlobCache.get(url);
+    return lruTouch(_assetBlobCache, url);
   }
   console.log('[PEAR] garmentBlobCached result:', 'miss');
   const job = (async () => {
@@ -2588,7 +2705,7 @@ function garmentBlobCached(url) {
       return null;
     }
   })();
-  _assetBlobCache.set(url, job);
+  lruSet(_assetBlobCache, url, job);
   return job;
 }
 
@@ -3409,7 +3526,7 @@ function drawSectionLabel(ctx, text, anchorX, top, fontPx, align) {
 const LOOK_W   = 1024, LOOK_H = 2048, LOOK_SEP = 200;
 const LOOK_PAD = 44;                                // black gutter framing each half (isolated panel)
 const LOOK_BOX = (LOOK_H - LOOK_SEP) / 2;           // 924px per half
-const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Blob|null>
+const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Blob|null>  (LRU-capped, see BLOB_CACHE_MAX)
 
 /* ── Stitched Garment Composite Engine ───────────────────────────────────────────
    ONE reference image carrying BOTH views: FRONT on the left, BACK on the right,
@@ -3485,7 +3602,7 @@ const COMPOSITE_GUTTER  = 96;     // gap between panels - wider now that nothing
    entirely and rely purely on left/right position + the prompt. */
 const COMPOSITE_LABELS      = true;
 const COMPOSITE_LABEL_BAND  = 0.11;   // band height as a fraction of the panel height
-const _compositeCache = new Map();   // `${frontUrl} ${backUrl}` → Promise<Blob|null>
+const _compositeCache = new Map();   // `${frontUrl} ${backUrl}` → Promise<Blob|null>  (LRU-capped, see BLOB_CACHE_MAX)
 
 /**
  * Human-readable summary of a composite's panel geometry - and the one place that checks
@@ -3538,7 +3655,7 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
   if (!frontImageUrl || !backImageUrl) return Promise.resolve(null);
   const { as = "blob", labelPlacement = "below" } = opts;
   const key = `${frontImageUrl} ${backImageUrl} ${as} ${labelPlacement}`;
-  if (_compositeCache.has(key)) return _compositeCache.get(key);
+  if (_compositeCache.has(key)) return lruTouch(_compositeCache, key);
 
   const job = (async () => {
     try {
@@ -3649,7 +3766,7 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
     }
   })();
 
-  _compositeCache.set(key, job);
+  lruSet(_compositeCache, key, job);
   return job;
 }
 
@@ -3667,7 +3784,7 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
 function stitchLookBlob(topUrl, bottomUrl) {
   if (!topUrl || !bottomUrl) return Promise.resolve(null);
   const key = `${topUrl} ${bottomUrl}`;
-  if (_lookStitchCache.has(key)) return _lookStitchCache.get(key);
+  if (_lookStitchCache.has(key)) return lruTouch(_lookStitchCache, key);
 
   const job = (async () => {
     try {
@@ -3719,7 +3836,7 @@ function stitchLookBlob(topUrl, bottomUrl) {
     }
   })();
 
-  _lookStitchCache.set(key, job);
+  lruSet(_lookStitchCache, key, job);
   return job;
 }
 
@@ -5159,6 +5276,7 @@ function showDemoLockedScreen() {
   $("screen-calculator")?.classList.remove("active");
   $("screen-fitting")?.classList.remove("active");
   $("screen-locked")?.classList.add("active");
+  syncEditorialVideo();
 }
 
 /* Called once, right after the FIRST look is successfully saved to the

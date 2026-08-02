@@ -2794,9 +2794,21 @@ img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
     radial-gradient(42% 42% at 82% 20%, rgba(150, 132, 92, .18), transparent 72%),
     radial-gradient(48% 48% at 70% 84%, rgba(141, 182, 0, .10), transparent 72%),
     radial-gradient(40% 40% at 14% 80%, rgba(22, 19, 12, .06),  transparent 72%);
-  filter: blur(64px) saturate(160%);
+  /* Was blur(64px) with `will-change: transform`. This element is fixed at
+     inset:-14% (≈128% of the viewport on both axes, ~3.4Mpx at 1080p), so a
+     large-radius blur here is one of the most expensive things on the page -
+     and `will-change` kept it permanently promoted to its own GPU layer for
+     the whole session, on every screen, blur buffers included.
+
+     translate3d(0,0,0) below already promotes the layer for the duration of
+     the parallax drift (lux-interactions.js writes translate3d on this
+     element), which is what the animation actually needs; `will-change` on
+     top of that only pinned the memory earlier and for longer. Dropping the
+     blur to 48px cuts the intermediate buffer work noticeably - the mesh is a
+     diffuse 4-gradient wash, so the visual difference is imperceptible while
+     saturate(160%) keeps the colour identical. */
+  filter: blur(48px) saturate(160%);
   transform: translate3d(0, 0, 0);
-  will-change: transform;
   backface-visibility: hidden; -webkit-backface-visibility: hidden;
 }
 @media (prefers-reduced-motion: reduce) { .liquid-mesh { transform: none !important; } }

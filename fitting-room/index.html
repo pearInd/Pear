@@ -82,10 +82,19 @@
       <div class="calc-editorial__grid"></div>
       <div class="calc-editorial__visual">
         <!-- ░░ REMOVED: previously held the interactive Pear TRIO mascot
-             (state-driven SVG, see hero-pass.js). hero-pass.js's init() still
-             looks up #pearMascotWrap but null-checks and bails cleanly, so no
-             follow-up cleanup was needed there. ░░ -->
-        <video class="calc-editorial__video" src="/Commercial_video_for_a_tech_fa.mp4" autoplay muted loop playsinline aria-hidden="true"></video>
+             (a state-driven SVG animated by the old hero-pass.js). Both the
+             markup and that script are now gone - the script only ever looked
+             up #pearMascotWrap, which no longer exists, so it bailed on every
+             load while still costing a 30KB download + parse. ░░ -->
+        <!-- preload="none" - do not pull the file until playback actually starts.
+             NOTE: `autoplay` still triggers the load on screens where autoplay is
+             permitted, so this mainly helps the cases where autoplay is blocked
+             or deferred (data-saver / low-power / background tabs). The real
+             saving is syncEditorialVideo() in app.js, which pauses this element
+             whenever #screen-calculator is not the active screen - `display:none`
+             alone does NOT stop decoding, so it previously kept its decoder and
+             frame buffers alive for the entire fitting-room session. -->
+        <video class="calc-editorial__video" src="/Commercial_video_for_a_tech_fa.mp4" autoplay muted loop playsinline preload="none" aria-hidden="true"></video>
       </div>
       <div class="calc-editorial__scrim"></div>
     </aside>
@@ -610,9 +619,5 @@
      ambient side rails, magnetic buttons, floating labels. Additive only -
      touches no app.js logic or state. -->
 <script src="lux-interactions.js" defer></script>
-<!-- Interactive Pear mascot - reacts to #userName/#userEmail focus/input/
-     blur/keydown and the identity Continue click. Additive only - never
-     writes to app.js state or the identity/OTP flow. -->
-<script src="hero-pass.js" defer></script>
 </body>
 </html>
