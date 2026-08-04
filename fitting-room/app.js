@@ -8760,33 +8760,48 @@ else init();
     if (reduce || coarse) return;
 
     const MAX = 6; // degrees of tilt at the card edges
-    let raf = 0;
+    let raf = 0;                // pending frame handle; 0 means nothing scheduled
+    let lastX = 0, lastY = 0;   // newest pointer position, consumed by the frame
+
+    /* rAF COALESCING. A mouse reports far more often than the display refreshes
+       (125Hz-1000Hz polling vs a 60/120Hz screen), and the card sits on top of a
+       backdrop-filtered glass surface, so every extra paint is expensive. This
+       used to cancel and re-schedule - allocating a fresh closure - on EVERY
+       pointermove, so the work scaled with the pointer's report rate rather than
+       the frame rate. Now a move only stores two numbers, and schedules a frame
+       solely when none is already pending; the frame then reads whichever
+       position was latest. The tilt still tracks the cursor exactly (the newest
+       sample always wins) and the maths below is unchanged - we simply stopped
+       doing it for samples the browser was going to discard anyway. */
+    const paint = () => {
+      raf = 0;
+      const r = card.getBoundingClientRect();
+      const fx = (lastX - r.left) / r.width;   // 0 … 1
+      const fy = (lastY - r.top) / r.height;   // 0 … 1
+      const px = fx - 0.5;                      // -0.5 … 0.5
+      const py = fy - 0.5;
+      const rotX = (-py * MAX).toFixed(2);
+      const rotY = (px * MAX).toFixed(2);
+      card.classList.add("is-tilting");
+      // 3D parallax tilt
+      card.style.transform =
+        `perspective(1200px) rotateX(${rotX}deg) rotateY(${rotY}deg) translateY(-2px)`;
+      // environment mapping: move the specular highlight to the cursor
+      card.style.setProperty("--mx", (fx * 100).toFixed(1) + "%");
+      card.style.setProperty("--my", (fy * 100).toFixed(1) + "%");
+    };
 
     const reset = () => {
-      cancelAnimationFrame(raf);
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
       card.classList.remove("is-tilting");
       card.style.transform = "";
     };
 
     card.addEventListener("pointermove", (e) => {
       if (e.pointerType === "touch") return;
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const r = card.getBoundingClientRect();
-        const fx = (e.clientX - r.left) / r.width;   // 0 … 1
-        const fy = (e.clientY - r.top) / r.height;   // 0 … 1
-        const px = fx - 0.5;                          // -0.5 … 0.5
-        const py = fy - 0.5;
-        const rotX = (-py * MAX).toFixed(2);
-        const rotY = (px * MAX).toFixed(2);
-        card.classList.add("is-tilting");
-        // 3D parallax tilt
-        card.style.transform =
-          `perspective(1200px) rotateX(${rotX}deg) rotateY(${rotY}deg) translateY(-2px)`;
-        // environment mapping: move the specular highlight to the cursor
-        card.style.setProperty("--mx", (fx * 100).toFixed(1) + "%");
-        card.style.setProperty("--my", (fy * 100).toFixed(1) + "%");
-      });
+      lastX = e.clientX;
+      lastY = e.clientY;
+      if (!raf) raf = requestAnimationFrame(paint);
     });
     card.addEventListener("pointerleave", reset);
     card.addEventListener("touchend", reset, { passive: true });

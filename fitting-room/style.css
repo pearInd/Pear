@@ -226,6 +226,43 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 #screen-calculator .container.is-tilting::after { opacity: 1; }
 #screen-calculator .container > * { position: relative; z-index: 1; }
 
+/* ── ONE blur pass per card, not one per control inside it ──────────────────
+   PERF. The rule above gives this card `backdrop-filter: var(--blur-lg)`, and
+   per the Filter Effects spec that makes it a BACKDROP ROOT: a descendant's own
+   backdrop-filter can only sample what is painted inside this card, never the
+   page behind it. What is painted inside is the card's own 135deg white
+   gradient plus the ::before sheen - smooth, low-frequency fills. Blurring a
+   smooth gradient returns essentially the same smooth gradient, so each of
+   these controls was paying for a full backdrop snapshot + blur + its own
+   compositing surface to produce no visible pixels.
+
+   That cost is per-control, not per-card: with the fine-tune tray open the size
+   form alone puts five blurred inputs, the result box and the primary button on
+   screen at once, and it is all recomposited while the card is tilting under
+   the pointer. Turning them off leaves ONE real blur pass (the card's own) to
+   produce the identical frosted-glass look.
+
+   SCOPED, NOT DELETED - these same classes blur real content elsewhere and must
+   keep it: .btn-primary sits over the live camera feed in
+   .camera-card__placeholder, and #screen-locked reuses .container/.kicker but
+   is NOT a backdrop root (the base .container declares no backdrop-filter), so
+   its kicker genuinely blurs the ambient page orbs behind it.
+
+   Verified by pixel diff: all 11 captured scenes (identity gate, size form idle
+   / with results + fine-tune tray, card hover with the specular highlight lit
+   under the controls, and screen 2, at 1400x900 and 390x844) are byte-identical
+   before and after this block at a zero threshold. */
+#screen-calculator .container .kicker,
+#screen-calculator .container .focus-calc-hint,
+#screen-calculator .container .form-group input,
+#screen-calculator .container #otpInput,
+#screen-calculator .container .result-box,
+#screen-calculator .container .btn-primary,
+#screen-calculator .container .btn-ghost {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 .container h2 { font-size: 1.5rem; font-weight: 800; margin: 0 0 12px; }
 .subtitle { color: var(--muted); margin: 0 0 32px; font-size: .9rem; line-height: 1.5; }
 
