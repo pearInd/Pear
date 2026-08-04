@@ -745,14 +745,19 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      fix for a *different* dead-space problem - the merged/tall video column
      no longer exists here since .calc-editorial is hidden, so there's
      nothing left needing that auto-height behavior at this breakpoint).
-     Equal specificity to that min-height:auto rule (both are plain
-     #screen-calculator), but this comes later in the file and only applies
-     when the media query matches, so it wins here without touching desktop.
+     Scoped to .active ON PURPOSE: screen visibility is class-driven
+     (.screen { display:none } / .screen.active { display:block }), and a bare
+     #screen-calculator { display:flex } outranks .screen's display:none by ID
+     specificity - which kept Screen 1 painted on mobile even after the
+     Screen 1 → Screen 2 swap removed .active, so the fitting room sat a full
+     viewport below a still-visible size form ("stuck on size selection").
+     With .active in the selector this only applies while the screen is
+     actually shown, and the base .screen hide works again the moment it isn't.
      justify-content:center centers .calc-shell (the sole child) vertically;
      padding-bottom > padding-top shrinks the centering box from the bottom
      only, which pulls the midpoint - and so the centered card - up from
      dead-center by half the difference (here, 4vh above true center). */
-  #screen-calculator {
+  #screen-calculator.active {
     min-height: 100vh;
     min-height: 100dvh;
     display: flex;
