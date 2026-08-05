@@ -56,6 +56,11 @@ const SUITES = [
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],
+  ["frame-quality", "frame-quality.test.mjs"],
+  ["body-anchor", "body-anchor.test.mjs"],
+  ["fabric-realism", "fabric-realism.test.mjs"],
+  ["frame-stats", "frame-stats.test.mjs"],
+  ["lru-cache", "lru-cache.test.mjs"],
 ];
 
 let failed = 0;

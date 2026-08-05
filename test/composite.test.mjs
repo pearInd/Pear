@@ -4,6 +4,11 @@
    labels, size cap) rather than pixels, which is what the spec actually pins down. */
 import { JSDOM } from "jsdom";
 import { readFileSync } from "node:fs";
+/* The bounded-LRU helpers now live in their own module, so they come in as a real import
+   and get injected into the sandbox below rather than being sliced out of app.js as text.
+   createGarmentComposite() itself is LOCKED and still lives in app.js, so the slicing
+   below stays - but its dependency no longer has to be re-parsed from source. */
+import { lruTouch, lruSet, BLOB_CACHE_MAX } from "../fitting-room/lru-cache.js";
 
 // Normalised to LF: the repo checks out CRLF on Windows, and the slice markers below
 // are written with \n - a mismatch silently makes indexOf return -1 and drags in half
@@ -30,11 +35,9 @@ function extract(name, endMarker) {
   return SRC.slice(start, end);
 }
 const code =
-  // The bounded-LRU helpers the Blob caches use. createGarmentComposite memoises
-  // through lruSet(), so this slice has to come along or the extracted code hits a
-  // ReferenceError the moment it finishes building its first composite.
-  extract("const BLOB_CACHE_MAX", "const _assetBlobCache") +
-  extract("function sampleBackdrop", "/* object-fit: cover") +
+  // Starts at the probe-canvas helper, not at sampleBackdrop itself: the corner sampler
+  // now leans on backdropProbeCtx/medianRgb/rgbLuma, which sit just above it.
+  extract("let _backdropProbe", "/* object-fit: cover") +
   extract("function drawImageCover", "/* In-canvas section label") +
   extract("function drawSectionLabel", "/* ── Full-Look compositor") +
   extract("const COMPOSITE_MAX_W", "/**\n * Stitch a TOP + BOTTOM garment");
@@ -48,10 +51,26 @@ const calls = [];
    image, so this is what the median lands on - i.e. the tests below exercise the REAL
    sampling path, not its "couldn't read the pixels" fallback. */
 const BACKDROP_PIXEL = [247, 247, 247, 255];
+
+/* Corner-pixel override for the sampleBackdrop cases further down. sampleBackdrop now
+   reuses ONE lazily-created 1×1 probe canvas across every call (the whole point of the
+   change - it used to allocate one at the source image's full size), so a test can no
+   longer feed it different pixels by swapping document.createElement per case: the cached
+   canvas outlives the swap. Driving the pixels through this mutable hook instead works
+   regardless of caching, and is what the corner-sampling cases set. */
+let probeSeq = null;     // null → serve BACKDROP_PIXEL | array → serve in order | "throw" → simulate tainted
+let probeIdx = 0;
 const ctxStub = new Proxy({}, {
   get(_, prop) {
     if (prop === "measureText") return (t) => ({ width: t.length * 10 });
-    if (prop === "getImageData") return () => ({ data: BACKDROP_PIXEL });
+    if (prop === "getImageData") return () => {
+      if (probeSeq === "throw") throw new Error("tainted");
+      if (Array.isArray(probeSeq)) {
+        const rgb = probeSeq[Math.min(probeIdx++, probeSeq.length - 1)];
+        return { data: [...rgb, 255] };
+      }
+      return { data: BACKDROP_PIXEL };
+    };
     if (prop === "canvas") return undefined;
     return (...args) => { calls.push({ op: String(prop), args }); };
   },
@@ -74,6 +93,10 @@ window.document.createElement = ((orig) => (tag) => {
 const sandbox = {
   window, document: window.document, console, location: window.location, URLSearchParams,
   OffscreenCanvas: undefined, FileReader: window.FileReader, Promise, Math, Object, Map, Number,
+  // Real implementations from lru-cache.js - createGarmentComposite memoises through
+  // lruSet()/lruTouch(), so without these the sliced code hits a ReferenceError the
+  // moment it finishes building its first composite.
+  lruTouch, lruSet, BLOB_CACHE_MAX,
   loadGarmentBitmap: async (url) => {
     // front 1000x1000 square packshot; back 500x1000 (a deliberately different aspect)
     if (url.includes("back")) return { width: 500, height: 1000, close() {} };
@@ -161,17 +184,10 @@ check("labels drawn AFTER the panels (not painted over)",
    sane on the inputs real storefronts actually serve. */
 console.log("\n── backdrop sampling ──");
 {
-  const px = (rgb) => ({ data: [...rgb, 255] });
   const withPixels = (seq) => {
-    let i = 0;
-    const prev = window.document.createElement;
-    window.document.createElement = (tag) => {
-      if (tag !== "canvas") return prev(tag);
-      return { set width(_) {}, set height(_) {}, get width() { return 100; }, get height() { return 100; },
-        getContext: () => ({ drawImage() {}, getImageData: () => px(seq[Math.min(i++, seq.length - 1)]) }) };
-    };
+    probeSeq = seq; probeIdx = 0;
     const out = sampleBackdrop([{ width: 100, height: 100 }, { width: 100, height: 100 }]);
-    window.document.createElement = prev;
+    probeSeq = null;
     return out;
   };
 
@@ -188,17 +204,54 @@ console.log("\n── backdrop sampling ──");
   check("a single outlier corner cannot skew the result (median, not mean)",
     withPixels([[255, 255, 255], [255, 255, 255], [255, 255, 255], [255, 255, 255],
                 [255, 255, 255], [255, 255, 255], [255, 255, 255], [0, 0, 0]]).fill === "rgb(255, 255, 255)");
+
+  /* ── THE MID-GREY GUTTER ────────────────────────────────────────────────────
+     A white packshot paired with a dark lifestyle shot. The doc comment has always
+     promised the brighter backdrop wins here, but the implementation took a plain
+     median across all 8 corners - which lands exactly BETWEEN the two, i.e. a mid-grey
+     band down the middle of the reference. That is the same seam artifact the sampled
+     backdrop exists to remove, and Lucy reproduces a dark band as a shadow on the
+     shopper's clothing. */
+  const mixed = withPixels([[255, 255, 255], [255, 255, 255], [255, 255, 255], [255, 255, 255],
+                            [20, 20, 22], [20, 20, 22], [20, 20, 22], [20, 20, 22]]);
+  check("white + dark sources → the BRIGHT backdrop wins, not a mid-grey average",
+    mixed.fill === "rgb(255, 255, 255)", mixed.fill);
+  check("...so the gutter never lands between the two panels' backdrops", (() => {
+    const m = /rgb\((\d+)/.exec(mixed.fill);
+    return m && Number(m[1]) > 200;
+  })(), mixed.fill);
+  /* The override must stay narrow: sources that merely differ in shade still average,
+     because a median between two near-white sweeps IS the invisible join. */
+  const nearMatch = withPixels([[250, 250, 250], [250, 250, 250], [250, 250, 250], [250, 250, 250],
+                                [230, 230, 230], [230, 230, 230], [230, 230, 230], [230, 230, 230]]);
+  check("sources within normal shoot variation still median together",
+    nearMatch.fill === "rgb(240, 240, 240)", nearMatch.fill);
+
   check("unreadable pixels fall back to a light neutral, never the old dark grey", (() => {
-    const prev = window.document.createElement;
-    window.document.createElement = (tag) => {
-      if (tag !== "canvas") return prev(tag);
-      return { set width(_) {}, set height(_) {}, get width() { return 10; }, get height() { return 10; },
-        getContext: () => ({ drawImage() {}, getImageData() { throw new Error("tainted"); } }) };
-    };
+    probeSeq = "throw";
     const out = sampleBackdrop([{ width: 10, height: 10 }]);
-    window.document.createElement = prev;
+    probeSeq = null;
     return out.fill === "#f2f2f2";
   })());
+}
+
+/* The probe canvas is the memory fix: sampling used to allocate a canvas at the SOURCE
+   image's full size (≈4MB per 1000×1000 packshot) to read four corners. It must now read
+   through the 9-arg source-rect drawImage into a 1×1 buffer, and must not scale with the
+   source. */
+{
+  calls.length = 0;
+  probeSeq = null;
+  sampleBackdrop([{ width: 4000, height: 4000 }]);
+  const probeDraws = calls.filter((c) => c.op === "drawImage");
+  check("corner sampling uses the 9-arg source-rect form", probeDraws.length === 4 &&
+    probeDraws.every((d) => d.args.length === 9), JSON.stringify(probeDraws.map((d) => d.args.length)));
+  check("every corner read is a 1×1 blit regardless of source size",
+    probeDraws.every((d) => d.args[3] === 1 && d.args[4] === 1 && d.args[7] === 1 && d.args[8] === 1),
+    JSON.stringify(probeDraws.map((d) => d.args.slice(3))));
+  check("corners are read inset from the edge, not at (0,0)",
+    probeDraws.every((d) => d.args[1] > 0 && d.args[2] > 0),
+    JSON.stringify(probeDraws.map((d) => [d.args[1], d.args[2]])));
 }
 
 /* Oversized input must be capped, keeping the aspect. */

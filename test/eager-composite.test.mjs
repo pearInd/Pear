@@ -13,6 +13,9 @@
    any live-session machinery involved, i.e. exactly the gap that caused the bug. */
 import { JSDOM } from "jsdom";
 import { readFileSync } from "node:fs";
+// Bounded-LRU helpers now live in their own module - imported for real and injected into
+// the sandbox below, rather than sliced out of app.js as text.
+import { lruTouch, lruSet, BLOB_CACHE_MAX } from "../fitting-room/lru-cache.js";
 
 const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
@@ -32,12 +35,13 @@ function extract(startMarker, endMarker) {
 }
 
 const code =
-  // The bounded-LRU helpers the Blob caches use. createGarmentComposite memoises
-  // through lruSet(), so this slice has to come along or the extracted code hits a
-  // ReferenceError the moment it finishes building its first composite.
-  extract("const BLOB_CACHE_MAX", "const _assetBlobCache") +
   extract("function releaseCompositePreview", "function setActiveItem") +
-  extract("function sampleBackdrop", "/* object-fit: cover") +
+  /* Starts at the probe-canvas helper, NOT at sampleBackdrop itself. sampleBackdrop now
+     calls backdropProbeCtx/medianRgb/rgbLuma, which sit just above it - and because its
+     corner loop has its own try/catch, a missing helper does not throw: it is swallowed,
+     the sampler returns its "couldn't read the pixels" fallback, and this suite keeps
+     passing while silently exercising the fallback path instead of the real one. */
+  extract("let _backdropProbe", "/* object-fit: cover") +
   extract("function drawImageCover", "/* In-canvas section label") +
   extract("function drawSectionLabel", "/* ── Full-Look compositor") +
   extract("const COMPOSITE_MAX_W", "/**\n * Stitch a TOP + BOTTOM garment") +
@@ -104,6 +108,7 @@ function buildSandbox(loader) {
     OffscreenCanvas: undefined, FileReader: window.FileReader, Promise, Math, Object, Map, Number, Set,
     location: window.location,
     loadGarmentBitmap: loader.loadGarmentBitmap,
+    lruTouch, lruSet, BLOB_CACHE_MAX,   // real implementations from lru-cache.js
     abbrevImg: (u) => (u ? String(u).slice(0, 20) : "(none)"),
     activeItem: null,
     activeColor: null,   // module-level global galleryOf()'s variantAssetsOf() reads

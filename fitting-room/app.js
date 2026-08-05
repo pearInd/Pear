@@ -30,6 +30,18 @@
    We destructure the derived constants so existing call sites read naturally.   */
 import { CONFIG } from "./config.js";
 import { t, setupLangToggle } from "./i18n.js";
+/* Camera pre-flight quality gates + calibration harness. Extracted from this file - see
+   the header of frame-quality.js for why that subsystem went first and why BOTH gates
+   live together. Importing the module also installs window.__pearFrameStats, the
+   calibration entry point. sampleVideoLuma/CAMERA_BLACK_* come back across because
+   armFirstFrameBilling() below applies the same black-frame test to the REMOTE track. */
+import {
+  cameraQualityIssue, cameraLooksBlack, sampleVideoLuma,
+  CAMERA_BLACK_AVG_LUMA, CAMERA_BLACK_PIXEL_FRAC,
+} from "./frame-quality.js";
+/* Bounded LRU shared by the three Blob caches (_assetBlobCache, _lookStitchCache and the
+   locked _compositeCache). Pure Map bookkeeping - see lru-cache.js. */
+import { lruTouch, lruSet, BLOB_CACHE_MAX } from "./lru-cache.js";
 const {
   CONNECT_TIMEOUT_MS,
   HEALTH_PROBE_TIMEOUT_MS,
@@ -150,27 +162,6 @@ const CREDITS_PER_SESSION = CREDITS_PER_SECOND * (LIVE_DURATION_MS / 1000);   //
    down, so it can never bill indefinitely. Generous - real warm-up is ~1s. */
 const FIRST_FRAME_TIMEOUT_MS = 15000;
 
-/* ── Black-screen / camera-off gate (credit saver) ───────────────────────────
-   Before we mint a token or open the billed Decart session, we sample the LOCAL
-   webcam and refuse to go live if it's a black screen (lens covered, camera off,
-   privacy shutter, or a stream that only ever produces black frames). Streaming a
-   black feed to Decart still burns the full CREDITS_PER_SESSION for zero usable
-   render, so this pays for itself the first time a user forgets to uncover the lens.
-
-   Two independent signals, sampled from a tiny downscaled canvas (cheap, runs in a
-   few ms). A frame is judged "black" if EITHER holds - both thresholds are extreme
-   enough that even a dim, poorly-lit but genuinely open camera clears them, so we
-   don't false-block a paying user:
-     • CAMERA_BLACK_AVG_LUMA   - mean Rec.601 luma (0-255) at/below this ⇒ effectively black.
-     • CAMERA_BLACK_PIXEL_FRAC - fraction of near-black pixels at/above this ⇒ covered/off.
-   We take the BRIGHTEST of a few spaced samples (auto-exposure warm-up can emit a
-   transient black frame right after play()), so only a persistently black feed blocks. */
-const CAMERA_BLACK_AVG_LUMA   = 12;     // mean luma ≤ 12/255 ⇒ black feed
-const CAMERA_BLACK_PIXEL_CUT  = 16;     // a pixel counts as "near-black" when its luma < this
-const CAMERA_BLACK_PIXEL_FRAC = 0.985;  // ≥ 98.5% near-black pixels ⇒ covered lens / camera off
-const CAMERA_BLACK_SAMPLES    = 5;      // frames to sample before judging (keep the brightest)
-const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples - spans ~300ms of exposure warm-up
-// NOTE: the four thresholds above are also reused by armFirstFrameBilling() below to
 // verify the FIRST REMOTE (AI-rendered) frame isn't a black warm-up placeholder - same
 // "is this frame black" test, just pointed at a different <video> element.
 
@@ -361,10 +352,17 @@ const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
 let statsMonitorTimer = null;
 let _lastStatsSample = null;   // { ts, bytes, frames } from the previous tick, for deltas
 
-/** True only when a developer has explicitly opted in - see the block comment above. */
+/** True only when a developer has explicitly opted in - see the block comment above.
+    ?debugFrameStats=1 is the phone-friendly entry point: it LATCHES into localStorage so
+    the flag survives the calculator → fitting-room navigation (and any reload), which a
+    bare query param would not. ?debugFrameStats=0 clears it again - without an off switch
+    a tester who enabled it once keeps paying for logging on every later visit. */
 function statsDebugEnabled() {
   try {
     if (typeof window !== "undefined" && window.__pearStatsDebug) return true;
+    const q = new URLSearchParams(location.search).get("debugFrameStats");
+    if (q === "1") { try { localStorage.setItem("pear_stats_debug", "1"); } catch (_) {} return true; }
+    if (q === "0") { try { localStorage.removeItem("pear_stats_debug"); } catch (_) {} return false; }
     return localStorage.getItem("pear_stats_debug") === "1";
   } catch (_) { return false; }
 }
@@ -1755,72 +1753,6 @@ async function startCamera(facing = cameraFacing) {
   finally { cameraStartPromise = null; }
 }
 
-/* Sample ONE frame of ANY <video> element into a tiny downscaled canvas and measure
-   how dark it is. Returns { ready, avgLuma, blackFrac }:
-     • ready=false  → no decoded frame yet (videoWidth 0 / not paintable) - caller
-                      must NOT treat this as black, only as "can't judge yet".
-     • avgLuma      → mean Rec.601 luma across the frame (0-255).
-     • blackFrac    → fraction of pixels below CAMERA_BLACK_PIXEL_CUT (near-black).
-   Same-origin MediaStream pixels are not tainted, so getImageData never throws for
-   security; any unexpected error still fails OPEN (ready=false) so we never wrongly
-   block a paying user. 64×36 keeps this well under a millisecond.
-   Shared by two callers: cameraLooksBlack() (local #webcam, the credit-saving gate)
-   and armFirstFrameBilling() (remote #aiVideo, verifying the first real AI frame). */
-function sampleVideoLuma(v) {
-  if (!v || !v.videoWidth || !v.videoHeight) return { ready: false, avgLuma: 0, blackFrac: 1 };
-  try {
-    const cw = 64, ch = 36;                       // downscaled probe - cheap, enough for a luma verdict
-    const cnv = document.createElement("canvas");
-    cnv.width = cw; cnv.height = ch;
-    const ctx = cnv.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(v, 0, 0, cw, ch);
-    const data = ctx.getImageData(0, 0, cw, ch).data;
-    const total = cw * ch;
-    let sum = 0, black = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      // Rec.601 luma - matches how "brightness" reads to the human eye.
-      const luma = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
-      sum += luma;
-      if (luma < CAMERA_BLACK_PIXEL_CUT) black++;
-    }
-    return { ready: true, avgLuma: sum / total, blackFrac: black / total };
-  } catch (_) {
-    return { ready: false, avgLuma: 0, blackFrac: 1 };   // fail open - never block on a probe error
-  }
-}
-
-/* Black-screen / camera-off verdict for the CREDIT-SAVING gate in goLive().
-   Sends nothing to any API - it only inspects local webcam pixels. Samples a few
-   frames (CAMERA_BLACK_SAMPLES) spaced by CAMERA_BLACK_SAMPLE_MS and keeps the
-   BRIGHTEST one, so a single transient black frame during auto-exposure warm-up
-   doesn't trip the gate - only a persistently black feed does.
-   Returns true ONLY when we have a real, paintable frame that is black; if we never
-   get a decodable frame we return false (fail open - let the normal connect path and
-   its FIRST_FRAME_TIMEOUT_MS safety net handle a truly dead camera). */
-async function cameraLooksBlack() {
-  let sawFrame = false;
-  let bestLuma = -1;          // brightest mean luma seen
-  let bestBlackFrac = 1;      // lowest near-black fraction seen (from the brightest frame)
-  for (let i = 0; i < CAMERA_BLACK_SAMPLES; i++) {
-    const s = sampleVideoLuma($("webcam"));
-    if (s.ready) {
-      sawFrame = true;
-      if (s.avgLuma > bestLuma) { bestLuma = s.avgLuma; bestBlackFrac = s.blackFrac; }
-    }
-    if (i < CAMERA_BLACK_SAMPLES - 1) {
-      await new Promise((r) => setTimeout(r, CAMERA_BLACK_SAMPLE_MS));
-    }
-  }
-  if (!sawFrame) return false;   // couldn't judge → don't block here; connect path guards a dead camera
-  const isBlack = bestLuma <= CAMERA_BLACK_AVG_LUMA || bestBlackFrac >= CAMERA_BLACK_PIXEL_FRAC;
-  if (isBlack) {
-    console.warn("[PEAR] Black-screen gate tripped - skipping billed session " +
-      "(avgLuma=" + bestLuma.toFixed(1) + " ≤ " + CAMERA_BLACK_AVG_LUMA +
-      " or blackFrac=" + bestBlackFrac.toFixed(3) + " ≥ " + CAMERA_BLACK_PIXEL_FRAC + ")");
-  }
-  return isBlack;
-}
-
 /* Flip between the front ("user") and rear ("environment") camera. Stops ALL current
    preview tracks before requesting the new device so single-camera machines don't
    throw "device in use". Disabled while a billed session is live - we never swap the
@@ -2636,65 +2568,6 @@ async function bitmapLooksFlat(bitmap) {
    set() - no fetch, no reconnect, no flicker; the model transitions over a few frames.
    Memoized per URL, and a failed fetch is never cached, so a later retry isn't stuck
    serving the same failure forever. */
-/* ═══════════════════════════════════════════════════════════════════════════
-   Bounded LRU for the three Blob caches
-   ───────────────────────────────────────────────────────────────────────────
-   _assetBlobCache, _lookStitchCache and _compositeCache all previously grew
-   without limit: the only `.delete()` calls on any of them sat on the FAILURE
-   paths ("never cache a failure - allow a retry"), so every SUCCESSFUL Blob was
-   pinned for the lifetime of the page. Their keys are combinatorial - per URL,
-   per colour variant, per front/back pair, and per top×bottom look - and the
-   composites are 2048px JPEGs at quality 0.95 (several hundred KB each), so a
-   few minutes of browsing retained tens of MB that could never be reclaimed.
-
-   Map preserves insertion order, so `delete` + `set` moves a key to the
-   most-recently-used end. lruTouch() does that on every hit; lruSet() does it
-   on write and then evicts from the least-recently-used front until the cache
-   is back within MAX.
-
-   ⚠️ WHY THERE IS NO revokeObjectURL() HERE - these caches store
-   Promise<Blob|null>, NOT object-URL strings. There is nothing to revoke: a
-   Blob is reclaimed by GC once the last reference drops, which is exactly what
-   evicting the Map entry does. The object URLs that ARE derived from these
-   blobs are minted and owned elsewhere, on the item itself
-   (item._compositeObjectUrl - see createObjectURL in ensureActiveGarmentComposite),
-   and they already have a correct lifecycle of their own: releaseCompositePreview()
-   revokes them on every garment swap. Revoking those from here would be actively
-   WRONG - that URL is what the visible "Now fitting" chip is displaying (see
-   garmentThumb/displaySrcOf), so tearing it down on an unrelated cache eviction
-   would blank a thumbnail the user is still looking at. Dropping the Map entry
-   frees the bytes; the URLs stay under their existing owner's control.
-
-   Eviction is functionally invisible: an evicted key is simply rebuilt on next
-   use (a cache miss, never an error), and a job evicted while still in flight
-   still resolves normally for whoever is already awaiting it.
-   ═══════════════════════════════════════════════════════════════════════════ */
-const BLOB_CACHE_MAX = 10;   // entries per cache
-
-/** Mark `key` as most-recently-used and return its value. Caller checks .has() first. */
-function lruTouch(map, key) {
-  const v = map.get(key);
-  map.delete(key);
-  map.set(key, v);
-  return v;
-}
-
-/** Insert as most-recently-used, then evict the oldest entries beyond `max`. */
-function lruSet(map, key, value, max = BLOB_CACHE_MAX) {
-  map.delete(key);                 // a re-set must count as fresh, not stay in place
-  map.set(key, value);
-  while (map.size > max) {
-    const oldest = map.keys().next().value;
-    const evicted = map.get(oldest);
-    map.delete(oldest);            // last reference dropped → Blob becomes GC-eligible
-    // Defensive only: these caches never hold URL strings (see the note above),
-    // but if one ever does, release it rather than leaking it.
-    if (typeof evicted === "string" && /^blob:/i.test(evicted)) {
-      try { URL.revokeObjectURL(evicted); } catch (_) {}
-    }
-  }
-  return value;
-}
 
 const _assetBlobCache = new Map();   // url → Promise<Blob|null>  (LRU-capped, see above)
 
@@ -3456,33 +3329,89 @@ async function loadGarmentBitmap(url, attempts = 3) {
    @returns {{fill:string, contrast:string}} fill = backdrop; contrast = a legible
      ink colour for that backdrop (used by the label band, and by the divider if re-enabled)
 */
-function sampleBackdrop(imgs) {
-  const px = [];
-  for (const img of imgs) {
-    const w = img.width, h = img.height;
-    if (!w || !h) continue;
-    try {
-      const c = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(w, h)
-        : Object.assign(document.createElement("canvas"), { width: w, height: h });
-      const cx = c.getContext("2d", { willReadFrequently: true });
-      cx.drawImage(img, 0, 0);
-      const inset = Math.max(1, Math.round(Math.min(w, h) * 0.02));   // step off the very edge (JPEG ring)
-      for (const [x, y] of [[inset, inset], [w - inset, inset], [inset, h - inset], [w - inset, h - inset]]) {
-        const d = cx.getImageData(Math.min(w - 1, Math.max(0, x)), Math.min(h - 1, Math.max(0, y)), 1, 1).data;
-        px.push([d[0], d[1], d[2]]);
-      }
-    } catch (_) { /* tainted or zero-sized - just skip this source */ }
+/* Reusable 1×1 probe canvas for corner sampling.
+   This used to allocate a canvas at the SOURCE image's full size - `new OffscreenCanvas(w, h)`
+   followed by drawImage(img, 0, 0) - purely to read four corner pixels. On a 1000×1000
+   packshot that is a 4MB backing store, blitted in full, per image, thrown away immediately;
+   a two-panel composite churned ~8MB to read 24 bytes, and the full-size blit forced a
+   complete decode-and-upload of a bitmap nothing else needed.
+   The 9-argument drawImage takes a source rect, so a 1×1 destination reads the exact same
+   pixel with no resampling (1:1 scale never interpolates) and needs exactly one pixel of
+   backing store. Lazily created and reused across every call - the same discipline as
+   probeCtx() in frame-quality.js. */
+let _backdropProbe = null;
+function backdropProbeCtx() {
+  if (!_backdropProbe) {
+    _backdropProbe = typeof OffscreenCanvas !== "undefined"
+      ? new OffscreenCanvas(1, 1)
+      : Object.assign(document.createElement("canvas"), { width: 1, height: 1 });
   }
-  if (!px.length) return { fill: "#f2f2f2", contrast: "#101010" };   // neutral light, not the old dark grey
+  return _backdropProbe.getContext("2d", { willReadFrequently: true });
+}
 
+/* Per-channel median of a list of [r,g,b] samples. */
+function medianRgb(px) {
   const median = (i) => {
     const v = px.map((p) => p[i]).sort((a, b) => a - b);
     const m = Math.floor(v.length / 2);
     return v.length % 2 ? v[m] : Math.round((v[m - 1] + v[m]) / 2);
   };
-  const rgb = [median(0), median(1), median(2)];
+  return [median(0), median(1), median(2)];
+}
+
+const rgbLuma = (rgb) => 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+
+/* How far two sources' backdrops may differ in luma before they are treated as
+   irreconcilable. Two studio packshots land within a few points of each other; a white
+   packshot paired with a dark lifestyle shot is ~180 apart. 48 sits well clear of normal
+   shoot-to-shoot variation without needing them to match exactly. */
+const BACKDROP_DISAGREE_LUMA = 48;
+
+function sampleBackdrop(imgs) {
+  const perImage = [];               // one array of corner samples per readable source
+  for (const img of imgs) {
+    const w = img.width, h = img.height;
+    if (!w || !h) continue;
+    try {
+      const cx = backdropProbeCtx();
+      const inset = Math.max(1, Math.round(Math.min(w, h) * 0.02));   // step off the very edge (JPEG ring)
+      const px = [];
+      for (const [x, y] of [[inset, inset], [w - inset, inset], [inset, h - inset], [w - inset, h - inset]]) {
+        const sx = Math.min(w - 1, Math.max(0, x));
+        const sy = Math.min(h - 1, Math.max(0, y));
+        cx.drawImage(img, sx, sy, 1, 1, 0, 0, 1, 1);
+        const d = cx.getImageData(0, 0, 1, 1).data;
+        px.push([d[0], d[1], d[2]]);
+      }
+      perImage.push(px);
+    } catch (_) { /* tainted or zero-sized - just skip this source */ }
+  }
+  if (!perImage.length) return { fill: "#f2f2f2", contrast: "#101010" };   // neutral light, not the old dark grey
+
+  /* THE DISAGREEMENT CASE - this branch was documented above but never actually existed.
+     A plain median across ALL samples is right only while the sources agree. Pair a white
+     packshot with a dark lifestyle shot and the median of 4 white + 4 dark corners is the
+     MIDPOINT between them: a mid-grey gutter that matches neither panel and reads as a
+     band running down the middle of the reference - precisely the seam artifact this whole
+     function exists to remove, reintroduced by the averaging.
+     When the two sources' own backdrops are irreconcilable there is no colour that hides
+     both joins, so pick the BRIGHTEST source's backdrop: it reads as studio sweep, and the
+     model is far more willing to treat a light field as empty background than a dark band,
+     which it reproduces as a shadow on the shopper. */
+  const medians = perImage.map(medianRgb);
+  let rgb;
+  if (medians.length > 1) {
+    const lumas = medians.map(rgbLuma);
+    const spread = Math.max(...lumas) - Math.min(...lumas);
+    rgb = spread > BACKDROP_DISAGREE_LUMA
+      ? medians[lumas.indexOf(Math.max(...lumas))]
+      : medianRgb(perImage.flat());
+  } else {
+    rgb = medians[0];
+  }
+
   // Perceptual luminance - decides whether ink on this backdrop should be black or white.
-  const lum = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+  const lum = rgbLuma(rgb) / 255;
   return {
     fill: `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`,
     contrast: lum > 0.5 ? "#101010" : "#f5f5f5",
@@ -4345,7 +4274,7 @@ function buildCompositePrompt(item, angle) {
     COMPOSITE_PANEL_CONTRACT + select +
     ` Substitute the person's current ${target} with ${desc}, reproducing its exact colour,` +
     ` pattern, print and fabric texture. ${anchor} Render a ${fitMod}${COMPOSITE_QUALITY}.${keep}` +
-    STRICT_INPAINT + ROTATION_CONTINUITY + COMPOSITE_TEMPORAL
+    STRICT_INPAINT + FABRIC_CONTACT + ROTATION_CONTINUITY + COMPOSITE_TEMPORAL
   ).replace(/\s+/g, " ").trim();
 }
 
@@ -4655,10 +4584,76 @@ async function applyGarment(item) {
   rtImageOnWire = !!imageRef;
 }
 
+/* ── Build derivation: why raw cm/kg is not enough ───────────────────────────────
+   getAnatomicalAnchor() used to hand the model "an exact height of 175cm and weighs
+   110kg" and stop there. Those two numbers jointly describe a heavy build, but a
+   diffusion text encoder does not do arithmetic - it has no reliable way to divide
+   one by the square of the other and arrive at "large". So a pair of numbers that
+   should be the single strongest anti-slimming signal in the whole prompt contributed
+   almost NO build conditioning, and the defence rested entirely on STRICT_INPAINT's
+   body-fidelity clause - which sits late in the prompt, where this file has twice
+   documented that instructions lose to earlier ones (see buildCompositePrompt and the
+   getFitModifier note). Against a training prior that skews slim, that is the wrong
+   place to be fighting from.
+
+   The bands below convert the arithmetic the encoder cannot do into the descriptive
+   language it responds to, at a position that ALREADY leads the prompt. Each band
+   carries a `drape` consequence as well as a `build` description, because naming the
+   body without naming what fabric DOES over it invites the model to render the
+   garment as a flat catalog cut floating on a generic torso.
+
+   WORDING IS DELIBERATE. These are physical, non-clinical descriptors ("carries
+   substantial mass through the torso"), never medical or judgemental labels. Two
+   reasons, and the second is not the soft one: clinical/pejorative vocabulary is
+   strongly associated in image-model training data with caricature and with stock
+   "before" photography, so it degrades realism in exactly the population this feature
+   exists to serve. Neutral physical description is both the kinder wording and the
+   one that renders a real person. */
+const BUILD_BANDS = [
+  { maxBmi: 18.5, build: "a lean, light frame with narrow shoulders and a flat midsection",
+    drape: "the garment hangs loosely with visible slack and soft vertical folds where it clears the waist" },
+  { maxBmi: 25,   build: "an average, proportionate build",
+    drape: "the garment follows the torso with a natural, even drape" },
+  { maxBmi: 30,   build: "a solid, full build carrying real weight through the chest, waist and midsection",
+    drape: "the garment sits close over the chest and midsection with gentle tension creases where the fabric passes the widest point of the torso" },
+  { maxBmi: 35,   build: "a heavy-set, broad build with a wide waist, thick torso and a full, forward-projecting stomach",
+    drape: "the fabric stretches across the stomach and chest under clear tension, with stress wrinkles radiating from the side seams and a soft contact shadow where the hem falls away beneath the belly" },
+  { maxBmi: Infinity, build: "a large, heavy build with a broad torso, wide waist and substantial abdominal and chest volume",
+    drape: "the fabric pulls taut over the stomach and chest with pronounced stress wrinkles at the side seams and underarms, following the abdomen's full outward curve rather than hanging straight past it" },
+];
+
+/* Sane input window for deriving a build - matches calculateSize()'s validation. Outside
+   it the numbers are a typo (height entered in metres as 1.75, weight in pounds), and a
+   derived build would be confidently wrong; the raw measurements are still emitted. */
+const BUILD_H_MIN = 130, BUILD_H_MAX = 240;
+const BUILD_W_MIN = 35,  BUILD_W_MAX = 220;
+
+/* Waist-to-height ratio above which the midsection is called out explicitly. WHtR is a
+   better descriptor of WHERE mass sits than BMI - two people at the same BMI can carry
+   it very differently, and the stomach is the specific region that gets flattened. Only
+   emitted above the threshold, so an average shopper's prompt gains nothing to dilute. */
+const WHTR_CENTRAL = 0.55;
+
+/**
+ * Translate height/weight into a descriptive build band the text encoder can act on.
+ * @param {number|null} height cm
+ * @param {number|null} weight kg
+ * @returns {{build: string, drape: string}|null} null when the inputs cannot support a verdict
+ */
+function deriveBuild(height, weight) {
+  if (!height || !weight) return null;
+  if (height < BUILD_H_MIN || height > BUILD_H_MAX) return null;
+  if (weight < BUILD_W_MIN || weight > BUILD_W_MAX) return null;
+  const bmi = weight / ((height / 100) ** 2);
+  if (!isFinite(bmi) || bmi <= 0) return null;
+  return BUILD_BANDS.find((b) => bmi < b.maxBmi) || BUILD_BANDS[BUILD_BANDS.length - 1];
+}
+
 /**
  * Reads the Screen 1 physical inputs and returns a forceful anatomical anchor
  * sentence. This pins the AI's body model to real measurements so it cannot
- * hallucinate a generic body shape.
+ * hallucinate a generic body shape - and, when height and weight allow it, states
+ * the resulting BUILD in words so the model is not asked to infer mass from numbers.
  * @returns {string}
  */
 function getAnatomicalAnchor() {
@@ -4666,8 +4661,11 @@ function getAnatomicalAnchor() {
   const height = num("height"), weight = num("weight");
   const chest  = num("chest"),  waist  = num("waist"),  legs = num("legs");
 
+  /* No measurements at all - the live frame is then the ONLY evidence of the shopper's
+     size, so point the model at it explicitly rather than leaving body volume unstated
+     (an unstated region is one the slim-skewed prior fills in for us). */
   if (!height && !weight) {
-    return "Fit the garment to a realistic human body with accurate anatomical proportions and photorealistic fabric physics.";
+    return "Fit the garment to this person's real body exactly as it appears in the live camera frame, at whatever size and shape that is, with accurate anatomical proportions and photorealistic fabric physics.";
   }
 
   let sentence = "The person has ";
@@ -4682,7 +4680,23 @@ function getAnatomicalAnchor() {
   if (legs)  details.push(`inseam ${legs}cm`);
   if (details.length) sentence += ` Exact body measurements: ${details.join(", ")}.`;
 
-  sentence += " Fit the garment strictly to these specific anatomical proportions - zero generic guessing, maximum physical fidelity.";
+  // The numbers spelled out as a build the encoder can actually condition on.
+  const band = deriveBuild(height, weight);
+  if (band) sentence += ` This is ${band.build} - render this build faithfully: ${band.drape}.`;
+
+  /* Where the mass sits, and specifically what the HEM does over it. The band above
+     already covers overall volume and how fabric behaves across it, so repeating
+     "follow the outward curve" here would spend prompt budget on nothing. This clause
+     earns its place by naming a different failure: the hem and waistband. Over a
+     projecting stomach a real garment's front hem rides higher than its back and the
+     waistband sits under the belly, and a model that has not been told so renders a
+     flat horizontal cut straight across the abdomen - which reads as a slimmer body
+     even when the torso width itself came out right. */
+  if (waist && height && height >= BUILD_H_MIN && height <= BUILD_H_MAX && waist / height >= WHTR_CENTRAL) {
+    sentence += " The hem and waistband sit where they truly fall on that midsection: the front hem rides higher than the back over the stomach, never a flat straight line across the belly.";
+  }
+
+  sentence += " Fit the garment strictly to these specific anatomical proportions - zero generic guessing, maximum physical fidelity, and no slimming, narrowing or idealising of this build.";
   return sentence;
 }
 
@@ -4739,7 +4753,42 @@ function getFitModifier(delta, garmentType) {
 
 /* Appended to every VTON prompt to lock the engine into photorealistic output.
    Kept as a module constant so changing it in one place affects all call sites. */
-const QUALITY_SUFFIX = ", photorealistic real-world fabric texture, visible seams and stitching, micro-detailed weave, natural environmental lighting matching the user's room, cinematic shading, ultra-realistic physical garment appearance, strictly maintain flawless fabric integrity, continuous realistic 3D mesh, and natural material physics without any glitching, strange horizontal bands, tearing, or unnatural structural folds";
+/* ── Two words removed here, and why they were working against the goal ──────────
+   This string carried "continuous realistic 3D mesh" and "cinematic shading". Both were
+   added for sound reasons - the first to stop the garment tearing or fragmenting, the
+   second as a generic quality booster - but both name a RENDERING TECHNIQUE rather than a
+   photograph, and a diffusion model conditions on the vocabulary it is given. "3D mesh"
+   sits in training data beside CG renders, Marvelous Designer cloth sims and game assets;
+   "cinematic" sits beside colour-graded film stills. Asking for photorealism while naming
+   two CGI/graded-image priors in the same sentence is a contradiction resolved by whichever
+   term is more strongly represented - and it is not the abstract word "photorealistic".
+   Replaced with wording that carries the SAME intent in physical-photographic terms:
+   "continuous unbroken fabric surface" is the anti-tearing instruction without the mesh
+   prior, "soft natural shading" is the lighting instruction without the film-grade prior,
+   and it no longer fights the "lighting matching the user's room" clause standing next
+   to it. Nothing else in the string changed. */
+const QUALITY_SUFFIX = ", photorealistic real-world fabric texture, visible seams and stitching, micro-detailed weave, natural environmental lighting matching the user's room, soft natural shading, ultra-realistic physical garment appearance, strictly maintain flawless fabric integrity, a continuous unbroken fabric surface, and natural material physics without any glitching, strange horizontal bands, tearing, or unnatural structural folds";
+
+/* ── Contact shadow + the "pasted-on sticker" negative ───────────────────────────
+   The one failure mode nothing in this file addressed universally. Every other clause
+   describes the garment's OWN properties - its colour, texture, seams, how it tensions
+   over mass - and none describe the JOIN between garment and person. With that unstated,
+   the most probable render is a correctly-textured garment sitting flat on the frame with
+   no shadow beneath its edges: the "sticker" look, where the fit can be perfectly sized
+   and still read as fake because the cloth casts nothing onto the body it is supposedly
+   touching. Contact shadow IS the depth cue that sells the composite as real.
+
+   It also carries the CGI/retouch negatives. Decart's realtime set() takes only
+   { prompt, enhance, image } - there is no negative_prompt field on this SDK (see
+   STRICT_INPAINT's note), so every "negative" in this codebase is an inline clause, which
+   is what this is. Kept short and appended next to STRICT_INPAINT because it is the same
+   category of instruction: what must be true of the garment where it meets the body. */
+const FABRIC_CONTACT =
+  " Where the garment meets skin, render a soft contact shadow and a clear depth transition" +
+  " so the cloth sits ON the body rather than floating flat above it, and shade fold" +
+  " overlaps so the layers read as separate. This is a photograph of real cloth on a real" +
+  " person - not a CGI or 3D render, not a flat sticker or cut-out pasted onto the frame," +
+  " and not a smoothed, airbrushed or retouched figure.";
 
 /* Bias the model toward keeping graphics/logos/text and the bottom-hem edge details in
    their original scale, proportion and relative position, and to render the full hem in
@@ -4833,11 +4882,11 @@ function buildPrompt(item) {
   const suffix = HARD_NEGATIVE;   // universal hard negative (combined orientation lives in angleClause)
 
   if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${colorWord} ${sub} trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+    return `Substitute the current bottoms with ${colorWord} ${sub} trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${FABRIC_CONTACT}${ROTATION_CONTINUITY}${suffix}`
       .replace(/\s+/g, " ").trim();
   }
   const noun = SHIRT_NOUN[item.subType] || "top";
-  return `Substitute the current top with a ${colorWord} ${sub} ${noun}. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+  return `Substitute the current top with a ${colorWord} ${sub} ${noun}. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${FABRIC_CONTACT}${ROTATION_CONTINUITY}${suffix}`
     .replace(/\s+/g, " ").trim();
 }
 
@@ -4856,10 +4905,10 @@ function buildCustomPrompt(item) {
   const ref = "the exact garment shown in the reference image - a custom uploaded garment - replicating its precise color, pattern, print, fabric texture and silhouette";
 
   if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+    return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${FABRIC_CONTACT}${ROTATION_CONTINUITY}${suffix}`
       .replace(/\s+/g, " ").trim();
   }
-  return `Substitute the current top with ${ref}, worn on the upper body. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+  return `Substitute the current top with ${ref}, worn on the upper body. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${FABRIC_CONTACT}${ROTATION_CONTINUITY}${suffix}`
     .replace(/\s+/g, " ").trim();
 }
 
@@ -4995,7 +5044,7 @@ function buildLookPrompt(top, bottom) {
     /* A full look replaces BOTH layers, so there is no KEEP_TOP/KEEP_BOTTOMS to pin here -
        which makes the face/hair/skin/background lock the ONLY thing standing between this
        prompt and a regenerated room. It matters more here, not less. */
-    `${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+    `${STRICT_INPAINT}${FABRIC_CONTACT}${ROTATION_CONTINUITY}${suffix}`
   ).replace(/\s+/g, " ").trim();
 }
 
@@ -6217,19 +6266,43 @@ async function goLive() {
 
     if (!localStream) { const ok = await startCamera(); if (!ok) return; }
 
-    // ── Black-screen / camera-off gate (credit saver) ────────────────────────
-    // Runs AFTER the camera is live but BEFORE any token mint / WebRTC connect /
-    // billing. Streaming a black feed to Decart would burn the full
-    // CREDITS_PER_SESSION for a render nobody can use, so if the local webcam is a
-    // black screen (lens covered, camera off, privacy shutter) we bail out here -
-    // no /api/realtime-token, no connectRealtime(), no credits - and tell the user
-    // exactly what to fix. cameraLooksBlack() only inspects local pixels; it sends
-    // nothing to any API.
-    if (await cameraLooksBlack()) {
+    // ── Frame-quality gates (credit savers) ──────────────────────────────────
+    // Run AFTER the camera is live but BEFORE any token mint / WebRTC connect /
+    // billing. Streaming an unusable feed to Decart burns the full
+    // CREDITS_PER_SESSION for a render nobody can use, so a black screen (lens
+    // covered, camera off, privacy shutter), a badly out-of-focus frame, or a
+    // blown-out one all bail out here - no /api/realtime-token, no connectRealtime(),
+    // no credits - and tell the user exactly what to fix. Both probes only inspect
+    // local pixels; neither sends anything to any API.
+    //
+    // Deliberately CONCURRENT: each gate spends its own ~250-280ms sampling frames
+    // over time, and they are independent read-only samplers of the same <video>.
+    // Racing them together costs max(240ms, 280ms) instead of the ~520ms that
+    // awaiting them in sequence would add to every go-live click.
+    const [blackFeed, qualityIssue] = await Promise.all([
+      cameraLooksBlack({ getVideo: () => $("webcam") }),
+      cameraQualityIssue({ getVideo: () => $("webcam"), debug: statsDebugEnabled() }),
+    ]);
+
+    if (blackFeed) {
       showCamError("זוהה מסך שחור. הפעל את המצלמה או הסר חסימה מהעדשה כדי להמשיך. " +
         "(Black screen detected. Please turn on your camera or remove any obstacles to proceed.)");
       toast("📷 מסך שחור - המדידה לא הופעלה כדי לחסוך קרדיטים");
       return;   // finally{} resets busy + the capture button; no billed session opened
+    }
+
+    if (qualityIssue === "overexposed") {
+      showCamError("התמונה בהירה מדי. התרחק מהחלון או הפחת את התאורה שמאחוריך כדי להמשיך. " +
+        "(The image is too bright. Move away from the window or reduce the light behind you to proceed.)");
+      toast("☀️ תאורה חזקה מדי - המדידה לא הופעלה כדי לחסוך קרדיטים");
+      return;
+    }
+
+    if (qualityIssue === "blurry") {
+      showCamError("התמונה מטושטשת. נקה את עדשת המצלמה, התרחק מעט והישאר יציב כדי להמשיך. " +
+        "(The image is blurry. Clean the camera lens, step back slightly and hold still to proceed.)");
+      toast("🔍 תמונה מטושטשת - המדידה לא הופעלה כדי לחסוך קרדיטים");
+      return;
     }
 
     /* BUG FIX (cross-run mode persistence): a PREVIOUS session in this same page load
