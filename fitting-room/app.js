@@ -2804,6 +2804,33 @@ const ORIENT_LOCK_MS        = 2500;  // OR this much sustained agreement - which
    paying the full 2.5s anti-flap cost for it is what made a shopper who was already
    turned around watch the FRONT render on their back for the first few seconds. */
 const ORIENT_ACQUIRE_FRAMES = 2;
+
+/* ── Fast confirm on unambiguous evidence - the real fix for the long freeze ─────
+   The turn hold lasts as long as confirmation does, and confirmation was a flat
+   ORIENT_LOCK_FRAMES (10 samples / 2.5s) regardless of how clear the reading was. In a
+   LIVE_DURATION_MS (5000ms) session that is half the shopper's session spent looking at
+   a frozen still on every turn.
+
+   The existing note argues - correctly - that the hysteresis must NOT simply be lowered:
+   a shorter bar swaps the reference on a head-turn and reintroduces the flapping the
+   threshold exists to stop. But that argument is about AMBIGUOUS signals. A sustained
+   run of high-confidence samples is categorically different evidence from a run of
+   borderline ones, and the old bar could not tell them apart because it only counted
+   samples. This adds a second, stricter route to the same conclusion rather than
+   weakening the first: the slow bar is completely unchanged and still handles every
+   ambiguous case.
+
+   MINIMUM confidence across the streak, not the average - an average lets two strong
+   samples carry a weak one, which is exactly the borderline reading that must NOT take
+   the fast path. Requiring every sample in the run to clear the bar is what makes the
+   run "unambiguous", and that is the only property justifying the bypass.
+
+   A FaceDetector hit reports confidence 1.0 (binary API), so a shopper turning back to
+   face the camera in good light confirms in ORIENT_FAST_LOCK_FRAMES samples (~1s) rather
+   than 2.5s. A dim room or a partial profile scores lower, misses the fast path, and
+   falls through to the unchanged slow bar. */
+const ORIENT_FAST_LOCK_FRAMES = 4;      // consecutive agreeing samples (~1s @ ORIENT_SAMPLE_MS)
+const ORIENT_FAST_LOCK_CONF   = 0.95;   // ...each of which must clear this confidence
 const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
 const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
 const ORIENT_SIZE           = 96;    // skin-histogram canvas edge - tiny on purpose (per-pixel loop)
@@ -2850,8 +2877,10 @@ function syncOrientationWatcher() {
    IS the "anchor" while the live feed underneath catches up and is revealed. One canvas
    draw + a CSS opacity transition; no per-frame cost. */
 const ORIENT_FADE_MS      = 260;   // cross-fade duration - fast, not jarring
-const ORIENT_FADE_HOLD_MS = 150;   // grace period after set() resolves before revealing, so the
-                                    // frame the fade uncovers is actually the NEW side, not the old one
+/* NOTE: the flat post-set() grace period that used to live here (ORIENT_FADE_HOLD_MS)
+   is gone - it was a fixed guess at how long the model takes to emit a frame built from
+   the new reference. Replaced by waitForRemoteFrames(), which waits for real frames on
+   the remote track and caps itself; see ORIENT_REVEAL_FRAMES below. */
 let _orientFadeCanvas = null;
 
 function orientFadeEl() {
@@ -2893,7 +2922,7 @@ function orientFadeFreeze() {
 }
 
 /* Fade the frozen overlay back out, revealing the (by now updated) live feed underneath.
-   Call AFTER the swap's rtClient.set() has resolved (+ a short ORIENT_FADE_HOLD_MS). */
+   Call AFTER the swap's rtClient.set() has resolved AND waitForRemoteFrames() has settled. */
 function orientFadeReveal() {
   if (!_orientFadeCanvas) return;
   _orientFadeCanvas.style.opacity = "0";
@@ -2921,9 +2950,58 @@ function orientFadeReveal() {
    ORIENT_LOCK_FRAMES would swap the reference on a head-turn and re-introduce the
    flapping that threshold exists to stop; this covers the same window without touching
    the confirmation bar. */
-const ORIENT_TURN_HOLD_MAX_MS = 4000;  // hard ceiling - a stuck still frame is worse than a live one
+/* ── Sizing the ceiling: why it cannot simply be made small ──────────────────────
+   The obvious reading of "the freeze lasts too long" is that this ceiling is too high.
+   It is not the dominant cost, and cutting it hard actively re-opens the bug the hold
+   exists to hide.
+
+   Do the arithmetic on the NORMAL path. The hold is raised on the first disagreeing
+   vote and released when the swap completes. Confirming a flip takes
+   ORIENT_LOCK_FRAMES (10) agreeing samples at ORIENT_SAMPLE_MS (250ms) - or
+   ORIENT_LOCK_MS (2500ms), which is the same 2.5s by construction. So a genuine turn
+   freezes for ~2.5s of confirmation plus the swap itself, ~2.7-3.0s total, and the
+   4000ms ceiling almost never fires. Setting the ceiling to, say, 1200ms would not trim
+   the pathological case - it would fire in the middle of every ordinary turn, revealing
+   the live feed during precisely the window where the model is still being told "use the
+   FRONT panel" while the shopper is side-on. That is the shopper's own shirt coming
+   back, which is the bug this whole mechanism was built to fix.
+
+   The ceiling must therefore stay above ORIENT_LOCK_MS + the swap budget, or it
+   pre-empts the confirmation it is waiting for. 3000ms is that floor plus a little
+   headroom. The real reduction in frozen time comes from confirming FASTER (see
+   ORIENT_FAST_LOCK_* in the sampler), not from revealing sooner. */
+const ORIENT_TURN_HOLD_MAX_MS = 3000;  // hard ceiling - a stuck still frame is worse than a live one
 let _orientHoldActive = false;
 let _orientHoldTimer  = null;
+let _orientHoldStartedAt = 0;
+
+/* Adaptive reveal. The reveal used to wait a flat ORIENT_FADE_HOLD_MS after set()
+   resolved, which is a guess in both directions: too short when the model is slow (the
+   overlay lifts onto frames still rendered from the OLD reference) and needlessly long
+   when it is fast. set() resolving means the instruction was accepted, not that a frame
+   built from it has arrived - so wait for actual frames on the remote track instead,
+   capped so a stalled track can never pin the overlay up. */
+const ORIENT_REVEAL_FRAMES = 2;     // real remote frames after set() before revealing
+const ORIENT_REVEAL_MAX_MS = 700;   // ...or this, whichever lands first
+
+/** Resolve after `count` frames present on #aiVideo, or after `timeoutMs`. Never rejects,
+ *  never hangs - a stalled track resolves on the timer. */
+function waitForRemoteFrames(count, timeoutMs) {
+  return new Promise((resolve) => {
+    const ai = $("aiVideo");
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    const timer = setTimeout(finish, timeoutMs);
+    if (!ai || typeof ai.requestVideoFrameCallback !== "function") return;   // timer alone
+    let seen = 0;
+    const onFrame = () => {
+      if (done) return;
+      if (++seen >= count) { clearTimeout(timer); finish(); return; }
+      try { ai.requestVideoFrameCallback(onFrame); } catch (_) { clearTimeout(timer); finish(); }
+    };
+    try { ai.requestVideoFrameCallback(onFrame); } catch (_) { clearTimeout(timer); finish(); }
+  });
+}
 
 /* @param {"turn-detected"|"swap"} reason - which stage raised the hold, for the log only */
 function orientHoldBegin(reason) {
@@ -2931,6 +3009,7 @@ function orientHoldBegin(reason) {
                                         // the turn would capture the degraded frame we are
                                         // holding precisely to hide.
   _orientHoldActive = true;
+  _orientHoldStartedAt = Date.now();
   orientFadeFreeze();
   if (_orientHoldTimer) clearTimeout(_orientHoldTimer);
   _orientHoldTimer = setTimeout(() => {
@@ -2945,7 +3024,14 @@ function orientHoldEnd(reason) {
   if (!_orientHoldActive) return;
   _orientHoldActive = false;
   orientFadeReveal();
-  if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - releasing hold (" + reason + ")");
+  /* Always logged, not gated behind ORIENT_DEBUG: the duration and the release reason
+     are the only evidence of how much of a 5s session the shopper actually spent looking
+     at a still, and which path released it. Tuning ORIENT_FAST_LOCK_* without this is
+     guesswork - a "timeout" release means the fast path never fired. */
+  const heldMs = _orientHoldStartedAt ? Date.now() - _orientHoldStartedAt : 0;
+  _orientHoldStartedAt = 0;
+  console.log("[PEAR] AI Auto - releasing hold (" + reason + ") after " + heldMs + "ms" +
+    " | " + ((heldMs / LIVE_DURATION_MS) * 100).toFixed(0) + "% of the billed window");
 }
 
 function createOrientationWatcher() {
@@ -3019,6 +3105,7 @@ function createOrientationWatcher() {
   logVtonState();
 
   let lastVote = null, streak = 0, streakSince = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
+  let streakMinConf = 0;   // weakest confidence seen in the current agreeing run (fast-confirm gate)
 
   /* Numeric confidence (0..1) for a skin-ratio vote: 0 right AT the classification
      threshold, saturating to 1 by double the threshold's margin into "obviously this
@@ -3201,7 +3288,7 @@ function createOrientationWatcher() {
     renderPerspectiveSelector();
     try {
       await applyActive();                       // one rtClient.set() - pre-cached Blob payload
-      await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));   // let the new frame actually land
+      await waitForRemoteFrames(ORIENT_REVEAL_FRAMES, ORIENT_REVEAL_MAX_MS);   // let the new frames actually land
       orientHoldEnd("swap-complete");
       toast(next === "back" ? "מציג גב · Back view" : "מציג חזית · Front view");
     } catch (e) {
@@ -3218,8 +3305,10 @@ function createOrientationWatcher() {
     try {
       const vote = await classify();
       if (vote) {
-        if (vote === lastVote) streak++;
-        else { lastVote = vote; streak = 1; streakSince = Date.now(); }
+        // streakMinConf tracks the WEAKEST sample in the current run - see
+        // ORIENT_FAST_LOCK_CONF for why the minimum and not the average.
+        if (vote === lastVote) { streak++; streakMinConf = Math.min(streakMinConf, lastConfidence); }
+        else { lastVote = vote; streak = 1; streakSince = Date.now(); streakMinConf = lastConfidence; }
       }
       const held = lastVote ? Date.now() - streakSince : 0;
       /* Two DIFFERENT transitions, with deliberately different bars:
@@ -3238,9 +3327,12 @@ function createOrientationWatcher() {
          confirmed, and that transition must be recorded rather than silently skipped. */
       const acquiring = autoOrientation === null;
       const needsSwitch = !!lastVote && (acquiring || lastVote !== autoOrientation);
+      /* Second, STRICTER route to the same conclusion - never a loosening of the bar
+         below it. Both remain live; whichever is satisfied first confirms. */
+      const fastConfirm = streak >= ORIENT_FAST_LOCK_FRAMES && streakMinConf >= ORIENT_FAST_LOCK_CONF;
       const confirmed = needsSwitch && (acquiring
         ? streak >= ORIENT_ACQUIRE_FRAMES
-        : (streak >= ORIENT_LOCK_FRAMES || held >= ORIENT_LOCK_MS));
+        : (fastConfirm || streak >= ORIENT_LOCK_FRAMES || held >= ORIENT_LOCK_MS));
 
       if (ORIENT_DEBUG) {
         const confidence = faceDetector && !fdBroken
@@ -6745,6 +6837,26 @@ function startRecording() {
     catch (e) { console.warn("recorder start failed:", e?.message || e); stopPaintLoop(); mediaRecorder = null; }
   };
 
+  /* ── Redundant-blit skip ──────────────────────────────────────────────────────
+     This loop is driven by rAF (~60Hz) but its SOURCE is Decart's remote track, which
+     delivers far slower (LIVE_INFERENCE_FPS-ish, plus network jitter). Every tick used
+     to run a full-resolution drawImage regardless, so most of them re-blitted a frame
+     already on the canvas - roughly 35-50 wasted full-res blits per second, on the main
+     thread, for the entire billed window. That is contention the 10fps setInterval
+     feeding createThrottledInputStream() has to compete with, and the visible cost of
+     losing that race is an uneven outbound frame rate.
+
+     currentTime on a MediaStream-backed <video> advances as frames are presented, so an
+     unchanged value means no new frame has arrived and the blit would be a no-op with
+     GPU cost. Skip the draw, keep the loop scheduled.
+
+     DELIBERATELY still rAF-driven rather than requestVideoFrameCallback. rVFC fires only
+     when the video produces a frame, and the FROZEN-HOLD phase below has no video
+     producing anything - Decart is disconnected by then. An rVFC-driven loop would
+     simply stop being called at exactly the moment the hold needs it to keep repainting,
+     and the clip would stop growing short of VIDEO_LENGTH_MS. */
+  let lastPaintedTime = -1;
+
   const paint = () => {
     if (!recordingActive) return;
     if (recordHold && recordHoldSrc) {
@@ -6752,14 +6864,19 @@ function startRecording() {
       // the captured final frame so canvas.captureStream keeps emitting and the clip
       // grows to VIDEO_LENGTH_MS. beginRecorder() is idempotent - it covers the case
       // where the first real frame only arrived right at the billing cap.
+      // NO skip here: the source is static by definition, so "unchanged" is the normal
+      // state and skipping would stall the very stream this phase exists to feed.
       try { ctx.drawImage(recordHoldSrc, 0, 0, recordCanvas.width, recordCanvas.height); beginRecorder(); } catch (_) {}
     } else {
       const w = video.videoWidth, h = video.videoHeight;
       if (w && h) {
-        if (recordCanvas.width !== w || recordCanvas.height !== h) {
-          recordCanvas.width = w; recordCanvas.height = h;
+        const resized = recordCanvas.width !== w || recordCanvas.height !== h;
+        if (resized) { recordCanvas.width = w; recordCanvas.height = h; }
+        // A resize clears the canvas, so that tick must always repaint.
+        if (resized || video.currentTime !== lastPaintedTime) {
+          lastPaintedTime = video.currentTime;
+          try { ctx.drawImage(video, 0, 0, w, h); beginRecorder(); } catch (_) {}
         }
-        try { ctx.drawImage(video, 0, 0, w, h); beginRecorder(); } catch (_) {}
       }
     }
     recordRaf = requestAnimationFrame(paint);

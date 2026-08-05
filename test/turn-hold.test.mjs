@@ -41,7 +41,11 @@ function harness() {
   let timers = [];
   const sandbox = {
     ORIENT_DEBUG: false,
-    console: { log() {}, warn: (...a) => events.push({ op: "warn", a }) },
+    // orientHoldEnd reports the hold duration as a share of the billed window, so the
+    // slice needs the window length. Captured as events so the log itself is assertable -
+    // it is the only evidence of how much of a session a shopper spent on a still.
+    LIVE_DURATION_MS: 5000,
+    console: { log: (...a) => events.push({ op: "log", a }), warn: (...a) => events.push({ op: "warn", a }) },
     orientFadeFreeze: () => events.push({ op: "freeze" }),
     orientFadeReveal: () => events.push({ op: "reveal" }),
     setTimeout: (fn, ms) => { const t = { fn, ms, live: true }; timers.push(t); return t; },
@@ -95,7 +99,12 @@ console.log("\n── the ceiling: a hold can never outlive its own timer ──
 {
   const { api, events, fireTimers } = harness();
   api.orientHoldBegin("turn-detected");
-  check("a safety timer is armed", api.MAX === 4000, String(api.MAX));
+  /* The ceiling must stay ABOVE ORIENT_LOCK_MS (2500) plus the swap budget, or it fires
+     mid-confirmation on every ordinary turn and reveals the live feed during exactly the
+     window the hold exists to cover - the shopper's own shirt coming back. Lowering this
+     number is not the way to shorten the freeze; confirming faster is (ORIENT_FAST_LOCK_*). */
+  check("a safety timer is armed", api.MAX === 3000, String(api.MAX));
+  check("the ceiling still clears ORIENT_LOCK_MS + a swap budget", api.MAX > 2500, String(api.MAX));
   fireTimers();
   check("the ceiling reveals the feed rather than sitting on a still",
     api.active() === false && events.some((e) => e.op === "reveal"), JSON.stringify(events.map((e) => e.op)));
@@ -137,6 +146,75 @@ console.log("\n── wiring: the sampler raises the hold before confirmation, n
   const stop = extract("    stop() {", "  };\n}");
   check("the watcher releases its hold when it stops (or the still sticks forever)",
     /orientHoldEnd\("watcher-stopped"\)/.test(stop), stop);
+}
+
+console.log("\n── fast confirm: the actual lever on how long the freeze lasts ──");
+{
+  /* The hold lasts as long as CONFIRMATION does. At ORIENT_SAMPLE_MS=250 the slow bar
+     (ORIENT_LOCK_FRAMES=10 / ORIENT_LOCK_MS=2500) is ~2.5s, so every ordinary turn froze
+     half a 5s session. The fast path is a second, STRICTER route - it must never become a
+     way for an ambiguous reading to confirm early. */
+  const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);");
+  const consts = extract("const ORIENT_FAST_LOCK_FRAMES", "\n\n");
+
+  check("fast confirm requires BOTH a frame count and a confidence floor",
+    /streak >= ORIENT_FAST_LOCK_FRAMES && streakMinConf >= ORIENT_FAST_LOCK_CONF/.test(watcher), watcher);
+  check("it is OR-ed with the slow bar, never replacing it",
+    /fastConfirm \|\| streak >= ORIENT_LOCK_FRAMES \|\| held >= ORIENT_LOCK_MS/.test(watcher), watcher);
+  check("the slow bar's own thresholds are untouched",
+    /ORIENT_LOCK_FRAMES\s*=\s*10/.test(SRC) && /ORIENT_LOCK_MS\s*=\s*2500/.test(SRC));
+
+  /* MINIMUM, not average: an average lets two strong samples carry a borderline one
+     through, which is precisely the reading that must take the slow path. */
+  check("the streak tracks its WEAKEST sample",
+    /streakMinConf = Math\.min\(streakMinConf, lastConfidence\)/.test(watcher), watcher);
+  check("a new streak reseeds the confidence floor rather than inheriting it",
+    /streak = 1;.*streakMinConf = lastConfidence/.test(watcher), watcher);
+
+  const fastFrames = Number(/ORIENT_FAST_LOCK_FRAMES\s*=\s*(\d+)/.exec(consts)?.[1]);
+  const fastConf = Number(/ORIENT_FAST_LOCK_CONF\s*=\s*([\d.]+)/.exec(consts)?.[1]);
+  check("fast path is strictly faster than the slow bar", fastFrames > 0 && fastFrames < 10,
+    String(fastFrames));
+  check("...but demands more than the per-sample minimum to get there",
+    fastConf > 0.85, `${fastConf} vs ORIENT_CONFIDENCE_MIN 0.85`);
+  /* Sanity on the resulting freeze: fast confirm has to actually buy back a meaningful
+     share of a 5s session or the redesign did nothing. */
+  check("a confident turn now confirms in about a second, not two and a half",
+    fastFrames * 250 <= 1200, `${fastFrames * 250}ms`);
+}
+
+console.log("\n── the reveal waits for real frames, not a fixed guess ──");
+{
+  const reveal = extract("function waitForRemoteFrames", "/* @param {\"turn-detected\"");
+  check("resolves on remote frames when rVFC is available",
+    /requestVideoFrameCallback/.test(reveal), reveal);
+  check("always arms a timeout so a stalled track cannot pin the overlay up",
+    /setTimeout\(finish, timeoutMs\)/.test(reveal), reveal);
+  check("resolves exactly once", /if \(!done\) \{ done = true; resolve\(\); \}/.test(reveal), reveal);
+  check("falls back to the timer when rVFC is missing",
+    /typeof ai\.requestVideoFrameCallback !== "function"\) return/.test(reveal), reveal);
+  /* The swap path must use it - a fixed sleep there is the guess this replaced. */
+  const swap = extract("async function maybeSwap", "const timer = setInterval");
+  check("the swap awaits real frames before releasing the hold",
+    /await waitForRemoteFrames\(ORIENT_REVEAL_FRAMES, ORIENT_REVEAL_MAX_MS\)/.test(swap), swap);
+  check("the old fixed grace period is gone from the swap path",
+    !/ORIENT_FADE_HOLD_MS/.test(swap), swap);
+}
+
+console.log("\n── release telemetry: how much of the session was actually frozen ──");
+{
+  const { api, events } = harness();
+  api.orientHoldBegin("turn-detected");
+  api.orientHoldEnd("swap-complete");
+  const log = events.find((e) => e.op === "log" && /releasing hold/.test(String(e.a[0])));
+  check("the release logs its duration", !!log && /after \d+ms/.test(String(log.a[0])), JSON.stringify(events));
+  check("...and the share of the billed window it consumed",
+    !!log && /% of the billed window/.test(String(log.a[0])), log && String(log.a[0]));
+  check("...and which path released it",
+    !!log && /swap-complete/.test(String(log.a[0])), log && String(log.a[0]));
+  /* Not gated behind ORIENT_DEBUG (the harness sets it false): a release that only
+     appears in debug builds cannot be used to tune the fast-confirm thresholds. */
+  check("logged even with ORIENT_DEBUG off", !!log);
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
