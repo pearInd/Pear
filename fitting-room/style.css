@@ -2378,6 +2378,96 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .pear-lang-toggle__btn:active { transform: scale(.96); }
 .pear-lang-toggle__btn.is-active { color: var(--ink); background: rgba(255,255,255,.7); box-shadow: var(--shadow); }
 
+/* ── Floating help widget (help-widget.js) - fixed bottom corner, Liquid Glass ─
+   `inset-inline-start` (not left/right) is the whole RTL/LTR trick: it resolves
+   to the LEFT in LTR (English) and the RIGHT in RTL (Hebrew) purely from
+   <html dir>, which i18n.js already keeps current - no [dir="rtl"] override
+   needed here, matching the inset-inline-* convention used elsewhere in this
+   file.
+
+   Visual language: warm-frosted glass (blur+saturate, a cream-white tint, a
+   faint white refraction border) matching #screen-calculator .container /
+   .kicker rather than the flat dark .glass-dark chip the button used to be -
+   and the same olive-green ink (#3d4825) the brand already uses as a true
+   fill elsewhere (.pg-swatch.is-active) for the icon, title, list markers and
+   the button's own "open" state, instead of generic grayscale UI chrome.
+   --help-accent is scoped to this component only - it does not touch the
+   site-wide --pear-deep token (near-black by design everywhere else) or any
+   of the many components that rely on it staying that way. */
+.pear-help-widget {
+  position: fixed; bottom: calc(20px + var(--safe-b)); inset-inline-start: 20px; z-index: 150;
+  --help-accent: #3d4825;
+}
+
+.pear-help-widget__btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; border-radius: 50%; padding: 0;
+  border: 1px solid rgba(255, 255, 255, .4);
+  background: linear-gradient(135deg, rgba(255, 253, 246, .92) 0%, rgba(250, 247, 235, .78) 100%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%); backdrop-filter: blur(16px) saturate(180%);
+  color: var(--help-accent); font-family: "Urbanist", sans-serif; font-weight: 800; font-size: 1.15rem;
+  cursor: pointer;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .06), inset 0 1px 0 rgba(255, 255, 255, .6);
+  transition: box-shadow .3s var(--ease), background .3s var(--ease),
+              border-color .3s var(--ease), transform .25s var(--ease);
+}
+.pear-help-widget__btn:hover {
+  transform: translateY(-2px);
+  background: linear-gradient(135deg, rgba(255, 253, 246, .98) 0%, rgba(250, 247, 235, .90) 100%);
+  box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .7);
+}
+.pear-help-widget__btn:active { transform: scale(.92); }
+.pear-help-widget__btn:focus-visible {
+  outline: none; box-shadow: 0 0 0 4px var(--pear-ring), 0 8px 32px rgba(0, 0, 0, .06);
+}
+/* "open" state - the same olive tint used for an active swatch/tab elsewhere,
+   so the button visibly reads as engaged rather than relying on the popover
+   alone to communicate it. */
+.pear-help-widget__btn[aria-expanded="true"] {
+  background: linear-gradient(135deg, rgba(141, 182, 0, .26) 0%, rgba(141, 182, 0, .14) 100%);
+  border-color: rgba(141, 182, 0, .4);
+}
+.pear-help-widget[hidden] { display: none; }
+
+.pear-help-widget__popover {
+  position: absolute; bottom: calc(100% + 12px); inset-inline-start: 0;
+  width: min(320px, calc(100vw - 40px));
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, .4); border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, rgba(255, 253, 246, .96) 0%, rgba(250, 247, 235, .93) 100%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%); backdrop-filter: blur(16px) saturate(180%);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .06), inset 0 1px 0 rgba(255, 255, 255, .6);
+}
+.pear-help-widget__popover[hidden] { display: none; }
+
+.pear-help-widget__header {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding-bottom: 10px; margin-bottom: 8px; border-bottom: 1px solid var(--glass-line);
+}
+.pear-help-widget__title {
+  margin: 0; font-family: "Urbanist", sans-serif; font-weight: 800; font-size: 1rem; color: var(--help-accent);
+}
+.pear-help-widget__close {
+  flex: none; width: 26px; height: 26px; border-radius: 50%; border: 0; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--muted); font-size: 1.2rem; line-height: 1; cursor: pointer;
+  transition: background .2s var(--ease), color .2s var(--ease);
+}
+.pear-help-widget__close:hover { background: var(--pear-soft); color: var(--help-accent); }
+
+.pear-help-widget__steps {
+  margin: 0; padding-inline-start: 20px; display: flex; flex-direction: column; gap: 8px;
+  font-family: "Inter", sans-serif; font-size: .86rem; line-height: 1.45; color: var(--text);
+}
+.pear-help-widget__steps li { padding-inline-start: 2px; }
+.pear-help-widget__steps li::marker { color: var(--help-accent); font-weight: 700; }
+
+@media (max-width: 480px) {
+  .pear-help-widget { bottom: calc(14px + var(--safe-b)); inset-inline-start: 14px; }
+  .pear-help-widget__btn { width: 38px; height: 38px; font-size: 1.02rem; }
+  .pear-help-widget__popover { width: min(300px, calc(100vw - 28px)); padding: 14px; }
+}
+
 /* STICKING/OVERLAP FIX: .profile-btn is position:fixed at a CONSTANT top offset,
    independent of .app-header's own scroll-triggered compaction (padding shrinks,
    see .app-header.is-scrolled) - so as the header shrank on scroll, the button

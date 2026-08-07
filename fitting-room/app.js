@@ -8516,6 +8516,9 @@ function onRetake() {
 
 function init() {
   setupLangToggle();   // global page-level toggle - wired regardless of demo-gate state below
+  // (Floating contextual help beacon: help-widget.js is loaded as its own
+  // <script type="module"> in index.html and self-initializes independently
+  // - nothing to wire here.)
 
   // One-time public demo - strict check BEFORE anything else runs: no camera
   // wiring, no identity gate, no size-form listeners, nothing. A returning
