@@ -5871,10 +5871,30 @@ function renderCartBadge(count) {
 }
 
 function renderCartDropdown() {
-  const list = $("cartList"), empty = $("cartEmpty");
+  const list = $("cartList"), empty = $("cartEmpty"), headCount = $("cartHeadCount");
   if (!list || !empty) return;
   const items = (hostCart && hostCart.items) || [];
-  empty.hidden = items.length > 0;
+  const count = (hostCart && hostCart.itemCount) || 0;
+
+  if (headCount) headCount.textContent = count ? String(count) : "";
+
+  /* countOnly: the host's cart COUNT is known (read off its own cart badge)
+     but its line items are not - the store exposes no readable cart API and
+     wired no PEAR_CART_CONFIG.getCart() hook. Showing "your cart is empty"
+     there would be an outright lie while the store badge reads 2, so say
+     exactly what is true instead: N items, listed on the store itself. */
+  const countOnly = !!(hostCart && hostCart.countOnly) && count > 0;
+  empty.hidden = items.length > 0 || countOnly;
+  empty.textContent = t("cartDropdownEmpty");
+
+  if (countOnly) {
+    list.innerHTML = "";
+    const note = document.createElement("p");
+    note.className = "cart-dropdown__empty";   // same quiet centred treatment, different message
+    note.textContent = t("cartDropdownCountOnly").replace("{n}", String(count));
+    list.appendChild(note);
+    return;
+  }
   list.innerHTML = "";   // rebuilt from scratch below via DOM APIs (not innerHTML+interpolation) - the
                           // host cart's title/variant text is the MERCHANT's own data, but still untrusted
                           // input crossing an origin boundary, so it's never concatenated into markup.
@@ -5937,8 +5957,13 @@ function setupCartButton() {
   if (!btn || !dd || btn.dataset.wired) return;
   btn.dataset.wired = "1";
 
-  const openDropdown  = () => { dd.hidden = false; };
-  const closeDropdown = () => { dd.hidden = true; };
+  // .has-cart-open raises the header's own stacking context for exactly as long
+  // as the popover is open - without it the popover is trapped under the header's
+  // sticky z-index on phones and paints BELOW the fixed lang-switch/profile/help
+  // chrome. See the .app-header.has-cart-open rule in style.css.
+  const header = document.querySelector(".app-header");
+  const openDropdown  = () => { dd.hidden = false; header?.classList.add("has-cart-open"); };
+  const closeDropdown = () => { dd.hidden = true;  header?.classList.remove("has-cart-open"); };
 
   btn.addEventListener("click", (e) => {
     e.stopPropagation();

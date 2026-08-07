@@ -1922,31 +1922,135 @@
     };
   }
 
+  /* Selectors for the host's own rendered cart-count badge. Used for BOTH
+     jobs: reading the count (readHostCartCountFromDOM below) and detecting
+     that it changed (startCartWatch further down). */
+  var CART_COUNT_SELECTORS = [
+    ".cart-count", "#CartCount", "[data-cart-count]", ".cart-count-bubble",
+    ".cart-link__bubble", ".site-header__cart-count", ".cart__count",
+    ".cart-quantity", ".minicart-quantity", ".header-cart__count", ".cart-items-count"
+  ].join(", ");
+
+  /* Reads the count straight off the host's rendered badge. This is the
+     UNIVERSAL tier - no API, no platform detection, no merchant hook - so it
+     works on Fox / Terminal X / any custom stack that simply renders its cart
+     total as text. It yields a COUNT ONLY, never line items, so the snapshot
+     is flagged countOnly:true and PEAR says "N items in your store cart"
+     instead of pretending to an item list it cannot actually see.
+     Returns null (no badge found) which is deliberately DISTINCT from 0 (a
+     badge that really does read empty) - only the latter is safe to mirror. */
+  function readHostCartCountFromDOM() {
+    var nodes = d.querySelectorAll(CART_COUNT_SELECTORS);
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      var raw = (el.getAttribute("data-cart-count") || el.textContent || "").trim();
+      var m = raw.match(/\d+/);   // badges render "2", "(2)", "2 items", "Cart (2)"
+      if (!m) continue;
+      var n = parseInt(m[0], 10);
+      if (!isNaN(n)) return n;
+    }
+    return null;
+  }
+
+  function cartFromDOMBadge() {
+    var n = readHostCartCountFromDOM();
+    if (n === null) return null;
+    return { items: [], itemCount: n, empty: n === 0, countOnly: true };
+  }
+
+  /* A well-known host cart global (window.FoxCart). Shape-checked, not
+     trusted by name: a global that happens to share the name but exposes
+     nothing cart-like is ignored rather than guessed at. */
+  function readHostCartGlobal() {
+    var g = w.FoxCart;
+    if (!g || typeof g !== "object") return null;
+    var items = g.items || g.lines || null;
+    var count = typeof g.item_count === "number" ? g.item_count
+              : typeof g.itemCount === "number" ? g.itemCount
+              : (items && typeof items.length === "number") ? items.length
+              : null;
+    if (count === null) return null;
+    /* Reuse the Shopify normalizer only when this really carries line items -
+       its field names (variant_id/product_title/...) are the common
+       e-commerce JSON spelling, and anything it can't find degrades to "".
+       With no items array we still know the count, so report it as
+       countOnly rather than inventing an empty list. */
+    if (items && items.length) return normalizeShopifyCart({ items: items, item_count: count });
+    return { items: [], itemCount: count, empty: count === 0, countOnly: true };
+  }
+
   function fetchHostCart(platform) {
     if (platform === "shopify") {
       return fetch("/cart.js", { headers: { "Accept": "application/json" } }).then(function (r) {
         if (!r.ok) throw new Error("cart.js HTTP " + r.status);
         return r.json();
-      }).then(normalizeShopifyCart);
+      }).then(normalizeShopifyCart).catch(function (err) {
+        /* Even on Shopify the endpoint can be proxied away, rate-limited, or
+           blocked by a consent/CDN layer. Falling back to the rendered badge
+           keeps PEAR showing the right COUNT instead of stalling at zero. */
+        var fallback = cartFromDOMBadge();
+        if (fallback) return fallback;
+        throw err;
+      });
     }
     if (platform === "custom" && w.PEAR_CART_CONFIG && typeof w.PEAR_CART_CONFIG.getCart === "function") {
       return Promise.resolve(w.PEAR_CART_CONFIG.getCart());
     }
-    return Promise.reject(new Error("no known host cart integration (platform: " + platform + ")"));
+    /* No readable cart API on this platform - the Fox case. Try a known
+       global, then the rendered badge, before giving up entirely. */
+    var fromGlobal = readHostCartGlobal();
+    if (fromGlobal) return Promise.resolve(fromGlobal);
+    var fromBadge = cartFromDOMBadge();
+    if (fromBadge) return Promise.resolve(fromBadge);
+    return Promise.reject(new Error("no readable host cart (platform: " + platform + ")"));
   }
 
-  /* Pushes one authoritative snapshot into `targetWindow` (the fitting-room
-     iframe). Called: on the PEAR_CART_REQUEST_SYNC handshake below, after
-     every successful add/remove (so PEAR reflects real host state rather
-     than just its own optimistic guess), and by the live host-change watch
-     further down. */
+  /* Last snapshot we successfully read, cached from the moment this script
+     boots (primeHostCart below). It is what makes hydration INSTANT: the
+     iframe gets the real count on the very first tick it can receive a
+     message, instead of rendering 0 while a /cart.js round-trip is still in
+     flight. */
+  var lastKnownCart = null;
+
+  function postCart(targetWindow, cart) {
+    if (!targetWindow || !cart) return;
+    try { targetWindow.postMessage({ type: "PEAR_CART_SYNC", cart: cart }, PEAR_BASE); }
+    catch (err) { /* iframe may already be torn down (session ended) - nothing to sync into */ }
+  }
+
+  /* Pushes the host cart into `targetWindow` (the fitting-room iframe) in two
+     beats: the cached snapshot goes out SYNCHRONOUSLY so PEAR paints the
+     right count with zero delay, then the freshly-read authoritative one
+     follows the moment it resolves. Called on the PEAR_CART_REQUEST_SYNC
+     handshake, after every add/remove, and by the live host-change watch. */
   function pushCartSync(targetWindow) {
     if (!targetWindow) return;
+    postCart(targetWindow, lastKnownCart);
     fetchHostCart(detectCartPlatform()).then(function (cart) {
-      try { targetWindow.postMessage({ type: "PEAR_CART_SYNC", cart: cart }, PEAR_BASE); }
-      catch (err) { /* iframe may already be torn down (session ended) - nothing to sync into */ }
+      lastKnownCart = cart;
+      postCart(targetWindow, cart);
     }).catch(function (err) {
       console.warn("[PEAR widget] couldn't read host cart:", err && err.message);
+    });
+  }
+
+  /* Immediate hydration - runs at widget boot, long before the shopper opens
+     anything, so `lastKnownCart` is already populated by the time an iframe
+     exists to receive it. Also pushes straight into an already-open modal,
+     which is what makes a host-side cart change show up in PEAR live. */
+  function primeHostCart() {
+    fetchHostCart(detectCartPlatform()).then(function (cart) {
+      var changed = !lastKnownCart || lastKnownCart.itemCount !== cart.itemCount;
+      lastKnownCart = cart;
+      if (changed && activeIframe && activeIframe.contentWindow) {
+        postCart(activeIframe.contentWindow, cart);
+      }
+    }).catch(function (err) {
+      /* Genuinely unreadable cart (no API, no hook, no badge on the page).
+         Deliberately NOT synthesised as an empty cart - claiming "0 items"
+         when the store may well hold several is worse than PEAR simply
+         keeping its own local count. */
+      console.warn("[PEAR widget] host cart not readable at boot:", err && err.message);
     });
   }
 
@@ -1986,33 +2090,56 @@
      combines two theme-agnostic signals into the same re-sync:
        1. A MutationObserver on common cart-count badge selectors - catches
           most themes' own AJAX-cart updates within a frame or two.
-       2. A light background poll (Shopify's /cart.js is cheap/cacheable) as
-          a backstop for whatever (1) misses - a theme with no visible count
-          badge, a full reload of the host tab, etc. */
-  var CART_COUNT_SELECTORS = [
-    ".cart-count", "#CartCount", "[data-cart-count]", ".cart-count-bubble",
-    ".cart-link__bubble", ".site-header__cart-count", ".cart__count"
-  ].join(", ");
-  var CART_POLL_MS = 5000;
+       2. A light background poll as a backstop for whatever (1) misses - a
+          theme with no visible count badge, a badge rendered inside a
+          closed shadow root, a full reload of the host tab, etc.
+     (CART_COUNT_SELECTORS is shared with the badge READER - see
+     readHostCartCountFromDOM above.) */
+  var CART_POLL_MS = 2000;
   var cartWatchObserver = null;
   var cartWatchTimer = null;
 
   function startCartWatch(iframeEl) {
     stopCartWatch();
+    var syncNow = function () {
+      if (iframeEl && iframeEl.contentWindow) pushCartSync(iframeEl.contentWindow);
+    };
+
     if (w.MutationObserver) {
+      cartWatchObserver = new w.MutationObserver(function (records) {
+        /* Ignore mutations originating inside our OWN overlay - the widget's
+           modal/iframe churns the DOM and would otherwise re-trigger this on
+           every one of its own paints. */
+        for (var r = 0; r < records.length; r++) {
+          var target = records[r].target;
+          if (activeOverlay && target && activeOverlay.contains(target)) continue;
+          syncNow();
+          return;
+        }
+      });
       var badges = d.querySelectorAll(CART_COUNT_SELECTORS);
-      if (badges.length) {
-        cartWatchObserver = new w.MutationObserver(function () {
-          if (iframeEl && iframeEl.contentWindow) pushCartSync(iframeEl.contentWindow);
-        });
-        for (var i = 0; i < badges.length; i++) {
-          cartWatchObserver.observe(badges[i], { childList: true, characterData: true, subtree: true });
+      for (var i = 0; i < badges.length; i++) {
+        /* Observe the badge AND its parent: many themes REPLACE the badge
+           node outright on update rather than editing its text, which an
+           observer bound only to the old node would never see. */
+        cartWatchObserver.observe(badges[i], { childList: true, characterData: true, subtree: true });
+        if (badges[i].parentNode && badges[i].parentNode.nodeType === 1) {
+          cartWatchObserver.observe(badges[i].parentNode, { childList: true, characterData: true, subtree: true });
         }
       }
+      /* No badge on the page yet (a theme that renders its cart chrome
+         lazily): watch for one appearing, cheaply - childList only, no
+         characterData, so this is a structural-change watch rather than a
+         full text observer over the whole document. */
+      if (!badges.length && d.body) {
+        cartWatchObserver.observe(d.body, { childList: true, subtree: true });
+      }
     }
-    cartWatchTimer = w.setInterval(function () {
-      if (iframeEl && iframeEl.contentWindow) pushCartSync(iframeEl.contentWindow);
-    }, CART_POLL_MS);
+
+    /* The poll re-reads through the same tiered reader, so it also covers
+       the case where the badge is unchanged but the underlying cart JSON
+       moved (e.g. a quantity edit that leaves the item count the same). */
+    cartWatchTimer = w.setInterval(syncNow, CART_POLL_MS);
   }
 
   function stopCartWatch() {
@@ -2104,6 +2231,11 @@
        Fire-and-forget: the result is merged opportunistically, and its absence
        (non-Shopify store, collection page) changes nothing. */
     loadShopifyProductJSON();
+    /* Read the host cart straight away - boot is the earliest point this can
+       happen, so PEAR has the real count cached and ready before the shopper
+       has even opened the fitting room. Fire-and-forget: an unreadable cart
+       just leaves the cache empty (see primeHostCart). */
+    primeHostCart();
     injectAllButtons();
     /* Re-inject as the DOM changes - infinite scroll, tab/filter switches, quick-
        shop modals - so dynamically added products get their button too. Injection

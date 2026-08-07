@@ -129,6 +129,9 @@ const I18N = {
      Bi-directional Cart Sync comment block in app.js). */
   cartDropdownTitle:         { he: "הסל שלך", en: "Your cart" },
   cartDropdownEmpty:         { he: "הסל ריק", en: "Your cart is empty" },
+  /* Shown when the host store's cart COUNT is known but its line items are
+     not readable - see the countOnly branch in renderCartDropdown(). */
+  cartDropdownCountOnly:     { he: "{n} פריטים בסל בחנות", en: "{n} items in your store cart" },
   cartRemoveItemAria:        { he: "הסר פריט · Remove item", en: "Remove item" },
 
   personalTitlePrefix:       { he: "ככה המידה", en: "Here's how size" },

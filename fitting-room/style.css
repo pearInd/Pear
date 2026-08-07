@@ -2406,27 +2406,54 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    not a fixed viewport corner, so a hardcoded fixed offset would drift out
    from under it the moment the header's own layout/scroll state changes. ── */
 .cart-dropdown {
-  position: absolute; top: calc(100% + 12px); inset-inline-end: 0; z-index: 100;
-  direction: rtl;
+  position: absolute; top: calc(100% + 8px); inset-inline-end: 0; z-index: 9999;
+  /* BUG FIX: was a hardcoded `direction: rtl`, which left the popover
+     right-to-left (text alignment, and the remove button's side) even in
+     English. Inherited from <html dir>, which i18n.js already keeps current,
+     so the popover follows the active language like the rest of the UI. */
+  direction: inherit;
   width: 280px; max-width: calc(100vw - 32px); max-height: 60vh; overflow-y: auto;
   padding: 14px;
   border: 1px solid var(--glass-border); border-radius: 16px;
+  /* Explicitly opaque enough that NOTHING behind it (the page h1/h2, the
+     camera stage) can read through - backdrop-filter alone is not a
+     guarantee, since a browser that ignores/degrades it would otherwise
+     leave this popover translucent over live content. */
   background: rgba(255, 255, 255, .97);
-  -webkit-backdrop-filter: var(--blur-lg); backdrop-filter: var(--blur-lg);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, .15);
+  -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .18), 0 2px 8px rgba(0, 0, 0, .08);
   animation: fade .25s var(--ease) both;
 }
 .cart-dropdown[hidden] { display: none; }
 
+/* BUG FIX (popover rendering UNDER page chrome): on phones .app-header is
+   `position: sticky; z-index: 40`, which makes it a stacking context - so the
+   popover's own z-index could only ever compete INSIDE it, and fixed siblings
+   later in the document (.lang-switch / .profile-btn at 100, the help widget
+   at 150) painted straight over it no matter how high that z-index went.
+   Raising the header's own context while the popover is open is what actually
+   lifts it clear. 190 is deliberate: above ordinary page chrome (help widget
+   150) but BELOW every real overlay - lightbox 200, compare 220, toast 300,
+   garment-detect 400 - so an open popover can never float over a modal.
+   Toggled from setupCartButton() in app.js, only for as long as it's open. */
+.app-header.has-cart-open { position: relative; z-index: 190; }
+
 .cart-dropdown__head {
-  display: flex; align-items: baseline; gap: 5px;
+  display: flex; align-items: baseline; gap: 6px;
   font-family: "Urbanist", sans-serif; font-size: .95rem; color: var(--ink);
   padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--glass-line);
 }
-.cart-dropdown__head span { font-size: .78rem; font-weight: 600; color: var(--muted); }
+/* the heading itself may shrink/ellipsize; the count chip never does */
+.cart-dropdown__head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cart-dropdown__count {
+  flex: none; margin-inline-start: auto;
+  font-family: "Inter", sans-serif; font-size: .76rem; font-weight: 700; color: var(--muted);
+}
+.cart-dropdown__count:empty { display: none; }
 
 .cart-dropdown__empty {
   margin: 6px 0 2px; text-align: center; font-size: .84rem; color: var(--muted);
+  line-height: 1.45;
 }
 .cart-dropdown__empty[hidden] { display: none; }
 
@@ -2600,6 +2627,9 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .pear-help-widget__popover {
   position: absolute; bottom: calc(100% + 12px); inset-inline-start: 0;
   width: min(320px, calc(100vw - 40px));
+  /* never grow past the viewport on a short screen - scroll inside instead
+     (same guard as .cart-dropdown / .profile-dropdown) */
+  max-height: calc(100vh - 120px); overflow-y: auto;
   padding: 18px;
   border: 1px solid rgba(255, 255, 255, .4); border-radius: var(--radius-lg);
   background: linear-gradient(135deg, rgba(255, 253, 246, .96) 0%, rgba(250, 247, 235, .93) 100%);
@@ -2690,8 +2720,15 @@ body.focus-mode.is-scrolled .profile-btn {
 
 .profile-dropdown {
   position: fixed; top: 60px; right: 16px; z-index: 100;
-  direction: rtl;
+  /* BUG FIX: was a hardcoded `direction: rtl` - the same bug just fixed on
+     .cart-dropdown, which left this panel right-to-left even in English.
+     `right:16px` above is deliberately NOT switched to a logical property:
+     it pins to #profileBtn, which is itself `position:fixed; right:16px` in
+     both directions, so the two must stay on the same physical edge. */
+  direction: inherit;
   width: 220px; max-width: calc(100vw - 32px); padding: 16px;
+  /* never run off a short viewport (landscape phone) - scroll inside instead */
+  max-height: calc(100vh - 76px); overflow-y: auto;
   border: 1px solid var(--glass-border); border-radius: 12px;
   background: rgba(255, 255, 255, .97);
   -webkit-backdrop-filter: var(--blur-lg); backdrop-filter: var(--blur-lg);
@@ -2722,7 +2759,9 @@ body.focus-mode.is-scrolled .profile-btn {
 .profile-dropdown__divider { height: 1px; margin: 4px 0 8px; background: var(--glass-line); }
 
 /* ── measurements section - right-aligned rows ── */
-.profile-dropdown__measurements { text-align: right; }
+/* `start`, not `right` - follows the inherited direction now that the panel
+   no longer forces RTL on itself (see .profile-dropdown above). */
+.profile-dropdown__measurements { text-align: start; }
 .profile-dropdown__row {
   display: flex; align-items: baseline; gap: 6px; padding: 4px 0;
   font-family: "Inter", sans-serif; font-size: .82rem;

@@ -342,9 +342,15 @@
              (position:relative in style.css), not fixed like .profile-dropdown,
              since #cartBtn itself sits in normal document flow, not a fixed corner. -->
         <div class="cart-dropdown" id="cartDropdown" role="menu" aria-label="סל קניות · Shopping cart" hidden>
+            <!-- Heading is bound STRICTLY to the active language (one data-i18n node,
+                 no bilingual "· English" partner span). The partner-span pattern used
+                 elsewhere in this file is a deliberate design accent on wide, static
+                 labels; inside this narrow 280px popover it rendered "הסל שלך · Your
+                 cart" as one run-on line that wrapped and collided with the list
+                 below it, so this heading opts out of that pattern entirely. -->
             <div class="cart-dropdown__head">
                 <strong data-i18n="cartDropdownTitle">הסל שלך</strong>
-                <span data-i18n-hide-on-en>· Your cart</span>
+                <span class="cart-dropdown__count" id="cartHeadCount"></span>
             </div>
             <p class="cart-dropdown__empty" id="cartEmpty" data-i18n="cartDropdownEmpty">הסל ריק</p>
             <div class="cart-dropdown__list" id="cartList"></div>
