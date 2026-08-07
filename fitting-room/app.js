@@ -5691,6 +5691,68 @@ function setupProfileButton() {
   updateProfileButton();
 }
 
+/* ── Fullscreen / Expand toggle (#fullscreenToggleBtn, was "Back to Store") ──
+   Gives the shopper an immersive, unconstrained view of the fitting room
+   instead of a link that navigated them away mid-session. Feature-detects the
+   Fullscreen API (Safari still needs the -webkit- prefix on every part of it)
+   and hides the button entirely - the "Alternative Mode: Clean Hide" - on any
+   browser/embed that can't support it, rather than leaving a dead control
+   sitting in the header. A request can also be rejected at click-time (most
+   commonly: this page is inside a THIRD-PARTY host's iframe whose <iframe>
+   tag never granted the "fullscreen" Permissions-Policy value) - that's
+   caught and hides the button too, for the same reason. */
+function fullscreenSupported() {
+  const el = document.documentElement;
+  return !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) &&
+         !!(el.requestFullscreen || el.webkitRequestFullscreen);
+}
+function isFullscreenActive() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+function requestFullscreenCompat() {
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  return req ? req.call(el) : Promise.reject(new Error("Fullscreen API unavailable"));
+}
+function exitFullscreenCompat() {
+  const exit = document.exitFullscreen || document.webkitExitFullscreen;
+  return exit ? exit.call(document) : Promise.reject(new Error("Fullscreen API unavailable"));
+}
+
+function setupFullscreenToggle() {
+  const btn = $("fullscreenToggleBtn");
+  if (!btn || btn.dataset.wired) return;
+
+  if (!fullscreenSupported()) {
+    btn.hidden = true;   // Alternative Mode - no dead control left in the header
+    return;
+  }
+  btn.dataset.wired = "1";
+
+  const syncState = () => {
+    const active = isFullscreenActive();
+    btn.classList.toggle("is-fullscreen", active);
+    const label = $("fsToggleLabel");
+    if (label) label.textContent = t(active ? "fullscreenExitLabel" : "fullscreenToggleLabel");
+    btn.setAttribute("aria-label", t(active ? "fullscreenExitAria" : "fullscreenToggleAria"));
+    const expandIcon = btn.querySelector(".fs-icon--expand");
+    const compressIcon = btn.querySelector(".fs-icon--compress");
+    if (expandIcon)   expandIcon.hidden = active;
+    if (compressIcon) compressIcon.hidden = !active;
+  };
+
+  btn.addEventListener("click", () => {
+    const action = isFullscreenActive() ? exitFullscreenCompat() : requestFullscreenCompat();
+    action.catch((err) => {
+      console.warn("[PEAR] fullscreen toggle failed - hiding the control:", err?.message || err);
+      btn.hidden = true;   // e.g. blocked by the embedding page's Permissions Policy
+    });
+  });
+  document.addEventListener("fullscreenchange", syncState);
+  document.addEventListener("webkitfullscreenchange", syncState);
+  syncState();
+}
+
 /* Show the name/email gate and wire its controls (idempotent - safe to call
    more than once). Hides the measurement form until the visitor registers.
    opts.reauth + opts.user (Case 2 - known device, stale auth date): prefills
@@ -8663,6 +8725,7 @@ function init() {
     });
     setupProfileButton();
   }
+  setupFullscreenToggle();   // header "Back to Store" -> fullscreen toggle; wired regardless of DEMO_GATE
 
   document.querySelectorAll("#sizeForm input").forEach((i) => {
     i.addEventListener("input", calculateSize);

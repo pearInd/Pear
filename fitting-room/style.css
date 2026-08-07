@@ -908,21 +908,24 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   padding: 24px clamp(16px,5vw,36px) 0;
   max-width: 760px; margin: 0 auto;
 }
-/* Back to Store - frosted-glass pill matching the room theme */
+/* Fullscreen toggle (was "Back to Store" - now a <button>, not an <a>, so
+   margin/appearance/cursor are reset the same way .btn-edit-measurements
+   resets them below) - frosted-glass pill matching the room theme */
 .back-to-store {
   align-self: center;
   display: inline-flex; align-items: center; gap: 6px;
   min-width: 0;   /* LAYOUT FIX: let this pill itself shrink inside the nav zone -
                      without this it refused to shrink below its label's natural
                      width and spilled out of the nav box into the brand lockup. */
-  padding: 7px 13px;
+  padding: 7px 13px; margin: 0; border: 0;
+  appearance: none; -webkit-appearance: none;
   border-radius: var(--pill);
   background: var(--glass-strong);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   border: 1px solid var(--glass-border);
   color: var(--ink);
   font-family: "Inter", sans-serif; font-size: .8rem; font-weight: 600;
-  text-decoration: none; white-space: nowrap;
+  text-decoration: none; white-space: nowrap; cursor: pointer;
   box-shadow: var(--shadow-soft);
   transition: transform .2s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease);
 }
@@ -931,6 +934,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   border-color: rgba(141, 182, 0, .55);
   box-shadow: 0 8px 22px rgba(141, 182, 0, .2);
 }
+.back-to-store:active { transform: scale(.96); }
 .back-to-store svg  { flex: none; }   /* icon is fixed-size - only the label may shrink */
 /* LAYOUT FIX: truncate the label with an ellipsis instead of letting it overflow
    the pill (which is what was visually overlapping the pear logo). min-width:0
