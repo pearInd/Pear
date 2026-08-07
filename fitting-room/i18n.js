@@ -130,7 +130,13 @@ const I18N = {
   flipCamAria:               { he: "הפוך מצלמה · Flip camera", en: "Flip camera" },
   swatchesAria:              { he: "צבע · Colour", en: "Colour" },
   liveCountdownLabel:        { he: "שניות", en: "seconds" },
-  scanOverlayText:           { he: "מכין את חדר ההלבשה הוירטואלי", en: "Preparing your virtual fitting room" },
+  /* Progressive loading-state guidance (#scanStepText) - cycled by
+     startScanTimer()/updateScanTimer() in app.js while #scanOverlay is up,
+     one step at a time, so the shopper always knows what's happening and how
+     to help (frame themselves, hold still, wait for the garment). */
+  scanStepFrame:             { he: "קח כמה צעדים אחורה שיראו אותך בבירור", en: "Please step back so your full body is in frame" },
+  scanStepCalibrate:         { he: "מכייל פרופורציות גוף ותאורה...", en: "Calibrating body proportions & lighting..." },
+  scanStepFitting:           { he: "מלביש את הטקסטורה והבד...", en: "Fitting active garment physics..." },
   camPlaceholderText:        { he: "כדי להתחיל במדידה, נשמח לקבל גישה למצלמה. אל דאגה, הצילום משמש למדידת מידות הגוף בלבד ואינו נשמר בשרתים שלנו.", en: "To start your fitting, we'll need access to your camera. Don't worry - the footage is used only to measure your body and is never stored on our servers." },
   startCamBtn:               { he: "הפעלת מצלמה לתחילת מדידה", en: "Turn on camera to start fitting" },
   captureBtnLabel:           { he: "מתחילים במדידה", en: "Start fitting" },

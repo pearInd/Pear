@@ -409,7 +409,12 @@ function stopStatsMonitor() {
 }
 
 /* ── embedded catalog ──────────────────────────────────────────────────────── */
-/* Catalog item shape: { id, name, price, type, subType, color, img, imgBack?, images?, variants? }.
+/* Catalog item shape: { id, name, price, type, subType, color, fabric?, img, imgBack?, images?, variants? }.
+   `fabric` drives Fabric-Aware Tension & Physics Conditioning (see FABRIC_PHYSICS /
+   getFabricModifier() below) - one of FABRIC_PHYSICS's keys ("dry_fit", "cotton",
+   "denim", "silk", "knitwear"). Optional: absent, unset, or unrecognized falls back to
+   DEFAULT_FABRIC, so legacy items (and item 99 below, left unset on purpose) still get
+   a physics clause instead of none.
    `img` is the FRONT asset (required - every legacy consumer reads it: catalog cards,
    thumbnails, store handoff). Product angles can be supplied THREE ways, all merged by
    galleryOf() into one { front, back?, side?, detail? } map (highest priority first):
@@ -426,17 +431,17 @@ function stopStatsMonitor() {
                    white: { swatch:"#eee", front:"…" } } }   // white's back/side auto-fall back */
 const PEAR_CATALOG = [
   /* ── Shirts ── */
-  { id: 1,  name: "Halo Tank",         price: 88,  type: "shirt", subType: "sleeveless",   color: "#3f5a8a",
+  { id: 1,  name: "Halo Tank",         price: 88,  type: "shirt", subType: "sleeveless",   color: "#3f5a8a", fabric: "dry_fit",
     img: "https://images.unsplash.com/photo-1556821840-3a63f15732ce?w=1600&q=90&auto=format&fit=crop&crop=top,center" },
-  { id: 2,  name: "Vapor Sleeveless",  price: 72,  type: "shirt", subType: "sleeveless",   color: "#b8c0cc",
+  { id: 2,  name: "Vapor Sleeveless",  price: 72,  type: "shirt", subType: "sleeveless",   color: "#b8c0cc", fabric: "dry_fit",
     img: "https://burst.shopifycdn.com/photos/grey-t-shirt.jpg?width=1600&format=pjpg&quality=90" },
-  { id: 3,  name: "Ion Crew Tee",      price: 96,  type: "shirt", subType: "short_sleeve", color: "#c2452f",
+  { id: 3,  name: "Ion Crew Tee",      price: 96,  type: "shirt", subType: "short_sleeve", color: "#c2452f", fabric: "cotton",
     img: "https://burst.shopifycdn.com/photos/red-t-shirt.jpg?width=1600&format=pjpg&quality=90" },
-  { id: 4,  name: "Pulse Tee",         price: 84,  type: "shirt", subType: "short_sleeve", color: "#1f6feb",
+  { id: 4,  name: "Pulse Tee",         price: 84,  type: "shirt", subType: "short_sleeve", color: "#1f6feb", fabric: "cotton",
     img: "https://burst.shopifycdn.com/photos/cobalt-blue-t-shirt.jpg?width=1600&format=pjpg&quality=90" },
-  { id: 5,  name: "Circuit Tee",       price: 90,  type: "shirt", subType: "short_sleeve", color: "#149c7a",
+  { id: 5,  name: "Circuit Tee",       price: 90,  type: "shirt", subType: "short_sleeve", color: "#149c7a", fabric: "dry_fit",
     img: "https://burst.shopifycdn.com/photos/teal-t-shirt.jpg?width=1600&format=pjpg&quality=90" },
-  { id: 6,  name: "Strata Longsleeve", price: 128, type: "shirt", subType: "long_sleeve",  color: "#2b2b30",
+  { id: 6,  name: "Strata Longsleeve", price: 128, type: "shirt", subType: "long_sleeve",  color: "#2b2b30", fabric: "cotton",
     // Multi-angle hero - assets VISUALLY verified (not just HTTP 200): -1 = front
     // packshot (clean white bg → best VTON reference), -3 = back on model, -4 = fabric/
     // logo detail macro. NOTE: -2 is a front-on-model shot (NOT a back) and this item has
@@ -451,26 +456,26 @@ const PEAR_CATALOG = [
     img:     "https://www.universalcolours.com/cdn/shop/files/LongSleeveTee-CharcoalBlack-1.jpg?v=1732626199&width=2048",
     imgBack: "https://www.universalcolours.com/cdn/shop/files/LongSleeveTee-CharcoalBlack-3.jpg?v=1732626199&width=2048",
     images:  { detail: "https://www.universalcolours.com/cdn/shop/files/LongSleeveTee-CharcoalBlack-4.jpg?v=1732626199&width=2048" } },
-  { id: 7,  name: "Nimbus Henley",     price: 134, type: "shirt", subType: "long_sleeve",  color: "#8e7bd0",
+  { id: 7,  name: "Nimbus Henley",     price: 134, type: "shirt", subType: "long_sleeve",  color: "#8e7bd0", fabric: "knitwear",
     img: "https://cdn.shopify.com/s/files/1/0831/9103/products/DK_LS_Henley_Dark_Purple-Final-Web.jpg?v=1665703111" },
-  { id: 8,  name: "Echo Longsleeve",   price: 118, type: "shirt", subType: "long_sleeve",  color: "#d8d4cb",
+  { id: 8,  name: "Echo Longsleeve",   price: 118, type: "shirt", subType: "long_sleeve",  color: "#d8d4cb", fabric: "cotton",
     img: "https://img.magnific.com/premium-photo/beige-long-sleeve-shirt-isolated-white-background_1166140-13287.jpg" },
   /* ── Pants ── */
-  { id: 9,  name: "Glide Slim",        price: 142, type: "pants", subType: "slim",    color: "#2a2d34",
+  { id: 9,  name: "Glide Slim",        price: 142, type: "pants", subType: "slim",    color: "#2a2d34", fabric: "cotton",
     img: "https://cdn.suitsupply.com/image/upload/b_rgb:efefef,bo_500px_solid_rgb:efefef,c_pad,w_2600/b_rgb:efefef,c_pad,dpr_1,w_850,h_1176,f_auto,q_auto,fl_progressive/products/Trousers/default/B6905_28.jpg" },
-  { id: 10, name: "Mono Slim",         price: 118, type: "pants", subType: "slim",    color: "#6e7681",
+  { id: 10, name: "Mono Slim",         price: 118, type: "pants", subType: "slim",    color: "#6e7681", fabric: "cotton",
     img: "https://cdn.suitsupply.com/image/upload/b_rgb:efefef,bo_500px_solid_rgb:efefef,c_pad,w_2600/b_rgb:efefef,c_pad,dpr_1,w_850,h_1176,f_auto,q_auto,fl_progressive/products/Trousers/default/B6906_28.jpg" },
-  { id: 11, name: "Vector Regular",    price: 132, type: "pants", subType: "regular", color: "#3b5bdb",
+  { id: 11, name: "Vector Regular",    price: 132, type: "pants", subType: "regular", color: "#3b5bdb", fabric: "cotton",
     img: "https://image.hm.com/assets/hm/54/71/5471b01a9ccf7562c74cf7d8f0102228465f30b5.jpg?imwidth=2160" },
-  { id: 12, name: "Apex Regular",      price: 124, type: "pants", subType: "regular", color: "#8a8f98",
+  { id: 12, name: "Apex Regular",      price: 124, type: "pants", subType: "regular", color: "#8a8f98", fabric: "cotton",
     img: "https://image.hm.com/assets/hm/72/56/7256f227cb82ac834363dfb140f245652797d841.jpg?imwidth=2160" },
-  { id: 13, name: "Drift Wide",        price: 156, type: "pants", subType: "wide",    color: "#1a1a1d",
+  { id: 13, name: "Drift Wide",        price: 156, type: "pants", subType: "wide",    color: "#1a1a1d", fabric: "denim",
     img: "https://cdn.suitsupply.com/image/upload/b_rgb:efefef,bo_300px_solid_rgb:efefef,c_pad,w_2600/b_rgb:efefef,c_pad,dpr_1,w_768,h_922,f_auto,q_auto,fl_progressive/products/Trousers/default/B25209_28.jpg" },
-  { id: 14, name: "Terra Wide",        price: 148, type: "pants", subType: "wide",    color: "#a8794f",
+  { id: 14, name: "Terra Wide",        price: 148, type: "pants", subType: "wide",    color: "#a8794f", fabric: "denim",
     img: "https://cdn.suitsupply.com/image/upload/b_rgb:efefef,bo_500px_solid_rgb:efefef,c_pad,w_2600/b_rgb:efefef,c_pad,dpr_1,w_850,h_1176,f_auto,q_auto,fl_progressive/products/Trousers/default/B25212_28.jpg" },
-  { id: 15, name: "Null Slim",         price: 138, type: "pants", subType: "slim",    color: "#22324f",
+  { id: 15, name: "Null Slim",         price: 138, type: "pants", subType: "slim",    color: "#22324f", fabric: "denim",
     img: "https://cdn.suitsupply.com/image/upload/b_rgb:efefef,bo_500px_solid_rgb:efefef,c_pad,w_2600/b_rgb:efefef,c_pad,dpr_1,w_850,h_1176,f_auto,q_auto,fl_progressive/products/Trousers/default/B9449_28.jpg" },
-  { id: 16, name: "Cargo Wide",        price: 162, type: "pants", subType: "wide",    color: "#566b3e",
+  { id: 16, name: "Cargo Wide",        price: 162, type: "pants", subType: "wide",    color: "#566b3e", fabric: "denim",
     img: "https://image.hm.com/assets/hm/31/ab/31ab5b52cc238aaad4d95fa3a79d2af741bf7192.jpg?imwidth=2160" },
   /* ── Gatekeeper TEST item (intentionally incomplete) ──────────────────────────
      Proves the two-view gate end-to-end: it OPTS INTO strict (requireBothViews) but
@@ -1941,14 +1946,20 @@ function scrollToCamera() {
   window.scrollTo({ top: Math.max(0, Math.min(target, maxScroll)), behavior: "smooth" });
 }
 
-/* ── Loading-state elapsed timer (#scanOverlay / #scanSub) ───────────────────
+/* ── Loading-state elapsed timer + progressive onboarding steps
+   (#scanOverlay / #scanSub / #scanStepText) ─────────────────────────────────
    LOADING (w/ timer) → Model Ready → Start 5s capture. Ticks a live mm:ss counter
    for as long as the loading overlay is up (goLive() start → startBillingWindow()'s
    Model Ready reveal, or an earlier failure/timeout - see those call sites for
-   start/stop wiring). Copy is deliberately generic: never names the underlying AI
-   vendor/model, just what the user is waiting for. */
+   start/stop wiring). Alongside the counter, #scanStepText cycles through
+   SCAN_STEPS on the same interval - guiding the shopper into frame, then
+   explaining what's happening next - so the wait never feels silent or stalled.
+   Copy is deliberately generic: never names the underlying AI vendor/model. */
+const SCAN_STEPS = ["scanStepFrame", "scanStepCalibrate", "scanStepFitting"];
+const SCAN_STEP_INTERVAL_SEC = 3;   // how long each onboarding message stays up before advancing
 let scanTimerInterval = null;
 let scanTimerStartMs = 0;
+let scanStepIndex = -1;
 function startScanTimer() {
   stopScanTimer();                 // clear any stale interval before arming a fresh one
   scanTimerStartMs = Date.now();
@@ -1956,15 +1967,32 @@ function startScanTimer() {
   scanTimerInterval = setInterval(updateScanTimer, 1000);
 }
 function updateScanTimer() {
-  const el = $("scanSub");
-  if (!el) return;
+  const timeEl = $("scanSub");
+  const stepEl = $("scanStepText");
   const elapsedSec = Math.floor((Date.now() - scanTimerStartMs) / 1000);
-  const mm = String(Math.floor(elapsedSec / 60)).padStart(2, "0");
-  const ss = String(elapsedSec % 60).padStart(2, "0");
-  el.textContent = `Preparing Virtual Fitting Room · ${mm}:${ss}`;
+  if (timeEl) {
+    const mm = String(Math.floor(elapsedSec / 60)).padStart(2, "0");
+    const ss = String(elapsedSec % 60).padStart(2, "0");
+    timeEl.textContent = `${mm}:${ss}`;
+  }
+  if (stepEl) {
+    const nextIndex = Math.min(Math.floor(elapsedSec / SCAN_STEP_INTERVAL_SEC), SCAN_STEPS.length - 1);
+    if (nextIndex !== scanStepIndex) {
+      scanStepIndex = nextIndex;
+      // Crossfade rather than swap in place - opacity-only, no height change
+      // (see .scan-overlay__text's reserved min-height), so the loader beneath
+      // it never jumps between a short and a long onboarding message.
+      stepEl.classList.add("is-fading");
+      setTimeout(() => {
+        stepEl.textContent = t(SCAN_STEPS[scanStepIndex]);
+        stepEl.classList.remove("is-fading");
+      }, 180);
+    }
+  }
 }
 function stopScanTimer() {
   if (scanTimerInterval) { clearInterval(scanTimerInterval); scanTimerInterval = null; }
+  scanStepIndex = -1;
 }
 
 function showCamError(msg) {
@@ -4340,11 +4368,12 @@ function buildCompositePrompt(item, angle) {
 
   const anchor = getAnatomicalAnchor();
   const fitMod = getFitModifier(getSizeDelta(), item.garmentType);
+  const fabricMod = getFabricModifier(item);
 
   return (
     COMPOSITE_PANEL_CONTRACT + select +
     ` Substitute the person's current ${target} with ${desc}, reproducing its exact colour,` +
-    ` pattern, print and fabric texture. ${anchor} Render a ${fitMod}${COMPOSITE_QUALITY}.${keep}` +
+    ` pattern, print and fabric texture. ${anchor} Render a ${fitMod}${COMPOSITE_QUALITY}.${fabricMod}${keep}` +
     STRICT_INPAINT + ROTATION_CONTINUITY + COMPOSITE_TEMPORAL
   ).replace(/\s+/g, " ").trim();
 }
@@ -4737,6 +4766,37 @@ function getFitModifier(delta, garmentType) {
   /* delta >= 2 */  return "wide-leg garment with generous volume through the thigh and a sweeping leg that breaks softly over the shoe, clean continuous fabric geometry";
 }
 
+/* ── Fabric-Aware Tension & Physics Conditioning ──────────────────────────────
+   getFitModifier() above describes FIT - how loose or tight the cut is. This
+   describes MATERIAL - how that specific fabric physically behaves once fit is
+   accounted for: a dry-fit tee clings and shows compression lines under tension,
+   raw denim holds a stiff, angular shape almost independent of the body inside
+   it. The two compose (fit + material), they never overlap or contradict.
+   Keyed by item.fabric - catalog metadata (PEAR_CATALOG), a custom upload's
+   declared material, or a store handoff's fabric field - so the clause tracks
+   whatever garment/colour is ACTIVE rather than being fixed per garment type. */
+const FABRIC_PHYSICS = {
+  dry_fit:  "a synthetic athletic dry-fit stretch material: sleek, body-conforming tension with the fabric hugging the body's real contours, subtle athletic stretch lines radiating across the chest, shoulders and back where the material tensions over muscle and bone, and a smooth skin-tight elasticity - without artificially slimming, compressing or reshaping the body underneath",
+  cotton:   "medium-weight woven cotton: a natural, semi-structured drape with soft, rounded fold lines, moderate stiffness that holds its shape at the seams while relaxing over the body's contours, and a matte, breathable weave texture",
+  denim:    "rigid, heavyweight denim: a structured, semi-stiff drape that holds its own shape largely independent of the body, thick angular fold lines at the hips, knees and elbows, visible top-stitching, and rigid shape retention over the body's mass - the fabric resists the body rather than clinging to it",
+  silk:     "lightweight, fluid silk: a soft, liquid drape that skims the body with minimal resistance, fine cascading folds rather than sharp creases, and a subtle natural sheen that shifts with the fabric's movement",
+  knitwear: "a soft knit weave: visible ribbed knit texture lines, a close, slightly elastic cling that follows the body's contours with gentle stretch recovery, and soft rolled edges at the hem, cuffs and collar rather than crisp woven seams",
+};
+const DEFAULT_FABRIC = "cotton";   // legacy/custom items with no declared fabric read as this, never with no physics clause at all
+
+/**
+ * Fabric-physics clause for one garment. `subject` lets a two-garment prompt
+ * (buildLookPrompt) name which layer the clause is about; single-garment
+ * builders leave it at the generic default.
+ * @param {object} item - reads item.fabric; anything unset/unrecognized falls back to DEFAULT_FABRIC
+ * @param {string} [subject]
+ * @returns {string}
+ */
+function getFabricModifier(item, subject = "This garment's fabric") {
+  const key = item && Object.prototype.hasOwnProperty.call(FABRIC_PHYSICS, item.fabric) ? item.fabric : DEFAULT_FABRIC;
+  return ` ${subject} is ${FABRIC_PHYSICS[key]}.`;
+}
+
 /* Appended to every VTON prompt to lock the engine into photorealistic output.
    Kept as a module constant so changing it in one place affects all call sites. */
 const QUALITY_SUFFIX = ", photorealistic real-world fabric texture, visible seams and stitching, micro-detailed weave, natural environmental lighting matching the user's room, cinematic shading, ultra-realistic physical garment appearance, strictly maintain flawless fabric integrity, continuous realistic 3D mesh, and natural material physics without any glitching, strange horizontal bands, tearing, or unnatural structural folds";
@@ -4751,8 +4811,8 @@ const HEM_DETAIL = " Preserve the garment's printed graphics, logos, and text, a
    drift (e.g. trying a shirt silently restyles the user's real pants). These hard
    "do not touch" instructions pin the untouched layer to the live camera so a
    top swap edits ONLY the top, and a bottom swap edits ONLY the bottom. */
-const KEEP_BOTTOMS = " Keep the person's existing lower body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the trousers, shorts, skirt, shoes, or anything below the waist.";
-const KEEP_TOP     = " Keep the person's existing upper body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the shirt, top, jacket, or anything above the waist.";
+const KEEP_BOTTOMS = " Keep the person's existing lower body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the trousers, shorts, skirt, shoes, belt, or anything below the waist, and do not add, invent or restyle any accessories that were not already present.";
+const KEEP_TOP     = " Keep the person's existing upper body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the shirt, top, jacket, hat, scarf, jewelry, or anything above the waist, and do not add, invent or restyle any accessories that were not already present.";
 
 /* ── Strict garment inpainting - the hallucination clamp ──────────────────────
    KEEP_BOTTOMS/KEEP_TOP only ever pinned the OPPOSITE GARMENT layer. Everything else in
@@ -4792,7 +4852,12 @@ const STRICT_INPAINT =
   " wider torso, drape and stretch the garment realistically OVER their actual stomach and" +
   " body volume - with natural fabric tension, creases and shadow folds where it meets" +
   " their real contours, not a flat model-cut fit. Fit the garment to the body; never the" +
-  " body to the garment.";
+  " body to the garment." +
+  " STRICT GARMENT ISOLATION: replace and fit only the target garment named above - this is" +
+  " a single-item substitution, not a full-outfit restyling. Preserve the shopper's" +
+  " existing pants, shorts, skirt, belt and every other accessory exactly as seen in the" +
+  " live camera frame: no added belts, no unrequested pants, no added accessories, and no" +
+  " invented clothing items of any kind outside the one garment specified.";
 
 /* ── Rotation continuity - the "my real shirt came back" clamp ────────────────
    Paired with the freeze-through-the-turn hold in the OrientationWatcher (see
@@ -4830,14 +4895,15 @@ function buildPrompt(item) {
   const anchor = getAnatomicalAnchor();
   const delta  = getSizeDelta();
   const fitMod = getFitModifier(delta, item.garmentType);
+  const fabricMod = getFabricModifier(item);
   const suffix = HARD_NEGATIVE;   // universal hard negative (combined orientation lives in angleClause)
 
   if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${colorWord} ${sub} trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+    return `Substitute the current bottoms with ${colorWord} ${sub} trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
       .replace(/\s+/g, " ").trim();
   }
   const noun = SHIRT_NOUN[item.subType] || "top";
-  return `Substitute the current top with a ${colorWord} ${sub} ${noun}. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+  return `Substitute the current top with a ${colorWord} ${sub} ${noun}. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
     .replace(/\s+/g, " ").trim();
 }
 
@@ -4852,14 +4918,15 @@ function buildCustomPrompt(item) {
   const anchor = getAnatomicalAnchor();
   const delta  = getSizeDelta();
   const fitMod = getFitModifier(delta, item.garmentType);
+  const fabricMod = getFabricModifier(item);
   const suffix = HARD_NEGATIVE;
   const ref = "the exact garment shown in the reference image - a custom uploaded garment - replicating its precise color, pattern, print, fabric texture and silhouette";
 
   if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+    return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
       .replace(/\s+/g, " ").trim();
   }
-  return `Substitute the current top with ${ref}, worn on the upper body. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+  return `Substitute the current top with ${ref}, worn on the upper body. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
     .replace(/\s+/g, " ").trim();
 }
 
@@ -4986,12 +5053,15 @@ function buildLookPrompt(top, bottom) {
   const delta  = getSizeDelta();
   const topFit = getFitModifier(delta, top.garmentType);
   const botFit = getFitModifier(delta, bottom.garmentType);
+  const topFabric = getFabricModifier(top, "The top's fabric");
+  const botFabric = getFabricModifier(bottom, "The bottoms' fabric");
   const suffix = HARD_NEGATIVE;
   return (
     `Dress the person in one complete outfit in a single pass: ` +
     `replace the top with a ${tColor} ${tSub} ${tNoun} rendered as a ${topFit}, ` +
     `and at the same time replace the bottoms with ${bColor} ${bSub} trousers rendered as a ${botFit}. ` +
     `${anchor} Render both garments together in a single photorealistic pass${QUALITY_SUFFIX}.` +
+    `${topFabric}${botFabric}` +
     /* A full look replaces BOTH layers, so there is no KEEP_TOP/KEEP_BOTTOMS to pin here -
        which makes the face/hair/skin/background lock the ONLY thing standing between this
        prompt and a regenerated room. It matters more here, not less. */

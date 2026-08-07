@@ -367,8 +367,6 @@
             <!-- the frozen "masterpiece" snapshot is painted here -->
             <canvas id="resultCanvas"></canvas>
 
-            <div class="camera-card__guide" id="alignGuide"></div>
-
             <!-- strict 5-second live countdown - the visible token kill-clock.
                  Shown only while .show-live; ticks 5→1 then auto-freezes. -->
             <div class="live-countdown" id="liveCountdown" hidden aria-live="polite">
@@ -385,12 +383,19 @@
                     <img class="pear-loader__fruit" src="/pear-logo.png" alt="" width="48">
                     <div class="pear-loader__shadow"></div>
                 </div>
-                <div class="scan-overlay__text"><span data-i18n="scanOverlayText">מכין את חדר ההלבשה הוירטואלי</span><span class="dots"><i>.</i><i>.</i><i>.</i></span></div>
+                <!-- Progressive onboarding copy - cycled by startScanTimer()/updateScanTimer()
+                     in app.js (step back into frame → calibrating → fitting the garment) so the
+                     shopper always knows what's happening and how to help. #scanStepText is
+                     driven entirely from JS (via t()), not data-i18n, so a language toggle
+                     mid-cycle can't stomp the currently-shown step; the text below is only the
+                     pre-JS fallback. min-height on .scan-overlay__text (style.css) reserves room
+                     for the longest step so switching between them never shifts the loader. -->
+                <div class="scan-overlay__text"><span id="scanStepText">קח כמה צעדים אחורה שיראו אותך בבירור</span><span class="dots"><i>.</i><i>.</i><i>.</i></span></div>
                 <!-- CONTENT CLEANUP: generic, provider-free copy - never names the underlying
                      AI vendor/model. Ticking mm:ss elapsed counter is written here every
                      second by startScanTimer()/updateScanTimer() in app.js for as long as
                      the loading phase lasts; "00:00" is just the pre-JS default. -->
-                <div class="scan-overlay__sub" id="scanSub">Preparing Virtual Fitting Room · 00:00</div>
+                <div class="scan-overlay__sub" id="scanSub">00:00</div>
             </div>
 
             <div class="camera-card__placeholder" id="camPlaceholder">

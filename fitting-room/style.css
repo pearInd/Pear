@@ -129,6 +129,40 @@ h1, h2, h3, h4 {
 html.pear-returning-check #screen-calculator { display: none !important; }
 @keyframes fade { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 
+/* ── Top-down progressive reveal on screen swap ───────────────────────────
+   Prevents the "random element flash" (CLS) of body text/controls popping in
+   before the structure that frames them: the outer glass shell/card settles
+   first, then the h1/h2 heading, then form controls and copy trail a beat
+   behind. Purely opacity + translateY (never affects layout/box size), so it
+   cannot itself cause a shift; it composes with .screen.active's own fade
+   (each element's animation runs on top of its already-fading ancestor,
+   which is what produces the staggered look) and never touches bespoke
+   reveals that already exist ( .result-actions.is-ready, .active-garment.is-
+   pending, .gd-overlay__panel, etc.) since none of those are h1/h2/form/
+   .cam-controls/.calc-shell/.camera-card/.active-garment. */
+.screen.active .calc-shell,
+.screen.active .camera-card,
+.screen.active .active-garment {
+  animation: fade .5s var(--ease) both;
+}
+.screen.active h1,
+.screen.active h2 {
+  animation: fade .5s var(--ease) both .07s;
+}
+.screen.active form,
+.screen.active .cam-controls {
+  animation: fade .5s var(--ease) both .14s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .screen.active .calc-shell,
+  .screen.active .camera-card,
+  .screen.active .active-garment,
+  .screen.active h1,
+  .screen.active h2,
+  .screen.active form,
+  .screen.active .cam-controls { animation: none; }
+}
+
 .container {
   max-width: 580px;
   margin: 0 auto;
@@ -1098,7 +1132,6 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 /* LIVE try-on: AI-edited stream shown directly */
 .camera-card.show-live #aiVideo { display: block; transform: none; }
 .camera-card.show-live #webcam { visibility: hidden; }
-.camera-card.show-live .camera-card__guide { display: none; }
 
 /* ── Colour swatches - variant bubbles pinned to the camera stage ─────────────
    The only floating gallery control left on the live stage. Pinned to the inline-start
@@ -1158,7 +1191,6 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 /* CLIP replay: a saved history clip plays in #aiVideo (no live billing) */
 .camera-card.show-clip #aiVideo { display: block; transform: none; }
 .camera-card.show-clip #webcam { visibility: hidden; }
-.camera-card.show-clip .camera-card__guide,
 .camera-card.show-clip .camera-card__placeholder { display: none; }
 .camera-card.show-clip::before {
   content: "▶ מדידה קודמת"; position: absolute; top: 14px; inset-inline-start: 14px; z-index: 6;
@@ -1193,15 +1225,6 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .camera-card.show-result .camera-card__live { display: none; }
 .camera-card__live i { width: 7px; height: 7px; border-radius: 50%; background: var(--pear); box-shadow: 0 0 8px var(--pear-glow); animation: blink 1.4s infinite; }
 @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
-
-/* body alignment guide */
-.camera-card__guide {
-  position: absolute; inset: 8% 26%; z-index: 4; pointer-events: none;
-  border: 1.5px dashed rgba(141,182,0,.55); border-radius: 120px;
-  display: none;
-}
-.camera-card.live .camera-card__guide { display: block; }
-.camera-card.show-result .camera-card__guide { display: none; }
 
 /* ── strict 5-second live countdown - the visible token kill-clock ──────────
    A frosted disc whose conic ring drains pear-green → empty as the seconds tick,
@@ -1294,9 +1317,20 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 
 .scan-overlay__text {
   position: relative; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  /* Reserves room for the tallest onboarding step (2 lines on narrow screens in
+     either language) so cycling between messages of very different lengths -
+     "Fitting active garment physics..." vs "Please step back..." - never nudges
+     the loader/timer beneath it. Crossfades via #scanStepText's own opacity
+     transition (see .is-fading below), not a height change, so there is no
+     layout shift between steps either. */
+  min-height: 2.6em; max-width: 320px; margin: 0 auto;
+  text-align: center;
   font-family: "Urbanist"; font-weight: 800; font-size: 1.06rem; color: #fff;
   letter-spacing: .01em; text-shadow: 0 2px 16px rgba(0,0,0,.6);
 }
+#scanStepText { transition: opacity .18s var(--ease); }
+#scanStepText.is-fading { opacity: 0; }
 .scan-overlay__text .dots i { animation: dot 1.4s infinite; opacity: 0; font-style: normal; }
 .scan-overlay__text .dots i:nth-child(2) { animation-delay: .2s; }
 .scan-overlay__text .dots i:nth-child(3) { animation-delay: .4s; }
@@ -1304,6 +1338,10 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .scan-overlay__sub {
   position: relative; z-index: 2; font-size: .76rem; font-weight: 600;
   color: rgba(255,255,255,.85); letter-spacing: .06em; text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  #scanStepText { transition: none; }
 }
 
 /* ── live try-on controls (premium pills) ──────────────────────────────── */
@@ -2021,7 +2059,9 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   box-shadow: var(--shadow-lift), inset 0 1px 0 rgba(255,255,255,.5);
   animation: galleryItemIn .45s cubic-bezier(.25, 1, .5, 1) both;
 }
-.pcmp__head { display: flex; align-items: center; gap: 12px; }
+/* heading settles a beat after .pcmp__panel itself, echoing the same
+   card-then-heading ordering used on screen swap above */
+.pcmp__head { display: flex; align-items: center; gap: 12px; animation: fade .4s var(--ease) both .06s; }
 .pcmp__title { margin: 0; font-size: 1.1rem; font-weight: 800; }
 .pcmp__title span:not([data-i18n]) { color: var(--pear-deep); font-weight: 700; font-size: .85rem; }
 .pcmp__close {
@@ -3038,7 +3078,9 @@ img.pear-loader__fruit { width: 46px; height: auto; object-fit: contain; }
 .gd-overlay.show .gd-overlay__panel { animation: gdPanelIn .5s cubic-bezier(.22,1,.3,1) both; }
 @keyframes gdPanelIn { from { opacity: 0; transform: translateY(18px) scale(.97); } to { opacity: 1; transform: none; } }
 
-.gd-head { display: flex; align-items: flex-start; gap: 12px; }
+/* heading settles a beat after .gd-overlay__panel itself, echoing the same
+   card-then-heading ordering used on screen swap above */
+.gd-head { display: flex; align-items: flex-start; gap: 12px; animation: fade .4s var(--ease) both .06s; }
 .gd-eyebrow {
   display: inline-block; font-size: .64rem; font-weight: 800; letter-spacing: .18em;
   text-transform: uppercase; color: var(--royal-lift);
