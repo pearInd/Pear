@@ -1293,11 +1293,22 @@ function setActiveItem(item, opts = {}) {
 }
 
 // Exposed for lux-interactions.js (a plain, non-module script that can't import
-// app.js's module-scoped `activeItem`) so the "הוסף לסל" click handler knows which
-// garment/variant to send to the host store's cart.
+// app.js's module-scoped `activeItem`/size state) so the "הוסף לסל" click handler
+// knows which exact garment/variant/size to hand the host store's cart (see
+// PEAR_ADD_TO_CART in lux-interactions.js -> pear-widget.js's Host Cart
+// Integration). sku falls back to variantId, then the catalog id, since not
+// every catalog entry carries a dedicated sku field; quantity is always 1 -
+// there is no quantity picker anywhere in this UI to read a real value from.
 window.pearGetActiveGarment = function () {
   if (!activeItem) return null;
-  return { url: activeItem.img, name: activeItem.name, variantId: activeItem.variantId };
+  return {
+    url: activeItem.img,
+    name: activeItem.name,
+    variantId: activeItem.variantId,
+    sku: activeItem.sku || activeItem.variantId || String(activeItem.id),
+    size: activeTryOnSize || currentUserSize || "",
+    quantity: 1,
+  };
 };
 
 /* =============================================================================
@@ -5719,6 +5730,14 @@ function exitFullscreenCompat() {
   return exit ? exit.call(document) : Promise.reject(new Error("Fullscreen API unavailable"));
 }
 
+/* #fullscreenToggleBtn's track geometry (style.css .fs-switch__seg / __thumb -
+   keep these two in sync with that file if the pill is ever resized). Fixed,
+   not measured at runtime: the switch is a constant icon-only size at every
+   breakpoint, so there's no responsive case where the CSS and this constant
+   could legitimately disagree, and skipping getBoundingClientRect() on every
+   pointermove avoids a layout read on the drag's hot path. */
+const FS_SWITCH_SEG_W = 34;
+
 function setupFullscreenToggle() {
   const btn = $("fullscreenToggleBtn");
   if (!btn || btn.dataset.wired) return;
@@ -5729,27 +5748,89 @@ function setupFullscreenToggle() {
   }
   btn.dataset.wired = "1";
 
-  const syncState = () => {
-    const active = isFullscreenActive();
-    btn.classList.toggle("is-fullscreen", active);
-    const label = $("fsToggleLabel");
-    if (label) label.textContent = t(active ? "fullscreenExitLabel" : "fullscreenToggleLabel");
-    btn.setAttribute("aria-label", t(active ? "fullscreenExitAria" : "fullscreenToggleAria"));
-    const expandIcon = btn.querySelector(".fs-icon--expand");
-    const compressIcon = btn.querySelector(".fs-icon--compress");
-    if (expandIcon)   expandIcon.hidden = active;
-    if (compressIcon) compressIcon.hidden = !active;
-  };
+  const segNormal = btn.querySelector(".fs-switch__seg--normal");
+  const segFull   = btn.querySelector(".fs-switch__seg--full");
 
-  btn.addEventListener("click", () => {
-    const action = isFullscreenActive() ? exitFullscreenCompat() : requestFullscreenCompat();
+  const setThumbX = (px) => btn.style.setProperty("--thumb-x", px + "px");
+
+  // Reflects the CONFIRMED fullscreen state (not a live drag position) onto
+  // the thumb/segments/aria - called on init and on every real fullscreenchange,
+  // never mid-drag (the drag handlers move the thumb directly for 1:1 tracking,
+  // see pointermove below).
+  function syncState() {
+    const active = isFullscreenActive();
+    btn.setAttribute("aria-checked", String(active));
+    btn.setAttribute("aria-label", t(active ? "fullscreenExitAria" : "fullscreenToggleAria"));
+    if (segNormal) segNormal.classList.toggle("is-active", !active);
+    if (segFull)   segFull.classList.toggle("is-active", active);
+    setThumbX(active ? FS_SWITCH_SEG_W : 0);
+  }
+
+  // A rejected request (most commonly: an embedding host iframe whose <iframe>
+  // tag never granted the "fullscreen" Permissions-Policy value) hides the
+  // control entirely rather than leaving a control stuck out of sync with
+  // reality - the "Alternative Mode: Clean Hide".
+  function requestMode(wantFull) {
+    const action = wantFull ? requestFullscreenCompat() : exitFullscreenCompat();
     action.catch((err) => {
       console.warn("[PEAR] fullscreen toggle failed - hiding the control:", err?.message || err);
-      btn.hidden = true;   // e.g. blocked by the embedding page's Permissions Policy
+      btn.hidden = true;
     });
+  }
+
+  // ── Press-and-drag physics ────────────────────────────────────────────────
+  // One pointer-event trio handles BOTH a plain tap on either half AND a real
+  // drag: every gesture - 0px of movement or 40px of it - ends in pointerup,
+  // which reads the thumb's live position and snaps to whichever half it's
+  // closer to. There is no separate "click" handler and no risk of the two
+  // paths double-firing.
+  let dragging = false;
+  let pointerId = null;
+
+  btn.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    pointerId = e.pointerId;
+    btn.setPointerCapture(pointerId);
+    btn.classList.add("is-dragging");   // suspends the CSS spring so the thumb tracks 1:1, no lag
+    const r = btn.getBoundingClientRect();
+    const x = Math.max(0, Math.min(FS_SWITCH_SEG_W, e.clientX - r.left - FS_SWITCH_SEG_W / 2));
+    setThumbX(x);
+    e.preventDefault();   // no text-selection/scroll gesture fighting the drag
   });
+
+  btn.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const r = btn.getBoundingClientRect();
+    const x = Math.max(0, Math.min(FS_SWITCH_SEG_W, e.clientX - r.left - FS_SWITCH_SEG_W / 2));
+    setThumbX(x);
+  });
+
+  function endDrag(e) {
+    if (!dragging) return;
+    dragging = false;
+    try { btn.releasePointerCapture(pointerId); } catch { /* already released - browsers auto-release on pointerup anyway */ }
+    btn.classList.remove("is-dragging");   // re-arms the spring for the snap below
+    const r = btn.getBoundingClientRect();
+    const wantFull = (e.clientX - r.left) > r.width / 2;
+    if (wantFull !== isFullscreenActive()) requestMode(wantFull);
+    else setThumbX(wantFull ? FS_SWITCH_SEG_W : 0);   // released back where it started - just re-settle
+  }
+  btn.addEventListener("pointerup", endDrag);
+  btn.addEventListener("pointercancel", endDrag);
+
+  // ── Keyboard ───────────────────────────────────────────────────────────────
+  btn.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== " " && e.key !== "Enter") return;
+    e.preventDefault();
+    if (e.key === "ArrowLeft")       requestMode(false);
+    else if (e.key === "ArrowRight") requestMode(true);
+    else                             requestMode(!isFullscreenActive());   // Space/Enter - simple toggle
+  });
+
   document.addEventListener("fullscreenchange", syncState);
   document.addEventListener("webkitfullscreenchange", syncState);
+  // The switch is a fixed size at every breakpoint (see FS_SWITCH_SEG_W above),
+  // so no resize listener is needed to keep the thumb's snapped position correct.
   syncState();
 }
 

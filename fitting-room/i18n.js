@@ -116,12 +116,11 @@ const I18N = {
   profileLogout:             { he: "התנתקות", en: "Log out" },
 
   focusBarPrefix:            { he: "מדידת פריט ממוקדת:", en: "Focused fitting:" },
-  /* Fullscreen / Expand toggle (was "Back to Store") - two paired states cycled
-     by setupFullscreenToggle() in app.js as document.fullscreenElement changes. */
+  /* Fullscreen segmented switch (was "Back to Store") - icon-only, so just the
+     two paired accessible names, cycled by setupFullscreenToggle() in app.js
+     as document.fullscreenElement changes. */
   fullscreenToggleAria:      { he: "מסך מלא · Full screen", en: "Full screen" },
-  fullscreenToggleLabel:     { he: "מסך מלא", en: "Full screen" },
   fullscreenExitAria:        { he: "יציאה ממסך מלא · Exit full screen", en: "Exit full screen" },
-  fullscreenExitLabel:       { he: "יציאה ממסך מלא", en: "Exit full screen" },
   editMeasurementsAria:      { he: "עריכת מידות · Edit measurements", en: "Edit measurements" },
   editMeasurementsLabel:     { he: "עריכת מידות", en: "Edit measurements" },
   appHeaderSub:              { he: "חדר הלבשה וירטואלי", en: "Virtual Fitting Room" },

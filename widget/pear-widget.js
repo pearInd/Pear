@@ -1809,32 +1809,106 @@
     lockAllDemoModeButtons();
   });
 
-  /* Fitting room's "הוסף לסל" button posts this on click (see lux-interactions.js
-     in fitting-room/) so the actual cart mutation happens on the HOST page, where
-     the store's own cart endpoint lives. Tries Shopify's /cart/add.js first; on
-     any failure (non-Shopify store, no variant id resolved, network error) falls
-     back to telling the shopper to add it manually rather than guessing a URL. */
+  /* ── Host Store Cart Integration ───────────────────────────────────────────
+     Fitting room's "הוסף לסל" button posts PEAR_ADD_TO_CART on click (see
+     lux-interactions.js's land()) so the actual cart mutation happens on the
+     HOST page, where the store's real cart session/cookies/endpoint live.
+     Three tiers, tried in order, so this widget works out of the box on
+     Shopify (the one platform most PEAR merchants run today) while staying
+     honest about what it can and can't know on an arbitrary/private stack:
+
+       1. SHOPIFY - the one add-to-cart contract that's public, stable, and
+          safe to call blind: POST /cart/add.js.
+       2. MERCHANT HOOK (window.PEAR_CART_CONFIG.addToCart) - an opt-in
+          extensibility point a merchant on Magento, a custom engine, or any
+          platform without a public/stable add-to-cart endpoint (Fox,
+          Terminal X, and most Israeli retail stacks fall here) wires up ONCE
+          during onboarding, pointing at whatever their real cart mutation
+          actually is: window.PEAR_CART_CONFIG = { addToCart(payload) {...} }.
+          We never guess a private endpoint/CSRF scheme on a merchant's
+          behalf - a wrong guess can silently "succeed" against the wrong
+          request, which is worse than not trying at all.
+       3. BROADCAST (window.dispatchEvent(new CustomEvent("pear:addToCart"))) -
+          fired unconditionally, regardless of (1)/(2)'s outcome, so a
+          store's own theme/app code (its mini-cart, an analytics listener,
+          anything) can react live with zero PEAR-side platform-specific code.
+
+     Feedback Sync: whichever tier actually confirms the add (or the final
+     failure) drives a PEAR_ADD_TO_CART_RESULT reply back to the iframe -
+     lux-interactions.js listens for it and only ever corrects its optimistic
+     "added to cart" toast on an explicit, reported failure. */
+  function detectCartPlatform() {
+    if (w.Shopify || d.querySelector('script[src*="cdn.shopify.com"]') ||
+        d.querySelector('meta[name="shopify-digital-wallet"]')) {
+      return "shopify";
+    }
+    if (w.PEAR_CART_CONFIG && typeof w.PEAR_CART_CONFIG.addToCart === "function") {
+      return "custom";
+    }
+    return "unknown";
+  }
+
+  function addToShopifyCart(payload) {
+    return fetch("/cart/add.js", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: payload.variantId, quantity: payload.quantity || 1 })
+    }).then(function (r) {
+      if (!r.ok) throw new Error("cart/add.js HTTP " + r.status);
+      return r.json();
+    });
+  }
+
+  function addToHostCart(payload, platform) {
+    var attempt;
+    if (platform === "shopify" && payload.variantId) {
+      attempt = addToShopifyCart(payload);
+    } else if (platform === "custom") {
+      attempt = Promise.resolve(w.PEAR_CART_CONFIG.addToCart(payload));
+    } else {
+      attempt = Promise.reject(new Error("no known host cart integration (platform: " + platform + ")"));
+    }
+
+    /* Broadcast regardless of the outcome above - a theme's own mini-cart/
+       analytics code may listen for this independent of whether OUR request
+       above succeeded (their own listener might BE the real add-to-cart action). */
+    if (w.CustomEvent) {
+      w.dispatchEvent(new w.CustomEvent("pear:addToCart", { detail: payload }));
+    }
+    return attempt;
+  }
+
   w.addEventListener("message", function (e) {
     if (e.origin !== PEAR_BASE) return;
     if (!e.data || e.data.type !== "PEAR_ADD_TO_CART") return;
 
-    var variantId = e.data.variantId;
-    if (!variantId) {
+    // e.data.payload is the current contract; e.data.variantId (flat, no
+    // payload wrapper) is what pre-Host-Cart-Integration fitting-room builds
+    // sent - kept working here rather than silently dropping older sessions.
+    var payload = e.data.payload || { variantId: e.data.variantId };
+    var sourceWindow = e.source;   // the fitting-room iframe's window - the Feedback Sync target
+
+    function notifyFittingRoom(ok, message) {
+      if (!sourceWindow) return;
+      try {
+        sourceWindow.postMessage({ type: "PEAR_ADD_TO_CART_RESULT", ok: ok, message: message || "" }, PEAR_BASE);
+      } catch (err) { /* iframe may already be torn down (session ended) - nothing to notify */ }
+    }
+
+    var platform = detectCartPlatform();
+    if (!payload.variantId && platform !== "custom") {
       showToast(isHebrewPage() ? "לא נמצאה גרסת מוצר להוספה לסל" : "Couldn't find a product variant to add");
+      notifyFittingRoom(false, "no-variant");
       return;
     }
-    fetch("/cart/add.js", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: variantId, quantity: 1 })
-    }).then(function (r) {
-      if (!r.ok) throw new Error("cart/add.js HTTP " + r.status);
-      return r.json();
-    }).then(function () {
+
+    addToHostCart(payload, platform).then(function () {
       showToast(isHebrewPage() ? "הפריט נוסף לסל!" : "Added to cart!");
+      notifyFittingRoom(true);
     }).catch(function (err) {
-      console.warn("[PEAR widget] /cart/add.js failed:", err && err.message);
+      console.warn("[PEAR widget] host cart add failed:", err && err.message);
       showToast(isHebrewPage() ? "לא הצלחנו להוסיף לסל אוטומטית - נסה/י ידנית" : "Couldn't add to cart automatically - please add it manually");
+      notifyFittingRoom(false, err && err.message);
     });
   });
 

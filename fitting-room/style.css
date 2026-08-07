@@ -908,49 +908,74 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   padding: 24px clamp(16px,5vw,36px) 0;
   max-width: 760px; margin: 0 auto;
 }
-/* Fullscreen toggle (was "Back to Store" - now a <button>, not an <a>, so
-   margin/appearance/cursor are reset the same way .btn-edit-measurements
-   resets them below) - frosted-glass pill matching the room theme */
-.back-to-store {
+/* ── Fullscreen segmented switch (was "Back to Store", a plain link/pill) ──
+   Apple Liquid Glass segmented control: a translucent sliding thumb behind
+   two icon segments (Normal / Fullscreen), matching .pear-lang-toggle's glass
+   pill language but with a real animated thumb instead of per-button
+   background swaps. Supports a plain click/tap on either half AND
+   press-and-drag the thumb across the track (setupFullscreenToggle() in
+   app.js drives both through the same pointerdown/move/up handlers).
+   direction:ltr locks this control's OWN internal geometry to a fixed
+   physical layout regardless of the page's dir - "Normal" is always slot 0
+   or "left" internally, "Fullscreen" is always slot 1 - so the drag/
+   translateX math in app.js never needs an RTL branch. This only overrides
+   direction INSIDE the button; its position within the RTL nav row (physical
+   right, where "Back to Store" used to sit) is entirely unaffected. */
+.fs-switch {
   align-self: center;
-  display: inline-flex; align-items: center; gap: 6px;
-  min-width: 0;   /* LAYOUT FIX: let this pill itself shrink inside the nav zone -
-                     without this it refused to shrink below its label's natural
-                     width and spilled out of the nav box into the brand lockup. */
-  padding: 7px 13px; margin: 0; border: 0;
+  position: relative; direction: ltr;
+  display: inline-flex; align-items: center;
+  padding: 4px; margin: 0; border: 0;
   appearance: none; -webkit-appearance: none;
   border-radius: var(--pill);
-  background: var(--glass-strong);
-  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
-  border: 1px solid var(--glass-border);
-  color: var(--ink);
-  font-family: "Inter", sans-serif; font-size: .8rem; font-weight: 600;
-  text-decoration: none; white-space: nowrap; cursor: pointer;
+  background: var(--glass-soft);
+  -webkit-backdrop-filter: blur(16px) saturate(180%); backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, .4);   /* specular border, per the Liquid Glass spec */
   box-shadow: var(--shadow-soft);
-  transition: transform .2s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease);
+  cursor: pointer; touch-action: none;   /* pointer drag owns touch gestures here, not page scroll */
 }
-.back-to-store:hover {
-  transform: translateY(-1px);
-  border-color: rgba(141, 182, 0, .55);
-  box-shadow: 0 8px 22px rgba(141, 182, 0, .2);
+.fs-switch:hover { box-shadow: 0 8px 22px rgba(0, 0, 0, .12); }
+.fs-switch:active { cursor: grabbing; }
+.fs-switch:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--pear-ring), var(--shadow-soft); }
+
+/* The translucent pill indicator - slides between slot 0/1 via --thumb-x
+   (set inline by app.js, live during drag; snapped to the exact segment
+   width on release/click). Ambient soft drop-shadow + specular border, both
+   per the Liquid Glass spec. */
+.fs-switch__thumb {
+  position: absolute; top: 4px; left: 4px; z-index: 0;
+  width: 34px; height: calc(100% - 8px);
+  border-radius: var(--pill);
+  background: rgba(255, 255, 255, .82);
+  border: 1px solid rgba(255, 255, 255, .4);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .18), inset 0 1px 0 rgba(255, 255, 255, .6);
+  transform: translateX(var(--thumb-x, 0px));
+  transition: transform .5s var(--spring);   /* the release "snap" */
+  pointer-events: none;   /* the track (.fs-switch itself) owns all pointer handling */
 }
-.back-to-store:active { transform: scale(.96); }
-.back-to-store svg  { flex: none; }   /* icon is fixed-size - only the label may shrink */
-/* LAYOUT FIX: truncate the label with an ellipsis instead of letting it overflow
-   the pill (which is what was visually overlapping the pear logo). min-width:0
-   lets the flex-item span shrink at all; the rest is standard ellipsis truncation. */
-.back-to-store span {
-  line-height: 1; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+/* live-drag: no transition lag while the thumb is tracking the pointer 1:1 -
+   the spring above only plays on the SNAP once the pointer is released. */
+.fs-switch.is-dragging .fs-switch__thumb { transition: none; }
+
+.fs-switch__seg {
+  position: relative; z-index: 1;   /* above the absolutely-positioned thumb */
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 26px;
+  color: var(--muted);
+  transition: color .3s var(--ease);
+}
+.fs-switch__seg.is-active { color: var(--ink); }
+.fs-switch__icon { width: 15px; height: 15px; flex: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fs-switch__thumb { transition: none; }
 }
 
-/* Edit Measurements - same frosted pill language as Back to Store, but
-   pear-green accented (an action, not a navigation link). */
+/* Edit Measurements - same frosted pill language as the old Back-to-Store
+   link, but pear-green accented (an action, not a navigation link). */
 .btn-edit-measurements {
   align-self: center;
   display: inline-flex; align-items: center; gap: 6px;
-  min-width: 0;   /* LAYOUT FIX: this is the button the logo was overlapping - same
-                     shrink-instead-of-spill fix as .back-to-store above. */
   padding: 7px 13px; margin: 0; border: 0;
   border-radius: var(--pill);
   background: var(--pear-tint);
@@ -973,12 +998,13 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .btn-edit-measurements:active { transform: scale(.96); }
 .btn-edit-measurements svg  { flex: none; }   /* icon is fixed-size - only the label may shrink */
-/* LAYOUT FIX: same ellipsis-truncation fix as .back-to-store span - this label no
-   longer overflows the button into the neighbouring logo/title zone. */
-.btn-edit-measurements span {
-  line-height: 1; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
+/* BUG FIX: was overflow:hidden;text-overflow:ellipsis, which truncated the
+   label to "עריכת..." well before the header actually ran out of room -
+   .app-header__nav > * { flex-shrink:0 } above now guarantees this button is
+   never squeezed below its natural content width in the first place (the
+   brand lockup gives way instead), so the label just always renders in full;
+   ellipsis is no longer needed as a safety net here. */
+.btn-edit-measurements span { line-height: 1; white-space: nowrap; }
 /* NOTE: the old ≤480px rule that hid these buttons' text (icon-only fallback)
    was removed - the 2-row mobile header (see the "SMALL-PHONE HEADER" block
    further down) gives both buttons their own row/column, so the full label
@@ -2946,7 +2972,13 @@ body::after  { background: radial-gradient(circle at 60% 40%, rgba(150, 132, 92,
    keeps the full rail clamp (still guards the badge side). */
 @media (min-width: 1340px) {
   .focus-bar {
-    padding-left: clamp(84px, 7vw, 150px);
+    /* BUG FIX: floor raised 84px -> 136px - the old floor was sized only for
+       the ambient rail, not for .pear-lang-toggle (fixed top:16px;left:16px,
+       ~136px clearance needed - see the ≤1339px rule above for the exact
+       arithmetic), so .focus-bar__badge still rendered under the language
+       toggle for 1340-~1885px wide viewports (where 7vw < 136px). The cap
+       (150px) and the growth curve above the new floor are unchanged. */
+    padding-left: clamp(136px, 7vw, 150px);
     padding-right: 72px;   /* 56px avatar clearance + a deliberate ~16px breathing gap */
   }
 }
@@ -3289,6 +3321,16 @@ body.gd-open { overflow: hidden; }
 }
 .app-header__actions { justify-content: flex-end; }
 .app-header__actions .cart-btn { margin: 0; }   /* zone handles placement now */
+/* BUG FIX: the nav pills ("עריכת מידות", the fullscreen switch) used to be the
+   shrink-and-ellipsize safety valve (see .btn-edit-measurements span below) -
+   at ordinary desktop/laptop widths that meant their OWN label text quietly
+   truncated to "עריכת..." well before the row was actually out of room. The
+   brand lockup already has its own graceful shrink-and-ellipsize fallback
+   (.app-header__brand/__sub, see the LAYOUT FIX comment below) and is purely
+   decorative, so it - not an actionable button's label - should be the thing
+   that gives way first. flex-shrink:0 here means these pills always render
+   at their natural content width; only the lockup compresses under pressure. */
+.app-header__nav > * { flex-shrink: 0; }
 
 /* Brand lockup: logo + title/subtitle as one row. Logo is FIRST in DOM order,
    so in this RTL document it renders at the lockup's visual RIGHT edge - i.e.
@@ -3337,15 +3379,6 @@ body.gd-open { overflow: hidden; }
    hidden - screen readers/accessibility name are unaffected). If the 2-row
    full-label layout is ever preferred again, that's a one-line revert of
    this block, not a rebuild. ════════════════════════════════════════════ */
-@media (max-width: 768px) {
-  /* Between 480-768px the buttons still share the base flex row - keep their
-     labels from ever ellipsis-truncating there too. */
-  .back-to-store span,
-  .btn-edit-measurements span {
-    overflow: visible; text-overflow: clip; white-space: nowrap;
-  }
-}
-
 @media (max-width: 480px) {
   /* No display:grid override here anymore - .app-header stays the ordinary
      flex row from the base rule (line ~533: display:flex;
@@ -3360,12 +3393,12 @@ body.gd-open { overflow: hidden; }
   .app-header__nav { gap: 6px; }
 
   /* Icon-only: hide the label, keep the icon + the button's own aria-label
-     (accessible name is unaffected - only the VISIBLE text is hidden). */
-  .back-to-store,
+     (accessible name is unaffected - only the VISIBLE text is hidden). The
+     fullscreen switch (.fs-switch) is icon-only by design already - no label
+     span to hide, no size override needed here. */
   .btn-edit-measurements {
     padding: 7px; min-width: 32px; min-height: 32px; justify-content: center;
   }
-  .back-to-store span,
   .btn-edit-measurements span { display: none; }
 
   /* PROMINENCE FIX: was 16px/20px (logo) - now that the nav buttons are icon-only
@@ -3426,6 +3459,18 @@ body.gd-open { overflow: hidden; }
   .focus-bar {
     justify-content: flex-start;   /* RTL flex-start = visual right, alongside the badge */
     padding-right: 68px;           /* 56px avatar clearance + a deliberate ~12px breathing gap */
+    /* BUG FIX: physical-LEFT mirror of the padding-right reservation above -
+       was missing entirely, so .focus-bar__badge (margin-inline-start:auto
+       pushes it flush to the row's inline-end edge, which is the physical
+       LEFT in RTL) rendered directly under .pear-lang-toggle (fixed
+       top:16px;left:16px;z-index:100 - always the physical left corner,
+       regardless of dir). ~104px estimated toggle width (two-button glass
+       pill, "EN"/"עב") + 16px offset + a ~16px breathing gap = 136px. Unlike
+       .profile-btn, the language toggle never fades/shrinks on scroll (see
+       .pear-lang-toggle - no .is-scrolled variant exists for it at all), so
+       this reservation is intentionally NOT relaxed anywhere padding-right
+       is below (.focus-bar.is-scrolled only ever touches padding-right). */
+    padding-left: 136px;
   }
 }
 

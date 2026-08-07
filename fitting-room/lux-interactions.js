@@ -80,19 +80,52 @@
 
       if (inIframe()) {
         // Embedded in a store (e.g. fox.co.il) - hand the garment off to the host
-        // page's own cart. pear-widget.js listens for this and calls /cart/add.js.
+        // page's own Host Cart Integration (see pear-widget.js's PEAR_ADD_TO_CART
+        // listener: platform auto-detection -> host cart request -> pear:addToCart
+        // broadcast -> a PEAR_ADD_TO_CART_RESULT reply, listened for below).
+        // `payload` is the documented contract other integrations key off of;
+        // garmentUrl/garmentName ride alongside it for the host's own toast/UI,
+        // same as before.
         window.parent.postMessage({
           type: "PEAR_ADD_TO_CART",
+          payload: {
+            sku: garment.sku || "",
+            size: garment.size || "",
+            quantity: garment.quantity || 1,
+            variantId: garment.variantId || "",
+          },
           garmentUrl: garment.url || "",
           garmentName: garment.name || "",
-          variantId: garment.variantId || "",
         }, "*");
+        // Optimistic - fires immediately so the interaction still feels instant
+        // even on a slow host network. PEAR_ADD_TO_CART_RESULT below only ever
+        // CORRECTS this on an explicit, host-reported failure; a widget build
+        // that never replies (older embeds) simply leaves this as the final
+        // word, exactly like the fire-and-forget behaviour before it.
         springToast("נוסף לסל · Added to cart");
       } else {
         // Standalone (PEAR demo site, no host store to hand off to).
         springToast("הפריט נוסף לסל! (דמו)");
       }
     }
+
+    // Feedback Sync - pear-widget.js replies with this once its Host Cart
+    // Integration actually resolves (see the PEAR_ADD_TO_CART listener there).
+    // Only ever downgrades the optimistic toast above on an explicit,
+    // host-reported failure (e.data.ok === false); an ok:true, or an older
+    // widget build that never replies at all, leaves the optimistic toast as
+    // the only - and final - word, so nothing regresses for merchants who
+    // haven't updated pear-widget.js yet. e.source is checked against
+    // window.parent (not a fixed origin allowlist - this page is embedded on
+    // arbitrary, unknown-in-advance host stores) so only a reply from the
+    // actual embedding page is ever acted on.
+    window.addEventListener("message", (e) => {
+      if (e.source !== window.parent) return;
+      if (!e.data || e.data.type !== "PEAR_ADD_TO_CART_RESULT") return;
+      if (e.data.ok === false) {
+        springToast("נשמר - ההוספה האוטומטית לסל החנות נכשלה, נא להוסיף ידנית · Saved - couldn't add to the store cart automatically, please add it manually");
+      }
+    });
 
     let busy = false;
     btn.addEventListener("click", () => {
