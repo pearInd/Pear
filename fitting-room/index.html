@@ -267,9 +267,9 @@
         <div class="app-header__nav">
         <!-- Fullscreen / Expand segmented switch - was "Back to Store" (navigated away
              from the fitting room mid-session, which is exactly what we don't want a
-             shopper doing). Apple Liquid Glass segmented control, matching
-             .pear-lang-toggle's visual language: a sliding translucent thumb behind two
-             icon segments (Normal / Fullscreen). Click either half, or press-and-drag the
+             shopper doing). Apple Liquid Glass segmented control, matching the same
+             sliding-thumb architecture now shared with .lang-switch: a translucent thumb
+             behind two icon segments (Normal / Fullscreen). Click either half, or press-and-drag the
              thumb - both call requestFullscreen()/exitFullscreen() (setupFullscreenToggle()
              in app.js), which also feature-detects the Fullscreen API and cleanly hides
              this control on any browser/embed that can't support it, rather than leaving
@@ -336,6 +336,19 @@
             </svg>
             <span class="cart-btn__count is-empty" id="cartCount">0</span>
         </button>
+        <!-- Cart dropdown - mirrors the HOST store's real cart (Full Bi-directional
+             Cart Sync: PEAR_CART_REQUEST_SYNC / PEAR_CART_SYNC / PEAR_REMOVE_FROM_CART
+             in app.js <-> pear-widget.js). Anchored to .app-header__actions
+             (position:relative in style.css), not fixed like .profile-dropdown,
+             since #cartBtn itself sits in normal document flow, not a fixed corner. -->
+        <div class="cart-dropdown" id="cartDropdown" role="menu" aria-label="סל קניות · Shopping cart" hidden>
+            <div class="cart-dropdown__head">
+                <strong data-i18n="cartDropdownTitle">הסל שלך</strong>
+                <span data-i18n-hide-on-en>· Your cart</span>
+            </div>
+            <p class="cart-dropdown__empty" id="cartEmpty" data-i18n="cartDropdownEmpty">הסל ריק</p>
+            <div class="cart-dropdown__list" id="cartList"></div>
+        </div>
         <span class="app-header__engine" id="engineBadge" title="מנוע">●</span>
         </div><!-- /.app-header__actions -->
     </div>
@@ -632,10 +645,20 @@
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<div class="pear-lang-toggle" role="group" aria-label="Switch language · החלף שפה">
-  <button class="pear-lang-toggle__btn" id="langToggleEn" type="button" data-lang="en">EN</button>
-  <button class="pear-lang-toggle__btn" id="langToggleHe" type="button" data-lang="he">עב</button>
-</div>
+<!-- Language segmented switch - Apple Liquid Glass drag physics, the exact same
+     architecture/interaction model as the fullscreen switch
+     (#fullscreenToggleBtn): a sliding translucent thumb behind two segments,
+     click either half OR press-and-drag the thumb, snapping with spring
+     easing on release (setupLangToggle() in i18n.js). direction:ltr
+     (style.css) locks this control's OWN internal layout to a fixed physical
+     order (EN always left, עב always right) regardless of which language is
+     currently active - see the comment on setupLangToggle() in i18n.js for why. -->
+<button type="button" class="lang-switch" id="langSwitch" role="switch" aria-checked="false"
+        aria-label="שפה: אנגלית · Language: English">
+  <span class="lang-switch__seg lang-switch__seg--en is-active" data-lang="en" aria-hidden="true">EN</span>
+  <span class="lang-switch__seg lang-switch__seg--he" data-lang="he" aria-hidden="true">עב</span>
+  <span class="lang-switch__thumb" aria-hidden="true"></span>
+</button>
 
 <script type="module" src="app.js?v=14"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky

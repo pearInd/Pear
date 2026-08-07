@@ -125,6 +125,11 @@ const I18N = {
   editMeasurementsLabel:     { he: "עריכת מידות", en: "Edit measurements" },
   appHeaderSub:              { he: "חדר הלבשה וירטואלי", en: "Virtual Fitting Room" },
   cartBtnAria:               { he: "סל קניות · Shopping cart", en: "Shopping cart" },
+  /* Cart dropdown - mirrors the host store's real cart (see the Full
+     Bi-directional Cart Sync comment block in app.js). */
+  cartDropdownTitle:         { he: "הסל שלך", en: "Your cart" },
+  cartDropdownEmpty:         { he: "הסל ריק", en: "Your cart is empty" },
+  cartRemoveItemAria:        { he: "הסר פריט · Remove item", en: "Remove item" },
 
   personalTitlePrefix:       { he: "ככה המידה", en: "Here's how size" },
   personalTitleSuffix:       { he: "נראית עליך", en: "looks on you" },
@@ -356,26 +361,90 @@ function raceAllSettledForFirstSuccess(promises) {
   });
 }
 
-/* Wires the two explicit EN / עב toggle buttons (index.html). The DOM was
-   already put in the right language by initLanguage() at module load, so
-   this only needs to (a) reflect which one is currently active and (b) turn
-   a click into an explicit, permanently-persisted choice. */
-function syncLangToggleUI(lang) {
-  const enBtn = document.getElementById("langToggleEn"), heBtn = document.getElementById("langToggleHe");
-  if (enBtn) enBtn.classList.toggle("is-active", lang === "en");
-  if (heBtn) heBtn.classList.toggle("is-active", lang === "he");
+/* ── Language segmented switch (index.html #langSwitch) ──────────────────────
+   Apple Liquid Glass drag physics - the exact same architecture as the
+   fullscreen switch (#fullscreenToggleBtn, app.js's setupFullscreenToggle()):
+   ONE role="switch" button, a sliding translucent thumb behind two decorative
+   segments, driven entirely through pointerdown/move/up so a plain tap on
+   either half and a real press-and-drag both resolve through the same code
+   path (whichever half the pointer ends up over on release wins).
+   direction:ltr (style.css) locks this control's OWN internal layout to a
+   fixed physical order - EN always the left slot, עב always the right -
+   regardless of which language is currently active. That is what makes the
+   drag's clientX-based math correct and CONSISTENT in both directions: a
+   gesture whose meaning silently flipped depending on the page's current
+   dir would be worse UX than a control whose own geometry simply never
+   changes, matching the same reasoning the fullscreen switch already uses. */
+const LANG_SWITCH_SEG_W = 42;   // keep in sync with .lang-switch__seg / __thumb width in style.css
+
+function setLangThumbX(btn, px) { btn.style.setProperty("--thumb-x", px + "px"); }
+
+function syncLangSwitchUI(lang) {
+  const btn = document.getElementById("langSwitch");
+  if (!btn) return;
+  const isHe = lang === "he";
+  btn.setAttribute("aria-checked", String(isHe));
+  btn.setAttribute("aria-label", isHe ? "שפה: עברית · Language: Hebrew" : "שפה: אנגלית · Language: English");
+  const enSeg = btn.querySelector('[data-lang="en"]');
+  const heSeg = btn.querySelector('[data-lang="he"]');
+  if (enSeg) enSeg.classList.toggle("is-active", !isHe);
+  if (heSeg) heSeg.classList.toggle("is-active", isHe);
+  setLangThumbX(btn, isHe ? LANG_SWITCH_SEG_W : 0);
 }
 
 export function setupLangToggle() {
-  syncLangToggleUI(getActiveLang());
-  const enBtn = document.getElementById("langToggleEn"), heBtn = document.getElementById("langToggleHe");
-  [[enBtn, "en"], [heBtn, "he"]].forEach(([btn, lang]) => {
-    if (!btn || btn.dataset.wired) return;
-    btn.dataset.wired = "1";
-    btn.addEventListener("click", () => {
-      setLanguage(lang, { explicit: true });
-      syncLangToggleUI(lang);
-    });
+  syncLangSwitchUI(getActiveLang());
+  const btn = document.getElementById("langSwitch");
+  if (!btn || btn.dataset.wired) return;
+  btn.dataset.wired = "1";
+
+  function requestLang(lang) {
+    setLanguage(lang, { explicit: true });
+    syncLangSwitchUI(lang);
+  }
+
+  // ── Press-and-drag physics (identical model to setupFullscreenToggle) ─────
+  let dragging = false;
+  let pointerId = null;
+
+  btn.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    pointerId = e.pointerId;
+    btn.setPointerCapture(pointerId);
+    btn.classList.add("is-dragging");   // suspends the CSS spring so the thumb tracks 1:1, no lag
+    const r = btn.getBoundingClientRect();
+    const x = Math.max(0, Math.min(LANG_SWITCH_SEG_W, e.clientX - r.left - LANG_SWITCH_SEG_W / 2));
+    setLangThumbX(btn, x);
+    e.preventDefault();   // no text-selection/scroll gesture fighting the drag
+  });
+
+  btn.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const r = btn.getBoundingClientRect();
+    const x = Math.max(0, Math.min(LANG_SWITCH_SEG_W, e.clientX - r.left - LANG_SWITCH_SEG_W / 2));
+    setLangThumbX(btn, x);
+  });
+
+  function endDrag(e) {
+    if (!dragging) return;
+    dragging = false;
+    try { btn.releasePointerCapture(pointerId); } catch { /* already released - browsers auto-release on pointerup anyway */ }
+    btn.classList.remove("is-dragging");   // re-arms the spring for the snap below
+    const r = btn.getBoundingClientRect();
+    const wantHe = (e.clientX - r.left) > r.width / 2;
+    if (wantHe !== (getActiveLang() === "he")) requestLang(wantHe ? "he" : "en");
+    else setLangThumbX(btn, wantHe ? LANG_SWITCH_SEG_W : 0);   // released back where it started - just re-settle
+  }
+  btn.addEventListener("pointerup", endDrag);
+  btn.addEventListener("pointercancel", endDrag);
+
+  // ── Keyboard ───────────────────────────────────────────────────────────────
+  btn.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== " " && e.key !== "Enter") return;
+    e.preventDefault();
+    if (e.key === "ArrowLeft")       requestLang("en");
+    else if (e.key === "ArrowRight") requestLang("he");
+    else                              requestLang(getActiveLang() === "he" ? "en" : "he");   // Space/Enter - simple toggle
   });
 }
 
@@ -394,7 +463,7 @@ function initLanguage() {
   // never a flash of the raw markup default while we wait on the network.
   const initialLang = explicit && stored ? stored : getActiveLang();
   applyLanguage(initialLang);
-  syncLangToggleUI(initialLang);
+  syncLangSwitchUI(initialLang);
 
   if (explicit && stored) {
     console.log("[PEAR i18n] explicit choice on file:", stored, "- skipping geo-IP");
@@ -411,7 +480,7 @@ function initLanguage() {
     const lang = country === "IL" ? "he" : "en"; // any failure/timeout (country===null) -> "en"
     console.log("Detected Country:", country, "Applying language:", lang);
     setLanguage(lang, { explicit: false });
-    syncLangToggleUI(lang);
+    syncLangSwitchUI(lang);
   });
 }
 initLanguage();

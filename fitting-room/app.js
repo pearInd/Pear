@@ -5834,6 +5834,142 @@ function setupFullscreenToggle() {
   syncState();
 }
 
+/* ── Full Bi-directional Cart Sync (#cartBtn / #cartDropdown) ────────────────
+   Embedded (inIframe()), PEAR's own cart is a MIRROR of the HOST store's real
+   cart (Shopify's /cart.js etc. - see pear-widget.js's Host Cart Integration),
+   never an independent source of truth:
+     - PEAR_CART_REQUEST_SYNC (posted below, on init() and every dropdown open)
+       asks the host for a fresh snapshot.
+     - PEAR_CART_SYNC (listened for below) is the host's reply - also pushed
+       proactively after every add/remove and on live host-side cart changes
+       detected while the widget's modal is open (pear-widget.js).
+     - PEAR_REMOVE_FROM_CART (posted from removeCartLine) mirrors an in-PEAR
+       deletion onto the host cart; the removal here is OPTIMISTIC (applied to
+       local state immediately) and corrected by whatever sync arrives next,
+       so the two carts can never drift apart even if the host removal fails.
+   hostCart stays null (never fabricated as "empty") until the first REAL sync
+   arrives - and in standalone/demo mode (no host to sync with) it never
+   arrives at all, so this whole module stays a dormant no-op there and
+   #cartCount keeps being driven by lux-interactions.js's local
+   pear_cart_count counter exactly as before. */
+let hostCart = null;
+
+function inIframe() {
+  try { return window.self !== window.top; } catch { return true; }
+}
+
+function requestCartSync() {
+  if (!inIframe()) return;
+  window.parent.postMessage({ type: "PEAR_CART_REQUEST_SYNC" }, "*");
+}
+
+function renderCartBadge(count) {
+  const el = $("cartCount");
+  if (!el) return;
+  el.textContent = String(count);
+  el.classList.toggle("is-empty", count === 0);
+}
+
+function renderCartDropdown() {
+  const list = $("cartList"), empty = $("cartEmpty");
+  if (!list || !empty) return;
+  const items = (hostCart && hostCart.items) || [];
+  empty.hidden = items.length > 0;
+  list.innerHTML = "";   // rebuilt from scratch below via DOM APIs (not innerHTML+interpolation) - the
+                          // host cart's title/variant text is the MERCHANT's own data, but still untrusted
+                          // input crossing an origin boundary, so it's never concatenated into markup.
+  items.forEach((it) => {
+    const row = document.createElement("div");
+    row.className = "cart-line";
+    row.dataset.key = it.key || "";
+    row.dataset.variantId = it.variantId || "";
+
+    const media = document.createElement("div");
+    media.className = "cart-line__media";
+    if (it.image) {
+      const img = document.createElement("img");
+      img.src = it.image; img.alt = ""; img.loading = "lazy";
+      media.appendChild(img);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "cart-line__meta";
+    const title = document.createElement("span");
+    title.className = "cart-line__title";
+    title.textContent = it.title || "";
+    const variant = document.createElement("span");
+    variant.className = "cart-line__variant";
+    variant.textContent = [it.variantTitle, it.quantity > 1 ? `× ${it.quantity}` : ""].filter(Boolean).join(" · ");
+    meta.append(title, variant);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "cart-line__remove";
+    removeBtn.setAttribute("aria-label", t("cartRemoveItemAria"));
+    removeBtn.title = t("cartRemoveItemAria");
+    removeBtn.textContent = "✕";
+
+    row.append(media, meta, removeBtn);
+    list.appendChild(row);
+  });
+}
+
+function applyCartSync(cart) {
+  hostCart = (cart && typeof cart === "object") ? cart : { items: [], itemCount: 0 };
+  renderCartBadge(hostCart.itemCount || 0);
+  renderCartDropdown();
+}
+
+function removeCartLine(key, variantId) {
+  window.parent.postMessage({ type: "PEAR_REMOVE_FROM_CART", payload: { key, variantId } }, "*");
+  if (!hostCart) return;   // nothing local to optimistically update - the next real sync is authoritative anyway
+  hostCart = {
+    ...hostCart,
+    items: hostCart.items.filter((it) => (key ? it.key !== key : it.variantId !== variantId)),
+  };
+  hostCart.itemCount = hostCart.items.reduce((n, it) => n + (it.quantity || 1), 0);
+  renderCartBadge(hostCart.itemCount);
+  renderCartDropdown();
+}
+
+function setupCartButton() {
+  const btn = $("cartBtn"), dd = $("cartDropdown"), list = $("cartList");
+  if (!btn || !dd || btn.dataset.wired) return;
+  btn.dataset.wired = "1";
+
+  const openDropdown  = () => { dd.hidden = false; };
+  const closeDropdown = () => { dd.hidden = true; };
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (dd.hidden) {
+      requestCartSync();   // refresh-on-open - catches anything a missed live-sync tick didn't
+      openDropdown();
+    } else {
+      closeDropdown();
+    }
+  });
+  document.addEventListener("click", (e) => {
+    if (dd.hidden) return;
+    if (dd.contains(e.target) || btn.contains(e.target)) return;
+    closeDropdown();
+  });
+  list?.addEventListener("click", (e) => {
+    const removeBtn = e.target.closest(".cart-line__remove");
+    if (!removeBtn) return;
+    const row = removeBtn.closest(".cart-line");
+    if (!row) return;
+    row.classList.add("is-removing");   // optimistic - removeCartLine() below corrects state either way
+    removeCartLine(row.dataset.key || null, row.dataset.variantId || null);
+  });
+}
+
+window.addEventListener("message", (e) => {
+  if (e.source !== window.parent) return;
+  if (!e.data || e.data.type !== "PEAR_CART_SYNC") return;
+  applyCartSync(e.data.cart);
+});
+
 /* Show the name/email gate and wire its controls (idempotent - safe to call
    more than once). Hides the measurement form until the visitor registers.
    opts.reauth + opts.user (Case 2 - known device, stale auth date): prefills
@@ -8807,6 +8943,8 @@ function init() {
     setupProfileButton();
   }
   setupFullscreenToggle();   // header "Back to Store" -> fullscreen toggle; wired regardless of DEMO_GATE
+  setupCartButton();
+  requestCartSync();         // no-op in standalone/demo mode (inIframe() guard) - see the module comment above
 
   document.querySelectorAll("#sizeForm input").forEach((i) => {
     i.addEventListener("input", calculateSize);

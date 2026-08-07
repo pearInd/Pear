@@ -1263,6 +1263,7 @@
       d.removeEventListener("keydown", escHandler);
       escHandler = null;
     }
+    stopCartWatch();   // nothing in PEAR needs a live cart mirror while it's closed
   }
 
   function openModal(garment) {
@@ -1315,6 +1316,11 @@
        browser at least reached PEAR_BASE and got SOME response back for `src`. */
     iframe.addEventListener("load", function () {
       console.log("[PEAR widget] fitting-room iframe fired 'load' for:", src);
+      // Belt-and-suspenders initial sync: the fitting room ALSO pulls one itself
+      // via PEAR_CART_REQUEST_SYNC once its own cart UI is ready (the more
+      // robust path, since it can't race its own message listener wiring up
+      // by construction) - this push just covers the gap either way.
+      pushCartSync(iframe.contentWindow);
     });
     iframe.addEventListener("error", function () {
       console.error("[PEAR widget] fitting-room iframe fired 'error' for:", src);
@@ -1342,6 +1348,7 @@
     d.body.appendChild(overlay);
     activeOverlay = overlay;
     activeIframe = iframe;
+    startCartWatch(iframe);   // live-mirror host cart changes for as long as this modal is open
     return iframe;
   }
 
@@ -1842,7 +1849,12 @@
         d.querySelector('meta[name="shopify-digital-wallet"]')) {
       return "shopify";
     }
-    if (w.PEAR_CART_CONFIG && typeof w.PEAR_CART_CONFIG.addToCart === "function") {
+    /* A merchant may only need to implement a subset of the hook (e.g.
+       getCart + removeFromCart but not addToCart) - any one of the three is
+       enough to count as "custom" so the others still get tried. */
+    if (w.PEAR_CART_CONFIG && (typeof w.PEAR_CART_CONFIG.addToCart === "function" ||
+        typeof w.PEAR_CART_CONFIG.getCart === "function" ||
+        typeof w.PEAR_CART_CONFIG.removeFromCart === "function")) {
       return "custom";
     }
     return "unknown";
@@ -1878,6 +1890,168 @@
     return attempt;
   }
 
+  /* ── Full Bi-directional Cart Sync ─────────────────────────────────────────
+     Reads and mirrors the HOST cart (the same one the shopper's Shopify/host
+     session already owns) into PEAR's own cart UI, and mirrors deletions the
+     other way. Same three-tier honesty as addToHostCart above: Shopify's
+     /cart.js and /cart/change.js are the one public, stable, safe-to-call-
+     blind contract; window.PEAR_CART_CONFIG.getCart()/removeFromCart() is the
+     merchant-provided hook for Magento/Fox/Terminal X/custom stacks; an
+     unrecognized platform gets NO sync at all rather than a fabricated
+     "empty cart" - a false empty is worse than staying silent. */
+  function normalizeShopifyCart(raw) {
+    var items = ((raw && raw.items) || []).map(function (it) {
+      return {
+        key: it.key,
+        variantId: it.variant_id || it.id,
+        sku: it.sku || "",
+        title: it.product_title || it.title || "",
+        /* Shopify's own placeholder for a product with no real variants -
+           not meaningful to show as a cart-line detail. */
+        variantTitle: (it.variant_title && it.variant_title !== "Default Title") ? it.variant_title : "",
+        image: it.image || "",
+        price: it.price,
+        quantity: it.quantity
+      };
+    });
+    return {
+      items: items,
+      itemCount: raw && typeof raw.item_count === "number" ? raw.item_count : items.length,
+      totalPrice: raw && raw.total_price,
+      empty: items.length === 0
+    };
+  }
+
+  function fetchHostCart(platform) {
+    if (platform === "shopify") {
+      return fetch("/cart.js", { headers: { "Accept": "application/json" } }).then(function (r) {
+        if (!r.ok) throw new Error("cart.js HTTP " + r.status);
+        return r.json();
+      }).then(normalizeShopifyCart);
+    }
+    if (platform === "custom" && w.PEAR_CART_CONFIG && typeof w.PEAR_CART_CONFIG.getCart === "function") {
+      return Promise.resolve(w.PEAR_CART_CONFIG.getCart());
+    }
+    return Promise.reject(new Error("no known host cart integration (platform: " + platform + ")"));
+  }
+
+  /* Pushes one authoritative snapshot into `targetWindow` (the fitting-room
+     iframe). Called: on the PEAR_CART_REQUEST_SYNC handshake below, after
+     every successful add/remove (so PEAR reflects real host state rather
+     than just its own optimistic guess), and by the live host-change watch
+     further down. */
+  function pushCartSync(targetWindow) {
+    if (!targetWindow) return;
+    fetchHostCart(detectCartPlatform()).then(function (cart) {
+      try { targetWindow.postMessage({ type: "PEAR_CART_SYNC", cart: cart }, PEAR_BASE); }
+      catch (err) { /* iframe may already be torn down (session ended) - nothing to sync into */ }
+    }).catch(function (err) {
+      console.warn("[PEAR widget] couldn't read host cart:", err && err.message);
+    });
+  }
+
+  function removeFromShopifyCart(payload) {
+    var id = payload.key || payload.variantId;
+    return fetch("/cart/change.js", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: id, quantity: 0 })
+    }).then(function (r) {
+      if (!r.ok) throw new Error("cart/change.js HTTP " + r.status);
+      return r.json();
+    });
+  }
+
+  function removeFromHostCart(payload, platform) {
+    var attempt;
+    if (platform === "shopify" && (payload.key || payload.variantId)) {
+      attempt = removeFromShopifyCart(payload);
+    } else if (platform === "custom" && w.PEAR_CART_CONFIG && typeof w.PEAR_CART_CONFIG.removeFromCart === "function") {
+      attempt = Promise.resolve(w.PEAR_CART_CONFIG.removeFromCart(payload));
+    } else {
+      attempt = Promise.reject(new Error("no known host cart integration (platform: " + platform + ")"));
+    }
+
+    /* Same broadcast parity as addToHostCart - a theme's own mini-cart/
+       analytics code may want to react to a PEAR-initiated removal too. */
+    if (w.CustomEvent) {
+      w.dispatchEvent(new w.CustomEvent("pear:removeFromCart", { detail: payload }));
+    }
+    return attempt;
+  }
+
+  /* ── Live host-cart-change detection (only while the PEAR modal is open -
+     nothing in PEAR needs updating while it's closed) ─────────────────────
+     No universal cross-theme "cart changed" DOM event exists, so this
+     combines two theme-agnostic signals into the same re-sync:
+       1. A MutationObserver on common cart-count badge selectors - catches
+          most themes' own AJAX-cart updates within a frame or two.
+       2. A light background poll (Shopify's /cart.js is cheap/cacheable) as
+          a backstop for whatever (1) misses - a theme with no visible count
+          badge, a full reload of the host tab, etc. */
+  var CART_COUNT_SELECTORS = [
+    ".cart-count", "#CartCount", "[data-cart-count]", ".cart-count-bubble",
+    ".cart-link__bubble", ".site-header__cart-count", ".cart__count"
+  ].join(", ");
+  var CART_POLL_MS = 5000;
+  var cartWatchObserver = null;
+  var cartWatchTimer = null;
+
+  function startCartWatch(iframeEl) {
+    stopCartWatch();
+    if (w.MutationObserver) {
+      var badges = d.querySelectorAll(CART_COUNT_SELECTORS);
+      if (badges.length) {
+        cartWatchObserver = new w.MutationObserver(function () {
+          if (iframeEl && iframeEl.contentWindow) pushCartSync(iframeEl.contentWindow);
+        });
+        for (var i = 0; i < badges.length; i++) {
+          cartWatchObserver.observe(badges[i], { childList: true, characterData: true, subtree: true });
+        }
+      }
+    }
+    cartWatchTimer = w.setInterval(function () {
+      if (iframeEl && iframeEl.contentWindow) pushCartSync(iframeEl.contentWindow);
+    }, CART_POLL_MS);
+  }
+
+  function stopCartWatch() {
+    if (cartWatchObserver) { cartWatchObserver.disconnect(); cartWatchObserver = null; }
+    if (cartWatchTimer) { w.clearInterval(cartWatchTimer); cartWatchTimer = null; }
+  }
+
+  /* PEAR asks for a fresh snapshot - sent once the fitting room's own cart UI
+     is ready to receive it (on load, and whenever the shopper opens the cart
+     dropdown), so the very first sync can't race the iframe's own message
+     listener still being wired up. */
+  w.addEventListener("message", function (e) {
+    if (e.origin !== PEAR_BASE) return;
+    if (!e.data || e.data.type !== "PEAR_CART_REQUEST_SYNC") return;
+    pushCartSync(e.source);
+  });
+
+  /* Item deleted from inside PEAR - mirror the removal on the host cart, then
+     push a fresh, AUTHORITATIVE snapshot back (rather than trusting the
+     iframe's own optimistic local removal) so the two can never drift apart -
+     on a failure too, since the optimistic removal still needs correcting
+     back to whatever the host cart actually contains. */
+  w.addEventListener("message", function (e) {
+    if (e.origin !== PEAR_BASE) return;
+    if (!e.data || e.data.type !== "PEAR_REMOVE_FROM_CART") return;
+
+    var payload = e.data.payload || {};
+    var sourceWindow = e.source;
+    var platform = detectCartPlatform();
+
+    removeFromHostCart(payload, platform).then(function () {
+      pushCartSync(sourceWindow);
+    }).catch(function (err) {
+      console.warn("[PEAR widget] host cart removal failed:", err && err.message);
+      showToast(isHebrewPage() ? "לא הצלחנו להסיר מהסל אוטומטית" : "Couldn't remove the item automatically");
+      pushCartSync(sourceWindow);
+    });
+  });
+
   w.addEventListener("message", function (e) {
     if (e.origin !== PEAR_BASE) return;
     if (!e.data || e.data.type !== "PEAR_ADD_TO_CART") return;
@@ -1905,6 +2079,7 @@
     addToHostCart(payload, platform).then(function () {
       showToast(isHebrewPage() ? "הפריט נוסף לסל!" : "Added to cart!");
       notifyFittingRoom(true);
+      pushCartSync(sourceWindow);   // real host state, not just an optimistic count bump
     }).catch(function (err) {
       console.warn("[PEAR widget] host cart add failed:", err && err.message);
       showToast(isHebrewPage() ? "לא הצלחנו להוסיף לסל אוטומטית - נסה/י ידנית" : "Couldn't add to cart automatically - please add it manually");

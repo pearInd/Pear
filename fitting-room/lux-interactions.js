@@ -71,10 +71,7 @@
     }
 
     function land() {
-      count += 1;
-      localStorage.setItem("pear_cart_count", String(count));
-      renderBadge();
-      bounceCart();
+      bounceCart();   // the jiggle plays regardless of who ends up owning the count below
 
       const garment = (window.pearGetActiveGarment && window.pearGetActiveGarment()) || {};
 
@@ -97,14 +94,23 @@
           garmentUrl: garment.url || "",
           garmentName: garment.name || "",
         }, "*");
-        // Optimistic - fires immediately so the interaction still feels instant
-        // even on a slow host network. PEAR_ADD_TO_CART_RESULT below only ever
-        // CORRECTS this on an explicit, host-reported failure; a widget build
-        // that never replies (older embeds) simply leaves this as the final
-        // word, exactly like the fire-and-forget behaviour before it.
+        // The Full Bi-directional Cart Sync module in app.js owns #cartCount
+        // in iframe mode from here (PEAR_ADD_TO_CART_RESULT / PEAR_CART_SYNC
+        // land a moment after this resolves) - NOT bumped here too, so the
+        // two never fight over the same badge with two competing counts.
+        // Optimistic toast only - fires immediately so the interaction still
+        // feels instant even on a slow host network. PEAR_ADD_TO_CART_RESULT
+        // below only ever CORRECTS this on an explicit, host-reported
+        // failure; a widget build that never replies (older embeds) simply
+        // leaves this as the final word, exactly like the fire-and-forget
+        // behaviour before it.
         springToast("נוסף לסל · Added to cart");
       } else {
-        // Standalone (PEAR demo site, no host store to hand off to).
+        // Standalone (PEAR demo site, no host store to sync with) - this
+        // local counter IS the source of truth here, so it still owns the badge.
+        count += 1;
+        localStorage.setItem("pear_cart_count", String(count));
+        renderBadge();
         springToast("הפריט נוסף לסל! (דמו)");
       }
     }
