@@ -190,7 +190,15 @@ const I18N = {
   resultLabelError:         { he: "שגיאה בנתונים:", en: "Data error:" },
   sizeResultInvalid:        { he: "נתונים לא הגיוניים", en: "Values out of range" },
   bestSizeOutOfRange:       { he: "מידה מחוץ לטווח", en: "Size out of range" },
+  // resultLabelApprox/bestSizeOutOfRange above are now DEAD - the "closest match"
+  // fallback that used them was removed (calculateSize() no longer scores rows
+  // that don't genuinely fit). Left in place rather than deleted, same as the
+  // backend age_group plumbing this replaces.
   resultLabelApprox:        { he: "קירוב מידה מומלץ:", en: "Closest size match:" },
+  // Shown when height+weight genuinely fit NEITHER chart - see calculateSize()'s
+  // "fits neither" branch.
+  resultLabelNoMatch:       { he: "לא נמצאה מידה מתאימה:", en: "No matching size found:" },
+  sizeResultNoMatch:        { he: "אין התאמה", en: "No match" },
   // Appended to a bare child-chart size ("12" -> "12 (ילדים)") everywhere a size
   // value is displayed or logged - see formatSizeLabel(). Adult sizes are never
   // touched by this key; the number alone ("M"/"L") is unambiguous on its own.

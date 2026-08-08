@@ -780,37 +780,33 @@ function setOptionalVisible(show) {
 }
 
 /**
- * Recompute the recommended size from the form inputs (Zara or child chart,
- * penalty-scored). Drives the result box, the "continue" button enabled-state,
- * and - via setOptionalVisible/refreshAgeFieldVisibility - the conditional reveal
- * of the optional measurement fields and the age field itself.
- * Re-run on every input event, and whenever the garment's own kids/adult verdict
- * changes (see the PEAR_UPDATE_GARMENT listener). Pure UI/state; no network.
+ * Recompute the recommended size from height+weight ALONE - a genuine-fit
+ * lookup against both charts, not a closest-match guess. A chart row only
+ * counts if BOTH height AND weight land inside its band; there is no longer a
+ * fallback that recommends the nearest row when nothing genuinely fits (see
+ * the "fits neither" branch below).
+ *
+ * Age/activeItem.ageGroup play NO part in this anymore - chart selection is
+ * derived purely from which chart(s) the body genuinely fits. The age field
+ * (#ageFieldGroup) and the Gemini garment classification that used to drive
+ * this are left in place as dead/unused code (resolvedGarmentAgeGroup,
+ * refreshAgeFieldVisibility, pickSizeCategory) rather than deleted - nothing
+ * calls them from here anymore, so #ageFieldGroup can never be revealed.
+ *
+ * Drives the result box and the "continue" button enabled-state, and - via
+ * setOptionalVisible - the conditional reveal of the optional measurement
+ * fields. Re-run on every input event. Pure UI/state; no network.
  * @returns {void}
  */
 function calculateSize() {
-  // The GARMENT may already say whether this is kids' or adult clothing
-  // (resolvedGarmentAgeGroup - activeItem.ageGroup / pendingAgeGroup, set from the
-  // widget's classify-images verdict). When it does, that verdict is authoritative
-  // and the visitor's age is never asked for at all - see refreshAgeFieldVisibility.
-  // Only when the garment signal is "uncertain" (unresolved, absent, or genuinely
-  // ambiguous) does the visitor's own age become the deciding signal, exactly as
-  // stage 3 implemented before this feature existed.
-  refreshAgeFieldVisibility();
-  const garmentAgeGroup = resolvedGarmentAgeGroup();   // "kids" | "adult" | "uncertain"
-  const ageRequired = garmentAgeGroup === "uncertain";
-
   const num = (id) => ($(id).value ? parseFloat($(id).value) : null);
   const height = num("height"), weight = num("weight");
-  const age = ageRequired ? num("age") : null;
 
-  // Reveal optional fields only once every MANDATORY value currently being asked
-  // for is present and sane - age only counts when it's actually on-screen.
+  // Reveal optional fields only once both mandatory values are present and sane.
   // Height floor is 110cm/18kg to admit children's sizing (size 8 and below).
   // Bounds mirrored in PROFILE_* below and in updateUserMeasurements() server-side.
-  const mandatoryReady = !!height && !!weight && (!ageRequired || !!age) &&
-    height >= 110 && height <= 240 && weight >= 18 && weight <= 220 &&
-    (!ageRequired || (age >= 1 && age <= 120));
+  const mandatoryReady = !!height && !!weight &&
+    height >= 110 && height <= 240 && weight >= 18 && weight <= 220;
   setOptionalVisible(mandatoryReady);
 
   const chest = num("chest"), waist = num("waist"), legs = num("legs");
@@ -819,7 +815,7 @@ function calculateSize() {
   const nextBtn = $("btn-next-screen");
   const resultActions = $("resultActions");
 
-  resultBox.classList.remove("show", "error-result");
+  resultBox.classList.remove("show", "error-result", "no-match-result");
   if (resultActions) resultActions.classList.remove("is-ready");   // collapse the tray
   resultLabel.innerText = t("resultLabelDefault");
   nextBtn.disabled = true;
@@ -829,10 +825,9 @@ function calculateSize() {
   currentSizeCategory = null;
   updateProgress();
 
-  if (!height || !weight || (ageRequired && !age)) return;
+  if (!height || !weight) return;
 
-  if (height > 240 || height < 110 || weight > 220 || weight < 18 ||
-      (ageRequired && (age > 120 || age < 1))) {
+  if (height > 240 || height < 110 || weight > 220 || weight < 18) {
     resultLabel.innerText = t("resultLabelError");
     sizeResult.innerText = t("sizeResultInvalid");
     resultBox.classList.add("show", "error-result");
@@ -840,22 +835,45 @@ function calculateSize() {
     return;
   }
 
-  let bestSize = t("bestSizeOutOfRange"), minPenalty = Infinity;
-  const MAX_ALLOWED_PENALTY = 35;
+  // "Genuine fit" candidates per chart: rows where BOTH height AND weight land
+  // inside the band. coreHwPenalty() is exactly 0 in that case (it only ever
+  // adds penalty for being OUTSIDE a bound), so filtering on that gives exactly
+  // the genuine-fit set - a chart with no such row contributes NOTHING below,
+  // rather than still "winning" via whichever row happened to score lowest.
+  const childFits = CHILD_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
+  const adultFits = ZARA_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
 
-  // The garment's own signal wins outright when confident; age (via
-  // pickSizeCategory) only ever breaks the tie when the garment itself is
-  // "uncertain". Either way height/weight then choose the row WITHIN that chart -
-  // rows from the two charts are never mixed into a single penalty pass. The
-  // child path ignores chest/waist/legs entirely (no such columns on child rows).
-  currentSizeCategory =
-    garmentAgeGroup === "kids"  ? "child" :
-    garmentAgeGroup === "adult" ? "adult" :
-    pickSizeCategory(age);
-  const chart = currentSizeCategory === "child" ? CHILD_SIZE_CHART : ZARA_SIZE_CHART;
+  // Overlap zone (genuinely fits BOTH charts, e.g. ~170-172cm/54-60kg) defaults
+  // to adult - same tie-break convention used elsewhere in this codebase
+  // (pickSizeCategory's age cutoff, resolveAgeGroup's server-side tie rule).
+  // Adult winning whenever it has ANY candidate covers "adult-only" and
+  // "fits both" in the same branch.
+  currentSizeCategory = adultFits.length ? "adult" : (childFits.length ? "child" : null);
 
-  chart.forEach((row) => {
-    let pen = coreHwPenalty(row, height, weight);
+  if (!currentSizeCategory) {
+    // Fits NEITHER chart - no closest-match guess. A real gap between the two
+    // charts, or genuinely out-of-catalog proportions, is now a visible "no
+    // size found" result instead of a silently wrong recommendation.
+    // Blocking, same severity as the sane-range validation error above -
+    // Continue stays disabled until the visitor's measurements resolve to a
+    // real chart match.
+    resultLabel.innerText = t("resultLabelNoMatch");
+    sizeResult.innerText = t("sizeResultNoMatch");
+    resultBox.classList.add("show", "no-match-result");
+    if (resultActions) resultActions.classList.add("is-ready");
+    updateProgress();
+    return;
+  }
+
+  // Among the genuinely-fitting rows only, chest/waist/legs still refine WHICH
+  // one is shown when more than one qualifies (adjacent adult sizes' bands
+  // really do overlap, e.g. S and M both fit 170-172cm/64-65kg) - same scoring
+  // as before, just scoped to candidates that already passed the height/weight
+  // gate, never to a row that didn't.
+  const candidates = currentSizeCategory === "child" ? childFits : adultFits;
+  let bestSize = candidates[0].size, minPenalty = Infinity;
+  candidates.forEach((row) => {
+    let pen = 0;   // height/weight are already an exact fit for every candidate here
     if (currentSizeCategory === "adult") {
       if (chest) { if (chest < row.minChest) pen += (row.minChest - chest) * 0.5; if (chest > row.maxChest) pen += (chest - row.maxChest) * 0.5; }
       if (waist) { if (waist < row.minWaist) pen += (row.minWaist - waist) * 0.5; if (waist > row.maxWaist) pen += (waist - row.maxWaist) * 0.5; }
@@ -864,33 +882,16 @@ function calculateSize() {
     if (pen < minPenalty) { minPenalty = pen; bestSize = row.size; }
   });
 
-  if (minPenalty > MAX_ALLOWED_PENALTY) {
-    // Measurements don't match any chart row exactly, but we still let the user
-    // proceed - the fitting room works without a size recommendation, it just
-    // won't show a size badge. bestSize still holds the closest row found.
-    resultLabel.innerText = t("resultLabelApprox");
-    sizeResult.innerText = formatSizeLabel(bestSize);
-    resultBox.classList.add("show");
-    if (resultActions) resultActions.classList.add("is-ready");
-    currentUserSize = bestSize;   // use closest match rather than blocking
-    nextBtn.disabled = false;
-  } else {
-    sizeResult.innerText = formatSizeLabel(bestSize);
-    resultBox.classList.add("show");
-    if (resultActions) resultActions.classList.add("is-ready");
-    currentUserSize = bestSize;
-    nextBtn.disabled = false;
-  }
+  sizeResult.innerText = formatSizeLabel(bestSize);
+  resultBox.classList.add("show");
+  if (resultActions) resultActions.classList.add("is-ready");
+  currentUserSize = bestSize;
+  nextBtn.disabled = false;
   updateProgress();
 }
 
 function updateProgress() {
-  // "age" only counts toward the denominator while it's actually being asked for -
-  // otherwise a confident garment leaves the bar permanently short of 100% before
-  // currentUserSize forces it there (see calculateSize/resolvedGarmentAgeGroup).
-  const fields = resolvedGarmentAgeGroup() === "uncertain"
-    ? ["age", "height", "weight", "chest", "waist", "legs"]
-    : ["height", "weight", "chest", "waist", "legs"];
+  const fields = ["height", "weight", "chest", "waist", "legs"];
   const filled = fields.filter((f) => $(f) && $(f).value).length;
   let pct = Math.round((filled / fields.length) * 70);
   if (currentUserSize) pct = 100;
@@ -1138,7 +1139,11 @@ function goToFitting(opts) {
     garmentName: _handoff?.name    ?? "",
     garmentType: _handoff?.type    ?? "",
     subType:     _handoff?.subType ?? "",
-    size:        formatSizeLabel(currentUserSize) || "",
+    // "-" (not "") when unresolved - unreachable in normal flow now that
+    // calculateSize()'s "fits neither chart" state blocks Continue, but keeps
+    // this an intentional "no match" marker rather than a blank spreadsheet
+    // cell if it's ever hit some other way.
+    size:        formatSizeLabel(currentUserSize) || "-",
   };
   fetch("/api/track-tryon", {
     method:    "POST",
@@ -1160,6 +1165,9 @@ function goToFitting(opts) {
   // get silently clipped to "12 (Kid"/similar garbage - corrupting exactly the
   // child-size rows this feature exists to make clearer. The admin dashboard can
   // derive "kids" from the raw numeric value itself if it ever needs to display it.
+  // currentUserSize itself (not formatSizeLabel's output) is passed through
+  // unmodified below - null when unresolved, handled by logSessionMeasurements()'s
+  // own "-" fallback rather than here.
   logSessionMeasurements(
     { id: _handoff?.id ?? "", name: _handoff?.name ?? "" },
     currentUserSize
@@ -1174,7 +1182,11 @@ function goToFitting(opts) {
   // transition so the change happens fully behind the opaque pear mask.
   const commitSwap = () => {
     try {
-      $("final-size-text").innerText = formatSizeLabel(currentUserSize) || "";
+      // "-" (not "") when unresolved - unreachable in normal flow (Continue is
+      // disabled whenever calculateSize() found no genuine match), but keeps
+      // the headline sentence readable rather than showing a bare double-space
+      // gap if this is ever reached some other way.
+      $("final-size-text").innerText = formatSizeLabel(currentUserSize) || "-";
       $("screen-calculator").classList.remove("active");
       $("screen-fitting").classList.add("active");
       syncEditorialVideo();
@@ -1314,7 +1326,11 @@ function enterRoom() {
     console.log('[PEAR] activeItem.imgBack set to:', activeItem?.imgBack);
     $("focusBar").hidden = false;
     $("catalogPanel").hidden = true;
-    if (currentUserSize) $("focusSizeBadge").innerText = "מידה " + formatSizeLabel(currentUserSize);
+    // Always set (never leave stale text): unreachable with a null size in
+    // normal flow, but this only sets once per enterRoom() call, so a lingering
+    // "if" guard would leave a PREVIOUS garment's size badge showing if this
+    // path were ever reached with no size for the current one.
+    $("focusSizeBadge").innerText = currentUserSize ? "מידה " + formatSizeLabel(currentUserSize) : "";
   } else {
     focusMode = false;
     $("focusBar").hidden = true;
@@ -6313,8 +6329,9 @@ function logTryOnAnalytics(item, size) {
     subType:     item.subType     ?? "",
     // Lands in Sheets (/api/track-tryon → lib/sheets.js), a free-text cell with no
     // length cap - unlike logSessionMeasurements()'s Supabase-bound payload below,
-    // formatting here is safe.
-    size:        formatSizeLabel(size) ?? "",
+    // formatting here is safe. "-" (not "") when unresolved, for the same
+    // "intentional no-match marker, not a blank cell" reason as elsewhere.
+    size:        formatSizeLabel(size) ?? "-",
   };
   console.log("[analytics] firing /api/track-tryon →", payload);
   fetch("/api/track-tryon", {
@@ -6610,11 +6627,19 @@ function routeUser(user) {
     setIf("age", user.age);
     setIf("height", user.height); setIf("weight", user.weight);
     try { calculateSize(); } catch {}
-    // instant:true - this visitor never saw Screen 1 (pre-paint gate kept
-    // #screen-calculator hidden the whole time), so skip the branded transition
-    // and land directly on the camera with zero visible animation/delay.
-    goToFitting({ instant: true });
-    return;
+    // A stored height/weight that was valid when saved can still land in the
+    // "fits neither chart" gap calculateSize() now recognizes (it no longer
+    // forces a closest-match guess). Don't silently instant-skip into the
+    // fitting room with no resolved size - fall through to Screen 1 below,
+    // exactly the same blocking "no matching size" state a fresh visitor would
+    // hit, instead of bypassing it entirely via this fast path.
+    if (currentUserSize) {
+      // instant:true - this visitor never saw Screen 1 (pre-paint gate kept
+      // #screen-calculator hidden the whole time), so skip the branded transition
+      // and land directly on the camera with zero visible animation/delay.
+      goToFitting({ instant: true });
+      return;
+    }
   }
 
   showSizeForm({ refreshNotice: !!hasProfile });
@@ -7465,7 +7490,11 @@ function logSessionMeasurements(item, size) {
     userId:      PEAR_USER_ID,        // links this session to the remembered user
     garmentId:   item?.id   || "",
     garmentName: item?.name || "",
-    size:        size       || "",   // calculated size
+    // "-" (not "") when unresolved - a well-within-8-chars "no match" marker
+    // for the Supabase sessions.size column (see the truncation note at the
+    // goToFitting() call site above); RAW, never formatSizeLabel(), for the
+    // same reason.
+    size:        size       || "-",   // calculated size
     measurements,                    // ← object with ALL entered measurements
     ...measurements,                 // ← flat fields kept for the Sheets schema
   };
