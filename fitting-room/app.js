@@ -3403,6 +3403,29 @@ const ORIENT_PROFILE_EXIT_SCORE = 0.25;
    guards against pointless chatter on a shopper who is oscillating around the threshold,
    not against bandwidth. Shorter than ORIENT_COOLDOWN_MS for the same asymmetry above. */
 const ORIENT_PROFILE_COOLDOWN_MS = 1200;
+/* ── Dwell-time re-anchor ──────────────────────────────────────────────────────
+   THE BUG: "at 90°, the garment holds for a while, then quietly reverts" - confirmed
+   live via console trace (orient_debug=1) to happen during SUSTAINED dwelling, not the
+   turn itself. The turn is what the freeze-hold above already covers; this is a
+   different window entirely.
+
+   maybeUpdateProfile() only calls setPrompt() on a TRANSITION - autoProfile flipping.
+   Once it settles true, nothing re-asserts anything for as long as the shopper stays
+   edge-on. Lucy has no cross-frame state (see COMPOSITE_TEMPORAL's comment) - the
+   steering prompt is applied continuously server-side once set, not re-read from
+   anywhere client-side - so this isn't the model "forgetting" a fact it was told once;
+   it's a steering signal that was only ever asserted ONE time being expected to hold an
+   arbitrarily long generation window on its own, with a strong prior (a diffusion
+   model's own default completion for a person on camera) pulling against it the entire
+   time. Periodically re-issuing the CURRENT prompt (unchanged) re-steers it. */
+/* Min gap between periodic re-anchors while EDGE-ON and otherwise idle (no swap or
+   transition already re-issuing something). Deliberately much longer than
+   ORIENT_PROFILE_COOLDOWN_MS - that guards a STATE CHANGE against chatter; this guards
+   a STABLE state, where there is no risk of oscillation to protect against, only a
+   cost (an extra control message) to keep proportionate. A starting value, not a
+   theoretically derived one - the model's actual drift rate over a long dwell is not
+   something static analysis can measure; adjust from live observation. */
+const ORIENT_PROFILE_REANCHOR_MS = 4000;
 /* ── Foreshortening (silhouette width) thresholds ─────────────────────────────
    Measured RELATIVE to the shopper's own square-on width, never as an absolute pixel
    count: absolute width depends on how far they stand from the lens, their build, and the
@@ -3698,7 +3721,7 @@ function createOrientationWatcher() {
      `applying` mutex so a pose update and an asset swap can never be in flight at once.
      profileBuf holds the last ORIENT_PROFILE_WINDOW per-frame scores; squareStreak counts
      consecutive samples that look square-on, and is what the exit threshold reads. */
-  let profileBuf = [], squareStreak = 0, strongStreak = 0, lastProfileAt = 0;
+  let profileBuf = [], squareStreak = 0, strongStreak = 0, lastProfileAt = 0, lastReanchorAt = 0;
 
   /* Numeric confidence (0..1) for a skin-ratio vote: 0 right AT the classification
      threshold, saturating to 1 by double the threshold's margin into "obviously this
@@ -4202,6 +4225,11 @@ function createOrientationWatcher() {
 
     applying = true;                    // shared with maybeSwap - one in-flight apply at a time
     lastProfileAt = Date.now();
+    // Also counts as a fresh dwell re-anchor - this update IS the prompt landing with
+    // the current pose baked in, so maybeReanchorProfile() firing again immediately
+    // afterward in this same tick would be pure redundancy (same argument as skipping
+    // it opposite a pending dual-view swap - see the tick's own comment).
+    lastReanchorAt = Date.now();
     autoProfile = next;                 // set BEFORE applying, so the snapshot below reads it
     console.log(`[PEAR] AI Auto - pose ${next ? "EDGE-ON (side profile)" : "SQUARE-ON"}` +
       ` | depth-fidelity clause ${next ? "ENGAGED" : "released"} (prompt-only, reference unchanged)`);
@@ -4209,6 +4237,33 @@ function createOrientationWatcher() {
       await applyActive();
     } catch (e) {
       console.warn("[PEAR] AI Auto profile prompt update:", e?.message || e);
+    } finally {
+      applying = false;
+    }
+  }
+
+  /* THE DWELL-DRIFT COUNTERPART of maybeUpdateProfile() above - see
+     ORIENT_PROFILE_REANCHOR_MS's comment for the mechanism this exists to counter.
+     Deliberately a SEPARATE function rather than folded into maybeUpdateProfile(): that
+     one's very first line is `if (next === autoProfile) return;` - it only ever acts on
+     a CHANGE, by design (re-deriving `next` and re-running that check here would just
+     reimplement the same guard badly). This one is the opposite: it only ever acts when
+     NOTHING has changed and the shopper has simply stayed edge-on long enough to be
+     worth re-steering again. They share `lastReanchorAt`'s clock, though - a transition
+     maybeUpdateProfile() just sent IS a fresh anchor, so it stamps this same timestamp
+     too rather than leaving this function to immediately re-send the identical prompt
+     again a moment later. */
+  async function maybeReanchorProfile() {
+    if (!autoProfile || applying) return;
+    if (Date.now() - lastReanchorAt < ORIENT_PROFILE_REANCHOR_MS) return;
+    if (disposed || !isLive()) return;
+    applying = true;
+    lastReanchorAt = Date.now();
+    try {
+      await applyActive();
+      if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - profile dwell re-anchor (prompt-only, reference unchanged)");
+    } catch (e) {
+      console.warn("[PEAR] AI Auto profile re-anchor:", e?.message || e);
     } finally {
       applying = false;
     }
@@ -4326,7 +4381,15 @@ function createOrientationWatcher() {
          with no swap ever actually pending behind it. Gating on `dualView` too is what
          keeps this axis running for the entire life of a single-view session instead of
          going silent the moment the shopper is first read as "front". */
-      if (!(dualView && confirmed)) await maybeUpdateProfile(lastProfileScore);
+      if (!(dualView && confirmed)) {
+        await maybeUpdateProfile(lastProfileScore);
+        // Same redundancy argument as maybeUpdateProfile()'s skip above: a pending
+        // dual-view swap is about to re-apply the whole payload anyway. Called AFTER
+        // maybeUpdateProfile(), not instead of it - a fresh ENTER this very tick already
+        // resets lastReanchorAt itself (see that function's comment), so back-to-back
+        // calls here never double-fire for the same transition.
+        await maybeReanchorProfile();
+      }
 
       if (dualView && confirmed) await maybeSwap(lastVote);
     } catch (_) {} finally { sampling = false; }

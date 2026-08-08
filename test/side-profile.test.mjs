@@ -345,7 +345,7 @@ console.log("\n── §5 THE WATCHER: edge-on is a separate channel from the fr
 
   const tick = extract("const timer = setInterval", "if (dualView && confirmed) await maybeSwap(lastVote);");
   check("the tick skips the pose update only for a PENDING DUAL-VIEW swap (no redundant second set())",
-    /if \(!\(dualView && confirmed\)\) await maybeUpdateProfile\(lastProfileScore\);/.test(tick), tick.slice(-400));
+    /if \(!\(dualView && confirmed\)\) \{\s*\n\s*await maybeUpdateProfile\(lastProfileScore\);/.test(tick), tick.slice(-400));
 }
 
 console.log("\n── §5b THE PIXEL METRICS, EXECUTED against synthetic frames ──");

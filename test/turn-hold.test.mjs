@@ -197,7 +197,7 @@ console.log("\n── wiring: single-view items get the SAME protection, with th
      being called for the rest of the session the moment the shopper is first read as
      "front", silently undoing the whole fix. */
   check("maybeUpdateProfile's per-tick call is skipped only for a PENDING DUAL-VIEW swap",
-    /if \(!\(dualView && confirmed\)\) await maybeUpdateProfile\(lastProfileScore\);/.test(watcher));
+    /if \(!\(dualView && confirmed\)\) \{\s*\n\s*await maybeUpdateProfile\(lastProfileScore\);/.test(watcher));
   check("maybeSwap is only ever invoked for a dual-view session",
     /if \(dualView && confirmed\) await maybeSwap\(lastVote\);/.test(watcher));
 }
