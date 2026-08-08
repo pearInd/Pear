@@ -28,6 +28,21 @@
                       from the confirmed flip 2.5s later - the uncovered window is where
                       the shopper's real shirt came back. Plus every release path,
                       because a stuck hold hides the live feed entirely.
+     signaling-retry  "WebSocket is not open" thrown from the SDK's signaling channel
+                      during go-live (openAndJoin's join-frame race, see the SDK's
+                      signaling-channel.js) used to fail the whole session with zero
+                      retry. One bounded, narrowly-matched retry now covers it -
+                      asserted here, including that a REAL auth/permission failure
+                      still fails on the first attempt.
+     reconnect        The SDK already retries a dropped mid-session connection
+                      internally ("reconnecting", 5 attempts, 1-10s backoff) - but its
+                      own recovery resends only the garment/pose that was live at the
+                      ORIGINAL go-live moment, silently discarding every later swap or
+                      rotation. Asserts the re-apply that fixes it fires only on a
+                      genuine recovery (never the first connect), that a permanently
+                      exhausted reconnect retires the session instead of leaving
+                      billing/watcher timers running against nothing, and that a
+                      normal user-initiated Stop can never re-enter that same path.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -55,6 +70,8 @@ const SUITES = [
   ["preload-composite", "preload-composite.test.mjs"],
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
+  ["signaling-retry", "signaling-retry.test.mjs"],
+  ["reconnect", "reconnect.test.mjs"],
   ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],
 ];
 
