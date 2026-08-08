@@ -35,16 +35,22 @@
                       from the confirmed flip 2.5s later - the uncovered window is where
                       the shopper's real shirt came back. Plus every release path,
                       because a stuck hold hides the live feed entirely.
-     profile-reanchor The garment holds through a turn, then quietly reverts after
-                      sitting at 90 degrees for a while - confirmed live via console
-                      trace to be dwell-time model drift, not the turn itself (the hold
-                      already covers that). maybeUpdateProfile() only re-issues the
-                      prompt on autoProfile FLIPPING; nothing re-asserted it while the
-                      shopper just stayed edge-on. Asserts the periodic re-anchor fires
-                      on cadence, respects the applying mutex/disposed/isLive guards,
-                      swallows a failed attempt instead of throwing, and shares its
-                      timestamp bookkeeping with maybeUpdateProfile() so a transition
-                      and a scheduled re-anchor never double-fire back to back.
+     prompt-reanchor  The garment renders, then quietly reverts part-way through the
+                      session. Transitions re-issue the prompt (maybeUpdateProfile on an
+                      autoProfile flip, maybeSwap on a front/back flip) but a shopper who
+                      simply HOLDS a pose triggers neither, so the steering prompt is
+                      asserted once at go-live and never again - against a diffusion
+                      prior pulling toward "the person as photographed" the whole time.
+                      Asserts the periodic re-anchor fires on cadence at EVERY pose (not
+                      just edge-on), that the cadence is DERIVED from LIVE_DURATION_MS
+                      rather than hardcoded (a hardcoded 4000ms inside a 5000ms billed
+                      window could fire at most once, far too late for a reversion seen
+                      ~2s in), that it respects the applying mutex / disposed / isLive /
+                      isGarmentApplied guards, swallows a failed attempt instead of
+                      throwing, shares timestamp bookkeeping with maybeUpdateProfile so a
+                      transition and a scheduled re-anchor never double-fire, and that
+                      its telemetry is session-relative so console output can actually be
+                      lined up against a screen recording.
      signaling-retry  "WebSocket is not open" thrown from the SDK's signaling channel
                       during go-live (openAndJoin's join-frame race, see the SDK's
                       signaling-channel.js) used to fail the whole session with zero
@@ -99,7 +105,7 @@ const SUITES = [
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
   ["side-profile", "side-profile.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
-  ["profile-reanchor", "profile-reanchor.test.mjs"],
+  ["prompt-reanchor", "prompt-reanchor.test.mjs"],
   ["signaling-retry", "signaling-retry.test.mjs"],
   ["reconnect", "reconnect.test.mjs"],
   ["apply-timeout", "apply-timeout.test.mjs"],

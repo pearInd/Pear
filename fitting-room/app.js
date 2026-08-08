@@ -622,6 +622,13 @@ let recordHold = false;        // true once billing stopped & the recorder is ho
 let recordHoldSrc = null;      // off-DOM canvas holding the frozen final dressed frame the recorder repaints during the hold
 let firstFrameGuardTimer = null; // safety timeout - tears the session down if Decart's first frame never arrives (no billing cap otherwise)
 let billingStarted = false;      // guards startBillingWindow() so it arms the billed window ONCE per session, on the first rendered frame
+/* Wall-clock instant billingStarted flipped true. Diagnostics only - never a control
+   input, so it can never affect what is rendered. Its value is that it is stamped on the
+   SAME first-dressed-frame event that starts the recorder, so a "t=NNNNms" in the console
+   maps 1:1 onto the timestamp in a screen recording of that session - which is the only
+   way a report like "it reverted around 2 seconds in" can be checked against what the
+   code actually did at that moment. */
+let billingStartedAt = 0;
 let dressedFrameReady = false;   // true once #aiVideo has shown a VERIFIED non-black AI-rendered frame this
                                   // session - the single "model ready" signal shared by billing/countdown
                                   // (armFirstFrameBilling/startBillingWindow) AND the recorder (startRecording)
@@ -629,6 +636,12 @@ let isGarmentApplied = false;    // true once rtClient.set() has resolved - gate
 
 /** @returns {boolean} true while a billable realtime session is active. */
 const isLive = () => connState === "connected" || connState === "generating";
+
+/** Milliseconds since the first DRESSED frame (== recording start), or -1 before it.
+ *  Diagnostics only - see billingStartedAt. -1 rather than 0 so "before the window
+ *  opened" is visibly distinct in a log from "at the very start of it".
+ *  @returns {number} */
+const sessionElapsedMs = () => (billingStartedAt ? Date.now() - billingStartedAt : -1);
 
 /* =============================================================================
    SCREEN 1 - Size / measurement calculator
@@ -2683,6 +2696,7 @@ async function connectRealtime() {
   // no-first-frame safety timer, so the billed window re-arms cleanly on THIS session's
   // first rendered frame (see startBillingWindow / armFirstFrameBilling).
   billingStarted = false;
+  billingStartedAt = 0;            // diagnostics clock - re-stamped on this session's own first frame
   dressedFrameReady = false;
   isGarmentApplied = false;
   /* A fresh session holds NO reference image, whatever the last one held. Without this
@@ -2817,6 +2831,7 @@ function teardown() {
   // session starts clean (the billed window re-arms only on its own first rendered frame).
   if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
   billingStarted = false;
+  billingStartedAt = 0;            // diagnostics clock - re-stamped on the next session's first frame
   dressedFrameReady = false;
 
   // Bug 3 fix: bump the generation FIRST so any in-flight callbacks from the
@@ -3403,29 +3418,40 @@ const ORIENT_PROFILE_EXIT_SCORE = 0.25;
    guards against pointless chatter on a shopper who is oscillating around the threshold,
    not against bandwidth. Shorter than ORIENT_COOLDOWN_MS for the same asymmetry above. */
 const ORIENT_PROFILE_COOLDOWN_MS = 1200;
-/* ── Dwell-time re-anchor ──────────────────────────────────────────────────────
-   THE BUG: "at 90°, the garment holds for a while, then quietly reverts" - confirmed
-   live via console trace (orient_debug=1) to happen during SUSTAINED dwelling, not the
-   turn itself. The turn is what the freeze-hold above already covers; this is a
-   different window entirely.
+/* ── Steering re-anchor ────────────────────────────────────────────────────────
+   THE BUG: the garment renders, then quietly reverts to the shopper's real clothing
+   part-way through the session - reported at 90° dwell AND (from the earliest reports)
+   head-on.
 
    maybeUpdateProfile() only calls setPrompt() on a TRANSITION - autoProfile flipping.
-   Once it settles true, nothing re-asserts anything for as long as the shopper stays
-   edge-on. Lucy has no cross-frame state (see COMPOSITE_TEMPORAL's comment) - the
-   steering prompt is applied continuously server-side once set, not re-read from
-   anywhere client-side - so this isn't the model "forgetting" a fact it was told once;
-   it's a steering signal that was only ever asserted ONE time being expected to hold an
-   arbitrarily long generation window on its own, with a strong prior (a diffusion
-   model's own default completion for a person on camera) pulling against it the entire
-   time. Periodically re-issuing the CURRENT prompt (unchanged) re-steers it. */
-/* Min gap between periodic re-anchors while EDGE-ON and otherwise idle (no swap or
-   transition already re-issuing something). Deliberately much longer than
-   ORIENT_PROFILE_COOLDOWN_MS - that guards a STATE CHANGE against chatter; this guards
-   a STABLE state, where there is no risk of oscillation to protect against, only a
-   cost (an extra control message) to keep proportionate. A starting value, not a
-   theoretically derived one - the model's actual drift rate over a long dwell is not
-   something static analysis can measure; adjust from live observation. */
-const ORIENT_PROFILE_REANCHOR_MS = 4000;
+   maybeSwap() only fires on a confirmed front/back flip. A shopper who simply STAYS in
+   one pose triggers neither, so the steering prompt is asserted once and then never
+   again for the rest of the session. Lucy has no cross-frame state (see
+   COMPOSITE_TEMPORAL's comment) - the prompt is applied continuously server-side once
+   set, not re-read from anywhere client-side - so this isn't the model "forgetting" a
+   fact: it is a single assertion being asked to hold the whole generation window on its
+   own, against a strong prior (a diffusion model's default completion for a person on
+   camera is the person as photographed) pulling the other way the entire time.
+   Periodically re-issuing the CURRENT prompt, unchanged, re-steers it.
+
+   NOT scoped to edge-on. The first version of this was, which was an arbitrary
+   restriction: the mechanism above is pose-INDEPENDENT, and a shopper standing still
+   facing the camera goes just as long without a re-assertion as one holding a profile.
+   applyActive() re-derives the current desired state (including profileActive()), so
+   one cadence covers every pose without needing to know which one is live. */
+/* Min gap between re-anchors, DERIVED from the session length rather than hardcoded.
+   A hardcoded value is exactly how the first version of this shipped broken: it was set
+   to 4000ms against a LIVE_DURATION_MS of 5000ms, so it could fire at most ONCE per
+   session - and only for a shopper who held a single pose for 4 of their 5 seconds.
+   Reversion was being observed ~2s in, which that cadence could never have reached.
+   Deriving it keeps the real invariant - "re-anchor several times WITHIN a session" -
+   true by construction if the billed window is ever retuned. The floor is a chatter
+   guard for a hypothetical very short window; at LIVE_DURATION_MS=5000 this resolves to
+   1250ms (~3 re-anchors per session, first at ~1.25s - comfortably ahead of the
+   observed ~2s reversion). Each ride setPrompt(): a small control message, no image
+   bytes (see applyGarment()'s flicker-fix comment), so the cost of the extra frequency
+   is negligible and does NOT re-upload the reference. */
+const REANCHOR_MS = Math.max(1000, Math.round(LIVE_DURATION_MS / 4));
 /* ── Foreshortening (silhouette width) thresholds ─────────────────────────────
    Measured RELATIVE to the shopper's own square-on width, never as an absolute pixel
    count: absolute width depends on how far they stand from the lens, their build, and the
@@ -4225,8 +4251,8 @@ function createOrientationWatcher() {
 
     applying = true;                    // shared with maybeSwap - one in-flight apply at a time
     lastProfileAt = Date.now();
-    // Also counts as a fresh dwell re-anchor - this update IS the prompt landing with
-    // the current pose baked in, so maybeReanchorProfile() firing again immediately
+    // Also counts as a fresh re-anchor - this update IS the prompt landing with the
+    // current pose baked in, so maybeReanchorPrompt() firing again immediately
     // afterward in this same tick would be pure redundancy (same argument as skipping
     // it opposite a pending dual-view swap - see the tick's own comment).
     lastReanchorAt = Date.now();
@@ -4242,28 +4268,43 @@ function createOrientationWatcher() {
     }
   }
 
-  /* THE DWELL-DRIFT COUNTERPART of maybeUpdateProfile() above - see
-     ORIENT_PROFILE_REANCHOR_MS's comment for the mechanism this exists to counter.
+  /* THE STEADY-STATE COUNTERPART of maybeUpdateProfile()/maybeSwap() - see REANCHOR_MS's
+     comment for the mechanism this exists to counter.
+
      Deliberately a SEPARATE function rather than folded into maybeUpdateProfile(): that
      one's very first line is `if (next === autoProfile) return;` - it only ever acts on
      a CHANGE, by design (re-deriving `next` and re-running that check here would just
-     reimplement the same guard badly). This one is the opposite: it only ever acts when
-     NOTHING has changed and the shopper has simply stayed edge-on long enough to be
-     worth re-steering again. They share `lastReanchorAt`'s clock, though - a transition
-     maybeUpdateProfile() just sent IS a fresh anchor, so it stamps this same timestamp
-     too rather than leaving this function to immediately re-send the identical prompt
-     again a moment later. */
-  async function maybeReanchorProfile() {
-    if (!autoProfile || applying) return;
-    if (Date.now() - lastReanchorAt < ORIENT_PROFILE_REANCHOR_MS) return;
+     reimplement the same guard badly). This one is the exact opposite: it only ever acts
+     when NOTHING has changed and the shopper has simply held whatever pose they are in
+     long enough to be worth re-steering again. Between them, every path that could
+     re-assert the prompt is covered: transitions by those two, steady state by this.
+
+     They share `lastReanchorAt`'s clock - a transition maybeUpdateProfile() just sent IS
+     a fresh anchor, so it stamps this same timestamp rather than leaving this function to
+     re-send an identical prompt a moment later. */
+  async function maybeReanchorPrompt() {
+    if (applying) return;                        // a swap or transition update owns the wire
+    if (Date.now() - lastReanchorAt < REANCHOR_MS) return;
     if (disposed || !isLive()) return;
+    /* Nothing has been rendered yet - there is no steering to re-assert, and firing here
+       would race the very first applyActive() that goLive() is still awaiting. */
+    if (!isGarmentApplied) return;
     applying = true;
     lastReanchorAt = Date.now();
     try {
       await applyActive();
-      if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - profile dwell re-anchor (prompt-only, reference unchanged)");
+      /* Session-relative, because that is the only form that is actually useful for the
+         diagnosis this keeps being needed for: billingStartedAt is stamped on the SAME
+         first-dressed-frame event that starts the recorder, so t= here lines up 1:1 with
+         the timestamp in a screen recording of the session. "Re-anchored at t=2400ms,
+         reversion visible at t=2000ms in the clip" is a decidable statement; a wall-clock
+         log line is not. */
+      if (ORIENT_DEBUG) {
+        console.log(`[PEAR] AI Auto - prompt re-anchor at t=${sessionElapsedMs()}ms` +
+          ` | pose=${autoProfile ? "EDGE-ON" : "square-on"} | prompt-only, reference unchanged`);
+      }
     } catch (e) {
-      console.warn("[PEAR] AI Auto profile re-anchor:", e?.message || e);
+      console.warn("[PEAR] AI Auto prompt re-anchor:", e?.message || e);
     } finally {
       applying = false;
     }
@@ -4383,12 +4424,15 @@ function createOrientationWatcher() {
          going silent the moment the shopper is first read as "front". */
       if (!(dualView && confirmed)) {
         await maybeUpdateProfile(lastProfileScore);
-        // Same redundancy argument as maybeUpdateProfile()'s skip above: a pending
-        // dual-view swap is about to re-apply the whole payload anyway. Called AFTER
-        // maybeUpdateProfile(), not instead of it - a fresh ENTER this very tick already
-        // resets lastReanchorAt itself (see that function's comment), so back-to-back
-        // calls here never double-fire for the same transition.
-        await maybeReanchorProfile();
+        /* Same redundancy argument as maybeUpdateProfile()'s skip above: a pending
+           dual-view swap is about to re-apply the whole payload anyway. Called AFTER
+           maybeUpdateProfile(), not instead of it - a fresh transition this very tick
+           already stamps lastReanchorAt itself (see that function's comment), so
+           back-to-back calls here never double-fire for the same transition.
+           NOT gated on pose: the drift this counters is pose-independent, so a shopper
+           standing still square-on needs it exactly as much as one holding a profile -
+           see REANCHOR_MS's comment. */
+        await maybeReanchorPrompt();
       }
 
       if (dualView && confirmed) await maybeSwap(lastVote);
@@ -7777,6 +7821,7 @@ function startBillingWindow(gen) {
   if (billingStarted) return;            // already ticking for this session
   if (gen !== sessionGen) return;        // stale first-frame from a torn-down session
   billingStarted = true;
+  billingStartedAt = Date.now();         // diagnostics clock - see sessionElapsedMs()
 
   // Start recording from the SAME event that starts billing (the first DRESSED frame)
   // so the encoded clip and the billed window cover exactly the same span - no gap
