@@ -2297,6 +2297,57 @@ function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width
  * reaches the browser - only the short-lived ek_ token from the proxy does.
  * @returns {Promise<void>}
  */
+/* The realtime.connect() options object, factored out of connectRealtime() so a
+   retried connect attempt (see the signaling-race retry below) can rebuild it
+   identically for each attempt without duplicating the callback bodies. `gen` is the
+   session generation captured by connectRealtime() at the top of that call - every
+   callback below closes over it and bails the instant a teardown/new-connect has
+   moved sessionGen on, exactly as before this was extracted. */
+function buildRealtimeConnectOpts(gen) {
+  return {
+    model: {
+      name: "lucy-vton-latest",
+      urlPath: "/v1/stream",
+      // NOTE: these are advisory only - the SDK ignores model.fps/width/height on
+      // Chromium. The REAL cap is enforced upstream by createThrottledInputStream()
+      // (canvas pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H). Kept in sync so any
+      // SDK build that DOES honour them agrees with the throttle.
+      fps: { ideal: LIVE_INFERENCE_FPS, max: LIVE_INFERENCE_FPS },
+      width: LIVE_W,
+      height: LIVE_H,
+    },
+    mirror: "auto",
+    onRemoteStream: (editedStream) => {
+      if (gen !== sessionGen) return;    // stale callback from a torn-down session
+      // Official pattern: map the live edited WebRTC stream straight to the
+      // video element so the garment warps/tracks the user in realtime.
+      const aiVideo = document.querySelector("#aiVideo");
+      aiVideo.srcObject = editedStream;
+      aiVideo.style.display = "block";   // make sure it's visible
+      aiVideo.style.transform = "none";  // edited feed is already correctly oriented
+      // Force the video onto its own GPU compositing layer so the browser doesn't
+      // re-rasterize it in software on every frame repaint. translateZ(0) is the
+      // universal trigger; will-change is the spec-correct version.
+      aiVideo.style.willChange = "transform";
+      aiVideo.style.transform = "translateZ(0)";
+      aiVideo.play().catch(() => {});
+      // BILLING START: the 5s / 10-credit window begins at the FIRST DRESSED frame
+      // Decart actually renders to #aiVideo here - NOT at connect and NOT merely at
+      // set() being called, but once it has resolved AND a frame reflecting it has
+      // decoded - so the handshake + server warm-up + styling round-trip is never
+      // billed. Idempotent + sessionGen-guarded inside startBillingWindow, so a
+      // stale/duplicate stream can't re-arm it. Recording (Feature 2) is armed from
+      // the same call, inside startBillingWindow, so both cover the identical span.
+      armFirstFrameBilling(aiVideo, gen);
+    },
+    onConnectionChange: (state) => {
+      if (gen !== sessionGen) return;    // stale callback from a torn-down session
+      connState = state;
+      setConn(state);
+    },
+  };
+}
+
 async function connectRealtime() {
   if (rtClient && isLive()) return;
   if (connecting) return;
@@ -2346,76 +2397,74 @@ async function connectRealtime() {
   try {
     /* ── load SDK ─────────────────────────────────────────────────────────── */
     const { createDecartClient } = await loadSDK();
-    console.log("[PEAR] connectRealtime() - stage 2/4: SDK loaded. Minting ephemeral token…");
 
-    /* ── mint a short-lived ek_ token from the secure proxy (only now, never on
-          page load) - the permanent dct_ key stays server-side ─────────────── */
-    const ekToken = await mintEphemeralToken();
+    /* ── mint token → create client → build the throttled input, WITH ONE RETRY ──
+       THE FAILURE THIS COVERS: "WebSocket is not open" thrown from the SDK's
+       signaling channel (openAndJoin → writeMessage({type:"livekit_join"})). Reading
+       the SDK source (realtime/signaling-channel.js): openSocket() resolves once
+       ws.onopen fires, then openAndJoin() immediately tries to send the join frame -
+       if the socket has ALREADY closed again by that point (readyState !== OPEN),
+       writeMessage() returns false and this exact message is thrown, with no error
+       code to distinguish it by. That is a signaling-layer race - the ek_ token
+       itself was accepted (the socket opened), but the join handshake lost a very
+       narrow window, which upstream network jitter or a momentarily overloaded
+       signaling server can both produce. It surfaced to the shopper as "המדידה
+       החיה נכשלה" with zero retry, on a call this file otherwise treats as
+       reliable once the token is in hand.
+       ONE retry, matched narrowly on this message text so a real auth/permission
+       failure (bad key, camera denied, model not permitted) still fails fast rather
+       than silently eating 2x the latency. The cached ek_ token is invalidated
+       before retrying: it already failed one join, and mintEphemeralToken()'s cache
+       has no way to know that on its own. */
+    let attempt = 0;
+    for (;;) {
+      attempt++;
+      console.log(`[PEAR] connectRealtime() - stage 2/4: SDK loaded. Minting ephemeral token… (attempt ${attempt})`);
 
-    // A teardown may have fired while we were awaiting the SDK/token - abort.
-    if (gen !== sessionGen) return;
-    console.log("[PEAR] connectRealtime() - stage 3/4: token OK. Creating Decart client…");
+      /* ── mint a short-lived ek_ token from the secure proxy (only now, never on
+            page load) - the permanent dct_ key stays server-side ─────────────── */
+      const ekToken = await mintEphemeralToken();
 
-    /* ── create client with the ephemeral token ───────────────────────────── */
-    const client = createDecartClient({ apiKey: ekToken });
-    console.log("[PEAR] connectRealtime() - stage 4/4: opening WebRTC session (waiting for 'connected')…");
+      // A teardown may have fired while we were awaiting the SDK/token - abort.
+      if (gen !== sessionGen) return;
+      console.log("[PEAR] connectRealtime() - stage 3/4: token OK. Creating Decart client…");
 
-    /* Bug 3 fix: work off a CLONE of the camera tracks so disconnect/teardown never
-       stops localStream (our persistent preview). The clone is OWNED by the throttle,
-       which stops it on dispose().
-       BILLING FIX: route that clone through createThrottledInputStream() so the SDK
-       receives a canvas capture pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H - the
-       SDK's own fps/resolution caps are no-ops on Chromium (see the throttler note). */
-    const camClone = new MediaStream(localStream.getVideoTracks().map((t) => t.clone()));
-    inputThrottle = createThrottledInputStream(camClone, {
-      fps: LIVE_INFERENCE_FPS, width: LIVE_W, height: LIVE_H,
-    });
-    realtimeInput = inputThrottle.stream;
+      /* ── create client with the ephemeral token ───────────────────────────── */
+      const client = createDecartClient({ apiKey: ekToken });
+      console.log("[PEAR] connectRealtime() - stage 4/4: opening WebRTC session (waiting for 'connected')…");
 
-    /* ── connect realtime ─────────────────────────────────────────────────── */
-    // FIX: model passed as a plain string, NOT via models.realtime()
-    rtClient = await client.realtime.connect(realtimeInput, {
-      model: {
-        name: "lucy-vton-latest",
-        urlPath: "/v1/stream",
-        // NOTE: these are advisory only - the SDK ignores model.fps/width/height on
-        // Chromium. The REAL cap is enforced upstream by createThrottledInputStream()
-        // (canvas pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H). Kept in sync so any
-        // SDK build that DOES honour them agrees with the throttle.
-        fps: { ideal: LIVE_INFERENCE_FPS, max: LIVE_INFERENCE_FPS },
-        width: LIVE_W,
-        height: LIVE_H,
-      },
-      mirror: "auto",
-      onRemoteStream: (editedStream) => {
-        if (gen !== sessionGen) return;    // stale callback from a torn-down session
-        // Official pattern: map the live edited WebRTC stream straight to the
-        // video element so the garment warps/tracks the user in realtime.
-        const aiVideo = document.querySelector("#aiVideo");
-        aiVideo.srcObject = editedStream;
-        aiVideo.style.display = "block";   // make sure it's visible
-        aiVideo.style.transform = "none";  // edited feed is already correctly oriented
-        // Force the video onto its own GPU compositing layer so the browser doesn't
-        // re-rasterize it in software on every frame repaint. translateZ(0) is the
-        // universal trigger; will-change is the spec-correct version.
-        aiVideo.style.willChange = "transform";
-        aiVideo.style.transform = "translateZ(0)";
-        aiVideo.play().catch(() => {});
-        // BILLING START: the 5s / 10-credit window begins at the FIRST DRESSED frame
-        // Decart actually renders to #aiVideo here - NOT at connect and NOT merely at
-        // set() being called, but once it has resolved AND a frame reflecting it has
-        // decoded - so the handshake + server warm-up + styling round-trip is never
-        // billed. Idempotent + sessionGen-guarded inside startBillingWindow, so a
-        // stale/duplicate stream can't re-arm it. Recording (Feature 2) is armed from
-        // the same call, inside startBillingWindow, so both cover the identical span.
-        armFirstFrameBilling(aiVideo, gen);
-      },
-      onConnectionChange: (state) => {
-        if (gen !== sessionGen) return;    // stale callback from a torn-down session
-        connState = state;
-        setConn(state);
-      },
-    });
+      /* Bug 3 fix: work off a CLONE of the camera tracks so disconnect/teardown never
+         stops localStream (our persistent preview). The clone is OWNED by the throttle,
+         which stops it on dispose().
+         BILLING FIX: route that clone through createThrottledInputStream() so the SDK
+         receives a canvas capture pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H - the
+         SDK's own fps/resolution caps are no-ops on Chromium (see the throttler note). */
+      const camClone = new MediaStream(localStream.getVideoTracks().map((t) => t.clone()));
+      inputThrottle = createThrottledInputStream(camClone, {
+        fps: LIVE_INFERENCE_FPS, width: LIVE_W, height: LIVE_H,
+      });
+      realtimeInput = inputThrottle.stream;
+
+      try {
+        /* ── connect realtime ───────────────────────────────────────────────── */
+        // FIX: model passed as a plain string, NOT via models.realtime()
+        rtClient = await client.realtime.connect(realtimeInput, buildRealtimeConnectOpts(gen));
+        break;      // success - fall through to the post-connect code below
+      } catch (e) {
+        // Dispose THIS attempt's throttle/clone before either retrying (a fresh one is
+        // built above) or rethrowing (the outer catch's stopLive() would otherwise find
+        // a dangling throttle from an attempt that never became the live session).
+        if (inputThrottle) { try { inputThrottle.dispose(); } catch (_) {} inputThrottle = null; }
+        realtimeInput = null;
+
+        const isSignalingRace = /WebSocket is not open/.test(e?.message || "");
+        if (!isSignalingRace || attempt >= 2 || gen !== sessionGen) throw e;
+
+        console.warn("[PEAR] connectRealtime() - signaling race on attempt", attempt,
+          "(" + e.message + ") - invalidating cached token and retrying once…");
+        _tokenCache = null;             // do not reuse a token that just failed its join
+      }
+    }
 
     // If a teardown landed during connect(), immediately close this orphan - and
     // dispose the throttle so its paint loop / cloned camera track don't outlive it.
