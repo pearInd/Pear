@@ -2867,6 +2867,37 @@ function teardown() {
   setConn("idle");
 }
 
+/**
+ * Full exit teardown - runs the normal teardown() above (Decart/WebRTC session)
+ * AND additionally releases the raw camera (localStream), which teardown() leaves
+ * running on purpose for in-page garment swaps (see the sessionGen comment above).
+ * Only call this when the fitting room itself is being closed/discarded (the
+ * PEAR_TEARDOWN handler below) - never from the in-page swap path, or every
+ * garment change would re-prompt for camera permission.
+ */
+function fullTeardown() {
+  teardown();
+  if (localStream) {
+    try { localStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+    localStream = null;
+  }
+  const v = $("webcam");
+  if (v) v.srcObject = null;
+}
+
+/* The host widget sends this right before it removes our iframe from its DOM
+   (modal close / X button). A plain iframe removal doesn't reliably fire our own
+   beforeunload/pagehide handlers, and even when it does, teardown() intentionally
+   keeps the camera open for same-session reuse - neither is safe to rely on for a
+   real exit, so the parent asks us explicitly. Acks back so the widget can remove
+   the iframe immediately instead of always waiting out its fallback timeout. */
+window.addEventListener("message", (e) => {
+  if (e.source !== window.parent) return;
+  if (!e.data || e.data.type !== "PEAR_TEARDOWN") return;
+  try { fullTeardown(); } catch (_) {}
+  try { window.parent.postMessage({ type: "PEAR_TEARDOWN_ACK" }, "*"); } catch (_) {}
+});
+
 function waitConnected(timeout) {
   return new Promise((resolve, reject) => {
     if (isLive()) return resolve();

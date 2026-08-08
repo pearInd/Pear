@@ -1257,10 +1257,14 @@
   var activeIframe = null;
   var escHandler = null;
 
+  /* Max time to wait for the fitting room to ack PEAR_TEARDOWN (stop its camera +
+     WebRTC session) before force-removing its iframe anyway - never let a close
+     action hang on a child that fails to respond. */
+  var TEARDOWN_ACK_TIMEOUT_MS = 250;
+
   function closeModal() {
-    if (activeOverlay && activeOverlay.parentNode) {
-      activeOverlay.parentNode.removeChild(activeOverlay);
-    }
+    var overlay = activeOverlay;
+    var iframe = activeIframe;
     activeOverlay = null;
     activeIframe = null;
     if (escHandler) {
@@ -1268,6 +1272,38 @@
       escHandler = null;
     }
     stopCartWatch();   // nothing in PEAR needs a live cart mirror while it's closed
+
+    if (!overlay) return;
+
+    var removed = false;
+    function removeOverlay() {
+      if (removed) return;
+      removed = true;
+      w.removeEventListener("message", onAck);
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    function onAck(e) {
+      if (iframe && e.source === iframe.contentWindow &&
+          e.data && e.data.type === "PEAR_TEARDOWN_ACK") {
+        removeOverlay();
+      }
+    }
+
+    /* Tell the fitting room to release its camera/WebRTC session BEFORE its iframe
+       is torn down - a plain removeChild() doesn't reliably fire the child's own
+       unload/pagehide handlers, and even when it does, the room's internal
+       teardown() intentionally leaves the camera running (it's built for in-page
+       garment swaps, not a full exit). Keep the iframe attached until the child
+       acks or the fallback timeout fires, whichever is first, so a re-opened
+       fitting room never inherits a still-locked camera device. */
+    try {
+      if (iframe && iframe.contentWindow) {
+        w.addEventListener("message", onAck);
+        iframe.contentWindow.postMessage({ type: "PEAR_TEARDOWN" }, "*");
+      }
+    } catch (e) {}
+
+    w.setTimeout(removeOverlay, TEARDOWN_ACK_TIMEOUT_MS);
   }
 
   function openModal(garment) {
