@@ -786,12 +786,18 @@ function setOptionalVisible(show) {
  * fallback that recommends the nearest row when nothing genuinely fits (see
  * the "fits neither" branch below).
  *
- * Age/activeItem.ageGroup play NO part in this anymore - chart selection is
- * derived purely from which chart(s) the body genuinely fits. The age field
- * (#ageFieldGroup) and the Gemini garment classification that used to drive
- * this are left in place as dead/unused code (resolvedGarmentAgeGroup,
- * refreshAgeFieldVisibility, pickSizeCategory) rather than deleted - nothing
- * calls them from here anymore, so #ageFieldGroup can never be revealed.
+ * The garment's own classification (resolvedGarmentAgeGroup(), via
+ * activeItem.ageGroup) is consulted first: a CONFIDENT "kids" or "adult"
+ * verdict restricts the genuine-fit search to that single chart only - a
+ * kids garment never falls back to the adult chart even if the body would
+ * technically fit there, and vice versa. Only when the garment is
+ * "uncertain" (genuinely unclassified, not yet arrived, or an older cached
+ * item predating this feature) does the dual-chart search below run, with
+ * its usual overlap-defaults-to-adult tie-break.
+ *
+ * The #age input field and refreshAgeFieldVisibility() stay dead/unused -
+ * the visitor is never asked for their age; only the garment's own
+ * classification and their height/weight decide the chart.
  *
  * Drives the result box and the "continue" button enabled-state, and - via
  * setOptionalVisible - the conditional reveal of the optional measurement
@@ -840,14 +846,24 @@ function calculateSize() {
   // adds penalty for being OUTSIDE a bound), so filtering on that gives exactly
   // the genuine-fit set - a chart with no such row contributes NOTHING below,
   // rather than still "winning" via whichever row happened to score lowest.
-  const childFits = CHILD_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
-  const adultFits = ZARA_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
+  //
+  // A CONFIDENT garment classification restricts the search to a single
+  // chart from the start - the other chart's array is left empty rather than
+  // filtered, so it can never contribute a candidate below, even if the body
+  // would technically fit a row there.
+  const garmentAgeGroup = resolvedGarmentAgeGroup();
+  const childFits = garmentAgeGroup === "adult" ? [] :
+    CHILD_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
+  const adultFits = garmentAgeGroup === "kids" ? [] :
+    ZARA_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
 
   // Overlap zone (genuinely fits BOTH charts, e.g. ~170-172cm/54-60kg) defaults
   // to adult - same tie-break convention used elsewhere in this codebase
   // (pickSizeCategory's age cutoff, resolveAgeGroup's server-side tie rule).
   // Adult winning whenever it has ANY candidate covers "adult-only" and
-  // "fits both" in the same branch.
+  // "fits both" in the same branch. This only actually applies in the
+  // "uncertain" case above - a confident garment already has the other
+  // chart's array forced empty, so there's nothing left for it to tie with.
   currentSizeCategory = adultFits.length ? "adult" : (childFits.length ? "child" : null);
 
   if (!currentSizeCategory) {
