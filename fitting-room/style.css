@@ -577,7 +577,15 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    away regardless). */
 #screen-calculator .calc-card {
   display: grid;
-  grid-template-columns: 40% 60%;
+  /* 2fr/3fr, NOT 40%/60%: percentage tracks resolve against the container and
+     then the gap is ADDED on top, so 40+60+2px was always 2px wider than the
+     box holding it. Between 921px (where this two-column layout starts) and
+     1180px (where .calc-shell's max-width finally absorbs the excess) that
+     overflow reached the viewport and put a horizontal scrollbar on the whole
+     page - measured: scrollWidth 1002 at a 1000px viewport, 1122 at 1120px.
+     fr tracks divide what is left AFTER the gap, so the same 40:60 proportion
+     now always fits exactly. */
+  grid-template-columns: 2fr 3fr;
   gap: 2px;
 }
 @media (min-width: 921px) {
@@ -907,6 +915,23 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 24px clamp(16px,5vw,36px) 0;
   max-width: 760px; margin: 0 auto;
+  box-sizing: border-box;
+
+  /* ── Corner reservation (see TOP-CORNER CONTROL GEOMETRY) ──────────────
+     The fixed .lang-switch / .profile-btn are pinned to the VIEWPORT edges,
+     while this box is capped at 760px and centred - so the space it already
+     has between its own edge and the viewport edge counts toward clearing
+     them. That inset is (100vw - box width) / 2, and only the SHORTFALL
+     needs to become padding.
+     max() means this is a strict no-op wherever the centred box is already
+     wide of the corners (~1008px up, i.e. every ordinary desktop width) -
+     the design's own clamp() padding wins there and the perfected desktop
+     header is untouched. It engages only in the band where the two really
+     do collide, which measurement put at ≤907px: at 800px the cart button
+     sat 42×34px underneath the language switch and was completely
+     unclickable, at a perfectly ordinary laptop/tablet width. */
+  padding-left:  max(clamp(16px,5vw,36px), calc(var(--hdr-gutter-l) - (100vw - min(760px, 100vw)) / 2));
+  padding-right: max(clamp(16px,5vw,36px), calc(var(--hdr-gutter-r) - (100vw - min(760px, 100vw)) / 2));
 }
 /* ── Fullscreen segmented switch (was "Back to Store", a plain link/pill) ──
    Apple Liquid Glass segmented control: a translucent sliding thumb behind
@@ -925,7 +950,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   align-self: center;
   position: relative; direction: ltr;
   display: inline-flex; align-items: center;
-  padding: 4px; margin: 0; border: 0;
+  padding: var(--switch-pad); margin: 0; border: 0;
   appearance: none; -webkit-appearance: none;
   border-radius: var(--pill);
   background: var(--glass-soft);
@@ -943,8 +968,11 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    width on release/click). Ambient soft drop-shadow + specular border, both
    per the Liquid Glass spec. */
 .fs-switch__thumb {
-  position: absolute; top: 4px; left: 4px; z-index: 0;
-  width: 34px; height: calc(100% - 8px);
+  position: absolute; top: var(--switch-pad); left: var(--switch-pad); z-index: 0;
+  /* Width is authored to EQUAL one segment - app.js measures this node to get
+     the live segment width, so the drag/snap math follows any responsive
+     resize automatically instead of trusting a hardcoded constant. */
+  width: var(--fs-seg-w); height: calc(100% - 2 * var(--switch-pad));
   border-radius: var(--pill);
   background: rgba(255, 255, 255, .82);
   border: 1px solid rgba(255, 255, 255, .4);
@@ -960,7 +988,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .fs-switch__seg {
   position: relative; z-index: 1;   /* above the absolutely-positioned thumb */
   display: inline-flex; align-items: center; justify-content: center;
-  width: 34px; height: 26px;
+  width: var(--fs-seg-w); height: 26px;
   color: var(--muted);
   transition: color .3s var(--ease);
 }
@@ -2212,7 +2240,52 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 :root {
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
   --spring: cubic-bezier(.34, 1.56, .64, 1);   /* tactile overshoot */
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ✦ TOP-CORNER CONTROL GEOMETRY - the single source of truth
+   ─────────────────────────────────────────────────────────────────────────
+   OVERLAP ROOT CAUSE (fixed here): .lang-switch (physical top-LEFT) and
+   .profile-btn (physical top-RIGHT) are position:fixed VIEWPORT chrome that
+   lives outside .app-header in the DOM - .lang-switch is a direct child of
+   <body> (it must survive screen 1, which has no header at all), .profile-btn
+   sits just before the header inside #screen-fitting. The header meanwhile
+   lays its OWN controls out with justify-content:space-between, so its two end
+   clusters run straight into those same two corners. Two independent layout
+   systems both claiming the same pixels = guaranteed collision, and because
+   the fixed pair carries z-index:100 against the header's 40, they won the
+   stack and swallowed the taps: on every phone width the language switch sat
+   directly on top of #cartBtn and ate its clicks outright.
+   Neither control can simply be moved into the header's flex row (the header
+   does not exist on screen 1, and .lang-switch has to be reachable there), so
+   the fix is to make the header RESERVE the exact width those corners occupy
+   and lay its own row out inside what's left - real flex placement, no
+   geometric guesswork, no overlap possible at any width.
+   Every number the reservation depends on is a token here, and the fixed
+   controls consume the SAME tokens for their size/offset (see .lang-switch /
+   .profile-btn below), so the gutter and the thing it clears can never drift
+   apart the way two hand-tuned magic numbers eventually do.
+   ════════════════════════════════════════════════════════════════════════ */
+:root {
+  --corner-inset:  16px;   /* physical inset of both fixed corner controls */
+  --corner-clear:  10px;   /* deliberate breathing gap before header content */
+  --profile-size:  40px;   /* .profile-btn circle */
+  --lang-seg-w:    42px;   /* .lang-switch__seg / __thumb - MIRRORED in i18n.js */
+  --fs-seg-w:      34px;   /* .fs-switch__seg  / __thumb - MIRRORED in app.js  */
+  --switch-pad:     4px;   /* segmented-switch track padding */
+
+  /* Overall track width of a 2-segment glass switch: both segments + the
+     track's own padding + its 1px specular border on each side. */
+  --lang-switch-w: calc(2 * var(--lang-seg-w) + 2 * var(--switch-pad) + 2px);
+
+  /* What the header must keep clear on each PHYSICAL edge. Physical, not
+     logical: the fixed pair is pinned with left/right and never mirrors with
+     dir, so these must not mirror either. */
+  --hdr-gutter-l: calc(var(--safe-l) + var(--corner-inset) + var(--lang-switch-w) + var(--corner-clear));
+  --hdr-gutter-r: calc(var(--safe-r) + var(--corner-inset) + var(--profile-size)  + var(--corner-clear));
 }
 
 /* ── scroll-reveal (mobile-ux.js adds .reveal-up, then .in-view) ──────────
@@ -2257,6 +2330,13 @@ html.pear-returning-check #screen-calculator { display: none !important; }
     position: sticky; top: 0; z-index: 40;
     max-width: none; margin: 0;
     padding: calc(8px + var(--safe-t)) clamp(16px, 5vw, 22px) 8px;
+    /* Full-bleed here (max-width:none), so the box edge IS the viewport edge -
+       the centred-box term in the base rule collapses to zero and the corner
+       gutters apply at full value. Stated directly rather than left to the
+       base rule's max(), so the reservation is obvious at the breakpoint that
+       actually needs it. */
+    padding-left: var(--hdr-gutter-l);
+    padding-right: var(--hdr-gutter-r);
     gap: 8px;   /* was the base rule's 12px - tighter, more compact on phones */
     background: linear-gradient(180deg, rgba(247,247,246,.88), rgba(247,247,246,.30));
     -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
@@ -2412,7 +2492,16 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      English. Inherited from <html dir>, which i18n.js already keeps current,
      so the popover follows the active language like the rest of the UI. */
   direction: inherit;
-  width: 280px; max-width: calc(100vw - 32px); max-height: 60vh; overflow-y: auto;
+  /* OVERFLOW FIX: was a flat 280px with max-width:calc(100vw - 32px), which
+     measures the VIEWPORT but ignores where this popover is actually anchored -
+     inset-inline-end:0 on .app-header__actions, i.e. offset from the viewport
+     edge by whatever gutter the header reserves for the fixed corner controls.
+     At 320px that put 48px of the panel off-screen. The cap now subtracts the
+     LARGER of the two gutters so it holds in both directions (RTL anchors the
+     panel at the physical-left gutter, LTR at the physical-right one), and is
+     a no-op at every width where 280px already fits. */
+  width: min(280px, calc(100vw - max(var(--hdr-gutter-l), var(--hdr-gutter-r)) - 12px));
+  max-height: 60vh; overflow-y: auto;
   padding: 14px;
   border: 1px solid var(--glass-border); border-radius: 16px;
   /* Explicitly opaque enough that NOTHING behind it (the page h1/h2, the
@@ -2495,9 +2584,12 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    z-index is 9, see .camera-card__* rules) but below any modal/overlay
    (garment-detect / lightbox / compare start at 200+). ── */
 .profile-btn {
-  position: fixed; top: 16px; right: 16px; z-index: 100;
+  position: fixed; top: var(--corner-inset); z-index: 100;
+  /* Physical right + the landscape safe-area inset, matching --hdr-gutter-r
+     exactly (see the TOP-CORNER CONTROL GEOMETRY block). */
+  right: calc(var(--safe-r) + var(--corner-inset));
   display: inline-flex; align-items: center; justify-content: center;
-  width: 40px; height: 40px; border-radius: 50%; padding: 0;
+  width: var(--profile-size); height: var(--profile-size); border-radius: 50%; padding: 0;
   border: 1px solid rgba(255, 255, 255, .16);
   background: var(--glass-dark);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
@@ -2525,10 +2617,13 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    right) regardless of which language is currently active - see the comment
    on setupLangToggle() in i18n.js for why that's the right call here. */
 .lang-switch {
-  position: fixed; top: 16px; left: 16px; z-index: 100;
+  position: fixed; top: var(--corner-inset); z-index: 100;
+  /* Physical left + the landscape safe-area inset, matching --hdr-gutter-l
+     exactly (see the TOP-CORNER CONTROL GEOMETRY block). */
+  left: calc(var(--safe-l) + var(--corner-inset));
   direction: ltr;
   display: inline-flex; align-items: center;
-  padding: 4px; margin: 0; border: 0;
+  padding: var(--switch-pad); margin: 0; border: 0;
   appearance: none; -webkit-appearance: none;
   border-radius: var(--pill);
   background: var(--glass-soft);
@@ -2546,8 +2641,11 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    segment width on release/click). Ambient soft drop-shadow + specular
    border, both per the Liquid Glass spec. */
 .lang-switch__thumb {
-  position: absolute; top: 4px; left: 4px; z-index: 0;
-  width: 42px; height: calc(100% - 8px);
+  position: absolute; top: var(--switch-pad); left: var(--switch-pad); z-index: 0;
+  /* Width is authored to EQUAL one segment - i18n.js measures this node to get
+     the live segment width, so the drag/snap math follows any responsive
+     resize automatically instead of trusting a hardcoded constant. */
+  width: var(--lang-seg-w); height: calc(100% - 2 * var(--switch-pad));
   border-radius: var(--pill);
   background: rgba(255, 255, 255, .82);
   border: 1px solid rgba(255, 255, 255, .4);
@@ -2563,7 +2661,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .lang-switch__seg {
   position: relative; z-index: 1;   /* above the absolutely-positioned thumb */
   display: inline-flex; align-items: center; justify-content: center;
-  width: 42px; height: 28px;
+  width: var(--lang-seg-w); height: 28px;
   font-size: .74rem; font-weight: 700; color: var(--muted);
   transition: color .3s var(--ease);
 }
@@ -2592,6 +2690,19 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .pear-help-widget {
   position: fixed; bottom: calc(20px + var(--safe-b)); inset-inline-start: 20px; z-index: 150;
   --help-accent: #3d4825;
+  transition: opacity .22s var(--ease), transform .28s var(--ease);
+}
+/* Set by guardObstruction() in help-widget.js while this button would sit over
+   a primary control (capture / add-to-cart / any .btn-primary) - see the
+   Obstruction guard note there. pointer-events:none is the part that actually
+   matters: a fixed z-index:150 layer over a full-bleed CTA silently ate the
+   tap. The fade is just so it reads as stepping aside rather than glitching. */
+.pear-help-widget.is-yielding {
+  opacity: 0; transform: scale(.72); pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pear-help-widget { transition: none; }
+  .pear-help-widget.is-yielding { transform: none; }
 }
 
 .pear-help-widget__btn {
@@ -3516,6 +3627,92 @@ body.gd-open { overflow: hidden; }
    hidden - screen readers/accessibility name are unaffected). If the 2-row
    full-label layout is ever preferred again, that's a one-line revert of
    this block, not a rebuild. ════════════════════════════════════════════ */
+/* ── COMPACT VIEWPORT (≤600px): retune the corner-control tokens ──────────
+   Scaling the two glass switches down here is what buys the header row back
+   the ~30px it needs to seat five controls plus the brand lockup on a 320-414px
+   display. Done by re-declaring the TOKENS rather than by transform:scale():
+     · the reserved gutters recompute themselves from the same numbers, so the
+       clearance stays exact instead of drifting out of sync with the shrink;
+     · transform:scale() would leave the switches' drag physics reading pointer
+       deltas in scaled pixels while writing --thumb-x in unscaled ones, making
+       the thumb track ~10% fast under the finger. Real geometry, not a visual
+       shrink, keeps the 1:1 tracking honest.
+   i18n.js / app.js measure the live thumb width, so both switches' snap points
+   follow these tokens automatically (see the .lang-switch__thumb note above). */
+@media (max-width: 600px) {
+  :root {
+    --corner-inset: 10px;
+    --corner-clear:  8px;
+    --profile-size: 34px;
+    --lang-seg-w:   30px;
+    --fs-seg-w:     28px;
+    --switch-pad:    3px;
+  }
+  .lang-switch__seg { height: 24px; font-size: .68rem; }
+  .fs-switch__seg   { height: 24px; }
+  .fs-switch__icon  { width: 14px; height: 14px; }
+
+  /* ── Touch targets ───────────────────────────────────────────────────────
+     Every header control clears 44×44px of TAPPABLE area while keeping its
+     compact visual footprint, via a transparent pseudo-element rather than a
+     bigger box. Two things make that safe rather than a fresh source of
+     invisible overlap:
+       · the expansion is symmetric and capped at 5px, and the gaps between
+         neighbouring controls are held at ≥12px below (.app-header__nav /
+         .app-header__actions), so no two hit areas can ever intersect;
+       · the header's own content row is ~44px tall here, so the vertical
+         growth stays INSIDE the header band and cannot reach down over the
+         page content beneath it and steal its clicks.
+     The pseudo-element belongs to the control itself, so a tap in the expanded
+     ring is a tap on that control - no pointer-events juggling between
+     siblings, which is what made the old overlap unrecoverable. */
+  .cart-btn::after,
+  .btn-edit-measurements::after,
+  .profile-btn::after,
+  .lang-switch::after,
+  .fs-switch::after {
+    content: ""; position: absolute; inset: -6px;
+    border-radius: inherit;
+  }
+  /* -6px, not -5px: border-radius:inherit makes the ring on the round 34px
+     controls a CIRCLE, whose usable extent at the extremes falls just inside
+     the nominal 44px - probing the rendered page measured only 42×43px of real
+     tappable area at -5px. -6px puts the MEASURED figure at 44px+, which is
+     what the guideline actually asks for. */
+  /* The two switches are wide enough already (56-68px) - they only need
+     vertical reach, and must NOT grow sideways into the header content they
+     sit beside. -7px because their pill radius costs the same ~1px per side at
+     the extremes that the circles do: measured, -6px yielded only 42px. */
+  .lang-switch::after,
+  .fs-switch::after { inset: -7px 0; }
+  /* The edit control is a wide pill, not a circle - it has width to spare and
+     needs only the same extra vertical px (measured 43px at -6px). */
+  .btn-edit-measurements::after { inset: -7px -6px; }
+
+  /* Each control owns an isolated bounding box + its own stacking slot inside
+     the header, so hit-testing resolves to exactly one of them. The lockup is
+     purely decorative, so it opts out of pointer-events entirely rather than
+     sitting in the tab/hit order between two real controls. */
+  .cart-btn, .btn-edit-measurements, .fs-switch { position: relative; z-index: 1; }
+  .app-header__brand-lockup { position: relative; z-index: 0; pointer-events: none; }
+
+  /* ── The second overlap: nav vs. the brand lockup ────────────────────────
+     The two end zones carry flex:1 1 0 (see .app-header__nav/__actions), which
+     forces them to EQUAL widths so the lockup optically centres. That is right
+     on desktop, where there is slack to spare - but the zones are lopsided
+     (nav holds two controls at ~110px, actions holds one at ~34px), and their
+     children are flex-shrink:0, so once the row is tight the nav simply cannot
+     fit the half-width it is being handed. It overflowed its share and the edit
+     button rendered straight over the wordmark - 30×27px of overlap at 390px.
+     On phones the zones therefore size to their CONTENT and the lockup takes
+     the remainder, which is both what makes the row fit and what keeps the
+     logo centred between the two clusters rather than centred on a viewport
+     the clusters are not symmetric about. */
+  .app-header__nav,
+  .app-header__actions { flex: 0 0 auto; }
+  .app-header__brand-lockup { flex: 1 1 auto; justify-content: center; }
+}
+
 @media (max-width: 480px) {
   /* No display:grid override here anymore - .app-header stays the ordinary
      flex row from the base rule (line ~533: display:flex;
@@ -3524,17 +3721,33 @@ body.gd-open { overflow: hidden; }
      2613) instead of being flattened to display:contents for grid placement.
      That's what puts back-to-store and edit-measurements back side by side
      in ONE row instead of stacked in two. */
-  .app-header { padding: calc(6px + var(--safe-t)) 10px 6px; gap: 6px; }
+  /* NOTE: longhands, not the `padding` shorthand this used to be - the
+     shorthand reset padding-left/right to a flat 10px and silently wiped out
+     the corner reservation set on .app-header above, putting the language
+     switch straight back on top of the cart button. */
+  .app-header {
+    padding-top: calc(6px + var(--safe-t)); padding-bottom: 6px;
+    padding-left: var(--hdr-gutter-l); padding-right: var(--hdr-gutter-r);
+    gap: 8px;
+  }
   .app-header.is-scrolled { padding-top: calc(5px + var(--safe-t)); padding-bottom: 5px; }
 
-  .app-header__nav { gap: 6px; }
+  /* 12px, not the old 6px: the edit button's and the fullscreen switch's 44px
+     hit rings (±6px each, see above) would otherwise overlap and one would
+     start eating the other's taps - the exact class of bug this pass is
+     removing. 12px is the tightest gap at which they can only ever abut. */
+  .app-header__nav { gap: 12px; }
+  .app-header__actions { gap: 12px; }
 
   /* Icon-only: hide the label, keep the icon + the button's own aria-label
      (accessible name is unaffected - only the VISIBLE text is hidden). The
      fullscreen switch (.fs-switch) is icon-only by design already - no label
      span to hide, no size override needed here. */
+  /* 34px, not 32px: paired with the ±5px hit ring above this lands the tap
+     target on exactly 44px - the accessibility floor - while the visible pill
+     grows by only 2px. */
   .btn-edit-measurements {
-    padding: 7px; min-width: 32px; min-height: 32px; justify-content: center;
+    padding: 7px; min-width: 34px; min-height: 34px; justify-content: center;
   }
   .btn-edit-measurements span { display: none; }
 
@@ -3546,21 +3759,59 @@ body.gd-open { overflow: hidden; }
   .app-header__sub { display: none; }
   .brand-mark { height: 27px; }
   .app-header.is-scrolled .brand-mark { height: 23px; }
+  /* 8px, not the base 10px - buys the wordmark the couple of pixels it needs to
+     render in full at 390px instead of ellipsising to "PEA…". */
+  .app-header__brand-lockup { gap: 8px; }
 
-  .cart-btn { width: 32px; height: 32px; }
+  .cart-btn { width: 34px; height: 34px; }
 }
 
-/* Profile icon: 32px circle per spec; the dropdown follows it down. */
+/* ── NARROW PHONE (≤389px: iPhone SE / 13 mini / older Androids) ──────────
+   Five controls, the pear mark AND the wordmark genuinely do not fit one row
+   below ~390px - that is the width at which the row overflowed and the edit
+   button rendered on top of the brand lockup (measured: 34×27px at 320px).
+   The wordmark is the only purely decorative item in the row, so it is what
+   gives way rather than an actionable control: "PEAR" drops and the pear MARK
+   stays, still centred between the two control clusters. The threshold is the
+   measured fit point, not a round number - 390px (iPhone 12/13/14/15, by far
+   the most common phone width) keeps the complete lockup. */
+@media (max-width: 389px) {
+  /* --corner-clear GROWS here rather than tightening, and the 12px
+     inter-control gap does not move: both are what keep the 44px hit rings
+     from intersecting, so they are correctness constraints, not spacing
+     preferences. Tried 6px - the cart's ring then reached back to the language
+     switch's edge and, since the switch carries z-index:100 against the
+     header's controls, the switch silently won those pixels back (measured at
+     320px: the cart fell to 40px of tappable width, then 42px at 8px of
+     clearance). 10px is the first value that leaves the full 44px intact.
+     The width that pays for it comes from the fullscreen switch, which is
+     icon-only and reads perfectly well a touch narrower. */
+  :root { --corner-clear: 10px; --fs-seg-w: 24px; }
+  .app-header { gap: 6px; }
+  .app-header__brand { display: none; }
+  .brand-mark { height: 24px; }
+  .app-header.is-scrolled .brand-mark { height: 21px; }
+}
+
+/* Profile icon: the avatar's size/offset now come from --profile-size /
+   --corner-inset (retuned in the ≤600px block above) so the header gutter that
+   clears it and the button itself can never disagree. Only what is genuinely
+   local to this breakpoint stays here. */
 @media (max-width: 480px) {
-  .profile-btn { width: 32px; height: 32px; top: 14px; right: 14px; }
   .profile-btn__initial { font-size: .78rem; }
-  .profile-dropdown { top: 50px; right: 14px; }
+  /* NOTCH FIX: was a flat top:50px. The avatar it hangs from is offset by
+     var(--safe-t) (the header's own top padding is too), so on a notched phone
+     - safe-area-inset-top ~47px - this panel opened ~43px HIGHER than its own
+     button and landed on top of the header. Its is-scrolled counterpart
+     (body.is-scrolled .profile-dropdown) already added --safe-t; this is the
+     unscrolled case catching up. */
+  .profile-dropdown { top: calc(50px + var(--safe-t)); right: calc(var(--safe-r) + var(--corner-inset)); }
 
   /* Same focus-bar vertical-centering the >480px rule does (see body.focus-
-     mode:not(.is-scrolled) .profile-btn above), recomputed for this smaller
-     32px avatar: bar center is now ~34px (22px padding + ~24.6px row / 2);
-     avatar center = top + 16 (half of 32px) → top:18px lands it there. */
-  body.focus-mode:not(.is-scrolled) .profile-btn { top: 18px; }
+     mode:not(.is-scrolled) .profile-btn above), recomputed for the smaller
+     34px avatar: bar center is ~34px (22px padding + ~24.6px row / 2);
+     avatar center = top + 17 → top:17px lands it there. */
+  body.focus-mode:not(.is-scrolled) .profile-btn { top: 17px; }
 }
 
 /* Focus bar (garment-name status strip): reserve room on the physical right
@@ -3573,7 +3824,12 @@ body.gd-open { overflow: hidden; }
    the UNSCROLLED gutter only - see the is-scrolled rule below for why it
    drops to a true 0 instead of just shrinking further. */
 @media (max-width: 480px) {
-  .focus-bar { padding-right: 52px; font-size: 12px; flex-wrap: nowrap; }
+  /* padding-right deliberately NOT set here: the ≤1339px rule below is later in
+     source at equal specificity, so it always won this longhand anyway - the
+     52px here was dead code. Both gutters now come from the shared tokens
+     there, which is also what fixes this bar at 320px, where the old fixed
+     136px + 68px reservation left only ~116px for the garment name itself. */
+  .focus-bar { font-size: 12px; flex-wrap: nowrap; }
   .focus-bar__text {
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
@@ -3595,7 +3851,10 @@ body.gd-open { overflow: hidden; }
 @media (max-width: 1339px) {
   .focus-bar {
     justify-content: flex-start;   /* RTL flex-start = visual right, alongside the badge */
-    padding-right: 68px;           /* 56px avatar clearance + a deliberate ~12px breathing gap */
+    /* Avatar clearance + breathing gap, from the same tokens the header
+       reserves against (see TOP-CORNER CONTROL GEOMETRY) - so this bar and the
+       header always agree on where the fixed corner controls actually are. */
+    padding-right: var(--hdr-gutter-r);
     /* BUG FIX: physical-LEFT mirror of the padding-right reservation above -
        was missing entirely, so .focus-bar__badge (margin-inline-start:auto
        pushes it flush to the row's inline-end edge, which is the physical
@@ -3606,8 +3865,11 @@ body.gd-open { overflow: hidden; }
        .profile-btn, the language switch never fades/shrinks on scroll (see
        .lang-switch - no .is-scrolled variant exists for it at all), so
        this reservation is intentionally NOT relaxed anywhere padding-right
-       is below (.focus-bar.is-scrolled only ever touches padding-right). */
-    padding-left: 136px;
+       is below (.focus-bar.is-scrolled only ever touches padding-right).
+       Was a hardcoded 136px derived from the desktop switch size; now the
+       shared token, so it tracks the switch down to 68px on phones instead of
+       over-reserving half a 320px bar. */
+    padding-left: var(--hdr-gutter-l);
   }
 }
 

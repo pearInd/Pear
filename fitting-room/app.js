@@ -5736,7 +5736,20 @@ function exitFullscreenCompat() {
    breakpoint, so there's no responsive case where the CSS and this constant
    could legitimately disagree, and skipping getBoundingClientRect() on every
    pointermove avoids a layout read on the drag's hot path. */
-const FS_SWITCH_SEG_W = 34;
+const FS_SWITCH_SEG_W = 34;   // fallback only - .fs-switch__thumb is authoritative
+
+/* The premise above ("a constant icon-only size at every breakpoint") no longer
+   holds: style.css scales this switch down at ≤600px so the phone header row
+   can seat five controls without overlap, so a hardcoded 34 would snap the
+   thumb ~6px past the segment it is aiming at. The thumb's CSS width is
+   authored to equal exactly one segment (both are var(--fs-seg-w)), so reading
+   it gives the live value. Read once per gesture - the drag handlers already
+   call getBoundingClientRect() on the track every pointermove, so this adds no
+   layout read to the hot path that was not already there. */
+function fsSegW(btn) {
+  const thumb = btn.querySelector(".fs-switch__thumb");
+  return thumb?.offsetWidth || FS_SWITCH_SEG_W;
+}
 
 function setupFullscreenToggle() {
   const btn = $("fullscreenToggleBtn");
@@ -5763,7 +5776,7 @@ function setupFullscreenToggle() {
     btn.setAttribute("aria-label", t(active ? "fullscreenExitAria" : "fullscreenToggleAria"));
     if (segNormal) segNormal.classList.toggle("is-active", !active);
     if (segFull)   segFull.classList.toggle("is-active", active);
-    setThumbX(active ? FS_SWITCH_SEG_W : 0);
+    setThumbX(active ? fsSegW(btn) : 0);
   }
 
   // A rejected request (most commonly: an embedding host iframe whose <iframe>
@@ -5786,14 +5799,16 @@ function setupFullscreenToggle() {
   // paths double-firing.
   let dragging = false;
   let pointerId = null;
+  let segW = fsSegW(btn);   // refreshed at each pointerdown (breakpoint may have changed)
 
   btn.addEventListener("pointerdown", (e) => {
     dragging = true;
     pointerId = e.pointerId;
     btn.setPointerCapture(pointerId);
     btn.classList.add("is-dragging");   // suspends the CSS spring so the thumb tracks 1:1, no lag
+    segW = fsSegW(btn);   // one read per gesture; the switch cannot resize mid-drag
     const r = btn.getBoundingClientRect();
-    const x = Math.max(0, Math.min(FS_SWITCH_SEG_W, e.clientX - r.left - FS_SWITCH_SEG_W / 2));
+    const x = Math.max(0, Math.min(segW, e.clientX - r.left - segW / 2));
     setThumbX(x);
     e.preventDefault();   // no text-selection/scroll gesture fighting the drag
   });
@@ -5801,7 +5816,7 @@ function setupFullscreenToggle() {
   btn.addEventListener("pointermove", (e) => {
     if (!dragging) return;
     const r = btn.getBoundingClientRect();
-    const x = Math.max(0, Math.min(FS_SWITCH_SEG_W, e.clientX - r.left - FS_SWITCH_SEG_W / 2));
+    const x = Math.max(0, Math.min(segW, e.clientX - r.left - segW / 2));
     setThumbX(x);
   });
 
@@ -5813,7 +5828,7 @@ function setupFullscreenToggle() {
     const r = btn.getBoundingClientRect();
     const wantFull = (e.clientX - r.left) > r.width / 2;
     if (wantFull !== isFullscreenActive()) requestMode(wantFull);
-    else setThumbX(wantFull ? FS_SWITCH_SEG_W : 0);   // released back where it started - just re-settle
+    else setThumbX(wantFull ? segW : 0);   // released back where it started - just re-settle
   }
   btn.addEventListener("pointerup", endDrag);
   btn.addEventListener("pointercancel", endDrag);
@@ -5829,8 +5844,19 @@ function setupFullscreenToggle() {
 
   document.addEventListener("fullscreenchange", syncState);
   document.addEventListener("webkitfullscreenchange", syncState);
-  // The switch is a fixed size at every breakpoint (see FS_SWITCH_SEG_W above),
-  // so no resize listener is needed to keep the thumb's snapped position correct.
+  // This switch is NO LONGER a fixed size at every breakpoint (style.css scales
+  // it down at ≤600px, and again at ≤389px, so the phone header row fits), so
+  // the thumb's snapped position - written in pixels - has to be re-derived
+  // whenever the viewport crosses one of those widths. Without this, dragging a
+  // desktop window narrow while fullscreen is active leaves the thumb parked at
+  // the old, wider offset, hanging off the end of its own track.
+  // Skipped mid-drag: the pointer owns the thumb until it is released.
+  let resettleQueued = false;
+  addEventListener("resize", () => {
+    if (dragging || resettleQueued) return;
+    resettleQueued = true;
+    requestAnimationFrame(() => { resettleQueued = false; syncState(); });
+  }, { passive: true });
   syncState();
 }
 

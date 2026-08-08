@@ -378,7 +378,23 @@ function raceAllSettledForFirstSuccess(promises) {
    gesture whose meaning silently flipped depending on the page's current
    dir would be worse UX than a control whose own geometry simply never
    changes, matching the same reasoning the fullscreen switch already uses. */
-const LANG_SWITCH_SEG_W = 42;   // keep in sync with .lang-switch__seg / __thumb width in style.css
+/* Desktop segment width - now only a FALLBACK for the (impossible in practice)
+   case where the thumb node is missing. The switch is no longer one constant
+   size at every breakpoint: style.css scales it down at ≤600px so five controls
+   fit a phone header row, so a hardcoded 42 would put the snap points ~40% wide
+   of the segments they are meant to land on. langSegW() reads the live width
+   instead. */
+const LANG_SWITCH_SEG_W = 42;   // fallback only - .lang-switch__thumb is authoritative
+
+/* The thumb's CSS width is authored to equal exactly one segment (both are
+   var(--lang-seg-w) in style.css), which makes it the cheapest honest source
+   for the current segment width. Read per gesture, not per pointermove - the
+   drag handlers already call getBoundingClientRect() on the track each move,
+   so this adds no layout read they were not already paying for. */
+function langSegW(btn) {
+  const thumb = btn.querySelector(".lang-switch__thumb");
+  return thumb?.offsetWidth || LANG_SWITCH_SEG_W;
+}
 
 function setLangThumbX(btn, px) { btn.style.setProperty("--thumb-x", px + "px"); }
 
@@ -392,7 +408,7 @@ function syncLangSwitchUI(lang) {
   const heSeg = btn.querySelector('[data-lang="he"]');
   if (enSeg) enSeg.classList.toggle("is-active", !isHe);
   if (heSeg) heSeg.classList.toggle("is-active", isHe);
-  setLangThumbX(btn, isHe ? LANG_SWITCH_SEG_W : 0);
+  setLangThumbX(btn, isHe ? langSegW(btn) : 0);
 }
 
 export function setupLangToggle() {
@@ -409,14 +425,16 @@ export function setupLangToggle() {
   // ── Press-and-drag physics (identical model to setupFullscreenToggle) ─────
   let dragging = false;
   let pointerId = null;
+  let segW = langSegW(btn);   // refreshed at each pointerdown (breakpoint may have changed)
 
   btn.addEventListener("pointerdown", (e) => {
     dragging = true;
     pointerId = e.pointerId;
     btn.setPointerCapture(pointerId);
     btn.classList.add("is-dragging");   // suspends the CSS spring so the thumb tracks 1:1, no lag
+    segW = langSegW(btn);   // one read per gesture; the switch cannot resize mid-drag
     const r = btn.getBoundingClientRect();
-    const x = Math.max(0, Math.min(LANG_SWITCH_SEG_W, e.clientX - r.left - LANG_SWITCH_SEG_W / 2));
+    const x = Math.max(0, Math.min(segW, e.clientX - r.left - segW / 2));
     setLangThumbX(btn, x);
     e.preventDefault();   // no text-selection/scroll gesture fighting the drag
   });
@@ -424,7 +442,7 @@ export function setupLangToggle() {
   btn.addEventListener("pointermove", (e) => {
     if (!dragging) return;
     const r = btn.getBoundingClientRect();
-    const x = Math.max(0, Math.min(LANG_SWITCH_SEG_W, e.clientX - r.left - LANG_SWITCH_SEG_W / 2));
+    const x = Math.max(0, Math.min(segW, e.clientX - r.left - segW / 2));
     setLangThumbX(btn, x);
   });
 
@@ -436,7 +454,7 @@ export function setupLangToggle() {
     const r = btn.getBoundingClientRect();
     const wantHe = (e.clientX - r.left) > r.width / 2;
     if (wantHe !== (getActiveLang() === "he")) requestLang(wantHe ? "he" : "en");
-    else setLangThumbX(btn, wantHe ? LANG_SWITCH_SEG_W : 0);   // released back where it started - just re-settle
+    else setLangThumbX(btn, wantHe ? segW : 0);   // released back where it started - just re-settle
   }
   btn.addEventListener("pointerup", endDrag);
   btn.addEventListener("pointercancel", endDrag);
@@ -449,6 +467,20 @@ export function setupLangToggle() {
     else if (e.key === "ArrowRight") requestLang("he");
     else                              requestLang(getActiveLang() === "he" ? "en" : "he");   // Space/Enter - simple toggle
   });
+
+  // ── Re-settle across breakpoints ──────────────────────────────────────────
+  // --thumb-x is written in PIXELS, but the segment it points at is no longer
+  // one fixed size: style.css scales this switch down at ≤600px so the phone
+  // header row fits. Dragging a desktop window narrow therefore left the thumb
+  // parked at the old 42px offset against a 30px segment - hanging 12px off the
+  // end of its own track. Re-derive it from the live geometry instead.
+  // Skipped mid-drag: the pointer owns the thumb until it is released.
+  let resettleQueued = false;
+  addEventListener("resize", () => {
+    if (dragging || resettleQueued) return;
+    resettleQueued = true;
+    requestAnimationFrame(() => { resettleQueued = false; syncLangSwitchUI(getActiveLang()); });
+  }, { passive: true });
 }
 
 /* Boot entry point - runs once, at this module's top level (see the call at
