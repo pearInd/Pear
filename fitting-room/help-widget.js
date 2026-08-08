@@ -176,7 +176,6 @@ function open() {
 function close() {
   popoverEl.hidden = true;
   btnEl.setAttribute("aria-expanded", "false");
-  queueGuard();   // the guard stands down while open - re-evaluate now it isn't
 }
 function toggle() { popoverEl.hidden ? open() : close(); }
 
@@ -190,84 +189,12 @@ function sync() {
   rootEl.hidden = !step;
   if (!step) { close(); return; }
   if (!popoverEl.hidden) renderText();
-  queueGuard();   // a step change relays the page - what sits under us changed
-}
-
-/* ── Obstruction guard ────────────────────────────────────────────────────
-   This button is position:fixed in a bottom corner while the page scrolls
-   underneath it, and the app's primary controls (capture / add-to-cart /
-   every .btn-primary) are full-bleed rows on a phone - so there are always
-   scroll positions where a control passes directly beneath the button. At
-   z-index:150 the button wins that stack and swallows the tap: measured at
-   360-480px, #addToCartBtn lost a 36×14px bite of itself to this button, and
-   #captureBtn lost 33×3px at 414-540px. A help affordance must never cost the
-   user a tap on the primary action.
-   No CSS can express "these two never coincide" for a fixed layer over a
-   scrolling one, so the button yields instead: while it would cover a
-   protected control it fades out and drops out of the hit path entirely,
-   returning the moment the control has scrolled clear.
-   PROTECTED is the whole contract - add a selector here and the new control is
-   covered too; nothing else in this file needs to know about it. */
-const PROTECTED = [
-  "#captureBtn", "#addToCartBtn", "#startCamBtn", "#btn-next-screen",
-  ".btn-primary", ".btn-capture", ".btn-watch", ".btn-download",
-  ".pear-compare-bar", ".cam-controls button", ".result-actions button",
-].join(", ");
-
-const CLEARANCE = 8;   // px of breathing room around the button, not just touching
-
-function guardObstruction() {
-  if (!rootEl || rootEl.hidden) return;
-  // An open popover is a deliberate act - never yank it out from under the user.
-  if (!popoverEl.hidden) { rootEl.classList.remove("is-yielding"); return; }
-
-  const b = btnEl.getBoundingClientRect();
-  const zone = { left: b.left - CLEARANCE, right: b.right + CLEARANCE,
-                 top: b.top - CLEARANCE, bottom: b.bottom + CLEARANCE };
-
-  let blocked = false;
-  for (const el of document.querySelectorAll(PROTECTED)) {
-    /* Deliberately NOT skipping [disabled]: #captureBtn ships disabled until
-       the camera opens, and while a disabled control cannot lose a tap, it is
-       still the visual anchor of the screen - parking a "?" bubble on the
-       corner of the big capture button looks broken whether or not it is
-       armed yet. Visual obstruction counts, not just the tap-stealing kind. */
-    if (el.closest("[hidden]")) continue;
-    const r = el.getBoundingClientRect();
-    if (!r.width || !r.height) continue;                       // display:none / collapsed
-    if (r.bottom < zone.top || r.top > zone.bottom) continue;  // cheap reject before the x test
-    if (r.right < zone.left || r.left > zone.right) continue;
-    blocked = true;
-    break;
-  }
-  rootEl.classList.toggle("is-yielding", blocked);
-}
-
-/* rAF-coalesced: scroll fires far more often than the layout can change. */
-let guardQueued = false;
-function queueGuard() {
-  if (guardQueued) return;
-  guardQueued = true;
-  requestAnimationFrame(() => { guardQueued = false; guardObstruction(); });
 }
 
 function init() {
   if (document.getElementById("pearHelpWidget")) return; // idempotent - defensive against double-inclusion
   build();
   sync();
-
-  addEventListener("scroll", queueGuard, { passive: true });
-  addEventListener("resize", queueGuard, { passive: true });
-  /* Scroll and resize are not the only ways a control can end up under this
-     button: the header's padding animates as you scroll past the top-corner
-     controls, sections un-hide as a try-on completes, and images settle late -
-     each re-flows the page with no scroll event to react to. Capturing
-     transitionend/animationend on the document covers those cheaply (the
-     handler is rAF-coalesced and reads a handful of rects), so the guard
-     re-evaluates once the layout has actually come to rest. */
-  for (const ev of ["transitionend", "animationend", "load"])
-    addEventListener(ev, queueGuard, { passive: true, capture: true });
-  queueGuard();
 
   const observer = new MutationObserver(sync);
   ["screen-calculator", "screen-fitting", "screen-locked"].forEach((id) => {

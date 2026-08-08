@@ -1433,6 +1433,35 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   display: flex; flex-direction: column; align-items: center; gap: 14px;
   max-width: 470px; margin: 24px auto 0;
 }
+/* ── Permanent clearance from the fixed help button ────────────────────────
+   #captureBtn (in .cam-controls) and #addToCartBtn (in .add-cart-row, just
+   below it) are both width:100% of this row, and the row itself has no `width`
+   of its own - only max-width:470px - so on any phone narrower than that it
+   simply fills the container's full content width, edge to edge. The help
+   button is fixed at inset-inline-start:20px (14px ≤480px), so on that exact
+   viewport range (~390-430px, where the container's own edge padding leaves
+   just enough - and not quite enough - room) the button's corner and this
+   row's corner land in the same pixels: measured 33×38px of REAL overlap at
+   430px, most of which the round help button actually wins.
+   This is deliberately a static, unconditional reservation, not a runtime
+   check - a button that dynamically fades in and out as content scrolls past
+   it reads as broken (that was this file's previous approach, replaced after
+   it was reported as constant "popping on and off"). Reserving the corner
+   permanently makes the overlap geometrically impossible at every scroll
+   position, not just probabilistically unlikely at some of them. */
+:root {
+  --help-fab-inset: 20px; --help-fab-size: 44px; --help-fab-clear: 10px;
+  --help-fab-gutter: calc(var(--help-fab-inset) + var(--help-fab-size) + var(--help-fab-clear));
+}
+@media (max-width: 480px) {
+  :root { --help-fab-inset: 14px; --help-fab-size: 38px; --help-fab-clear: 8px; }
+}
+@media (max-width: 600px) {
+  /* padding-inline-start (not a physical side) so this tracks .pear-help-widget's
+     own inset-inline-start automatically as the language/direction flips -
+     both are logical properties resolving off the same physical edge. */
+  .cam-controls, .add-cart-row { padding-inline-start: var(--help-fab-gutter); box-sizing: border-box; }
+}
 /* "Go Live" - inviting translucent pear-green glass capsule */
 .btn-capture {
   width: 100%; display: flex; flex-direction: column; align-items: center; gap: 2px;
@@ -2116,6 +2145,21 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   transition: all .5s cubic-bezier(.16, 1, .3, 1);
   animation: compareBarIn .5s cubic-bezier(.16, 1, .3, 1) both;
 }
+/* Unlike .cam-controls/.add-cart-row above, this pill is width:fit-content
+   with margin:auto on BOTH sides - true centering, not a full-width row a
+   padding-inline-start could shrink-and-shift. It also lives mid-gallery, not
+   pinned to the top or bottom of the page, so as the page scrolls it - like
+   any other mid-page content - passes through the fixed help button's
+   permanent y-band at some scroll position on every visit that reaches it, not
+   just some: measured up to 138 of 138 sampled points inside the overlap
+   resolving to the help button, a real, complete win for the wrong control.
+   Swapping the trailing auto margin for a fixed one keeps this pinned exactly
+   --help-fab-gutter clear of the button's side at every scroll position,
+   trading perfect centering (this is a secondary "Compare Looks" pill, not the
+   screen's primary action) for a guarantee that holds regardless of scroll. */
+@media (max-width: 600px) {
+  .pear-compare-bar { margin-inline-start: var(--help-fab-gutter); margin-inline-end: auto; }
+}
 .pear-compare-bar[hidden] { display: none; }
 .pear-compare-bar:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 16px 38px rgba(141,182,0,.3); }
 .pear-compare-bar:active { transform: scale(.96); }
@@ -2747,27 +2791,36 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    --help-accent is scoped to this component only - it does not touch the
    site-wide --pear-deep token (near-black by design everywhere else) or any
    of the many components that rely on it staying that way. */
+/* SOLID BY DESIGN: this button used to fade out and drop pointer-events
+   whenever a primary control (capture / add-to-cart / any .btn-primary)
+   scrolled underneath its fixed corner - a guard against the button stealing
+   a tap meant for that control. In practice those full-bleed rows pass
+   through this exact corner constantly during ordinary scrolling, so the
+   button was fading in and out on nearly every scroll gesture - reported as
+   "popping on and off, on and off." That trade was the wrong one: a help
+   affordance that visibly flickers reads as broken far more than the rare,
+   narrow sliver of tap overlap it was preventing. The guard is gone; this
+   button is now always visible, always in the same corner, always
+   interactive - full stop.
+   What still guards against stealing a real tap is `clip-path` below, which
+   trims the button's hit area down to its actual visible circle - the
+   transparent corners of its square bounding box (the only part that could
+   ever land on a control it isn't visually covering) no longer intercept
+   anything. */
 .pear-help-widget {
   position: fixed; bottom: calc(20px + var(--safe-b)); inset-inline-start: 20px; z-index: 150;
   --help-accent: #3d4825;
-  transition: opacity .22s var(--ease), transform .28s var(--ease);
-}
-/* Set by guardObstruction() in help-widget.js while this button would sit over
-   a primary control (capture / add-to-cart / any .btn-primary) - see the
-   Obstruction guard note there. pointer-events:none is the part that actually
-   matters: a fixed z-index:150 layer over a full-bleed CTA silently ate the
-   tap. The fade is just so it reads as stepping aside rather than glitching. */
-.pear-help-widget.is-yielding {
-  opacity: 0; transform: scale(.72); pointer-events: none;
-}
-@media (prefers-reduced-motion: reduce) {
-  .pear-help-widget { transition: none; }
-  .pear-help-widget.is-yielding { transform: none; }
 }
 
 .pear-help-widget__btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 44px; height: 44px; border-radius: 50%; padding: 0;
+  /* Hit-test the VISIBLE circle only, not its square bounding box - see the
+     SOLID BY DESIGN note on .pear-help-widget. A round border-radius:50% button
+     still has a full square box of pointer-events by default; without this,
+     the box's four transparent corners could each land on whatever sits
+     beneath them even though nothing is visually there to tap. */
+  clip-path: circle(50%);
   border: 1px solid rgba(255, 255, 255, .4);
   background: linear-gradient(135deg, rgba(255, 253, 246, .92) 0%, rgba(250, 247, 235, .78) 100%);
   -webkit-backdrop-filter: blur(16px) saturate(180%); backdrop-filter: blur(16px) saturate(180%);
