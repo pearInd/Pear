@@ -864,7 +864,24 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 
 /* product-isolation status bar - frosted white glass, pear-green cues */
 .focus-bar {
-  position: sticky; top: 0; z-index: 30;
+  /* STATIC, not sticky: this bar and .app-header used to both claim top:0 (the
+     header only on phones, ≤768px - see the .focus-bar:not([hidden]) ~
+     .app-header rule this replaces), which the header ceded to this bar
+     entirely rather than let two sticky elements overlap at the same offset.
+     That meant the PEAR logo / language / edit controls scrolled away the
+     moment an item's focus status appeared, leaving only the "measuring: X"
+     strip pinned - reported as the main header vanishing while a sub-bar
+     stayed stuck, with its own content overlapping whatever scrolled up
+     beneath it. The header is the primary chrome; this is a subordinate
+     status strip, so it should give way to the header, not the other way
+     round. As ordinary in-flow content it now simply scrolls up and passes
+     BEHIND the still-sticky header (which sits at z-index:40, well above
+     anything ordinary in-flow content stacks at, so its opaque glass panel
+     visually covers this bar as it goes under) instead of racing it for the
+     same pinned slot. z-index/top are dropped below, not just left at their
+     old values - both are inert on position:static, so keeping them would
+     just be dead, misleading declarations. */
+  position: static;
   display: flex; align-items: center; gap: 12px;
   padding: 22px clamp(16px,5vw,36px);   /* was 15px - sat too close to the viewport's top edge */
   background: linear-gradient(135deg, rgba(255,255,255,.6), rgba(255,255,255,.4));
@@ -1457,10 +1474,24 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   :root { --help-fab-inset: 14px; --help-fab-size: 38px; --help-fab-clear: 8px; }
 }
 @media (max-width: 600px) {
-  /* padding-inline-start (not a physical side) so this tracks .pear-help-widget's
-     own inset-inline-start automatically as the language/direction flips -
-     both are logical properties resolving off the same physical edge. */
-  .cam-controls, .add-cart-row { padding-inline-start: var(--help-fab-gutter); box-sizing: border-box; }
+  /* BOTH sides, not just padding-inline-start: these rows are centered via
+     margin:auto on their OWN outer box (see .cam-controls/.add-cart-row
+     above), and their single child button is width:100% of that box - so
+     padding on only ONE side does clear the help button, but it also eats
+     into the available width from just that side, dragging the (still
+     "centered" as a box) row's CONTENT off dead-center. Measured: a real
+     60-74px shift, the two buttons landing a third of their own width off
+     from where they belong. Matching padding-inline-end keeps the button
+     centered on the page exactly as before, while the still-present
+     start-side padding is what actually keeps this clear of the button -
+     inline-start uses the logical property for the same reason as before
+     (tracks direction automatically); inline-end doesn't need to, since it's
+     restoring symmetry, not chasing the fixed control's own corner. */
+  .cam-controls, .add-cart-row {
+    padding-inline-start: var(--help-fab-gutter);
+    padding-inline-end: var(--help-fab-gutter);
+    box-sizing: border-box;
+  }
 }
 /* "Go Live" - inviting translucent pear-green glass capsule */
 .btn-capture {
@@ -2418,8 +2449,9 @@ html.pear-returning-check #screen-calculator { display: none !important; }
     border-bottom-color: var(--glass-border);
     box-shadow: 0 6px 20px rgba(0, 0, 0, .06);
   }
-  /* in focus mode the .focus-bar already owns the sticky top slot - don't stack two */
-  .focus-bar:not([hidden]) ~ .app-header { position: static; }
+  /* REVERSED: .focus-bar is no longer sticky (see its own rule), so there is
+     nothing left for the header to cede its slot to - .app-header now stays
+     sticky unconditionally, focus mode or not, matching every other screen. */
   /* PROMINENCE FIX: was 1.26rem/1.1rem (scrolled) - scaled up so the wordmark reads
      as the header's visual anchor instead of getting lost in the trimmed padding. */
   .app-header__brand { font-size: 1.4rem; transition: font-size .45s var(--ease); }

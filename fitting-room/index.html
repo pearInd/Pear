@@ -255,13 +255,14 @@
         <button class="profile-dropdown__logout" id="profileLogoutBtn" type="button" data-i18n="profileLogout">התנתקות</button>
     </div>
 
-    <!-- Pear-green product-isolation status bar (focus mode only) -->
-    <div class="focus-bar" id="focusBar" hidden>
-        <span class="focus-bar__dot"></span>
-        <span class="focus-bar__text"><span data-i18n="focusBarPrefix">מדידת פריט ממוקדת:</span> <strong id="focusItemName">-</strong></span>
-        <span class="focus-bar__badge" id="focusSizeBadge"></span>
-    </div>
-
+    <!-- app-header now comes BEFORE .focus-bar in DOM order (was after) - the
+         header is the primary, always-sticky chrome; the focus-bar is a
+         subordinate status strip that scrolls normally and passes behind it.
+         With .focus-bar no longer sticky (style.css), document order is what
+         determines resting stacking order for two plain in-flow blocks - the
+         old order rendered the "measuring: X" strip ABOVE the PEAR logo/
+         controls at the top of the page, which is backwards for a strip
+         whose whole point is being subordinate to the main header. -->
     <div class="app-header">
         <!-- Nav zone (start / right in RTL): storefront + edit-measurements. -->
         <div class="app-header__nav">
@@ -357,6 +358,13 @@
         </div>
         <span class="app-header__engine" id="engineBadge" title="מנוע">●</span>
         </div><!-- /.app-header__actions -->
+    </div>
+
+    <!-- Pear-green product-isolation status bar (focus mode only) -->
+    <div class="focus-bar" id="focusBar" hidden>
+        <span class="focus-bar__dot"></span>
+        <span class="focus-bar__text"><span data-i18n="focusBarPrefix">מדידת פריט ממוקדת:</span> <strong id="focusItemName">-</strong></span>
+        <span class="focus-bar__badge" id="focusSizeBadge"></span>
     </div>
 
     <div class="container fitting-container">

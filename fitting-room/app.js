@@ -4385,7 +4385,7 @@ function buildCompositePrompt(item, angle) {
     COMPOSITE_PANEL_CONTRACT + select +
     ` Substitute the person's current ${target} with ${desc}, reproducing its exact colour,` +
     ` pattern, print and fabric texture. ${anchor} Render a ${fitMod}${COMPOSITE_QUALITY}.${fabricMod}${keep}` +
-    STRICT_INPAINT + ROTATION_CONTINUITY + COMPOSITE_TEMPORAL
+    STRICT_INPAINT + IGNORE_SOURCE_ARTIFACTS + ROTATION_CONTINUITY + PROFILE_ANOMALY_GUARD + COMPOSITE_TEMPORAL
   ).replace(/\s+/g, " ").trim();
 }
 
@@ -4870,6 +4870,49 @@ const STRICT_INPAINT =
   " live camera frame: no added belts, no unrequested pants, no added accessories, and no" +
   " invented clothing items of any kind outside the one garment specified.";
 
+/* ── Source-frame hygiene - camera/UI artifacts are not garment content ───────
+   STRICT_INPAINT above says the live frame outside the target garment is "locked
+   source footage" to pass through untouched - but it never said what to do with
+   pixels that were never real footage of the person or garment in the first
+   place: a product photo's price sticker or hangtag, a watermark, a capture
+   timestamp, or any app/browser chrome that leaks into a frame. Nothing upstream
+   filters these out before the prompt runs, and an unstated pixel is exactly the
+   kind of region the model is free to reinterpret (the same class of gap
+   STRICT_INPAINT's own comment documents for body shape) - so a stray badge or
+   label sitting on a reference image reads as "content on the garment" with
+   nothing telling the model otherwise, risking a rendered logo/print that never
+   belonged to the actual product. Named explicitly as noise to discard. */
+const IGNORE_SOURCE_ARTIFACTS =
+  " Ignore any incidental on-screen text, UI overlays, badges, orientation labels" +
+  " (e.g. \"FRONT\"/\"BACK\"), timestamps, watermarks or frame borders present in the" +
+  " source image or live video feed - these are capture artifacts, not part of the" +
+  " garment or the person, and must never be rendered, reproduced or interpreted as" +
+  " clothing design, print or texture.";
+
+/* ── Side-profile anomaly guard - what the garment drapes OVER while turned ───
+   Paired with ROTATION_CONTINUITY below, which keeps the garment ON through a
+   turn; this addresses a different failure in the same window. In profile the
+   body's silhouette foreshortens, and whatever the shopper happens to be
+   holding (a phone, a bag, any held object) or brief lens/motion distortion
+   during the turn can sit right where torso volume would otherwise read. With
+   nothing telling the model these aren't anatomy, they get treated as body the
+   garment must fit around - an anomalous bulge or shape at exactly the moment
+   the pose is already hardest to read.
+   NOT the same claim as, and does NOT relax, STRICT_INPAINT's ABSOLUTE BODY
+   FIDELITY guarantee above - that clause exists specifically because this
+   model's training prior skews toward slimming real bodies, and was written
+   after that exact complaint. This one is scoped ONLY to non-anatomical
+   objects and transient capture artifacts; the person's actual body, at any
+   angle including side-on, is still rendered with the same fidelity as head-on -
+   never thinned, flattened or idealized. */
+const PROFILE_ANOMALY_GUARD =
+  " While the person is side-on or turning, do not mistake held objects, props," +
+  " clothing caught by motion, or transient camera/lens distortion for part of" +
+  " their body - these must never distort the rendered garment's fit or shape." +
+  " Drape the garment following the person's actual, undistorted anatomical body" +
+  " contour only, at exactly the same body-shape fidelity required at every other" +
+  " angle - never as license to slim, smooth or idealize their real silhouette.";
+
 /* ── Rotation continuity - the "my real shirt came back" clamp ────────────────
    Paired with the freeze-through-the-turn hold in the OrientationWatcher (see
    ORIENT_TURN_HOLD_MS). The hold covers the window visually; this tells the model what
@@ -4910,11 +4953,11 @@ function buildPrompt(item) {
   const suffix = HARD_NEGATIVE;   // universal hard negative (combined orientation lives in angleClause)
 
   if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${colorWord} ${sub} trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+    return `Substitute the current bottoms with ${colorWord} ${sub} trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
       .replace(/\s+/g, " ").trim();
   }
   const noun = SHIRT_NOUN[item.subType] || "top";
-  return `Substitute the current top with a ${colorWord} ${sub} ${noun}. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+  return `Substitute the current top with a ${colorWord} ${sub} ${noun}. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
     .replace(/\s+/g, " ").trim();
 }
 
@@ -4934,10 +4977,10 @@ function buildCustomPrompt(item) {
   const ref = "the exact garment shown in the reference image - a custom uploaded garment - replicating its precise color, pattern, print, fabric texture and silhouette";
 
   if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+    return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
       .replace(/\s+/g, " ").trim();
   }
-  return `Substitute the current top with ${ref}, worn on the upper body. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+  return `Substitute the current top with ${ref}, worn on the upper body. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
     .replace(/\s+/g, " ").trim();
 }
 
