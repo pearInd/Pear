@@ -63,9 +63,44 @@
   /* ── 2) Sticky-header shrink ─────────────────────────────────────────────── */
   const header = document.querySelector(".app-header");
   const focusBar = document.querySelector(".focus-bar");
+
+  /* The two top-corner controls (language switch, profile avatar) are
+     position:absolute, not fixed - they belong to the top of the PAGE and
+     scroll away with it, while the rest of the header keeps sticking (see
+     .lang-switch / .profile-btn in style.css). The gutters the sticky header
+     reserves to clear them are therefore only needed while they are actually
+     on screen, so flag the moment BOTH have left the viewport and let the
+     header reclaim that space (body.corners-cleared).
+     This is deliberately a SEPARATE threshold from the .is-scrolled flag
+     below: is-scrolled fires at 12px, when the controls are still half
+     visible, and collapsing the gutters there would slide the header's own
+     buttons underneath them - reintroducing exactly the overlap this layout
+     exists to remove.
+     Document coordinates (offsetParent is body: position:relative, margin:0),
+     remeasured on resize because both controls change size at the ≤600px and
+     ≤389px breakpoints. */
+  const cornerControls = [".lang-switch", ".profile-btn"]
+    .map((s) => document.querySelector(s))
+    .filter(Boolean);
+  let cornersBottom = 0;
+  const measureCorners = () => {
+    cornersBottom = 0;
+    for (const el of cornerControls) {
+      if (el.hidden) continue;   // e.g. the avatar before a user is known
+      cornersBottom = Math.max(cornersBottom, el.offsetTop + el.offsetHeight);
+    }
+  };
+  measureCorners();
+  addEventListener("resize", measureCorners, { passive: true });
+  /* Fonts/late layout, and the avatar un-hiding once a user is known, both
+     land after first paint - one cheap re-read covers each. */
+  setTimeout(measureCorners, 800);
+  setTimeout(measureCorners, 2500);
+
   if (header || focusBar) {
     const onScroll = () => {
       const scrolled = scrollY > 12;
+      if (cornersBottom) document.body.classList.toggle("corners-cleared", scrollY >= cornersBottom);
       // .profile-btn is position:fixed and sits BEFORE .app-header in the DOM (see
       // index.html), so a `.app-header.is-scrolled ~ .profile-btn` sibling selector
       // can't reach it - CSS combinators only select forward. A shared flag on

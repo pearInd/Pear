@@ -930,8 +930,34 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      do collide, which measurement put at ≤907px: at 800px the cart button
      sat 42×34px underneath the language switch and was completely
      unclickable, at a perfectly ordinary laptop/tablet width. */
-  padding-left:  max(clamp(16px,5vw,36px), calc(var(--hdr-gutter-l) - (100vw - min(760px, 100vw)) / 2));
-  padding-right: max(clamp(16px,5vw,36px), calc(var(--hdr-gutter-r) - (100vw - min(760px, 100vw)) / 2));
+  --hdr-pad-x: clamp(16px,5vw,36px);   /* the ordinary edge padding, with no corner control to clear */
+  padding-left:  max(var(--hdr-pad-x), calc(var(--hdr-gutter-l) - (100vw - min(760px, 100vw)) / 2));
+  padding-right: max(var(--hdr-pad-x), calc(var(--hdr-gutter-r) - (100vw - min(760px, 100vw)) / 2));
+}
+
+/* Both corner controls scroll away with the page (see .lang-switch /
+   .profile-btn), so the moment they have left the viewport the gutters
+   reserved to clear them are dead space - an ~86px hole at the head of the row
+   and ~52px at its tail on a phone, which reads as a layout bug rather than a
+   deliberate margin. Reclaim both and let the row re-centre. .app-header
+   already transitions `padding`, so this glides in on the same easing as the
+   existing scroll compaction rather than snapping.
+   body.corners-cleared is set by mobile-ux.js only once BOTH controls are
+   ENTIRELY past the top edge - deliberately NOT the shared .is-scrolled flag,
+   which fires at 12px while they are still half on screen and would slide the
+   header's contents underneath them. */
+   Scoped to ≤768px because that is exactly where .app-header is sticky. Above
+   it the header is an ordinary block that scrolls away WITH the corner
+   controls, so there is no surviving gutter to reclaim - and collapsing it
+   there is actively wrong: the desktop header is a centred 760px box whose
+   own margin does part of the clearing, so dropping its padding pulls the row
+   back into the language switch's column (measured: a 39×29px overlap at
+   820-900px). */
+@media (max-width: 768px) {
+  body.corners-cleared .app-header {
+    padding-left:  calc(var(--safe-l) + var(--hdr-pad-x));
+    padding-right: calc(var(--safe-r) + var(--hdr-pad-x));
+  }
 }
 /* ── Fullscreen segmented switch (was "Back to Store", a plain link/pill) ──
    Apple Liquid Glass segmented control: a translucent sliding thumb behind
@@ -2329,7 +2355,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   .app-header {
     position: sticky; top: 0; z-index: 40;
     max-width: none; margin: 0;
-    padding: calc(8px + var(--safe-t)) clamp(16px, 5vw, 22px) 8px;
+    --hdr-pad-x: clamp(16px, 5vw, 22px);
+    padding: calc(8px + var(--safe-t)) var(--hdr-pad-x) 8px;
     /* Full-bleed here (max-width:none), so the box edge IS the viewport edge -
        the centred-box term in the base rule collapses to zero and the corner
        gutters apply at full value. Stated directly rather than left to the
@@ -2584,7 +2611,27 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    z-index is 9, see .camera-card__* rules) but below any modal/overlay
    (garment-detect / lightbox / compare start at 200+). ── */
 .profile-btn {
-  position: fixed; top: var(--corner-inset); z-index: 100;
+  /* ABSOLUTE, matching .lang-switch: both top-corner controls belong to the
+     TOP OF THE PAGE and scroll away with it, while .app-header keeps sticking.
+     This was already the OBSERVED behaviour, but only by accident, and only in
+     some browsers: it is declared inside #screen-fitting, whose .screen.active
+     `fade` animation ends on `transform: none` under animation-fill-mode:both.
+     Chrome resolves that filled value to an identity matrix, which is enough to
+     make the screen a containing block and quietly demote this `fixed` to
+     absolute - which is why the avatar scrolls off. A browser that resolves the
+     same keyframe to a genuine `none` creates no containing block, leaving the
+     avatar truly viewport-fixed and pinned on screen while everything else
+     scrolls. Declaring `absolute` outright makes the intended behaviour the
+     same everywhere instead of depending on how a keyframe happens to compute.
+     body is position:relative with margin:0, so the resolved position is
+     identical to what the trapped-fixed version produced. */
+  /* --safe-t for the same reason as .lang-switch above (viewport-fit=cover).
+     It also removes a jump this button used to make on notched phones: the
+     base offset had no --safe-t while the body.is-scrolled override below
+     does, so crossing the 12px scroll threshold shifted it down by the whole
+     inset - ~45px on an iPhone. Both ends now include it, leaving the
+     intended 2px of compaction. */
+  position: absolute; top: calc(var(--safe-t) + var(--corner-inset)); z-index: 100;
   /* Physical right + the landscape safe-area inset, matching --hdr-gutter-r
      exactly (see the TOP-CORNER CONTROL GEOMETRY block). */
   right: calc(var(--safe-r) + var(--corner-inset));
@@ -2617,7 +2664,20 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    right) regardless of which language is currently active - see the comment
    on setupLangToggle() in i18n.js for why that's the right call here. */
 .lang-switch {
-  position: fixed; top: var(--corner-inset); z-index: 100;
+  /* ABSOLUTE, not fixed - by request: this control belongs to the TOP OF THE
+     PAGE, not to the viewport. It sits in the header row at rest and then
+     scrolls away with the document, while everything else in .app-header keeps
+     sticking. body is position:relative with no transform/filter, so this
+     resolves against the document origin and simply scrolls off the top.
+     z-index stays above .app-header (40) so it passes cleanly OVER the frosted
+     bar on its way out instead of dissolving through the blur.
+     Once it has fully cleared the viewport, mobile-ux.js flags
+     body.lang-cleared and the header reclaims the gutter reserved for it -
+     see the .lang-switch reservation notes on .app-header. */
+  /* --safe-t, like .app-header's own padding-top: the document sets
+     viewport-fit=cover, so without it this sits UNDER the notch / status bar
+     on every notched phone. */
+  position: absolute; top: calc(var(--safe-t) + var(--corner-inset)); z-index: 100;
   /* Physical left + the landscape safe-area inset, matching --hdr-gutter-l
      exactly (see the TOP-CORNER CONTROL GEOMETRY block). */
   left: calc(var(--safe-l) + var(--corner-inset));
@@ -2805,7 +2865,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    the avatar is a smaller 32px circle (see the ≤480px "Profile icon" rule)
    with a different, already-close offset. */
 @media (min-width: 481px) {
-  body.focus-mode:not(.is-scrolled) .profile-btn { top: 14px; }
+  body.focus-mode:not(.is-scrolled) .profile-btn { top: calc(var(--safe-t) + 14px); }
 }
 
 /* Focus mode + scrolled: the focus-bar's item-name/dot needs the WHOLE right
@@ -2830,7 +2890,11 @@ body.focus-mode.is-scrolled .profile-btn {
 }
 
 .profile-dropdown {
-  position: fixed; top: 60px; right: 16px; z-index: 100;
+  /* Absolute for the same reason as .profile-btn above - the panel has to
+     travel with the button it hangs from, so both must resolve against the
+     same box. Leaving this `fixed` while the button scrolls away would tear
+     the panel off its anchor and strand it mid-viewport. */
+  position: absolute; top: 60px; right: 16px; z-index: 100;
   /* BUG FIX: was a hardcoded `direction: rtl` - the same bug just fixed on
      .cart-dropdown, which left this panel right-to-left even in English.
      `right:16px` above is deliberately NOT switched to a logical property:
@@ -3726,6 +3790,7 @@ body.gd-open { overflow: hidden; }
      the corner reservation set on .app-header above, putting the language
      switch straight back on top of the cart button. */
   .app-header {
+    --hdr-pad-x: 10px;
     padding-top: calc(6px + var(--safe-t)); padding-bottom: 6px;
     padding-left: var(--hdr-gutter-l); padding-right: var(--hdr-gutter-r);
     gap: 8px;
@@ -3811,7 +3876,7 @@ body.gd-open { overflow: hidden; }
      mode:not(.is-scrolled) .profile-btn above), recomputed for the smaller
      34px avatar: bar center is ~34px (22px padding + ~24.6px row / 2);
      avatar center = top + 17 → top:17px lands it there. */
-  body.focus-mode:not(.is-scrolled) .profile-btn { top: 17px; }
+  body.focus-mode:not(.is-scrolled) .profile-btn { top: calc(var(--safe-t) + 17px); }
 }
 
 /* Focus bar (garment-name status strip): reserve room on the physical right
@@ -3893,6 +3958,13 @@ body.gd-open { overflow: hidden; }
    way back (base rule above) - the classic "confident snap in, gentle settle
    out" asymmetry premium UI uses instead of one flat curve both ways. */
 .focus-bar.is-scrolled { padding-right: 14px; transition: padding .55s var(--spring); }
+
+/* Mirror of the header's reclaim above: .focus-bar is sticky too, so once the
+   corner controls have scrolled off, its left reservation is dead space. Keyed
+   to corners-cleared rather than is-scrolled for the same reason - is-scrolled
+   fires while they are still half visible. 14px matches the flush inset the
+   scrolled bar already uses on its right. */
+body.corners-cleared .focus-bar { padding-left: 14px; }
 
 /* ════════════════════════════════════════════════════════════════════════
    ✦ CAMERA - flip control · front-only mirror · orientation-adaptive stage

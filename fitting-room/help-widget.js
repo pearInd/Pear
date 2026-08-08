@@ -258,6 +258,15 @@ function init() {
 
   addEventListener("scroll", queueGuard, { passive: true });
   addEventListener("resize", queueGuard, { passive: true });
+  /* Scroll and resize are not the only ways a control can end up under this
+     button: the header's padding animates as you scroll past the top-corner
+     controls, sections un-hide as a try-on completes, and images settle late -
+     each re-flows the page with no scroll event to react to. Capturing
+     transitionend/animationend on the document covers those cheaply (the
+     handler is rAF-coalesced and reads a handful of rects), so the guard
+     re-evaluates once the layout has actually come to rest. */
+  for (const ev of ["transitionend", "animationend", "load"])
+    addEventListener(ev, queueGuard, { passive: true, capture: true });
   queueGuard();
 
   const observer = new MutationObserver(sync);
