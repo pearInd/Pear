@@ -46,14 +46,18 @@ function extract(startMarker, endMarker) {
   return SRC.slice(start, end);
 }
 
-// One contiguous slice: ANGLE_CLAUSE / COMPOSITE_PANEL_CONTRACT / COMPOSITE_SELECT /
-// buildCompositePrompt / CUSTOM_BACK_INFERRED / activeBackIsReal / compositeActiveFor /
-// angleClause all sit back-to-back in app.js, so a single extract avoids assembling
-// mismatched fragments.
-const code = extract("const ANGLE_CLAUSE", "/**\n * Resolve the reference image handed to rtClient.set");
+// One contiguous slice: REAR_POSE / BACK_TAIL / ANGLE_CLAUSE / SIDE_PROFILE_DEPTH /
+// COMPOSITE_PANEL_CONTRACT / COMPOSITE_APPLY / COMPOSITE_POSE / COMPOSITE_SELECT /
+// COMPOSITE_SELECT_PROFILE / buildCompositePrompt / CUSTOM_BACK_INFERRED /
+// activeBackIsReal / compositeActiveFor / angleClause all sit back-to-back in app.js, so
+// a single extract avoids assembling mismatched fragments.
+// Starts at REAR_POSE rather than ANGLE_CLAUSE: the rear pose sentence and the three
+// garment tails were factored out ABOVE ANGLE_CLAUSE (so an edge-on pose can replace the
+// opener without touching the print instructions), and ANGLE_CLAUSE now references them.
+const code = extract("const REAR_POSE", "/**\n * Resolve the reference image handed to rtClient.set");
 
-check("extracted angleClause with the angleOverride + useComposite parameters",
-  /function angleClause\(item, angleOverride, useComposite\)/.test(code));
+check("extracted angleClause with the angleOverride + useComposite + inProfile parameters",
+  /function angleClause\(item, angleOverride, useComposite, inProfile\)/.test(code));
 check("extracted compositeActiveFor", /function compositeActiveFor/.test(code));
 
 /* The composite clause always states the full panel contract, which NAMES BOTH panels -
@@ -218,7 +222,7 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
     ["buildPrompt (catalog)", /function buildPrompt\(item\)[\s\S]*?\n}/],
     ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item\)[\s\S]*?\n}/],
     ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom\)[\s\S]*?\n}/],
-    ["buildCompositePrompt", /function buildCompositePrompt\(item, angle\)[\s\S]*?\n}/],
+    ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
   for (const [name, re] of builders) {
     const body = (SRC.match(re) || [""])[0];
