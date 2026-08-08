@@ -34,6 +34,15 @@
                       retry. One bounded, narrowly-matched retry now covers it -
                       asserted here, including that a REAL auth/permission failure
                       still fails on the first attempt.
+     reconnect        The SDK already retries a dropped mid-session connection
+                      internally ("reconnecting", 5 attempts, 1-10s backoff) - but its
+                      own recovery resends only the garment/pose that was live at the
+                      ORIGINAL go-live moment, silently discarding every later swap or
+                      rotation. Asserts the re-apply that fixes it fires only on a
+                      genuine recovery (never the first connect), that a permanently
+                      exhausted reconnect retires the session instead of leaving
+                      billing/watcher timers running against nothing, and that a
+                      normal user-initiated Stop can never re-enter that same path.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -62,6 +71,7 @@ const SUITES = [
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["signaling-retry", "signaling-retry.test.mjs"],
+  ["reconnect", "reconnect.test.mjs"],
   ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],
 ];
 

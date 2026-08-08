@@ -2342,8 +2342,72 @@ function buildRealtimeConnectOpts(gen) {
     },
     onConnectionChange: (state) => {
       if (gen !== sessionGen) return;    // stale callback from a torn-down session
+      const prevState = connState;
       connState = state;
       setConn(state);
+
+      /* setState() (stream-session.js) already drops a same-state re-emission before
+         this callback ever fires, so every call here IS a real transition - no extra
+         "did this already fire" gating needed for a just-once toast. The badge (setConn
+         above) is the persistent indicator; this is the attention-catching one, matching
+         the existing pattern for other state changes (e.g. the orientation flip toast). */
+      if (state === "reconnecting") toast("מתחבר מחדש…");
+      else if ((state === "connected" || state === "generating") && prevState === "reconnecting") {
+        toast("✓ החיבור חזר");
+      }
+
+      /* ── THE STATE-REVERSION BUG ───────────────────────────────────────────
+         @decartai/sdk@0.1.5's StreamSession ALREADY retries a dropped mid-session
+         connection internally (media/signaling loss → handleConnectionLoss() →
+         scheduleReconnect(), p-retry, 5 attempts, 1s/2s/4s/8s/10s backoff) - this file
+         does not need to reimplement that, and did not need a queue for outgoing
+         messages either. What it DOES need is this: scheduleReconnect()'s internal
+         reconnect calls runOneConnect(), which resends getInitialState() - and that
+         reads this.config.initialImage/initialPrompt, captured ONCE when
+         client.realtime.connect() was first called and never updated by any later
+         rtClient.set()/setPrompt() (verified in stream-session.js - neither method
+         touches those fields). So an SDK-level reconnect silently puts the shopper back
+         in whatever garment/pose was live at the ORIGINAL go-live moment, discarding
+         every colour swap, orientation flip, or profile-pose update sent since - with
+         no error, no log, nothing to say it happened. That is a correctness bug a
+         message queue could not have fixed either: replaying literal past messages
+         would restore whichever one happened to be queued, not necessarily what is
+         actually true NOW if the shopper kept interacting during the outage.
+         The fix already exists in this file's architecture: applyActive() re-derives
+         the CURRENT desired state from live values (activeItem, effectiveAngle(),
+         profileActive(), resolveLook()) rather than replaying anything captured
+         earlier - which is exactly the property angleAtStart/profileAtStart rely on
+         elsewhere. So the correct response to "the SDK just reconnected" is simply to
+         call it again. isGarmentApplied gates this to sessions that had actually
+         dressed the shopper (never fires on the FIRST connect, where prevState can
+         only be "connecting" - the SDK never reports "reconnecting" before an initial
+         "connected"). */
+      if ((state === "connected" || state === "generating") &&
+          prevState === "reconnecting" && isGarmentApplied) {
+        console.log("[PEAR] connectRealtime() - SDK reconnected; re-applying the CURRENT garment/pose",
+          "(the SDK's own recovery only restores the ORIGINAL go-live state)");
+        applyActive().catch((e) =>
+          console.warn("[PEAR] post-reconnect re-apply failed:", e?.message || e));
+      }
+
+      /* ── PERMANENT FAILURE CLEANUP ──────────────────────────────────────────
+         "disconnected" is also the SDK's terminal state after scheduleReconnect()
+         exhausts all 5 internal attempts (stream-session.js: tearDown() + setState
+         ("disconnected") + events.emit("error", ...) in the same catch block) - so this
+         file's EXISTING rtClient.on("error", ...) listener below already shows the
+         shopper a message for that exact case. What it did not do is retire the
+         session: billing timers, the recorder and the orientation watcher were left
+         running against a connection the SDK itself has already given up on. Scoped to
+         a transition FROM "reconnecting" specifically (not the ordinary "connected" →
+         "disconnected" step every teardown() also produces, which must NOT re-enter
+         stopLive() while teardown() is still unwinding) - a permanent failure is always
+         preceded by at least one "reconnecting" tick, per handleConnectionLoss()'s own
+         gate on state. stopLive() (not bare teardown()) so the "Go Live" control resets
+         and any final frame is handled the same way a manual Stop would. */
+      if (state === "disconnected" && prevState === "reconnecting") {
+        console.warn("[PEAR] connectRealtime() - SDK reconnect exhausted; retiring the session");
+        stopLive();
+      }
     },
   };
 }
@@ -5045,6 +5109,32 @@ const APPLY_RETRY_MS = 200;  // gap between them; must stay well under ORIENT_TU
  * @returns {Promise<void>}
  */
 async function applyActive() {
+  /* ── Skip cleanly while the SDK is mid-reconnect - BUT ONLY for an ALREADY-DRESSED
+     session ─────────────────────────────────────────────────────────────────────
+     "reconnecting" means StreamSession.scheduleReconnect() (stream-session.js) is
+     already running its own multi-second recovery (p-retry, up to 1s/2s/4s/8s/10s
+     between attempts) - every send() the SDK exposes calls assertConnected() first
+     and throws immediately if the state isn't "connected"/"generating", so a set()
+     fired here would fail on contact, and the loop below would burn both of ITS
+     attempts (400ms total) against a recovery that operates on a completely
+     different timescale.
+     Gated on isGarmentApplied, and that gate is load-bearing, not incidental: the
+     safety net this skip relies on - buildRealtimeConnectOpts()'s onConnectionChange
+     re-running this exact function once the SDK actually reconnects - ONLY fires
+     under that same isGarmentApplied condition (see its comment). Without the gate
+     here, the very FIRST applyGarment() of a session (goLive()'s own call, before
+     the shopper has ever been successfully dressed) could hit a reconnect that just
+     started, skip silently, and have NOTHING re-apply it afterward - stranding the
+     shopper undressed with no error at all, which is worse than the failure this
+     exists to prevent. So a first-ever apply falls through to the retry loop below
+     exactly as it always did (unaffected by this change); only a session that was
+     already dressed once skips, because that is the one case with a recovery path
+     waiting to restore it. */
+  if (connState === "reconnecting" && isGarmentApplied) {
+    console.log("[PEAR] applyActive() - skipped: SDK is mid-reconnect; will re-apply once it lands");
+    return;
+  }
+
   /* ── Bounded retry: a dropped set() used to cost the WHOLE session ────────────
      Every call site fires this and forgets it (`.catch(console.warn)`), because none
      of them - a colour tap, a mid-turn orientation flip, "Add to Look" - has anything
@@ -8505,9 +8595,19 @@ function setConn(state) {
   if (state === "connected" || state === "generating") {
     b.classList.add("live");
     b.textContent = "● מחובר ל-API חי";
-  } else if (state === "connecting" || state === "reconnecting") {
+  } else if (state === "connecting") {
     b.style.color = "#d08a17";
     b.textContent = "● מתחבר…";
+  } else if (state === "reconnecting") {
+    /* A REAL SDK state (StreamSession.scheduleReconnect(), stream-session.js), not a
+       hypothetical one: the SDK retries a dropped mid-session connection internally
+       (p-retry, 5 attempts, 1s/2s/4s/8s/10s backoff) BEFORE ever surfacing a failure to
+       this file. Distinguished from the initial "connecting" text so the shopper sees
+       "recovering" rather than "starting a new session" - the live overlay and video
+       element are untouched throughout, only this badge and the one-time toast below
+       change. */
+    b.style.color = "#d08a17";
+    b.textContent = "● מתחבר מחדש…";
   } else if (state === "error" || state === "disconnected") {
     b.classList.add("mock");
     b.textContent = "● לא מחובר";
