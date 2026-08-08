@@ -10,6 +10,7 @@
  *
  * @typedef {Object} PearConfig
  * @property {number}   CONNECT_TIMEOUT_MS      Max wait for the realtime session to report "connected" (ms).
+ * @property {number}   APPLY_TIMEOUT_MS        Max wait for the initial rtClient.set() (garment apply) at go-live to settle (ms).
  * @property {number}   HEALTH_PROBE_TIMEOUT_MS Abort window for the pre-use connectivity probe (ms).
  * @property {number}   TOAST_DURATION_MS       On-screen toast lifetime (ms).
  * @property {string}   TOKEN_ENDPOINT          Same-origin proxy route that mints the ephemeral ek_ token.
@@ -25,6 +26,17 @@
 export const CONFIG = Object.freeze({
   /* ── timings (milliseconds) ─────────────────────────────────────────────── */
   CONNECT_TIMEOUT_MS:      12000,  // max wait for the WebRTC session to reach "connected"
+  /* Nothing previously bounded the FIRST rtClient.set() at go-live: waitConnected()
+     covers reaching "connected", FIRST_FRAME_TIMEOUT_MS covers a rendered frame ever
+     arriving, but the set() call itself sat in between, unguarded. If the underlying
+     transport it was writing to got torn down and rebuilt by the SDK's OWN internal
+     reconnect (media/signaling hiccups are most likely in exactly this first-second
+     window) and the SDK never rejects the now-orphaned promise, this awaited forever -
+     "connected" was already showing (onConnectionChange fires independently), the
+     shopper's real camera feed was already live under it, and the garment simply never
+     arrived, with no error and no retry. Bounded here the same way the two neighbouring
+     stages already are. */
+  APPLY_TIMEOUT_MS:        10000,  // max wait for the initial garment apply to settle
   HEALTH_PROBE_TIMEOUT_MS: 4000,   // pre-use /api/health probe abort window
   TOAST_DURATION_MS:       2600,   // toast visible duration
 

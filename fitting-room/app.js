@@ -32,6 +32,7 @@ import { CONFIG } from "./config.js";
 import { t, setupLangToggle } from "./i18n.js";
 const {
   CONNECT_TIMEOUT_MS,
+  APPLY_TIMEOUT_MS,
   HEALTH_PROBE_TIMEOUT_MS,
   TOAST_DURATION_MS,
   TOKEN_ENDPOINT,
@@ -7994,7 +7995,40 @@ async function goLive() {
 
     // 2) apply on the live stream - the full look (shirt + pants, ONE payload) when
     //    activeOutfit has both slots filled, else the single active garment. Same session.
-    await applyActive();               // rtClient.set({ prompt, image(s), enhance:false })
+    /* THE SILENT-UNDRESS HANG. This call sits in a gap neither of this function's other
+       two timeouts covers: waitConnected(CONNECT_TIMEOUT_MS) above already resolved (the
+       SDK reports "connected" independently of this call, via onConnectionChange), and
+       FIRST_FRAME_TIMEOUT_MS below doesn't arm until AFTER this line returns. If the
+       transport this specific rtClient.set() was writing to gets torn down and replaced
+       by the SDK's OWN internal reconnect - most likely in exactly this first-second
+       window, while media/signaling is still settling - and the SDK never rejects the
+       now-orphaned promise, this awaited forever: "connected" was already showing, the
+       shopper's real camera was already live under it, and the garment simply never
+       arrived - no error, no retry, and nothing downstream (isGarmentApplied stays
+       false) to tell the reconnect-recovery path at connectRealtime() there was
+       ever anything worth re-applying. Bounded the same way CONNECT_TIMEOUT_MS/
+       FIRST_FRAME_TIMEOUT_MS already bound their own stages, so a genuine hang here
+       becomes the SAME visible "live measurement failed" + stopLive() this function
+       already produces for any other go-live failure, instead of a silently undressed
+       session with a healthy-looking badge. */
+    {
+      const guardGen = sessionGen;
+      const applyPromise = applyActive();          // rtClient.set({ prompt, image(s), enhance:false })
+      // Attached unconditionally, independent of whether the race below times out - a
+      // promise that eventually settles AFTER we've moved on (timed out, or superseded
+      // by a later connect/teardown) must never become an unhandled rejection.
+      applyPromise.catch(() => {});
+      await Promise.race([
+        applyPromise,
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error("timeout ממתין ליישום הבגד (rtClient.set לא הגיב)")),
+          APPLY_TIMEOUT_MS)),
+      ]);
+      // Superseded while we were waiting (a manual Stop, a fresh connect) - the session
+      // this apply was FOR no longer exists; let whichever path superseded it own what
+      // happens next instead of continuing go-live's success sequence against a dead one.
+      if (guardGen !== sessionGen) return;
+    }
     // Log every garment being worn - both top AND bottom when a full look is active.
     const _trackSize = activeTryOnSize || currentUserSize;
     const _look = resolveLook();

@@ -50,6 +50,17 @@
                       exhausted reconnect retires the session instead of leaving
                       billing/watcher timers running against nothing, and that a
                       normal user-initiated Stop can never re-enter that same path.
+     apply-timeout    The initial rtClient.set() at go-live had no timeout of its own,
+                      unlike the connect and first-frame stages either side of it. An
+                      SDK-internal reconnect tearing down that call's transport in the
+                      first second (and never rejecting the orphaned promise) could hang
+                      it forever - "connected" already showing, the shopper's real
+                      camera already live under it, the garment never arriving, no
+                      error. Asserts the race against APPLY_TIMEOUT_MS, that a real
+                      rejection still propagates unmodified, that a session superseded
+                      mid-wait bails instead of continuing go-live's success path, and
+                      that a late settlement after the timeout already won never surfaces
+                      as an unhandled rejection.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -80,6 +91,7 @@ const SUITES = [
   ["turn-hold", "turn-hold.test.mjs"],
   ["signaling-retry", "signaling-retry.test.mjs"],
   ["reconnect", "reconnect.test.mjs"],
+  ["apply-timeout", "apply-timeout.test.mjs"],
   ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],
 ];
 
