@@ -1208,7 +1208,11 @@
         results: (data && data.results) || [],
         front: (data && data.front_image_url) || "",
         back: (data && data.back_image_url) || "",
-        backSource: (data && data.back_source) || "none"
+        backSource: (data && data.back_source) || "none",
+        // Per-product kids/adult verdict from the same classify call. "uncertain" on
+        // an older server build that doesn't send it yet, same as an unresolved one.
+        ageGroup: (data && data.age_group) || "uncertain",
+        ageGroupConfidence: (data && data.age_group_confidence) || 0
       };
     });
   }
@@ -1722,7 +1726,13 @@
                    LEFT=FRONT / RIGHT=BACK contract it is about to assert to Decart rather
                    than trusting that two separately-bundled stitchers still agree. */
                 garment_composite_layout: (composite && built.layout) || undefined,
-                garment_images: sorted
+                garment_images: sorted,
+                // Kids/adult verdict for this product, resolved server-side from the
+                // same classify call. "uncertain" is sent explicitly (not omitted) so
+                // the fitting room can tell "we checked and don't know" apart from
+                // "this correction predates the field existing".
+                garment_age_group: res.ageGroup,
+                garment_age_group_confidence: res.ageGroupConfidence
               }, PEAR_BASE);
             } catch (_) {}
           });

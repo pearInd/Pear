@@ -586,7 +586,7 @@ function publicUser(u) {
   if (!u) return null;
   return {
     id: u.id, name: u.name, email: u.email,
-    height: u.height, weight: u.weight,
+    height: u.height, weight: u.weight, age: u.age,
     created_at: u.created_at,
   };
 }
@@ -777,9 +777,15 @@ async function getUserByDevice(req, res) {
 }
 
 /* PATCH /api/users/:deviceId - update this device's user row with a fresh
-   height/weight (the monthly returning-user measurements refresh). Same
-   sane-range bounds as the client's isSaneProfile()/calculateSize() gate, so
-   the server never persists a value the form itself would reject. */
+   height/weight, and age WHEN the client actually collected one. Same sane-range
+   bounds as the client's isSaneProfile()/calculateSize() gate, so the server
+   never persists a value the form itself would reject.
+   age is OPTIONAL here, unlike height/weight: the client only ever asks the
+   visitor for it when the current garment's own kids/adult signal is uncertain
+   (resolvedGarmentAgeGroup() in app.js) - a confident garment persists
+   height/weight alone. Present-but-invalid is still rejected; simply absent is
+   not, and an absent age never overwrites a previously-stored one with NULL -
+   it just leaves that column untouched. */
 async function updateUserMeasurements(req, res) {
   if (storageUnavailable(res)) return;
   const deviceId = String(req.params.deviceId || "").trim();
@@ -787,8 +793,13 @@ async function updateUserMeasurements(req, res) {
 
   const height = Number(req.body?.height);
   const weight = Number(req.body?.weight);
+  const rawAge = req.body?.age;
+  const ageProvided = rawAge !== undefined && rawAge !== null && rawAge !== "";
+  const age = ageProvided ? Number(rawAge) : null;
+
   const sane = Number.isFinite(height) && Number.isFinite(weight) &&
-    height >= 130 && height <= 240 && weight >= 35 && weight <= 220;
+    height >= 110 && height <= 240 && weight >= 18 && weight <= 220 &&
+    (!ageProvided || (Number.isFinite(age) && age >= 1 && age <= 120));
   if (!sane) {
     return res.status(400).json({ ok: false, error: "invalid_measurements" });
   }
@@ -797,9 +808,12 @@ async function updateUserMeasurements(req, res) {
     const user = await findUserByDeviceId(deviceId);
     if (!user) return res.status(404).json({ ok: false, error: "not_found" });
 
+    const update = { height, weight };
+    if (ageProvided) update.age = age;   // omitted entirely when not collected - never clobbers a stored age with NULL
+
     const { error } = await supabase
       .from("users")
-      .update({ height, weight })
+      .update(update)
       .eq("id", user.id);
     if (error) throw new Error(error.message);
 
@@ -835,7 +849,7 @@ async function relinkUserDevice(req, res) {
     if (error) throw new Error(error.message);
 
     console.log(`[users] relinked device "${deviceId}" to user ${user.id} (${email})`);
-    res.json({ id: user.id, name: user.name, email: user.email, height: user.height, weight: user.weight });
+    res.json({ id: user.id, name: user.name, email: user.email, height: user.height, weight: user.weight, age: user.age });
   } catch (err) {
     console.error("[users] relink failed:", err?.message);
     res.status(500).json({ ok: false, error: err?.message });
@@ -923,6 +937,7 @@ async function saveSession(req, res) {
     user_id:       b.userId || null,   // links the session to a remembered user (users.id)
     height:        n(pick(b.height,    m.height)),
     weight:        n(pick(b.weight,    m.weight)),
+    age:           n(pick(b.age,       m.age)),
     chest:         n(pick(b.chest,     m.chest)),
     waist:         n(pick(b.waist,     m.waist)),
     legs:          n(pick(b.legs,      m.legs)),
@@ -1315,8 +1330,47 @@ Report confidence honestly:
 - 0.7-0.89 one decisive cue, partially occluded or low resolution
 - below 0.7 inference from weak cues only -> you must answer "uncertain"
 
+SEPARATELY, also classify whether this is a KIDS' garment or an ADULT garment -
+this is about the PRODUCT, not the photo's orientation, so judge it independently
+of your front/back answer above.
+
+DECISIVE KIDS cues:
+- A child or infant is wearing the garment (judge by body/face proportions and
+  height relative to any visible surroundings, not by clothing style alone -
+  petite adult sizing exists and is NOT kids' clothing)
+- A visible size label/tag using child sizing (e.g. "2T", "4Y", "Age 8", "110cm",
+  "XS Kids", a EU/IL kids numeric size like 8-18 on a size chart)
+- Snap-crotch or grow-with-me adjustable waistband construction (bodysuits,
+  rompers) - these do not exist in adult sizing
+- Character licensing, cartoon prints, or a garment scaled small enough that
+  ordinary adult proportions (shoulder width, torso length, sleeve/inseam ratio)
+  are visibly impossible
+
+DECISIVE ADULT cues:
+- An adult is wearing the garment (adult body/face proportions)
+- A visible size label using adult sizing (S/M/L/XL/XXL, numeric waist/chest in
+  cm or inches typical of adult garments, EU 36-52 etc.)
+- Tailoring, cut, or proportions only found in adult clothing (structured
+  blazers, adult-length trousers with a standard rise, underwire, adult-scale
+  formalwear)
+
+TRICKY CASES - follow these exactly:
+- Flat-lay / packshot with NO model and NO visible size label: judge PURELY by
+  the garment's own scale and cut cues above. If the garment could plausibly be
+  either a petite adult's item or an older child's/teen's item with no other
+  cue to separate them, answer "uncertain" - do not guess from styling alone.
+- A youth/teen-cut garment that could span either chart (a typical concern
+  around EU kids size 16-18 / adult XS-S): answer "uncertain" rather than
+  picking one, unless a size label or a visibly child-proportioned wearer
+  settles it.
+- Do NOT infer age group from color, print style, or price positioning alone
+  ("cute" prints and pastel colors exist in adult fashion too).
+
+Report age_group confidence honestly using the SAME bands as view confidence
+above; below 0.7 you must answer "uncertain".
+
 Respond ONLY with JSON matching this schema:
-{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>"}`;
+{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>","age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0}`;
 
 /* Classify one image. Returns the full record - the caller decides what an
    `uncertain` verdict means (see resolveGarmentViews), rather than the prompt
@@ -1345,11 +1399,13 @@ async function classifyFrontBackDetailed(imageUrl) {
         responseSchema: {
           type: "OBJECT",
           properties: {
-            view:       { type: "STRING", enum: ["front", "back", "uncertain"] },
-            confidence: { type: "NUMBER" },
-            cue:        { type: "STRING" },
+            view:                 { type: "STRING", enum: ["front", "back", "uncertain"] },
+            confidence:           { type: "NUMBER" },
+            cue:                  { type: "STRING" },
+            age_group:            { type: "STRING", enum: ["kids", "adult", "uncertain"] },
+            age_group_confidence: { type: "NUMBER" },
           },
-          required: ["view", "confidence"],
+          required: ["view", "confidence", "age_group", "age_group_confidence"],
         },
       },
     }),
@@ -1373,11 +1429,17 @@ async function classifyFrontBackDetailed(imageUrl) {
     // uncertain rather than string-matching it (the old .includes("back") test read
     // "not the back" as a back).
     console.warn(`[classify] unparseable Gemini body for ${secureUrl}: ${text.slice(0, 120)}`);
-    return { view: "uncertain", confidence: 0, cue: "unparseable response" };
+    return { view: "uncertain", confidence: 0, cue: "unparseable response", age_group: "uncertain", age_group_confidence: 0 };
   }
   const view = ["front", "back", "uncertain"].includes(parsed?.view) ? parsed.view : "uncertain";
   const confidence = Number.isFinite(parsed?.confidence) ? Math.max(0, Math.min(1, parsed.confidence)) : 0;
-  return { view, confidence, cue: typeof parsed?.cue === "string" ? parsed.cue.slice(0, 120) : "" };
+  const ageGroup = ["kids", "adult", "uncertain"].includes(parsed?.age_group) ? parsed.age_group : "uncertain";
+  const ageGroupConfidence = Number.isFinite(parsed?.age_group_confidence)
+    ? Math.max(0, Math.min(1, parsed.age_group_confidence)) : 0;
+  return {
+    view, confidence, cue: typeof parsed?.cue === "string" ? parsed.cue.slice(0, 120) : "",
+    age_group: ageGroup, age_group_confidence: ageGroupConfidence,
+  };
 }
 
 /* Back-compat wrapper: the front|back-only contract the scanner and the cache read
@@ -1421,20 +1483,32 @@ async function getCachedClassification(imageUrl) {
   return data ? data.classification : null;
 }
 
+const MISSING_COLUMN_RE = /column .* does not exist|Could not find the/i;
+
 /* Same row, but with the diagnostic columns added in supabase_setup_v8.sql
-   (confidence / source / cue). Falls back to the v5 shape when the migration hasn't
-   been applied, so this deploy is safe to ship BEFORE the SQL runs. */
+   (confidence / source / cue) and the kids/adult verdict added in v11
+   (age_group / age_group_confidence). Degrades one migration tier at a time -
+   v11 columns missing falls back to v8 shape, v8 columns missing falls back to
+   the bare v5 shape - so this deploy is safe to ship BEFORE either SQL runs, and
+   an existing v8-only deployment doesn't lose confidence/source/cue just because
+   v11 hasn't run yet. */
 async function getCachedClassificationDetailed(imageUrl) {
   if (!supabase) return null;
-  const { data, error } = await garmentCacheQuery(imageUrl, "classification, confidence, source, cue");
-  if (error) {
-    if (/column .* does not exist/i.test(error.message || "")) {
+  let { data, error } = await garmentCacheQuery(
+    imageUrl, "classification, confidence, source, cue, age_group, age_group_confidence"
+  );
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+    ({ data, error } = await garmentCacheQuery(imageUrl, "classification, confidence, source, cue"));
+    if (error && MISSING_COLUMN_RE.test(error.message || "")) {
       const classification = await getCachedClassification(imageUrl);
-      return classification ? { classification, confidence: null, source: "legacy", cue: "" } : null;
+      return classification
+        ? { classification, confidence: null, source: "legacy", cue: "", age_group: null, age_group_confidence: null }
+        : null;
     }
-    console.warn("[garment_cache] read failed:", error.message);
-    return null;
+    if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
+    return data ? { ...data, age_group: null, age_group_confidence: null } : null;
   }
+  if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
   return data || null;
 }
 
@@ -1451,21 +1525,31 @@ async function getCachedClassificationDetailed(imageUrl) {
 async function saveClassification(imageUrl, classification, meta = {}) {
   if (!supabase) return;
   const base = { image_url: imageUrl, classification };
-  const enriched = {
-    ...base,
-    // One row per PHOTOGRAPH. onConflict targets canonical_url so a second URL
-    // spelling UPDATES the existing row instead of inserting a rival one that can
-    // disagree about front vs back (see archive/supabase_setup_v9.sql).
-    canonical_url: canonicalImageUrl(imageUrl),
+  const canonical = { canonical_url: canonicalImageUrl(imageUrl) };
+  // One row per PHOTOGRAPH. onConflict targets canonical_url so a second URL
+  // spelling UPDATES the existing row instead of inserting a rival one that can
+  // disagree about front vs back (see archive/supabase_setup_v9.sql).
+  const v8Fields = {
     confidence: Number.isFinite(meta.confidence) ? meta.confidence : null,
     source: meta.source || "gemini",
     cue: meta.cue || null,
     ...(meta.productUrl ? { product_url: meta.productUrl } : {}),
   };
-  let { error } = await supabase.from("garment_cache").upsert([enriched], { onConflict: "canonical_url" });
-  if (error && /column .* does not exist|Could not find the/i.test(error.message || "")) {
-    console.warn("[garment_cache] v8 columns absent - run archive/supabase_setup_v8.sql for full diagnostics");
-    ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));
+  const v11Fields = {
+    age_group: meta.ageGroup || null,
+    age_group_confidence: Number.isFinite(meta.ageGroupConfidence) ? meta.ageGroupConfidence : null,
+  };
+
+  let { error } = await supabase.from("garment_cache")
+    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields }], { onConflict: "canonical_url" });
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+    console.warn("[garment_cache] v11 columns absent - run archive/supabase_setup_v11.sql for kids/adult classification");
+    ({ error } = await supabase.from("garment_cache")
+      .upsert([{ ...base, ...canonical, ...v8Fields }], { onConflict: "canonical_url" }));
+    if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+      console.warn("[garment_cache] v8 columns absent - run archive/supabase_setup_v8.sql for full diagnostics");
+      ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));
+    }
   }
   if (error) console.warn("[garment_cache] write failed:", error.message);
 }
@@ -1817,6 +1901,33 @@ function resolveGarmentViews({ images, records, scrapedFront, scrapedBack }) {
   return { front, back: "", back_source: "none" };
 }
 
+/* Per-PRODUCT kids/adult verdict, resolved from the same per-image records
+   resolveGarmentViews() just used for front/back. age_group is a property of
+   the GARMENT, not of any one photo, so this picks ONE verdict for the whole
+   product rather than exposing one per image:
+     1. Prefer the record backing the resolved FRONT photo - the hero shot most
+        representative of the product as a whole.
+     2. Otherwise, the highest-confidence non-uncertain verdict among the other
+        classified images (a size-label close-up may be more decisive than the
+        hero shot itself).
+     3. Otherwise "uncertain" - never guess a default category. */
+function resolveAgeGroup({ images, records, front }) {
+  const frontIdx = images.indexOf(front);
+  const frontRec = frontIdx !== -1 ? records[frontIdx] : null;
+  if (frontRec?.age_group && frontRec.age_group !== "uncertain") {
+    return { age_group: frontRec.age_group, age_group_confidence: frontRec.age_group_confidence ?? null };
+  }
+
+  let best = null;
+  for (const r of records) {
+    if (!r?.age_group || r.age_group === "uncertain") continue;
+    if (!best || (r.age_group_confidence ?? 0) > (best.age_group_confidence ?? 0)) best = r;
+  }
+  if (best) return { age_group: best.age_group, age_group_confidence: best.age_group_confidence ?? null };
+
+  return { age_group: "uncertain", age_group_confidence: 0 };
+}
+
 /* POST /api/classify-images
    Request (all fields optional except `images`):
      { images: string[],            // the scraped gallery, DOM order
@@ -1826,10 +1937,14 @@ function resolveGarmentViews({ images, records, scrapedFront, scrapedBack }) {
        page_url?: string, store_key?: string }   // diagnostics only
    Response:
      { results: ("front"|"back")[],   // one per input URL, in order (legacy contract)
-       front_image_url, back_image_url, back_source, uncertain_count }
+       front_image_url, back_image_url, back_source, uncertain_count,
+       age_group: "kids"|"adult"|"uncertain", age_group_confidence: number }
    Cache-first; uncached images are classified via Gemini and written back to
    garment_cache with their provenance. A single image's classification failure is
-   recorded as a FALLBACK (never cached as a verdict) rather than failing the batch. */
+   recorded as a FALLBACK (never cached as a verdict) rather than failing the batch.
+   age_group is the same Gemini call's SEPARATE verdict on whether the garment is
+   kids' or adult clothing (see resolveAgeGroup) - cached and resolved alongside
+   front/back, not a second model call. */
 app.post("/api/classify-images", classifyLimiter, async (req, res) => {
   console.log('[classify] Received images:', req.body.images);
   // Belt-and-suspenders alongside the PUBLIC_API_PATHS bypass in the shared /api
@@ -1864,9 +1979,11 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
   const records = [];
   let rateLimited = 0;
   for (const url of uniqueUrls) {
-    // A rear photo the storefront's own markup named needs no model call.
+    // A rear photo the storefront's own markup named needs no model call. It carries
+    // no age_group opinion - the DOM only ever names WHICH photo is the back, never
+    // what kind of garment it is.
     if (scrapedBack && url === scrapedBack) {
-      records.push({ view: "back", confidence: 1, source: "dom_hint", cue: "storefront markup" });
+      records.push({ view: "back", confidence: 1, source: "dom_hint", cue: "storefront markup", age_group: "uncertain", age_group_confidence: 0 });
       continue;
     }
     try {
@@ -1877,6 +1994,11 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
           confidence: Number.isFinite(cached.confidence) ? cached.confidence : null,
           source: cached.source || "legacy",
           cue: cached.cue || "",
+          // null on a pre-v11 row (age group was never classified for this photo, not
+          // "uncertain" - resolveAgeGroup() treats both the same, but the distinction
+          // stays visible in logs/DB for anyone auditing coverage).
+          age_group: cached.age_group ?? null,
+          age_group_confidence: cached.age_group_confidence ?? null,
           cached: true,
         });
         continue;
@@ -1889,7 +2011,10 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
       await saveClassification(
         url,
         rec.view === "back" ? "back" : "front",
-        { confidence: rec.confidence, source: rec.view === "uncertain" ? "uncertain" : "gemini", cue: rec.cue }
+        {
+          confidence: rec.confidence, source: rec.view === "uncertain" ? "uncertain" : "gemini", cue: rec.cue,
+          ageGroup: rec.age_group, ageGroupConfidence: rec.age_group_confidence,
+        }
       );
       records.push({ ...rec, source: rec.view === "uncertain" ? "uncertain" : "gemini" });
       await new Promise((r) => setTimeout(r, 1100)); // stay under Gemini's 60 RPM
@@ -1897,11 +2022,12 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
       if (err?.rateLimited) rateLimited++;
       console.error(`[classify-images] ${err?.rateLimited ? "RATE LIMITED" : "failed"} for ${url}:`, err?.message || err);
       // NOT cached, and explicitly marked a fallback - this is a default, not a verdict.
-      records.push({ view: "uncertain", confidence: 0, source: "fallback", cue: err?.message || "error" });
+      records.push({ view: "uncertain", confidence: 0, source: "fallback", cue: err?.message || "error", age_group: "uncertain", age_group_confidence: 0 });
     }
   }
 
   const views = resolveGarmentViews({ images: uniqueUrls, records, scrapedFront, scrapedBack });
+  const ageGroupResult = resolveAgeGroup({ images: uniqueUrls, records, front: views.front });
 
   /* Nothing found on THIS page visit, but the cache may already know this product's
      rear photo from a previous visit or a scanner crawl - a lazy gallery that failed
@@ -1946,6 +2072,11 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     back_image_url: views.back,
     back_source: views.back_source,
     uncertain_count: uncertainCount,
+    // Per-PRODUCT kids/adult verdict (resolveAgeGroup) - "uncertain" when no image
+    // in the gallery gave a confident answer. NOT yet used to pick a size chart
+    // anywhere downstream; this is plumbing only, consumed by callers that choose to.
+    age_group: ageGroupResult.age_group,
+    age_group_confidence: ageGroupResult.age_group_confidence,
   });
 });
 

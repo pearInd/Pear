@@ -518,8 +518,23 @@ const $ = (s) => document.getElementById(s);
 
 /* ── state ───────────────────────────────────────────────────────────────── */
 let currentUserSize = null;
+let currentSizeCategory = null;  // "child" | "adult" - which chart produced currentUserSize.
+                                 // Drives the override selector's scale and suppresses
+                                 // the SIZE_SCALE fit-delta math for child sizes.
 let activeTryOnSize = null;   // size the user has selected in the Screen 2 override selector
 let activeItem = null;
+/* The widget's classify-images verdict on the CURRENT garment (see resolveAgeGroup
+   in server.js), captured BEFORE activeItem exists. activeItem is only created in
+   setActiveItem() (Screen 2), but the widget's PEAR_UPDATE_GARMENT correction can
+   arrive while the shopper is still on Screen 1 filling in the measurement form -
+   the classify+synthesize round trip on the store page runs in parallel with that,
+   and often finishes first. Without this, an early correction would be silently
+   dropped (the message listener used to require activeItem to exist) and Screen 1
+   would have no way to know the garment's category until Screen 2. Synced onto
+   activeItem.ageGroup the moment activeItem is created, so Screen 2 never has to
+   care which of the two arrived first. */
+let pendingAgeGroup = undefined;             // "kids" | "adult" | "uncertain" | undefined (none arrived yet)
+let pendingAgeGroupConfidence = undefined;
 let focusMode = false;
 
 /* Multi-Image Product Gallery Sync - which product angle the live engine is warping.
@@ -624,11 +639,129 @@ const ZARA_SIZE_CHART = [
   { size: "XL", minHeight: 184, maxHeight: 195, minWeight: 85, maxWeight: 100, minChest: 110, maxChest: 118, minWaist: 96, maxWaist: 106, minLegs: 106, maxLegs: 112 },
 ];
 
+/* Children's numeric sizing (EU/IL kids convention, sizes 8-18).
+   Height/weight bands only - unlike ZARA_SIZE_CHART there are no chest/waist/legs
+   columns, so the optional fine-tune inputs contribute no penalty against these
+   rows - calculateSize() skips them outright on the child path.
+
+   Size 20+ is deliberately absent: the ladder connects into the adult chart on its
+   own, since adult S starts at 160cm/55kg and already overlaps size 18's upper end
+   (170-176cm / 54-60kg). */
+const CHILD_SIZE_CHART = [
+  { size: "8",  minHeight: 122, maxHeight: 135, minWeight: 22, maxWeight: 27 },
+  { size: "10", minHeight: 135, maxHeight: 145, minWeight: 27, maxWeight: 32 },
+  { size: "12", minHeight: 145, maxHeight: 155, minWeight: 32, maxWeight: 38 },
+  { size: "14", minHeight: 155, maxHeight: 163, minWeight: 38, maxWeight: 46 },
+  { size: "16", minHeight: 163, maxHeight: 170, minWeight: 46, maxWeight: 54 },
+  { size: "18", minHeight: 170, maxHeight: 176, minWeight: 54, maxWeight: 60 },
+];
+
+/* Ordered child scale, derived from the chart so the two can never drift apart.
+   → ["8","10","12","14","16","18"] */
+const CHILD_SIZE_SCALE = CHILD_SIZE_CHART.map((r) => r.size);
+
 /* Ordered size scale - full range used by the override selector and delta math. */
 const SIZE_SCALE = ["XS", "S", "M", "L", "XL", "XXL", "3XL"];
 
-/* Task 6 - conditional input flow: the optional fields stay hidden until BOTH
-   mandatory fields (height + weight) hold sane, in-range values. */
+/**
+ * Height/weight penalty for one chart row - the scoring kernel behind
+ * calculateSize()'s match pass, shared by both charts. Same ×2 per-cm/kg
+ * weighting as the original adult matcher.
+ * @returns {number}
+ */
+function coreHwPenalty(row, height, weight) {
+  let pen = 0;
+  if (height < row.minHeight) pen += (row.minHeight - height) * 2;
+  if (height > row.maxHeight) pen += (height - row.maxHeight) * 2;
+  if (weight < row.minWeight) pen += (row.minWeight - weight) * 2;
+  if (weight > row.maxWeight) pen += (weight - row.maxWeight) * 2;
+  return pen;
+}
+
+/* Age at which a visitor is sized against the adult chart rather than the kids
+   chart. Below this → "child", at or above → "adult".
+
+   NOTE ON THE CUTOFF: in the EU/IL kids convention the numeric sizes ARE ages
+   (מידה 12 ≈ a 12-year-old), so the chart's own labels suggest a boundary of 18
+   rather than 16. At 16, kids sizes 16 and 18 can still be reached - but only by
+   an unusually tall 14-15 year old, never by the 16-18 year olds those rows were
+   drawn for. 16 is nonetheless a defensible retail split (a 16-year-old is often
+   better served by adult S than by a kids size), so it is used as specified;
+   change this ONE constant to 18 to follow the chart's own labelling instead. */
+const CHILD_AGE_MAX = 16;
+
+/**
+ * Decide which chart a body is sized against. Age is the sole input: it is an
+ * EXPLICIT signal from the visitor, unlike the height/weight comparison this
+ * replaced - that guess routed petite adults (150cm/50kg → kids 14) and slim tall
+ * adults (174cm/56kg → kids 18, at penalty 0, so it read as a confident match)
+ * into children's sizing with no way for them to correct it.
+ *
+ * Height/weight still choose the exact size WITHIN the selected chart - see the
+ * coreHwPenalty() scoring pass in calculateSize().
+ * @param {number} age - years; callers must pass a validated, in-range value
+ * @returns {"child"|"adult"}
+ */
+function pickSizeCategory(age) {
+  return age < CHILD_AGE_MAX ? "child" : "adult";
+}
+
+/* The garment's own kids/adult signal, wherever it currently lives - activeItem
+   once Screen 2 exists, pendingAgeGroup before that. "uncertain" covers three
+   cases identically, by design (never guess a default): the classifier genuinely
+   couldn't tell, no correction has arrived yet, or the field is simply absent
+   (an older cached correction from before this feature existed). All three route
+   the visitor through the same age question calculateSize() already asks.
+ * @returns {"kids"|"adult"|"uncertain"}
+ */
+function resolvedGarmentAgeGroup() {
+  const ag = activeItem?.ageGroup ?? pendingAgeGroup;
+  return (ag === "kids" || ag === "adult") ? ag : "uncertain";
+}
+
+/* Shows/hides the #age field's own form-group, independent of whatever
+   calculateSize() does with its value - a confident garment verdict means age is
+   never asked at all, not merely optional. Called from calculateSize() itself so
+   every path that recomputes the size (Screen 1's first paint, live typing, a
+   widget correction landing mid-form) keeps the field in lockstep with what
+   calculateSize() is about to do. */
+function refreshAgeFieldVisibility() {
+  const ageField = $("ageFieldGroup");
+  if (!ageField) return;
+  const show = resolvedGarmentAgeGroup() === "uncertain";
+  const currentlyShown = !ageField.hidden;
+  if (show === currentlyShown) return;   // no-op if already in the desired state
+  // Inline display too: .form-group has `display:grid` in CSS (style.css) which
+  // outranks the [hidden] attribute alone - the same fix #sizeForm itself needed
+  // (see showSizeForm's own comment on this exact CSS-specificity issue).
+  ageField.hidden = !show;
+  ageField.style.display = show ? "" : "none";
+  // Hiding it clears any stale value so a garment that resolves kids/adult AFTER
+  // the visitor already typed an age can't have that age silently reappear if a
+  // later correction somehow flips the field back to uncertain.
+  if (!show && $("age")) $("age").value = "";
+}
+
+/**
+ * Human-readable label for a size VALUE, for display/logging only - never for
+ * matching logic. currentUserSize/activeTryOnSize themselves stay raw chart
+ * codes everywhere else (SIZE_SCALE.indexOf, CHILD_SIZE_SCALE lookups, the
+ * override-selector buttons, getSizeDelta) - only the text shown or sent here
+ * goes through this.
+ * Adult sizes are returned UNCHANGED - "M" stays "M", byte-for-byte identical to
+ * every surface's pre-existing text. A bare child size ("12") is otherwise
+ * indistinguishable from a quantity, a shoe size, or an adult numeric system, so
+ * it gets an explicit "(Kids)" qualifier appended.
+ * @param {string|null} size
+ * @returns {string|null}
+ */
+function formatSizeLabel(size) {
+  if (!size) return size;
+  return currentSizeCategory === "child" ? `${size} ${t("sizeLabelKidsSuffix")}` : size;
+}
+
+/* Task 6 - conditional input flow: the optional fields stay hidden until ALL
+   mandatory fields (age + height + weight) hold sane, in-range values. */
 function setOptionalVisible(show) {
   const box = $("optionalFields");
   if (!box) return;
@@ -647,19 +780,37 @@ function setOptionalVisible(show) {
 }
 
 /**
- * Recompute the recommended size from the form inputs (Zara chart, penalty-scored).
- * Drives the result box, the "continue" button enabled-state, and - via
- * setOptionalVisible - the conditional reveal of the optional measurement fields.
- * Re-run on every input event. Pure UI/state; no network.
+ * Recompute the recommended size from the form inputs (Zara or child chart,
+ * penalty-scored). Drives the result box, the "continue" button enabled-state,
+ * and - via setOptionalVisible/refreshAgeFieldVisibility - the conditional reveal
+ * of the optional measurement fields and the age field itself.
+ * Re-run on every input event, and whenever the garment's own kids/adult verdict
+ * changes (see the PEAR_UPDATE_GARMENT listener). Pure UI/state; no network.
  * @returns {void}
  */
 function calculateSize() {
+  // The GARMENT may already say whether this is kids' or adult clothing
+  // (resolvedGarmentAgeGroup - activeItem.ageGroup / pendingAgeGroup, set from the
+  // widget's classify-images verdict). When it does, that verdict is authoritative
+  // and the visitor's age is never asked for at all - see refreshAgeFieldVisibility.
+  // Only when the garment signal is "uncertain" (unresolved, absent, or genuinely
+  // ambiguous) does the visitor's own age become the deciding signal, exactly as
+  // stage 3 implemented before this feature existed.
+  refreshAgeFieldVisibility();
+  const garmentAgeGroup = resolvedGarmentAgeGroup();   // "kids" | "adult" | "uncertain"
+  const ageRequired = garmentAgeGroup === "uncertain";
+
   const num = (id) => ($(id).value ? parseFloat($(id).value) : null);
   const height = num("height"), weight = num("weight");
+  const age = ageRequired ? num("age") : null;
 
-  // Reveal optional fields only once both mandatory values are present and sane.
-  const mandatoryReady = !!height && !!weight &&
-    height >= 130 && height <= 240 && weight >= 35 && weight <= 220;
+  // Reveal optional fields only once every MANDATORY value currently being asked
+  // for is present and sane - age only counts when it's actually on-screen.
+  // Height floor is 110cm/18kg to admit children's sizing (size 8 and below).
+  // Bounds mirrored in PROFILE_* below and in updateUserMeasurements() server-side.
+  const mandatoryReady = !!height && !!weight && (!ageRequired || !!age) &&
+    height >= 110 && height <= 240 && weight >= 18 && weight <= 220 &&
+    (!ageRequired || (age >= 1 && age <= 120));
   setOptionalVisible(mandatoryReady);
 
   const chest = num("chest"), waist = num("waist"), legs = num("legs");
@@ -673,11 +824,15 @@ function calculateSize() {
   resultLabel.innerText = t("resultLabelDefault");
   nextBtn.disabled = true;
   currentUserSize = null;
+  // Cleared alongside the size so the two never disagree; both early-return paths
+  // below (missing input / out of range) therefore leave the category null.
+  currentSizeCategory = null;
   updateProgress();
 
-  if (!height || !weight) return;
+  if (!height || !weight || (ageRequired && !age)) return;
 
-  if (height > 240 || height < 130 || weight > 220 || weight < 35) {
+  if (height > 240 || height < 110 || weight > 220 || weight < 18 ||
+      (ageRequired && (age > 120 || age < 1))) {
     resultLabel.innerText = t("resultLabelError");
     sizeResult.innerText = t("sizeResultInvalid");
     resultBox.classList.add("show", "error-result");
@@ -688,15 +843,24 @@ function calculateSize() {
   let bestSize = t("bestSizeOutOfRange"), minPenalty = Infinity;
   const MAX_ALLOWED_PENALTY = 35;
 
-  ZARA_SIZE_CHART.forEach((row) => {
-    let pen = 0;
-    if (height < row.minHeight) pen += (row.minHeight - height) * 2;
-    if (height > row.maxHeight) pen += (height - row.maxHeight) * 2;
-    if (weight < row.minWeight) pen += (row.minWeight - weight) * 2;
-    if (weight > row.maxWeight) pen += (weight - row.maxWeight) * 2;
-    if (chest) { if (chest < row.minChest) pen += (row.minChest - chest) * 0.5; if (chest > row.maxChest) pen += (chest - row.maxChest) * 0.5; }
-    if (waist) { if (waist < row.minWaist) pen += (row.minWaist - waist) * 0.5; if (waist > row.maxWaist) pen += (waist - row.maxWaist) * 0.5; }
-    if (legs)  { if (legs  < row.minLegs)  pen += (row.minLegs  - legs)  * 0.5; if (legs  > row.maxLegs)  pen += (legs  - row.maxLegs)  * 0.5; }
+  // The garment's own signal wins outright when confident; age (via
+  // pickSizeCategory) only ever breaks the tie when the garment itself is
+  // "uncertain". Either way height/weight then choose the row WITHIN that chart -
+  // rows from the two charts are never mixed into a single penalty pass. The
+  // child path ignores chest/waist/legs entirely (no such columns on child rows).
+  currentSizeCategory =
+    garmentAgeGroup === "kids"  ? "child" :
+    garmentAgeGroup === "adult" ? "adult" :
+    pickSizeCategory(age);
+  const chart = currentSizeCategory === "child" ? CHILD_SIZE_CHART : ZARA_SIZE_CHART;
+
+  chart.forEach((row) => {
+    let pen = coreHwPenalty(row, height, weight);
+    if (currentSizeCategory === "adult") {
+      if (chest) { if (chest < row.minChest) pen += (row.minChest - chest) * 0.5; if (chest > row.maxChest) pen += (chest - row.maxChest) * 0.5; }
+      if (waist) { if (waist < row.minWaist) pen += (row.minWaist - waist) * 0.5; if (waist > row.maxWaist) pen += (waist - row.maxWaist) * 0.5; }
+      if (legs)  { if (legs  < row.minLegs)  pen += (row.minLegs  - legs)  * 0.5; if (legs  > row.maxLegs)  pen += (legs  - row.maxLegs)  * 0.5; }
+    }
     if (pen < minPenalty) { minPenalty = pen; bestSize = row.size; }
   });
 
@@ -705,13 +869,13 @@ function calculateSize() {
     // proceed - the fitting room works without a size recommendation, it just
     // won't show a size badge. bestSize still holds the closest row found.
     resultLabel.innerText = t("resultLabelApprox");
-    sizeResult.innerText = bestSize;
+    sizeResult.innerText = formatSizeLabel(bestSize);
     resultBox.classList.add("show");
     if (resultActions) resultActions.classList.add("is-ready");
     currentUserSize = bestSize;   // use closest match rather than blocking
     nextBtn.disabled = false;
   } else {
-    sizeResult.innerText = bestSize;
+    sizeResult.innerText = formatSizeLabel(bestSize);
     resultBox.classList.add("show");
     if (resultActions) resultActions.classList.add("is-ready");
     currentUserSize = bestSize;
@@ -721,7 +885,12 @@ function calculateSize() {
 }
 
 function updateProgress() {
-  const fields = ["height", "weight", "chest", "waist", "legs"];
+  // "age" only counts toward the denominator while it's actually being asked for -
+  // otherwise a confident garment leaves the bar permanently short of 100% before
+  // currentUserSize forces it there (see calculateSize/resolvedGarmentAgeGroup).
+  const fields = resolvedGarmentAgeGroup() === "uncertain"
+    ? ["age", "height", "weight", "chest", "waist", "legs"]
+    : ["height", "weight", "chest", "waist", "legs"];
   const filled = fields.filter((f) => $(f) && $(f).value).length;
   let pct = Math.round((filled / fields.length) * 70);
   if (currentUserSize) pct = 100;
@@ -969,7 +1138,7 @@ function goToFitting(opts) {
     garmentName: _handoff?.name    ?? "",
     garmentType: _handoff?.type    ?? "",
     subType:     _handoff?.subType ?? "",
-    size:        currentUserSize   || "",
+    size:        formatSizeLabel(currentUserSize) || "",
   };
   fetch("/api/track-tryon", {
     method:    "POST",
@@ -985,6 +1154,12 @@ function goToFitting(opts) {
   // submit, BEFORE the camera ever starts. This records users who size up even if
   // they never go live. Garment comes from the store handoff; size is the
   // calculated recommendation.
+  // Deliberately RAW here, not formatSizeLabel() - unlike the Sheets-bound payload
+  // above, this lands in Supabase's sessions.size column, which server.js hard-
+  // truncates to 8 chars (str(b.size, 8)). "12 (Kids)"/Hebrew "12 (ילדים)" would
+  // get silently clipped to "12 (Kid"/similar garbage - corrupting exactly the
+  // child-size rows this feature exists to make clearer. The admin dashboard can
+  // derive "kids" from the raw numeric value itself if it ever needs to display it.
   logSessionMeasurements(
     { id: _handoff?.id ?? "", name: _handoff?.name ?? "" },
     currentUserSize
@@ -999,7 +1174,7 @@ function goToFitting(opts) {
   // transition so the change happens fully behind the opaque pear mask.
   const commitSwap = () => {
     try {
-      $("final-size-text").innerText = currentUserSize || "";
+      $("final-size-text").innerText = formatSizeLabel(currentUserSize) || "";
       $("screen-calculator").classList.remove("active");
       $("screen-fitting").classList.add("active");
       syncEditorialVideo();
@@ -1139,7 +1314,7 @@ function enterRoom() {
     console.log('[PEAR] activeItem.imgBack set to:', activeItem?.imgBack);
     $("focusBar").hidden = false;
     $("catalogPanel").hidden = true;
-    if (currentUserSize) $("focusSizeBadge").innerText = "מידה " + currentUserSize;
+    if (currentUserSize) $("focusSizeBadge").innerText = "מידה " + formatSizeLabel(currentUserSize);
   } else {
     focusMode = false;
     $("focusBar").hidden = true;
@@ -1378,6 +1553,32 @@ function hotSwapIfLive(toastMsg) {
 window.addEventListener("message", (e) => {
   if (e.source !== window.parent) return;
   if (!e.data || e.data.type !== "PEAR_UPDATE_GARMENT") return;
+
+  /* Kids/adult verdict, captured BEFORE the activeItem check below - Screen 1 (no
+     activeItem yet) needs this every bit as much as Screen 2 does, and the widget
+     sends it on the SAME message that would otherwise be dropped entirely by the
+     early return below while the visitor is still on the measurement form. Synced
+     onto activeItem too when it already exists, so nothing downstream needs to
+     know which of the two variables to read - resolvedGarmentAgeGroup() checks
+     activeItem first and falls back to this. "uncertain" is a real, meaningful
+     value here (the classifier ran and found no confident answer) - distinct from
+     undefined (no correction has arrived, or an older widget build never sent one). */
+  if (typeof e.data.garment_age_group === "string") {
+    pendingAgeGroup = e.data.garment_age_group;
+    pendingAgeGroupConfidence = Number.isFinite(e.data.garment_age_group_confidence)
+      ? e.data.garment_age_group_confidence : undefined;
+    if (activeItem) {
+      activeItem.ageGroup = pendingAgeGroup;
+      activeItem.ageGroupConfidence = pendingAgeGroupConfidence;
+    }
+    // Screen 1 may still be showing (the classify round trip can resolve WHILE the
+    // visitor is filling in height/weight) - if so, re-derive the age field's
+    // visibility and the recommendation immediately rather than waiting for the
+    // next keystroke, which may never come if the field just became hidden.
+    const sizeForm = $("sizeForm");
+    if (sizeForm && !sizeForm.hidden) { try { calculateSize(); } catch {} }
+  }
+
   const front = e.data.garment_url;
   const back = e.data.garment_back;
   if (!activeItem || !front) return;
@@ -4730,9 +4931,16 @@ function getAnatomicalAnchor() {
  * Return the signed delta between activeTryOnSize and currentUserSize in the
  * SIZE_SCALE ladder. Positive = user chose larger; negative = user chose smaller.
  * Returns 0 when either size is absent or not in the scale.
+ *
+ * Child sizes return 0 unconditionally: the numeric kids ladder (8-18) is not in
+ * SIZE_SCALE, and a step there spans a whole growth stage rather than the
+ * tight/oversized styling choice the adult delta encodes - so no fit modifier is
+ * applied to the VTON prompt for child sizes. This is the SINGLE definition of
+ * that rule; setSizeOverride() consumes it rather than re-deriving indices.
  * @returns {number}
  */
 function getSizeDelta() {
+  if (currentSizeCategory === "child") return 0;
   if (!currentUserSize || !activeTryOnSize) return 0;
   const baseIdx = SIZE_SCALE.indexOf(currentUserSize);
   const pickIdx = SIZE_SCALE.indexOf(activeTryOnSize);
@@ -5131,8 +5339,11 @@ function buildLookPrompt(top, bottom) {
 /* =============================================================================
    Size Override Selector - Screen 2 (Try-On room)
    ─────────────────────────────────────────────────────────────────────────
-   A glassmorphism button row (XS / S / M / L / XL / XXL / 3XL) injected below
-   the active-garment chip. The button matching currentUserSize is highlighted by default.
+   A glassmorphism button row injected below the active-garment chip. The scale
+   depends on currentSizeCategory: adults get SIZE_SCALE (XS / S / M / L / XL /
+   XXL / 3XL), children get CHILD_SIZE_SCALE (8 / 10 / 12 / 14 / 16 / 18) and no
+   adult option is rendered at all.
+   The button matching currentUserSize is highlighted by default.
    Selecting a different size sets activeTryOnSize, which buildFitModifier() then
    uses to append tight-fit or oversized descriptors to the VTON prompt. If a
    WebRTC session is already live, applyActive() is called immediately so the
@@ -5275,8 +5486,12 @@ function injectSizeSelector() {
   row.id = "pearSizeSelector";
   row.setAttribute("aria-label", "Size override selector");
 
+  // Child results get the numeric kids ladder ONLY - no adult S/M/L/XL button is
+  // rendered at all, so there is nothing for a child profile to cross over into.
+  const scale = currentSizeCategory === "child" ? CHILD_SIZE_SCALE : SIZE_SCALE;
+
   const current = activeTryOnSize || currentUserSize;
-  const btnHtml = SIZE_SCALE.map((sz) => {
+  const btnHtml = scale.map((sz) => {
     const isActive = sz === current;
     const isRec    = sz === currentUserSize;
     return `<button class="pear-sz-btn${isActive ? " is-active" : ""}" data-sz="${sz}" type="button" aria-pressed="${isActive}">${sz}${isRec ? " ★" : ""}</button>`;
@@ -5308,7 +5523,8 @@ function injectSizeSelector() {
  * Switch the active try-on size, refresh button highlight states, and - if a
  * WebRTC session is currently live - push a new prompt payload immediately so
  * the garment resizes in real-time without restarting the connection.
- * @param {string} size - one of SIZE_SCALE ('S'|'M'|'L'|'XL'|'XXL')
+ * @param {string} size - an entry from whichever scale the selector was built with:
+ *                        SIZE_SCALE for adults, CHILD_SIZE_SCALE ('8'-'18') for children
  */
 function setSizeOverride(size) {
   activeTryOnSize = size;
@@ -5323,13 +5539,18 @@ function setSizeOverride(size) {
     applyActive().catch((e) => console.warn("size override apply:", e?.message || e));
   }
 
-  const baseIdx = SIZE_SCALE.indexOf(currentUserSize);
-  const pickIdx = SIZE_SCALE.indexOf(size);
-  if (!currentUserSize || baseIdx === -1) {
+  // Toast wording derives from the ONE delta definition in getSizeDelta() rather
+  // than re-deriving ladder indices here. `onLadder` mirrors exactly the conditions
+  // under which that delta is meaningful, so a 0 from a child size takes the
+  // neutral branch instead of falsely reading as "perfect fit".
+  const onLadder = currentSizeCategory === "adult" &&
+    SIZE_SCALE.includes(currentUserSize) && SIZE_SCALE.includes(size);
+  const delta = getSizeDelta();
+  if (!onLadder) {
     toast(`מידה שנבחרה: <b>${size}</b>`);
-  } else if (pickIdx < baseIdx) {
+  } else if (delta < 0) {
     toast(`מידה <b>${size}</b> - הלבוש יראה הדוק יותר`);
-  } else if (pickIdx > baseIdx) {
+  } else if (delta > 0) {
     toast(`מידה <b>${size}</b> - הלבוש יראה גדול יותר`);
   } else {
     toast(`מידה <b>${size}</b> - התאמה מדויקת`);
@@ -5347,7 +5568,10 @@ function logTryOnAnalytics(item, size) {
     garmentName: item.name        ?? "",
     garmentType: item.garmentType ?? "",
     subType:     item.subType     ?? "",
-    size:        size             ?? "",
+    // Lands in Sheets (/api/track-tryon → lib/sheets.js), a free-text cell with no
+    // length cap - unlike logSessionMeasurements()'s Supabase-bound payload below,
+    // formatting here is safe.
+    size:        formatSizeLabel(size) ?? "",
   };
   console.log("[analytics] firing /api/track-tryon →", payload);
   fetch("/api/track-tryon", {
@@ -5488,18 +5712,28 @@ function lockDemoAfterFirstMeasurement() {
    that question once before skipping Screen 1 on every later visit.
 
    Bounds mirror calculateSize()'s "mandatoryReady" gate exactly (height
-   130–240 cm, weight 35–220 kg) - also enforced server-side in
+   110–240 cm, weight 18–220 kg, age 1–120) - also enforced server-side in
    updateUserMeasurements() - so no out-of-range value survives the round-trip.
    ============================================================================= */
 const PEAR_LAST_MEASUREMENTS_KEY = "pear_last_measurements_date";
 const MEASUREMENTS_REFRESH_MS    = 30 * 24 * 60 * 60 * 1000;   // 30 days
-const PROFILE_HEIGHT_MIN = 130, PROFILE_HEIGHT_MAX = 240;
-const PROFILE_WEIGHT_MIN = 35,  PROFILE_WEIGHT_MAX = 220;
+const PROFILE_HEIGHT_MIN = 110, PROFILE_HEIGHT_MAX = 240;
+const PROFILE_WEIGHT_MIN = 18,  PROFILE_WEIGHT_MAX = 220;
+const PROFILE_AGE_MIN    = 1,   PROFILE_AGE_MAX    = 120;
 
-function isSaneProfile(height, weight) {
+/* age is required for a profile to count as complete ONLY when it's actually being
+   asked for - i.e. the current garment's own kids/adult verdict is "uncertain"
+   (see resolvedGarmentAgeGroup). A confident garment never needs the visitor's
+   age at all, so a stored profile that predates the age field (or simply never
+   supplied one) is still complete for that garment. When age IS required and
+   missing, the profile is incomplete and Screen 1 must ask for it.
+ * @param {boolean} ageRequired - resolvedGarmentAgeGroup() === "uncertain" at call time
+ */
+function isSaneProfile(height, weight, age, ageRequired) {
   return Number.isFinite(height) && Number.isFinite(weight) &&
     height >= PROFILE_HEIGHT_MIN && height <= PROFILE_HEIGHT_MAX &&
-    weight >= PROFILE_WEIGHT_MIN && weight <= PROFILE_WEIGHT_MAX;
+    weight >= PROFILE_WEIGHT_MIN && weight <= PROFILE_WEIGHT_MAX &&
+    (!ageRequired || (Number.isFinite(age) && age >= PROFILE_AGE_MIN && age <= PROFILE_AGE_MAX));
 }
 
 function isMeasurementsRefreshDue() {
@@ -5593,6 +5827,7 @@ function showSizeForm(opts) {
   if (notice) notice.hidden = !(opts && opts.refreshNotice);
   if (PEAR_USER) {
     const setIf = (id, v) => { const el = $(id); if (el && v != null && v !== "" && !el.value) el.value = String(v); };
+    setIf("age", PEAR_USER.age);
     setIf("height", PEAR_USER.height); setIf("weight", PEAR_USER.weight);
   }
   try { calculateSize(); } catch {}
@@ -5612,15 +5847,24 @@ function showSizeForm(opts) {
      Profile, refresh NOT due → Screen 1 is never shown; prefill straight into
                                 calculateSize() and transition into the camera. */
 function routeUser(user) {
-  PEAR_USER    = user ? { id: user.id, name: user.name, email: user.email, height: user.height, weight: user.weight } : null;
+  PEAR_USER    = user ? { id: user.id, name: user.name, email: user.email, height: user.height, weight: user.weight, age: user.age } : null;
   PEAR_USER_ID = (user && user.id) || null;
   updateProfileButton();
 
-  const hasProfile = user && isSaneProfile(Number(user.height), Number(user.weight));
+  // NOTE: at this point in the flow the widget's classify-images correction has
+  // usually NOT arrived yet (it can take 1-27s; this runs at page load), so
+  // resolvedGarmentAgeGroup() will almost always still read "uncertain" here even
+  // for a garment that will shortly resolve to a confident kids/adult verdict.
+  // A returning user's stored age therefore keeps mattering for THIS instant-skip
+  // decision in practice, even though it may stop mattering moments later once
+  // Screen 1 (if shown) picks up the correction live via calculateSize().
+  const ageRequired = resolvedGarmentAgeGroup() === "uncertain";
+  const hasProfile = user && isSaneProfile(Number(user.height), Number(user.weight), Number(user.age), ageRequired);
 
   if (hasProfile && !isMeasurementsRefreshDue()) {
     hideAllScreen1Forms();
     const setIf = (id, v) => { const el = $(id); if (el && v != null && v !== "") el.value = String(v); };
+    setIf("age", user.age);
     setIf("height", user.height); setIf("weight", user.weight);
     try { calculateSize(); } catch {}
     // instant:true - this visitor never saw Screen 1 (pre-paint gate kept
@@ -5633,20 +5877,27 @@ function routeUser(user) {
   showSizeForm({ refreshNotice: !!hasProfile });
 }
 
-/* Send the current form's height/weight to the server (PATCH) and stamp today
+/* Send the current form's age/height/weight to the server (PATCH) and stamp today
  * as the last-measurements date. No-op (resolves immediately) when there's no
  * logged-in device profile to attach it to (e.g. demo mode, or infra-failure
  * fallback where the session was never linked to a server profile). */
-async function persistMeasurementsIfLoggedIn(height, weight) {
+async function persistMeasurementsIfLoggedIn(height, weight, age) {
   if (!PEAR_USER_ID) return;
   try {
     await fetch(`/api/users/${encodeURIComponent(getDeviceId())}`, {
       method:  "PATCH",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ height, weight }),
+      body:    JSON.stringify({ height, weight, age }),
     });
     stampMeasurementsDate();
-    if (PEAR_USER) { PEAR_USER.height = Number(height); PEAR_USER.weight = Number(weight); }
+    if (PEAR_USER) {
+      PEAR_USER.height = Number(height);
+      PEAR_USER.weight = Number(weight);
+      // age arrives as "" when the field was hidden (confident garment - see
+      // refreshAgeFieldVisibility). Number("") is 0, not NaN - leave the cached
+      // profile's age untouched rather than corrupting it to a false 0.
+      if (age !== "" && age != null) PEAR_USER.age = Number(age);
+    }
     updateProfileButton();
   } catch (err) {
     console.error("[PEAR] measurements PATCH failed:", err?.message);
@@ -5657,7 +5908,7 @@ async function persistMeasurementsIfLoggedIn(height, weight) {
    onMeasurementKeydown). Persists the just-entered measurements server-side
    for a logged-in returning/new user before transitioning into the room. */
 async function onSizeFormContinue() {
-  await persistMeasurementsIfLoggedIn($("height")?.value, $("weight")?.value);
+  await persistMeasurementsIfLoggedIn($("height")?.value, $("weight")?.value, $("age")?.value);
   goToFitting();
 }
 
@@ -5691,6 +5942,9 @@ function updateProfileButton() {
   if (nameEl) nameEl.textContent = PEAR_USER.name || "-";
   if (emailEl) emailEl.textContent = PEAR_USER.email || "-";
 
+  const ageEl = $("profileAge");
+  if (ageEl) ageEl.textContent = PEAR_USER.age != null ? String(PEAR_USER.age) : "-";
+
   const heightEl = $("profileHeight"), weightEl = $("profileWeight");
   if (heightEl) heightEl.textContent = PEAR_USER.height != null ? `${PEAR_USER.height} ס"מ` : "-";
   if (weightEl) weightEl.textContent = PEAR_USER.weight != null ? `${PEAR_USER.weight} ק"ג` : "-";
@@ -5698,7 +5952,10 @@ function updateProfileButton() {
   const sizeEl = $("profileSize");
   if (sizeEl) {
     const sizeText = $("final-size-text");
-    sizeEl.textContent = (sizeText && sizeText.innerText.trim()) || currentUserSize || "-";
+    // sizeText already carries the "(Kids)" suffix when applicable - #final-size-text
+    // is set via formatSizeLabel() in goToFitting(). The fallback needs its own call
+    // since currentUserSize itself is always the raw, unformatted chart code.
+    sizeEl.textContent = (sizeText && sizeText.innerText.trim()) || formatSizeLabel(currentUserSize) || "-";
   }
 }
 
@@ -6453,6 +6710,7 @@ function logSessionMeasurements(item, size) {
   const num = (id) => { const el = $(id); return el && el.value ? parseFloat(el.value) : null; };
   // All entered measurements, grouped into one object per the payload spec.
   const measurements = {
+    age:    num("age"),
     height: num("height"),
     weight: num("weight"),
     chest:  num("chest"),
@@ -8593,7 +8851,10 @@ function saveFitToGallery(imageSrc, garmentName, size, itemId) {
   const arr = readGallery();
   // itemId lets the gallery modal's "Try again live" restore the exact garment
   // and open a fresh 5s session. null when the look isn't a single catalog item.
-  arr.push({ img: imageSrc, name: garmentName || "Look", size: size || "-", ts,
+  // Formatted once here, at the single write point - every reader (the gallery
+  // tile badge, the compare panel, the lightbox) pulls it.size straight off the
+  // stored record, same as #final-size-text already does for the profile panel.
+  arr.push({ img: imageSrc, name: garmentName || "Look", size: formatSizeLabel(size) || "-", ts,
              itemId: (itemId == null ? null : itemId) });
   while (arr.length > GALLERY_MAX) { const old = arr.shift(); dropClip(old.ts); }
   writeGallery(arr);

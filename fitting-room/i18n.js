@@ -95,6 +95,8 @@ const I18N = {
   btnResendOtp:              { he: "שלח קוד חדש", en: "Send new code" },
 
   measurementsRefreshNotice: { he: "עדכן את המידות שלך - עבר חודש מהפעם האחרונה", en: "Update your measurements - it's been a month since last time" },
+  labelAge:                  { he: "גיל:", en: "Age:" },
+  placeholderAge:            { he: "לדוגמה: 32", en: "e.g. 32" },
   labelHeight:               { he: 'גובה (בס"מ):', en: "Height (cm):" },
   placeholderHeight:         { he: "לדוגמה: 175", en: "e.g. 175" },
   labelWeight:               { he: 'משקל (בק"ג):', en: "Weight (kg):" },
@@ -110,6 +112,7 @@ const I18N = {
   placeholderLegs:           { he: "לדוגמה: 102", en: "e.g. 102" },
 
   profileAria:               { he: "פרופיל משתמש · User profile", en: "User profile" },
+  profileLabelAge:           { he: "גיל:", en: "Age:" },
   profileLabelHeight:        { he: "גובה:", en: "Height:" },
   profileLabelWeight:        { he: "משקל:", en: "Weight:" },
   profileLabelSize:          { he: "מידה:", en: "Size:" },
@@ -188,6 +191,10 @@ const I18N = {
   sizeResultInvalid:        { he: "נתונים לא הגיוניים", en: "Values out of range" },
   bestSizeOutOfRange:       { he: "מידה מחוץ לטווח", en: "Size out of range" },
   resultLabelApprox:        { he: "קירוב מידה מומלץ:", en: "Closest size match:" },
+  // Appended to a bare child-chart size ("12" -> "12 (ילדים)") everywhere a size
+  // value is displayed or logged - see formatSizeLabel(). Adult sizes are never
+  // touched by this key; the number alone ("M"/"L") is unambiguous on its own.
+  sizeLabelKidsSuffix:      { he: "(ילדים)", en: "(Kids)" },
   errNameRequired:          { he: "נא להזין שם מלא.", en: "Please enter your full name." },
   errEmailInvalid:          { he: "נא להזין כתובת אימייל תקינה.", en: "Please enter a valid email address." },
   errGenericRetry:          { he: "נא לבדוק את הפרטים ולנסות שוב.", en: "Please check your details and try again." },

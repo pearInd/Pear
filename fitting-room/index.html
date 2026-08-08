@@ -164,13 +164,23 @@
                  showSizeForm in app.js). Hidden the rest of the time. -->
             <p id="measurementsRefreshNotice" class="measurements-refresh-notice" hidden data-i18n="measurementsRefreshNotice">עדכן את המידות שלך - עבר חודש מהפעם האחרונה</p>
             <!-- ░░ Mandatory inputs - always visible (idle state) ░░ -->
+            <!-- Age is a FALLBACK child-vs-adult signal, asked only when the garment
+                 itself doesn't already say (resolvedGarmentAgeGroup() === "uncertain" -
+                 see calculateSize/refreshAgeFieldVisibility in app.js). Ships hidden by
+                 default in markup for the same pre-paint reason #sizeForm itself does
+                 (see the comment above this form) - JS decides the real state, in the
+                 same synchronous pass, before the visitor ever sees this screen. -->
+            <div class="form-group" id="ageFieldGroup" hidden style="display:none">
+                <label for="age"><span class="required">*</span><span data-i18n="labelAge">גיל:</span></label>
+                <input type="number" id="age" min="1" max="120" placeholder="לדוגמה: 32" data-i18n-placeholder="placeholderAge">
+            </div>
             <div class="form-group">
                 <label for="height"><span class="required">*</span><span data-i18n="labelHeight">גובה (בס"מ):</span></label>
                 <input type="number" id="height" min="100" max="300" placeholder="לדוגמה: 175" data-i18n-placeholder="placeholderHeight">
             </div>
             <div class="form-group">
                 <label for="weight"><span class="required">*</span><span data-i18n="labelWeight">משקל (בק"ג):</span></label>
-                <input type="number" id="weight" min="30" max="250" placeholder="לדוגמה: 68" data-i18n-placeholder="placeholderWeight">
+                <input type="number" id="weight" min="18" max="250" placeholder="לדוגמה: 68" data-i18n-placeholder="placeholderWeight">
             </div>
 
             <!-- ░░ Result + Continue - appear directly below Weight once both
@@ -238,6 +248,10 @@
         </div>
         <div class="profile-dropdown__divider"></div>
         <div class="profile-dropdown__measurements">
+            <div class="profile-dropdown__row">
+                <span class="profile-dropdown__label" data-i18n="profileLabelAge">גיל:</span>
+                <span class="profile-dropdown__value" id="profileAge"></span>
+            </div>
             <div class="profile-dropdown__row">
                 <span class="profile-dropdown__label" data-i18n="profileLabelHeight">גובה:</span>
                 <span class="profile-dropdown__value" id="profileHeight"></span>
