@@ -4855,15 +4855,16 @@ const STRICT_INPAINT =
   " the live video frame - the person's face, hair, head, neck, hands, arms and skin, and" +
   " the entire background, room and lighting. Do NOT generate, replace, restyle, recolor" +
   " or re-render the background, or any part of the person outside the target garment(s)." +
-  " ABSOLUTE BODY FIDELITY: preserve the person's exact body shape, weight, volume and" +
-  " silhouette exactly as captured in the live frame, including their stomach/belly shape," +
-  " waist circumference and torso width. Do NOT flatten, slim, smooth, thin, reshape or" +
-  " idealize their physique in any way, and do NOT shrink the torso, waist or belly" +
-  " boundary inward toward a thinner baseline. If the person has a fuller figure, belly or" +
-  " wider torso, drape and stretch the garment realistically OVER their actual stomach and" +
-  " body volume - with natural fabric tension, creases and shadow folds where it meets" +
-  " their real contours, not a flat model-cut fit. Fit the garment to the body; never the" +
-  " body to the garment." +
+  " ABSOLUTE BODY FIDELITY: 1:1 adherence to the person's exact detected body shape," +
+  " weight, volume and silhouette exactly as captured in the live frame, including their" +
+  " chest, stomach/belly shape, hips, waist circumference and torso width. Do NOT flatten," +
+  " slim, smooth, thin, reshape or idealize their physique in any way, and do NOT shrink" +
+  " the chest, torso, waist, hips or belly boundary inward toward a thinner baseline. If" +
+  " the person has a fuller figure, belly, wider hips or wider torso, drape and stretch the" +
+  " garment realistically OVER their actual chest, stomach, hips and body volume - with" +
+  " natural fabric tension, creases and shadow folds where it meets their real contours," +
+  " not a flat model-cut fit. Map the garment onto that exact physical volume: fit the" +
+  " garment to the body; never the body to the garment." +
   " STRICT GARMENT ISOLATION: replace and fit only the target garment named above - this is" +
   " a single-item substitution, not a full-outfit restyling. Preserve the shopper's" +
   " existing pants, shorts, skirt, belt and every other accessory exactly as seen in the" +
@@ -5118,8 +5119,12 @@ function buildLookPrompt(top, bottom) {
     `${topFabric}${botFabric}` +
     /* A full look replaces BOTH layers, so there is no KEEP_TOP/KEEP_BOTTOMS to pin here -
        which makes the face/hair/skin/background lock the ONLY thing standing between this
-       prompt and a regenerated room. It matters more here, not less. */
-    `${STRICT_INPAINT}${ROTATION_CONTINUITY}${suffix}`
+       prompt and a regenerated room. It matters more here, not less.
+       IGNORE_SOURCE_ARTIFACTS / PROFILE_ANOMALY_GUARD were missed here in the pass that
+       added them to the other five prompt-assembly sites - this is the sixth (the
+       both-slots-filled "complete look" flow), sharing the same STRICT_INPAINT/
+       ROTATION_CONTINUITY pair, so it needs the same two companions for the same reasons. */
+    `${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
   ).replace(/\s+/g, " ").trim();
 }
 
