@@ -945,7 +945,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    body.corners-cleared is set by mobile-ux.js only once BOTH controls are
    ENTIRELY past the top edge - deliberately NOT the shared .is-scrolled flag,
    which fires at 12px while they are still half on screen and would slide the
-   header's contents underneath them. */
+   header's contents underneath them.
    Scoped to ≤768px because that is exactly where .app-header is sticky. Above
    it the header is an ordinary block that scrolls away WITH the corner
    controls, so there is no surviving gutter to reclaim - and collapsing it
