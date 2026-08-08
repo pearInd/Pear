@@ -1332,6 +1332,7 @@ function setAngle(angle) {
   currentAngle = next;
   if (next === AUTO_ANGLE) {
     autoOrientation = null;                  // PENDING - acquired from the camera, not assumed
+    autoProfile = false;                     // ...and no stale edge-on reading from a previous session
     prewarmOrientationAssets();              // fire-and-forget: both Blobs cached before the first turn
   }
   syncOrientationWatcher();                  // start/stop the webcam orientation monitor
@@ -1523,6 +1524,7 @@ function renderPerspectiveSelector() {
     currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
     if (currentAngle === AUTO_ANGLE && !wasAuto) {
       autoOrientation = null;                  // PENDING - no startup FRONT lock; the camera decides
+      autoProfile = false;                     // ...and no stale edge-on reading carried in
       prewarmOrientationAssets();              // fire-and-forget: both Blobs cached before the first turn
     }
   }
@@ -2972,6 +2974,60 @@ const ORIENT_LOCK_MS        = 2500;  // OR this much sustained agreement - which
 const ORIENT_ACQUIRE_FRAMES = 2;
 const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
 const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
+/* Edge-on detection thresholds. Deliberately FAR looser than the orientation lock's,
+   because the two protect different things and carry different costs when wrong. A wrong
+   orientation flip swaps the garment reference and shows the wrong side of the shirt on a
+   shopper's body - expensive, hence ORIENT_LOCK_FRAMES/ORIENT_LOCK_MS at ~2.5s. A wrong
+   profile reading only softens a pose sentence and adds a "preserve their real body
+   volume" instruction, which is a true statement at every angle; the worst case is a few
+   hundred wasted prompt characters. The asymmetry is the whole reason this can react in
+   ~500ms while the lock still takes seconds - and it matters, because a 90-degree turn
+   passes through the window this is trying to catch. */
+const ORIENT_PROFILE_ENTER  = 2;     // min samples in the buffer before it may assert anything (~500ms)
+/* ROLLING WINDOW. The per-frame edge-on score is noisy by nature - it is read off a 96px
+   canvas with no model behind it - so the decision is made on the MEAN of the last N
+   scores rather than on any single frame. This is the anti-jitter mechanism: a shopper
+   parked near the threshold angle produces scores that straddle it, and averaging turns
+   that into one stable answer instead of a toggle every 250ms. Five samples is ~1.25s of
+   evidence, short enough to still catch a turn in progress. */
+const ORIENT_PROFILE_WINDOW = 5;
+/* Mean score over that window required to ASSERT edge-on. Calibrated against the weights
+   in profileScore() so that no single weak signal can reach it alone - see that
+   function's table. */
+const ORIENT_PROFILE_ENTER_SCORE = 0.55;
+/* FAST PATH, and it is not redundant with the mean above. Averaging over five samples is
+   the right answer for a shopper hovering near the threshold angle, but it is the wrong
+   one for a decisive turn: the window still holds the square-on scores from before the
+   rotation started, so a shopper who is unambiguously side-on has to wait for those to
+   age out. Measured on the modelled spin in side-profile.test.mjs §5d, that cost a full
+   sample - EDGE-ON landed at ~110° instead of at 90°.
+   Two consecutive samples this high mean several independent signals agree at once
+   (ambiguous skin AND a foreshortened silhouette - see profileScore's table), which is a
+   turn, not noise. Borderline oscillation cannot reach it, so the jitter protection the
+   mean provides is untouched: the two paths cover disjoint cases. */
+const ORIENT_PROFILE_FAST_SCORE  = 0.85;
+const ORIENT_PROFILE_FAST_FRAMES = 2;
+/* Consecutive square-on samples required to LEAVE edge-on. The previous build exited on
+   the first one; two sustained windows (~500ms) is the anti-jitter half of the same
+   asymmetry, and stops a single well-lit frame mid-turn from dropping the depth clause
+   and snapping the pose back for one message. Still deliberately short - a stale
+   "they are side-on" claim is the same class of false pose assertion this feature exists
+   to remove, so it must not outlive the evidence by much. */
+const ORIENT_PROFILE_EXIT   = 2;
+/* Min gap between profile-driven prompt re-issues. These ride setPrompt() - a small
+   control message, no image bytes (see applyGarment()'s flicker-fix comment) - so this
+   guards against pointless chatter on a shopper who is oscillating around the threshold,
+   not against bandwidth. Shorter than ORIENT_COOLDOWN_MS for the same asymmetry above. */
+const ORIENT_PROFILE_COOLDOWN_MS = 1200;
+/* ── Foreshortening (silhouette width) thresholds ─────────────────────────────
+   Measured RELATIVE to the shopper's own square-on width, never as an absolute pixel
+   count: absolute width depends on how far they stand from the lens, their build, and the
+   camera's field of view, none of which are known. torsoWidth() learns the baseline from
+   frames the lock has already confidently called front or back, so the comparison is
+   always "narrower than THIS person was a moment ago". */
+const ORIENT_NARROW_RATIO   = 0.78;  // width/baseline at or below this reads as foreshortened
+const ORIENT_NARROW_FLOOR   = 0.55;  // ...and the evidence saturates here (a full 90° turn)
+const ORIENT_BASELINE_MIN   = 3;     // confident square-on samples before the baseline is trusted
 const ORIENT_SIZE           = 96;    // skin-histogram canvas edge - tiny on purpose (per-pixel loop)
 const ORIENT_FACE_SIZE      = 256;   // face-detection canvas edge - 96px is too small to detect a face reliably
 // Explicit enum for the per-orientation lock (a DIFFERENT axis from AUTO_ANGLE/"front"
@@ -2992,9 +3048,19 @@ const BACK_MODE  = "BACK_MODE";
    within ~500ms, instead of a locked state that needed 2.5s+ of sustained
    disagreement to leave. */
 const PENDING_MODE = "PENDING_MODE";
-// TEMPORARY - single compact per-tick log line for tuning the thresholds above; flip
-// off (or delete the ORIENT_DEBUG block below) once the values are settled.
-const ORIENT_DEBUG          = true;
+/* Single compact per-tick line for tuning the thresholds above. OPT-IN rather than always
+   on: it fires ~4x/second for the entire life of a session, which is genuinely useful when
+   diagnosing a live orientation problem and pure noise in every other console. Enabled per
+   session with ?orient_debug=1, or stickily with localStorage pear_orient_debug=1 - the
+   same pair of conventions the stats overlay already uses, so there is one way to do this
+   in this file rather than two. Reads once at load; failures are swallowed because
+   localStorage throws outright in some privacy modes. */
+const ORIENT_DEBUG = (() => {
+  try {
+    if (new URLSearchParams(location.search).get("orient_debug") === "1") return true;
+    return localStorage.getItem("pear_orient_debug") === "1";
+  } catch (_) { return false; }
+})();
 
 let orientWatcher = null;         // { stop } while running, else null
 
@@ -3164,6 +3230,17 @@ function createOrientationWatcher() {
   let fdBroken = false;
   let lastSkinRatio = null;        // surfaced in the ORIENT_DEBUG log line only
   let lastConfidence = 0;          // 0..1, surfaced in the ORIENT_DEBUG log line only
+  /* Per-tick edge-on SCORE (0..1), set by classify(). NOT a third vote value: it is
+     reported alongside the front/back vote on a separate channel, so it can never enter
+     the streak/lock arithmetic that decides which garment asset is on the wire. */
+  let lastProfileScore = 0;
+  let lastNarrow = null;           // signed foreshortening evidence, surfaced in the debug line
+  /* The shopper's own square-on silhouette width, learned from frames the LOCK has already
+     confidently called front or back. Everything the width channel says is relative to
+     this, because an absolute width conflates pose with distance from the lens, build and
+     field of view. An EMA rather than a max: a max would ratchet up on one noisy frame and
+     never come back down, permanently biasing every later comparison toward "narrow". */
+  let baselineWidth = 0, baselineSamples = 0;
   console.log("[PEAR] AI Auto - orientation watcher armed (engine:",
     faceDetector ? "FaceDetector)" : "skin-ratio heuristic)",
     "| GARMENT_FRONT:", abbrevImg(GARMENT_FRONT), "| GARMENT_BACK:", GARMENT_BACK ? abbrevImg(GARMENT_BACK) : "(none)");
@@ -3185,6 +3262,11 @@ function createOrientationWatcher() {
   logVtonState();
 
   let lastVote = null, streak = 0, streakSince = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
+  /* Edge-on axis - its own rolling buffer, exit streak and cooldown, sharing only the
+     `applying` mutex so a pose update and an asset swap can never be in flight at once.
+     profileBuf holds the last ORIENT_PROFILE_WINDOW per-frame scores; squareStreak counts
+     consecutive samples that look square-on, and is what the exit threshold reads. */
+  let profileBuf = [], squareStreak = 0, strongStreak = 0, lastProfileAt = 0;
 
   /* Numeric confidence (0..1) for a skin-ratio vote: 0 right AT the classification
      threshold, saturating to 1 by double the threshold's margin into "obviously this
@@ -3198,6 +3280,157 @@ function createOrientationWatcher() {
     if (vote === "front") return Math.min(1, (ratio - 0.10) / 0.10);   // saturates by ratio=0.20
     if (vote === "back")  return Math.min(1, (0.04 - ratio) / 0.04);   // saturates by ratio=0
     return 0;
+  }
+
+  /* ── Lighting-invariant skin corroboration (YCbCr chroma) ────────────────────
+     The RGB rule in skinRatioVote() is the classic Kovac test, and it is kept EXACTLY as
+     it is: the 0.10/0.04 vote thresholds and the confidence ramp above are tuned against
+     its output, and re-basing them on a different metric would re-open the front/back
+     misdetection this watcher has already been through once. What it is not, though, is
+     illumination-invariant - `r > 95 && g > 40 && b > 20` fails outright in a dim or
+     strongly warm-lit room, and `max-min > 15` fails on a low-contrast one, both of which
+     make real skin read as zero.
+
+     Chroma tells a different story. Converting to YCbCr and testing Cb/Cr alone discards
+     luminance entirely, so it holds up across exposure, and the skin locus in Cb/Cr is
+     famously narrow and stable ACROSS skin tones - melanin moves Y far more than it moves
+     chroma. Used here for two things only, never to override the vote:
+       · the profile channel, where it is the lighting-robust half of "is the skin read
+         ambiguous?";
+       · a disagreement guard, where RGB reporting near-zero skin while chroma reports
+         plenty means the lighting broke the RGB rule - which would otherwise have been
+         cast as a confident BACK vote. */
+  function chromaSkinRatio(px, x0, y0, w, h) {
+    let skin = 0, n = 0;
+    for (let y = y0; y < y0 + h; y++) {
+      for (let x = x0; x < x0 + w; x++) {
+        const i = (y * ORIENT_SIZE + x) * 4;
+        const r = px[i], g = px[i + 1], b = px[i + 2];
+        const cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+        const cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+        if (cb >= 77 && cb <= 127 && cr >= 133 && cr <= 173) skin++;
+        n++;
+      }
+    }
+    return n ? skin / n : 0;
+  }
+
+  /* ── Silhouette width - the foreshortening signal ────────────────────────────
+     WHY THIS EXISTS. Skin ratio answers "can I see a face?", which is a proxy for
+     orientation and a weak one: it says nothing at all about the body, and it is exactly
+     the measurement that harsh lighting ruins. Turning 90 degrees does something to the
+     shopper that no lighting condition imitates - their silhouette NARROWS, because
+     shoulder breadth (~40cm) is replaced by torso depth (~25cm) as the horizontal extent.
+     That is a geometric fact about the pose, independent of colour, exposure and skin
+     tone, which is precisely the axis the skin metric is blind to.
+
+     HOW, with no segmentation model available. Sample the background from the outer
+     columns of the torso band, then count per column how many rows differ from it. A
+     column with enough differing rows is subject; the span between the first and last
+     such column is the silhouette width.
+
+     WHAT IT REFUSES TO ANSWER, which matters as much as what it measures. The method
+     assumes a reasonably uniform backdrop, so it abstains (null) rather than guessing
+     when: the background sample is itself high-variance (a cluttered room - everything
+     "differs", so the span would be meaningless), the span fills nearly the whole frame
+     (subject too close, or the abstain case above leaking through), or the span is
+     vanishingly small (nobody in frame). Abstaining costs only the extra evidence; the
+     skin channel still works on its own, exactly as it did before this existed. */
+  function torsoWidth(px) {
+    const y0 = Math.round(ORIENT_SIZE * 0.45), y1 = Math.round(ORIENT_SIZE * 0.85);
+    const bandH = y1 - y0;
+    const edge = 4;                                   // outer columns taken as background
+
+    // Background reference + its variance, from the left and right margins of the band.
+    let br = 0, bg = 0, bb = 0, bn = 0;
+    for (let y = y0; y < y1; y++) {
+      for (let k = 0; k < edge; k++) {
+        for (const x of [k, ORIENT_SIZE - 1 - k]) {
+          const i = (y * ORIENT_SIZE + x) * 4;
+          br += px[i]; bg += px[i + 1]; bb += px[i + 2]; bn++;
+        }
+      }
+    }
+    if (!bn) return null;
+    br /= bn; bg /= bn; bb /= bn;
+    let variance = 0;
+    for (let y = y0; y < y1; y++) {
+      for (let k = 0; k < edge; k++) {
+        for (const x of [k, ORIENT_SIZE - 1 - k]) {
+          const i = (y * ORIENT_SIZE + x) * 4;
+          variance += Math.abs(px[i] - br) + Math.abs(px[i + 1] - bg) + Math.abs(px[i + 2] - bb);
+        }
+      }
+    }
+    variance /= bn;
+    // A busy backdrop makes "differs from background" meaningless - say so instead of
+    // returning a number that would read as a full-width subject.
+    if (variance > 60) return null;
+
+    // Threshold scales with the backdrop's own noise, so a slightly textured wall does not
+    // register as subject while a genuinely uniform one stays sensitive.
+    const thresh = Math.max(45, variance * 2.5);
+    let first = -1, last = -1;
+    for (let x = 0; x < ORIENT_SIZE; x++) {
+      let hits = 0;
+      for (let y = y0; y < y1; y++) {
+        const i = (y * ORIENT_SIZE + x) * 4;
+        if (Math.abs(px[i] - br) + Math.abs(px[i + 1] - bg) + Math.abs(px[i + 2] - bb) > thresh) hits++;
+      }
+      if (hits >= bandH * 0.25) { if (first === -1) first = x; last = x; }
+    }
+    if (first === -1) return null;
+    const width = (last - first + 1) / ORIENT_SIZE;
+    if (width >= 0.92 || width <= 0.08) return null;     // implausible - see the comment above
+    return width;
+  }
+
+  /* Signed foreshortening evidence in [-1, 1] from the width measurement, or null when
+     torsoWidth() abstained or no baseline has been established yet.
+       +1  fully foreshortened (a square-on width collapsed to ORIENT_NARROW_FLOOR)
+        0  right at ORIENT_NARROW_RATIO - the boundary, no evidence either way
+       -1  at or above the shopper's own square-on baseline - positive evidence AGAINST
+           edge-on, which is what vetoes a lighting-induced false positive.
+     The negative half is the half that earns its keep: a dim room makes the skin read
+     ambiguous while the shopper stands squarely facing the camera, and without this the
+     ambiguity alone used to be enough to assert profile. */
+  function narrowness(width) {
+    if (width === null || baselineSamples < ORIENT_BASELINE_MIN || !baselineWidth) return null;
+    const ratio = width / baselineWidth;
+    if (ratio <= ORIENT_NARROW_RATIO) {
+      const span = ORIENT_NARROW_RATIO - ORIENT_NARROW_FLOOR;
+      return Math.min(1, (ORIENT_NARROW_RATIO - ratio) / span);
+    }
+    return Math.max(-1, (ORIENT_NARROW_RATIO - ratio) / (1 - ORIENT_NARROW_RATIO));
+  }
+
+  /* ── Evidence fusion → a single 0..1 edge-on score for this frame ────────────
+     Additive weights, because the signals are independent and individually weak; the
+     whole point of fusing them is that a real profile pose trips several at once while
+     each one alone trips regularly for boring reasons (bad light, a missed detection, a
+     shopper standing off-centre).
+
+       face detected            hard 0   - a frontal face is proof they are not edge-on,
+                                           and no combination of the others may override it
+       skin read ambiguous       +0.55   - the original signal, still the strongest single one
+       detector armed, no face   +0.20   - weak alone: this is also what every ordinary
+                                           detection failure looks like
+       silhouette narrowed    up to +0.45
+       silhouette at baseline down to -0.35  ← the veto that makes this worth doing
+
+     Calibration against ORIENT_PROFILE_ENTER_SCORE (0.55) is deliberate:
+       · ambiguous skin alone (0.55) still passes when the width channel abstains, so a
+         cluttered-room session degrades exactly to the previous behaviour rather than
+         losing the feature;
+       · ambiguous skin in a dim room WITH a normal-width silhouette lands at ~0.47 and is
+         correctly rejected - the jitter case this hardening pass exists for;
+       · a genuine 90° turn trips ambiguity AND narrowing together and saturates. */
+  function profileScore(faceSeen, faceMissed, skinAmbiguous, n) {
+    if (faceSeen) return 0;
+    let score = skinAmbiguous ? 0.55 : 0;
+    if (faceMissed) score += 0.20;
+    if (n !== null) score += n > 0 ? 0.45 * n : 0.35 * n;   // n<0 subtracts - the veto
+    return Math.max(0, Math.min(1, score));
   }
 
   /* One vote: "front" | "back" | null (abstain - includes a read that crossed the raw
@@ -3224,12 +3457,51 @@ function createOrientationWatcher() {
      disagree the tick ABSTAINS (null), which neither flips the state nor resets the
      streak - the watcher simply waits for an unambiguous frame. A face-PRESENT vote is
      still taken at face value: it is the direction that doesn't need a second opinion. */
+  /* THE EDGE-ON READING - two channels out of one function.
+
+     classify() returns the front/back VOTE, whose contract is unchanged: it drives the
+     hysteresis-protected lock that decides which garment reference is on the wire, and
+     nothing about profile may influence it. Alongside it, and on a strictly separate
+     channel, it publishes lastProfileScore - the fused 0..1 evidence that the shopper is
+     edge-on, which drives only what the PROMPT asserts about their pose.
+
+     The original signal was the vote's own ambiguity: at a true 90-degree turn a
+     frontal-trained FaceDetector stops finding a face and the head band shows one cheek's
+     worth of skin - neither a face (>=10%) nor the back of a head (<=4%). That dead band
+     is what being side-on looks like to this pipeline, and it was previously discarded.
+
+     Ambiguity alone, though, is not specific: a dim room, a backlit shopper or a low-
+     contrast frame produce the same abstention while the shopper stands squarely facing
+     the camera, and acting on it there is what made the pose toggle. So the score fuses
+     that signal with two others chosen because they fail in DIFFERENT conditions -
+     chroma-based skin (illumination-invariant, see chromaSkinRatio) and silhouette width
+     (geometric, colour-blind, see torsoWidth). profileScore() states the weights and the
+     calibration; the short version is that a real turn trips several at once, while each
+     one alone trips regularly for boring reasons, and a normal-width silhouette actively
+     VETOES a lighting-induced false positive.
+
+     Cost is still ONE getImageData per tick, now over the whole 96px canvas instead of
+     just the head band, plus two small per-pixel passes - ~21µs measured, against a 250ms
+     sampling interval, on the watcher's own timer rather than the render path. */
   async function classify() {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) return null;
     const s = Math.max(ORIENT_SIZE / vw, ORIENT_SIZE / vh);   // cover-fit center crop
     ctx.drawImage(video, (ORIENT_SIZE - vw * s) / 2, (ORIENT_SIZE - vh * s) / 2, vw * s, vh * s);
 
+    /* ONE readback for the whole tick, sliced by the metrics below rather than each
+       pulling its own region. getImageData is a GPU→CPU sync, so the per-CALL overhead
+       dominates the per-pixel cost at these sizes: this reads more pixels than the old
+       head-band-only call (96×96 vs 96×43) but still makes exactly one of them, where the
+       obvious alternative - leaving skinRatioVote() to fetch its band and giving
+       torsoWidth() its own - would have made two. Measured cost of the added pixel work is
+       ~21µs against a 250ms sampling interval, and none of it is on the render path. */
+    const px = ctx.getImageData(0, 0, ORIENT_SIZE, ORIENT_SIZE).data;
+    const width = torsoWidth(px);          // measured once per tick, reused for the baseline below
+    const n = narrowness(width);
+    lastNarrow = n;
+
+    let vote, faceSeen = false, faceMissed = false;
     if (faceDetector && !fdBroken) {
       try {
         const fs = Math.max(ORIENT_FACE_SIZE / vw, ORIENT_FACE_SIZE / vh);
@@ -3238,43 +3510,90 @@ function createOrientationWatcher() {
         if (faces.length > 0) {
           lastConfidence = 1;               // binary API - no partial score to report
           lastSkinRatio = null;
-          return "front";
+          faceSeen = true;
+          vote = "front";
+        } else {
+          faceMissed = true;
+          /* No face. Corroborate before calling it a back. skinRatioVote() populates
+             lastSkinRatio/lastConfidence, so the debug line shows both engines. */
+          const corroboration = skinRatioVote(px);
+          // Both engines agree: squarely turned away, not mid-turn.
+          if (corroboration === "back") vote = "back";
+          else {
+            // Skin says "there is a face here" (or is ambiguous) while the detector found
+            // none - the likeliest reading is a MISSED face, not a turned back. Abstain.
+            // Still right for the LOCK; the profile channel reads the same ambiguity below.
+            lastConfidence = 0;
+            vote = null;
+          }
         }
-        /* No face. Corroborate before calling it a back. skinRatioVote() populates
-           lastSkinRatio/lastConfidence, so the debug line shows both engines. */
-        const corroboration = skinRatioVote();
-        if (corroboration === "back") return "back";          // both engines agree
-        // Skin says "there is a face here" (or is ambiguous) while the detector found
-        // none - the likeliest reading is a MISSED face, not a turned back. Abstain.
-        lastConfidence = 0;
-        return null;
       } catch (_) {
         fdBroken = true;
         console.log("[PEAR] AI Auto - FaceDetector unavailable at runtime; using skin-ratio heuristic");
+        vote = skinRatioVote(px);
       }
+    } else {
+      vote = skinRatioVote(px);
     }
-    return skinRatioVote();
+
+    /* Ambiguity is defined by the VOTE being withheld, which is exactly what the dead band
+       and the sub-confidence band produce - the signal that used to be discarded. A face
+       seen or a confident side both resolve it, so neither counts as ambiguous. */
+    const skinAmbiguous = !faceSeen && vote === null;
+    lastProfileScore = profileScore(faceSeen, faceMissed, skinAmbiguous, n);
+
+    /* Learn the square-on baseline ONLY from frames the lock confidently resolved, and
+       only when the width channel produced a real measurement. Using every frame would
+       fold profile frames into the baseline and slowly erase the very difference being
+       measured. EMA at 0.2 so a genuine change of position converges in about a second
+       while a single bad frame moves it barely at all. */
+    if (vote && !skinAmbiguous && width !== null) {
+      baselineWidth = baselineWidth ? baselineWidth * 0.8 + width * 0.2 : width;
+      baselineSamples++;
+    }
+    return vote;
   }
 
   /* Skin-tone share of the head band. Classic RGB skin rule - coarse, but the dual
      thresholds + confidence gate + lock absorb its noise. */
-  function skinRatioVote() {
-    const x = Math.round(ORIENT_SIZE * 0.25), w = Math.round(ORIENT_SIZE * 0.5);
+  function skinRatioVote(px) {
+    const x0 = Math.round(ORIENT_SIZE * 0.25), w = Math.round(ORIENT_SIZE * 0.5);
     const h = Math.round(ORIENT_SIZE * 0.45);
-    const d = ctx.getImageData(x, 0, w, h).data;
-    let skin = 0;
-    const total = d.length / 4;
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i], g = d[i + 1], b = d[i + 2];
-      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-      if (r > 95 && g > 40 && b > 20 && mx - mn > 15 && Math.abs(r - g) > 15 && r > g && r > b) skin++;
+    let skin = 0, total = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = x0; x < x0 + w; x++) {
+        const i = (y * ORIENT_SIZE + x) * 4;
+        const r = px[i], g = px[i + 1], b = px[i + 2];
+        const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        if (r > 95 && g > 40 && b > 20 && mx - mn > 15 && Math.abs(r - g) > 15 && r > g && r > b) skin++;
+        total++;
+      }
     }
     const ratio = skin / total;
     lastSkinRatio = ratio;
-    const vote = ratio >= 0.10 ? "front" : ratio <= 0.04 ? "back" : null;
-    if (!vote) { lastConfidence = 0; return null; }         // ambiguous (profile/transition) - abstain
+    let vote = ratio >= 0.10 ? "front" : ratio <= 0.04 ? "back" : null;
+
+    /* THE LIGHTING GUARD. A "back" here means the RGB rule found essentially no skin - but
+       that is also precisely what a dim or strongly warm-lit room does to this rule, and a
+       confident BACK vote is expensive: it swaps the garment reference. Before letting it
+       through, check the illumination-invariant chroma metric over the same band. If
+       chroma sees a face's worth of skin where RGB saw none, the disagreement is evidence
+       the RGB rule broke rather than that the shopper turned around, so the tick abstains -
+       the same conservative resolution the FaceDetector path already applies to its own
+       weak direction. Never used to CREATE or flip a vote; only to withhold one. */
+    if (vote === "back" && chromaSkinRatio(px, x0, 0, w, h) >= 0.12) {
+      lastConfidence = 0;
+      return null;
+    }
+
+    /* The dead band. Between "clearly a face" and "clearly the back of a head" is what one
+       visible cheek looks like - i.e. a shopper in profile. It abstains from the front/back
+       VOTE, unchanged; the profile channel in classify() reads that abstention. */
+    if (!vote) { lastConfidence = 0; return null; }
     lastConfidence = skinConfidence(ratio, vote);
-    return lastConfidence >= ORIENT_CONFIDENCE_MIN ? vote : null;   // crossed the line, not confidently
+    // Crossed a threshold but not confidently - a rotation is likely underway. Abstain.
+    if (lastConfidence < ORIENT_CONFIDENCE_MIN) return null;
+    return vote;
   }
 
   /* Confirmed flip → cross-fade + hot-swap the live reference, using ONLY the frozen
@@ -3378,6 +3697,58 @@ function createOrientationWatcher() {
     }
   }
 
+  /* The edge-on counterpart of maybeSwap(), and far simpler than it for one structural
+     reason: the reference image does not change. There is no back Blob to fetch, no
+     flat-placeholder probe, no cross-fade overlay to freeze and no toast - and therefore
+     no path by which this can leave the session displaying the wrong garment. It re-issues
+     the payload, applyGarment() sees the reference is unchanged and takes the setPrompt()
+     fast path (one small control message, no image bytes on the datachannel - see that
+     function's flicker-fix comment), and the model gets a truthful pose plus the
+     depth-fidelity clause. That is why this can afford a ~500ms trigger where an asset
+     swap needs seconds of corroboration. */
+  async function maybeUpdateProfile(score) {
+    profileBuf.push(score);
+    if (profileBuf.length > ORIENT_PROFILE_WINDOW) profileBuf.shift();
+    const mean = profileBuf.reduce((a, b) => a + b, 0) / profileBuf.length;
+    // "Square-on" for the EXIT test is the absence of meaningful evidence, not merely a
+    // score below the enter threshold - otherwise the two thresholds would sit on top of
+    // each other and the shopper would oscillate across the single boundary between them.
+    squareStreak = score <= 0.25 ? squareStreak + 1 : 0;
+    strongStreak = score >= ORIENT_PROFILE_FAST_SCORE ? strongStreak + 1 : 0;
+
+    /* ASYMMETRIC BY DESIGN, and the two directions read different statistics.
+
+       ENTER on the windowed MEAN: entering is the decision that must not be made on one
+       noisy frame, and averaging is what stops a shopper parked near the threshold angle
+       from toggling the pose every 250ms.
+
+       LEAVE on a CONSECUTIVE run of square-on samples: the mean is deliberately slow to
+       fall (an old high score lingers in the window for over a second), which would keep
+       asserting "side-on" well after the shopper came back around - the same class of
+       false pose assertion, pointing the other way. A short consecutive run answers "are
+       they square-on NOW?" without waiting for history to decay out. */
+    const next = autoProfile
+      ? !(squareStreak >= ORIENT_PROFILE_EXIT)
+      : (strongStreak >= ORIENT_PROFILE_FAST_FRAMES ||
+         (profileBuf.length >= ORIENT_PROFILE_ENTER && mean >= ORIENT_PROFILE_ENTER_SCORE));
+    if (next === autoProfile) return;
+    if (applying || Date.now() - lastProfileAt < ORIENT_PROFILE_COOLDOWN_MS) return;
+    if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) return;
+
+    applying = true;                    // shared with maybeSwap - one in-flight apply at a time
+    lastProfileAt = Date.now();
+    autoProfile = next;                 // set BEFORE applying, so the snapshot below reads it
+    console.log(`[PEAR] AI Auto - pose ${next ? "EDGE-ON (side profile)" : "SQUARE-ON"}` +
+      ` | depth-fidelity clause ${next ? "ENGAGED" : "released"} (prompt-only, reference unchanged)`);
+    try {
+      await applyActive();
+    } catch (e) {
+      console.warn("[PEAR] AI Auto profile prompt update:", e?.message || e);
+    } finally {
+      applying = false;
+    }
+  }
+
   const timer = setInterval(async () => {
     if (disposed || sampling) return;
     sampling = true;
@@ -3422,7 +3793,21 @@ function createOrientationWatcher() {
         const progress = acquiring
           ? ` (${streak}/${ORIENT_ACQUIRE_FRAMES}f)`
           : ` (${streak}/${ORIENT_LOCK_FRAMES}f, ${held}/${ORIENT_LOCK_MS}ms)`;
-        console.log(`[PEAR][ORIENT] state=${vtonState()} | confidence=${confidence} | ${status}` +
+        /* Pose is reported separately from the lock, because it IS separate - reading them
+           on one line is what makes "locked FRONT, but edge-on right now" legible while
+           tuning. ratio/score/width are the three numbers the thresholds are set from, so
+           a live session can be diagnosed from the console without a debugger: `ratio` is
+           the raw skin share, `score` the fused per-frame evidence against
+           ORIENT_PROFILE_ENTER_SCORE, and `w` the silhouette width relative to this
+           shopper's own square-on baseline (n/a until the baseline is learned, or when the
+           backdrop is too busy to measure). */
+        const mean = profileBuf.length
+          ? profileBuf.reduce((a, b) => a + b, 0) / profileBuf.length : 0;
+        const pose = `pose=${autoProfile ? "EDGE-ON" : "square-on"}` +
+          ` | ratio=${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}` +
+          ` | score=${lastProfileScore.toFixed(2)}(avg ${mean.toFixed(2)}/${ORIENT_PROFILE_ENTER_SCORE})` +
+          ` | w=${lastNarrow === null ? "n/a" : lastNarrow.toFixed(2)}`;
+        console.log(`[PEAR][ORIENT] state=${vtonState()} | ${pose} | confidence=${confidence} | ${status}` +
           (needsSwitch ? progress : ""));
       }
 
@@ -3436,6 +3821,12 @@ function createOrientationWatcher() {
       /* The shopper turned back before the flip confirmed (or the signal cleared): no swap
          is coming, so drop the hold now rather than sitting on a still until the ceiling. */
       else if (!needsSwitch && _orientHoldActive) orientHoldEnd("turn-abandoned");
+
+      /* The pose axis, updated every tick. Skipped when a swap is confirmed and about to
+         run: maybeSwap() re-applies the entire payload, which picks up whatever autoProfile
+         is by then anyway, so firing a second set() alongside it would be pure redundancy
+         inside the exact window the flicker fix works to keep quiet. */
+      if (!confirmed) await maybeUpdateProfile(lastProfileScore);
 
       if (confirmed) await maybeSwap(lastVote);
     } catch (_) {} finally { sampling = false; }
@@ -4069,6 +4460,21 @@ const AUTO_ANGLE = "auto";
    opens by ASSERTING the shopper faces the camera, it opens with the question still
    open and answers it from the first confident sample. See PENDING_MODE. */
 let autoOrientation = null;
+/* Is the shopper currently EDGE-ON to the camera? A deliberately separate axis from
+   autoOrientation above, and the two must not be merged - see angleClause()'s `inProfile`
+   comment for the full argument. In short: autoOrientation is a hysteresis-protected LOCK
+   over which garment asset is on the wire, and a side-on frame is not evidence that the
+   other side of the garment should now be showing. This flag changes only what the PROMPT
+   asserts about the body's pose, never which reference image is sent, which is what makes
+   it safe to move far more freely than the lock does.
+
+   Sourced from a signal the watcher already computed and was throwing away: skinRatioVote()'s
+   dead band, whose own comment read "ambiguous (profile/transition) - abstain". Abstaining
+   was right for the lock and wrong for the prompt, which went on asserting a stale facing. */
+let autoProfile = false;
+/* Read by applyGarment()/applyLook() only, and only to take a SNAPSHOT - never called from
+   inside angleClause(), which receives the frozen value as a parameter instead. */
+function profileActive() { return currentAngle === AUTO_ANGLE && autoProfile; }
 /* The angle every resolver should ACT on: auto mode delegates to the detected
    orientation, every other mode is what the user picked. PENDING (null) resolves to
    "front" for RENDERING only - the provisional reference, not a lock; the watcher's
@@ -4220,12 +4626,41 @@ function hasDedicatedAngle(item) {
 /* Angle-oriented prompt clauses. Switching the image alone isn't enough - Lucy
    regenerates every frame, so the prompt must ALSO name the viewing angle or the
    model keeps rendering a front. Front needs no clause. */
+/* The rear POSE sentence, factored out of the three back clauses below for the same
+   reason COMPOSITE_POSE is split from COMPOSITE_APPLY: all three opened with this exact
+   sentence, and it is the one part of them that stops being true mid-turn. The garment
+   instructions that follow it (reproduce the back print / infer a plain rear / the custom
+   variant) stay correct at every angle, because the orientation lock that selected them
+   has not moved. Concatenation below is byte-identical to the previous strings. */
+const REAR_POSE =
+  " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera.";
+/* Its edge-on replacement. Same locked side, truthful rotation, plus the explicit ban on
+   de-rotating - see COMPOSITE_POSE's comment for why asserting a square rear view while
+   the shopper is side-on is what flattens their real profile volume. */
+const REAR_POSE_PROFILE =
+  " The person is TURNED TO THEIR SIDE and is seen EDGE-ON, in side profile, at roughly a right" +
+  " angle to the camera - part-way through turning away, so the back of the garment faces off to" +
+  " one side rather than squarely toward you. Render them at the exact rotation shown in the live" +
+  " frame: do NOT rotate, straighten or re-pose them back to a square rear view.";
+/* The garment half of each back clause, kept separate so either pose above can lead it. */
+const BACK_TAIL = {
+  real:
+    " This reference photo shows the BACK of the garment: reproduce it faithfully - its back panel, rear yoke, back collar, rear hemline and especially any back graphics, prints, logos or lettering - keeping each element at the SAME size, height and horizontal position on the garment as in the reference, wrapping naturally around the body. Do not move, rescale, re-center or omit the back print, and do NOT render the front of the garment.",
+  inferred:
+    " Render the BACK of the garment: its back panel, rear yoke, back collar, rear hemline and the seams the cut implies, wrapping naturally around the body from the rear. This reference photo shows the FRONT of the garment, so you must INFER the corresponding rear from it. The back is a clean, plain expression of the same fabric, colour and texture: do NOT copy, mirror, repeat or relocate the front chest print, front logo, front lettering, buttons, placket, zipper or front pockets onto the back. Unless the garment's cut clearly implies a back panel print, the back carries NO graphic at all. Do NOT render the front of the garment.",
+  custom:
+    " Render the BACK of this custom garment. The back of the garment must be a clean, plain version of the" +
+    " front's fabric and color, strictly without the front graphics or logos. Maintain the same seams," +
+    " material texture, and drape as the front view. Do not mirror front-specific details to the back." +
+    " Negative constraint - avoid printing, logos, or graphic motifs on the back side.",
+};
+
 const ANGLE_CLAUSE = {
   front: "",
   // Back, REAL rear reference: the active image IS a dedicated back photo. Tell Lucy to
   // REPRODUCE it - and pin the print's size/position to the reference so the graphic
   // doesn't drift, rescale or re-center between frames (the back-alignment ask).
-  backReal: " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera. This reference photo shows the BACK of the garment: reproduce it faithfully - its back panel, rear yoke, back collar, rear hemline and especially any back graphics, prints, logos or lettering - keeping each element at the SAME size, height and horizontal position on the garment as in the reference, wrapping naturally around the body. Do not move, rescale, re-center or omit the back print, and do NOT render the front of the garment.",
+  backReal: REAR_POSE + BACK_TAIL.real,
   /* Back, INFERRED rear: no dedicated back photo - the active image IS the front, so
      Lucy must infer a plausible rear from it (graceful fallback; placement can't be
      pinned). THE PRINT-DUPLICATION FIX: the previous wording asked for "any back
@@ -4235,7 +4670,7 @@ const ANGLE_CLAUSE = {
      forbidden (the model cannot avoid what it hasn't been told to avoid), and the
      default rear is stated as PLAIN. Mirrors CUSTOM_BACK_INFERRED, which already
      carried this constraint and did not exhibit the bug. */
-  backInferred: " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera. Render the BACK of the garment: its back panel, rear yoke, back collar, rear hemline and the seams the cut implies, wrapping naturally around the body from the rear. This reference photo shows the FRONT of the garment, so you must INFER the corresponding rear from it. The back is a clean, plain expression of the same fabric, colour and texture: do NOT copy, mirror, repeat or relocate the front chest print, front logo, front lettering, buttons, placket, zipper or front pockets onto the back. Unless the garment's cut clearly implies a back panel print, the back carries NO graphic at all. Do NOT render the front of the garment.",
+  backInferred: REAR_POSE + BACK_TAIL.inferred,
   side:  " The person is viewed from the SIDE in profile: render the garment's side profile - shoulder line, sleeve, side seam and the way the fabric drapes along the flank - in an accurate three-quarter/profile perspective.",
   // AI Auto, facing camera: the reference is ONE clean front asset (no composite), so the
   // clause pins it explicitly as the front and forbids inventing rear details - the
@@ -4245,7 +4680,68 @@ const ANGLE_CLAUSE = {
     " reproduce the garment's front faithfully - its front panel, collar, closure, hemline and" +
     " any front graphics, prints, logos or lettering - keeping each element at the SAME size," +
     " height and horizontal position as in the reference. Do NOT render the back of the garment.",
+  /* Single-asset counterpart of COMPOSITE_POSE.profileFront - same reasoning, same fix,
+     for the path where the reference is one photo rather than a stitched pair. autoFront
+     above opens by asserting "The person is facing the camera", which is the sentence
+     that has to go when they are edge-on; the garment side it names is still correct,
+     because the orientation lock did not move. */
+  autoProfile:
+    " This reference photo shows the FRONT of the garment. The person is TURNED TO THEIR SIDE," +
+    " seen EDGE-ON in side profile at roughly a right angle to the camera, so the garment's front" +
+    " faces off to one side rather than toward you: render the garment in that true side-on" +
+    " perspective - the shoulder line, sleeve, side seam and the way the fabric drapes along the" +
+    " flank - keeping its colour, texture and any visible front graphics faithful to the reference." +
+    " Do NOT rotate, straighten or re-pose the person back toward the camera, and do NOT re-render" +
+    " this as a front-facing shot.",
 };
+
+/* ── Side-profile depth fidelity - the volume that only exists edge-on ────────
+   THE BUG THIS EXISTS FOR: a shopper with real torso depth (the test case was a pillow
+   under a shirt) turns 90 degrees and the rendered body comes back flat - the garment
+   drapes over a generic torso instead of over their actual projection.
+
+   The mechanism is a blind spot in the prompt, not in the detector. Head-on, the body's
+   width carries its shape and STRICT_INPAINT's "do not slim, flatten or idealize" is
+   phrased for exactly that: it enumerates waist circumference and torso WIDTH. Edge-on,
+   width is foreshortened to nearly nothing and the entire silhouette is DEPTH - how far
+   the chest and stomach project forward, how the back curves behind. No clause in the
+   prompt named that axis, so nothing defended it, and a diffusion model with a strong
+   prior toward flat profiles had no instruction standing against that prior at precisely
+   the angle where it is most exposed. This names the axis and pins it to the live frame's
+   own silhouette edge, which is the only ground truth available in a pipeline with no
+   depth sensor and no mesh.
+
+   Complements rather than repeats its neighbours: PROFILE_ANOMALY_GUARD scopes out what
+   is NOT body (held objects, lens distortion) while turned; this asserts what IS body and
+   must survive. STRICT_INPAINT's ABSOLUTE BODY FIDELITY still governs at every angle -
+   this is its profile-axis form, not a replacement. */
+/* Structured as four numbered directives rather than one paragraph. Position and framing
+   both matter for this model: the clause leads with WHERE THE BODY IS, because every
+   instruction after it is relative to that, and the numbering keeps the four asks
+   individually addressable instead of dissolving into a wall of qualifiers. */
+const SIDE_PROFILE_DEPTH =
+  " SIDE-PROFILE DEPTH FIDELITY - four requirements for this frame." +
+  " (1) ORIENTATION: the person is positioned EDGE-ON, IN SIDE PROFILE, facing LATERALLY" +
+  " relative to the camera frame - turned roughly a right angle away from the lens, so you" +
+  " see the side of their body rather than its front or its back." +
+  " (2) GROUND TRUTH: the lateral silhouette edge in the live frame - including any abdominal" +
+  " curve, stomach or belly projection, chest depth, curve of the lower back and seat, and the" +
+  " bulk of the clothing itself - is ABSOLUTE GROUND TRUTH and overrides any assumption you" +
+  " hold about how a body is shaped. Because they are edge-on, that outline is their real" +
+  " FRONT-TO-BACK DEPTH, not their width. Trace it exactly as it is. Any protrusion, bulge," +
+  " overhang, rounding or expansion along that edge is REAL BODY VOLUME and must be preserved" +
+  " at its exact depth, height and position, however far it extends." +
+  " (3) FORESHORTENING: maintain the full side-view foreshortening exactly as captured. Do NOT" +
+  " rotate, turn or twist the person's chest, waist, hips or shoulders back toward the front" +
+  " camera view, and do NOT widen the torso back toward a front-facing silhouette. Do NOT" +
+  " substitute a typical, average, slimmer, athletic or idealized profile; do NOT flatten," +
+  " straighten, compress or pull the stomach, chest, belly or back edge inward toward the" +
+  " spine; do NOT reduce the torso's front-to-back thickness." +
+  " (4) DRAPE: wrap and drape the selected garment fabric seamlessly over those exact profile" +
+  " contours, preserving their true physical depth - the side seam following their real side" +
+  " contour, the fabric projecting outward wherever their body does, falling from the point of" +
+  " greatest protrusion with natural tension, creases and fold shadows beneath it." +
+  " Fit the garment to the body's true volume; never the body to the garment.";
 
 /* ── Stitched Garment Composite - orientation clauses ────────────────────────────
    Deliberately modelled on LOOK_CLAUSE below, which is the in-repo proof that a
@@ -4307,23 +4803,86 @@ const COMPOSITE_TEMPORAL =
    instruction, not a "reproduce the reference" one: the task is a texture transfer from a
    named region of the reference onto a named region of the body, and naming both ends of
    that transfer is what the previous wording left implicit. */
-const COMPOSITE_SELECT = {
+/* Split into POSE + APPLY so the two can vary independently.
+
+   They answer different questions and only one of them depends on how far the shopper
+   has turned. APPLY is a texture-transfer instruction - WHICH panel of the reference is
+   the legal source - and it stays correct at every rotation, because the orientation
+   lock that picked the panel is unchanged. POSE is a claim about the body in the live
+   frame, and it is the half that goes WRONG the moment the shopper is edge-on: see
+   COMPOSITE_POSE.profileFront for the failure it caused. The concatenation below
+   reproduces the previous strings byte for byte - this is a refactor to create a seam,
+   not a rewording. */
+const COMPOSITE_APPLY = {
   front:
-    " The person is FACING FORWARD, the front of their body toward the camera." +
     " Apply the LEFT PANEL (FRONT view) design to the FRONT of their body: extract that panel's" +
     " exact texture, print, graphic, logo, lettering and colour and render it on the front of the" +
     " garment they are wearing - its front panel, collar, closure and hemline - keeping every element" +
     " at the SAME size, height and horizontal position it has in that panel." +
     " The RIGHT PANEL does not exist for this frame: none of its content may appear anywhere in the output.",
   back:
-    " The person has TURNED AROUND and is presenting their BACK to the camera - rear view, the back of" +
-    " their body toward you, no face visible." +
     " Accurately EXTRACT the exact garment texture and print from the RIGHT PANEL (BACK view) and RENDER" +
     " IT ONTO THE BACK of the person: its back print, graphic, logo, lettering, colour blocking, rear yoke," +
     " back collar and rear hemline, each kept at the SAME size, height and horizontal position it has in" +
     " that panel, wrapping naturally around the torso and following the fabric as they move." +
     " The LEFT PANEL (FRONT view) does not exist for this frame: its chest print, front logo, front" +
     " lettering, buttons, placket, zipper and front pockets must NOT appear anywhere on the back you render.",
+};
+
+/* THE 90-DEGREE POSE LIE, and why the profile variants exist.
+
+   The orientation lock is BINARY (front | back) and, by design, it holds through a turn:
+   skinRatioVote()'s dead band abstains on an ambiguous frame rather than voting, so at a
+   true side-on pose the lock simply stays wherever it last was. Everything about that is
+   correct for choosing an ASSET - a profile frame genuinely does not justify flipping the
+   reference.
+
+   What was not correct is that the pose sentence rode along with it. At 90 degrees the
+   prompt asserted "The person is FACING FORWARD, the front of their body toward the
+   camera" (or, from the other lock, "has TURNED AROUND ... no face visible") while the
+   pixels showed the shopper edge-on. Lucy regenerates every frame from the prompt plus
+   that frame, so a categorical pose claim that contradicts the input is not a harmless
+   inaccuracy: reconciling it means rotating the torso back to the asserted view, and a
+   torso rendered as front-on has no profile depth left in it. The shopper's real
+   front-to-back volume - which is ONLY visible edge-on, and is exactly what a pillow
+   under a shirt is testing - is what gets normalised away. That is the "it falls back to
+   a default body" report.
+
+   So the profile poses do two things the front/back poses cannot: they describe the
+   rotation truthfully instead of asserting a facing, and they explicitly forbid the
+   de-rotation. They still name the locked side, because which half of the garment is
+   toward the camera is still known and still steers the panel that APPLY selects. */
+const COMPOSITE_POSE = {
+  front: " The person is FACING FORWARD, the front of their body toward the camera.",
+  back:
+    " The person has TURNED AROUND and is presenting their BACK to the camera - rear view, the back of" +
+    " their body toward you, no face visible.",
+  profileFront:
+    " The person is TURNED TO THEIR SIDE and is seen EDGE-ON, in side profile, at roughly a right angle" +
+    " to the camera - you are seeing the side of their body, with the front of the garment facing off to" +
+    " one side rather than toward you. Render them at the exact rotation shown in the live frame:" +
+    " do NOT rotate, straighten or re-pose them back toward the camera, and do NOT re-render this as a" +
+    " front-facing shot.",
+  profileBack:
+    " The person is TURNED TO THEIR SIDE and is seen EDGE-ON, in side profile, at roughly a right angle" +
+    " to the camera - you are seeing the side of their body, part-way through turning away, with the back" +
+    " of the garment facing off to one side rather than squarely away from you. Render them at the exact" +
+    " rotation shown in the live frame: do NOT rotate, straighten or re-pose them, and do NOT re-render" +
+    " this as a square rear shot.",
+};
+
+const COMPOSITE_SELECT = {
+  front: COMPOSITE_POSE.front + COMPOSITE_APPLY.front,
+  back:  COMPOSITE_POSE.back  + COMPOSITE_APPLY.back,
+};
+
+/* Same panel contract, same texture source, truthful pose - selected when the watcher
+   reports the shopper is edge-on. Pairs with SIDE_PROFILE_DEPTH, which supplies the
+   positive instruction about what the silhouette edge means; this one only stops the
+   prompt from asserting a facing that is not there. */
+const COMPOSITE_SELECT_PROFILE = {
+  front: COMPOSITE_POSE.profileFront + COMPOSITE_APPLY.front,
+  back:  COMPOSITE_POSE.profileBack  + COMPOSITE_APPLY.back,
 };
 
 /* Trimmed photorealism tail for composite mode, replacing QUALITY_SUFFIX + HEM_DETAIL.
@@ -4365,8 +4924,9 @@ const COMPOSITE_QUALITY =
  *   applyGarment()'s frozen `angleAtStart`, never a fresh effectiveAngle() read.
  * @returns {string}
  */
-function buildCompositePrompt(item, angle) {
-  const select = angle === "back" ? COMPOSITE_SELECT.back : COMPOSITE_SELECT.front;
+function buildCompositePrompt(item, angle, inProfile) {
+  const a = angle === "back" ? "back" : "front";
+  const select = inProfile ? COMPOSITE_SELECT_PROFILE[a] : COMPOSITE_SELECT[a];
   const lower  = item.garmentType === "lower_body";
   const keep   = lower ? KEEP_TOP : KEEP_BOTTOMS;   // pin the layer we are NOT replacing
   const target = lower ? "bottoms" : "top";
@@ -4383,9 +4943,18 @@ function buildCompositePrompt(item, angle) {
 
   return (
     COMPOSITE_PANEL_CONTRACT + select +
+    /* PLACEMENT IS DELIBERATE, and follows this function's own ordering argument above.
+       When the shopper is edge-on, what their body actually looks like IS the primary
+       instruction for that frame - it is the thing being got wrong. Appending it at the
+       tail put it ~1,600 characters deep, behind the garment description, fit modifier,
+       quality boilerplate and three general clamps; that is the position this function
+       exists to rescue the panel contract FROM. It sits directly behind the pose instead:
+       which reference, what rotation, what body, then the garment. */
+    (inProfile ? SIDE_PROFILE_DEPTH : "") +
     ` Substitute the person's current ${target} with ${desc}, reproducing its exact colour,` +
     ` pattern, print and fabric texture. ${anchor} Render a ${fitMod}${COMPOSITE_QUALITY}.${fabricMod}${keep}` +
-    STRICT_INPAINT + IGNORE_SOURCE_ARTIFACTS + ROTATION_CONTINUITY + PROFILE_ANOMALY_GUARD + COMPOSITE_TEMPORAL
+    STRICT_INPAINT + IGNORE_SOURCE_ARTIFACTS + ROTATION_CONTINUITY + PROFILE_ANOMALY_GUARD +
+    COMPOSITE_TEMPORAL
   ).replace(/\s+/g, " ").trim();
 }
 
@@ -4406,12 +4975,7 @@ const LOOK_CLAUSE =
    stripped) that keeps the front's fabric/colour/seams/drape. The "negative prompt" is
    folded IN as an inline clause because Decart's realtime set() accepts only
    { prompt, image, enhance } - there is NO separate negative_prompt field to pass. */
-const CUSTOM_BACK_INFERRED =
-  " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera." +
-  " Render the BACK of this custom garment. The back of the garment must be a clean, plain version of the" +
-  " front's fabric and color, strictly without the front graphics or logos. Maintain the same seams," +
-  " material texture, and drape as the front view. Do not mirror front-specific details to the back." +
-  " Negative constraint - avoid printing, logos, or graphic motifs on the back side.";
+const CUSTOM_BACK_INFERRED = REAR_POSE + BACK_TAIL.custom;
 /* A REAL rear reference = a back image that DIFFERS from the front. A mirrored front
    (catalog auto-fill at load, or the graceful front-fallback) has g.back === g.front and
    is NOT a true back photo - so it must NOT claim "reproduce the back" steering. Only a
@@ -4467,27 +5031,54 @@ function compositeActiveFor(item) {
    panel that does not exist, so there is nothing for the back instruction to point at.
    applyGarment() therefore passes what it actually sent. Omitted elsewhere, where the
    inferred value is correct. */
-function angleClause(item, angleOverride, useComposite) {
+/* `inProfile` is the OrientationWatcher's edge-on reading, and it is a frozen snapshot for
+   exactly the same reason `angleOverride` is: the watcher samples on its own 250ms
+   interval and can change it during applyGarment()'s await, which would let the pose
+   sentence and the already-resolved reference describe different moments. applyGarment()
+   snapshots it beside angleAtStart and threads it through.
+
+   It is deliberately a SEPARATE axis from `angleOverride`, not a third value of it. The
+   angle decides WHICH GARMENT ASSET/panel is the source and is a hysteresis-protected
+   lock; profile decides only WHAT POSE THE PROMPT ASSERTS about the body. Collapsing them
+   would mean a side-on frame could change the reference image, which is precisely the
+   flapping the lock exists to prevent - a profile frame is not evidence the shopper's
+   other side is now showing. Keeping them independent is what lets this fix the pose
+   without touching any asset-selection behaviour. */
+function angleClause(item, angleOverride, useComposite, inProfile) {
+  // Edge-on: append the depth-fidelity clause on every branch below. The clause is about
+  // the BODY, so it is orientation-independent - it rides on front, back and side alike.
+  const depth = inProfile ? SIDE_PROFILE_DEPTH : "";
+
   // Composite mode: the reference carries BOTH views, so the clause names the panel
-  // matching the detected orientation and excludes the other outright.
+  // matching the detected orientation and excludes the other outright. Only the pose
+  // sentence varies with profile; the panel contract and selection are unchanged.
   if (useComposite === undefined ? compositeActiveFor(item) : useComposite) {
     const a = (angleOverride || effectiveAngle()) === "back" ? "back" : "front";
-    return " " + COMPOSITE_PANEL_CONTRACT + COMPOSITE_SELECT[a] + COMPOSITE_TEMPORAL;
+    const select = inProfile ? COMPOSITE_SELECT_PROFILE[a] : COMPOSITE_SELECT[a];
+    // depth rides DIRECTLY behind the pose, not at the tail - see buildCompositePrompt()'s
+    // placement comment for why position is load-bearing for this model.
+    return " " + COMPOSITE_PANEL_CONTRACT + select + depth + COMPOSITE_TEMPORAL;
   }
   const angle = angleOverride || effectiveAngle();      // AI Auto resolves to the DETECTED orientation
   if (angle === "back") {
+    // Which POSE leads the clause depends on whether they are square-on or mid-turn; which
+    // GARMENT TAIL follows it depends on what reference we actually hold. Independent
+    // choices, so they are resolved independently rather than as four hand-written strings.
+    const pose = inProfile ? REAR_POSE_PROFILE : REAR_POSE;
+    // Pose, then what the body actually looks like, then the garment - the tails below are
+    // self-contained instructions and do not depend on sitting adjacent to the pose.
     // Dual asset (front + a REAL back photo, incl. a user's uploaded back) → reproduce it.
     // AI Auto always lands here with a real back (canCombineViews gates the mode on one).
-    if (activeBackIsReal(item)) return ANGLE_CLAUSE.backReal;
+    if (activeBackIsReal(item)) return pose + depth + BACK_TAIL.real;
     // Custom upload with only a front → the strict "clean plain rear, no front graphics"
     // constraint (+ inlined negative). Catalog items keep the generic inferred clause.
-    if (item && item.custom) return CUSTOM_BACK_INFERRED;
-    return ANGLE_CLAUSE.backInferred;
+    if (item && item.custom) return pose + depth + BACK_TAIL.custom;
+    return pose + depth + BACK_TAIL.inferred;
   }
-  // AI Auto, facing the camera: unlike the plain front tab (no clause), pin the reference
-  // explicitly as the garment FRONT - the mode's whole contract is one unambiguous side.
-  if (currentAngle === AUTO_ANGLE) return ANGLE_CLAUSE.autoFront;
-  return ANGLE_CLAUSE[angle] || "";
+  // AI Auto: pin the reference explicitly as the garment FRONT - the mode's whole contract
+  // is one unambiguous side - but state the shopper's real rotation, not an assumed facing.
+  if (currentAngle === AUTO_ANGLE) return (inProfile ? ANGLE_CLAUSE.autoProfile : ANGLE_CLAUSE.autoFront) + depth;
+  return (ANGLE_CLAUSE[angle] || "") + depth;
 }
 
 /**
@@ -4571,6 +5162,12 @@ async function applyGarment(item) {
      turn behind, corrected by the very next set() once the flip is observed again;
      it can never be internally self-contradictory. */
   const angleAtStart = effectiveAngle();
+  /* Frozen for the SAME reason and in the SAME breath as angleAtStart above. The watcher
+     samples on its own 250ms interval and can enter or leave the edge-on state during the
+     await below, so re-reading it after would let the pose sentence describe a different
+     moment than the reference resolved for. Cheaper to be one tick stale than internally
+     inconsistent - and the next tick corrects it. */
+  const profileAtStart = profileActive();
   const activeImg = activeImageOf(item);
   const refInfo   = {};                                          // ← filled in by referenceImageFor
   const imageRef  = await referenceImageFor(item, activeImg, refInfo);   // Blob for combined, URL otherwise
@@ -4630,8 +5227,8 @@ async function applyGarment(item) {
      prompt can never describe a reference other than the one on the next line. */
   const payload = {
     prompt: usingComposite
-      ? buildCompositePrompt(item, angleAtStart)
-      : buildPrompt(item) + angleClause(item, angleAtStart, false),
+      ? buildCompositePrompt(item, angleAtStart, profileAtStart)
+      : buildPrompt(item) + angleClause(item, angleAtStart, false, profileAtStart),
     enhance: false,
     ...(imageRef ? { image: imageRef } : {}),
   };
@@ -5055,10 +5652,17 @@ async function applyLook(top, bottom) {
   // single image the SDK does forward. Skip it for AI Auto, which already needs
   // that one image slot for its own per-orientation front/back Blob.
   const canStitchLook = currentAngle !== AUTO_ANGLE;
+  /* Snapshotted BEFORE the stitch await for the reason applyGarment() documents at
+     angleAtStart/profileAtStart: stitchLookBlob() is a real async gap, and the watcher's
+     independent sampler can toggle the pose during it. The existing comment that
+     applyLook() "has no per-orientation reference to race against" is about the ANGLE,
+     which selects a reference this path does not use per-orientation; the pose clause
+     below is read live and would race. */
+  const profileAtStart = profileActive();
   let primaryImage = canStitchLook ? await stitchLookBlob(topImg, bottomImg) : null;
   const prompt = primaryImage
     ? buildLookPrompt(top, bottom) + LOOK_CLAUSE
-    : buildLookPrompt(top, bottom) + angleClause();
+    : buildLookPrompt(top, bottom) + angleClause(undefined, undefined, undefined, profileAtStart);
 
   if (!primaryImage) {
     // Stitch unavailable (AI Auto angle) or failed to decode - fall back to the

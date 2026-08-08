@@ -53,6 +53,10 @@ function makeHarness({ composite = true } = {}) {
     currentAngle: "auto",
     AUTO_ANGLE: "auto",
     effectiveAngle: () => sandbox._angle,
+    /* The edge-on pose axis. applyGarment() snapshots it beside the angle and threads it
+       into the prompt builders; driven from sandbox._profile so the cases below can prove
+       a pose change is prompt-only too - the reference image must not move for it. */
+    profileActive: () => sandbox._profile,
     activeImageOf: () => "https://cdn.test/front.jpg",
     referenceImageFor: async (_i, _a, out) => { out.composite = composite; return sandbox._ref; },
     compositeActiveFor: () => composite,
@@ -64,10 +68,12 @@ function makeHarness({ composite = true } = {}) {
     vtonState: () => "BACK_MODE",
     hasDedicatedAngle: () => true,
     describeCompositeLayout: () => "layout",
-    buildCompositePrompt: (_it, angle) => `COMPOSITE_PROMPT_${angle}`,
+    // Both builders echo the profile flag so the assertions can read what was actually sent.
+    buildCompositePrompt: (_it, angle, inProfile) => `COMPOSITE_PROMPT_${angle}${inProfile ? "_PROFILE" : ""}`,
     buildPrompt: () => "PLAIN_PROMPT",
-    angleClause: () => "_CLAUSE",
+    angleClause: (_it, _a, _c, inProfile) => `_CLAUSE${inProfile ? "_PROFILE" : ""}`,
     _angle: "front",
+    _profile: false,
     _ref: null,
   };
   const body =
@@ -141,6 +147,57 @@ console.log("\n── a NEW session must never inherit 'already on the wire' ─
   await api.applyGarment(item);
   check("after a session reset the image is sent again, in full",
     sent[1].kind === "set" && sent[1].hasImage === true, JSON.stringify(sent.map((s) => s.kind)));
+}
+
+console.log("\n── a POSE change (square-on → edge-on) is prompt-only: the reference must not move ──");
+{
+  /* The 90-degree side-profile fix rides this exact path, and it is the reason it costs no
+     rendering latency. Turning sideways changes only what the prompt asserts about the
+     body - the garment reference is byte-identical - so it must go out as a setPrompt()
+     control message, never a re-upload. If this ever regresses to a full set(), the
+     depth-fidelity fix starts pushing a few hundred KB of base64 through the datachannel
+     at the precise moment the shopper is mid-rotation, which is the window the flicker
+     fix above exists to keep quiet: the pose fix would then reintroduce the print-vanishing
+     bug it was never meant to touch. */
+  const { api, sent, sandbox } = makeHarness();
+  sandbox._ref = COMPOSITE;
+
+  sandbox._angle = "front"; sandbox._profile = false;
+  await api.applyGarment(item);                        // go-live, square-on
+  check("go-live sends the image once", sent[0].kind === "set" && sent[0].hasImage === true);
+  check("...and the square-on prompt carries no profile marker",
+    sent[0].prompt === "COMPOSITE_PROMPT_front", sent[0].prompt);
+
+  sandbox._profile = true;                             // the shopper turns 90 degrees
+  await api.applyGarment(item);
+  check("THE POSE CHANGE IS PROMPT-ONLY - no image re-upload mid-turn",
+    sent[1].kind === "setPrompt", JSON.stringify(sent[1] && sent[1].kind));
+  check("...and the new prompt actually carries the edge-on pose",
+    sent[1].prompt === "COMPOSITE_PROMPT_front_PROFILE", sent[1].prompt);
+
+  sandbox._profile = false;                            // ...and turns back square-on
+  await api.applyGarment(item);
+  check("leaving profile is prompt-only too", sent[2].kind === "setPrompt");
+  check("...and drops the profile marker again",
+    sent[2].prompt === "COMPOSITE_PROMPT_front", sent[2].prompt);
+
+  check("exactly ONE image upload across a full turn out and back",
+    sent.filter((s) => s.kind === "set").length === 1, JSON.stringify(sent.map((s) => s.kind)));
+}
+
+console.log("\n── the pose snapshot is independent of the angle snapshot ──");
+{
+  /* Both axes must be able to move without the other. A profile update while the lock sits
+     on BACK has to keep selecting the back panel - see side-profile.test.mjs §4 for the
+     clause-level proof; this is the payload-level one. */
+  const { api, sent, sandbox } = makeHarness();
+  sandbox._ref = COMPOSITE;
+  sandbox._angle = "back"; sandbox._profile = false;
+  await api.applyGarment(item);
+  sandbox._profile = true;
+  await api.applyGarment(item);
+  check("edge-on while the lock is BACK still builds the BACK prompt",
+    sent[1].prompt === "COMPOSITE_PROMPT_back_PROFILE", sent[1].prompt);
 }
 
 console.log("\n── single-asset mode: each flip changes the picture, so it must NOT be skipped ──");

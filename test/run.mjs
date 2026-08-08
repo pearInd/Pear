@@ -24,6 +24,13 @@
      prompt-only-flip A turn re-sends the prompt, never the reference image. Re-
                       uploading the composite mid-rotation is what made the back print
                       flicker and vanish inside the 5s billed window.
+     side-profile     The 90-degree turn: at a side-on pose the orientation lock rightly
+                      HOLDS, but the pose sentence used to hold with it - so the prompt
+                      asserted "FACING FORWARD" over pixels showing the shopper edge-on,
+                      and reconciling that flattened their real torso depth (the pillow-
+                      under-a-shirt case). Asserts the pose/panel split, the depth clause
+                      on every builder, and - most importantly - that the edge-on signal
+                      stays on its own channel and can never move the asset lock.
      turn-hold        The last dressed frame is held from the FIRST sign of a turn, not
                       from the confirmed flip 2.5s later - the uncovered window is where
                       the shopper's real shirt came back. Plus every release path,
@@ -54,6 +61,7 @@ const SUITES = [
   ["angle-race", "angle-race.test.mjs"],
   ["preload-composite", "preload-composite.test.mjs"],
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
+  ["side-profile", "side-profile.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],
 ];
