@@ -67,10 +67,10 @@ check("extracted compositeActiveFor", /function compositeActiveFor/.test(code));
 const SELECTED_FRONT = /Apply the LEFT PANEL \(FRONT view\) design to the FRONT of their body/;
 const SELECTED_BACK  = /from the RIGHT PANEL \(BACK view\) and RENDER IT ONTO THE BACK of the person/;
 
-function run({ effectiveAngleReturns, distinctBack, resolveLookReturns = null, custom = false, angleOverride, useComposite }) {
+function run({ effectiveAngleReturns, distinctBack, resolveLookReturns = null, custom = false, angleOverride, useComposite, inProfile, currentAngle = "auto" }) {
   const sandbox = {
     COMPOSITE_MODE: true,
-    currentAngle: "auto",
+    currentAngle,
     AUTO_ANGLE: "auto",
     effectiveAngle: () => effectiveAngleReturns,
     resolveLook: () => resolveLookReturns,
@@ -80,7 +80,7 @@ function run({ effectiveAngleReturns, distinctBack, resolveLookReturns = null, c
   const fn = new Function(...Object.keys(sandbox), code + "\nreturn { angleClause, compositeActiveFor };");
   const api = fn(...Object.values(sandbox));
   const item = { name: "Tee", custom, img: "https://cdn.test/front.jpg" };
-  return api.angleClause(item, angleOverride, useComposite);
+  return api.angleClause(item, angleOverride, useComposite, inProfile);
 }
 
 console.log("── THE RACE: a live effectiveAngle() that changed AFTER the snapshot must NOT win ──");
@@ -237,6 +237,42 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
   check("ROTATION_CONTINUITY forbids revealing the shopper's real garment mid-turn",
     /no frame in which it is dropped, faded, or replaced by the person's own real/.test(src) &&
     /side-on, partially occluded, or facing away/.test(src));
+}
+
+console.log("\n── single-view items (no AI Auto) now get a truthful side clause too ──");
+{
+  /* THE GAP: ANGLE_CLAUSE.front is "" - it never needed its own pose sentence, because
+     there used to be no LIVE pose signal at all outside AI Auto. `inProfile` is that
+     signal now (the watcher arms for single-view items too - see
+     syncOrientationWatcher()'s dualView/singleView split and profileActive()'s
+     !!orientWatcher gate) - so a shopper turning edge-on while a single-view item's
+     `currentAngle` is still nominally "front" must get more than an empty string. */
+  const clause = run({
+    currentAngle: "front",           // NOT AUTO_ANGLE - the single-view case
+    effectiveAngleReturns: "front",
+    angleOverride: "front",
+    distinctBack: undefined,         // no real back at all - a custom upload / single photo
+    inProfile: true,
+  });
+  check("reaches for ANGLE_CLAUSE.side's garment-drape wording, not the empty front clause",
+    /shoulder line, sleeve, side seam and the way the fabric drapes along the flank/.test(clause),
+    clause.slice(0, 260));
+  check("...and still carries SIDE_PROFILE_DEPTH (the body-volume fidelity clause)",
+    /SIDE-PROFILE DEPTH FIDELITY/.test(clause), clause.slice(0, 120));
+}
+{
+  // Square-on, same single-view session: must fall back to the plain (empty) front clause,
+  // not leak ANGLE_CLAUSE.side or the depth clause when there is no live evidence of a turn.
+  const clause = run({
+    currentAngle: "front",
+    effectiveAngleReturns: "front",
+    angleOverride: "front",
+    distinctBack: undefined,
+    inProfile: false,
+  });
+  check("square-on single-view: no side wording and no depth clause leak in",
+    !/shoulder line, sleeve, side seam/.test(clause) && !/SIDE-PROFILE DEPTH FIDELITY/.test(clause),
+    JSON.stringify(clause));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

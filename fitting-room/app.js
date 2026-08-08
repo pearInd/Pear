@@ -3391,6 +3391,12 @@ const ORIENT_PROFILE_FAST_FRAMES = 2;
    "they are side-on" claim is the same class of false pose assertion this feature exists
    to remove, so it must not outlive the evidence by much. */
 const ORIENT_PROFILE_EXIT   = 2;
+/* Floor below which a per-frame score counts as "no meaningful profile evidence" - used
+   both by the squareStreak count above and, as the earliest possible signal, by the turn
+   hold below (see orientHoldBegin's "profile-turn-detected" reason): the same asymmetry
+   that makes ENTER slow and deliberate but EXIT/abandon fast applies to freezing the last
+   dressed frame - a hold that outlives real evidence by much is a stuck still, not a fix. */
+const ORIENT_PROFILE_EXIT_SCORE = 0.25;
 /* Min gap between profile-driven prompt re-issues. These ride setPrompt() - a small
    control message, no image bytes (see applyGarment()'s flicker-fix comment) - so this
    guards against pointless chatter on a shopper who is oscillating around the threshold,
@@ -3440,13 +3446,40 @@ const ORIENT_DEBUG = (() => {
 })();
 
 let orientWatcher = null;         // { stop } while running, else null
+let orientWatcherItem = null;     // the activeItem this instance's GARMENT_FRONT/BACK were
+                                   // captured from - see the staleItem branch below.
 
 /* Idempotent lifecycle gate - safe to call from ANY state change (angle switch, item swap,
-   go-live, teardown): starts the watcher when AI Auto is live-armed, retires it otherwise. */
+   go-live, teardown): starts the watcher whenever it has something to protect, retires it
+   otherwise.
+
+   TWO tiers, not one. DUAL-VIEW (AI Auto, a real distinct back exists) gets the full
+   watcher: front/back asset-switching AND the profile axis. SINGLE-VIEW (no real back -
+   a custom upload, or a catalog item shipping only a front photo) used to get NONE of
+   this - turning 90 degrees got no depth-fidelity clause, no truthful pose, and no
+   freeze-hold, only the always-on generic STRICT_INPAINT/ROTATION_CONTINUITY text, which
+   is exactly the reversion/flattening bug this file has already fixed once for the
+   dual-view case. SINGLE-VIEW now arms the SAME watcher for the PROFILE axis only - there
+   is no second asset to switch to, so the front/back half (maybeSwap, the acquiring/
+   needsSwitch lock) stays permanently and safely inert for it; see maybeSwap()'s own
+   `currentAngle !== AUTO_ANGLE` guard and the tick's `dualView` gate below. */
 function syncOrientationWatcher() {
-  const want = currentAngle === AUTO_ANGLE && isLive() && canCombineViews(activeItem) && !!localStream;
-  if (want && !orientWatcher) orientWatcher = createOrientationWatcher();
-  else if (!want && orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; }
+  const dualView = currentAngle === AUTO_ANGLE && canCombineViews(activeItem);
+  const singleView = currentAngle !== AUTO_ANGLE && !!activeItem;
+  const want = (dualView || singleView) && isLive() && !!localStream;
+  /* A watcher armed for one item must never keep running against a DIFFERENT one - its
+     GARMENT_FRONT/GARMENT_BACK (and, for single-view, the item its profile signal is
+     meaningful for) are captured once at creation and go stale on a swap. `want` alone
+     does not catch this: swapping between two items that are both dual-view (or both
+     single-view) leaves `want` true throughout, so the watcher would otherwise never be
+     torn down and rebuilt for the new item. */
+  if (orientWatcher && orientWatcherItem !== activeItem) {
+    try { orientWatcher.stop(); } catch (_) {}
+    orientWatcher = null;
+    orientWatcherItem = null;
+  }
+  if (want && !orientWatcher) { orientWatcher = createOrientationWatcher(); orientWatcherItem = activeItem; }
+  else if (!want && orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; orientWatcherItem = null; }
 }
 
 /* ── Orientation-swap cross-fade ──────────────────────────────────────────────
@@ -3562,7 +3595,7 @@ function createOrientationWatcher() {
   if (!track) return null;                       // no camera yet - sync will retry later
 
   /* ── Explicit, immutable per-session asset mapping (zero ambiguity) ───────────
-     Resolved ONCE here, when AI Auto arms for this session - NOT re-derived from
+     Resolved ONCE here, when this watcher arms for this session - NOT re-derived from
      galleryOf(activeItem) on every vote/swap. A mid-rotation mutation of activeItem
      (color swap, item swap) can no longer shift what "front"/"back" mean partway
      through a turn; this watcher instance always maps to the exact two assets it
@@ -3570,14 +3603,35 @@ function createOrientationWatcher() {
      from ONE of these two constants - GARMENT_BACK is never routed to FRONT_MODE's
      payload and GARMENT_FRONT is never routed to BACK_MODE's, by construction (see
      maybeSwap below). GARMENT_BACK is undefined when there's no real, distinct back
-     photo - canCombineViews() already gates this watcher's existence on that being
-     true, so this is a belt-and-suspenders capture, not the source of that decision. */
+     photo - single-view items always hit this case, and maybeSwap's own
+     `currentAngle !== AUTO_ANGLE` guard is what keeps the front/back half of this
+     watcher inert for them, not the absence of GARMENT_BACK itself (see
+     syncOrientationWatcher()'s dualView/singleView split). */
   const gInit = galleryOf(activeItem);
   const GARMENT_FRONT = gInit.front || activeItem.img;
   /* distinctBackOf() - never a raw string compare. Two URL spellings of the SAME
      photo must not qualify here: binding the front photo as GARMENT_BACK is what put
      the chest print on the back (see canonicalImageUrl's comment). */
   const GARMENT_BACK  = distinctBackOf(activeItem, gInit);
+  /* Fresh instance, fresh reading - a stale EDGE-ON from whatever item/session this
+     watcher's predecessor last saw must never carry into this one. profileActive() trusts
+     `!!orientWatcher` as proof the CURRENT watcher produced `autoProfile`'s current value;
+     that proof is only good if every new instance starts from a clean false.
+
+     autoOrientation gets the same treatment, and for the first time here rather than only
+     at the call sites that used to be the sole entry points into AUTO_ANGLE
+     (renderPerspectiveSelector()'s `!wasAuto` branch, setAngle(), goLive()'s mode-settling
+     block). Those all reset it on a MODE transition; none of them fire on a same-tier item
+     swap - dual-view garment A to dual-view garment B, say - because currentAngle stays
+     AUTO_ANGLE throughout and `wasAuto` is already true. That used to be harmless because
+     the OLD watcher instance (with garment A's stale GARMENT_FRONT/BACK) just kept running
+     unrecreated across the swap - itself a latent bug, now fixed by orientWatcherItem
+     forcing a rebuild on every item change. Without this reset, THAT rebuild would hand
+     garment B's brand new watcher a stale "confirmed BACK" lock left over from garment A,
+     skipping the acquire phase and reading needsSwitch/confirmed off a side nobody has
+     actually classified yet for the item now on screen. */
+  autoOrientation = null;
+  autoProfile = false;
 
   // Private sampler onto the SAME track the preview uses - reading is free, and we never
   // stop the track itself (it belongs to the shared preview camera).
@@ -4023,6 +4077,17 @@ function createOrientationWatcher() {
         return;
       }
       const backBlob = await garmentBlobCached(GARMENT_BACK);
+      /* THE SUPERSEDED-INSTANCE GUARD, first of three in this function. stop() can land
+         while any of this function's awaits is in flight - syncOrientationWatcher() now
+         tears down and rebuilds on every item swap (see orientWatcherItem), not just on a
+         mode change, so a swap arriving mid-turn is a routine event, not a rare one.
+         `disposed`, `autoOrientation`, `GARMENT_BACK` and the hold are ALL either
+         per-instance or shared module state that a fresh watcher may already be relying
+         on by the time this stale continuation resumes; touching any of it here would be
+         exactly the "late callback from a superseded session" class of bug this file
+         already guards against elsewhere (see reconnect.test.mjs). Re-checked after EVERY
+         await in this function, not just the last one. */
+      if (disposed) return;
       if (!backBlob) {
         console.error("[PEAR] CRITICAL: GARMENT_BACK unavailable at flip time; holding FRONT_MODE -", GARMENT_BACK);
         settleFrontOnBackFailure();
@@ -4040,6 +4105,7 @@ function createOrientationWatcher() {
         backLooksFlat = await bitmapLooksFlat(probe);
         probe.close?.();
       } catch (_) { /* probe failure - fail open, let the already-validated Blob through */ }
+      if (disposed) return;               // same guard, after the decode/probe awaits
       if (backLooksFlat) {
         console.error("[PEAR] CRITICAL: GARMENT_BACK decoded but looks like a blank/solid-color placeholder (no garment texture); holding FRONT_MODE -", GARMENT_BACK);
         _assetBlobCache.delete(GARMENT_BACK);   // don't keep serving this bad asset from cache
@@ -4064,11 +4130,18 @@ function createOrientationWatcher() {
     try {
       await applyActive();                       // one rtClient.set() - pre-cached Blob payload
       await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));   // let the new frame actually land
+      // Third instance of the superseded-instance guard (see the comment above the first
+      // one). orientHoldEnd/toast are exactly the shared state a fresh watcher's own hold
+      // lifecycle now owns if this instance was torn down mid-await - stop() has already
+      // released whatever hold IT was responsible for; this stale continuation must not
+      // release whatever the NEW one has since raised.
+      if (disposed) return;
       orientHoldEnd("swap-complete");
       toast(next === "back" ? "מציג גב · Back view" : "מציג חזית · Front view");
     } catch (e) {
       console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
-      orientHoldEnd("swap-failed");               // never leave the frozen overlay stuck up on failure
+      if (!disposed) orientHoldEnd("swap-failed");   // never leave the frozen overlay stuck up on
+                                                      // failure - but only if THIS instance still owns it
     } finally {
       applying = false;
     }
@@ -4077,12 +4150,21 @@ function createOrientationWatcher() {
   /* The edge-on counterpart of maybeSwap(), and far simpler than it for one structural
      reason: the reference image does not change. There is no back Blob to fetch, no
      flat-placeholder probe, no cross-fade overlay to freeze and no toast - and therefore
-     no path by which this can leave the session displaying the wrong garment. It re-issues
+     no path by which this can leave the session displaying the wrong ASSET. It re-issues
      the payload, applyGarment() sees the reference is unchanged and takes the setPrompt()
      fast path (one small control message, no image bytes on the datachannel - see that
      function's flicker-fix comment), and the model gets a truthful pose plus the
      depth-fidelity clause. That is why this can afford a ~500ms trigger where an asset
-     swap needs seconds of corroboration. */
+     swap needs seconds of corroboration.
+
+     That guarantee is about the ASSET, not the PIXELS, and used to overstate itself here -
+     it does not cover the window before this function's own ENTER threshold fires. Until
+     then Lucy is still regenerating a foreshortened, mid-turn frame against a prompt that
+     has not caught up, which is the exact condition under which it reverts to the
+     shopper's real shirt (see ROTATION_CONTINUITY's comment). The sampler tick now raises
+     the SAME cross-fade hold used for a front/back flip the instant `score` clears
+     ORIENT_PROFILE_EXIT_SCORE - see "profile-turn-detected" in the timer callback below -
+     so that window is covered by the hold rather than by prompt text alone. */
   async function maybeUpdateProfile(score) {
     profileBuf.push(score);
     if (profileBuf.length > ORIENT_PROFILE_WINDOW) profileBuf.shift();
@@ -4090,7 +4172,7 @@ function createOrientationWatcher() {
     // "Square-on" for the EXIT test is the absence of meaningful evidence, not merely a
     // score below the enter threshold - otherwise the two thresholds would sit on top of
     // each other and the shopper would oscillate across the single boundary between them.
-    squareStreak = score <= 0.25 ? squareStreak + 1 : 0;
+    squareStreak = score <= ORIENT_PROFILE_EXIT_SCORE ? squareStreak + 1 : 0;
     strongStreak = score >= ORIENT_PROFILE_FAST_SCORE ? strongStreak + 1 : 0;
 
     /* ASYMMETRIC BY DESIGN, and the two directions read different statistics.
@@ -4110,7 +4192,12 @@ function createOrientationWatcher() {
          (profileBuf.length >= ORIENT_PROFILE_ENTER && mean >= ORIENT_PROFILE_ENTER_SCORE));
     if (next === autoProfile) return;
     if (applying || Date.now() - lastProfileAt < ORIENT_PROFILE_COOLDOWN_MS) return;
-    if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) return;
+    /* No `currentAngle !== AUTO_ANGLE` bail here (unlike maybeSwap) - this axis runs for
+       single-view items too now (see syncOrientationWatcher()'s dualView/singleView
+       split), where currentAngle never becomes AUTO_ANGLE at all. disposed/isLive() are
+       the only preconditions that still apply regardless of which tier armed this
+       watcher. */
+    if (disposed || !isLive()) return;
 
     applying = true;                    // shared with maybeSwap - one in-flight apply at a time
     lastProfileAt = Date.now();
@@ -4189,23 +4276,58 @@ function createOrientationWatcher() {
       }
 
       /* Raise the hold the INSTANT a turn looks like it is starting - one disagreeing
-         vote against a locked side - so the frame we freeze is still a good dressed one.
-         Waiting for `confirmed` is 2.5s too late; see orientHoldBegin()'s comment.
-         Excluded while ACQUIRING: there is no confirmed side to protect yet, nothing has
-         been rendered to hold, and freezing the very first frames of a session would just
-         stall the reveal. */
-      if (!acquiring && needsSwitch && !confirmed) orientHoldBegin("turn-detected");
-      /* The shopper turned back before the flip confirmed (or the signal cleared): no swap
-         is coming, so drop the hold now rather than sitting on a still until the ceiling. */
-      else if (!needsSwitch && _orientHoldActive) orientHoldEnd("turn-abandoned");
+         vote against a locked side, OR early evidence the shopper is turning edge-on - so
+         the frame we freeze is still a good dressed one. Waiting for `confirmed` (front/
+         back) or the ENTER threshold (profile, ~500ms of corroboration by design - see
+         ORIENT_PROFILE_ENTER's comment) is too late for the same reason either way.
+         THE GAP THIS CLOSES: maybeUpdateProfile() never re-uploads the reference image, so
+         the ASSET can never be wrong while turning edge-on - but that says nothing about
+         the PIXELS in the meantime. Until its prompt update actually lands, Lucy is still
+         regenerating a foreshortened, mid-turn person against a prompt that has not caught
+         up - per ROTATION_CONTINUITY's own comment, the exact condition under which the
+         most probable completion is the shopper's real shirt. SIDE_PROFILE_DEPTH is a
+         probabilistic bias on that frame, not a guarantee (see COMPOSITE_TEMPORAL's
+         comment) - this is the deterministic backstop the front/back axis already had and
+         the profile axis never got when it was added.
+         Excluded while ACQUIRING (dual-view) / before anything has ever been dressed
+         (single-view): there is no confirmed side, or no rendered frame at all, to
+         protect yet, and freezing the very first frames of a session would just stall
+         the reveal.
 
-      /* The pose axis, updated every tick. Skipped when a swap is confirmed and about to
-         run: maybeSwap() re-applies the entire payload, which picks up whatever autoProfile
-         is by then anyway, so firing a second set() alongside it would be pure redundancy
-         inside the exact window the flicker fix works to keep quiet. */
-      if (!confirmed) await maybeUpdateProfile(lastProfileScore);
+         TWO TIERS, mirroring syncOrientationWatcher()'s split. `dualView` sessions have a
+         front/back LOCK to protect, so frontBackTurn uses it exactly as before (`acquiring`
+         is meaningless without a lock - autoOrientation never leaves PENDING for a
+         single-view item, since maybeSwap() never runs for one). `holdReady` is the
+         readiness gate for the profile axis specifically, and it needs its OWN readiness
+         signal for single-view sessions, where there is no lock to be "acquiring": once
+         the very first frame has ever been dressed (isGarmentApplied), a profile reading
+         is worth protecting the same way a dual-view one is. */
+      const dualView = currentAngle === AUTO_ANGLE;
+      const holdReady = dualView ? !acquiring : isGarmentApplied;
+      const frontBackTurn = dualView && !acquiring && needsSwitch && !confirmed;
+      const enteringProfile = holdReady && !autoProfile && lastProfileScore > ORIENT_PROFILE_EXIT_SCORE;
+      if (frontBackTurn || enteringProfile)
+        orientHoldBegin(frontBackTurn ? "turn-detected" : "profile-turn-detected");
+      /* The shopper turned back / straightened up before either axis confirmed (or the
+         signal cleared): no swap and no profile flip is coming, so drop the hold now
+         rather than sitting on a still until the ceiling. */
+      else if (_orientHoldActive) orientHoldEnd("turn-abandoned");
 
-      if (confirmed) await maybeSwap(lastVote);
+      /* The pose axis, updated every tick. Skipped when a DUAL-VIEW swap is confirmed and
+         about to run: maybeSwap() re-applies the entire payload, which picks up whatever
+         autoProfile is by then anyway, so firing a second set() alongside it would be pure
+         redundancy inside the exact window the flicker fix works to keep quiet.
+
+         `confirmed` alone is NOT that signal for a single-view item: `acquiring` is
+         `autoOrientation === null`, and for single-view sessions autoOrientation never
+         leaves null (maybeSwap - the only place that ever sets it - is a no-op for them),
+         so `confirmed` can go permanently true the moment the front/back vote settles,
+         with no swap ever actually pending behind it. Gating on `dualView` too is what
+         keeps this axis running for the entire life of a single-view session instead of
+         going silent the moment the shopper is first read as "front". */
+      if (!(dualView && confirmed)) await maybeUpdateProfile(lastProfileScore);
+
+      if (dualView && confirmed) await maybeSwap(lastVote);
     } catch (_) {} finally { sampling = false; }
   }, ORIENT_SAMPLE_MS);
 
@@ -4850,8 +4972,18 @@ let autoOrientation = null;
    was right for the lock and wrong for the prompt, which went on asserting a stale facing. */
 let autoProfile = false;
 /* Read by applyGarment()/applyLook() only, and only to take a SNAPSHOT - never called from
-   inside angleClause(), which receives the frozen value as a parameter instead. */
-function profileActive() { return currentAngle === AUTO_ANGLE && autoProfile; }
+   inside angleClause(), which receives the frozen value as a parameter instead.
+
+   Gated on the WATCHER's liveness, not on `currentAngle === AUTO_ANGLE` - that used to be
+   the same thing, back when only dual-view items ever armed a watcher at all. Single-view
+   items now do too (see syncOrientationWatcher()'s dualView/singleView split), and for
+   them currentAngle never becomes AUTO_ANGLE, so that check would silently discard a real
+   profile reading. `!!orientWatcher` is the correct generalisation: it is true exactly
+   while a watcher is computing `autoProfile` for the CURRENT item (createOrientationWatcher()
+   resets autoProfile to false at the top of every fresh instance, and
+   syncOrientationWatcher() tears the watcher down - never leaving it running against a
+   swapped item), so a stale reading from a torn-down watcher can never leak through here. */
+function profileActive() { return !!orientWatcher && autoProfile; }
 /* The angle every resolver should ACT on: auto mode delegates to the detected
    orientation, every other mode is what the user picked. PENDING (null) resolves to
    "front" for RENDERING only - the provisional reference, not a lock; the watcher's
@@ -5455,7 +5587,15 @@ function angleClause(item, angleOverride, useComposite, inProfile) {
   // AI Auto: pin the reference explicitly as the garment FRONT - the mode's whole contract
   // is one unambiguous side - but state the shopper's real rotation, not an assumed facing.
   if (currentAngle === AUTO_ANGLE) return (inProfile ? ANGLE_CLAUSE.autoProfile : ANGLE_CLAUSE.autoFront) + depth;
-  return (ANGLE_CLAUSE[angle] || "") + depth;
+  /* Single-view items (see profileActive()'s comment - the watcher now runs for these
+     too): `angle` here is a GALLERY tab choice (which product photo to reference), not a
+     claim about how the shopper is physically standing, and ANGLE_CLAUSE.front is "" - it
+     never needed its own pose sentence because there used to be no live pose signal for
+     this mode at all. `inProfile` is that signal now. When it's true, reach for
+     ANGLE_CLAUSE.side - the garment-specific "shoulder line, sleeve, side seam, drape
+     along the flank" wording - instead of whatever the selected tab's (possibly empty)
+     clause says, same as AUTO_ANGLE substituting autoProfile for autoFront above. */
+  return (inProfile ? ANGLE_CLAUSE.side : (ANGLE_CLAUSE[angle] || "")) + depth;
 }
 
 /**

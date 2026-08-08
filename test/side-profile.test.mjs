@@ -112,6 +112,7 @@ function poseMachine() {
   const CONSTS = {
     ORIENT_PROFILE_WINDOW: 5, ORIENT_PROFILE_ENTER: 2, ORIENT_PROFILE_ENTER_SCORE: 0.55,
     ORIENT_PROFILE_EXIT: 2, ORIENT_PROFILE_FAST_SCORE: 0.85, ORIENT_PROFILE_FAST_FRAMES: 2,
+    ORIENT_PROFILE_EXIT_SCORE: 0.25,
   };
   return new Function(...Object.keys(CONSTS),
     "let profileBuf = [], squareStreak = 0, strongStreak = 0, autoProfile = false;\n" +
@@ -334,15 +335,17 @@ console.log("\n── §5 THE WATCHER: edge-on is a separate channel from the fr
   check("LEAVING is decided on a consecutive square-on run, not the (slow-falling) mean",
     /squareStreak >= ORIENT_PROFILE_EXIT/.test(upd), upd.slice(0, 900));
   check("the exit test uses its own lower band, so the two thresholds do not sit on one boundary",
-    /squareStreak = score <= 0\.25 \? squareStreak \+ 1 : 0;/.test(upd), upd.slice(0, 500));
+    /squareStreak = score <= ORIENT_PROFILE_EXIT_SCORE \? squareStreak \+ 1 : 0;/.test(upd), upd.slice(0, 500));
   check("it is cooldown-guarded against oscillation around the threshold",
     /Date\.now\(\) - lastProfileAt < ORIENT_PROFILE_COOLDOWN_MS/.test(upd));
-  check("it bails when the session is no longer live or has left AI Auto",
-    /if \(disposed \|\| !isLive\(\) \|\| currentAngle !== AUTO_ANGLE\) return;/.test(upd));
+  check("it bails when the session is no longer live (but NOT merely for leaving AI Auto - " +
+    "this axis now runs for single-view items too, see profileActive()'s comment)",
+    /if \(disposed \|\| !isLive\(\)\) return;/.test(upd) &&
+    !/currentAngle !== AUTO_ANGLE\) return;\n\n {4}applying = true;/.test(upd));
 
-  const tick = extract("const timer = setInterval", "if (confirmed) await maybeSwap(lastVote);");
-  check("the tick skips the pose update when a swap is confirmed (no redundant second set())",
-    /if \(!confirmed\) await maybeUpdateProfile\(lastProfileScore\);/.test(tick), tick.slice(-400));
+  const tick = extract("const timer = setInterval", "if (dualView && confirmed) await maybeSwap(lastVote);");
+  check("the tick skips the pose update only for a PENDING DUAL-VIEW swap (no redundant second set())",
+    /if \(!\(dualView && confirmed\)\) await maybeUpdateProfile\(lastProfileScore\);/.test(tick), tick.slice(-400));
 }
 
 console.log("\n── §5b THE PIXEL METRICS, EXECUTED against synthetic frames ──");
@@ -598,16 +601,30 @@ console.log("\n── §6 NO TOCTOU: the pose is a frozen snapshot, like the ang
     /angleClause\(undefined, undefined, undefined, profileAtStart\)/.test(look), look.slice(-300));
 }
 
-console.log("\n── §7 profileActive() is scoped to AI Auto ──");
+console.log("\n── §7 profileActive() is scoped to a LIVE watcher, not to AI Auto specifically ──");
 {
-  /* Manual angle tabs pick their own view; there is no watcher running to report a pose,
-     so a stale flag must not leak into their prompts. */
-  check("profileActive() gates on AI Auto being the active mode",
-    /function profileActive\(\) \{ return currentAngle === AUTO_ANGLE && autoProfile; \}/.test(SRC));
+  /* Used to gate on `currentAngle === AUTO_ANGLE` directly - back when only dual-view
+     items (a real, distinct back photo) ever armed a watcher at all, the two were the same
+     thing. Single-view items (custom uploads, single-photo catalog items) now arm a
+     profile-only watcher too (see syncOrientationWatcher()'s dualView/singleView split),
+     and for them currentAngle never becomes AUTO_ANGLE - so gating on it here would silently
+     discard their profile reading and reintroduce the exact bug this section used to guard
+     against, just for a different class of item. `!!orientWatcher` is the correct
+     generalisation: true only while a watcher is live and computing autoProfile for the
+     CURRENT item; no watcher (any manual tab, on an item with no camera stream, etc.) means
+     no pose to report, same as before. */
+  check("profileActive() gates on a live watcher, not on AUTO_ANGLE specifically",
+    /function profileActive\(\) \{ return !!orientWatcher && autoProfile; \}/.test(SRC));
   check("autoProfile is reset when AI Auto is (re-)armed from the angle selector",
     /autoOrientation = null;\s*\/\/ PENDING - acquired from the camera, not assumed\n\s*autoProfile = false;/.test(SRC));
   check("...and when it is armed at go-live",
     /autoOrientation = null;\s*\/\/ PENDING - no startup FRONT lock; the camera decides\n\s*autoProfile = false;/.test(SRC));
+  /* The single-view counterpart of the two resets above: every FRESH watcher instance -
+     dual-view or single-view alike - clears autoProfile itself, so a stale EDGE-ON from
+     whatever this watcher's predecessor last saw (a different item, a different session)
+     can never leak through the `!!orientWatcher` check into a brand new one. */
+  check("...and every fresh watcher instance resets it too (covers the single-view arm path)",
+    /const GARMENT_BACK  = distinctBackOf\(activeItem, gInit\);[\s\S]*?autoProfile = false;/.test(SRC));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
