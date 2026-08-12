@@ -80,7 +80,7 @@ function run({ angle = "front", inProfile = false, distinctBack, custom = false,
     /* The prompt budget the dense builders assemble against. Real value, not a stub:
        fitPrompt() SHEDS clauses to honour it, so a fake number here would test a
        different prompt than the one that ships. */
-    PROMPT_MAX_CHARS: 700,
+    PROMPT_MAX_CHARS: 650,
     console: { warn() {}, log() {} },
     KEEP_TOP: "_KEEP_TOP", KEEP_BOTTOMS: "_KEEP_BOTTOMS",
     STRICT_INPAINT: "_STRICT_INPAINT", IGNORE_SOURCE_ARTIFACTS: "_IGNORE_ARTIFACTS",
@@ -223,7 +223,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   check("...declares it GROUND TRUTH, so the live silhouette overrides the model's prior",
     /ground truth/.test(clause), clause.slice(-400));
   check("...and still forbids flattening that profile (the pillow/belly case)",
-    /never flatten that profile/.test(clause), clause.slice(-400));
+    /never flatten/.test(clause), clause.slice(-400));
   check("the clause is scoped to EDGE-ON so it cannot fire square-on",
     /EDGE-ON: their front-to-back depth/.test(clause), clause.slice(-400));
 
@@ -237,7 +237,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
     posePos !== -1 && selPos !== -1 && depthPos > posePos && depthPos > selPos,
     `pose@${posePos} select@${selPos} depth@${depthPos}`);
   check("...and the whole clause fits the token budget it was compressed for",
-    clause.length < 750, `${clause.length} chars`);
+    clause.length <= 650, `${clause.length} chars`);
 }
 {
   /* Same placement rule in the OTHER builder - the one that assembles the real live
@@ -291,7 +291,7 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   check("still instructs the wrap around the flank with a real side seam",
     /Wrap it round the flank with a natural side seam/.test(clause), clause.slice(-400));
   check("still names the reported symptom - the shopper's own shirt showing through",
-    /never let their own shirt show/.test(clause), clause.slice(-400));
+    /no original shirt showing/.test(clause), clause.slice(-400));
 
   /* THE REGRESSION GUARD survives compression, and had to: the shortest phrasing of this
      clause ("blend the front and back panels") is exactly the one that would contradict
@@ -382,14 +382,14 @@ console.log("\n── §4 DECOUPLING: profile changes the POSE, never the panel/
   }
   const profiled = run({ angle: "front", inProfile: true, distinctBack: BACK, useComposite: true }).clause;
   check("the panel contract itself is unchanged edge-on (LEFT=front / RIGHT=back still stated)",
-    /LEFT half = garment front, RIGHT = back/.test(profiled), profiled.slice(0, 300));
+    /LEFT = garment front, RIGHT = back/.test(profiled), profiled.slice(0, 300));
   check("cross-panel bleed is still forbidden edge-on",
     /RIGHT must not appear/.test(profiled), profiled.slice(0, 400));
   /* The canvas-furniture ban compressed to three words; the temporal clause is TRIM and
      is legitimately shed at edge-on, where the depth and lateral directives outrank it -
      see §5e, which now asserts that trade-off explicitly rather than assuming both fit. */
   check("the canvas-furniture ban still rides along edge-on",
-    /Ignore gap and labels/.test(profiled), profiled.slice(0, 300));
+    /Ignore gap.labels/.test(profiled), profiled.slice(0, 300));
 }
 
 console.log("\n── §5 THE WATCHER: edge-on is a separate channel from the front/back vote ──");
@@ -673,7 +673,7 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
   check("...as does the passthrough clamp",
     /pass through untouched/.test(square) && /pass through untouched/.test(built));
   check("both payloads stay inside the token budget",
-    square.length < 750 && built.length < 750, `square=${square.length} edge=${built.length}`);
+    square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }
 
 console.log("\n── §6 NO TOCTOU: the pose is a frozen snapshot, like the angle ──");

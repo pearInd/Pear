@@ -46,6 +46,11 @@ function makeHarness({ composite = true } = {}) {
   const sandbox = {
     console: { log() {}, warn() {}, error() {}, group() {}, groupEnd() {} },
     Blob,
+    /* The wire guard applyGarment() now wraps its prompt in. Identity here, not a stub
+       that shortens: this suite asserts WHICH payload shape goes out (prompt-only vs
+       prompt+image), so the guard must be transparent to it. Its own truncation
+       behaviour is covered in composite.test.mjs. */
+    clampPromptForWire: (p) => p,
     rtClient: {
       set: async (p) => { sent.push({ kind: "set", hasImage: p.image !== undefined, image: p.image, prompt: p.prompt }); },
       setPrompt: async (prompt, opts) => { sent.push({ kind: "setPrompt", prompt, opts }); },

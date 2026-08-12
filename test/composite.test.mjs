@@ -241,7 +241,7 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
   const promptCode = SRC.slice(SRC.indexOf("const P = Object.freeze({ CORE"),
                                SRC.indexOf("/* Full-Look composite clause"));
   const psandbox = {
-    PROMPT_MAX_CHARS: 700, console: { warn() {}, log() {} },
+    PROMPT_MAX_CHARS: 650, console: { warn() {}, log() {} },
     SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
     colorName: () => "white", getSizeDelta: () => 0,
     getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
@@ -249,7 +249,7 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
   const P = new Function(...Object.keys(psandbox),
     promptCode + "\nreturn { buildCompositePrompt, fitPrompt, P, DENSE };")(...Object.values(psandbox));
 
-  const MAX = 750;                       // ~187 tokens - the assertion the spec asks for
+  const MAX = 650;                       // ~187 tokens - the assertion the spec asks for
   const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
   const cases = [
     ["FRONT  square-on", TEE, "front", false],
@@ -272,7 +272,7 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
   const pathological = { ...TEE, color: "#fff",
     subType: "short_sleeve", name: "x".repeat(400) };
   check("a pathologically long garment name still fits (clauses shed, then a hard clamp)",
-    P.buildCompositePrompt(pathological, "front", true).length <= 700);
+    P.buildCompositePrompt(pathological, "front", true).length <= 650);
 
   const shed = P.fitPrompt([
     [P.P.CORE, "CORE stays."],
@@ -292,6 +292,35 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
     !/EDGE-ON/.test(sq) && !/flank/.test(sq), sq);
   check("...and is therefore shorter than the edge-on prompt",
     sq.length < P.buildCompositePrompt(TEE, "front", true).length);
+
+  /* THE WIRE GUARD. fitPrompt() budgets what this file BUILDS; clampPromptForWire()
+     budgets what actually reaches Decart. The distinction is the whole lesson of this
+     bug: the crash was reported twice against prompts that no builder here produces, and
+     a guarantee that only covers the builders cannot see a path that skips them. Asserted
+     on the SEND sites, because "every builder is short" is not the property that keeps the
+     session alive - "nothing long reaches set()" is. */
+  const wireCode = SRC.slice(SRC.indexOf("function clampPromptForWire"),
+                             SRC.indexOf("function fitPrompt"));
+  let warned = "";
+  const clamp = new Function("PROMPT_MAX_CHARS", "console",
+    wireCode + "\nreturn clampPromptForWire;")(650, { error: (m) => { warned = m; } });
+  check("the wire guard truncates an over-long prompt rather than letting set() reject it",
+    clamp("z".repeat(5000), "test").length === 650);
+  check("...and logs loudly, because firing at all means a builder bypassed the budget",
+    /over the 650 budget/.test(warned), warned.slice(0, 120));
+  check("...while leaving an in-budget prompt byte-identical",
+    clamp(sq, "test") === sq);
+
+  for (const site of ["applyGarment", "applyLook"]) {
+    check(`the ${site} send path is wrapped by the wire guard`,
+      new RegExp(`clampPromptForWire\\([\\s\\S]{0,400}"${site}"`).test(SRC),
+      `no clampPromptForWire(..., "${site}") found`);
+  }
+  /* Every rtClient.set()/setPrompt() call must draw from a guarded string. If a fifth
+     send site is ever added straight from a builder, this is what catches it. */
+  const sends = (SRC.match(/await rtClient\.set\(|await rtClient\.setPrompt\(/g) || []).length;
+  check(`all ${sends} rtClient send sites draw from a guarded prompt`,
+    sends === 4, `${sends} send sites found - if this changed, verify the new one is clamped`);
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

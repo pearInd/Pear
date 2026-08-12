@@ -5644,7 +5644,7 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    so the few capitals left (EDGE-ON, LEFT/RIGHT) are spent only where the emphasis is
    doing real steering work. */
 const DENSE = Object.freeze({
-  contract:      "Try-on. Reference: split image, LEFT half = garment front, RIGHT = back. Ignore gap and labels.",
+  contract:      "Try-on. Reference: split image, LEFT = garment front, RIGHT = back. Ignore gap/labels.",
   select: {
     front:       "Use LEFT only; RIGHT must not appear.",
     back:        "Use RIGHT only; LEFT must not appear.",
@@ -5657,13 +5657,13 @@ const DENSE = Object.freeze({
     front:       "They are EDGE-ON in side profile; keep that rotation.",
     back:        "They are EDGE-ON, part-way turned away; keep that rotation.",
   },
-  profileDepth:  "EDGE-ON: their front-to-back depth and belly are ground truth; never flatten that profile.",
-  lateralWrap:   "Wrap it round the flank with a natural side seam; never let their own shirt show.",
-  bodyFidelity:  "Keep their real volume, belly and hips as filmed; never slim or idealize.",
+  profileDepth:  "EDGE-ON: their front-to-back depth and belly are ground truth; never flatten.",
+  lateralWrap:   "Wrap it round the flank with a natural side seam; no original shirt showing.",
+  bodyFidelity:  "Keep their real volume, belly and hips; never slim or idealize.",
   modelAgnostic: "Cloth only: ignore the reference model's body; drape to THIS person.",
   keepBottoms:   "Leave their bottoms unchanged.",
   keepTop:       "Leave their top unchanged.",
-  inpaintLock:   "Face, hair, hands, skin and background pass through untouched.",
+  inpaintLock:   "Face, hands, skin and background pass through untouched.",
   rotation:      "The garment stays on through any turn.",
   temporal:      "Stable print, no flicker.",
   quality:       "Photoreal fabric, natural light.",
@@ -5708,6 +5708,28 @@ const DENSE = Object.freeze({
 function fitSentence(garmentType) {
   const mod = getFitModifier(getSizeDelta(), garmentType);
   return mod ? `Fit: ${String(mod).trim()}.` : "";
+}
+
+/* ── THE WIRE GUARD - last line of defence, and the one that generalises ──────
+   fitPrompt() budgets the prompts this file BUILDS. That is not the same guarantee as
+   "nothing over-long reaches Decart": a future builder, a hot-fix that concatenates one
+   more clause onto a returned string, or any path that skips the builders entirely would
+   sail straight past it and fail the session with the same opaque Hebrew banner.
+
+   This clamps at the wire instead, so the guarantee holds no matter who produced the
+   string. It should never fire - every builder already fits - so firing is itself the
+   signal, and it logs loudly with the offending prefix rather than silently truncating.
+   Truncation is the correct failure mode here: a clipped prompt still dresses the
+   shopper, while a rejected one ends the session before the first frame. */
+function clampPromptForWire(prompt, where) {
+  const s = String(prompt ?? "");
+  if (s.length <= PROMPT_MAX_CHARS) return s;
+  console.error(
+    `[PEAR] ${where}: prompt is ${s.length} chars, over the ${PROMPT_MAX_CHARS} budget ` +
+    `(Decart hard-rejects >226 tokens). Truncating to keep the session alive - a builder ` +
+    `is bypassing fitPrompt(). Prefix: ${s.slice(0, 120)}…`
+  );
+  return s.slice(0, PROMPT_MAX_CHARS).trim();
 }
 
 function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
@@ -5777,7 +5799,12 @@ function buildCompositePrompt(item, angle, inProfile) {
        shirt from showing along the flank, which is a worse failure than a restyled pair
        of trousers. It costs nothing square-on, where the band is not in view. */
     [P.HIGH,  inProfile ? DENSE.lateralWrap : ""],
-    [P.MED,   DENSE.inpaintLock],
+    /* HIGH, and ABOVE the opposite-layer lock. Tightening the cap to 650 made this
+       ranking load-bearing: at 700 both fitted, at 650 one of them sheds edge-on, and
+       shedding the passthrough clamp lets the model repaint the shopper's face and room -
+       far worse than the restyled trousers you get from shedding keepBottoms. Ranking
+       decides which failure you take, so it is stated rather than left to list order. */
+    [P.HIGH,  DENSE.inpaintLock],
     [P.MED,   lower ? DENSE.keepTop : DENSE.keepBottoms],
     [P.LOW,   DENSE.rotation],
     [P.LOW,   fitSentence(item.garmentType)],
@@ -6066,9 +6093,10 @@ async function applyGarment(item) {
      is the substantive difference. Both branches are driven by `usingComposite`, so the
      prompt can never describe a reference other than the one on the next line. */
   const payload = {
-    prompt: usingComposite
+    prompt: clampPromptForWire(usingComposite
       ? buildCompositePrompt(item, angleAtStart, profileAtStart)
       : buildPrompt(item, angleClause(item, angleAtStart, false, profileAtStart)),
+      "applyGarment"),
     enhance: false,
     ...(imageRef ? { image: imageRef } : {}),
   };
@@ -6587,9 +6615,10 @@ async function applyLook(top, bottom) {
      below is read live and would race. */
   const profileAtStart = profileActive();
   let primaryImage = canStitchLook ? await stitchLookBlob(topImg, bottomImg) : null;
-  const prompt = primaryImage
+  const prompt = clampPromptForWire(primaryImage
     ? buildLookPrompt(top, bottom, DENSE.lookPanels)
-    : buildLookPrompt(top, bottom, angleClause(undefined, undefined, undefined, profileAtStart));
+    : buildLookPrompt(top, bottom, angleClause(undefined, undefined, undefined, profileAtStart)),
+    "applyLook");
 
   if (!primaryImage) {
     // Stitch unavailable (AI Auto angle) or failed to decode - fall back to the

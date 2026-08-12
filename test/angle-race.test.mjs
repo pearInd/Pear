@@ -142,7 +142,7 @@ console.log("\n── useComposite: the clause must describe the reference that 
     useComposite: false,                          // ...but no composite was actually resolved
   });
   check("composite WANTED but not resolved -> no panel contract in the clause",
-    !/split image, LEFT half = garment front/.test(clause) && !SELECTED_BACK.test(clause), clause.slice(0, 200));
+    !/split image, LEFT = garment front/.test(clause) && !SELECTED_BACK.test(clause), clause.slice(0, 200));
   check("...and it falls back to the single-asset BACK steering instead",
     /The reference photo shows the garment's BACK/.test(clause), clause.slice(0, 200));
 }
@@ -155,7 +155,7 @@ console.log("\n── useComposite: the clause must describe the reference that 
     useComposite: true,
   });
   check("composite actually resolved -> the panel contract IS stated",
-    /split image, LEFT half = garment front/.test(clause) && SELECTED_BACK.test(clause), clause.slice(0, 200));
+    /split image, LEFT = garment front/.test(clause) && SELECTED_BACK.test(clause), clause.slice(0, 200));
 }
 {
   /* applyGarment() is the only caller that passes the flag; every other caller omits it
@@ -168,7 +168,7 @@ console.log("\n── useComposite: the clause must describe the reference that 
     useComposite: undefined,
   });
   check("useComposite omitted -> still inferred from compositeActiveFor()",
-    /split image, LEFT half = garment front/.test(clause), clause.slice(0, 200));
+    /split image, LEFT = garment front/.test(clause), clause.slice(0, 200));
 }
 
 console.log("\n── the panel contract states LEFT=FRONT / RIGHT=BACK, matching the stitcher ──");
@@ -179,7 +179,7 @@ console.log("\n── the panel contract states LEFT=FRONT / RIGHT=BACK, matchin
      words; if the stitcher's panel order is ever flipped without flipping this sentence,
      every back render silently reads the wrong half. */
   check("LEFT half is declared the FRONT view",
-    /LEFT half = garment front/.test(clause), clause.slice(0, 260));
+    /LEFT = garment front/.test(clause), clause.slice(0, 260));
   check("RIGHT half is declared the BACK view",
     /RIGHT = back/.test(clause), clause.slice(0, 260));
   const drawsFrontLeft = /ctx\.rect\(0, 0, fW, pH\)[\s\S]{0,80}drawImageCover\(ctx, front/.test(SRC);
@@ -201,9 +201,9 @@ console.log("\n── artifact + temporal clauses ride on BOTH orientations ─�
        under the 226-token ceiling (see config.js PROMPT_MAX_CHARS). What survives is the
        one-phrase form, and the layout fact it protects is still stated explicitly. */
     check(`${angle}: still tells the model to ignore the canvas furniture`,
-      /Ignore gap and labels/.test(clause), clause.slice(0, 260));
+      /Ignore gap.labels/.test(clause), clause.slice(0, 260));
     check(`${angle}: still names which half is which, so a flipped stitcher stays detectable`,
-      /LEFT half = garment front, RIGHT = back/.test(clause), clause.slice(0, 260));
+      /LEFT = garment front, RIGHT = back/.test(clause), clause.slice(0, 260));
   }
 }
 
@@ -237,7 +237,7 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
   check("the body-fidelity clamp still forbids slimming or idealizing the shopper",
     /never slim or idealize/.test(SRC));
   check("the passthrough clamp still names face, skin and background",
-    /Face, hair, hands, skin and background pass through untouched/.test(SRC));
+    /Face, hands, skin and background pass through untouched/.test(SRC));
   check("rotation continuity still promises the garment stays on through a turn",
     /The garment stays on through any turn/.test(SRC));
 }

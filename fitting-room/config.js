@@ -67,7 +67,7 @@ export const CONFIG = Object.freeze({
      tokenize WORSE than prose and that these prompts are full of: ALL-CAPS words and
      heavy punctuation, both of which split into more tokens per character. Lower this if
      a real prompt is ever rejected again; raising it spends that margin. */
-  PROMPT_MAX_CHARS: 700,
+  PROMPT_MAX_CHARS: 650,
 
   /* ── realtime latency tuning (CLIENT-side only) ─────────────────────────────
      ⚠️ Scope reality check: the ~1s a user perceives in the Lucy-VTON feed is

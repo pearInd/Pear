@@ -43,7 +43,7 @@ function check(label, cond, detail) {
 const code = SRC.slice(SRC.indexOf("const P = Object.freeze({ CORE"),
                        SRC.indexOf("/* Full-Look composite clause"));
 const sandbox = {
-  PROMPT_MAX_CHARS: 700, console: { warn() {}, log() {} },
+  PROMPT_MAX_CHARS: 650, console: { warn() {}, log() {} },
   SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
   colorName: () => "white", getSizeDelta: () => 0,
   getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
@@ -63,7 +63,7 @@ console.log("── §1 THE DIRECTIVE, in the prompt that actually ships ──"
   check("...and drapes to THIS person, the live subject",
     /drape to THIS person/.test(out), out);
   check("its positive half - the body-fidelity clamp - rides alongside it",
-    /Keep their real volume, belly and hips as filmed; never slim or idealize/.test(out), out);
+    /Keep their real volume, belly and hips; never slim or idealize/.test(out), out);
 
   /* COMPRESSED AWAY, recorded so the loss is deliberate rather than forgotten: the
      enumerated attribute list (height, build, skin tone, shoulder width, limb positions,
