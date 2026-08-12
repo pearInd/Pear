@@ -228,7 +228,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
      tee. One clause now carries both claims. The depth half is asserted above; the
      garment half is what these now assert, because it is the half that was missing. */
   check("...and now also tells the model how to BUILD the side, not just what body to keep",
-    /build the garment's side by continuing its front and back panels/.test(clause),
+    /build the side by continuing its front and back panels/.test(clause),
     clause.slice(-400));
   check("the clause is scoped to EDGE-ON so it cannot fire square-on",
     /EDGE-ON: keep their full front-to-back depth/.test(clause), clause.slice(-400));
@@ -301,7 +301,7 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
      names the actual failure. */
   const { clause } = run({ angle: "front", inProfile: true, distinctBack: BACK, useComposite: true });
   check("still instructs the side be built from the two reference panels",
-    /build the garment's side by continuing its front and back panels/.test(clause),
+    /build the side by continuing its front and back panels/.test(clause),
     clause.slice(-400));
   /* The symptom moved clause. "their own shirt showing" now lives in the asset lock,
      which is CORE and rides EVERY pose - not just edge-on - because the grey-shirt
@@ -314,7 +314,7 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   const lockItem = { name: "Tee", custom: false, garmentType: "upper_body" };
   for (const prof of [false, true]) {
     check(`the asset lock names the symptom at inProfile=${prof}`,
-      /never leave their own clothing showing/.test(lockApi.buildCompositePrompt(lockItem, "front", prof)),
+      /never leave their own top showing/.test(lockApi.buildCompositePrompt(lockItem, "front", prof)),
       lockApi.buildCompositePrompt(lockItem, "front", prof).slice(0, 400));
   }
 
@@ -357,7 +357,7 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   const built = api.buildCompositePrompt(item, "front", true);
   const latPos = built.indexOf("EDGE-ON: keep their full front-to-back depth");
   const subPos = built.indexOf("Replace their");
-  const lockPos = built.indexOf("Never invent a plain or grey garment");
+  const lockPos = built.indexOf("Never invent a garment, add a jacket");
   /* Depth and lateral are ONE clause now, and both follow the binding. The ordering that
      matters after the grey-shirt regression is: which garment (and the ban on inventing
      one), THEN how to build its side. */
@@ -711,8 +711,8 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     /pass through untouched/.test(square) && /pass through untouched/.test(built));
   check("...as does the reference binding and its asset lock (priority 1, never shed)",
     /in the reference image/.test(square) && /in the reference image/.test(built) &&
-    /Never invent a plain or grey garment/.test(square) &&
-    /Never invent a plain or grey garment/.test(built));
+    /Never invent a garment, add a jacket/.test(square) &&
+    /Never invent a garment, add a jacket/.test(built));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

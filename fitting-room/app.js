@@ -5726,12 +5726,26 @@ const DENSE = Object.freeze({
      nothing forbidding invention, a diffusion model falls to its own prior, which for
      "shirt" is a plain mid-grey tee. Naming the failure is what suppresses it - the same
      mechanism as backInferred's front-print ban. */
-  assetLock:     "Never invent a plain or grey garment, and never leave their own clothing showing.",
+  /* THE ANTI-INVENTION NEGATIVE, widened after a reported blue JACKET appearing over a
+     white printed tee. The previous wording banned inventing a plain or grey garment -
+     it named the wrong axis. The observed failure was not a colour substitution but a
+     LAYER and a TYPE change: the model kept a garment-shaped region and rendered
+     outerwear into it. Nothing in the prompt forbade that, and an unstated failure is
+     one this model is free to produce.
+
+     Naming the specific wrong output ("jacket", "coat", "extra layer") is deliberate and
+     is the mechanism this file relies on everywhere - the same reason backInferred names
+     the front print it must not copy. What is NOT named is any particular garment's
+     print text: that belongs to one product, and hardcoding it would state a falsehood
+     about every other item in the catalog. The substitution sentence already binds the
+     print generically ("every graphic, logo and lettering on it"), which is what makes
+     it true for all of them. */
+  assetLock:     "Never invent a garment, add a jacket, coat or extra layer, or change the garment type, and never leave their own top showing.",
   /* Depth and lateral wrap MERGED. Separately they cost ~155 characters and the budget
      could only afford one, so a 90-degree frame got the BODY clause and no GARMENT clause -
      leaving the side of the garment unreferenced, which is exactly where the model
      substitutes its own prior. One instruction about one region, ~175 chars. */
-  profileLateral: "EDGE-ON: keep their full front-to-back depth, and build the garment's side by continuing its front and back panels around the body.",
+  profileLateral: "EDGE-ON: keep their full front-to-back depth; build the side by continuing its front and back panels.",
   bodyFidelity:  "Keep their real body volume; never slim them.",
   modelAgnostic: "Ignore the reference model's body; fit the cloth to THIS person.",
   keepBottoms:   "Bottoms unchanged.",
@@ -5884,7 +5898,7 @@ function buildCompositePrompt(item, angle, inProfile) {
        for. Both CORE and adjacent: the instruction and the ban on ignoring it work as one
        statement, and separating them by a shed-able clause is how the negative could go
        missing while the positive stayed. */
-    [P.CORE, `Replace their ${target} with ONLY ${desc} - keep its exact colour and every graphic, logo and lettering on it.`],
+    [P.CORE, `Replace their ${target} with ONLY ${desc} - its exact colour and every graphic and lettering on it.`],
     [P.CORE, DENSE.assetLock],
     /* PRIORITY 2 - the 90-degree directive, CORE for the same reason. An edge-on frame
        shows a band of garment neither panel contains; unreferenced, that band is where
