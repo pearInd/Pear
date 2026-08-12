@@ -57,13 +57,13 @@ console.log("── §1 THE DIRECTIVE, in the prompt that actually ships ──"
 {
   const out = api.buildCompositePrompt(TEE, "front", false);
   check("names the reference as cloth-only, not a body",
-    /Cloth only: ignore the reference model's body/.test(out), out);
+    /Ignore the reference model's body/.test(out), out);
   /* The compact statement of the whole feature, and the one phrase that must survive any
      future shortening: it is what distinguishes this clause from ordinary body fidelity. */
   check("...and drapes to THIS person, the live subject",
-    /drape to THIS person/.test(out), out);
+    /fit the cloth to THIS person/.test(out), out);
   check("its positive half - the body-fidelity clamp - rides alongside it",
-    /Keep their real volume, belly and hips; never slim or idealize/.test(out), out);
+    /Keep their real body volume; never slim them/.test(out), out);
 
   /* COMPRESSED AWAY, recorded so the loss is deliberate rather than forgotten: the
      enumerated attribute list (height, build, skin tone, shoulder width, limb positions,
@@ -103,19 +103,31 @@ console.log("\n── §3 THE BUDGET MUST NOT SHED IT (new risk, created by comp
      isolation were tagged TRIM, a long product name would silently remove it - the
      original bug returning with no code change and nothing to point at. It is HIGH,
      one step below never-drop, and that ranking is the assertion. */
-  const isolationIsHigh = /\[P\.HIGH,\s*DENSE\.modelAgnostic\]/.test(SRC);
-  check("tagged HIGH, so only CORE outranks it",
-    isolationIsHigh, "must not be MED/LOW/TRIM - those are shed under budget pressure");
+  /* DEMOTED HIGH -> MED by the grey-shirt regression, and the demotion is the assertion
+     now. The clause that grounds WHICH garment renders had to outrank the clause that
+     refines WHOSE BODY it is draped on: the live failure was the model discarding the
+     referenced shirt entirely for a plain grey one, which no amount of model-agnostic
+     phrasing would have prevented.
 
+     The honest consequence: this survives square-on and is SHED edge-on. Pinned in both
+     directions so neither drifts silently - if it ever survives edge-on again, something
+     above it was quietly dropped. */
+  check("ranked MED - below the reference binding, the edge-on directive and passthrough",
+    /\[P\.MED,\s*DENSE\.modelAgnostic\]/.test(SRC),
+    "if this is promoted again, check what it displaced");
+  check("survives square-on, where the budget affords it",
+    /[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", false)));
+  check("shed EDGE-ON - a known cost of grounding the garment first, not an accident",
+    !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", true)));
+
+  /* What must survive unconditionally is the binding it supports. A pathological garment
+     name is the case where shedding turns into truncation, so it is checked here. */
   const pathological = { ...TEE, name: "x".repeat(400) };
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
-    check(`survives a pathologically long garment name (inProfile=${prof})`,
-      /ignore the reference model's body/.test(out), `${out.length} chars: ${out.slice(-160)}`);
+    check(`the reference binding survives a pathologically long name (inProfile=${prof})`,
+      /in the reference image/.test(out), `${out.length} chars: ${out.slice(-160)}`);
   }
-  check("survives at BOTH poses on ordinary input",
-    /ignore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", false)) &&
-    /ignore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", true)));
 }
 
 console.log("\n── §4 NOT POSE-GATED: the reference figure bleeds at every angle ──");
@@ -129,9 +141,10 @@ console.log("\n── §4 NOT POSE-GATED: the reference figure bleeds at every a
   check("not placed behind an inProfile ternary",
     !/inProfile \?[^\n]*modelAgnostic/.test(composite),
     "the reference model is present at 0 degrees too");
-  check("...while the genuinely pose-specific clauses ARE still gated",
-    /inProfile \? DENSE\.profileDepth : ""/.test(composite) &&
-    /inProfile \? DENSE\.lateralWrap : ""/.test(composite),
+  /* profileDepth and lateralWrap MERGED into profileLateral - separately they cost ~155
+     chars and only one fitted, which left the garment's side unreferenced at 90 degrees. */
+  check("...while the genuinely pose-specific clause IS still gated",
+    /inProfile \? DENSE\.profileLateral : ""/.test(composite),
     composite.slice(composite.indexOf("inProfile ?"), composite.indexOf("inProfile ?") + 160));
   check("the catalog/custom builders take no pose parameter, so they cannot be gated at all",
     /function buildPrompt\(item, angleText = ""\)/.test(SRC) &&

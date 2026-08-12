@@ -290,8 +290,14 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
   const sq = P.buildCompositePrompt(TEE, "front", false);
   check("square-on omits the EDGE-ON directives entirely",
     !/EDGE-ON/.test(sq) && !/flank/.test(sq), sq);
-  check("...and is therefore shorter than the edge-on prompt",
-    sq.length < P.buildCompositePrompt(TEE, "front", true).length);
+  /* NOT "square-on is shorter". Both poses now fill the budget - they just fill it with
+     different clauses. Square-on spends the room the EDGE-ON directive would take on the
+     lower-priority ones (model-agnostic, rotation), so the two lengths land within a few
+     characters of each other. Length is the wrong property; WHICH clauses survive is the
+     right one, and that is what the shed-order checks above and below assert. */
+  check("...and both poses land inside the budget rather than one being padded",
+    sq.length <= 650 && P.buildCompositePrompt(TEE, "front", true).length <= 650,
+    `square=${sq.length} edge=${P.buildCompositePrompt(TEE, "front", true).length}`);
 
   /* THE WIRE GUARD. fitPrompt() budgets what this file BUILDS; clampPromptForWire()
      budgets what actually reaches Decart. The distinction is the whole lesson of this

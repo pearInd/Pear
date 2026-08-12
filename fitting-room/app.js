@@ -5644,10 +5644,18 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    so the few capitals left (EDGE-ON, LEFT/RIGHT) are spent only where the emphasis is
    doing real steering work. */
 const DENSE = Object.freeze({
-  contract:      "Try-on. Reference: split image, LEFT = garment front, RIGHT = back. Ignore gap/labels.",
+  /* NAMES THE REFERENCE AS A PHOTO OF THE GARMENT, in prose. The previous wording -
+     "Try-on. Reference: split image, LEFT = garment front, RIGHT = back." - was
+     telegraphic notation, and notation is a weak way to tell a diffusion model that an
+     attached image is the thing it must copy. Costs ~65 characters more and buys the
+     grounding back. */
+  contract:      "Virtual try-on. The reference image is a split photo of one garment: LEFT half its front, RIGHT half its back.",
+  /* Split out of the contract so it can shed on its own. It guards a cosmetic artifact -
+     a panel divider painted onto the shirt - which must never outrank grounding. */
+  ignoreFurniture: "Ignore the gap, the background and any FRONT/BACK label.",
   select: {
-    front:       "Use LEFT only; RIGHT must not appear.",
-    back:        "Use RIGHT only; LEFT must not appear.",
+    front:       "Use the LEFT half only; ignore the RIGHT.",
+    back:        "Use the RIGHT half only; ignore the LEFT.",
   },
   pose: {
     front:       "They face the camera.",
@@ -5657,13 +5665,22 @@ const DENSE = Object.freeze({
     front:       "They are EDGE-ON in side profile; keep that rotation.",
     back:        "They are EDGE-ON, part-way turned away; keep that rotation.",
   },
-  profileDepth:  "EDGE-ON: their front-to-back depth and belly are ground truth; never flatten.",
-  lateralWrap:   "Wrap it round the flank with a natural side seam; no original shirt showing.",
-  bodyFidelity:  "Keep their real volume, belly and hips; never slim or idealize.",
-  modelAgnostic: "Cloth only: ignore the reference model's body; drape to THIS person.",
-  keepBottoms:   "Leave their bottoms unchanged.",
-  keepTop:       "Leave their top unchanged.",
-  inpaintLock:   "Face, hands, skin and background pass through untouched.",
+  /* THE ANTI-MUTATION NEGATIVE. Compression removed every enumerated "do not" from this
+     prompt, and this is the one that had to come back: with a weakly-bound reference and
+     nothing forbidding invention, a diffusion model falls to its own prior, which for
+     "shirt" is a plain mid-grey tee. Naming the failure is what suppresses it - the same
+     mechanism as backInferred's front-print ban. */
+  assetLock:     "Never invent a plain or grey garment, and never leave their own clothing showing.",
+  /* Depth and lateral wrap MERGED. Separately they cost ~155 characters and the budget
+     could only afford one, so a 90-degree frame got the BODY clause and no GARMENT clause -
+     leaving the side of the garment unreferenced, which is exactly where the model
+     substitutes its own prior. One instruction about one region, ~175 chars. */
+  profileLateral: "EDGE-ON: keep their full front-to-back depth, and build the garment's side by continuing its front and back panels around the body.",
+  bodyFidelity:  "Keep their real body volume; never slim them.",
+  modelAgnostic: "Ignore the reference model's body; fit the cloth to THIS person.",
+  keepBottoms:   "Bottoms unchanged.",
+  keepTop:       "Top unchanged.",
+  inpaintLock:   "Face, skin, hands and background pass through untouched.",
   rotation:      "The garment stays on through any turn.",
   temporal:      "Stable print, no flicker.",
   quality:       "Photoreal fabric, natural light.",
@@ -5780,32 +5797,45 @@ function buildCompositePrompt(item, angle, inProfile) {
 
   const sub  = SUBTYPE_PROMPT[item.subType] || "";
   const noun = lower ? `${sub} trousers`.trim() : `${sub} ${SHIRT_NOUN[item.subType] || "top"}`.trim();
-  // A custom upload has no catalog colour/subType to name - the panel IS the description.
-  const desc = item.custom ? "the garment shown" : `the ${colorName(item.color)} ${noun} shown`;
+  const target = lower ? "bottoms" : "top";
+  /* THE BINDING PHRASE, restored. Compression trimmed "the white t-shirt shown IN THAT
+     PANEL" down to "the white t-shirt shown", which reads as a description of a garment
+     rather than a pointer at the attached image - and a description alone is something a
+     diffusion model is free to satisfy with its own idea of a t-shirt. Naming the
+     reference image explicitly is what re-anchors it. A custom upload has no catalog
+     colour to fall back on, so for it the pointer is the ENTIRE description. */
+  const desc = item.custom
+    ? "the exact garment in the reference image"
+    : `the ${colorName(item.color)} ${noun} in the reference image`;
 
   return fitPrompt([
     [P.CORE, DENSE.contract],
     [P.CORE, DENSE.select[a]],
     [P.CORE, inProfile ? DENSE.poseProfile[a] : DENSE.pose[a]],
-    /* Edge-on only, and it sits BEFORE the garment description for the reason the verbose
-       version documented: at 90 degrees the body's depth is the thing actually being got
-       wrong, so it leads the garment rather than trailing it. CORE, so it can never be
-       shed - a dropped depth directive is the flattening bug returning silently. */
-    [P.CORE,  inProfile ? DENSE.profileDepth : ""],
-    [P.CORE, `Replace their ${lower ? "bottoms" : "top"} with ${desc}: exact colour, texture and print.`],
-    [P.HIGH,  DENSE.bodyFidelity],
-    [P.HIGH,  DENSE.modelAgnostic],
-    /* HIGH, not MED, and only edge-on: this is the clause that keeps the shopper's own
-       shirt from showing along the flank, which is a worse failure than a restyled pair
-       of trousers. It costs nothing square-on, where the band is not in view. */
-    [P.HIGH,  inProfile ? DENSE.lateralWrap : ""],
-    /* HIGH, and ABOVE the opposite-layer lock. Tightening the cap to 650 made this
-       ranking load-bearing: at 700 both fitted, at 650 one of them sheds edge-on, and
-       shedding the passthrough clamp lets the model repaint the shopper's face and room -
-       far worse than the restyled trousers you get from shedding keepBottoms. Ranking
-       decides which failure you take, so it is stated rather than left to list order. */
+    /* PRIORITY 1 - the substitution and its asset lock, which is what the whole prompt is
+       for. Both CORE and adjacent: the instruction and the ban on ignoring it work as one
+       statement, and separating them by a shed-able clause is how the negative could go
+       missing while the positive stayed. */
+    [P.CORE, `Replace their ${target} with ONLY ${desc} - keep its exact colour and every graphic, logo and lettering on it.`],
+    [P.CORE, DENSE.assetLock],
+    /* PRIORITY 2 - the 90-degree directive, CORE for the same reason. An edge-on frame
+       shows a band of garment neither panel contains; unreferenced, that band is where
+       the model substitutes its own prior, which is how a plain grey shirt appears at the
+       exact moment the shopper turns. It sits before the body/passthrough clamps. */
+    [P.CORE, inProfile ? DENSE.profileLateral : ""],
+    /* PRIORITY 3 - the passthrough clamp. Top of the DROPPABLE tier, so everything above
+       survives any budget pressure and this is the first real instruction to go. */
     [P.HIGH,  DENSE.inpaintLock],
+    /* MED, one tier BELOW the passthrough clamp, and only because of what sits above it:
+       profileLateral already says "keep their full front-to-back depth", which IS the
+       body-fidelity claim at 90 degrees. So shedding this edge-on loses nothing that the
+       CORE directive is not already making, while shedding the passthrough clamp instead
+       would let the model repaint the face and room. Square-on, where profileLateral is
+       absent, the budget is loose enough that both survive - checked, not assumed. */
+    [P.MED,   DENSE.bodyFidelity],
+    [P.MED,   DENSE.modelAgnostic],
     [P.MED,   lower ? DENSE.keepTop : DENSE.keepBottoms],
+    [P.LOW,   DENSE.ignoreFurniture],
     [P.LOW,   DENSE.rotation],
     [P.LOW,   fitSentence(item.garmentType)],
     [P.TRIM,  DENSE.temporal],
@@ -5905,7 +5935,10 @@ function angleClause(item, angleOverride, useComposite, inProfile) {
      describe the frame, not which panel was locked), so they ride on front, back and side
      alike. Order is deliberate and matches buildCompositePrompt(): what the body IS, then
      how the garment covers it - the second only means anything given the first. */
-  const depth = inProfile ? " " + DENSE.profileDepth + " " + DENSE.lateralWrap : "";
+  /* One merged edge-on directive now, not two. Referencing the retired profileDepth /
+     lateralWrap here would interpolate the string "undefined" straight into a live
+     prompt - silent, and exactly the kind of thing the model would try to render. */
+  const depth = inProfile ? " " + DENSE.profileLateral : "";
 
   // Composite mode: the reference carries BOTH views, so the clause names the panel
   // matching the detected orientation and excludes the other outright. Only the pose
