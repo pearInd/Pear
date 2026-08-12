@@ -1523,11 +1523,17 @@ function setActiveItem(item, opts = {}) {
 // there is no quantity picker anywhere in this UI to read a real value from.
 window.pearGetActiveGarment = function () {
   if (!activeItem) return null;
+  /* Variant-resolved, not base-resolved. Reading activeItem.sku directly meant a shopper
+     who picked the red swatch added the BASE colour to their cart - the swatch moved the
+     photo and nothing else. variantMetaOf() falls back to exactly the old values when the
+     item has no variant table, so single-colour items are unaffected. */
+  const meta = variantMetaOf(activeItem);
   return {
-    url: activeItem.img,
+    url: activeImageOf(activeItem) || activeItem.img,   // the variant's own packshot
     name: activeItem.name,
-    variantId: activeItem.variantId,
-    sku: activeItem.sku || activeItem.variantId || String(activeItem.id),
+    color: activeColor || undefined,                    // which swatch, for the host's UI
+    variantId: meta.variantId,
+    sku: meta.sku,
     size: activeTryOnSize || currentUserSize || "",
     quantity: 1,
   };
@@ -5134,6 +5140,56 @@ function swatchColor(item, key) {
   return (v && v.swatch) || (item && item.color) || "#8a8f98";
 }
 
+/* ── Variant identity - the half of a colour swap that used to be dropped ─────
+   THE BUG: setColor() moved `activeColor`, and galleryOf() reads through
+   variantAssetsOf(), so picking a swatch DID swap the reference photo. Nothing else
+   moved. Everything downstream still read the item's BASE fields:
+
+     · the prompt said colorName(item.color)      → "the black t-shirt" for a red variant
+     · the cart said activeItem.sku / .variantId  → the base SKU, whatever was picked
+
+   So the model was handed a red packshot under an instruction naming black, and the
+   shopper could add a colour to their cart that they never selected. The image half
+   worked, which is exactly why it read as the model mutating the garment rather than as
+   a state bug.
+
+   Resolved through ONE accessor rather than by mutating activeItem on every swap:
+   activeItem is shared with the outfit slots, the thumbnail cache and the handoff
+   payload, so writing colour/sku into it would make a swatch click a mutation of
+   catalog data - and a stale copy anywhere would then disagree. Reading derives the
+   same answer everywhere, every time.
+
+   Falls back through variant → item → id at each field independently, because a
+   storefront variant may carry a sku and no variantId (or the reverse), and a catalog
+   item may define variants purely for imagery with no commerce identity at all.
+   @returns {{ color: string, variantId: string|undefined, sku: string }} */
+function variantMetaOf(item, color = activeColor) {
+  const base = {
+    color: (item && item.color) || "#8a8f98",
+    variantId: item && item.variantId,
+    sku: (item && (item.sku || item.variantId)) || (item && item.id != null ? String(item.id) : ""),
+  };
+  if (!item) return base;
+  const colors = colorsOf(item);
+  if (!colors.length) return base;
+  const key = colors.includes(color) ? color : colors[0];
+  const v = item.variants[key];
+  if (!v) return base;
+  return {
+    // `swatch` is the variant's own hex and is what the bubble renders, so it is also
+    // the honest answer for "what colour is the shopper actually trying on".
+    color: v.swatch || v.color || base.color,
+    variantId: v.variantId ?? base.variantId,
+    sku: v.sku || v.variantId || base.sku,
+  };
+}
+
+/* The colour word the PROMPT should use. Separate one-liner because every builder needs
+   it and none of them should have to know about the variant table. */
+function activeColorOf(item) {
+  return variantMetaOf(item).color;
+}
+
 /** Normalize any item (variant, flat-gallery, or legacy) into one { front, back?, … } map. */
 function galleryOf(item) {
   if (!item) return {};
@@ -5781,7 +5837,7 @@ function buildCompositePrompt(item, angle, inProfile) {
   const sub  = SUBTYPE_PROMPT[item.subType] || "";
   const noun = lower ? `${sub} trousers`.trim() : `${sub} ${SHIRT_NOUN[item.subType] || "top"}`.trim();
   // A custom upload has no catalog colour/subType to name - the panel IS the description.
-  const desc = item.custom ? "the garment shown" : `the ${colorName(item.color)} ${noun} shown`;
+  const desc = item.custom ? "the garment shown" : `the ${colorName(activeColorOf(item))} ${noun} shown`;
 
   return fitPrompt([
     [P.CORE, DENSE.contract],
@@ -6475,7 +6531,7 @@ function buildPrompt(item, angleText = "") {
                       : `${sub} ${SHIRT_NOUN[item.subType] || "top"}`.trim();
 
   return fitPrompt([
-    [P.CORE, `Virtual try-on. Replace their ${lower ? "bottoms" : "top"} with ${colorName(item.color)} ${noun}: exact colour, texture and print.`],
+    [P.CORE, `Virtual try-on. Replace their ${lower ? "bottoms" : "top"} with ${colorName(activeColorOf(item))} ${noun}: exact colour, texture and print.`],
     [P.CORE, angleText],
     [P.HIGH, DENSE.bodyFidelity],
     [P.HIGH, DENSE.modelAgnostic],
@@ -6665,7 +6721,7 @@ function buildLookPrompt(top, bottom, angleText = "") {
   const tNoun = `${tSub} ${SHIRT_NOUN[top.subType] || "top"}`.trim();
   const bSub = SUBTYPE_PROMPT[bottom.subType] || "";
   return fitPrompt([
-    [P.CORE, `Virtual try-on, one pass: replace their top with ${colorName(top.color)} ${tNoun} and their bottoms with ${colorName(bottom.color)} ${`${bSub} trousers`.trim()}. Both at once, exact colours and textures.`],
+    [P.CORE, `Virtual try-on, one pass: replace their top with ${colorName(activeColorOf(top))} ${tNoun} and their bottoms with ${colorName(activeColorOf(bottom))} ${`${bSub} trousers`.trim()}. Both at once, exact colours and textures.`],
     [P.CORE, angleText],
     [P.HIGH, DENSE.bodyFidelity],
     [P.HIGH, DENSE.modelAgnostic],
@@ -9739,9 +9795,41 @@ function detectGarments(img) {
   // Classify each blob (Top / Bottom / Full-body) and split a worn-outfit blob
   // into separate Top + Bottom garments, then confidence-gate + cap.
   natural = refineGarments(natural, iw, ih, U);
-  const best = natural.reduce((m, b) => Math.max(m, b.score || 0), 0);
+
+  /* ── ASPECT-RATIO GATE - the validation the area gates cannot express ────────
+     MIN_BOX_AREA_FRAC / MAX_BOX_AREA_FRAC / MIN_BOX_DIM_FRAC above already reject boxes
+     that are too small, too large, or too thin in either axis. None of them can reject a
+     box that is a plausible SIZE but an implausible SHAPE - and that is the crop that
+     does real damage, because it survives every existing check and gets sent to Decart
+     as if it were a garment.
+
+     The two cases seen in practice are a hard-shadow strip or a background seam merging
+     into the blob (a long horizontal band, ratio well under 0.35) and a full-height
+     column of wall caught beside the subject (a narrow vertical bar, ratio over ~4). A
+     real upper- or lower-body garment photographed flat or worn sits comfortably inside
+     those bounds. Rejecting here rather than downstream means the caller's existing
+     "no garments found" UI (gdEmpty) handles it - the user is told to re-crop, instead
+     of the model being handed a strip of wall and inventing a garment to match it. */
+  const ASPECT_MIN = 0.35;   // w/h - flatter than this is a shadow band, not a garment
+  const ASPECT_MAX = 4.0;    // w/h - narrower than this is a wall/door edge column
+  const shaped = natural.filter((b) => {
+    if (!b.width || !b.height) return false;
+    const ratio = b.width / b.height;
+    const ok = ratio >= ASPECT_MIN && ratio <= ASPECT_MAX;
+    if (!ok) {
+      console.warn(`[PEAR] detectGarments: rejected ${b.label || "box"} on aspect ratio ` +
+        `${ratio.toFixed(2)} (allowed ${ASPECT_MIN}-${ASPECT_MAX}) - ${b.width}x${b.height}px`);
+    }
+    return ok;
+  });
+
+  /* Confidence is scored on the SURVIVING set. Scoring before the aspect gate would let
+     a rejected shadow band's high area-score carry the whole detection over the
+     confidence bar, so a photo whose only "garment" was noise would still open the
+     picker with nothing usable in it. */
+  const best = shaped.reduce((m, b) => Math.max(m, b.score || 0), 0);
   if (best < U.MIN_CONFIDENCE) return [];
-  return natural.slice(0, U.MAX_BOXES);
+  return shaped.slice(0, U.MAX_BOXES);
 }
 
 /**

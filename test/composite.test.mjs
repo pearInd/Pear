@@ -243,7 +243,11 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
   const psandbox = {
     PROMPT_MAX_CHARS: 650, console: { warn() {}, log() {} },
     SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
-    colorName: () => "white", getSizeDelta: () => 0,
+    colorName: () => "white",
+  /* Resolves the SELECTED variant's colour so a swatch swap reaches the prompt.
+     Lives outside this slice (next to the variant table), so it is stubbed to the
+     item's own colour - the single-variant path, which is what these cases use. */
+  activeColorOf: (it) => (it && it.color) || "#fff", getSizeDelta: () => 0,
     getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
   };
   const P = new Function(...Object.keys(psandbox),

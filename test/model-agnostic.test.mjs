@@ -45,7 +45,11 @@ const code = SRC.slice(SRC.indexOf("const P = Object.freeze({ CORE"),
 const sandbox = {
   PROMPT_MAX_CHARS: 650, console: { warn() {}, log() {} },
   SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
-  colorName: () => "white", getSizeDelta: () => 0,
+  colorName: () => "white",
+  /* Resolves the SELECTED variant's colour so a swatch swap reaches the prompt.
+     Lives outside this slice (next to the variant table), so it is stubbed to the
+     item's own colour - the single-variant path, which is what these cases use. */
+  activeColorOf: (it) => (it && it.color) || "#fff", getSizeDelta: () => 0,
   getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),

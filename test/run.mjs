@@ -94,6 +94,16 @@
                       mid-wait bails instead of continuing go-live's success path, and
                       that a late settlement after the timeout already won never surfaces
                       as an unhandled rejection.
+     variant-sync     A colour swatch moved the reference PHOTO and nothing else: the
+                      prompt still named the item's BASE colour and the cart still sent
+                      the base SKU, so Decart got a red packshot told it was black and a
+                      shopper could buy a colour they never picked. Also the host bridge -
+                      pearGetActiveGarment() correctly returns null with nothing selected,
+                      but lux-interactions.js did `|| {}` and posted sku:"" to the store,
+                      under an optimistic toast claiming success. Plus the detection
+                      aspect-ratio gate, which rejects the plausible-SIZE/implausible-SHAPE
+                      crops (shadow bands, wall columns) that every existing area gate
+                      passes straight through to the VTON backend.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -128,6 +138,7 @@ const SUITES = [
   ["reconnect", "reconnect.test.mjs"],
   ["apply-timeout", "apply-timeout.test.mjs"],
   ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],
+  ["variant-sync", "variant-sync.test.mjs"],
 ];
 
 let failed = 0;
