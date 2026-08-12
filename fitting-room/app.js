@@ -5360,6 +5360,56 @@ const SIDE_PROFILE_DEPTH =
   " greatest protrusion with natural tension, creases and fold shadows beneath it." +
   " Fit the garment to the body's true volume; never the body to the garment.";
 
+/* ── Lateral seam synthesis - the band that NO reference view depicts ─────────
+   THE GAP THIS FILLS, and why it is not the same gap SIDE_PROFILE_DEPTH fills. That
+   clause is about the BODY: it pins the silhouette edge as ground truth so the shopper's
+   real front-to-back volume survives. This one is about the GARMENT covering that edge.
+
+   At 90 degrees the camera sees a band of the garment that neither reference view
+   contains - the flank, the side seam, the underarm, the outer face of the sleeve. The
+   composite holds a FRONT panel and a BACK panel; the side is the hinge between them and
+   is photographed by neither. With nothing in the prompt naming that band, the model is
+   inpainting a region it has no reference for, and the cheapest completion available to
+   it is the pixels already there: the shopper's own real shirt. That is the "it drops the
+   garment when I turn" report, and it is a DIFFERENT mechanism from the reversion
+   ROTATION_CONTINUITY covers (that one is about the turn as a temporal event; this is
+   about a spatial region being unreferenced at the moment of peak exposure).
+
+   WHY THIS DOES NOT SAY "BLEND THE TWO PANELS", which is the obvious phrasing and the
+   wrong one. COMPOSITE_PANEL_CONTRACT opens the prompt by calling the boundary between
+   the panels an impassable wall, and COMPOSITE_APPLY then retires the unselected panel
+   outright ("does not exist for this frame"). Instructing a blend here would contradict
+   the two strongest, earliest instructions in the prompt, and the way that contradiction
+   resolves in practice is already on the record: rendering both panels' designs on one
+   surface is the double-print regression that got the previous stitcher removed in
+   23f5953. So the synthesis is specified GEOMETRICALLY - the garment wraps, the side seam
+   is where the wrap turns - while the locked panel remains the only texture source and
+   the unreferenced band is filled by EXTRAPOLATING its cloth, never by dragging the
+   opposite panel's graphics around the body. Continuity of fabric, not of print.
+
+   Prompt-only, so it costs nothing at runtime: it rides the same assembly path every
+   other clause does and is re-asserted by the existing re-anchor cadence. */
+const LATERAL_SEAM_SYNTHESIS =
+  " LATERAL SEAM SYNTHESIS - the side of the garment must be PREDICTED, not skipped." +
+  " No reference view depicts the narrow lateral band now facing the camera: the flank," +
+  " the side seam, the underarm and the outer face of the sleeve. Synthesize it." +
+  " (1) CONTINUITY MANDATE: hold 100% garment replacement coverage across the entire" +
+  " visible torso for every frame of the turn. There must be no frame, and no region of" +
+  " any frame, in which the target garment thins, breaks, fades, turns transparent or lets" +
+  " the person's own original shirt - its colour, collar, sleeves or hem - show through" +
+  " anywhere, least of all along the flank, the shoulder line or the underarm." +
+  " (2) WRAP: render how this garment continues around the torso's lateral depth - the" +
+  " side seam running down their real side contour, the shoulder seam and sleeve head" +
+  " turning with the shoulder, the hem closing unbroken around the flank, and the fabric" +
+  " folding and gathering where the arm meets the body." +
+  " (3) EXTRAPOLATE, NEVER RELOCATE: carry the colour, weave, sheen, material thickness" +
+  " and fold behaviour of the reference view named above outward across that band, so the" +
+  " side reads as the same garment in the same cloth and the transition into it is smooth" +
+  " and gradual, with no hard edge, colour step, seam artifact or texture break. Where the" +
+  " reference depicts no lateral detail, infer PLAIN fabric in that same colour and" +
+  " texture. Do NOT drag, mirror, wrap or repeat the reference's graphics, prints, logos" +
+  " or lettering around onto the side to fill it, and do NOT invent new ones there.";
+
 /* ── Stitched Garment Composite - orientation clauses ────────────────────────────
    Deliberately modelled on LOOK_CLAUSE below, which is the in-repo proof that a
    labelled two-panel reference works with this model: name the panels, forbid
@@ -5567,10 +5617,10 @@ function buildCompositePrompt(item, angle, inProfile) {
        quality boilerplate and three general clamps; that is the position this function
        exists to rescue the panel contract FROM. It sits directly behind the pose instead:
        which reference, what rotation, what body, then the garment. */
-    (inProfile ? SIDE_PROFILE_DEPTH : "") +
+    (inProfile ? SIDE_PROFILE_DEPTH + LATERAL_SEAM_SYNTHESIS : "") +
     ` Substitute the person's current ${target} with ${desc}, reproducing its exact colour,` +
     ` pattern, print and fabric texture. ${anchor} Render a ${fitMod}${COMPOSITE_QUALITY}.${fabricMod}${keep}` +
-    STRICT_INPAINT + IGNORE_SOURCE_ARTIFACTS + ROTATION_CONTINUITY + PROFILE_ANOMALY_GUARD +
+    MODEL_AGNOSTIC_EXTRACTION + STRICT_INPAINT + IGNORE_SOURCE_ARTIFACTS + ROTATION_CONTINUITY + PROFILE_ANOMALY_GUARD +
     COMPOSITE_TEMPORAL
   ).replace(/\s+/g, " ").trim();
 }
@@ -5662,9 +5712,12 @@ function compositeActiveFor(item) {
    other side is now showing. Keeping them independent is what lets this fix the pose
    without touching any asset-selection behaviour. */
 function angleClause(item, angleOverride, useComposite, inProfile) {
-  // Edge-on: append the depth-fidelity clause on every branch below. The clause is about
-  // the BODY, so it is orientation-independent - it rides on front, back and side alike.
-  const depth = inProfile ? SIDE_PROFILE_DEPTH : "";
+  /* Edge-on: append BOTH profile clauses on every branch below - the body's depth axis,
+     then the garment's lateral wrap over it. Both are orientation-independent (they
+     describe the frame, not which panel was locked), so they ride on front, back and side
+     alike. Order is deliberate and matches buildCompositePrompt(): what the body IS, then
+     how the garment covers it - the second only means anything given the first. */
+  const depth = inProfile ? SIDE_PROFILE_DEPTH + LATERAL_SEAM_SYNTHESIS : "";
 
   // Composite mode: the reference carries BOTH views, so the clause names the panel
   // matching the detected orientation and excludes the other outright. Only the pose
@@ -6054,6 +6107,53 @@ const HEM_DETAIL = " Preserve the garment's printed graphics, logos, and text, a
 const KEEP_BOTTOMS = " Keep the person's existing lower body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the trousers, shorts, skirt, shoes, belt, or anything below the waist, and do not add, invent or restyle any accessories that were not already present.";
 const KEEP_TOP     = " Keep the person's existing upper body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the shirt, top, jacket, hat, scarf, jewelry, or anything above the waist, and do not add, invent or restyle any accessories that were not already present.";
 
+/* ── Model-agnostic extraction - the OTHER body in the pipeline ───────────────
+   THE GAP: every clause in this file that defends body shape defends it against the
+   model's own training prior (STRICT_INPAINT's "it slimmed me down", SIDE_PROFILE_DEPTH's
+   flattened profile). None of them account for the fact that the reference image usually
+   contains A SECOND HUMAN - the e-commerce model wearing the product - and that Lucy sees
+   that figure as part of its conditioning. IGNORE_SOURCE_ARTIFACTS is the nearest thing
+   and it is deliberately scoped to non-human noise: badges, watermarks, orientation
+   labels. A whole person in the reference asset was never named, so their shoulder line,
+   chest, build and posture sat in the conditioning with nothing marking them as
+   off-limits - and an unstated region is exactly what this file's history keeps recording
+   as the thing that gets reinterpreted. That is the "it gave me the model's shoulders"
+   report: not a detection failure, an unstated constraint, same class as every other bug
+   these constants exist for.
+
+   DELIBERATELY NOT A RESTATEMENT of ABSOLUTE BODY FIDELITY below. That clause already
+   says the live person's shape is 1:1 ground truth and that the garment fits the body
+   rather than the reverse; repeating it here would spend several hundred characters
+   re-asserting it ~200 characters before it actually appears, against a prompt this file
+   already argues is competing for the model's attention. What is genuinely new is the
+   PROVENANCE SPLIT - the reference is the only source of cloth, the live feed is the only
+   source of body - so that is what this carries, and it hands off to STRICT_INPAINT for
+   the positive fidelity language it is placed directly ahead of.
+
+   THE PRINT-PLACEMENT CARVE-OUT at the end is load-bearing, not padding. "Re-proportion
+   the garment to their body" and BACK_TAIL.real's "keep each element at the SAME size,
+   height and horizontal position, do not move, rescale or re-center the back print" are
+   one bad reading apart from contradicting each other, and that print alignment was its
+   own fix. Scaling the garment to a different body must not become licence to relocate
+   its artwork on the garment, so the boundary is stated rather than left to inference. */
+const MODEL_AGNOSTIC_EXTRACTION =
+  " GARMENT ISOLATION MANDATE: the reference image is a TEXTURE AND CLOTHING TEMPLATE and" +
+  " nothing more. Extract ONLY the garment from it - fabric, weave, colour, pattern, print," +
+  " logos, seams, cut, collar, closure and hemline. If a person, model or mannequin is" +
+  " wearing that garment in the reference, they are packaging: completely ignore their" +
+  " body, physique, height, build, skin tone, shoulder width, chest, waist, limb positions" +
+  " and posture." +
+  " ZERO MODEL BLEED: do NOT transfer, copy, blend, average or impose ANY of that reference" +
+  " figure's anatomy, proportions, pose or body structure onto the live person, and never" +
+  " reshape the live person toward them. The live camera feed is the ONLY source of BODY;" +
+  " the reference image is the ONLY source of CLOTH." +
+  " DYNAMIC USER FITTING: fit, stretch, drape and re-proportion the extracted garment onto" +
+  " the live person's own exact body shape and volume - their real torso, chest, stomach," +
+  " waist and hips - so it reads as cut for THEM, with fabric tension, creases and folds" +
+  " following their contours rather than the reference figure's. Re-proportioning the" +
+  " garment to their body is NOT licence to move its artwork: any print, graphic, logo or" +
+  " lettering keeps the size, height and position on the garment specified above.";
+
 /* ── Strict garment inpainting - the hallucination clamp ──────────────────────
    KEEP_BOTTOMS/KEEP_TOP only ever pinned the OPPOSITE GARMENT layer. Everything else in
    frame - face, hair, hands, skin, the room behind the shopper, AND the shopper's own
@@ -6183,11 +6283,11 @@ function buildPrompt(item) {
   const suffix = HARD_NEGATIVE;   // universal hard negative (combined orientation lives in angleClause)
 
   if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${colorWord} ${sub} trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
+    return `Substitute the current bottoms with ${colorWord} ${sub} trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${MODEL_AGNOSTIC_EXTRACTION}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
       .replace(/\s+/g, " ").trim();
   }
   const noun = SHIRT_NOUN[item.subType] || "top";
-  return `Substitute the current top with a ${colorWord} ${sub} ${noun}. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
+  return `Substitute the current top with a ${colorWord} ${sub} ${noun}. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${MODEL_AGNOSTIC_EXTRACTION}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
     .replace(/\s+/g, " ").trim();
 }
 
@@ -6207,10 +6307,10 @@ function buildCustomPrompt(item) {
   const ref = "the exact garment shown in the reference image - a custom uploaded garment - replicating its precise color, pattern, print, fabric texture and silhouette";
 
   if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
+    return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${MODEL_AGNOSTIC_EXTRACTION}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
       .replace(/\s+/g, " ").trim();
   }
-  return `Substitute the current top with ${ref}, worn on the upper body. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
+  return `Substitute the current top with ${ref}, worn on the upper body. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${MODEL_AGNOSTIC_EXTRACTION}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
     .replace(/\s+/g, " ").trim();
 }
 
@@ -6386,7 +6486,7 @@ function buildLookPrompt(top, bottom) {
        added them to the other five prompt-assembly sites - this is the sixth (the
        both-slots-filled "complete look" flow), sharing the same STRICT_INPAINT/
        ROTATION_CONTINUITY pair, so it needs the same two companions for the same reasons. */
-    `${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
+    `${MODEL_AGNOSTIC_EXTRACTION}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
   ).replace(/\s+/g, " ").trim();
 }
 

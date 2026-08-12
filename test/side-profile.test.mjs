@@ -79,6 +79,7 @@ function run({ angle = "front", inProfile = false, distinctBack, custom = false,
        rather than reproduced. The clauses under test are all real source. */
     KEEP_TOP: "_KEEP_TOP", KEEP_BOTTOMS: "_KEEP_BOTTOMS",
     STRICT_INPAINT: "_STRICT_INPAINT", IGNORE_SOURCE_ARTIFACTS: "_IGNORE_ARTIFACTS",
+    MODEL_AGNOSTIC_EXTRACTION: "_MODEL_AGNOSTIC",
     ROTATION_CONTINUITY: "_ROTATION", PROFILE_ANOMALY_GUARD: "_ANOMALY_GUARD",
     SUBTYPE_PROMPT: {}, SHIRT_NOUN: {},
     colorName: () => "black",
@@ -100,6 +101,7 @@ const BACK = "https://cdn.test/back.jpg";
 const SELECTED_FRONT = /Apply the LEFT PANEL \(FRONT view\) design to the FRONT of their body/;
 const SELECTED_BACK  = /from the RIGHT PANEL \(BACK view\) and RENDER IT ONTO THE BACK of the person/;
 const DEPTH_MARKER   = /SIDE-PROFILE DEPTH FIDELITY/;
+const LATERAL_MARKER = /LATERAL SEAM SYNTHESIS/;
 
 /* A fresh pose state machine driven by the REAL enter/exit arithmetic lifted out of
    maybeUpdateProfile(). Only the decision half is taken - everything after it is cooldown,
@@ -274,6 +276,118 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
     check(`${name}: omits it when square-on (no wasted tokens head-on)`,
       !DEPTH_MARKER.test(run({ ...opts, inProfile: false }).clause));
   }
+}
+
+console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view depicts ──");
+{
+  /* The side of the garment is photographed by NEITHER panel - the composite holds a front
+     and a back, and the flank is the hinge between them. Unreferenced, the cheapest
+     completion for that region is the pixels already there: the shopper's real shirt.
+     Distinct from SIDE_PROFILE_DEPTH (body geometry) and from ROTATION_CONTINUITY (the
+     turn as a temporal event); this is a spatial region being unreferenced at the angle
+     where it is most exposed. */
+  const { clause } = run({ angle: "front", inProfile: true, distinctBack: BACK, useComposite: true });
+  check("names the unreferenced band explicitly (flank, side seam, underarm, sleeve face)",
+    /No reference view depicts the narrow lateral band now facing the camera: the flank, the side seam, the underarm and the outer face of the sleeve/.test(clause),
+    clause.slice(-1600));
+  check("(1) mandates 100% coverage for every frame of the turn",
+    /hold 100% garment replacement coverage across the entire visible torso for every frame of the turn/.test(clause),
+    clause.slice(-1600));
+  check("(1) forbids the garment thinning, breaking or turning transparent",
+    /the target garment thins, breaks, fades, turns transparent/.test(clause), clause.slice(-1600));
+  check("(1) names the ACTUAL reported symptom - the user's own shirt showing through",
+    /lets the person's own original shirt - its colour, collar, sleeves or hem - show through anywhere/.test(clause) &&
+    /least of all along the flank, the shoulder line or the underarm/.test(clause), clause.slice(-1600));
+  check("(2) requires the wrap around lateral depth - side seam, shoulder seam, hem",
+    /the side seam running down their real side contour/.test(clause) &&
+    /the hem closing unbroken around the flank/.test(clause), clause.slice(-1600));
+  check("(3) extrapolates cloth properties outward from the locked reference view",
+    /carry the colour, weave, sheen, material thickness and fold behaviour of the reference view named above outward across that band/.test(clause),
+    clause.slice(-1600));
+  check("(3) demands a smooth transition with no hard edge or texture break",
+    /no hard edge, colour step, seam artifact or texture break/.test(clause), clause.slice(-1600));
+  check("(3) defaults the unreferenced band to PLAIN fabric rather than invention",
+    /infer PLAIN fabric in that same colour and texture/.test(clause), clause.slice(-1600));
+
+  /* THE REGRESSION GUARD, and the reason this clause is phrased geometrically instead of
+     as "blend the front and back panels". Telling the model to blend the panels would
+     contradict the impassable-wall contract that OPENS the prompt, and that contradiction
+     has a known resolution in this repo: both panels' designs on one surface is the
+     double-print bug that got the previous stitcher removed in 23f5953. Fabric continuity
+     is synthesized; PRINT relocation stays forbidden. */
+  check("does NOT instruct the model to blend the two panels (the 23f5953 double-print trap)",
+    !/blend[\s\S]{0,60}(front|left) panel[\s\S]{0,40}(back|right) panel/i.test(clause),
+    "lateral continuity must be geometric, never a cross-panel design blend");
+  check("explicitly forbids dragging the reference's graphics around onto the side",
+    /Do NOT drag, mirror, wrap or repeat the reference's graphics, prints, logos or lettering around onto the side/.test(clause),
+    clause.slice(-1600));
+  check("...and forbids inventing new graphics there instead",
+    /do NOT invent new ones there/.test(clause), clause.slice(-1600));
+  check("the impassable-wall contract SURVIVES alongside it",
+    /never blend, mirror or copy any detail from one half into the other/.test(clause) &&
+    /The RIGHT PANEL does not exist for this frame/.test(clause), clause.slice(0, 800));
+}
+{
+  /* Same every-branch sweep §3 runs for the depth clause, for the same reason: a clause
+     that reaches only the composite path leaves single-asset, custom-upload and
+     inferred-rear exposed. Single-view items have no back panel at all, which is why the
+     wording says "the reference view named above" rather than naming a panel. */
+  const branches = [
+    ["composite/front", { angle: "front", distinctBack: BACK, useComposite: true }],
+    ["composite/back", { angle: "back", distinctBack: BACK, useComposite: true }],
+    ["single/back real", { angle: "back", distinctBack: BACK, useComposite: false }],
+    ["single/back inferred", { angle: "back", distinctBack: undefined, useComposite: false }],
+    ["single/back custom", { angle: "back", distinctBack: undefined, custom: true, useComposite: false }],
+    ["single/auto front", { angle: "front", distinctBack: undefined, useComposite: false }],
+  ];
+  for (const [name, opts] of branches) {
+    check(`${name}: carries the lateral synthesis clause when edge-on`,
+      LATERAL_MARKER.test(run({ ...opts, inProfile: true }).clause));
+    check(`${name}: omits it when square-on (the band is not in view head-on)`,
+      !LATERAL_MARKER.test(run({ ...opts, inProfile: false }).clause));
+  }
+}
+{
+  /* The live payload builder, unreachable from angleClause() - §3 makes the same point
+     for the depth clause. Ordering: body geometry, then the garment covering it, then the
+     garment description. The second clause only means anything given the first. */
+  const { api } = run({ distinctBack: BACK });
+  const item = { name: "Tee", custom: true, garmentType: "upper_body" };
+  const built = api.buildCompositePrompt(item, "front", true);
+  const depthPos = built.indexOf("SIDE-PROFILE DEPTH FIDELITY");
+  const latPos   = built.indexOf("LATERAL SEAM SYNTHESIS");
+  const subPos   = built.indexOf("Substitute the person's current");
+  check("buildCompositePrompt orders depth → lateral → garment description",
+    depthPos !== -1 && latPos > depthPos && subPos > latPos,
+    `depth@${depthPos} lateral@${latPos} substitute@${subPos}`);
+  check("...and omits the lateral clause entirely on a square-on frame",
+    !LATERAL_MARKER.test(api.buildCompositePrompt(item, "front", false)));
+}
+
+console.log("\n── §3c MODEL-AGNOSTIC EXTRACTION rides BOTH orientation states ──");
+{
+  /* The reference figure's anatomy bleeds at every angle, so unlike the two clauses above
+     this one is NOT profile-gated - it must be present square-on and edge-on alike. Asserted
+     here because this is the harness that can drive both states; the clause's own CONTENT
+     and its coverage of the non-composite builders live in model-agnostic.test.mjs.
+     (Stubbed as _MODEL_AGNOSTIC - the constant sits outside this file's extracted slice,
+     same as STRICT_INPAINT.) */
+  const { api } = run({ distinctBack: BACK });
+  const item = { name: "Tee", custom: true, garmentType: "upper_body" };
+  for (const inProfile of [false, true]) {
+    const built = api.buildCompositePrompt(item, "front", inProfile);
+    check(`buildCompositePrompt carries garment isolation at inProfile=${inProfile}`,
+      /_MODEL_AGNOSTIC/.test(built), built.slice(-260));
+  }
+  /* Ordering: it introduces the reference/live provenance split, then STRICT_INPAINT states
+     the live body is 1:1 ground truth. The second is the positive half of the first, and
+     this clause is written to hand off to it rather than restate it - so if they are ever
+     separated or reordered, the hand-off silently stops reading as one argument. */
+  const built = api.buildCompositePrompt(item, "front", true);
+  check("...immediately ahead of STRICT_INPAINT, whose fidelity language it hands off to",
+    /_MODEL_AGNOSTIC_STRICT_INPAINT/.test(built), built.slice(-260));
+  check("...and after the garment description, not before it",
+    built.indexOf("Substitute the person's current") < built.indexOf("_MODEL_AGNOSTIC"));
 }
 
 console.log("\n── §4 DECOUPLING: profile changes the POSE, never the panel/asset ──");
