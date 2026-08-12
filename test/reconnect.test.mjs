@@ -64,6 +64,8 @@ function makeConnHarness() {
   const calls = { applyActive: 0, stopLive: 0, setConn: [], toast: [] };
   const sandbox = {
     LIVE_INFERENCE_FPS: 10, LIVE_W: 512, LIVE_H: 288,
+    // The server-supplied model id buildRealtimeConnectOpts() now reads instead of a literal.
+    activeVtonModel: "lucy-vton-latest",
     document: { querySelector: () => ({ style: {}, play: () => Promise.resolve() }) },
     armFirstFrameBilling: () => {},
     setConn: (s) => calls.setConn.push(s),

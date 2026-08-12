@@ -16,6 +16,7 @@
  * @property {string}   TOKEN_ENDPOINT          Same-origin proxy route that mints the ephemeral ek_ token.
  * @property {string}   HEALTH_ENDPOINT         Same-origin proxy health route used by the pre-use check.
  * @property {string[]} SDK_URLS                Ordered Decart SDK CDN fallbacks.
+ * @property {string}   VTON_MODEL_FALLBACK     Realtime model id used ONLY when the token response omits `model`.
  * @property {number}   PLAYOUT_DELAY_HINT      Chromium RTCRtpReceiver.playoutDelayHint (seconds). 0 = render ASAP.
  * @property {boolean}  PREFER_LOW_LATENCY_CODEC Opt-in SDP codec-preference munge (default OFF - see note below).
  * @property {string[]} CODEC_PREFERENCE        Codec order tried when the munge flag is ON (reorder only, never remove).
@@ -49,6 +50,16 @@ export const CONFIG = Object.freeze({
     "https://esm.sh/@decartai/sdk@0.1.5",
     "https://cdn.jsdelivr.net/npm/@decartai/sdk@0.1.5/+esm",
   ]),
+
+  /* ── realtime model id - LAST-RESORT fallback only ──────────────────────────
+     The SERVER owns this value: server.js reads DECART_VTON_MODEL from .env,
+     scopes every minted ek_ token to it (allowedModels) and echoes it back as
+     `model` in the token response. app.js connects with the echoed id, so
+     pinning a model is a one-line .env change with no client edit.
+     This constant is used ONLY if the token response carries no `model` field
+     (a server predating that echo). It must stay equal to server.js's own
+     default or a pin could silently disagree across the two halves. */
+  VTON_MODEL_FALLBACK: "lucy-vton-latest",
 
   /* ── realtime latency tuning (CLIENT-side only) ─────────────────────────────
      ⚠️ Scope reality check: the ~1s a user perceives in the Lucy-VTON feed is

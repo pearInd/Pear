@@ -63,6 +63,8 @@ function makeHarness({ scriptedErrors = [], mintFails = false } = {}) {
     document: { querySelector: () => ({ style: {}, play: () => Promise.resolve() }) },
 
     LIVE_INFERENCE_FPS: 10, LIVE_W: 512, LIVE_H: 288,
+    // The server-supplied model id buildRealtimeConnectOpts() now reads instead of a literal.
+    activeVtonModel: "lucy-vton-latest",
     localStream: { getVideoTracks: () => [{ clone: () => ({ id: "clone" }) }] },
 
     loadSDK: async () => ({

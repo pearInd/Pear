@@ -3,7 +3,8 @@
    ----------------------------------------------------------------------------
    Screen 1  Size calculator (required) ─► Screen 2  Isolated try-on room.
 
-   Engine: Decart Lucy VTON realtime ("lucy-vton-latest") over WebRTC (LiveKit).
+   Engine: Decart Lucy VTON realtime over WebRTC (LiveKit). The model id is set
+   server-side by DECART_VTON_MODEL and arrives with the token - see activeVtonModel.
    Verified against @decartai/sdk@0.1.5:
      • createDecartClient({ apiKey })  - apiKey is a short-lived ek_ token minted
        by the backend (/api/realtime-token); the permanent dct_ key never reaches
@@ -38,6 +39,7 @@ const {
   TOKEN_ENDPOINT,
   HEALTH_ENDPOINT,
   SDK_URLS,
+  VTON_MODEL_FALLBACK,
   PLAYOUT_DELAY_HINT,
   PREFER_LOW_LATENCY_CODEC,
   CODEC_PREFERENCE,
@@ -581,7 +583,16 @@ let rtImageOnWire = false;     // has THIS session received an image yet?
 
 /* Pre-minted ek_ token cache - populated by warmupSDKAndToken() on room entry so
    mintEphemeralToken() can skip the network round-trip at go-live time. */
-let _tokenCache = null; // { apiKey: string, expiresAt: number } | null
+let _tokenCache = null; // { apiKey: string, expiresAt: number, model: string } | null
+
+/* The realtime model id the SERVER minted the CURRENT ek_ token for.
+   server.js scopes every token to DECART_VTON_MODEL via allowedModels and echoes the
+   same id back as `model`; connecting with any other id hands the SDK a session the
+   token's scope does not cover. This used to be hardcoded to "lucy-vton-latest" at the
+   connect site, so setting DECART_VTON_MODEL in .env pinned the TOKEN to a version
+   while the browser kept asking for the floating `-latest` - the pin silently did
+   nothing (or failed the scope check). Populated by mintEphemeralToken(). */
+let activeVtonModel = VTON_MODEL_FALLBACK;
 
 /* Bug 3 - consecutive-session state.
    `sessionGen` is a monotonic generation counter bumped on every connect and
@@ -2280,7 +2291,8 @@ function resetToLive() {
         proxy (/api/realtime-token) and hand THAT to createDecartClient().
 
    NOTE: models.realtime() does not exist in @decartai/sdk@0.1.5 - the model is
-        passed as the plain object below (name "lucy-vton-latest" + stream opts).
+        passed as the plain object below (name + stream opts). The name comes from
+        the token response (DECART_VTON_MODEL), never a client-side literal.
    ============================================================================= */
 async function loadSDK() {
   let lastErr;
@@ -2344,6 +2356,10 @@ async function mintEphemeralToken() {
   if (_tokenCache && _tokenCache.expiresAt > now + 30_000) {
     console.log("[PEAR] mintEphemeralToken() - cached ek_ token reused (expires in",
       Math.round((_tokenCache.expiresAt - now) / 1000), "s)");
+    /* Re-assert the model this CACHED token was scoped to. The token and the model id
+       it allows must travel together - restoring one without the other is how a reused
+       token would connect against the wrong model. */
+    activeVtonModel = _tokenCache.model || VTON_MODEL_FALLBACK;
     return _tokenCache.apiKey;
   }
   _tokenCache = null; // stale or absent - fetch fresh
@@ -2395,9 +2411,15 @@ async function mintEphemeralToken() {
 
   // Cache the fresh token for reuse within its TTL. parseExpiry handles ISO strings,
   // epoch-ms AND epoch-seconds (5-min fallback if expiresAt is absent/unparseable).
+  /* Adopt the model id the server scoped this token to (see activeVtonModel). A server
+     that omits `model` leaves the documented fallback in place rather than an undefined
+     name reaching the SDK. */
+  activeVtonModel = data.model || VTON_MODEL_FALLBACK;
+
   _tokenCache = {
     apiKey: data.apiKey,
     expiresAt: parseExpiry(data.expiresAt),
+    model: activeVtonModel,
   };
 
   return data.apiKey;
@@ -2555,7 +2577,9 @@ function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width
 function buildRealtimeConnectOpts(gen) {
   return {
     model: {
-      name: "lucy-vton-latest",
+      /* NOT a literal: this is the id the server scoped the current ek_ token to
+         (DECART_VTON_MODEL). Pin the model in .env and both halves move together. */
+      name: activeVtonModel,
       urlPath: "/v1/stream",
       // NOTE: these are advisory only - the SDK ignores model.fps/width/height on
       // Chromium. The REAL cap is enforced upstream by createThrottledInputStream()
