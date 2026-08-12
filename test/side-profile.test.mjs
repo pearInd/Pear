@@ -103,10 +103,10 @@ function run({ angle = "front", inProfile = false, distinctBack, custom = false,
 const BACK = "https://cdn.test/back.jpg";
 // Read off the SELECTOR sentence, never the words FRONT/BACK - the panel contract names
 // both panels by design, so only the selector says which one was actually chosen.
-const SELECTED_FRONT = /Use LEFT only; RIGHT must not appear/;
-const SELECTED_BACK  = /Use RIGHT only; LEFT must not appear/;
-const DEPTH_MARKER   = /EDGE-ON: their front-to-back depth/;
-const LATERAL_MARKER = /Wrap it round the flank/;
+const SELECTED_FRONT = /Use the LEFT half only; ignore the RIGHT/;
+const SELECTED_BACK  = /Use the RIGHT half only; ignore the LEFT/;
+const DEPTH_MARKER   = /EDGE-ON: keep their full front-to-back depth/;
+const LATERAL_MARKER = /continuing its front and back panels/;
 
 /* A fresh pose state machine driven by the REAL enter/exit arithmetic lifted out of
    maybeUpdateProfile(). Only the decision half is taken - everything after it is cooldown,
@@ -219,20 +219,25 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
      the axis NAMED above all else. If the pillow-under-a-shirt case regresses, the fix is
      to buy a directive back out of TRIM, not to re-grow the clause. */
   check("names the front-to-back depth axis - the axis that only exists edge-on",
-    /front-to-back depth and belly are ground truth/.test(clause), clause.slice(-400));
-  check("...declares it GROUND TRUTH, so the live silhouette overrides the model's prior",
-    /ground truth/.test(clause), clause.slice(-400));
-  check("...and still forbids flattening that profile (the pillow/belly case)",
-    /never flatten/.test(clause), clause.slice(-400));
+    /keep their full front-to-back depth/.test(clause), clause.slice(-400));
+  /* "never flatten" and the words "ground truth" were dropped when the depth clause and
+     the lateral clause MERGED. That merge was forced by the grey-shirt regression: each
+     cost ~155 chars separately and the budget could only afford one, so an edge-on frame
+     was getting the BODY directive with no GARMENT directive - leaving the side of the
+     garment unreferenced, which is precisely where the model substituted a plain grey
+     tee. One clause now carries both claims. The depth half is asserted above; the
+     garment half is what these now assert, because it is the half that was missing. */
+  check("...and now also tells the model how to BUILD the side, not just what body to keep",
+    /build the side by continuing its front and back panels/.test(clause),
+    clause.slice(-400));
   check("the clause is scoped to EDGE-ON so it cannot fire square-on",
-    /EDGE-ON: their front-to-back depth/.test(clause), clause.slice(-400));
+    /EDGE-ON: keep their full front-to-back depth/.test(clause), clause.slice(-400));
 
   /* PLACEMENT still matters for the same reason it always did - leading tokens dominate
-     for this model - and compression did not change the ordering argument, only the
-     lengths. Contract → pose → panel → substitution → depth. */
+     for this model. Contract → pose → panel → substitution → edge-on directive. */
   const posePos  = clause.indexOf("EDGE-ON in side profile");
-  const selPos   = clause.indexOf("Use LEFT only");
-  const depthPos = clause.indexOf("EDGE-ON: their front-to-back depth");
+  const selPos   = clause.indexOf("Use the LEFT half only");
+  const depthPos = clause.indexOf("EDGE-ON: keep their full front-to-back depth");
   check("the panel contract and pose lead, and the depth directive follows them",
     posePos !== -1 && selPos !== -1 && depthPos > posePos && depthPos > selPos,
     `pose@${posePos} select@${selPos} depth@${depthPos}`);
@@ -246,10 +251,17 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   const { api } = run({ distinctBack: BACK });
   const built = api.buildCompositePrompt(
     { name: "Tee", custom: true, garmentType: "upper_body" }, "front", true);
-  const dPos = built.indexOf("EDGE-ON: their front-to-back depth");
+  const dPos = built.indexOf("EDGE-ON: keep their full front-to-back depth");
   const subPos = built.indexOf("Replace their");
-  check("buildCompositePrompt places the depth clause before the garment description",
-    dPos !== -1 && subPos !== -1 && dPos < subPos, `depth@${dPos} substitute@${subPos}`);
+  /* ORDER REVERSED, deliberately, by the grey-shirt regression. The depth directive used
+     to lead the substitution on the argument that at 90 degrees the body is what is being
+     got wrong. That stopped being true: what was being got wrong was the GARMENT - the
+     model dropped the referenced shirt entirely and rendered a plain grey one, at every
+     angle. So the reference binding and its asset lock now lead, and the edge-on
+     directive follows them. Leading tokens dominate; they should carry the instruction
+     the session actually fails on. */
+  check("buildCompositePrompt leads with the garment binding, then the depth directive",
+    dPos !== -1 && subPos !== -1 && subPos < dPos, `substitute@${subPos} depth@${dPos}`);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false)));
@@ -288,10 +300,23 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
      side seam) and the SYMPTOM (their own shirt showing through), which is the half that
      names the actual failure. */
   const { clause } = run({ angle: "front", inProfile: true, distinctBack: BACK, useComposite: true });
-  check("still instructs the wrap around the flank with a real side seam",
-    /Wrap it round the flank with a natural side seam/.test(clause), clause.slice(-400));
-  check("still names the reported symptom - the shopper's own shirt showing through",
-    /no original shirt showing/.test(clause), clause.slice(-400));
+  check("still instructs the side be built from the two reference panels",
+    /build the side by continuing its front and back panels/.test(clause),
+    clause.slice(-400));
+  /* The symptom moved clause. "their own shirt showing" now lives in the asset lock,
+     which is CORE and rides EVERY pose - not just edge-on - because the grey-shirt
+     regression hit front-facing frames too. */
+  /* The asset lock lives in the BUILDERS, not in angleClause - angleClause supplies the
+     panel contract and pose, the builder supplies the substitution it guards. Asserted
+     against the builder at both poses, because the grey-shirt regression hit front-facing
+     frames too, so a lock that only rode edge-on would miss most of it. */
+  const { api: lockApi } = run({ distinctBack: BACK });
+  const lockItem = { name: "Tee", custom: false, garmentType: "upper_body" };
+  for (const prof of [false, true]) {
+    check(`the asset lock names the symptom at inProfile=${prof}`,
+      /never leave their own top showing/.test(lockApi.buildCompositePrompt(lockItem, "front", prof)),
+      lockApi.buildCompositePrompt(lockItem, "front", prof).slice(0, 400));
+  }
 
   /* THE REGRESSION GUARD survives compression, and had to: the shortest phrasing of this
      clause ("blend the front and back panels") is exactly the one that would contradict
@@ -301,7 +326,7 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
     !/blend/i.test(clause),
     "lateral continuity must stay geometric, never a cross-panel design blend");
   check("the panel-exclusion contract SURVIVES alongside it",
-    /Use LEFT only; RIGHT must not appear/.test(clause), clause.slice(0, 400));
+    /Use the LEFT half only; ignore the RIGHT/.test(clause), clause.slice(0, 400));
 }
 {
   /* Same every-branch sweep §3 runs for the depth clause, for the same reason: a clause
@@ -330,17 +355,15 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
   const built = api.buildCompositePrompt(item, "front", true);
-  const depthPos = built.indexOf("EDGE-ON: their front-to-back depth");
-  const latPos   = built.indexOf("Wrap it round the flank");
-  const subPos   = built.indexOf("Replace their");
-  /* Depth leads the garment description (body geometry first - the ordering the verbose
-     version argued for and compression preserved). The lateral wrap now follows the
-     substitution rather than preceding it: it ranks HIGH, not CORE, so it is assembled
-     with the droppable clauses - deliberate, since shedding it must never shed the
-     substitution itself. */
-  check("buildCompositePrompt orders depth → garment description → lateral wrap",
-    depthPos !== -1 && subPos > depthPos && latPos > subPos,
-    `depth@${depthPos} substitute@${subPos} lateral@${latPos}`);
+  const latPos = built.indexOf("EDGE-ON: keep their full front-to-back depth");
+  const subPos = built.indexOf("Replace their");
+  const lockPos = built.indexOf("Never invent a garment, add a jacket");
+  /* Depth and lateral are ONE clause now, and both follow the binding. The ordering that
+     matters after the grey-shirt regression is: which garment (and the ban on inventing
+     one), THEN how to build its side. */
+  check("buildCompositePrompt orders binding → asset lock → edge-on directive",
+    subPos !== -1 && lockPos > subPos && latPos > lockPos,
+    `substitute@${subPos} lock@${lockPos} edge-on@${latPos}`);
   check("...and omits the lateral clause entirely on a square-on frame",
     !LATERAL_MARKER.test(api.buildCompositePrompt(item, "front", false)));
 }
@@ -355,18 +378,22 @@ console.log("\n── §3c MODEL-AGNOSTIC EXTRACTION rides BOTH orientation stat
      same as STRICT_INPAINT.) */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  for (const inProfile of [false, true]) {
-    const built = api.buildCompositePrompt(item, "front", inProfile);
-    check(`buildCompositePrompt carries garment isolation at inProfile=${inProfile}`,
-      /ignore the reference model's body/.test(built), built.slice(-300));
-  }
-  /* It ranks HIGH, not TRIM, so the budget cannot silently shed it on a long garment
-     name - which is the failure mode compression introduces that did not exist before. */
+  /* DEMOTED to MED by the grey-shirt regression, and this records the cost honestly.
+     Square-on it survives; EDGE-ON it now sheds, because the merged edge-on directive
+     plus the asset lock take the room it used to have. That is a real loss - the
+     reference model's build can bleed into a 90-degree frame again - and it was the
+     right trade only because the failure it competes with is worse: at edge-on the model
+     was dropping the referenced garment entirely and inventing a plain grey shirt.
+     Grounding the garment outranks refining whose body it is draped on. */
+  check("carries garment isolation square-on, where the budget affords it",
+    /[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", false)));
+  check("EDGE-ON sheds it - recorded as a known cost, not an accident",
+    !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", true)));
   const built = api.buildCompositePrompt(item, "front", true);
-  check("...and pairs with the body-fidelity clamp, its positive half",
-    /never slim or idealize/.test(built), built.slice(-300));
-  check("...after the garment description, not before it",
-    built.indexOf("Replace their") < built.indexOf("ignore the reference model's body"));
+  check("...but the CORE binding it supports is never shed, at either pose",
+    /in the reference image/.test(built) &&
+    /in the reference image/.test(api.buildCompositePrompt(item, "front", false)),
+    built.slice(0, 300));
 }
 
 console.log("\n── §4 DECOUPLING: profile changes the POSE, never the panel/asset ──");
@@ -382,14 +409,15 @@ console.log("\n── §4 DECOUPLING: profile changes the POSE, never the panel/
   }
   const profiled = run({ angle: "front", inProfile: true, distinctBack: BACK, useComposite: true }).clause;
   check("the panel contract itself is unchanged edge-on (LEFT=front / RIGHT=back still stated)",
-    /LEFT = garment front, RIGHT = back/.test(profiled), profiled.slice(0, 300));
+    /LEFT half its front, RIGHT half its back/.test(profiled), profiled.slice(0, 300));
   check("cross-panel bleed is still forbidden edge-on",
-    /RIGHT must not appear/.test(profiled), profiled.slice(0, 400));
-  /* The canvas-furniture ban compressed to three words; the temporal clause is TRIM and
-     is legitimately shed at edge-on, where the depth and lateral directives outrank it -
-     see §5e, which now asserts that trade-off explicitly rather than assuming both fit. */
-  check("the canvas-furniture ban still rides along edge-on",
-    /Ignore gap.labels/.test(profiled), profiled.slice(0, 300));
+    /ignore the RIGHT/.test(profiled), profiled.slice(0, 400));
+  /* The canvas-furniture ban is LOW priority and lives only in the full builders now.
+     It guards a cosmetic artifact - a panel divider painted onto the shirt - and after
+     the grey-shirt regression it must never compete with the clauses that decide WHICH
+     garment renders at all. Its absence here is the ranking working. */
+  check("the canvas-furniture ban does NOT outrank grounding in the angle clause",
+    !/Ignore the gap, the background/.test(profiled), profiled.slice(0, 300));
 }
 
 console.log("\n── §5 THE WATCHER: edge-on is a separate channel from the front/back vote ──");
@@ -663,15 +691,28 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
   const square = api.buildCompositePrompt(item, "front", false);
   const built  = api.buildCompositePrompt(item, "front", true);
-  check("square-on keeps the temporal-stability directive (budget allows it)",
-    /Stable print, no flicker/.test(square), square.slice(-200));
-  check("edge-on sheds it so the depth + lateral directives fit - the chosen trade",
-    !/Stable print, no flicker/.test(built) && /front-to-back depth/.test(built),
+  /* THE SHED LADDER, re-pinned after the grey-shirt regression moved everything down a
+     rung. The reference binding and its asset lock now take room that the polish clauses
+     used to have, so temporal/photorealism are shed at BOTH poses, and body fidelity is
+     shed edge-on (where the merged EDGE-ON directive already asserts "keep their full
+     front-to-back depth" and so covers the same ground).
+
+     Stated as explicit expectations rather than left implicit: each of these is a real
+     loss, and the only reason it is acceptable is that the alternative was the model
+     rendering a garment nobody selected. */
+  check("temporal/photorealism polish is shed at both poses - grounding took the room",
+    !/Stable print, no flicker/.test(square) && !/Stable print, no flicker/.test(built));
+  check("body fidelity survives square-on...",
+    /never slim them/.test(square), square.slice(-260));
+  check("...and is shed edge-on, where the EDGE-ON directive already asserts the depth",
+    !/never slim them/.test(built) && /keep their full front-to-back depth/.test(built),
     built.slice(-260));
-  check("the body-fidelity clamp survives at BOTH poses (it is HIGH, never shed)",
-    /never slim or idealize/.test(square) && /never slim or idealize/.test(built));
-  check("...as does the passthrough clamp",
+  check("the passthrough clamp survives at BOTH poses (priority 3, top of the droppable tier)",
     /pass through untouched/.test(square) && /pass through untouched/.test(built));
+  check("...as does the reference binding and its asset lock (priority 1, never shed)",
+    /in the reference image/.test(square) && /in the reference image/.test(built) &&
+    /Never invent a garment, add a jacket/.test(square) &&
+    /Never invent a garment, add a jacket/.test(built));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

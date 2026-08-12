@@ -1523,11 +1523,17 @@ function setActiveItem(item, opts = {}) {
 // there is no quantity picker anywhere in this UI to read a real value from.
 window.pearGetActiveGarment = function () {
   if (!activeItem) return null;
+  /* Variant-resolved, not base-resolved. Reading activeItem.sku directly meant a shopper
+     who picked the red swatch added the BASE colour to their cart - the swatch moved the
+     photo and nothing else. variantMetaOf() falls back to exactly the old values when the
+     item has no variant table, so single-colour items are unaffected. */
+  const meta = variantMetaOf(activeItem);
   return {
-    url: activeItem.img,
+    url: activeImageOf(activeItem) || activeItem.img,   // the variant's own packshot
     name: activeItem.name,
-    variantId: activeItem.variantId,
-    sku: activeItem.sku || activeItem.variantId || String(activeItem.id),
+    color: activeColor || undefined,                    // which swatch, for the host's UI
+    variantId: meta.variantId,
+    sku: meta.sku,
     size: activeTryOnSize || currentUserSize || "",
     quantity: 1,
   };
@@ -5134,6 +5140,56 @@ function swatchColor(item, key) {
   return (v && v.swatch) || (item && item.color) || "#8a8f98";
 }
 
+/* ── Variant identity - the half of a colour swap that used to be dropped ─────
+   THE BUG: setColor() moved `activeColor`, and galleryOf() reads through
+   variantAssetsOf(), so picking a swatch DID swap the reference photo. Nothing else
+   moved. Everything downstream still read the item's BASE fields:
+
+     · the prompt said colorName(item.color)      → "the black t-shirt" for a red variant
+     · the cart said activeItem.sku / .variantId  → the base SKU, whatever was picked
+
+   So the model was handed a red packshot under an instruction naming black, and the
+   shopper could add a colour to their cart that they never selected. The image half
+   worked, which is exactly why it read as the model mutating the garment rather than as
+   a state bug.
+
+   Resolved through ONE accessor rather than by mutating activeItem on every swap:
+   activeItem is shared with the outfit slots, the thumbnail cache and the handoff
+   payload, so writing colour/sku into it would make a swatch click a mutation of
+   catalog data - and a stale copy anywhere would then disagree. Reading derives the
+   same answer everywhere, every time.
+
+   Falls back through variant → item → id at each field independently, because a
+   storefront variant may carry a sku and no variantId (or the reverse), and a catalog
+   item may define variants purely for imagery with no commerce identity at all.
+   @returns {{ color: string, variantId: string|undefined, sku: string }} */
+function variantMetaOf(item, color = activeColor) {
+  const base = {
+    color: (item && item.color) || "#8a8f98",
+    variantId: item && item.variantId,
+    sku: (item && (item.sku || item.variantId)) || (item && item.id != null ? String(item.id) : ""),
+  };
+  if (!item) return base;
+  const colors = colorsOf(item);
+  if (!colors.length) return base;
+  const key = colors.includes(color) ? color : colors[0];
+  const v = item.variants[key];
+  if (!v) return base;
+  return {
+    // `swatch` is the variant's own hex and is what the bubble renders, so it is also
+    // the honest answer for "what colour is the shopper actually trying on".
+    color: v.swatch || v.color || base.color,
+    variantId: v.variantId ?? base.variantId,
+    sku: v.sku || v.variantId || base.sku,
+  };
+}
+
+/* The colour word the PROMPT should use. Separate one-liner because every builder needs
+   it and none of them should have to know about the variant table. */
+function activeColorOf(item) {
+  return variantMetaOf(item).color;
+}
+
 /** Normalize any item (variant, flat-gallery, or legacy) into one { front, back?, … } map. */
 function galleryOf(item) {
   if (!item) return {};
@@ -5644,10 +5700,18 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    so the few capitals left (EDGE-ON, LEFT/RIGHT) are spent only where the emphasis is
    doing real steering work. */
 const DENSE = Object.freeze({
-  contract:      "Try-on. Reference: split image, LEFT = garment front, RIGHT = back. Ignore gap/labels.",
+  /* NAMES THE REFERENCE AS A PHOTO OF THE GARMENT, in prose. The previous wording -
+     "Try-on. Reference: split image, LEFT = garment front, RIGHT = back." - was
+     telegraphic notation, and notation is a weak way to tell a diffusion model that an
+     attached image is the thing it must copy. Costs ~65 characters more and buys the
+     grounding back. */
+  contract:      "Virtual try-on. The reference image is a split photo of one garment: LEFT half its front, RIGHT half its back.",
+  /* Split out of the contract so it can shed on its own. It guards a cosmetic artifact -
+     a panel divider painted onto the shirt - which must never outrank grounding. */
+  ignoreFurniture: "Ignore the gap, the background and any FRONT/BACK label.",
   select: {
-    front:       "Use LEFT only; RIGHT must not appear.",
-    back:        "Use RIGHT only; LEFT must not appear.",
+    front:       "Use the LEFT half only; ignore the RIGHT.",
+    back:        "Use the RIGHT half only; ignore the LEFT.",
   },
   pose: {
     front:       "They face the camera.",
@@ -5657,13 +5721,36 @@ const DENSE = Object.freeze({
     front:       "They are EDGE-ON in side profile; keep that rotation.",
     back:        "They are EDGE-ON, part-way turned away; keep that rotation.",
   },
-  profileDepth:  "EDGE-ON: their front-to-back depth and belly are ground truth; never flatten.",
-  lateralWrap:   "Wrap it round the flank with a natural side seam; no original shirt showing.",
-  bodyFidelity:  "Keep their real volume, belly and hips; never slim or idealize.",
-  modelAgnostic: "Cloth only: ignore the reference model's body; drape to THIS person.",
-  keepBottoms:   "Leave their bottoms unchanged.",
-  keepTop:       "Leave their top unchanged.",
-  inpaintLock:   "Face, hands, skin and background pass through untouched.",
+  /* THE ANTI-MUTATION NEGATIVE. Compression removed every enumerated "do not" from this
+     prompt, and this is the one that had to come back: with a weakly-bound reference and
+     nothing forbidding invention, a diffusion model falls to its own prior, which for
+     "shirt" is a plain mid-grey tee. Naming the failure is what suppresses it - the same
+     mechanism as backInferred's front-print ban. */
+  /* THE ANTI-INVENTION NEGATIVE, widened after a reported blue JACKET appearing over a
+     white printed tee. The previous wording banned inventing a plain or grey garment -
+     it named the wrong axis. The observed failure was not a colour substitution but a
+     LAYER and a TYPE change: the model kept a garment-shaped region and rendered
+     outerwear into it. Nothing in the prompt forbade that, and an unstated failure is
+     one this model is free to produce.
+
+     Naming the specific wrong output ("jacket", "coat", "extra layer") is deliberate and
+     is the mechanism this file relies on everywhere - the same reason backInferred names
+     the front print it must not copy. What is NOT named is any particular garment's
+     print text: that belongs to one product, and hardcoding it would state a falsehood
+     about every other item in the catalog. The substitution sentence already binds the
+     print generically ("every graphic, logo and lettering on it"), which is what makes
+     it true for all of them. */
+  assetLock:     "Never invent a garment, add a jacket, coat or extra layer, or change the garment type, and never leave their own top showing.",
+  /* Depth and lateral wrap MERGED. Separately they cost ~155 characters and the budget
+     could only afford one, so a 90-degree frame got the BODY clause and no GARMENT clause -
+     leaving the side of the garment unreferenced, which is exactly where the model
+     substitutes its own prior. One instruction about one region, ~175 chars. */
+  profileLateral: "EDGE-ON: keep their full front-to-back depth; build the side by continuing its front and back panels.",
+  bodyFidelity:  "Keep their real body volume; never slim them.",
+  modelAgnostic: "Ignore the reference model's body; fit the cloth to THIS person.",
+  keepBottoms:   "Bottoms unchanged.",
+  keepTop:       "Top unchanged.",
+  inpaintLock:   "Face, skin, hands and background pass through untouched.",
   rotation:      "The garment stays on through any turn.",
   temporal:      "Stable print, no flicker.",
   quality:       "Photoreal fabric, natural light.",
@@ -5780,32 +5867,57 @@ function buildCompositePrompt(item, angle, inProfile) {
 
   const sub  = SUBTYPE_PROMPT[item.subType] || "";
   const noun = lower ? `${sub} trousers`.trim() : `${sub} ${SHIRT_NOUN[item.subType] || "top"}`.trim();
-  // A custom upload has no catalog colour/subType to name - the panel IS the description.
-  const desc = item.custom ? "the garment shown" : `the ${colorName(item.color)} ${noun} shown`;
+  const target = lower ? "bottoms" : "top";
+  /* THE BINDING PHRASE. Compression once trimmed "the white t-shirt shown IN THAT PANEL"
+     down to "the white t-shirt shown", which reads as a description of a garment rather
+     than a pointer at the attached image - and a description alone is something a
+     diffusion model is free to satisfy with its own idea of a t-shirt. That was the
+     grey-shirt regression. Naming the reference image explicitly is what re-anchors it.
+
+     NO COLOUR ADJECTIVE, and this is the deliberate half. In composite mode there is
+     ALWAYS a reference image on the wire, and its pixels carry the colour far more
+     precisely than a word derived from a catalog hex ever could. Naming a colour here
+     buys nothing the image is not already saying, and it costs a whole class of
+     text-vs-image contradiction: a stale or approximate catalog `color` (or, before
+     variantMetaOf(), the base colour under a swapped variant's packshot) puts the prompt
+     and the reference in direct disagreement, which this model resolves by picking ONE -
+     sometimes the word. The noun stays because it names the GARMENT CLASS (tee vs
+     trousers), which the panel alone does not disambiguate for a lower-body item.
+
+     The colour word is still used by buildPrompt()/buildLookPrompt(), which can run with
+     no usable reference at all - there, the word is the only colour information there is. */
+  const desc = item.custom
+    ? "the exact garment in the reference image"
+    : `the ${noun} in the reference image`;
 
   return fitPrompt([
     [P.CORE, DENSE.contract],
     [P.CORE, DENSE.select[a]],
     [P.CORE, inProfile ? DENSE.poseProfile[a] : DENSE.pose[a]],
-    /* Edge-on only, and it sits BEFORE the garment description for the reason the verbose
-       version documented: at 90 degrees the body's depth is the thing actually being got
-       wrong, so it leads the garment rather than trailing it. CORE, so it can never be
-       shed - a dropped depth directive is the flattening bug returning silently. */
-    [P.CORE,  inProfile ? DENSE.profileDepth : ""],
-    [P.CORE, `Replace their ${lower ? "bottoms" : "top"} with ${desc}: exact colour, texture and print.`],
-    [P.HIGH,  DENSE.bodyFidelity],
-    [P.HIGH,  DENSE.modelAgnostic],
-    /* HIGH, not MED, and only edge-on: this is the clause that keeps the shopper's own
-       shirt from showing along the flank, which is a worse failure than a restyled pair
-       of trousers. It costs nothing square-on, where the band is not in view. */
-    [P.HIGH,  inProfile ? DENSE.lateralWrap : ""],
-    /* HIGH, and ABOVE the opposite-layer lock. Tightening the cap to 650 made this
-       ranking load-bearing: at 700 both fitted, at 650 one of them sheds edge-on, and
-       shedding the passthrough clamp lets the model repaint the shopper's face and room -
-       far worse than the restyled trousers you get from shedding keepBottoms. Ranking
-       decides which failure you take, so it is stated rather than left to list order. */
+    /* PRIORITY 1 - the substitution and its asset lock, which is what the whole prompt is
+       for. Both CORE and adjacent: the instruction and the ban on ignoring it work as one
+       statement, and separating them by a shed-able clause is how the negative could go
+       missing while the positive stayed. */
+    [P.CORE, `Replace their ${target} with ONLY ${desc} - its exact colour and every graphic and lettering on it.`],
+    [P.CORE, DENSE.assetLock],
+    /* PRIORITY 2 - the 90-degree directive, CORE for the same reason. An edge-on frame
+       shows a band of garment neither panel contains; unreferenced, that band is where
+       the model substitutes its own prior, which is how a plain grey shirt appears at the
+       exact moment the shopper turns. It sits before the body/passthrough clamps. */
+    [P.CORE, inProfile ? DENSE.profileLateral : ""],
+    /* PRIORITY 3 - the passthrough clamp. Top of the DROPPABLE tier, so everything above
+       survives any budget pressure and this is the first real instruction to go. */
     [P.HIGH,  DENSE.inpaintLock],
+    /* MED, one tier BELOW the passthrough clamp, and only because of what sits above it:
+       profileLateral already says "keep their full front-to-back depth", which IS the
+       body-fidelity claim at 90 degrees. So shedding this edge-on loses nothing that the
+       CORE directive is not already making, while shedding the passthrough clamp instead
+       would let the model repaint the face and room. Square-on, where profileLateral is
+       absent, the budget is loose enough that both survive - checked, not assumed. */
+    [P.MED,   DENSE.bodyFidelity],
+    [P.MED,   DENSE.modelAgnostic],
     [P.MED,   lower ? DENSE.keepTop : DENSE.keepBottoms],
+    [P.LOW,   DENSE.ignoreFurniture],
     [P.LOW,   DENSE.rotation],
     [P.LOW,   fitSentence(item.garmentType)],
     [P.TRIM,  DENSE.temporal],
@@ -5905,7 +6017,10 @@ function angleClause(item, angleOverride, useComposite, inProfile) {
      describe the frame, not which panel was locked), so they ride on front, back and side
      alike. Order is deliberate and matches buildCompositePrompt(): what the body IS, then
      how the garment covers it - the second only means anything given the first. */
-  const depth = inProfile ? " " + DENSE.profileDepth + " " + DENSE.lateralWrap : "";
+  /* One merged edge-on directive now, not two. Referencing the retired profileDepth /
+     lateralWrap here would interpolate the string "undefined" straight into a live
+     prompt - silent, and exactly the kind of thing the model would try to render. */
+  const depth = inProfile ? " " + DENSE.profileLateral : "";
 
   // Composite mode: the reference carries BOTH views, so the clause names the panel
   // matching the detected orientation and excludes the other outright. Only the pose
@@ -6475,7 +6590,7 @@ function buildPrompt(item, angleText = "") {
                       : `${sub} ${SHIRT_NOUN[item.subType] || "top"}`.trim();
 
   return fitPrompt([
-    [P.CORE, `Virtual try-on. Replace their ${lower ? "bottoms" : "top"} with ${colorName(item.color)} ${noun}: exact colour, texture and print.`],
+    [P.CORE, `Virtual try-on. Replace their ${lower ? "bottoms" : "top"} with ${colorName(activeColorOf(item))} ${noun}: exact colour, texture and print.`],
     [P.CORE, angleText],
     [P.HIGH, DENSE.bodyFidelity],
     [P.HIGH, DENSE.modelAgnostic],
@@ -6665,7 +6780,7 @@ function buildLookPrompt(top, bottom, angleText = "") {
   const tNoun = `${tSub} ${SHIRT_NOUN[top.subType] || "top"}`.trim();
   const bSub = SUBTYPE_PROMPT[bottom.subType] || "";
   return fitPrompt([
-    [P.CORE, `Virtual try-on, one pass: replace their top with ${colorName(top.color)} ${tNoun} and their bottoms with ${colorName(bottom.color)} ${`${bSub} trousers`.trim()}. Both at once, exact colours and textures.`],
+    [P.CORE, `Virtual try-on, one pass: replace their top with ${colorName(activeColorOf(top))} ${tNoun} and their bottoms with ${colorName(activeColorOf(bottom))} ${`${bSub} trousers`.trim()}. Both at once, exact colours and textures.`],
     [P.CORE, angleText],
     [P.HIGH, DENSE.bodyFidelity],
     [P.HIGH, DENSE.modelAgnostic],
@@ -9739,9 +9854,41 @@ function detectGarments(img) {
   // Classify each blob (Top / Bottom / Full-body) and split a worn-outfit blob
   // into separate Top + Bottom garments, then confidence-gate + cap.
   natural = refineGarments(natural, iw, ih, U);
-  const best = natural.reduce((m, b) => Math.max(m, b.score || 0), 0);
+
+  /* ── ASPECT-RATIO GATE - the validation the area gates cannot express ────────
+     MIN_BOX_AREA_FRAC / MAX_BOX_AREA_FRAC / MIN_BOX_DIM_FRAC above already reject boxes
+     that are too small, too large, or too thin in either axis. None of them can reject a
+     box that is a plausible SIZE but an implausible SHAPE - and that is the crop that
+     does real damage, because it survives every existing check and gets sent to Decart
+     as if it were a garment.
+
+     The two cases seen in practice are a hard-shadow strip or a background seam merging
+     into the blob (a long horizontal band, ratio well under 0.35) and a full-height
+     column of wall caught beside the subject (a narrow vertical bar, ratio over ~4). A
+     real upper- or lower-body garment photographed flat or worn sits comfortably inside
+     those bounds. Rejecting here rather than downstream means the caller's existing
+     "no garments found" UI (gdEmpty) handles it - the user is told to re-crop, instead
+     of the model being handed a strip of wall and inventing a garment to match it. */
+  const ASPECT_MIN = 0.35;   // w/h - flatter than this is a shadow band, not a garment
+  const ASPECT_MAX = 4.0;    // w/h - narrower than this is a wall/door edge column
+  const shaped = natural.filter((b) => {
+    if (!b.width || !b.height) return false;
+    const ratio = b.width / b.height;
+    const ok = ratio >= ASPECT_MIN && ratio <= ASPECT_MAX;
+    if (!ok) {
+      console.warn(`[PEAR] detectGarments: rejected ${b.label || "box"} on aspect ratio ` +
+        `${ratio.toFixed(2)} (allowed ${ASPECT_MIN}-${ASPECT_MAX}) - ${b.width}x${b.height}px`);
+    }
+    return ok;
+  });
+
+  /* Confidence is scored on the SURVIVING set. Scoring before the aspect gate would let
+     a rejected shadow band's high area-score carry the whole detection over the
+     confidence bar, so a photo whose only "garment" was noise would still open the
+     picker with nothing usable in it. */
+  const best = shaped.reduce((m, b) => Math.max(m, b.score || 0), 0);
   if (best < U.MIN_CONFIDENCE) return [];
-  return natural.slice(0, U.MAX_BOXES);
+  return shaped.slice(0, U.MAX_BOXES);
 }
 
 /**

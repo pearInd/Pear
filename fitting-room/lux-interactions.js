@@ -70,11 +70,61 @@
       try { return window.self !== window.top; } catch (_) { return true; }
     }
 
+    /* ── Active-garment guard ────────────────────────────────────────────────
+       app.js's window.pearGetActiveGarment() returns NULL when no garment is selected -
+       a correct, honest answer. The `|| {}` that used to sit here turned that null into
+       an empty object, and every field below then fell back to "" - so a click with
+       nothing selected posted PEAR_ADD_TO_CART with sku:"", variantId:"" to the host
+       store. The host has no way to tell that apart from a real request for a product
+       whose SKU it simply doesn't recognise, so it either 404s or, worse, adds the
+       wrong line. Never send an unidentified garment.
+
+       A garment counts as usable only if it carries an identity the host can resolve.
+       Name and image are for OUR toast; sku/variantId are what the store actually needs. */
+    function usableGarment() {
+      try {
+        const g = window.pearGetActiveGarment && window.pearGetActiveGarment();
+        if (!g || typeof g !== "object") return null;
+        return (g.sku || g.variantId) ? g : null;
+      } catch (err) {
+        // pearGetActiveGarment reads app.js module state; if that throws, treat it as
+        // "not ready" rather than letting the exception kill the click handler.
+        console.warn("[PEAR lux] pearGetActiveGarment threw:", err && err.message);
+        return null;
+      }
+    }
+
+    /* app.js populates activeItem asynchronously on a handoff (parseHandoff → catalog
+       lookup → classification), so a fast click right after the room opens can land in
+       the gap. Retry a few times before giving up rather than failing a click that would
+       have worked 200ms later. Bounded and short: this runs under a real click, so it
+       must never leave the button hanging. */
+    const GARMENT_RETRIES = 4;
+    const GARMENT_RETRY_MS = 150;
+    function resolveGarment(tries, cb) {
+      const g = usableGarment();
+      if (g) return cb(g);
+      if (tries <= 0) return cb(null);
+      setTimeout(() => resolveGarment(tries - 1, cb), GARMENT_RETRY_MS);
+    }
+
     function land() {
       bounceCart();   // the jiggle plays regardless of who ends up owning the count below
+      resolveGarment(GARMENT_RETRIES, (garment) => {
+        if (!garment) {
+          /* Blocked, and SAID so. The previous behaviour was silent: an empty payload
+             went out and the optimistic toast claimed success, so the shopper believed
+             the item was in their cart. Failing visibly is the point. */
+          console.warn("[PEAR lux] add-to-cart blocked: no identifiable active garment " +
+            `after ${GARMENT_RETRIES + 1} attempts (sku/variantId both empty)`);
+          springToast("לא זוהה פריט פעיל - בחרו בגד ונסו שוב · No active item - pick a garment and try again");
+          return;
+        }
+        landWithGarment(garment);
+      });
+    }
 
-      const garment = (window.pearGetActiveGarment && window.pearGetActiveGarment()) || {};
-
+    function landWithGarment(garment) {
       if (inIframe()) {
         // Embedded in a store (e.g. fox.co.il) - hand the garment off to the host
         // page's own Host Cart Integration (see pear-widget.js's PEAR_ADD_TO_CART
@@ -83,13 +133,20 @@
         // `payload` is the documented contract other integrations key off of;
         // garmentUrl/garmentName ride alongside it for the host's own toast/UI,
         // same as before.
+        /* sku/variantId are NOT ""-defaulted any more. usableGarment() has already
+           guaranteed at least one of them is present, so an empty string here would be a
+           real identity we are discarding rather than a missing one we are papering over -
+           and the host must be able to tell "not provided" (undefined, key omitted) from
+           "provided as blank". `color` rides along so the host's own cart UI can show the
+           variant the shopper actually picked. */
         window.parent.postMessage({
           type: "PEAR_ADD_TO_CART",
           payload: {
-            sku: garment.sku || "",
+            sku: garment.sku || undefined,
             size: garment.size || "",
             quantity: garment.quantity || 1,
-            variantId: garment.variantId || "",
+            variantId: garment.variantId || undefined,
+            color: garment.color || undefined,
           },
           garmentUrl: garment.url || "",
           garmentName: garment.name || "",

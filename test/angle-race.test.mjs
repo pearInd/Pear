@@ -64,8 +64,8 @@ check("extracted compositeActiveFor", /function compositeActiveFor/.test(code));
    that is the point of it. So "which side did it select?" cannot be answered by looking
    for the word FRONT or BACK; it has to be read off the SELECTOR sentence, which names
    one panel as the source and declares the other absent for this frame. */
-const SELECTED_FRONT = /Use LEFT only; RIGHT must not appear/;
-const SELECTED_BACK  = /Use RIGHT only; LEFT must not appear/;
+const SELECTED_FRONT = /Use the LEFT half only; ignore the RIGHT/;
+const SELECTED_BACK  = /Use the RIGHT half only; ignore the LEFT/;
 
 function run({ effectiveAngleReturns, distinctBack, resolveLookReturns = null, custom = false, angleOverride, useComposite, inProfile, currentAngle = "auto" }) {
   const sandbox = {
@@ -142,7 +142,7 @@ console.log("\n── useComposite: the clause must describe the reference that 
     useComposite: false,                          // ...but no composite was actually resolved
   });
   check("composite WANTED but not resolved -> no panel contract in the clause",
-    !/split image, LEFT = garment front/.test(clause) && !SELECTED_BACK.test(clause), clause.slice(0, 200));
+    !/split photo of one garment: LEFT half its front/.test(clause) && !SELECTED_BACK.test(clause), clause.slice(0, 200));
   check("...and it falls back to the single-asset BACK steering instead",
     /The reference photo shows the garment's BACK/.test(clause), clause.slice(0, 200));
 }
@@ -155,7 +155,7 @@ console.log("\n── useComposite: the clause must describe the reference that 
     useComposite: true,
   });
   check("composite actually resolved -> the panel contract IS stated",
-    /split image, LEFT = garment front/.test(clause) && SELECTED_BACK.test(clause), clause.slice(0, 200));
+    /split photo of one garment: LEFT half its front/.test(clause) && SELECTED_BACK.test(clause), clause.slice(0, 200));
 }
 {
   /* applyGarment() is the only caller that passes the flag; every other caller omits it
@@ -168,7 +168,7 @@ console.log("\n── useComposite: the clause must describe the reference that 
     useComposite: undefined,
   });
   check("useComposite omitted -> still inferred from compositeActiveFor()",
-    /split image, LEFT = garment front/.test(clause), clause.slice(0, 200));
+    /split photo of one garment: LEFT half its front/.test(clause), clause.slice(0, 200));
 }
 
 console.log("\n── the panel contract states LEFT=FRONT / RIGHT=BACK, matching the stitcher ──");
@@ -179,9 +179,9 @@ console.log("\n── the panel contract states LEFT=FRONT / RIGHT=BACK, matchin
      words; if the stitcher's panel order is ever flipped without flipping this sentence,
      every back render silently reads the wrong half. */
   check("LEFT half is declared the FRONT view",
-    /LEFT = garment front/.test(clause), clause.slice(0, 260));
+    /LEFT half its front/.test(clause), clause.slice(0, 260));
   check("RIGHT half is declared the BACK view",
-    /RIGHT = back/.test(clause), clause.slice(0, 260));
+    /RIGHT half its back/.test(clause), clause.slice(0, 260));
   const drawsFrontLeft = /ctx\.rect\(0, 0, fW, pH\)[\s\S]{0,80}drawImageCover\(ctx, front/.test(SRC);
   const drawsBackRight = /const backX = fW \+ gut;[\s\S]{0,160}drawImageCover\(ctx, back, backX/.test(SRC);
   check("...and the stitcher actually draws FRONT left / BACK right", drawsFrontLeft && drawsBackRight,
@@ -200,10 +200,15 @@ console.log("\n── artifact + temporal clauses ride on BOTH orientations ─�
        list, the "only real seams" sentence, the ZERO-flickering paragraph - no longer fit
        under the 226-token ceiling (see config.js PROMPT_MAX_CHARS). What survives is the
        one-phrase form, and the layout fact it protects is still stated explicitly. */
-    check(`${angle}: still tells the model to ignore the canvas furniture`,
-      /Ignore gap.labels/.test(clause), clause.slice(0, 260));
+    /* The canvas-furniture ban is now LOW priority and lives only in the full builders,
+       not in this clause - it guards a cosmetic artifact (a divider painted onto the
+       shirt) and must never compete with the reference grounding that stops the wrong
+       garment rendering entirely. What this clause still owes the caller is the PANEL
+       CONTRACT, asserted below. */
+    check(`${angle}: still declares the reference a split photo of one garment`,
+      /split photo of one garment/.test(clause), clause.slice(0, 260));
     check(`${angle}: still names which half is which, so a flipped stitcher stays detectable`,
-      /LEFT = garment front, RIGHT = back/.test(clause), clause.slice(0, 260));
+      /LEFT half its front, RIGHT half its back/.test(clause), clause.slice(0, 260));
   }
 }
 
@@ -235,9 +240,9 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
   }
 
   check("the body-fidelity clamp still forbids slimming or idealizing the shopper",
-    /never slim or idealize/.test(SRC));
+    /never slim them/.test(SRC));
   check("the passthrough clamp still names face, skin and background",
-    /Face, hands, skin and background pass through untouched/.test(SRC));
+    /Face, skin, hands and background pass through untouched/.test(SRC));
   check("rotation continuity still promises the garment stays on through a turn",
     /The garment stays on through any turn/.test(SRC));
 }
@@ -261,7 +266,7 @@ console.log("\n── single-view items (no AI Auto) now get a truthful side cla
     /shoulder line, sleeve and side seam, draping along the flank/.test(clause),
     clause.slice(0, 260));
   check("...and still carries the body-depth directive (compressed from SIDE_PROFILE_DEPTH)",
-    /EDGE-ON: their front-to-back depth and belly are ground truth/.test(clause),
+    /EDGE-ON: keep their full front-to-back depth/.test(clause),
     clause.slice(0, 220));
 }
 {
