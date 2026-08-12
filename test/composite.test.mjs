@@ -218,5 +218,81 @@ check("returns null when an image fails to load",
 check("returns null when either URL is missing",
   (await failing.createGarmentComposite("https://cdn.test/a.jpg", "")) === null);
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROMPT TOKEN BUDGET - the production crash this suite now guards
+   ───────────────────────────────────────────────────────────────────────────
+   Decart rejects an over-long prompt outright:
+
+     "Prompt is too long: 1376 tokens (maximum 226, including the end-of-sequence
+      token). Please shorten the prompt."
+
+   set() fails and the shopper gets NO garment - so prompt length is a correctness
+   property here, not a style one, and it is the kind that regresses silently: every
+   clause this repo has ever added was individually justified, and the sum is what
+   crossed the line. Nothing before this asserted the sum.
+
+   Measured in CHARACTERS because the browser has no tokenizer (see config.js
+   PROMPT_MAX_CHARS). ~4 chars/token for English prose puts the 226-token ceiling at
+   ~904 chars; 750 is asserted here, keeping ~17% headroom for the ALL-CAPS and heavy
+   punctuation these prompts still contain, both of which tokenize worse than prose.
+   ═══════════════════════════════════════════════════════════════════════════ */
+console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-token ceiling ──");
+{
+  const promptCode = SRC.slice(SRC.indexOf("const P = Object.freeze({ CORE"),
+                               SRC.indexOf("/* Full-Look composite clause"));
+  const psandbox = {
+    PROMPT_MAX_CHARS: 700, console: { warn() {}, log() {} },
+    SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
+    colorName: () => "white", getSizeDelta: () => 0,
+    getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
+  };
+  const P = new Function(...Object.keys(psandbox),
+    promptCode + "\nreturn { buildCompositePrompt, fitPrompt, P, DENSE };")(...Object.values(psandbox));
+
+  const MAX = 750;                       // ~187 tokens - the assertion the spec asks for
+  const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
+  const cases = [
+    ["FRONT  square-on", TEE, "front", false],
+    ["FRONT  EDGE-ON", TEE, "front", true],
+    ["BACK   square-on", TEE, "back", false],
+    ["BACK   EDGE-ON", TEE, "back", true],
+    ["BOTTOMS EDGE-ON", { ...TEE, garmentType: "lower_body" }, "front", true],
+    ["custom upload", { ...TEE, custom: true }, "front", true],
+  ];
+  for (const [name, item, angle, prof] of cases) {
+    const out = P.buildCompositePrompt(item, angle, prof);
+    check(`${name}: ${String(out.length).padStart(3)} chars (~${Math.ceil(out.length / 4)} tok) < ${MAX}`,
+      out.length < MAX, out.slice(0, 160) + "…");
+  }
+
+  /* THE GUARANTEE, not the happy path. Every length above is a measurement of today's
+     catalog copy; none of them proves the NEXT clause or a longer product name cannot
+     push it over. fitPrompt() sheds by priority, so this asserts the mechanism itself
+     rather than trusting the authored strings to stay short. */
+  const pathological = { ...TEE, color: "#fff",
+    subType: "short_sleeve", name: "x".repeat(400) };
+  check("a pathologically long garment name still fits (clauses shed, then a hard clamp)",
+    P.buildCompositePrompt(pathological, "front", true).length <= 700);
+
+  const shed = P.fitPrompt([
+    [P.P.CORE, "CORE stays."],
+    [P.P.HIGH, "HIGH goes second-to-last."],
+    [P.P.TRIM, "TRIM goes first."],
+  ], 30);
+  check("fitPrompt drops the WORST priority first, keeping CORE",
+    /CORE stays\./.test(shed) && !/TRIM goes first/.test(shed), JSON.stringify(shed));
+  check("...and never returns more than the budget",
+    P.fitPrompt([[P.P.CORE, "y".repeat(900)]], 120).length <= 120);
+
+  /* Square-on must not pay for the edge-on clauses - the contextual-trimming half of
+     the spec. If the profile directives ever ride unconditionally, the base prompt
+     loses that many characters of budget for a band that is not even in view. */
+  const sq = P.buildCompositePrompt(TEE, "front", false);
+  check("square-on omits the EDGE-ON directives entirely",
+    !/EDGE-ON/.test(sq) && !/flank/.test(sq), sq);
+  check("...and is therefore shorter than the edge-on prompt",
+    sq.length < P.buildCompositePrompt(TEE, "front", true).length);
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);

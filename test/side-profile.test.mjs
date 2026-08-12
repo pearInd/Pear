@@ -77,6 +77,11 @@ function run({ angle = "front", inProfile = false, distinctBack, custom = false,
     /* buildCompositePrompt() reaches for these; they live outside the extracted slice and
        are irrelevant to what is asserted here, so they are stubbed as identifiable markers
        rather than reproduced. The clauses under test are all real source. */
+    /* The prompt budget the dense builders assemble against. Real value, not a stub:
+       fitPrompt() SHEDS clauses to honour it, so a fake number here would test a
+       different prompt than the one that ships. */
+    PROMPT_MAX_CHARS: 700,
+    console: { warn() {}, log() {} },
     KEEP_TOP: "_KEEP_TOP", KEEP_BOTTOMS: "_KEEP_BOTTOMS",
     STRICT_INPAINT: "_STRICT_INPAINT", IGNORE_SOURCE_ARTIFACTS: "_IGNORE_ARTIFACTS",
     MODEL_AGNOSTIC_EXTRACTION: "_MODEL_AGNOSTIC",
@@ -98,10 +103,10 @@ function run({ angle = "front", inProfile = false, distinctBack, custom = false,
 const BACK = "https://cdn.test/back.jpg";
 // Read off the SELECTOR sentence, never the words FRONT/BACK - the panel contract names
 // both panels by design, so only the selector says which one was actually chosen.
-const SELECTED_FRONT = /Apply the LEFT PANEL \(FRONT view\) design to the FRONT of their body/;
-const SELECTED_BACK  = /from the RIGHT PANEL \(BACK view\) and RENDER IT ONTO THE BACK of the person/;
-const DEPTH_MARKER   = /SIDE-PROFILE DEPTH FIDELITY/;
-const LATERAL_MARKER = /LATERAL SEAM SYNTHESIS/;
+const SELECTED_FRONT = /Use LEFT only; RIGHT must not appear/;
+const SELECTED_BACK  = /Use RIGHT only; LEFT must not appear/;
+const DEPTH_MARKER   = /EDGE-ON: their front-to-back depth/;
+const LATERAL_MARKER = /Wrap it round the flank/;
 
 /* A fresh pose state machine driven by the REAL enter/exit arithmetic lifted out of
    maybeUpdateProfile(). Only the decision half is taken - everything after it is cooldown,
@@ -122,12 +127,18 @@ function poseMachine() {
     "\n autoProfile = next; return autoProfile; };")(...Object.values(CONSTS));
 }
 
-console.log("── §1 THE REFACTOR IS BYTE-IDENTICAL: square-on prompts must not have moved ──");
+console.log("── §1 THE RETIRED ARCHIVE IS INTACT (these no longer reach the model) ──");
 {
-  /* Splitting POSE from PANEL (and REAR_POSE from BACK_TAIL) was done to create a seam for
-     the profile variants, NOT to reword anything. These four strings are the entire
-     square-on surface area of that refactor; if one drifts, a change intended to affect
-     only side-on frames has silently altered every head-on frame too. */
+  /* SCOPE CHANGED. These strings used to BE the shipped prompt, and this section pinned
+     them so a profile-only change could not silently reword every head-on frame. They are
+     now retired: Decart's 226-token ceiling forced the whole clause set into the DENSE
+     table, and nothing assembles these any more (see the RETIRED banner in app.js).
+
+     The section is kept, and still passes, because the archive is the written record of
+     what each regression needed - and the one-sentence directives that replaced it carry
+     the instruction without the reasoning. If a regression returns, this text is what
+     someone will read to buy a directive back, so it is worth knowing it is unmodified.
+     What it does NOT prove any more is anything about the live prompt; §2 onward do that. */
   const { api } = run({ distinctBack: BACK });
   check("COMPOSITE_SELECT.front still opens with the exact FACING FORWARD sentence",
     api.COMPOSITE_SELECT.front.startsWith(
@@ -152,96 +163,81 @@ console.log("── §1 THE REFACTOR IS BYTE-IDENTICAL: square-on prompts must n
 
 console.log("\n── §2 THE POSE LIE IS GONE: edge-on never asserts a facing ──");
 {
+  /* COMPRESSED to fit the 226-token ceiling (see config.js PROMPT_MAX_CHARS). The pose
+     sentences lost their explicit "do NOT rotate / do NOT re-render as a front-facing
+     shot" tails - there is no budget for enumerated negatives - but the LOAD-BEARING
+     claim is unchanged and is what these assert: the prompt states the true edge-on
+     rotation and never asserts a facing that contradicts the pixels. That contradiction
+     is the entire bug this file exists for. */
   const { clause } = run({ angle: "front", inProfile: true, distinctBack: BACK, useComposite: true });
   check("composite/front: no longer claims the shopper is FACING FORWARD",
-    !/FACING FORWARD/.test(clause) && !/the front of their body toward the camera/.test(clause),
+    !/FACING FORWARD/.test(clause) && !/They face the camera/.test(clause),
     clause.slice(0, 300));
   check("composite/front: states the true edge-on rotation instead",
-    /TURNED TO THEIR SIDE and is seen EDGE-ON, in side profile/.test(clause), clause.slice(0, 300));
-  check("composite/front: explicitly forbids de-rotating them back to front-on",
-    /do NOT rotate, straighten or re-pose them back toward the camera/.test(clause) &&
-    /do NOT re-render this as a front-facing shot/.test(clause), clause.slice(0, 400));
+    /They are EDGE-ON in side profile; keep that rotation/.test(clause), clause.slice(0, 300));
 }
 {
   const { clause } = run({ angle: "back", inProfile: true, distinctBack: BACK, useComposite: true });
-  check("composite/back: no longer claims a square rear view with no face visible",
-    !/has TURNED AROUND and is presenting their BACK to the camera/.test(clause) &&
-    !/no face visible/.test(clause), clause.slice(0, 300));
+  check("composite/back: no longer claims a square rear view",
+    !/turned around, back to camera/.test(clause), clause.slice(0, 300));
   check("composite/back: states the true edge-on rotation instead",
-    /TURNED TO THEIR SIDE and is seen EDGE-ON, in side profile/.test(clause), clause.slice(0, 300));
-  check("composite/back: forbids re-posing to a square rear shot",
-    /do NOT re-render this as a square rear shot/.test(clause), clause.slice(0, 400));
+    /They are EDGE-ON, part-way turned away; keep that rotation/.test(clause), clause.slice(0, 300));
 }
 {
   const { clause } = run({ angle: "back", inProfile: true, distinctBack: BACK, useComposite: false });
   check("single-asset/back: the rear POSE sentence is replaced...",
-    !/seen from BEHIND - rear view, turned around/.test(clause) &&
-    /TURNED TO THEIR SIDE and is seen EDGE-ON/.test(clause), clause.slice(0, 300));
-  check("...while the reproduce-the-back-print TAIL is fully preserved",
-    /This reference photo shows the BACK of the garment: reproduce it faithfully/.test(clause) &&
-    /Do not move, rescale, re-center or omit the back print/.test(clause), clause.slice(0, 600));
+    !/turned around, back to camera/.test(clause) &&
+    /They are EDGE-ON, part-way turned away/.test(clause), clause.slice(0, 300));
+  /* The back-print PLACEMENT pin survived compression, unlike most enumerated
+     instructions - it is the difference between a back print rendered where it belongs
+     and one that drifts frame to frame, and that was its own fix. */
+  check("...while the reproduce-the-back-print instruction survives",
+    /The reference photo shows the garment's BACK: reproduce its back print at the same size and position/.test(clause),
+    clause.slice(0, 600));
 }
 {
   const { clause } = run({ angle: "front", inProfile: true, distinctBack: undefined, useComposite: false });
-  check("single-asset/front: autoProfile replaces autoFront's 'facing the camera' claim",
-    !/The person is facing the camera/.test(clause) &&
-    /TURNED TO THEIR SIDE/.test(clause), clause.slice(0, 300));
+  check("single-asset/front: the profile pose replaces the 'facing the camera' claim",
+    !/They face the camera/.test(clause) &&
+    /EDGE-ON in side profile/.test(clause), clause.slice(0, 300));
   check("...and still pins the reference as the garment FRONT (the lock did not move)",
-    /This reference photo shows the FRONT of the garment/.test(clause), clause.slice(0, 300));
+    /The reference photo shows the garment's front/.test(clause), clause.slice(0, 300));
 }
 
 console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on ──");
 {
   const { clause } = run({ angle: "front", inProfile: true, distinctBack: BACK, useComposite: true });
-  /* The four numbered directives. Asserted individually because they are four separable
-     asks - a rewrite that drops any one of them (most easily (3), which is the only one
-     that speaks to foreshortening) would leave the others reading fine while the specific
-     failure they were written for came back. */
-  check("(1) states the orientation: edge-on, side profile, facing laterally",
-    /the person is positioned EDGE-ON, IN SIDE PROFILE, facing LATERALLY relative to the camera frame/.test(clause),
-    clause.slice(-1400));
-  check("(2) names the lateral silhouette edge as ABSOLUTE GROUND TRUTH",
-    /lateral silhouette edge in the live frame[\s\S]*is ABSOLUTE GROUND TRUTH/.test(clause), clause.slice(-1400));
-  check("(2) covers abdominal curve, torso depth and clothing bulk",
-    /including any abdominal curve, stomach or belly projection, chest depth/.test(clause) &&
-    /the bulk of the clothing itself/.test(clause), clause.slice(-1400));
-  check("(2) names FRONT-TO-BACK DEPTH as the visible axis, not width",
-    /that outline is their real FRONT-TO-BACK DEPTH, not their width/.test(clause), clause.slice(-1400));
-  check("(2) declares a protrusion to be REAL BODY VOLUME - the pillow/belly case",
-    /Any protrusion, bulge, overhang, rounding or expansion along that edge is REAL BODY VOLUME/.test(clause) &&
-    /must be preserved at its exact depth, height and position, however far it extends/.test(clause),
-    clause.slice(-1400));
-  check("(3) requires full side-view foreshortening to be maintained",
-    /maintain the full side-view foreshortening exactly as captured/.test(clause), clause.slice(-1400));
-  check("(3) forbids rotating chest/waist/hips/shoulders back toward the front view",
-    /Do NOT rotate, turn or twist the person's chest, waist, hips or shoulders back toward the front camera view/.test(clause),
-    clause.slice(-1400));
-  check("(3) forbids substituting an idealized profile",
-    /Do NOT substitute a typical, average, slimmer, athletic or idealized profile/.test(clause), clause.slice(-1400));
-  check("(3) forbids flattening the stomach/chest/back edge toward the spine",
-    /do NOT flatten, straighten, compress or pull the stomach, chest, belly or back edge inward toward the/.test(clause) &&
-    /do NOT reduce the torso's front-to-back thickness/.test(clause), clause.slice(-1400));
-  check("(4) requires the fabric to drape over the exact profile contours at true depth",
-    /wrap and drape the selected garment fabric seamlessly over those exact profile contours, preserving their true physical depth/.test(clause),
-    clause.slice(-1400));
+  /* COMPRESSED, and this is the single biggest loss in the token-budget rewrite:
+     SIDE_PROFILE_DEPTH was 1,816 characters (~454 tokens) of four numbered directives -
+     TWICE the entire 226-token budget for one clause - and is now a single sentence.
 
-  /* PLACEMENT, asserted because buildCompositePrompt()'s own ordering comment makes the
-     case that leading tokens dominate for this model - that argument is the reason the
-     panel contract leads at all. On an edge-on frame the body geometry IS the instruction
-     being got wrong, so it must sit directly behind the pose rather than at the tail
-     behind the garment description, fit modifier and general clamps. */
-  const posePos  = clause.indexOf("TURNED TO THEIR SIDE");
-  const applyPos = clause.indexOf("Apply the LEFT PANEL");
-  const depthPos = clause.indexOf("SIDE-PROFILE DEPTH FIDELITY");
-  const tempPos  = clause.indexOf("temporally consistent");
-  /* It follows the pose+panel block rather than splitting it: the panel contract is
-     deliberately contiguous (contract → pose → which panel), and wedging 1,169 characters
-     about anatomy into the middle of it would undo the ordering this file fought for. */
-  check("the depth clause follows the pose/panel block, leaving that block contiguous",
-    posePos !== -1 && applyPos > posePos && depthPos > applyPos,
-    `pose@${posePos} apply@${applyPos} depth@${depthPos}`);
-  check("...and still precedes the trailing temporal clause",
-    tempPos !== -1 && depthPos < tempPos, `depth@${depthPos} temporal@${tempPos}`);
+     Gone: the enumerated protrusion/bulge/overhang language, the explicit foreshortening
+     ban, the "do not substitute an idealized profile" negative, and the drape directive.
+     Each was written against a reproduced failure, so this IS a weaker instrument. What
+     survives is the load-bearing half - naming the front-to-back axis as ground truth and
+     forbidding the flattening - because a model with a strong flat-profile prior needs
+     the axis NAMED above all else. If the pillow-under-a-shirt case regresses, the fix is
+     to buy a directive back out of TRIM, not to re-grow the clause. */
+  check("names the front-to-back depth axis - the axis that only exists edge-on",
+    /front-to-back depth and belly are ground truth/.test(clause), clause.slice(-400));
+  check("...declares it GROUND TRUTH, so the live silhouette overrides the model's prior",
+    /ground truth/.test(clause), clause.slice(-400));
+  check("...and still forbids flattening that profile (the pillow/belly case)",
+    /never flatten that profile/.test(clause), clause.slice(-400));
+  check("the clause is scoped to EDGE-ON so it cannot fire square-on",
+    /EDGE-ON: their front-to-back depth/.test(clause), clause.slice(-400));
+
+  /* PLACEMENT still matters for the same reason it always did - leading tokens dominate
+     for this model - and compression did not change the ordering argument, only the
+     lengths. Contract → pose → panel → substitution → depth. */
+  const posePos  = clause.indexOf("EDGE-ON in side profile");
+  const selPos   = clause.indexOf("Use LEFT only");
+  const depthPos = clause.indexOf("EDGE-ON: their front-to-back depth");
+  check("the panel contract and pose lead, and the depth directive follows them",
+    posePos !== -1 && selPos !== -1 && depthPos > posePos && depthPos > selPos,
+    `pose@${posePos} select@${selPos} depth@${depthPos}`);
+  check("...and the whole clause fits the token budget it was compressed for",
+    clause.length < 750, `${clause.length} chars`);
 }
 {
   /* Same placement rule in the OTHER builder - the one that assembles the real live
@@ -250,8 +246,8 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   const { api } = run({ distinctBack: BACK });
   const built = api.buildCompositePrompt(
     { name: "Tee", custom: true, garmentType: "upper_body" }, "front", true);
-  const dPos = built.indexOf("SIDE-PROFILE DEPTH FIDELITY");
-  const subPos = built.indexOf("Substitute the person's current");
+  const dPos = built.indexOf("EDGE-ON: their front-to-back depth");
+  const subPos = built.indexOf("Replace their");
   check("buildCompositePrompt places the depth clause before the garment description",
     dPos !== -1 && subPos !== -1 && dPos < subPos, `depth@${dPos} substitute@${subPos}`);
   check("...and omits it entirely on a square-on frame",
@@ -286,46 +282,26 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
      Distinct from SIDE_PROFILE_DEPTH (body geometry) and from ROTATION_CONTINUITY (the
      turn as a temporal event); this is a spatial region being unreferenced at the angle
      where it is most exposed. */
+  /* COMPRESSED from 1,543 characters to one sentence. Gone: the enumerated coverage
+     language, the extrapolate-don't-relocate directive, and the explicit ban on dragging
+     the reference's graphics round onto the flank. What survives is the geometry (wrap +
+     side seam) and the SYMPTOM (their own shirt showing through), which is the half that
+     names the actual failure. */
   const { clause } = run({ angle: "front", inProfile: true, distinctBack: BACK, useComposite: true });
-  check("names the unreferenced band explicitly (flank, side seam, underarm, sleeve face)",
-    /No reference view depicts the narrow lateral band now facing the camera: the flank, the side seam, the underarm and the outer face of the sleeve/.test(clause),
-    clause.slice(-1600));
-  check("(1) mandates 100% coverage for every frame of the turn",
-    /hold 100% garment replacement coverage across the entire visible torso for every frame of the turn/.test(clause),
-    clause.slice(-1600));
-  check("(1) forbids the garment thinning, breaking or turning transparent",
-    /the target garment thins, breaks, fades, turns transparent/.test(clause), clause.slice(-1600));
-  check("(1) names the ACTUAL reported symptom - the user's own shirt showing through",
-    /lets the person's own original shirt - its colour, collar, sleeves or hem - show through anywhere/.test(clause) &&
-    /least of all along the flank, the shoulder line or the underarm/.test(clause), clause.slice(-1600));
-  check("(2) requires the wrap around lateral depth - side seam, shoulder seam, hem",
-    /the side seam running down their real side contour/.test(clause) &&
-    /the hem closing unbroken around the flank/.test(clause), clause.slice(-1600));
-  check("(3) extrapolates cloth properties outward from the locked reference view",
-    /carry the colour, weave, sheen, material thickness and fold behaviour of the reference view named above outward across that band/.test(clause),
-    clause.slice(-1600));
-  check("(3) demands a smooth transition with no hard edge or texture break",
-    /no hard edge, colour step, seam artifact or texture break/.test(clause), clause.slice(-1600));
-  check("(3) defaults the unreferenced band to PLAIN fabric rather than invention",
-    /infer PLAIN fabric in that same colour and texture/.test(clause), clause.slice(-1600));
+  check("still instructs the wrap around the flank with a real side seam",
+    /Wrap it round the flank with a natural side seam/.test(clause), clause.slice(-400));
+  check("still names the reported symptom - the shopper's own shirt showing through",
+    /never let their own shirt show/.test(clause), clause.slice(-400));
 
-  /* THE REGRESSION GUARD, and the reason this clause is phrased geometrically instead of
-     as "blend the front and back panels". Telling the model to blend the panels would
-     contradict the impassable-wall contract that OPENS the prompt, and that contradiction
-     has a known resolution in this repo: both panels' designs on one surface is the
-     double-print bug that got the previous stitcher removed in 23f5953. Fabric continuity
-     is synthesized; PRINT relocation stays forbidden. */
+  /* THE REGRESSION GUARD survives compression, and had to: the shortest phrasing of this
+     clause ("blend the front and back panels") is exactly the one that would contradict
+     the impassable-wall contract and re-open the 23f5953 double-print bug. Brevity makes
+     that trap MORE tempting, not less. */
   check("does NOT instruct the model to blend the two panels (the 23f5953 double-print trap)",
-    !/blend[\s\S]{0,60}(front|left) panel[\s\S]{0,40}(back|right) panel/i.test(clause),
-    "lateral continuity must be geometric, never a cross-panel design blend");
-  check("explicitly forbids dragging the reference's graphics around onto the side",
-    /Do NOT drag, mirror, wrap or repeat the reference's graphics, prints, logos or lettering around onto the side/.test(clause),
-    clause.slice(-1600));
-  check("...and forbids inventing new graphics there instead",
-    /do NOT invent new ones there/.test(clause), clause.slice(-1600));
-  check("the impassable-wall contract SURVIVES alongside it",
-    /never blend, mirror or copy any detail from one half into the other/.test(clause) &&
-    /The RIGHT PANEL does not exist for this frame/.test(clause), clause.slice(0, 800));
+    !/blend/i.test(clause),
+    "lateral continuity must stay geometric, never a cross-panel design blend");
+  check("the panel-exclusion contract SURVIVES alongside it",
+    /Use LEFT only; RIGHT must not appear/.test(clause), clause.slice(0, 400));
 }
 {
   /* Same every-branch sweep §3 runs for the depth clause, for the same reason: a clause
@@ -354,12 +330,17 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
   const built = api.buildCompositePrompt(item, "front", true);
-  const depthPos = built.indexOf("SIDE-PROFILE DEPTH FIDELITY");
-  const latPos   = built.indexOf("LATERAL SEAM SYNTHESIS");
-  const subPos   = built.indexOf("Substitute the person's current");
-  check("buildCompositePrompt orders depth → lateral → garment description",
-    depthPos !== -1 && latPos > depthPos && subPos > latPos,
-    `depth@${depthPos} lateral@${latPos} substitute@${subPos}`);
+  const depthPos = built.indexOf("EDGE-ON: their front-to-back depth");
+  const latPos   = built.indexOf("Wrap it round the flank");
+  const subPos   = built.indexOf("Replace their");
+  /* Depth leads the garment description (body geometry first - the ordering the verbose
+     version argued for and compression preserved). The lateral wrap now follows the
+     substitution rather than preceding it: it ranks HIGH, not CORE, so it is assembled
+     with the droppable clauses - deliberate, since shedding it must never shed the
+     substitution itself. */
+  check("buildCompositePrompt orders depth → garment description → lateral wrap",
+    depthPos !== -1 && subPos > depthPos && latPos > subPos,
+    `depth@${depthPos} substitute@${subPos} lateral@${latPos}`);
   check("...and omits the lateral clause entirely on a square-on frame",
     !LATERAL_MARKER.test(api.buildCompositePrompt(item, "front", false)));
 }
@@ -377,17 +358,15 @@ console.log("\n── §3c MODEL-AGNOSTIC EXTRACTION rides BOTH orientation stat
   for (const inProfile of [false, true]) {
     const built = api.buildCompositePrompt(item, "front", inProfile);
     check(`buildCompositePrompt carries garment isolation at inProfile=${inProfile}`,
-      /_MODEL_AGNOSTIC/.test(built), built.slice(-260));
+      /ignore the reference model's body/.test(built), built.slice(-300));
   }
-  /* Ordering: it introduces the reference/live provenance split, then STRICT_INPAINT states
-     the live body is 1:1 ground truth. The second is the positive half of the first, and
-     this clause is written to hand off to it rather than restate it - so if they are ever
-     separated or reordered, the hand-off silently stops reading as one argument. */
+  /* It ranks HIGH, not TRIM, so the budget cannot silently shed it on a long garment
+     name - which is the failure mode compression introduces that did not exist before. */
   const built = api.buildCompositePrompt(item, "front", true);
-  check("...immediately ahead of STRICT_INPAINT, whose fidelity language it hands off to",
-    /_MODEL_AGNOSTIC_STRICT_INPAINT/.test(built), built.slice(-260));
-  check("...and after the garment description, not before it",
-    built.indexOf("Substitute the person's current") < built.indexOf("_MODEL_AGNOSTIC"));
+  check("...and pairs with the body-fidelity clamp, its positive half",
+    /never slim or idealize/.test(built), built.slice(-300));
+  check("...after the garment description, not before it",
+    built.indexOf("Replace their") < built.indexOf("ignore the reference model's body"));
 }
 
 console.log("\n── §4 DECOUPLING: profile changes the POSE, never the panel/asset ──");
@@ -402,12 +381,15 @@ console.log("\n── §4 DECOUPLING: profile changes the POSE, never the panel/
       SELECTED_BACK.test(run({ angle: "back", inProfile, distinctBack: BACK, useComposite: true }).clause));
   }
   const profiled = run({ angle: "front", inProfile: true, distinctBack: BACK, useComposite: true }).clause;
-  check("the panel contract itself is unchanged edge-on (LEFT=FRONT / RIGHT=BACK still stated)",
-    /the LEFT HALF is the FRONT view/.test(profiled) && /the RIGHT HALF is the BACK view/.test(profiled));
+  check("the panel contract itself is unchanged edge-on (LEFT=front / RIGHT=back still stated)",
+    /LEFT half = garment front, RIGHT = back/.test(profiled), profiled.slice(0, 300));
   check("cross-panel bleed is still forbidden edge-on",
-    /The RIGHT PANEL does not exist for this frame/.test(profiled), profiled.slice(0, 600));
-  check("canvas-furniture and temporal clauses still ride along edge-on",
-    /IGNORE ALL CANVAS FURNITURE/.test(profiled) && /ZERO flickering/.test(profiled));
+    /RIGHT must not appear/.test(profiled), profiled.slice(0, 400));
+  /* The canvas-furniture ban compressed to three words; the temporal clause is TRIM and
+     is legitimately shed at edge-on, where the depth and lateral directives outrank it -
+     see §5e, which now asserts that trade-off explicitly rather than assuming both fit. */
+  check("the canvas-furniture ban still rides along edge-on",
+    /Ignore gap and labels/.test(profiled), profiled.slice(0, 300));
 }
 
 console.log("\n── §5 THE WATCHER: edge-on is a separate channel from the front/back vote ──");
@@ -672,20 +654,26 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
      across the change is the temporal/rotation language, and it must therefore be present
      on the edge-on prompt as well as the square-on one - if it rode only the square-on
      branch, every transition would drop the very clause that smooths it. */
-  const profiled = run({ angle: "front", inProfile: true, distinctBack: BACK, useComposite: true }).clause;
-  check("the edge-on composite clause still demands temporally consistent frames",
-    /temporally consistent frame-to-frame output/.test(profiled));
-  check("...and still forbids the print flickering or re-positioning between frames",
-    /must never vanish, fade or re-position between frames/.test(profiled));
-
+  /* THE TRADE-OFF COMPRESSION FORCED, asserted rather than hoped for. The temporal and
+     photorealism directives are TRIM: they survive square-on, where there is budget, and
+     are deliberately shed edge-on, where the depth and lateral directives need the room.
+     That is a real regression risk for flicker at 90 degrees - it is recorded here so it
+     is a known, chosen trade rather than a silent one. */
   const { api } = run({ distinctBack: BACK });
-  const built = api.buildCompositePrompt({ name: "Tee", custom: true, garmentType: "upper_body" }, "front", true);
-  check("the built edge-on payload carries ROTATION_CONTINUITY (garment stays on through the turn)",
-    /_ROTATION/.test(built), built.slice(-200));
-  check("...and PROFILE_ANOMALY_GUARD (held objects are not anatomy while turning)",
-    /_ANOMALY_GUARD/.test(built), built.slice(-200));
-  check("...and STRICT_INPAINT (body fidelity governs at every angle)",
-    /_STRICT_INPAINT/.test(built), built.slice(-200));
+  const item = { name: "Tee", custom: true, garmentType: "upper_body" };
+  const square = api.buildCompositePrompt(item, "front", false);
+  const built  = api.buildCompositePrompt(item, "front", true);
+  check("square-on keeps the temporal-stability directive (budget allows it)",
+    /Stable print, no flicker/.test(square), square.slice(-200));
+  check("edge-on sheds it so the depth + lateral directives fit - the chosen trade",
+    !/Stable print, no flicker/.test(built) && /front-to-back depth/.test(built),
+    built.slice(-260));
+  check("the body-fidelity clamp survives at BOTH poses (it is HIGH, never shed)",
+    /never slim or idealize/.test(square) && /never slim or idealize/.test(built));
+  check("...as does the passthrough clamp",
+    /pass through untouched/.test(square) && /pass through untouched/.test(built));
+  check("both payloads stay inside the token budget",
+    square.length < 750 && built.length < 750, `square=${square.length} edge=${built.length}`);
 }
 
 console.log("\n── §6 NO TOCTOU: the pose is a frozen snapshot, like the angle ──");

@@ -1,30 +1,33 @@
 /* MODEL-AGNOSTIC GARMENT EXTRACTION - "it gave me the e-commerce model's shoulders".
 
-   REPORTED FAILURE: the rendered body picks up physical features of the person wearing the
-   garment in the REFERENCE photo - shoulder width, chest shape, overall proportions,
-   sometimes posture - instead of keeping the live shopper's own frame.
+   REPORTED FAILURE: the rendered body picks up physical features of the person wearing
+   the garment in the REFERENCE photo - shoulder width, chest shape, proportions, posture -
+   instead of keeping the live shopper's own frame.
 
-   ROOT CAUSE, and it is the same class as every other clamp in app.js: an unstated region.
-   Every body-shape defence in that file is aimed at the model's TRAINING PRIOR -
-   STRICT_INPAINT's "do not slim or idealize", SIDE_PROFILE_DEPTH's flattened profile. None
-   of them accounted for the second human actually present in the conditioning: a catalog
-   reference is almost always model-worn, and Lucy sees that figure. IGNORE_SOURCE_ARTIFACTS
-   is the closest existing clause and is deliberately scoped to non-human noise (badges,
-   watermarks, "FRONT"/"BACK" labels), so a whole person in the reference was never named as
-   off-limits. Anything the prompt does not pin is free to be reinterpreted.
+   ROOT CAUSE, the same class as every other clamp in app.js: an unstated region. Every
+   body-shape defence in that file aims at the diffusion model's TRAINING prior. None
+   accounted for the second human actually present in the conditioning - a catalog
+   reference is almost always model-worn - and the nearest existing clause was scoped to
+   non-human noise (badges, watermarks, orientation labels). Anything the prompt does not
+   pin is free to be reinterpreted.
 
-   THE FIX: a provenance split stated explicitly - the reference image is the only source of
-   CLOTH, the live camera feed is the only source of BODY - carried on every prompt builder.
+   THE FIX: a provenance split stated explicitly - the reference image is the only source
+   of CLOTH, the live camera feed is the only source of BODY - carried on every builder.
 
-   WHAT THIS SUITE PROTECTS, beyond the clause existing:
-     §1 the three directives, individually, so a reword cannot quietly drop one.
-     §2 the print-placement carve-out. "Re-proportion the garment to their body" and
-        BACK_TAIL.real's "do not move, rescale or re-center the back print" are one bad
-        reading apart from contradicting each other, and that alignment was its own fix.
-     §3 EVERY builder carries it. app.js's own comment at buildLookPrompt records
-        IGNORE_SOURCE_ARTIFACTS / PROFILE_ANOMALY_GUARD being "missed here in the pass that
-        added them" - this asserts parity against STRICT_INPAINT so that cannot recur.
-     §4 it is NOT profile-gated - the reference figure bleeds at 0 degrees too. */
+   ── COMPRESSED, AND WHY THIS SUITE CHANGED SHAPE ──────────────────────────────
+   Decart rejects any prompt over 226 tokens ("Prompt is too long: 1376 tokens"), so the
+   1,253-character clause this suite was originally written against no longer exists. It
+   is now DENSE.modelAgnostic, one sentence, assembled through fitPrompt().
+
+   That makes HOW it is asserted matter more than before. The old suite could check nine
+   separate enumerated phrases; there is only one sentence to check now. So the weight
+   moves to the two properties compression actually put at risk:
+     · it must be on EVERY builder (§2) - unchanged from before, and
+     · it must rank high enough that the BUDGET never sheds it (§3) - entirely new. A
+       clause that silently drops out on a long garment name is indistinguishable from
+       one that was never added.
+   Asserted against the SHIPPED prompt, never the retired constant - a test that passes by
+   reading dead source is worse than one that fails. */
 import { readFileSync } from "node:fs";
 
 const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -36,120 +39,103 @@ function check(label, cond, detail) {
   if (!cond && detail !== undefined) console.log(`        ${detail}`);
 }
 
-/* The constant is EVALUATED rather than regex-matched over source, so the assertions below
-   read the real assembled string - concatenation bugs included. */
-const start = SRC.indexOf("const MODEL_AGNOSTIC_EXTRACTION =");
-if (start === -1) throw new Error("MODEL_AGNOSTIC_EXTRACTION not found in app.js");
-const end = SRC.indexOf("\n\n", SRC.indexOf('lettering keeps the size', start));
-const CLAUSE = new Function(
-  SRC.slice(start, end) + "\nreturn MODEL_AGNOSTIC_EXTRACTION;")();
+/* The real builders, executed - not regex-matched over source. */
+const code = SRC.slice(SRC.indexOf("const P = Object.freeze({ CORE"),
+                       SRC.indexOf("/* Full-Look composite clause"));
+const sandbox = {
+  PROMPT_MAX_CHARS: 700, console: { warn() {}, log() {} },
+  SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
+  colorName: () => "white", getSizeDelta: () => 0,
+  getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
+};
+const api = new Function(...Object.keys(sandbox),
+  code + "\nreturn { buildCompositePrompt, fitPrompt, P, DENSE };")(...Object.values(sandbox));
 
-console.log("── §1 THE THREE DIRECTIVES ──");
+const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
+
+console.log("── §1 THE DIRECTIVE, in the prompt that actually ships ──");
 {
-  check("(1) ISOLATION: names the reference as a texture/clothing template and nothing more",
-    /GARMENT ISOLATION MANDATE: the reference image is a TEXTURE AND CLOTHING TEMPLATE and nothing more/.test(CLAUSE),
-    CLAUSE.slice(0, 200));
-  check("(1) enumerates what MAY be extracted (fabric, pattern, print, seams, cut)",
-    /Extract ONLY the garment from it - fabric, weave, colour, pattern, print, logos, seams, cut, collar, closure and hemline/.test(CLAUSE),
-    CLAUSE.slice(0, 300));
-  check("(1) names the reference's wearer explicitly - a person, model OR mannequin",
-    /If a person, model or mannequin is wearing that garment in the reference/.test(CLAUSE),
-    CLAUSE.slice(0, 400));
-  check("(1) enumerates the specific attributes to ignore, incl. the reported ones",
-    /ignore their body, physique, height, build, skin tone, shoulder width, chest, waist, limb positions and posture/.test(CLAUSE),
-    CLAUSE.slice(0, 500));
+  const out = api.buildCompositePrompt(TEE, "front", false);
+  check("names the reference as cloth-only, not a body",
+    /Cloth only: ignore the reference model's body/.test(out), out);
+  /* The compact statement of the whole feature, and the one phrase that must survive any
+     future shortening: it is what distinguishes this clause from ordinary body fidelity. */
+  check("...and drapes to THIS person, the live subject",
+    /drape to THIS person/.test(out), out);
+  check("its positive half - the body-fidelity clamp - rides alongside it",
+    /Keep their real volume, belly and hips as filmed; never slim or idealize/.test(out), out);
 
-  check("(2) ZERO MODEL BLEED: forbids transfer/copy/blend/average of the reference anatomy",
-    /ZERO MODEL BLEED: do NOT transfer, copy, blend, average or impose ANY of that reference figure's anatomy, proportions, pose or body structure onto the live person/.test(CLAUSE),
-    CLAUSE.slice(-900));
-  check("(2) also forbids the INVERSE - reshaping the live person toward the reference figure",
-    /never reshape the live person toward them/.test(CLAUSE), CLAUSE.slice(-900));
-  /* The compact statement of the whole feature. Worth pinning on its own: it is the one
-     sentence that survives if the clause is ever shortened under prompt-length pressure. */
-  check("(2) states the PROVENANCE SPLIT - cloth from the reference, body from the live feed",
-    /The live camera feed is the ONLY source of BODY; the reference image is the ONLY source of CLOTH/.test(CLAUSE),
-    CLAUSE.slice(-900));
-
-  check("(3) DYNAMIC USER FITTING: fit/stretch/drape/re-proportion onto the live body",
-    /DYNAMIC USER FITTING: fit, stretch, drape and re-proportion the extracted garment onto the live person's own exact body shape and volume/.test(CLAUSE),
-    CLAUSE.slice(-700));
-  check("(3) names the abdominal/torso volume the verification case turns on",
-    /their real torso, chest, stomach, waist and hips/.test(CLAUSE), CLAUSE.slice(-700));
-  check("(3) requires fabric tension and folds to follow THEIR contours, not the model's",
-    /with fabric tension, creases and folds following their contours rather than the reference figure's/.test(CLAUSE),
-    CLAUSE.slice(-700));
+  /* COMPRESSED AWAY, recorded so the loss is deliberate rather than forgotten: the
+     enumerated attribute list (height, build, skin tone, shoulder width, limb positions,
+     posture), the explicit "never reshape the live person toward them" inverse, and the
+     print-placement carve-out. The carve-out mattered because "re-proportion the garment"
+     and the back-print placement pin can be read as contradictory - that pin is asserted
+     directly below instead, which is the property the carve-out was protecting. */
+  check("the back-print placement pin survives independently of the retired carve-out",
+    /reproduce its back print at the same size and position/.test(SRC),
+    "compression must not have taken the print-alignment fix with it");
 }
 
-console.log("\n── §2 THE CARVE-OUT: re-proportioning must not relocate artwork ──");
+console.log("\n── §2 EVERY BUILDER CARRIES IT (the 'one site was missed' failure) ──");
 {
-  /* Without this boundary the clause reads as licence to re-lay-out the garment's graphics
-     for a different body, which is exactly what BACK_TAIL.real spent its own fix forbidding
-     ("keeping each element at the SAME size, height and horizontal position ... Do not move,
-     rescale, re-center or omit the back print"). Two clauses in one prompt disagreeing is
-     how the back print started drifting in the first place. */
-  check("scaling the garment is explicitly NOT licence to move its artwork",
-    /Re-proportioning the garment to their body is NOT licence to move its artwork/.test(CLAUSE),
-    CLAUSE.slice(-400));
-  check("...and defers to the placement already specified upstream",
-    /any print, graphic, logo or lettering keeps the size, height and position on the garment specified above/.test(CLAUSE),
-    CLAUSE.slice(-400));
-  check("the back-print pin it defers to is still present in app.js",
-    /Do not move, rescale, re-center or omit the back print/.test(SRC),
-    "BACK_TAIL.real's placement pin is the instruction the carve-out points at");
-}
-
-console.log("\n── §3 EVERY BUILDER CARRIES IT (the 'one site was missed' failure) ──");
-{
-  /* app.js's own comment at buildLookPrompt records IGNORE_SOURCE_ARTIFACTS and
-     PROFILE_ANOMALY_GUARD being missed at that exact site when they were introduced. Parity
-     against STRICT_INPAINT is the check that generalises: both belong on every prompt this
-     app can emit, so any assembly site carrying one and not the other is the bug. */
-  const inpaintSites = SRC.split(/\$\{STRICT_INPAINT\}|STRICT_INPAINT \+/).length - 1;
-  const agnosticSites = SRC.split(/\$\{MODEL_AGNOSTIC_EXTRACTION\}|MODEL_AGNOSTIC_EXTRACTION \+/).length - 1;
-  check("garment isolation is on exactly as many assembly sites as STRICT_INPAINT",
-    inpaintSites === agnosticSites && inpaintSites >= 6,
-    `STRICT_INPAINT@${inpaintSites} sites, MODEL_AGNOSTIC_EXTRACTION@${agnosticSites} sites`);
-
-  /* Named individually too - the parity count above would still pass if BOTH were missing
-     from the same builder, and these are the six distinct prompts a shopper can trigger. */
+  /* app.js's buildLookPrompt comment records IGNORE_SOURCE_ARTIFACTS being missed at that
+     exact site when it was introduced. Parity against the body-fidelity clamp generalises:
+     both belong on every prompt this app can emit, so a site carrying one and not the
+     other is the bug. */
   const builders = [
-    ["buildCompositePrompt (AI Auto, stitched front|back reference)", "MODEL_AGNOSTIC_EXTRACTION + STRICT_INPAINT"],
-    ["buildPrompt - catalog lower body", "Substitute the current bottoms with ${colorWord}"],
-    ["buildPrompt - catalog upper body", "Substitute the current top with a ${colorWord}"],
-    ["buildCustomPrompt - uploaded lower body", "Substitute the current bottoms with ${ref}"],
-    ["buildCustomPrompt - uploaded upper body", "Substitute the current top with ${ref}"],
+    ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
+    ["buildPrompt (catalog)", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
+    ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
+    ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
   ];
-  for (const [name, marker] of builders) {
-    const i = SRC.indexOf(marker);
-    const line = i === -1 ? "" : SRC.slice(i, SRC.indexOf("\n", i));
+  for (const [name, re] of builders) {
+    const body = (SRC.match(re) || [""])[0];
     check(`${name}: carries the isolation clause`,
-      i !== -1 && /MODEL_AGNOSTIC_EXTRACTION/.test(line), line.slice(0, 200) || `marker not found: ${marker}`);
+      body.includes("DENSE.modelAgnostic"), body.slice(-300) || "builder not found");
+    check(`${name}: ...paired with the body-fidelity clamp`,
+      body.includes("DENSE.bodyFidelity"), body.slice(-300) || "builder not found");
   }
-  // The full-look builder assembles its tail on its own line, so it is matched separately.
-  const lookTail = SRC.indexOf("${MODEL_AGNOSTIC_EXTRACTION}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`");
-  check("buildLookPrompt (full look, TOP+BOTTOM): carries it too",
-    lookTail !== -1, "the site app.js's own comment records as previously missed");
 }
 
-console.log("\n── §4 NOT PROFILE-GATED: the reference figure bleeds at every angle ──");
+console.log("\n── §3 THE BUDGET MUST NOT SHED IT (new risk, created by compression) ──");
 {
-  /* SIDE_PROFILE_DEPTH and LATERAL_SEAM_SYNTHESIS are correctly gated behind `inProfile` -
-     they describe a 90-degree frame. This one must NOT be: a square-on shopper is rendered
-     against the same model-worn reference. Asserted structurally, because a future tidy that
-     groups the three "body" clauses together would be an easy way to gate it by accident. */
-  const compositeBody = SRC.slice(SRC.indexOf("function buildCompositePrompt(item, angle, inProfile)"),
-                                  SRC.indexOf("/* Full-Look composite clause"));
-  check("buildCompositePrompt does not put the isolation clause behind an inProfile ternary",
-    !/inProfile \?[^:]*MODEL_AGNOSTIC_EXTRACTION/.test(compositeBody) &&
-    !/MODEL_AGNOSTIC_EXTRACTION[^;]*: ""/.test(compositeBody),
-    "it must be unconditional - the reference model is present at 0 degrees too");
-  check("...while the two genuinely pose-specific clauses ARE still gated",
-    /inProfile \? SIDE_PROFILE_DEPTH \+ LATERAL_SEAM_SYNTHESIS : ""/.test(compositeBody),
-    compositeBody.slice(compositeBody.indexOf("inProfile ?"), compositeBody.indexOf("inProfile ?") + 120));
-  /* The non-composite builders have no inProfile parameter at all, so their coverage is
-     unconditional by construction - §3 already proves they carry it. */
-  check("the catalog/custom builders take no pose parameter, so their coverage cannot be gated",
-    /function buildPrompt\(item\) \{/.test(SRC) && /function buildCustomPrompt\(item\) \{/.test(SRC));
+  /* fitPrompt() drops the worst-priority clauses until the prompt fits. If garment
+     isolation were tagged TRIM, a long product name would silently remove it - the
+     original bug returning with no code change and nothing to point at. It is HIGH,
+     one step below never-drop, and that ranking is the assertion. */
+  const isolationIsHigh = /\[P\.HIGH,\s*DENSE\.modelAgnostic\]/.test(SRC);
+  check("tagged HIGH, so only CORE outranks it",
+    isolationIsHigh, "must not be MED/LOW/TRIM - those are shed under budget pressure");
+
+  const pathological = { ...TEE, name: "x".repeat(400) };
+  for (const prof of [false, true]) {
+    const out = api.buildCompositePrompt(pathological, "front", prof);
+    check(`survives a pathologically long garment name (inProfile=${prof})`,
+      /ignore the reference model's body/.test(out), `${out.length} chars: ${out.slice(-160)}`);
+  }
+  check("survives at BOTH poses on ordinary input",
+    /ignore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", false)) &&
+    /ignore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", true)));
+}
+
+console.log("\n── §4 NOT POSE-GATED: the reference figure bleeds at every angle ──");
+{
+  /* The depth and lateral directives are correctly gated behind `inProfile` - they
+     describe a 90-degree frame. This one must NOT be: a square-on shopper is rendered
+     against the same model-worn reference. Asserted structurally, because grouping the
+     three "body" clauses together in a future tidy is an easy way to gate it by accident. */
+  const composite = SRC.slice(SRC.indexOf("function buildCompositePrompt(item, angle, inProfile)"),
+                              SRC.indexOf("/* Full-Look composite clause"));
+  check("not placed behind an inProfile ternary",
+    !/inProfile \?[^\n]*modelAgnostic/.test(composite),
+    "the reference model is present at 0 degrees too");
+  check("...while the genuinely pose-specific clauses ARE still gated",
+    /inProfile \? DENSE\.profileDepth : ""/.test(composite) &&
+    /inProfile \? DENSE\.lateralWrap : ""/.test(composite),
+    composite.slice(composite.indexOf("inProfile ?"), composite.indexOf("inProfile ?") + 160));
+  check("the catalog/custom builders take no pose parameter, so they cannot be gated at all",
+    /function buildPrompt\(item, angleText = ""\)/.test(SRC) &&
+    /function buildCustomPrompt\(item, angleText = ""\)/.test(SRC));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
