@@ -1234,6 +1234,22 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .camera-card.show-live #aiVideo { display: block; transform: none; }
 .camera-card.show-live #webcam { visibility: hidden; }
 
+/* ── Lower-body compositing guard (config.js LOWER_BODY_GUARD_ENABLED) ────────
+   Stacked ABOVE #aiVideo in DOM order (index.html), so it paints on top by default -
+   no z-index needed to win against the video layers, only against the frame border
+   (::after, z-index 5) and swatch rail (z-index 7), which must both stay above it.
+   transform:none, unlike the base #webcam/#aiVideo rule: startLowerBodyGuard() reads
+   raw pixels FROM #webcam via drawImage() (which ignores CSS transforms - it sees the
+   decoded frame, not the mirrored display) and applies its OWN ctx.scale(-1,1) before
+   drawing, matching #aiVideo's un-mirrored orientation by construction rather than by
+   another CSS transform stacking on top of a canvas that already contains the flip. */
+.camera-card #lowerBodyGuard {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  z-index: 2; pointer-events: none; transform: none;
+  display: none; background: transparent;
+}
+.camera-card.show-live.lower-body-guard-active #lowerBodyGuard { display: block; }
+
 /* ── Colour swatches - variant bubbles pinned to the camera stage ─────────────
    The only floating gallery control left on the live stage. Pinned to the inline-start
    edge, vertically centred, ABOVE the live #aiVideo (z-index 7 > the video) so the colour

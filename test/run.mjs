@@ -140,6 +140,7 @@ const SUITES = [
   ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],
   ["variant-sync", "variant-sync.test.mjs"],
   ["decart-debug-log", "decart-debug-log.test.mjs"],
+  ["lower-body-guard", "lower-body-guard.test.mjs"],
 ];
 
 let failed = 0;

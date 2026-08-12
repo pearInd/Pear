@@ -17,6 +17,8 @@
  * @property {string}   HEALTH_ENDPOINT         Same-origin proxy health route used by the pre-use check.
  * @property {string[]} SDK_URLS                Ordered Decart SDK CDN fallbacks.
  * @property {number}   PROMPT_MAX_CHARS        Hard cap on any assembled prompt (Decart rejects >226 tokens).
+ * @property {boolean}  LOWER_BODY_GUARD_ENABLED Composite the shopper's own raw lower-body pixels back over Decart's output (default OFF - validate live first).
+ * @property {number}   LOWER_BODY_GUARD_FRAC   Fraction of frame height, from the bottom, that the guard protects.
  * @property {number}   PLAYOUT_DELAY_HINT      Chromium RTCRtpReceiver.playoutDelayHint (seconds). 0 = render ASAP.
  * @property {boolean}  PREFER_LOW_LATENCY_CODEC Opt-in SDP codec-preference munge (default OFF - see note below).
  * @property {string[]} CODEC_PREFERENCE        Codec order tried when the munge flag is ON (reorder only, never remove).
@@ -68,6 +70,41 @@ export const CONFIG = Object.freeze({
      heavy punctuation, both of which split into more tokens per character. Lower this if
      a real prompt is ever rejected again; raising it spends that margin. */
   PROMPT_MAX_CHARS: 650,
+
+  /* ── lower-body compositing guard - a CODE-level backstop, not a prompt ──────
+     THE HONEST REASON THIS EXISTS. @decartai/sdk@0.1.5's realtime set()/setPrompt()
+     accept exactly { prompt, enhance, image } (setInputSchema, z.core.$strip - unknown
+     keys are DISCARDED, not forwarded, confirmed against the compiled SDK, not just its
+     types). There is no mask, ROI, region or segmentation parameter on this API surface
+     at all - "enforce strict regional masking" is not a config to turn on, because Decart
+     never exposes one. A prompt can ASK the model not to touch the trousers; nothing in
+     this SDK can make that a hard guarantee. This is the one lever that can: composite
+     the shopper's OWN, unedited lower-body pixels back over whatever Decart rendered
+     there, in the browser, after the fact - so even a full hallucinated tuxedo below the
+     belt never reaches the screen.
+
+     WHY IT DEFAULTS OFF, and this is load-bearing, not caution theatre. The boundary is a
+     FIXED FRACTION of frame height (LOWER_BODY_GUARD_FRAC below) - there is no body-part
+     detector in this codebase to derive it from the shopper's ACTUAL waist position, and
+     adding one (MediaPipe/BodyPix or similar) means a multi-MB WASM+model CDN dependency,
+     which this codebase has already rejected once for the same reason on the upload
+     detector (see UPLOAD's own comment: "against this codebase's 'bulletproof,
+     self-contained, no external path to break' ethos"). A fixed fraction is therefore a
+     GUESS calibrated to nothing about the actual shopper: framed close to camera, it can
+     clip into the bottom of a correctly-rendered SHIRT, restoring raw unedited pixels
+     across a band of garment that was fine - trading an occasional hallucination for a
+     guaranteed visible seam on every session. That trade is not obviously a win, and
+     nobody has watched it happen on a real camera yet. Flip LOWER_BODY_GUARD_ENABLED to
+     true only after a live check confirms the seam sits below real trousers, not across
+     a shirt hem, for how this app is actually framed in practice. */
+  LOWER_BODY_GUARD_ENABLED: false,
+  /* Fraction of the camera-card's frame HEIGHT, measured from the bottom, that gets the
+     shopper's own raw camera pixels composited back over Decart's output. 0.34 is a
+     rough midpoint for a torso-forward selfie framing (roughly waist-down) - conservative
+     on purpose: erring toward occasionally missing a sliver of upper trouser is a much
+     smaller visible defect than erring toward clipping into the rendered shirt. Tune only
+     against a live camera, never by reasoning about it in the abstract. */
+  LOWER_BODY_GUARD_FRAC: 0.34,
 
   /* ── realtime latency tuning (CLIENT-side only) ─────────────────────────────
      ⚠️ Scope reality check: the ~1s a user perceives in the Lucy-VTON feed is

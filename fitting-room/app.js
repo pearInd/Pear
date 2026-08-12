@@ -39,6 +39,8 @@ const {
   HEALTH_ENDPOINT,
   SDK_URLS,
   PROMPT_MAX_CHARS,
+  LOWER_BODY_GUARD_ENABLED,
+  LOWER_BODY_GUARD_FRAC,
   PLAYOUT_DELAY_HINT,
   PREFER_LOW_LATENCY_CODEC,
   CODEC_PREFERENCE,
@@ -2833,6 +2835,11 @@ function teardown() {
   recordHoldSrc = null;
   // Same leak guard for the visual countdown ticker + overlay.
   hideLiveCountdown();
+  // ...and for the lower-body compositing guard's rAF loop, as the authoritative
+  // backstop: stopLive()/beginFreezeHold() already call this at their own call sites,
+  // but teardown() is what EVERY exit path eventually reaches, so a future path that
+  // disconnects without going through either of those two still stops it here.
+  stopLowerBodyGuard();
 
   // Cancel the no-first-frame safety timer and reset the billing-armed guard so the next
   // session starts clean (the billed window re-arms only on its own first rendered frame).
@@ -8289,6 +8296,7 @@ function startBillingWindow(gen) {
   stopScanTimer();
   $("scanOverlay").hidden = true;
   card().classList.add("show-live");
+  startLowerBodyGuard();   // no-op unless LOWER_BODY_GUARD_ENABLED - see its own comment
   // Feature 2 - start recording HERE, on the exact frame that arms billing, so the
   // encoded clip always matches the billed 5s window (no black warm-up frames at the
   // front - see the BLACK-FRAME FIX note in startRecording, and the isDressedFrame
@@ -8675,6 +8683,7 @@ function stopLive() {
 
   teardown();                          // rtClient.disconnect() → billing stops now (also hides #aiVideo)
   card().classList.remove("show-live");
+  stopLowerBodyGuard();
   if (frozen) card().classList.add("show-result");   // surface the frozen snapshot as the final result
   setLiveControls(false);              // reset the button back to "Go Live" so a new session can start
   $("captureBtn").disabled = !localStream;
@@ -8709,6 +8718,7 @@ function beginFreezeHold() {
   // 4) Surface the frozen result for the remainder of the window; lock the control so
   //    a mid-hold click can't start a second session before the clip finalizes.
   card().classList.remove("show-live");
+  stopLowerBodyGuard();
   if (frozen) card().classList.add("show-result");
   $("captureBtn").disabled = true;
 
@@ -8775,6 +8785,81 @@ function finalizeVideoClip() {
   toast("⏱ הסרטון בן " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות מוכן ✓");
 }
 
+/* ── Lower-body compositing guard (config.js LOWER_BODY_GUARD_ENABLED) ────────
+   THE PROBLEM THIS EXISTS FOR: nothing in @decartai/sdk@0.1.5's realtime API can put a
+   hard boundary on what Decart is allowed to touch (setInputSchema is exactly { prompt,
+   enhance, image } - no mask/ROI/region parameter exists to configure). A prompt can ask
+   the model not to alter the trousers; it cannot GUARANTEE it, and a live report showed
+   it failing that ask (a hallucinated tuxedo/altered trousers reaching the screen). This
+   is the one lever that CAN guarantee it: after Decart renders, paint the shopper's own
+   raw camera pixels back over whatever is below the guard line, in the browser, where
+   nothing the model does can override it.
+
+   WHY IT IS OFF BY DEFAULT: see LOWER_BODY_GUARD_ENABLED's own comment in config.js.
+   Short version - the boundary is a fixed fraction of frame height, not a real body-part
+   detection, so it is a guess that can clip into a correctly-rendered shirt for a
+   shopper framed close to the camera. Must be validated live before flipping true.
+
+   ADDITIVE ONLY, matching lux-interactions.js's own stated design rule for exactly this
+   reason: #aiVideo is never touched, never re-parented, never has its role changed. This
+   only ever paints on top of it via the stacked #lowerBodyGuard canvas (style.css). */
+let lowerBodyGuardRAF = null;
+
+function startLowerBodyGuard() {
+  if (!LOWER_BODY_GUARD_ENABLED) return;      // the whole feature is a no-op until validated live
+  if (lowerBodyGuardRAF) return;              // already running - never stack a second loop
+  const webcam = $("webcam"), canvas = $("lowerBodyGuard");
+  if (!webcam || !canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  card().classList.add("lower-body-guard-active");   // CSS gate: .show-live is the other half
+
+  function paint() {
+    // isLive() re-checked every frame, not just at start: the guard must stop painting
+    // the instant the session ends, not ride one more rAF tick into a torn-down state.
+    if (!isLive() || webcam.videoWidth === 0) {
+      lowerBodyGuardRAF = requestAnimationFrame(paint);
+      return;
+    }
+    const w = webcam.videoWidth, h = webcam.videoHeight;
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    const bandY = Math.round(h * (1 - LOWER_BODY_GUARD_FRAC));
+    ctx.clearRect(0, 0, w, h);
+    ctx.save();
+    /* Selfie-mirror correction. #webcam's DECODED frame (what drawImage sees) is never
+       mirrored - only its CSS display is (scaleX(-1), style.css). #aiVideo is already
+       correctly oriented coming back from Decart (no CSS mirror on it at all - see the
+       base .camera-card rule). So a raw drawImage(webcam, ...) here would composite a
+       MIRROR-FLIPPED band under a correctly-oriented one, an obvious seam (buttons/
+       pockets/prints landing on the wrong side at the boundary). This translate+scale is
+       the exact technique freezeFinalFrame() already uses for its own webcam-sourced
+       fallback branch - same correction, same reason, applied here instead to only the
+       guarded band rather than the whole frame. */
+    ctx.translate(w, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(webcam, 0, bandY, w, h - bandY, 0, bandY, w, h - bandY);
+    ctx.restore();
+    lowerBodyGuardRAF = requestAnimationFrame(paint);
+  }
+  lowerBodyGuardRAF = requestAnimationFrame(paint);
+}
+
+/* Idempotent and safe to call from multiple teardown paths (see the three call sites) -
+   exactly the redundant-safety style teardown() itself already uses for its other
+   timers, because "did the rAF loop actually stop" must never depend on remembering the
+   one right place to ask. */
+function stopLowerBodyGuard() {
+  if (lowerBodyGuardRAF) { cancelAnimationFrame(lowerBodyGuardRAF); lowerBodyGuardRAF = null; }
+  const card_ = card();
+  if (card_) card_.classList.remove("lower-body-guard-active");
+  const canvas = $("lowerBodyGuard");
+  if (canvas) {
+    const ctx = canvas.getContext("2d");
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+}
+
 /* Paint the final dressed frame onto the on-screen #resultCanvas at full capture
    resolution and return its JPEG dataURL. Doubles as (1) the frozen "masterpiece"
    shown via .show-result and (2) the high-quality poster saved to Previous Fits.
@@ -8798,6 +8883,28 @@ function freezeFinalFrame() {
   if (mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
   try { ctx.drawImage(src, 0, 0, w, h); } catch (_) { ctx.restore(); return null; }
   ctx.restore();
+  /* Bake the SAME lower-body guard into the snapshot the shopper actually keeps - the
+     live view and the "masterpiece" they save/add-to-cart must never disagree about
+     which pixels are real. Only when the primary source is the AI-EDITED stream
+     (src === ai): the webcam-fallback branch above is ALREADY 100% raw camera with no
+     AI edit anywhere in it, so there is nothing there for the guard to protect against,
+     and re-drawing over it would be a no-op at best. */
+  if (LOWER_BODY_GUARD_ENABLED && src === ai && webcam && webcam.videoWidth > 0) {
+    // Source band in WEBCAM's own coordinate space and destination band in the
+    // CANVAS's (ai's w/h) - these can legitimately differ in resolution, so the two
+    // must be computed independently rather than reusing one Y offset for both.
+    const srcBandY = Math.round(webcam.videoHeight * (1 - LOWER_BODY_GUARD_FRAC));
+    const dstBandY = Math.round(h * (1 - LOWER_BODY_GUARD_FRAC));
+    ctx.save();
+    ctx.translate(w, 0);
+    ctx.scale(-1, 1);
+    try {
+      ctx.drawImage(webcam,
+        0, srcBandY, webcam.videoWidth, webcam.videoHeight - srcBandY,
+        0, dstBandY, w, h - dstBandY);
+    } catch (_) { /* best-effort - a failed guard paint must not fail the whole snapshot */ }
+    ctx.restore();
+  }
   try { return cv.toDataURL("image/jpeg", 0.85); } catch (_) { return null; }
 }
 
