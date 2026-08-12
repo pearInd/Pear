@@ -89,12 +89,22 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
     mk("crimson").activeColorOf(ITEM) === "#c2452f");
   /* The actual regression: three builders interpolated colorName(item.color). If any
      reverts, a swatch swap silently sends a contradicting colour word again. */
+  /* The composite builder deliberately names NO colour: in AI Combined there is always a
+     reference image on the wire, and its pixels state the colour more precisely than a
+     word from a catalog hex. Naming one there buys nothing and costs a whole class of
+     text-vs-image contradiction. The other two builders CAN run with no usable reference,
+     so for them the word is the only colour information there is - they keep it, and it
+     must resolve through the variant. */
+  check("the composite builder points at the image and names no colour",
+    APP.includes("`the ${noun} in the reference image`") &&
+    APP.includes('"the exact garment in the reference image"'),
+    "AI Combined must not assert a colour word against its own reference");
   for (const site of [
-    "the ${colorName(activeColorOf(item))} ${noun} shown",
     "with ${colorName(activeColorOf(item))} ${noun}:",
     "replace their top with ${colorName(activeColorOf(top))}",
   ]) {
-    check(`builder reads the variant colour: ${site.slice(0, 42)}…`, APP.includes(site), site);
+    check(`text-only builder still reads the VARIANT colour: ${site.slice(0, 40)}…`,
+      APP.includes(site), site);
   }
   /* Comments stripped first: variantMetaOf's own doc block QUOTES the old call as the
      thing it replaced, and a check that trips over the explanation of the fix is worse

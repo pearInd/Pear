@@ -121,7 +121,16 @@ export const CONFIG = Object.freeze({
     MERGE_IOU:               0.18,  // merge two boxes overlapping more than this (or on strong containment)
     MAX_BOXES:               6,     // cap on how many detection boxes are drawn
 
-    BOX_PAD_FRAC:            0.05,  // expand the crop outward by this fraction so seams/edges aren't clipped
+    /* Expand the crop outward so seams/edges aren't clipped. RAISED 0.05 -> 0.12.
+       5% was tuned to keep a flat-lay tight, but the detector's box hugs the FOREGROUND
+       MASK, and a garment's lowest-contrast pixels - a white collar against a white
+       backdrop, a sleeve hem, a dark seam in shadow - are exactly the ones that fall
+       outside that mask. A crop that clips them hands Decart a garment whose collar or
+       cuff simply ends, and the model completes the boundary itself: invented sleeve
+       ends, a re-drawn neckline, a graphic re-flowed to fit the truncated shape.
+       12% sits mid-range of the 10-15% asked for and is still well inside
+       MAX_BOX_AREA_FRAC, so a padded box cannot grow into the "fills the frame" reject. */
+    BOX_PAD_FRAC:            0.12,
     CROP_MAX_DIM:            1024,  // longest side of the exported cropped garment
     CROP_QUALITY:            0.92,  // JPEG quality of the exported crop (data URL handed to rtClient.set)
     SHARPEN_AMOUNT:          0.6,   // mild unsharp mask on the crop to improve graphic/logo legibility without halos (0 = off)
