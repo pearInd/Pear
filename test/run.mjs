@@ -31,6 +31,23 @@
                       under-a-shirt case). Asserts the pose/panel split, the depth clause
                       on every builder, and - most importantly - that the edge-on signal
                       stays on its own channel and can never move the asset lock.
+                      Also the LATERAL band: at 90 degrees the flank/side seam/underarm is
+                      photographed by NEITHER panel, and an unreferenced region gets filled
+                      with the cheapest completion available - the shopper's own shirt. The
+                      synthesis clause is asserted to be geometric (wrap + extrapolate the
+                      cloth) and NOT a cross-panel blend, which would contradict the
+                      impassable-wall contract and re-open the 23f5953 double-print bug.
+     model-agnostic   "It gave me the e-commerce model's shoulders." Every body-shape
+                      defence in app.js aims at the model's TRAINING prior; none accounted
+                      for the second human in the conditioning - a catalog reference is
+                      almost always model-worn. IGNORE_SOURCE_ARTIFACTS is scoped to
+                      non-human noise, so that figure was never named as off-limits.
+                      Asserts the provenance split (cloth from the reference, body from the
+                      live feed), that re-proportioning the garment is NOT licence to move
+                      its print (which would fight BACK_TAIL.real's placement pin), that
+                      ALL SIX builders carry it - parity with STRICT_INPAINT, since this
+                      file already records a clause being missed at one site - and that it
+                      is NOT pose-gated, unlike the two genuinely edge-on clauses.
      turn-hold        The last dressed frame is held from the FIRST sign of a turn, not
                       from the confirmed flip 2.5s later - the uncovered window is where
                       the shopper's real shirt came back. Plus every release path,
@@ -104,6 +121,7 @@ const SUITES = [
   ["preload-composite", "preload-composite.test.mjs"],
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
   ["side-profile", "side-profile.test.mjs"],
+  ["model-agnostic", "model-agnostic.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],
   ["signaling-retry", "signaling-retry.test.mjs"],

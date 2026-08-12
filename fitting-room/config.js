@@ -16,6 +16,7 @@
  * @property {string}   TOKEN_ENDPOINT          Same-origin proxy route that mints the ephemeral ek_ token.
  * @property {string}   HEALTH_ENDPOINT         Same-origin proxy health route used by the pre-use check.
  * @property {string[]} SDK_URLS                Ordered Decart SDK CDN fallbacks.
+ * @property {number}   PROMPT_MAX_CHARS        Hard cap on any assembled prompt (Decart rejects >226 tokens).
  * @property {number}   PLAYOUT_DELAY_HINT      Chromium RTCRtpReceiver.playoutDelayHint (seconds). 0 = render ASAP.
  * @property {boolean}  PREFER_LOW_LATENCY_CODEC Opt-in SDP codec-preference munge (default OFF - see note below).
  * @property {string[]} CODEC_PREFERENCE        Codec order tried when the munge flag is ON (reorder only, never remove).
@@ -49,6 +50,24 @@ export const CONFIG = Object.freeze({
     "https://esm.sh/@decartai/sdk@0.1.5",
     "https://cdn.jsdelivr.net/npm/@decartai/sdk@0.1.5/+esm",
   ]),
+
+  /* ── prompt token budget - a HARD API limit, not a style preference ─────────
+     Decart rejects an over-long prompt outright:
+       "Prompt is too long: 1376 tokens (maximum 226, including the end-of-sequence
+        token). Please shorten the prompt."
+     set() fails, connectRealtime()'s caller surfaces it, and the shopper gets no garment
+     at all. A blunter prompt that RUNS beats a perfectly-argued one that never reaches
+     the model, so every builder in app.js assembles against this cap and sheds its
+     lowest-priority clauses until it fits (see fitPrompt()).
+
+     WHY 700 AND NOT 904. The limit is in TOKENS; this budget is in CHARACTERS, because
+     the browser has no tokenizer and shipping one would cost more than it saves. English
+     prose runs ~4 chars/token - which places that rejected 1376-token prompt at ~5,500
+     characters, so 226 tokens is ~904. 700 keeps ~22% headroom for the two things that
+     tokenize WORSE than prose and that these prompts are full of: ALL-CAPS words and
+     heavy punctuation, both of which split into more tokens per character. Lower this if
+     a real prompt is ever rejected again; raising it spends that margin. */
+  PROMPT_MAX_CHARS: 650,
 
   /* ── realtime latency tuning (CLIENT-side only) ─────────────────────────────
      ⚠️ Scope reality check: the ~1s a user perceives in the Lucy-VTON feed is

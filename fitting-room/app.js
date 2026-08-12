@@ -38,6 +38,7 @@ const {
   TOKEN_ENDPOINT,
   HEALTH_ENDPOINT,
   SDK_URLS,
+  PROMPT_MAX_CHARS,
   PLAYOUT_DELAY_HINT,
   PREFER_LOW_LATENCY_CODEC,
   CODEC_PREFERENCE,
@@ -5240,7 +5241,29 @@ function hasDedicatedAngle(item) {
   return !!(item && galleryOf(item)[a]);
 }
 
-/* Angle-oriented prompt clauses. Switching the image alone isn't enough - Lucy
+/* ╔══════════════════════════════════════════════════════════════════════════╗
+   ║  RETIRED - NOT ASSEMBLED INTO ANY PROMPT.  Read before editing.          ║
+   ╚══════════════════════════════════════════════════════════════════════════╝
+   Every constant from here down to COMPOSITE_QUALITY, plus STRICT_INPAINT,
+   MODEL_AGNOSTIC_EXTRACTION, IGNORE_SOURCE_ARTIFACTS, PROFILE_ANOMALY_GUARD,
+   ROTATION_CONTINUITY, QUALITY_SUFFIX, HEM_DETAIL, KEEP_TOP, KEEP_BOTTOMS,
+   HARD_NEGATIVE and LOOK_CLAUSE further down, is DEAD. Nothing reads them. Every
+   builder now assembles from the DENSE table through fitPrompt().
+
+   WHY THEY ARE STILL HERE rather than deleted. Decart caps a prompt at 226 tokens
+   and these totalled roughly 2,500 - so they were compressed, not removed for being
+   wrong. Each one is the written record of a specific reproduced regression (the
+   double-printed back, the flattened profile, the regenerated room, the garment
+   dropping mid-turn, the model's shoulders on the shopper), and the one-sentence
+   directives that replaced them carry the instruction but not the reasoning. When a
+   regression returns - and the compression makes that likelier, not less - the clause
+   that used to prevent it is the first thing worth reading.
+
+   TO BUY A DIRECTIVE BACK: lift the sentence you need out of the relevant constant
+   below, add it to DENSE, and give it a priority. Do NOT re-add a whole constant, and
+   do not raise PROMPT_MAX_CHARS to make one fit - the ceiling is the API's, not ours.
+
+   Angle-oriented prompt clauses. Switching the image alone isn't enough - Lucy
    regenerates every frame, so the prompt must ALSO name the viewing angle or the
    model keeps rendering a front. Front needs no clause. */
 /* The rear POSE sentence, factored out of the three back clauses below for the same
@@ -5359,6 +5382,56 @@ const SIDE_PROFILE_DEPTH =
   " contour, the fabric projecting outward wherever their body does, falling from the point of" +
   " greatest protrusion with natural tension, creases and fold shadows beneath it." +
   " Fit the garment to the body's true volume; never the body to the garment.";
+
+/* ── Lateral seam synthesis - the band that NO reference view depicts ─────────
+   THE GAP THIS FILLS, and why it is not the same gap SIDE_PROFILE_DEPTH fills. That
+   clause is about the BODY: it pins the silhouette edge as ground truth so the shopper's
+   real front-to-back volume survives. This one is about the GARMENT covering that edge.
+
+   At 90 degrees the camera sees a band of the garment that neither reference view
+   contains - the flank, the side seam, the underarm, the outer face of the sleeve. The
+   composite holds a FRONT panel and a BACK panel; the side is the hinge between them and
+   is photographed by neither. With nothing in the prompt naming that band, the model is
+   inpainting a region it has no reference for, and the cheapest completion available to
+   it is the pixels already there: the shopper's own real shirt. That is the "it drops the
+   garment when I turn" report, and it is a DIFFERENT mechanism from the reversion
+   ROTATION_CONTINUITY covers (that one is about the turn as a temporal event; this is
+   about a spatial region being unreferenced at the moment of peak exposure).
+
+   WHY THIS DOES NOT SAY "BLEND THE TWO PANELS", which is the obvious phrasing and the
+   wrong one. COMPOSITE_PANEL_CONTRACT opens the prompt by calling the boundary between
+   the panels an impassable wall, and COMPOSITE_APPLY then retires the unselected panel
+   outright ("does not exist for this frame"). Instructing a blend here would contradict
+   the two strongest, earliest instructions in the prompt, and the way that contradiction
+   resolves in practice is already on the record: rendering both panels' designs on one
+   surface is the double-print regression that got the previous stitcher removed in
+   23f5953. So the synthesis is specified GEOMETRICALLY - the garment wraps, the side seam
+   is where the wrap turns - while the locked panel remains the only texture source and
+   the unreferenced band is filled by EXTRAPOLATING its cloth, never by dragging the
+   opposite panel's graphics around the body. Continuity of fabric, not of print.
+
+   Prompt-only, so it costs nothing at runtime: it rides the same assembly path every
+   other clause does and is re-asserted by the existing re-anchor cadence. */
+const LATERAL_SEAM_SYNTHESIS =
+  " LATERAL SEAM SYNTHESIS - the side of the garment must be PREDICTED, not skipped." +
+  " No reference view depicts the narrow lateral band now facing the camera: the flank," +
+  " the side seam, the underarm and the outer face of the sleeve. Synthesize it." +
+  " (1) CONTINUITY MANDATE: hold 100% garment replacement coverage across the entire" +
+  " visible torso for every frame of the turn. There must be no frame, and no region of" +
+  " any frame, in which the target garment thins, breaks, fades, turns transparent or lets" +
+  " the person's own original shirt - its colour, collar, sleeves or hem - show through" +
+  " anywhere, least of all along the flank, the shoulder line or the underarm." +
+  " (2) WRAP: render how this garment continues around the torso's lateral depth - the" +
+  " side seam running down their real side contour, the shoulder seam and sleeve head" +
+  " turning with the shoulder, the hem closing unbroken around the flank, and the fabric" +
+  " folding and gathering where the arm meets the body." +
+  " (3) EXTRAPOLATE, NEVER RELOCATE: carry the colour, weave, sheen, material thickness" +
+  " and fold behaviour of the reference view named above outward across that band, so the" +
+  " side reads as the same garment in the same cloth and the transition into it is smooth" +
+  " and gradual, with no hard edge, colour step, seam artifact or texture break. Where the" +
+  " reference depicts no lateral detail, infer PLAIN fabric in that same colour and" +
+  " texture. Do NOT drag, mirror, wrap or repeat the reference's graphics, prints, logos" +
+  " or lettering around onto the side to fill it, and do NOT invent new ones there.";
 
 /* ── Stitched Garment Composite - orientation clauses ────────────────────────────
    Deliberately modelled on LOOK_CLAUSE below, which is the in-repo proof that a
@@ -5517,6 +5590,166 @@ const COMPOSITE_QUALITY =
   " lighting matching the user's room, and natural material physics - no glitching, banding," +
   " tearing or unnatural structural folds";
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOKEN BUDGET - why every clause above this line was rewritten into a phrase
+   ───────────────────────────────────────────────────────────────────────────
+   Decart rejects an over-long prompt outright:
+
+     "Prompt is too long: 1376 tokens (maximum 226, including the end-of-sequence
+      token). Please shorten the prompt."
+
+   That is not a soft quality signal - set() fails and the shopper gets NO garment.
+   Measured against that 226-token ceiling (~904 characters at English prose's ~4
+   chars/token), what this file had been assembling was:
+
+       composite square-on   6,718 chars  ~1,680 tok    7.4x over
+       composite edge-on    10,077 chars  ~2,520 tok   11.2x over
+
+   SIDE_PROFILE_DEPTH alone was 454 tokens - twice the entire budget for a single
+   clause. So this could not be a trim. Every long constant this file spent its
+   history growing (each one written against a real, reproduced regression) had to
+   collapse into one short directive, and several had to go entirely.
+
+   WHAT WAS KEPT, and the order is the triage. The budget buys roughly a dozen short
+   directives, so they are ranked by what breaks without them and dropped from the
+   bottom when a particular garment's description runs long:
+
+     CORE  panel contract, panel selection, pose, the substitution itself, and -
+           edge-on only - body depth. Without any of these the render is simply
+           wrong (wrong half of the garment, wrong rotation, flattened body).
+     HIGH  body fidelity and model-agnostic extraction: the two most-reported
+           failures ("it slimmed me", "it gave me the model's shoulders").
+     MED   opposite-layer lock, background/person lock, lateral wrap.
+     LOW   rotation continuity, fit modifier.
+     TRIM  temporal stability and photorealism - the model's own priors already
+           favour both, so these are the cheapest to lose.
+
+   WHAT WAS LOST, stated plainly because it is real: the enumerated negatives are
+   gone. STRICT_INPAINT's per-item list, BACK_TAIL's explicit "do not copy the front
+   print onto the back", IGNORE_SOURCE_ARTIFACTS' watermark/badge list, and
+   PROFILE_ANOMALY_GUARD entirely. Each was written because naming a failure
+   explicitly is what stopped it. At 226 tokens there is no room to name them, so
+   these prompts are a weaker instrument than what they replace - they are simply the
+   strongest instrument that FITS. If a specific regression returns, the fix is to buy
+   its directive back by dropping something in TRIM, not to grow the prompt.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Drop order. CORE is never shed - if a prompt cannot fit with CORE alone, it is
+   truncated instead (see fitPrompt), because a slightly clipped prompt still renders
+   while a rejected one renders nothing. */
+const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
+
+/* The dense clause table. Deliberately lower-case and lightly punctuated wherever the
+   meaning survives it: ALL-CAPS and heavy punctuation both tokenize worse than prose,
+   so the few capitals left (EDGE-ON, LEFT/RIGHT) are spent only where the emphasis is
+   doing real steering work. */
+const DENSE = Object.freeze({
+  contract:      "Try-on. Reference: split image, LEFT = garment front, RIGHT = back. Ignore gap/labels.",
+  select: {
+    front:       "Use LEFT only; RIGHT must not appear.",
+    back:        "Use RIGHT only; LEFT must not appear.",
+  },
+  pose: {
+    front:       "They face the camera.",
+    back:        "They are turned around, back to camera.",
+  },
+  poseProfile: {
+    front:       "They are EDGE-ON in side profile; keep that rotation.",
+    back:        "They are EDGE-ON, part-way turned away; keep that rotation.",
+  },
+  profileDepth:  "EDGE-ON: their front-to-back depth and belly are ground truth; never flatten.",
+  lateralWrap:   "Wrap it round the flank with a natural side seam; no original shirt showing.",
+  bodyFidelity:  "Keep their real volume, belly and hips; never slim or idealize.",
+  modelAgnostic: "Cloth only: ignore the reference model's body; drape to THIS person.",
+  keepBottoms:   "Leave their bottoms unchanged.",
+  keepTop:       "Leave their top unchanged.",
+  inpaintLock:   "Face, hands, skin and background pass through untouched.",
+  rotation:      "The garment stays on through any turn.",
+  temporal:      "Stable print, no flicker.",
+  quality:       "Photoreal fabric, natural light.",
+
+  /* Single-asset (non-composite) counterparts. The reference is ONE photo, so these say
+     which side of the garment it shows instead of which half of a split image. */
+  frontRef:      "The reference photo shows the garment's front; reproduce it, not the back.",
+  backReal:      "The reference photo shows the garment's BACK: reproduce its back print at the same size and position; do not render the front.",
+  /* The one enumerated negative the budget still pays for. With only a front photo the
+     model's likeliest completion for a back is the front print repeated - the documented
+     double-print bug - and nothing else in this compressed prompt forbids it. */
+  backInferred:  "No back photo exists: infer a plain back in the same fabric and colour. Never copy the front print, logo or buttons onto it.",
+  side:          "Show the garment's side: shoulder line, sleeve and side seam, draping along the flank.",
+  /* Full-look stitched reference: two garments stacked in one image. Same job the
+     composite contract does for front|back, for the top|bottom axis instead. */
+  lookPanels:    "The reference stacks two garments: the TOP panel is the upper-body garment, the BOTTOM panel the lower. Render both at once; never mix them or draw the panel frames.",
+});
+
+/**
+ * Assemble a prompt from priority-tagged parts, guaranteeing it fits PROMPT_MAX_CHARS.
+ *
+ * THE GUARANTEE IS THE POINT. Writing short clauses is necessary but not sufficient:
+ * the garment description is interpolated from catalog data (or a shopper's own upload),
+ * so its length is not known at authoring time and a long one could push a
+ * hand-tuned-to-fit prompt back over the ceiling - reintroducing exactly the crash this
+ * exists to prevent, for one unlucky product. Clauses are therefore SHED, worst-priority
+ * first, until the result fits.
+ *
+ * The final clamp is a hard slice. It only triggers if CORE alone exceeds the budget
+ * (a pathologically long garment name), and it is deliberate: a clipped prompt still
+ * produces a garment, while a rejected one produces a failed session.
+ *
+ * @param {Array<[number, string]>} parts  [priority, text]; empty text is skipped.
+ * @param {number} [max]  budget override, for tests.
+ * @returns {string}
+ */
+/* getFitModifier() returns a bare noun phrase ("regular fit", "slightly oversized fit")
+   because every previous caller embedded it mid-sentence as "Render a ${fitMod}". The
+   dense builders join their parts as standalone sentences, where a bare phrase reads as
+   a fragment - so it gets its own sentence here rather than being reworded at three
+   separate call sites. */
+function fitSentence(garmentType) {
+  const mod = getFitModifier(getSizeDelta(), garmentType);
+  return mod ? `Fit: ${String(mod).trim()}.` : "";
+}
+
+/* ── THE WIRE GUARD - last line of defence, and the one that generalises ──────
+   fitPrompt() budgets the prompts this file BUILDS. That is not the same guarantee as
+   "nothing over-long reaches Decart": a future builder, a hot-fix that concatenates one
+   more clause onto a returned string, or any path that skips the builders entirely would
+   sail straight past it and fail the session with the same opaque Hebrew banner.
+
+   This clamps at the wire instead, so the guarantee holds no matter who produced the
+   string. It should never fire - every builder already fits - so firing is itself the
+   signal, and it logs loudly with the offending prefix rather than silently truncating.
+   Truncation is the correct failure mode here: a clipped prompt still dresses the
+   shopper, while a rejected one ends the session before the first frame. */
+function clampPromptForWire(prompt, where) {
+  const s = String(prompt ?? "");
+  if (s.length <= PROMPT_MAX_CHARS) return s;
+  console.error(
+    `[PEAR] ${where}: prompt is ${s.length} chars, over the ${PROMPT_MAX_CHARS} budget ` +
+    `(Decart hard-rejects >226 tokens). Truncating to keep the session alive - a builder ` +
+    `is bypassing fitPrompt(). Prefix: ${s.slice(0, 120)}…`
+  );
+  return s.slice(0, PROMPT_MAX_CHARS).trim();
+}
+
+function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
+  let keep = parts.filter(([, text]) => text && String(text).trim());
+  const render = (list) => list.map(([, t]) => String(t).trim()).join(" ").replace(/\s+/g, " ").trim();
+
+  let out = render(keep);
+  while (out.length > max) {
+    const worst = Math.max(...keep.map(([p]) => p));
+    if (worst === P.CORE) break;                       // nothing droppable left
+    keep.splice(keep.findIndex(([p]) => p === worst), 1);
+    out = render(keep);
+  }
+  if (out.length > max) {
+    console.warn(`[PEAR] fitPrompt() - CORE alone is ${out.length} chars (budget ${max}); clamping.`);
+    out = out.slice(0, max).trim();
+  }
+  return out;
+}
+
 /**
  * Build the COMPLETE prompt for a split FRONT|BACK composite reference.
  *
@@ -5543,36 +5776,41 @@ const COMPOSITE_QUALITY =
  */
 function buildCompositePrompt(item, angle, inProfile) {
   const a = angle === "back" ? "back" : "front";
-  const select = inProfile ? COMPOSITE_SELECT_PROFILE[a] : COMPOSITE_SELECT[a];
-  const lower  = item.garmentType === "lower_body";
-  const keep   = lower ? KEEP_TOP : KEEP_BOTTOMS;   // pin the layer we are NOT replacing
-  const target = lower ? "bottoms" : "top";
+  const lower = item.garmentType === "lower_body";
 
   const sub  = SUBTYPE_PROMPT[item.subType] || "";
-  const noun = lower ? `${sub} trousers` : `${sub} ${SHIRT_NOUN[item.subType] || "top"}`;
+  const noun = lower ? `${sub} trousers`.trim() : `${sub} ${SHIRT_NOUN[item.subType] || "top"}`.trim();
   // A custom upload has no catalog colour/subType to name - the panel IS the description.
-  const desc = item.custom ? "the custom garment shown in that panel"
-                           : `the ${colorName(item.color)} ${noun} shown in that panel`;
+  const desc = item.custom ? "the garment shown" : `the ${colorName(item.color)} ${noun} shown`;
 
-  const anchor = getAnatomicalAnchor();
-  const fitMod = getFitModifier(getSizeDelta(), item.garmentType);
-  const fabricMod = getFabricModifier(item);
-
-  return (
-    COMPOSITE_PANEL_CONTRACT + select +
-    /* PLACEMENT IS DELIBERATE, and follows this function's own ordering argument above.
-       When the shopper is edge-on, what their body actually looks like IS the primary
-       instruction for that frame - it is the thing being got wrong. Appending it at the
-       tail put it ~1,600 characters deep, behind the garment description, fit modifier,
-       quality boilerplate and three general clamps; that is the position this function
-       exists to rescue the panel contract FROM. It sits directly behind the pose instead:
-       which reference, what rotation, what body, then the garment. */
-    (inProfile ? SIDE_PROFILE_DEPTH : "") +
-    ` Substitute the person's current ${target} with ${desc}, reproducing its exact colour,` +
-    ` pattern, print and fabric texture. ${anchor} Render a ${fitMod}${COMPOSITE_QUALITY}.${fabricMod}${keep}` +
-    STRICT_INPAINT + IGNORE_SOURCE_ARTIFACTS + ROTATION_CONTINUITY + PROFILE_ANOMALY_GUARD +
-    COMPOSITE_TEMPORAL
-  ).replace(/\s+/g, " ").trim();
+  return fitPrompt([
+    [P.CORE, DENSE.contract],
+    [P.CORE, DENSE.select[a]],
+    [P.CORE, inProfile ? DENSE.poseProfile[a] : DENSE.pose[a]],
+    /* Edge-on only, and it sits BEFORE the garment description for the reason the verbose
+       version documented: at 90 degrees the body's depth is the thing actually being got
+       wrong, so it leads the garment rather than trailing it. CORE, so it can never be
+       shed - a dropped depth directive is the flattening bug returning silently. */
+    [P.CORE,  inProfile ? DENSE.profileDepth : ""],
+    [P.CORE, `Replace their ${lower ? "bottoms" : "top"} with ${desc}: exact colour, texture and print.`],
+    [P.HIGH,  DENSE.bodyFidelity],
+    [P.HIGH,  DENSE.modelAgnostic],
+    /* HIGH, not MED, and only edge-on: this is the clause that keeps the shopper's own
+       shirt from showing along the flank, which is a worse failure than a restyled pair
+       of trousers. It costs nothing square-on, where the band is not in view. */
+    [P.HIGH,  inProfile ? DENSE.lateralWrap : ""],
+    /* HIGH, and ABOVE the opposite-layer lock. Tightening the cap to 650 made this
+       ranking load-bearing: at 700 both fitted, at 650 one of them sheds edge-on, and
+       shedding the passthrough clamp lets the model repaint the shopper's face and room -
+       far worse than the restyled trousers you get from shedding keepBottoms. Ranking
+       decides which failure you take, so it is stated rather than left to list order. */
+    [P.HIGH,  DENSE.inpaintLock],
+    [P.MED,   lower ? DENSE.keepTop : DENSE.keepBottoms],
+    [P.LOW,   DENSE.rotation],
+    [P.LOW,   fitSentence(item.garmentType)],
+    [P.TRIM,  DENSE.temporal],
+    [P.TRIM,  DENSE.quality],
+  ]);
 }
 
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
@@ -5662,48 +5900,52 @@ function compositeActiveFor(item) {
    other side is now showing. Keeping them independent is what lets this fix the pose
    without touching any asset-selection behaviour. */
 function angleClause(item, angleOverride, useComposite, inProfile) {
-  // Edge-on: append the depth-fidelity clause on every branch below. The clause is about
-  // the BODY, so it is orientation-independent - it rides on front, back and side alike.
-  const depth = inProfile ? SIDE_PROFILE_DEPTH : "";
+  /* Edge-on: append BOTH profile clauses on every branch below - the body's depth axis,
+     then the garment's lateral wrap over it. Both are orientation-independent (they
+     describe the frame, not which panel was locked), so they ride on front, back and side
+     alike. Order is deliberate and matches buildCompositePrompt(): what the body IS, then
+     how the garment covers it - the second only means anything given the first. */
+  const depth = inProfile ? " " + DENSE.profileDepth + " " + DENSE.lateralWrap : "";
 
   // Composite mode: the reference carries BOTH views, so the clause names the panel
   // matching the detected orientation and excludes the other outright. Only the pose
   // sentence varies with profile; the panel contract and selection are unchanged.
   if (useComposite === undefined ? compositeActiveFor(item) : useComposite) {
     const a = (angleOverride || effectiveAngle()) === "back" ? "back" : "front";
-    const select = inProfile ? COMPOSITE_SELECT_PROFILE[a] : COMPOSITE_SELECT[a];
+    const pose = inProfile ? DENSE.poseProfile[a] : DENSE.pose[a];
     // depth rides DIRECTLY behind the pose, not at the tail - see buildCompositePrompt()'s
     // placement comment for why position is load-bearing for this model.
-    return " " + COMPOSITE_PANEL_CONTRACT + select + depth + COMPOSITE_TEMPORAL;
+    return " " + DENSE.contract + " " + pose + " " + DENSE.select[a] + depth;
   }
   const angle = angleOverride || effectiveAngle();      // AI Auto resolves to the DETECTED orientation
   if (angle === "back") {
     // Which POSE leads the clause depends on whether they are square-on or mid-turn; which
     // GARMENT TAIL follows it depends on what reference we actually hold. Independent
     // choices, so they are resolved independently rather than as four hand-written strings.
-    const pose = inProfile ? REAR_POSE_PROFILE : REAR_POSE;
-    // Pose, then what the body actually looks like, then the garment - the tails below are
-    // self-contained instructions and do not depend on sitting adjacent to the pose.
+    const pose = " " + (inProfile ? DENSE.poseProfile.back : DENSE.pose.back);
     // Dual asset (front + a REAL back photo, incl. a user's uploaded back) → reproduce it.
     // AI Auto always lands here with a real back (canCombineViews gates the mode on one).
-    if (activeBackIsReal(item)) return pose + depth + BACK_TAIL.real;
-    // Custom upload with only a front → the strict "clean plain rear, no front graphics"
-    // constraint (+ inlined negative). Catalog items keep the generic inferred clause.
-    if (item && item.custom) return pose + depth + BACK_TAIL.custom;
-    return pose + depth + BACK_TAIL.inferred;
+    if (activeBackIsReal(item)) return pose + depth + " " + DENSE.backReal;
+    // Only a front reference → the rear must be INFERRED, and the front print must not be
+    // copied onto it. That negative is the one enumerated ban the budget still pays for:
+    // it is the difference between a plain back and the chest logo printed twice.
+    return pose + depth + " " + DENSE.backInferred;
   }
   // AI Auto: pin the reference explicitly as the garment FRONT - the mode's whole contract
   // is one unambiguous side - but state the shopper's real rotation, not an assumed facing.
-  if (currentAngle === AUTO_ANGLE) return (inProfile ? ANGLE_CLAUSE.autoProfile : ANGLE_CLAUSE.autoFront) + depth;
+  if (currentAngle === AUTO_ANGLE) {
+    return " " + (inProfile ? DENSE.poseProfile.front : DENSE.pose.front) + " " + DENSE.frontRef + depth;
+  }
   /* Single-view items (see profileActive()'s comment - the watcher now runs for these
      too): `angle` here is a GALLERY tab choice (which product photo to reference), not a
      claim about how the shopper is physically standing, and ANGLE_CLAUSE.front is "" - it
      never needed its own pose sentence because there used to be no live pose signal for
      this mode at all. `inProfile` is that signal now. When it's true, reach for
-     ANGLE_CLAUSE.side - the garment-specific "shoulder line, sleeve, side seam, drape
-     along the flank" wording - instead of whatever the selected tab's (possibly empty)
-     clause says, same as AUTO_ANGLE substituting autoProfile for autoFront above. */
-  return (inProfile ? ANGLE_CLAUSE.side : (ANGLE_CLAUSE[angle] || "")) + depth;
+     DENSE.side - the garment-specific side-seam/flank wording - instead of whatever the
+     selected tab's (possibly empty) clause says, same as AUTO_ANGLE substituting the
+     profile pose for the square-on one above. */
+  if (inProfile) return " " + DENSE.side + depth;
+  return angle === "back" ? " " + DENSE.pose.back : "";
 }
 
 /**
@@ -5851,9 +6093,10 @@ async function applyGarment(item) {
      is the substantive difference. Both branches are driven by `usingComposite`, so the
      prompt can never describe a reference other than the one on the next line. */
   const payload = {
-    prompt: usingComposite
+    prompt: clampPromptForWire(usingComposite
       ? buildCompositePrompt(item, angleAtStart, profileAtStart)
-      : buildPrompt(item) + angleClause(item, angleAtStart, false, profileAtStart),
+      : buildPrompt(item, angleClause(item, angleAtStart, false, profileAtStart)),
+      "applyGarment"),
     enhance: false,
     ...(imageRef ? { image: imageRef } : {}),
   };
@@ -6054,6 +6297,53 @@ const HEM_DETAIL = " Preserve the garment's printed graphics, logos, and text, a
 const KEEP_BOTTOMS = " Keep the person's existing lower body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the trousers, shorts, skirt, shoes, belt, or anything below the waist, and do not add, invent or restyle any accessories that were not already present.";
 const KEEP_TOP     = " Keep the person's existing upper body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the shirt, top, jacket, hat, scarf, jewelry, or anything above the waist, and do not add, invent or restyle any accessories that were not already present.";
 
+/* ── Model-agnostic extraction - the OTHER body in the pipeline ───────────────
+   THE GAP: every clause in this file that defends body shape defends it against the
+   model's own training prior (STRICT_INPAINT's "it slimmed me down", SIDE_PROFILE_DEPTH's
+   flattened profile). None of them account for the fact that the reference image usually
+   contains A SECOND HUMAN - the e-commerce model wearing the product - and that Lucy sees
+   that figure as part of its conditioning. IGNORE_SOURCE_ARTIFACTS is the nearest thing
+   and it is deliberately scoped to non-human noise: badges, watermarks, orientation
+   labels. A whole person in the reference asset was never named, so their shoulder line,
+   chest, build and posture sat in the conditioning with nothing marking them as
+   off-limits - and an unstated region is exactly what this file's history keeps recording
+   as the thing that gets reinterpreted. That is the "it gave me the model's shoulders"
+   report: not a detection failure, an unstated constraint, same class as every other bug
+   these constants exist for.
+
+   DELIBERATELY NOT A RESTATEMENT of ABSOLUTE BODY FIDELITY below. That clause already
+   says the live person's shape is 1:1 ground truth and that the garment fits the body
+   rather than the reverse; repeating it here would spend several hundred characters
+   re-asserting it ~200 characters before it actually appears, against a prompt this file
+   already argues is competing for the model's attention. What is genuinely new is the
+   PROVENANCE SPLIT - the reference is the only source of cloth, the live feed is the only
+   source of body - so that is what this carries, and it hands off to STRICT_INPAINT for
+   the positive fidelity language it is placed directly ahead of.
+
+   THE PRINT-PLACEMENT CARVE-OUT at the end is load-bearing, not padding. "Re-proportion
+   the garment to their body" and BACK_TAIL.real's "keep each element at the SAME size,
+   height and horizontal position, do not move, rescale or re-center the back print" are
+   one bad reading apart from contradicting each other, and that print alignment was its
+   own fix. Scaling the garment to a different body must not become licence to relocate
+   its artwork on the garment, so the boundary is stated rather than left to inference. */
+const MODEL_AGNOSTIC_EXTRACTION =
+  " GARMENT ISOLATION MANDATE: the reference image is a TEXTURE AND CLOTHING TEMPLATE and" +
+  " nothing more. Extract ONLY the garment from it - fabric, weave, colour, pattern, print," +
+  " logos, seams, cut, collar, closure and hemline. If a person, model or mannequin is" +
+  " wearing that garment in the reference, they are packaging: completely ignore their" +
+  " body, physique, height, build, skin tone, shoulder width, chest, waist, limb positions" +
+  " and posture." +
+  " ZERO MODEL BLEED: do NOT transfer, copy, blend, average or impose ANY of that reference" +
+  " figure's anatomy, proportions, pose or body structure onto the live person, and never" +
+  " reshape the live person toward them. The live camera feed is the ONLY source of BODY;" +
+  " the reference image is the ONLY source of CLOTH." +
+  " DYNAMIC USER FITTING: fit, stretch, drape and re-proportion the extracted garment onto" +
+  " the live person's own exact body shape and volume - their real torso, chest, stomach," +
+  " waist and hips - so it reads as cut for THEM, with fabric tension, creases and folds" +
+  " following their contours rather than the reference figure's. Re-proportioning the" +
+  " garment to their body is NOT licence to move its artwork: any print, graphic, logo or" +
+  " lettering keeps the size, height and position on the garment specified above.";
+
 /* ── Strict garment inpainting - the hallucination clamp ──────────────────────
    KEEP_BOTTOMS/KEEP_TOP only ever pinned the OPPOSITE GARMENT layer. Everything else in
    frame - face, hair, hands, skin, the room behind the shopper, AND the shopper's own
@@ -6167,28 +6457,35 @@ const ROTATION_CONTINUITY =
    the front" instruction. */
 const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like logos or front-pockets) when the BACK view is requested.";
 
-function buildPrompt(item) {
+/* `angleText` is angleClause()'s output, passed IN rather than concatenated on by the
+   caller. That is what makes the budget enforceable: the old shape was
+   `buildPrompt(item) + angleClause(...)`, two independently-sized strings glued together
+   downstream, so neither half could know the total and nothing could shed a clause when
+   the pair overran. Threaded through here, the orientation clause becomes one more
+   priority-tagged part in a single fitPrompt() call - and it ranks CORE, because a prompt
+   that has lost its orientation clause renders the wrong side of the garment. */
+function buildPrompt(item, angleText = "") {
   // "Upload Your Own Garment": the reference image IS the garment, so we point the
-  // model AT that image instead of naming a catalog color/subType. We still keep the
-  // anatomical anchor, size-driven fit modifier and the opposite-layer lock, so a
-  // custom upload behaves exactly like a built-in item in the strict live flow.
-  if (item.custom) return buildCustomPrompt(item);
+  // model AT that image instead of naming a catalog color/subType.
+  if (item.custom) return buildCustomPrompt(item, angleText);
 
-  const colorWord = colorName(item.color);
-  const sub    = SUBTYPE_PROMPT[item.subType] || "";
-  const anchor = getAnatomicalAnchor();
-  const delta  = getSizeDelta();
-  const fitMod = getFitModifier(delta, item.garmentType);
-  const fabricMod = getFabricModifier(item);
-  const suffix = HARD_NEGATIVE;   // universal hard negative (combined orientation lives in angleClause)
+  const lower = item.garmentType === "lower_body";
+  const sub   = SUBTYPE_PROMPT[item.subType] || "";
+  const noun  = lower ? `${sub} trousers`.trim()
+                      : `${sub} ${SHIRT_NOUN[item.subType] || "top"}`.trim();
 
-  if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${colorWord} ${sub} trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
-      .replace(/\s+/g, " ").trim();
-  }
-  const noun = SHIRT_NOUN[item.subType] || "top";
-  return `Substitute the current top with a ${colorWord} ${sub} ${noun}. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
-    .replace(/\s+/g, " ").trim();
+  return fitPrompt([
+    [P.CORE, `Virtual try-on. Replace their ${lower ? "bottoms" : "top"} with ${colorName(item.color)} ${noun}: exact colour, texture and print.`],
+    [P.CORE, angleText],
+    [P.HIGH, DENSE.bodyFidelity],
+    [P.HIGH, DENSE.modelAgnostic],
+    [P.MED,  lower ? DENSE.keepTop : DENSE.keepBottoms],
+    [P.MED,  DENSE.inpaintLock],
+    [P.LOW,  DENSE.rotation],
+    [P.LOW,  fitSentence(item.garmentType)],
+    [P.TRIM, DENSE.temporal],
+    [P.TRIM, DENSE.quality],
+  ]);
 }
 
 /**
@@ -6198,20 +6495,20 @@ function buildPrompt(item) {
  * @param {object} item - a custom item ({ custom:true, garmentType, img, color })
  * @returns {string}
  */
-function buildCustomPrompt(item) {
-  const anchor = getAnatomicalAnchor();
-  const delta  = getSizeDelta();
-  const fitMod = getFitModifier(delta, item.garmentType);
-  const fabricMod = getFabricModifier(item);
-  const suffix = HARD_NEGATIVE;
-  const ref = "the exact garment shown in the reference image - a custom uploaded garment - replicating its precise color, pattern, print, fabric texture and silhouette";
-
-  if (item.garmentType === "lower_body") {
-    return `Substitute the current bottoms with ${ref}, worn as trousers. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_TOP}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
-      .replace(/\s+/g, " ").trim();
-  }
-  return `Substitute the current top with ${ref}, worn on the upper body. ${anchor} Render a ${fitMod}${QUALITY_SUFFIX}.${fabricMod}${HEM_DETAIL}${KEEP_BOTTOMS}${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
-    .replace(/\s+/g, " ").trim();
+function buildCustomPrompt(item, angleText = "") {
+  const lower = item.garmentType === "lower_body";
+  return fitPrompt([
+    [P.CORE, `Virtual try-on. Replace their ${lower ? "bottoms" : "top"} with the exact garment in the reference image: its colour, pattern, print, texture and silhouette.`],
+    [P.CORE, angleText],
+    [P.HIGH, DENSE.bodyFidelity],
+    [P.HIGH, DENSE.modelAgnostic],
+    [P.MED,  lower ? DENSE.keepTop : DENSE.keepBottoms],
+    [P.MED,  DENSE.inpaintLock],
+    [P.LOW,  DENSE.rotation],
+    [P.LOW,  fitSentence(item.garmentType)],
+    [P.TRIM, DENSE.temporal],
+    [P.TRIM, DENSE.quality],
+  ]);
 }
 
 const APPLY_ATTEMPTS = 2;    // set() tries per apply - see applyActive()
@@ -6318,9 +6615,10 @@ async function applyLook(top, bottom) {
      below is read live and would race. */
   const profileAtStart = profileActive();
   let primaryImage = canStitchLook ? await stitchLookBlob(topImg, bottomImg) : null;
-  const prompt = primaryImage
-    ? buildLookPrompt(top, bottom) + LOOK_CLAUSE
-    : buildLookPrompt(top, bottom) + angleClause(undefined, undefined, undefined, profileAtStart);
+  const prompt = clampPromptForWire(primaryImage
+    ? buildLookPrompt(top, bottom, DENSE.lookPanels)
+    : buildLookPrompt(top, bottom, angleClause(undefined, undefined, undefined, profileAtStart)),
+    "applyLook");
 
   if (!primaryImage) {
     // Stitch unavailable (AI Auto angle) or failed to decode - fall back to the
@@ -6362,32 +6660,24 @@ async function applyLook(top, bottom) {
  * simultaneously (a single pass), so a full outfit is rendered together rather
  * than as two separate substitutions.
  */
-function buildLookPrompt(top, bottom) {
-  const tColor = colorName(top.color), tSub = SUBTYPE_PROMPT[top.subType] || "";
-  const tNoun  = SHIRT_NOUN[top.subType] || "top";
-  const bColor = colorName(bottom.color), bSub = SUBTYPE_PROMPT[bottom.subType] || "";
-  const anchor = getAnatomicalAnchor();
-  const delta  = getSizeDelta();
-  const topFit = getFitModifier(delta, top.garmentType);
-  const botFit = getFitModifier(delta, bottom.garmentType);
-  const topFabric = getFabricModifier(top, "The top's fabric");
-  const botFabric = getFabricModifier(bottom, "The bottoms' fabric");
-  const suffix = HARD_NEGATIVE;
-  return (
-    `Dress the person in one complete outfit in a single pass: ` +
-    `replace the top with a ${tColor} ${tSub} ${tNoun} rendered as a ${topFit}, ` +
-    `and at the same time replace the bottoms with ${bColor} ${bSub} trousers rendered as a ${botFit}. ` +
-    `${anchor} Render both garments together in a single photorealistic pass${QUALITY_SUFFIX}.` +
-    `${topFabric}${botFabric}` +
-    /* A full look replaces BOTH layers, so there is no KEEP_TOP/KEEP_BOTTOMS to pin here -
-       which makes the face/hair/skin/background lock the ONLY thing standing between this
-       prompt and a regenerated room. It matters more here, not less.
-       IGNORE_SOURCE_ARTIFACTS / PROFILE_ANOMALY_GUARD were missed here in the pass that
-       added them to the other five prompt-assembly sites - this is the sixth (the
-       both-slots-filled "complete look" flow), sharing the same STRICT_INPAINT/
-       ROTATION_CONTINUITY pair, so it needs the same two companions for the same reasons. */
-    `${STRICT_INPAINT}${IGNORE_SOURCE_ARTIFACTS}${ROTATION_CONTINUITY}${PROFILE_ANOMALY_GUARD}${suffix}`
-  ).replace(/\s+/g, " ").trim();
+function buildLookPrompt(top, bottom, angleText = "") {
+  const tSub = SUBTYPE_PROMPT[top.subType] || "";
+  const tNoun = `${tSub} ${SHIRT_NOUN[top.subType] || "top"}`.trim();
+  const bSub = SUBTYPE_PROMPT[bottom.subType] || "";
+  return fitPrompt([
+    [P.CORE, `Virtual try-on, one pass: replace their top with ${colorName(top.color)} ${tNoun} and their bottoms with ${colorName(bottom.color)} ${`${bSub} trousers`.trim()}. Both at once, exact colours and textures.`],
+    [P.CORE, angleText],
+    [P.HIGH, DENSE.bodyFidelity],
+    [P.HIGH, DENSE.modelAgnostic],
+    /* A full look replaces BOTH layers, so there is no keepTop/keepBottoms to pin here -
+       which makes the face/skin/background lock the ONLY thing standing between this
+       prompt and a regenerated room. It ranks higher here than in the other builders for
+       exactly that reason: it is carrying the whole passthrough contract alone. */
+    [P.HIGH, DENSE.inpaintLock],
+    [P.LOW,  DENSE.rotation],
+    [P.TRIM, DENSE.temporal],
+    [P.TRIM, DENSE.quality],
+  ]);
 }
 
 /* =============================================================================

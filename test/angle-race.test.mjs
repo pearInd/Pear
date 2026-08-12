@@ -64,8 +64,8 @@ check("extracted compositeActiveFor", /function compositeActiveFor/.test(code));
    that is the point of it. So "which side did it select?" cannot be answered by looking
    for the word FRONT or BACK; it has to be read off the SELECTOR sentence, which names
    one panel as the source and declares the other absent for this frame. */
-const SELECTED_FRONT = /Apply the LEFT PANEL \(FRONT view\) design to the FRONT of their body/;
-const SELECTED_BACK  = /from the RIGHT PANEL \(BACK view\) and RENDER IT ONTO THE BACK of the person/;
+const SELECTED_FRONT = /Use LEFT only; RIGHT must not appear/;
+const SELECTED_BACK  = /Use RIGHT only; LEFT must not appear/;
 
 function run({ effectiveAngleReturns, distinctBack, resolveLookReturns = null, custom = false, angleOverride, useComposite, inProfile, currentAngle = "auto" }) {
   const sandbox = {
@@ -142,9 +142,9 @@ console.log("\n── useComposite: the clause must describe the reference that 
     useComposite: false,                          // ...but no composite was actually resolved
   });
   check("composite WANTED but not resolved -> no panel contract in the clause",
-    !/SPLIT COMPOSITE IMAGE/.test(clause) && !SELECTED_BACK.test(clause), clause.slice(0, 200));
+    !/split image, LEFT = garment front/.test(clause) && !SELECTED_BACK.test(clause), clause.slice(0, 200));
   check("...and it falls back to the single-asset BACK steering instead",
-    /This reference photo shows the BACK of the garment/.test(clause), clause.slice(0, 200));
+    /The reference photo shows the garment's BACK/.test(clause), clause.slice(0, 200));
 }
 {
   // The inverse must still hold: when the composite DID resolve, the contract is stated.
@@ -155,7 +155,7 @@ console.log("\n── useComposite: the clause must describe the reference that 
     useComposite: true,
   });
   check("composite actually resolved -> the panel contract IS stated",
-    /SPLIT COMPOSITE IMAGE/.test(clause) && SELECTED_BACK.test(clause), clause.slice(0, 200));
+    /split image, LEFT = garment front/.test(clause) && SELECTED_BACK.test(clause), clause.slice(0, 200));
 }
 {
   /* applyGarment() is the only caller that passes the flag; every other caller omits it
@@ -168,7 +168,7 @@ console.log("\n── useComposite: the clause must describe the reference that 
     useComposite: undefined,
   });
   check("useComposite omitted -> still inferred from compositeActiveFor()",
-    /SPLIT COMPOSITE IMAGE/.test(clause), clause.slice(0, 200));
+    /split image, LEFT = garment front/.test(clause), clause.slice(0, 200));
 }
 
 console.log("\n── the panel contract states LEFT=FRONT / RIGHT=BACK, matching the stitcher ──");
@@ -179,9 +179,9 @@ console.log("\n── the panel contract states LEFT=FRONT / RIGHT=BACK, matchin
      words; if the stitcher's panel order is ever flipped without flipping this sentence,
      every back render silently reads the wrong half. */
   check("LEFT half is declared the FRONT view",
-    /the LEFT HALF is the FRONT view/.test(clause), clause.slice(0, 260));
+    /LEFT = garment front/.test(clause), clause.slice(0, 260));
   check("RIGHT half is declared the BACK view",
-    /the RIGHT HALF is the BACK view/.test(clause), clause.slice(0, 260));
+    /RIGHT = back/.test(clause), clause.slice(0, 260));
   const drawsFrontLeft = /ctx\.rect\(0, 0, fW, pH\)[\s\S]{0,80}drawImageCover\(ctx, front/.test(SRC);
   const drawsBackRight = /const backX = fW \+ gut;[\s\S]{0,160}drawImageCover\(ctx, back, backX/.test(SRC);
   check("...and the stitcher actually draws FRONT left / BACK right", drawsFrontLeft && drawsBackRight,
@@ -196,17 +196,14 @@ console.log("\n── artifact + temporal clauses ride on BOTH orientations ─�
      comes back on the other half of every session. */
   for (const angle of ["front", "back"]) {
     const clause = run({ effectiveAngleReturns: angle, angleOverride: angle, distinctBack: "https://cdn.test/back.jpg" });
-    check(`${angle}: tells the model to ignore canvas furniture`,
-      /IGNORE ALL CANVAS FURNITURE/.test(clause) &&
-      /Never reproduce a boundary, divider, seam, border, frame, band or letterform/.test(clause),
-      clause.slice(0, 260));
-    check(`${angle}: names the garment's own seams as the only legal lines`,
-      /only lines you may render on the garment are its own real seams, stitching and hems/.test(clause));
-    check(`${angle}: asks for temporally consistent output`,
-      /temporally consistent frame-to-frame output/.test(clause) && /ZERO flickering/.test(clause),
-      clause.slice(-260));
-    check(`${angle}: forbids the print vanishing between frames`,
-      /print must never vanish, fade or re-position between frames/.test(clause));
+    /* COMPRESSED. The enumerated bans these used to assert - the divider/border/letterform
+       list, the "only real seams" sentence, the ZERO-flickering paragraph - no longer fit
+       under the 226-token ceiling (see config.js PROMPT_MAX_CHARS). What survives is the
+       one-phrase form, and the layout fact it protects is still stated explicitly. */
+    check(`${angle}: still tells the model to ignore the canvas furniture`,
+      /Ignore gap.labels/.test(clause), clause.slice(0, 260));
+    check(`${angle}: still names which half is which, so a flipped stitcher stays detectable`,
+      /LEFT = garment front, RIGHT = back/.test(clause), clause.slice(0, 260));
   }
 }
 
@@ -217,26 +214,32 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
      A clause that only reaches the composite path leaves the single-asset, custom-upload
      and full-look paths exposed, so assert against the SOURCE that every builder carries
      both - a regex on one rendered clause cannot see the other three builders. */
-  const src = SRC.slice(SRC.indexOf("const STRICT_INPAINT"));
+  /* COMPRESSED. STRICT_INPAINT and ROTATION_CONTINUITY ran 1,650 and 458 characters -
+     the first alone was nearly twice the entire 226-token budget - and are now
+     DENSE.bodyFidelity / DENSE.inpaintLock / DENSE.rotation. The PROPERTY these checks
+     encode is unchanged, and is the one worth keeping: every builder carries the
+     body-fidelity and passthrough clamps, on every path, so a new builder cannot ship
+     without them. */
   const builders = [
-    ["buildPrompt (catalog)", /function buildPrompt\(item\)[\s\S]*?\n}/],
-    ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item\)[\s\S]*?\n}/],
-    ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom\)[\s\S]*?\n}/],
+    ["buildPrompt (catalog)", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
+    ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
+    ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
     ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
   for (const [name, re] of builders) {
     const body = (SRC.match(re) || [""])[0];
-    check(`${name} applies STRICT_INPAINT`, body.includes("STRICT_INPAINT"), body.slice(-200));
-    check(`${name} applies ROTATION_CONTINUITY`, body.includes("ROTATION_CONTINUITY"), body.slice(-200));
+    check(`${name} carries the body-fidelity clamp`,
+      body.includes("DENSE.bodyFidelity"), body.slice(-300));
+    check(`${name} carries the face/background passthrough clamp`,
+      body.includes("DENSE.inpaintLock"), body.slice(-300));
   }
 
-  check("STRICT_INPAINT locks face, hair, skin and background as source footage",
-    /face, hair, head, neck, hands, arms and skin/.test(src) &&
-    /entire background, room and lighting/.test(src) &&
-    /locked source footage that must pass through/.test(src));
-  check("ROTATION_CONTINUITY forbids revealing the shopper's real garment mid-turn",
-    /no frame in which it is dropped, faded, or replaced by the person's own real/.test(src) &&
-    /side-on, partially occluded, or facing away/.test(src));
+  check("the body-fidelity clamp still forbids slimming or idealizing the shopper",
+    /never slim or idealize/.test(SRC));
+  check("the passthrough clamp still names face, skin and background",
+    /Face, hands, skin and background pass through untouched/.test(SRC));
+  check("rotation continuity still promises the garment stays on through a turn",
+    /The garment stays on through any turn/.test(SRC));
 }
 
 console.log("\n── single-view items (no AI Auto) now get a truthful side clause too ──");
@@ -254,11 +257,12 @@ console.log("\n── single-view items (no AI Auto) now get a truthful side cla
     distinctBack: undefined,         // no real back at all - a custom upload / single photo
     inProfile: true,
   });
-  check("reaches for ANGLE_CLAUSE.side's garment-drape wording, not the empty front clause",
-    /shoulder line, sleeve, side seam and the way the fabric drapes along the flank/.test(clause),
+  check("reaches for the side-drape wording, not the empty front clause",
+    /shoulder line, sleeve and side seam, draping along the flank/.test(clause),
     clause.slice(0, 260));
-  check("...and still carries SIDE_PROFILE_DEPTH (the body-volume fidelity clause)",
-    /SIDE-PROFILE DEPTH FIDELITY/.test(clause), clause.slice(0, 120));
+  check("...and still carries the body-depth directive (compressed from SIDE_PROFILE_DEPTH)",
+    /EDGE-ON: their front-to-back depth and belly are ground truth/.test(clause),
+    clause.slice(0, 220));
 }
 {
   // Square-on, same single-view session: must fall back to the plain (empty) front clause,
