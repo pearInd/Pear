@@ -139,6 +139,7 @@ const SUITES = [
   ["apply-timeout", "apply-timeout.test.mjs"],
   ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],
   ["variant-sync", "variant-sync.test.mjs"],
+  ["decart-debug-log", "decart-debug-log.test.mjs"],
 ];
 
 let failed = 0;

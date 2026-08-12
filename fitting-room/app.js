@@ -5774,6 +5774,16 @@ const DENSE = Object.freeze({
   modelAgnostic: "Ignore the reference model's body; fit the cloth to THIS person.",
   keepBottoms:   "Bottoms unchanged.",
   keepTop:       "Top unchanged.",
+  /* CONSIDERED AND REJECTED: adding "arms" here, after the tuxedo/blazer report - a
+     blazer's sleeve is structurally different from a t-shirt's, so naming the arm/sleeve
+     region alongside face/hands looked like a targeted fix. It is wrong for this shared
+     table: PEAR_CATALOG ships long-sleeve items (Strata, Nimbus, Echo), and for those a
+     correct render DOES cover the arm in sleeve fabric - "arms pass through untouched"
+     would contradict the substitution itself on every one of them, the exact class of
+     internal prompt contradiction this session has spent several commits removing, not
+     one to reintroduce. The noun already carries this signal correctly ("t-shirt" implies
+     short sleeves, "tank top" sleeveless, "long-sleeve shirt" full coverage) without a
+     separate, subType-blind passthrough clause fighting it. */
   inpaintLock:   "Face, skin, hands and background pass through untouched.",
   rotation:      "The garment stays on through any turn.",
   temporal:      "Stable print, no flicker.",
@@ -6290,10 +6300,19 @@ async function applyGarment(item) {
   if (sameImageOnWire) {
     console.log("[PEAR] prompt-only update - reference unchanged, image NOT re-uploaded",
       `(${angleAtStart})`);
+    /* THE EXACT STRING HITTING DECART, logged immediately adjacent to the call that sends
+       it - not earlier in the debug group above, which describes the payload BUILT, not
+       necessarily the one about to go out this specific dispatch (this path and the
+       full set() below are two different sends from two different places in this
+       function). abbrevImg(), not the raw Blob/URL: the console.log("img ref", ...) line
+       above already established that a raw data: URL or Blob here can flood the console. */
+    console.log("[DECART PROMPT DEBUG]", payload.prompt, abbrevImg(imageRef),
+      "(prompt-only - image already on the wire, unchanged)");
     await rtClient.setPrompt(payload.prompt, { enhance: false });
     return;
   }
 
+  console.log("[DECART PROMPT DEBUG]", payload.prompt, abbrevImg(imageRef));
   await rtClient.set(payload);
   lastSentImageRef = imageRef || null;
   rtImageOnWire = !!imageRef;
@@ -6779,11 +6798,13 @@ async function applyLook(top, bottom) {
     ],
   };
 
+  console.log("[DECART PROMPT DEBUG]", prompt, abbrevImg(primaryImage));
   try {
     await rtClient.set(payload);
   } catch (e) {
     // A stricter SDK build may reject the enriched shape - retry with the minimal contract.
     console.warn("look payload rejected, retrying minimal:", e?.message || e);
+    console.log("[DECART PROMPT DEBUG] (retry, minimal payload)", prompt, abbrevImg(primaryImage));
     await rtClient.set({ prompt, image: primaryImage, enhance: false });
   }
   /* Keep the reference tracker honest: a look sends its OWN stitched image, so whatever
