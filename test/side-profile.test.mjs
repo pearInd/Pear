@@ -357,7 +357,7 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   const built = api.buildCompositePrompt(item, "front", true);
   const latPos = built.indexOf("EDGE-ON: keep their full front-to-back depth");
   const subPos = built.indexOf("Replace their");
-  const lockPos = built.indexOf("Never invent a garment, add a jacket");
+  const lockPos = built.indexOf("Never invent a garment, jacket");
   /* Depth and lateral are ONE clause now, and both follow the binding. The ordering that
      matters after the grey-shirt regression is: which garment (and the ban on inventing
      one), THEN how to build its side. */
@@ -711,8 +711,8 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     /pass through untouched/.test(square) && /pass through untouched/.test(built));
   check("...as does the reference binding and its asset lock (priority 1, never shed)",
     /in the reference image/.test(square) && /in the reference image/.test(built) &&
-    /Never invent a garment, add a jacket/.test(square) &&
-    /Never invent a garment, add a jacket/.test(built));
+    /Never invent a garment, jacket/.test(square) &&
+    /Never invent a garment, jacket/.test(built));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

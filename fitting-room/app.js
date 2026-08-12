@@ -3450,15 +3450,34 @@ const ORIENT_PROFILE_COOLDOWN_MS = 1200;
    A hardcoded value is exactly how the first version of this shipped broken: it was set
    to 4000ms against a LIVE_DURATION_MS of 5000ms, so it could fire at most ONCE per
    session - and only for a shopper who held a single pose for 4 of their 5 seconds.
-   Reversion was being observed ~2s in, which that cadence could never have reached.
    Deriving it keeps the real invariant - "re-anchor several times WITHIN a session" -
-   true by construction if the billed window is ever retuned. The floor is a chatter
-   guard for a hypothetical very short window; at LIVE_DURATION_MS=5000 this resolves to
-   1250ms (~3 re-anchors per session, first at ~1.25s - comfortably ahead of the
-   observed ~2s reversion). Each ride setPrompt(): a small control message, no image
-   bytes (see applyGarment()'s flicker-fix comment), so the cost of the extra frequency
-   is negligible and does NOT re-upload the reference. */
-const REANCHOR_MS = Math.max(1000, Math.round(LIVE_DURATION_MS / 4));
+   true by construction if the billed window is ever retuned.
+
+   TIGHTENED /4 -> /8 (1250ms -> 625ms), against a report of drift into an unrelated
+   outfit visible within the first ~1s and dominant by ~4s - faster than the previous
+   cadence's SECOND re-anchor (~1.25s) even landed. maybeReanchorPrompt() fires as soon
+   as the first frame is dressed (see prompt-reanchor.test.mjs §2 - that is tested,
+   intended behaviour, not a bug), then every REANCHOR_MS after; halving the gap roughly
+   doubles the corrective opportunities inside the same 5s window (~8 instead of ~4).
+
+   THE HONEST LIMIT on what this can fix: it re-asserts the SAME prompt text, unchanged.
+   @decartai/sdk@0.1.5's realtime setInputSchema exposes exactly { prompt, enhance,
+   image } (z.core.$strip - unknown keys are silently discarded, not forwarded), so there
+   is no temporal-consistency, frame-guidance-weight or seed parameter to raise instead -
+   this cadence IS the substitute for one. If the backend holds any temporal state this
+   API surface doesn't expose (plausible for a realtime video model, and consistent with
+   drift existing at all despite "no cross-frame state" being the documented client-side
+   contract), no cadence of re-asserting unchanged text can out-run it; only a genuinely
+   stronger anchor - which this API does not offer a way to send - would.
+
+   The floor is a chatter guard for a hypothetical very short window; at LIVE_DURATION_MS
+   =5000 this resolves to 625ms (~8 re-anchors per session). Each rides setPrompt(): a
+   small control message, no image bytes (see applyGarment()'s flicker-fix comment), so
+   the cost of the extra frequency is negligible and does NOT re-upload the reference -
+   the specific technique this file already ruled out re-sending the IMAGE periodically
+   for (a full re-upload risks the same mid-stream glitch the flicker fix exists to
+   prevent, whether or not the image content actually changed). */
+const REANCHOR_MS = Math.max(500, Math.round(LIVE_DURATION_MS / 8));
 /* ── Foreshortening (silhouette width) thresholds ─────────────────────────────
    Measured RELATIVE to the shopper's own square-on width, never as an absolute pixel
    count: absolute width depends on how far they stand from the lens, their build, and the
@@ -5726,21 +5745,26 @@ const DENSE = Object.freeze({
      nothing forbidding invention, a diffusion model falls to its own prior, which for
      "shirt" is a plain mid-grey tee. Naming the failure is what suppresses it - the same
      mechanism as backInferred's front-print ban. */
-  /* THE ANTI-INVENTION NEGATIVE, widened after a reported blue JACKET appearing over a
-     white printed tee. The previous wording banned inventing a plain or grey garment -
-     it named the wrong axis. The observed failure was not a colour substitution but a
-     LAYER and a TYPE change: the model kept a garment-shaped region and rendered
-     outerwear into it. Nothing in the prompt forbade that, and an unstated failure is
-     one this model is free to produce.
+  /* THE ANTI-INVENTION NEGATIVE. Widened twice against two separate reports of the same
+     mechanism producing different specific outputs - first a blue JACKET, then a full
+     TUXEDO with a bowtie and badge - which is the pattern that argues for naming the
+     CLASS (formalwear/outerwear/accessories) rather than chasing individual garment
+     words one report at a time; the next drift is not guaranteed to invent a jacket
+     either. The underlying failure is unchanged from the first widening: the model kept
+     a garment-shaped region and rendered something else into it - a layer, a type and
+     now an ACCESSORY change, none of which the previous wording forbade.
 
-     Naming the specific wrong output ("jacket", "coat", "extra layer") is deliberate and
-     is the mechanism this file relies on everywhere - the same reason backInferred names
-     the front print it must not copy. What is NOT named is any particular garment's
-     print text: that belongs to one product, and hardcoding it would state a falsehood
-     about every other item in the catalog. The substitution sentence already binds the
-     print generically ("every graphic, logo and lettering on it"), which is what makes
-     it true for all of them. */
-  assetLock:     "Never invent a garment, add a jacket, coat or extra layer, or change the garment type, and never leave their own top showing.",
+     Naming the specific wrong output is deliberate and is the mechanism this file relies
+     on everywhere (the same reason backInferred names the front print it must not copy),
+     but the list cannot grow without bound inside a 226-token prompt - so it is pitched
+     at garment CLASSES wide enough to cover what has actually been observed (jacket/coat/
+     suit/tuxedo covers "outerwear or formalwear invented instead of a tee"; tie/bowtie/
+     badge covers "accessories invented that were never in the reference") rather than an
+     ever-growing enumeration of exact nouns. What is still NOT named is any particular
+     garment's print text - that belongs to one product, and hardcoding it would state a
+     falsehood about every other catalog item. The substitution sentence already binds the
+     print generically ("every graphic, logo and lettering on it"). */
+  assetLock:     "Never invent a garment, jacket, coat, suit, tuxedo, tie, bowtie or badge, or change the garment type, and never leave their own top showing.",
   /* Depth and lateral wrap MERGED. Separately they cost ~155 characters and the budget
      could only afford one, so a 90-degree frame got the BODY clause and no GARMENT clause -
      leaving the side of the garment unreferenced, which is exactly where the model
