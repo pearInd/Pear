@@ -651,7 +651,11 @@ let isGarmentApplied = false;    // true once rtClient.set() has resolved - gate
    fast path in applyGarment() (see sameImageOnWire), for ONE diagnostic session -
    ⚠️ intentionally reintroduces the regression prompt-only-flip.test.mjs guards
    against; OFF by default, never flip the default:
-     DevTools console:  window.__pearDebugForceFullReupload = true          */
+     DevTools console:  window.__pearDebugForceFullReupload = true
+   Trace the isGarmentApplied/isDressedFrame race in armFirstFrameBilling() - verbose,
+   throttled per-frame logging up to the reveal, then a short post-fire luma watch
+   (see watchPostFireLuma). OFF by default (noisy - 20-30+ ticks/session):
+     DevTools console:  window.__pearDebugFrameTiming = true                */
 let debugStreamCheckedThisGen = false;   // reset per session in connectRealtime, alongside billingStarted etc.
 
 /**
@@ -8491,6 +8495,18 @@ function startBillingWindow(gen) {
 function armFirstFrameBilling(video, gen) {
   if (!video || billingStarted || gen !== sessionGen) return;
   let done = false;
+  /* DEBUG WRAPPER: window.__pearDebugFrameTiming - verbose trace of the isGarmentApplied
+     / isDressedFrame race this function gates on, to test a specific hypothesis: that
+     isDressedFrame() (which only proves the frame ISN'T BLACK, never that it matches the
+     garment that was actually sent) can pass on a frame that's still Decart's generic/
+     default output, briefly revealing it before the real garment frames catch up. OFF by
+     default - this polls on every decoded frame while waiting, which is 20-30+ ticks in
+     under a second and too noisy for a normal session. A local Date.now()-based clock,
+     not sessionElapsedMs() - that one is relative to billingStartedAt, which this
+     function's own fire() is what sets, so it reads -1 for this entire pre-fire window. */
+  const frameTimingDebug = typeof window !== "undefined" && !!window.__pearDebugFrameTiming;
+  const armedAt = Date.now();
+  let lastLogAt = 0;
   const isDressedFrame = () => {
     const s = sampleVideoLuma(video);
     return s.ready && s.avgLuma > CAMERA_BLACK_AVG_LUMA && s.blackFrac < CAMERA_BLACK_PIXEL_FRAC;
@@ -8500,6 +8516,11 @@ function armFirstFrameBilling(video, gen) {
     done = true;
     if (gen !== sessionGen) return;      // session was torn down before the first frame
     dressedFrameReady = true;            // model-ready signal shared with the recorder (startRecording)
+    if (frameTimingDebug) {
+      console.log(`[PEAR][DEBUG] armFirstFrameBilling FIRED at +${Date.now() - armedAt}ms`,
+        `since arming (isGarmentApplied=${isGarmentApplied})`);
+      watchPostFireLuma(video, gen, armedAt);   // keep sampling briefly - see if the frame is still settling
+    }
     startBillingWindow(gen);
   };
   // TWO independent gates, both required before firing - each closes a gap the other
@@ -8516,7 +8537,18 @@ function armFirstFrameBilling(video, gen) {
   // that is genuinely ready, never before.
   const frameReady = () => {
     if (done || gen !== sessionGen) return;
-    if (!isGarmentApplied || !isDressedFrame()) {
+    const dressed = isDressedFrame();
+    if (frameTimingDebug) {
+      const now = Date.now();
+      if (now - lastLogAt >= 80) {   // throttled - avoid one line per decoded frame
+        lastLogAt = now;
+        const s = sampleVideoLuma(video);
+        console.log(`[PEAR][DEBUG] frame check +${now - armedAt}ms | isGarmentApplied=${isGarmentApplied}`,
+          `| luma=${s.ready ? s.avgLuma.toFixed(1) : "n/a"} blackFrac=${s.ready ? s.blackFrac.toFixed(3) : "n/a"}`,
+          `| dressed=${dressed}`);
+      }
+    }
+    if (!isGarmentApplied || !dressed) {
       if (typeof video.requestVideoFrameCallback === "function") {
         video.requestVideoFrameCallback(frameReady);
       } else {
@@ -8537,6 +8569,30 @@ function armFirstFrameBilling(video, gen) {
       requestAnimationFrame(poll);
     })();
   }
+}
+
+/* DEBUG WRAPPER: runs for a short, self-limiting window immediately AFTER
+   armFirstFrameBilling() fires, purely to observe whether the frame is still visibly
+   changing right after "dressed" was declared - a luma still drifting a few hundred ms
+   post-reveal is consistent with the isDressedFrame() gap window.__pearDebugFrameTiming
+   exists to investigate. Diagnostic only: never reads or writes billing/recording state,
+   session-gen guarded, and capped at 20 ticks so it can never run past the session that
+   started it. @returns {void} */
+function watchPostFireLuma(video, gen, armedAt) {
+  let ticks = 0;
+  const tick = () => {
+    if (gen !== sessionGen || ticks >= 20) return;
+    ticks++;
+    const s = sampleVideoLuma(video);
+    console.log(`[PEAR][DEBUG] post-fire watch +${Date.now() - armedAt}ms`,
+      `| luma=${s.ready ? s.avgLuma.toFixed(1) : "n/a"} blackFrac=${s.ready ? s.blackFrac.toFixed(3) : "n/a"}`);
+    if (typeof video.requestVideoFrameCallback === "function") {
+      video.requestVideoFrameCallback(tick);
+    } else {
+      requestAnimationFrame(tick);
+    }
+  };
+  tick();
 }
 
 /**
