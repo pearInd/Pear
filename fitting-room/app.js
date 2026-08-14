@@ -8492,9 +8492,24 @@ function startBillingWindow(gen) {
    frame the recording paint loop draws to its canvas that tick); falls back to a rAF
    poll on videoWidth/currentTime where rVFC is unavailable. sessionGen-guarded so a
    stale session's late frame can never start the new one's billing. */
+/* Minimum run of CONSECUTIVE qualifying frames (both isGarmentApplied and
+   isDressedFrame true, uninterrupted) required before the reveal fires - both floors
+   must be satisfied. isDressedFrame() only proves a frame isn't black; it has no way to
+   tell "Decart's generic/default output" apart from "the actual sent garment", so a
+   frame can pass it while the server is still finishing its transition off the base
+   model. A brief run of consecutive good frames is a much stronger signal that the
+   output has genuinely settled than any single frame can be - and the two floors
+   together stay correct across a wide range of frame rates: MS alone could be satisfied
+   by one stale frame sitting for 300ms with no new decode, and FRAMES alone could be
+   satisfied in a few ms on a very high frame rate stream. */
+const MODEL_READY_STABLE_FRAMES = 3;     // minimum consecutive qualifying decodes
+const MODEL_READY_STABLE_MS     = 300;   // ...spanning at least this many ms
+
 function armFirstFrameBilling(video, gen) {
   if (!video || billingStarted || gen !== sessionGen) return;
   let done = false;
+  let stableSinceMs = null;    // Date.now() of the first frame in the current unbroken qualifying run
+  let stableFrameCount = 0;    // length of that run; reset to 0 the instant a frame fails either gate
   /* DEBUG WRAPPER: window.__pearDebugFrameTiming - verbose trace of the isGarmentApplied
      / isDressedFrame race this function gates on, to test a specific hypothesis: that
      isDressedFrame() (which only proves the frame ISN'T BLACK, never that it matches the
@@ -8518,26 +8533,44 @@ function armFirstFrameBilling(video, gen) {
     dressedFrameReady = true;            // model-ready signal shared with the recorder (startRecording)
     if (frameTimingDebug) {
       console.log(`[PEAR][DEBUG] armFirstFrameBilling FIRED at +${Date.now() - armedAt}ms`,
-        `since arming (isGarmentApplied=${isGarmentApplied})`);
+        `since arming (isGarmentApplied=${isGarmentApplied}, stableFrameCount=${stableFrameCount},`,
+        `stableFor=${stableSinceMs !== null ? Date.now() - stableSinceMs : "n/a"}ms)`);
       watchPostFireLuma(video, gen, armedAt);   // keep sampling briefly - see if the frame is still settling
     }
     startBillingWindow(gen);
   };
-  // TWO independent gates, both required before firing - each closes a gap the other
-  // doesn't cover:
+  // THREE independent gates, ALL required before firing - each closes a gap the others
+  // don't cover:
   //  (1) isGarmentApplied - rtClient.set() has resolved, so this can't be a stray
   //      raw/undressed passthrough frame that arrived before the apply request even
-  //      went out.
+  //      went out. NEVER bypassed: a false here always resets the stability run below
+  //      and re-schedules, so the reveal cannot fire while this is false, full stop.
   //  (2) isDressedFrame() - the frame is verified non-black, so it can't be the ~1s of
   //      blank/black placeholder Decart's server can still emit for a beat AFTER the
   //      apply was acknowledged (see the BLACK-FRAME FIX note in startRecording).
+  //  (3) MODEL_READY_STABLE_FRAMES/_MS - (1) and (2) passing on a SINGLE frame is not
+  //      enough: isDressedFrame() cannot distinguish "the real garment" from "Decart's
+  //      generic/default output, which also isn't black" - a frame can pass both (1) and
+  //      (2) while the server is still finishing its transition off the base model. A
+  //      short run of CONSECUTIVE frames that keep passing is what actually distinguishes
+  //      "settled" from "mid-transition, coincidentally not black this tick". Any frame
+  //      that fails (1) or (2) resets the run to zero - this must be an UNBROKEN streak,
+  //      not merely N good frames somewhere in the window.
   // Re-checked on every subsequent decoded frame (rVFC, or the rAF poll below where
-  // rVFC is unavailable) until both hold, THEN fire - so billing, the countdown, and
+  // rVFC is unavailable) until all three hold, THEN fire - so billing, the countdown, and
   // recording (started together in startBillingWindow) all begin on the first frame
   // that is genuinely ready, never before.
   const frameReady = () => {
     if (done || gen !== sessionGen) return;
     const dressed = isDressedFrame();
+    const qualifies = isGarmentApplied && dressed;
+    if (!qualifies) {
+      stableSinceMs = null;
+      stableFrameCount = 0;
+    } else {
+      if (stableSinceMs === null) stableSinceMs = Date.now();
+      stableFrameCount++;
+    }
     if (frameTimingDebug) {
       const now = Date.now();
       if (now - lastLogAt >= 80) {   // throttled - avoid one line per decoded frame
@@ -8545,10 +8578,12 @@ function armFirstFrameBilling(video, gen) {
         const s = sampleVideoLuma(video);
         console.log(`[PEAR][DEBUG] frame check +${now - armedAt}ms | isGarmentApplied=${isGarmentApplied}`,
           `| luma=${s.ready ? s.avgLuma.toFixed(1) : "n/a"} blackFrac=${s.ready ? s.blackFrac.toFixed(3) : "n/a"}`,
-          `| dressed=${dressed}`);
+          `| dressed=${dressed} | stableFrameCount=${stableFrameCount}`,
+          `| stableFor=${stableSinceMs !== null ? now - stableSinceMs : "n/a"}ms`);
       }
     }
-    if (!isGarmentApplied || !dressed) {
+    const stableLongEnough = stableSinceMs !== null && (Date.now() - stableSinceMs) >= MODEL_READY_STABLE_MS;
+    if (!qualifies || stableFrameCount < MODEL_READY_STABLE_FRAMES || !stableLongEnough) {
       if (typeof video.requestVideoFrameCallback === "function") {
         video.requestVideoFrameCallback(frameReady);
       } else {
