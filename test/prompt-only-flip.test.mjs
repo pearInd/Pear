@@ -65,7 +65,11 @@ function makeHarness({ composite = true } = {}) {
     activeImageOf: () => "https://cdn.test/front.jpg",
     referenceImageFor: async (_i, _a, out) => { out.composite = composite; return sandbox._ref; },
     compositeActiveFor: () => composite,
-    galleryOf: () => ({ front: "https://cdn.test/front.jpg", back: "https://cdn.test/back.jpg" }),
+    galleryOf: () => sandbox._gallery,
+    /* Reached only by applyGarment()'s last-ditch recovery sweep - the real one proxies an
+       http(s) URL and passes a data:/blob: one through, so identity is a faithful stub for
+       "this URL is usable as a reference". */
+    garmentImageRef: (u) => u || undefined,
     distinctBackOf: () => "https://cdn.test/back.jpg",
     sameImage: (a, b) => a === b,
     activeBackIsReal: () => true,
@@ -80,6 +84,7 @@ function makeHarness({ composite = true } = {}) {
     _angle: "front",
     _profile: false,
     _ref: null,
+    _gallery: { front: "https://cdn.test/front.jpg", back: "https://cdn.test/back.jpg" },
   };
   const body =
     "let lastSentImageRef = null; let rtImageOnWire = false;\n" +
@@ -224,13 +229,39 @@ console.log("\n── single-asset mode: each flip changes the picture, so it mu
 
 console.log("\n── a prompt-only path must never be taken with no image on the wire ──");
 {
+  /* THE ITEM STILL HAS ASSETS - referenceImageFor() just came back empty. Since the
+     image-first refactor the prompt no longer describes the garment at all (it says "the
+     exact provided image asset" and stops), so shipping this dispatch with no image would
+     leave Decart conditioning on nothing but its own prior - the tuxedo. applyGarment()
+     now sweeps the item's gallery rather than accepting the empty payload. */
   const { api, sent, sandbox } = makeHarness();
-  sandbox._ref = null;                    // prompt-only payload (no reference resolved at all)
+  sandbox._ref = null;
   sandbox._angle = "front";
   await api.applyGarment(item);
-  await api.applyGarment(item);
+  check("a failed resolve recovers from the item's own gallery instead of shipping empty",
+    sent[0].kind === "set" && sent[0].hasImage === true &&
+    sent[0].image === "https://cdn.test/front.jpg", JSON.stringify(sent[0]));
+  check("...and the recovered reference is recorded on the wire like any other",
+    api.state().rtImageOnWire === true);
+}
+{
+  /* NOTHING TO RECOVER: an item with no gallery, no img and no composite - a malformed
+     catalog entry or a half-built handover. The original invariant still has to hold on
+     this path, and it is the one that matters most here: a payload with no image must
+     never take the setPrompt() fast path, because that path exists ONLY to avoid
+     re-uploading a reference that is already on the wire, and here there is none. Taking
+     it would leave a session permanently undressed with no set() ever attempting a fix. */
+  const { api, sent, sandbox } = makeHarness();
+  sandbox._ref = null;
+  sandbox._gallery = {};
+  sandbox._angle = "front";
+  const bare = { ...item, img: undefined, composite: undefined };
+  await api.applyGarment(bare);
+  await api.applyGarment(bare);
   check("null references never collapse into setPrompt()",
     sent.every((s) => s.kind === "set"), JSON.stringify(sent.map((s) => s.kind)));
+  check("...and no image is invented onto the payload either",
+    sent.every((s) => s.hasImage === false), JSON.stringify(sent.map((s) => s.hasImage)));
   check("and nothing is recorded as being on the wire", api.state().rtImageOnWire === false);
 }
 

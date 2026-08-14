@@ -252,16 +252,22 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   const built = api.buildCompositePrompt(
     { name: "Tee", custom: true, garmentType: "upper_body" }, "front", true);
   const dPos = built.indexOf("EDGE-ON: keep their full front-to-back depth");
-  const subPos = built.indexOf("Replace their");
+  const subPos = built.indexOf("Fit and replace the user's current");
   /* ORDER REVERSED, deliberately, by the grey-shirt regression. The depth directive used
      to lead the substitution on the argument that at 90 degrees the body is what is being
      got wrong. That stopped being true: what was being got wrong was the GARMENT - the
      model dropped the referenced shirt entirely and rendered a plain grey one, at every
      angle. So the reference binding and its asset lock now lead, and the edge-on
      directive follows them. Leading tokens dominate; they should carry the instruction
-     the session actually fails on. */
-  check("buildCompositePrompt leads with the garment binding, then the depth directive",
-    dPos !== -1 && subPos !== -1 && subPos < dPos, `substitute@${subPos} depth@${dPos}`);
+     the session actually fails on.
+
+     THE SAME RULE, ONE STEP FURTHER, after the tuxedo report: the binding is no longer a
+     substitution sentence built from catalog fields ("Replace their top with the white
+     t-shirt in the reference image") but garmentAnchor(), which points at the image and
+     describes nothing. The ORDERING claim is unchanged and is what this still asserts -
+     only the string that occupies position zero has changed. */
+  check("buildCompositePrompt leads with the image anchor, then the depth directive",
+    dPos !== -1 && subPos === 0 && subPos < dPos, `anchor@${subPos} depth@${dPos}`);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false)));
@@ -303,19 +309,28 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   check("still instructs the side be built from the two reference panels",
     /build the side by continuing its front and back panels/.test(clause),
     clause.slice(-400));
-  /* The symptom moved clause. "their own shirt showing" now lives in the asset lock,
-     which is CORE and rides EVERY pose - not just edge-on - because the grey-shirt
-     regression hit front-facing frames too. */
-  /* The asset lock lives in the BUILDERS, not in angleClause - angleClause supplies the
-     panel contract and pose, the builder supplies the substitution it guards. Asserted
-     against the builder at both poses, because the grey-shirt regression hit front-facing
-     frames too, so a lock that only rode edge-on would miss most of it. */
+  /* The symptom moved clause. "their own shirt showing" lived in DENSE.assetLock, which
+     was CORE and rode EVERY pose - not just edge-on - because the grey-shirt regression
+     hit front-facing frames too.
+
+     THE ASSET LOCK IS NOW THE ANCHOR'S OWN SECOND HALF. The tuxedo report retired the
+     standalone enumeration ("never invent a garment, jacket, coat, suit, tuxedo, tie,
+     bowtie or badge"): with no negative_prompt field on Decart's set(), every noun in a
+     ban ships inside the POSITIVE prompt, where a named garment is a token the sampler
+     can steer TOWARD. garmentAnchor() carries the one directive that mattered - replace
+     the shopper's garment strictly from the provided asset, invent nothing - in the same
+     breath as the instruction it guards, which is where the file always argued it
+     belonged ("separating them by a shed-able clause is how the negative could go
+     missing while the positive stayed"). Asserted at both poses, unchanged. */
   const { api: lockApi } = run({ distinctBack: BACK });
   const lockItem = { name: "Tee", custom: false, garmentType: "upper_body" };
   for (const prof of [false, true]) {
-    check(`the asset lock names the symptom at inProfile=${prof}`,
-      /never leave their own top showing/.test(lockApi.buildCompositePrompt(lockItem, "front", prof)),
-      lockApi.buildCompositePrompt(lockItem, "front", prof).slice(0, 400));
+    const out = lockApi.buildCompositePrompt(lockItem, "front", prof);
+    check(`the anchor carries the replacement directive at inProfile=${prof}`,
+      /Fit and replace the user's current upper garment strictly using the exact provided image asset/.test(out),
+      out.slice(0, 400));
+    check(`...and its anti-invention half at inProfile=${prof}`,
+      /without generating any tuxedos, suits, or unrequested garments/.test(out), out.slice(0, 400));
   }
 
   /* THE REGRESSION GUARD survives compression, and had to: the shortest phrasing of this
@@ -356,44 +371,56 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
   const built = api.buildCompositePrompt(item, "front", true);
   const latPos = built.indexOf("EDGE-ON: keep their full front-to-back depth");
-  const subPos = built.indexOf("Replace their");
-  const lockPos = built.indexOf("Never invent a garment, jacket");
+  const subPos = built.indexOf("Fit and replace the user's current");
+  const lockPos = built.indexOf("without generating any tuxedos");
+  const panelPos = built.indexOf("Use the LEFT half only");
   /* Depth and lateral are ONE clause now, and both follow the binding. The ordering that
      matters after the grey-shirt regression is: which garment (and the ban on inventing
-     one), THEN how to build its side. */
-  check("buildCompositePrompt orders binding → asset lock → edge-on directive",
-    subPos !== -1 && lockPos > subPos && latPos > lockPos,
-    `substitute@${subPos} lock@${lockPos} edge-on@${latPos}`);
+     one), THEN how to build its side. The binding and the ban are one sentence pair now
+     (garmentAnchor) rather than two shed-able clauses, so their relative order is fixed
+     by construction - what is still worth pinning is that BOTH precede the panel
+     contract, which in turn precedes the edge-on directive. */
+  check("buildCompositePrompt orders anchor → anti-invention → panel contract → edge-on",
+    subPos === 0 && lockPos > subPos && panelPos > lockPos && latPos > panelPos,
+    `anchor@${subPos} lock@${lockPos} panel@${panelPos} edge-on@${latPos}`);
   check("...and omits the lateral clause entirely on a square-on frame",
     !LATERAL_MARKER.test(api.buildCompositePrompt(item, "front", false)));
 }
 
-console.log("\n── §3c MODEL-AGNOSTIC EXTRACTION rides BOTH orientation states ──");
+console.log("\n── §3c THE ANCHOR rides BOTH orientation states ──");
 {
-  /* The reference figure's anatomy bleeds at every angle, so unlike the two clauses above
-     this one is NOT profile-gated - it must be present square-on and edge-on alike. Asserted
-     here because this is the harness that can drive both states; the clause's own CONTENT
-     and its coverage of the non-composite builders live in model-agnostic.test.mjs.
-     (Stubbed as _MODEL_AGNOSTIC - the constant sits outside this file's extracted slice,
-     same as STRICT_INPAINT.) */
+  /* WHAT THIS SECTION USED TO ASSERT, and why it changed. DENSE.modelAgnostic ("ignore
+     the reference model's body; fit the cloth to THIS person") was pinned here as NOT
+     profile-gated: the reference figure's anatomy bleeds at every angle, so it had to be
+     present square-on and edge-on alike. It was demoted CORE → HIGH → MED as grounding
+     clauses displaced it, and edge-on it already shed.
+
+     The image-first refactor retired it from assembly outright, along with every other
+     clause that was neither the anchor nor structural - see garmentAnchor() for the
+     mechanism and the DENSE table for the one-line restore. The property this section
+     exists to guard (the load-bearing directive must survive BOTH pose states, because a
+     clause that quietly sheds at 90 degrees is indistinguishable from one that was never
+     added) is unchanged; it now guards the anchor, which is what carries the grounding
+     that modelAgnostic was progressively demoted behind.
+
+     THE LOSS, recorded rather than dropped: the reference model's build can bleed into a
+     rendered frame again, at every angle now instead of only edge-on. That is the known
+     cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  /* DEMOTED to MED by the grey-shirt regression, and this records the cost honestly.
-     Square-on it survives; EDGE-ON it now sheds, because the merged edge-on directive
-     plus the asset lock take the room it used to have. That is a real loss - the
-     reference model's build can bleed into a 90-degree frame again - and it was the
-     right trade only because the failure it competes with is worse: at edge-on the model
-     was dropping the referenced garment entirely and inventing a plain grey shirt.
-     Grounding the garment outranks refining whose body it is draped on. */
-  check("carries garment isolation square-on, where the budget affords it",
-    /[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", false)));
-  check("EDGE-ON sheds it - recorded as a known cost, not an accident",
-    !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", true)));
-  const built = api.buildCompositePrompt(item, "front", true);
-  check("...but the CORE binding it supports is never shed, at either pose",
-    /in the reference image/.test(built) &&
-    /in the reference image/.test(api.buildCompositePrompt(item, "front", false)),
-    built.slice(0, 300));
+  const ANCHOR = /Fit and replace the user's current upper garment strictly using the exact provided image asset/;
+  for (const prof of [false, true]) {
+    check(`the anchor survives at inProfile=${prof} - never shed, at either pose`,
+      ANCHOR.test(api.buildCompositePrompt(item, "front", prof)),
+      api.buildCompositePrompt(item, "front", prof).slice(0, 300));
+  }
+  check("...and it is the FIRST thing in the prompt at both poses, not merely present",
+    api.buildCompositePrompt(item, "front", false).indexOf("Fit and replace") === 0 &&
+    api.buildCompositePrompt(item, "front", true).indexOf("Fit and replace") === 0);
+  check("the retired isolation clause is no longer assembled at either pose",
+    !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", false)) &&
+    !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", true)),
+    "retired deliberately by the image-first refactor - see DENSE's restore note");
 }
 
 console.log("\n── §4 DECOUPLING: profile changes the POSE, never the panel/asset ──");
@@ -691,28 +718,29 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
   const square = api.buildCompositePrompt(item, "front", false);
   const built  = api.buildCompositePrompt(item, "front", true);
-  /* THE SHED LADDER, re-pinned after the grey-shirt regression moved everything down a
-     rung. The reference binding and its asset lock now take room that the polish clauses
-     used to have, so temporal/photorealism are shed at BOTH poses, and body fidelity is
-     shed edge-on (where the merged EDGE-ON directive already asserts "keep their full
-     front-to-back depth" and so covers the same ground).
+  /* THE SHED LADDER, re-pinned twice: first by the grey-shirt regression (which moved
+     everything down a rung to make room for the reference binding), then by the tuxedo
+     report, which stopped shedding clauses one at a time and RETIRED the whole
+     non-structural tier. What is assembled now is the anchor, the reference's layout, the
+     pose, the passthrough clamps and - edge-on - the depth/lateral directive. Nothing
+     that DESCRIBES the garment or the body survives at either pose.
 
-     Stated as explicit expectations rather than left implicit: each of these is a real
+     Stated as explicit expectations rather than left implicit: each retirement is a real
      loss, and the only reason it is acceptable is that the alternative was the model
      rendering a garment nobody selected. */
-  check("temporal/photorealism polish is shed at both poses - grounding took the room",
+  check("temporal/photorealism polish is assembled at neither pose",
     !/Stable print, no flicker/.test(square) && !/Stable print, no flicker/.test(built));
-  check("body fidelity survives square-on...",
-    /never slim them/.test(square), square.slice(-260));
-  check("...and is shed edge-on, where the EDGE-ON directive already asserts the depth",
-    !/never slim them/.test(built) && /keep their full front-to-back depth/.test(built),
-    built.slice(-260));
-  check("the passthrough clamp survives at BOTH poses (priority 3, top of the droppable tier)",
+  check("body fidelity is retired at both poses now, not merely shed edge-on",
+    !/never slim them/.test(square) && !/never slim them/.test(built), square.slice(-260));
+  check("...while the EDGE-ON directive still asserts the depth it used to overlap with",
+    /keep their full front-to-back depth/.test(built) &&
+    !/keep their full front-to-back depth/.test(square), built.slice(-260));
+  check("the passthrough clamp survives at BOTH poses (top of the droppable tier)",
     /pass through untouched/.test(square) && /pass through untouched/.test(built));
-  check("...as does the reference binding and its asset lock (priority 1, never shed)",
-    /in the reference image/.test(square) && /in the reference image/.test(built) &&
-    /Never invent a garment, jacket/.test(square) &&
-    /Never invent a garment, jacket/.test(built));
+  check("...as does the anchor and its anti-invention half (CORE, never shed)",
+    /Fit and replace the user's current/.test(square) && /Fit and replace the user's current/.test(built) &&
+    /without generating any tuxedos/.test(square) &&
+    /without generating any tuxedos/.test(built));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

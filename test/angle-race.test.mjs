@@ -220,31 +220,65 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
      and full-look paths exposed, so assert against the SOURCE that every builder carries
      both - a regex on one rendered clause cannot see the other three builders. */
   /* COMPRESSED. STRICT_INPAINT and ROTATION_CONTINUITY ran 1,650 and 458 characters -
-     the first alone was nearly twice the entire 226-token budget - and are now
-     DENSE.bodyFidelity / DENSE.inpaintLock / DENSE.rotation. The PROPERTY these checks
-     encode is unchanged, and is the one worth keeping: every builder carries the
-     body-fidelity and passthrough clamps, on every path, so a new builder cannot ship
-     without them. */
+     the first alone was nearly twice the entire 226-token budget - and became
+     DENSE.bodyFidelity / DENSE.inpaintLock / DENSE.rotation.
+
+     ── THEN THE IMAGE-FIRST REFACTOR SPLIT THEM APART, and this section had to follow.
+     The tuxedo report said the prompt was losing to itself: with no negative_prompt and
+     no image-strength lever on Decart's set(), the only control over how hard the
+     reference image is weighed is how much TEXT sits beside it, and a dozen clauses was
+     too much. So the builders now carry the anchor plus STRUCTURAL clauses only, and the
+     three constants above went different ways:
+
+       inpaintLock  STILL ON EVERY BUILDER. It is structural - it names which regions of
+                    the FRAME are off-limits (face, skin, hands, background) rather than
+                    describing anything - and without it the model repaints the shopper's
+                    room. Unchanged property, asserted exactly as before.
+       bodyFidelity RETIRED FROM ASSEMBLY. Restorable in one line; see the DENSE table's
+                    own note. The check below is now that it is still THERE to restore,
+                    which is the honest form of the assertion once it stopped shipping.
+       rotation     RETIRED FROM ASSEMBLY. Its mechanical half - the prompt-only flip and
+                    the OrientationWatcher's turn hold - is code, not prompt, and is
+                    untouched; prompt-only-flip.test.mjs and turn-hold.test.mjs still
+                    cover the part that actually keeps the garment on through a turn.
+
+     buildPrompt/buildCustomPrompt now DELEGATE to imageFirstPrompt(), so the clamp lives
+     in the shared assembler rather than being copied into each - matched here explicitly
+     rather than regexing a function body that no longer contains it. */
   const builders = [
-    ["buildPrompt (catalog)", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
-    ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
+    ["imageFirstPrompt (catalog + upload)", /function imageFirstPrompt\(item, angleText\)[\s\S]*?\n}/],
     ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
     ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
   for (const [name, re] of builders) {
     const body = (SRC.match(re) || [""])[0];
-    check(`${name} carries the body-fidelity clamp`,
-      body.includes("DENSE.bodyFidelity"), body.slice(-300));
     check(`${name} carries the face/background passthrough clamp`,
       body.includes("DENSE.inpaintLock"), body.slice(-300));
+    check(`${name} leads with the image anchor`,
+      /^\s*\[P\.CORE, garmentAnchor\(/m.test(body), body.slice(0, 300));
+  }
+  /* The delegation itself, so "the clamp is in the shared assembler" cannot quietly
+     become "the catalog path no longer reaches the shared assembler". */
+  for (const entry of ["buildPrompt", "buildCustomPrompt"]) {
+    const body = (SRC.match(new RegExp(`function ${entry}\\(item, angleText[\\s\\S]*?\\n}`)) || [""])[0];
+    check(`${entry}() routes through imageFirstPrompt(), inheriting the clamps`,
+      /return imageFirstPrompt\(item, angleText\)/.test(body), body.slice(-200));
   }
 
-  check("the body-fidelity clamp still forbids slimming or idealizing the shopper",
-    /never slim them/.test(SRC));
   check("the passthrough clamp still names face, skin and background",
     /Face, skin, hands and background pass through untouched/.test(SRC));
-  check("rotation continuity still promises the garment stays on through a turn",
+  check("the retired body-fidelity clamp is still on file, one line from being restored",
+    /bodyFidelity:\s+"Keep their real body volume; never slim them\."/.test(SRC),
+    "retiring a clause from assembly must not delete the clause");
+  check("...as is rotation continuity",
     /The garment stays on through any turn/.test(SRC));
+  /* THE NEW INVARIANT, and the one the tuxedo report is actually about: no builder may
+     describe the garment. A colour word, a subtype noun or an enumerated list of banned
+     garments is text the model can satisfy without ever reading the reference image. */
+  const codeOnly = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  check("no builder assembles a garment DESCRIPTION alongside the reference",
+    !/colorName\(activeColorOf\(/.test(codeOnly) && !/DENSE\.assetLock/.test(codeOnly),
+    "the reference image is the description; a sentence beside it competes with it");
 }
 
 console.log("\n── single-view items (no AI Auto) now get a truthful side clause too ──");
