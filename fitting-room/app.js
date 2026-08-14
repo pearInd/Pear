@@ -589,6 +589,12 @@ let busy = false;
    reference at all. */
 let lastSentImageRef = null;   // the exact object last handed to set({ image })
 let rtImageOnWire = false;     // has THIS session received an image yet?
+/* The prompt half of the same bookkeeping. Under strict image-only conditioning the
+   prompt is one frozen string, so "same image + same prompt" is a dispatch that provably
+   changes nothing on the wire - see the skip in applyGarment(). Reset alongside the two
+   above, for the same reason: believing a fresh session already holds this prompt would
+   let the first apply skip its own set(). */
+let lastSentPrompt = null;
 
 /* Pre-minted ek_ token cache - populated by warmupSDKAndToken() on room entry so
    mintEphemeralToken() can skip the network round-trip at go-live time. */
@@ -740,6 +746,7 @@ async function debugReinjectGarment(opts = {}) {
   }
   lastSentImageRef = null;   // bypass applyGarment()/applyLook()'s "sameImageOnWire" shortcut -
   rtImageOnWire = false;     // this must land on the full rtClient.set({ image }) path, not setPrompt()
+  lastSentPrompt = null;     // ...and past the "prompt unchanged too" no-op skip in front of it
   console.log("[PEAR][DEBUG] reinject: forcing a fresh rtClient.set() for the active garment/look…");
   try {
     await applyActive();
@@ -2834,6 +2841,7 @@ async function connectRealtime() {
      Decart generating against no garment reference at all. */
   lastSentImageRef = null;
   rtImageOnWire = false;
+  lastSentPrompt = null;
   debugStreamCheckedThisGen = false;   // DEBUG WRAPPER: re-arm the undressed-stream check for this session
   if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
 
@@ -2997,6 +3005,7 @@ function teardown() {
   // clearing here as well keeps the invariant true at every point the session ends.
   lastSentImageRef = null;
   rtImageOnWire = false;
+  lastSentPrompt = null;
 
   // Bug 3 fix: stop this session's cloned camera tracks (the WebRTC sender side).
   // localStream - the real camera/preview - is intentionally left running.
@@ -4770,12 +4779,39 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
 
    Gated by COMPOSITE_MODE. If double-rendering reappears, flip that off and the
    per-orientation single-asset path (AI Auto) is back, unchanged. */
-/* THE KILL SWITCH. Composite mode is the default per the current product decision.
-   If double-logo / duplicated-garment rendering reappears - the symptom that got the
-   previous front|back stitcher removed - append ?composite=0 to the fitting-room URL
-   (or flip COMPOSITE_DEFAULT) and the per-orientation single-asset path is restored
-   with no other change. Keep both paths working; do not delete one for the other. */
-const COMPOSITE_DEFAULT = true;
+/* THE KILL SWITCH, NOW THROWN - and this is the one behavioural change in strict
+   image-only mode that is not a prompt edit, so read this before flipping it back.
+
+   The composite is a SPLIT image: two garment views side by side, a sampled gutter
+   between them, and 'FRONT'/'BACK' text markers below. Nothing about that layout is
+   self-evident to an image-conditioned model. Every bit of it was explained in words -
+   DENSE.contract named it a split photo, DENSE.select named the half in play,
+   DENSE.ignoreFurniture disclaimed the gutter and the markers - and IMAGE_ONLY_PROMPT
+   removes all three. What is left is a reference the model has to interpret unaided:
+   two garments, or a collage, or a garment with a seam down it. This file already has
+   the record of what that produces (23f5953: both panels' designs rendered on one
+   surface), and an ambiguous reference is precisely the condition under which a
+   diffusion model falls back on its own prior - which is the tuxedo.
+
+   So strict image-only sends the per-orientation SINGLE asset instead: one clean
+   photograph of the garment, front or back, swapped by the OrientationWatcher when the
+   shopper turns. That reference needs no explanation at all, which is the entire point
+   of the mode. The path is not new - it is the pre-composite behaviour, still tested,
+   still the fallback whenever a stitch fails.
+
+   WHAT THROWING THIS COSTS, honestly: an orientation flip now changes the reference, so
+   it re-uploads the image mid-turn instead of taking applyGarment()'s prompt-only fast
+   path. That re-upload is what the composite was introduced to avoid, and the flicker it
+   can cause is documented at that fast path. Whether it actually causes it was already
+   in question - see window.__pearDebugForceFullReupload, added to test exactly that.
+   Only items shipping a genuine distinct rear photo were ever affected either way.
+
+   TO GO BACK: append ?composite=1 to the fitting-room URL (unchanged, and the right way
+   to A/B this against a live session), or flip this constant. If you flip it, restore
+   DENSE.contract + DENSE.select in buildCompositePrompt() in the same commit - a split
+   reference with no panel contract is the worst of both modes. Keep both paths working;
+   do not delete one for the other. */
+const COMPOSITE_DEFAULT = false;
 const COMPOSITE_MODE = (() => {
   try {
     const q = new URLSearchParams(location.search).get("composite");
@@ -5848,71 +5884,72 @@ const COMPOSITE_QUALITY =
 const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
 
 /* ╔══════════════════════════════════════════════════════════════════════════╗
-   ║  THE IMAGE-FIRST ANCHOR - the whole substitution, in one sentence pair.   ║
+   ║  STRICT IMAGE-ONLY CONDITIONING - one static string, for every dispatch.  ║
    ╚══════════════════════════════════════════════════════════════════════════╝
-   THE REPORTED FAILURE THIS REPLACES: a Spider-Man graphic tee selected in the
-   catalog, and Decart streaming back a full tuxedo with a bowtie. The reference
-   image on the wire was correct; the model simply was not rendering it.
+   THE REPORTED FAILURE: a Spider-Man graphic tee, selected in the catalog and
+   correctly delivered to the wire, rendering as a tuxedo with a bowtie. Twice - the
+   first fix (an image-first anchor, with the garment description removed but the
+   structural clauses kept) did not stop it.
 
-   THE MECHANISM, and why the previous shape invited it. Decart's realtime set()
-   takes { prompt, image, enhance } and NOTHING else - no negative_prompt, no
-   image-strength, no ControlNet weight. The only lever over how hard the image is
-   weighed against the text is how much text there is. What this file was sending
-   was a stack of a dozen independently-justified clauses, and two of them were
-   actively fighting the reference:
+   THE MECHANISM. Decart's realtime set() takes { prompt, image, enhance } and NOTHING
+   else - no negative_prompt, no image-strength, no ControlNet weight (verified against
+   @decartai/sdk@0.1.5 setInputSchema). The ONLY lever this app has over how hard the
+   reference image is weighed against the text is HOW MUCH TEXT THERE IS. Every
+   remaining clause, however structural, is another token competing with the pixels for
+   the model's attention, and the first fix left roughly a dozen of them.
 
-     · THE GARMENT DESCRIPTION. buildPrompt() interpolated catalog metadata into
-       "Replace their top with white t-shirt: exact colour, texture and print."
-       That is a TEXT description of a garment, and a diffusion model is free to
-       satisfy a text description out of its own prior - which is exactly what
-       "render something plausible in the shirt-shaped region" means. The pixels
-       of the actual Spider-Man print were competing with a sentence that never
-       mentioned Spider-Man, and losing.
-     · THE ENUMERATED NEGATIVE. The retired DENSE.assetLock spelled out "never
-       invent a garment, jacket, coat, suit, TUXEDO, tie, BOWTIE or badge". With
-       no negative-prompt field those nouns go into the POSITIVE prompt, and a
-       named noun in a positive prompt is a token the sampler can steer toward.
-       The clause written to stop the tuxedo is a plausible reason one appeared.
+   THE MODE THIS IMPLEMENTS: the prompt stops being generated at all. It is one frozen
+   string, byte-identical on every dispatch, for every garment, every angle, every pose
+   and every shopper. It cannot contradict the reference because it says nothing the
+   reference could contradict, and it cannot dilute it because there is nothing left to
+   shed. The SDK requires a non-empty prompt, so this is the smallest thing that
+   satisfies that requirement while pointing at the asset.
 
-   THE FIX is to stop describing the garment at all. The reference image IS the
-   description - it carries the colour, the print, the weave and the cut far more
-   precisely than any sentence assembled from catalog fields - so the prompt's only
-   job is to point at it and say "that one, wrapped onto this person". Everything
-   still assembled alongside this anchor is STRUCTURAL: how to read the reference
-   (which half, which side), where the body is, and which regions of the frame must
-   pass through untouched. Nothing left in any builder describes what the garment
-   looks like.
+   WORDING IS PRODUCT-SPECIFIED - do not paraphrase, do not interpolate, do not append.
+   `${...}` inside this string is how a description gets back in, one field at a time.
 
-   WORDING IS PRODUCT-SPECIFIED - do not paraphrase it. Only the region noun varies,
-   because "upper garment" is a lie for the lower_body half of the catalog (Nimbus,
-   the trousers) and for a full look, and a prompt that names the wrong region is the
-   one class of text-vs-image contradiction this refactor exists to remove.
+   ── WHAT WENT WITH IT, and how to get any of it back ─────────────────────────
+   Every clause the builders assembled is retired from the prompt path. They are all
+   still on file (see the DENSE table below, and the RETIRED block above it) with the
+   reasoning that produced them, because each one is a reproduced regression:
 
-   ONE HONEST RESERVATION, recorded because it is the likeliest thing to revisit: the
-   anchor still names "tuxedos, suits" in its own negative half, so the summoning
-   mechanism described above is reduced (one clause, not an enumeration) but not
-   eliminated. If tuxedos survive this change, deleting that trailing clause - leaving
-   "Preserve all graphic details, colors, and textures from the reference image." - is
-   the next thing to try, NOT adding more prohibitions. */
-const ANCHOR_REGION = Object.freeze({
-  upper_body: "upper garment",
-  lower_body: "lower garment",
-  look:       "upper and lower garments",
-});
+     · the garment description  colour word + subtype noun, interpolated from catalog
+                                metadata. The original tuxedo cause - a text
+                                description is something a diffusion model can satisfy
+                                from its own prior instead of from the reference.
+     · assetLock                the enumerated ban ("never invent a ... suit, TUXEDO,
+                                tie, BOWTIE"). With no negative_prompt field those
+                                nouns shipped in the POSITIVE prompt, where a named
+                                garment is a token the sampler can steer toward.
+     · contract + select        the FRONT|BACK panel contract. Retiring this is what
+                                forces COMPOSITE_DEFAULT to false - see its comment; a
+                                split reference is unreadable without the text that
+                                explains it, and shipping one anyway is how the
+                                23f5953 double-print bug comes back.
+     · pose / poseProfile       front/back/edge-on. The reference asset itself now
+                                carries the orientation (the watcher swaps the photo),
+                                so the pose sentence is the model's job to read off
+                                the live frame, which is where it always came from.
+     · profileLateral           the 90-degree flank/depth directive.
+     · inpaintLock              face/skin/hands/background passthrough. THE LARGEST
+                                LOSS and the one to restore first if the model starts
+                                repainting the shopper's room or face: nothing else
+                                stands between this prompt and a regenerated scene.
+     · keepTop / keepBottoms    the opposite-layer lock.
+     · ignoreFurniture          the "don't paint the panel divider onto the shirt" ban.
+     · fitSentence              the size-override selector's only route into the render.
+                                The UI still works and still re-applies; the chosen size
+                                no longer changes what Decart draws.
 
-/**
- * The complete garment directive: point at the reference image, forbid inventing
- * around it. Every builder in this file opens with exactly this and adds only
- * structural clauses after it.
- * @param {"upper_body"|"lower_body"|"look"} [target] which region is being replaced
- * @returns {string}
- */
-function garmentAnchor(target) {
-  const region = ANCHOR_REGION[target] || ANCHOR_REGION.upper_body;
-  return `Fit and replace the user's current ${region} strictly using the exact provided image asset.` +
-    " Preserve all graphic details, colors, and textures from the reference image" +
-    " without generating any tuxedos, suits, or unrequested garments.";
-}
+   TO RESTORE ONE: it is a two-line change - reinstate fitPrompt() in the builder that
+   needs it and add [P.CORE, DENSE.<clause>] beside IMAGE_ONLY_PROMPT. fitPrompt(),
+   clampPromptForWire() and the whole DENSE table are deliberately left intact for
+   exactly that. Restore ONE at a time and re-test: the entire premise of this mode is
+   that clause count is what was drowning the image. */
+const IMAGE_ONLY_PROMPT =
+  "Fit and render the exact garment provided in the reference image onto the target subject." +
+  " Strictly preserve all graphic patterns, colors, and cuts from the image" +
+  " without inventing any new clothing, jackets, or suits.";
 
 /* The dense clause table. Deliberately lower-case and lightly punctuated wherever the
    meaning survives it: ALL-CAPS and heavy punctuation both tokenize worse than prose,
@@ -6103,72 +6140,38 @@ function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
 }
 
 /**
- * Build the COMPLETE prompt for a split FRONT|BACK composite reference.
+ * The prompt for a composite reference. Returns IMAGE_ONLY_PROMPT.
  *
- * ORDER IS THE POINT, and it has moved once before. The original shape was
- * `buildPrompt(item) + angleClause(item)`: 1,403 characters of colour / anatomy / fit /
- * quality / hem / hard-negative boilerplate AHEAD of the panel contract, pushing the
- * single most important instruction in composite mode past the halfway mark of a 2,636
- * character prompt. Lucy is a realtime diffusion model regenerating every frame from that
- * prompt and the leading tokens dominate, so that boilerplate was not merely wasteful -
- * it was outranking the contract. The fix then was to put the panel contract first.
+ * ORDER USED TO BE THE POINT, and it moved twice before it stopped mattering. The
+ * original shape was `buildPrompt(item) + angleClause(item)`: 1,403 characters of colour /
+ * anatomy / fit / quality / hem / hard-negative boilerplate AHEAD of the panel contract,
+ * pushing the single most important instruction in composite mode past the halfway mark of
+ * a 2,636 character prompt. Lucy regenerates every frame from that prompt and the leading
+ * tokens dominate, so that boilerplate was not merely wasteful - it was outranking the
+ * contract. Fix one: put the panel contract first. Fix two (the tuxedo report): put the
+ * image anchor first, because "which half of the reference to read" only matters once the
+ * model is reading the reference at all.
  *
- * IT LEADS NO LONGER, and the tuxedo report is why. "Which half of the reference to read"
- * is only the most important instruction once the model has agreed to read the reference
- * AT ALL; when it invents a garment outright, the panel contract is describing a picture
- * the output does not come from. So the anchor - "render the provided asset, invent
- * nothing" - takes the lead, and the contract follows it. Everything that used to trail
- * as a qualifier and DESCRIBED the garment (catalog colour, subtype noun, the enumerated
- * anti-invention list) is gone; see garmentAnchor() for the mechanism. What remains after
- * the anchor is structural only: the reference's layout, the pose, the passthrough locks.
+ * FIX THREE - the tuxedo survived both - IS THAT THERE IS NOTHING TO ORDER. Every clause
+ * is a token competing with the pixels, and ordering them only chooses which competitor
+ * goes first. See IMAGE_ONLY_PROMPT for the mechanism and the full list of what this gave
+ * up. The composite path itself is standing down with it (COMPOSITE_DEFAULT = false): a
+ * split FRONT|BACK reference is only legible alongside the panel contract that explains
+ * it, and that contract is exactly the text this mode removes.
+ *
+ * THE PARAMETERS ARE RETAINED AND DELIBERATELY UNUSED. They are the seam: applyGarment()
+ * still freezes `angleAtStart`/`profileAtStart` before its awaits and still threads them
+ * here, so the TOCTOU plumbing that keeps the reference and the prompt describing the same
+ * moment stays live and stays tested (angle-race, side-profile §6). Restoring any clause
+ * is then a two-line edit here, not a re-derivation of that plumbing.
  *
  * @param {object} item   the active garment (catalog or custom upload)
- * @param {"front"|"back"} angle  the orientation the payload is being built FOR - pass
- *   applyGarment()'s frozen `angleAtStart`, never a fresh effectiveAngle() read.
+ * @param {"front"|"back"} angle  retained; see above
+ * @param {boolean} inProfile     retained; see above
  * @returns {string}
  */
-function buildCompositePrompt(item, angle, inProfile) {
-  const a = angle === "back" ? "back" : "front";
-  const lower = item.garmentType === "lower_body";
-
-  return fitPrompt([
-    /* THE ANCHOR LEADS. Leading tokens dominate this model, and the one instruction the
-       session actually fails on is "render THAT image, not something like it" - so it
-       takes the position the panel contract used to hold. The contract follows one line
-       later and loses nothing by it: it is a statement about the reference's LAYOUT, and
-       the anchor it now trails is what makes the reference matter in the first place. */
-    [P.CORE, garmentAnchor(item.garmentType)],
-    /* The two structural facts about the provided asset: it is a split image, and only
-       one half is in play for this frame. Both stay CORE - a split reference read without
-       them is the 23f5953 double-print bug, and neither says anything about what the
-       garment looks like, so neither can compete with the pixels. */
-    [P.CORE, DENSE.contract],
-    [P.CORE, DENSE.select[a]],
-    /* Where the body is. Square-on FRONT is the one case that needs no sentence: the live
-       frame already says it, and DENSE.pose.front only spends budget restating it. Back
-       and edge-on both do need it - the reference alone cannot tell the model which way
-       the shopper has turned. */
-    [P.CORE, inProfile ? DENSE.poseProfile[a] : (a === "back" ? DENSE.pose.back : "")],
-    /* The 90-degree directive, CORE because an edge-on frame shows a band of garment that
-       NEITHER panel contains. Unreferenced, that band is exactly where the model falls
-       back on its own prior - the same substitution the anchor exists to stop, arriving
-       through a spatial gap rather than through the text. */
-    [P.CORE, inProfile ? DENSE.profileLateral : ""],
-    /* The passthrough clamps: which regions of the FRAME the model may not touch. Still
-       structural, so they survive the image-first cut - without them the model is free to
-       repaint the shopper's face and their room, which no amount of garment grounding
-       prevents. Top of the droppable tier, so the anchor and the panel facts always win. */
-    [P.HIGH,  DENSE.inpaintLock],
-    [P.MED,   lower ? DENSE.keepTop : DENSE.keepBottoms],
-    /* Reference-layout hygiene and the size-override feature. LOW, so they are the first
-       to shed under a tight edge-on budget: ignoreFurniture guards a cosmetic artifact (a
-       panel divider painted onto the shirt), and fitSentence carries the shopper's size
-       selection, which is a real shipped control - dropping it from the prompt entirely
-       would silently disable that UI, which is not what an anti-hallucination change is
-       for. */
-    [P.LOW,   DENSE.ignoreFurniture],
-    [P.LOW,   fitSentence(item.garmentType)],
-  ]);
+function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line no-unused-vars
+  return IMAGE_ONLY_PROMPT;
 }
 
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
@@ -6417,6 +6420,12 @@ async function applyGarment(item) {
      remaining assets rather than shipping a prompt with nothing behind it. */
   if (!imageRef) {
     const g = galleryOf(item) || {};
+    /* item.composite is LAST on purpose. It is a split FRONT|BACK image, and strict
+       image-only has no panel contract left to explain one (see COMPOSITE_DEFAULT) - so
+       it is the reference this mode least wants. It stays in the list because it is only
+       reachable when the item has no front, no back and no img at all, and an ambiguous
+       reference still beats none. If it is ever being reached routinely, the item's
+       gallery is broken and that is the bug to fix. */
     for (const candidate of [g.front, g.back, item.img, item.composite]) {
       if (!candidate) continue;
       const recovered = garmentImageRef(candidate);
@@ -6569,6 +6578,33 @@ async function applyGarment(item) {
       "when done capturing the transcript.");
   }
   if (sameImageOnWire) {
+    /* ── NOTHING TO SEND: same image, same prompt ─────────────────────────────
+       This branch could not be reached before strict image-only mode, because the
+       prompt was assembled per angle/pose/garment and every caller that got here had
+       just changed one of them. IMAGE_ONLY_PROMPT is one frozen string, so the payload
+       is now byte-identical to what Decart already holds - both halves of it - and
+       setPrompt() would push a control message that provably changes nothing.
+
+       The re-anchor cadence is what makes this common rather than theoretical:
+       maybeReanchorPrompt() fires ~8 times per session specifically to re-assert the
+       steering, and every one of those now lands here. Skipping is the honest
+       behaviour, but it is worth being clear about what it means -
+
+       THE RE-ANCHOR IS A NO-OP IN THIS MODE. It exists because the model drifts back
+       toward "the person as photographed" mid-session, and re-stating the prompt is how
+       it was pulled back. There is nothing left in the prompt to re-state. The only
+       thing worth re-asserting now is the IMAGE, and that is a full set() with a real
+       bandwidth cost inside a 5s billed window - a deliberate policy choice, not
+       something to fall into by leaving a dispatch running. If drift-reversion returns,
+       the fix is to make the re-anchor force a full re-upload (lastSentImageRef = null
+       before applyActive(), exactly as __pearDebugReinjectGarment does), not to restore
+       a prompt clause purely to give setPrompt() something to carry. */
+    if (payload.prompt === lastSentPrompt) {
+      console.log("[PEAR] no-op update skipped - reference AND prompt both unchanged",
+        `(${angleAtStart}); strict image-only means a re-anchor has nothing to re-assert.`,
+        "Force a real re-upload with window.__pearDebugReinjectGarment().");
+      return;
+    }
     console.log("[PEAR] prompt-only update - reference unchanged, image NOT re-uploaded",
       `(${angleAtStart})`);
     /* THE EXACT STRING HITTING DECART, logged immediately adjacent to the call that sends
@@ -6580,6 +6616,7 @@ async function applyGarment(item) {
     console.log("[DECART PROMPT DEBUG]", payload.prompt, abbrevImg(imageRef),
       "(prompt-only - image already on the wire, unchanged)");
     await rtClient.setPrompt(payload.prompt, { enhance: false });
+    lastSentPrompt = payload.prompt;
     return;
   }
 
@@ -6589,8 +6626,13 @@ async function applyGarment(item) {
   // that doesn't include this - a bare call would throw ReferenceError there.
   if (typeof verifyGarmentAsset === "function") verifyGarmentAsset(payload, "applyGarment");
   await rtClient.set(payload);
+  /* Stamped only AFTER set() resolves, which is what makes a retry correct: applyActive()
+     re-enters this function on a rejection, and if these had been written optimistically
+     the second attempt would see its own reference "already on the wire" and take the
+     prompt-only path - retrying a failed image upload by not uploading the image. */
   lastSentImageRef = imageRef || null;
   rtImageOnWire = !!imageRef;
+  lastSentPrompt = payload.prompt;
 }
 
 /**
@@ -6897,54 +6939,29 @@ const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like lo
    the pair overran. Threaded through here, the orientation clause becomes one more
    priority-tagged part in a single fitPrompt() call - and it ranks CORE, because a prompt
    that has lost its orientation clause renders the wrong side of the garment. */
-function buildPrompt(item, angleText = "") {
-  // "Upload Your Own Garment" keeps its own entry point. Both builders now assemble the
-  // SAME parts - see buildCustomPrompt() for why the two survived the merge.
-  if (item.custom) return buildCustomPrompt(item, angleText);
-  return imageFirstPrompt(item, angleText);
+function buildPrompt(item, angleText = "") {              // eslint-disable-line no-unused-vars
+  return IMAGE_ONLY_PROMPT;
 }
 
 /**
- * Prompt for a user-uploaded ("custom") garment.
+ * Prompt for a user-uploaded ("custom") garment. Returns IMAGE_ONLY_PROMPT.
  *
- * IDENTICAL TO buildPrompt() NOW, and that is the whole result of the image-first
- * refactor rather than an oversight. These two diverged for exactly one reason: a
- * catalog item had metadata to describe ("white t-shirt") and an upload did not, so the
- * custom path pointed at the reference image while the catalog path recited catalog
- * fields. Pointing at the reference image is now what BOTH do, so there is nothing left
- * to differ about - a shopper's uploaded photo and a catalog packshot are the same kind
- * of asset and get the same treatment.
+ * IDENTICAL TO buildPrompt(), and has been since the image-first refactor rather than by
+ * oversight. These two diverged for exactly one reason: a catalog item had metadata to
+ * describe ("white t-shirt") and an upload did not, so the custom path pointed at the
+ * reference image while the catalog path recited catalog fields. Neither describes
+ * anything now, so there is nothing left to differ about - a shopper's uploaded photo and
+ * a catalog packshot are the same kind of asset and get the same treatment.
  *
- * Kept as its own function anyway: it is the documented entry point for the upload flow
- * (buildPrompt() dispatches to it on item.custom, and applyGarment()'s comments name it),
- * and collapsing the two would hide the dispatch rather than simplify it. If the paths
- * ever need to diverge again, the seam is already here.
+ * Kept as its own function because it is the documented entry point for the upload flow
+ * and because the dispatch is a seam worth keeping: if the two ever need to diverge again
+ * (a crop-confidence hint, say), it is already here. buildPrompt() no longer branches to
+ * it - a branch between two identical returns is a false signal that they differ.
  * @param {object} item - a custom item ({ custom:true, garmentType, img, color })
  * @returns {string}
  */
-function buildCustomPrompt(item, angleText = "") {
-  return imageFirstPrompt(item, angleText);
-}
-
-/**
- * The shared single-asset assembly: the anchor, the caller's orientation clause, and the
- * passthrough locks. Nothing here describes the garment - `angleText` (angleClause()'s
- * output) describes which SIDE of it the reference photo shows, which is a structural
- * fact about the asset, not an adjective the model can satisfy from its own prior.
- * @param {object} item @param {string} angleText @returns {string}
- */
-function imageFirstPrompt(item, angleText) {
-  const lower = item.garmentType === "lower_body";
-  return fitPrompt([
-    [P.CORE, garmentAnchor(item.garmentType)],
-    /* CORE, because a prompt that has lost its orientation clause renders the wrong side
-       of the garment - and with the catalog description gone, this is the only remaining
-       statement about WHICH view of the reference is in play. */
-    [P.CORE, angleText],
-    [P.HIGH, DENSE.inpaintLock],
-    [P.MED,  lower ? DENSE.keepTop : DENSE.keepBottoms],
-    [P.LOW,  fitSentence(item.garmentType)],
-  ]);
+function buildCustomPrompt(item, angleText = "") {        // eslint-disable-line no-unused-vars
+  return IMAGE_ONLY_PROMPT;
 }
 
 const APPLY_ATTEMPTS = 2;    // set() tries per apply - see applyActive()
@@ -7113,6 +7130,7 @@ async function applyLook(top, bottom) {
      path against the wrong reference. */
   lastSentImageRef = primaryImage || null;
   rtImageOnWire = !!primaryImage;
+  lastSentPrompt = prompt;
 }
 
 /**
@@ -7120,24 +7138,19 @@ async function applyLook(top, bottom) {
  * simultaneously (a single pass), so a full outfit is rendered together rather
  * than as two separate substitutions.
  */
-function buildLookPrompt(top, bottom, angleText = "") {
-  return fitPrompt([
-    /* The "look" region noun covers BOTH garments in one sentence, which is what makes
-       this a single-pass instruction rather than two substitutions the model can satisfy
-       one at a time. The two catalog descriptions it replaces ("… with white t-shirt and
-       their bottoms with black trousers") were the worst offenders in the file for
-       text-vs-image conflict: two descriptions competing against one stitched reference. */
-    [P.CORE, garmentAnchor("look")],
-    /* Carries DENSE.lookPanels for the stitched TOP/BOTTOM reference - the structural
-       statement of how that image is laid out, the look-mode counterpart of the composite
-       builder's panel contract. */
-    [P.CORE, angleText],
-    /* A full look replaces BOTH layers, so there is no keepTop/keepBottoms to pin here -
-       which makes the face/skin/background lock the ONLY thing standing between this
-       prompt and a regenerated room. It ranks higher here than in the other builders for
-       exactly that reason: it is carrying the whole passthrough contract alone. */
-    [P.HIGH, DENSE.inpaintLock],
-  ]);
+function buildLookPrompt(top, bottom, angleText = "") {   // eslint-disable-line no-unused-vars
+  /* THE ONE PLACE THIS MODE IS A REAL BET RATHER THAN A CLEAN WIN, recorded so it is not
+     discovered by surprise. A full look ships ONE stitched reference holding two garments
+     (TOP over BOTTOM), and DENSE.lookPanels is what told the model that image was two
+     garments to render simultaneously rather than one to choose between. Strict image-only
+     removes it, so the layout now has to carry that entirely on its own - which the
+     stitcher is built for (isolated panels, wide separator band; see stitchLookBlob) but
+     which was never tested without the sentence.
+
+     If a look starts rendering only the shirt, or blending the two, DENSE.lookPanels is
+     the first clause to buy back - and it is the one clause in this file whose absence
+     costs a whole FEATURE rather than a degree of fidelity. */
+  return IMAGE_ONLY_PROMPT;
 }
 
 /* =============================================================================
@@ -9137,7 +9150,7 @@ function stopBilling() {
   sessionGen++;                         // neutralise in-flight onRemoteStream/onConnectionChange
   stopStatsMonitor();
   if (rtClient) { try { rtClient.disconnect(); } catch (_) {} rtClient = null; }
-  lastSentImageRef = null; rtImageOnWire = false;   // session over - nothing is on the wire
+  lastSentImageRef = null; rtImageOnWire = false; lastSentPrompt = null;   // session over - nothing is on the wire
   /* Unlike teardown(), this deliberately leaves the watcher and the paint loop alive for
      the frozen-hold tail - so a turn hold raised a moment before the window closed has
      nothing left to release it, and its overlay (z-index 6, inside #cameraCard) would sit

@@ -28,10 +28,14 @@
    as a full tuxedo with a bowtie. Decart's realtime set() takes { prompt, image, enhance }
    and nothing else - no negative_prompt, no image-strength, no ControlNet weight - so the
    only lever over how hard the reference is weighed against the text is HOW MUCH TEXT
-   THERE IS. app.js was sending a dozen clauses. The fix was to cut the prompt back to an
-   image anchor plus structural directives only, and this clause is not structural: it
-   describes a BODY. It is retired from assembly, kept verbatim in DENSE, restorable in
-   one line.
+   THERE IS. app.js was sending a dozen clauses.
+
+   The first cut kept an image anchor plus the structural directives and dropped this one
+   for describing a BODY rather than a structure. The tuxedo survived it, so the second
+   cut dropped the structural directives too: the prompt is now one frozen string
+   (IMAGE_ONLY_PROMPT), identical on every dispatch. This clause is retired either way,
+   kept verbatim in DENSE, restorable in two lines - the difference is that restoring it
+   now also means reinstating fitPrompt() at the builder, which §2 exercises directly.
 
    SO THE ASSERTIONS INVERTED, deliberately and with the loss stated. The reference
    figure's build can bleed into a rendered frame again - at every angle now, not just
@@ -66,7 +70,7 @@ const sandbox = {
   getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
-  code + "\nreturn { buildCompositePrompt, garmentAnchor, fitPrompt, P, DENSE };")(...Object.values(sandbox));
+  code + "\nreturn { buildCompositePrompt, IMAGE_ONLY_PROMPT, fitPrompt, P, DENSE };")(...Object.values(sandbox));
 
 const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 
@@ -113,7 +117,7 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     /Restore: add \[P\.MED, DENSE\.modelAgnostic\]/.test(SRC));
 
   const restored = api.fitPrompt([
-    [api.P.CORE, api.garmentAnchor("upper_body")],
+    [api.P.CORE, api.IMAGE_ONLY_PROMPT],
     [api.P.HIGH, api.DENSE.bodyFidelity],
     [api.P.MED,  api.DENSE.modelAgnostic],
   ]);
@@ -146,8 +150,8 @@ console.log("\n── §3 IT IS GENUINELY OFF THE WIRE, at every pose and every 
   const pathological = { ...TEE, name: "x".repeat(400) };
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
-    check(`the image anchor survives a pathologically long name (inProfile=${prof})`,
-      /Fit and replace the user's current upper garment/.test(out),
+    check(`the frozen prompt survives a pathologically long name (inProfile=${prof})`,
+      /Fit and render the exact garment provided in the reference image/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }

@@ -1,47 +1,55 @@
-/* IMAGE-FIRST CONDITIONING - "I picked a Spider-Man tee and it rendered a tuxedo".
+/* STRICT IMAGE-ONLY CONDITIONING - "I picked a Spider-Man tee and it rendered a tuxedo".
 
    REPORTED FAILURE: a graphic t-shirt selected from the catalog, its reference image
    correctly resolved, correctly composited and correctly delivered to rtClient.set() -
    and Decart streaming back a full tuxedo with a bowtie. Not a wrong colour, not a
    drifted print: a different garment entirely, of a different class, from a reference the
-   model demonstrably had.
+   model demonstrably had. Reported TWICE - the first fix did not stop it.
 
    ROOT CAUSE - the prompt was competing with its own image. Decart's realtime set()
    accepts exactly { prompt, image, enhance } (verified against @decartai/sdk@0.1.5
    setInputSchema). There is no negative_prompt, no image-strength, no ControlNet weight -
    so the ONLY lever this app has over how hard the reference image is weighed against the
-   text is how much text there is. app.js was sending a dozen clauses, and two of them
-   were actively fighting the pixels:
+   text is how much text there is.
 
+   FIX ONE removed the two clauses that were most obviously fighting the pixels:
      · THE GARMENT DESCRIPTION. Every builder opened by interpolating catalog metadata -
-       "Replace their top with white t-shirt: exact colour, texture and print." That is a
-       TEXT description of a garment, and a description is something a diffusion model can
-       satisfy out of its own prior instead of out of the reference. Nothing in that
-       sentence mentions Spider-Man; the pixels that did were losing to it.
+       "Replace their top with white t-shirt: exact colour, texture and print." A text
+       description is something a diffusion model can satisfy out of its own prior instead
+       of out of the reference. Nothing in that sentence mentions Spider-Man.
      · THE ENUMERATED NEGATIVE. DENSE.assetLock spelled out "never invent a garment,
        jacket, coat, suit, TUXEDO, tie, BOWTIE or badge". With no negative_prompt field
        those nouns ship inside the POSITIVE prompt, where a named garment is a token the
-       sampler can steer toward. The clause written to stop the tuxedo is a plausible
-       reason one appeared.
+       sampler can steer toward.
+   It kept an image anchor plus the STRUCTURAL clauses (panel contract, pose, passthrough
+   locks) on the theory that a clause which describes no garment cannot summon one.
 
-   THE FIX: stop describing the garment. The reference image IS the description. The
-   prompt's only job is garmentAnchor() - point at the asset, forbid inventing around it -
-   plus clauses that are STRUCTURAL: how to read the reference (which half, which side),
-   where the body is, and which regions of the frame pass through untouched.
+   THE TUXEDO SURVIVED IT, so FIX TWO drops the theory: every clause is text, structural
+   ones included, and the axis that mattered was total volume rather than kind. The prompt
+   is now ONE FROZEN STRING - IMAGE_ONLY_PROMPT - byte-identical for every garment, angle,
+   pose and shopper. It cannot contradict the reference because it says nothing the
+   reference could contradict, and it cannot dilute it because there is nothing to shed.
+
+   THE COMPOSITE STANDS DOWN WITH IT (COMPOSITE_DEFAULT = false), and that is the one
+   non-prompt change in this mode. A split FRONT|BACK reference is only legible alongside
+   the panel contract that explains it; strip the contract and the model is handed a
+   collage with no key, which is both the 23f5953 double-print bug and exactly the kind of
+   ambiguous reference that sends a diffusion model back to its prior.
 
    WHAT THIS SUITE PINS, and why each is a distinct way for the fix to rot:
-     §1  the anchor's exact wording (product-specified) and its region variants, because
-         "upper garment" is a lie for the trouser half of the catalog and for a full look;
-     §2  it LEADS every builder and is never shed, at any pose or budget;
-     §3  no builder describes a garment any more - the invariant, stated as an absence,
-         which is the only form that catches a NEW clause being added later;
-     §4  the payload actually carries an image, because an image-first prompt with no
-         image on the wire is the same failure arriving through the other half of the
-         call - and that path used to be silent.
+     §1  the frozen string's exact wording (product-specified) and that it is genuinely
+         constant - no interpolation, no per-item branch, no concatenation;
+     §2  every builder returns it and assembles nothing, at every angle and pose;
+     §3  the retirement is REVERSIBLE - the clauses and the assembly machinery are all
+         still on file, because a mode this aggressive will need pieces bought back;
+     §4  the composite stands down, with its kill switch still working both ways;
+     §5  the payload actually carries an image on every update and retry, because an
+         image-only prompt with no image is the same failure through the other half of
+         the call - and that path used to be silent.
 
-   Sibling suites: model-agnostic.test.mjs holds the record of what this retired and how
-   to restore it; composite.test.mjs owns the token budget; prompt-only-flip.test.mjs owns
-   which dispatches re-upload the reference. */
+   Sibling suites: model-agnostic.test.mjs holds the record of the body clauses and their
+   restore path; side-profile.test.mjs still proves angleClause() assembles correctly (it
+   is the restore path, kept live); composite.test.mjs owns the stitch geometry. */
 import { readFileSync } from "node:fs";
 
 const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -53,7 +61,7 @@ function check(label, cond, detail) {
   if (!cond && detail !== undefined) console.log(`        ${detail}`);
 }
 
-/* The real builders, executed. */
+/* The real builder, executed. */
 const code = SRC.slice(SRC.indexOf("const P = Object.freeze({ CORE"),
                        SRC.indexOf("/* Full-Look composite clause"));
 const sandbox = {
@@ -64,141 +72,191 @@ const sandbox = {
   getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
-  code + "\nreturn { buildCompositePrompt, garmentAnchor, fitPrompt, P, DENSE, ANCHOR_REGION };")(...Object.values(sandbox));
+  code + "\nreturn { buildCompositePrompt, IMAGE_ONLY_PROMPT, fitPrompt, P, DENSE };")(...Object.values(sandbox));
 
 const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
-const SPEC_UPPER =
-  "Fit and replace the user's current upper garment strictly using the exact provided image asset." +
-  " Preserve all graphic details, colors, and textures from the reference image" +
-  " without generating any tuxedos, suits, or unrequested garments.";
+const SPEC =
+  "Fit and render the exact garment provided in the reference image onto the target subject." +
+  " Strictly preserve all graphic patterns, colors, and cuts from the image" +
+  " without inventing any new clothing, jackets, or suits.";
 
-console.log("── §1 THE ANCHOR: product-specified wording, region-aware ──");
+console.log("── §1 THE FROZEN STRING: product-specified, and genuinely constant ──");
 {
   /* Byte-exact, because the wording is a product decision rather than an implementation
      detail - a paraphrase that reads the same to a human is a different token sequence to
      a diffusion model, and this is the one string in the file whose exact form was
      specified from outside it. */
-  check("the upper-body anchor matches the specified wording byte for byte",
-    api.garmentAnchor("upper_body") === SPEC_UPPER,
-    JSON.stringify(api.garmentAnchor("upper_body")));
+  check("IMAGE_ONLY_PROMPT matches the specified wording byte for byte",
+    api.IMAGE_ONLY_PROMPT === SPEC, JSON.stringify(api.IMAGE_ONLY_PROMPT));
 
-  /* THE ONE THING THAT MAY VARY, and must. The spec sentence says "upper garment"; the
-     catalog ships lower_body items (Nimbus) and full looks. Sending "replace the user's
-     current upper garment" while the reference is a pair of trousers is precisely the
-     text-vs-image contradiction this whole refactor exists to remove - reintroduced by
-     the fix itself, on the half of the catalog nobody screenshots. */
-  check("the lower-body variant names the lower garment, not the upper one",
-    /current lower garment strictly/.test(api.garmentAnchor("lower_body")) &&
-    !/upper/.test(api.garmentAnchor("lower_body")), api.garmentAnchor("lower_body"));
-  check("the full-look variant names both, in one sentence (one pass, not two)",
-    /current upper and lower garments strictly/.test(api.garmentAnchor("look")),
-    api.garmentAnchor("look"));
-  check("an unknown/absent garmentType falls back to upper - never to 'undefined garment'",
-    api.garmentAnchor(undefined) === SPEC_UPPER && api.garmentAnchor("nonsense") === SPEC_UPPER,
-    api.garmentAnchor("nonsense"));
-
-  /* The two halves do different jobs and both must be present: the first binds the
-     output to the asset, the second forbids the substitution that was reported. */
+  /* The two halves do different jobs and both must be present: the first binds the output
+     to the provided asset, the second forbids the substitution that was reported. */
   check("it binds the render to the PROVIDED asset, not to a garment concept",
-    /strictly using the exact provided image asset/.test(SPEC_UPPER));
-  check("...and preserves the graphic detail that identifies the specific product",
-    /Preserve all graphic details, colors, and textures from the reference image/.test(SPEC_UPPER));
+    /render the exact garment provided in the reference image/.test(SPEC));
+  check("...and preserves the detail that identifies the specific product",
+    /Strictly preserve all graphic patterns, colors, and cuts from the image/.test(SPEC));
+
+  /* CONSTANT, not merely short. A template literal here is how a description creeps back
+     in one field at a time, which is the exact history this mode is reacting to. */
+  check("declared with no interpolation hole",
+    /const IMAGE_ONLY_PROMPT =\s*\n?\s*"[^`]*";/s.test(SRC) &&
+    !/IMAGE_ONLY_PROMPT[^\n]*\$\{/.test(SRC),
+    "no ${...} anywhere in or adjacent to the declaration");
+  check("...and it is never concatenated onto at any call site",
+    !/IMAGE_ONLY_PROMPT\s*\+/.test(SRC) && !/\+\s*IMAGE_ONLY_PROMPT/.test(SRC),
+    "appending one clause is how the dozen came back last time");
+
+  /* It has to survive the wire guard untouched: clampPromptForWire() truncates anything
+     over budget, and a frozen prompt that gets clipped is no longer the spec'd string. */
+  check("it is comfortably inside the 226-token ceiling, so the wire guard never clips it",
+    SPEC.length <= 650, `${SPEC.length} chars (~${Math.ceil(SPEC.length / 4)} tokens)`);
 }
 
-console.log("\n── §2 IT LEADS, AND IT NEVER SHEDS ──");
+console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──");
 {
-  /* Position is load-bearing for this model - leading tokens dominate, which is why the
-     panel contract was moved to the front in the first place. The anchor displaced it:
-     "which half of the reference to read" only matters once the model is reading the
-     reference at all. */
-  const poses = [
+  const cases = [
     ["FRONT square-on", TEE, "front", false],
     ["FRONT edge-on", TEE, "front", true],
     ["BACK square-on", TEE, "back", false],
     ["BACK edge-on", TEE, "back", true],
     ["BOTTOMS edge-on", { ...TEE, garmentType: "lower_body" }, "front", true],
     ["custom upload", { ...TEE, custom: true }, "front", true],
+    ["pathological name", { ...TEE, name: "x".repeat(400) }, "front", true],
   ];
-  for (const [name, item, angle, prof] of poses) {
-    const out = api.buildCompositePrompt(item, angle, prof);
-    check(`${name}: the anchor is at character 0`,
-      out.indexOf("Fit and replace the user's current") === 0, out.slice(0, 120));
-    check(`${name}: ...and the panel contract follows it rather than leading`,
-      out.indexOf("split photo of one garment") > 0);
+  for (const [name, item, angle, prof] of cases) {
+    check(`${name}: byte-identical to the frozen string`,
+      api.buildCompositePrompt(item, angle, prof) === SPEC,
+      api.buildCompositePrompt(item, angle, prof));
   }
 
-  /* THE SHED TEST. fitPrompt() drops the worst priority until the prompt fits, so
-     "present today" is not the same claim as "cannot be dropped". A pathological garment
-     name is the real-world shape of that pressure. */
-  const pathological = { ...TEE, name: "x".repeat(400) };
-  for (const prof of [false, true]) {
-    check(`the anchor survives budget pressure (inProfile=${prof})`,
-      /Fit and replace the user's current upper garment/.test(
-        api.buildCompositePrompt(pathological, "front", prof)));
+  /* Structural, across the builders this sandbox cannot execute. The four together are
+     every path that can reach rtClient.set() with a prompt. */
+  const builders = [
+    ["buildPrompt", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
+    ["buildCustomPrompt", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
+    ["buildLookPrompt", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
+    ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
+  ];
+  for (const [name, re] of builders) {
+    const body = (SRC.match(re) || [""])[0];
+    /* Comments stripped first: buildLookPrompt()'s body carries the restore note naming
+       DENSE.lookPanels, and a check that trips over the explanation of the retirement is
+       worse than no check - it would force whoever reads it to delete the documentation. */
+    const codeBody = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    check(`${name}(): returns the constant, calls no assembler`,
+      /return IMAGE_ONLY_PROMPT;/.test(codeBody) && !/fitPrompt\(/.test(codeBody) &&
+      !/DENSE\./.test(codeBody), codeBody.slice(-240) || "builder not found");
   }
-  check("it is tagged CORE at every assembly site, which is what makes that true",
-    (SRC.match(/\[P\.CORE, garmentAnchor\(/g) || []).length >= 3 &&
-    !/\[P\.(HIGH|MED|LOW|TRIM),\s*garmentAnchor\(/.test(SRC),
-    "a non-CORE anchor is one long product name away from being dropped");
-}
 
-console.log("\n── §3 NO BUILDER DESCRIBES A GARMENT (the invariant, as an absence) ──");
-{
-  /* Stated as an absence on purpose. Asserting that today's clauses are present cannot
-     catch the actual regression, which is somebody ADDING one more well-meant sentence -
-     every clause this file ever grew was individually justified, and the sum is what
-     produced the tuxedo. */
+  /* THE INVARIANT, stated as an absence - the only form that catches the real regression,
+     which is somebody adding one more well-meant clause. Every clause this file ever grew
+     was individually justified; the sum is what produced the tuxedo. */
   const codeOnly = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  check("no colour word is interpolated into any prompt",
-    !/colorName\(activeColorOf\(/.test(codeOnly) && !/colorName\(item\.color\)/.test(codeOnly),
-    "the reference image states the colour more precisely than a catalog hex ever could");
-  check("no subtype noun is interpolated into any prompt",
-    !/SHIRT_NOUN\[/.test(codeOnly) && !/SUBTYPE_PROMPT\[/.test(codeOnly),
-    "'t-shirt' is a concept the model can render without reading the reference");
-  check("the enumerated anti-invention list is no longer assembled",
-    !/DENSE\.assetLock/.test(codeOnly),
-    "with no negative_prompt field, 'tuxedo' in a ban is 'tuxedo' in the positive prompt");
-
-  /* The rendered prompts, not just the source: a description could arrive from a clause
-     rather than an interpolation. These are the nouns the retired builders used. */
-  for (const [name, item, angle, prof] of [
-    ["front square-on", TEE, "front", false],
-    ["back edge-on", TEE, "back", true],
-    ["bottoms", { ...TEE, garmentType: "lower_body" }, "front", false],
-  ]) {
-    const out = api.buildCompositePrompt(item, angle, prof);
-    check(`${name}: the shipped prompt names no garment noun or colour`,
-      !/\bt-shirt\b|\btank top\b|\btrousers\b|\bwhite\b|\bshort-sleeve\b/i.test(out), out);
-  }
-  /* The anchor's own trailing negative is the ONE place these words may appear, and it is
-     there because the wording is specified. Pinned so that a future widening of the list -
-     the pattern that produced assetLock, one reported garment at a time - is a deliberate
-     edit to a spec'd string rather than a drift. */
-  const negatives = (api.buildCompositePrompt(TEE, "front", false)
-    .match(/tuxedos?|suits?|jackets?|coats?|bowties?|badges?/gi) || []).map((w) => w.toLowerCase());
-  check("exactly two banned nouns ship, both inside the spec'd anchor",
-    negatives.join(",") === "tuxedo,suit" || negatives.join(",") === "tuxedos,suits",
-    `found: ${JSON.stringify(negatives)} - assetLock's six-noun enumeration must not return`);
+  check("no colour word or subtype noun reaches any prompt",
+    !/colorName\(activeColorOf\(/.test(codeOnly) &&
+    !/SHIRT_NOUN\[/.test(codeOnly) && !/SUBTYPE_PROMPT\[/.test(codeOnly));
+  check("no DENSE clause is assembled by any builder",
+    !/\[P\.(CORE|HIGH|MED|LOW|TRIM),\s*DENSE\./.test(codeOnly),
+    "the DENSE table is a restore library now, not an assembly source");
+  check("the size-override modifier no longer reaches the wire either",
+    !/\[P\.\w+,\s*fitSentence\(/.test(codeOnly),
+    "documented in IMAGE_ONLY_PROMPT's retirement list - the UI still works, the render ignores it");
 }
 
-console.log("\n── §4 THE OTHER HALF OF THE CALL: an image must actually be on the wire ──");
+console.log("\n── §3 THE RETIREMENT IS REVERSIBLE (this mode will need pieces back) ──");
 {
-  /* An image-first prompt with no image is the same failure through the other door: the
-     prompt says "the exact provided image asset" and nothing was provided, so the model
-     has only its prior. This used to be silent - `...(imageRef ? { image: imageRef } : {})`
-     quietly omitted the key while the prompt still recited a catalog description, so
-     SOMETHING garment-shaped rendered. That safety net is gone by design. */
+  /* A mode this aggressive is a starting point, not an endpoint: it establishes whether
+     text volume was the problem, and the answer is only useful if clauses can be added
+     back ONE at a time. That requires three things to still exist. */
+  check("the assembly machinery survives - fitPrompt() and the priority tiers",
+    /function fitPrompt\(parts, max = PROMPT_MAX_CHARS\)/.test(SRC) &&
+    /const P = Object\.freeze\(\{ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 \}\)/.test(SRC));
+  check("...the DENSE table survives, with every retired clause verbatim",
+    /inpaintLock:\s+"Face, skin, hands and background pass through untouched\."/.test(SRC) &&
+    /contract:\s+"The reference image is a split photo of one garment/.test(SRC) &&
+    /lookPanels:\s+"The reference stacks two garments/.test(SRC));
+  check("...and angleClause() survives, so the orientation clauses stay proven",
+    /function angleClause\(item, angleOverride, useComposite, inProfile\)/.test(SRC),
+    "side-profile.test.mjs still executes every branch of it");
+
+  /* The restore list itself, ranked. inpaintLock is the largest loss - nothing else
+     stands between this prompt and a regenerated face or room - and lookPanels is the
+     only one whose absence costs a whole feature rather than a degree of fidelity. */
+  check("app.js ranks the losses, naming the passthrough clamp as first to restore",
+    /THE LARGEST[\s\S]{0,90}LOSS and the one to restore first/.test(SRC));
+  check("...and flags the full-look panel clause as the one that costs a FEATURE",
+    /lookPanels is\s*\n?\s*the first clause to buy back/.test(SRC) ||
+    /DENSE\.lookPanels is[\s\S]{0,120}first clause to buy back/.test(SRC),
+    "buildLookPrompt() must carry that warning - a look has no other layout signal");
+
+  /* The builders keep their parameters so a restore is a two-line edit rather than a
+     re-derivation of applyGarment()'s TOCTOU freeze. */
+  check("the builders keep their angle/pose parameters as the restore seam",
+    /function buildCompositePrompt\(item, angle, inProfile\)/.test(SRC) &&
+    /buildCompositePrompt\(item, angleAtStart, profileAtStart\)/.test(SRC),
+    "the frozen snapshots must stay threaded even while unused");
+}
+
+console.log("\n── §4 THE COMPOSITE STANDS DOWN, and its switch still works ──");
+{
+  /* Not a prompt change, and the only behavioural one in this mode - so it is asserted
+     separately and with its reasoning attached. */
+  check("COMPOSITE_DEFAULT is off",
+    /const COMPOSITE_DEFAULT = false;/.test(SRC),
+    "a split reference with no panel contract is the 23f5953 double-print bug");
+  check("...for the stated reason, not silently",
+    /THE KILL SWITCH, NOW THROWN/.test(SRC) &&
+    /a reference the model has to interpret unaided/.test(SRC));
+  check("the URL override still forces it back on for an A/B against a live session",
+    /const q = new URLSearchParams\(location\.search\)\.get\("composite"\)/.test(SRC) &&
+    /if \(q === "1" \|\| q === "true"\)\s+return true;/.test(SRC));
+  check("...and re-enabling is documented as requiring the panel contract back with it",
+    /restore\s*\n?\s*DENSE\.contract \+ DENSE\.select in buildCompositePrompt\(\) in the same commit/.test(SRC),
+    "the worst of both modes is a split image with no key");
+  /* The single-asset path it falls back to is the pre-composite behaviour, still the
+     fallback whenever a stitch fails - so this is a switch, not a new code path. */
+  check("the per-orientation single-asset path is still what referenceImageFor() falls to",
+    /if \(currentAngle === AUTO_ANGLE\) \{\s*\n\s*const blob = await garmentBlobCached\(activeImg\);/.test(SRC));
+}
+
+console.log("\n── §5 AN IMAGE ON EVERY UPDATE AND EVERY RETRY ──");
+{
+  /* An image-only prompt with no image is the same failure through the other door: the
+     prompt says "the reference image" and nothing was provided, so the model has only its
+     prior. This used to be survivable - the prompt still recited a catalog description,
+     so SOMETHING garment-shaped rendered. That safety net is gone by design. */
   const apply = SRC.slice(SRC.indexOf("async function applyGarment(item) {"),
                           SRC.indexOf("\n/**\n * Reads the Screen 1 physical inputs"));
   check("applyGarment sweeps the item's remaining assets when nothing resolved",
-    /for \(const candidate of \[g\.front, g\.back, item\.img, item\.composite\]\)/.test(apply),
-    "referenceImageFor() failing must not end the search");
+    /for \(const candidate of \[g\.front, g\.back, item\.img, item\.composite\]\)/.test(apply));
   check("...and a total failure is an ERROR, not a warning",
-    /console\.error\("\[PEAR\] applyGarment\(\) - NO garment asset could be resolved/.test(apply),
-    "an image-first prompt with no image is a broken render, not a degraded one");
+    /console\.error\("\[PEAR\] applyGarment\(\) - NO garment asset could be resolved/.test(apply));
   check("...that does not throw the live session away",
     !/throw new Error\("no garment asset/.test(apply),
-    "a recoverable session beats a dead one - the next re-anchor gets another attempt");
+    "a recoverable session beats a dead one - the next apply gets another attempt");
+
+  /* THE RETRY PROPERTY. applyActive() re-enters applyGarment() on a rejected set(), and
+     the wire bookkeeping must not have been written optimistically - otherwise attempt
+     two sees its own reference "already on the wire" and retries a failed image upload
+     by not uploading the image. */
+  const setIdx = apply.indexOf("await rtClient.set(payload);");
+  const stampIdx = apply.indexOf("lastSentImageRef = imageRef || null;");
+  check("the wire bookkeeping is stamped only AFTER set() resolves, so a retry re-uploads",
+    setIdx !== -1 && stampIdx > setIdx, `set@${setIdx} stamp@${stampIdx}`);
+
+  /* THE NO-OP SKIP, new in this mode. With a frozen prompt, "same image + same prompt" is
+     a dispatch that provably changes nothing - which the re-anchor cadence would
+     otherwise fire ~8 times a session. Skipping it is right; pretending the re-anchor
+     still works would not be, so the code says so. */
+  check("a dispatch with nothing new is skipped rather than sent",
+    /if \(payload\.prompt === lastSentPrompt\) \{/.test(apply) &&
+    /no-op update skipped - reference AND prompt both unchanged/.test(apply));
+  check("...and the dead re-anchor is documented, not left to be discovered",
+    /THE RE-ANCHOR IS A NO-OP IN THIS MODE/.test(apply),
+    "there is nothing left in the prompt to re-assert");
+  check("lastSentPrompt is cleared everywhere the image bookkeeping is",
+    (SRC.match(/lastSentPrompt = null;/g) || []).length >= 4,
+    "a stale 'already sent' belief across a session boundary skips the first real dispatch");
 
   const look = SRC.slice(SRC.indexOf("async function applyLook(top, bottom) {"),
                          SRC.indexOf("function buildLookPrompt"));
@@ -206,16 +264,12 @@ console.log("\n── §4 THE OTHER HALF OF THE CALL: an image must actually be 
      the SDK validates, and in a payload log it looks like a reference was delivered. */
   check("applyLook omits the image key rather than sending image: null",
     !/image: primaryImage,/.test(look) &&
-    /\.\.\.\(primaryImage \? \{ image: primaryImage \} : \{\}\)/.test(look),
-    "an explicit null is the 'empty/default image state' this exists to prevent");
+    /\.\.\.\(primaryImage \? \{ image: primaryImage \} : \{\}\)/.test(look));
   check("...on the minimal-retry path too, not just the enriched payload",
-    (look.match(/\.\.\.\(primaryImage \? \{ image: primaryImage \} : \{\}\)/g) || []).length === 2,
-    "the retry is a second send site and needs the same rule");
+    (look.match(/\.\.\.\(primaryImage \? \{ image: primaryImage \} : \{\}\)/g) || []).length === 2);
   check("applyLook falls back to a raw garment ref before giving up",
     /garmentImageRef\(topImg\) \|\| garmentImageRef\(bottomImg\)/.test(look));
 
-  /* The pre-existing wire check still guards both send sites - it is what turns a missing
-     asset into a console line somebody can act on. */
   check("verifyGarmentAsset still inspects the payload at both full-set sites",
     (SRC.match(/verifyGarmentAsset\(payload, "(applyGarment|applyLook)"\)/g) || []).length === 2);
   check("...and still says what a payload with no image will actually do",

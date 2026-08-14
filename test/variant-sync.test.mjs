@@ -92,12 +92,13 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
      new variant. The first fix routed those interpolations through activeColorOf() so
      the WORD followed the swatch.
 
-     ── THE IMAGE-FIRST REFACTOR SUPERSEDED THAT FIX ENTIRELY ──────────────────────
+     ── STRICT IMAGE-ONLY SUPERSEDED THAT FIX ENTIRELY ─────────────────────────────
      The tuxedo report (a Spider-Man tee rendering as formalwear) traced to the same
      mechanism this section was written about, one step further along: a prompt that
      DESCRIBES a garment is a prompt the model can satisfy from its own prior instead of
-     from the reference pixels. So no builder names a colour, a subtype noun or any other
-     garment adjective any more - garmentAnchor() points at the image and stops.
+     from the reference pixels. No builder names a colour, a subtype noun or any other
+     garment adjective any more - every one of them returns IMAGE_ONLY_PROMPT, a frozen
+     string with no interpolation in it at all.
 
      That makes the contradiction structurally impossible rather than merely synchronised,
      which is the stronger property and the one asserted here. activeColorOf() itself is
@@ -111,9 +112,12 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
   check("...nor a subtype noun (SHIRT_NOUN/SUBTYPE_PROMPT are prompt-free now)",
     !/SHIRT_NOUN\[|SUBTYPE_PROMPT\[/.test(promptColour),
     "a garment noun is a description the model can satisfy without reading the image");
-  check("every builder opens with the image anchor instead",
-    (APP.match(/\[P\.CORE, garmentAnchor\(/g) || []).length >= 3,
-    "buildCompositePrompt, imageFirstPrompt and buildLookPrompt must each lead with it");
+  check("every builder returns the frozen prompt instead",
+    (APP.match(/return IMAGE_ONLY_PROMPT;/g) || []).length >= 4,
+    "buildPrompt, buildCustomPrompt, buildCompositePrompt and buildLookPrompt");
+  check("...and the frozen prompt has no interpolation hole to leak a variant into",
+    /const IMAGE_ONLY_PROMPT =\s*\n?\s*"[^`]*";/.test(APP) && !/IMAGE_ONLY_PROMPT[\s\S]{0,200}\$\{/.test(APP),
+    "a template hole here is how a colour word gets back onto the wire");
   /* Comments stripped first: variantMetaOf's own doc block QUOTES the old call as the
      thing it replaced, and a check that trips over the explanation of the fix is worse
      than no check - it would force whoever reads it to delete the documentation. */
