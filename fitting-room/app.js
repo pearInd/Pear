@@ -646,7 +646,12 @@ let isGarmentApplied = false;    // true once rtClient.set() has resolved - gate
    state applyGarment()/applyLook() already maintain (rtImageOnWire,
    lastSentImageRef) - it adds no new state to the live/billing flow itself.
    Verbose per-payload logging (every VALID send, not just failures):
-     DevTools console:  window.__pearDebugGarment = true                    */
+     DevTools console:  window.__pearDebugGarment = true
+   Force every dispatch through a full image re-upload, bypassing the flicker-fix
+   fast path in applyGarment() (see sameImageOnWire), for ONE diagnostic session -
+   ⚠️ intentionally reintroduces the regression prompt-only-flip.test.mjs guards
+   against; OFF by default, never flip the default:
+     DevTools console:  window.__pearDebugForceFullReupload = true          */
 let debugStreamCheckedThisGen = false;   // reset per session in connectRealtime, alongside billingStarted etc.
 
 /**
@@ -2820,6 +2825,11 @@ async function connectRealtime() {
   debugStreamCheckedThisGen = false;   // DEBUG WRAPPER: re-arm the undressed-stream check for this session
   if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
 
+  // DEBUG WRAPPER: stamp the flag's state at the top of the session transcript, so a
+  // captured log is unambiguous about whether this run had it on.
+  if (typeof window !== "undefined" && window.__pearDebugForceFullReupload) {
+    console.warn("[PEAR][DEBUG] this session is starting with __pearDebugForceFullReupload = true");
+  }
   console.log("[PEAR] connectRealtime() - stage 1/4: loading SDK from CDN…");
   try {
     /* ── load SDK ─────────────────────────────────────────────────────────── */
@@ -6407,7 +6417,25 @@ async function applyGarment(item) {
      anything else (first application, a garment swap, a fallback to a single-view asset)
      still goes through the full set(). enhance:false must be passed explicitly:
      setPromptInputSchema defaults it to TRUE, unlike set(). */
-  const sameImageOnWire = imageRef && lastSentImageRef === imageRef && rtImageOnWire;
+  /* DEBUG ONLY: window.__pearDebugForceFullReupload lets ONE live session force every
+     dispatch through the full rtClient.set({ image }) path below, bypassing this fast
+     path entirely - to test, with real Decart telemetry, whether repeated image
+     re-uploads are what's actually dropping the garment reference, against the
+     documented flicker-fix rationale this fast path exists for (the comment above).
+     OFF by default; set it from DevTools for one diagnostic run, never flip the
+     default. typeof-guarded: applyGarment() is extracted and executed standalone by
+     prompt-only-flip.test.mjs/side-profile.test.mjs in a sandbox with no `window`
+     global - a bare reference would throw ReferenceError there (see the matching
+     guard on verifyGarmentAsset() below). */
+  const debugForceFullReupload = typeof window !== "undefined" && !!window.__pearDebugForceFullReupload;
+  const sameImageOnWire = !debugForceFullReupload && imageRef && lastSentImageRef === imageRef && rtImageOnWire;
+  if (debugForceFullReupload && imageRef && lastSentImageRef === imageRef && rtImageOnWire) {
+    console.warn("[PEAR][DEBUG] __pearDebugForceFullReupload is ON - forcing a full image",
+      "re-upload even though the reference is unchanged. This intentionally reintroduces",
+      "the flicker-fix regression (see prompt-only-flip.test.mjs) for ONE diagnostic",
+      "session only - turn it back off (window.__pearDebugForceFullReupload = false)",
+      "when done capturing the transcript.");
+  }
   if (sameImageOnWire) {
     console.log("[PEAR] prompt-only update - reference unchanged, image NOT re-uploaded",
       `(${angleAtStart})`);
