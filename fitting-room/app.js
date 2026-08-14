@@ -637,6 +637,105 @@ let dressedFrameReady = false;   // true once #aiVideo has shown a VERIFIED non-
                                   // (armFirstFrameBilling/startBillingWindow) AND the recorder (startRecording)
 let isGarmentApplied = false;    // true once rtClient.set() has resolved - gates billing/recording to the first DRESSED frame, not raw passthrough
 
+/* ── DEBUG WRAPPER: garment-asset verification ────────────────────────────────
+   Diagnostic-only instrumentation for tracing "generated image never reaches
+   Decart" reports. Verifies a payload actually carries a garment asset right
+   before it goes on the wire, flags a stream that starts rendering with none
+   attached (the "generic/default output" symptom), and exposes a console
+   escape hatch to force a fresh re-upload without a page reload. Reads only
+   state applyGarment()/applyLook() already maintain (rtImageOnWire,
+   lastSentImageRef) - it adds no new state to the live/billing flow itself.
+   Verbose per-payload logging (every VALID send, not just failures):
+     DevTools console:  window.__pearDebugGarment = true                    */
+let debugStreamCheckedThisGen = false;   // reset per session in connectRealtime, alongside billingStarted etc.
+
+/**
+ * Inspect a { prompt, enhance, image } payload right before rtClient.set() and
+ * report whether it actually carries a usable garment asset.
+ * @param {{image?: Blob|string}} payload
+ * @param {string} source  caller name, for the log line ("applyGarment" | "applyLook")
+ * @returns {boolean} true if payload.image looks like a real asset
+ */
+function verifyGarmentAsset(payload, source) {
+  const asset = payload && payload.image;
+  let valid = false, detail = "MISSING - no image key on the payload";
+  if (typeof Blob !== "undefined" && asset instanceof Blob) {
+    valid = asset.size > 0;
+    detail = valid ? `Blob, ${asset.size} bytes, type=${asset.type || "?"}`
+                    : "Blob is 0 bytes - decode/composite likely failed silently";
+  } else if (typeof asset === "string" && asset.length > 0) {
+    valid = /^(https?:|data:|blob:)/i.test(asset);
+    detail = valid ? `string ref (${asset.slice(0, 40)}…)`
+                    : `string but not a recognizable URL: "${asset.slice(0, 60)}"`;
+  }
+  if (!valid) {
+    console.warn(`[PEAR][DEBUG] ${source}() - garmentAsset NOT valid before rtClient.set(): ${detail}`,
+      "\n  → this set() will run PROMPT-ONLY; Decart has no pixel reference and will render its default/generic output.");
+  } else if (typeof window !== "undefined" && window.__pearDebugGarment) {
+    console.log(`[PEAR][DEBUG] ${source}() - garmentAsset OK:`, detail);
+  }
+  return valid;
+}
+
+/**
+ * Fires once per session, the moment Decart's first remote frame is wired to
+ * #aiVideo (see onRemoteStream in connectRealtime). If the stream is already
+ * rendering while no image was ever confirmed on the wire, that render is
+ * necessarily prompt-only / default output - warn loudly so it's obvious in
+ * DevTools without correlating it against the payload-debug log by hand.
+ * @returns {void}
+ */
+function warnIfStreamStartedUndressed() {
+  if (debugStreamCheckedThisGen) return;
+  debugStreamCheckedThisGen = true;
+  if (!rtImageOnWire) {
+    console.warn("[PEAR][DEBUG] Decart stream started rendering WITHOUT a garment asset on the wire.",
+      "\n  lastSentImageRef:", lastSentImageRef,
+      "\n  → the model has nothing to condition on and will render its generic/default output.",
+      "\n  → run window.__pearDebugReinjectGarment() in the console to force a fresh set() with the current item's image.");
+  }
+}
+
+/**
+ * Console escape hatch: force a full re-upload of the CURRENT garment/look,
+ * bypassing the "image already on the wire" fast path (setPrompt-only) that
+ * applyGarment()/applyLook() normally take when the reference hasn't changed.
+ * Use this when the render looks like the generic default even though the
+ * payload-debug log claims an asset was sent - it rules out "stale/corrupted
+ * cached Blob" as the cause by forcing a genuinely fresh set(), and optionally
+ * clearing the caches first so a bad cached asset can't be re-sent as-is.
+ * Lets us tell apart "failure to send the data" (this either fixes it or the
+ * warning above still fires) from "Decart not recognizing sent data" (this
+ * re-sends the identical bytes and the render still doesn't change).
+ * @param {{bustCache?: boolean}} [opts]
+ * @returns {Promise<boolean>}
+ */
+async function debugReinjectGarment(opts = {}) {
+  if (!rtClient || !isLive()) {
+    console.warn("[PEAR][DEBUG] reinject: no live Decart session - go live first.");
+    return false;
+  }
+  if (opts.bustCache) {
+    _assetBlobCache.clear();
+    _compositeCache.clear();
+    _lookStitchCache.clear();
+    console.log("[PEAR][DEBUG] reinject: Blob/composite caches cleared.");
+  }
+  lastSentImageRef = null;   // bypass applyGarment()/applyLook()'s "sameImageOnWire" shortcut -
+  rtImageOnWire = false;     // this must land on the full rtClient.set({ image }) path, not setPrompt()
+  console.log("[PEAR][DEBUG] reinject: forcing a fresh rtClient.set() for the active garment/look…");
+  try {
+    await applyActive();
+    console.log("[PEAR][DEBUG] reinject: rtClient.set() resolved. rtImageOnWire =", rtImageOnWire,
+      "| lastSentImageRef =", abbrevImg(lastSentImageRef));
+    return true;
+  } catch (e) {
+    console.error("[PEAR][DEBUG] reinject: applyActive() failed -", e?.message || e);
+    return false;
+  }
+}
+if (typeof window !== "undefined") window.__pearDebugReinjectGarment = debugReinjectGarment;
+
 /** @returns {boolean} true while a billable realtime session is active. */
 const isLive = () => connState === "connected" || connState === "generating";
 
@@ -2577,6 +2676,10 @@ function buildRealtimeConnectOpts(gen) {
     mirror: "auto",
     onRemoteStream: (editedStream) => {
       if (gen !== sessionGen) return;    // stale callback from a torn-down session
+      // DEBUG WRAPPER: flag a stream rendering with no garment on the wire. typeof-guarded,
+      // not a bare call - this callback is extracted/sandboxed by some tests without the
+      // debug-wrapper globals in scope, and a bare undeclared reference would throw there.
+      if (typeof warnIfStreamStartedUndressed === "function") warnIfStreamStartedUndressed();
       // Official pattern: map the live edited WebRTC stream straight to the
       // video element so the garment warps/tracks the user in realtime.
       const aiVideo = document.querySelector("#aiVideo");
@@ -2714,6 +2817,7 @@ async function connectRealtime() {
      Decart generating against no garment reference at all. */
   lastSentImageRef = null;
   rtImageOnWire = false;
+  debugStreamCheckedThisGen = false;   // DEBUG WRAPPER: re-arm the undressed-stream check for this session
   if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
 
   console.log("[PEAR] connectRealtime() - stage 1/4: loading SDK from CDN…");
@@ -6320,6 +6424,10 @@ async function applyGarment(item) {
   }
 
   console.log("[DECART PROMPT DEBUG]", payload.prompt, abbrevImg(imageRef));
+  // DEBUG WRAPPER, typeof-guarded: applyGarment() is extracted and run standalone by
+  // prompt-only-flip.test.mjs/side-profile.test.mjs against a fixed sandbox global list
+  // that doesn't include this - a bare call would throw ReferenceError there.
+  if (typeof verifyGarmentAsset === "function") verifyGarmentAsset(payload, "applyGarment");
   await rtClient.set(payload);
   lastSentImageRef = imageRef || null;
   rtImageOnWire = !!imageRef;
@@ -6806,6 +6914,8 @@ async function applyLook(top, bottom) {
   };
 
   console.log("[DECART PROMPT DEBUG]", prompt, abbrevImg(primaryImage));
+  // DEBUG WRAPPER, typeof-guarded - see the matching comment in applyGarment().
+  if (typeof verifyGarmentAsset === "function") verifyGarmentAsset(payload, "applyLook");
   try {
     await rtClient.set(payload);
   } catch (e) {
