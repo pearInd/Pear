@@ -19,7 +19,7 @@
          all, so a shipped CSS change was served from cache indefinitely while
          app.js?v= was being bumped every deploy. Kept in step with app.js's
          version so there is one number to reason about, not two. -->
-    <link rel="stylesheet" href="style.css?v=27">
+    <link rel="stylesheet" href="style.css?v=29">
 </head>
 <body>
 
@@ -478,6 +478,16 @@
             </div>
 
             <div class="camera-card__error" id="camError" hidden></div>
+
+            <!-- ░░ Adult/kids size-mismatch card - proactive counterpart to the
+                 goLive() gate. Shown whenever the shopper's resolved profile size
+                 category is incompatible with the active garment (see
+                 updateSizeMismatchUI() in app.js), including a returning shopper who
+                 never saw the Screen 1 form at all. ░░ -->
+            <div class="camera-card__size-mismatch" id="sizeMismatchView" hidden>
+                <p class="camera-card__size-mismatch-text" id="sizeMismatchText"></p>
+                <button class="btn-primary camera-card__size-mismatch-cta" id="sizeMismatchUpdateBtn" type="button">עדכן מידות · Update Profile Sizes</button>
+            </div>
         </div>
 
         <!-- ░░ Live try-on controls ░░ -->
@@ -699,7 +709,7 @@
   <span class="lang-switch__thumb" aria-hidden="true"></span>
 </button>
 
-<script type="module" src="app.js?v=28"></script>
+<script type="module" src="app.js?v=29"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
      header shrink. Pure enhancement - touches no app.js logic or state. -->
 <script src="mobile-ux.js" defer></script>

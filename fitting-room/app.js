@@ -939,6 +939,36 @@ function sizeCategoryMismatchReason() {
   return "הפריט אינו בטווח המידות שלך (מידת ילדים) · This item is not within your size range (Kids item)";
 }
 
+/* PROACTIVE counterpart to sizeCategoryMismatchReason() above. That gate only fires
+   the moment goLive() is actually called - fine for a fresh visitor who clicks
+   through Screen 1, but a RETURNING shopper with a saved adult profile never sees
+   Screen 1 at all (routeUser()'s instant-skip fast path lands them straight in the
+   camera room), so nothing ever painted a warning until the one click that would
+   have opened a billed session anyway. This keeps a persistent card in the camera
+   modal honest the whole time a mismatch is active - and disables Start Fitting so
+   there's nothing to click through in the first place - called from every point
+   currentSizeCategory or the garment's resolved age group can change while the room
+   is open: calculateSize() (covers the returning-user fast path too), enterRoom(),
+   setSizeOverride(), and the PEAR_UPDATE_GARMENT late-classification listener.
+   goLive()'s own gate stays as the authoritative backstop regardless of whether this
+   UI happened to run - this is only ever a courtesy, never the enforcement. */
+function updateSizeMismatchUI() {
+  const view = $("sizeMismatchView");
+  if (!view) return;
+  const mismatched = !isCompatibleSizeCategory(currentSizeCategory, resolvedGarmentAgeGroup());
+  view.hidden = !mismatched;
+  if (mismatched) {
+    const textEl = $("sizeMismatchText");
+    if (textEl) textEl.textContent =
+      "הפריט אינו בטווח המידות שלך. אינך יכול למדוד פריט זה במידה הנוכחית. " +
+      "כדי למדוד, יש לעדכן/לשנות את המידות בפרופיל. · " +
+      "This item is outside your size range. You cannot try on this item with your " +
+      "current profile size. Please update your profile sizes to proceed.";
+  }
+  const captureBtn = $("captureBtn");
+  if (captureBtn) captureBtn.disabled = mismatched || !localStream;
+}
+
 /* Shows/hides the #age field's own form-group, independent of whatever
    calculateSize() does with its value - a confident garment verdict means age is
    never asked at all, not merely optional. Called from calculateSize() itself so
@@ -1124,6 +1154,12 @@ function calculateSize() {
   currentUserSize = bestSize;
   nextBtn.disabled = false;
   updateProgress();
+  // Covers the RETURNING-USER fast path too: routeUser()'s instant-skip branch calls
+  // calculateSize() directly and, on a hasProfile match, goes straight to goToFitting()
+  // with Screen 1 never shown - so this is the only place that path's resolved
+  // currentSizeCategory ever gets checked against the room's mismatch UI before the
+  // shopper lands in it. See updateSizeMismatchUI()'s own comment.
+  updateSizeMismatchUI();
 }
 
 function updateProgress() {
@@ -1588,6 +1624,10 @@ function enterRoom() {
   // Reset the size override to the Screen-1 recommendation and rebuild the selector UI.
   activeTryOnSize = currentUserSize;
   injectSizeSelector();
+  // The garment just became active (possibly a NEW item/ageGroup) and the room is
+  // about to be shown - re-check the mismatch card/button before the shopper sees it,
+  // not only on the next calculateSize()/size-override change.
+  updateSizeMismatchUI();
 
   // Pre-warm SDK + token so the go-live path skips both round-trips.
   warmupSDKAndToken();
@@ -1836,6 +1876,11 @@ window.addEventListener("message", (e) => {
     // next keystroke, which may never come if the field just became hidden.
     const sizeForm = $("sizeForm");
     if (sizeForm && !sizeForm.hidden) { try { calculateSize(); } catch {} }
+    // The room may ALREADY be open (a returning shopper's instant-skip fast path, or
+    // simply a slow classify round trip that resolves after go-to-fitting): a late
+    // "kids" verdict landing here is exactly as capable of creating a mismatch as an
+    // initial one, so re-check regardless of which screen is currently showing.
+    try { updateSizeMismatchUI(); } catch {}
   }
 
   const front = e.data.garment_url;
@@ -12182,6 +12227,11 @@ function init() {
   });
   $("flipCamBtn")?.addEventListener("click", () => flipCamera());
   $("captureBtn").addEventListener("click", onLiveToggle);
+  // Size-mismatch card's CTA - same destination as the existing "Edit Measurements"
+  // Screen 2 button, so the shopper lands on the exact form that can actually change
+  // currentSizeCategory (see updateSizeMismatchUI()'s own comment for why this card
+  // exists at all).
+  $("sizeMismatchUpdateBtn")?.addEventListener("click", backToCalculator);
 
   // Re-fit the preview camera to the device's orientation on rotate. matchMedia fires
   // exactly on a portrait↔landscape flip; orientationchange is a legacy fallback.
