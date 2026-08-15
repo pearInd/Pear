@@ -2448,6 +2448,38 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   --hdr-control-h: 40px;   /* shared height of EVERY header control */
   --hdr-pad-t:     24px;   /* shared top edge: header padding AND both corner controls */
 
+  /* ── THE ROW HEIGHT HAD TO BECOME A NUMBER TOO ───────────────────────────
+     Equal control heights and equal top edges were necessary and not
+     sufficient, because the ROW is not as tall as the controls in it. The
+     brand lockup is the tallest zone and its height comes from type metrics:
+
+       .app-header__brand  1.4rem, line-height 1    = 22.40px
+       .app-header__titles gap                      =  3.00px
+       .app-header__sub    .84rem, line-height 1.2  = 16.13px
+                                                      ------
+                                                      41.53px   (> the 38px logo)
+
+     So the row resolved to 41.53px. Its flex children centre on THAT - at
+     padding-top + 20.76 - while the two absolute corner controls, anchored to
+     the padding edge with a height of 40, centre at padding-top + 20. A 0.76px
+     disagreement: small, visible against a circle's edge, and impossible to
+     nudge away permanently because the number is a font measurement. It moves
+     with every type change and differs at each breakpoint (the wordmark is
+     1.4rem here, 1.2rem when the phone header compacts).
+
+     --hdr-row-h fixes the row at a round number the lockup fits inside, so the
+     centreline stops being derived from font metrics at all. The corner pair
+     then anchors to that CENTRE - (row - control) / 2 below the padding edge -
+     rather than to the padding edge itself.
+
+     min-height, not height, on the zones: at the nominal type size the lockup
+     (41.53px) is comfortably inside 44px so the row IS exactly 44, while a
+     shopper who zooms text still gets a row that grows instead of clipping.
+     Under that growth the corner pair drifts again by half the overflow - the
+     correct trade, since a clipped wordmark is worse than a 1px offset at
+     200% zoom. */
+  --hdr-row-h:     44px;   /* deterministic row height - NOT the type's 41.53px */
+
   --corner-inset:  16px;   /* physical HORIZONTAL inset of both fixed corner controls */
   --corner-clear:  10px;   /* deliberate breathing gap before header content */
   --profile-size:  var(--hdr-control-h);   /* .profile-btn circle - was a separate 40px */
@@ -2797,7 +2829,9 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      does, so crossing the 12px scroll threshold shifted it down by the whole
      inset - ~45px on an iPhone. Both ends now include it, leaving the
      intended 2px of compaction. */
-  position: absolute; top: calc(var(--safe-t) + var(--hdr-pad-t)); z-index: 100;
+  position: absolute;
+  top: calc(var(--safe-t) + var(--hdr-pad-t) + (var(--hdr-row-h) - var(--hdr-control-h)) / 2);
+  z-index: 100;
   /* --hdr-pad-t, NOT --corner-inset: this control is absolutely positioned and
      is therefore the one thing in the header that cannot inherit the row's top
      edge. Sharing the token is what keeps it on the row's baseline at every
@@ -2848,7 +2882,9 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   /* --safe-t, like .app-header's own padding-top: the document sets
      viewport-fit=cover, so without it this sits UNDER the notch / status bar
      on every notched phone. */
-  position: absolute; top: calc(var(--safe-t) + var(--hdr-pad-t)); z-index: 100;
+  position: absolute;
+  top: calc(var(--safe-t) + var(--hdr-pad-t) + (var(--hdr-row-h) - var(--hdr-control-h)) / 2);
+  z-index: 100;
   /* --hdr-pad-t, NOT --corner-inset: this control is absolutely positioned and
      is therefore the one thing in the header that cannot inherit the row's top
      edge. Sharing the token is what keeps it on the row's baseline at every
@@ -3815,7 +3851,25 @@ body.gd-open { overflow: hidden; }
 .app-header__actions {
   display: flex; align-items: center; gap: 8px; min-width: 0;
   flex: 1 1 0;
+  min-height: var(--hdr-row-h);   /* all three zones agree on the row - see --hdr-row-h */
 }
+/* Every direct child of the header, whatever it is, on the same centreline and
+   with no margin of its own to shift it off. Stated once here rather than per
+   control, so a control added later inherits the rhythm instead of having to
+   remember it.
+   NOTE margin, not padding: a blanket `padding: 0` would collapse the pill
+   shapes these controls are built from (.btn-edit-measurements' 0 13px, the
+   switches' --switch-pad track inset), so horizontal padding is deliberately
+   left to each control and only stray MARGIN is normalised away. */
+.app-header__nav > *,
+.app-header__actions > * {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin: 0;
+}
+/* The cart dropdown is an absolutely-anchored popover, not a row item - it must
+   not be forced inline-flex by the rule above or it lays out as a flex row. */
+.app-header__actions > .cart-dropdown { display: block; }
+.app-header__actions > .cart-dropdown[hidden] { display: none; }
 .app-header__actions { justify-content: flex-end; position: relative; }   /* anchors .cart-dropdown */
 .app-header__actions .cart-btn { margin: 0; }   /* zone handles placement now */
 /* BUG FIX: the nav pills ("עריכת מידות", the fullscreen switch) used to be the
@@ -3837,6 +3891,7 @@ body.gd-open { overflow: hidden; }
    than force nav/actions to make room for it. */
 .app-header__brand-lockup {
   display: flex; align-items: center; gap: 10px; flex: 0 1 auto; min-width: 0;
+  min-height: var(--hdr-row-h);   /* the zone that used to SET the row now conforms to it */
 }
 .app-header__titles {
   display: flex; flex-direction: column; align-items: flex-start;
@@ -3846,7 +3901,13 @@ body.gd-open { overflow: hidden; }
    proportional. flex:none - the logo never shrinks/distorts; only the text
    beside it truncates under pressure. */
 .brand-mark {
-  width: auto; height: 38px; object-fit: contain; margin: 0; align-self: center; flex: none;
+  width: auto; height: 38px; object-fit: contain; flex: none;
+  /* align-self:center is what actually centres it - this is a flex item, so its
+     baseline plays no part. vertical-align/auto margins are kept alongside for
+     the same reason the rest of this block is explicit: if the lockup is ever
+     un-flexed (an inline fallback, a print sheet), the image still sits on the
+     centreline instead of dropping to the text baseline. */
+  align-self: center; margin: auto 0; vertical-align: middle; display: block;
 }
 
 /* Desktop: widen the camera stage so landscape webcam + AI output show with far
