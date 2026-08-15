@@ -268,7 +268,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   check("the live composite payload is the frozen prompt, at every pose",
     built === api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Fit and drape the exact garment from the reference image/.test(built),
+    /^Fit and drape the exact garment from the reference image dynamically/.test(built),
     built);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
@@ -329,10 +329,10 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   for (const prof of [false, true]) {
     const out = lockApi.buildCompositePrompt(lockItem, "front", prof);
     check(`the frozen prompt carries the render directive at inProfile=${prof}`,
-      /Fit and drape the exact garment from the reference image strictly onto the subject's live body shape, waistline/.test(out),
+      /Fit and drape the exact garment from the reference image dynamically onto the target subject's LIVE body shape/.test(out),
       out.slice(0, 400));
     check(`...and its provenance split at inProfile=${prof}`,
-      /Extract ONLY the garment's texture, pattern, and design from the reference image/.test(out),
+      /Extract ONLY the garment's texture, design, and graphics from the reference image/.test(out),
       out.slice(0, 400));
   }
 
@@ -405,7 +405,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Fit and drape the exact garment from the reference image strictly onto the subject's live body shape, waistline/;
+  const FROZEN = /^Fit and drape the exact garment from the reference image dynamically onto the target subject's LIVE body shape/;
   for (const prof of [false, true]) {
     check(`the frozen prompt is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
@@ -491,8 +491,14 @@ console.log("\n── §5 THE WATCHER: edge-on is a separate channel from the fr
     !/currentAngle !== AUTO_ANGLE\) return;\n\n {4}applying = true;/.test(upd));
 
   const tick = extract("const timer = setInterval", "if (dualView && confirmed) await maybeSwap(lastVote);");
+  /* Fire-and-forget since the 90-degree freeze work: awaiting it held the sampler's
+     `sampling` flag across a network round-trip, so the next orientation sample was
+     skipped and the watcher went stale during the very turn it tracks. The GATE is what
+     this asserts and it is unchanged; the `applying` mutex inside maybeUpdateProfile is
+     what makes dropping the await safe. */
   check("the tick skips the pose update only for a PENDING DUAL-VIEW swap (no redundant second set())",
-    /if \(!\(dualView && confirmed\)\) \{\s*\n\s*await maybeUpdateProfile\(lastProfileScore\);/.test(tick), tick.slice(-400));
+    /if \(!\(dualView && confirmed\)\) \{\s*\n(?:[^\n]*\n)*?\s*maybeUpdateProfile\(lastProfileScore\)\.catch\(\(\) => \{\}\);/.test(tick),
+    tick.slice(-400));
 }
 
 console.log("\n── §5b THE PIXEL METRICS, EXECUTED against synthetic frames ──");
@@ -739,7 +745,7 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     "if this ever passes again, inpaintLock was restored - update app.js's restore list");
   check("what survives at both poses is the frozen prompt, byte-identical",
     square === built && /Fit and drape the exact garment from the reference image/.test(square) &&
-    /do not force the original model's body proportions onto the user/.test(square));
+    /do NOT copy the source model's body frame or force a flat torso/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

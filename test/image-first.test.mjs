@@ -77,12 +77,12 @@ const api = new Function(...Object.keys(sandbox),
 
 const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 const SPEC =
-  "Fit and drape the exact garment from the reference image strictly onto the subject's" +
-  " live body shape, waistline, and true physical contours. Adapt the fabric volume," +
-  " drape, and curvature in real-time to match the user's actual abdomen depth, body" +
-  " width, and pose at all angles. Extract ONLY the garment's texture, pattern, and" +
-  " design from the reference image\u2014do not force the original model's body proportions" +
-  " onto the user.";
+  "Fit and drape the exact garment from the reference image dynamically onto the target" +
+  " subject's LIVE body shape and contours. The shirt must stretch, curve, and conform" +
+  " in real-time to the user's actual visible abdomen depth, waist volume, and silhouette" +
+  " from all angles (including 90-degree side profile). Extract ONLY the garment's" +
+  " texture, design, and graphics from the reference image\u2014do NOT copy the source model's" +
+  " body frame or force a flat torso.";
 
 console.log("── §1 THE FROZEN STRING: product-specified, and genuinely constant ──");
 {
@@ -99,15 +99,26 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      notice it any more, because there is no assembly left to log. */
   check("(1) it binds the drape to the PROVIDED asset AND the LIVE body, not to a concept",
     /Fit and drape the exact garment from the reference image/.test(SPEC) &&
-    /strictly onto the subject's live body shape, waistline, and true physical contours/.test(SPEC));
-  check("(2) it states the body physics: real volume, abdomen depth, every angle",
-    /Adapt the fabric volume, drape, and curvature in real-time/.test(SPEC) &&
-    /the user's actual abdomen depth, body width, and pose at all angles/.test(SPEC),
+    /dynamically onto the target subject's LIVE body shape and contours/.test(SPEC));
+  check("(2) it states the body physics as THREE verbs, not one, plus the reproduction angle",
+    /must stretch, curve, and conform in real-time/.test(SPEC) &&
+    /actual visible abdomen depth, waist volume, and silhouette/.test(SPEC) &&
+    /from all angles \(including 90-degree side profile\)/.test(SPEC),
     "DENSE.bodyFidelity + DENSE.profileLateral, folded in and un-sheddable");
   check("(3) it states the provenance split - cloth from the reference, body from the feed",
-    /Extract ONLY the garment's texture, pattern, and design from the reference image/.test(SPEC) &&
-    /do not force the original model's body proportions onto the user/.test(SPEC),
+    /Extract ONLY the garment's texture, design, and graphics from the reference image/.test(SPEC) &&
+    /do NOT copy the source model's body frame/.test(SPEC),
     "DENSE.modelAgnostic, folded in");
+  /* THE FLAT-TORSO BAN, and why a named negative is safe HERE when the tuxedo list was
+     not. "Don't copy their proportions" is a prohibition the model can satisfy by falling
+     back on its own generic prior - which for a torso is flat, i.e. the reported failure
+     arriving through the escape hatch left by the fix. Naming the specific wrong output is
+     the mechanism this file has used since backInferred. It is safe because "flat torso"
+     is a SHAPE, not a garment: there is no flat-torso object for the sampler to steer
+     toward the way "tuxedo" gave it one. */
+  check("...and bans the fallback the prohibition alone would leave open",
+    /or force a flat torso/.test(SPEC),
+    "a generic prior satisfies 'do not copy' by rendering flat - name it");
 
   /* BOTH SILHOUETTE AXES ARE NAMED, and this is the assertion the abdomen report earned.
      Head-on a body's outline is its WIDTH; edge-on, width foreshortens to nearly nothing
@@ -115,17 +126,22 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      at exactly the angle where it is the whole silhouette - which is the gap the retired
      SIDE_PROFILE_DEPTH was written against, and the reason "waistline" is named alongside
      the generic contour language. */
-  check("...naming BOTH silhouette axes - depth AND width - plus the waist explicitly",
-    /abdomen depth/.test(SPEC) && /body width/.test(SPEC) && /waistline/.test(SPEC),
+  check("...naming depth, volume AND silhouette, so no axis is undefended at 90 degrees",
+    /abdomen depth/.test(SPEC) && /waist volume/.test(SPEC) && /silhouette/.test(SPEC),
     "one axis alone is undefended at 90 degrees, where the other IS the outline");
 
   /* NOT POSE-GATED, and that is the substantive win over the clause it replaces.
      DENSE.profileLateral rode behind an `inProfile` ternary and shed edge-on under budget
      pressure - so the 90-degree frame, the one case it existed for, was the case most
      likely to lose it. "at all angles" needs no flag and cannot shed. */
-  check("...and 90 degrees is stated as physics, not as a pose-gated special case",
-    /at all angles/.test(SPEC) && !/EDGE-ON/.test(SPEC),
-    "no pose flag switches this off and no budget sheds it");
+  /* MORE THAN A CONVENIENCE NOW. The orientation watcher no longer dispatches anything on
+     a profile transition - its hold and its prompt update were both retired when the
+     90-degree freeze was traced to them - so a directive that needed a pose flag to arrive
+     would simply never arrive. Stating it unconditionally is the only way it holds at 90
+     degrees at all. */
+  check("...and 90 degrees is stated unconditionally, since no pose event delivers it",
+    /from all angles \(including 90-degree side profile\)/.test(SPEC) && !/EDGE-ON/.test(SPEC),
+    "no pose flag switches this on, and nothing would fire one if it did");
 
   /* THE NOUN LIST IS GONE ENTIRELY, and its absence is the assertion. Three versions of
      this prompt named the garment they were trying to prevent - assetLock enumerated six,

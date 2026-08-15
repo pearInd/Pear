@@ -4495,8 +4495,17 @@ function createOrientationWatcher() {
     // it opposite a pending dual-view swap - see the tick's own comment).
     lastReanchorAt = Date.now();
     autoProfile = next;                 // set BEFORE applying, so the snapshot below reads it
+    /* THE OLD LOG LINE CLAIMED A DISPATCH THAT NO LONGER HAPPENS - it read "depth-fidelity
+       clause ENGAGED (prompt-only, reference unchanged)". Under strict image-only
+       conditioning there is no depth-fidelity CLAUSE to engage: its instruction lives
+       inside the frozen string and is on the wire at every pose, so applyActive() below
+       finds nothing changed and correctly sends nothing. Saying otherwise in the console
+       is how the 90-degree freeze survived diagnosis for as long as it did - the log
+       described a transition that looked like it explained the stall. This axis is now
+       tracked purely so profileActive() can report it; the prompt does not move. */
     console.log(`[PEAR] AI Auto - pose ${next ? "EDGE-ON (side profile)" : "SQUARE-ON"}` +
-      ` | depth-fidelity clause ${next ? "ENGAGED" : "released"} (prompt-only, reference unchanged)`);
+      " | tracking only - the frozen prompt already states body conformity at all angles," +
+      " so no dispatch is expected here");
     try {
       await applyActive();
     } catch (e) {
@@ -4637,15 +4646,51 @@ function createOrientationWatcher() {
          signal for single-view sessions, where there is no lock to be "acquiring": once
          the very first frame has ever been dressed (isGarmentApplied), a profile reading
          is worth protecting the same way a dual-view one is. */
+      /* ╔════════════════════════════════════════════════════════════════════════╗
+         ║  THE 90-DEGREE FREEZE. This block WAS the bug. Read before restoring.  ║
+         ╚════════════════════════════════════════════════════════════════════════╝
+         REPORTED: "the feed freezes for a second or two, but ONLY when I turn sideways,
+         and ONLY live - the recording of the same session is smooth."
+
+         That asymmetry is the whole diagnosis, and it rules out WebRTC entirely. The
+         recorder's paint loop draws #aiVideo directly (see startRecording); the freeze
+         was #orientFadeCanvas - an opaque still snapshot, z-index 6, pinned over #aiVideo
+         inside #cameraCard - which the recorder cannot see. Live: frozen. Replay: smooth.
+         Nothing was ever wrong with the stream.
+
+         WHAT RAISED IT, and why it lasted so long. `enteringProfile` fired at
+         lastProfileScore > ORIENT_PROFILE_EXIT_SCORE - the EXIT threshold, 0.25, which is
+         deliberately low because its job is hysteresis on the way OUT. Used as an entry
+         trigger it fires the instant a shopper starts to turn. Release then required
+         autoProfile to actually flip, which needs ORIENT_PROFILE_ENTER samples at >= 0.55
+         (~500ms at best), plus a tick to notice. So even a clean 90-degree turn froze the
+         view for ~750ms - and a shopper who lingered anywhere between 0.25 and 0.55, which
+         is most of a real rotation, held it raised until the 4s ceiling. That is the
+         "1-2 second freeze".
+
+         WHY IT IS RETIRED RATHER THAN RETUNED. Its stated purpose was to cover the window
+         "until its prompt update actually lands" - the pose sentence catching up. There is
+         no pose sentence any more. Under strict image-only conditioning the prompt is one
+         frozen string, so maybeUpdateProfile()'s applyActive() finds the image AND the
+         prompt unchanged and dispatches nothing at all (see applyGarment's no-op skip).
+         The hold was freezing the live view for up to four seconds to hide a transition
+         that no longer transitions anything. Retuning the threshold would only shorten a
+         freeze that has no remaining purpose.
+
+         THE FRONT/BACK HOLD STAYS, and the difference is not cosmetic: that one covers a
+         real ASSET swap - with COMPOSITE_DEFAULT off, a confirmed flip changes the
+         reference image and re-uploads it - so there genuinely is a window in which the
+         model is between garments. It ends when the swap completes, not on a guess.
+
+         TO RESTORE THE PROFILE HOLD you would first have to give it something to cover:
+         restore a pose clause to the prompt (see IMAGE_ONLY_PROMPT's restore list) so the
+         profile transition dispatches again. Then raise it on ORIENT_PROFILE_ENTER_SCORE,
+         never on the EXIT threshold. */
       const dualView = currentAngle === AUTO_ANGLE;
-      const holdReady = dualView ? !acquiring : isGarmentApplied;
       const frontBackTurn = dualView && !acquiring && needsSwitch && !confirmed;
-      const enteringProfile = holdReady && !autoProfile && lastProfileScore > ORIENT_PROFILE_EXIT_SCORE;
-      if (frontBackTurn || enteringProfile)
-        orientHoldBegin(frontBackTurn ? "turn-detected" : "profile-turn-detected");
-      /* The shopper turned back / straightened up before either axis confirmed (or the
-         signal cleared): no swap and no profile flip is coming, so drop the hold now
-         rather than sitting on a still until the ceiling. */
+      if (frontBackTurn) orientHoldBegin("turn-detected");
+      /* The shopper turned back / straightened up before the flip confirmed: no swap is
+         coming, so drop the hold now rather than sitting on a still until the ceiling. */
       else if (_orientHoldActive) orientHoldEnd("turn-abandoned");
 
       /* The pose axis, updated every tick. Skipped when a DUAL-VIEW swap is confirmed and
@@ -4660,8 +4705,23 @@ function createOrientationWatcher() {
          with no swap ever actually pending behind it. Gating on `dualView` too is what
          keeps this axis running for the entire life of a single-view session instead of
          going silent the moment the shopper is first read as "front". */
+      /* NOT AWAITED - these run in the background, and the tick moves on. Both end in
+         applyActive(), which can take a network round-trip; awaiting them here held
+         `sampling` true for that whole time, so the NEXT orientation sample was skipped
+         and the watcher's effective rate dropped from 250ms to however long Decart took
+         to answer. That never froze #aiVideo (the video is composited independently of
+         this timer), but it did make the orientation signal go stale during exactly the
+         movement it is meant to be tracking - the turn - which is a slower, quieter
+         version of the same complaint.
+
+         Safe without the await because the mutex is INSIDE them, not here:
+         maybeUpdateProfile() and maybeReanchorPrompt() both check and set the shared
+         `applying` flag before doing anything, so two overlapping ticks still cannot
+         produce two concurrent applies. What is lost is only the tick's knowledge of when
+         they finished, which nothing below uses. maybeSwap() stays awaited - it owns the
+         hold's lifecycle and the tick must not run ahead of it. */
       if (!(dualView && confirmed)) {
-        await maybeUpdateProfile(lastProfileScore);
+        maybeUpdateProfile(lastProfileScore).catch(() => {});
         /* Same redundancy argument as maybeUpdateProfile()'s skip above: a pending
            dual-view swap is about to re-apply the whole payload anyway. Called AFTER
            maybeUpdateProfile(), not instead of it - a fresh transition this very tick
@@ -4670,7 +4730,7 @@ function createOrientationWatcher() {
            NOT gated on pose: the drift this counters is pose-independent, so a shopper
            standing still square-on needs it exactly as much as one holding a profile -
            see REANCHOR_MS's comment. */
-        await maybeReanchorPrompt();
+        maybeReanchorPrompt().catch(() => {});
       }
 
       if (dualView && confirmed) await maybeSwap(lastVote);
@@ -5992,19 +6052,26 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    retired when the prompt froze. They are back, but INSIDE the frozen string rather than
    beside it, which is the whole point: they cannot be shed, cannot be reordered, and
    cannot be separated from the instruction they qualify. Each sentence now carries one:
-     1. drape onto the SUBJECT's live shape, WAISTLINE and true physical contours - the
-        live feed is the body source, and the waist is named because it is the region the
-        report is actually about;
-     2. adapt volume/drape/curvature to real abdomen depth, BODY WIDTH and pose AT ALL
-        ANGLES - the 90-degree case profileLateral was written for, stated as physics
-        rather than as a special case, so it needs no pose flag to switch it on. Depth and
-        width are named as separate axes on purpose: head-on the silhouette is width and
-        edge-on it is depth, and a clause naming only one leaves the other undefended at
-        exactly the angle where it is the whole outline;
-     3. extract ONLY texture/pattern/design from the reference - the provenance split -
-        and do not FORCE the model's proportions onto the user. "Force onto" rather than
-        "copy" is the sharper phrasing: the failure is not the model politely copying a
-        shape, it is the shopper's real body being overridden by one.
+     1. drape DYNAMICALLY onto the subject's LIVE shape - the live feed is the body
+        source, and "dynamically" is doing real work: the failure is not a wrong static
+        fit, it is a garment that stays the shape it was while the body under it moves;
+     2. STRETCH, CURVE and CONFORM in real-time to visible abdomen depth, waist volume and
+        silhouette FROM ALL ANGLES, 90-degree side profile named explicitly. Three verbs
+        rather than one because the fabric has to do three different things over a
+        protruding stomach - extend across it, follow its curve, and settle against it -
+        and "fit" alone is satisfied by a garment that merely hovers at the right size.
+        The angle is named because it is the reproduction case, and stating it as physics
+        rather than as a special case means no pose flag switches it on: the orientation
+        watcher no longer dispatches anything on a profile transition (see the tick's
+        90-degree freeze note), so a clause that needed one would never arrive;
+     3. extract ONLY texture/design/graphics from the reference - the provenance split -
+        and do not copy the source model's body FRAME or force a FLAT TORSO. The flat-torso
+        ban is the one addition experience argues hardest for: "don't copy their
+        proportions" is a prohibition the model can satisfy by falling back on its own
+        generic prior, which for a torso is flat. Naming the specific wrong output is the
+        mechanism this file has relied on since backInferred, and it is the one place a
+        named negative is safe here - "flat torso" is a SHAPE, not a garment, so it cannot
+        be summoned into the output the way "tuxedo" could.
 
    NOTE WHAT LEFT: the enumerated "without inventing any tuxedos, suits, or unrequested
    garments" tail is gone. That is deliberate and it is this file's own recorded next step
@@ -6061,12 +6128,12 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    exactly that. Restore ONE at a time and re-test: the entire premise of this mode is
    that clause count is what was drowning the image. */
 const IMAGE_ONLY_PROMPT =
-  "Fit and drape the exact garment from the reference image strictly onto the subject's" +
-  " live body shape, waistline, and true physical contours. Adapt the fabric volume," +
-  " drape, and curvature in real-time to match the user's actual abdomen depth, body" +
-  " width, and pose at all angles. Extract ONLY the garment's texture, pattern, and" +
-  " design from the reference image—do not force the original model's body proportions" +
-  " onto the user.";
+  "Fit and drape the exact garment from the reference image dynamically onto the target" +
+  " subject's LIVE body shape and contours. The shirt must stretch, curve, and conform" +
+  " in real-time to the user's actual visible abdomen depth, waist volume, and silhouette" +
+  " from all angles (including 90-degree side profile). Extract ONLY the garment's" +
+  " texture, design, and graphics from the reference image—do NOT copy the source model's" +
+  " body frame or force a flat torso.";
 
 /* The dense clause table. Deliberately lower-case and lightly punctuated wherever the
    meaning survives it: ALL-CAPS and heavy punctuation both tokenize worse than prose,

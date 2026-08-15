@@ -98,19 +98,24 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      the reference is the only source of CLOTH, the live feed the only source of BODY. */
   const out = api.buildCompositePrompt(TEE, "front", false);
   check("the shipped prompt names the reference as cloth-only",
-    /Extract ONLY the garment's texture, pattern, and design from the reference image/.test(out), out);
-  check("...and forbids IMPOSING the reference figure's build - the reported failure",
-    /do not force the original model's body proportions onto the user/.test(out), out);
-  check("...while pinning the LIVE subject, waist included, as the body it must fit",
-    /strictly onto the subject's live body shape, waistline, and true physical contours/.test(out) &&
-    /the user's actual abdomen depth, body width/.test(out), out);
+    /Extract ONLY the garment's texture, design, and graphics from the reference image/.test(out), out);
+  check("...and forbids copying the source model's body FRAME - the reported failure",
+    /do NOT copy the source model's body frame/.test(out), out);
+  /* THE SECOND HALF, added after the abdomen report: a prohibition alone is satisfiable by
+     falling back on a generic prior, and for a torso that prior is flat - the same failure
+     through the escape hatch the fix left open. Naming the wrong shape closes it. */
+  check("...and the flat-torso fallback with it",
+    /or force a flat torso/.test(out), out);
+  check("...while pinning the LIVE subject, waist volume included, as the body it must fit",
+    /dynamically onto the target subject's LIVE body shape and contours/.test(out) &&
+    /actual visible abdomen depth, waist volume, and silhouette/.test(out), out);
 
   /* NOT POSE-GATED, which is the property §4 of the original suite existed for: the
      reference figure's anatomy bleeds at every angle, so this must hold edge-on too.
      It used to be a ranking argument (MED, shed under pressure); it is now structural. */
   for (const prof of [false, true]) {
     check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
-      /do not force the original model's body proportions onto the user/
+      /do NOT copy the source model's body frame or force a flat torso/
         .test(api.buildCompositePrompt(TEE, "front", prof)));
   }
 
@@ -189,7 +194,7 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
     check(`the frozen prompt survives a pathologically long name (inProfile=${prof})`,
-      /Fit and drape the exact garment from the reference image/.test(out),
+      /Fit and drape the exact garment from the reference image dynamically/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }
