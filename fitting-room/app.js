@@ -6038,6 +6038,63 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    WORDING IS PRODUCT-SPECIFIED - do not paraphrase, do not interpolate, do not append.
    `${...}` inside this string is how a description gets back in, one field at a time.
 
+   ── REVISION 4: THE PHYSICS LANGUAGE STARTED STYLING THE GARMENT ─────────────
+   THREE REPORTS, and the first two are the same mechanism seen from two sides.
+
+     · A KNOT tied into the front hem, over the abdomen.
+     · The BACK flaring open into loose floating fabric on a turn.
+
+   Revision 3's third sentence asked for "realistic textile drape, natural tension lines,
+   and proper 3D volume wrapping". Every one of those words is also the vocabulary of
+   GARMENT STYLING - drape, gathering, tension are what a designer says about a knotted
+   hem or an open-backed cut - and a diffusion model has no way to know we meant physics
+   rather than construction. Asked for drape over a protruding stomach with no statement
+   of what the garment's STRUCTURE is, the most probable way to produce visible drape is
+   to give the garment somewhere to drape FROM: a knot, a gather, an open back. It was
+   doing exactly what it was told, and what it was told was ambiguous.
+
+   So this revision states the STRUCTURE first and asks for the physics only as a smooth
+   wrap. "Standard, continuous t-shirt" is the frame; "normal, flat, un-knotted hem and a
+   completely closed back" is the boundary; the four named artifacts are the enumeration.
+   The physics vocabulary that invited the styling reading is gone entirely - what
+   survives is "smoothly wrap ... around the subject's true body volume and stomach",
+   which asks for the same outcome without ever naming a construction technique.
+
+     · THE THIRD REPORT: the fit only came out right when the session STARTED at 90
+       degrees; face-on it flattened. Revision 3 said "from all angles", which is true and
+       useless - a model has no reason to treat an unenumerated range as including the
+       case it is currently getting wrong. Both angles are now named explicitly, 0-degree
+       front alongside 90-degree side, so neither is the default the other is measured
+       against.
+
+   ── TWO THINGS THIS REVISION TRADES AWAY, recorded because they are real ──────
+     1. THE EXPLICIT BODY-DISCARD IS GONE. Revision 3 led with "completely ignoring the
+        original model's body size, chest, and waist dimensions" - DENSE.modelAgnostic,
+        stated outright. What replaces it is "Preserve ONLY the reference image's graphics,
+        fabric texture, and color", which implies the same thing by exhaustion but never
+        says it. That is a weaker instrument against the "it gave me the e-commerce
+        model's shoulders" report, and it is the FIRST thing to restore if that returns:
+        DENSE.modelAgnostic is still on file, and appending its sentence is a one-line
+        edit. Recorded here rather than discovered later.
+     2. THE EXTRACTION DIRECTIVE NO LONGER LEADS. Revision 3 moved it to the front
+        deliberately, on this file's oldest lesson - leading tokens dominate - and it is
+        now the closing sentence. The lead is still a reference-bound instruction ("a
+        standard, continuous t-shirt FROM the reference image"), so the asset is anchored
+        in the first clause either way; what moved is the isolation half. If the garment
+        itself starts drifting again (wrong colour, wrong print), this ordering is the
+        first thing to look at, before adding any words.
+
+   ONE MORE, AND IT IS THE RISKIEST PART OF THIS STRING: "knots", "tied fabric", "open
+   slits" and "floating back flaps" are NAMED NEGATIVES. This file's record is that naming
+   a rendering FAULT is safe (a stretch, a float - there is no object to steer toward)
+   while naming a GARMENT is not (the tuxedo outlived two prompts that banned it by name).
+   These sit between: a knot is not a garment type, but it is more object-like than any
+   negative shipped since the tuxedo list. They are named because the artifacts are already
+   appearing and naming the failure is what has historically stopped it - but if knots
+   persist or spread, deleting the enumeration and keeping only the positive boundary
+   ("Maintain a normal, flat, un-knotted hem and a completely closed back") is the next
+   thing to try, NOT a longer list.
+
    ── REVISION 3: THE REFERENCE IS A 2D MATERIAL, NOT A DRESSED PERSON ─────────
    THE SYMPTOM THAT SEPARATES THIS FROM THE REVISION BELOW: the previous wording asked
    the garment to conform to the shopper's real abdomen and it did - by STRETCHING. A
@@ -6081,41 +6138,45 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    beside it, which is the whole point: they cannot be shed, cannot be reordered, and
    cannot be separated from the instruction they qualify.
 
-   ── THE THREE SENTENCES ON THE WIRE TODAY ────────────────────────────────────
-     1. EXTRACT strictly fabric texture, colour and design pattern; completely ignore the
-        original model's body size, chest and waist. This is DENSE.modelAgnostic's
-        provenance split, promoted to lead the prompt by revision 3 - it has to be settled
-        before anything else, because until the reference is understood as material rather
-        than as a photograph of a person, every later instruction is applied to that
-        person's geometry. Chest and waist are named individually rather than as
-        "proportions": they are the two measurements the source packshot most visibly
-        carries, and a general word invites a general reading.
-     2. WRAP AND DRAPE dynamically onto the subject's true live body VOLUME, abdomen depth
-        and physical contours, FROM ALL ANGLES. This is DENSE.bodyFidelity plus
-        DENSE.profileLateral. "Volume" rather than "shape" is the load-bearing word after
-        the 2D-stretch report - a shape can be satisfied by an outline, a volume cannot.
-        Stating the angles unconditionally matters more than it reads: the orientation
-        watcher no longer dispatches anything on a profile transition (see the tick's
-        90-degree freeze note), so a directive that needed a pose flag would never arrive.
-     3. RENDER the physics - textile drape, natural tension lines, proper 3D volume
-        wrapping over stomach and waist, WHETHER LARGE OR SMALL, without 2D stretching or
-        floating artifacts. The size clause removes the assumption instead of arguing with
-        it, which is cheaper than any amount of insisting. The two named artifacts are the
-        reported failures stated directly, and naming a specific wrong output is this
-        file's oldest working mechanism (backInferred). It is safe here for the same reason
-        "flat torso" was in revision 2: a stretch and a float are RENDERING FAULTS, not
-        garments, so there is no object for the sampler to steer toward.
+   ── THE FOUR SENTENCES ON THE WIRE TODAY ──────────────────────────────
+     1. STRUCTURE, and it leads for the reason revision 4 exists: "a standard, continuous
+        t-shirt from the reference image". Naming what the garment IS - continuous, one
+        piece - is what forecloses the knot and the open back before any physics language
+        arrives. It also anchors the reference in the first clause, which is what keeps the
+        asset bound now that the extraction sentence has moved to the end.
+        THE ONE COMPROMISE IN THIS STRING: "t-shirt" is a garment NOUN, of exactly the kind
+        SHIRT_NOUN/SUBTYPE_PROMPT were retired for naming. It is correct for the upper-body
+        catalog and for every case reported so far, and WRONG for lower_body items (Nimbus)
+        and long-sleeve tops, where it asserts something the reference contradicts. If
+        trousers render as a shirt, this noun is the cause and "garment" is the one-word
+        fix - see SUBTYPE_PROMPT's retired-noun note for the mechanism.
+     2. WRAP smoothly around the subject's true body VOLUME and stomach, at 0-degree front
+        AND 90-degree side. This is DENSE.bodyFidelity plus DENSE.profileLateral. "Volume"
+        rather than "shape" is the word the 2D-stretch report earned - a shape is
+        satisfiable by an outline, a volume is not. Both angles are ENUMERATED rather than
+        left to "all angles": the face-on case was failing while "all angles" was already
+        on the wire, and a model has no reason to read an unenumerated range as including
+        the case it is currently getting wrong. Neither is a pose flag, which matters - the
+        orientation watcher no longer dispatches anything on a profile transition (see the
+        tick's 90-degree freeze note), so a directive gated on one would never arrive.
+     3. BOUNDARY: a normal, flat, un-knotted hem and a completely closed back, then the four
+        artifacts named directly - front knots, tied fabric, open slits, floating back
+        flaps. Positive boundary FIRST, enumeration second, deliberately: if the list has to
+        go (see the risk note above), what remains is still a complete statement of the
+        correct structure rather than a gap.
+     4. EXTRACTION: preserve ONLY the reference's graphics, fabric texture and colour. The
+        provenance split, reduced to its positive half - it implies the body-discard by
+        exhaustion but no longer states it. See "two things this revision trades away".
 
    NOTE WHAT LEFT, across revisions: the enumerated "without inventing any tuxedos, suits,
-   or unrequested garments" tail, and revision 2's "do NOT copy the source model's body
-   frame or force a flat torso". The first is deliberate and is this file's own recorded
-   next step - with no negative_prompt field, a named garment ships in the POSITIVE prompt
-   where the sampler can steer toward it, and the tuxedo outlived two versions that named
-   it. The second was superseded rather than dropped: sentence 1 now bans copying the
-   source body far more specifically (size, chest, waist), and sentence 3's "without 2D
-   stretching" is the flat-torso ban restated as the artifact it actually produces. If
-   invented garments return, do not re-add the noun list; re-read the DENSE table's
-   assetLock comment for why that made it worse.
+   or unrequested garments" tail, revision 2's "do NOT copy the source model's body frame or
+   force a flat torso", and revision 3's physics vocabulary ("realistic textile drape,
+   natural tension lines") - the last because it was read as STYLING and produced the knot.
+   The tuxedo tail is deliberate and is this file's own recorded next step: with no
+   negative_prompt field a named garment ships in the POSITIVE prompt where the sampler can
+   steer toward it, and the tuxedo outlived two versions that named it. If invented garments
+   return, do not re-add that noun list; re-read the DENSE table's assetLock comment for why
+   it made things worse.
 
    ── WHAT WENT WITH IT, and how to get any of it back ─────────────────────────
    Every clause the builders assembled is retired from the prompt path. They are all
@@ -6140,14 +6201,16 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
                                 so the pose sentence is the model's job to read off
                                 the live frame, which is where it always came from.
      · profileLateral           the 90-degree flank/depth directive. SUPERSEDED, not
-                                simply lost: the frozen string's "abdomen depth, and
-                                physical contours from all angles" states the same physics
-                                with no pose flag to gate it - which matters more than it
-                                reads, since nothing dispatches on a profile transition
-                                any more. Same for bodyFidelity ("true live body volume")
-                                and modelAgnostic ("completely ignoring the original
-                                model's body size, chest, and waist dimensions") - see the
-                                revision notes above.
+                                simply lost: the frozen string's "from all angles,
+                                including 0-degree front and 90-degree side views" states
+                                the same coverage with no pose flag to gate it - which
+                                matters more than it reads, since nothing dispatches on a
+                                profile transition any more. Same for bodyFidelity
+                                ("the subject's true body volume and stomach"). NOT the
+                                same for modelAgnostic - revision 4 reduced that one to an
+                                IMPLICATION ("Preserve only ... graphics, fabric texture,
+                                and color"), which is the weakest it has been. See the
+                                revision notes above; it is first on the restore list.
      · inpaintLock              face/skin/hands/background passthrough. THE LARGEST
                                 LOSS and the one to restore first if the model starts
                                 repainting the shopper's room or face: nothing else
@@ -6164,12 +6227,12 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    exactly that. Restore ONE at a time and re-test: the entire premise of this mode is
    that clause count is what was drowning the image. */
 const IMAGE_ONLY_PROMPT =
-  "Extract strictly the garment's fabric texture, color, and design pattern from the" +
-  " reference image, completely ignoring the original model's body size, chest, and waist" +
-  " dimensions. Wrap and drape the fabric dynamically onto the target subject's true live" +
-  " body volume, abdomen depth, and physical contours from all angles. Render realistic" +
-  " textile drape, natural tension lines, and proper 3D volume wrapping over the subject's" +
-  " stomach and waist, whether large or small, without 2D stretching or floating artifacts.";
+  "Fit a standard, continuous t-shirt from the reference image onto the subject. Smoothly" +
+  " wrap the fabric around the subject's true body volume and stomach from all angles," +
+  " including 0-degree front and 90-degree side views. Maintain a normal, flat, un-knotted" +
+  " hem and a completely closed back—do NOT generate front knots, tied fabric, open slits," +
+  " or floating back flaps. Preserve only the reference image's graphics, fabric texture," +
+  " and color.";
 
 /* The dense clause table. Deliberately lower-case and lightly punctuated wherever the
    meaning survives it: ALL-CAPS and heavy punctuation both tokenize worse than prose,
@@ -6191,10 +6254,15 @@ const IMAGE_ONLY_PROMPT =
      · assetLock      its directive is the frozen string's "the EXACT garment FROM the
                       reference image"; its enumerated noun list is deliberately NOT
                       reproduced (see this table's own assetLock comment).
-     · bodyFidelity   → "the target subject's true live body volume".
-     · modelAgnostic  → "completely ignoring the original model's body size, chest, and
-                      waist dimensions" - and it LEADS the prompt now, see revision 3.
-     · profileLateral → "abdomen depth, and physical contours from all angles".
+     · bodyFidelity   → "the subject's true body volume and stomach".
+     · profileLateral → "from all angles, including 0-degree front and 90-degree side
+                      views" - both angles enumerated, neither gated on a pose event.
+     · modelAgnostic  → ONLY IMPLIED, by "Preserve only the reference image's graphics,
+                      fabric texture, and color". Revision 3 stated the discard outright
+                      and revision 4 dropped that wording; the implication is weaker than
+                      the statement. This is the one clause on this list whose restore is
+                      an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
+                      the moment "it gave me the model's shoulders" is reported again.
 
    THE REST ARE GENUINELY GONE from the wire, and are the ones worth buying back first:
      · inpaintLock    face/skin/hands/background passthrough. THE LARGEST LOSS.

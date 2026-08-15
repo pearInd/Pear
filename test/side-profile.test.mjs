@@ -268,7 +268,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   check("the live composite payload is the frozen prompt, at every pose",
     built === api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Extract strictly the garment's fabric texture, color, and design pattern/.test(built),
+    /^Fit a standard, continuous t-shirt from the reference image/.test(built),
     built);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
@@ -329,10 +329,10 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   for (const prof of [false, true]) {
     const out = lockApi.buildCompositePrompt(lockItem, "front", prof);
     check(`the frozen prompt carries the render directive at inProfile=${prof}`,
-      /Wrap and drape the fabric dynamically onto the target subject's true live body volume/.test(out),
+      /Smoothly wrap the fabric around the subject's true body volume and stomach/.test(out),
       out.slice(0, 400));
     check(`...and its provenance split at inProfile=${prof}`,
-      /Extract strictly the garment's fabric texture, color, and design pattern from the reference image/.test(out),
+      /Preserve only the reference image's graphics, fabric texture, and color/.test(out),
       out.slice(0, 400));
   }
 
@@ -405,7 +405,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Extract strictly the garment's fabric texture, color, and design pattern from the reference image/;
+  const FROZEN = /^Fit a standard, continuous t-shirt from the reference image onto the subject/;
   for (const prof of [false, true]) {
     check(`the frozen prompt is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
@@ -744,8 +744,8 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     !/pass through untouched/.test(square) && !/pass through untouched/.test(built),
     "if this ever passes again, inpaintLock was restored - update app.js's restore list");
   check("what survives at both poses is the frozen prompt, byte-identical",
-    square === built && /Extract strictly the garment's fabric texture/.test(square) &&
-    /without 2D stretching or floating artifacts/.test(square));
+    square === built && /Fit a standard, continuous t-shirt from the reference image/.test(square) &&
+    /do NOT generate front knots, tied fabric, open slits, or floating back flaps/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

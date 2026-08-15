@@ -40,18 +40,21 @@
    bug, returning exactly as its §3 predicted it would. A shopper with a real waistline got
    the catalog model's slim proportions and a shirt that hovered instead of draping.
 
-   So the provenance split is on the wire again, but as one of the frozen string's three
-   sentences rather than as a shed-able clause beside it - and after revision 3 it is the
-   sentence that LEADS: "Extract strictly the garment's fabric texture, color, and design
-   pattern from the reference image, completely ignoring the original model's body size,
-   chest, and waist dimensions." That is strictly stronger than what it replaces on both
-   counts. It names the three measurements the source packshot actually carries instead of
-   the general word "proportions", and it settles what the reference IS before any drape
-   instruction is given - because until that is settled, every later instruction is applied
-   to the source model's geometry, which is the 2D-stretch report. The old
-   DENSE.modelAgnostic was ranked MED and was ALREADY being shed edge-on under budget
-   pressure; a sentence inside the constant cannot be shed, cannot be reordered, and
-   cannot be separated from the instruction it qualifies.
+   So the provenance split went back on the wire - but its strength has moved twice since.
+   Revision 3 stated it outright and led with it: "Extract strictly the garment's fabric
+   texture, color, and design pattern from the reference image, completely ignoring the
+   original model's body size, chest, and waist dimensions." Revision 4, chasing a knotted
+   hem and an open back, restructured the whole prompt around garment CONSTRUCTION and
+   reduced this to its positive half alone - "Preserve only the reference image's graphics,
+   fabric texture, and color" - which now closes the reference at the END of the prompt
+   rather than opening it.
+
+   That implies the discard by exhaustion but never states it, and it is the weakest this
+   directive has been since it was first written. It is a deliberate trade against two
+   visible artifacts, not an oversight - but it means THIS suite's own bug is the one most
+   likely to return next, and DENSE.modelAgnostic is the one retired clause whose restore
+   would be an improvement rather than a duplication. Appending it is a one-line edit; §2
+   keeps that path exercised so it stays one line.
 
    WHAT THIS SUITE ASSERTS NOW is therefore both halves: that the DIRECTIVE ships (§1),
    and that the CONSTANT it used to ship as is still on file and still restorable (§2),
@@ -101,23 +104,24 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      the reference is the only source of CLOTH, the live feed the only source of BODY. */
   const out = api.buildCompositePrompt(TEE, "front", false);
   check("the shipped prompt names the reference as cloth-only",
-    /Extract strictly the garment's fabric texture, color, and design pattern from the reference image/.test(out), out);
-  check("...and discards the source body by name - size, chest, waist",
-    /completely ignoring the original model's body size, chest, and waist dimensions/.test(out), out);
-  /* THE SECOND HALF, added after the 2D-stretch report: a prohibition alone is satisfiable
-     by deforming the source geometry rather than discarding it - the shirt painted flat
-     across a protrusion instead of wrapping it. Naming the artifact closes that route. */
-  check("...and bans the artifact that prohibition alone still permits",
-    /without 2D stretching or floating artifacts/.test(out), out);
+    /Preserve only the reference image's graphics, fabric texture, and color/.test(out), out);
+  /* THE DISCARD IS NOW IMPLICIT, and that is a real reduction rather than a rewording.
+     Revision 3 said "completely ignoring the original model's body size, chest, and waist
+     dimensions" outright; revision 4 replaced it with "Preserve ONLY ...", which implies
+     the same thing by exhaustion but never states it. Weaker against this suite's own
+     report, and recorded as such: the restore is one line, and §2 keeps it exercised. */
+  check("...the discard is carried by exhaustion (ONLY these three), not stated outright",
+    /Preserve only the reference image's graphics, fabric texture, and color/.test(out) &&
+    !/ignoring the original model's body/.test(out), out);
   check("...while pinning the LIVE subject's VOLUME as the body it must fit",
-    /onto the target subject's true live body volume, abdomen depth, and physical contours/.test(out), out);
+    /wrap the fabric around the subject's true body volume and stomach/.test(out), out);
 
   /* NOT POSE-GATED, which is the property §4 of the original suite existed for: the
      reference figure's anatomy bleeds at every angle, so this must hold edge-on too.
      It used to be a ranking argument (MED, shed under pressure); it is now structural. */
   for (const prof of [false, true]) {
     check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
-      /completely ignoring the original model's body size, chest, and waist dimensions/
+      /Preserve only the reference image's graphics, fabric texture, and color/
         .test(api.buildCompositePrompt(TEE, "front", prof)));
   }
 
@@ -153,7 +157,7 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     /RESTORE LIBRARY, not an assembly source/.test(SRC));
   check("...and records this clause as SUPERSEDED, with the sentence that replaced it",
     /THREE OF THEM ARE SUPERSEDED rather than merely retired/.test(SRC) &&
-    /modelAgnostic  \u2192 "completely ignoring the original model's body size, chest, and/.test(SRC),
+    /modelAgnostic  \u2192 ONLY IMPLIED, by "Preserve only the reference image's graphics,/.test(SRC),
     "restoring a superseded clause would DUPLICATE what is already on the wire");
   check("...and names the clauses that are genuinely gone, ranked, with a real restore line",
     /inpaintLock    face\/skin\/hands\/background passthrough\. THE LARGEST LOSS/.test(SRC) &&
@@ -196,7 +200,7 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
     check(`the frozen prompt survives a pathologically long name (inProfile=${prof})`,
-      /Extract strictly the garment's fabric texture, color, and design pattern/.test(out),
+      /Fit a standard, continuous t-shirt from the reference image/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }
