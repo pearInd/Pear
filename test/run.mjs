@@ -163,6 +163,7 @@ const SUITES = [
   ["lower-body-guard", "lower-body-guard.test.mjs"],
   ["kids-adult-size-guard", "kids-adult-size-guard.test.mjs"],
   ["size-mismatch-view", "size-mismatch-view.test.mjs"],
+  ["cart-size-variant", "cart-size-variant.test.mjs"],
 ];
 
 let failed = 0;

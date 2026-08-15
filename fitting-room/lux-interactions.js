@@ -160,8 +160,12 @@
         // below only ever CORRECTS this on an explicit, host-reported
         // failure; a widget build that never replies (older embeds) simply
         // leaves this as the final word, exactly like the fire-and-forget
-        // behaviour before it.
-        springToast("נוסף לסל · Added to cart");
+        // behaviour before it. Names the size when known (adult letter scale or
+        // kids numeric scale alike) so the confirmation matches what was actually
+        // tried on, not just "something was added".
+        springToast(garment.size
+          ? `הפריט במידה ${garment.size} נוסף לעגלה · Size ${garment.size} added to cart`
+          : "נוסף לסל · Added to cart");
       } else {
         // Standalone (PEAR demo site, no host store to sync with) - this
         // local counter IS the source of truth here, so it still owns the badge.

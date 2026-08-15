@@ -797,11 +797,20 @@
      pages, and the DOM scrape still covers everything else (and quick-shop grids where
      the page path is not the product's). Fetched once at boot so a click never waits. */
   var _shopifyGallery = null;      // string[] once resolved, [] when unavailable
+  // The SAME product.js fetch also carries the full variant list - cached here so the
+  // Add-to-Cart bridge can resolve an in-room size change to its real variant id
+  // instead of trusting whatever the PDP had selected when the fitting room opened
+  // (see findVariantForSize()'s own comment below for the bug this closes).
+  var _shopifyVariants = null;         // Shopify variant objects[] once resolved, [] when unavailable
+  var _shopifySizeOptionIndex = -1;    // 0/1/2 (option1/2/3) for whichever option Shopify itself calls "Size", else -1
 
   function loadShopifyProductJSON() {
     if (_shopifyGallery) return Promise.resolve(_shopifyGallery);
     var path = w.location.pathname.split("?")[0].replace(/\/$/, "");
-    if (path.indexOf("/products/") === -1) { _shopifyGallery = []; return Promise.resolve(_shopifyGallery); }
+    if (path.indexOf("/products/") === -1) {
+      _shopifyGallery = []; _shopifyVariants = []; _shopifySizeOptionIndex = -1;
+      return Promise.resolve(_shopifyGallery);
+    }
     return fetch(path + ".js", { credentials: "same-origin" })
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (p) {
@@ -812,14 +821,80 @@
           if (u && !isExcludedSrc(u)) imgs.push(upgradeImageUrl(u));
         }
         _shopifyGallery = imgs;
-        console.log("[PEAR] Shopify product JSON:", imgs.length, "image(s) for", p && p.title);
+
+        _shopifyVariants = (p && p.variants) || [];
+        // Read the option's declared NAME rather than assuming a position - different
+        // themes/merchants put Size at option1, option2 or option3 depending on
+        // whichever other option (colour, material) they listed first.
+        var opts = (p && p.options) || [];
+        _shopifySizeOptionIndex = -1;
+        for (var j = 0; j < opts.length; j++) {
+          var name = ((opts[j] && opts[j].name) || "").trim().toLowerCase();
+          if (name === "size" || name === "מידה") { _shopifySizeOptionIndex = j; break; }
+        }
+
+        console.log("[PEAR] Shopify product JSON:", imgs.length, "image(s),",
+          _shopifyVariants.length, "variant(s) for", p && p.title,
+          "- size option index:", _shopifySizeOptionIndex);
         return imgs;
       })
       .catch(function (e) {
         console.log("[PEAR] Shopify product JSON unavailable (not a Shopify PDP?):", e && e.message);
-        _shopifyGallery = [];
+        _shopifyGallery = []; _shopifyVariants = []; _shopifySizeOptionIndex = -1;
         return _shopifyGallery;
       });
+  }
+
+  function normalizeSizeToken(s) {
+    return String(s == null ? "" : s).trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function optionValueAt(variant, idx) {
+    if (idx === 0) return variant && variant.option1;
+    if (idx === 1) return variant && variant.option2;
+    if (idx === 2) return variant && variant.option3;
+    return undefined;
+  }
+
+  /* THE BUG THIS CLOSES: the fitting room's own size selector (setSizeOverride() in
+     app.js) lets a shopper try on a DIFFERENT size than whatever the store's PDP had
+     selected - pearGetActiveGarment() already reports that live choice correctly, but
+     nothing previously re-resolved WHICH SHOPIFY VARIANT that size corresponds to, so
+     /cart/add.js kept receiving the id captured off the PDP at handoff time. A shopper
+     who tried on M, saw L recommended, switched in-room, and clicked Add to Cart got M
+     silently added while the toast said success.
+
+     sizeOptionIndex is read from the product's own DECLARED option name (see
+     loadShopifyProductJSON above) - never assumed to be option1, since merchants order
+     Size/Colour/Material differently. fallbackVariantId (the id captured off the DOM/
+     PDP, still correct for every OTHER dimension - colour, material) anchors which of
+     several same-size variants to pick when the product has more than one option;
+     without it, any variant matching the size wins, which is still strictly better
+     than never re-resolving at all. Returns null - never a guess - when there's no
+     declared Size option, no variants loaded yet, or no size string to match. */
+  function findVariantForSize(variants, sizeOptionIndex, size, fallbackVariantId) {
+    if (sizeOptionIndex < 0 || !variants || !variants.length) return null;
+    var target = normalizeSizeToken(size);
+    if (!target) return null;
+
+    var current = fallbackVariantId != null
+      ? variants.filter(function (v) { return String(v.id) === String(fallbackVariantId); })[0]
+      : null;
+
+    function otherOptionsMatch(v) {
+      if (!current) return true;
+      for (var i = 0; i < 3; i++) {
+        if (i === sizeOptionIndex) continue;
+        if (normalizeSizeToken(optionValueAt(v, i)) !== normalizeSizeToken(optionValueAt(current, i))) return false;
+      }
+      return true;
+    }
+
+    for (var i = 0; i < variants.length; i++) {
+      var v = variants[i];
+      if (normalizeSizeToken(optionValueAt(v, sizeOptionIndex)) === target && otherOptionsMatch(v)) return v;
+    }
+    return null;
   }
 
   /* ── COMBINED composite - built here, on the store page ───────────────────────
@@ -2243,6 +2318,22 @@
     }
 
     var platform = detectCartPlatform();
+
+    // Prefer the variant that matches the shopper's CURRENT in-room size over
+    // whatever the PDP had selected at handoff - see findVariantForSize()'s own
+    // comment for the bug this closes. Never overrides on a miss (unknown Size
+    // option, product JSON not loaded yet, no matching size): payload.variantId
+    // stays exactly what it already was.
+    if (platform === "shopify" && payload.size) {
+      var sizedVariant = findVariantForSize(_shopifyVariants, _shopifySizeOptionIndex, payload.size, payload.variantId);
+      if (sizedVariant) {
+        payload = Object.assign({}, payload, {
+          variantId: sizedVariant.id,
+          sku: sizedVariant.sku || payload.sku,
+        });
+      }
+    }
+
     if (!payload.variantId && platform !== "custom") {
       showToast(isHebrewPage() ? "לא נמצאה גרסת מוצר להוספה לסל" : "Couldn't find a product variant to add");
       notifyFittingRoom(false, "no-variant");
@@ -2250,7 +2341,9 @@
     }
 
     addToHostCart(payload, platform).then(function () {
-      showToast(isHebrewPage() ? "הפריט נוסף לסל!" : "Added to cart!");
+      showToast(payload.size
+        ? (isHebrewPage() ? "הפריט במידה " + payload.size + " נוסף לעגלה" : "Size " + payload.size + " added to cart")
+        : (isHebrewPage() ? "הפריט נוסף לסל!" : "Added to cart!"));
       notifyFittingRoom(true);
       pushCartSync(sourceWindow);   // real host state, not just an optimistic count bump
     }).catch(function (err) {
