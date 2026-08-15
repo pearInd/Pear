@@ -93,9 +93,10 @@ const sandbox = {
   getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
-  code + "\nreturn { buildCompositePrompt, IMAGE_ONLY_PROMPT, fitPrompt, P, DENSE };")(...Object.values(sandbox));
+  code + "\nreturn { buildCompositePrompt, imageOnlyPrompt, fitPrompt, P, DENSE };")(...Object.values(sandbox));
 
-const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
+const TEE   = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
+const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
 
 console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes out ──");
 {
@@ -113,9 +114,13 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
   check("...the discard is carried by exhaustion (ONLY these three), not stated outright",
     /Use only the reference image's graphics, fabric texture, and color/.test(out) &&
     !/ignoring the original model's body/.test(out), out);
+  /* "strictly persistent 3D body volume" left with the t-shirt anchor it was welded to -
+     that sentence was replaced wholesale by the category anchor. The GUARANTEE it carried
+     did not leave: VOLUME_PERSISTENCE states it in full, and states it more specifically
+     (three named quantities rather than one adjective), which is what is asserted here. */
   check("...while pinning the LIVE subject's VOLUME as the body it must fit",
-    /strictly persistent 3D body volume/.test(out) &&
-    /abdomen\/stomach depth, waist volume, and torso thickness/.test(out), out);
+    /abdomen\/stomach depth, waist volume, and torso thickness/.test(out) &&
+    /never flatten or reset body size mid-stream/.test(out), out);
 
   /* NOT POSE-GATED, which is the property §4 of the original suite existed for: the
      reference figure's anatomy bleeds at every angle, so this must hold edge-on too.
@@ -164,30 +169,36 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     /inpaintLock    face\/skin\/hands\/background passthrough\. THE LARGEST LOSS/.test(SRC) &&
     /Restore: add \[P\.HIGH, DENSE\.inpaintLock\]/.test(SRC));
 
-  /* ── THE RESTORE BUDGET IS NOW ONE CLAUSE, NOT TWO ──────────────────────────
-     The frozen string has grown across five revisions - 215 chars to 573, which is 88% of
-     PROMPT_MAX_CHARS - so the headroom buys exactly one short clause. Either alone fits;
-     the pair does not, and fitPrompt() would silently shed the worse-priority one, which
-     is the failure mode this repo has spent its history making visible. Asserted in BOTH
-     directions so the constraint is discovered here rather than in a live session. */
+  /* ── THE RESTORE BUDGET IS BACK TO TWO CLAUSES ──────────────────────────────
+     It was ONE while the prompt was a single 573-char string carrying every clause for
+     every garment. Splitting it by CATEGORY bought headroom back rather than spending it:
+     each branch now carries only what applies to its own region (tops 524, bottoms 527),
+     so the pair fits again.
+
+     SIZED AGAINST BOTTOMS, the TIGHTER branch by 3 characters - its anchor carries the
+     extra "do not render any upper clothing from the reference" provenance sentence. A
+     restore checked against tops alone can still overflow bottoms, which is exactly the
+     silent-shed failure this section exists to make visible. */
+  const base = api.imageOnlyPrompt(JEANS);
   const one = api.fitPrompt([
-    [api.P.CORE, api.IMAGE_ONLY_PROMPT],
+    [api.P.CORE, base],
     [api.P.MED,  api.DENSE.modelAgnostic],
   ]);
   check("restoring THIS clause alone assembles and fits the budget",
     /Ignore the reference model's body/.test(one) && one.length <= 650,
     `${one.length} chars`);
   const both = api.fitPrompt([
-    [api.P.CORE, api.IMAGE_ONLY_PROMPT],
+    [api.P.CORE, base],
     [api.P.HIGH, api.DENSE.bodyFidelity],
     [api.P.MED,  api.DENSE.modelAgnostic],
   ]);
-  check("...but restoring a PAIR silently sheds one - the budget no longer covers both",
-    /never slim them/.test(both) && !/Ignore the reference model's body/.test(both),
-    `${both.length} chars - a second clause needs the frozen string to give up a sentence`);
-  check("...and app.js records that constraint with the arithmetic",
-    /THE RESTORE BUDGET IS NOW ONE CLAUSE, NOT TWO/.test(SRC) &&
-    /\+ BOTH                       \u2192 684   does NOT fit/.test(SRC));
+  check("...and the PAIR now fits too - nothing is silently shed",
+    /never slim them/.test(both) && /Ignore the reference model's body/.test(both) &&
+    both.length <= 650,
+    `${both.length} chars on the tighter (bottoms) branch`);
+  check("...and app.js records the new arithmetic, per branch",
+    /THE RESTORE BUDGET IS BACK TO TWO CLAUSES/.test(SRC) &&
+    /\+ BOTH                     \u2192 635    \u2192 638   fits/.test(SRC));
 }
 
 console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");
@@ -215,8 +226,8 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
   const pathological = { ...TEE, name: "x".repeat(400) };
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
-    check(`the frozen prompt survives a pathologically long name (inProfile=${prof})`,
-      /Fit a standard t-shirt from the reference image/.test(out),
+    check(`the category anchor survives a pathologically long name (inProfile=${prof})`,
+      /Fit and replace ONLY the subject's upper garment/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }

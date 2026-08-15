@@ -249,10 +249,18 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
     ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
     ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
+  /* The prompt now BRANCHES ON GARMENT CATEGORY (garment-category-prompt.test.mjs): a
+     trouser reference used to be handed a t-shirt anchor, which put the catalog model's
+     shirt on the shopper. That branch does not touch what THIS suite is about - the
+     prompt still cannot vary by angle or pose, so it still cannot lose a race against
+     the reference image. Each builder DELEGATES to the resolver and assembles nothing of
+     its own, which is the property that keeps the TOCTOU freeze meaningful. */
   for (const [name, re] of builders) {
     const body = (SRC.match(re) || [""])[0];
-    check(`${name} returns the frozen prompt and assembles nothing`,
-      /return IMAGE_ONLY_PROMPT;/.test(body) && !/fitPrompt\(/.test(body), body.slice(-300));
+    const codeBody = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    check(`${name} delegates to the category resolver and assembles nothing`,
+      /return (imageOnlyPrompt\(item\)|lookAnchorPrompt\(\));/.test(codeBody) &&
+      !/fitPrompt\(/.test(codeBody), codeBody.slice(-300));
   }
 
   check("the passthrough clamp is still on file, and named as the first to restore",

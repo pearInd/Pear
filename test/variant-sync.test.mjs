@@ -112,12 +112,26 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
   check("...nor a subtype noun (SHIRT_NOUN/SUBTYPE_PROMPT are prompt-free now)",
     !/SHIRT_NOUN\[|SUBTYPE_PROMPT\[/.test(promptColour),
     "a garment noun is a description the model can satisfy without reading the image");
-  check("every builder returns the frozen prompt instead",
-    (APP.match(/return IMAGE_ONLY_PROMPT;/g) || []).length >= 4,
-    "buildPrompt, buildCustomPrompt, buildCompositePrompt and buildLookPrompt");
-  check("...and the frozen prompt has no interpolation hole to leak a variant into",
-    /const IMAGE_ONLY_PROMPT =\s*\n?\s*"[^`]*";/.test(APP) && !/IMAGE_ONLY_PROMPT[\s\S]{0,200}\$\{/.test(APP),
+  /* THE PROMPT NOW BRANCHES ON GARMENT CATEGORY (garment-category-prompt.test.mjs) - a
+     trouser reference used to receive a t-shirt anchor, which put the catalog model's
+     shirt on the shopper. That is a branch on WHICH BODY REGION is being replaced, and it
+     is the only axis the prompt varies on: it still does not vary by colour, by variant,
+     by angle or by pose, which is the property THIS suite owns. Asserted as "every
+     builder routes through the resolver" rather than "every builder returns a constant",
+     because the constant is what had to go. */
+  check("every builder resolves its prompt through the category resolver",
+    (APP.match(/return imageOnlyPrompt\(item\);/g) || []).length >= 3 &&
+    /return lookAnchorPrompt\(\);/.test(APP),
+    "buildPrompt, buildCustomPrompt, buildCompositePrompt + the full-look exemption");
+  check("...and neither category anchor has an interpolation hole to leak a variant into",
+    /const CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(APP) &&
+    !/CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,900}?\$\{/.test(APP),
     "a template hole here is how a colour word gets back onto the wire");
+  /* The resolver may branch on CATEGORY and nothing else. A second argument threaded in
+     from a variant/colour/angle is how a description creeps back onto the wire. */
+  check("...and the resolver branches on the garment's category alone",
+    /function imageOnlyPrompt\(item\) \{\s*\n\s*const bottoms = isBottomsGarment\(item\);/.test(APP),
+    "any other input to this function is a new axis the prompt can vary on");
   /* Comments stripped first: variantMetaOf's own doc block QUOTES the old call as the
      thing it replaced, and a check that trips over the explanation of the fix is worse
      than no check - it would force whoever reads it to delete the documentation. */

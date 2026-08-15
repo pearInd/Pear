@@ -1436,6 +1436,22 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .camera-card__size-mismatch-text { margin: 0; font-size: .82rem; font-weight: 600; line-height: 1.45; }
 .camera-card__size-mismatch-cta { padding: 10px 16px; font-size: .82rem; }
 
+/* A blocked product shows the notice and NOTHING to start: the video/canvas layers and
+   the placeholder are all suppressed, so there is no live stage rendered behind the
+   card and no Go-Live affordance to reach. The notice itself is re-centred (it is
+   absolutely positioned for the normal error case, where it overlays a live feed). */
+.camera-card.size-mismatched #webcam,
+.camera-card.size-mismatched #aiVideo,
+.camera-card.size-mismatched #resultCanvas,
+.camera-card.size-mismatched #lowerBodyGuard,
+.camera-card.size-mismatched .camera-card__placeholder { display: none !important; }
+.camera-card.size-mismatched .camera-card__size-mismatch {
+  position: static; margin: 0; align-self: center;
+}
+.camera-card.size-mismatched {
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+
 /* ── AI scanning overlay (monochrome sweep with a pear-green bar) ───────── */
 .scan-overlay {
   position: absolute; inset: 0; z-index: 8;

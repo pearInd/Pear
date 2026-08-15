@@ -56,6 +56,24 @@
                       well-meant clause being added - and that the payload actually
                       carries an image, since an image-first prompt with nothing on the
                       wire is the same failure through the other half of the call.
+     garment-category-prompt
+                      "I tried on JEANS and it put the catalog model's SHIRT on me."
+                      The image-first fix froze the prompt into ONE string for the whole
+                      catalog - and that string opened "Fit a standard t-shirt from the
+                      reference image". On a trouser product it is a flat contradiction:
+                      the prompt names a t-shirt, the reference photographs a model wearing
+                      a shirt AND trousers, and nothing said which half was the product, so
+                      the source model's shirt replaced the shopper's real one. The prompt
+                      now branches on garment category - the anchor names the layer being
+                      replaced AND pins the opposite layer to the live camera, which is what
+                      the retired KEEP_TOP/KEEP_BOTTOMS used to do, folded into the one
+                      sentence that cannot be shed. Asserts the classification (garmentType
+                      outranks the Hebrew/English keyword fallback, and "short_sleeve" never
+                      reads as "shorts"), both anchors' exact wording, that neither branch
+                      preserves the layer it is itself replacing, that both fit the token
+                      budget, and that EVERY builder branches - with the full-look builder
+                      asserted as the deliberate exception, since it substitutes both layers
+                      on purpose.
      model-agnostic   "It gave me the e-commerce model's shoulders." Every body-shape
                       defence in app.js aims at the model's TRAINING prior; none accounted
                       for the second human in the conditioning - a catalog reference is
@@ -151,6 +169,7 @@ const SUITES = [
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
   ["side-profile", "side-profile.test.mjs"],
   ["image-first", "image-first.test.mjs"],
+  ["garment-category-prompt", "garment-category-prompt.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],
@@ -164,6 +183,7 @@ const SUITES = [
   ["kids-adult-size-guard", "kids-adult-size-guard.test.mjs"],
   ["size-mismatch-view", "size-mismatch-view.test.mjs"],
   ["cart-size-variant", "cart-size-variant.test.mjs"],
+  ["kids-product-sizes", "kids-product-sizes.test.mjs"],
 ];
 
 let failed = 0;

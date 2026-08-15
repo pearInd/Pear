@@ -95,8 +95,8 @@ const I18N = {
   btnResendOtp:              { he: "שלח קוד חדש", en: "Send new code" },
 
   measurementsRefreshNotice: { he: "עדכן את המידות שלך - עבר חודש מהפעם האחרונה", en: "Update your measurements - it's been a month since last time" },
-  labelAge:                  { he: "גיל:", en: "Age:" },
-  placeholderAge:            { he: "לדוגמה: 32", en: "e.g. 32" },
+  // labelAge / placeholderAge / profileLabelAge removed with the age field itself -
+  // see the "AGE - REMOVED" note in app.js.
   labelHeight:               { he: 'גובה (בס"מ):', en: "Height (cm):" },
   placeholderHeight:         { he: "לדוגמה: 175", en: "e.g. 175" },
   labelWeight:               { he: 'משקל (בק"ג):', en: "Weight (kg):" },
@@ -112,7 +112,6 @@ const I18N = {
   placeholderLegs:           { he: "לדוגמה: 102", en: "e.g. 102" },
 
   profileAria:               { he: "פרופיל משתמש · User profile", en: "User profile" },
-  profileLabelAge:           { he: "גיל:", en: "Age:" },
   profileLabelHeight:        { he: "גובה:", en: "Height:" },
   profileLabelWeight:        { he: "משקל:", en: "Weight:" },
   profileLabelSize:          { he: "מידה:", en: "Size:" },

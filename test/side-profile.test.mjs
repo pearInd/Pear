@@ -265,10 +265,10 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
      angleClause() above still assembles and is still tested at every branch: it is the
      restore path (its clauses are what a two-line edit plugs back in), and keeping it
      proven is what stops "retired" from decaying into "deleted". */
-  check("the live composite payload is the frozen prompt, at every pose",
+  check("the live composite payload is the category anchor, at every pose",
     built === api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Fit a standard t-shirt from the reference image onto the subject with strictly persistent 3D body volume/.test(built),
+    /^Fit and replace ONLY the subject's upper garment using the exact upper garment from the reference image/.test(built),
     built);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
@@ -405,14 +405,25 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Fit a standard t-shirt from the reference image onto the subject with strictly persistent/;
+  const FROZEN = /^Fit and replace ONLY the subject's upper garment using the exact upper garment/;
   for (const prof of [false, true]) {
-    check(`the frozen prompt is what ships at inProfile=${prof} - never shed, never varied`,
+    check(`the category anchor is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
       api.buildCompositePrompt(item, "front", prof).slice(0, 300));
   }
   check("...and it is byte-identical across both poses, not merely present in both",
     api.buildCompositePrompt(item, "front", false) === api.buildCompositePrompt(item, "front", true));
+  /* THE CATEGORY BRANCH MUST NOT BECOME A POSE BRANCH. The prompt now varies on exactly
+     one axis - which body region is being replaced - and this suite owns the proof that
+     POSE is not a second one. Checked on the bottoms branch too, because it is the newer
+     of the two and the one whose anchor a future edit is likelier to reach for. */
+  const jeans = { name: "Glide Slim", custom: true, garmentType: "lower_body" };
+  check("the BOTTOMS anchor is equally pose-invariant, and is a different string",
+    api.buildCompositePrompt(jeans, "front", false) === api.buildCompositePrompt(jeans, "front", true) &&
+    /^Fit and replace ONLY the subject's lower garment \(pants\/shorts\)/.test(
+      api.buildCompositePrompt(jeans, "front", false)) &&
+    api.buildCompositePrompt(jeans, "front", false) !== api.buildCompositePrompt(item, "front", false),
+    api.buildCompositePrompt(jeans, "front", false).slice(0, 200));
   check("the retired isolation clause is no longer assembled at either pose",
     !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", false)) &&
     !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", true)),
@@ -743,8 +754,9 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
   check("the passthrough clamp is retired with them - the largest loss, recorded",
     !/pass through untouched/.test(square) && !/pass through untouched/.test(built),
     "if this ever passes again, inpaintLock was restored - update app.js's restore list");
-  check("what survives at both poses is the frozen prompt, byte-identical",
-    square === built && /Fit a standard t-shirt from the reference image/.test(square) &&
+  check("what survives at both poses is the category anchor, byte-identical",
+    square === built &&
+    /Fit and replace ONLY the subject's upper garment using the exact upper garment/.test(square) &&
     /Preserve a closed back and normal un-knotted hem/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);

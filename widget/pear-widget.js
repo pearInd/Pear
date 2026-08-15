@@ -849,6 +849,94 @@
     return String(s == null ? "" : s).trim().toLowerCase().replace(/\s+/g, " ");
   }
 
+  /* ── Reading the product's REAL size list off the host page ────────────────────
+     THE BUG THIS EXISTS FOR: the fitting room used to decide kids-vs-adult purely
+     from Gemini's packshot classification, which server.js's own prompt tells the
+     model to answer "uncertain" for a flat-lay with no model and no size label - so a
+     FOX kids-only Spiderman tee (sizes 8-16) came back "uncertain", the adult/kids
+     guard never fired, and an adult XS-3XL size ladder was drawn over it. The store
+     page knew the answer the whole time. This reads it.
+
+     A WRONG list here BLOCKS A PAYING SHOPPER, so both tiers below are deliberately
+     strict: the Shopify tier only trusts the option the store itself named "Size",
+     and the DOM tier only accepts a control whose values are ALL recognisable size
+     tokens. Anything less confident yields nothing at all, which simply restores the
+     previous (classifier-only) behaviour rather than risking a false block. */
+  function isPlausibleSizeToken(s) {
+    var t = String(s == null ? "" : s).trim();
+    if (!t || t.length > 5) return false;
+    return /^\d{1,2}$/.test(t) || /^(?:XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL)$/i.test(t);
+  }
+
+  /* Distinct values of the declared Size option, in catalog order. sizeOptionIndex
+     comes from the product's own options array (see loadShopifyProductJSON) - never a
+     guessed position - so -1 correctly yields nothing rather than reading colours. */
+  function sizesFromVariants(variants, sizeOptionIndex) {
+    if (sizeOptionIndex < 0 || !variants || !variants.length) return [];
+    var out = [], seen = {};
+    for (var i = 0; i < variants.length; i++) {
+      var raw = optionValueAt(variants[i], sizeOptionIndex);
+      var v = String(raw == null ? "" : raw).trim();
+      if (!v) continue;
+      var key = v.toLowerCase();
+      if (seen[key]) continue;
+      seen[key] = 1;
+      out.push(v);
+    }
+    return out;
+  }
+
+  var SIZE_CONTROL_SELECTORS = [
+    '[data-option-name="Size" i]', '[data-option-name="מידה"]',
+    'select[name*="size" i]', 'select[id*="size" i]', 'select[name*="מידה"]',
+    'fieldset[name*="size" i]', '[class*="size-selector" i]', '[class*="size-swatch" i]',
+    '[class*="swatch" i][data-option*="size" i]', '[data-attribute*="size" i]'
+  ].join(",");
+
+  /* DOM tier - the universal fallback for every non-Shopify stack. Returns [] unless a
+     single control yields 2+ values that are ALL plausible size tokens, so a stray
+     <select> of colours or quantities can never masquerade as a size list. */
+  function sizesFromDOM() {
+    var nodes = d.querySelectorAll(SIZE_CONTROL_SELECTORS);
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i], raw = [];
+      var opts = el.querySelectorAll ? el.querySelectorAll("option") : [];
+      for (var j = 0; j < opts.length; j++) raw.push(opts[j].textContent);
+      if (!raw.length) {
+        var btns = el.querySelectorAll
+          ? el.querySelectorAll("button,label,li,a,[data-value]") : [];
+        for (var k = 0; k < btns.length; k++) {
+          raw.push(readAttr(btns[k], "data-value") || btns[k].textContent);
+        }
+      }
+      var out = [], seen = {}, rejected = false;
+      for (var m = 0; m < raw.length; m++) {
+        var v = String(raw[m] == null ? "" : raw[m]).trim();
+        if (!v) continue;                        // blank rows carry no signal either way
+        if (!isPlausibleSizeToken(v)) {
+          // A leading placeholder ("Choose a size", "בחר מידה") is normal and ignored;
+          // a non-size value ANYWHERE else means this control isn't a size picker, so
+          // the whole list is discarded rather than half-trusted.
+          if (m === 0) continue;
+          rejected = true; break;
+        }
+        var key = v.toLowerCase();
+        if (seen[key]) continue;
+        seen[key] = 1;
+        out.push(v);
+      }
+      if (rejected) continue;                    // try the next candidate control
+      if (out.length >= 2) return out;
+    }
+    return [];
+  }
+
+  function extractHostSizes() {
+    var fromVariants = sizesFromVariants(_shopifyVariants, _shopifySizeOptionIndex);
+    if (fromVariants.length) return fromVariants;
+    try { return sizesFromDOM(); } catch (e) { return []; }
+  }
+
   function optionValueAt(variant, idx) {
     if (idx === 0) return variant && variant.option1;
     if (idx === 1) return variant && variant.option2;
@@ -1389,6 +1477,8 @@
        travel via the PEAR_UPDATE_GARMENT postMessage correction (structured clone,
        no length limit); the query string carries http(s) URLs only. */
     var backParam = (garment.back && !/^data:/i.test(garment.back)) ? garment.back : "";
+    var hostSizes = extractHostSizes();
+    console.log("[PEAR widget] host product sizes:", hostSizes.length ? hostSizes.join("/") : "(none readable)");
 
     var params =
       "garment_url=" + encodeURIComponent(garment.url) +
@@ -1405,6 +1495,11 @@
       (garment.images && garment.images.length > 1
         ? "&garment_images=" + garment.images.map(encodeURIComponent).join(",") : "") +
       (garment.variantId ? "&garment_variant_id=" + encodeURIComponent(garment.variantId) : "") +
+      /* The product's REAL size list - the fitting room's PRIMARY kids/adult signal
+         (see extractHostSizes / isKidsProduct there). Sent at open so the guard and the
+         size selector are correct on the very first paint, not only after the classify
+         round trip lands. */
+      (hostSizes && hostSizes.length ? "&garment_sizes=" + hostSizes.map(encodeURIComponent).join(",") : "") +
       (COMPOSITE_PARAM ? "&composite=" + COMPOSITE_PARAM : "") +
       (REQUIRE_BOTH_VIEWS ? "&require_both_views=1" : "") +
       (DEMO_GATE ? "&demo_gate=1" : "") +
@@ -1843,7 +1938,12 @@
                 // the fitting room can tell "we checked and don't know" apart from
                 // "this correction predates the field existing".
                 garment_age_group: res.ageGroup,
-                garment_age_group_confidence: res.ageGroupConfidence
+                garment_age_group_confidence: res.ageGroupConfidence,
+                /* Re-sent alongside the verdict above, and OUTRANKING it in the room.
+                   The Shopify product JSON is fetched at boot but can resolve after the
+                   modal already opened, so this is the delivery for a size list that
+                   wasn't readable yet at open time. */
+                garment_sizes: extractHostSizes()
               }, PEAR_BASE);
             } catch (_) {}
           });

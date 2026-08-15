@@ -19,7 +19,7 @@
          all, so a shipped CSS change was served from cache indefinitely while
          app.js?v= was being bumped every deploy. Kept in step with app.js's
          version so there is one number to reason about, not two. -->
-    <link rel="stylesheet" href="style.css?v=30">
+    <link rel="stylesheet" href="style.css?v=31">
 </head>
 <body>
 
@@ -168,16 +168,10 @@
                  showSizeForm in app.js). Hidden the rest of the time. -->
             <p id="measurementsRefreshNotice" class="measurements-refresh-notice" hidden data-i18n="measurementsRefreshNotice">עדכן את המידות שלך - עבר חודש מהפעם האחרונה</p>
             <!-- ░░ Mandatory inputs - always visible (idle state) ░░ -->
-            <!-- Age is a FALLBACK child-vs-adult signal, asked only when the garment
-                 itself doesn't already say (resolvedGarmentAgeGroup() === "uncertain" -
-                 see calculateSize/refreshAgeFieldVisibility in app.js). Ships hidden by
-                 default in markup for the same pre-paint reason #sizeForm itself does
-                 (see the comment above this form) - JS decides the real state, in the
-                 same synchronous pass, before the visitor ever sees this screen. -->
-            <div class="form-group" id="ageFieldGroup" hidden style="display:none">
-                <label for="age"><span class="required">*</span><span data-i18n="labelAge">גיל:</span></label>
-                <input type="number" id="age" min="1" max="120" placeholder="לדוגמה: 32" data-i18n-placeholder="placeholderAge">
-            </div>
+            <!-- The #age field was removed here: it was never revealed (nothing called
+                 refreshAgeFieldVisibility) and never used for sizing (nothing called
+                 pickSizeCategory), yet a stored value from an older build kept being
+                 painted into the profile popover. See the "AGE - REMOVED" note in app.js. -->
             <div class="form-group">
                 <label for="height"><span class="required">*</span><span data-i18n="labelHeight">גובה (בס"מ):</span></label>
                 <input type="number" id="height" min="100" max="300" placeholder="לדוגמה: 175" data-i18n-placeholder="placeholderHeight">
@@ -252,10 +246,9 @@
         </div>
         <div class="profile-dropdown__divider"></div>
         <div class="profile-dropdown__measurements">
-            <div class="profile-dropdown__row">
-                <span class="profile-dropdown__label" data-i18n="profileLabelAge">גיל:</span>
-                <span class="profile-dropdown__value" id="profileAge"></span>
-            </div>
+            <!-- The "גיל" row lived here. It rendered a stored age for a visitor who was
+                 never asked for one - the phantom field in the bug report. Removed with
+                 the rest of the age plumbing; see the "AGE - REMOVED" note in app.js. -->
             <div class="profile-dropdown__row">
                 <span class="profile-dropdown__label" data-i18n="profileLabelHeight">גובה:</span>
                 <span class="profile-dropdown__value" id="profileHeight"></span>
@@ -709,7 +702,7 @@
   <span class="lang-switch__thumb" aria-hidden="true"></span>
 </button>
 
-<script type="module" src="app.js?v=30"></script>
+<script type="module" src="app.js?v=32"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
      header shrink. Pure enhancement - touches no app.js logic or state. -->
 <script src="mobile-ux.js" defer></script>

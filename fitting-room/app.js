@@ -548,6 +548,11 @@ let currentUserSize = null;
 let currentSizeCategory = null;  // "child" | "adult" - which chart produced currentUserSize.
                                  // Drives the override selector's scale and suppresses
                                  // the SIZE_SCALE fit-delta math for child sizes.
+/* The shopper's own scale with NO garment constraint applied - deliberately distinct
+   from currentSizeCategory above, which a kids garment forces onto the child chart (or
+   onto null) by design. See userBodyCategory()'s comment for why the mismatch guard has
+   to read this one and not that one. */
+let currentBodyCategory = null;  // "child" | "adult" | null
 let activeTryOnSize = null;   // size the user has selected in the Screen 2 override selector
 let activeItem = null;
 /* The widget's classify-images verdict on the CURRENT garment (see resolveAgeGroup
@@ -562,6 +567,11 @@ let activeItem = null;
    care which of the two arrived first. */
 let pendingAgeGroup = undefined;             // "kids" | "adult" | "uncertain" | undefined (none arrived yet)
 let pendingAgeGroupConfidence = undefined;
+/* The host product's REAL size list, same two-stage handoff as pendingAgeGroup above.
+   This is the signal that actually decides kids-vs-adult (see isKidsProduct) - the
+   classifier verdict beside it is only the fallback for products we never got a list
+   for. Arrives on the deep-link URL at open, and/or on a PEAR_UPDATE_GARMENT message. */
+let pendingSizes = undefined;                // string[] | undefined (none arrived yet)
 let focusMode = false;
 
 /* Multi-Image Product Gallery Sync - which product angle the live engine is warping.
@@ -860,40 +870,20 @@ function coreHwPenalty(row, height, weight) {
   return pen;
 }
 
-/* Age at which a visitor is sized against the adult chart rather than the kids
-   chart. Below this → "child", at or above → "adult".
-
-   NOTE ON THE CUTOFF: in the EU/IL kids convention the numeric sizes ARE ages
-   (מידה 12 ≈ a 12-year-old), so the chart's own labels suggest a boundary of 18
-   rather than 16. At 16, kids sizes 16 and 18 can still be reached - but only by
-   an unusually tall 14-15 year old, never by the 16-18 year olds those rows were
-   drawn for. 16 is nonetheless a defensible retail split (a 16-year-old is often
-   better served by adult S than by a kids size), so it is used as specified;
-   change this ONE constant to 18 to follow the chart's own labelling instead. */
-const CHILD_AGE_MAX = 16;
-
-/**
- * Decide which chart a body is sized against. Age is the sole input: it is an
- * EXPLICIT signal from the visitor, unlike the height/weight comparison this
- * replaced - that guess routed petite adults (150cm/50kg → kids 14) and slim tall
- * adults (174cm/56kg → kids 18, at penalty 0, so it read as a confident match)
- * into children's sizing with no way for them to correct it.
- *
- * Height/weight still choose the exact size WITHIN the selected chart - see the
- * coreHwPenalty() scoring pass in calculateSize().
- * @param {number} age - years; callers must pass a validated, in-range value
- * @returns {"child"|"adult"}
- */
-function pickSizeCategory(age) {
-  return age < CHILD_AGE_MAX ? "child" : "adult";
-}
+/* CHILD_AGE_MAX / pickSizeCategory() lived here and are GONE - see the "AGE -
+   REMOVED" note further down. Both were already unreachable: nothing called
+   pickSizeCategory(), so no visitor's age ever chose a chart. The chart is chosen
+   from the product's own size list and the shopper's height/weight instead. */
 
 /* The garment's own kids/adult signal, wherever it currently lives - activeItem
    once Screen 2 exists, pendingAgeGroup before that. "uncertain" covers three
    cases identically, by design (never guess a default): the classifier genuinely
    couldn't tell, no correction has arrived yet, or the field is simply absent
-   (an older cached correction from before this feature existed). All three route
-   the visitor through the same age question calculateSize() already asks.
+   (an older cached correction from before this feature existed).
+
+   ⚠️ This is the WEAKER of the two category signals and is consulted only as a
+   fallback - see isKidsProduct() below for why the product's own size list outranks
+   it, and what shipped to production when it didn't.
  * @returns {"kids"|"adult"|"uncertain"}
  */
 function resolvedGarmentAgeGroup() {
@@ -901,32 +891,104 @@ function resolvedGarmentAgeGroup() {
   return (ag === "kids" || ag === "adult") ? ag : "uncertain";
 }
 
-/* KIDS/ADULT SIZE-CATEGORY GUARD - a deterministic go-live gate, not a guess (unlike
-   the lower-body pixel guard above, whose boundary genuinely IS one). calculateSize()
-   already refuses to RECOMMEND a kids size to a body sized against the adult chart
-   (its adultFits/childFits split); this closes the one gap that leaves open: a shopper
-   who already HAS an adult size resolved hitting Go Live on a garment
-   resolvedGarmentAgeGroup() reports as kids-only. Reuses that same ageGroup/
-   currentSizeCategory state rather than adding a new product-sizes data source this
-   codebase doesn't otherwise ingest. */
+/* KIDS/ADULT SIZE-CATEGORY GUARD.
+
+   ── WHY THIS READS THE PRODUCT'S REAL SIZE LIST, AND NOT JUST THE CLASSIFIER ──────
+   The first version of this guard keyed entirely on resolvedGarmentAgeGroup() - the
+   per-product kids/adult verdict from Gemini's image classification - and it FAILED IN
+   PRODUCTION on a FOX Spiderman tee sold only in kids 8/10/12/14/16: an adult
+   180cm/80kg profile sailed straight into the fitting room, with an adult XS-3XL size
+   selector rendered over a product that has no adult size at all.
+
+   That failure was not a coding slip, it was the wrong source of truth. server.js's own
+   classifier prompt INSTRUCTS the model to abstain on exactly this kind of item:
+     · "Flat-lay / packshot with NO model and NO visible size label ... answer
+        'uncertain' - do not guess from styling alone."
+     · "Do NOT infer age group from color, PRINT STYLE, or price positioning alone"
+     · "below 0.7 you must answer 'uncertain'"
+   A character-print packshot hits all three, so "uncertain" is the CORRECT answer from
+   that model - and "uncertain" can never block. Meanwhile the storefront was displaying
+   8/10/12/14/16 the entire time: deterministic ground truth, sitting unread.
+
+   So the ordering below is deliberate and load-bearing: when the host page gives us a
+   real size list, THAT decides, in both directions (it can also clear a wrong "kids"
+   verdict). The classifier is consulted only when no size list reached us at all - a
+   probabilistic signal designed to abstain must never outrank a deterministic one. */
+
+/* The kids numeric ladder, per the retail convention this codebase already encodes in
+   CHILD_SIZE_CHART (which runs 8-18; 2-6 are included here because a product can list
+   them even though we don't size-match against those rows). Adult numeric systems -
+   waist/chest 28-44 - deliberately fall OUTSIDE this set, so "32" never reads as kids. */
+const KIDS_NUMERIC_SIZES = new Set(["2", "4", "6", "8", "10", "12", "14", "16", "18"]);
+/* Adult letter scales, incl. the 2XL/3XL spellings storefronts use interchangeably
+   with XXL/XXXL. Presence of ANY of these is proof the product is not kids-only. */
+const ADULT_ALPHA_SIZES = new Set([
+  "XXS", "XS", "S", "M", "L", "XL", "XXL", "XXXL", "XXXXL", "2XL", "3XL", "4XL", "5XL",
+]);
+
+/** Accepts the array form (`item.sizes`) or the comma-joined URL-param form, and
+ *  normalises to trimmed upper-case tokens. Junk/empties are dropped, order kept.
+ * @param {string[]|string|null|undefined} raw
+ * @returns {string[]} */
+function parseSizeList(raw) {
+  const list = Array.isArray(raw) ? raw : (typeof raw === "string" ? raw.split(",") : []);
+  return list.map((s) => String(s == null ? "" : s).trim().toUpperCase()).filter(Boolean);
+}
 
 /**
- * @param {"kids"|"adult"|"uncertain"} garmentAgeGroup - resolvedGarmentAgeGroup()'s output
- * @returns {boolean}
+ * @param {string[]|string|null} sizes - the host product's OWN size list, when known
+ * @param {"kids"|"adult"|"uncertain"|undefined} garmentAgeGroup - classifier fallback only
+ * @returns {boolean} true only when the product is CONFIDENTLY kids-only.
  */
-function isKidsProduct(garmentAgeGroup) {
+function isKidsProduct(sizes, garmentAgeGroup) {
+  const list = parseSizeList(sizes);
+  if (list.length) {
+    // Any adult letter size present -> the product serves adults, whatever else it lists.
+    if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
+    // Otherwise: kids only if EVERY token is a kids numeric. A mixed or unrecognised
+    // list (an adult 28-44 waist run, a one-size product, a store's own odd labels)
+    // is NOT confidently kids - and an unconfident verdict must never block a sale.
+    return list.every((s) => KIDS_NUMERIC_SIZES.has(s));
+  }
   return garmentAgeGroup === "kids";
 }
 
 /**
- * @param {"child"|"adult"|null} userSizeCategory - currentSizeCategory
- * @param {"kids"|"adult"|"uncertain"} garmentAgeGroup - resolvedGarmentAgeGroup()'s output
- * @returns {boolean} false only for a confidently-kids item against a confidently-adult
- *   shopper; every other combination (uncertain garment, child shopper, no size resolved
+ * The shopper's OWN scale, derived with NO garment constraint applied.
+ *
+ * WHY THIS IS NOT currentSizeCategory. calculateSize() deliberately forces
+ * `adultFits = []` once the garment resolves to kids, so a kids garment can never
+ * recommend an adult size. For the 180cm/80kg shopper in the bug report that leaves no
+ * candidate in EITHER chart (the child chart ends at 176cm/60kg), so currentSizeCategory
+ * lands on null - meaning a guard keyed on `currentSizeCategory === "adult"` would go
+ * quiet again the moment the product-size fix made the garment resolve correctly. The
+ * guard has to read a category that the garment cannot influence. This is that value.
+ *
+ * NOTE ON THE METHOD: chart-fit, never a raw height/weight threshold. pickSizeCategory()
+ * previously recorded why - a threshold guess "routed petite adults (150cm/50kg -> kids
+ * 14) and slim tall adults (174cm/56kg -> kids 18) into children's sizing with no way
+ * for them to correct it". The mirror of that mistake here would block a 13-year-old
+ * off the kids items they actually need. Adult wins genuine ties, matching the same
+ * convention calculateSize() already uses for the overlap zone.
+ * @returns {"adult"|"child"|null}
+ */
+function userBodyCategory(height, weight) {
+  if (!height || !weight) return null;
+  if (ZARA_SIZE_CHART.some((row) => coreHwPenalty(row, height, weight) === 0)) return "adult";
+  if (CHILD_SIZE_CHART.some((row) => coreHwPenalty(row, height, weight) === 0)) return "child";
+  return null;
+}
+
+/**
+ * @param {"child"|"adult"|null} userCategory - userBodyCategory()'s garment-independent verdict
+ * @param {string[]|string|null} sizes - the host product's own size list, when known
+ * @param {"kids"|"adult"|"uncertain"|undefined} garmentAgeGroup - classifier fallback only
+ * @returns {boolean} false only for a confidently-kids product against a confidently-adult
+ *   body; every other combination (unknown product category, child body, no measurements
  *   yet) passes - never block on ambiguity, matching liveBlockReason()/livePendingReason().
  */
-function isCompatibleSizeCategory(userSizeCategory, garmentAgeGroup) {
-  return !(isKidsProduct(garmentAgeGroup) && userSizeCategory === "adult");
+function isCompatibleSizeCategory(userCategory, sizes, garmentAgeGroup) {
+  return !(isKidsProduct(sizes, garmentAgeGroup) && userCategory === "adult");
 }
 
 /* go-live gate paralleling liveBlockReason()/livePendingReason() just below - returns
@@ -934,9 +996,31 @@ function isCompatibleSizeCategory(userSizeCategory, garmentAgeGroup) {
    garment, else null. Bilingual inline string, matching itemBlockReason()/
    itemPendingReason()'s own convention rather than routing through i18n.js, since this
    sits in the same gate family and neither of those go through t() either. */
+/* The active product's own size list, wherever it currently lives - activeItem once
+   Screen 2 exists, pendingSizes before that (same two-stage pattern
+   resolvedGarmentAgeGroup() already uses, and for the same reason: the widget's
+   correction can land while the visitor is still on the measurement form). */
+function resolvedGarmentSizes() {
+  return parseSizeList(activeItem?.sizes ?? pendingSizes);
+}
+
+/* The ONE mismatch predicate every surface reads - the go-live gate, the modal card,
+   and the size selector alike - so they can never disagree about what is blocked. */
+function hasSizeCategoryMismatch() {
+  return !isCompatibleSizeCategory(currentBodyCategory, resolvedGarmentSizes(), resolvedGarmentAgeGroup());
+}
+
+const SIZE_MISMATCH_MESSAGE =
+  "הפריט אינו בטווח המידות שלך (פריט במידות ילדים). אינך יכול למדוד פריט זה במידה הנוכחית. " +
+  "כדי למדוד, יש לעדכן/לשנות את המידות בפרופיל. · " +
+  "This item is not within your size range (Kids item). You cannot try on this item with " +
+  "your current profile size. Please update your profile sizes to proceed.";
+
+/* go-live gate paralleling liveBlockReason()/livePendingReason() just below - returns
+   the localized message when an adult-sized shopper is about to launch a kids-only
+   garment, else null. */
 function sizeCategoryMismatchReason() {
-  if (isCompatibleSizeCategory(currentSizeCategory, resolvedGarmentAgeGroup())) return null;
-  return "הפריט אינו בטווח המידות שלך (מידת ילדים) · This item is not within your size range (Kids item)";
+  return hasSizeCategoryMismatch() ? SIZE_MISMATCH_MESSAGE : null;
 }
 
 /* PROACTIVE counterpart to sizeCategoryMismatchReason() above. That gate only fires
@@ -955,42 +1039,40 @@ function sizeCategoryMismatchReason() {
 function updateSizeMismatchUI() {
   const view = $("sizeMismatchView");
   if (!view) return;
-  const mismatched = !isCompatibleSizeCategory(currentSizeCategory, resolvedGarmentAgeGroup());
+  const mismatched = hasSizeCategoryMismatch();
   view.hidden = !mismatched;
   if (mismatched) {
     const textEl = $("sizeMismatchText");
-    if (textEl) textEl.textContent =
-      "הפריט אינו בטווח המידות שלך. אינך יכול למדוד פריט זה במידה הנוכחית. " +
-      "כדי למדוד, יש לעדכן/לשנות את המידות בפרופיל. · " +
-      "This item is outside your size range. You cannot try on this item with your " +
-      "current profile size. Please update your profile sizes to proceed.";
+    if (textEl) textEl.textContent = SIZE_MISMATCH_MESSAGE;
   }
+  /* Blocked means BLOCKED, not "blocked once you click": the live stage and the size
+     selector are both suppressed while a mismatch stands, so there is no camera feed
+     to start and - the second half of the reported bug - no adult XS-3XL selector
+     rendered over a product that ships none of those sizes. The class drives the CSS
+     (see .camera-card.size-mismatched in style.css); the selector is removed outright
+     because injectSizeSelector() rebuilds it from scratch on every item swap anyway. */
+  const cardEl = $("cameraCard");
+  if (cardEl) cardEl.classList.toggle("size-mismatched", mismatched);
+  if (mismatched) $("pearSizeSelector")?.remove();
+
   const captureBtn = $("captureBtn");
   if (captureBtn) captureBtn.disabled = mismatched || !localStream;
 }
 
-/* Shows/hides the #age field's own form-group, independent of whatever
-   calculateSize() does with its value - a confident garment verdict means age is
-   never asked at all, not merely optional. Called from calculateSize() itself so
-   every path that recomputes the size (Screen 1's first paint, live typing, a
-   widget correction landing mid-form) keeps the field in lockstep with what
-   calculateSize() is about to do. */
-function refreshAgeFieldVisibility() {
-  const ageField = $("ageFieldGroup");
-  if (!ageField) return;
-  const show = resolvedGarmentAgeGroup() === "uncertain";
-  const currentlyShown = !ageField.hidden;
-  if (show === currentlyShown) return;   // no-op if already in the desired state
-  // Inline display too: .form-group has `display:grid` in CSS (style.css) which
-  // outranks the [hidden] attribute alone - the same fix #sizeForm itself needed
-  // (see showSizeForm's own comment on this exact CSS-specificity issue).
-  ageField.hidden = !show;
-  ageField.style.display = show ? "" : "none";
-  // Hiding it clears any stale value so a garment that resolves kids/adult AFTER
-  // the visitor already typed an age can't have that age silently reappear if a
-  // later correction somehow flips the field back to uncertain.
-  if (!show && $("age")) $("age").value = "";
-}
+/* AGE - REMOVED, deliberately and completely.
+
+   It had already decayed into dead weight before this: refreshAgeFieldVisibility()
+   had no callers, so the #age input was never revealed and no visitor was ever asked
+   for one, and pickSizeCategory() - the only function that ever used age to pick a
+   chart - had no callers either. What survived was a stored value from an older build
+   still being PAINTED into the profile popover ("גיל: 5" in the bug report): a field
+   the UI no longer collects, no longer updates, and no longer reads for anything.
+
+   The chart is chosen from the product's own size list (isKidsProduct) plus the
+   shopper's height/weight against the two charts (userBodyCategory) - both stronger
+   signals than a self-reported age, and neither of them needs it. So the field, its
+   markup, its i18n keys, its profile row, and its persistence are all gone rather
+   than left dormant for someone to rediscover and re-wire. */
 
 /**
  * Human-readable label for a size VALUE, for display/logging only - never for
@@ -1045,9 +1127,9 @@ function setOptionalVisible(show) {
  * item predating this feature) does the dual-chart search below run, with
  * its usual overlap-defaults-to-adult tie-break.
  *
- * The #age input field and refreshAgeFieldVisibility() stay dead/unused -
- * the visitor is never asked for their age; only the garment's own
- * classification and their height/weight decide the chart.
+ * The visitor is never asked for an age - the field and all its plumbing are
+ * gone (see the "AGE - REMOVED" note). The product's own size list, then its
+ * classification, then the visitor's height/weight decide the chart.
  *
  * Drives the result box and the "continue" button enabled-state, and - via
  * setOptionalVisible - the conditional reveal of the optional measurement
@@ -1079,6 +1161,7 @@ function calculateSize() {
   // Cleared alongside the size so the two never disagree; both early-return paths
   // below (missing input / out of range) therefore leave the category null.
   currentSizeCategory = null;
+  currentBodyCategory = null;   // ...and the garment-independent one with it
   updateProgress();
 
   if (!height || !weight) return;
@@ -1102,14 +1185,20 @@ function calculateSize() {
   // filtered, so it can never contribute a candidate below, even if the body
   // would technically fit a row there.
   const garmentAgeGroup = resolvedGarmentAgeGroup();
-  const childFits = garmentAgeGroup === "adult" ? [] :
-    CHILD_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
-  const adultFits = garmentAgeGroup === "kids" ? [] :
-    ZARA_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
+  /* Computed BEFORE the garment constraint below, and kept: this is the shopper's own
+     scale, which the mismatch guard needs precisely because the constrained result
+     cannot express "an adult body looking at a kids-only product" (it collapses to
+     null). See userBodyCategory()'s comment. */
+  const bodyChildFits = CHILD_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
+  const bodyAdultFits = ZARA_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
+  currentBodyCategory = bodyAdultFits.length ? "adult" : (bodyChildFits.length ? "child" : null);
+
+  const childFits = garmentAgeGroup === "adult" ? [] : bodyChildFits;
+  const adultFits = isKidsProduct(resolvedGarmentSizes(), garmentAgeGroup) ? [] : bodyAdultFits;
 
   // Overlap zone (genuinely fits BOTH charts, e.g. ~170-172cm/54-60kg) defaults
   // to adult - same tie-break convention used elsewhere in this codebase
-  // (pickSizeCategory's age cutoff, resolveAgeGroup's server-side tie rule).
+  // (userBodyCategory's adult-first rule, resolveAgeGroup's server-side tie rule).
   // Adult winning whenever it has ANY candidate covers "adult-only" and
   // "fits both" in the same branch. This only actually applies in the
   // "uncertain" case above - a confident garment already has the other
@@ -1304,6 +1393,15 @@ function parseHandoff() {
       // carried through so the "הוסף לסל" button here can hand it back to the
       // storefront's own /cart/add.js call (see pear-widget.js's PEAR_ADD_TO_CART listener).
       variantId: q.get("garment_variant_id") || undefined,
+      /* The host product's REAL size list, comma-joined by the widget. THE signal that
+         decides kids-vs-adult (see isKidsProduct) - a Gemini packshot verdict is only
+         the fallback when this is absent, which is exactly how the FOX kids-tee bug
+         got through. Carried through RAW (the comma string) rather than parsed here:
+         every reader already normalises via parseSizeList(), which accepts both forms,
+         so this stays a pure param read with no dependency on code defined elsewhere
+         in the module. Absent leaves it undefined, never "", so "no list arrived" stays
+         distinguishable from "the product genuinely lists no sizes". */
+      sizes: q.get("garment_sizes") || undefined,
       angle: readAngle(),
     };
     // CHECK B instrumentation - the exact point imgBack is resolved, showing which of
@@ -1862,6 +1960,23 @@ window.addEventListener("message", (e) => {
      activeItem first and falls back to this. "uncertain" is a real, meaningful
      value here (the classifier ran and found no confident answer) - distinct from
      undefined (no correction has arrived, or an older widget build never sent one). */
+  /* The host product's REAL size list, handled BEFORE (and independently of) the
+     classifier verdict below - it outranks it, and it can arrive on a message that the
+     age-group branch would otherwise be the only reader of. Same Screen-1-safe
+     treatment: recorded on pendingSizes, and synced onto activeItem when one exists.
+     Stored RAW, exactly as parseHandoff() does - every reader normalises through
+     parseSizeList() - so this listener stays free of module-level dependencies. */
+  const incomingSizes = e.data.garment_sizes;
+  if (incomingSizes && incomingSizes.length) {
+    pendingSizes = incomingSizes;
+    if (activeItem) activeItem.sizes = incomingSizes;
+    const sizeFormEl = $("sizeForm");
+    if (sizeFormEl && !sizeFormEl.hidden) { try { calculateSize(); } catch {} }
+    // The room may already be open - rebuild the ladder against the real variants and
+    // re-check the block, rather than waiting for the next item swap.
+    try { injectSizeSelector(); updateSizeMismatchUI(); } catch {}
+  }
+
   if (typeof e.data.garment_age_group === "string") {
     pendingAgeGroup = e.data.garment_age_group;
     pendingAgeGroupConfidence = Number.isFinite(e.data.garment_age_group_confidence)
@@ -6372,15 +6487,153 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    clampPromptForWire() and the whole DENSE table are deliberately left intact for
    exactly that. Restore ONE at a time and re-test: the entire premise of this mode is
    that clause count is what was drowning the image. */
-const IMAGE_ONLY_PROMPT =
-  "Fit a standard t-shirt from the reference image onto the subject with strictly" +
-  " persistent 3D body volume. Maintain the exact same abdomen/stomach depth, waist" +
-  " volume, and torso thickness continuously through all 360-degree rotations—never" +
-  " flatten or reset body size mid-stream. In front-facing (0-degree) views," +
-  " realistically render the stomach's forward volume and convexity using natural fabric" +
-  " drape, forward hem extension, and subtle lighting falloff. Preserve a closed back and" +
-  " normal un-knotted hem. Use only the reference image's graphics, fabric texture," +
-  " and color.";
+/* ── THE CATEGORY BRANCH - "I tried on jeans and it put the model's shirt on me" ──
+   The frozen string above was ONE anchor for the whole catalog, and it opened by naming
+   a t-shirt. On a trouser product that first sentence is a direct contradiction: the
+   prompt says t-shirt, the reference photographs a model wearing a shirt AND trousers,
+   and NOTHING told the model which half of that reference was the product. Lucy took the
+   whole visual, so the source model's shirt replaced the shirt the shopper was still
+   wearing on camera. run.mjs's suite index already named this gap before it was closed
+   ("an 'upper garment' anchor on a trouser reference is the same contradiction").
+
+   WHY THE ANCHOR AND NOT A RESTORED CLAUSE. KEEP_TOP/KEEP_BOTTOMS still exist in the
+   DENSE table and would say much of this - but they were retired because clause COUNT was
+   drowning the image, and adding one back re-enters that competition. Folding the
+   opposite-layer lock INTO the anchor costs no extra clause: the sentence that has to
+   name the target garment anyway is the same sentence that names what not to touch. It
+   also cannot be shed, because it is the anchor.
+
+   THE PROVENANCE HALF IS LOAD-BEARING, not a restatement. "Preserve the live upper
+   garment" alone still leaves the reference's shirt as unclaimed territory, and an
+   unstated region is precisely what this file's history keeps recording as the thing that
+   gets reinterpreted (see STRICT_INPAINT's comment). So the bottoms branch names the
+   REFERENCE as the thing not to copy an upper garment from, not just the live frame as
+   the thing to keep. */
+const CATEGORY_ANCHOR = Object.freeze({
+  top:
+    "Fit and replace ONLY the subject's upper garment using the exact upper garment from" +
+    " the reference image. Strictly preserve the subject's live pants/lower garment as" +
+    " seen on camera. Do NOT replace or alter the subject's lower clothing.",
+  bottom:
+    "Fit and replace ONLY the subject's lower garment (pants/shorts) using the exact lower" +
+    " garment from the reference image. Strictly preserve the subject's live upper garment" +
+    " (shirt/top) as seen on camera. Do NOT apply or render any shirt, jacket, or upper" +
+    " clothing from the reference image.",
+});
+
+/* The surviving halves of the old frozen string, split into individually priority-taggable
+   parts. Every one of these is a reproduced regression and the wording is deliberately
+   unchanged from the string it came out of - only the t-shirt ANCHOR was replaced. */
+const VOLUME_PERSISTENCE =
+  "Maintain the exact same abdomen/stomach depth, waist volume, and torso thickness" +
+  " continuously through all 360-degree rotations—never flatten or reset body size" +
+  " mid-stream.";
+const FRONTAL_VOLUME =
+  "In front-facing (0-degree) views, realistically render the stomach's forward volume and" +
+  " convexity using natural fabric drape, forward hem extension, and subtle lighting falloff.";
+/* Both of these describe a SHIRT's construction - the knotted hem and the open back flap
+   were top-specific failures - so they are simply not part of a trousers prompt rather
+   than being reworded into a lower-body equivalent nobody has reproduced a bug for. */
+const CLOSED_BACK_HEM = "Preserve a closed back and normal un-knotted hem.";
+const REFERENCE_EXTRACTION = "Use only the reference image's graphics, fabric texture, and color.";
+
+/* Lower-body tokens. Hebrew FIRST because it is the storefront's primary language, so a
+   Hebrew-only product title is the common case here rather than an edge case; both geresh
+   spellings are listed (U+05F3 ׳ and a plain ASCII apostrophe) because storefronts use
+   them interchangeably. "מכנס" is left unanchored on purpose - Hebrew inflects by suffix
+   (מכנסיים/מכנסי) and a prefix match covers the whole family.
+
+   THE ENGLISH SIDE IS \b-ANCHORED AND USES "shorts" PLURAL, DELIBERATELY. A bare /short/
+   matches "short_sleeve" - the subType this very file sets on tees - which would classify
+   a t-shirt as trousers and repaint the shopper's real jeans: the reported bug, inverted.
+   Same reason "sweatpants"/"tracksuit" are listed in full rather than relying on \bpants\b
+   to find them inside a compound. */
+const BOTTOMS_TOKENS =
+  /(מכנס|ג['׳]ינס|חצאי|שורט|טייץ|טייצ|לגינ|\bpants\b|\btrousers\b|\bshorts\b|\bjeans\b|\bskirts?\b|\bleggings\b|\bchinos\b|\bjoggers\b|\bsweatpants\b|\btracksuit\b|\bslacks\b|\bculottes\b|\bbottoms?\b)/i;
+
+/**
+ * Which body region a garment belongs to.
+ *
+ * ORDER IS THE WHOLE DESIGN: garmentType is GROUND TRUTH when present. It is what
+ * toItem() sets and what slotOf() already routes the outfit slots on, so a keyword sweep
+ * that could override it would let a product NAME re-categorise an item the catalog had
+ * already classified correctly - strictly worse than the metadata it second-guesses, and
+ * the "Cargo Pants Print Tee" case is not hypothetical. Keywords are consulted ONLY for
+ * items that arrived without a category at all (a bare widget handoff, a custom upload).
+ *
+ * DEFAULTS TO TOPS on absent/unknown input, matching the pre-existing bias of every
+ * predicate around it (slotOf() returns "top" for anything not explicitly lower_body):
+ * tops are the overwhelming majority of the catalog, so an unknown item guessed as tops
+ * is wrong far less often - and its failure mode is the OLD behaviour, not a new one.
+ *
+ * @param {{garmentType?:string, type?:string, category?:string, subType?:string,
+ *          name?:string, title?:string}|null|undefined} item
+ * @returns {boolean} true only for a lower-body garment.
+ */
+function isBottomsGarment(item) {
+  if (!item) return false;
+  if (item.garmentType === "lower_body") return true;
+  if (item.garmentType === "upper_body") return false;
+  const fields = [item.type, item.category, item.subType, item.name, item.title]
+    .filter(Boolean).join(" ");
+  return BOTTOMS_TOKENS.test(fields);
+}
+
+/**
+ * The image-only prompt, resolved for THIS garment's category.
+ *
+ * ASSEMBLED THROUGH fitPrompt(), not concatenated, and that is not ceremony: the tops
+ * branch runs 702 characters against a 650 budget that app.js:5862 explicitly forbids
+ * raising ("the ceiling is the API's, not ours"). Concatenation would overrun into
+ * clampPromptForWire()'s hard slice, which cuts at the END - taking REFERENCE_EXTRACTION,
+ * the clause that stops the tuxedo, and cutting it mid-sentence. Priority tags make that
+ * shed a CHOICE instead: FRONTAL_VOLUME (P.MED) drops first on tops, and it is the right
+ * one to lose because it is the only part here that is a refinement of a bias the two
+ * P.HIGH/P.CORE clauses already assert, rather than a distinct guarantee.
+ *
+ * If the anchor is ever shortened, the shed clause returns on its own. That is the
+ * property worth having, and it is why this is not four string literals.
+ *
+ * @param {object|null} item - the garment being fitted; null resolves to the tops branch.
+ * @returns {string}
+ */
+function imageOnlyPrompt(item) {
+  const bottoms = isBottomsGarment(item);
+  return fitPrompt([
+    [P.CORE, bottoms ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
+    [P.HIGH, VOLUME_PERSISTENCE],
+    [P.MED,  bottoms ? "" : FRONTAL_VOLUME],
+    [P.MED,  bottoms ? "" : CLOSED_BACK_HEM],
+    [P.CORE, REFERENCE_EXTRACTION],
+  ]);
+}
+
+const LOOK_ANCHOR =
+  "Fit and replace BOTH the subject's upper garment and lower garment using the exact" +
+  " garments from the reference image, which shows the top above the bottom as two" +
+  " separate products. Render both simultaneously on the subject.";
+
+/**
+ * The full-look prompt - the THIRD case, and the one that must claim both layers rather
+ * than isolate one. See buildLookPrompt() for why it cannot route through
+ * imageOnlyPrompt(). Assembled the same way so it inherits the same budget guarantee.
+ *
+ * A FUNCTION, not a module constant, and deliberately so: a `const X = fitPrompt(...)` at
+ * module scope runs at LOAD time, which makes PROMPT_MAX_CHARS a load-order dependency for
+ * every consumer - including the test harnesses that slice this file into a sandbox and
+ * only stub the globals their own section needs. One of them (angle-race) does not, and a
+ * load-time call turns that into a ReferenceError before a single assertion runs. Resolved
+ * on demand it costs nothing measurable and cannot fail at import.
+ * @returns {string}
+ */
+function lookAnchorPrompt() {
+  return fitPrompt([
+    [P.CORE, LOOK_ANCHOR],
+    [P.HIGH, VOLUME_PERSISTENCE],
+    [P.MED,  CLOSED_BACK_HEM],
+    [P.CORE, REFERENCE_EXTRACTION],
+  ]);
+}
 
 /* The dense clause table. Deliberately lower-case and lightly punctuated wherever the
    meaning survives it: ALL-CAPS and heavy punctuation both tokenize worse than prose,
@@ -6412,22 +6665,28 @@ const IMAGE_ONLY_PROMPT =
                       an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
                       the moment "it gave me the model's shoulders" is reported again.
 
-   ── THE RESTORE BUDGET IS NOW ONE CLAUSE, NOT TWO ────────────────────────────
-   Recorded because it is a NEW constraint and an easy one to discover the hard way. The
-   frozen string has grown across five revisions, from 215 characters to 573 - 88% of
-   PROMPT_MAX_CHARS. There are 77 characters of headroom left, which buys exactly one
-   short clause:
+   ── THE RESTORE BUDGET IS BACK TO TWO CLAUSES ────────────────────────────────
+   It was ONE for five revisions, when the prompt was a single 573-character frozen string
+   at 88% of PROMPT_MAX_CHARS with 77 characters of headroom. The category branch bought
+   headroom back rather than spending it: each branch now carries only the clauses that
+   apply to ITS region, so the tops branch runs 524 characters and the bottoms branch 527.
 
-     + DENSE.bodyFidelity  (45)  → 619   fits
-     + DENSE.modelAgnostic (63)  → 638   fits
-     + BOTH                       → 684   does NOT fit
+     TOPS (524)                      BOTTOMS (527)
+     + DENSE.bodyFidelity  (45) → 570    → 573   fits
+     + DENSE.modelAgnostic (64) → 589    → 592   fits
+     + BOTH                     → 635    → 638   fits
 
-   So "a two-line restore" is still true of any ONE clause and no longer true of a pair.
-   Add a second and fitPrompt() will silently shed the worse-priority one - which is the
-   failure mode this file has spent its whole history trying to make visible, arriving
-   through the back door. If two are genuinely needed, the frozen string has to give up a
-   sentence first; that is a deliberate trade to be made in the open, not absorbed by the
-   budget. The order to restore in is below.
+   So "a two-line restore" is true of any one clause AND of the pair again. It is NOT
+   true of a third - check the arithmetic before adding one rather than letting fitPrompt()
+   silently shed the worse-priority clause, which is the failure mode this file has spent
+   its whole history trying to make visible.
+
+   NOTE WHICH BRANCH IS TIGHTER: bottoms, by 3 characters, because its anchor carries the
+   extra "do not render any upper clothing from the reference" provenance sentence. Size a
+   restore against BOTTOMS, not tops. And note that the tops branch is already shedding
+   FRONTAL_VOLUME (P.MED) to fit - the headroom above is what remains AFTER that shed, so
+   buying a clause back on tops competes with restoring that sentence first. The order to
+   restore in is below.
 
    THE REST ARE GENUINELY GONE from the wire, and are the ones worth buying back first:
      · inpaintLock    face/skin/hands/background passthrough. THE LARGEST LOSS.
@@ -6640,7 +6899,7 @@ function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
  * @returns {string}
  */
 function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line no-unused-vars
-  return IMAGE_ONLY_PROMPT;
+  return imageOnlyPrompt(item);
 }
 
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
@@ -7410,7 +7669,7 @@ const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like lo
    priority-tagged part in a single fitPrompt() call - and it ranks CORE, because a prompt
    that has lost its orientation clause renders the wrong side of the garment. */
 function buildPrompt(item, angleText = "") {              // eslint-disable-line no-unused-vars
-  return IMAGE_ONLY_PROMPT;
+  return imageOnlyPrompt(item);
 }
 
 /**
@@ -7431,7 +7690,7 @@ function buildPrompt(item, angleText = "") {              // eslint-disable-line
  * @returns {string}
  */
 function buildCustomPrompt(item, angleText = "") {        // eslint-disable-line no-unused-vars
-  return IMAGE_ONLY_PROMPT;
+  return imageOnlyPrompt(item);
 }
 
 const APPLY_ATTEMPTS = 2;    // set() tries per apply - see applyActive()
@@ -7621,7 +7880,14 @@ function buildLookPrompt(top, bottom, angleText = "") {   // eslint-disable-line
      If a look starts rendering only the shirt, or blending the two, DENSE.lookPanels is
      the first clause to buy back - and it is the one clause in this file whose absence
      costs a whole FEATURE rather than a degree of fidelity. */
-  return IMAGE_ONLY_PROMPT;
+  /* DELIBERATELY NOT imageOnlyPrompt(). Both category branches there pin the OPPOSITE
+     layer to the live camera, which is exactly the instruction a full look must not
+     carry: addToLook() ships a two-garment payload precisely because the shopper asked
+     for both layers to be substituted, and telling the model to preserve the live top
+     while handing it a stitched TOP+BOTTOM reference is a contradiction that resolves
+     however the sampler feels like resolving it. This anchor claims both layers instead;
+     everything after it is the same shared tail the other two branches use. */
+  return lookAnchorPrompt();
 }
 
 /* =============================================================================
@@ -7641,6 +7907,11 @@ function injectSizeSelector() {
   // Remove any stale selector from a previous room entry before rebuilding.
   const old = $("pearSizeSelector");
   if (old) old.remove();
+
+  /* Nothing to pick from on a blocked product - offering a size ladder for a garment
+     the shopper has just been told they cannot try on is the contradiction the report
+     showed (adult buttons drawn over a kids-only item). Left removed, not disabled. */
+  if (hasSizeCategoryMismatch()) return;
 
   if (!$("pearSizeSelectorStyles")) {
     const s = document.createElement("style");
@@ -7774,9 +8045,17 @@ function injectSizeSelector() {
   row.id = "pearSizeSelector";
   row.setAttribute("aria-label", "Size override selector");
 
-  // Child results get the numeric kids ladder ONLY - no adult S/M/L/XL button is
-  // rendered at all, so there is nothing for a child profile to cross over into.
-  const scale = currentSizeCategory === "child" ? CHILD_SIZE_SCALE : SIZE_SCALE;
+  /* THE PRODUCT'S OWN SIZES WIN. Rendering a generic XS-3XL ladder over a garment the
+     storefront sells in 8/10/12/14/16 was the second half of the FOX kids-tee report:
+     every button offered a size the shopper could not actually buy. When the host page
+     told us what it stocks, those are the only buttons there is any point drawing.
+     The generic scales below remain the fallback for catalog/demo items and for any
+     storefront we couldn't read a size list from. */
+  const productSizes = parseSizeList(activeItem?.sizes ?? pendingSizes);
+  const scale = productSizes.length ? productSizes
+    // Child results get the numeric kids ladder ONLY - no adult S/M/L/XL button is
+    // rendered at all, so there is nothing for a child profile to cross over into.
+    : (currentSizeCategory === "child" ? CHILD_SIZE_SCALE : SIZE_SCALE);
 
   const current = activeTryOnSize || currentUserSize;
   const btnHtml = scale.map((sz) => {
@@ -8008,21 +8287,14 @@ const PEAR_LAST_MEASUREMENTS_KEY = "pear_last_measurements_date";
 const MEASUREMENTS_REFRESH_MS    = 30 * 24 * 60 * 60 * 1000;   // 30 days
 const PROFILE_HEIGHT_MIN = 110, PROFILE_HEIGHT_MAX = 240;
 const PROFILE_WEIGHT_MIN = 18,  PROFILE_WEIGHT_MAX = 220;
-const PROFILE_AGE_MIN    = 1,   PROFILE_AGE_MAX    = 120;
-
-/* age is required for a profile to count as complete ONLY when it's actually being
-   asked for - i.e. the current garment's own kids/adult verdict is "uncertain"
-   (see resolvedGarmentAgeGroup). A confident garment never needs the visitor's
-   age at all, so a stored profile that predates the age field (or simply never
-   supplied one) is still complete for that garment. When age IS required and
-   missing, the profile is incomplete and Screen 1 must ask for it.
- * @param {boolean} ageRequired - resolvedGarmentAgeGroup() === "uncertain" at call time
- */
-function isSaneProfile(height, weight, age, ageRequired) {
+/* Height and weight are the whole profile now - age is gone entirely (see the
+   "AGE - REMOVED" note above). It only ever gated completeness here; it never
+   contributed to the recommendation, so dropping it makes a stored profile from any
+   era complete on the same terms. */
+function isSaneProfile(height, weight) {
   return Number.isFinite(height) && Number.isFinite(weight) &&
     height >= PROFILE_HEIGHT_MIN && height <= PROFILE_HEIGHT_MAX &&
-    weight >= PROFILE_WEIGHT_MIN && weight <= PROFILE_WEIGHT_MAX &&
-    (!ageRequired || (Number.isFinite(age) && age >= PROFILE_AGE_MIN && age <= PROFILE_AGE_MAX));
+    weight >= PROFILE_WEIGHT_MIN && weight <= PROFILE_WEIGHT_MAX;
 }
 
 function isMeasurementsRefreshDue() {
@@ -8116,7 +8388,6 @@ function showSizeForm(opts) {
   if (notice) notice.hidden = !(opts && opts.refreshNotice);
   if (PEAR_USER) {
     const setIf = (id, v) => { const el = $(id); if (el && v != null && v !== "" && !el.value) el.value = String(v); };
-    setIf("age", PEAR_USER.age);
     setIf("height", PEAR_USER.height); setIf("weight", PEAR_USER.weight);
   }
   try { calculateSize(); } catch {}
@@ -8136,24 +8407,18 @@ function showSizeForm(opts) {
      Profile, refresh NOT due → Screen 1 is never shown; prefill straight into
                                 calculateSize() and transition into the camera. */
 function routeUser(user) {
-  PEAR_USER    = user ? { id: user.id, name: user.name, email: user.email, height: user.height, weight: user.weight, age: user.age } : null;
+  // `age` is deliberately NOT carried onto PEAR_USER any more, even when the server
+  // still returns a stored one - that value is what the profile popover was painting
+  // as "גיל: 5" for a visitor who was never asked. See the "AGE - REMOVED" note.
+  PEAR_USER    = user ? { id: user.id, name: user.name, email: user.email, height: user.height, weight: user.weight } : null;
   PEAR_USER_ID = (user && user.id) || null;
   updateProfileButton();
 
-  // NOTE: at this point in the flow the widget's classify-images correction has
-  // usually NOT arrived yet (it can take 1-27s; this runs at page load), so
-  // resolvedGarmentAgeGroup() will almost always still read "uncertain" here even
-  // for a garment that will shortly resolve to a confident kids/adult verdict.
-  // A returning user's stored age therefore keeps mattering for THIS instant-skip
-  // decision in practice, even though it may stop mattering moments later once
-  // Screen 1 (if shown) picks up the correction live via calculateSize().
-  const ageRequired = resolvedGarmentAgeGroup() === "uncertain";
-  const hasProfile = user && isSaneProfile(Number(user.height), Number(user.weight), Number(user.age), ageRequired);
+  const hasProfile = user && isSaneProfile(Number(user.height), Number(user.weight));
 
   if (hasProfile && !isMeasurementsRefreshDue()) {
     hideAllScreen1Forms();
     const setIf = (id, v) => { const el = $(id); if (el && v != null && v !== "") el.value = String(v); };
-    setIf("age", user.age);
     setIf("height", user.height); setIf("weight", user.weight);
     try { calculateSize(); } catch {}
     // A stored height/weight that was valid when saved can still land in the
@@ -8174,26 +8439,23 @@ function routeUser(user) {
   showSizeForm({ refreshNotice: !!hasProfile });
 }
 
-/* Send the current form's age/height/weight to the server (PATCH) and stamp today
- * as the last-measurements date. No-op (resolves immediately) when there's no
- * logged-in device profile to attach it to (e.g. demo mode, or infra-failure
- * fallback where the session was never linked to a server profile). */
-async function persistMeasurementsIfLoggedIn(height, weight, age) {
+/* Send the current form's height/weight to the server (PATCH) and stamp today as the
+ * last-measurements date. No-op (resolves immediately) when there's no logged-in
+ * device profile to attach it to (e.g. demo mode, or infra-failure fallback where the
+ * session was never linked to a server profile).
+ * `age` is no longer collected or sent - see the "AGE - REMOVED" note. */
+async function persistMeasurementsIfLoggedIn(height, weight) {
   if (!PEAR_USER_ID) return;
   try {
     await fetch(`/api/users/${encodeURIComponent(getDeviceId())}`, {
       method:  "PATCH",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ height, weight, age }),
+      body:    JSON.stringify({ height, weight }),
     });
     stampMeasurementsDate();
     if (PEAR_USER) {
       PEAR_USER.height = Number(height);
       PEAR_USER.weight = Number(weight);
-      // age arrives as "" when the field was hidden (confident garment - see
-      // refreshAgeFieldVisibility). Number("") is 0, not NaN - leave the cached
-      // profile's age untouched rather than corrupting it to a false 0.
-      if (age !== "" && age != null) PEAR_USER.age = Number(age);
     }
     updateProfileButton();
   } catch (err) {
@@ -8205,7 +8467,7 @@ async function persistMeasurementsIfLoggedIn(height, weight, age) {
    onMeasurementKeydown). Persists the just-entered measurements server-side
    for a logged-in returning/new user before transitioning into the room. */
 async function onSizeFormContinue() {
-  await persistMeasurementsIfLoggedIn($("height")?.value, $("weight")?.value, $("age")?.value);
+  await persistMeasurementsIfLoggedIn($("height")?.value, $("weight")?.value);
   goToFitting();
 }
 
@@ -8239,9 +8501,7 @@ function updateProfileButton() {
   if (nameEl) nameEl.textContent = PEAR_USER.name || "-";
   if (emailEl) emailEl.textContent = PEAR_USER.email || "-";
 
-  const ageEl = $("profileAge");
-  if (ageEl) ageEl.textContent = PEAR_USER.age != null ? String(PEAR_USER.age) : "-";
-
+  // (no age row - the field is gone; see the "AGE - REMOVED" note)
   const heightEl = $("profileHeight"), weightEl = $("profileWeight");
   if (heightEl) heightEl.textContent = PEAR_USER.height != null ? `${PEAR_USER.height} ס"מ` : "-";
   if (weightEl) weightEl.textContent = PEAR_USER.weight != null ? `${PEAR_USER.weight} ק"ג` : "-";
@@ -9007,7 +9267,6 @@ function logSessionMeasurements(item, size) {
   const num = (id) => { const el = $(id); return el && el.value ? parseFloat(el.value) : null; };
   // All entered measurements, grouped into one object per the payload spec.
   const measurements = {
-    age:    num("age"),
     height: num("height"),
     weight: num("weight"),
     chest:  num("chest"),
@@ -9420,7 +9679,10 @@ function createFrameFreezeWatcher(video, gen) {
       if (rtClient && Date.now() - lastPingAt >= FRAME_FREEZE_PING_MS) {
         lastPingAt = Date.now();
         pings++;
-        const keepAlive = clampPromptForWire(IMAGE_ONLY_PROMPT, "freezeKeepAlive");
+        /* Resolved per category like every other dispatch: re-asserting a TOPS anchor
+           over a live trouser session is the same contradiction this branch exists to
+           remove, arriving through the recovery path instead of the apply path. */
+        const keepAlive = clampPromptForWire(imageOnlyPrompt(activeItem), "freezeKeepAlive");
         console.log("[DECART PROMPT DEBUG]", keepAlive, "(keep-alive ping - no image, no teardown)");
         try {
           await rtClient.setPrompt(keepAlive, { enhance: false });

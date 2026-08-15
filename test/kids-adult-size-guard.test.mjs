@@ -31,63 +31,65 @@ function extract(startMarker, endMarker) {
   return APP.slice(start, end);
 }
 
-console.log("── §1 isKidsProduct() / isCompatibleSizeCategory(): pure, executed for real ──");
+/* NOTE ON SCOPE: the CATEGORY logic itself (isKidsProduct / userBodyCategory /
+   isCompatibleSizeCategory, and the product-size-list signal that now drives them)
+   is owned by kids-product-sizes.test.mjs, which was written against the production
+   failure that proved the classifier-only version of this guard wrong. This file
+   stays focused on the GO-LIVE GATE: that a mismatch produces a reason, that the
+   reason carries the required copy, and that goLive() consults it before spending
+   anything. Splitting them keeps each suite pinned to one claim. */
+
+console.log("── §1 sizeCategoryMismatchReason(): reads real module state, real message ──");
 {
-  const code = extract("function isKidsProduct(", "function sizeCategoryMismatchReason(");
-  const mod = await import("data:text/javascript," + encodeURIComponent(
-    code + "\nexport { isKidsProduct, isCompatibleSizeCategory };"
-  ));
-  const { isKidsProduct, isCompatibleSizeCategory } = mod;
-
-  check("a kids-resolved garment reads as a kids product",
-    isKidsProduct("kids") === true);
-  check("an adult-resolved garment does NOT read as a kids product",
-    isKidsProduct("adult") === false);
-  check("an uncertain garment does NOT read as a kids product - fail open, never guess",
-    isKidsProduct("uncertain") === false);
-
-  check("REGRESSION TARGET: an adult-profile shopper is INCOMPATIBLE with a kids-only item",
-    isCompatibleSizeCategory("adult", "kids") === false);
-  check("an adult-profile shopper IS compatible with an adult item",
-    isCompatibleSizeCategory("adult", "adult") === true);
-  check("an adult-profile shopper IS compatible with an uncertain-category item\n" +
-        "        (never block on a classifier that hasn't resolved yet)",
-    isCompatibleSizeCategory("adult", "uncertain") === true);
-  check("a child-profile shopper IS compatible with a kids item",
-    isCompatibleSizeCategory("child", "kids") === true);
-  check("no user size resolved yet (null) never blocks - nothing to compare against",
-    isCompatibleSizeCategory(null, "kids") === true);
-}
-
-console.log("\n── §2 sizeCategoryMismatchReason(): reads real module state, real message ──");
-{
-  const code = extract("function resolvedGarmentAgeGroup(", "function refreshAgeFieldVisibility(");
-  function harness({ activeItem = null, pendingAgeGroup = undefined, currentSizeCategory = null } = {}) {
-    const fn = new Function("activeItem", "pendingAgeGroup", "currentSizeCategory",
-      code + "\nreturn { sizeCategoryMismatchReason, isCompatibleSizeCategory, isKidsProduct };");
-    return fn(activeItem, pendingAgeGroup, currentSizeCategory);
+  const code = extract("function resolvedGarmentAgeGroup(", "function calculateSize()");
+  function harness({ activeItem = null, pendingAgeGroup = undefined, pendingSizes = undefined,
+                      currentBodyCategory = null } = {}) {
+    const fn = new Function("activeItem", "pendingAgeGroup", "pendingSizes", "currentBodyCategory",
+      code + "\nreturn { sizeCategoryMismatchReason, hasSizeCategoryMismatch };");
+    return fn(activeItem, pendingAgeGroup, pendingSizes, currentBodyCategory);
   }
 
-  const blocked = harness({ activeItem: { ageGroup: "kids" }, currentSizeCategory: "adult" });
+  const blocked = harness({
+    activeItem: { ageGroup: "uncertain", sizes: ["8", "10", "12", "14", "16"] },
+    currentBodyCategory: "adult",
+  });
   const reason = blocked.sizeCategoryMismatchReason();
-  check("adult shopper + kids item: returns a non-null reason", typeof reason === "string" && reason.length > 0);
+  check("adult body + kids-only product: returns a non-null reason",
+    typeof reason === "string" && reason.length > 0);
   check("the reason carries the required Hebrew message verbatim",
-    reason.includes("הפריט אינו בטווח המידות שלך (מידת ילדים)"), reason);
+    reason.includes("הפריט אינו בטווח המידות שלך (פריט במידות ילדים). אינך יכול למדוד פריט זה במידה הנוכחית."),
+    reason);
   check("the reason carries the required English fallback",
     reason.includes("This item is not within your size range (Kids item)"), reason);
 
-  const allowedAdult = harness({ activeItem: { ageGroup: "adult" }, currentSizeCategory: "adult" });
-  check("adult shopper + adult item: no reason (null)", allowedAdult.sizeCategoryMismatchReason() === null);
+  /* The classifier-only fallback path, unchanged: still works when NO size list ever
+     reached us, which is the only situation it is still trusted for. */
+  const blockedByClassifier = harness({ activeItem: { ageGroup: "kids" }, currentBodyCategory: "adult" });
+  check("no size list at all + a confident 'kids' verdict still blocks (fallback intact)",
+    blockedByClassifier.sizeCategoryMismatchReason() !== null);
 
-  const allowedChild = harness({ activeItem: { ageGroup: "kids" }, currentSizeCategory: "child" });
-  check("child shopper + kids item: no reason (null)", allowedChild.sizeCategoryMismatchReason() === null);
+  const allowedAdult = harness({
+    activeItem: { ageGroup: "uncertain", sizes: ["S", "M", "L"] }, currentBodyCategory: "adult",
+  });
+  check("adult body + adult product: no reason (null)", allowedAdult.sizeCategoryMismatchReason() === null);
 
-  const allowedUncertain = harness({ activeItem: null, pendingAgeGroup: undefined, currentSizeCategory: "adult" });
-  check("adult shopper + uncertain item (nothing resolved yet): no reason (null)",
-    allowedUncertain.sizeCategoryMismatchReason() === null);
+  const allowedChild = harness({
+    activeItem: { ageGroup: "kids", sizes: ["8", "10"] }, currentBodyCategory: "child",
+  });
+  check("child body + kids product: no reason (null)", allowedChild.sizeCategoryMismatchReason() === null);
+
+  const allowedUnknown = harness({ activeItem: null, currentBodyCategory: "adult" });
+  check("adult body + nothing resolved about the product yet: no reason (null)",
+    allowedUnknown.sizeCategoryMismatchReason() === null);
+
+  const noMeasurements = harness({
+    activeItem: { sizes: ["8", "10"] }, currentBodyCategory: null,
+  });
+  check("kids product but no measurements entered yet: no reason (null)",
+    noMeasurements.sizeCategoryMismatchReason() === null);
 }
 
-console.log("\n── §3 goLive() WIRING: the gate fires before any camera/token/billing work ──");
+console.log("\n── §2 goLive() WIRING: the gate fires before any camera/token/billing work ──");
 {
   const live = extract("async function goLive() {", "\nasync function ");
   check("goLive() calls the new gate", /sizeCategoryMismatchReason\(\)/.test(live), live.slice(0, 800));

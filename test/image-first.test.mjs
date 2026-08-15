@@ -73,18 +73,44 @@ const sandbox = {
   getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
-  code + "\nreturn { buildCompositePrompt, IMAGE_ONLY_PROMPT, fitPrompt, P, DENSE };")(...Object.values(sandbox));
+  code + "\nreturn { buildCompositePrompt, imageOnlyPrompt, fitPrompt, P, DENSE };")(...Object.values(sandbox));
 
-const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
-const SPEC =
-  "Fit a standard t-shirt from the reference image onto the subject with strictly" +
-  " persistent 3D body volume. Maintain the exact same abdomen/stomach depth, waist" +
+const TEE   = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
+const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
+
+/* \u2500\u2500 ONE STRING BECAME TWO, AND THAT IS THE ONLY THING THAT CHANGED \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   The frozen string opened "Fit a standard t-shirt from the reference image" for EVERY
+   product in the catalog. On a trouser packshot that is a contradiction the model resolves
+   by taking the whole reference - so the catalog model's shirt replaced the shopper's real
+   one. run.mjs's suite index had already named the gap ("an 'upper garment' anchor on a
+   trouser reference is the same contradiction"); garment-category-prompt.test.mjs owns the
+   fix. This suite keeps everything it already guaranteed, now per branch.
+
+   THE MODE IS INTACT. The prompt is still constant per dispatch, still assembles no
+   garment description, still has no interpolation hole. It varies on exactly ONE axis -
+   which body region is being replaced - and NOT on colour, variant, angle or pose. */
+const TOPS_SPEC =
+  "Fit and replace ONLY the subject's upper garment using the exact upper garment from" +
+  " the reference image. Strictly preserve the subject's live pants/lower garment as" +
+  " seen on camera. Do NOT replace or alter the subject's lower clothing." +
+  " Maintain the exact same abdomen/stomach depth, waist" +
   " volume, and torso thickness continuously through all 360-degree rotations\u2014never" +
-  " flatten or reset body size mid-stream. In front-facing (0-degree) views," +
-  " realistically render the stomach's forward volume and convexity using natural fabric" +
-  " drape, forward hem extension, and subtle lighting falloff. Preserve a closed back and" +
+  " flatten or reset body size mid-stream. Preserve a closed back and" +
   " normal un-knotted hem. Use only the reference image's graphics, fabric texture," +
   " and color.";
+const BOTTOMS_SPEC =
+  "Fit and replace ONLY the subject's lower garment (pants/shorts) using the exact lower" +
+  " garment from the reference image. Strictly preserve the subject's live upper garment" +
+  " (shirt/top) as seen on camera. Do NOT apply or render any shirt, jacket, or upper" +
+  " clothing from the reference image." +
+  " Maintain the exact same abdomen/stomach depth, waist" +
+  " volume, and torso thickness continuously through all 360-degree rotations\u2014never" +
+  " flatten or reset body size mid-stream." +
+  " Use only the reference image's graphics, fabric texture," +
+  " and color.";
+/* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
+   for the two top-specific construction clauses, which \u00a71 checks per branch. */
+const SPEC = TOPS_SPEC;
 
 console.log("── §1 THE FROZEN STRING: product-specified, and genuinely constant ──");
 {
@@ -92,8 +118,10 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      detail - a paraphrase that reads the same to a human is a different token sequence to
      a diffusion model, and this is the one string in the file whose exact form was
      specified from outside it. */
-  check("IMAGE_ONLY_PROMPT matches the specified wording byte for byte",
-    api.IMAGE_ONLY_PROMPT === SPEC, JSON.stringify(api.IMAGE_ONLY_PROMPT));
+  check("the TOPS branch matches the specified wording byte for byte",
+    api.imageOnlyPrompt(TEE) === TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
+  check("the BOTTOMS branch matches the specified wording byte for byte",
+    api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
 
   /* THREE SENTENCES, THREE JOBS, each one a clause that used to be separate and
      shed-able. Asserted individually because the failure mode of a frozen string is a
@@ -107,12 +135,27 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      provenance forecloses them. The reference is still bound in the first clause ("from
      the reference image"), so the asset anchor did not move; only the isolation half did.
      Both facts are pinned so a reorder is a deliberate act. */
-  check("(1) it leads by naming the garment's STRUCTURE and asserting body VOLUME",
-    SPEC.indexOf("Fit a standard t-shirt from the reference image onto the subject with strictly persistent 3D body volume") === 0,
-    "the knot and the open back are construction failures - foreclose them first");
-  check("...and the reference is still bound in that same first sentence",
-    /^Fit a standard t-shirt from the reference image onto the subject/.test(SPEC),
+  /* REVISION 5 CHANGES WHAT THE LEAD SENTENCE IS FOR. Revisions 3 and 4 argued over
+     EXTRACTION-first vs STRUCTURE-first; both assumed one anchor served every garment.
+     The lead now states REGION - which layer is being replaced and which is being kept -
+     because a prompt that names the wrong layer cannot be rescued by anything after it.
+     Structure and extraction both still ship; they just no longer lead. */
+  check("(1) TOPS leads by naming the REGION it replaces and the one it preserves",
+    TOPS_SPEC.indexOf("Fit and replace ONLY the subject's upper garment") === 0 &&
+    /Strictly preserve the subject's live pants\/lower garment as seen on camera/.test(TOPS_SPEC),
+    "naming the wrong layer is unrecoverable by any later clause");
+  check("(1) BOTTOMS leads the same way, mirrored - the fix for the reported bug",
+    BOTTOMS_SPEC.indexOf("Fit and replace ONLY the subject's lower garment (pants/shorts)") === 0 &&
+    /Strictly preserve the subject's live upper garment \(shirt\/top\) as seen on camera/.test(BOTTOMS_SPEC));
+  check("...and the reference is still bound in that same first sentence, both branches",
+    /^Fit and replace ONLY the subject's upper garment using the exact upper garment from the reference image/.test(TOPS_SPEC) &&
+    /^Fit and replace ONLY the subject's lower garment \(pants\/shorts\) using the exact lower garment from the reference image/.test(BOTTOMS_SPEC),
     "the asset anchor must not depend on the extraction sentence that trails");
+  /* THE PROVENANCE HALF, bottoms only. "Preserve the live top" alone leaves the
+     reference's shirt unclaimed, and an unstated region is what gets reinterpreted. */
+  check("...and BOTTOMS additionally disclaims the reference's OWN upper garment",
+    /Do NOT apply or render any shirt, jacket, or upper clothing from the reference image/.test(BOTTOMS_SPEC),
+    "the model wearing the product is packaging, not content");
   /* (2) PERSISTENCE. Three quantities named individually because "volume" alone is
      satisfiable by any one of them, and the transition named explicitly because the
      reported failure is progressive - volume present at the start of a turn, gone by the
@@ -137,12 +180,42 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      extent in a 2D frame, so every previous revision's volume language simply did not
      apply and the model sized off shoulder width. These three cues are what frontal
      volume looks like in 2D, and the only ones available at 0 degrees. */
-  check("(3) it names the 0-degree case explicitly and what volume LOOKS like there",
-    /In front-facing \(0-degree\) views/.test(SPEC) &&
-    /the stomach's forward volume and convexity/.test(SPEC));
-  check("...through the three 2D cues that read as depth head-on",
-    /natural fabric drape, forward hem extension, and subtle lighting falloff/.test(SPEC),
-    "depth/contour/silhouette are profile-visible and do not apply at 0 degrees");
+  /* ── (3) THE HEAD-ON CLAUSE NOW SHEDS ON TOPS. RECORDED, NOT GLOSSED ──────────
+     This is the one substantive cost of the category branch and it is asserted as a
+     LOSS so it cannot be discovered in a live session instead.
+
+     THE ARITHMETIC: the tops branch assembles to 702 characters against a hard 650
+     budget (app.js:5862 - "the ceiling is the API's, not ours"), so fitPrompt() sheds
+     its worst-priority part. FRONTAL_VOLUME is tagged P.MED and is the largest single
+     clause at 177 characters, so it goes and the prompt lands at 524.
+
+     WHY THIS IS THE RIGHT CLAUSE TO LOSE, given something had to go: it is a refinement
+     of a bias the surviving P.HIGH clause already asserts in general terms
+     ("abdomen/stomach depth, waist volume, torso thickness ... never flatten"), whereas
+     the anchor and the extraction clause are each the sole carrier of their guarantee.
+
+     THE ONE-LINE RESTORE, if head-on volume regresses: the tops anchor's third sentence
+     ("Do NOT replace or alter the subject's lower clothing.", 53 chars) restates what its
+     second sentence already says. Dropping it frees 53 and FRONTAL_VOLUME returns on its
+     own - fitPrompt() re-includes it the moment it fits, with no other edit. That trade
+     is deliberately NOT made here: the anchor wording is a product decision. */
+  check("(3) the frontal-volume clause is SHED on tops, and the budget explains why",
+    !/In front-facing \(0-degree\) views/.test(TOPS_SPEC) && TOPS_SPEC.length <= 650,
+    `tops = ${TOPS_SPEC.length} chars; unshed it would be 702 against a 650 ceiling`);
+  check("...and app.js records the shed as a choice, with the restore path",
+    /FRONTAL_VOLUME \(P\.MED\) drops first on tops/.test(SRC),
+    "a silent shed is the failure mode this repo exists to make visible");
+  check("...while the GENERAL volume guarantee survives in both branches, unshed",
+    /abdomen\/stomach depth, waist volume, and torso thickness/.test(TOPS_SPEC) &&
+    /abdomen\/stomach depth, waist volume, and torso thickness/.test(BOTTOMS_SPEC),
+    "the P.HIGH clause is the one that must never shed");
+  /* Bottoms never carried the frontal clause at all - it describes a shirt draping over a
+     stomach, which is not what a trouser render is about. Its absence there is by design,
+     not budget, and the two must not be confused by a future reader. */
+  check("...and BOTTOMS omits it BY DESIGN, not by shedding - it never applied",
+    !/In front-facing \(0-degree\) views/.test(BOTTOMS_SPEC) &&
+    BOTTOMS_SPEC.length < 650 - 100,
+    "bottoms has ample headroom - its omission is a design choice, not budget pressure");
   /* (4) THE STRUCTURAL BOUNDARY - the positive half of revision 4's rule, now standing
      alone. Its four-artifact enumeration ("do NOT generate front knots, tied fabric, open
      slits, or floating back flaps") is gone, which is exactly the step revision 4's own
@@ -160,9 +233,12 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      It returns because frontal convexity cannot be described without it. What makes it
      less exposed: it is scoped to front-facing views rather than stated as a general goal,
      and the structural boundary follows immediately after. */
-  check("the returning drape/hem language is SCOPED to the frontal case, not general",
-    SPEC.indexOf("In front-facing (0-degree) views") < SPEC.indexOf("natural fabric drape") &&
-    SPEC.indexOf("natural fabric drape") < SPEC.indexOf("Preserve a closed back"),
+  /* The scoping check moves to the SOURCE rather than the shipped string: FRONTAL_VOLUME
+     sheds on tops, so the assembled prompt can no longer demonstrate the ordering. What
+     the ordering protected still matters the moment the clause is restored (see the
+     one-line restore above), so it is pinned where the clause actually lives. */
+  check("the drape/hem language stays SCOPED to the frontal case in FRONTAL_VOLUME itself",
+    /const FRONTAL_VOLUME =\s*\n?\s*"In front-facing \(0-degree\) views[\s\S]{0,200}?natural fabric drape/.test(SRC),
     "unscoped drape language is what produced the front knot in revision 3");
   check("...and no tension/gathering vocabulary came back with it",
     !/tension lines/.test(SPEC) && !/gather/i.test(SPEC));
@@ -186,7 +262,8 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      SIDE_PROFILE_DEPTH was written against, and the reason "waistline" is named alongside
      the generic contour language. */
   check("...naming the stomach specifically, not a generic contour",
-    /abdomen\/stomach depth/.test(SPEC) && /the stomach's forward volume/.test(SPEC),
+    /abdomen\/stomach depth/.test(TOPS_SPEC) && /abdomen\/stomach depth/.test(BOTTOMS_SPEC) &&
+    /const FRONTAL_VOLUME =[\s\S]{0,160}the stomach's forward volume/.test(SRC),
     "the stomach is the region every report has actually been about");
 
   /* NOT POSE-GATED, and that is the substantive win over the clause it replaces.
@@ -219,11 +296,14 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
   /* CONSTANT, not merely short. A template literal here is how a description creeps back
      in one field at a time, which is the exact history this mode is reacting to. */
   check("declared with no interpolation hole",
-    /const IMAGE_ONLY_PROMPT =\s*\n?\s*"[^`]*";/s.test(SRC) &&
-    !/IMAGE_ONLY_PROMPT[^\n]*\$\{/.test(SRC),
+    /const CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(SRC) &&
+    !/CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,900}?\$\{/.test(SRC),
     "no ${...} anywhere in or adjacent to the declaration");
-  check("...and it is never concatenated onto at any call site",
-    !/IMAGE_ONLY_PROMPT\s*\+/.test(SRC) && !/\+\s*IMAGE_ONLY_PROMPT/.test(SRC),
+  /* The resolver picks between two frozen literals; it must never BUILD one. A template
+     hole in either anchor is how a colour word or a subtype noun gets back on the wire. */
+  check("...and the resolver only SELECTS an anchor, never interpolates one",
+    /bottoms \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top/.test(SRC) &&
+    !/CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC),
     "appending one clause is how the dozen came back last time");
 
   /* It has to survive the wire guard untouched: clampPromptForWire() truncates anything
@@ -243,11 +323,21 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
     ["custom upload", { ...TEE, custom: true }, "front", true],
     ["pathological name", { ...TEE, name: "x".repeat(400) }, "front", true],
   ];
+  /* Each case now names the branch it must land in. The invariance being asserted is
+     unchanged in strength - byte-identical output across angle, pose, colour, custom-upload
+     and pathological-name - it is just measured against the anchor for that garment's
+     REGION rather than one global constant. */
   for (const [name, item, angle, prof] of cases) {
-    check(`${name}: byte-identical to the frozen string`,
-      api.buildCompositePrompt(item, angle, prof) === SPEC,
+    const expected = item.garmentType === "lower_body" ? BOTTOMS_SPEC : TOPS_SPEC;
+    check(`${name}: byte-identical to its category anchor`,
+      api.buildCompositePrompt(item, angle, prof) === expected,
       api.buildCompositePrompt(item, angle, prof));
   }
+  /* THE AXIS ITSELF, asserted once: category is the ONLY thing that moves the prompt. */
+  check("the two branches are genuinely different, and category is the only axis",
+    TOPS_SPEC !== BOTTOMS_SPEC &&
+    api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(TEE, "back", true) &&
+    api.buildCompositePrompt(JEANS, "front", false) === api.buildCompositePrompt(JEANS, "back", true));
 
   /* Structural, across the builders this sandbox cannot execute. The four together are
      every path that can reach rtClient.set() with a prompt. */
@@ -263,9 +353,15 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
        DENSE.lookPanels, and a check that trips over the explanation of the retirement is
        worse than no check - it would force whoever reads it to delete the documentation. */
     const codeBody = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-    check(`${name}(): returns the constant, calls no assembler`,
-      /return IMAGE_ONLY_PROMPT;/.test(codeBody) && !/fitPrompt\(/.test(codeBody) &&
-      !/DENSE\./.test(codeBody), codeBody.slice(-240) || "builder not found");
+    /* "Calls no assembler" is still the property, and it still means the same thing: no
+       builder may assemble a garment DESCRIPTION. The single fitPrompt() call now lives
+       inside imageOnlyPrompt(), where it selects between two frozen literals and budgets
+       the shared tail - it is not reachable from a builder, so a builder still cannot
+       introduce a clause. What each builder does is DELEGATE, and that is asserted. */
+    check(`${name}(): delegates to the category resolver, assembles nothing itself`,
+      /return (imageOnlyPrompt\(item\)|lookAnchorPrompt\(\));/.test(codeBody) &&
+      !/fitPrompt\(/.test(codeBody) && !/DENSE\./.test(codeBody),
+      codeBody.slice(-240) || "builder not found");
   }
 
   /* THE INVARIANT, stated as an absence - the only form that catches the real regression,

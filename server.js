@@ -586,7 +586,9 @@ function publicUser(u) {
   if (!u) return null;
   return {
     id: u.id, name: u.name, email: u.email,
-    height: u.height, weight: u.weight, age: u.age,
+    // age is intentionally NOT surfaced - see updateUserMeasurements()'s note. A row
+    // written by an older build may still hold one; nothing is entitled to read it.
+    height: u.height, weight: u.weight,
     created_at: u.created_at,
   };
 }
@@ -777,15 +779,17 @@ async function getUserByDevice(req, res) {
 }
 
 /* PATCH /api/users/:deviceId - update this device's user row with a fresh
-   height/weight, and age WHEN the client actually collected one. Same sane-range
-   bounds as the client's isSaneProfile()/calculateSize() gate, so the server
-   never persists a value the form itself would reject.
-   age is OPTIONAL here, unlike height/weight: the client only ever asks the
-   visitor for it when the current garment's own kids/adult signal is uncertain
-   (resolvedGarmentAgeGroup() in app.js) - a confident garment persists
-   height/weight alone. Present-but-invalid is still rejected; simply absent is
-   not, and an absent age never overwrites a previously-stored one with NULL -
-   it just leaves that column untouched. */
+   height/weight. Same sane-range bounds as the client's isSaneProfile()/
+   calculateSize() gate, so the server never persists a value the form itself
+   would reject.
+
+   AGE IS NO LONGER ACCEPTED OR WRITTEN. The client stopped collecting it (see the
+   "AGE - REMOVED" note in fitting-room/app.js: the input was never revealed and
+   nothing read the value for sizing), so a body carrying one is from a stale cached
+   bundle and is ignored rather than persisted. The `age` COLUMN is deliberately left
+   in place and untouched - dropping it is a destructive migration that belongs in a
+   reviewed migration step, not in an app deploy - it is simply never read or written
+   from here again. */
 async function updateUserMeasurements(req, res) {
   if (storageUnavailable(res)) return;
   const deviceId = String(req.params.deviceId || "").trim();
@@ -793,13 +797,9 @@ async function updateUserMeasurements(req, res) {
 
   const height = Number(req.body?.height);
   const weight = Number(req.body?.weight);
-  const rawAge = req.body?.age;
-  const ageProvided = rawAge !== undefined && rawAge !== null && rawAge !== "";
-  const age = ageProvided ? Number(rawAge) : null;
 
   const sane = Number.isFinite(height) && Number.isFinite(weight) &&
-    height >= 110 && height <= 240 && weight >= 18 && weight <= 220 &&
-    (!ageProvided || (Number.isFinite(age) && age >= 1 && age <= 120));
+    height >= 110 && height <= 240 && weight >= 18 && weight <= 220;
   if (!sane) {
     return res.status(400).json({ ok: false, error: "invalid_measurements" });
   }
@@ -809,7 +809,6 @@ async function updateUserMeasurements(req, res) {
     if (!user) return res.status(404).json({ ok: false, error: "not_found" });
 
     const update = { height, weight };
-    if (ageProvided) update.age = age;   // omitted entirely when not collected - never clobbers a stored age with NULL
 
     const { error } = await supabase
       .from("users")
@@ -849,7 +848,7 @@ async function relinkUserDevice(req, res) {
     if (error) throw new Error(error.message);
 
     console.log(`[users] relinked device "${deviceId}" to user ${user.id} (${email})`);
-    res.json({ id: user.id, name: user.name, email: user.email, height: user.height, weight: user.weight, age: user.age });
+    res.json({ id: user.id, name: user.name, email: user.email, height: user.height, weight: user.weight });
   } catch (err) {
     console.error("[users] relink failed:", err?.message);
     res.status(500).json({ ok: false, error: err?.message });

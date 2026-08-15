@@ -34,46 +34,73 @@ function extract(startMarker, endMarker) {
 
 console.log("── §1 updateSizeMismatchUI(): real DOM state, real message, real button gating ──");
 {
-  const code = extract("function resolvedGarmentAgeGroup(", "function refreshAgeFieldVisibility(");
+  const code = extract("function resolvedGarmentAgeGroup(", "function calculateSize()");
 
-  function harness({ activeItem = null, pendingAgeGroup = undefined,
-                      currentSizeCategory = null, localStream = null, missingView = false } = {}) {
+  function harness({ activeItem = null, pendingAgeGroup = undefined, pendingSizes = undefined,
+                      currentBodyCategory = null, localStream = null, missingView = false } = {}) {
     const view = { hidden: true };
     const textEl = { textContent: "" };
     const captureBtn = { disabled: false };
-    const els = { sizeMismatchView: missingView ? null : view, sizeMismatchText: textEl, captureBtn };
+    const cardClasses = new Set();
+    const cameraCard = { classList: {
+      toggle: (c, on) => { if (on) cardClasses.add(c); else cardClasses.delete(c); },
+    } };
+    let selectorRemoved = false;
+    const pearSizeSelector = { remove: () => { selectorRemoved = true; } };
+    const els = {
+      sizeMismatchView: missingView ? null : view, sizeMismatchText: textEl,
+      captureBtn, cameraCard, pearSizeSelector,
+    };
     const $ = (id) => els[id] ?? null;
-    const fn = new Function("activeItem", "pendingAgeGroup", "currentSizeCategory", "localStream", "$",
+    const fn = new Function("activeItem", "pendingAgeGroup", "pendingSizes",
+      "currentBodyCategory", "localStream", "$",
       code + "\nreturn { updateSizeMismatchUI };");
-    const api = fn(activeItem, pendingAgeGroup, currentSizeCategory, localStream, $);
-    return { api, view, textEl, captureBtn };
+    const api = fn(activeItem, pendingAgeGroup, pendingSizes, currentBodyCategory, localStream, $);
+    return { api, view, textEl, captureBtn, cardClasses, selectorRemoved: () => selectorRemoved };
   }
 
-  const blocked = harness({ activeItem: { ageGroup: "kids" }, currentSizeCategory: "adult", localStream: {} });
+  /* The REPORTED product: kids-only numeric sizes, and a classifier that abstained -
+     the combination that previously sailed through. */
+  const blocked = harness({
+    activeItem: { ageGroup: "uncertain", sizes: ["8", "10", "12", "14", "16"] },
+    currentBodyCategory: "adult", localStream: {},
+  });
   blocked.api.updateSizeMismatchUI();
-  check("adult shopper + kids item: the card is shown", blocked.view.hidden === false);
+  check("adult body + kids-only sizes (classifier 'uncertain'): the card is shown",
+    blocked.view.hidden === false);
   check("...Start Fitting is disabled", blocked.captureBtn.disabled === true);
+  check("...the live stage is suppressed, not just overlaid",
+    blocked.cardClasses.has("size-mismatched"));
+  check("...and the adult size selector is removed outright",
+    blocked.selectorRemoved() === true);
   check("...the card carries the required Hebrew text",
-    blocked.textEl.textContent.includes("הפריט אינו בטווח המידות שלך") &&
-    blocked.textEl.textContent.includes("יש לעדכן/לשנות את המידות בפרופיל"),
+    blocked.textEl.textContent.includes("הפריט אינו בטווח המידות שלך (פריט במידות ילדים)") &&
+    blocked.textEl.textContent.includes("אינך יכול למדוד פריט זה במידה הנוכחית"),
     blocked.textEl.textContent);
-  check("...and the required English fallback",
-    blocked.textEl.textContent.includes("This item is outside your size range") &&
-    blocked.textEl.textContent.includes("update your profile sizes"),
+  check("...and the English fallback",
+    blocked.textEl.textContent.includes("This item is not within your size range (Kids item)"),
     blocked.textEl.textContent);
 
-  const okAdult = harness({ activeItem: { ageGroup: "adult" }, currentSizeCategory: "adult", localStream: {} });
+  const okAdult = harness({
+    activeItem: { ageGroup: "uncertain", sizes: ["S", "M", "L", "XL"] },
+    currentBodyCategory: "adult", localStream: {},
+  });
   okAdult.api.updateSizeMismatchUI();
-  check("adult shopper + adult item: the card stays hidden", okAdult.view.hidden === true);
-  check("...and Start Fitting is enabled (camera already running)", okAdult.captureBtn.disabled === false);
+  check("adult body + adult sizes: the card stays hidden", okAdult.view.hidden === true);
+  check("...Start Fitting is enabled (camera already running)", okAdult.captureBtn.disabled === false);
+  check("...and the live stage is NOT suppressed", !okAdult.cardClasses.has("size-mismatched"));
 
-  const noCamera = harness({ activeItem: { ageGroup: "adult" }, currentSizeCategory: "adult", localStream: null });
+  const noCamera = harness({
+    activeItem: { ageGroup: "adult" }, currentBodyCategory: "adult", localStream: null,
+  });
   noCamera.api.updateSizeMismatchUI();
   check("compatible item but no camera stream yet: Start Fitting still disabled\n" +
         "        (this function must not fight the existing !localStream gate)",
     noCamera.view.hidden === true && noCamera.captureBtn.disabled === true);
 
-  const noView = harness({ activeItem: { ageGroup: "kids" }, currentSizeCategory: "adult", missingView: true });
+  const noView = harness({
+    activeItem: { ageGroup: "kids" }, currentBodyCategory: "adult", missingView: true,
+  });
   let threw = false;
   try { noView.api.updateSizeMismatchUI(); } catch (_) { threw = true; }
   check("missing #sizeMismatchView (older cached DOM/markup) - degrades safely, never throws",
