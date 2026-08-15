@@ -32,22 +32,37 @@
 
    The first cut kept an image anchor plus the structural directives and dropped this one
    for describing a BODY rather than a structure. The tuxedo survived it, so the second
-   cut dropped the structural directives too: the prompt is now one frozen string
-   (IMAGE_ONLY_PROMPT), identical on every dispatch. This clause is retired either way,
-   kept verbatim in DENSE, restorable in two lines - the difference is that restoring it
-   now also means reinstating fitPrompt() at the builder, which §2 exercises directly.
+   cut dropped the structural directives too: the prompt became one frozen string
+   (IMAGE_ONLY_PROMPT), identical on every dispatch.
 
-   SO THE ASSERTIONS INVERTED, deliberately and with the loss stated. The reference
-   figure's build can bleed into a rendered frame again - at every angle now, not just
-   edge-on. What this suite still owes is the part that makes that reversible:
-     · §1 the clause still EXISTS, verbatim, so restoring it is one line and not an
-       archaeology exercise (a "removal" that deletes the wording is not reversible), and
-     · §2 the restore instructions in app.js are ACCURATE - the names they tell you to
-       add are the names actually on the DENSE table, and fitPrompt() would carry them,
-     · §3 nothing quietly re-added it under a different name, which would leave the file
-       claiming a retirement it did not perform.
-   The successor contract - what the prompt now says INSTEAD - is asserted in
-   image-first.test.mjs. Asserted against the SHIPPED prompt, never the retired constant. */
+   ── THIRD REVISION: THE DIRECTIVE IS BACK, INSIDE THE FROZEN STRING ───────────
+   Freezing the prompt fixed the garment and exposed the body - which is this suite's own
+   bug, returning exactly as its §3 predicted it would. A shopper with a real waistline got
+   the catalog model's slim proportions and a shirt that hovered instead of draping.
+
+   So the provenance split is on the wire again, but as one of the frozen string's three
+   sentences rather than as a shed-able clause beside it: "Extract only the garment's
+   texture, pattern, and design from the reference image - do not copy the original
+   model's body proportions." That is strictly stronger than what it replaces. The old
+   DENSE.modelAgnostic was ranked MED and was ALREADY being shed edge-on under budget
+   pressure; a sentence inside the constant cannot be shed, cannot be reordered, and
+   cannot be separated from the instruction it qualifies.
+
+   WHAT THIS SUITE ASSERTS NOW is therefore both halves: that the DIRECTIVE ships (§1),
+   and that the CONSTANT it used to ship as is still on file and still restorable (§2),
+   because "superseded" decays into "deleted" the moment nothing checks.
+
+   Concretely:
+     · §1 the DIRECTIVE ships, in the rendered prompt, at both poses - and the constants
+       it used to ship as are still on file, because a supersede that deletes the wording
+       is a deletion and the next report would be rewritten from scratch;
+     · §2 the restore path in app.js is ACCURATE - the DENSE table names real symbols,
+       fitPrompt() still assembles them, and the table distinguishes SUPERSEDED clauses
+       (restoring one would duplicate the frozen string) from genuinely lost ones;
+     · §3 the retired CONSTANTS are off the wire, so the file cannot claim a retirement it
+       did not perform - the directive is carried by the frozen string, not by them.
+   The wider contract - everything the prompt says now - is asserted in
+   image-first.test.mjs. Asserted against the SHIPPED prompt, never a retired constant. */
 import { readFileSync } from "node:fs";
 
 const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -74,22 +89,37 @@ const api = new Function(...Object.keys(sandbox),
 
 const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 
-console.log("── §1 THE DIRECTIVE SURVIVES AS TEXT, so the retirement is reversible ──");
+console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes out ──");
 {
-  /* The two halves of the provenance split, checked on the constant rather than on a
-     rendered prompt - which is the whole point of this section now. A retirement that
-     also deletes the wording is not a retirement, it is a deletion, and the next person
-     to see "it gave me the model's shoulders" would be rewriting it from scratch. */
-  check("the isolation clause is still on file, verbatim",
+  /* Asserted on the RENDERED prompt, not on the constant - a suite that passes by reading
+     a retired string is worse than one that fails. This is the provenance split itself:
+     the reference is the only source of CLOTH, the live feed the only source of BODY. */
+  const out = api.buildCompositePrompt(TEE, "front", false);
+  check("the shipped prompt names the reference as cloth-only",
+    /Extract only the garment's texture, pattern, and design from the reference image/.test(out), out);
+  check("...and forbids copying the reference figure's build - the reported failure",
+    /do not copy the original model's body proportions/.test(out), out);
+  check("...while pinning the LIVE subject as the body it must fit",
+    /strictly onto the subject's live body shape and contours/.test(out) &&
+    /the user's true torso dimensions, abdomen depth/.test(out), out);
+
+  /* NOT POSE-GATED, which is the property §4 of the original suite existed for: the
+     reference figure's anatomy bleeds at every angle, so this must hold edge-on too.
+     It used to be a ranking argument (MED, shed under pressure); it is now structural. */
+  for (const prof of [false, true]) {
+    check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
+      /do not copy the original model's body proportions/
+        .test(api.buildCompositePrompt(TEE, "front", prof)));
+  }
+
+  /* The constants it used to ship as, still on file. A "supersede" that also deletes the
+     wording is a deletion, and the next person to see "it gave me the model's shoulders"
+     would be rewriting it from scratch. */
+  check("the retired constant is still on file, verbatim",
     /modelAgnostic:\s+"Ignore the reference model's body; fit the cloth to THIS person\."/.test(SRC),
     "DENSE.modelAgnostic must survive its own retirement from assembly");
-  /* The compact statement of the whole feature, and the one phrase that would have to
-     survive any future shortening: it is what distinguishes this clause from ordinary
-     body fidelity. */
-  check("...including the phrase that distinguishes it from plain body fidelity",
-    /fit the cloth to THIS person/.test(SRC), "the provenance split, not a slimming ban");
   check("its positive half - the body-fidelity clamp - is on file too",
-    /bodyFidelity:\s+"Keep their real body volume; never slim them\."/.test(SRC), SRC.slice(0, 0));
+    /bodyFidelity:\s+"Keep their real body volume; never slim them\."/.test(SRC));
 
   /* COMPRESSED AWAY LONG BEFORE THE RETIREMENT, recorded so the loss stays deliberate:
      the enumerated attribute list (height, build, skin tone, shoulder width, limb
@@ -109,12 +139,16 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      executes the restore against the REAL fitPrompt() and the REAL DENSE table, so a
      rename that silently invalidates the comment fails here rather than in whatever
      session someone actually needs the clause back. */
-  check("app.js documents the retirement and how to undo it",
-    /RETIRED FROM ASSEMBLY, kept here so they can be bought back in one line/.test(SRC),
-    "the DENSE table must carry its own restore note");
-  check("...naming DENSE.bodyFidelity and DENSE.modelAgnostic as the symbols to re-add",
-    /Restore: add \[P\.HIGH, DENSE\.bodyFidelity\]/.test(SRC) &&
-    /Restore: add \[P\.MED, DENSE\.modelAgnostic\]/.test(SRC));
+  check("the DENSE table documents itself as a restore library, not an assembly source",
+    /NOTHING HERE IS ASSEMBLED ANY MORE/.test(SRC) &&
+    /RESTORE LIBRARY, not an assembly source/.test(SRC));
+  check("...and records this clause as SUPERSEDED, with the sentence that replaced it",
+    /THREE OF THEM ARE SUPERSEDED rather than merely retired/.test(SRC) &&
+    /modelAgnostic  \u2192 "do not copy the original model's body proportions"\.|modelAgnostic  \u2192 "do not copy the original model.s body proportions"\./.test(SRC.replace(/\u2192/g, "\u2192")),
+    "restoring a superseded clause would DUPLICATE what is already on the wire");
+  check("...and names the clauses that are genuinely gone, ranked, with a real restore line",
+    /inpaintLock    face\/skin\/hands\/background passthrough\. THE LARGEST LOSS/.test(SRC) &&
+    /Restore: add \[P\.HIGH, DENSE\.inpaintLock\]/.test(SRC));
 
   const restored = api.fitPrompt([
     [api.P.CORE, api.IMAGE_ONLY_PROMPT],
@@ -127,12 +161,14 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     `${restored.length} chars: ${restored}`);
 }
 
-console.log("\n── §3 IT IS GENUINELY OFF THE WIRE, at every pose and every builder ──");
+console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");
 {
-  /* The failure mode this catches is a half-done retirement: the comment says retired,
-     one builder still carries it, and the prompt-length problem the retirement was for is
-     only partly solved. Checked on the SHIPPED prompt at both poses, and structurally
-     across the other three builders (which this sandbox cannot execute). */
+  /* The distinction §1 and this section split between them. The DIRECTIVE ships, inside
+     the frozen string. The CONSTANTS do not, and must not: assembling DENSE.modelAgnostic
+     beside a frozen string that already says the same thing would spend budget restating
+     it, which is the exact failure mode - text volume drowning the image - that this whole
+     sequence of changes is about. A half-done supersede (comment says superseded, one
+     builder still assembles it) is what this catches. */
   for (const prof of [false, true]) {
     check(`buildCompositePrompt does not assemble it (inProfile=${prof})`,
       !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", prof)));
@@ -151,7 +187,7 @@ console.log("\n── §3 IT IS GENUINELY OFF THE WIRE, at every pose and every 
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
     check(`the frozen prompt survives a pathologically long name (inProfile=${prof})`,
-      /Fit and render the exact garment provided in the reference image/.test(out),
+      /Fit and drape the exact garment from the reference image/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }

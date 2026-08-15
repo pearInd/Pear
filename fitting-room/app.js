@@ -595,6 +595,33 @@ let rtImageOnWire = false;     // has THIS session received an image yet?
    above, for the same reason: believing a fresh session already holds this prompt would
    let the first apply skip its own set(). */
 let lastSentPrompt = null;
+/* The last reference a set() actually RESOLVED with, kept across every invalidation
+   below. lastSentImageRef answers "what does the wire hold?" and must be cleared the
+   moment that stops being knowable; this answers "what did Decart last acknowledge?" and
+   stays true regardless - it is what a recovery re-anchors TO, and what lets the recovery
+   verify it re-sent the same asset rather than silently substituting another. */
+let lastAckedImageRef = null;
+
+/**
+ * Forget what the wire is believed to hold, so the next apply is a full set({ image })
+ * rather than a prompt-only update or (with a frozen prompt) no dispatch at all.
+ *
+ * Call this whenever the TRANSPORT may have changed under us without this file opening
+ * the session itself - an SDK-internal reconnect, or a freeze whose cause is unknown.
+ * It deliberately does NOT touch lastAckedImageRef, isGarmentApplied, billing or the
+ * recorder: this is a statement about the connection, not about whether the shopper was
+ * ever dressed, and conflating the two is how a recovery ends up re-arming the reveal or
+ * re-billing a session that never stopped.
+ * @param {string} why  short reason, logged - these are rare and always worth a line
+ * @returns {void}
+ */
+function invalidateWireState(why) {
+  console.log("[PEAR] wire state invalidated -", why,
+    "| last acknowledged reference:", typeof abbrevImg === "function" ? abbrevImg(lastAckedImageRef) : lastAckedImageRef);
+  lastSentImageRef = null;
+  rtImageOnWire = false;
+  lastSentPrompt = null;
+}
 
 /* Pre-minted ek_ token cache - populated by warmupSDKAndToken() on room entry so
    mintEphemeralToken() can skip the network round-trip at go-live time. */
@@ -2724,6 +2751,12 @@ function buildRealtimeConnectOpts(gen) {
       // stale/duplicate stream can't re-arm it. Recording (Feature 2) is armed from
       // the same call, inside startBillingWindow, so both cover the identical span.
       armFirstFrameBilling(aiVideo, gen);
+      /* Armed HERE, not at the reveal: armFirstFrameBilling() is a one-shot gate that
+         stops watching the moment it fires, so a stall during warm-up - before any frame
+         has qualified - would otherwise be covered by nothing but firstFrameGuardTimer's
+         all-or-nothing teardown. typeof-guarded for the same reason the line above is:
+         this callback is extracted and sandboxed by tests without these globals in scope. */
+      if (typeof startFrameFreezeWatch === "function") startFrameFreezeWatch(aiVideo, gen);
     },
     onConnectionChange: (state) => {
       if (gen !== sessionGen) return;    // stale callback from a torn-down session
@@ -2771,6 +2804,23 @@ function buildRealtimeConnectOpts(gen) {
           prevState === "reconnecting" && isGarmentApplied) {
         console.log("[PEAR] connectRealtime() - SDK reconnected; re-applying the CURRENT garment/pose",
           "(the SDK's own recovery only restores the ORIGINAL go-live state)");
+        /* ── THE WIRE STATE DID NOT SURVIVE THE RECONNECT, so neither may our belief
+           about it ────────────────────────────────────────────────────────────────
+           lastSentImageRef/rtImageOnWire/lastSentPrompt describe what THIS PEER
+           CONNECTION holds. connectRealtime() clears them for a brand-new session, but an
+           SDK-internal reconnect never re-enters connectRealtime() - runOneConnect()
+           rebuilds the transport underneath us and this file's bookkeeping sails straight
+           through it, still claiming the composite Blob is on the wire.
+
+           Before strict image-only that produced a prompt-only setPrompt() on the
+           re-apply: wrong, but the garment survived because the SDK's own
+           getInitialState() replay had put SOMETHING there. With one frozen prompt the
+           re-apply matches on BOTH halves and applyGarment() skips the dispatch entirely,
+           so the recovered connection would be left holding whatever the SDK replayed -
+           the ORIGINAL go-live state, which is precisely what this block exists to
+           correct. Clearing here is what makes the re-apply a real set({ image }) and
+           puts the CURRENT garment blob back on the new transport. */
+        invalidateWireState("SDK reconnect - the transport was rebuilt underneath us");
         applyActive().catch((e) =>
           console.warn("[PEAR] post-reconnect re-apply failed:", e?.message || e));
       }
@@ -2992,6 +3042,13 @@ function teardown() {
   // Retire the AI Auto orientation watcher with the session - it samples the camera and
   // issues live set() swaps, so it must never outlive isLive().
   if (orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; }
+
+  // Same rule, same reason, for the frame-freeze watchdog: it can fire applyActive(), so
+  // a surviving instance would issue set() calls against a disconnected session. Its own
+  // tick is sessionGen- and isLive()-guarded as well, so this is the second of two locks
+  // rather than the only one - deliberately, since it is the timer most likely to be
+  // running at the exact moment a session ends.
+  stopFrameFreezeWatch();
 
   // Feature 2 - flush the recorder while the edited tracks are still live, so the
   // download clip is finalized before disconnect ends the stream.
@@ -5908,6 +5965,35 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    WORDING IS PRODUCT-SPECIFIED - do not paraphrase, do not interpolate, do not append.
    `${...}` inside this string is how a description gets back in, one field at a time.
 
+   ── REVISION: BODY CONFORMATION FOLDED IN ────────────────────────────────────
+   The first version of this string said only "render the provided asset, invent nothing".
+   That fixed the garment but exposed the BODY: a shopper with a real waistline (the test
+   case is a pillow under a shirt) got the slim proportions of the e-commerce model
+   wearing the shirt in the catalog photo, and the fabric hovered off their actual
+   silhouette instead of draping over it. The cause is the same unstated-region mechanism
+   this file documents everywhere - a catalog reference is almost always model-worn, so
+   there are TWO bodies in the conditioning and nothing said which one to fit.
+
+   The three directives that used to cover this were separate, shed-able clauses -
+   DENSE.bodyFidelity, DENSE.modelAgnostic and DENSE.profileLateral - and all three were
+   retired when the prompt froze. They are back, but INSIDE the frozen string rather than
+   beside it, which is the whole point: they cannot be shed, cannot be reordered, and
+   cannot be separated from the instruction they qualify. Each sentence now carries one:
+     1. drape onto the SUBJECT's live shape - the live feed is the body source;
+     2. adapt volume/drape/curvature to real torso, abdomen depth and pose AT ALL ANGLES -
+        the 90-degree case profileLateral was written for, stated as physics rather than
+        as a special case, so it needs no pose flag to switch it on;
+     3. extract ONLY texture/pattern/design from the reference - the provenance split, and
+        the explicit ban on copying the reference model's proportions.
+
+   NOTE WHAT LEFT: the enumerated "without inventing any tuxedos, suits, or unrequested
+   garments" tail is gone. That is deliberate and it is this file's own recorded next step
+   - with no negative_prompt field, a named garment ships in the POSITIVE prompt where the
+   sampler can steer toward it, and the tuxedo outlived two versions that named it. What
+   guards the substitution now is positive and unnamed: "the EXACT garment FROM the
+   reference image", twice. If invented garments return, do not re-add the noun list;
+   re-read the DENSE table's assetLock comment for why that made it worse.
+
    ── WHAT WENT WITH IT, and how to get any of it back ─────────────────────────
    Every clause the builders assembled is retired from the prompt path. They are all
    still on file (see the DENSE table below, and the RETIRED block above it) with the
@@ -5930,7 +6016,12 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
                                 carries the orientation (the watcher swaps the photo),
                                 so the pose sentence is the model's job to read off
                                 the live frame, which is where it always came from.
-     · profileLateral           the 90-degree flank/depth directive.
+     · profileLateral           the 90-degree flank/depth directive. SUPERSEDED, not
+                                simply lost: the frozen string's "abdomen depth, and pose
+                                at all angles" states the same physics without a pose flag
+                                to gate it. Same for bodyFidelity ("true torso
+                                dimensions") and modelAgnostic ("do not copy the original
+                                model's body proportions") - see the revision note above.
      · inpaintLock              face/skin/hands/background passthrough. THE LARGEST
                                 LOSS and the one to restore first if the model starts
                                 repainting the shopper's room or face: nothing else
@@ -5947,30 +6038,47 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    exactly that. Restore ONE at a time and re-test: the entire premise of this mode is
    that clause count is what was drowning the image. */
 const IMAGE_ONLY_PROMPT =
-  "Fit and render the exact garment provided in the reference image onto the target subject." +
-  " Strictly preserve all graphic patterns, colors, and cuts from the image" +
-  " without inventing any new clothing, jackets, or suits.";
+  "Fit and drape the exact garment from the reference image strictly onto the subject's" +
+  " live body shape and contours. Adapt the fabric volume, drape, and curvature in" +
+  " real-time to match the user's true torso dimensions, abdomen depth, and pose at all" +
+  " angles. Extract only the garment's texture, pattern, and design from the reference" +
+  " image—do not copy the original model's body proportions.";
 
 /* The dense clause table. Deliberately lower-case and lightly punctuated wherever the
    meaning survives it: ALL-CAPS and heavy punctuation both tokenize worse than prose,
    so the few capitals left (EDGE-ON, LEFT/RIGHT) are spent only where the emphasis is
    doing real steering work.
 
-   ── WHAT IS STILL ASSEMBLED, after the image-first refactor ──────────────────
-   LIVE (structural only): contract, select, pose, poseProfile, profileLateral,
-   inpaintLock, keepTop, keepBottoms, ignoreFurniture, frontRef, backReal,
-   backInferred, side, lookPanels.
+   ── NOTHING HERE IS ASSEMBLED ANY MORE ───────────────────────────────────────
+   Under strict image-only conditioning every builder returns IMAGE_ONLY_PROMPT, so this
+   table is a RESTORE LIBRARY, not an assembly source. It is kept whole - and kept next
+   to fitPrompt() and the P tiers, which are also intact - because a mode this aggressive
+   is a starting point: each clause is a real, reproduced regression, and getting one
+   back must be a two-line edit rather than an archaeology exercise. Restore ONE at a
+   time and re-test; the premise of the mode is that clause COUNT was drowning the image.
 
-   RETIRED FROM ASSEMBLY, kept here so they can be bought back in one line if the
-   failures they were written against return. Each is a real, reproduced regression
-   and none of them was deleted for being wrong - they were dropped because the
-   anchor above has to be the dominant text in the prompt for image-first
-   conditioning to mean anything:
-     · assetLock      folded INTO the anchor (its negative half), so it is not lost -
-                      just no longer a second, competing enumeration.
-     · bodyFidelity   "it slimmed me". Restore: add [P.HIGH, DENSE.bodyFidelity].
-     · modelAgnostic  "it gave me the e-commerce model's shoulders".
-                      Restore: add [P.MED, DENSE.modelAgnostic].
+   THREE OF THEM ARE SUPERSEDED rather than merely retired - the frozen string now
+   carries their instruction inline, where it cannot be shed or reordered. Restoring
+   these would DUPLICATE what is already on the wire, which is the one thing this mode
+   is least able to afford:
+     · assetLock      its directive is the frozen string's "the EXACT garment FROM the
+                      reference image"; its enumerated noun list is deliberately NOT
+                      reproduced (see this table's own assetLock comment).
+     · bodyFidelity   → "match the user's true torso dimensions".
+     · modelAgnostic  → "do not copy the original model's body proportions".
+     · profileLateral → "abdomen depth, and pose at all angles".
+
+   THE REST ARE GENUINELY GONE from the wire, and are the ones worth buying back first:
+     · inpaintLock    face/skin/hands/background passthrough. THE LARGEST LOSS.
+                      Restore: add [P.HIGH, DENSE.inpaintLock].
+     · contract, select, ignoreFurniture   the split-reference contract. Restore these
+                      TOGETHER with COMPOSITE_DEFAULT, never one without the other.
+     · lookPanels     the full-look TOP/BOTTOM layout. The only clause whose absence
+                      costs a whole feature. Restore: add [P.CORE, DENSE.lookPanels].
+     · pose, poseProfile, frontRef, backReal, backInferred, side
+                      orientation steering, now carried by the ASSET the watcher swaps
+                      to rather than by a sentence.
+     · keepTop, keepBottoms   the opposite-layer lock.
      · rotation       "the garment dropped mid-turn". The mechanical half of that fix
                       (the prompt-only flip in applyGarment, and the OrientationWatcher's
                       turn hold) is code, not prompt, and is untouched by this.
@@ -6633,6 +6741,7 @@ async function applyGarment(item) {
   lastSentImageRef = imageRef || null;
   rtImageOnWire = !!imageRef;
   lastSentPrompt = payload.prompt;
+  if (imageRef) lastAckedImageRef = imageRef;   // survives a wire invalidation - see its declaration
 }
 
 /**
@@ -7131,6 +7240,7 @@ async function applyLook(top, bottom) {
   lastSentImageRef = primaryImage || null;
   rtImageOnWire = !!primaryImage;
   lastSentPrompt = prompt;
+  if (primaryImage) lastAckedImageRef = primaryImage;
 }
 
 /**
@@ -8770,6 +8880,194 @@ function armFirstFrameBilling(video, gen) {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   FRAME-FREEZE WATCHDOG - the stream stops, then comes back wrong
+   ───────────────────────────────────────────────────────────────────────────
+   THE REPORTED FAILURE: the Decart feed freezes or stutters for a beat mid-session and
+   then resumes - and what resumes is not always what was playing. Inside a 5s billed
+   window a 1.5s stall is a third of the session.
+
+   WHY NOTHING ELSE CATCHES IT. This file already has three watchdogs and none of them
+   covers a freeze:
+     · firstFrameGuardTimer  fires only if NO first frame ever arrives, then gives up.
+     · armFirstFrameBilling  stops watching the instant it fires - by design, it is a
+                             one-shot reveal gate, not a health monitor.
+     · onConnectionChange    only sees states the SDK chooses to report. A media stall
+                             that never trips its own loss detector is invisible here,
+                             and that is the common case: the transport is "connected"
+                             throughout, the frames simply stop.
+
+   WHAT A FREEZE ACTUALLY COSTS, and why a recovery is more than a nudge. Two distinct
+   things can be wrong when frames stop:
+     1. THE ELEMENT stalled - a paused/suspended <video>, a backgrounded tab, a decoder
+        hiccup. play() fixes it and nothing else needs to happen.
+     2. THE CONDITIONING was lost - the transport was rebuilt under us (an SDK reconnect
+        this file was not told about, an ICE restart), so Decart is generating from
+        whatever getInitialState() replayed rather than from the garment actually
+        selected. The picture comes back, dressed in the wrong thing, and every existing
+        signal in this file still reports success.
+   So recovery is staged: ping first, and only if the freeze persists, force the CURRENT
+   garment reference back onto the wire (see invalidateWireState). The second step is the
+   whole point - a resumed stream that is no longer conditioned on the shopper's garment
+   is exactly the failure this is here to prevent, and it is indistinguishable from a
+   healthy stream from the outside.
+
+   DELIBERATELY LIGHTWEIGHT. One rVFC chain (the same mechanism armFirstFrameBilling
+   already uses, so no new frame-detection machinery) plus a 500ms interval that does
+   nothing but compare two numbers. It reads no pixels - sampleVideoLuma() is a canvas
+   readback and far too expensive to run on a poll - and takes no action at all on a
+   healthy stream. */
+const FRAME_FREEZE_MS = 1500;              // no decoded frame for this long while live == frozen
+const FRAME_FREEZE_POLL_MS = 500;          // watchdog tick; 3 ticks inside the freeze window
+/* Minimum gap between two RE-ANCHOR attempts. A freeze that outlives the first attempt
+   must not turn into a re-upload storm: each one ships the full garment blob through the
+   datachannel, and doing that every 500ms would starve the very stream it is repairing.
+   Comfortably longer than a set() round-trip, comfortably shorter than the 5s window. */
+const FRAME_FREEZE_RECOVER_COOLDOWN_MS = 2500;
+
+let freezeWatcher = null;                  // { stop } while running, else null
+
+/**
+ * Watch #aiVideo for decode stalls and recover them. See the block comment above.
+ * @param {HTMLVideoElement} video  the live AI feed
+ * @param {number} gen  sessionGen at arm time - every callback bails once it moves
+ * @returns {{stop: () => void}}
+ */
+function createFrameFreezeWatcher(video, gen) {
+  let disposed = false;
+  let lastFrameAt = Date.now();     // wall clock of the last decoded frame we observed
+  let lastMediaTime = -1;           // rVFC-less fallback signal: video.currentTime
+  let frozenSince = null;           // when the current freeze began, or null while healthy
+  let lastRecoverAt = 0;
+  let recovering = false;
+  let pings = 0, reanchors = 0;
+
+  const hasRVFC = typeof video.requestVideoFrameCallback === "function";
+
+  /* Every decoded frame stamps the clock. Chained rVFC rather than a rAF loop: rVFC fires
+     on frame PRESENTATION, so it stops firing exactly when the stream stops - which is
+     the signal. rAF keeps firing at display rate whether or not a frame decoded, and
+     would have to be paired with a currentTime comparison anyway (which is what the
+     fallback below does). */
+  const onFrame = () => {
+    if (disposed || gen !== sessionGen) return;
+    noteFrame();
+    if (hasRVFC) video.requestVideoFrameCallback(onFrame);
+  };
+  const noteFrame = () => {
+    if (frozenSince !== null) {
+      console.log(`[PEAR] stream RESUMED after ${Date.now() - frozenSince}ms with no decoded frame`,
+        `(${pings} ping${pings === 1 ? "" : "s"}, ${reanchors} re-anchor${reanchors === 1 ? "" : "s"})`);
+      frozenSince = null;
+      pings = 0;
+      reanchors = 0;
+    }
+    lastFrameAt = Date.now();
+  };
+  if (hasRVFC) video.requestVideoFrameCallback(onFrame);
+
+  const tick = async () => {
+    if (disposed || gen !== sessionGen) return;
+
+    /* Not our problem, and each of these would produce a false positive:
+       · not live      - a torn-down or pre-connect session has no frames by definition;
+       · hidden tab    - browsers legitimately stop decoding video in a background tab,
+                         and "recovering" it would fire a set() the shopper cannot see;
+       · reconnecting  - the SDK owns recovery during its own backoff, every send() throws
+                         until it lands, and onConnectionChange already re-anchors on the
+                         way out. Stamping the clock (rather than merely returning) is
+                         what stops the whole outage from counting as one long freeze the
+                         instant the tab or the transport comes back. */
+    if (!isLive() || connState === "reconnecting" ||
+        (typeof document !== "undefined" && document.hidden)) {
+      lastFrameAt = Date.now();
+      frozenSince = null;
+      return;
+    }
+
+    // Where rVFC is unavailable, currentTime advancing IS the frame signal.
+    if (!hasRVFC) {
+      const t = video.currentTime;
+      if (t !== lastMediaTime) { lastMediaTime = t; noteFrame(); }
+    }
+
+    const gap = Date.now() - lastFrameAt;
+    if (gap < FRAME_FREEZE_MS) return;
+    if (frozenSince === null) {
+      frozenSince = lastFrameAt;
+      console.warn(`[PEAR] stream FROZEN - no decoded frame for ${gap}ms while live`,
+        `(state=${connState}, paused=${video.paused}, readyState=${video.readyState})`);
+    }
+    if (recovering) return;                  // an attempt is already in flight
+
+    recovering = true;
+    try {
+      /* STEP 1 - THE FRAME PING. Cheapest cause, cheapest fix, and safe to repeat: a
+         <video> that autoplay or a decoder hiccup left paused resumes here with no
+         session traffic at all. Done on every frozen tick, because it costs nothing and
+         a stall can begin at any point during a longer outage. */
+      if (video.paused || video.readyState < 2) {
+        pings++;
+        try { await video.play(); } catch (_) { /* autoplay policy, or already playing */ }
+      }
+
+      /* STEP 2 - THE RE-ANCHOR, rate-limited. If frames are still absent the element is
+         not the problem, and the live hypothesis is that the transport was rebuilt under
+         us: Decart is either generating nothing or generating from the SDK's replayed
+         initial state rather than the garment on screen. Forcing the wire state stale is
+         what turns applyActive()'s next dispatch into a real set({ image }) - without it,
+         a frozen prompt plus a memoized Blob matches on both halves and applyGarment()
+         correctly skips, which is exactly the wrong answer here.
+
+         applyActive() re-DERIVES the reference from live state rather than replaying a
+         captured one, so this re-anchors to the garment the shopper currently has
+         selected, at the current orientation - which is what "the last acknowledged
+         reference" has to mean in a session where they can still be swapping items. The
+         acknowledged ref is carried only to verify that. */
+      if (Date.now() - lastRecoverAt < FRAME_FREEZE_RECOVER_COOLDOWN_MS) return;
+      lastRecoverAt = Date.now();
+      if (!isGarmentApplied) return;         // nothing acknowledged yet - go-live's own apply still owns the wire
+      reanchors++;
+      const before = lastAckedImageRef;
+      invalidateWireState(`frame freeze (${Date.now() - frozenSince}ms) - forcing the garment back onto the wire`);
+      await applyActive();
+      if (before && lastAckedImageRef !== before) {
+        console.warn("[PEAR] freeze recovery re-anchored to a DIFFERENT reference than the one last",
+          "acknowledged - expected if the shopper swapped items during the stall, a bug otherwise.",
+          "\n  was:", abbrevImg(before), "\n  now:", abbrevImg(lastAckedImageRef));
+      }
+    } catch (e) {
+      console.warn("[PEAR] freeze recovery attempt failed:", e?.message || e);
+    } finally {
+      recovering = false;
+    }
+  };
+
+  const timer = setInterval(() => { tick().catch(() => {}); }, FRAME_FREEZE_POLL_MS);
+
+  return {
+    stop() {
+      if (disposed) return;
+      disposed = true;
+      clearInterval(timer);
+    },
+  };
+}
+
+/** Arm the freeze watchdog for this session, replacing any previous instance. */
+function startFrameFreezeWatch(video, gen) {
+  stopFrameFreezeWatch();
+  if (!video) return;
+  freezeWatcher = createFrameFreezeWatcher(video, gen);
+}
+
+/** Retire it. Safe to call repeatedly and from any exit path. */
+function stopFrameFreezeWatch() {
+  if (!freezeWatcher) return;
+  try { freezeWatcher.stop(); } catch (_) {}
+  freezeWatcher = null;
+}
+
 /* DEBUG WRAPPER: runs for a short, self-limiting window immediately AFTER
    armFirstFrameBilling() fires, purely to observe whether the frame is still visibly
    changing right after "dressed" was declared - a luma still drifting a few hundred ms
@@ -9156,6 +9454,15 @@ function stopBilling() {
      nothing left to release it, and its overlay (z-index 6, inside #cameraCard) would sit
      on top of that tail for the rest of the session. */
   orientHoldEnd("billing-stopped");
+  /* The freeze watchdog does NOT get that exemption, and the difference is what each one
+     is for. The orientation watcher stays because the frozen-hold tail still has UI state
+     to release; this one exists solely to keep a LIVE stream alive, and two lines above
+     this the session was disconnected and #aiVideo detached - so from here it can only
+     observe a video element with no source and correctly conclude nothing. Its own
+     sessionGen/isLive guards already make it inert; stopping it is the difference between
+     inert and not running, and a 500ms timer spinning through the tail for no reason is
+     the kind of thing that reads as a leak the next time someone profiles this. */
+  stopFrameFreezeWatch();
   if (inputThrottle) { try { inputThrottle.dispose(); } catch (_) {} inputThrottle = null; }
   if (realtimeInput) { try { realtimeInput.getTracks().forEach((t) => t.stop()); } catch (_) {} realtimeInput = null; }
   const ai = $("aiVideo");

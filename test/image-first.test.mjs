@@ -76,9 +76,11 @@ const api = new Function(...Object.keys(sandbox),
 
 const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 const SPEC =
-  "Fit and render the exact garment provided in the reference image onto the target subject." +
-  " Strictly preserve all graphic patterns, colors, and cuts from the image" +
-  " without inventing any new clothing, jackets, or suits.";
+  "Fit and drape the exact garment from the reference image strictly onto the subject's" +
+  " live body shape and contours. Adapt the fabric volume, drape, and curvature in" +
+  " real-time to match the user's true torso dimensions, abdomen depth, and pose at all" +
+  " angles. Extract only the garment's texture, pattern, and design from the reference" +
+  " image\u2014do not copy the original model's body proportions.";
 
 console.log("── §1 THE FROZEN STRING: product-specified, and genuinely constant ──");
 {
@@ -89,12 +91,43 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
   check("IMAGE_ONLY_PROMPT matches the specified wording byte for byte",
     api.IMAGE_ONLY_PROMPT === SPEC, JSON.stringify(api.IMAGE_ONLY_PROMPT));
 
-  /* The two halves do different jobs and both must be present: the first binds the output
-     to the provided asset, the second forbids the substitution that was reported. */
-  check("it binds the render to the PROVIDED asset, not to a garment concept",
-    /render the exact garment provided in the reference image/.test(SPEC));
-  check("...and preserves the detail that identifies the specific product",
-    /Strictly preserve all graphic patterns, colors, and cuts from the image/.test(SPEC));
+  /* THREE SENTENCES, THREE JOBS, each one a clause that used to be separate and
+     shed-able. Asserted individually because the failure mode of a frozen string is a
+     well-meant reword that quietly drops one - and there is no fitPrompt() shed log to
+     notice it any more, because there is no assembly left to log. */
+  check("(1) it binds the drape to the PROVIDED asset AND the LIVE body, not to a concept",
+    /Fit and drape the exact garment from the reference image/.test(SPEC) &&
+    /strictly onto the subject's live body shape and contours/.test(SPEC));
+  check("(2) it states the body physics: real volume, abdomen depth, every angle",
+    /Adapt the fabric volume, drape, and curvature in real-time/.test(SPEC) &&
+    /the user's true torso dimensions, abdomen depth, and pose at all angles/.test(SPEC),
+    "DENSE.bodyFidelity + DENSE.profileLateral, folded in and un-sheddable");
+  check("(3) it states the provenance split - cloth from the reference, body from the feed",
+    /Extract only the garment's texture, pattern, and design from the reference image/.test(SPEC) &&
+    /do not copy the original model's body proportions/.test(SPEC),
+    "DENSE.modelAgnostic, folded in");
+
+  /* NOT POSE-GATED, and that is the substantive win over the clause it replaces.
+     DENSE.profileLateral rode behind an `inProfile` ternary and shed edge-on under budget
+     pressure - so the 90-degree frame, the one case it existed for, was the case most
+     likely to lose it. "at all angles" needs no flag and cannot shed. */
+  check("...and 90 degrees is stated as physics, not as a pose-gated special case",
+    /at all angles/.test(SPEC) && !/EDGE-ON/.test(SPEC),
+    "no pose flag switches this off and no budget sheds it");
+
+  /* THE NOUN LIST IS GONE ENTIRELY, and its absence is the assertion. Three versions of
+     this prompt named the garment they were trying to prevent - assetLock enumerated six,
+     the first frozen string kept two - and the tuxedo outlived all of them. With no
+     negative_prompt field, a banned noun ships in the POSITIVE prompt where the sampler
+     can steer toward it: at best neutral, plausibly the cause. What guards the
+     substitution now is positive and unnamed, stated twice.
+     If invented garments return, DO NOT re-add the list - that move has been tried. */
+  check("no banned-garment noun ships at all",
+    !/tuxedos?|suits?|jackets?|coats?|bowties?|badges?/i.test(SPEC),
+    "naming the garment is what three earlier versions already tried");
+  check("...the substitution is guarded positively instead, twice over",
+    (SPEC.match(/from the reference image/g) || []).length === 2 &&
+    /the exact garment from the reference image/.test(SPEC));
 
   /* CONSTANT, not merely short. A template literal here is how a description creeps back
      in one field at a time, which is the exact history this mode is reacting to. */
@@ -274,6 +307,86 @@ console.log("\n── §5 AN IMAGE ON EVERY UPDATE AND EVERY RETRY ──");
     (SRC.match(/verifyGarmentAsset\(payload, "(applyGarment|applyLook)"\)/g) || []).length === 2);
   check("...and still says what a payload with no image will actually do",
     /Decart has no pixel reference and will render its default\/generic output/.test(SRC));
+}
+
+console.log("\n── §6 A FREEZE MUST NOT RESUME UNCONDITIONED ──");
+{
+  /* THE FAILURE: the feed stalls for a beat and comes back - dressed in the wrong thing.
+     Two different things can be wrong when frames stop (a stalled <video>, or a transport
+     rebuilt under us so Decart is generating from the SDK's replayed initial state), and
+     only the first is fixed by a nudge. The second is invisible from the outside: the
+     picture returns, every existing signal in the file reports success, and the garment
+     is whatever was live at the original go-live moment.
+
+     This is asserted HERE rather than in a stream suite because it is the same invariant
+     the rest of this file is about, arriving through the transport instead of the text: a
+     prompt that says "the reference image" and no reference on the wire. */
+  const watcher = SRC.slice(SRC.indexOf("function createFrameFreezeWatcher(video, gen)"),
+                            SRC.indexOf("function startFrameFreezeWatch"));
+  check("the freeze threshold is the specified 1500ms",
+    /const FRAME_FREEZE_MS = 1500;/.test(SRC));
+  check("...checked often enough to see it - at least 3 ticks inside the window",
+    /const FRAME_FREEZE_POLL_MS = 500;/.test(SRC));
+  check("frames are detected via rVFC, with a currentTime fallback where it is missing",
+    /video\.requestVideoFrameCallback\(onFrame\)/.test(watcher) &&
+    /if \(!hasRVFC\) \{[\s\S]{0,160}video\.currentTime/.test(watcher),
+    "rVFC stops firing exactly when the stream stops - that IS the signal");
+  check("the watchdog reads no pixels - it must stay cheap enough to poll",
+    !/sampleVideoLuma/.test(watcher),
+    "a canvas readback every 500ms would cost more than the stall it detects");
+
+  /* THE THREE FALSE-POSITIVE GUARDS. Each of these legitimately stops frame decoding, and
+     "recovering" any of them would fire a set() that is at best wasted and at worst
+     throws (the SDK's assertConnected rejects every send while reconnecting). */
+  check("it stands down when not live, on a hidden tab, and during an SDK reconnect",
+    /if \(!isLive\(\) \|\| connState === "reconnecting" \|\|/.test(watcher) &&
+    /document\.hidden/.test(watcher));
+  check("...and re-stamps the clock rather than returning, so the outage is not one freeze",
+    /lastFrameAt = Date\.now\(\);\s*\n\s*frozenSince = null;\s*\n\s*return;/.test(watcher),
+    "otherwise the tab coming back reads as a multi-second stall");
+
+  /* STAGED RECOVERY: ping first (free, safe to repeat), re-anchor second (expensive,
+     rate-limited). The order matters - a paused element does not need a re-upload. */
+  check("step 1 is a frame ping on the element itself",
+    /if \(video\.paused \|\| video\.readyState < 2\)[\s\S]{0,120}video\.play\(\)/.test(watcher));
+  check("step 2 forces the garment back onto the wire, not merely a prompt nudge",
+    /invalidateWireState\(`frame freeze/.test(watcher) && /await applyActive\(\)/.test(watcher),
+    "a frozen prompt + memoized blob would otherwise match on both halves and skip");
+  check("...rate-limited, so a long freeze is not a re-upload storm",
+    /const FRAME_FREEZE_RECOVER_COOLDOWN_MS = 2500;/.test(SRC) &&
+    /Date\.now\(\) - lastRecoverAt < FRAME_FREEZE_RECOVER_COOLDOWN_MS/.test(watcher));
+  check("...and never runs before the first garment was acknowledged",
+    /if \(!isGarmentApplied\) return;/.test(watcher),
+    "go-live's own apply still owns the wire until then");
+  check("re-anchoring verifies it landed on the same asset Decart last acknowledged",
+    /const before = lastAckedImageRef;/.test(watcher) &&
+    /lastAckedImageRef !== before/.test(watcher));
+
+  /* THE RECONNECT GUARD - the same fix at the other entry point. An SDK-internal
+     reconnect never re-enters connectRealtime(), so this file's wire bookkeeping sails
+     through a rebuilt transport still claiming the blob is on it. */
+  const opts = SRC.slice(SRC.indexOf("function buildRealtimeConnectOpts(gen)"),
+                         SRC.indexOf("async function connectRealtime"));
+  check("a post-reconnect re-apply invalidates the wire state FIRST",
+    /invalidateWireState\("SDK reconnect[\s\S]{0,200}applyActive\(\)/.test(opts),
+    "without it the re-apply matches on both halves and dispatches nothing");
+  const invalidate = (SRC.match(/function invalidateWireState\(why\) \{[\s\S]*?\n\}/) || [""])[0];
+  check("invalidateWireState clears all three wire flags",
+    /lastSentImageRef = null;/.test(invalidate) && /rtImageOnWire = false;/.test(invalidate) &&
+    /lastSentPrompt = null;/.test(invalidate), invalidate);
+  check("...and preserves the last ACKNOWLEDGED reference, which a recovery re-anchors to",
+    !/lastAckedImageRef\s*=/.test(invalidate),
+    "it is a statement about the connection, not about what Decart last accepted");
+  check("...and touches neither billing, the recorder nor isGarmentApplied",
+    !/isGarmentApplied|billingStarted|stopRecording|dressedFrameReady/.test(invalidate),
+    "conflating the two re-arms the reveal on a session that never stopped");
+
+  /* Lifecycle: it can fire applyActive(), so it must never outlive the session. */
+  check("armed on the remote stream, so a warm-up stall is covered too",
+    /startFrameFreezeWatch\(aiVideo, gen\)/.test(SRC));
+  check("...and retired in teardown(), the path every exit eventually reaches",
+    /stopFrameFreezeWatch\(\);/.test(SRC.slice(SRC.indexOf("function teardown()"),
+                                               SRC.indexOf("function teardown()") + 2600)));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

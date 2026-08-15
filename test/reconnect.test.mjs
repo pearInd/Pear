@@ -61,15 +61,21 @@ function extract(startMarker, endMarker) {
 const optsCode = extract("function buildRealtimeConnectOpts(gen)", "\nasync function connectRealtime()");
 
 function makeConnHarness() {
-  const calls = { applyActive: 0, stopLive: 0, setConn: [], toast: [] };
+  const calls = { applyActive: 0, stopLive: 0, setConn: [], toast: [], order: [] };
   const sandbox = {
     LIVE_INFERENCE_FPS: 10, LIVE_W: 512, LIVE_H: 288,
     document: { querySelector: () => ({ style: {}, play: () => Promise.resolve() }) },
     armFirstFrameBilling: () => {},
     setConn: (s) => calls.setConn.push(s),
     toast: (msg) => calls.toast.push(msg),
-    applyActive: () => { calls.applyActive++; return Promise.resolve(); },
+    applyActive: () => { calls.applyActive++; calls.order.push("applyActive"); return Promise.resolve(); },
     stopLive: () => { calls.stopLive++; },
+    /* BUG 3: an SDK-internal reconnect rebuilds the transport WITHOUT re-entering
+       connectRealtime(), so this file's lastSentImageRef/rtImageOnWire/lastSentPrompt
+       bookkeeping survives a connection that did not - still claiming the garment blob is
+       on the wire. Stubbed here so the ORDER against applyActive() can be asserted; the
+       real one lives beside that state. */
+    invalidateWireState: (why) => { calls.order.push("invalidateWireState"); calls.invalidateWhy = why; },
     console: { log() {}, warn() {}, error() {} },
     // Mutable module-level state the handler reads/writes as real `let`s.
     sessionGen: 1, connState: "connecting", isGarmentApplied: false,
@@ -94,6 +100,19 @@ console.log("── BUG 1 FIX: a successful SDK reconnect re-applies the CURRENT
   opts.onConnectionChange("connected");   // the SDK recovered on its own
   check("applyActive() was called exactly once - only on the RECOVERY, not the initial connect",
     calls.applyActive === 1, `called ${calls.applyActive} times`);
+
+  /* ── BUG 3: the re-apply has to be a REAL set({ image }) ──────────────────────
+     Re-calling applyActive() is only half the fix. applyGarment() short-circuits when the
+     reference AND the prompt both match what it believes is already on the wire - and
+     after an SDK reconnect that belief is stale, because runOneConnect() rebuilt the
+     transport underneath this file. With one frozen prompt and a memoized composite Blob
+     BOTH halves match, so the re-apply would dispatch nothing at all and the recovered
+     connection would keep whatever getInitialState() replayed: the ORIGINAL go-live
+     garment, which is precisely what this whole block exists to correct. */
+  check("...and the wire state was invalidated FIRST, so that re-apply actually re-uploads",
+    calls.order.join(",") === "invalidateWireState,applyActive", calls.order.join(","));
+  check("...with the reason logged, because a silent invalidation is unexplainable in a trace",
+    /reconnect/i.test(calls.invalidateWhy || ""), calls.invalidateWhy);
 }
 {
   const { opts, api, calls } = makeConnHarness();
