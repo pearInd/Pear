@@ -296,13 +296,15 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
 
      If late-entry trousers renders come back wrong, TEMPORAL_PERSISTENCE.bottom is
      already written and re-adding it is one line in imageOnlyPrompt(). */
-  check("TOPS carries the continuous-tracking directive, spec wording",
-    /Continuously track and strictly fit the reference top to the subject's torso as soon as visible\./.test(top), top);
-  check("...and its keep-the-rest-natural half",
-    /Keep lower body and background natural and unmodified\./.test(top), top);
-  check("BOTTOMS deliberately does NOT - it was collapsed to a bare reference lock",
-    !/Continuously track/.test(bot) && bot.length <= 300,
-    `${bot.length} chars - see CATEGORY_ANCHOR.bottom for the black-shorts report`);
+  /* NOW GONE FROM BOTH BRANCHES. The tops branch followed bottoms in a later revision
+     that collapsed everything to a strict 1:1 reference lock, after a third report -
+     invented detail on the correct garment. So the prompt's half of the late-entry fix
+     is fully retired, on both categories. */
+  check("NEITHER branch carries the continuous-tracking directive any more",
+    !/Continuously track/.test(top) && !/Continuously track/.test(bot),
+    `tops=${top.length} bottoms=${bot.length} - both collapsed to a 1:1 reference lock`);
+  check("...and both are ultra-minimal, which is what replaced it",
+    top.length <= 200 && bot.length <= 200, `tops=${top.length} bottoms=${bot.length}`);
   /* The clause itself must stay on file, or "one line to re-add" stops being true. */
   check("...but the clause is still ON FILE, so the restore really is one line",
     /TEMPORAL_PERSISTENCE = Object\.freeze\(\{[\s\S]{0,600}?bottom:/.test(SRC),
@@ -310,8 +312,9 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
   /* "as soon as visible" is the half that does the late-entry work: it tells the model
      the subject may not be there yet, which is exactly the frame the old prompt had no
      language for. Asserted so a reword cannot quietly drop it from the branch that has it. */
-  check("TOPS still says 'as soon as visible' - the late-entry half of the directive",
-    /as soon as visible/.test(top));
+  check("'as soon as visible' is gone from both - the prompt half is fully retired",
+    !/as soon as visible/.test(top) && !/as soon as visible/.test(bot),
+    "recorded as a loss; the runtime half below is what still covers late entry");
   /* THE NON-PROMPT HALF OF THE FEATURE COVERS BOTH CATEGORIES REGARDLESS, which is what
      keeps the bottoms loss survivable - asserted here so the two halves cannot both be
      removed on the assumption that the other one is holding. */
@@ -323,8 +326,8 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
     top.length <= CONFIG.PROMPT_MAX_CHARS && bot.length <= CONFIG.PROMPT_MAX_CHARS,
     `tops=${top.length} bottoms=${bot.length}`);
   check("the category anchor still leads - persistence language must not displace it",
-    /^Fit and replace ONLY the subject's upper garment/.test(top) &&
-    /^Fit strictly the exact shorts\/pants shown in the reference image/.test(bot),
+    /^Overlay and fit the EXACT upper garment from the reference image/.test(top) &&
+    /^Overlay and fit the EXACT shorts\/pants from the reference image/.test(bot),
     "each branch must open on its own anchor, whatever else it carries");
 }
 

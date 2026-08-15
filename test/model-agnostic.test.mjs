@@ -104,30 +104,36 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      a retired string is worse than one that fails. This is the provenance split itself:
      the reference is the only source of CLOTH, the live feed the only source of BODY. */
   const out = api.buildCompositePrompt(TEE, "front", false);
-  check("the shipped prompt names the reference as cloth-only",
-    /Use only the reference image's graphics, fabric texture, and color/.test(out), out);
-  /* THE DISCARD IS NOW IMPLICIT, and that is a real reduction rather than a rewording.
-     Revision 3 said "completely ignoring the original model's body size, chest, and waist
-     dimensions" outright; revision 4 replaced it with "Preserve ONLY ...", which implies
-     the same thing by exhaustion but never states it. Weaker against this suite's own
-     report, and recorded as such: the restore is one line, and §2 keeps it exercised. */
-  check("...the discard is carried by exhaustion (ONLY these three), not stated outright",
-    /Use only the reference image's graphics, fabric texture, and color/.test(out) &&
+  /* THE PROVENANCE SENTENCE IS SUPERSEDED, NOT LOST. "Use only the reference image's
+     graphics, fabric texture, and color" was replaced by "Exactly match color, pattern,
+     logos, and cut", which states the same rule inside the anchor where it cannot shed -
+     and adds logos and cut, which the old wording did not name. */
+  check("the shipped prompt names the reference as the only source of cloth",
+    /Exactly match color, pattern, logos, and cut\./.test(out), out);
+  check("...the discard is still carried by exhaustion, not stated outright",
     !/ignoring the original model's body/.test(out), out);
-  /* "strictly persistent 3D body volume" left with the t-shirt anchor it was welded to -
-     that sentence was replaced wholesale by the category anchor. The GUARANTEE it carried
-     did not leave: VOLUME_PERSISTENCE states it in full, and states it more specifically
-     (three named quantities rather than one adjective), which is what is asserted here. */
-  check("...while pinning the LIVE subject's VOLUME as the body it must fit",
-    /abdomen\/stomach depth, waist volume, and torso thickness/.test(out) &&
-    /never flatten or reset body size mid-stream/.test(out), out);
+  /* ── THE BODY-VOLUME GUARANTEE IS OFF THE WIRE, and this suite is where that has to
+     be visible, because this suite is the record of the body clauses.
+     VOLUME_PERSISTENCE went with the 1:1 collapse after a third report - invented detail
+     on the correct garment. It remains on file as a constant, so the restore is one line
+     in imageOnlyPrompt(), and there is now ~480 characters of budget to put it back into.
+     Asserted as an ABSENCE plus a live restore path, which is the only shape that keeps
+     a deliberate removal from decaying into a forgotten one. */
+  check("...the LIVE-subject volume clause is OFF the wire - a recorded trade",
+    !/abdomen\/stomach depth, waist volume, and torso thickness/.test(out), out);
+  check("...but VOLUME_PERSISTENCE is still on file, so the restore is genuinely one line",
+    /const VOLUME_PERSISTENCE =\s*\n?\s*"Maintain the exact same abdomen\/stomach depth/.test(SRC),
+    "a restore path that requires rewriting the clause is not a restore path");
+  check("...and app.js lists it among what the 1:1 collapse removed",
+    /VOLUME_PERSISTENCE \/ FRONTAL_VOLUME - "it slimmed me down"/.test(SRC),
+    "the removal must be findable from the file, not only from this test");
 
   /* NOT POSE-GATED, which is the property §4 of the original suite existed for: the
      reference figure's anatomy bleeds at every angle, so this must hold edge-on too.
      It used to be a ranking argument (MED, shed under pressure); it is now structural. */
   for (const prof of [false, true]) {
     check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
-      /Use only the reference image's graphics, fabric texture, and color/
+      /Exactly match color, pattern, logos, and cut\./
         .test(api.buildCompositePrompt(TEE, "front", prof)));
   }
 
@@ -169,51 +175,34 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     /inpaintLock    face\/skin\/hands\/background passthrough\. THE LARGEST LOSS/.test(SRC) &&
     /Restore: add \[P\.HIGH, DENSE\.inpaintLock\]/.test(SRC));
 
-  /* ── THE RESTORE BUDGET IS NOW ASYMMETRIC ───────────────────────────────────
-     TOPS has ZERO headroom (634/650): anything added there is silently shed by
-     fitPrompt(), which is the failure mode this whole file exists to make visible. Size
-     every restore against tops.
+  /* ── THE BUDGET IS NO LONGER THE CONSTRAINT. THE EDITORIAL RULE IS. ─────────
+     Both branches now run ~169 characters against a 650 ceiling, so every retired clause
+     would fit, on either side, with room to spare. That makes this section's job the
+     opposite of what it used to be: it no longer warns that a restore will silently shed,
+     it warns that a restore will silently SUCCEED.
 
-     BOTTOMS HAS 392 CHARACTERS FREE AND MUST NOT SPEND THEM, which is the part a reader
-     scanning for "spare capacity" will get wrong. That branch was cut from 616 characters
-     to 258 precisely BECAUSE text volume was outweighing the reference pixels and
-     producing generic black shorts instead of the photographed ones. The emptiness IS the
-     fix; refilling it re-creates the bug. Asserted below in both directions so neither
-     half can be read alone. */
-  const tightest = api.imageOnlyPrompt(TEE);
-  const roomiest = api.imageOnlyPrompt(JEANS);
-  check("TOPS is the tighter branch - size any restore against it, not bottoms",
-    tightest.length > roomiest.length * 2,
-    `tops=${tightest.length} bottoms=${roomiest.length}`);
-  check("...and app.js warns that the bottoms headroom is NOT a budget to spend",
-    /BOTTOMS HAS 392 CHARACTERS FREE AND MUST NOT SPEND THEM/.test(SRC),
-    "the emptiness on that branch is the fix, not spare capacity");
+     Text volume competing with the reference image is the mechanism behind all three
+     reports in this sequence - wrong region, wrong garment, invented detail - so budget
+     headroom is not permission. Anything added back is a deliberate bet against that
+     mechanism and needs a live session to justify it, not a character count. */
+  const tops = api.imageOnlyPrompt(TEE);
+  const bottoms = api.imageOnlyPrompt(JEANS);
+  check("both branches are ultra-minimal and near-identical in length",
+    tops.length <= 200 && bottoms.length <= 200 && Math.abs(tops.length - bottoms.length) <= 5,
+    `tops=${tops.length} bottoms=${bottoms.length}`);
 
-  const one = api.fitPrompt([
-    [api.P.CORE, tightest],
-    [api.P.MED,  api.DENSE.modelAgnostic],
-  ]);
-  check("restoring even ONE clause no longer fits - it is silently shed",
-    !/Ignore the reference model's body/.test(one) && one.length <= 650,
-    `${one.length} chars - the clause was dropped to honour the budget`);
-  /* And the shed is a SHED, not a truncation: the surviving text must still be complete
-     sentences, because clampPromptForWire()'s hard slice would cut mid-word at the end -
-     taking the extraction clause that stops the tuxedo. */
-  check("...and what survives is intact, not clipped mid-sentence by the wire guard",
-    one === tightest,
-    "fitPrompt() must drop the whole clause, never truncate the prompt");
-  /* On BOTTOMS both clauses fit comfortably - and that is exactly the trap. The check
-     records that they FIT while app.js records that they must not be added, so the two
-     facts are held together rather than one being discovered without the other. */
   const both = api.fitPrompt([
-    [api.P.CORE, roomiest],
+    [api.P.CORE, bottoms],
     [api.P.HIGH, api.DENSE.bodyFidelity],
     [api.P.MED,  api.DENSE.modelAgnostic],
   ]);
-  check("on BOTTOMS both clauses would fit - the constraint there is editorial, not budget",
+  check("every retired clause would now FIT - so nothing but judgement stops a restore",
     /never slim them/.test(both) && /Ignore the reference model's body/.test(both) &&
     both.length <= 650,
-    `${both.length} chars - fits, and is still the wrong thing to do`);
+    `${both.length} chars - fits, which is exactly why the rule has to be written down`);
+  check("...and app.js states that the budget is no longer the constraint",
+    /The budget is no longer the\s*\n?\s*constraint/.test(SRC),
+    "a reader who checks only the character count will draw the wrong conclusion");
   check("...and app.js records the new arithmetic, per branch",
     /THE RESTORE BUDGET IS NOW ASYMMETRIC, AND THAT IS DELIBERATE/.test(SRC) &&
     /\+ DENSE\.bodyFidelity  \(45\) \u2192 680  does NOT fit      \u2192 304  fits/.test(SRC) &&
@@ -246,7 +235,7 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
     check(`the category anchor survives a pathologically long name (inProfile=${prof})`,
-      /Fit and replace ONLY the subject's upper garment/.test(out),
+      /Overlay and fit the EXACT upper garment from the reference image/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }

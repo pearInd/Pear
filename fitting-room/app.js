@@ -6790,44 +6790,59 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    gets reinterpreted (see STRICT_INPAINT's comment). So the bottoms branch names the
    REFERENCE as the thing not to copy an upper garment from, not just the live frame as
    the thing to keep. */
+/* ── REVISION: STRICT 1:1, BOTH BRANCHES ─────────────────────────────────────────
+   THE THIRD REPORT IN THIS SEQUENCE, and a different failure from the first two. The
+   first was the WRONG REGION (a t-shirt anchor on a trouser reference). The second was
+   the WRONG GARMENT (generic black shorts instead of the photographed white ones). This
+   one is the RIGHT garment with INVENTED DETAIL - textures and design elements the
+   reference never contained.
+
+   So the clamp changed shape. "without inventing new shorts" only forbade SUBSTITUTION;
+   it said nothing about embellishing the correct garment. The replacement bans all three
+   operations explicitly - invent, add, alter - because adding a stripe and altering a
+   stripe are different edits and only the first was previously excluded.
+
+   BOTH BRANCHES ARE NOW COLLAPSED AND SYMMETRIC. The previous revision cut bottoms only,
+   on the principle of one branch at a time on evidence; tops kept its seven-sentence
+   assembly. This finishes the job at the product owner's direction, and the two strings
+   are now identical apart from the garment noun.
+
+   ── WHAT THIS REMOVES, AND WHY IT IS WRITTEN DOWN HERE ──────────────────────────
+   Every clause below is a reproduced regression, and all of them are now off the wire:
+
+     · the OPPOSITE-LAYER LOCK. Neither string says "preserve the live upper/lower
+       garment" any more. That clause was the fix for the FIRST report in this sequence -
+       trying on trousers putting the catalog model's shirt on the shopper. The scoping
+       now rests entirely on "the EXACT shorts/pants ... onto the subject" naming one
+       region, which is implicit where it used to be explicit. IF SHIRT-REPLACEMENT
+       RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST - it is the only loss here that
+       re-opens a previously fixed report rather than degrading fidelity.
+     · VOLUME_PERSISTENCE / FRONTAL_VOLUME - "it slimmed me down", and the head-on
+       stomach-projection gap.
+     · TEMPORAL_PERSISTENCE - the prompt's half of the late-entry presence fix. The gate
+       and the watcher still run for both categories, so the mechanism survives.
+     · CLOSED_BACK_HEM - the knotted-hem and open-back-flap artifacts.
+     · REFERENCE_EXTRACTION - superseded rather than lost: "Exactly match color, pattern,
+       logos, and cut" states the same provenance rule in the anchor itself.
+
+   All of them remain on file as constants, so each restore is one line in
+   imageOnlyPrompt(). The budget is no longer the constraint - both branches now run ~168
+   characters against a 650 ceiling - so anything bought back is a deliberate choice about
+   TEXT VOLUME COMPETING WITH THE REFERENCE, which is the mechanism all three reports in
+   this sequence share. Add one at a time, and re-test against a live session. */
 const CATEGORY_ANCHOR = Object.freeze({
+  /* The two strings are identical apart from the garment noun. That symmetry is
+     deliberate: the previous revisions diverged the branches to solve region-specific
+     problems, and this one is aimed at a failure mode - invented detail - that has
+     nothing to do with which half of the body is being dressed. */
   top:
-    "Fit and replace ONLY the subject's upper garment (shirt/top) using the exact upper" +
-    " garment from the reference image. Strictly preserve the subject's live pants/lower" +
-    " garment as seen on camera.",
-  /* ── BOTTOMS IS ULTRA-MINIMAL, AND IT IS THE ONLY BRANCH THAT IS ────────────
-     REPORTED WITH A SCREENSHOT: a white/cream basketball short rendered as generic BLACK
-     shorts. The reference resolved correctly, composited correctly and was on the wire -
-     the model simply was not copying it. That is the tuxedo failure again, arriving
-     through the lower-body branch, and the mechanism is the one this file already
-     documents at length: Decart's set() takes { prompt, image, enhance } and nothing
-     else - no negative_prompt, no image-strength, no conditioning scale - so the ONLY
-     lever over how hard the image is weighed against the text is HOW MUCH TEXT THERE IS.
-
-     This branch had grown back to 616 characters across six sentences, and only two of
-     them were about the garment; the rest were body volume, temporal tracking and
-     layer preservation. Cut to ONE instruction that says nothing except "copy this exact
-     thing", stated three ways - fit it, copy its pattern/colour/stripes/design, do not
-     invent one. 258 characters.
-
-     WHY THE NEGATIVE IS SAFE HERE, since this file's own history warns against negatives:
-     DENSE.assetLock's enumerated ban ("never invent a ... suit, TUXEDO, tie, BOWTIE") made
-     things WORSE because, with no negative_prompt field, every noun in it shipped in the
-     POSITIVE prompt where the sampler could steer toward it. "without inventing new
-     shorts" names the garment we WANT. Steering toward "shorts" is the goal, so the
-     mechanism that made assetLock harmful is inert here. Do not read this as licence to
-     re-add a noun list of garments we do not want - that remains the documented mistake.
-
-     THE TRADE, stated so it is reversible: VOLUME_PERSISTENCE and TEMPORAL_PERSISTENCE
-     are both dropped from bottoms. A correct garment with imperfect body volume beats a
-     wrong garment with perfect volume, and the report is of a wrong garment. If black
-     shorts stop appearing and volume decay shows up instead, VOLUME_PERSISTENCE is the
-     first thing to buy back - one line in imageOnlyPrompt(). */
+    "Overlay and fit the EXACT upper garment from the reference image onto the subject." +
+    " Exactly match color, pattern, logos, and cut." +
+    " Do NOT invent, add, or alter any details.",
   bottom:
-    "Fit strictly the exact shorts/pants shown in the reference image onto the subject's" +
-    " lower body. Copy the exact pattern, color, stripes, and design from the reference" +
-    " image without inventing new shorts. Keep the subject's upper body and background" +
-    " unmodified.",
+    "Overlay and fit the EXACT shorts/pants from the reference image onto the subject." +
+    " Exactly match color, pattern, logos, and cut." +
+    " Do NOT invent, add, or alter any details.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -6931,34 +6946,22 @@ function isBottomsGarment(item) {
  * @returns {string}
  */
 function imageOnlyPrompt(item) {
-  const bottoms = isBottomsGarment(item);
+  /* ONE CLAUSE, BOTH BRANCHES. There is no assembly left on either side - see
+     CATEGORY_ANCHOR above for the three reports that drove it there and for the full
+     list of what came off the wire.
 
-  /* THE TWO BRANCHES ARE NO LONGER SYMMETRIC, and that asymmetry is the fix rather than
-     an oversight. BOTTOMS returns its anchor ALONE - see CATEGORY_ANCHOR.bottom for the
-     black-shorts report that forced it. Every additional clause is text competing with
-     the reference pixels, and the lower-body branch is where that competition was
-     demonstrably being lost.
+     STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at ~168 characters:
+     it normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that
+     lengthens an anchor is clamped here instead of over-running into
+     clampPromptForWire()'s hard slice, which cuts at the END and would take the
+     "do NOT invent" sentence with it.
 
-     TOPS KEEPS ITS ASSEMBLY because nothing has been reported against it: the tops render
-     is using the reference correctly today, so the volume, frontal and construction
-     clauses are still earning their weight there. If a "generic top" report ever arrives,
-     this is the shape of the fix - collapse it the same way, one branch at a time, and
-     re-test. Do NOT collapse it pre-emptively; the clauses on this side are each a
-     reproduced regression, and removing them without a report trades a known-good render
-     for an untested one. */
-  if (bottoms) return fitPrompt([[P.CORE, CATEGORY_ANCHOR.bottom]]);
-
+     TO BUY A CLAUSE BACK, add it as a second part here. The budget is no longer the
+     constraint - there are ~480 characters free - so the only question is whether that
+     text is worth the weight it takes away from the reference image, which is the
+     mechanism every report in this sequence shares. One at a time, re-tested live. */
   return fitPrompt([
-    [P.CORE, CATEGORY_ANCHOR.top],
-    /* Ranked directly under the anchor, above the body-volume clause: a garment fitted to
-       the wrong thing entirely (an empty frame, a chair) is a worse failure than one
-       fitted to a slightly idealised torso, so if the budget ever forces a choice this
-       survives and VOLUME_PERSISTENCE goes first. */
-    [P.HIGH, TEMPORAL_PERSISTENCE.top],
-    [P.HIGH, VOLUME_PERSISTENCE],
-    [P.MED,  FRONTAL_VOLUME],
-    [P.MED,  CLOSED_BACK_HEM],
-    [P.CORE, REFERENCE_EXTRACTION],
+    [P.CORE, isBottomsGarment(item) ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
   ]);
 }
 

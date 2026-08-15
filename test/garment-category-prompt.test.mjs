@@ -147,16 +147,18 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
      gone from BOTTOMS ONLY. A correct garment with imperfect volume beats a wrong garment
      with perfect volume, and the screenshot is of a wrong garment. */
   check("opens by locking onto the EXACT reference garment, nothing before it",
-    bottomsPrompt.indexOf("Fit strictly the exact shorts/pants shown in the reference image onto the subject's lower body.") === 0,
+    bottomsPrompt.indexOf("Overlay and fit the EXACT shorts/pants from the reference image onto the subject.") === 0,
     bottomsPrompt);
-  check("...names the visual attributes to copy, so 'exact' has something to bind to",
-    /Copy the exact pattern, color, stripes, and design from the reference image/.test(bottomsPrompt),
-    "'exact garment' is abstract; pattern/colour/stripes/design are what the model matches on");
-  check("...forbids substituting an invented pair - the reported failure, stated directly",
-    /without inventing new shorts/.test(bottomsPrompt), bottomsPrompt);
-  check("...and still pins the untouched layers",
-    /Keep the subject's upper body and background unmodified\./.test(bottomsPrompt),
-    bottomsPrompt);
+  check("...names the visual attributes to match, so 'EXACT' has something to bind to",
+    /Exactly match color, pattern, logos, and cut\./.test(bottomsPrompt),
+    "'exact garment' is abstract; colour/pattern/logos/cut are what the model matches on");
+  /* THE HALLUCINATION CLAMP. The report was not a wrong garment this time but INVENTED
+     detail on the right one - textures and design elements the reference never had. This
+     is the sentence aimed at that, and it bans all three verbs (invent / add / alter)
+     rather than only "invent", because adding a stripe and altering a stripe are
+     different operations and the previous revision only forbade the first. */
+  check("...forbids inventing, adding AND altering - all three, not just invention",
+    /Do NOT invent, add, or alter any details\./.test(bottomsPrompt), bottomsPrompt);
 
   /* THE SIZE PROPERTY IS THE FIX, so it is asserted as a number rather than trusted to
      stay small because someone remembered why. Every clause added back here is weight
@@ -172,22 +174,35 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
 
 console.log("\n── §3 THE TOPS PROMPT: isolate the upper garment, preserve the live bottoms ──");
 {
-  check("commands replacement of ONLY the upper garment",
-    /Fit and replace ONLY the subject's upper garment \(shirt\/top\) using the exact upper garment from the reference image\./.test(topsPrompt),
+  check("commands overlay of the EXACT upper garment from the reference",
+    topsPrompt.indexOf("Overlay and fit the EXACT upper garment from the reference image onto the subject.") === 0,
     topsPrompt);
-  check("strictly preserves the shopper's LIVE lower garment",
-    /Strictly preserve the subject's live pants\/lower garment as seen on camera\./.test(topsPrompt),
-    topsPrompt);
-  /* THE BRANCHES ARE NO LONGER SYMMETRIC, deliberately - see CATEGORY_ANCHOR.bottom.
-     Bottoms was collapsed to a single reference-lock instruction after the black-shorts
-     report; tops keeps its assembly because nothing has been reported against it. Each
-     branch still names the region it replaces, which is the property that matters. */
-  check("...and each branch names the region it replaces",
-    /upper garment \(shirt\/top\)/.test(topsPrompt) &&
-    /shorts\/pants/.test(bottomsPrompt) && /lower body/.test(bottomsPrompt), topsPrompt);
-  check("...and tops is the branch that still carries the full clause assembly",
-    topsPrompt.length > bottomsPrompt.length * 2,
-    `tops=${topsPrompt.length} bottoms=${bottomsPrompt.length} - collapse tops only on a report`);
+  check("...and carries the same match/no-invent clamp as bottoms",
+    /Exactly match color, pattern, logos, and cut\./.test(topsPrompt) &&
+    /Do NOT invent, add, or alter any details\./.test(topsPrompt), topsPrompt);
+
+  /* ── THE BRANCHES ARE SYMMETRIC AGAIN, and differ ONLY by the garment noun ──
+     The previous revision collapsed bottoms alone, on the principle of one branch at a
+     time on evidence. This one finishes the job: the failure it targets - invented detail
+     on the CORRECT garment - is not region-specific, so a region-specific fix would have
+     been arbitrary. */
+  check("the two branches differ ONLY by the garment noun",
+    topsPrompt.replace("upper garment", "GARMENT") ===
+    bottomsPrompt.replace("shorts/pants", "GARMENT"),
+    `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
+  check("...and each still names the region it replaces",
+    /upper garment/.test(topsPrompt) && /shorts\/pants/.test(bottomsPrompt));
+
+  /* ── THE LOSS THAT MATTERS MOST, asserted so it cannot be forgotten ──────────
+     Neither branch says "preserve the live opposite layer" any more. That clause was the
+     fix for the FIRST report in this sequence - trying on trousers putting the catalog
+     model's shirt on the shopper. Scoping now rests entirely on the anchor naming ONE
+     region. This check does not demand the clause back; it demands that the removal stay
+     a DOCUMENTED decision with a named restore path, so a returning shirt-replacement
+     report is diagnosed in minutes instead of rediscovered. */
+  check("the dropped opposite-layer lock is recorded in app.js with a restore path",
+    /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC),
+    "the only removal here that re-opens a previously fixed report");
 }
 
 console.log("\n── §4 THE CONTRADICTION IS GONE: no t-shirt anchor on a trouser reference ──");
@@ -225,12 +240,13 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      silently over-running into clampPromptForWire()'s hard slice. Asserted per branch,
      because "the function mentions fitPrompt somewhere" would pass even if one branch
      had been changed to return a bare literal. */
-  check("the BOTTOMS branch is assembled through fitPrompt(), not returned raw",
-    /if \(bottoms\) return fitPrompt\(\[\[P\.CORE, CATEGORY_ANCHOR\.bottom\]\]\);/.test(SRC),
+  /* Still routed through fitPrompt() at ~169 chars, which looks redundant and is not: it
+     normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that lengthens
+     an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
+     slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
+  check("both branches are assembled through fitPrompt(), not returned raw",
+    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
-  check("...and so is the TOPS branch",
-    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, CATEGORY_ANCHOR\.top\]/.test(SRC),
-    "concatenation cannot shed a clause; fitPrompt() can");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix. */
   check("the category anchor is tagged P.CORE so it can never be shed",
     /\[P\.CORE,\s*(bottoms|isBottoms)[^\]]*ANCHOR|\[P\.CORE,\s*CATEGORY_ANCHOR/.test(SRC),

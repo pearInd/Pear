@@ -130,7 +130,7 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
   /* The resolver may branch on CATEGORY and nothing else. A second argument threaded in
      from a variant/colour/angle is how a description creeps back onto the wire. */
   check("...and the resolver branches on the garment's category alone",
-    /function imageOnlyPrompt\(item\) \{\s*\n\s*const bottoms = isBottomsGarment\(item\);/.test(APP),
+    /\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\]/.test(APP),
     "any other input to this function is a new axis the prompt can vary on");
   /* Comments stripped first: variantMetaOf's own doc block QUOTES the old call as the
      thing it replaced, and a check that trips over the explanation of the fix is worse

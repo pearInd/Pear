@@ -268,7 +268,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   check("the live composite payload is the category anchor, at every pose",
     built === api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Fit and replace ONLY the subject's upper garment \(shirt\/top\) using the exact upper garment/.test(built),
+    /^Overlay and fit the EXACT upper garment from the reference image onto the subject\./.test(built),
     built);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
@@ -328,11 +328,16 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   const lockItem = { name: "Tee", custom: false, garmentType: "upper_body" };
   for (const prof of [false, true]) {
     const out = lockApi.buildCompositePrompt(lockItem, "front", prof);
-    check(`the frozen prompt carries the render directive at inProfile=${prof}`,
-      /Maintain the exact same abdomen\/stomach depth, waist volume, and torso thickness/.test(out),
+    /* THE VOLUME AND PROVENANCE CLAUSES ARE BOTH OFF THE WIRE NOW - the anchor was
+       collapsed to a strict 1:1 reference lock after a third report (invented detail on
+       the CORRECT garment). What this section is actually about survives unchanged and is
+       what is asserted instead: the payload is pose-invariant, and the reference binding
+       plus the no-invent clamp cannot shed at either pose. */
+    check(`the anchor carries its reference binding at inProfile=${prof}`,
+      /the EXACT upper garment from the reference image/.test(out),
       out.slice(0, 400));
-    check(`...and its provenance split at inProfile=${prof}`,
-      /Use only the reference image's graphics, fabric texture, and color/.test(out),
+    check(`...and the no-invent clamp at inProfile=${prof}`,
+      /Do NOT invent, add, or alter any details\./.test(out),
       out.slice(0, 400));
   }
 
@@ -405,7 +410,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Fit and replace ONLY the subject's upper garment \(shirt\/top\) using the exact upper garment/;
+  const FROZEN = /^Overlay and fit the EXACT upper garment from the reference image onto the subject\./;
   for (const prof of [false, true]) {
     check(`the category anchor is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
@@ -420,7 +425,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
   const jeans = { name: "Glide Slim", custom: true, garmentType: "lower_body" };
   check("the BOTTOMS anchor is equally pose-invariant, and is a different string",
     api.buildCompositePrompt(jeans, "front", false) === api.buildCompositePrompt(jeans, "front", true) &&
-    /^Fit strictly the exact shorts\/pants shown in the reference image/.test(
+    /^Overlay and fit the EXACT shorts\/pants from the reference image/.test(
       api.buildCompositePrompt(jeans, "front", false)) &&
     api.buildCompositePrompt(jeans, "front", false) !== api.buildCompositePrompt(item, "front", false),
     api.buildCompositePrompt(jeans, "front", false).slice(0, 200));
@@ -754,10 +759,13 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
   check("the passthrough clamp is retired with them - the largest loss, recorded",
     !/pass through untouched/.test(square) && !/pass through untouched/.test(built),
     "if this ever passes again, inpaintLock was restored - update app.js's restore list");
+  /* CLOSED_BACK_HEM went off the wire with the 1:1 collapse - see CATEGORY_ANCHOR in
+     app.js for the full list and the restore path. Byte-identity across poses is the
+     property this section owns, and it is unaffected. */
   check("what survives at both poses is the category anchor, byte-identical",
     square === built &&
-    /Fit and replace ONLY the subject's upper garment \(shirt\/top\) using the exact upper garment/.test(square) &&
-    /Preserve a closed back and normal un-knotted hem/.test(square));
+    /^Overlay and fit the EXACT upper garment from the reference image onto the subject\./.test(square) &&
+    /Do NOT invent, add, or alter any details\./.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

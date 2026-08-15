@@ -89,257 +89,107 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
    THE MODE IS INTACT. The prompt is still constant per dispatch, still assembles no
    garment description, still has no interpolation hole. It varies on exactly ONE axis -
    which body region is being replaced - and NOT on colour, variant, angle or pose. */
+/* BOTH BRANCHES ARE NOW STRICT 1:1 REFERENCE LOCKS, ~169 characters each, identical
+   apart from the garment noun. Three reports drove this, each a different failure:
+     1. WRONG REGION   - a t-shirt anchor on a trouser reference (the category branch).
+     2. WRONG GARMENT  - generic black shorts instead of the photographed white ones
+                         (bottoms collapsed).
+     3. INVENTED DETAIL- the right garment with textures the reference never had
+                         (both collapsed, and "invent/add/alter" all banned).
+   See CATEGORY_ANCHOR in app.js for the full list of what came off the wire and the
+   restore path for each. */
 const TOPS_SPEC =
-  "Fit and replace ONLY the subject's upper garment (shirt/top) using the exact upper" +
-  " garment from the reference image. Strictly preserve the subject's live pants/lower" +
-  " garment as seen on camera." +
-  " Continuously track and strictly fit the reference top to the subject's torso as soon" +
-  " as visible. Keep lower body and background natural and unmodified." +
-  " Maintain the exact same abdomen/stomach depth, waist" +
-  " volume, and torso thickness continuously through all 360-degree rotations\u2014never" +
-  " flatten or reset body size mid-stream. Preserve a closed back and" +
-  " normal un-knotted hem. Use only the reference image's graphics, fabric texture," +
-  " and color.";
-/* BOTTOMS COLLAPSED TO A SINGLE REFERENCE-LOCK INSTRUCTION after a screenshot of a
-   white/cream basketball short rendering as generic BLACK shorts - the tuxedo failure
-   arriving through the lower-body branch. 258 chars against the tops branch's 634, and
-   the asymmetry IS the fix: every clause is weight against the reference pixels, and
-   this is the branch where that competition was demonstrably being lost. See
-   CATEGORY_ANCHOR.bottom in app.js for the reasoning and the restore order. */
+  "Overlay and fit the EXACT upper garment from the reference image onto the subject." +
+  " Exactly match color, pattern, logos, and cut." +
+  " Do NOT invent, add, or alter any details.";
 const BOTTOMS_SPEC =
-  "Fit strictly the exact shorts/pants shown in the reference image onto the subject's" +
-  " lower body. Copy the exact pattern, color, stripes, and design from the reference" +
-  " image without inventing new shorts. Keep the subject's upper body and background" +
-  " unmodified.";
+  "Overlay and fit the EXACT shorts/pants from the reference image onto the subject." +
+  " Exactly match color, pattern, logos, and cut." +
+  " Do NOT invent, add, or alter any details.";
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
 
-console.log("── §1 THE FROZEN STRING: product-specified, and genuinely constant ──");
+console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely constant ──");
 {
   /* Byte-exact, because the wording is a product decision rather than an implementation
      detail - a paraphrase that reads the same to a human is a different token sequence to
-     a diffusion model, and this is the one string in the file whose exact form was
-     specified from outside it. */
+     a diffusion model, and these are the strings whose exact form was specified from
+     outside this file. */
   check("the TOPS branch matches the specified wording byte for byte",
     api.imageOnlyPrompt(TEE) === TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
   check("the BOTTOMS branch matches the specified wording byte for byte",
     api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
+  check("the two differ ONLY by the garment noun",
+    TOPS_SPEC.replace("upper garment", "G") === BOTTOMS_SPEC.replace("shorts/pants", "G"),
+    "the failure this revision targets - invented detail - is not region-specific");
 
-  /* THREE SENTENCES, THREE JOBS, each one a clause that used to be separate and
-     shed-able. Asserted individually because the failure mode of a frozen string is a
-     well-meant reword that quietly drops one - and there is no fitPrompt() shed log to
-     notice it any more, because there is no assembly left to log. */
-  /* SENTENCE ORDER IS PART OF THE SPEC, not incidental, and it has moved twice. Revision 3
-     led with EXTRACTION, on the reasoning that a reference read as a photograph of a
-     dressed person gets its geometry deformed rather than discarded. Revision 4 leads with
-     STRUCTURE instead - "a standard, continuous t-shirt" - because the knot and the
-     open-back flap are failures of CONSTRUCTION, and no amount of correct material
-     provenance forecloses them. The reference is still bound in the first clause ("from
-     the reference image"), so the asset anchor did not move; only the isolation half did.
-     Both facts are pinned so a reorder is a deliberate act. */
-  /* REVISION 5 CHANGES WHAT THE LEAD SENTENCE IS FOR. Revisions 3 and 4 argued over
-     EXTRACTION-first vs STRUCTURE-first; both assumed one anchor served every garment.
-     The lead now states REGION - which layer is being replaced and which is being kept -
-     because a prompt that names the wrong layer cannot be rescued by anything after it.
-     Structure and extraction both still ship; they just no longer lead. */
-  check("(1) TOPS leads by naming the REGION it replaces and the one it preserves",
-    TOPS_SPEC.indexOf("Fit and replace ONLY the subject's upper garment") === 0 &&
-    /Strictly preserve the subject's live pants\/lower garment as seen on camera/.test(TOPS_SPEC),
-    "naming the wrong layer is unrecoverable by any later clause");
-  /* BOTTOMS NO LONGER MIRRORS TOPS. It leads with a bare reference lock - no region
-     naming, no layer-preservation preamble - because the black-shorts report showed the
-     lower-body branch losing the competition between text and pixels outright. */
-  check("(1) BOTTOMS leads with a bare reference lock, collapsed after the black-shorts report",
-    BOTTOMS_SPEC.indexOf("Fit strictly the exact shorts/pants shown in the reference image") === 0 &&
-    /Keep the subject's upper body and background unmodified/.test(BOTTOMS_SPEC));
-  check("...and the reference is still bound in that same first sentence, both branches",
-    /^Fit and replace ONLY the subject's upper garment \(shirt\/top\) using the exact upper garment from the reference image/.test(TOPS_SPEC) &&
-    /^Fit strictly the exact shorts\/pants shown in the reference image/.test(BOTTOMS_SPEC),
-    "the asset anchor must not depend on the extraction sentence that trails");
-  /* THE BOTTOMS ANCHOR BINDS TO THE REFERENCE THREE TIMES in 258 characters - fit the
-     exact one shown, copy its pattern/colour/stripes/design, do not invent one. That
-     repetition IS the minimal prompt: with the supporting clauses gone, saying the same
-     thing three short ways is the entire weight available to outrank the model's prior
-     toward generic black shorts. */
-  check("...and BOTTOMS binds to the reference repeatedly, in 258 chars",
-    (BOTTOMS_SPEC.match(/reference image/g) || []).length >= 2 &&
-    /without inventing new shorts/.test(BOTTOMS_SPEC),
-    "the model wearing the product is packaging, not content");
-  /* (2) PERSISTENCE. Three quantities named individually because "volume" alone is
-     satisfiable by any one of them, and the transition named explicitly because the
-     reported failure is progressive - volume present at the start of a turn, gone by the
-     end - rather than static. */
-  check("(2) it names the three quantities that must not change, not just 'volume'",
-    /the exact same abdomen\/stomach depth, waist volume, and torso thickness/.test(SPEC),
-    "one word is satisfiable by any one of the three");
-  check("...and the transition they must survive, because the failure is progressive",
-    /continuously through all 360-degree rotations/.test(SPEC) &&
-    /never flatten or reset body size mid-stream/.test(SPEC));
-  /* THE HONEST LIMIT, pinned in the test so nobody escalates the wording believing it is
-     a state lock. Lucy regenerates every frame independently - no cross-frame state, no
-     seed, no motion-guidance parameter in the SDK. This is a per-frame BIAS and cannot be
-     made into a filter from here; if volume still decays mid-turn the answer is better
-     evidence on the weak frames (a pipeline change), not stronger language. */
-  check("...and app.js records that this is a per-frame bias, NOT a state lock",
-    /NO PROMPT CAN CREATE PERSISTENCE THIS PIPELINE DOES NOT HAVE/.test(SRC),
-    "escalating this sentence cannot work - the limit is architectural");
+  /* THREE SENTENCES, THREE JOBS. Asserted individually because the failure mode of a
+     minimal prompt is a well-meant reword that quietly drops one - and there is no
+     fitPrompt() shed log to catch it, because there is no assembly left to log. */
+  const LEAD = /^Overlay and fit the EXACT (upper garment|shorts\/pants) from the reference image onto the subject\./;
+  check("(1) it leads by BINDING to the reference and naming the target region",
+    LEAD.test(TOPS_SPEC) && LEAD.test(BOTTOMS_SPEC),
+    "a prompt that names the wrong layer cannot be rescued by anything after it");
+  /* (2) The attributes. "EXACT garment" is abstract; these four are what a diffusion model
+     actually matches on. They SUPERSEDE the retired REFERENCE_EXTRACTION sentence - same
+     provenance rule, now inside the anchor where it cannot shed, and naming logos and cut
+     which the old wording never did. */
+  check("(2) it names the attributes to match, superseding the old extraction clause",
+    /Exactly match color, pattern, logos, and cut\./.test(TOPS_SPEC) &&
+    /Exactly match color, pattern, logos, and cut\./.test(BOTTOMS_SPEC));
+  check("...and it names LOGOS and CUT, which the retired wording did not",
+    /logos, and cut/.test(TOPS_SPEC) &&
+    /const REFERENCE_EXTRACTION = "Use only the reference image's graphics, fabric texture, and color\."/.test(SRC),
+    "the superseded constant stays on file so the supersede is checkable");
+  /* (3) THE HALLUCINATION CLAMP - the sentence this revision exists for. All three verbs,
+     because adding a stripe and altering a stripe are different edits, and the previous
+     revision only forbade inventing a whole garment. */
+  check("(3) it bans inventing, adding AND altering - all three verbs",
+    /Do NOT invent, add, or alter any details\.$/.test(TOPS_SPEC) &&
+    /Do NOT invent, add, or alter any details\.$/.test(BOTTOMS_SPEC),
+    "banning invention alone still permits embellishing the correct garment");
 
-  /* (3) THE HEAD-ON GAP. Depth, contour and silhouette are all PROFILE-visible
-     quantities: head-on the stomach projects toward the camera, along the axis with no
-     extent in a 2D frame, so every previous revision's volume language simply did not
-     apply and the model sized off shoulder width. These three cues are what frontal
-     volume looks like in 2D, and the only ones available at 0 degrees. */
-  /* ── (3) THE HEAD-ON CLAUSE NOW SHEDS ON TOPS. RECORDED, NOT GLOSSED ──────────
-     This is the one substantive cost of the category branch and it is asserted as a
-     LOSS so it cannot be discovered in a live session instead.
-
-     THE ARITHMETIC: the tops branch assembles to 702 characters against a hard 650
-     budget (app.js:5862 - "the ceiling is the API's, not ours"), so fitPrompt() sheds
-     its worst-priority part. FRONTAL_VOLUME is tagged P.MED and is the largest single
-     clause at 177 characters, so it goes and the prompt lands at 524.
-
-     WHY THIS IS THE RIGHT CLAUSE TO LOSE, given something had to go: it is a refinement
-     of a bias the surviving P.HIGH clause already asserts in general terms
-     ("abdomen/stomach depth, waist volume, torso thickness ... never flatten"), whereas
-     the anchor and the extraction clause are each the sole carrier of their guarantee.
-
-     THE ONE-LINE RESTORE, if head-on volume regresses: the tops anchor's third sentence
-     ("Do NOT replace or alter the subject's lower clothing.", 53 chars) restates what its
-     second sentence already says. Dropping it frees 53 and FRONTAL_VOLUME returns on its
-     own - fitPrompt() re-includes it the moment it fits, with no other edit. That trade
-     is deliberately NOT made here: the anchor wording is a product decision. */
-  check("(3) the frontal-volume clause is SHED on tops, and the budget explains why",
-    !/In front-facing \(0-degree\) views/.test(TOPS_SPEC) && TOPS_SPEC.length <= 650,
-    `tops = ${TOPS_SPEC.length} chars; unshed it would be 702 against a 650 ceiling`);
-  check("...and app.js records the shed as a choice, with the restore path",
-    /FRONTAL_VOLUME \(P\.MED\) drops first on tops/.test(SRC),
-    "a silent shed is the failure mode this repo exists to make visible");
-  /* THE VOLUME CLAUSE NOW SURVIVES ON TOPS ONLY. Bottoms lost it when the branch
-     collapsed to a bare reference lock - a deliberate trade recorded in
-     CATEGORY_ANCHOR.bottom: a correct garment with imperfect volume beats a wrong garment
-     with perfect volume, and the report was of a wrong garment. It is first on the
-     restore list if volume decay ever shows up on trousers. */
-  check("...while the GENERAL volume guarantee survives on TOPS, unshed",
-    /abdomen\/stomach depth, waist volume, and torso thickness/.test(TOPS_SPEC),
-    "the P.HIGH clause is the one that must never shed on the branch that still carries it");
-  check("...and its absence from BOTTOMS is a recorded trade with a restore path",
-    !/abdomen\/stomach depth/.test(BOTTOMS_SPEC) &&
-    /VOLUME_PERSISTENCE is the[\s\S]{0,80}first thing to buy back/.test(SRC),
-    "a dropped regression fix must leave a written way back");
-  /* Bottoms never carried the frontal clause at all - it describes a shirt draping over a
-     stomach, which is not what a trouser render is about. Its absence there is by design,
-     not budget, and the two must not be confused by a future reader. */
-  /* Asserted STRUCTURALLY rather than by measuring headroom. Both clauses describe a
-     SHIRT's construction - a stomach draping under a hem, an open back flap - so the
-     bottoms branch never assembles them at all; the source says `bottoms ? "" : ...`,
-     which is the design decision itself rather than a consequence of the budget. The
-     headroom that used to make this visible was spent on the temporal directive, so
-     measuring it would now test the wrong thing. */
-  check("...and BOTTOMS omits it BY DESIGN - that branch assembles nothing at all now",
-    !/In front-facing \(0-degree\) views/.test(BOTTOMS_SPEC) &&
-    /if \(bottoms\) return fitPrompt\(\[\[P\.CORE, CATEGORY_ANCHOR\.bottom\]\]\);/.test(SRC),
-    "the bottoms branch returns its anchor alone - there is no clause list to omit from");
-  /* (4) THE STRUCTURAL BOUNDARY - the positive half of revision 4's rule, now standing
-     alone. Its four-artifact enumeration ("do NOT generate front knots, tied fabric, open
-     slits, or floating back flaps") is gone, which is exactly the step revision 4's own
-     risk note prescribed if the named negatives proved counterproductive. It works alone
-     because it was deliberately written to lead that enumeration rather than depend on it. */
-  check("(4) the structural boundary survives, and states the correct shape on its own",
-    /Preserve a closed back and normal un-knotted hem/.test(SPEC));
-  check("...with the artifact enumeration retired, as revision 4's risk note prescribed",
-    !/do NOT generate front knots/.test(SPEC) && !/open slits/.test(SPEC),
-    "a knot is more object-like than a stretch or a float - the list was the risk");
-
-  /* THE KNOWING RISK OF THIS REVISION, asserted so it stays visible: drape-and-hem
-     vocabulary is BACK, scoped to the frontal case. Revision 4 removed it because it is
-     also how a designer describes a knotted or gathered hem, and that produced the knot.
-     It returns because frontal convexity cannot be described without it. What makes it
-     less exposed: it is scoped to front-facing views rather than stated as a general goal,
-     and the structural boundary follows immediately after. */
-  /* The scoping check moves to the SOURCE rather than the shipped string: FRONTAL_VOLUME
-     sheds on tops, so the assembled prompt can no longer demonstrate the ordering. What
-     the ordering protected still matters the moment the clause is restored (see the
-     one-line restore above), so it is pinned where the clause actually lives. */
-  check("the drape/hem language stays SCOPED to the frontal case in FRONTAL_VOLUME itself",
-    /const FRONTAL_VOLUME =\s*\n?\s*"In front-facing \(0-degree\) views[\s\S]{0,200}?natural fabric drape/.test(SRC),
-    "unscoped drape language is what produced the front knot in revision 3");
-  check("...and no tension/gathering vocabulary came back with it",
-    !/tension lines/.test(SPEC) && !/gather/i.test(SPEC));
-
-  check("(5) the extraction directive closes it, reduced to its positive half",
-    /Use only the reference image's graphics, fabric texture, and color\.$/.test(SPEC));
-  /* RECORDED AS A LOSS, not glossed: revision 3 said "completely ignoring the original
-     model's body size, chest, and waist dimensions" outright. "Preserve ONLY ..." implies
-     it by exhaustion but never states it, which is a weaker instrument against the "it gave
-     me the e-commerce model's shoulders" report. DENSE.modelAgnostic is still on file and
-     appending it is a one-line edit - it is the first thing to restore if that returns. */
-  check("...so the explicit body-discard is no longer on the wire - a known trade",
-    !/ignoring the original model's body/.test(SPEC) &&
-    /modelAgnostic:\s+"Ignore the reference model's body/.test(SRC),
-    "implied by exhaustion, not stated - and DENSE.modelAgnostic is the one-line restore");
-
-  /* BOTH SILHOUETTE AXES ARE NAMED, and this is the assertion the abdomen report earned.
-     Head-on a body's outline is its WIDTH; edge-on, width foreshortens to nearly nothing
-     and the entire outline is DEPTH. A clause naming only one leaves the other undefended
-     at exactly the angle where it is the whole silhouette - which is the gap the retired
-     SIDE_PROFILE_DEPTH was written against, and the reason "waistline" is named alongside
-     the generic contour language. */
-  check("...naming the stomach specifically, not a generic contour",
-    /abdomen\/stomach depth/.test(TOPS_SPEC) &&
-    /const FRONTAL_VOLUME =[\s\S]{0,160}the stomach's forward volume/.test(SRC),
-    "the stomach is the region every report has actually been about");
-
-  /* NOT POSE-GATED, and that is the substantive win over the clause it replaces.
-     DENSE.profileLateral rode behind an `inProfile` ternary and shed edge-on under budget
-     pressure - so the 90-degree frame, the one case it existed for, was the case most
-     likely to lose it. "at all angles" needs no flag and cannot shed. */
-  /* MORE THAN A CONVENIENCE NOW. The orientation watcher no longer dispatches anything on
-     a profile transition - its hold and its prompt update were both retired when the
-     90-degree freeze was traced to them - so a directive that needed a pose flag to arrive
-     would simply never arrive. Stating it unconditionally is the only way it holds at 90
-     degrees at all. */
-  check("...and every angle is covered unconditionally, since no pose event delivers it",
-    /all 360-degree rotations/.test(SPEC) && !/EDGE-ON/.test(SPEC),
-    "no pose flag switches this on, and the watcher would not fire one if there were");
-
-  /* THE NOUN LIST IS GONE ENTIRELY, and its absence is the assertion. Three versions of
-     this prompt named the garment they were trying to prevent - assetLock enumerated six,
-     the first frozen string kept two - and the tuxedo outlived all of them. With no
-     negative_prompt field, a banned noun ships in the POSITIVE prompt where the sampler
-     can steer toward it: at best neutral, plausibly the cause. What guards the
-     substitution now is positive and unnamed, stated twice.
-     If invented garments return, DO NOT re-add the list - that move has been tried. */
-  check("no banned-garment noun ships at all",
-    !/tuxedos?|suits?|jackets?|coats?|bowties?|badges?/i.test(SPEC),
-    "naming the garment is what three earlier versions already tried");
-  check("...the substitution is guarded positively instead - by what may be taken, not what may not",
-    /Use only the reference image's graphics, fabric texture, and color/.test(SPEC),
-    "an exhaustive list of what to take leaves nothing for an invented garment to be");
+  /* ── WHAT CAME OFF THE WIRE, asserted as ABSENCE + a live restore path ──────
+     Every one of these is a reproduced regression. They are RETIRED, not deleted: each
+     constant is still on file, so a restore is one line in imageOnlyPrompt(). Asserting
+     both halves is what stops a deliberate removal decaying into a forgotten one. */
+  const RETIRED = [
+    ["the opposite-layer lock",     /preserve the subject's live/i,          /const KEEP_BOTTOMS = /],
+    ["body-volume persistence",     /abdomen\/stomach depth/,                /const VOLUME_PERSISTENCE =/],
+    ["frontal volume",              /In front-facing \(0-degree\) views/,    /const FRONTAL_VOLUME =/],
+    ["closed back / un-knotted hem",/closed back and normal un-knotted hem/, /const CLOSED_BACK_HEM =/],
+    ["temporal persistence",        /as soon as visible/,                    /const TEMPORAL_PERSISTENCE = /],
+  ];
+  for (const [label, absent, constantRe] of RETIRED) {
+    check(label + ": off the wire on BOTH branches",
+      !absent.test(TOPS_SPEC) && !absent.test(BOTTOMS_SPEC));
+    check("...but still on file, so its restore is genuinely one line",
+      constantRe.test(SRC), String(constantRe) + " not found in app.js");
+  }
+  /* THE ONE LOSS THAT RE-OPENS A FIXED REPORT, singled out because it is not merely a
+     fidelity trade: the opposite-layer lock is what stopped a trouser try-on putting the
+     catalog model's shirt on the shopper. Scoping now rests entirely on the anchor naming
+     ONE region, so app.js has to carry that warning where a future debugger will find it. */
+  check("app.js flags the opposite-layer lock as the FIRST thing to restore",
+    /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC),
+    "the only removal here that re-opens a previously fixed report");
 
   /* CONSTANT, not merely short. A template literal here is how a description creeps back
      in one field at a time, which is the exact history this mode is reacting to. */
   check("declared with no interpolation hole",
     /const CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(SRC) &&
     !/CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,900}?\$\{/.test(SRC),
-    "no ${...} anywhere in or adjacent to the declaration");
-  /* The resolver picks between two frozen literals; it must never BUILD one. A template
-     hole in either anchor is how a colour word or a subtype noun gets back on the wire. */
-  /* The resolver now BRANCHES rather than selecting inline, since the two sides assemble
-     differently. The property is unchanged and is what is asserted: each branch hands
-     fitPrompt() a frozen literal by reference, and neither ever builds one by
-     concatenation - which is how a description creeps back in one field at a time. */
-  check("...and the resolver only SELECTS an anchor, never interpolates one",
-    /\[P\.CORE, CATEGORY_ANCHOR\.bottom\]/.test(SRC) &&
-    /\[P\.CORE, CATEGORY_ANCHOR\.top\]/.test(SRC) &&
+    "no template hole anywhere in or adjacent to the declaration");
+  check("...and the resolver only SELECTS an anchor, never builds one",
+    /\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\]/.test(SRC) &&
     !/CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC),
     "appending one clause is how the dozen came back last time");
-
-  /* It has to survive the wire guard untouched: clampPromptForWire() truncates anything
-     over budget, and a frozen prompt that gets clipped is no longer the spec'd string. */
-  check("it is comfortably inside the 226-token ceiling, so the wire guard never clips it",
-    SPEC.length <= 650, `${SPEC.length} chars (~${Math.ceil(SPEC.length / 4)} tokens)`);
+  check("both sit far inside the 226-token ceiling, so the wire guard never clips them",
+    TOPS_SPEC.length <= 650 && BOTTOMS_SPEC.length <= 650,
+    "tops=" + TOPS_SPEC.length + " bottoms=" + BOTTOMS_SPEC.length);
 }
+
 
 console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──");
 {
