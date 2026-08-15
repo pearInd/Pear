@@ -93,6 +93,8 @@ const TOPS_SPEC =
   "Fit and replace ONLY the subject's upper garment (shirt/top) using the exact upper" +
   " garment from the reference image. Strictly preserve the subject's live pants/lower" +
   " garment as seen on camera." +
+  " Continuously track and strictly fit the reference top to the subject's torso as soon" +
+  " as visible. Keep lower body and background natural and unmodified." +
   " Maintain the exact same abdomen/stomach depth, waist" +
   " volume, and torso thickness continuously through all 360-degree rotations\u2014never" +
   " flatten or reset body size mid-stream. Preserve a closed back and" +
@@ -102,6 +104,8 @@ const BOTTOMS_SPEC =
   "Fit and replace ONLY the subject's lower garment (pants/shorts) using the exact" +
   " shorts/pants shown in the reference image. Strictly keep and preserve the subject's" +
   " live shirt/upper garment completely unchanged." +
+  " Continuously track and strictly fit the reference shorts/pants to the subject's lower" +
+  " body as soon as visible. Keep upper body and background natural and unmodified." +
   " Maintain the exact same abdomen/stomach depth, waist" +
   " volume, and torso thickness continuously through all 360-degree rotations\u2014never" +
   " flatten or reset body size mid-stream." +
@@ -213,10 +217,17 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
   /* Bottoms never carried the frontal clause at all - it describes a shirt draping over a
      stomach, which is not what a trouser render is about. Its absence there is by design,
      not budget, and the two must not be confused by a future reader. */
+  /* Asserted STRUCTURALLY rather than by measuring headroom. Both clauses describe a
+     SHIRT's construction - a stomach draping under a hem, an open back flap - so the
+     bottoms branch never assembles them at all; the source says `bottoms ? "" : ...`,
+     which is the design decision itself rather than a consequence of the budget. The
+     headroom that used to make this visible was spent on the temporal directive, so
+     measuring it would now test the wrong thing. */
   check("...and BOTTOMS omits it BY DESIGN, not by shedding - it never applied",
     !/In front-facing \(0-degree\) views/.test(BOTTOMS_SPEC) &&
-    BOTTOMS_SPEC.length < 650 - 100,
-    "bottoms has ample headroom - its omission is a design choice, not budget pressure");
+    /\[P\.MED,\s*bottoms \? "" : FRONTAL_VOLUME\]/.test(SRC) &&
+    /\[P\.MED,\s*bottoms \? "" : CLOSED_BACK_HEM\]/.test(SRC),
+    "both clauses are shirt-construction language; the bottoms branch never assembles them");
   /* (4) THE STRUCTURAL BOUNDARY - the positive half of revision 4's rule, now standing
      alone. Its four-artifact enumeration ("do NOT generate front knots, tied fabric, open
      slits, or floating back flaps") is gone, which is exactly the step revision 4's own

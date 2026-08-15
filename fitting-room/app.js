@@ -36,6 +36,14 @@ const {
   HEALTH_PROBE_TIMEOUT_MS,
   TOAST_DURATION_MS,
   CATEGORY_LLM_TIMEOUT_MS,
+  POSE_GATE_ENABLED,
+  POSE_MIN_CONFIDENCE,
+  POSE_CONSECUTIVE_FRAMES,
+  POSE_SAMPLE_MS,
+  POSE_GATE_TIMEOUT_MS,
+  POSE_WASM_BASE,
+  POSE_MODEL_URL,
+  POSE_TASKS_MODULE,
   TOKEN_ENDPOINT,
   HEALTH_ENDPOINT,
   SDK_URLS,
@@ -1989,6 +1997,12 @@ function enterRoom() {
 
   // Pre-warm SDK + token so the go-live path skips both round-trips.
   warmupSDKAndToken();
+  /* Fetch the pose model NOW, on Screen 2 entry, not when go-live is pressed. It is a
+     multi-MB WASM runtime, and the whole point of the presence gate is to make the FIRST
+     try work - putting that download on the critical path would trade one first-try
+     failure for another. Fire-and-forget and failure-tolerant: by the time the shopper
+     presses the button it is either resident or the gate quietly runs without it. */
+  preloadPoseDetector();
 }
 
 /* Release a composite preview object URL. Called on every item swap so the blob backing
@@ -3503,6 +3517,7 @@ function teardown() {
   // but teardown() is what EVERY exit path eventually reaches, so a future path that
   // disconnects without going through either of those two still stops it here.
   stopLowerBodyGuard();
+  stopPresenceWatcher();
 
   // Cancel the no-first-frame safety timer and reset the billing-armed guard so the next
   // session starts clean (the billed window re-arms only on its own first rendered frame).
@@ -6802,6 +6817,30 @@ const FRONTAL_VOLUME =
 const CLOSED_BACK_HEM = "Preserve a closed back and normal un-knotted hem.";
 const REFERENCE_EXTRACTION = "Use only the reference image's graphics, fabric texture, and color.";
 
+/* ── Temporal persistence - the prompt half of the presence fix ───────────────────
+   The presence GATE stops a session opening on an empty frame. This covers what the gate
+   cannot: the shopper who is briefly occluded, half out of shot, or steps back in
+   mid-window. Every previous revision of this prompt described a subject who was assumed
+   to be THERE, so a frame where they are not yet visible had no language attached to it
+   at all - and an unstated state is what this file's history keeps recording as the thing
+   the model reinterprets.
+
+   "AS SOON AS VISIBLE" IS THE LOAD-BEARING PHRASE, not filler. It tells the model the
+   subject may be absent RIGHT NOW and that the correct response is to wait and then fit -
+   rather than to fit something to whatever is currently in frame, which is exactly how a
+   garment ends up rendered onto a wall or a chair.
+
+   The second sentence is scoped to the OPPOSITE region plus the background, so it
+   reinforces the anchor's own isolation rule rather than competing with it. */
+const TEMPORAL_PERSISTENCE = Object.freeze({
+  top:
+    "Continuously track and strictly fit the reference top to the subject's torso as soon" +
+    " as visible. Keep lower body and background natural and unmodified.",
+  bottom:
+    "Continuously track and strictly fit the reference shorts/pants to the subject's lower" +
+    " body as soon as visible. Keep upper body and background natural and unmodified.",
+});
+
 /* Lower-body tokens. Hebrew FIRST because it is the storefront's primary language, so a
    Hebrew-only product title is the common case here rather than an edge case; both geresh
    spellings are listed (U+05F3 ׳ and a plain ASCII apostrophe) because storefronts use
@@ -6866,6 +6905,11 @@ function imageOnlyPrompt(item) {
   const bottoms = isBottomsGarment(item);
   return fitPrompt([
     [P.CORE, bottoms ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
+    /* Ranked directly under the anchor, above the body-volume clause: a garment fitted to
+       the wrong thing entirely (an empty frame, a chair) is a worse failure than one
+       fitted to a slightly idealised torso, so if the budget ever forces a choice this
+       survives and VOLUME_PERSISTENCE goes first. */
+    [P.HIGH, bottoms ? TEMPORAL_PERSISTENCE.bottom : TEMPORAL_PERSISTENCE.top],
     [P.HIGH, VOLUME_PERSISTENCE],
     [P.MED,  bottoms ? "" : FRONTAL_VOLUME],
     [P.MED,  bottoms ? "" : CLOSED_BACK_HEM],
@@ -6930,28 +6974,35 @@ function lookAnchorPrompt() {
                       an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
                       the moment "it gave me the model's shoulders" is reported again.
 
-   ── THE RESTORE BUDGET IS BACK TO TWO CLAUSES ────────────────────────────────
-   It was ONE for five revisions, when the prompt was a single 573-character frozen string
-   at 88% of PROMPT_MAX_CHARS with 77 characters of headroom. The category branch bought
-   headroom back rather than spending it: each branch now carries only the clauses that
-   apply to ITS region, so the tops branch runs 524 characters and the bottoms branch 527.
+   ── THE RESTORE BUDGET IS NOW ZERO. NOTHING FITS. ────────────────────────────
+   Recorded bluntly because it is the single most likely thing to be discovered the hard
+   way, by adding a clause and watching fitPrompt() silently shed it.
 
-     TOPS (524)                      BOTTOMS (527)
-     + DENSE.bodyFidelity  (45) → 570    → 573   fits
-     + DENSE.modelAgnostic (64) → 589    → 592   fits
-     + BOTH                     → 635    → 638   fits
+   The history, since the number has moved three times: ONE clause of headroom while the
+   prompt was a single 573-char frozen string; TWO after the category branch split it by
+   region (tops 524 / bottoms 527, because each branch dropped the clauses that did not
+   apply to it); and ZERO now that TEMPORAL_PERSISTENCE has spent it.
 
-   So "a two-line restore" is true of any one clause AND of the pair again. It is NOT
-   true of a third - check the arithmetic before adding one rather than letting fitPrompt()
-   silently shed the worse-priority clause, which is the failure mode this file has spent
-   its whole history trying to make visible.
+     TOPS (634)                      BOTTOMS (616)
+     + DENSE.bodyFidelity  (45) → 680    → 662   does NOT fit
+     + DENSE.modelAgnostic (64) → 699    → 681   does NOT fit
 
-   NOTE WHICH BRANCH IS TIGHTER: bottoms, by 3 characters, because its anchor carries the
-   extra "do not render any upper clothing from the reference" provenance sentence. Size a
-   restore against BOTTOMS, not tops. And note that the tops branch is already shedding
-   FRONTAL_VOLUME (P.MED) to fit - the headroom above is what remains AFTER that shed, so
-   buying a clause back on tops competes with restoring that sentence first. The order to
-   restore in is below.
+   THE TRADE THAT BOUGHT THIS, stated so it can be reversed deliberately: the temporal
+   directive costs ~150 characters per branch and is what tells the model the subject may
+   not be in frame YET ("as soon as visible"). Without it, a frame with nobody in it is an
+   unstated state, and the model fits the garment to whatever IS there - the reported
+   "first try is always glitchy". That was judged worth more than a restore budget for
+   clauses that are currently retired anyway.
+
+   TO BUY HEADROOM BACK, cheapest first:
+     · FRONTAL_VOLUME is already shed on tops (P.MED, 177 chars) and never assembled on
+       bottoms - so on tops there is nothing to reclaim there; it is already gone.
+     · CLOSED_BACK_HEM (49) is the next P.MED on tops.
+     · The anchors themselves are product-specified wording - change them deliberately or
+       not at all.
+   Size any restore against TOPS, which is now the tighter branch by 18 characters (the
+   reverse of the previous revision - the tops anchor names its region twice and carries
+   two construction clauses the bottoms branch does not). The order to restore in is below.
 
    THE REST ARE GENUINELY GONE from the wire, and are the ones worth buying back first:
      · inpaintLock    face/skin/hands/background passthrough. THE LARGEST LOSS.
@@ -9598,6 +9649,10 @@ function startBillingWindow(gen) {
   $("scanOverlay").hidden = true;
   card().classList.add("show-live");
   startLowerBodyGuard();   // no-op unless LOWER_BODY_GUARD_ENABLED - see its own comment
+  /* Late-entry recovery starts with the billed window: from here on, a shopper who
+     drifts out of shot and steps back in gets the garment re-conditioned into the
+     window ALREADY RUNNING - never a second billed one. See startPresenceWatcher(). */
+  startPresenceWatcher();
   // Feature 2 - start recording HERE, on the exact frame that arms billing, so the
   // encoded clip always matches the billed 5s window (no black warm-up frames at the
   // front - see the BLACK-FRAME FIX note in startRecording, and the isDressedFrame
@@ -10106,6 +10161,32 @@ async function goLive() {
       return;   // finally{} resets busy + the capture button; no billed session opened
     }
 
+    /* ── Presence check, call site (credit saver #2) ────────────────────────
+       Header deliberately worded so it does not begin with the same phrase that opens
+       the gate's own implementation block below - body-presence-gate.test.mjs extracts
+       that block by matching its first line, and takes the FIRST occurrence in the file.
+       goLive() sits ABOVE the implementation, so a matching header here silently becomes
+       the code under test. Same trap the outfit-slot extract marker already documents.
+
+       Same position and same reasoning as the black-screen check directly above: the
+       camera is live, nothing has been minted or billed yet, and this is the last point
+       at which we can still tell that the session about to open would be wasted.
+
+       Decart conditions on the frame it is handed, and LIVE_DURATION_MS caps the session
+       at 5s - so going live while the shopper is still out of shot spends the entire
+       billed window on a garment fitted to an empty room. That is the reported
+       "first try is always glitchy".
+
+       UNLIKE the black-screen check, this one NEVER REFUSES. It delays, shows the
+       "step into frame" overlay while it waits, and proceeds anyway on timeout or with
+       no usable detector - see awaitBodyPresence(). A shopper the model cannot see must
+       still get their try-on. */
+    const presence = await awaitBodyPresence(isBottomsGarment(activeItem));
+    if (presence !== "present") {
+      console.warn(`[go-live] presence gate did not confirm (${presence}) - continuing`);
+    }
+    hidePresenceOverlay();   // belt-and-braces: never leave it over a live session
+
     /* BUG FIX (cross-run mode persistence): a PREVIOUS session in this same page load
        may have downgraded currentAngle to "front" below (watcher couldn't arm that
        time) - and since renderPerspectiveSelector() is only re-run on an item/colour
@@ -10326,6 +10407,7 @@ function stopLive() {
   teardown();                          // rtClient.disconnect() → billing stops now (also hides #aiVideo)
   card().classList.remove("show-live");
   stopLowerBodyGuard();
+  stopPresenceWatcher();
   if (frozen) card().classList.add("show-result");   // surface the frozen snapshot as the final result
   setLiveControls(false);              // reset the button back to "Go Live" so a new session can start
   $("captureBtn").disabled = !localStream;
@@ -10361,6 +10443,7 @@ function beginFreezeHold() {
   //    a mid-hold click can't start a second session before the clip finalizes.
   card().classList.remove("show-live");
   stopLowerBodyGuard();
+  stopPresenceWatcher();
   if (frozen) card().classList.add("show-result");
   $("captureBtn").disabled = true;
 
@@ -10454,6 +10537,322 @@ function finalizeVideoClip() {
    ADDITIVE ONLY, matching lux-interactions.js's own stated design rule for exactly this
    reason: #aiVideo is never touched, never re-parented, never has its role changed. This
    only ever paints on top of it via the stacked #lowerBodyGuard canvas (style.css). */
+/* ── Body-presence gate - "the first try is always glitchy" ──────────────────────
+   THE FAILURE. Decart conditions on the frame it is handed. Press go-live while still
+   reaching for the mouse, half out of shot, or mid-turn, and the garment is fitted to
+   THAT frame - to an empty room, a shoulder, a blur. The session is hard-capped at
+   LIVE_DURATION_MS (5s, 10 credits), so the shopper watches a broken render for the whole
+   billed window and presses again. The retry reads as "it fixed itself"; nothing was
+   fixed, they simply happened to be standing still the second time.
+
+   THE SHAPE IS ALREADY IN THIS FILE. cameraLooksBlack() sits a few lines above the
+   insertion point in goLive() and does exactly this for a covered lens: a local,
+   pixel-only check that refuses to open a billed session it can already tell will be
+   wasted, and sends nothing anywhere to decide. This is that, for an empty frame.
+
+   ── WHY A POSE MODEL, AND WHY IT IS OPTIONAL ────────────────────────────────────
+   The orientation watcher's FaceDetector can answer "is a person there". It cannot
+   answer "are the HIPS AND KNEES in frame", which is the only question that matters for
+   a trousers try-on - and gating trousers on a face is how "the first try is glitchy"
+   survives this fix for exactly the category that reported it.
+
+   But MediaPipe Pose is a multi-MB WASM runtime from a CDN, in a page that has zero
+   external scripts, and app.js:10474 records this file declining that dependency once
+   already. So the rules are: it is PRELOADED during Screen 2, never fetched on the
+   go-live path (a 3-6MB download on the critical path would defeat the very feature),
+   and EVERY failure of it - dead CDN, slow CDN, no WebAssembly, no WebGL - degrades to
+   the native FaceDetector engine and then to simply proceeding. The gate is an
+   optimisation; the try-on is the product, and no third party may block it.
+
+   STILL A HEURISTIC, said plainly: landmark visibility is the model's own confidence
+   that a joint is in frame, not a measurement. It is a far better signal than the fixed
+   fraction the lower-body guard below has to use, and it is not a guarantee. */
+
+/* BlazePose 33-point topology. Named rather than inlined because a bare `landmarks[23]`
+   is unreviewable, and an off-by-one here silently gates trousers on an elbow. */
+const POSE_LANDMARK = Object.freeze({
+  LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12,
+  LEFT_HIP: 23, RIGHT_HIP: 24,
+  LEFT_KNEE: 25, RIGHT_KNEE: 26,
+});
+
+/**
+ * Which joints must be visible before this garment can be fitted.
+ *
+ * TOPS need shoulders AND hips. Shoulders alone are satisfied by a head-and-neck crop
+ * with no torso in frame at all - which is precisely the framing that produces a garment
+ * fitted to nothing. Hips are the torso's lower anchor, so requiring them means the whole
+ * region the garment will occupy is actually on camera.
+ *
+ * TOPS DELIBERATELY DO NOT REQUIRE KNEES. The most common webcam framing in the world is
+ * a person seated at a desk, and requiring legs would refuse a shirt try-on to nearly
+ * everyone. BOTTOMS do require them: hips alone do not prove the trousers will be in
+ * frame, and the reported failure was a bottoms render.
+ * @param {"top"|"bottom"} category
+ * @returns {number[]}
+ */
+function requiredPoseLandmarks(category) {
+  const L = POSE_LANDMARK;
+  return category === "bottom"
+    ? [L.LEFT_HIP, L.RIGHT_HIP, L.LEFT_KNEE, L.RIGHT_KNEE]
+    : [L.LEFT_SHOULDER, L.RIGHT_SHOULDER, L.LEFT_HIP, L.RIGHT_HIP];
+}
+
+/**
+ * Does ONE detected skeleton clear the bar for this category?
+ * @param {Array<{visibility?:number}>|null|undefined} landmarks
+ * @param {"top"|"bottom"} category
+ * @param {number} minConfidence
+ * @returns {boolean}
+ */
+function poseFrameQualifies(landmarks, category, minConfidence = POSE_MIN_CONFIDENCE) {
+  if (!Array.isArray(landmarks) || !landmarks.length) return false;
+  return requiredPoseLandmarks(category).every((i) => {
+    const lm = landmarks[i];
+    return !!lm && Number(lm.visibility ?? 0) >= minConfidence;
+  });
+}
+
+/**
+ * Interpret a raw detector result.
+ *
+ * THE THREE-STATE RETURN IS THE POINT. `null` means "cannot judge" - no detector, or it
+ * failed - and is NOT the same as `false` ("looked, nobody there"). Collapsing the two
+ * would let a broken CDN read as a permanently empty room and refuse every session,
+ * which is the exact failure mode this gate must never have.
+ * @returns {boolean|null}
+ */
+function presenceFromPoseResult(result, category) {
+  if (!result || !Array.isArray(result.landmarks)) return null;
+  if (!result.landmarks.length) return false;
+  return result.landmarks.some((set) => poseFrameQualifies(set, category, POSE_MIN_CONFIDENCE));
+}
+
+/**
+ * The consecutive-frame streak. One qualifying frame is not presence: a shopper walking
+ * THROUGH the shot, or a poster on the wall catching the model for a frame, both produce
+ * isolated hits. Requiring POSE_CONSECUTIVE_FRAMES in a row, with any miss resetting the
+ * count, is what separates "someone is standing here" from "something passed by".
+ */
+function makePresenceGate(needed = POSE_CONSECUTIVE_FRAMES) {
+  let streak = 0;
+  return {
+    feed(ok) { streak = ok ? streak + 1 : 0; return streak >= needed; },
+    reset() { streak = 0; },
+    get streak() { return streak; },
+  };
+}
+
+/* The loaded PoseLandmarker, as a memoized PROMISE - so N callers during preload share
+   one download, and a second call never restarts it. Resolves to null on every failure. */
+let _poseLandmarkerPromise = null;
+
+/**
+ * Load MediaPipe Tasks Vision. NEVER throws, NEVER rejects - resolves to null instead,
+ * because every caller's correct response to "no detector" is to carry on without one.
+ * @returns {Promise<object|null>}
+ */
+function loadPoseLandmarker() {
+  if (_poseLandmarkerPromise) return _poseLandmarkerPromise;
+  _poseLandmarkerPromise = (async () => {
+    if (typeof _testDetector !== "undefined" && _testDetector) return _testDetector;
+    try {
+      /* Dynamic import of a CDN ES module: the only way to add this without a bundler,
+         and it keeps the bytes off the initial page load entirely. */
+      const vision = await import(/* webpackIgnore: true */ POSE_TASKS_MODULE);
+      const fileset = await vision.FilesetResolver.forVisionTasks(POSE_WASM_BASE);
+      return await vision.PoseLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: POSE_MODEL_URL, delegate: "GPU" },
+        runningMode: "VIDEO",
+        numPoses: 1,
+      });
+    } catch (e) {
+      console.warn("[PEAR] pose detector unavailable, falling back to native presence:", e?.message || e);
+      return null;
+    }
+  })();
+  return _poseLandmarkerPromise;
+}
+
+/* Fire-and-forget warm-up. Called once the shopper is in the fitting room, which is
+   typically many seconds before they press go-live - so by the time the gate needs the
+   detector it is already resident, and the critical path pays nothing. */
+function preloadPoseDetector() {
+  if (!POSE_GATE_ENABLED) return;
+  loadPoseLandmarker().catch(() => {});   // .catch is belt-and-braces; it never rejects
+}
+
+/* ── The native fallback ──────────────────────────────────────────────────────
+   Reuses the SAME browser primitive the orientation watcher already runs (see
+   ORIENT_FACE_SIZE) - no new dependency, nothing extra to download. It cannot see hips,
+   so it answers the weaker question "is a person there at all". For a TOP that is very
+   nearly the same question. For BOTTOMS it genuinely is not, and that is stated rather
+   than papered over: a face-only pass on a trousers item is treated as unknown, so the
+   gate proceeds rather than pretending it verified something it cannot see. */
+async function nativePresenceFallback(video, category) {
+  if (typeof FaceDetector === "undefined") return null;
+  try {
+    const det = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+    const faces = await det.detect(video);
+    if (!faces || !faces.length) return false;
+    return category === "bottom" ? null : true;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Wait until a body is actually in frame, or until the gate times out.
+ *
+ * ALWAYS RESOLVES, and resolves TRUTHY on timeout. Read that as the design rule it is:
+ * this function may delay a session, and may never refuse one. A shopper who cannot be
+ * detected - unusual lighting, a wheelchair user the model reads poorly, a browser with
+ * no WebAssembly - still gets their try-on.
+ *
+ * @param {boolean} isBottoms - drives which landmarks are required
+ * @returns {Promise<"present"|"timeout"|"skipped">}
+ */
+async function awaitBodyPresence(isBottoms) {
+  if (!POSE_GATE_ENABLED) return "skipped";
+  const video = $("webcam");
+  if (!video) return "skipped";
+  const category = isBottoms ? "bottom" : "top";
+  const detector = await loadPoseLandmarker();
+  const gate = makePresenceGate();
+  const startedAt = Date.now();
+  let shownOverlay = false;
+
+  try {
+    while (Date.now() - startedAt < POSE_GATE_TIMEOUT_MS) {
+      let verdict = null;
+      if (detector && video.videoWidth) {
+        try {
+          verdict = presenceFromPoseResult(
+            detector.detectForVideo(video, performance.now()), category);
+        } catch (e) {
+          console.warn("[PEAR] pose detect failed, degrading:", e?.message || e);
+          verdict = null;
+        }
+      }
+      if (verdict === null) verdict = await nativePresenceFallback(video, category);
+      /* Still unknown after both engines: nothing here can judge this frame, so waiting
+         longer cannot help. Proceed immediately rather than burning the full timeout on
+         a question no available detector can answer. */
+      if (verdict === null) {
+        console.log("[PEAR] presence gate: no usable detector - proceeding without it");
+        return "skipped";
+      }
+      if (gate.feed(verdict === true)) {
+        if (shownOverlay) hidePresenceOverlay();
+        console.log(`[PEAR] presence gate: confirmed after ${Date.now() - startedAt}ms (${category})`);
+        return "present";
+      }
+      if (!shownOverlay) { showPresenceOverlay(); shownOverlay = true; }
+      await new Promise((r) => setTimeout(r, POSE_SAMPLE_MS));
+    }
+    /* TIMED OUT - and we PROCEED. The shopper asked for a session; a detector that
+       cannot find them is not grounds to refuse one. */
+    console.warn(`[PEAR] presence gate: timed out after ${POSE_GATE_TIMEOUT_MS}ms - proceeding anyway`);
+    return "timeout";
+  } finally {
+    if (shownOverlay) hidePresenceOverlay();
+  }
+}
+
+function showPresenceOverlay() {
+  const el = $("presenceOverlay");
+  if (el) el.hidden = false;
+}
+function hidePresenceOverlay() {
+  const el = $("presenceOverlay");
+  if (el) el.hidden = true;
+}
+
+/* ── Late entry: re-condition, never re-bill ──────────────────────────────────
+   The gate above covers the START of a session. This covers the shopper who drifts out
+   of shot and steps back in DURING one - the garment should re-fit the moment they are
+   visible again, not stay broken for the rest of the window.
+
+   IT MUST NOT TOUCH BILLING, and that is the whole reason this is its own function
+   rather than a call to the go-live path. liveDurationTimer / startBillingWindow() arm
+   the LIVE_DURATION_MS cap; re-arming either on a presence event would bill a second
+   full session every time somebody stepped in and out. So this re-sends conditioning
+   into the window ALREADY RUNNING, and touches nothing else.
+
+   It reuses applyActive() and the same `applying` mutex maybeReanchorPrompt() uses, for
+   the same reason: a swap or a profile transition may already own the wire. */
+let presenceWatcherTimer = null;
+
+function startPresenceWatcher() {
+  if (!POSE_GATE_ENABLED || presenceWatcherTimer) return;
+  const video = $("webcam");
+  if (!video) return;
+  const category = isBottomsGarment(activeItem) ? "bottom" : "top";
+  const gate = makePresenceGate();
+  let wasPresent = true;      // the go-live gate just confirmed presence
+  let inFlight = false;
+
+  presenceWatcherTimer = setInterval(async () => {
+    if (inFlight || !isLive()) return;
+    inFlight = true;
+    try {
+      const detector = await loadPoseLandmarker();
+      if (!detector || !video.videoWidth) return;
+      let verdict;
+      try {
+        verdict = presenceFromPoseResult(
+          detector.detectForVideo(video, performance.now()), category);
+      } catch (_) { return; }
+      if (verdict === null) return;
+      const present = gate.feed(verdict === true);
+      if (present && !wasPresent) {
+        wasPresent = true;
+        hidePresenceOverlay();
+        await reconditionForPresence();
+      } else if (!present && wasPresent && verdict === false) {
+        wasPresent = false;
+        showPresenceOverlay();
+      }
+    } finally {
+      inFlight = false;
+    }
+  }, POSE_SAMPLE_MS * 2);
+}
+
+function stopPresenceWatcher() {
+  if (presenceWatcherTimer) { clearInterval(presenceWatcherTimer); presenceWatcherTimer = null; }
+  hidePresenceOverlay();
+}
+
+/* Re-send the conditioning for the CURRENT garment into the window already running.
+
+   Guarded on the same three conditions maybeReanchorPrompt() uses - not mid-send, still
+   live, and something has actually been dressed already (re-asserting steering before
+   the first frame would race the applyActive() goLive() is still awaiting).
+
+   ON THE MUTEX, honestly: the orientation watcher's `applying` flag is a CLOSURE local
+   inside syncOrientationWatcher(), not reachable from here, so this cannot share it.
+   That leaves a narrow window where a re-anchor and a presence re-condition could both
+   send. Both send the SAME payload for the same garment, so the outcome is a redundant
+   set() rather than a wrong one - the same benign collision the re-anchor and the
+   profile update already tolerate between themselves. Hoisting one real mutex for all
+   three send sites is the right fix and is deliberately NOT bundled into this change. */
+let presenceReconditionInFlight = false;
+
+async function reconditionForPresence() {
+  if (presenceReconditionInFlight || !isLive() || !isGarmentApplied) return;
+  presenceReconditionInFlight = true;
+  try {
+    console.log(`[PEAR] presence regained at t=${sessionElapsedMs()}ms - re-conditioning (no re-bill)`);
+    await applyActive();
+  } catch (e) {
+    console.warn("[PEAR] presence re-condition failed:", e?.message || e);
+  } finally {
+    presenceReconditionInFlight = false;
+  }
+}
+/* ── end body-presence gate ── */
+
 let lowerBodyGuardRAF = null;
 /* The LIVE value the paint loop actually reads, distinct from the static
    LOWER_BODY_GUARD_FRAC config constant it starts equal to. calibrateLowerBodyGuard()

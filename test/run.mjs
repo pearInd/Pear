@@ -171,6 +171,7 @@ const SUITES = [
   ["image-first", "image-first.test.mjs"],
   ["garment-category-prompt", "garment-category-prompt.test.mjs"],
   ["garment-category-detection", "garment-category-detection.test.mjs"],
+  ["body-presence-gate", "body-presence-gate.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],

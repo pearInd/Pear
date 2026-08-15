@@ -440,6 +440,20 @@
                 <span class="live-countdown__label"><span data-i18n="liveCountdownLabel">שניות</span> <span data-i18n-hide-on-en>· sec</span></span>
             </div>
 
+            <!-- Body-presence prompt. Shown ONLY while the presence gate is waiting for the
+                 shopper to step into frame (see awaitBodyPresence in app.js) and torn down
+                 on every exit path from it. Decart conditions on the frame it is handed and
+                 the session is capped at 5s, so opening one while nobody is in shot spends
+                 the whole billed window on a garment fitted to an empty room - this is the
+                 message that explains the wait instead of leaving the button feeling dead. -->
+            <div class="presence-overlay" id="presenceOverlay" hidden aria-live="polite">
+                <div class="presence-overlay__frame" aria-hidden="true"></div>
+                <p class="presence-overlay__text">
+                    <span data-i18n="presencePrompt">נא להתייצב מול המצלמה</span>
+                    <span data-i18n-hide-on-en> · Please step into the frame</span>
+                </p>
+            </div>
+
             <!-- luxury AI scanning overlay - the LOADING state. Stays visible from go-live
                  until Model Ready (see the state-transition comment on startBillingWindow()
                  in app.js), not just while an image is mid-process. -->
@@ -702,7 +716,7 @@
   <span class="lang-switch__thumb" aria-hidden="true"></span>
 </button>
 
-<script type="module" src="app.js?v=33"></script>
+<script type="module" src="app.js?v=34"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
      header shrink. Pure enhancement - touches no app.js logic or state. -->
 <script src="mobile-ux.js" defer></script>

@@ -169,36 +169,51 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     /inpaintLock    face\/skin\/hands\/background passthrough\. THE LARGEST LOSS/.test(SRC) &&
     /Restore: add \[P\.HIGH, DENSE\.inpaintLock\]/.test(SRC));
 
-  /* ── THE RESTORE BUDGET IS BACK TO TWO CLAUSES ──────────────────────────────
-     It was ONE while the prompt was a single 573-char string carrying every clause for
-     every garment. Splitting it by CATEGORY bought headroom back rather than spending it:
-     each branch now carries only what applies to its own region (tops 524, bottoms 527),
-     so the pair fits again.
+  /* ── THE RESTORE BUDGET IS NOW ZERO ─────────────────────────────────────────
+     The number has moved three times and this section exists to keep it honest: ONE
+     clause of headroom while the prompt was a single 573-char string; TWO after the
+     category branch split it by region; and ZERO now that TEMPORAL_PERSISTENCE (~150
+     chars per branch) has spent it.
 
-     SIZED AGAINST BOTTOMS, the TIGHTER branch by 3 characters - its anchor carries the
-     extra "do not render any upper clothing from the reference" provenance sentence. A
-     restore checked against tops alone can still overflow bottoms, which is exactly the
-     silent-shed failure this section exists to make visible. */
-  const base = api.imageOnlyPrompt(JEANS);
+     THIS IS ASSERTED AS A FAILURE TO FIT, deliberately. "Restoring a clause is a two-line
+     edit" was true for five revisions and is now false, and the way that fact gets
+     discovered must not be a silent shed in a live session - which is the exact failure
+     mode this whole file has spent its history making visible.
+
+     SIZED AGAINST TOPS, which is now the TIGHTER branch by 18 characters - the reverse of
+     the previous revision. Its anchor names the region twice and it carries two
+     shirt-construction clauses the bottoms branch never assembles. */
+  const tightest = api.imageOnlyPrompt(TEE);
+  const roomiest = api.imageOnlyPrompt(JEANS);
+  check("TOPS is now the tighter branch - size any restore against it, not bottoms",
+    tightest.length > roomiest.length,
+    `tops=${tightest.length} bottoms=${roomiest.length}`);
+
   const one = api.fitPrompt([
-    [api.P.CORE, base],
+    [api.P.CORE, tightest],
     [api.P.MED,  api.DENSE.modelAgnostic],
   ]);
-  check("restoring THIS clause alone assembles and fits the budget",
-    /Ignore the reference model's body/.test(one) && one.length <= 650,
-    `${one.length} chars`);
+  check("restoring even ONE clause no longer fits - it is silently shed",
+    !/Ignore the reference model's body/.test(one) && one.length <= 650,
+    `${one.length} chars - the clause was dropped to honour the budget`);
+  /* And the shed is a SHED, not a truncation: the surviving text must still be complete
+     sentences, because clampPromptForWire()'s hard slice would cut mid-word at the end -
+     taking the extraction clause that stops the tuxedo. */
+  check("...and what survives is intact, not clipped mid-sentence by the wire guard",
+    one === tightest,
+    "fitPrompt() must drop the whole clause, never truncate the prompt");
   const both = api.fitPrompt([
-    [api.P.CORE, base],
+    [api.P.CORE, roomiest],
     [api.P.HIGH, api.DENSE.bodyFidelity],
     [api.P.MED,  api.DENSE.modelAgnostic],
   ]);
-  check("...and the PAIR now fits too - nothing is silently shed",
-    /never slim them/.test(both) && /Ignore the reference model's body/.test(both) &&
-    both.length <= 650,
-    `${both.length} chars on the tighter (bottoms) branch`);
+  check("...and neither fits on the roomier branch either - the budget is genuinely spent",
+    !/never slim them/.test(both) && !/Ignore the reference model's body/.test(both),
+    `${both.length} chars - both clauses shed`);
   check("...and app.js records the new arithmetic, per branch",
-    /THE RESTORE BUDGET IS BACK TO TWO CLAUSES/.test(SRC) &&
-    /\+ BOTH                     \u2192 635    \u2192 638   fits/.test(SRC));
+    /THE RESTORE BUDGET IS NOW ZERO\. NOTHING FITS\./.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 680    \u2192 662   does NOT fit/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 699    \u2192 681   does NOT fit/.test(SRC));
 }
 
 console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");

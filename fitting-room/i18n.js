@@ -143,6 +143,9 @@ const I18N = {
   flipCamAria:               { he: "הפוך מצלמה · Flip camera", en: "Flip camera" },
   swatchesAria:              { he: "צבע · Colour", en: "Colour" },
   liveCountdownLabel:        { he: "שניות", en: "seconds" },
+  /* Shown by the body-presence gate while it waits for the shopper to step into frame -
+     see awaitBodyPresence() in app.js. */
+  presencePrompt:            { he: "נא להתייצב מול המצלמה", en: "Please step into the frame" },
   /* Progressive loading-state guidance (#scanStepText) - cycled by
      startScanTimer()/updateScanTimer() in app.js while #scanOverlay is up,
      one step at a time, so the shopper always knows what's happening and how

@@ -50,6 +50,30 @@ export const CONFIG = Object.freeze({
      normal outcome here, not an error - the tier-1 default stands. */
   CATEGORY_LLM_TIMEOUT_MS: 2500,
 
+  /* ── Body-presence gate (see awaitBodyPresence in app.js) ────────────────
+     Decart conditions on the frame it is handed, and the session is hard-capped at
+     LIVE_DURATION_MS. Going live while the shopper is still out of shot spends the whole
+     billed window on a render fitted to an empty room. This gate refuses to open the
+     session until a body is actually there - the same credit-saving shape as
+     cameraLooksBlack(), which sits directly above it in goLive(). */
+  POSE_GATE_ENABLED:       true,
+  POSE_MIN_CONFIDENCE:     0.78,  // per-landmark visibility bar; spec floor is 0.75
+  POSE_CONSECUTIVE_FRAMES: 4,     // spec range 3-5; one lucky frame is not presence
+  POSE_SAMPLE_MS:          120,   // ~8/s - fast enough to feel instant, cheap enough to idle
+  /* PROCEEDS on expiry, never refuses. A detector that cannot see the shopper must not
+     veto a session they explicitly asked for - the gate is an optimisation, the try-on
+     is the product. Sized to cover "walk back to where you were standing". */
+  POSE_GATE_TIMEOUT_MS:    12000,
+  /* MediaPipe Tasks Vision, pinned. PRELOADED during Screen 2 (see preloadPoseDetector)
+     rather than fetched at go-live: this is a multi-MB WASM runtime, and putting that
+     download on the critical path of the feature meant to fix first-try reliability
+     would defeat the feature. Every failure to load degrades to the native
+     FaceDetector engine the orientation watcher already runs. */
+  POSE_WASM_BASE: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm",
+  POSE_MODEL_URL: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/" +
+                  "pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  POSE_TASKS_MODULE: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14",
+
   /* ── secure proxy endpoints (same-origin; see ../server.js) ─────────────── */
   TOKEN_ENDPOINT:  "/api/realtime-token",
   HEALTH_ENDPOINT: "/api/health",

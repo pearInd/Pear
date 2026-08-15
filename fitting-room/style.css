@@ -1263,6 +1263,63 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    decoded frame, not the mirrored display) and applies its OWN ctx.scale(-1,1) before
    drawing, matching #aiVideo's un-mirrored orientation by construction rather than by
    another CSS transform stacking on top of a canvas that already contains the flip. */
+/* ── Body-presence prompt ─────────────────────────────────────────────────────
+   Shown while the presence gate waits for the shopper to step into frame. Visibility is
+   owned entirely by the `hidden` attribute from app.js - there is no class-based gate
+   here, because unlike the lower-body guard this element has exactly one reason to be
+   on screen and one place that decides it. */
+#presenceOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  z-index: 6;                 /* above the video, below the scan overlay and any modal */
+  /* Never intercepts clicks: the shopper must still be able to hit Stop, change a
+     swatch, or press go-live again while this is up. */
+  pointer-events: none;
+  background: rgba(12, 14, 12, 0.42);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  animation: presenceFadeIn 220ms ease-out both;
+}
+#presenceOverlay[hidden] { display: none; }
+
+/* A soft human-shaped guide, drawn in pure CSS - no asset to load, on a path whose
+   entire purpose is not waiting for downloads. */
+.presence-overlay__frame {
+  width: min(38%, 150px);
+  aspect-ratio: 3 / 5;
+  border: 2px dashed rgba(255, 255, 255, 0.72);
+  border-radius: 44% 44% 30% 30% / 32% 32% 12% 12%;
+  animation: presencePulse 2.1s ease-in-out infinite;
+}
+
+.presence-overlay__text {
+  margin: 0;
+  padding: 0 18px;
+  text-align: center;
+  font-size: clamp(0.95rem, 2.4vw, 1.15rem);
+  font-weight: 600;
+  line-height: 1.5;
+  color: #fff;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.55);
+}
+
+@keyframes presenceFadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes presencePulse {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.03); }
+}
+/* The pulse is decoration, and decoration is the first thing to drop for anyone who has
+   asked the OS not to animate - the message itself is unaffected. */
+@media (prefers-reduced-motion: reduce) {
+  #presenceOverlay { animation: none; }
+  .presence-overlay__frame { animation: none; opacity: 0.8; }
+}
+
 .camera-card #lowerBodyGuard {
   position: absolute; inset: 0; width: 100%; height: 100%;
   z-index: 2; pointer-events: none; transform: none;
