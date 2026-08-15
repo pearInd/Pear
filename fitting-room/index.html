@@ -15,7 +15,11 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
-    <link rel="stylesheet" href="style.css">
+    <!-- Cache-buster added with the header-alignment work: style.css had none at
+         all, so a shipped CSS change was served from cache indefinitely while
+         app.js?v= was being bumped every deploy. Kept in step with app.js's
+         version so there is one number to reason about, not two. -->
+    <link rel="stylesheet" href="style.css?v=25">
 </head>
 <body>
 
