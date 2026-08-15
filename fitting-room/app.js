@@ -6038,6 +6038,65 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    WORDING IS PRODUCT-SPECIFIED - do not paraphrase, do not interpolate, do not append.
    `${...}` inside this string is how a description gets back in, one field at a time.
 
+   ── REVISION 5: VOLUME PERSISTENCE, AND THE HEAD-ON CASE ─────────────────────
+   TWO REPORTS, from video rather than stills, which is why they are new:
+
+     · A session that starts side-on with correct stomach volume LOSES it part-way
+       through a 360-degree turn, ending flat and slim.
+     · A session that starts head-on renders flat from the first frame - no frontal
+       convexity at all, the garment sized off shoulder width alone.
+
+   ── READ THIS BEFORE TUNING THE PERSISTENCE SENTENCE ─────────────────────────
+   The reported root cause is "Decart's model state is resetting its 3D depth memory
+   across frames". That is close, but it is not a reset: THERE IS NO MEMORY TO RESET.
+   Lucy regenerates every frame independently. There is no cross-frame state, no seed and
+   no motion-guidance parameter exposed by @decartai/sdk@0.1.5 - realtime connect takes
+   model/fps/width/height/mirror/resolution/codec, and set() takes exactly
+   { prompt, enhance, image }. This file has that written down already, in
+   COMPOSITE_TEMPORAL's comment, and it is the single most important limit to hold in mind
+   here: NO PROMPT CAN CREATE PERSISTENCE THIS PIPELINE DOES NOT HAVE.
+
+   What the sentence CAN do, and does, is bias each independently-generated frame toward
+   the same interpretation - which is exactly why the failure looks progressive. Every
+   frame re-derives the body from the live pixels; a square-on frame carries strong volume
+   evidence, and a mid-turn frame is foreshortened and partly occluded, so the evidence
+   weakens and the model falls toward its prior, which is slim. Naming the quantities that
+   must not change (abdomen depth, waist volume, torso thickness) and the transition they
+   must survive (360-degree rotation, mid-stream) raises the floor on those weak-evidence
+   frames. It is a per-frame bias, not a temporal filter, and it cannot be one - so if
+   volume still decays mid-turn, the answer is NOT stronger persistence language. It is
+   that the weak-evidence frames need better evidence, which is a pipeline change (the
+   reference, the crop, the input resolution), not a prompt change.
+
+   THE HEAD-ON SENTENCE is the more tractable of the two, and it fills a real gap. Every
+   revision since the abdomen reports began has described volume in terms a PROFILE makes
+   visible - depth, contour, silhouette. Head-on, none of those are measurable from the
+   frame: the stomach's projection is toward the camera, along the axis with no extent in
+   a 2D image, so a model with nothing else to go on sizes the garment off shoulder width
+   and renders flat. That is not the model failing to follow an instruction; it is the
+   instruction not applying. The fix names what frontal volume actually looks like -
+   convexity, forward hem extension, lighting falloff - which are the 2D cues a viewer
+   reads as depth, and the only ones available at 0 degrees.
+
+   ── WHAT THIS REVISION REINTRODUCES, and it is a knowing risk ────────────────
+   "Natural fabric drape" and "forward hem extension" are the vocabulary revision 4
+   removed, because drape-and-hem language is also how a designer describes a knotted or
+   gathered hem - and that produced the front-knot artifact. They are back because the
+   head-on case cannot be described without them: convexity has to be rendered as
+   something, and drape and hem projection are what it is rendered as.
+   Two things make this less exposed than revision 3 was: the language is SCOPED to
+   front-facing views rather than stated as a general physics goal, and the structural
+   boundary ("a closed back and normal un-knotted hem") is still on the wire immediately
+   after it. If the knot returns, that scoping is the first thing to tighten - not the
+   boundary, which is already as explicit as it can be.
+
+   NOTE ALSO: revision 4's four-artifact enumeration ("do NOT generate front knots, tied
+   fabric, open slits, or floating back flaps") is gone, leaving only the positive
+   boundary. That is exactly the step revision 4's own risk note said to take if the named
+   negatives proved counterproductive, and it happens to be the right shape for a prompt
+   that has otherwise grown - the boundary sentence still states the correct structure
+   completely on its own, which is why it was written to lead its own enumeration.
+
    ── REVISION 4: THE PHYSICS LANGUAGE STARTED STYLING THE GARMENT ─────────────
    THREE REPORTS, and the first two are the same mechanism seen from two sides.
 
@@ -6138,35 +6197,37 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    beside it, which is the whole point: they cannot be shed, cannot be reordered, and
    cannot be separated from the instruction they qualify.
 
-   ── THE FOUR SENTENCES ON THE WIRE TODAY ──────────────────────────────
-     1. STRUCTURE, and it leads for the reason revision 4 exists: "a standard, continuous
-        t-shirt from the reference image". Naming what the garment IS - continuous, one
-        piece - is what forecloses the knot and the open back before any physics language
-        arrives. It also anchors the reference in the first clause, which is what keeps the
-        asset bound now that the extraction sentence has moved to the end.
-        THE ONE COMPROMISE IN THIS STRING: "t-shirt" is a garment NOUN, of exactly the kind
-        SHIRT_NOUN/SUBTYPE_PROMPT were retired for naming. It is correct for the upper-body
-        catalog and for every case reported so far, and WRONG for lower_body items (Nimbus)
-        and long-sleeve tops, where it asserts something the reference contradicts. If
+   ── THE FIVE SENTENCES ON THE WIRE TODAY ──────────────────────────────
+     1. STRUCTURE + THE VOLUME CLAIM: "a standard t-shirt from the reference image ... with
+        strictly persistent 3D body volume". Structure still leads (revision 4's fix for
+        the knot and the open back), and the persistence claim is attached to it rather
+        than left for a later sentence, so the very first thing stated about this render is
+        that it has a body with volume in it.
+        THE ONE COMPROMISE, unchanged from revision 4: "t-shirt" is a garment NOUN, of
+        exactly the kind SHIRT_NOUN/SUBTYPE_PROMPT were retired for naming. Correct for the
+        upper-body catalog and every case reported so far; WRONG for lower_body items
+        (Nimbus) and long-sleeve tops, where it asserts what the reference contradicts. If
         trousers render as a shirt, this noun is the cause and "garment" is the one-word
         fix - see SUBTYPE_PROMPT's retired-noun note for the mechanism.
-     2. WRAP smoothly around the subject's true body VOLUME and stomach, at 0-degree front
-        AND 90-degree side. This is DENSE.bodyFidelity plus DENSE.profileLateral. "Volume"
-        rather than "shape" is the word the 2D-stretch report earned - a shape is
-        satisfiable by an outline, a volume is not. Both angles are ENUMERATED rather than
-        left to "all angles": the face-on case was failing while "all angles" was already
-        on the wire, and a model has no reason to read an unenumerated range as including
-        the case it is currently getting wrong. Neither is a pose flag, which matters - the
-        orientation watcher no longer dispatches anything on a profile transition (see the
-        tick's 90-degree freeze note), so a directive gated on one would never arrive.
-     3. BOUNDARY: a normal, flat, un-knotted hem and a completely closed back, then the four
-        artifacts named directly - front knots, tied fabric, open slits, floating back
-        flaps. Positive boundary FIRST, enumeration second, deliberately: if the list has to
-        go (see the risk note above), what remains is still a complete statement of the
-        correct structure rather than a gap.
-     4. EXTRACTION: preserve ONLY the reference's graphics, fabric texture and colour. The
-        provenance split, reduced to its positive half - it implies the body-discard by
-        exhaustion but no longer states it. See "two things this revision trades away".
+     2. PERSISTENCE: the exact same abdomen/stomach depth, waist volume and torso thickness
+        through all 360-degree rotations, never flattening or resetting mid-stream. Three
+        quantities named individually because "volume" alone is satisfiable by any one of
+        them, and the transition named explicitly because the failure is progressive rather
+        than static. Read the limit above before touching this: it is a per-frame bias, not
+        a state lock, and it cannot be made into one from here.
+     3. FRONTAL CONVEXITY: at 0 degrees, render the stomach's forward volume through fabric
+        drape, forward hem extension and lighting falloff. The gap every previous revision
+        left - depth, contour and silhouette are all profile-visible quantities, and none of
+        them is measurable head-on, where the projection points at the camera. These three
+        are the 2D cues that read as depth, and the only ones available at that angle.
+     4. BOUNDARY: a closed back and a normal un-knotted hem. Revision 4's four-artifact
+        enumeration is gone; this is the positive half it was deliberately written to lead,
+        and it states the correct structure completely on its own.
+     5. EXTRACTION: use ONLY the reference's graphics, fabric texture and colour. The
+        provenance split, still reduced to its positive half - it implies the body-discard
+        by exhaustion but does not state it. See "two things this revision trades away"
+        under revision 4; that trade is unchanged and DENSE.modelAgnostic is still the
+        one-line restore.
 
    NOTE WHAT LEFT, across revisions: the enumerated "without inventing any tuxedos, suits,
    or unrequested garments" tail, revision 2's "do NOT copy the source model's body frame or
@@ -6227,11 +6288,13 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    exactly that. Restore ONE at a time and re-test: the entire premise of this mode is
    that clause count is what was drowning the image. */
 const IMAGE_ONLY_PROMPT =
-  "Fit a standard, continuous t-shirt from the reference image onto the subject. Smoothly" +
-  " wrap the fabric around the subject's true body volume and stomach from all angles," +
-  " including 0-degree front and 90-degree side views. Maintain a normal, flat, un-knotted" +
-  " hem and a completely closed back—do NOT generate front knots, tied fabric, open slits," +
-  " or floating back flaps. Preserve only the reference image's graphics, fabric texture," +
+  "Fit a standard t-shirt from the reference image onto the subject with strictly" +
+  " persistent 3D body volume. Maintain the exact same abdomen/stomach depth, waist" +
+  " volume, and torso thickness continuously through all 360-degree rotations—never" +
+  " flatten or reset body size mid-stream. In front-facing (0-degree) views," +
+  " realistically render the stomach's forward volume and convexity using natural fabric" +
+  " drape, forward hem extension, and subtle lighting falloff. Preserve a closed back and" +
+  " normal un-knotted hem. Use only the reference image's graphics, fabric texture," +
   " and color.";
 
 /* The dense clause table. Deliberately lower-case and lightly punctuated wherever the
@@ -6263,6 +6326,23 @@ const IMAGE_ONLY_PROMPT =
                       the statement. This is the one clause on this list whose restore is
                       an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
                       the moment "it gave me the model's shoulders" is reported again.
+
+   ── THE RESTORE BUDGET IS NOW ONE CLAUSE, NOT TWO ────────────────────────────
+   Recorded because it is a NEW constraint and an easy one to discover the hard way. The
+   frozen string has grown across five revisions, from 215 characters to 573 - 88% of
+   PROMPT_MAX_CHARS. There are 77 characters of headroom left, which buys exactly one
+   short clause:
+
+     + DENSE.bodyFidelity  (45)  → 619   fits
+     + DENSE.modelAgnostic (63)  → 638   fits
+     + BOTH                       → 684   does NOT fit
+
+   So "a two-line restore" is still true of any ONE clause and no longer true of a pair.
+   Add a second and fitPrompt() will silently shed the worse-priority one - which is the
+   failure mode this file has spent its whole history trying to make visible, arriving
+   through the back door. If two are genuinely needed, the frozen string has to give up a
+   sentence first; that is a deliberate trade to be made in the open, not absorbed by the
+   budget. The order to restore in is below.
 
    THE REST ARE GENUINELY GONE from the wire, and are the ones worth buying back first:
      · inpaintLock    face/skin/hands/background passthrough. THE LARGEST LOSS.

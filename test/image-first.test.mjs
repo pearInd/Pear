@@ -77,11 +77,13 @@ const api = new Function(...Object.keys(sandbox),
 
 const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 const SPEC =
-  "Fit a standard, continuous t-shirt from the reference image onto the subject. Smoothly" +
-  " wrap the fabric around the subject's true body volume and stomach from all angles," +
-  " including 0-degree front and 90-degree side views. Maintain a normal, flat, un-knotted" +
-  " hem and a completely closed back\u2014do NOT generate front knots, tied fabric, open slits," +
-  " or floating back flaps. Preserve only the reference image's graphics, fabric texture," +
+  "Fit a standard t-shirt from the reference image onto the subject with strictly" +
+  " persistent 3D body volume. Maintain the exact same abdomen/stomach depth, waist" +
+  " volume, and torso thickness continuously through all 360-degree rotations\u2014never" +
+  " flatten or reset body size mid-stream. In front-facing (0-degree) views," +
+  " realistically render the stomach's forward volume and convexity using natural fabric" +
+  " drape, forward hem extension, and subtle lighting falloff. Preserve a closed back and" +
+  " normal un-knotted hem. Use only the reference image's graphics, fabric texture," +
   " and color.";
 
 console.log("── §1 THE FROZEN STRING: product-specified, and genuinely constant ──");
@@ -105,52 +107,75 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      provenance forecloses them. The reference is still bound in the first clause ("from
      the reference image"), so the asset anchor did not move; only the isolation half did.
      Both facts are pinned so a reorder is a deliberate act. */
-  check("(1) it leads by naming the garment's STRUCTURE - continuous, one piece",
-    SPEC.indexOf("Fit a standard, continuous t-shirt from the reference image") === 0,
+  check("(1) it leads by naming the garment's STRUCTURE and asserting body VOLUME",
+    SPEC.indexOf("Fit a standard t-shirt from the reference image onto the subject with strictly persistent 3D body volume") === 0,
     "the knot and the open back are construction failures - foreclose them first");
   check("...and the reference is still bound in that same first sentence",
-    /^Fit a standard, continuous t-shirt from the reference image onto the subject\./.test(SPEC),
-    "the asset anchor must not depend on the extraction sentence that now trails");
-  check("(2) it wraps onto live VOLUME, not a shape - the word the stretch report earned",
-    /Smoothly wrap the fabric around the subject's true body volume and stomach/.test(SPEC),
-    "a shape is satisfiable by an outline; a volume is not");
-  /* BOTH ANGLES ENUMERATED, and this is the third report's fix. "From all angles" was
-     already on the wire while the face-on case was failing: a model has no reason to read
-     an unenumerated range as including the case it is currently getting wrong. Naming 0
-     alongside 90 stops either being the default the other is measured against. */
-  check("...naming 0-degree front AND 90-degree side, not just 'all angles'",
-    /including 0-degree front and 90-degree side views/.test(SPEC),
-    "the face-on failure happened while 'all angles' was already being sent");
-  /* THE PHYSICS VOCABULARY IS GONE, and its absence is an assertion. Revision 3 asked for
-     "realistic textile drape, natural tension lines" - every one of those words is also
-     GARMENT-STYLING vocabulary, and asked for visible drape over a stomach with no
-     statement of structure, the most probable way to produce it is to give the fabric
-     somewhere to drape FROM: a knot, a gather, an open back. That is the reported knot. */
-  check("(3) the styling-adjacent physics vocabulary is gone",
-    !/tension lines/.test(SPEC) && !/textile drape/.test(SPEC) && !/gather/i.test(SPEC),
-    "drape/tension/gathering read as construction, not physics - they produced the knot");
-  check("...replaced by a positive STRUCTURAL boundary",
-    /Maintain a normal, flat, un-knotted hem and a completely closed back/.test(SPEC));
-  /* THE FOUR NAMED ARTIFACTS - and these are the riskiest negatives shipped since the
-     tuxedo list. This file's record: naming a rendering FAULT is safe (a stretch, a float:
-     no object to steer toward), naming a GARMENT is not (the tuxedo outlived two prompts
-     that banned it by name). A knot sits between - not a garment type, but more object-like
-     than anything since. They are named because the artifacts are already appearing and
-     naming the failure is what has historically stopped it. If knots persist or spread,
-     drop the ENUMERATION and keep the positive boundary above - not a longer list. */
-  check("...and names the four reported artifacts directly",
-    /do NOT generate front knots, tied fabric, open slits, or floating back flaps/.test(SPEC));
-  check("...with the positive boundary stated BEFORE the enumeration, so dropping the list leaves a complete rule",
-    SPEC.indexOf("Maintain a normal, flat, un-knotted hem") < SPEC.indexOf("do NOT generate front knots"));
-  check("(4) the extraction directive closes it, reduced to its positive half",
-    /Preserve only the reference image's graphics, fabric texture, and color\.$/.test(SPEC));
+    /^Fit a standard t-shirt from the reference image onto the subject/.test(SPEC),
+    "the asset anchor must not depend on the extraction sentence that trails");
+  /* (2) PERSISTENCE. Three quantities named individually because "volume" alone is
+     satisfiable by any one of them, and the transition named explicitly because the
+     reported failure is progressive - volume present at the start of a turn, gone by the
+     end - rather than static. */
+  check("(2) it names the three quantities that must not change, not just 'volume'",
+    /the exact same abdomen\/stomach depth, waist volume, and torso thickness/.test(SPEC),
+    "one word is satisfiable by any one of the three");
+  check("...and the transition they must survive, because the failure is progressive",
+    /continuously through all 360-degree rotations/.test(SPEC) &&
+    /never flatten or reset body size mid-stream/.test(SPEC));
+  /* THE HONEST LIMIT, pinned in the test so nobody escalates the wording believing it is
+     a state lock. Lucy regenerates every frame independently - no cross-frame state, no
+     seed, no motion-guidance parameter in the SDK. This is a per-frame BIAS and cannot be
+     made into a filter from here; if volume still decays mid-turn the answer is better
+     evidence on the weak frames (a pipeline change), not stronger language. */
+  check("...and app.js records that this is a per-frame bias, NOT a state lock",
+    /NO PROMPT CAN CREATE PERSISTENCE THIS PIPELINE DOES NOT HAVE/.test(SRC),
+    "escalating this sentence cannot work - the limit is architectural");
+
+  /* (3) THE HEAD-ON GAP. Depth, contour and silhouette are all PROFILE-visible
+     quantities: head-on the stomach projects toward the camera, along the axis with no
+     extent in a 2D frame, so every previous revision's volume language simply did not
+     apply and the model sized off shoulder width. These three cues are what frontal
+     volume looks like in 2D, and the only ones available at 0 degrees. */
+  check("(3) it names the 0-degree case explicitly and what volume LOOKS like there",
+    /In front-facing \(0-degree\) views/.test(SPEC) &&
+    /the stomach's forward volume and convexity/.test(SPEC));
+  check("...through the three 2D cues that read as depth head-on",
+    /natural fabric drape, forward hem extension, and subtle lighting falloff/.test(SPEC),
+    "depth/contour/silhouette are profile-visible and do not apply at 0 degrees");
+  /* (4) THE STRUCTURAL BOUNDARY - the positive half of revision 4's rule, now standing
+     alone. Its four-artifact enumeration ("do NOT generate front knots, tied fabric, open
+     slits, or floating back flaps") is gone, which is exactly the step revision 4's own
+     risk note prescribed if the named negatives proved counterproductive. It works alone
+     because it was deliberately written to lead that enumeration rather than depend on it. */
+  check("(4) the structural boundary survives, and states the correct shape on its own",
+    /Preserve a closed back and normal un-knotted hem/.test(SPEC));
+  check("...with the artifact enumeration retired, as revision 4's risk note prescribed",
+    !/do NOT generate front knots/.test(SPEC) && !/open slits/.test(SPEC),
+    "a knot is more object-like than a stretch or a float - the list was the risk");
+
+  /* THE KNOWING RISK OF THIS REVISION, asserted so it stays visible: drape-and-hem
+     vocabulary is BACK, scoped to the frontal case. Revision 4 removed it because it is
+     also how a designer describes a knotted or gathered hem, and that produced the knot.
+     It returns because frontal convexity cannot be described without it. What makes it
+     less exposed: it is scoped to front-facing views rather than stated as a general goal,
+     and the structural boundary follows immediately after. */
+  check("the returning drape/hem language is SCOPED to the frontal case, not general",
+    SPEC.indexOf("In front-facing (0-degree) views") < SPEC.indexOf("natural fabric drape") &&
+    SPEC.indexOf("natural fabric drape") < SPEC.indexOf("Preserve a closed back"),
+    "unscoped drape language is what produced the front knot in revision 3");
+  check("...and no tension/gathering vocabulary came back with it",
+    !/tension lines/.test(SPEC) && !/gather/i.test(SPEC));
+
+  check("(5) the extraction directive closes it, reduced to its positive half",
+    /Use only the reference image's graphics, fabric texture, and color\.$/.test(SPEC));
   /* RECORDED AS A LOSS, not glossed: revision 3 said "completely ignoring the original
      model's body size, chest, and waist dimensions" outright. "Preserve ONLY ..." implies
      it by exhaustion but never states it, which is a weaker instrument against the "it gave
      me the e-commerce model's shoulders" report. DENSE.modelAgnostic is still on file and
      appending it is a one-line edit - it is the first thing to restore if that returns. */
   check("...so the explicit body-discard is no longer on the wire - a known trade",
-    !/completely ignoring the original model's body/.test(SPEC) &&
+    !/ignoring the original model's body/.test(SPEC) &&
     /modelAgnostic:\s+"Ignore the reference model's body/.test(SRC),
     "implied by exhaustion, not stated - and DENSE.modelAgnostic is the one-line restore");
 
@@ -160,8 +185,8 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      at exactly the angle where it is the whole silhouette - which is the gap the retired
      SIDE_PROFILE_DEPTH was written against, and the reason "waistline" is named alongside
      the generic contour language. */
-  check("...naming body volume AND the stomach specifically, not a generic contour",
-    /true body volume and stomach/.test(SPEC),
+  check("...naming the stomach specifically, not a generic contour",
+    /abdomen\/stomach depth/.test(SPEC) && /the stomach's forward volume/.test(SPEC),
     "the stomach is the region every report has actually been about");
 
   /* NOT POSE-GATED, and that is the substantive win over the clause it replaces.
@@ -174,7 +199,7 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      would simply never arrive. Stating it unconditionally is the only way it holds at 90
      degrees at all. */
   check("...and every angle is covered unconditionally, since no pose event delivers it",
-    /from all angles/.test(SPEC) && !/EDGE-ON/.test(SPEC),
+    /all 360-degree rotations/.test(SPEC) && !/EDGE-ON/.test(SPEC),
     "no pose flag switches this on, and the watcher would not fire one if there were");
 
   /* THE NOUN LIST IS GONE ENTIRELY, and its absence is the assertion. Three versions of
@@ -188,7 +213,7 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
     !/tuxedos?|suits?|jackets?|coats?|bowties?|badges?/i.test(SPEC),
     "naming the garment is what three earlier versions already tried");
   check("...the substitution is guarded positively instead - by what may be taken, not what may not",
-    /Preserve only the reference image's graphics, fabric texture, and color/.test(SPEC),
+    /Use only the reference image's graphics, fabric texture, and color/.test(SPEC),
     "an exhaustive list of what to take leaves nothing for an invented garment to be");
 
   /* CONSTANT, not merely short. A template literal here is how a description creeps back

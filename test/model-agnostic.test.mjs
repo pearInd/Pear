@@ -104,24 +104,25 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      the reference is the only source of CLOTH, the live feed the only source of BODY. */
   const out = api.buildCompositePrompt(TEE, "front", false);
   check("the shipped prompt names the reference as cloth-only",
-    /Preserve only the reference image's graphics, fabric texture, and color/.test(out), out);
+    /Use only the reference image's graphics, fabric texture, and color/.test(out), out);
   /* THE DISCARD IS NOW IMPLICIT, and that is a real reduction rather than a rewording.
      Revision 3 said "completely ignoring the original model's body size, chest, and waist
      dimensions" outright; revision 4 replaced it with "Preserve ONLY ...", which implies
      the same thing by exhaustion but never states it. Weaker against this suite's own
      report, and recorded as such: the restore is one line, and §2 keeps it exercised. */
   check("...the discard is carried by exhaustion (ONLY these three), not stated outright",
-    /Preserve only the reference image's graphics, fabric texture, and color/.test(out) &&
+    /Use only the reference image's graphics, fabric texture, and color/.test(out) &&
     !/ignoring the original model's body/.test(out), out);
   check("...while pinning the LIVE subject's VOLUME as the body it must fit",
-    /wrap the fabric around the subject's true body volume and stomach/.test(out), out);
+    /strictly persistent 3D body volume/.test(out) &&
+    /abdomen\/stomach depth, waist volume, and torso thickness/.test(out), out);
 
   /* NOT POSE-GATED, which is the property §4 of the original suite existed for: the
      reference figure's anatomy bleeds at every angle, so this must hold edge-on too.
      It used to be a ranking argument (MED, shed under pressure); it is now structural. */
   for (const prof of [false, true]) {
     check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
-      /Preserve only the reference image's graphics, fabric texture, and color/
+      /Use only the reference image's graphics, fabric texture, and color/
         .test(api.buildCompositePrompt(TEE, "front", prof)));
   }
 
@@ -163,15 +164,30 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     /inpaintLock    face\/skin\/hands\/background passthrough\. THE LARGEST LOSS/.test(SRC) &&
     /Restore: add \[P\.HIGH, DENSE\.inpaintLock\]/.test(SRC));
 
-  const restored = api.fitPrompt([
+  /* ── THE RESTORE BUDGET IS NOW ONE CLAUSE, NOT TWO ──────────────────────────
+     The frozen string has grown across five revisions - 215 chars to 573, which is 88% of
+     PROMPT_MAX_CHARS - so the headroom buys exactly one short clause. Either alone fits;
+     the pair does not, and fitPrompt() would silently shed the worse-priority one, which
+     is the failure mode this repo has spent its history making visible. Asserted in BOTH
+     directions so the constraint is discovered here rather than in a live session. */
+  const one = api.fitPrompt([
+    [api.P.CORE, api.IMAGE_ONLY_PROMPT],
+    [api.P.MED,  api.DENSE.modelAgnostic],
+  ]);
+  check("restoring THIS clause alone assembles and fits the budget",
+    /Ignore the reference model's body/.test(one) && one.length <= 650,
+    `${one.length} chars`);
+  const both = api.fitPrompt([
     [api.P.CORE, api.IMAGE_ONLY_PROMPT],
     [api.P.HIGH, api.DENSE.bodyFidelity],
     [api.P.MED,  api.DENSE.modelAgnostic],
   ]);
-  check("the documented restore actually assembles, and fits the budget",
-    /Ignore the reference model's body/.test(restored) &&
-    /never slim them/.test(restored) && restored.length <= 650,
-    `${restored.length} chars: ${restored}`);
+  check("...but restoring a PAIR silently sheds one - the budget no longer covers both",
+    /never slim them/.test(both) && !/Ignore the reference model's body/.test(both),
+    `${both.length} chars - a second clause needs the frozen string to give up a sentence`);
+  check("...and app.js records that constraint with the arithmetic",
+    /THE RESTORE BUDGET IS NOW ONE CLAUSE, NOT TWO/.test(SRC) &&
+    /\+ BOTH                       \u2192 684   does NOT fit/.test(SRC));
 }
 
 console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");
@@ -200,7 +216,7 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
     check(`the frozen prompt survives a pathologically long name (inProfile=${prof})`,
-      /Fit a standard, continuous t-shirt from the reference image/.test(out),
+      /Fit a standard t-shirt from the reference image/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }
