@@ -41,11 +41,14 @@
    the catalog model's slim proportions and a shirt that hovered instead of draping.
 
    So the provenance split is on the wire again, but as one of the frozen string's three
-   sentences rather than as a shed-able clause beside it: "Extract only the garment's
-   texture, pattern, and design from the reference image - do not FORCE the original
-   model's body proportions onto the user." That is strictly stronger than what it
-   replaces, and the verb is deliberate: the failure is not the model politely copying a
-   shape, it is the shopper's real body being overridden by one. The old
+   sentences rather than as a shed-able clause beside it - and after revision 3 it is the
+   sentence that LEADS: "Extract strictly the garment's fabric texture, color, and design
+   pattern from the reference image, completely ignoring the original model's body size,
+   chest, and waist dimensions." That is strictly stronger than what it replaces on both
+   counts. It names the three measurements the source packshot actually carries instead of
+   the general word "proportions", and it settles what the reference IS before any drape
+   instruction is given - because until that is settled, every later instruction is applied
+   to the source model's geometry, which is the 2D-stretch report. The old
    DENSE.modelAgnostic was ranked MED and was ALREADY being shed edge-on under budget
    pressure; a sentence inside the constant cannot be shed, cannot be reordered, and
    cannot be separated from the instruction it qualifies.
@@ -98,24 +101,23 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      the reference is the only source of CLOTH, the live feed the only source of BODY. */
   const out = api.buildCompositePrompt(TEE, "front", false);
   check("the shipped prompt names the reference as cloth-only",
-    /Extract ONLY the garment's texture, design, and graphics from the reference image/.test(out), out);
-  check("...and forbids copying the source model's body FRAME - the reported failure",
-    /do NOT copy the source model's body frame/.test(out), out);
-  /* THE SECOND HALF, added after the abdomen report: a prohibition alone is satisfiable by
-     falling back on a generic prior, and for a torso that prior is flat - the same failure
-     through the escape hatch the fix left open. Naming the wrong shape closes it. */
-  check("...and the flat-torso fallback with it",
-    /or force a flat torso/.test(out), out);
-  check("...while pinning the LIVE subject, waist volume included, as the body it must fit",
-    /dynamically onto the target subject's LIVE body shape and contours/.test(out) &&
-    /actual visible abdomen depth, waist volume, and silhouette/.test(out), out);
+    /Extract strictly the garment's fabric texture, color, and design pattern from the reference image/.test(out), out);
+  check("...and discards the source body by name - size, chest, waist",
+    /completely ignoring the original model's body size, chest, and waist dimensions/.test(out), out);
+  /* THE SECOND HALF, added after the 2D-stretch report: a prohibition alone is satisfiable
+     by deforming the source geometry rather than discarding it - the shirt painted flat
+     across a protrusion instead of wrapping it. Naming the artifact closes that route. */
+  check("...and bans the artifact that prohibition alone still permits",
+    /without 2D stretching or floating artifacts/.test(out), out);
+  check("...while pinning the LIVE subject's VOLUME as the body it must fit",
+    /onto the target subject's true live body volume, abdomen depth, and physical contours/.test(out), out);
 
   /* NOT POSE-GATED, which is the property §4 of the original suite existed for: the
      reference figure's anatomy bleeds at every angle, so this must hold edge-on too.
      It used to be a ranking argument (MED, shed under pressure); it is now structural. */
   for (const prof of [false, true]) {
     check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
-      /do NOT copy the source model's body frame or force a flat torso/
+      /completely ignoring the original model's body size, chest, and waist dimensions/
         .test(api.buildCompositePrompt(TEE, "front", prof)));
   }
 
@@ -151,7 +153,7 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     /RESTORE LIBRARY, not an assembly source/.test(SRC));
   check("...and records this clause as SUPERSEDED, with the sentence that replaced it",
     /THREE OF THEM ARE SUPERSEDED rather than merely retired/.test(SRC) &&
-    /modelAgnostic  \u2192 "do not force the original model's body proportions onto the user"\./.test(SRC),
+    /modelAgnostic  \u2192 "completely ignoring the original model's body size, chest, and/.test(SRC),
     "restoring a superseded clause would DUPLICATE what is already on the wire");
   check("...and names the clauses that are genuinely gone, ranked, with a real restore line",
     /inpaintLock    face\/skin\/hands\/background passthrough\. THE LARGEST LOSS/.test(SRC) &&
@@ -194,7 +196,7 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
     check(`the frozen prompt survives a pathologically long name (inProfile=${prof})`,
-      /Fit and drape the exact garment from the reference image dynamically/.test(out),
+      /Extract strictly the garment's fabric texture, color, and design pattern/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }
