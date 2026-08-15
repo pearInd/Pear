@@ -3861,15 +3861,47 @@ body.gd-open { overflow: hidden; }
    shapes these controls are built from (.btn-edit-measurements' 0 13px, the
    switches' --switch-pad track inset), so horizontal padding is deliberately
    left to each control and only stray MARGIN is normalised away. */
-.app-header__nav > *,
-.app-header__actions > * {
+/* ── THE BLACK DOT, and why a blanket child rule caused it ─────────────────
+   REPORTED: a black bullet between the language switch and the cart.
+
+   It is not a list bullet and not a pseudo-element - it is #engineBadge, a real
+   <span class="app-header__engine">, whose text content is a literal U+25CF
+   BLACK CIRCLE glyph. It has been hidden by `.app-header__engine{display:none}`
+   since it was retired, and it stayed hidden until the blanket normalisation
+   rule below was added: `.app-header__actions > *` has the SAME specificity
+   (0,1,0) as `.app-header__engine` and is declared ~2700 lines later, so it won
+   on source order and set the badge back to inline-flex. A rule written to make
+   the row tidy un-hid a retired element.
+
+   Two guards, because either alone would let it back:
+     · the selector excludes anything that is deliberately not a row item, so
+       the rule cannot change the display of something meant to be hidden;
+     · the display:none is re-asserted immediately AFTER it, so source order is
+       working for us rather than against us the next time something sweeps
+       these children.
+   The real lesson is narrower than the fix: a blanket `> *` rule that sets
+   `display` will resurrect anything hidden that way. Prefer excluding, and
+   re-assert. */
+.app-header__nav > *:not(.app-header__engine),
+.app-header__actions > *:not(.cart-dropdown):not(.app-header__engine) {
   display: inline-flex; align-items: center; justify-content: center;
   margin: 0;
 }
+/* Retired status dot - re-asserted here, after the sweep above, deliberately. */
+.app-header__engine { display: none !important; }
 /* The cart dropdown is an absolutely-anchored popover, not a row item - it must
    not be forced inline-flex by the rule above or it lays out as a flex row. */
 .app-header__actions > .cart-dropdown { display: block; }
 .app-header__actions > .cart-dropdown[hidden] { display: none; }
+
+/* List hygiene for the header. Nothing in it is a <ul>/<ol> today - the dot
+   above was a glyph, not a marker - so this changes nothing now. It is here
+   because a marker is the OTHER way a stray dot appears in a flex row, and a
+   future control added as a list would inherit the browser default silently. */
+.app-header ul, .app-header ol, .app-header li {
+  list-style: none; list-style-type: none; margin: 0; padding: 0;
+}
+.app-header li::marker { content: none; }
 .app-header__actions { justify-content: flex-end; position: relative; }   /* anchors .cart-dropdown */
 .app-header__actions .cart-btn { margin: 0; }   /* zone handles placement now */
 /* BUG FIX: the nav pills ("עריכת מידות", the fullscreen switch) used to be the
@@ -3953,7 +3985,15 @@ body.gd-open { overflow: hidden; }
   :root {
     --corner-inset: 10px;
     --corner-clear:  8px;
-    --profile-size: 34px;
+    /* THE HEIGHT SHRINKS AS ONE NUMBER HERE TOO. This block already retuned the
+       avatar to 34px and the switch segments to 24px, but --hdr-control-h stayed
+       at its desktop 40px - so below 600px the row seated a 34px avatar beside
+       40px switches, a 40px edit pill and a 40px cart. That is the original
+       ragged-row bug surviving inside the one breakpoint the token did not
+       reach, and it is why the avatar in particular still read as offset.
+       --profile-size is NOT re-declared: at :root it already derives from
+       --hdr-control-h, so retuning the height here carries it automatically. */
+    --hdr-control-h: 34px;
     --lang-seg-w:   30px;
     --fs-seg-w:     28px;
     --switch-pad:    3px;
@@ -4074,7 +4114,9 @@ body.gd-open { overflow: hidden; }
      render in full at 390px instead of ellipsising to "PEA…". */
   .app-header__brand-lockup { gap: 8px; }
 
-  .cart-btn { width: 34px; height: 34px; }
+  /* .cart-btn's hardcoded 34x34 removed - it now follows --hdr-control-h like
+     every other control, which the ≤600px block above already set to 34px. The
+     literal was both redundant and a second place for the size to drift. */
 }
 
 /* ── NARROW PHONE (≤389px: iPhone SE / 13 mini / older Androids) ──────────
