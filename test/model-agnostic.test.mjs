@@ -169,25 +169,25 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     /inpaintLock    face\/skin\/hands\/background passthrough\. THE LARGEST LOSS/.test(SRC) &&
     /Restore: add \[P\.HIGH, DENSE\.inpaintLock\]/.test(SRC));
 
-  /* ── THE RESTORE BUDGET IS NOW ZERO ─────────────────────────────────────────
-     The number has moved three times and this section exists to keep it honest: ONE
-     clause of headroom while the prompt was a single 573-char string; TWO after the
-     category branch split it by region; and ZERO now that TEMPORAL_PERSISTENCE (~150
-     chars per branch) has spent it.
+  /* ── THE RESTORE BUDGET IS NOW ASYMMETRIC ───────────────────────────────────
+     TOPS has ZERO headroom (634/650): anything added there is silently shed by
+     fitPrompt(), which is the failure mode this whole file exists to make visible. Size
+     every restore against tops.
 
-     THIS IS ASSERTED AS A FAILURE TO FIT, deliberately. "Restoring a clause is a two-line
-     edit" was true for five revisions and is now false, and the way that fact gets
-     discovered must not be a silent shed in a live session - which is the exact failure
-     mode this whole file has spent its history making visible.
-
-     SIZED AGAINST TOPS, which is now the TIGHTER branch by 18 characters - the reverse of
-     the previous revision. Its anchor names the region twice and it carries two
-     shirt-construction clauses the bottoms branch never assembles. */
+     BOTTOMS HAS 392 CHARACTERS FREE AND MUST NOT SPEND THEM, which is the part a reader
+     scanning for "spare capacity" will get wrong. That branch was cut from 616 characters
+     to 258 precisely BECAUSE text volume was outweighing the reference pixels and
+     producing generic black shorts instead of the photographed ones. The emptiness IS the
+     fix; refilling it re-creates the bug. Asserted below in both directions so neither
+     half can be read alone. */
   const tightest = api.imageOnlyPrompt(TEE);
   const roomiest = api.imageOnlyPrompt(JEANS);
-  check("TOPS is now the tighter branch - size any restore against it, not bottoms",
-    tightest.length > roomiest.length,
+  check("TOPS is the tighter branch - size any restore against it, not bottoms",
+    tightest.length > roomiest.length * 2,
     `tops=${tightest.length} bottoms=${roomiest.length}`);
+  check("...and app.js warns that the bottoms headroom is NOT a budget to spend",
+    /BOTTOMS HAS 392 CHARACTERS FREE AND MUST NOT SPEND THEM/.test(SRC),
+    "the emptiness on that branch is the fix, not spare capacity");
 
   const one = api.fitPrompt([
     [api.P.CORE, tightest],
@@ -202,18 +202,22 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   check("...and what survives is intact, not clipped mid-sentence by the wire guard",
     one === tightest,
     "fitPrompt() must drop the whole clause, never truncate the prompt");
+  /* On BOTTOMS both clauses fit comfortably - and that is exactly the trap. The check
+     records that they FIT while app.js records that they must not be added, so the two
+     facts are held together rather than one being discovered without the other. */
   const both = api.fitPrompt([
     [api.P.CORE, roomiest],
     [api.P.HIGH, api.DENSE.bodyFidelity],
     [api.P.MED,  api.DENSE.modelAgnostic],
   ]);
-  check("...and neither fits on the roomier branch either - the budget is genuinely spent",
-    !/never slim them/.test(both) && !/Ignore the reference model's body/.test(both),
-    `${both.length} chars - both clauses shed`);
+  check("on BOTTOMS both clauses would fit - the constraint there is editorial, not budget",
+    /never slim them/.test(both) && /Ignore the reference model's body/.test(both) &&
+    both.length <= 650,
+    `${both.length} chars - fits, and is still the wrong thing to do`);
   check("...and app.js records the new arithmetic, per branch",
-    /THE RESTORE BUDGET IS NOW ZERO\. NOTHING FITS\./.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 680    \u2192 662   does NOT fit/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 699    \u2192 681   does NOT fit/.test(SRC));
+    /THE RESTORE BUDGET IS NOW ASYMMETRIC, AND THAT IS DELIBERATE/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 680  does NOT fit      \u2192 304  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 699  does NOT fit      \u2192 323  fits/.test(SRC));
 }
 
 console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");

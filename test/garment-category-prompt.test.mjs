@@ -128,21 +128,46 @@ const topsPrompt    = imageOnlyPrompt(SHIRT);
 
 console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserve the live top ──");
 {
-  check("commands replacement of ONLY the lower garment",
-    /Fit and replace ONLY the subject's lower garment \(pants\/shorts\) using the exact shorts\/pants shown in the reference image\./.test(bottomsPrompt),
+  /* ── REVISION: ULTRA-MINIMAL, REFERENCE-LOCKED ──────────────────────────────
+     REPORTED WITH A SCREENSHOT: a white/cream basketball short rendered as generic BLACK
+     shorts. The reference was correct, delivered and in the payload - the model simply
+     was not copying it. That is not a new failure, it is the tuxedo failure through the
+     lower-body branch, and this file's own history already names the mechanism: with no
+     negative_prompt and no image-strength on Decart's set(), the ONLY lever over how hard
+     the image is weighed against the text is HOW MUCH TEXT THERE IS.
+
+     The bottoms branch had grown back to 616 characters across six sentences - four of
+     them about body volume, temporal tracking and layer preservation rather than about
+     the garment. Reduced to ONE instruction that says only "copy this exact thing",
+     stated three ways (fit it / copy its pattern, colour, stripes, design / do not invent
+     one). 258 characters, a 58% cut, and the whole of it is now about the reference.
+
+     WHAT THIS DELIBERATELY DROPS is asserted below rather than left to be discovered:
+     the 360-degree volume clause and the "as soon as visible" temporal directive are both
+     gone from BOTTOMS ONLY. A correct garment with imperfect volume beats a wrong garment
+     with perfect volume, and the screenshot is of a wrong garment. */
+  check("opens by locking onto the EXACT reference garment, nothing before it",
+    bottomsPrompt.indexOf("Fit strictly the exact shorts/pants shown in the reference image onto the subject's lower body.") === 0,
     bottomsPrompt);
-  /* THE HALF THAT FIXES THE REPORTED BUG. Without this sentence the reference's shirt is
-     unclaimed territory, and an unstated region is exactly what this codebase's history
-     keeps recording as the thing that gets reinterpreted. */
-  check("strictly preserves the shopper's LIVE upper garment, completely unchanged",
-    /Strictly keep and preserve the subject's live shirt\/upper garment completely unchanged\./.test(bottomsPrompt),
+  check("...names the visual attributes to copy, so 'exact' has something to bind to",
+    /Copy the exact pattern, color, stripes, and design from the reference image/.test(bottomsPrompt),
+    "'exact garment' is abstract; pattern/colour/stripes/design are what the model matches on");
+  check("...forbids substituting an invented pair - the reported failure, stated directly",
+    /without inventing new shorts/.test(bottomsPrompt), bottomsPrompt);
+  check("...and still pins the untouched layers",
+    /Keep the subject's upper body and background unmodified\./.test(bottomsPrompt),
     bottomsPrompt);
-  /* The anchor points at the reference TWICE - once to name the target region, once to
-     say which part of the photo to read it from. On a packshot that almost always shows
-     a model wearing a shirt as well, the second is what stops the shirt coming along. */
-  check("names the shorts/pants as the thing to read OUT of the reference image",
-    /using the exact shorts\/pants shown in the reference image/.test(bottomsPrompt),
-    "the model wearing the product is packaging, not content");
+
+  /* THE SIZE PROPERTY IS THE FIX, so it is asserted as a number rather than trusted to
+     stay small because someone remembered why. Every clause added back here is weight
+     against the reference pixels - which is the mechanism that produced both the tuxedo
+     and the black shorts. */
+  check("the bottoms prompt is ULTRA-MINIMAL - one instruction, not an assembly",
+    bottomsPrompt.length <= 300,
+    `${bottomsPrompt.length} chars - was 616 across six sentences before this revision`);
+  check("...and carries NO body-volume or temporal clause - the deliberate trade",
+    !/360-degree rotations/.test(bottomsPrompt) && !/as soon as visible/.test(bottomsPrompt),
+    "dropped on purpose: a correct garment with imperfect volume beats a wrong garment");
 }
 
 console.log("\n── §3 THE TOPS PROMPT: isolate the upper garment, preserve the live bottoms ──");
@@ -153,9 +178,16 @@ console.log("\n── §3 THE TOPS PROMPT: isolate the upper garment, preserve t
   check("strictly preserves the shopper's LIVE lower garment",
     /Strictly preserve the subject's live pants\/lower garment as seen on camera\./.test(topsPrompt),
     topsPrompt);
-  check("...and names the region it is replacing, so the two branches are symmetric",
+  /* THE BRANCHES ARE NO LONGER SYMMETRIC, deliberately - see CATEGORY_ANCHOR.bottom.
+     Bottoms was collapsed to a single reference-lock instruction after the black-shorts
+     report; tops keeps its assembly because nothing has been reported against it. Each
+     branch still names the region it replaces, which is the property that matters. */
+  check("...and each branch names the region it replaces",
     /upper garment \(shirt\/top\)/.test(topsPrompt) &&
-    /lower garment \(pants\/shorts\)/.test(bottomsPrompt), topsPrompt);
+    /shorts\/pants/.test(bottomsPrompt) && /lower body/.test(bottomsPrompt), topsPrompt);
+  check("...and tops is the branch that still carries the full clause assembly",
+    topsPrompt.length > bottomsPrompt.length * 2,
+    `tops=${topsPrompt.length} bottoms=${bottomsPrompt.length} - collapse tops only on a report`);
 }
 
 console.log("\n── §4 THE CONTRADICTION IS GONE: no t-shirt anchor on a trouser reference ──");
@@ -187,8 +219,17 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      lengthens the anchor the LOWEST-priority clause sheds automatically instead of the
      whole prompt silently overrunning into clampPromptForWire()'s hard slice - which
      would cut mid-sentence, at the end, where the extraction clause lives. */
-  check("both branches are assembled through fitPrompt(), not string concatenation",
-    /function imageOnlyPrompt\([^)]*\)\s*\{[\s\S]{0,600}?fitPrompt\(/.test(SRC),
+  /* BOTH branches still route through fitPrompt(), even the single-clause bottoms one.
+     That is not ceremony: fitPrompt() is what normalises whitespace and enforces the
+     budget, so a future edit that lengthens the bottoms anchor is clamped rather than
+     silently over-running into clampPromptForWire()'s hard slice. Asserted per branch,
+     because "the function mentions fitPrompt somewhere" would pass even if one branch
+     had been changed to return a bare literal. */
+  check("the BOTTOMS branch is assembled through fitPrompt(), not returned raw",
+    /if \(bottoms\) return fitPrompt\(\[\[P\.CORE, CATEGORY_ANCHOR\.bottom\]\]\);/.test(SRC),
+    "a raw return skips the budget clamp and the whitespace normaliser");
+  check("...and so is the TOPS branch",
+    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, CATEGORY_ANCHOR\.top\]/.test(SRC),
     "concatenation cannot shed a clause; fitPrompt() can");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix. */
   check("the category anchor is tagged P.CORE so it can never be shed",

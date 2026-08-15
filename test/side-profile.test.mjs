@@ -420,7 +420,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
   const jeans = { name: "Glide Slim", custom: true, garmentType: "lower_body" };
   check("the BOTTOMS anchor is equally pose-invariant, and is a different string",
     api.buildCompositePrompt(jeans, "front", false) === api.buildCompositePrompt(jeans, "front", true) &&
-    /^Fit and replace ONLY the subject's lower garment \(pants\/shorts\)/.test(
+    /^Fit strictly the exact shorts\/pants shown in the reference image/.test(
       api.buildCompositePrompt(jeans, "front", false)) &&
     api.buildCompositePrompt(jeans, "front", false) !== api.buildCompositePrompt(item, "front", false),
     api.buildCompositePrompt(jeans, "front", false).slice(0, 200));

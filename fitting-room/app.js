@@ -6795,10 +6795,39 @@ const CATEGORY_ANCHOR = Object.freeze({
     "Fit and replace ONLY the subject's upper garment (shirt/top) using the exact upper" +
     " garment from the reference image. Strictly preserve the subject's live pants/lower" +
     " garment as seen on camera.",
+  /* ── BOTTOMS IS ULTRA-MINIMAL, AND IT IS THE ONLY BRANCH THAT IS ────────────
+     REPORTED WITH A SCREENSHOT: a white/cream basketball short rendered as generic BLACK
+     shorts. The reference resolved correctly, composited correctly and was on the wire -
+     the model simply was not copying it. That is the tuxedo failure again, arriving
+     through the lower-body branch, and the mechanism is the one this file already
+     documents at length: Decart's set() takes { prompt, image, enhance } and nothing
+     else - no negative_prompt, no image-strength, no conditioning scale - so the ONLY
+     lever over how hard the image is weighed against the text is HOW MUCH TEXT THERE IS.
+
+     This branch had grown back to 616 characters across six sentences, and only two of
+     them were about the garment; the rest were body volume, temporal tracking and
+     layer preservation. Cut to ONE instruction that says nothing except "copy this exact
+     thing", stated three ways - fit it, copy its pattern/colour/stripes/design, do not
+     invent one. 258 characters.
+
+     WHY THE NEGATIVE IS SAFE HERE, since this file's own history warns against negatives:
+     DENSE.assetLock's enumerated ban ("never invent a ... suit, TUXEDO, tie, BOWTIE") made
+     things WORSE because, with no negative_prompt field, every noun in it shipped in the
+     POSITIVE prompt where the sampler could steer toward it. "without inventing new
+     shorts" names the garment we WANT. Steering toward "shorts" is the goal, so the
+     mechanism that made assetLock harmful is inert here. Do not read this as licence to
+     re-add a noun list of garments we do not want - that remains the documented mistake.
+
+     THE TRADE, stated so it is reversible: VOLUME_PERSISTENCE and TEMPORAL_PERSISTENCE
+     are both dropped from bottoms. A correct garment with imperfect body volume beats a
+     wrong garment with perfect volume, and the report is of a wrong garment. If black
+     shorts stop appearing and volume decay shows up instead, VOLUME_PERSISTENCE is the
+     first thing to buy back - one line in imageOnlyPrompt(). */
   bottom:
-    "Fit and replace ONLY the subject's lower garment (pants/shorts) using the exact" +
-    " shorts/pants shown in the reference image. Strictly keep and preserve the subject's" +
-    " live shirt/upper garment completely unchanged.",
+    "Fit strictly the exact shorts/pants shown in the reference image onto the subject's" +
+    " lower body. Copy the exact pattern, color, stripes, and design from the reference" +
+    " image without inventing new shorts. Keep the subject's upper body and background" +
+    " unmodified.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -6903,16 +6932,32 @@ function isBottomsGarment(item) {
  */
 function imageOnlyPrompt(item) {
   const bottoms = isBottomsGarment(item);
+
+  /* THE TWO BRANCHES ARE NO LONGER SYMMETRIC, and that asymmetry is the fix rather than
+     an oversight. BOTTOMS returns its anchor ALONE - see CATEGORY_ANCHOR.bottom for the
+     black-shorts report that forced it. Every additional clause is text competing with
+     the reference pixels, and the lower-body branch is where that competition was
+     demonstrably being lost.
+
+     TOPS KEEPS ITS ASSEMBLY because nothing has been reported against it: the tops render
+     is using the reference correctly today, so the volume, frontal and construction
+     clauses are still earning their weight there. If a "generic top" report ever arrives,
+     this is the shape of the fix - collapse it the same way, one branch at a time, and
+     re-test. Do NOT collapse it pre-emptively; the clauses on this side are each a
+     reproduced regression, and removing them without a report trades a known-good render
+     for an untested one. */
+  if (bottoms) return fitPrompt([[P.CORE, CATEGORY_ANCHOR.bottom]]);
+
   return fitPrompt([
-    [P.CORE, bottoms ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
+    [P.CORE, CATEGORY_ANCHOR.top],
     /* Ranked directly under the anchor, above the body-volume clause: a garment fitted to
        the wrong thing entirely (an empty frame, a chair) is a worse failure than one
        fitted to a slightly idealised torso, so if the budget ever forces a choice this
        survives and VOLUME_PERSISTENCE goes first. */
-    [P.HIGH, bottoms ? TEMPORAL_PERSISTENCE.bottom : TEMPORAL_PERSISTENCE.top],
+    [P.HIGH, TEMPORAL_PERSISTENCE.top],
     [P.HIGH, VOLUME_PERSISTENCE],
-    [P.MED,  bottoms ? "" : FRONTAL_VOLUME],
-    [P.MED,  bottoms ? "" : CLOSED_BACK_HEM],
+    [P.MED,  FRONTAL_VOLUME],
+    [P.MED,  CLOSED_BACK_HEM],
     [P.CORE, REFERENCE_EXTRACTION],
   ]);
 }
@@ -6974,35 +7019,30 @@ function lookAnchorPrompt() {
                       an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
                       the moment "it gave me the model's shoulders" is reported again.
 
-   ── THE RESTORE BUDGET IS NOW ZERO. NOTHING FITS. ────────────────────────────
-   Recorded bluntly because it is the single most likely thing to be discovered the hard
-   way, by adding a clause and watching fitPrompt() silently shed it.
+   ── THE RESTORE BUDGET IS NOW ASYMMETRIC, AND THAT IS DELIBERATE ─────────────
+   The number has moved four times, so read the CURRENT row rather than remembering one:
 
-   The history, since the number has moved three times: ONE clause of headroom while the
-   prompt was a single 573-char frozen string; TWO after the category branch split it by
-   region (tops 524 / bottoms 527, because each branch dropped the clauses that did not
-   apply to it); and ZERO now that TEMPORAL_PERSISTENCE has spent it.
+     TOPS (634 chars - full assembly)      BOTTOMS (258 chars - anchor only)
+     + DENSE.bodyFidelity  (45) → 680  does NOT fit      → 304  fits
+     + DENSE.modelAgnostic (64) → 699  does NOT fit      → 323  fits
 
-     TOPS (634)                      BOTTOMS (616)
-     + DENSE.bodyFidelity  (45) → 680    → 662   does NOT fit
-     + DENSE.modelAgnostic (64) → 699    → 681   does NOT fit
+   TOPS HAS ZERO HEADROOM. Adding anything there is silently shed by fitPrompt(), which is
+   the failure mode this whole file exists to make visible. Size every restore against it.
 
-   THE TRADE THAT BOUGHT THIS, stated so it can be reversed deliberately: the temporal
-   directive costs ~150 characters per branch and is what tells the model the subject may
-   not be in frame YET ("as soon as visible"). Without it, a frame with nobody in it is an
-   unstated state, and the model fits the garment to whatever IS there - the reported
-   "first try is always glitchy". That was judged worth more than a restore budget for
-   clauses that are currently retired anyway.
+   BOTTOMS HAS 392 CHARACTERS FREE AND MUST NOT SPEND THEM. That headroom is not a budget,
+   it is the fix: the branch was collapsed from 616 characters to 258 precisely BECAUSE
+   text volume was outweighing the reference pixels and producing generic black shorts
+   instead of the photographed ones. Refilling it re-creates the bug the emptiness cures.
+   If a clause genuinely must go back on bottoms, treat it as reopening the black-shorts
+   report, not as spending spare capacity.
 
-   TO BUY HEADROOM BACK, cheapest first:
-     · FRONTAL_VOLUME is already shed on tops (P.MED, 177 chars) and never assembled on
-       bottoms - so on tops there is nothing to reclaim there; it is already gone.
-     · CLOSED_BACK_HEM (49) is the next P.MED on tops.
-     · The anchors themselves are product-specified wording - change them deliberately or
-       not at all.
-   Size any restore against TOPS, which is now the tighter branch by 18 characters (the
-   reverse of the previous revision - the tops anchor names its region twice and carries
-   two construction clauses the bottoms branch does not). The order to restore in is below.
+   TO BUY HEADROOM ON TOPS, cheapest first:
+     · FRONTAL_VOLUME (P.MED, 177) is already shed there - nothing left to reclaim.
+     · CLOSED_BACK_HEM (49) is the next P.MED.
+     · TEMPORAL_PERSISTENCE.top (~150) - but see the presence-gate suite first; dropping
+       it removes the prompt's half of the late-entry fix.
+     · The anchors are product-specified wording - change them deliberately or not at all.
+   The order to restore in is below.
 
    THE REST ARE GENUINELY GONE from the wire, and are the ones worth buying back first:
      · inpaintLock    face/skin/hands/background passthrough. THE LARGEST LOSS.

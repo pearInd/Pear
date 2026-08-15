@@ -282,25 +282,50 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
   const top = p.imageOnlyPrompt({ garmentType: "upper_body" });
   const bot = p.imageOnlyPrompt({ garmentType: "lower_body" });
 
-  check("BOTTOMS carries the continuous-tracking directive, spec wording",
-    /Continuously track and strictly fit the reference shorts\/pants to the subject's lower body as soon as visible\./.test(bot), bot);
-  check("...and its keep-the-rest-natural half",
-    /Keep upper body and background natural and unmodified\./.test(bot), bot);
-  check("TOPS carries its own",
+  /* ── THE DIRECTIVE IS NOW TOPS-ONLY, and this is a REGRESSION IN THIS FEATURE ──
+     A later change collapsed the bottoms branch to a bare reference lock, after a
+     screenshot of a white/cream basketball short rendering as generic BLACK shorts (see
+     CATEGORY_ANCHOR.bottom). Everything went with it, this directive included.
+
+     THE TRADE WAS MADE KNOWINGLY and is recorded here rather than quietly absorbed,
+     because it is exactly the kind of cross-feature loss that otherwise gets rediscovered
+     as a fresh bug report: on TROUSERS, the prompt no longer tells the model the subject
+     may not be in frame yet. The GATE still covers the start of the session for both
+     categories, and the presence WATCHER still re-conditions on late entry for both - so
+     the mechanism survives; only the prompt's half of it is gone on bottoms.
+
+     If late-entry trousers renders come back wrong, TEMPORAL_PERSISTENCE.bottom is
+     already written and re-adding it is one line in imageOnlyPrompt(). */
+  check("TOPS carries the continuous-tracking directive, spec wording",
     /Continuously track and strictly fit the reference top to the subject's torso as soon as visible\./.test(top), top);
   check("...and its keep-the-rest-natural half",
     /Keep lower body and background natural and unmodified\./.test(top), top);
+  check("BOTTOMS deliberately does NOT - it was collapsed to a bare reference lock",
+    !/Continuously track/.test(bot) && bot.length <= 300,
+    `${bot.length} chars - see CATEGORY_ANCHOR.bottom for the black-shorts report`);
+  /* The clause itself must stay on file, or "one line to re-add" stops being true. */
+  check("...but the clause is still ON FILE, so the restore really is one line",
+    /TEMPORAL_PERSISTENCE = Object\.freeze\(\{[\s\S]{0,600}?bottom:/.test(SRC),
+    "a restore path that requires rewriting the clause is not a restore path");
   /* "as soon as visible" is the half that does the late-entry work: it tells the model
      the subject may not be there yet, which is exactly the frame the old prompt had no
-     language for. Asserted separately so a reword cannot quietly drop it. */
-  check("both branches say 'as soon as visible' - the late-entry half of the directive",
-    /as soon as visible/.test(top) && /as soon as visible/.test(bot));
+     language for. Asserted so a reword cannot quietly drop it from the branch that has it. */
+  check("TOPS still says 'as soon as visible' - the late-entry half of the directive",
+    /as soon as visible/.test(top));
+  /* THE NON-PROMPT HALF OF THE FEATURE COVERS BOTH CATEGORIES REGARDLESS, which is what
+     keeps the bottoms loss survivable - asserted here so the two halves cannot both be
+     removed on the assumption that the other one is holding. */
+  check("...and the gate + watcher remain category-agnostic, covering bottoms either way",
+    /awaitBodyPresence\(isBottomsGarment\(activeItem\)\)/.test(SRC) &&
+    /startPresenceWatcher\(\);/.test(SRC),
+    "the prompt lost its half on bottoms; the runtime half must still run for both");
   check(`both still fit the ${CONFIG.PROMPT_MAX_CHARS}-char budget`,
     top.length <= CONFIG.PROMPT_MAX_CHARS && bot.length <= CONFIG.PROMPT_MAX_CHARS,
     `tops=${top.length} bottoms=${bot.length}`);
   check("the category anchor still leads - persistence language must not displace it",
     /^Fit and replace ONLY the subject's upper garment/.test(top) &&
-    /^Fit and replace ONLY the subject's lower garment/.test(bot));
+    /^Fit strictly the exact shorts\/pants shown in the reference image/.test(bot),
+    "each branch must open on its own anchor, whatever else it carries");
 }
 
 console.log("\n── §7 THE OVERLAY: bilingual, and never left on screen ──");

@@ -100,17 +100,17 @@ const TOPS_SPEC =
   " flatten or reset body size mid-stream. Preserve a closed back and" +
   " normal un-knotted hem. Use only the reference image's graphics, fabric texture," +
   " and color.";
+/* BOTTOMS COLLAPSED TO A SINGLE REFERENCE-LOCK INSTRUCTION after a screenshot of a
+   white/cream basketball short rendering as generic BLACK shorts - the tuxedo failure
+   arriving through the lower-body branch. 258 chars against the tops branch's 634, and
+   the asymmetry IS the fix: every clause is weight against the reference pixels, and
+   this is the branch where that competition was demonstrably being lost. See
+   CATEGORY_ANCHOR.bottom in app.js for the reasoning and the restore order. */
 const BOTTOMS_SPEC =
-  "Fit and replace ONLY the subject's lower garment (pants/shorts) using the exact" +
-  " shorts/pants shown in the reference image. Strictly keep and preserve the subject's" +
-  " live shirt/upper garment completely unchanged." +
-  " Continuously track and strictly fit the reference shorts/pants to the subject's lower" +
-  " body as soon as visible. Keep upper body and background natural and unmodified." +
-  " Maintain the exact same abdomen/stomach depth, waist" +
-  " volume, and torso thickness continuously through all 360-degree rotations\u2014never" +
-  " flatten or reset body size mid-stream." +
-  " Use only the reference image's graphics, fabric texture," +
-  " and color.";
+  "Fit strictly the exact shorts/pants shown in the reference image onto the subject's" +
+  " lower body. Copy the exact pattern, color, stripes, and design from the reference" +
+  " image without inventing new shorts. Keep the subject's upper body and background" +
+  " unmodified.";
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
@@ -147,19 +147,24 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
     TOPS_SPEC.indexOf("Fit and replace ONLY the subject's upper garment") === 0 &&
     /Strictly preserve the subject's live pants\/lower garment as seen on camera/.test(TOPS_SPEC),
     "naming the wrong layer is unrecoverable by any later clause");
-  check("(1) BOTTOMS leads the same way, mirrored - the fix for the reported bug",
-    BOTTOMS_SPEC.indexOf("Fit and replace ONLY the subject's lower garment (pants/shorts)") === 0 &&
-    /Strictly keep and preserve the subject's live shirt\/upper garment completely unchanged/.test(BOTTOMS_SPEC));
+  /* BOTTOMS NO LONGER MIRRORS TOPS. It leads with a bare reference lock - no region
+     naming, no layer-preservation preamble - because the black-shorts report showed the
+     lower-body branch losing the competition between text and pixels outright. */
+  check("(1) BOTTOMS leads with a bare reference lock, collapsed after the black-shorts report",
+    BOTTOMS_SPEC.indexOf("Fit strictly the exact shorts/pants shown in the reference image") === 0 &&
+    /Keep the subject's upper body and background unmodified/.test(BOTTOMS_SPEC));
   check("...and the reference is still bound in that same first sentence, both branches",
     /^Fit and replace ONLY the subject's upper garment \(shirt\/top\) using the exact upper garment from the reference image/.test(TOPS_SPEC) &&
-    /^Fit and replace ONLY the subject's lower garment \(pants\/shorts\) using the exact shorts\/pants shown in the reference image/.test(BOTTOMS_SPEC),
+    /^Fit strictly the exact shorts\/pants shown in the reference image/.test(BOTTOMS_SPEC),
     "the asset anchor must not depend on the extraction sentence that trails");
-  /* THE BOTTOMS ANCHOR NAMES THE TARGET TWICE - "lower garment (pants/shorts)" and then
-     "the exact shorts/pants shown in the reference image". That is deliberate rather than
-     redundant: the second half is what points at WHICH REGION OF THE REFERENCE to read,
-     on an image that almost always photographs a model wearing a shirt as well. */
-  check("...and BOTTOMS names the garment again as the thing to read OUT of the reference",
-    /using the exact shorts\/pants shown in the reference image/.test(BOTTOMS_SPEC),
+  /* THE BOTTOMS ANCHOR BINDS TO THE REFERENCE THREE TIMES in 258 characters - fit the
+     exact one shown, copy its pattern/colour/stripes/design, do not invent one. That
+     repetition IS the minimal prompt: with the supporting clauses gone, saying the same
+     thing three short ways is the entire weight available to outrank the model's prior
+     toward generic black shorts. */
+  check("...and BOTTOMS binds to the reference repeatedly, in 258 chars",
+    (BOTTOMS_SPEC.match(/reference image/g) || []).length >= 2 &&
+    /without inventing new shorts/.test(BOTTOMS_SPEC),
     "the model wearing the product is packaging, not content");
   /* (2) PERSISTENCE. Three quantities named individually because "volume" alone is
      satisfiable by any one of them, and the transition named explicitly because the
@@ -210,10 +215,18 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
   check("...and app.js records the shed as a choice, with the restore path",
     /FRONTAL_VOLUME \(P\.MED\) drops first on tops/.test(SRC),
     "a silent shed is the failure mode this repo exists to make visible");
-  check("...while the GENERAL volume guarantee survives in both branches, unshed",
-    /abdomen\/stomach depth, waist volume, and torso thickness/.test(TOPS_SPEC) &&
-    /abdomen\/stomach depth, waist volume, and torso thickness/.test(BOTTOMS_SPEC),
-    "the P.HIGH clause is the one that must never shed");
+  /* THE VOLUME CLAUSE NOW SURVIVES ON TOPS ONLY. Bottoms lost it when the branch
+     collapsed to a bare reference lock - a deliberate trade recorded in
+     CATEGORY_ANCHOR.bottom: a correct garment with imperfect volume beats a wrong garment
+     with perfect volume, and the report was of a wrong garment. It is first on the
+     restore list if volume decay ever shows up on trousers. */
+  check("...while the GENERAL volume guarantee survives on TOPS, unshed",
+    /abdomen\/stomach depth, waist volume, and torso thickness/.test(TOPS_SPEC),
+    "the P.HIGH clause is the one that must never shed on the branch that still carries it");
+  check("...and its absence from BOTTOMS is a recorded trade with a restore path",
+    !/abdomen\/stomach depth/.test(BOTTOMS_SPEC) &&
+    /VOLUME_PERSISTENCE is the[\s\S]{0,80}first thing to buy back/.test(SRC),
+    "a dropped regression fix must leave a written way back");
   /* Bottoms never carried the frontal clause at all - it describes a shirt draping over a
      stomach, which is not what a trouser render is about. Its absence there is by design,
      not budget, and the two must not be confused by a future reader. */
@@ -223,11 +236,10 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      which is the design decision itself rather than a consequence of the budget. The
      headroom that used to make this visible was spent on the temporal directive, so
      measuring it would now test the wrong thing. */
-  check("...and BOTTOMS omits it BY DESIGN, not by shedding - it never applied",
+  check("...and BOTTOMS omits it BY DESIGN - that branch assembles nothing at all now",
     !/In front-facing \(0-degree\) views/.test(BOTTOMS_SPEC) &&
-    /\[P\.MED,\s*bottoms \? "" : FRONTAL_VOLUME\]/.test(SRC) &&
-    /\[P\.MED,\s*bottoms \? "" : CLOSED_BACK_HEM\]/.test(SRC),
-    "both clauses are shirt-construction language; the bottoms branch never assembles them");
+    /if \(bottoms\) return fitPrompt\(\[\[P\.CORE, CATEGORY_ANCHOR\.bottom\]\]\);/.test(SRC),
+    "the bottoms branch returns its anchor alone - there is no clause list to omit from");
   /* (4) THE STRUCTURAL BOUNDARY - the positive half of revision 4's rule, now standing
      alone. Its four-artifact enumeration ("do NOT generate front knots, tied fabric, open
      slits, or floating back flaps") is gone, which is exactly the step revision 4's own
@@ -274,7 +286,7 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      SIDE_PROFILE_DEPTH was written against, and the reason "waistline" is named alongside
      the generic contour language. */
   check("...naming the stomach specifically, not a generic contour",
-    /abdomen\/stomach depth/.test(TOPS_SPEC) && /abdomen\/stomach depth/.test(BOTTOMS_SPEC) &&
+    /abdomen\/stomach depth/.test(TOPS_SPEC) &&
     /const FRONTAL_VOLUME =[\s\S]{0,160}the stomach's forward volume/.test(SRC),
     "the stomach is the region every report has actually been about");
 
@@ -313,8 +325,13 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
     "no ${...} anywhere in or adjacent to the declaration");
   /* The resolver picks between two frozen literals; it must never BUILD one. A template
      hole in either anchor is how a colour word or a subtype noun gets back on the wire. */
+  /* The resolver now BRANCHES rather than selecting inline, since the two sides assemble
+     differently. The property is unchanged and is what is asserted: each branch hands
+     fitPrompt() a frozen literal by reference, and neither ever builds one by
+     concatenation - which is how a description creeps back in one field at a time. */
   check("...and the resolver only SELECTS an anchor, never interpolates one",
-    /bottoms \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top/.test(SRC) &&
+    /\[P\.CORE, CATEGORY_ANCHOR\.bottom\]/.test(SRC) &&
+    /\[P\.CORE, CATEGORY_ANCHOR\.top\]/.test(SRC) &&
     !/CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC),
     "appending one clause is how the dozen came back last time");
 
