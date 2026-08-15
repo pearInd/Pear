@@ -294,14 +294,27 @@ const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
       });
     } catch (_) {}
 
-    // (1) playoutDelayHint = 0 - flush the client jitter buffer immediately on every
-    //     incoming video track. Chromium-only; the `in` guard silently no-ops elsewhere.
+    /* (1) CLIENT JITTER BUFFER, on every incoming video track.
+       This used to force the buffer to zero ("render ASAP"), which is what produced the
+       freeze report - see PLAYOUT_DELAY_HINT's own comment in config.js for why a buffer
+       of nothing stalls the picture on any transient bitrate shift rather than absorbing
+       it. The value is now a small non-zero target and this hook just applies it.
+
+       BOTH APIs are set from the SAME number, because browser support is split and which
+       one wins is not ours to decide: playoutDelayHint is the legacy Chromium property
+       (seconds), jitterBufferTarget is the standard replacement (milliseconds) and is what
+       current Chrome actually honours. Setting one and not the other means a browser
+       upgrade silently changes this app's buffering behaviour. Each is feature-detected
+       independently - an `in` guard rather than a UA check - so a browser with neither
+       simply keeps its own default, which is the correct fallback: every implementation's
+       default is a NON-zero adaptive buffer, and the only way to get the stall back is to
+       explicitly ask for zero. */
     pc.addEventListener("track", (e) => {
       try {
         const r = e.receiver;
-        if (r && "playoutDelayHint" in r && e.track && e.track.kind === "video") {
-          r.playoutDelayHint = PLAYOUT_DELAY_HINT;
-        }
+        if (!r || !e.track || e.track.kind !== "video") return;
+        if ("playoutDelayHint" in r) r.playoutDelayHint = PLAYOUT_DELAY_HINT;
+        if ("jitterBufferTarget" in r) r.jitterBufferTarget = PLAYOUT_DELAY_HINT * 1000;
       } catch (_) {}
     });
 
@@ -514,6 +527,14 @@ const SUBTYPE_LABEL_HE = {
   sleeveless: "גופייה", short_sleeve: "שרוול קצר", long_sleeve: "שרוול ארוך",
   slim: "גזרה צמודה", regular: "גזרה רגילה", wide: "גזרה רחבה",
 };
+/* RETIRED FROM THE PROMPT PATH, and now read by nothing - kept for the record.
+   These two built the garment description every builder used to open with ("white
+   short-sleeve t-shirt"). The image-first refactor deleted that sentence: a text
+   description is something a diffusion model can satisfy out of its own prior instead
+   of out of the reference pixels, which is how a Spider-Man tee came back as a tuxedo.
+   See garmentAnchor(). Left in place because a subType→English map is the obvious thing
+   to reach for the next time something needs to NAME a garment (a share caption, an alt
+   attribute, an analytics label) - just never a VTON prompt. */
 const SUBTYPE_PROMPT = {
   sleeveless: "sleeveless", short_sleeve: "short-sleeve", long_sleeve: "long-sleeve",
   slim: "slim-fit", regular: "regular-fit", wide: "wide-leg",
@@ -583,6 +604,39 @@ let busy = false;
    reference at all. */
 let lastSentImageRef = null;   // the exact object last handed to set({ image })
 let rtImageOnWire = false;     // has THIS session received an image yet?
+/* The prompt half of the same bookkeeping. Under strict image-only conditioning the
+   prompt is one frozen string, so "same image + same prompt" is a dispatch that provably
+   changes nothing on the wire - see the skip in applyGarment(). Reset alongside the two
+   above, for the same reason: believing a fresh session already holds this prompt would
+   let the first apply skip its own set(). */
+let lastSentPrompt = null;
+/* The last reference a set() actually RESOLVED with, kept across every invalidation
+   below. lastSentImageRef answers "what does the wire hold?" and must be cleared the
+   moment that stops being knowable; this answers "what did Decart last acknowledge?" and
+   stays true regardless - it is what a recovery re-anchors TO, and what lets the recovery
+   verify it re-sent the same asset rather than silently substituting another. */
+let lastAckedImageRef = null;
+
+/**
+ * Forget what the wire is believed to hold, so the next apply is a full set({ image })
+ * rather than a prompt-only update or (with a frozen prompt) no dispatch at all.
+ *
+ * Call this whenever the TRANSPORT may have changed under us without this file opening
+ * the session itself - an SDK-internal reconnect, or a freeze whose cause is unknown.
+ * It deliberately does NOT touch lastAckedImageRef, isGarmentApplied, billing or the
+ * recorder: this is a statement about the connection, not about whether the shopper was
+ * ever dressed, and conflating the two is how a recovery ends up re-arming the reveal or
+ * re-billing a session that never stopped.
+ * @param {string} why  short reason, logged - these are rare and always worth a line
+ * @returns {void}
+ */
+function invalidateWireState(why) {
+  console.log("[PEAR] wire state invalidated -", why,
+    "| last acknowledged reference:", typeof abbrevImg === "function" ? abbrevImg(lastAckedImageRef) : lastAckedImageRef);
+  lastSentImageRef = null;
+  rtImageOnWire = false;
+  lastSentPrompt = null;
+}
 
 /* Pre-minted ek_ token cache - populated by warmupSDKAndToken() on room entry so
    mintEphemeralToken() can skip the network round-trip at go-live time. */
@@ -638,6 +692,115 @@ let dressedFrameReady = false;   // true once #aiVideo has shown a VERIFIED non-
                                   // session - the single "model ready" signal shared by billing/countdown
                                   // (armFirstFrameBilling/startBillingWindow) AND the recorder (startRecording)
 let isGarmentApplied = false;    // true once rtClient.set() has resolved - gates billing/recording to the first DRESSED frame, not raw passthrough
+
+/* ── DEBUG WRAPPER: garment-asset verification ────────────────────────────────
+   Diagnostic-only instrumentation for tracing "generated image never reaches
+   Decart" reports. Verifies a payload actually carries a garment asset right
+   before it goes on the wire, flags a stream that starts rendering with none
+   attached (the "generic/default output" symptom), and exposes a console
+   escape hatch to force a fresh re-upload without a page reload. Reads only
+   state applyGarment()/applyLook() already maintain (rtImageOnWire,
+   lastSentImageRef) - it adds no new state to the live/billing flow itself.
+   Verbose per-payload logging (every VALID send, not just failures):
+     DevTools console:  window.__pearDebugGarment = true
+   Force every dispatch through a full image re-upload, bypassing the flicker-fix
+   fast path in applyGarment() (see sameImageOnWire), for ONE diagnostic session -
+   ⚠️ intentionally reintroduces the regression prompt-only-flip.test.mjs guards
+   against; OFF by default, never flip the default:
+     DevTools console:  window.__pearDebugForceFullReupload = true
+   Trace the isGarmentApplied/isDressedFrame race in armFirstFrameBilling() - verbose,
+   throttled per-frame logging up to the reveal, then a short post-fire luma watch
+   (see watchPostFireLuma). OFF by default (noisy - 20-30+ ticks/session):
+     DevTools console:  window.__pearDebugFrameTiming = true                */
+let debugStreamCheckedThisGen = false;   // reset per session in connectRealtime, alongside billingStarted etc.
+
+/**
+ * Inspect a { prompt, enhance, image } payload right before rtClient.set() and
+ * report whether it actually carries a usable garment asset.
+ * @param {{image?: Blob|string}} payload
+ * @param {string} source  caller name, for the log line ("applyGarment" | "applyLook")
+ * @returns {boolean} true if payload.image looks like a real asset
+ */
+function verifyGarmentAsset(payload, source) {
+  const asset = payload && payload.image;
+  let valid = false, detail = "MISSING - no image key on the payload";
+  if (typeof Blob !== "undefined" && asset instanceof Blob) {
+    valid = asset.size > 0;
+    detail = valid ? `Blob, ${asset.size} bytes, type=${asset.type || "?"}`
+                    : "Blob is 0 bytes - decode/composite likely failed silently";
+  } else if (typeof asset === "string" && asset.length > 0) {
+    valid = /^(https?:|data:|blob:)/i.test(asset);
+    detail = valid ? `string ref (${asset.slice(0, 40)}…)`
+                    : `string but not a recognizable URL: "${asset.slice(0, 60)}"`;
+  }
+  if (!valid) {
+    console.warn(`[PEAR][DEBUG] ${source}() - garmentAsset NOT valid before rtClient.set(): ${detail}`,
+      "\n  → this set() will run PROMPT-ONLY; Decart has no pixel reference and will render its default/generic output.");
+  } else if (typeof window !== "undefined" && window.__pearDebugGarment) {
+    console.log(`[PEAR][DEBUG] ${source}() - garmentAsset OK:`, detail);
+  }
+  return valid;
+}
+
+/**
+ * Fires once per session, the moment Decart's first remote frame is wired to
+ * #aiVideo (see onRemoteStream in connectRealtime). If the stream is already
+ * rendering while no image was ever confirmed on the wire, that render is
+ * necessarily prompt-only / default output - warn loudly so it's obvious in
+ * DevTools without correlating it against the payload-debug log by hand.
+ * @returns {void}
+ */
+function warnIfStreamStartedUndressed() {
+  if (debugStreamCheckedThisGen) return;
+  debugStreamCheckedThisGen = true;
+  if (!rtImageOnWire) {
+    console.warn("[PEAR][DEBUG] Decart stream started rendering WITHOUT a garment asset on the wire.",
+      "\n  lastSentImageRef:", lastSentImageRef,
+      "\n  → the model has nothing to condition on and will render its generic/default output.",
+      "\n  → run window.__pearDebugReinjectGarment() in the console to force a fresh set() with the current item's image.");
+  }
+}
+
+/**
+ * Console escape hatch: force a full re-upload of the CURRENT garment/look,
+ * bypassing the "image already on the wire" fast path (setPrompt-only) that
+ * applyGarment()/applyLook() normally take when the reference hasn't changed.
+ * Use this when the render looks like the generic default even though the
+ * payload-debug log claims an asset was sent - it rules out "stale/corrupted
+ * cached Blob" as the cause by forcing a genuinely fresh set(), and optionally
+ * clearing the caches first so a bad cached asset can't be re-sent as-is.
+ * Lets us tell apart "failure to send the data" (this either fixes it or the
+ * warning above still fires) from "Decart not recognizing sent data" (this
+ * re-sends the identical bytes and the render still doesn't change).
+ * @param {{bustCache?: boolean}} [opts]
+ * @returns {Promise<boolean>}
+ */
+async function debugReinjectGarment(opts = {}) {
+  if (!rtClient || !isLive()) {
+    console.warn("[PEAR][DEBUG] reinject: no live Decart session - go live first.");
+    return false;
+  }
+  if (opts.bustCache) {
+    _assetBlobCache.clear();
+    _compositeCache.clear();
+    _lookStitchCache.clear();
+    console.log("[PEAR][DEBUG] reinject: Blob/composite caches cleared.");
+  }
+  lastSentImageRef = null;   // bypass applyGarment()/applyLook()'s "sameImageOnWire" shortcut -
+  rtImageOnWire = false;     // this must land on the full rtClient.set({ image }) path, not setPrompt()
+  lastSentPrompt = null;     // ...and past the "prompt unchanged too" no-op skip in front of it
+  console.log("[PEAR][DEBUG] reinject: forcing a fresh rtClient.set() for the active garment/look…");
+  try {
+    await applyActive();
+    console.log("[PEAR][DEBUG] reinject: rtClient.set() resolved. rtImageOnWire =", rtImageOnWire,
+      "| lastSentImageRef =", abbrevImg(lastSentImageRef));
+    return true;
+  } catch (e) {
+    console.error("[PEAR][DEBUG] reinject: applyActive() failed -", e?.message || e);
+    return false;
+  }
+}
+if (typeof window !== "undefined") window.__pearDebugReinjectGarment = debugReinjectGarment;
 
 /** @returns {boolean} true while a billable realtime session is active. */
 const isLive = () => connState === "connected" || connState === "generating";
@@ -2617,6 +2780,10 @@ function buildRealtimeConnectOpts(gen) {
     mirror: "auto",
     onRemoteStream: (editedStream) => {
       if (gen !== sessionGen) return;    // stale callback from a torn-down session
+      // DEBUG WRAPPER: flag a stream rendering with no garment on the wire. typeof-guarded,
+      // not a bare call - this callback is extracted/sandboxed by some tests without the
+      // debug-wrapper globals in scope, and a bare undeclared reference would throw there.
+      if (typeof warnIfStreamStartedUndressed === "function") warnIfStreamStartedUndressed();
       // Official pattern: map the live edited WebRTC stream straight to the
       // video element so the garment warps/tracks the user in realtime.
       const aiVideo = document.querySelector("#aiVideo");
@@ -2637,6 +2804,12 @@ function buildRealtimeConnectOpts(gen) {
       // stale/duplicate stream can't re-arm it. Recording (Feature 2) is armed from
       // the same call, inside startBillingWindow, so both cover the identical span.
       armFirstFrameBilling(aiVideo, gen);
+      /* Armed HERE, not at the reveal: armFirstFrameBilling() is a one-shot gate that
+         stops watching the moment it fires, so a stall during warm-up - before any frame
+         has qualified - would otherwise be covered by nothing but firstFrameGuardTimer's
+         all-or-nothing teardown. typeof-guarded for the same reason the line above is:
+         this callback is extracted and sandboxed by tests without these globals in scope. */
+      if (typeof startFrameFreezeWatch === "function") startFrameFreezeWatch(aiVideo, gen);
     },
     onConnectionChange: (state) => {
       if (gen !== sessionGen) return;    // stale callback from a torn-down session
@@ -2684,6 +2857,23 @@ function buildRealtimeConnectOpts(gen) {
           prevState === "reconnecting" && isGarmentApplied) {
         console.log("[PEAR] connectRealtime() - SDK reconnected; re-applying the CURRENT garment/pose",
           "(the SDK's own recovery only restores the ORIGINAL go-live state)");
+        /* ── THE WIRE STATE DID NOT SURVIVE THE RECONNECT, so neither may our belief
+           about it ────────────────────────────────────────────────────────────────
+           lastSentImageRef/rtImageOnWire/lastSentPrompt describe what THIS PEER
+           CONNECTION holds. connectRealtime() clears them for a brand-new session, but an
+           SDK-internal reconnect never re-enters connectRealtime() - runOneConnect()
+           rebuilds the transport underneath us and this file's bookkeeping sails straight
+           through it, still claiming the composite Blob is on the wire.
+
+           Before strict image-only that produced a prompt-only setPrompt() on the
+           re-apply: wrong, but the garment survived because the SDK's own
+           getInitialState() replay had put SOMETHING there. With one frozen prompt the
+           re-apply matches on BOTH halves and applyGarment() skips the dispatch entirely,
+           so the recovered connection would be left holding whatever the SDK replayed -
+           the ORIGINAL go-live state, which is precisely what this block exists to
+           correct. Clearing here is what makes the re-apply a real set({ image }) and
+           puts the CURRENT garment blob back on the new transport. */
+        invalidateWireState("SDK reconnect - the transport was rebuilt underneath us");
         applyActive().catch((e) =>
           console.warn("[PEAR] post-reconnect re-apply failed:", e?.message || e));
       }
@@ -2754,8 +2944,15 @@ async function connectRealtime() {
      Decart generating against no garment reference at all. */
   lastSentImageRef = null;
   rtImageOnWire = false;
+  lastSentPrompt = null;
+  debugStreamCheckedThisGen = false;   // DEBUG WRAPPER: re-arm the undressed-stream check for this session
   if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
 
+  // DEBUG WRAPPER: stamp the flag's state at the top of the session transcript, so a
+  // captured log is unambiguous about whether this run had it on.
+  if (typeof window !== "undefined" && window.__pearDebugForceFullReupload) {
+    console.warn("[PEAR][DEBUG] this session is starting with __pearDebugForceFullReupload = true");
+  }
   console.log("[PEAR] connectRealtime() - stage 1/4: loading SDK from CDN…");
   try {
     /* ── load SDK ─────────────────────────────────────────────────────────── */
@@ -2899,6 +3096,13 @@ function teardown() {
   // issues live set() swaps, so it must never outlive isLive().
   if (orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; }
 
+  // Same rule, same reason, for the frame-freeze watchdog: it can fire applyActive(), so
+  // a surviving instance would issue set() calls against a disconnected session. Its own
+  // tick is sessionGen- and isLive()-guarded as well, so this is the second of two locks
+  // rather than the only one - deliberately, since it is the timer most likely to be
+  // running at the exact moment a session ends.
+  stopFrameFreezeWatch();
+
   // Feature 2 - flush the recorder while the edited tracks are still live, so the
   // download clip is finalized before disconnect ends the stream.
   stopRecording();
@@ -2911,6 +3115,7 @@ function teardown() {
   // clearing here as well keeps the invariant true at every point the session ends.
   lastSentImageRef = null;
   rtImageOnWire = false;
+  lastSentPrompt = null;
 
   // Bug 3 fix: stop this session's cloned camera tracks (the WebRTC sender side).
   // localStream - the real camera/preview - is intentionally left running.
@@ -4330,8 +4535,17 @@ function createOrientationWatcher() {
     // it opposite a pending dual-view swap - see the tick's own comment).
     lastReanchorAt = Date.now();
     autoProfile = next;                 // set BEFORE applying, so the snapshot below reads it
+    /* THE OLD LOG LINE CLAIMED A DISPATCH THAT NO LONGER HAPPENS - it read "depth-fidelity
+       clause ENGAGED (prompt-only, reference unchanged)". Under strict image-only
+       conditioning there is no depth-fidelity CLAUSE to engage: its instruction lives
+       inside the frozen string and is on the wire at every pose, so applyActive() below
+       finds nothing changed and correctly sends nothing. Saying otherwise in the console
+       is how the 90-degree freeze survived diagnosis for as long as it did - the log
+       described a transition that looked like it explained the stall. This axis is now
+       tracked purely so profileActive() can report it; the prompt does not move. */
     console.log(`[PEAR] AI Auto - pose ${next ? "EDGE-ON (side profile)" : "SQUARE-ON"}` +
-      ` | depth-fidelity clause ${next ? "ENGAGED" : "released"} (prompt-only, reference unchanged)`);
+      " | tracking only - the frozen prompt already states body conformity at all angles," +
+      " so no dispatch is expected here");
     try {
       await applyActive();
     } catch (e) {
@@ -4472,15 +4686,51 @@ function createOrientationWatcher() {
          signal for single-view sessions, where there is no lock to be "acquiring": once
          the very first frame has ever been dressed (isGarmentApplied), a profile reading
          is worth protecting the same way a dual-view one is. */
+      /* ╔════════════════════════════════════════════════════════════════════════╗
+         ║  THE 90-DEGREE FREEZE. This block WAS the bug. Read before restoring.  ║
+         ╚════════════════════════════════════════════════════════════════════════╝
+         REPORTED: "the feed freezes for a second or two, but ONLY when I turn sideways,
+         and ONLY live - the recording of the same session is smooth."
+
+         That asymmetry is the whole diagnosis, and it rules out WebRTC entirely. The
+         recorder's paint loop draws #aiVideo directly (see startRecording); the freeze
+         was #orientFadeCanvas - an opaque still snapshot, z-index 6, pinned over #aiVideo
+         inside #cameraCard - which the recorder cannot see. Live: frozen. Replay: smooth.
+         Nothing was ever wrong with the stream.
+
+         WHAT RAISED IT, and why it lasted so long. `enteringProfile` fired at
+         lastProfileScore > ORIENT_PROFILE_EXIT_SCORE - the EXIT threshold, 0.25, which is
+         deliberately low because its job is hysteresis on the way OUT. Used as an entry
+         trigger it fires the instant a shopper starts to turn. Release then required
+         autoProfile to actually flip, which needs ORIENT_PROFILE_ENTER samples at >= 0.55
+         (~500ms at best), plus a tick to notice. So even a clean 90-degree turn froze the
+         view for ~750ms - and a shopper who lingered anywhere between 0.25 and 0.55, which
+         is most of a real rotation, held it raised until the 4s ceiling. That is the
+         "1-2 second freeze".
+
+         WHY IT IS RETIRED RATHER THAN RETUNED. Its stated purpose was to cover the window
+         "until its prompt update actually lands" - the pose sentence catching up. There is
+         no pose sentence any more. Under strict image-only conditioning the prompt is one
+         frozen string, so maybeUpdateProfile()'s applyActive() finds the image AND the
+         prompt unchanged and dispatches nothing at all (see applyGarment's no-op skip).
+         The hold was freezing the live view for up to four seconds to hide a transition
+         that no longer transitions anything. Retuning the threshold would only shorten a
+         freeze that has no remaining purpose.
+
+         THE FRONT/BACK HOLD STAYS, and the difference is not cosmetic: that one covers a
+         real ASSET swap - with COMPOSITE_DEFAULT off, a confirmed flip changes the
+         reference image and re-uploads it - so there genuinely is a window in which the
+         model is between garments. It ends when the swap completes, not on a guess.
+
+         TO RESTORE THE PROFILE HOLD you would first have to give it something to cover:
+         restore a pose clause to the prompt (see IMAGE_ONLY_PROMPT's restore list) so the
+         profile transition dispatches again. Then raise it on ORIENT_PROFILE_ENTER_SCORE,
+         never on the EXIT threshold. */
       const dualView = currentAngle === AUTO_ANGLE;
-      const holdReady = dualView ? !acquiring : isGarmentApplied;
       const frontBackTurn = dualView && !acquiring && needsSwitch && !confirmed;
-      const enteringProfile = holdReady && !autoProfile && lastProfileScore > ORIENT_PROFILE_EXIT_SCORE;
-      if (frontBackTurn || enteringProfile)
-        orientHoldBegin(frontBackTurn ? "turn-detected" : "profile-turn-detected");
-      /* The shopper turned back / straightened up before either axis confirmed (or the
-         signal cleared): no swap and no profile flip is coming, so drop the hold now
-         rather than sitting on a still until the ceiling. */
+      if (frontBackTurn) orientHoldBegin("turn-detected");
+      /* The shopper turned back / straightened up before the flip confirmed: no swap is
+         coming, so drop the hold now rather than sitting on a still until the ceiling. */
       else if (_orientHoldActive) orientHoldEnd("turn-abandoned");
 
       /* The pose axis, updated every tick. Skipped when a DUAL-VIEW swap is confirmed and
@@ -4495,8 +4745,23 @@ function createOrientationWatcher() {
          with no swap ever actually pending behind it. Gating on `dualView` too is what
          keeps this axis running for the entire life of a single-view session instead of
          going silent the moment the shopper is first read as "front". */
+      /* NOT AWAITED - these run in the background, and the tick moves on. Both end in
+         applyActive(), which can take a network round-trip; awaiting them here held
+         `sampling` true for that whole time, so the NEXT orientation sample was skipped
+         and the watcher's effective rate dropped from 250ms to however long Decart took
+         to answer. That never froze #aiVideo (the video is composited independently of
+         this timer), but it did make the orientation signal go stale during exactly the
+         movement it is meant to be tracking - the turn - which is a slower, quieter
+         version of the same complaint.
+
+         Safe without the await because the mutex is INSIDE them, not here:
+         maybeUpdateProfile() and maybeReanchorPrompt() both check and set the shared
+         `applying` flag before doing anything, so two overlapping ticks still cannot
+         produce two concurrent applies. What is lost is only the tick's knowledge of when
+         they finished, which nothing below uses. maybeSwap() stays awaited - it owns the
+         hold's lifecycle and the tick must not run ahead of it. */
       if (!(dualView && confirmed)) {
-        await maybeUpdateProfile(lastProfileScore);
+        maybeUpdateProfile(lastProfileScore).catch(() => {});
         /* Same redundancy argument as maybeUpdateProfile()'s skip above: a pending
            dual-view swap is about to re-apply the whole payload anyway. Called AFTER
            maybeUpdateProfile(), not instead of it - a fresh transition this very tick
@@ -4505,7 +4770,7 @@ function createOrientationWatcher() {
            NOT gated on pose: the drift this counters is pose-independent, so a shopper
            standing still square-on needs it exactly as much as one holding a profile -
            see REANCHOR_MS's comment. */
-        await maybeReanchorPrompt();
+        maybeReanchorPrompt().catch(() => {});
       }
 
       if (dualView && confirmed) await maybeSwap(lastVote);
@@ -4684,12 +4949,39 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
 
    Gated by COMPOSITE_MODE. If double-rendering reappears, flip that off and the
    per-orientation single-asset path (AI Auto) is back, unchanged. */
-/* THE KILL SWITCH. Composite mode is the default per the current product decision.
-   If double-logo / duplicated-garment rendering reappears - the symptom that got the
-   previous front|back stitcher removed - append ?composite=0 to the fitting-room URL
-   (or flip COMPOSITE_DEFAULT) and the per-orientation single-asset path is restored
-   with no other change. Keep both paths working; do not delete one for the other. */
-const COMPOSITE_DEFAULT = true;
+/* THE KILL SWITCH, NOW THROWN - and this is the one behavioural change in strict
+   image-only mode that is not a prompt edit, so read this before flipping it back.
+
+   The composite is a SPLIT image: two garment views side by side, a sampled gutter
+   between them, and 'FRONT'/'BACK' text markers below. Nothing about that layout is
+   self-evident to an image-conditioned model. Every bit of it was explained in words -
+   DENSE.contract named it a split photo, DENSE.select named the half in play,
+   DENSE.ignoreFurniture disclaimed the gutter and the markers - and IMAGE_ONLY_PROMPT
+   removes all three. What is left is a reference the model has to interpret unaided:
+   two garments, or a collage, or a garment with a seam down it. This file already has
+   the record of what that produces (23f5953: both panels' designs rendered on one
+   surface), and an ambiguous reference is precisely the condition under which a
+   diffusion model falls back on its own prior - which is the tuxedo.
+
+   So strict image-only sends the per-orientation SINGLE asset instead: one clean
+   photograph of the garment, front or back, swapped by the OrientationWatcher when the
+   shopper turns. That reference needs no explanation at all, which is the entire point
+   of the mode. The path is not new - it is the pre-composite behaviour, still tested,
+   still the fallback whenever a stitch fails.
+
+   WHAT THROWING THIS COSTS, honestly: an orientation flip now changes the reference, so
+   it re-uploads the image mid-turn instead of taking applyGarment()'s prompt-only fast
+   path. That re-upload is what the composite was introduced to avoid, and the flicker it
+   can cause is documented at that fast path. Whether it actually causes it was already
+   in question - see window.__pearDebugForceFullReupload, added to test exactly that.
+   Only items shipping a genuine distinct rear photo were ever affected either way.
+
+   TO GO BACK: append ?composite=1 to the fitting-room URL (unchanged, and the right way
+   to A/B this against a live session), or flip this constant. If you flip it, restore
+   DENSE.contract + DENSE.select in buildCompositePrompt() in the same commit - a split
+   reference with no panel contract is the worst of both modes. Keep both paths working;
+   do not delete one for the other. */
+const COMPOSITE_DEFAULT = false;
 const COMPOSITE_MODE = (() => {
   try {
     const q = new URLSearchParams(location.search).get("composite");
@@ -5761,17 +6053,364 @@ const COMPOSITE_QUALITY =
    while a rejected one renders nothing. */
 const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
 
+/* ╔══════════════════════════════════════════════════════════════════════════╗
+   ║  STRICT IMAGE-ONLY CONDITIONING - one static string, for every dispatch.  ║
+   ╚══════════════════════════════════════════════════════════════════════════╝
+   THE REPORTED FAILURE: a Spider-Man graphic tee, selected in the catalog and
+   correctly delivered to the wire, rendering as a tuxedo with a bowtie. Twice - the
+   first fix (an image-first anchor, with the garment description removed but the
+   structural clauses kept) did not stop it.
+
+   THE MECHANISM. Decart's realtime set() takes { prompt, image, enhance } and NOTHING
+   else - no negative_prompt, no image-strength, no ControlNet weight (verified against
+   @decartai/sdk@0.1.5 setInputSchema). The ONLY lever this app has over how hard the
+   reference image is weighed against the text is HOW MUCH TEXT THERE IS. Every
+   remaining clause, however structural, is another token competing with the pixels for
+   the model's attention, and the first fix left roughly a dozen of them.
+
+   THE MODE THIS IMPLEMENTS: the prompt stops being generated at all. It is one frozen
+   string, byte-identical on every dispatch, for every garment, every angle, every pose
+   and every shopper. It cannot contradict the reference because it says nothing the
+   reference could contradict, and it cannot dilute it because there is nothing left to
+   shed. The SDK requires a non-empty prompt, so this is the smallest thing that
+   satisfies that requirement while pointing at the asset.
+
+   WORDING IS PRODUCT-SPECIFIED - do not paraphrase, do not interpolate, do not append.
+   `${...}` inside this string is how a description gets back in, one field at a time.
+
+   ── REVISION 5: VOLUME PERSISTENCE, AND THE HEAD-ON CASE ─────────────────────
+   TWO REPORTS, from video rather than stills, which is why they are new:
+
+     · A session that starts side-on with correct stomach volume LOSES it part-way
+       through a 360-degree turn, ending flat and slim.
+     · A session that starts head-on renders flat from the first frame - no frontal
+       convexity at all, the garment sized off shoulder width alone.
+
+   ── READ THIS BEFORE TUNING THE PERSISTENCE SENTENCE ─────────────────────────
+   The reported root cause is "Decart's model state is resetting its 3D depth memory
+   across frames". That is close, but it is not a reset: THERE IS NO MEMORY TO RESET.
+   Lucy regenerates every frame independently. There is no cross-frame state, no seed and
+   no motion-guidance parameter exposed by @decartai/sdk@0.1.5 - realtime connect takes
+   model/fps/width/height/mirror/resolution/codec, and set() takes exactly
+   { prompt, enhance, image }. This file has that written down already, in
+   COMPOSITE_TEMPORAL's comment, and it is the single most important limit to hold in mind
+   here: NO PROMPT CAN CREATE PERSISTENCE THIS PIPELINE DOES NOT HAVE.
+
+   What the sentence CAN do, and does, is bias each independently-generated frame toward
+   the same interpretation - which is exactly why the failure looks progressive. Every
+   frame re-derives the body from the live pixels; a square-on frame carries strong volume
+   evidence, and a mid-turn frame is foreshortened and partly occluded, so the evidence
+   weakens and the model falls toward its prior, which is slim. Naming the quantities that
+   must not change (abdomen depth, waist volume, torso thickness) and the transition they
+   must survive (360-degree rotation, mid-stream) raises the floor on those weak-evidence
+   frames. It is a per-frame bias, not a temporal filter, and it cannot be one - so if
+   volume still decays mid-turn, the answer is NOT stronger persistence language. It is
+   that the weak-evidence frames need better evidence, which is a pipeline change (the
+   reference, the crop, the input resolution), not a prompt change.
+
+   THE HEAD-ON SENTENCE is the more tractable of the two, and it fills a real gap. Every
+   revision since the abdomen reports began has described volume in terms a PROFILE makes
+   visible - depth, contour, silhouette. Head-on, none of those are measurable from the
+   frame: the stomach's projection is toward the camera, along the axis with no extent in
+   a 2D image, so a model with nothing else to go on sizes the garment off shoulder width
+   and renders flat. That is not the model failing to follow an instruction; it is the
+   instruction not applying. The fix names what frontal volume actually looks like -
+   convexity, forward hem extension, lighting falloff - which are the 2D cues a viewer
+   reads as depth, and the only ones available at 0 degrees.
+
+   ── WHAT THIS REVISION REINTRODUCES, and it is a knowing risk ────────────────
+   "Natural fabric drape" and "forward hem extension" are the vocabulary revision 4
+   removed, because drape-and-hem language is also how a designer describes a knotted or
+   gathered hem - and that produced the front-knot artifact. They are back because the
+   head-on case cannot be described without them: convexity has to be rendered as
+   something, and drape and hem projection are what it is rendered as.
+   Two things make this less exposed than revision 3 was: the language is SCOPED to
+   front-facing views rather than stated as a general physics goal, and the structural
+   boundary ("a closed back and normal un-knotted hem") is still on the wire immediately
+   after it. If the knot returns, that scoping is the first thing to tighten - not the
+   boundary, which is already as explicit as it can be.
+
+   NOTE ALSO: revision 4's four-artifact enumeration ("do NOT generate front knots, tied
+   fabric, open slits, or floating back flaps") is gone, leaving only the positive
+   boundary. That is exactly the step revision 4's own risk note said to take if the named
+   negatives proved counterproductive, and it happens to be the right shape for a prompt
+   that has otherwise grown - the boundary sentence still states the correct structure
+   completely on its own, which is why it was written to lead its own enumeration.
+
+   ── REVISION 4: THE PHYSICS LANGUAGE STARTED STYLING THE GARMENT ─────────────
+   THREE REPORTS, and the first two are the same mechanism seen from two sides.
+
+     · A KNOT tied into the front hem, over the abdomen.
+     · The BACK flaring open into loose floating fabric on a turn.
+
+   Revision 3's third sentence asked for "realistic textile drape, natural tension lines,
+   and proper 3D volume wrapping". Every one of those words is also the vocabulary of
+   GARMENT STYLING - drape, gathering, tension are what a designer says about a knotted
+   hem or an open-backed cut - and a diffusion model has no way to know we meant physics
+   rather than construction. Asked for drape over a protruding stomach with no statement
+   of what the garment's STRUCTURE is, the most probable way to produce visible drape is
+   to give the garment somewhere to drape FROM: a knot, a gather, an open back. It was
+   doing exactly what it was told, and what it was told was ambiguous.
+
+   So this revision states the STRUCTURE first and asks for the physics only as a smooth
+   wrap. "Standard, continuous t-shirt" is the frame; "normal, flat, un-knotted hem and a
+   completely closed back" is the boundary; the four named artifacts are the enumeration.
+   The physics vocabulary that invited the styling reading is gone entirely - what
+   survives is "smoothly wrap ... around the subject's true body volume and stomach",
+   which asks for the same outcome without ever naming a construction technique.
+
+     · THE THIRD REPORT: the fit only came out right when the session STARTED at 90
+       degrees; face-on it flattened. Revision 3 said "from all angles", which is true and
+       useless - a model has no reason to treat an unenumerated range as including the
+       case it is currently getting wrong. Both angles are now named explicitly, 0-degree
+       front alongside 90-degree side, so neither is the default the other is measured
+       against.
+
+   ── TWO THINGS THIS REVISION TRADES AWAY, recorded because they are real ──────
+     1. THE EXPLICIT BODY-DISCARD IS GONE. Revision 3 led with "completely ignoring the
+        original model's body size, chest, and waist dimensions" - DENSE.modelAgnostic,
+        stated outright. What replaces it is "Preserve ONLY the reference image's graphics,
+        fabric texture, and color", which implies the same thing by exhaustion but never
+        says it. That is a weaker instrument against the "it gave me the e-commerce
+        model's shoulders" report, and it is the FIRST thing to restore if that returns:
+        DENSE.modelAgnostic is still on file, and appending its sentence is a one-line
+        edit. Recorded here rather than discovered later.
+     2. THE EXTRACTION DIRECTIVE NO LONGER LEADS. Revision 3 moved it to the front
+        deliberately, on this file's oldest lesson - leading tokens dominate - and it is
+        now the closing sentence. The lead is still a reference-bound instruction ("a
+        standard, continuous t-shirt FROM the reference image"), so the asset is anchored
+        in the first clause either way; what moved is the isolation half. If the garment
+        itself starts drifting again (wrong colour, wrong print), this ordering is the
+        first thing to look at, before adding any words.
+
+   ONE MORE, AND IT IS THE RISKIEST PART OF THIS STRING: "knots", "tied fabric", "open
+   slits" and "floating back flaps" are NAMED NEGATIVES. This file's record is that naming
+   a rendering FAULT is safe (a stretch, a float - there is no object to steer toward)
+   while naming a GARMENT is not (the tuxedo outlived two prompts that banned it by name).
+   These sit between: a knot is not a garment type, but it is more object-like than any
+   negative shipped since the tuxedo list. They are named because the artifacts are already
+   appearing and naming the failure is what has historically stopped it - but if knots
+   persist or spread, deleting the enumeration and keeping only the positive boundary
+   ("Maintain a normal, flat, un-knotted hem and a completely closed back") is the next
+   thing to try, NOT a longer list.
+
+   ── REVISION 3: THE REFERENCE IS A 2D MATERIAL, NOT A DRESSED PERSON ─────────
+   THE SYMPTOM THAT SEPARATES THIS FROM THE REVISION BELOW: the previous wording asked
+   the garment to conform to the shopper's real abdomen and it did - by STRETCHING. A
+   flat 2D projection pulled forward over a torso that was still rendered thin, rather
+   than cloth wrapping a volume. The shirt looked painted onto a protrusion, or floating
+   in front of one.
+
+   WHY THE PREVIOUS WORDING PERMITTED IT. It said "conform to the user's abdomen depth"
+   without ever saying what the reference IS, so the model kept reading the packshot as a
+   photograph of a dressed person - complete with that person's 3D geometry - and then
+   deformed the whole assembly to fit. Deforming a thin body to cover a wide one is a
+   stretch. There was no instruction to discard the source geometry and treat what remains
+   as material, so the strongest available reading was the literal one.
+
+   THE FIX IS AN ORDERING CHANGE AS MUCH AS A WORDING ONE. The extraction sentence now
+   LEADS, and this file's whole record says leading tokens dominate: the first thing the
+   model is told is that the reference is fabric texture, colour and pattern - a 2D
+   material sample - and that the original model's size, chest and waist are to be ignored
+   outright. Only once that is established does the drape instruction follow, so what gets
+   draped is cloth rather than a re-proportioned photograph.
+
+   THE THIRD SENTENCE IS NEW and is the physics the first two only imply: textile drape,
+   natural tension lines, 3D volume wrapping, "whether large or small" (which removes the
+   assumption rather than arguing with it), and the two reported artifacts named directly -
+   2D stretching and floating. Naming the specific wrong output is this file's oldest
+   working mechanism and it is safe here for the same reason "flat torso" was: these are
+   RENDERING FAULTS, not garments, so there is no object for the sampler to steer toward.
+
+   ── REVISION 2: BODY CONFORMATION FOLDED IN ──────────────────────────────────
+   The first version of this string said only "render the provided asset, invent nothing".
+   That fixed the garment but exposed the BODY: a shopper with a real waistline (the test
+   case is a pillow under a shirt) got the slim proportions of the e-commerce model
+   wearing the shirt in the catalog photo, and the fabric hovered off their actual
+   silhouette instead of draping over it. The cause is the same unstated-region mechanism
+   this file documents everywhere - a catalog reference is almost always model-worn, so
+   there are TWO bodies in the conditioning and nothing said which one to fit.
+
+   The three directives that used to cover this were separate, shed-able clauses -
+   DENSE.bodyFidelity, DENSE.modelAgnostic and DENSE.profileLateral - and all three were
+   retired when the prompt froze. They are back, but INSIDE the frozen string rather than
+   beside it, which is the whole point: they cannot be shed, cannot be reordered, and
+   cannot be separated from the instruction they qualify.
+
+   ── THE FIVE SENTENCES ON THE WIRE TODAY ──────────────────────────────
+     1. STRUCTURE + THE VOLUME CLAIM: "a standard t-shirt from the reference image ... with
+        strictly persistent 3D body volume". Structure still leads (revision 4's fix for
+        the knot and the open back), and the persistence claim is attached to it rather
+        than left for a later sentence, so the very first thing stated about this render is
+        that it has a body with volume in it.
+        THE ONE COMPROMISE, unchanged from revision 4: "t-shirt" is a garment NOUN, of
+        exactly the kind SHIRT_NOUN/SUBTYPE_PROMPT were retired for naming. Correct for the
+        upper-body catalog and every case reported so far; WRONG for lower_body items
+        (Nimbus) and long-sleeve tops, where it asserts what the reference contradicts. If
+        trousers render as a shirt, this noun is the cause and "garment" is the one-word
+        fix - see SUBTYPE_PROMPT's retired-noun note for the mechanism.
+     2. PERSISTENCE: the exact same abdomen/stomach depth, waist volume and torso thickness
+        through all 360-degree rotations, never flattening or resetting mid-stream. Three
+        quantities named individually because "volume" alone is satisfiable by any one of
+        them, and the transition named explicitly because the failure is progressive rather
+        than static. Read the limit above before touching this: it is a per-frame bias, not
+        a state lock, and it cannot be made into one from here.
+     3. FRONTAL CONVEXITY: at 0 degrees, render the stomach's forward volume through fabric
+        drape, forward hem extension and lighting falloff. The gap every previous revision
+        left - depth, contour and silhouette are all profile-visible quantities, and none of
+        them is measurable head-on, where the projection points at the camera. These three
+        are the 2D cues that read as depth, and the only ones available at that angle.
+     4. BOUNDARY: a closed back and a normal un-knotted hem. Revision 4's four-artifact
+        enumeration is gone; this is the positive half it was deliberately written to lead,
+        and it states the correct structure completely on its own.
+     5. EXTRACTION: use ONLY the reference's graphics, fabric texture and colour. The
+        provenance split, still reduced to its positive half - it implies the body-discard
+        by exhaustion but does not state it. See "two things this revision trades away"
+        under revision 4; that trade is unchanged and DENSE.modelAgnostic is still the
+        one-line restore.
+
+   NOTE WHAT LEFT, across revisions: the enumerated "without inventing any tuxedos, suits,
+   or unrequested garments" tail, revision 2's "do NOT copy the source model's body frame or
+   force a flat torso", and revision 3's physics vocabulary ("realistic textile drape,
+   natural tension lines") - the last because it was read as STYLING and produced the knot.
+   The tuxedo tail is deliberate and is this file's own recorded next step: with no
+   negative_prompt field a named garment ships in the POSITIVE prompt where the sampler can
+   steer toward it, and the tuxedo outlived two versions that named it. If invented garments
+   return, do not re-add that noun list; re-read the DENSE table's assetLock comment for why
+   it made things worse.
+
+   ── WHAT WENT WITH IT, and how to get any of it back ─────────────────────────
+   Every clause the builders assembled is retired from the prompt path. They are all
+   still on file (see the DENSE table below, and the RETIRED block above it) with the
+   reasoning that produced them, because each one is a reproduced regression:
+
+     · the garment description  colour word + subtype noun, interpolated from catalog
+                                metadata. The original tuxedo cause - a text
+                                description is something a diffusion model can satisfy
+                                from its own prior instead of from the reference.
+     · assetLock                the enumerated ban ("never invent a ... suit, TUXEDO,
+                                tie, BOWTIE"). With no negative_prompt field those
+                                nouns shipped in the POSITIVE prompt, where a named
+                                garment is a token the sampler can steer toward.
+     · contract + select        the FRONT|BACK panel contract. Retiring this is what
+                                forces COMPOSITE_DEFAULT to false - see its comment; a
+                                split reference is unreadable without the text that
+                                explains it, and shipping one anyway is how the
+                                23f5953 double-print bug comes back.
+     · pose / poseProfile       front/back/edge-on. The reference asset itself now
+                                carries the orientation (the watcher swaps the photo),
+                                so the pose sentence is the model's job to read off
+                                the live frame, which is where it always came from.
+     · profileLateral           the 90-degree flank/depth directive. SUPERSEDED, not
+                                simply lost: the frozen string's "from all angles,
+                                including 0-degree front and 90-degree side views" states
+                                the same coverage with no pose flag to gate it - which
+                                matters more than it reads, since nothing dispatches on a
+                                profile transition any more. Same for bodyFidelity
+                                ("the subject's true body volume and stomach"). NOT the
+                                same for modelAgnostic - revision 4 reduced that one to an
+                                IMPLICATION ("Preserve only ... graphics, fabric texture,
+                                and color"), which is the weakest it has been. See the
+                                revision notes above; it is first on the restore list.
+     · inpaintLock              face/skin/hands/background passthrough. THE LARGEST
+                                LOSS and the one to restore first if the model starts
+                                repainting the shopper's room or face: nothing else
+                                stands between this prompt and a regenerated scene.
+     · keepTop / keepBottoms    the opposite-layer lock.
+     · ignoreFurniture          the "don't paint the panel divider onto the shirt" ban.
+     · fitSentence              the size-override selector's only route into the render.
+                                The UI still works and still re-applies; the chosen size
+                                no longer changes what Decart draws.
+
+   TO RESTORE ONE: it is a two-line change - reinstate fitPrompt() in the builder that
+   needs it and add [P.CORE, DENSE.<clause>] beside IMAGE_ONLY_PROMPT. fitPrompt(),
+   clampPromptForWire() and the whole DENSE table are deliberately left intact for
+   exactly that. Restore ONE at a time and re-test: the entire premise of this mode is
+   that clause count is what was drowning the image. */
+const IMAGE_ONLY_PROMPT =
+  "Fit a standard t-shirt from the reference image onto the subject with strictly" +
+  " persistent 3D body volume. Maintain the exact same abdomen/stomach depth, waist" +
+  " volume, and torso thickness continuously through all 360-degree rotations—never" +
+  " flatten or reset body size mid-stream. In front-facing (0-degree) views," +
+  " realistically render the stomach's forward volume and convexity using natural fabric" +
+  " drape, forward hem extension, and subtle lighting falloff. Preserve a closed back and" +
+  " normal un-knotted hem. Use only the reference image's graphics, fabric texture," +
+  " and color.";
+
 /* The dense clause table. Deliberately lower-case and lightly punctuated wherever the
    meaning survives it: ALL-CAPS and heavy punctuation both tokenize worse than prose,
    so the few capitals left (EDGE-ON, LEFT/RIGHT) are spent only where the emphasis is
-   doing real steering work. */
+   doing real steering work.
+
+   ── NOTHING HERE IS ASSEMBLED ANY MORE ───────────────────────────────────────
+   Under strict image-only conditioning every builder returns IMAGE_ONLY_PROMPT, so this
+   table is a RESTORE LIBRARY, not an assembly source. It is kept whole - and kept next
+   to fitPrompt() and the P tiers, which are also intact - because a mode this aggressive
+   is a starting point: each clause is a real, reproduced regression, and getting one
+   back must be a two-line edit rather than an archaeology exercise. Restore ONE at a
+   time and re-test; the premise of the mode is that clause COUNT was drowning the image.
+
+   THREE OF THEM ARE SUPERSEDED rather than merely retired - the frozen string now
+   carries their instruction inline, where it cannot be shed or reordered. Restoring
+   these would DUPLICATE what is already on the wire, which is the one thing this mode
+   is least able to afford:
+     · assetLock      its directive is the frozen string's "the EXACT garment FROM the
+                      reference image"; its enumerated noun list is deliberately NOT
+                      reproduced (see this table's own assetLock comment).
+     · bodyFidelity   → "the subject's true body volume and stomach".
+     · profileLateral → "from all angles, including 0-degree front and 90-degree side
+                      views" - both angles enumerated, neither gated on a pose event.
+     · modelAgnostic  → ONLY IMPLIED, by "Preserve only the reference image's graphics,
+                      fabric texture, and color". Revision 3 stated the discard outright
+                      and revision 4 dropped that wording; the implication is weaker than
+                      the statement. This is the one clause on this list whose restore is
+                      an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
+                      the moment "it gave me the model's shoulders" is reported again.
+
+   ── THE RESTORE BUDGET IS NOW ONE CLAUSE, NOT TWO ────────────────────────────
+   Recorded because it is a NEW constraint and an easy one to discover the hard way. The
+   frozen string has grown across five revisions, from 215 characters to 573 - 88% of
+   PROMPT_MAX_CHARS. There are 77 characters of headroom left, which buys exactly one
+   short clause:
+
+     + DENSE.bodyFidelity  (45)  → 619   fits
+     + DENSE.modelAgnostic (63)  → 638   fits
+     + BOTH                       → 684   does NOT fit
+
+   So "a two-line restore" is still true of any ONE clause and no longer true of a pair.
+   Add a second and fitPrompt() will silently shed the worse-priority one - which is the
+   failure mode this file has spent its whole history trying to make visible, arriving
+   through the back door. If two are genuinely needed, the frozen string has to give up a
+   sentence first; that is a deliberate trade to be made in the open, not absorbed by the
+   budget. The order to restore in is below.
+
+   THE REST ARE GENUINELY GONE from the wire, and are the ones worth buying back first:
+     · inpaintLock    face/skin/hands/background passthrough. THE LARGEST LOSS.
+                      Restore: add [P.HIGH, DENSE.inpaintLock].
+     · contract, select, ignoreFurniture   the split-reference contract. Restore these
+                      TOGETHER with COMPOSITE_DEFAULT, never one without the other.
+     · lookPanels     the full-look TOP/BOTTOM layout. The only clause whose absence
+                      costs a whole feature. Restore: add [P.CORE, DENSE.lookPanels].
+     · pose, poseProfile, frontRef, backReal, backInferred, side
+                      orientation steering, now carried by the ASSET the watcher swaps
+                      to rather than by a sentence.
+     · keepTop, keepBottoms   the opposite-layer lock.
+     · rotation       "the garment dropped mid-turn". The mechanical half of that fix
+                      (the prompt-only flip in applyGarment, and the OrientationWatcher's
+                      turn hold) is code, not prompt, and is untouched by this.
+     · temporal, quality  the file's own TRIM tier - the model's priors already favour
+                      both, which is why they were always the first to shed. */
 const DENSE = Object.freeze({
   /* NAMES THE REFERENCE AS A PHOTO OF THE GARMENT, in prose. The previous wording -
      "Try-on. Reference: split image, LEFT = garment front, RIGHT = back." - was
      telegraphic notation, and notation is a weak way to tell a diffusion model that an
      attached image is the thing it must copy. Costs ~65 characters more and buys the
      grounding back. */
-  contract:      "Virtual try-on. The reference image is a split photo of one garment: LEFT half its front, RIGHT half its back.",
+  /* The "Virtual try-on." preamble that used to open this was dropped by the image-first
+     refactor: garmentAnchor() now leads every prompt and states the task in its first six
+     words, so the label was pure duplication sitting between the anchor and the layout
+     fact it exists to state. What is left is only the layout fact. */
+  contract:      "The reference image is a split photo of one garment: LEFT half its front, RIGHT half its back.",
   /* Split out of the contract so it can shed on its own. It guards a cosmetic artifact -
      a panel divider painted onto the shirt - which must never outrank grounding. */
   ignoreFurniture: "Ignore the gap, the background and any FRONT/BACK label.",
@@ -5811,6 +6450,12 @@ const DENSE = Object.freeze({
      garment's print text - that belongs to one product, and hardcoding it would state a
      falsehood about every other catalog item. The substitution sentence already binds the
      print generically ("every graphic, logo and lettering on it"). */
+  /* RETIRED FROM ASSEMBLY - folded into garmentAnchor(). Kept verbatim because the
+     comment above is the record of two live reports, and because it is the enumeration
+     the anchor deliberately does NOT reproduce: with no negative_prompt field on
+     Decart's set(), every noun here ships inside the POSITIVE prompt, where "tuxedo"
+     is a token the sampler can steer toward rather than away from. See the anchor's
+     own reservation note. */
   assetLock:     "Never invent a garment, jacket, coat, suit, tuxedo, tie, bowtie or badge, or change the garment type, and never leave their own top showing.",
   /* Depth and lateral wrap MERGED. Separately they cost ~155 characters and the budget
      could only afford one, so a 90-degree frame got the BODY clause and no GARMENT clause -
@@ -5919,91 +6564,38 @@ function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
 }
 
 /**
- * Build the COMPLETE prompt for a split FRONT|BACK composite reference.
+ * The prompt for a composite reference. Returns IMAGE_ONLY_PROMPT.
  *
- * ORDER IS THE POINT, and it is the substantive change over what this replaced.
- * The previous shape was `buildPrompt(item) + angleClause(item)`: 1,403 characters of
- * colour / anatomy / fit / quality / hem / hard-negative boilerplate AHEAD of the panel
- * contract, pushing the single most important instruction in composite mode - WHICH HALF
- * of the reference to read - past the halfway mark of a 2,636 character prompt. Lucy is a
- * realtime diffusion model regenerating every frame from that prompt; the leading tokens
- * dominate, so the panel contract was competing from the worst position available.
- * Here it leads, the orientation selector follows immediately, and the garment and body
- * description trail as qualifiers. Length is a secondary effect and a modest one (2,636 →
- * 2,171, ~18%, from dropping QUALITY_SUFFIX + HEM_DETAIL for COMPOSITE_QUALITY) - do not
- * mistake it for the mechanism. What changed is that nothing now precedes the contract.
+ * ORDER USED TO BE THE POINT, and it moved twice before it stopped mattering. The
+ * original shape was `buildPrompt(item) + angleClause(item)`: 1,403 characters of colour /
+ * anatomy / fit / quality / hem / hard-negative boilerplate AHEAD of the panel contract,
+ * pushing the single most important instruction in composite mode past the halfway mark of
+ * a 2,636 character prompt. Lucy regenerates every frame from that prompt and the leading
+ * tokens dominate, so that boilerplate was not merely wasteful - it was outranking the
+ * contract. Fix one: put the panel contract first. Fix two (the tuxedo report): put the
+ * image anchor first, because "which half of the reference to read" only matters once the
+ * model is reading the reference at all.
  *
- * The garment is named as "the … shown in that panel" rather than by catalog colour alone:
- * with real pixels for the side being rendered, the panel is the stronger reference and a
- * bare colour word can only contradict it.
+ * FIX THREE - the tuxedo survived both - IS THAT THERE IS NOTHING TO ORDER. Every clause
+ * is a token competing with the pixels, and ordering them only chooses which competitor
+ * goes first. See IMAGE_ONLY_PROMPT for the mechanism and the full list of what this gave
+ * up. The composite path itself is standing down with it (COMPOSITE_DEFAULT = false): a
+ * split FRONT|BACK reference is only legible alongside the panel contract that explains
+ * it, and that contract is exactly the text this mode removes.
+ *
+ * THE PARAMETERS ARE RETAINED AND DELIBERATELY UNUSED. They are the seam: applyGarment()
+ * still freezes `angleAtStart`/`profileAtStart` before its awaits and still threads them
+ * here, so the TOCTOU plumbing that keeps the reference and the prompt describing the same
+ * moment stays live and stays tested (angle-race, side-profile §6). Restoring any clause
+ * is then a two-line edit here, not a re-derivation of that plumbing.
  *
  * @param {object} item   the active garment (catalog or custom upload)
- * @param {"front"|"back"} angle  the orientation the payload is being built FOR - pass
- *   applyGarment()'s frozen `angleAtStart`, never a fresh effectiveAngle() read.
+ * @param {"front"|"back"} angle  retained; see above
+ * @param {boolean} inProfile     retained; see above
  * @returns {string}
  */
-function buildCompositePrompt(item, angle, inProfile) {
-  const a = angle === "back" ? "back" : "front";
-  const lower = item.garmentType === "lower_body";
-
-  const sub  = SUBTYPE_PROMPT[item.subType] || "";
-  const noun = lower ? `${sub} trousers`.trim() : `${sub} ${SHIRT_NOUN[item.subType] || "top"}`.trim();
-  const target = lower ? "bottoms" : "top";
-  /* THE BINDING PHRASE. Compression once trimmed "the white t-shirt shown IN THAT PANEL"
-     down to "the white t-shirt shown", which reads as a description of a garment rather
-     than a pointer at the attached image - and a description alone is something a
-     diffusion model is free to satisfy with its own idea of a t-shirt. That was the
-     grey-shirt regression. Naming the reference image explicitly is what re-anchors it.
-
-     NO COLOUR ADJECTIVE, and this is the deliberate half. In composite mode there is
-     ALWAYS a reference image on the wire, and its pixels carry the colour far more
-     precisely than a word derived from a catalog hex ever could. Naming a colour here
-     buys nothing the image is not already saying, and it costs a whole class of
-     text-vs-image contradiction: a stale or approximate catalog `color` (or, before
-     variantMetaOf(), the base colour under a swapped variant's packshot) puts the prompt
-     and the reference in direct disagreement, which this model resolves by picking ONE -
-     sometimes the word. The noun stays because it names the GARMENT CLASS (tee vs
-     trousers), which the panel alone does not disambiguate for a lower-body item.
-
-     The colour word is still used by buildPrompt()/buildLookPrompt(), which can run with
-     no usable reference at all - there, the word is the only colour information there is. */
-  const desc = item.custom
-    ? "the exact garment in the reference image"
-    : `the ${noun} in the reference image`;
-
-  return fitPrompt([
-    [P.CORE, DENSE.contract],
-    [P.CORE, DENSE.select[a]],
-    [P.CORE, inProfile ? DENSE.poseProfile[a] : DENSE.pose[a]],
-    /* PRIORITY 1 - the substitution and its asset lock, which is what the whole prompt is
-       for. Both CORE and adjacent: the instruction and the ban on ignoring it work as one
-       statement, and separating them by a shed-able clause is how the negative could go
-       missing while the positive stayed. */
-    [P.CORE, `Replace their ${target} with ONLY ${desc} - its exact colour and every graphic and lettering on it.`],
-    [P.CORE, DENSE.assetLock],
-    /* PRIORITY 2 - the 90-degree directive, CORE for the same reason. An edge-on frame
-       shows a band of garment neither panel contains; unreferenced, that band is where
-       the model substitutes its own prior, which is how a plain grey shirt appears at the
-       exact moment the shopper turns. It sits before the body/passthrough clamps. */
-    [P.CORE, inProfile ? DENSE.profileLateral : ""],
-    /* PRIORITY 3 - the passthrough clamp. Top of the DROPPABLE tier, so everything above
-       survives any budget pressure and this is the first real instruction to go. */
-    [P.HIGH,  DENSE.inpaintLock],
-    /* MED, one tier BELOW the passthrough clamp, and only because of what sits above it:
-       profileLateral already says "keep their full front-to-back depth", which IS the
-       body-fidelity claim at 90 degrees. So shedding this edge-on loses nothing that the
-       CORE directive is not already making, while shedding the passthrough clamp instead
-       would let the model repaint the face and room. Square-on, where profileLateral is
-       absent, the budget is loose enough that both survive - checked, not assumed. */
-    [P.MED,   DENSE.bodyFidelity],
-    [P.MED,   DENSE.modelAgnostic],
-    [P.MED,   lower ? DENSE.keepTop : DENSE.keepBottoms],
-    [P.LOW,   DENSE.ignoreFurniture],
-    [P.LOW,   DENSE.rotation],
-    [P.LOW,   fitSentence(item.garmentType)],
-    [P.TRIM,  DENSE.temporal],
-    [P.TRIM,  DENSE.quality],
-  ]);
+function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line no-unused-vars
+  return IMAGE_ONLY_PROMPT;
 }
 
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
@@ -6233,8 +6825,55 @@ async function applyGarment(item) {
   const profileAtStart = profileActive();
   const activeImg = activeImageOf(item);
   const refInfo   = {};                                          // ← filled in by referenceImageFor
-  const imageRef  = await referenceImageFor(item, activeImg, refInfo);   // Blob for combined, URL otherwise
+  let   imageRef  = await referenceImageFor(item, activeImg, refInfo);   // Blob for combined, URL otherwise
   const usingComposite = refInfo.composite === true;             // what we ACTUALLY resolved
+
+  /* ── LAST-DITCH REFERENCE RECOVERY - the prompt is image-first now ────────────
+     This used to be tolerable: `...(imageRef ? { image: imageRef } : {})` quietly
+     omitted the image key and the prompt still recited a catalog description ("white
+     t-shirt: exact colour, texture and print"), so a prompt-only set() rendered
+     SOMETHING garment-shaped. garmentAnchor() deleted that description on purpose -
+     the prompt now says "the exact provided image asset" and nothing else - so a
+     dispatch with no image is a prompt pointing at an asset that was never sent, and
+     the model has only its own prior to fall back on. That is the tuxedo, arriving
+     through the payload instead of through the text.
+
+     referenceImageFor() already falls through composite → per-orientation Blob →
+     proxied URL, so reaching here means activeImageOf() itself came back empty - a
+     catalog/handover item with no usable asset for the active angle. Sweep the item's
+     remaining assets rather than shipping a prompt with nothing behind it. */
+  if (!imageRef) {
+    const g = galleryOf(item) || {};
+    /* item.composite is LAST on purpose. It is a split FRONT|BACK image, and strict
+       image-only has no panel contract left to explain one (see COMPOSITE_DEFAULT) - so
+       it is the reference this mode least wants. It stays in the list because it is only
+       reachable when the item has no front, no back and no img at all, and an ambiguous
+       reference still beats none. If it is ever being reached routinely, the item's
+       gallery is broken and that is the bug to fix. */
+    for (const candidate of [g.front, g.back, item.img, item.composite]) {
+      if (!candidate) continue;
+      const recovered = garmentImageRef(candidate);
+      if (recovered) {
+        console.warn("[PEAR] applyGarment() - no reference resolved for the active angle;",
+          "recovered a fallback asset so the image-first prompt has something to bind to:",
+          abbrevImg(candidate));
+        imageRef = recovered;
+        break;
+      }
+    }
+  }
+  /* Still nothing. Loud, and at ERROR: every prompt this file builds now depends on an
+     image being on the wire, so this is a broken render, not a degraded one. It does NOT
+     throw - a live session that renders the shopper undressed is still recoverable by the
+     next applyActive()/re-anchor, while a throw ends the stream before the first frame. */
+  if (!imageRef) {
+    console.error("[PEAR] applyGarment() - NO garment asset could be resolved for", item.name,
+      `(id=${item.id}, angle=${angleAtStart}).`,
+      "\n  → the prompt is image-first and will have no reference to condition on;",
+      "Decart will render its own default garment.",
+      "\n  → check the item's gallery/img fields; window.__pearDebugReinjectGarment({ bustCache: true })",
+      "forces a fresh resolve once they are fixed.");
+  }
 
   /* ── STRICT ORIENTATION/ASSET BINDING (last line of defence) ──────────────────
      The pairing that produces "the chest print is rendered on the back" is a BACK
@@ -6343,8 +6982,53 @@ async function applyGarment(item) {
      anything else (first application, a garment swap, a fallback to a single-view asset)
      still goes through the full set(). enhance:false must be passed explicitly:
      setPromptInputSchema defaults it to TRUE, unlike set(). */
-  const sameImageOnWire = imageRef && lastSentImageRef === imageRef && rtImageOnWire;
+  /* DEBUG ONLY: window.__pearDebugForceFullReupload lets ONE live session force every
+     dispatch through the full rtClient.set({ image }) path below, bypassing this fast
+     path entirely - to test, with real Decart telemetry, whether repeated image
+     re-uploads are what's actually dropping the garment reference, against the
+     documented flicker-fix rationale this fast path exists for (the comment above).
+     OFF by default; set it from DevTools for one diagnostic run, never flip the
+     default. typeof-guarded: applyGarment() is extracted and executed standalone by
+     prompt-only-flip.test.mjs/side-profile.test.mjs in a sandbox with no `window`
+     global - a bare reference would throw ReferenceError there (see the matching
+     guard on verifyGarmentAsset() below). */
+  const debugForceFullReupload = typeof window !== "undefined" && !!window.__pearDebugForceFullReupload;
+  const sameImageOnWire = !debugForceFullReupload && imageRef && lastSentImageRef === imageRef && rtImageOnWire;
+  if (debugForceFullReupload && imageRef && lastSentImageRef === imageRef && rtImageOnWire) {
+    console.warn("[PEAR][DEBUG] __pearDebugForceFullReupload is ON - forcing a full image",
+      "re-upload even though the reference is unchanged. This intentionally reintroduces",
+      "the flicker-fix regression (see prompt-only-flip.test.mjs) for ONE diagnostic",
+      "session only - turn it back off (window.__pearDebugForceFullReupload = false)",
+      "when done capturing the transcript.");
+  }
   if (sameImageOnWire) {
+    /* ── NOTHING TO SEND: same image, same prompt ─────────────────────────────
+       This branch could not be reached before strict image-only mode, because the
+       prompt was assembled per angle/pose/garment and every caller that got here had
+       just changed one of them. IMAGE_ONLY_PROMPT is one frozen string, so the payload
+       is now byte-identical to what Decart already holds - both halves of it - and
+       setPrompt() would push a control message that provably changes nothing.
+
+       The re-anchor cadence is what makes this common rather than theoretical:
+       maybeReanchorPrompt() fires ~8 times per session specifically to re-assert the
+       steering, and every one of those now lands here. Skipping is the honest
+       behaviour, but it is worth being clear about what it means -
+
+       THE RE-ANCHOR IS A NO-OP IN THIS MODE. It exists because the model drifts back
+       toward "the person as photographed" mid-session, and re-stating the prompt is how
+       it was pulled back. There is nothing left in the prompt to re-state. The only
+       thing worth re-asserting now is the IMAGE, and that is a full set() with a real
+       bandwidth cost inside a 5s billed window - a deliberate policy choice, not
+       something to fall into by leaving a dispatch running. If drift-reversion returns,
+       the fix is to make the re-anchor force a full re-upload (lastSentImageRef = null
+       before applyActive(), exactly as __pearDebugReinjectGarment does), not to restore
+       a prompt clause purely to give setPrompt() something to carry. */
+    if (payload.prompt === lastSentPrompt) {
+      console.log("[PEAR] no-op update skipped - reference AND prompt both unchanged",
+        `(${angleAtStart}); strict image-only means a re-anchor has nothing to re-assert.`,
+        "Force a real re-upload with window.__pearDebugReinjectGarment().");
+      return;
+    }
     console.log("[PEAR] prompt-only update - reference unchanged, image NOT re-uploaded",
       `(${angleAtStart})`);
     /* THE EXACT STRING HITTING DECART, logged immediately adjacent to the call that sends
@@ -6356,13 +7040,24 @@ async function applyGarment(item) {
     console.log("[DECART PROMPT DEBUG]", payload.prompt, abbrevImg(imageRef),
       "(prompt-only - image already on the wire, unchanged)");
     await rtClient.setPrompt(payload.prompt, { enhance: false });
+    lastSentPrompt = payload.prompt;
     return;
   }
 
   console.log("[DECART PROMPT DEBUG]", payload.prompt, abbrevImg(imageRef));
+  // DEBUG WRAPPER, typeof-guarded: applyGarment() is extracted and run standalone by
+  // prompt-only-flip.test.mjs/side-profile.test.mjs against a fixed sandbox global list
+  // that doesn't include this - a bare call would throw ReferenceError there.
+  if (typeof verifyGarmentAsset === "function") verifyGarmentAsset(payload, "applyGarment");
   await rtClient.set(payload);
+  /* Stamped only AFTER set() resolves, which is what makes a retry correct: applyActive()
+     re-enters this function on a rejection, and if these had been written optimistically
+     the second attempt would see its own reference "already on the wire" and take the
+     prompt-only path - retrying a failed image upload by not uploading the image. */
   lastSentImageRef = imageRef || null;
   rtImageOnWire = !!imageRef;
+  lastSentPrompt = payload.prompt;
+  if (imageRef) lastAckedImageRef = imageRef;   // survives a wire invalidation - see its declaration
 }
 
 /**
@@ -6669,51 +7364,29 @@ const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like lo
    the pair overran. Threaded through here, the orientation clause becomes one more
    priority-tagged part in a single fitPrompt() call - and it ranks CORE, because a prompt
    that has lost its orientation clause renders the wrong side of the garment. */
-function buildPrompt(item, angleText = "") {
-  // "Upload Your Own Garment": the reference image IS the garment, so we point the
-  // model AT that image instead of naming a catalog color/subType.
-  if (item.custom) return buildCustomPrompt(item, angleText);
-
-  const lower = item.garmentType === "lower_body";
-  const sub   = SUBTYPE_PROMPT[item.subType] || "";
-  const noun  = lower ? `${sub} trousers`.trim()
-                      : `${sub} ${SHIRT_NOUN[item.subType] || "top"}`.trim();
-
-  return fitPrompt([
-    [P.CORE, `Virtual try-on. Replace their ${lower ? "bottoms" : "top"} with ${colorName(activeColorOf(item))} ${noun}: exact colour, texture and print.`],
-    [P.CORE, angleText],
-    [P.HIGH, DENSE.bodyFidelity],
-    [P.HIGH, DENSE.modelAgnostic],
-    [P.MED,  lower ? DENSE.keepTop : DENSE.keepBottoms],
-    [P.MED,  DENSE.inpaintLock],
-    [P.LOW,  DENSE.rotation],
-    [P.LOW,  fitSentence(item.garmentType)],
-    [P.TRIM, DENSE.temporal],
-    [P.TRIM, DENSE.quality],
-  ]);
+function buildPrompt(item, angleText = "") {              // eslint-disable-line no-unused-vars
+  return IMAGE_ONLY_PROMPT;
 }
 
 /**
- * Prompt for a user-uploaded ("custom") garment. The cropped image is passed as the
- * reference (image: dataURL) so the instruction tells the model to replicate the
- * exact garment shown, rather than a named catalog color/subType.
+ * Prompt for a user-uploaded ("custom") garment. Returns IMAGE_ONLY_PROMPT.
+ *
+ * IDENTICAL TO buildPrompt(), and has been since the image-first refactor rather than by
+ * oversight. These two diverged for exactly one reason: a catalog item had metadata to
+ * describe ("white t-shirt") and an upload did not, so the custom path pointed at the
+ * reference image while the catalog path recited catalog fields. Neither describes
+ * anything now, so there is nothing left to differ about - a shopper's uploaded photo and
+ * a catalog packshot are the same kind of asset and get the same treatment.
+ *
+ * Kept as its own function because it is the documented entry point for the upload flow
+ * and because the dispatch is a seam worth keeping: if the two ever need to diverge again
+ * (a crop-confidence hint, say), it is already here. buildPrompt() no longer branches to
+ * it - a branch between two identical returns is a false signal that they differ.
  * @param {object} item - a custom item ({ custom:true, garmentType, img, color })
  * @returns {string}
  */
-function buildCustomPrompt(item, angleText = "") {
-  const lower = item.garmentType === "lower_body";
-  return fitPrompt([
-    [P.CORE, `Virtual try-on. Replace their ${lower ? "bottoms" : "top"} with the exact garment in the reference image: its colour, pattern, print, texture and silhouette.`],
-    [P.CORE, angleText],
-    [P.HIGH, DENSE.bodyFidelity],
-    [P.HIGH, DENSE.modelAgnostic],
-    [P.MED,  lower ? DENSE.keepTop : DENSE.keepBottoms],
-    [P.MED,  DENSE.inpaintLock],
-    [P.LOW,  DENSE.rotation],
-    [P.LOW,  fitSentence(item.garmentType)],
-    [P.TRIM, DENSE.temporal],
-    [P.TRIM, DENSE.quality],
-  ]);
+function buildCustomPrompt(item, angleText = "") {        // eslint-disable-line no-unused-vars
+  return IMAGE_ONLY_PROMPT;
 }
 
 const APPLY_ATTEMPTS = 2;    // set() tries per apply - see applyActive()
@@ -6831,13 +7504,32 @@ async function applyLook(top, bottom) {
     if (canStitchLook) console.warn("[PEAR] look stitch failed; falling back to top-only reference");
     primaryImage = (await referenceImageFor(top, topImg)) ?? null;
   }
+  /* …and if even THAT came back empty, the bottom's own asset, before giving up. Same
+     reasoning as applyGarment()'s recovery sweep: buildLookPrompt() no longer describes
+     either garment, so a payload with no image is a prompt pointing at nothing. One
+     garment referenced is strictly better than none. */
+  if (!primaryImage) {
+    primaryImage = garmentImageRef(topImg) || garmentImageRef(bottomImg) || null;
+    if (primaryImage) console.warn("[PEAR] applyLook() - stitch and top reference both failed;",
+      "falling back to a single raw garment ref:", abbrevImg(primaryImage));
+  }
+  if (!primaryImage) {
+    console.error("[PEAR] applyLook() - NO garment asset resolved for this look",
+      `(${top?.name} + ${bottom?.name}).`,
+      "\n  → the prompt is image-first and has no reference to condition on;",
+      "Decart will render its own default garments.");
+  }
   const images = [topImg, bottomImg].filter(Boolean).map(garmentImageRef).filter(Boolean);
 
   // ONE combined payload - both garments, one pass, same session.
+  /* The image key is OMITTED rather than set to null when nothing resolved. `image: null`
+     is not the same thing as no image: it is an explicit empty value on a key the SDK
+     validates, and it is exactly the "sent as an empty/default image state" shape that
+     looks, in a payload log, like a reference was delivered when none was. */
   const payload = {
     prompt,
     enhance: false,
-    image: primaryImage,               // SDK single-image slot: TOP+BOTTOM stitched composite (or top-only fallback)
+    ...(primaryImage ? { image: primaryImage } : {}),   // SDK single-image slot: TOP+BOTTOM stitched composite (or fallback)
     images,                           // both verified proxy URLs, bundled together
     garments: [                       // per-slot metadata incl. category (top|bottom)
       { category: "top",    type: top.garmentType,    image: topImg,    color: top.color,    subType: top.subType,    name: top.name,    angle: currentAngle },
@@ -6846,13 +7538,16 @@ async function applyLook(top, bottom) {
   };
 
   console.log("[DECART PROMPT DEBUG]", prompt, abbrevImg(primaryImage));
+  // DEBUG WRAPPER, typeof-guarded - see the matching comment in applyGarment().
+  if (typeof verifyGarmentAsset === "function") verifyGarmentAsset(payload, "applyLook");
   try {
     await rtClient.set(payload);
   } catch (e) {
     // A stricter SDK build may reject the enriched shape - retry with the minimal contract.
     console.warn("look payload rejected, retrying minimal:", e?.message || e);
     console.log("[DECART PROMPT DEBUG] (retry, minimal payload)", prompt, abbrevImg(primaryImage));
-    await rtClient.set({ prompt, image: primaryImage, enhance: false });
+    // Same omit-don't-null rule as the enriched payload above.
+    await rtClient.set({ prompt, enhance: false, ...(primaryImage ? { image: primaryImage } : {}) });
   }
   /* Keep the reference tracker honest: a look sends its OWN stitched image, so whatever
      applyGarment() last recorded is no longer what the model holds. Without this, going
@@ -6860,6 +7555,8 @@ async function applyLook(top, bottom) {
      path against the wrong reference. */
   lastSentImageRef = primaryImage || null;
   rtImageOnWire = !!primaryImage;
+  lastSentPrompt = prompt;
+  if (primaryImage) lastAckedImageRef = primaryImage;
 }
 
 /**
@@ -6867,24 +7564,19 @@ async function applyLook(top, bottom) {
  * simultaneously (a single pass), so a full outfit is rendered together rather
  * than as two separate substitutions.
  */
-function buildLookPrompt(top, bottom, angleText = "") {
-  const tSub = SUBTYPE_PROMPT[top.subType] || "";
-  const tNoun = `${tSub} ${SHIRT_NOUN[top.subType] || "top"}`.trim();
-  const bSub = SUBTYPE_PROMPT[bottom.subType] || "";
-  return fitPrompt([
-    [P.CORE, `Virtual try-on, one pass: replace their top with ${colorName(activeColorOf(top))} ${tNoun} and their bottoms with ${colorName(activeColorOf(bottom))} ${`${bSub} trousers`.trim()}. Both at once, exact colours and textures.`],
-    [P.CORE, angleText],
-    [P.HIGH, DENSE.bodyFidelity],
-    [P.HIGH, DENSE.modelAgnostic],
-    /* A full look replaces BOTH layers, so there is no keepTop/keepBottoms to pin here -
-       which makes the face/skin/background lock the ONLY thing standing between this
-       prompt and a regenerated room. It ranks higher here than in the other builders for
-       exactly that reason: it is carrying the whole passthrough contract alone. */
-    [P.HIGH, DENSE.inpaintLock],
-    [P.LOW,  DENSE.rotation],
-    [P.TRIM, DENSE.temporal],
-    [P.TRIM, DENSE.quality],
-  ]);
+function buildLookPrompt(top, bottom, angleText = "") {   // eslint-disable-line no-unused-vars
+  /* THE ONE PLACE THIS MODE IS A REAL BET RATHER THAN A CLEAN WIN, recorded so it is not
+     discovered by surprise. A full look ships ONE stitched reference holding two garments
+     (TOP over BOTTOM), and DENSE.lookPanels is what told the model that image was two
+     garments to render simultaneously rather than one to choose between. Strict image-only
+     removes it, so the layout now has to carry that entirely on its own - which the
+     stitcher is built for (isolated panels, wide separator band; see stitchLookBlob) but
+     which was never tested without the sentence.
+
+     If a look starts rendering only the shirt, or blending the two, DENSE.lookPanels is
+     the first clause to buy back - and it is the one clause in this file whose absence
+     costs a whole FEATURE rather than a degree of fidelity. */
+  return IMAGE_ONLY_PROMPT;
 }
 
 /* =============================================================================
@@ -8390,9 +9082,36 @@ function startBillingWindow(gen) {
    frame the recording paint loop draws to its canvas that tick); falls back to a rAF
    poll on videoWidth/currentTime where rVFC is unavailable. sessionGen-guarded so a
    stale session's late frame can never start the new one's billing. */
+/* Minimum run of CONSECUTIVE qualifying frames (both isGarmentApplied and
+   isDressedFrame true, uninterrupted) required before the reveal fires - both floors
+   must be satisfied. isDressedFrame() only proves a frame isn't black; it has no way to
+   tell "Decart's generic/default output" apart from "the actual sent garment", so a
+   frame can pass it while the server is still finishing its transition off the base
+   model. A brief run of consecutive good frames is a much stronger signal that the
+   output has genuinely settled than any single frame can be - and the two floors
+   together stay correct across a wide range of frame rates: MS alone could be satisfied
+   by one stale frame sitting for 300ms with no new decode, and FRAMES alone could be
+   satisfied in a few ms on a very high frame rate stream. */
+const MODEL_READY_STABLE_FRAMES = 3;     // minimum consecutive qualifying decodes
+const MODEL_READY_STABLE_MS     = 300;   // ...spanning at least this many ms
+
 function armFirstFrameBilling(video, gen) {
   if (!video || billingStarted || gen !== sessionGen) return;
   let done = false;
+  let stableSinceMs = null;    // Date.now() of the first frame in the current unbroken qualifying run
+  let stableFrameCount = 0;    // length of that run; reset to 0 the instant a frame fails either gate
+  /* DEBUG WRAPPER: window.__pearDebugFrameTiming - verbose trace of the isGarmentApplied
+     / isDressedFrame race this function gates on, to test a specific hypothesis: that
+     isDressedFrame() (which only proves the frame ISN'T BLACK, never that it matches the
+     garment that was actually sent) can pass on a frame that's still Decart's generic/
+     default output, briefly revealing it before the real garment frames catch up. OFF by
+     default - this polls on every decoded frame while waiting, which is 20-30+ ticks in
+     under a second and too noisy for a normal session. A local Date.now()-based clock,
+     not sessionElapsedMs() - that one is relative to billingStartedAt, which this
+     function's own fire() is what sets, so it reads -1 for this entire pre-fire window. */
+  const frameTimingDebug = typeof window !== "undefined" && !!window.__pearDebugFrameTiming;
+  const armedAt = Date.now();
+  let lastLogAt = 0;
   const isDressedFrame = () => {
     const s = sampleVideoLuma(video);
     return s.ready && s.avgLuma > CAMERA_BLACK_AVG_LUMA && s.blackFrac < CAMERA_BLACK_PIXEL_FRAC;
@@ -8402,23 +9121,59 @@ function armFirstFrameBilling(video, gen) {
     done = true;
     if (gen !== sessionGen) return;      // session was torn down before the first frame
     dressedFrameReady = true;            // model-ready signal shared with the recorder (startRecording)
+    if (frameTimingDebug) {
+      console.log(`[PEAR][DEBUG] armFirstFrameBilling FIRED at +${Date.now() - armedAt}ms`,
+        `since arming (isGarmentApplied=${isGarmentApplied}, stableFrameCount=${stableFrameCount},`,
+        `stableFor=${stableSinceMs !== null ? Date.now() - stableSinceMs : "n/a"}ms)`);
+      watchPostFireLuma(video, gen, armedAt);   // keep sampling briefly - see if the frame is still settling
+    }
     startBillingWindow(gen);
   };
-  // TWO independent gates, both required before firing - each closes a gap the other
-  // doesn't cover:
+  // THREE independent gates, ALL required before firing - each closes a gap the others
+  // don't cover:
   //  (1) isGarmentApplied - rtClient.set() has resolved, so this can't be a stray
   //      raw/undressed passthrough frame that arrived before the apply request even
-  //      went out.
+  //      went out. NEVER bypassed: a false here always resets the stability run below
+  //      and re-schedules, so the reveal cannot fire while this is false, full stop.
   //  (2) isDressedFrame() - the frame is verified non-black, so it can't be the ~1s of
   //      blank/black placeholder Decart's server can still emit for a beat AFTER the
   //      apply was acknowledged (see the BLACK-FRAME FIX note in startRecording).
+  //  (3) MODEL_READY_STABLE_FRAMES/_MS - (1) and (2) passing on a SINGLE frame is not
+  //      enough: isDressedFrame() cannot distinguish "the real garment" from "Decart's
+  //      generic/default output, which also isn't black" - a frame can pass both (1) and
+  //      (2) while the server is still finishing its transition off the base model. A
+  //      short run of CONSECUTIVE frames that keep passing is what actually distinguishes
+  //      "settled" from "mid-transition, coincidentally not black this tick". Any frame
+  //      that fails (1) or (2) resets the run to zero - this must be an UNBROKEN streak,
+  //      not merely N good frames somewhere in the window.
   // Re-checked on every subsequent decoded frame (rVFC, or the rAF poll below where
-  // rVFC is unavailable) until both hold, THEN fire - so billing, the countdown, and
+  // rVFC is unavailable) until all three hold, THEN fire - so billing, the countdown, and
   // recording (started together in startBillingWindow) all begin on the first frame
   // that is genuinely ready, never before.
   const frameReady = () => {
     if (done || gen !== sessionGen) return;
-    if (!isGarmentApplied || !isDressedFrame()) {
+    const dressed = isDressedFrame();
+    const qualifies = isGarmentApplied && dressed;
+    if (!qualifies) {
+      stableSinceMs = null;
+      stableFrameCount = 0;
+    } else {
+      if (stableSinceMs === null) stableSinceMs = Date.now();
+      stableFrameCount++;
+    }
+    if (frameTimingDebug) {
+      const now = Date.now();
+      if (now - lastLogAt >= 80) {   // throttled - avoid one line per decoded frame
+        lastLogAt = now;
+        const s = sampleVideoLuma(video);
+        console.log(`[PEAR][DEBUG] frame check +${now - armedAt}ms | isGarmentApplied=${isGarmentApplied}`,
+          `| luma=${s.ready ? s.avgLuma.toFixed(1) : "n/a"} blackFrac=${s.ready ? s.blackFrac.toFixed(3) : "n/a"}`,
+          `| dressed=${dressed} | stableFrameCount=${stableFrameCount}`,
+          `| stableFor=${stableSinceMs !== null ? now - stableSinceMs : "n/a"}ms`);
+      }
+    }
+    const stableLongEnough = stableSinceMs !== null && (Date.now() - stableSinceMs) >= MODEL_READY_STABLE_MS;
+    if (!qualifies || stableFrameCount < MODEL_READY_STABLE_FRAMES || !stableLongEnough) {
       if (typeof video.requestVideoFrameCallback === "function") {
         video.requestVideoFrameCallback(frameReady);
       } else {
@@ -8439,6 +9194,275 @@ function armFirstFrameBilling(video, gen) {
       requestAnimationFrame(poll);
     })();
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FRAME-FREEZE WATCHDOG - the stream stops, then comes back wrong
+   ───────────────────────────────────────────────────────────────────────────
+   THE REPORTED FAILURE: the Decart feed freezes or stutters for a beat mid-session and
+   then resumes - and what resumes is not always what was playing. Inside a 5s billed
+   window a 1.5s stall is a third of the session.
+
+   WHY NOTHING ELSE CATCHES IT. This file already has three watchdogs and none of them
+   covers a freeze:
+     · firstFrameGuardTimer  fires only if NO first frame ever arrives, then gives up.
+     · armFirstFrameBilling  stops watching the instant it fires - by design, it is a
+                             one-shot reveal gate, not a health monitor.
+     · onConnectionChange    only sees states the SDK chooses to report. A media stall
+                             that never trips its own loss detector is invisible here,
+                             and that is the common case: the transport is "connected"
+                             throughout, the frames simply stop.
+
+   FIRST, THOUGH: THIS IS THE SECOND HALF OF THE FIX, NOT THE FIRST. The primary cause of
+   the reported "plays, freezes 1-2s, resumes" is that the receiver was configured with NO
+   jitter buffer at all (PLAYOUT_DELAY_HINT was 0), so any transient bitrate shift had
+   nothing in reserve to play and the picture held until the stream caught up. That is
+   fixed where it is caused - in config.js and the track handler at the top of this file -
+   and it is what should make freezes rare. What follows catches the ones that still
+   happen, and more importantly catches what a freeze can leave BEHIND.
+
+   WHAT A FREEZE ACTUALLY COSTS, and why a recovery is more than a nudge. Three distinct
+   things can be wrong when frames stop:
+     1. THE ELEMENT stalled - a paused/suspended <video>, a backgrounded tab, a decoder
+        hiccup. play() fixes it and nothing else needs to happen.
+     2. THE SESSION went quiet - the transport is up but nothing is flowing. A small
+        control message re-asserts it end-to-end without touching the image.
+     3. THE CONDITIONING was lost - the transport was rebuilt under us (an SDK reconnect
+        this file was not told about, an ICE restart), so Decart is generating from
+        whatever getInitialState() replayed rather than from the garment actually
+        selected. The picture comes back, dressed in the wrong thing, and every existing
+        signal in this file still reports success.
+   So recovery is staged cheapest-first: element ping, then an SDK keep-alive that sends
+   no image, then - only if the freeze outlives both - forcing the CURRENT garment
+   reference back onto the wire (see invalidateWireState). Ordering by cost is what lets
+   the threshold sit at 800ms: the first two stages are safe to fire during a stall that
+   may well resolve on its own, because neither adds meaningful traffic to a transport
+   that is already struggling. Stage 3 is the one that matters and the one that must be
+   rate-limited - a resumed stream no longer conditioned on the shopper's garment is
+   exactly the failure this is here to prevent, and it is indistinguishable from a healthy
+   stream from the outside.
+
+   NO TEARDOWN, NO ERROR UI, AT ANY STAGE. Every recovery here runs on the existing
+   session and is invisible to the shopper: no reconnect, no toast, no state change, no
+   "Go Live" reset. A freeze is a transient the app should absorb, and a session torn down
+   or an error banner shown mid-window is strictly worse than a stream that stutters once
+   and continues. The only visible trace is in the console.
+
+   DELIBERATELY LIGHTWEIGHT. One rVFC chain (the same mechanism armFirstFrameBilling
+   already uses, so no new frame-detection machinery) plus a 500ms interval that does
+   nothing but compare two numbers. It reads no pixels - sampleVideoLuma() is a canvas
+   readback and far too expensive to run on a poll - and takes no action at all on a
+   healthy stream. */
+/* 800ms, down from 1500. The stall being reported is 1-2 seconds long, so a 1500ms
+   threshold could only ever act at the very end of one - or miss a short one entirely -
+   and inside a 5s billed window that is most of the session gone before anything moves.
+   Not lower than this: at the 10fps this app runs inference at, frames legitimately
+   arrive ~100ms apart and a slow frame is normal, so a threshold near the frame interval
+   would fire on healthy jitter. 800ms is ~8 missed frames - unambiguous. */
+const FRAME_FREEZE_MS = 800;
+const FRAME_FREEZE_POLL_MS = 250;          // 3+ ticks inside the freeze window, so it is caught near its start
+/* Minimum gap between two full RE-ANCHOR attempts (stage 2). The keep-alive ping in
+   stage 1 is a small control message and is NOT rate-limited by this; a re-anchor ships
+   the whole garment blob through the datachannel, and doing that on every 250ms tick
+   would starve the very stream it is repairing. Comfortably longer than a set()
+   round-trip, comfortably shorter than the 5s window. */
+const FRAME_FREEZE_RECOVER_COOLDOWN_MS = 2500;
+/* Gap between keep-alive pings. Cheap, but not free: each is a datachannel message, and
+   firing one every 250ms tick through a two-second stall would add traffic to a transport
+   that is already struggling. One every ~600ms re-asserts liveness without contributing
+   to the problem. */
+const FRAME_FREEZE_PING_MS = 600;
+
+let freezeWatcher = null;                  // { stop } while running, else null
+
+/**
+ * Watch #aiVideo for decode stalls and recover them. See the block comment above.
+ * @param {HTMLVideoElement} video  the live AI feed
+ * @param {number} gen  sessionGen at arm time - every callback bails once it moves
+ * @returns {{stop: () => void}}
+ */
+function createFrameFreezeWatcher(video, gen) {
+  let disposed = false;
+  let lastFrameAt = Date.now();     // wall clock of the last decoded frame we observed
+  let lastMediaTime = -1;           // rVFC-less fallback signal: video.currentTime
+  let frozenSince = null;           // when the current freeze began, or null while healthy
+  let lastRecoverAt = 0;
+  let lastPingAt = 0;
+  let recovering = false;
+  let pings = 0, reanchors = 0;
+
+  const hasRVFC = typeof video.requestVideoFrameCallback === "function";
+
+  /* Every decoded frame stamps the clock. Chained rVFC rather than a rAF loop: rVFC fires
+     on frame PRESENTATION, so it stops firing exactly when the stream stops - which is
+     the signal. rAF keeps firing at display rate whether or not a frame decoded, and
+     would have to be paired with a currentTime comparison anyway (which is what the
+     fallback below does). */
+  const onFrame = () => {
+    if (disposed || gen !== sessionGen) return;
+    noteFrame();
+    if (hasRVFC) video.requestVideoFrameCallback(onFrame);
+  };
+  const noteFrame = () => {
+    if (frozenSince !== null) {
+      console.log(`[PEAR] stream RESUMED after ${Date.now() - frozenSince}ms with no decoded frame`,
+        `(${pings} ping${pings === 1 ? "" : "s"}, ${reanchors} re-anchor${reanchors === 1 ? "" : "s"})`);
+      frozenSince = null;
+      pings = 0;
+      reanchors = 0;
+    }
+    lastFrameAt = Date.now();
+  };
+  if (hasRVFC) video.requestVideoFrameCallback(onFrame);
+
+  const tick = async () => {
+    if (disposed || gen !== sessionGen) return;
+
+    /* Not our problem, and each of these would produce a false positive:
+       · not live      - a torn-down or pre-connect session has no frames by definition;
+       · hidden tab    - browsers legitimately stop decoding video in a background tab,
+                         and "recovering" it would fire a set() the shopper cannot see;
+       · reconnecting  - the SDK owns recovery during its own backoff, every send() throws
+                         until it lands, and onConnectionChange already re-anchors on the
+                         way out. Stamping the clock (rather than merely returning) is
+                         what stops the whole outage from counting as one long freeze the
+                         instant the tab or the transport comes back. */
+    if (!isLive() || connState === "reconnecting" ||
+        (typeof document !== "undefined" && document.hidden)) {
+      lastFrameAt = Date.now();
+      frozenSince = null;
+      return;
+    }
+
+    // Where rVFC is unavailable, currentTime advancing IS the frame signal.
+    if (!hasRVFC) {
+      const t = video.currentTime;
+      if (t !== lastMediaTime) { lastMediaTime = t; noteFrame(); }
+    }
+
+    const gap = Date.now() - lastFrameAt;
+    if (gap < FRAME_FREEZE_MS) return;
+    if (frozenSince === null) {
+      frozenSince = lastFrameAt;
+      console.warn(`[PEAR] stream FROZEN - no decoded frame for ${gap}ms while live`,
+        `(state=${connState}, paused=${video.paused}, readyState=${video.readyState})`);
+    }
+    if (recovering) return;                  // an attempt is already in flight
+
+    recovering = true;
+    try {
+      /* STAGE 1a - THE ELEMENT PING. Cheapest cause, cheapest fix, and safe to repeat: a
+         <video> that autoplay or a decoder hiccup left paused resumes here with no
+         session traffic at all. Tried on every frozen tick, because it costs nothing and
+         a stall can begin at any point during a longer outage. */
+      if (video.paused || video.readyState < 2) {
+        try { await video.play(); } catch (_) { /* autoplay policy, or already playing */ }
+      }
+
+      /* STAGE 1b - THE SDK KEEP-ALIVE. A small control message on the existing session:
+         setPrompt() takes session.sendPrompt(), which never touches the image, so this
+         re-asserts liveness end-to-end without re-uploading a single byte of garment and
+         without any teardown, reconnect or UI change. That is what makes it safe to fire
+         DURING a stall rather than after it - the stream is already struggling, and the
+         one thing recovery must not do is add a few hundred KB of base64 to it.
+
+         It deliberately bypasses applyGarment(): that path would compare the payload to
+         what it believes is on the wire, find both halves identical (one frozen prompt,
+         one memoized Blob) and correctly skip - which is right for an ordinary update and
+         exactly wrong here, where re-asserting the unchanged state IS the point. Sent
+         through clampPromptForWire() like every other dispatch, so this send site cannot
+         become the one that bypasses the budget guard. */
+      if (rtClient && Date.now() - lastPingAt >= FRAME_FREEZE_PING_MS) {
+        lastPingAt = Date.now();
+        pings++;
+        const keepAlive = clampPromptForWire(IMAGE_ONLY_PROMPT, "freezeKeepAlive");
+        console.log("[DECART PROMPT DEBUG]", keepAlive, "(keep-alive ping - no image, no teardown)");
+        try {
+          await rtClient.setPrompt(keepAlive, { enhance: false });
+        } catch (e) {
+          console.warn("[PEAR] freeze keep-alive ping failed:", e?.message || e);
+        }
+      }
+
+      /* STAGE 2 - THE RE-ANCHOR, rate-limited. If frames are still absent the element is
+         not the problem, and the live hypothesis is that the transport was rebuilt under
+         us: Decart is either generating nothing or generating from the SDK's replayed
+         initial state rather than the garment on screen. Forcing the wire state stale is
+         what turns applyActive()'s next dispatch into a real set({ image }) - without it,
+         a frozen prompt plus a memoized Blob matches on both halves and applyGarment()
+         correctly skips, which is exactly the wrong answer here.
+
+         applyActive() re-DERIVES the reference from live state rather than replaying a
+         captured one, so this re-anchors to the garment the shopper currently has
+         selected, at the current orientation - which is what "the last acknowledged
+         reference" has to mean in a session where they can still be swapping items. The
+         acknowledged ref is carried only to verify that. */
+      if (Date.now() - lastRecoverAt < FRAME_FREEZE_RECOVER_COOLDOWN_MS) return;
+      lastRecoverAt = Date.now();
+      if (!isGarmentApplied) return;         // nothing acknowledged yet - go-live's own apply still owns the wire
+      reanchors++;
+      const before = lastAckedImageRef;
+      invalidateWireState(`frame freeze (${Date.now() - frozenSince}ms) - forcing the garment back onto the wire`);
+      await applyActive();
+      if (before && lastAckedImageRef !== before) {
+        console.warn("[PEAR] freeze recovery re-anchored to a DIFFERENT reference than the one last",
+          "acknowledged - expected if the shopper swapped items during the stall, a bug otherwise.",
+          "\n  was:", abbrevImg(before), "\n  now:", abbrevImg(lastAckedImageRef));
+      }
+    } catch (e) {
+      console.warn("[PEAR] freeze recovery attempt failed:", e?.message || e);
+    } finally {
+      recovering = false;
+    }
+  };
+
+  const timer = setInterval(() => { tick().catch(() => {}); }, FRAME_FREEZE_POLL_MS);
+
+  return {
+    stop() {
+      if (disposed) return;
+      disposed = true;
+      clearInterval(timer);
+    },
+  };
+}
+
+/** Arm the freeze watchdog for this session, replacing any previous instance. */
+function startFrameFreezeWatch(video, gen) {
+  stopFrameFreezeWatch();
+  if (!video) return;
+  freezeWatcher = createFrameFreezeWatcher(video, gen);
+}
+
+/** Retire it. Safe to call repeatedly and from any exit path. */
+function stopFrameFreezeWatch() {
+  if (!freezeWatcher) return;
+  try { freezeWatcher.stop(); } catch (_) {}
+  freezeWatcher = null;
+}
+
+/* DEBUG WRAPPER: runs for a short, self-limiting window immediately AFTER
+   armFirstFrameBilling() fires, purely to observe whether the frame is still visibly
+   changing right after "dressed" was declared - a luma still drifting a few hundred ms
+   post-reveal is consistent with the isDressedFrame() gap window.__pearDebugFrameTiming
+   exists to investigate. Diagnostic only: never reads or writes billing/recording state,
+   session-gen guarded, and capped at 20 ticks so it can never run past the session that
+   started it. @returns {void} */
+function watchPostFireLuma(video, gen, armedAt) {
+  let ticks = 0;
+  const tick = () => {
+    if (gen !== sessionGen || ticks >= 20) return;
+    ticks++;
+    const s = sampleVideoLuma(video);
+    console.log(`[PEAR][DEBUG] post-fire watch +${Date.now() - armedAt}ms`,
+      `| luma=${s.ready ? s.avgLuma.toFixed(1) : "n/a"} blackFrac=${s.ready ? s.blackFrac.toFixed(3) : "n/a"}`);
+    if (typeof video.requestVideoFrameCallback === "function") {
+      video.requestVideoFrameCallback(tick);
+    } else {
+      requestAnimationFrame(tick);
+    }
+  };
+  tick();
 }
 
 /**
@@ -8803,12 +9827,21 @@ function stopBilling() {
   sessionGen++;                         // neutralise in-flight onRemoteStream/onConnectionChange
   stopStatsMonitor();
   if (rtClient) { try { rtClient.disconnect(); } catch (_) {} rtClient = null; }
-  lastSentImageRef = null; rtImageOnWire = false;   // session over - nothing is on the wire
+  lastSentImageRef = null; rtImageOnWire = false; lastSentPrompt = null;   // session over - nothing is on the wire
   /* Unlike teardown(), this deliberately leaves the watcher and the paint loop alive for
      the frozen-hold tail - so a turn hold raised a moment before the window closed has
      nothing left to release it, and its overlay (z-index 6, inside #cameraCard) would sit
      on top of that tail for the rest of the session. */
   orientHoldEnd("billing-stopped");
+  /* The freeze watchdog does NOT get that exemption, and the difference is what each one
+     is for. The orientation watcher stays because the frozen-hold tail still has UI state
+     to release; this one exists solely to keep a LIVE stream alive, and two lines above
+     this the session was disconnected and #aiVideo detached - so from here it can only
+     observe a video element with no source and correctly conclude nothing. Its own
+     sessionGen/isLive guards already make it inert; stopping it is the difference between
+     inert and not running, and a 500ms timer spinning through the tail for no reason is
+     the kind of thing that reads as a leak the next time someone profiles this. */
+  stopFrameFreezeWatch();
   if (inputThrottle) { try { inputThrottle.dispose(); } catch (_) {} inputThrottle = null; }
   if (realtimeInput) { try { realtimeInput.getTracks().forEach((t) => t.stop()); } catch (_) {} realtimeInput = null; }
   const ai = $("aiVideo");

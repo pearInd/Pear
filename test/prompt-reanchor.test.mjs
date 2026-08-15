@@ -200,8 +200,14 @@ console.log("\n── §6 the diagnostics clock itself ──");
 console.log("\n── §7 wiring: called from the tick, clock shared with maybeUpdateProfile ──");
 {
   const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);");
+  /* Both calls are now fire-and-forget: awaiting them held the sampler's `sampling` flag
+     across a network round-trip, dropping the orientation sample rate to whatever Decart's
+     latency happened to be. The ORDER and the GATE are what this asserts, and both are
+     unchanged; the mutex that makes it safe (`applying`) is inside the functions. */
   check("called from the tick, after maybeUpdateProfile, gated the same way (no pending dual-view swap)",
-    /if \(!\(dualView && confirmed\)\) \{[\s\S]*?await maybeUpdateProfile\(lastProfileScore\);[\s\S]*?await maybeReanchorPrompt\(\);/.test(watcher));
+    /if \(!\(dualView && confirmed\)\) \{[\s\S]*?maybeUpdateProfile\(lastProfileScore\)\.catch[\s\S]*?maybeReanchorPrompt\(\)\.catch\(\(\) => \{\}\);/.test(watcher));
+  check("...in the background, so a slow re-anchor cannot stall the next orientation sample",
+    !/await maybeReanchorPrompt\(\);/.test(watcher));
   check("the call is NOT gated on pose - square-on sessions get it too",
     !/autoProfile[^\n]*maybeReanchorPrompt/.test(watcher));
 

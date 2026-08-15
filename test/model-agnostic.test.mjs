@@ -14,20 +14,63 @@
    THE FIX: a provenance split stated explicitly - the reference image is the only source
    of CLOTH, the live camera feed is the only source of BODY - carried on every builder.
 
-   ── COMPRESSED, AND WHY THIS SUITE CHANGED SHAPE ──────────────────────────────
-   Decart rejects any prompt over 226 tokens ("Prompt is too long: 1376 tokens"), so the
-   1,253-character clause this suite was originally written against no longer exists. It
-   is now DENSE.modelAgnostic, one sentence, assembled through fitPrompt().
+   ── COMPRESSED, THEN RETIRED. WHY THIS SUITE NOW ASSERTS AN ABSENCE ───────────
+   Two pressures, in order.
 
-   That makes HOW it is asserted matter more than before. The old suite could check nine
-   separate enumerated phrases; there is only one sentence to check now. So the weight
-   moves to the two properties compression actually put at risk:
-     · it must be on EVERY builder (§2) - unchanged from before, and
-     · it must rank high enough that the BUDGET never sheds it (§3) - entirely new. A
-       clause that silently drops out on a long garment name is indistinguishable from
-       one that was never added.
-   Asserted against the SHIPPED prompt, never the retired constant - a test that passes by
-   reading dead source is worse than one that fails. */
+   FIRST, LENGTH. Decart rejects any prompt over 226 tokens ("Prompt is too long: 1376
+   tokens"), so the 1,253-character clause this suite was originally written against
+   became DENSE.modelAgnostic, one sentence, assembled through fitPrompt(). It was then
+   demoted CORE → HIGH → MED as grounding clauses displaced it, and at 90 degrees the
+   budget already shed it.
+
+   SECOND, AND DECISIVE: the tuxedo report. A Spider-Man graphic tee, selected in the
+   catalog and correctly delivered to the wire as a reference image, came back from Decart
+   as a full tuxedo with a bowtie. Decart's realtime set() takes { prompt, image, enhance }
+   and nothing else - no negative_prompt, no image-strength, no ControlNet weight - so the
+   only lever over how hard the reference is weighed against the text is HOW MUCH TEXT
+   THERE IS. app.js was sending a dozen clauses.
+
+   The first cut kept an image anchor plus the structural directives and dropped this one
+   for describing a BODY rather than a structure. The tuxedo survived it, so the second
+   cut dropped the structural directives too: the prompt became one frozen string
+   (IMAGE_ONLY_PROMPT), identical on every dispatch.
+
+   ── THIRD REVISION: THE DIRECTIVE IS BACK, INSIDE THE FROZEN STRING ───────────
+   Freezing the prompt fixed the garment and exposed the body - which is this suite's own
+   bug, returning exactly as its §3 predicted it would. A shopper with a real waistline got
+   the catalog model's slim proportions and a shirt that hovered instead of draping.
+
+   So the provenance split went back on the wire - but its strength has moved twice since.
+   Revision 3 stated it outright and led with it: "Extract strictly the garment's fabric
+   texture, color, and design pattern from the reference image, completely ignoring the
+   original model's body size, chest, and waist dimensions." Revision 4, chasing a knotted
+   hem and an open back, restructured the whole prompt around garment CONSTRUCTION and
+   reduced this to its positive half alone - "Preserve only the reference image's graphics,
+   fabric texture, and color" - which now closes the reference at the END of the prompt
+   rather than opening it.
+
+   That implies the discard by exhaustion but never states it, and it is the weakest this
+   directive has been since it was first written. It is a deliberate trade against two
+   visible artifacts, not an oversight - but it means THIS suite's own bug is the one most
+   likely to return next, and DENSE.modelAgnostic is the one retired clause whose restore
+   would be an improvement rather than a duplication. Appending it is a one-line edit; §2
+   keeps that path exercised so it stays one line.
+
+   WHAT THIS SUITE ASSERTS NOW is therefore both halves: that the DIRECTIVE ships (§1),
+   and that the CONSTANT it used to ship as is still on file and still restorable (§2),
+   because "superseded" decays into "deleted" the moment nothing checks.
+
+   Concretely:
+     · §1 the DIRECTIVE ships, in the rendered prompt, at both poses - and the constants
+       it used to ship as are still on file, because a supersede that deletes the wording
+       is a deletion and the next report would be rewritten from scratch;
+     · §2 the restore path in app.js is ACCURATE - the DENSE table names real symbols,
+       fitPrompt() still assembles them, and the table distinguishes SUPERSEDED clauses
+       (restoring one would duplicate the frozen string) from genuinely lost ones;
+     · §3 the retired CONSTANTS are off the wire, so the file cannot claim a retirement it
+       did not perform - the directive is carried by the frozen string, not by them.
+   The wider contract - everything the prompt says now - is asserted in
+   image-first.test.mjs. Asserted against the SHIPPED prompt, never a retired constant. */
 import { readFileSync } from "node:fs";
 
 const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -46,113 +89,136 @@ const sandbox = {
   PROMPT_MAX_CHARS: 650, console: { warn() {}, log() {} },
   SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
   colorName: () => "white",
-  /* Resolves the SELECTED variant's colour so a swatch swap reaches the prompt.
-     Lives outside this slice (next to the variant table), so it is stubbed to the
-     item's own colour - the single-variant path, which is what these cases use. */
   activeColorOf: (it) => (it && it.color) || "#fff", getSizeDelta: () => 0,
   getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
-  code + "\nreturn { buildCompositePrompt, fitPrompt, P, DENSE };")(...Object.values(sandbox));
+  code + "\nreturn { buildCompositePrompt, IMAGE_ONLY_PROMPT, fitPrompt, P, DENSE };")(...Object.values(sandbox));
 
 const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 
-console.log("── §1 THE DIRECTIVE, in the prompt that actually ships ──");
+console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes out ──");
 {
+  /* Asserted on the RENDERED prompt, not on the constant - a suite that passes by reading
+     a retired string is worse than one that fails. This is the provenance split itself:
+     the reference is the only source of CLOTH, the live feed the only source of BODY. */
   const out = api.buildCompositePrompt(TEE, "front", false);
-  check("names the reference as cloth-only, not a body",
-    /Ignore the reference model's body/.test(out), out);
-  /* The compact statement of the whole feature, and the one phrase that must survive any
-     future shortening: it is what distinguishes this clause from ordinary body fidelity. */
-  check("...and drapes to THIS person, the live subject",
-    /fit the cloth to THIS person/.test(out), out);
-  check("its positive half - the body-fidelity clamp - rides alongside it",
-    /Keep their real body volume; never slim them/.test(out), out);
+  check("the shipped prompt names the reference as cloth-only",
+    /Use only the reference image's graphics, fabric texture, and color/.test(out), out);
+  /* THE DISCARD IS NOW IMPLICIT, and that is a real reduction rather than a rewording.
+     Revision 3 said "completely ignoring the original model's body size, chest, and waist
+     dimensions" outright; revision 4 replaced it with "Preserve ONLY ...", which implies
+     the same thing by exhaustion but never states it. Weaker against this suite's own
+     report, and recorded as such: the restore is one line, and §2 keeps it exercised. */
+  check("...the discard is carried by exhaustion (ONLY these three), not stated outright",
+    /Use only the reference image's graphics, fabric texture, and color/.test(out) &&
+    !/ignoring the original model's body/.test(out), out);
+  check("...while pinning the LIVE subject's VOLUME as the body it must fit",
+    /strictly persistent 3D body volume/.test(out) &&
+    /abdomen\/stomach depth, waist volume, and torso thickness/.test(out), out);
 
-  /* COMPRESSED AWAY, recorded so the loss is deliberate rather than forgotten: the
-     enumerated attribute list (height, build, skin tone, shoulder width, limb positions,
-     posture), the explicit "never reshape the live person toward them" inverse, and the
-     print-placement carve-out. The carve-out mattered because "re-proportion the garment"
-     and the back-print placement pin can be read as contradictory - that pin is asserted
-     directly below instead, which is the property the carve-out was protecting. */
+  /* NOT POSE-GATED, which is the property §4 of the original suite existed for: the
+     reference figure's anatomy bleeds at every angle, so this must hold edge-on too.
+     It used to be a ranking argument (MED, shed under pressure); it is now structural. */
+  for (const prof of [false, true]) {
+    check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
+      /Use only the reference image's graphics, fabric texture, and color/
+        .test(api.buildCompositePrompt(TEE, "front", prof)));
+  }
+
+  /* The constants it used to ship as, still on file. A "supersede" that also deletes the
+     wording is a deletion, and the next person to see "it gave me the model's shoulders"
+     would be rewriting it from scratch. */
+  check("the retired constant is still on file, verbatim",
+    /modelAgnostic:\s+"Ignore the reference model's body; fit the cloth to THIS person\."/.test(SRC),
+    "DENSE.modelAgnostic must survive its own retirement from assembly");
+  check("its positive half - the body-fidelity clamp - is on file too",
+    /bodyFidelity:\s+"Keep their real body volume; never slim them\."/.test(SRC));
+
+  /* COMPRESSED AWAY LONG BEFORE THE RETIREMENT, recorded so the loss stays deliberate:
+     the enumerated attribute list (height, build, skin tone, shoulder width, limb
+     positions, posture), the explicit "never reshape the live person toward them"
+     inverse, and the print-placement carve-out. The carve-out mattered because
+     "re-proportion the garment" and the back-print placement pin can be read as
+     contradictory - that pin is asserted directly below instead, which is the property
+     the carve-out was protecting, and it is still assembled. */
   check("the back-print placement pin survives independently of the retired carve-out",
     /reproduce its back print at the same size and position/.test(SRC),
     "compression must not have taken the print-alignment fix with it");
 }
 
-console.log("\n── §2 EVERY BUILDER CARRIES IT (the 'one site was missed' failure) ──");
+console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspirational ──");
 {
-  /* app.js's buildLookPrompt comment records IGNORE_SOURCE_ARTIFACTS being missed at that
-     exact site when it was introduced. Parity against the body-fidelity clamp generalises:
-     both belong on every prompt this app can emit, so a site carrying one and not the
-     other is the bug. */
-  const builders = [
-    ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
-    ["buildPrompt (catalog)", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
-    ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
-    ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
-  ];
-  for (const [name, re] of builders) {
-    const body = (SRC.match(re) || [""])[0];
-    check(`${name}: carries the isolation clause`,
-      body.includes("DENSE.modelAgnostic"), body.slice(-300) || "builder not found");
-    check(`${name}: ...paired with the body-fidelity clamp`,
-      body.includes("DENSE.bodyFidelity"), body.slice(-300) || "builder not found");
-  }
+  /* A one-line restore is only one line if the instructions name real symbols. This
+     executes the restore against the REAL fitPrompt() and the REAL DENSE table, so a
+     rename that silently invalidates the comment fails here rather than in whatever
+     session someone actually needs the clause back. */
+  check("the DENSE table documents itself as a restore library, not an assembly source",
+    /NOTHING HERE IS ASSEMBLED ANY MORE/.test(SRC) &&
+    /RESTORE LIBRARY, not an assembly source/.test(SRC));
+  check("...and records this clause as SUPERSEDED, with the sentence that replaced it",
+    /THREE OF THEM ARE SUPERSEDED rather than merely retired/.test(SRC) &&
+    /modelAgnostic  \u2192 ONLY IMPLIED, by "Preserve only the reference image's graphics,/.test(SRC),
+    "restoring a superseded clause would DUPLICATE what is already on the wire");
+  check("...and names the clauses that are genuinely gone, ranked, with a real restore line",
+    /inpaintLock    face\/skin\/hands\/background passthrough\. THE LARGEST LOSS/.test(SRC) &&
+    /Restore: add \[P\.HIGH, DENSE\.inpaintLock\]/.test(SRC));
+
+  /* ── THE RESTORE BUDGET IS NOW ONE CLAUSE, NOT TWO ──────────────────────────
+     The frozen string has grown across five revisions - 215 chars to 573, which is 88% of
+     PROMPT_MAX_CHARS - so the headroom buys exactly one short clause. Either alone fits;
+     the pair does not, and fitPrompt() would silently shed the worse-priority one, which
+     is the failure mode this repo has spent its history making visible. Asserted in BOTH
+     directions so the constraint is discovered here rather than in a live session. */
+  const one = api.fitPrompt([
+    [api.P.CORE, api.IMAGE_ONLY_PROMPT],
+    [api.P.MED,  api.DENSE.modelAgnostic],
+  ]);
+  check("restoring THIS clause alone assembles and fits the budget",
+    /Ignore the reference model's body/.test(one) && one.length <= 650,
+    `${one.length} chars`);
+  const both = api.fitPrompt([
+    [api.P.CORE, api.IMAGE_ONLY_PROMPT],
+    [api.P.HIGH, api.DENSE.bodyFidelity],
+    [api.P.MED,  api.DENSE.modelAgnostic],
+  ]);
+  check("...but restoring a PAIR silently sheds one - the budget no longer covers both",
+    /never slim them/.test(both) && !/Ignore the reference model's body/.test(both),
+    `${both.length} chars - a second clause needs the frozen string to give up a sentence`);
+  check("...and app.js records that constraint with the arithmetic",
+    /THE RESTORE BUDGET IS NOW ONE CLAUSE, NOT TWO/.test(SRC) &&
+    /\+ BOTH                       \u2192 684   does NOT fit/.test(SRC));
 }
 
-console.log("\n── §3 THE BUDGET MUST NOT SHED IT (new risk, created by compression) ──");
+console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");
 {
-  /* fitPrompt() drops the worst-priority clauses until the prompt fits. If garment
-     isolation were tagged TRIM, a long product name would silently remove it - the
-     original bug returning with no code change and nothing to point at. It is HIGH,
-     one step below never-drop, and that ranking is the assertion. */
-  /* DEMOTED HIGH -> MED by the grey-shirt regression, and the demotion is the assertion
-     now. The clause that grounds WHICH garment renders had to outrank the clause that
-     refines WHOSE BODY it is draped on: the live failure was the model discarding the
-     referenced shirt entirely for a plain grey one, which no amount of model-agnostic
-     phrasing would have prevented.
+  /* The distinction §1 and this section split between them. The DIRECTIVE ships, inside
+     the frozen string. The CONSTANTS do not, and must not: assembling DENSE.modelAgnostic
+     beside a frozen string that already says the same thing would spend budget restating
+     it, which is the exact failure mode - text volume drowning the image - that this whole
+     sequence of changes is about. A half-done supersede (comment says superseded, one
+     builder still assembles it) is what this catches. */
+  for (const prof of [false, true]) {
+    check(`buildCompositePrompt does not assemble it (inProfile=${prof})`,
+      !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", prof)));
+    check(`...nor the body-fidelity clamp (inProfile=${prof})`,
+      !/never slim them/.test(api.buildCompositePrompt(TEE, "front", prof)));
+  }
+  const codeOnly = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  check("no builder anywhere in app.js still references either clause",
+    !/DENSE\.modelAgnostic/.test(codeOnly) && !/DENSE\.bodyFidelity/.test(codeOnly),
+    "found a live reference - the retirement is half-done");
 
-     The honest consequence: this survives square-on and is SHED edge-on. Pinned in both
-     directions so neither drifts silently - if it ever survives edge-on again, something
-     above it was quietly dropped. */
-  check("ranked MED - below the reference binding, the edge-on directive and passthrough",
-    /\[P\.MED,\s*DENSE\.modelAgnostic\]/.test(SRC),
-    "if this is promoted again, check what it displaced");
-  check("survives square-on, where the budget affords it",
-    /[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", false)));
-  check("shed EDGE-ON - a known cost of grounding the garment first, not an accident",
-    !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", true)));
-
-  /* What must survive unconditionally is the binding it supports. A pathological garment
-     name is the case where shedding turns into truncation, so it is checked here. */
+  /* What must survive unconditionally is the grounding the retired clause was
+     progressively demoted behind. A pathological garment name is the case where shedding
+     turns into truncation, so it is checked here. */
   const pathological = { ...TEE, name: "x".repeat(400) };
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
-    check(`the reference binding survives a pathologically long name (inProfile=${prof})`,
-      /in the reference image/.test(out), `${out.length} chars: ${out.slice(-160)}`);
+    check(`the frozen prompt survives a pathologically long name (inProfile=${prof})`,
+      /Fit a standard t-shirt from the reference image/.test(out),
+      `${out.length} chars: ${out.slice(-160)}`);
   }
-}
-
-console.log("\n── §4 NOT POSE-GATED: the reference figure bleeds at every angle ──");
-{
-  /* The depth and lateral directives are correctly gated behind `inProfile` - they
-     describe a 90-degree frame. This one must NOT be: a square-on shopper is rendered
-     against the same model-worn reference. Asserted structurally, because grouping the
-     three "body" clauses together in a future tidy is an easy way to gate it by accident. */
-  const composite = SRC.slice(SRC.indexOf("function buildCompositePrompt(item, angle, inProfile)"),
-                              SRC.indexOf("/* Full-Look composite clause"));
-  check("not placed behind an inProfile ternary",
-    !/inProfile \?[^\n]*modelAgnostic/.test(composite),
-    "the reference model is present at 0 degrees too");
-  /* profileDepth and lateralWrap MERGED into profileLateral - separately they cost ~155
-     chars and only one fitted, which left the garment's side unreferenced at 90 degrees. */
-  check("...while the genuinely pose-specific clause IS still gated",
-    /inProfile \? DENSE\.profileLateral : ""/.test(composite),
-    composite.slice(composite.indexOf("inProfile ?"), composite.indexOf("inProfile ?") + 160));
-  check("the catalog/custom builders take no pose parameter, so they cannot be gated at all",
-    /function buildPrompt\(item, angleText = ""\)/.test(SRC) &&
-    /function buildCustomPrompt\(item, angleText = ""\)/.test(SRC));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

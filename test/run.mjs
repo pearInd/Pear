@@ -37,6 +37,25 @@
                       synthesis clause is asserted to be geometric (wrap + extrapolate the
                       cloth) and NOT a cross-panel blend, which would contradict the
                       impassable-wall contract and re-open the 23f5953 double-print bug.
+     image-first      "I picked a Spider-Man tee and it rendered a tuxedo." The reference
+                      image was resolved, composited and delivered correctly; the model
+                      simply was not using it. Decart's set() takes { prompt, image,
+                      enhance } and nothing else - no negative_prompt, no image-strength -
+                      so the only lever over how hard the image is weighed against the
+                      text is HOW MUCH TEXT there is, and every builder was opening with a
+                      garment DESCRIPTION assembled from catalog fields ("white t-shirt:
+                      exact colour, texture and print") that the model could satisfy from
+                      its own prior instead. The enumerated ban meant to stop it ("never
+                      invent a ... suit, TUXEDO, tie, BOWTIE") shipped inside the POSITIVE
+                      prompt, where a named garment is a token the sampler can steer
+                      toward. Asserts the spec'd anchor's exact wording and its per-region
+                      variants (an "upper garment" anchor on a trouser reference is the
+                      same contradiction, reintroduced by the fix), that it leads every
+                      builder and never sheds, that NO builder describes a garment any
+                      more - stated as an absence, the only form that catches a new
+                      well-meant clause being added - and that the payload actually
+                      carries an image, since an image-first prompt with nothing on the
+                      wire is the same failure through the other half of the call.
      model-agnostic   "It gave me the e-commerce model's shoulders." Every body-shape
                       defence in app.js aims at the model's TRAINING prior; none accounted
                       for the second human in the conditioning - a catalog reference is
@@ -131,6 +150,7 @@ const SUITES = [
   ["preload-composite", "preload-composite.test.mjs"],
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
   ["side-profile", "side-profile.test.mjs"],
+  ["image-first", "image-first.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],

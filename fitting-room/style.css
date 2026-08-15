@@ -883,6 +883,13 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      just be dead, misleading declarations. */
   position: static;
   display: flex; align-items: center; gap: 12px;
+  /* Clear of the header row above it. .app-header has padding-bottom:0 at
+     desktop widths, so this bar's own top padding was the ONLY thing between
+     the "measuring: X" line and the header controls - and its glass panel
+     starts at that boundary, not at the text, which is what read as the two
+     colliding. A margin (not more padding) so the gap is OUTSIDE the panel:
+     it separates the two surfaces instead of just insetting this one's text. */
+  margin-top: 10px;
   padding: 22px clamp(16px,5vw,36px);   /* was 15px - sat too close to the viewport's top edge */
   background: linear-gradient(135deg, rgba(255,255,255,.6), rgba(255,255,255,.4));
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
@@ -930,7 +937,9 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 
 .app-header {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 24px clamp(16px,5vw,36px) 0;
+  /* padding-top from the shared token, so the row and the two absolute corner
+     controls resolve their top edge from ONE number - see --hdr-pad-t. */
+  padding: var(--hdr-pad-t) clamp(16px,5vw,36px) 0;
   max-width: 760px; margin: 0 auto;
   box-sizing: border-box;
 
@@ -993,6 +1002,11 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   align-self: center;
   position: relative; direction: ltr;
   display: inline-flex; align-items: center;
+  /* Shared header-control height. The track was 36px (26px segment + 2x4px
+     track padding + its 1px specular border each side); the segments keep
+     their own size and centre inside it, and __thumb already sizes itself as
+     the track height minus that padding, so it follows this automatically. */
+  height: var(--hdr-control-h);
   padding: var(--switch-pad); margin: 0; border: 0;
   appearance: none; -webkit-appearance: none;
   border-radius: var(--pill);
@@ -1047,7 +1061,13 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .btn-edit-measurements {
   align-self: center;
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 13px; margin: 0; border: 0;
+  /* THE OUTLIER: this was ~27px (12.8px of line-height:1 text + 7px padding
+     each side) sitting next to a 42px cart button - the single widest gap in
+     the row. Height is declared now rather than left to fall out of the type
+     size, and the vertical padding goes with it; the horizontal padding stays,
+     because that is what gives the pill its shape. */
+  height: var(--hdr-control-h);
+  padding: 0 13px; margin: 0; border: 0;
   border-radius: var(--pill);
   background: var(--pear-tint);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
@@ -2387,9 +2407,82 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    apart the way two hand-tuned magic numbers eventually do.
    ════════════════════════════════════════════════════════════════════════ */
 :root {
-  --corner-inset:  16px;   /* physical inset of both fixed corner controls */
+  /* ── ONE HEIGHT, ONE TOP EDGE, FOR EVERY HEADER CONTROL ──────────────────
+     THE REPORTED PROBLEM: the top-bar controls sat at visibly different
+     heights and did not share a baseline. Measured, they were five different
+     boxes with five different vertical centres:
+
+       control                  height   top edge   centre
+       .lang-switch              38px    16px       35px
+       .fs-switch                36px    24px       42px
+       .btn-edit-measurements    27px    24px      ~37px
+       .cart-btn                 42px    24px       45px
+       .profile-btn              40px    16px       36px
+
+     Two independent causes, and both had to be fixed or the row would still
+     be ragged. (1) Every control sized itself from its own content - padding
+     plus a label, or a hand-set 42px square - so no two agreed. (2)
+     .lang-switch and .profile-btn are position:absolute corner controls, NOT
+     flex children of .app-header, so they took their vertical origin from
+     --corner-inset (16px) while the row took its own from the header's
+     padding-top (24px on desktop, 8px on phones - where the same pair then
+     sat 8px BELOW the row instead of above it, the same bug with the sign
+     flipped).
+
+     So the fix is two tokens rather than a set of nudges. Every control now
+     resolves its height from --hdr-control-h, and everything that establishes
+     a top edge - the header's own padding and both absolute corner controls -
+     resolves it from --hdr-pad-t. Equal heights plus equal top edges is equal
+     centres, by construction, at every breakpoint, with no per-control
+     tuning to drift.
+
+     WHY A HEIGHT TOKEN AND NOT align-items:center: the row already had
+     align-items:center, and it was doing its job - centring five boxes of
+     five different heights, which is exactly what it is asked to do and is
+     still a ragged row. Alignment cannot fix a height disagreement.
+
+     --corner-inset stays, unchanged, as the HORIZONTAL inset: it is what
+     --hdr-gutter-l/r reserve against, and that reservation is a different
+     measurement from where the controls' top edge sits. Splitting them is
+     what lets the vertical origin move without touching the collision math. */
+  --hdr-control-h: 40px;   /* shared height of EVERY header control */
+  --hdr-pad-t:     24px;   /* shared top edge: header padding AND both corner controls */
+
+  /* ── THE ROW HEIGHT HAD TO BECOME A NUMBER TOO ───────────────────────────
+     Equal control heights and equal top edges were necessary and not
+     sufficient, because the ROW is not as tall as the controls in it. The
+     brand lockup is the tallest zone and its height comes from type metrics:
+
+       .app-header__brand  1.4rem, line-height 1    = 22.40px
+       .app-header__titles gap                      =  3.00px
+       .app-header__sub    .84rem, line-height 1.2  = 16.13px
+                                                      ------
+                                                      41.53px   (> the 38px logo)
+
+     So the row resolved to 41.53px. Its flex children centre on THAT - at
+     padding-top + 20.76 - while the two absolute corner controls, anchored to
+     the padding edge with a height of 40, centre at padding-top + 20. A 0.76px
+     disagreement: small, visible against a circle's edge, and impossible to
+     nudge away permanently because the number is a font measurement. It moves
+     with every type change and differs at each breakpoint (the wordmark is
+     1.4rem here, 1.2rem when the phone header compacts).
+
+     --hdr-row-h fixes the row at a round number the lockup fits inside, so the
+     centreline stops being derived from font metrics at all. The corner pair
+     then anchors to that CENTRE - (row - control) / 2 below the padding edge -
+     rather than to the padding edge itself.
+
+     min-height, not height, on the zones: at the nominal type size the lockup
+     (41.53px) is comfortably inside 44px so the row IS exactly 44, while a
+     shopper who zooms text still gets a row that grows instead of clipping.
+     Under that growth the corner pair drifts again by half the overflow - the
+     correct trade, since a clipped wordmark is worse than a 1px offset at
+     200% zoom. */
+  --hdr-row-h:     44px;   /* deterministic row height - NOT the type's 41.53px */
+
+  --corner-inset:  16px;   /* physical HORIZONTAL inset of both fixed corner controls */
   --corner-clear:  10px;   /* deliberate breathing gap before header content */
-  --profile-size:  40px;   /* .profile-btn circle */
+  --profile-size:  var(--hdr-control-h);   /* .profile-btn circle - was a separate 40px */
   --lang-seg-w:    42px;   /* .lang-switch__seg / __thumb - MIRRORED in i18n.js */
   --fs-seg-w:      34px;   /* .fs-switch__seg  / __thumb - MIRRORED in app.js  */
   --switch-pad:     4px;   /* segmented-switch track padding */
@@ -2443,11 +2536,16 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      DEAD-SPACE FIX: top/bottom padding trimmed (was 14px/14px, scrolled 8px/8px) -
      the row's own content height was already carrying the visual weight; this was
      pure extra air above/below it. */
+  /* The shared top edge is tighter on phones. Declared on :root rather than on
+     .app-header, because the two absolute corner controls are NOT descendants of
+     the header and would not see it there - which is exactly how they came to sit
+     8px BELOW the row here while sitting 8px above it on desktop. */
+  :root { --hdr-pad-t: 8px; }
   .app-header {
     position: sticky; top: 0; z-index: 40;
     max-width: none; margin: 0;
     --hdr-pad-x: clamp(16px, 5vw, 22px);
-    padding: calc(8px + var(--safe-t)) var(--hdr-pad-x) 8px;
+    padding: calc(var(--hdr-pad-t) + var(--safe-t)) var(--hdr-pad-x) var(--hdr-pad-t);
     /* Full-bleed here (max-width:none), so the box edge IS the viewport edge -
        the centred-box term in the base rule collapses to zero and the corner
        gutters apply at full value. Stated directly rather than left to the
@@ -2460,6 +2558,11 @@ html.pear-returning-check #screen-calculator { display: none !important; }
     -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
     border-bottom: 1px solid transparent;
   }
+  /* Compaction stays scoped to the header and does NOT move --hdr-pad-t: by the
+     time this class exists the two corner controls have scrolled off the top of
+     the viewport (they are position:absolute, not fixed - see body.corners-cleared),
+     so there is nothing left to keep aligned and re-anchoring them would only
+     animate two off-screen boxes. */
   .app-header.is-scrolled {
     padding-top: calc(5px + var(--safe-t)); padding-bottom: 5px;
     border-bottom-color: var(--glass-border);
@@ -2566,7 +2669,10 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .cart-btn {
   position: relative; align-self: center; margin-inline-start: auto;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 42px; height: 42px; border-radius: 50%;
+  /* Was a hand-set 42px square - the tallest control in the row, and the one
+     every other control was visually measured against. Now the shared height,
+     which also makes it exactly the same circle as .profile-btn opposite it. */
+  width: var(--hdr-control-h); height: var(--hdr-control-h); border-radius: 50%;
   border: 1px solid var(--glass-border);
   background: var(--glass-strong);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
@@ -2723,7 +2829,14 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      does, so crossing the 12px scroll threshold shifted it down by the whole
      inset - ~45px on an iPhone. Both ends now include it, leaving the
      intended 2px of compaction. */
-  position: absolute; top: calc(var(--safe-t) + var(--corner-inset)); z-index: 100;
+  position: absolute;
+  top: calc(var(--safe-t) + var(--hdr-pad-t) + (var(--hdr-row-h) - var(--hdr-control-h)) / 2);
+  z-index: 100;
+  /* --hdr-pad-t, NOT --corner-inset: this control is absolutely positioned and
+     is therefore the one thing in the header that cannot inherit the row's top
+     edge. Sharing the token is what keeps it on the row's baseline at every
+     breakpoint - it used to sit 8px above the row on desktop and 8px below it
+     on phones. --corner-inset still owns the horizontal inset below. */
   /* Physical right + the landscape safe-area inset, matching --hdr-gutter-r
      exactly (see the TOP-CORNER CONTROL GEOMETRY block). */
   right: calc(var(--safe-r) + var(--corner-inset));
@@ -2769,7 +2882,14 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   /* --safe-t, like .app-header's own padding-top: the document sets
      viewport-fit=cover, so without it this sits UNDER the notch / status bar
      on every notched phone. */
-  position: absolute; top: calc(var(--safe-t) + var(--corner-inset)); z-index: 100;
+  position: absolute;
+  top: calc(var(--safe-t) + var(--hdr-pad-t) + (var(--hdr-row-h) - var(--hdr-control-h)) / 2);
+  z-index: 100;
+  /* --hdr-pad-t, NOT --corner-inset: this control is absolutely positioned and
+     is therefore the one thing in the header that cannot inherit the row's top
+     edge. Sharing the token is what keeps it on the row's baseline at every
+     breakpoint - it used to sit 8px above the row on desktop and 8px below it
+     on phones. --corner-inset still owns the horizontal inset below. */
   /* Physical left + the landscape safe-area inset, matching --hdr-gutter-l
      exactly (see the TOP-CORNER CONTROL GEOMETRY block). */
   left: calc(var(--safe-l) + var(--corner-inset));
@@ -3731,7 +3851,57 @@ body.gd-open { overflow: hidden; }
 .app-header__actions {
   display: flex; align-items: center; gap: 8px; min-width: 0;
   flex: 1 1 0;
+  min-height: var(--hdr-row-h);   /* all three zones agree on the row - see --hdr-row-h */
 }
+/* Every direct child of the header, whatever it is, on the same centreline and
+   with no margin of its own to shift it off. Stated once here rather than per
+   control, so a control added later inherits the rhythm instead of having to
+   remember it.
+   NOTE margin, not padding: a blanket `padding: 0` would collapse the pill
+   shapes these controls are built from (.btn-edit-measurements' 0 13px, the
+   switches' --switch-pad track inset), so horizontal padding is deliberately
+   left to each control and only stray MARGIN is normalised away. */
+/* ── THE BLACK DOT, and why a blanket child rule caused it ─────────────────
+   REPORTED: a black bullet between the language switch and the cart.
+
+   It is not a list bullet and not a pseudo-element - it is #engineBadge, a real
+   <span class="app-header__engine">, whose text content is a literal U+25CF
+   BLACK CIRCLE glyph. It has been hidden by `.app-header__engine{display:none}`
+   since it was retired, and it stayed hidden until the blanket normalisation
+   rule below was added: `.app-header__actions > *` has the SAME specificity
+   (0,1,0) as `.app-header__engine` and is declared ~2700 lines later, so it won
+   on source order and set the badge back to inline-flex. A rule written to make
+   the row tidy un-hid a retired element.
+
+   Two guards, because either alone would let it back:
+     · the selector excludes anything that is deliberately not a row item, so
+       the rule cannot change the display of something meant to be hidden;
+     · the display:none is re-asserted immediately AFTER it, so source order is
+       working for us rather than against us the next time something sweeps
+       these children.
+   The real lesson is narrower than the fix: a blanket `> *` rule that sets
+   `display` will resurrect anything hidden that way. Prefer excluding, and
+   re-assert. */
+.app-header__nav > *:not(.app-header__engine),
+.app-header__actions > *:not(.cart-dropdown):not(.app-header__engine) {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin: 0;
+}
+/* Retired status dot - re-asserted here, after the sweep above, deliberately. */
+.app-header__engine { display: none !important; }
+/* The cart dropdown is an absolutely-anchored popover, not a row item - it must
+   not be forced inline-flex by the rule above or it lays out as a flex row. */
+.app-header__actions > .cart-dropdown { display: block; }
+.app-header__actions > .cart-dropdown[hidden] { display: none; }
+
+/* List hygiene for the header. Nothing in it is a <ul>/<ol> today - the dot
+   above was a glyph, not a marker - so this changes nothing now. It is here
+   because a marker is the OTHER way a stray dot appears in a flex row, and a
+   future control added as a list would inherit the browser default silently. */
+.app-header ul, .app-header ol, .app-header li {
+  list-style: none; list-style-type: none; margin: 0; padding: 0;
+}
+.app-header li::marker { content: none; }
 .app-header__actions { justify-content: flex-end; position: relative; }   /* anchors .cart-dropdown */
 .app-header__actions .cart-btn { margin: 0; }   /* zone handles placement now */
 /* BUG FIX: the nav pills ("עריכת מידות", the fullscreen switch) used to be the
@@ -3753,6 +3923,7 @@ body.gd-open { overflow: hidden; }
    than force nav/actions to make room for it. */
 .app-header__brand-lockup {
   display: flex; align-items: center; gap: 10px; flex: 0 1 auto; min-width: 0;
+  min-height: var(--hdr-row-h);   /* the zone that used to SET the row now conforms to it */
 }
 .app-header__titles {
   display: flex; flex-direction: column; align-items: flex-start;
@@ -3762,7 +3933,13 @@ body.gd-open { overflow: hidden; }
    proportional. flex:none - the logo never shrinks/distorts; only the text
    beside it truncates under pressure. */
 .brand-mark {
-  width: auto; height: 38px; object-fit: contain; margin: 0; align-self: center; flex: none;
+  width: auto; height: 38px; object-fit: contain; flex: none;
+  /* align-self:center is what actually centres it - this is a flex item, so its
+     baseline plays no part. vertical-align/auto margins are kept alongside for
+     the same reason the rest of this block is explicit: if the lockup is ever
+     un-flexed (an inline fallback, a print sheet), the image still sits on the
+     centreline instead of dropping to the text baseline. */
+  align-self: center; margin: auto 0; vertical-align: middle; display: block;
 }
 
 /* Desktop: widen the camera stage so landscape webcam + AI output show with far
@@ -3808,7 +3985,15 @@ body.gd-open { overflow: hidden; }
   :root {
     --corner-inset: 10px;
     --corner-clear:  8px;
-    --profile-size: 34px;
+    /* THE HEIGHT SHRINKS AS ONE NUMBER HERE TOO. This block already retuned the
+       avatar to 34px and the switch segments to 24px, but --hdr-control-h stayed
+       at its desktop 40px - so below 600px the row seated a 34px avatar beside
+       40px switches, a 40px edit pill and a 40px cart. That is the original
+       ragged-row bug surviving inside the one breakpoint the token did not
+       reach, and it is why the avatar in particular still read as offset.
+       --profile-size is NOT re-declared: at :root it already derives from
+       --hdr-control-h, so retuning the height here carries it automatically. */
+    --hdr-control-h: 34px;
     --lang-seg-w:   30px;
     --fs-seg-w:     28px;
     --switch-pad:    3px;
@@ -3929,7 +4114,9 @@ body.gd-open { overflow: hidden; }
      render in full at 390px instead of ellipsising to "PEA…". */
   .app-header__brand-lockup { gap: 8px; }
 
-  .cart-btn { width: 34px; height: 34px; }
+  /* .cart-btn's hardcoded 34x34 removed - it now follows --hdr-control-h like
+     every other control, which the ≤600px block above already set to 34px. The
+     literal was both redundant and a second place for the size to drift. */
 }
 
 /* ── NARROW PHONE (≤389px: iPhone SE / 13 mini / older Androids) ──────────

@@ -127,10 +127,10 @@ console.log("\n── wiring: the sampler raises the hold before confirmation, n
   check("raised while a switch is pending but NOT yet confirmed (dual-view axis)",
     /const frontBackTurn = dualView && !acquiring && needsSwitch && !confirmed;/.test(watcher),
     watcher.slice(watcher.indexOf("frontBackTurn ="), watcher.indexOf("frontBackTurn =") + 200));
-  check("...and the reason logged distinguishes which axis raised it",
-    /orientHoldBegin\(frontBackTurn \? "turn-detected" : "profile-turn-detected"\)/.test(watcher));
-  check("released only once NEITHER axis has pending evidence",
-    /if \(frontBackTurn \|\| enteringProfile\)[\s\S]*?else if \(_orientHoldActive\) orientHoldEnd\("turn-abandoned"\);/.test(watcher));
+  check("...raised on that axis alone now - see the profile-axis section below",
+    /if \(frontBackTurn\) orientHoldBegin\("turn-detected"\);/.test(watcher));
+  check("released as soon as that evidence clears",
+    /if \(frontBackTurn\) orientHoldBegin\("turn-detected"\);[\s\S]*?else if \(_orientHoldActive\) orientHoldEnd\("turn-abandoned"\);/.test(watcher));
   /* ACQUIRING is the first reading of a DUAL-VIEW session's front/back lock: nothing is
      confirmed, nothing dressed has been rendered yet, and freezing there would stall the
      opening frames behind a still. Meaningless without a lock, so single-view items use
@@ -143,33 +143,59 @@ console.log("\n── wiring: the sampler raises the hold before confirmation, n
     /orientHoldEnd\("watcher-stopped"\)/.test(stop), stop);
 }
 
-console.log("\n── wiring: the profile axis gets the SAME early hold the front/back flip has ──");
+console.log("\n── wiring: the PROFILE hold is RETIRED - it was the 90-degree freeze ──");
 {
-  /* THE REGRESSION THIS COVERS: "when I turn sideways, my real shirt comes back for a
-     moment" - reported live, despite ROTATION_CONTINUITY/SIDE_PROFILE_DEPTH/prompt-only-flip
-     all passing. Root cause: maybeUpdateProfile() (the profile-axis counterpart of
-     maybeSwap()) never called orientHoldBegin() at all - only a front/back vote flip did.
-     So turning edge-on without also flipping front/back got zero freeze protection during
-     the ~500ms-plus window before its own ENTER threshold fires and the pose sentence
-     catches up - covered by prompt text alone, which this file's own comments describe as
-     a probabilistic bias, not a guarantee. */
-  const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);");
-  check("evidence is read off the EXIT floor (earliest signal), not the ENTER threshold",
-    /const enteringProfile = holdReady && !autoProfile && lastProfileScore > ORIENT_PROFILE_EXIT_SCORE;/.test(watcher),
-    watcher.slice(watcher.indexOf("enteringProfile ="), watcher.indexOf("enteringProfile =") + 100));
-  check("profile evidence alone (no front/back vote change) is enough to raise the hold",
-    /if \(frontBackTurn \|\| enteringProfile\)/.test(watcher));
+  /* THIS SECTION INVERTED, and the report that inverted it is worth stating in full:
+     "the feed freezes for a second or two, but ONLY when I turn sideways, and ONLY live -
+     the recording of the same session is smooth."
 
-  /* THE CRITICAL GUARD, same shape as the front/back one two blocks up: a shopper passing
-     THROUGH profile on the way to a full flip must not have the hold released the instant
-     their profile score confirms while the flip itself is still pending - that would reveal
-     a mid-rotation frame before the swap the hold exists to cover has happened. Asserted
-     structurally: the release requires BOTH axes clear (frontBackTurn AND enteringProfile
-     both false), not just the profile one. */
-  const releaseLine = watcher.slice(watcher.indexOf("if (frontBackTurn || enteringProfile)"));
-  check("release requires the front/back axis clear too, not just the profile one",
-    /else if \(_orientHoldActive\) orientHoldEnd\("turn-abandoned"\);/.test(releaseLine) &&
-    releaseLine.indexOf("else if") < releaseLine.indexOf("maybeUpdateProfile"));
+     That asymmetry is the diagnosis. The recorder paints #aiVideo directly; the freeze was
+     #orientFadeCanvas, the opaque still this very hold raises over it. The recorder cannot
+     see that overlay, so live froze and replay did not. Nothing was wrong with WebRTC.
+
+     WHAT MADE IT LAST. `enteringProfile` fired at lastProfileScore >
+     ORIENT_PROFILE_EXIT_SCORE - the EXIT threshold (0.25), deliberately low because its
+     real job is hysteresis on the way out. As an ENTRY trigger it fires the moment a
+     shopper starts to turn, while release needed autoProfile to actually flip
+     (ORIENT_PROFILE_ENTER samples at >= 0.55, ~500ms at best, plus a tick to notice). A
+     clean turn froze ~750ms; a shopper lingering anywhere between 0.25 and 0.55 - most of
+     a real rotation - held it up to the 4s ceiling.
+
+     WHY RETIRED RATHER THAN RETUNED. What this hold covered was the window until the POSE
+     SENTENCE landed. There is no pose sentence: under strict image-only conditioning the
+     prompt is one frozen string, so maybeUpdateProfile()'s applyActive() finds image and
+     prompt both unchanged and dispatches nothing (applyGarment's no-op skip). It was
+     freezing the live view for up to four seconds to hide a transition that no longer
+     transitions. Retuning the threshold would only shorten a freeze with no purpose left.
+
+     THE FRONT/BACK HOLD STAYS - asserted in the section above - because it covers a real
+     asset swap: with COMPOSITE_DEFAULT off, a confirmed flip changes the reference image
+     and re-uploads it, so there genuinely is a window between garments.
+
+     TO RESTORE: give it something to cover first (restore a pose clause to the prompt -
+     see IMAGE_ONLY_PROMPT's restore list), then raise it on ORIENT_PROFILE_ENTER_SCORE,
+     never on the EXIT floor. */
+  const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);");
+  /* Comments stripped: the block comment at this exact site is the RECORD of the bug and
+     names every symbol below by design. A check that trips over the explanation would
+     force whoever reads it to delete the documentation - the same rule variant-sync and
+     image-first already follow. */
+  const code = watcher.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  check("no profile-axis trigger raises the hold any more",
+    !/enteringProfile/.test(code) && !/profile-turn-detected/.test(code),
+    code.slice(code.indexOf("const dualView"), code.indexOf("const dualView") + 320));
+  check("...and the EXIT floor is no longer used as an entry threshold anywhere",
+    !/lastProfileScore > ORIENT_PROFILE_EXIT_SCORE/.test(code),
+    "the exit threshold is hysteresis on the way OUT - as an entry trigger it fires far too early");
+  check("the front/back hold is untouched - it covers a real asset swap",
+    /if \(frontBackTurn\) orientHoldBegin\("turn-detected"\);/.test(watcher));
+  /* The mechanism is deliberately left intact: orientHoldBegin/End and the fade overlay
+     are still what the front/back swap uses, and are what a restored profile hold would
+     plug back into. Retiring a trigger must not delete the machinery behind it. */
+  check("the hold machinery itself survives, so restoring the trigger stays a one-liner",
+    /function orientHoldBegin\(reason\)/.test(SRC) && /function orientHoldEnd\(reason\)/.test(SRC));
+  check("...and app.js records why it went, next to the code that used to do it",
+    /THE 90-DEGREE FREEZE\. This block WAS the bug/.test(SRC));
 }
 
 console.log("\n── wiring: single-view items get the SAME protection, with their own readiness gate ──");
@@ -186,8 +212,13 @@ console.log("\n── wiring: single-view items get the SAME protection, with th
      autoOrientation) is permanently inert without AUTO_ANGLE. isGarmentApplied is the
      readiness signal that actually applies to them: once one frame has ever been dressed,
      a profile reading is worth protecting. */
-  check("single-view readiness uses isGarmentApplied, not the (meaningless for them) lock",
-    /const holdReady = dualView \? !acquiring : isGarmentApplied;/.test(watcher));
+  /* `holdReady` went with the profile hold - it existed only to gate that trigger for
+     single-view sessions, which have no front/back lock to be "acquiring". The readiness
+     concept still matters for the axis that survives, and frontBackTurn carries it via
+     !acquiring; single-view items simply never reach that branch. */
+  check("the retired readiness gate is gone with the trigger it gated",
+    !/holdReady/.test(watcher.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")),
+    "a dangling gate for a trigger that no longer exists reads as a half-done removal");
   check("frontBackTurn is dual-view only - maybeSwap() stays inert for single-view items",
     /const frontBackTurn = dualView && /.test(watcher));
   /* The other half of the fix: `confirmed` can go permanently true for a single-view item
@@ -196,8 +227,19 @@ console.log("\n── wiring: single-view items get the SAME protection, with th
      behind it. Without gating the skip on dualView too, maybeUpdateProfile() would stop
      being called for the rest of the session the moment the shopper is first read as
      "front", silently undoing the whole fix. */
+  /* Still per-tick and still gated the same way - but no longer AWAITED. Awaiting it held
+     `sampling` true across a network round-trip, so the next orientation sample was
+     skipped and the watcher's effective rate collapsed from 250ms to however long Decart
+     took to answer - during the turn, which is exactly when the signal matters most. The
+     mutex lives inside maybeUpdateProfile (`applying`), not here, so dropping the await
+     cannot produce overlapping applies. */
   check("maybeUpdateProfile's per-tick call is skipped only for a PENDING DUAL-VIEW swap",
-    /if \(!\(dualView && confirmed\)\) \{\s*\n\s*await maybeUpdateProfile\(lastProfileScore\);/.test(watcher));
+    /if \(!\(dualView && confirmed\)\) \{\s*\n(?:[^\n]*\n)*?\s*maybeUpdateProfile\(lastProfileScore\)\.catch\(\(\) => \{\}\);/.test(watcher));
+  check("...and runs in the background, so a slow apply cannot stall the next sample",
+    /maybeUpdateProfile\(lastProfileScore\)\.catch\(\(\) => \{\}\);/.test(watcher) &&
+    !/await maybeUpdateProfile\(/.test(watcher));
+  check("...while maybeSwap stays awaited - it owns the hold's lifecycle",
+    /if \(dualView && confirmed\) await maybeSwap\(lastVote\);/.test(watcher));
   check("maybeSwap is only ever invoked for a dual-view session",
     /if \(dualView && confirmed\) await maybeSwap\(lastVote\);/.test(watcher));
 }

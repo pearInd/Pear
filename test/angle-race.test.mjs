@@ -220,11 +220,29 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
      and full-look paths exposed, so assert against the SOURCE that every builder carries
      both - a regex on one rendered clause cannot see the other three builders. */
   /* COMPRESSED. STRICT_INPAINT and ROTATION_CONTINUITY ran 1,650 and 458 characters -
-     the first alone was nearly twice the entire 226-token budget - and are now
-     DENSE.bodyFidelity / DENSE.inpaintLock / DENSE.rotation. The PROPERTY these checks
-     encode is unchanged, and is the one worth keeping: every builder carries the
-     body-fidelity and passthrough clamps, on every path, so a new builder cannot ship
-     without them. */
+     the first alone was nearly twice the entire 226-token budget - and became
+     DENSE.bodyFidelity / DENSE.inpaintLock / DENSE.rotation.
+
+     ── THEN STRICT IMAGE-ONLY RETIRED ALL THREE, and this section had to follow. The
+     tuxedo survived two rounds of trimming, and the conclusion the third round draws is
+     that trimming was the wrong axis: with no negative_prompt and no image-strength lever
+     on Decart's set(), the only control over how hard the reference image is weighed is
+     how much TEXT sits beside it, and EVERY clause is text - structural ones included.
+     The prompt is now one frozen string (IMAGE_ONLY_PROMPT), identical on every dispatch.
+
+     So the property this section used to assert - "every builder carries the clamps" -
+     is false by design, and asserting it would only describe a file that no longer
+     exists. What replaces it is the property that makes the retirement reversible and
+     the one that catches the real regression risk:
+       · every builder returns the SAME frozen constant (below), so a future builder
+         cannot reintroduce assembly without this failing;
+       · the clauses are all still ON FILE with their reasoning, so restoring any one is
+         a two-line edit rather than an archaeology exercise;
+       · the assembly machinery (fitPrompt, the P tiers, DENSE) is intact, so that edit
+         has something to plug into.
+     THE LARGEST LOSS is inpaintLock - nothing now stands between this prompt and a
+     regenerated face or room. It is called out first in app.js's restore list for that
+     reason, and pinned here so the ranking cannot drift. */
   const builders = [
     ["buildPrompt (catalog)", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
     ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
@@ -233,18 +251,34 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
   ];
   for (const [name, re] of builders) {
     const body = (SRC.match(re) || [""])[0];
-    check(`${name} carries the body-fidelity clamp`,
-      body.includes("DENSE.bodyFidelity"), body.slice(-300));
-    check(`${name} carries the face/background passthrough clamp`,
-      body.includes("DENSE.inpaintLock"), body.slice(-300));
+    check(`${name} returns the frozen prompt and assembles nothing`,
+      /return IMAGE_ONLY_PROMPT;/.test(body) && !/fitPrompt\(/.test(body), body.slice(-300));
   }
 
-  check("the body-fidelity clamp still forbids slimming or idealizing the shopper",
-    /never slim them/.test(SRC));
-  check("the passthrough clamp still names face, skin and background",
-    /Face, skin, hands and background pass through untouched/.test(SRC));
-  check("rotation continuity still promises the garment stays on through a turn",
+  check("the passthrough clamp is still on file, and named as the first to restore",
+    /Face, skin, hands and background pass through untouched/.test(SRC) &&
+    /THE LARGEST[\s\S]{0,80}LOSS and the one to restore first/.test(SRC),
+    "retiring a clause from assembly must not delete it, nor lose its ranking");
+  check("the retired body-fidelity clamp is still on file too",
+    /bodyFidelity:\s+"Keep their real body volume; never slim them\."/.test(SRC));
+  check("...as is rotation continuity",
     /The garment stays on through any turn/.test(SRC));
+  /* The assembly machinery is deliberately NOT deleted: a restore is only two lines if
+     fitPrompt() and the priority tiers are still there to plug into. */
+  check("fitPrompt() and the priority tiers survive, so a restore stays a two-line edit",
+    /function fitPrompt\(parts, max = PROMPT_MAX_CHARS\)/.test(SRC) &&
+    /const P = Object\.freeze\(\{ CORE: 0/.test(SRC));
+
+  /* THE INVARIANT the tuxedo report is actually about, and the only form of it that
+     catches the regression: no builder may put ANY generated text on the wire. Stated as
+     an absence, because the failure is somebody adding one more well-meant clause. */
+  const codeOnly = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  check("no builder assembles a garment DESCRIPTION alongside the reference",
+    !/colorName\(activeColorOf\(/.test(codeOnly) && !/DENSE\.assetLock/.test(codeOnly),
+    "the reference image is the description; a sentence beside it competes with it");
+  check("...and no builder interpolates anything at all into the prompt",
+    !/IMAGE_ONLY_PROMPT\s*\+/.test(codeOnly) && !/\$\{[^}]*\}[^`]*reference image/.test(codeOnly),
+    "a template hole is how a description gets back in, one field at a time");
 }
 
 console.log("\n── single-view items (no AI Auto) now get a truthful side clause too ──");

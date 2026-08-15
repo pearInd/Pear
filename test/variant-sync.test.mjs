@@ -87,25 +87,37 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
 {
   check("activeColorOf resolves through the variant table",
     mk("crimson").activeColorOf(ITEM) === "#c2452f");
-  /* The actual regression: three builders interpolated colorName(item.color). If any
-     reverts, a swatch swap silently sends a contradicting colour word again. */
-  /* The composite builder deliberately names NO colour: in AI Combined there is always a
-     reference image on the wire, and its pixels state the colour more precisely than a
-     word from a catalog hex. Naming one there buys nothing and costs a whole class of
-     text-vs-image contradiction. The other two builders CAN run with no usable reference,
-     so for them the word is the only colour information there is - they keep it, and it
-     must resolve through the variant. */
-  check("the composite builder points at the image and names no colour",
-    APP.includes("`the ${noun} in the reference image`") &&
-    APP.includes('"the exact garment in the reference image"'),
-    "AI Combined must not assert a colour word against its own reference");
-  for (const site of [
-    "with ${colorName(activeColorOf(item))} ${noun}:",
-    "replace their top with ${colorName(activeColorOf(top))}",
-  ]) {
-    check(`text-only builder still reads the VARIANT colour: ${site.slice(0, 40)}…`,
-      APP.includes(site), site);
-  }
+  /* The original regression: three builders interpolated colorName(item.color), so a
+     swatch swap sent a contradicting colour word while the reference image showed the
+     new variant. The first fix routed those interpolations through activeColorOf() so
+     the WORD followed the swatch.
+
+     ── STRICT IMAGE-ONLY SUPERSEDED THAT FIX ENTIRELY ─────────────────────────────
+     The tuxedo report (a Spider-Man tee rendering as formalwear) traced to the same
+     mechanism this section was written about, one step further along: a prompt that
+     DESCRIBES a garment is a prompt the model can satisfy from its own prior instead of
+     from the reference pixels. No builder names a colour, a subtype noun or any other
+     garment adjective any more - every one of them returns IMAGE_ONLY_PROMPT, a frozen
+     string with no interpolation in it at all.
+
+     That makes the contradiction structurally impossible rather than merely synchronised,
+     which is the stronger property and the one asserted here. activeColorOf() itself is
+     unchanged and still load-bearing (the swatch UI, the "Now fitting" chip and the cart
+     bridge all read it) - only its route into the PROMPT is gone. If a colour word ever
+     returns to a builder, this is what catches it. */
+  const promptColour = APP.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  check("no builder interpolates a colour word into a prompt at all",
+    !/colorName\(activeColorOf\(/.test(promptColour),
+    "the reference image states the colour; a word beside it can only contradict it");
+  check("...nor a subtype noun (SHIRT_NOUN/SUBTYPE_PROMPT are prompt-free now)",
+    !/SHIRT_NOUN\[|SUBTYPE_PROMPT\[/.test(promptColour),
+    "a garment noun is a description the model can satisfy without reading the image");
+  check("every builder returns the frozen prompt instead",
+    (APP.match(/return IMAGE_ONLY_PROMPT;/g) || []).length >= 4,
+    "buildPrompt, buildCustomPrompt, buildCompositePrompt and buildLookPrompt");
+  check("...and the frozen prompt has no interpolation hole to leak a variant into",
+    /const IMAGE_ONLY_PROMPT =\s*\n?\s*"[^`]*";/.test(APP) && !/IMAGE_ONLY_PROMPT[\s\S]{0,200}\$\{/.test(APP),
+    "a template hole here is how a colour word gets back onto the wire");
   /* Comments stripped first: variantMetaOf's own doc block QUOTES the old call as the
      thing it replaced, and a check that trips over the explanation of the fix is worse
      than no check - it would force whoever reads it to delete the documentation. */

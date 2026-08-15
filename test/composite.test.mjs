@@ -326,11 +326,20 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
       new RegExp(`clampPromptForWire\\([\\s\\S]{0,400}"${site}"`).test(SRC),
       `no clampPromptForWire(..., "${site}") found`);
   }
-  /* Every rtClient.set()/setPrompt() call must draw from a guarded string. If a fifth
-     send site is ever added straight from a builder, this is what catches it. */
+  /* Every rtClient.set()/setPrompt() call must draw from a guarded string. This is the
+     count that catches a NEW send site being added straight from a builder.
+
+     FIVE now, not four: the frame-freeze watchdog's keep-alive ping is a real dispatch -
+     setPrompt() on the live session, deliberately bypassing applyGarment() (which would
+     compare the payload to what it believes is on the wire, find both halves identical
+     and correctly skip - right for an update, wrong for a liveness ping). It draws from
+     clampPromptForWire(IMAGE_ONLY_PROMPT, "freezeKeepAlive") like every other site, which
+     is the property this section is actually about; the number is just how it is caught. */
   const sends = (SRC.match(/await rtClient\.set\(|await rtClient\.setPrompt\(/g) || []).length;
   check(`all ${sends} rtClient send sites draw from a guarded prompt`,
-    sends === 4, `${sends} send sites found - if this changed, verify the new one is clamped`);
+    sends === 5, `${sends} send sites found - if this changed, verify the new one is clamped`);
+  check("the freeze keep-alive is clamped too, so recovery cannot bypass the budget guard",
+    /clampPromptForWire\(IMAGE_ONLY_PROMPT, "freezeKeepAlive"\)/.test(SRC));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
