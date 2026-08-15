@@ -35,6 +35,7 @@ const {
   APPLY_TIMEOUT_MS,
   HEALTH_PROBE_TIMEOUT_MS,
   TOAST_DURATION_MS,
+  CATEGORY_LLM_TIMEOUT_MS,
   TOKEN_ENDPOINT,
   HEALTH_ENDPOINT,
   SDK_URLS,
@@ -1342,8 +1343,23 @@ function parseHandoff() {
     try { window.__pearStoreDomain = new URL(widgetUrl).hostname; }
     catch (e) { console.warn("[PEAR] parseHandoff() - could not derive store domain from garment_url:", e?.message || e); }
 
-    const wType   = (q.get("garment_type") || "tops").toLowerCase();
-    const isPants = wType === "pants" || wType === "bottoms";
+    /* THE HARDCODED DEFAULT THAT SHIPPED THE BUG. This used to read
+         (q.get("garment_type") || "tops")
+       so a widget that could not classify the product - or an older widget that never
+       sent the param - handed the room a confident "tops" it had no basis for, and the
+       room's own classifier never ran because the value looked like a verdict.
+
+       "unknown" is now forwarded explicitly by the widget and treated as ABSENT here, so
+       the room falls through to its own title classifier (which knows the Hebrew stems
+       the widget's list was missing) and, failing that, the LLM tier. The old
+       `isPants = wType === "pants" || wType === "bottoms"` also silently dropped
+       "shorts" and "skirt" onto the upper body; EXPLICIT_BOTTOM_TYPES covers the whole
+       vocabulary in one place now. */
+    const wTypeRaw = (q.get("garment_type") || "").toLowerCase().trim();
+    const wType    = wTypeRaw === "unknown" ? "" : wTypeRaw;
+    const wName    = q.get("garment_name") || q.get("name") || "";
+    const isPants  = EXPLICIT_BOTTOM_TYPES.has(wType) ||
+                     (!EXPLICIT_TOP_TYPES.has(wType) && classifyGarmentTitle(wName) === "bottom");
     // Multi-image gallery: the widget forwards ALL product photos as a comma-joined
     // list of individually-encoded URLs (?garment_images=), ALREADY sorted front-first
     // (pear-widget.js classifies them through /api/classify-images). Photo 1 is the
@@ -1462,8 +1478,252 @@ function parseHandoff() {
   return result;
 }
 
+/* ── Garment category detection - "my shorts were fitted as a shirt" ─────────────
+   THE BUG: "מכנס קצר רגל - FOX" was labelled "בגד עליון שהעלית" and sent through the
+   upper-body prompt branch. The branch was right; the CATEGORY handed to it was wrong.
+
+   FIVE SEPARATE MISSES produced it, all in the same keyword sweep, and all landing on a
+   silent `DEFAULT_CATEGORY = "tops"`:
+
+     · the list held "מכנסיים" (plural) and the title says "מכנס" (singular stem).
+       Hebrew inflects by SUFFIX, so a substring test for a fully-inflected form cannot
+       match its own stem - מכנס / מכנסי / מכנסיים are three surface forms of one word.
+     · "ברמודה" and "שורטס" were not in the list at all.
+     · "ג'ינס" was listed with the Hebrew geresh (U+05F3) only; storefronts type an
+       ASCII apostrophe (U+0027) just as often. Same word, different codepoint.
+     · "חצאית" was filed under `dress`, and the only lower-body test anywhere was
+       `type === "pants" || type === "bottoms"` - so every skirt read as a top.
+
+   AND THE TOPS SIDE WAS BROKEN IDENTICALLY, just invisibly: "חולצת פולו" never matched
+   "חולצה" either (construct state). It came out right only because the fallback was
+   "tops" - a default that hides the failure it is also causing.
+
+   SO THE FIX IS STEMS, not a longer list of surface forms. Matching מכנס / חולצ / חצאי
+   matches every inflection; matching מכנסיים matches exactly one. English keeps word
+   boundaries instead, because it compounds in the other direction - a stem match on
+   "short" would swallow "short sleeve" and turn every tee into a pair of shorts.
+
+   AND ABSTENTION IS A REAL ANSWER. Tier 1 returns null when it does not know, which is
+   what makes a tier 2 possible at all: a sweep that silently guesses "top" has nothing
+   left to escalate, and that guess is exactly what shipped the bug. */
+const GARMENT_CATEGORY_KEYWORDS = Object.freeze({
+  /* Hebrew entries are STEMS, matched as substrings so every inflection follows.
+     English entries are matched with word boundaries - see WORD_BOUNDED below. */
+  bottom: Object.freeze({
+    he: ["מכנס", "ג'ינס", "ג׳ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "טייצ", "לגינ"],
+    en: ["pants", "shorts", "trousers", "jeans", "skirt", "skirts", "bottoms", "bottom",
+         "leggings", "chinos", "joggers", "sweatpants", "slacks", "culottes", "bermuda"],
+  }),
+  top: Object.freeze({
+    he: ["חולצ", "טישרט", "טי-שירט", "סווטשירט", "סוודר", "גופי", "ז'קט", "ז׳קט",
+         "מעיל", "קפוצ'ון", "קפוצ׳ון", "בלייזר", "קרדיגן", "טופ"],
+    en: ["shirt", "tshirt", "t-shirt", "tee", "top", "tops", "hoodie", "jacket", "blazer",
+         "sweater", "sweatshirt", "cardigan", "blouse", "polo", "tank", "pullover", "coat"],
+  }),
+});
+
+/* Hebrew has no case and no word boundary that \b understands (it is non-ASCII, so \b
+   sits at every Hebrew/Latin transition and nowhere useful inside a Hebrew phrase), which
+   is the other half of why the two languages are matched differently rather than merged
+   into one list. */
+const hasHebrewStem = (text, stems) => stems.some((s) => text.includes(s));
+const hasEnglishWord = (text, words) =>
+  words.some((w) => new RegExp(`\\b${w.replace(/[-]/g, "\\-")}\\b`, "i").test(text));
+
+/**
+ * TIER 1 - keyword/stem classification of a garment from its free text.
+ *
+ * @param {...(string|null|undefined)} texts - title, name, category; joined and scanned.
+ * @returns {"top"|"bottom"|null} null means ABSTAIN - either nothing matched, or both
+ *   sides did. Both are escalated to tier 2 rather than resolved by list order, because
+ *   list order is not evidence and picking by it is how the original bug read as a
+ *   confident verdict.
+ */
+/* THE FABRIC/GARMENT COLLISION. "ג'ינס" and "denim" name a lower-body garment AND a
+   material, so "ז'קט ג'ינס" (denim jacket) matches both sides at once. A denim jacket is
+   a common real product, and it is a TOP - the garment noun is the subject and the fabric
+   is a modifier of it. Stripping the fabric words and re-testing resolves the collision
+   in the direction that is right by grammar rather than by list order; anything still
+   ambiguous afterwards is genuinely ambiguous and abstains properly. */
+const FABRIC_AMBIGUOUS = ["ג'ינס", "ג׳ינס", "jeans", "denim"];
+
+function classifyGarmentTitle(...texts) {
+  const raw = texts.filter((t) => typeof t === "string" && t.trim()).join(" ");
+  if (!raw) return null;
+  const text = raw.toLowerCase();
+  const scan = (t) => ({
+    bottom: hasHebrewStem(t, GARMENT_CATEGORY_KEYWORDS.bottom.he) ||
+            hasEnglishWord(t, GARMENT_CATEGORY_KEYWORDS.bottom.en),
+    top:    hasHebrewStem(t, GARMENT_CATEGORY_KEYWORDS.top.he) ||
+            hasEnglishWord(t, GARMENT_CATEGORY_KEYWORDS.top.en),
+  });
+
+  let { bottom, top } = scan(text);
+  if (bottom && top) {
+    /* Re-scan with the fabric words removed. If the lower-body evidence was ONLY the
+       fabric ("ז'קט ג'ינס" → "ז'קט "), the top noun stands alone and wins. If real
+       lower-body evidence survives ("מכנס ג'ינס" → "מכנס "), nothing changes and the
+       title is still genuinely two-sided. */
+    const stripped = FABRIC_AMBIGUOUS.reduce((s, w) => s.split(w).join(" "), text);
+    const re = scan(stripped);
+    if (re.top && !re.bottom) return "top";
+    if (re.bottom && !re.top) return "bottom";
+  }
+  if (bottom === top) return null;              // neither, or still both - abstain
+  return bottom ? "bottom" : "top";
+}
+
+/* The two vocabularies in this codebase - "top"/"bottom" from the classifier, and
+   "upper_body"/"lower_body" in item state (what slotOf() and isBottomsGarment() read) -
+   converted in exactly one place. Two spellings of one fact is how they drift apart. */
+const categoryToGarmentType = (cat) => (cat === "bottom" ? "lower_body" : "upper_body");
+
+/* Explicit type markers, from the widget's own vocabulary AND the catalog's. "dress" is
+   deliberately absent: a dress covers both regions and has no correct answer here, so it
+   falls through to the title/LLM tiers rather than being forced onto a side. */
+const EXPLICIT_BOTTOM_TYPES = new Set(["pants", "bottoms", "bottom", "shorts", "skirt", "lower_body"]);
+const EXPLICIT_TOP_TYPES    = new Set(["shirt", "top", "tops", "outerwear", "upper_body"]);
+
+/**
+ * The full resolution chain, in priority order. Each tier only runs when every tier
+ * above it abstained.
+ *
+ *   1. garmentType   the catalog's own classification - ground truth, never overridden
+ *   2. type          the widget/catalog type marker, incl. shorts/skirt/outerwear which
+ *                    the old `type === "pants"` test dropped on the floor
+ *   3. title         tier 1 stems, above
+ *   4. LLM           tier 2, for genuinely ambiguous titles and bare custom uploads
+ *   5. "top"         the majority of the catalog - now the LAST resort rather than the
+ *                    FIRST, which is the actual difference between this and the bug
+ *
+ * @param {object|null} item
+ * @returns {Promise<"top"|"bottom">} always resolves; never throws.
+ */
+async function resolveGarmentCategory(item) {
+  if (!item) return "top";
+  if (item.garmentType === "lower_body") return "bottom";
+  if (item.garmentType === "upper_body") return "top";
+
+  const type = String(item.type ?? item.category ?? "").toLowerCase().trim();
+  if (EXPLICIT_BOTTOM_TYPES.has(type)) return "bottom";
+  if (EXPLICIT_TOP_TYPES.has(type)) return "top";
+
+  const byTitle = classifyGarmentTitle(item.name, item.title, item.category);
+  if (byTitle) return byTitle;
+
+  /* TIER 2. Bounded and swallowed: a classification call is an ENHANCEMENT, and it must
+     never be able to stall or fail a try-on. Promise.race against a timer rather than an
+     AbortController because the seam is a plain async function - callers may implement it
+     over fetch, over a worker, or (in tests) not at all, and the bound has to hold for
+     all three. Everything that is not a clean "top"/"bottom" falls through to the
+     default, including a hang, a throw, an unconfigured API key and a garbage string. */
+  try {
+    const verdict = await Promise.race([
+      classifyGarmentViaLLM(item.name || item.title || ""),
+      new Promise((resolve) => setTimeout(() => resolve(null), CATEGORY_LLM_TIMEOUT_MS)),
+    ]);
+    if (verdict === "top" || verdict === "bottom") return verdict;
+  } catch (e) {
+    console.warn("[PEAR] resolveGarmentCategory() - LLM tier failed, using default:", e?.message || e);
+  }
+  return "top";
+}
+
 function toItem(raw) {
-  return { ...raw, garmentType: raw.type === "pants" ? "lower_body" : "upper_body" };
+  /* Tier 1 only - toItem() is synchronous and runs while building the catalog grid, where
+     a per-card network round trip would be both slow and billable. The LLM tier runs later
+     and only for the ONE item the shopper actually selects (see refineActiveItemCategory).
+     The old body was `raw.type === "pants" ? "lower_body" : "upper_body"`, which silently
+     dropped shorts, skirts and every Hebrew title onto the upper body. */
+  const explicit = String(raw?.type ?? "").toLowerCase().trim();
+  let category = null;
+  if (EXPLICIT_BOTTOM_TYPES.has(explicit)) category = "bottom";
+  else if (EXPLICIT_TOP_TYPES.has(explicit)) category = "top";
+  else category = classifyGarmentTitle(raw?.name, raw?.title, raw?.category);
+  return { ...raw, garmentType: categoryToGarmentType(category ?? "top"), categoryResolved: !!category };
+}
+
+/* Memoized per title: the same product is re-resolved on every swatch change, every
+   replay and every re-entry into the room, and none of those are new information. */
+const _categoryLLMCache = new Map();
+
+/**
+ * TIER 2 - the network seam. Kept as its own function (rather than inlined into
+ * resolveGarmentCategory) because it is the only part that touches the network, and
+ * keeping it separate is what lets the resolver be tested without one.
+ *
+ * NEVER THROWS AND NEVER REJECTS. Returns null for every failure - no key configured,
+ * HTTP error, malformed body, unknown verdict - because the caller's contract is that a
+ * classification miss degrades to tier 1 rather than surfacing to the shopper.
+ * @param {string} title
+ * @returns {Promise<"top"|"bottom"|null>}
+ */
+async function classifyGarmentViaLLM(title) {
+  const key = String(title || "").trim();
+  if (!key) return null;
+  if (_categoryLLMCache.has(key)) return _categoryLLMCache.get(key);
+  let verdict = null;
+  try {
+    const resp = await fetch(`${location.origin}/api/classify-garment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: key }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data?.category === "top" || data?.category === "bottom") verdict = data.category;
+    }
+  } catch (e) {
+    console.warn("[PEAR] classifyGarmentViaLLM() - unavailable, tier 1 stands:", e?.message || e);
+  }
+  _categoryLLMCache.set(key, verdict);
+  return verdict;
+}
+
+/**
+ * Re-resolve the ACTIVE item's category through every tier, including the LLM, and apply
+ * the correction if it disagrees with the synchronous tier-1 guess toItem() made.
+ *
+ * WHY THIS EXISTS AS A SECOND PASS. toItem() runs while building the catalog grid, once
+ * per card; the LLM tier cannot run there without a network round trip per card. It also
+ * cannot run at go-live, because by then the prompt is already on the wire. So it runs on
+ * SELECTION - one item, one call, cached - which is the only point where the cost is one
+ * request and the answer still arrives before it matters.
+ *
+ * DELIBERATELY A NO-OP WHEN TIER 1 WAS CONFIDENT (`categoryResolved`), so the common path
+ * never touches the network at all. Mirrors the late-correction pattern
+ * PEAR_UPDATE_GARMENT already uses for the product size list.
+ */
+async function refineActiveItemCategory(item) {
+  if (!item || item.categoryResolved) return;
+  const gen = sessionGen;
+  const category = await resolveGarmentCategory(item);
+  const garmentType = categoryToGarmentType(category);
+  /* The shopper may have swapped items (or left) during the round trip - applying a
+     verdict for a garment that is no longer active is the same class of bug as the
+     reconnect path re-applying a stale garment. */
+  if (gen !== sessionGen || activeItem !== item) return;
+  if (item.garmentType === garmentType) return;
+  console.log(`[PEAR] category refined: ${item.name} → ${category} (was ${item.garmentType})`);
+  item.garmentType = garmentType;
+  item.categoryResolved = true;
+  /* Both surfaces the wrong category was visible on: the slot state that decides which
+     prompt builder runs, and the chip that said "בגד עליון" over a pair of shorts.
+
+     THE LOCAL IS NAMED `refinedSlot` ON PURPOSE, and this comment deliberately does not
+     spell out the name it avoids. setActiveItem()'s slot write is the canonical one, and
+     outfit-slot-isolation.test.mjs extracts that block out of app.js by matching its
+     opening line as a literal string, then executes it. The match takes the FIRST
+     occurrence in the file - so an identically-shaped statement ABOVE setActiveItem()
+     silently becomes the code under test, and the suite starts asserting against the
+     wrong function. A comment quoting the marker does it too, which is why this one
+     describes it instead. Extract markers in this repo are an interface: don't collide
+     with them, in code or in prose. */
+  const refinedSlot = slotOf(item);
+  activeOutfit[refinedSlot] = item;
+  activeOutfit[refinedSlot === "top" ? "bottom" : "top"] = null;
+  renderActiveGarment();
+  updateSizeMismatchUI();   // the size ladder is category-scoped too
 }
 
 /* =============================================================================
@@ -1841,6 +2101,12 @@ function setActiveItem(item, opts = {}) {
     }, 35000);
   }
   renderActiveGarment();             // shows either the single item or the full look
+  /* Fire-and-forget tier-2 category refinement. A no-op unless toItem()'s keyword pass
+     ABSTAINED on this item, so the common path never touches the network; when it did
+     abstain, this is the one point where the cost is a single request and the verdict
+     still lands before go-live. It re-renders the chip itself if the answer moves. */
+  refineActiveItemCategory(item).catch((e) =>
+    console.warn("[PEAR] refineActiveItemCategory() failed, tier-1 category stands:", e?.message || e));
   // Fire-and-forget: builds the FRONT|BACK composite the instant a distinct back is
   // already known (e.g. an inline ?garment_url_back=), instead of waiting for go-live.
   ensureActiveGarmentComposite(item);
@@ -6511,14 +6777,13 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    the thing to keep. */
 const CATEGORY_ANCHOR = Object.freeze({
   top:
-    "Fit and replace ONLY the subject's upper garment using the exact upper garment from" +
-    " the reference image. Strictly preserve the subject's live pants/lower garment as" +
-    " seen on camera. Do NOT replace or alter the subject's lower clothing.",
+    "Fit and replace ONLY the subject's upper garment (shirt/top) using the exact upper" +
+    " garment from the reference image. Strictly preserve the subject's live pants/lower" +
+    " garment as seen on camera.",
   bottom:
-    "Fit and replace ONLY the subject's lower garment (pants/shorts) using the exact lower" +
-    " garment from the reference image. Strictly preserve the subject's live upper garment" +
-    " (shirt/top) as seen on camera. Do NOT apply or render any shirt, jacket, or upper" +
-    " clothing from the reference image.",
+    "Fit and replace ONLY the subject's lower garment (pants/shorts) using the exact" +
+    " shorts/pants shown in the reference image. Strictly keep and preserve the subject's" +
+    " live shirt/upper garment completely unchanged.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable

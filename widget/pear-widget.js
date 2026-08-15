@@ -190,16 +190,33 @@
     for (var i = 0; i < injectedButtons.length; i++) lockButton(injectedButtons[i]);
   }
 
-  /* Garment-category keyword map (scanned against product name + page title). */
+  /* Garment-category keyword map (scanned against product name + page title).
+
+     HEBREW ENTRIES ARE STEMS, NOT SURFACE FORMS, and that is the fix for "מכנס קצר רגל -
+     FOX" being fitted as a shirt. Hebrew inflects by SUFFIX: מכנס / מכנסי / מכנסיים are
+     one word in three forms, and חולצה / חולצת likewise. The old list held only the fully
+     inflected "מכנסיים" and "חולצה", so a substring test missed every other form and fell
+     through to the silent "tops" default below. Matching the stem matches all of them.
+
+     ALSO FIXED HERE: ברמודה/שורטס were absent entirely; ג'ינס was listed only with the
+     Hebrew geresh (U+05F3) while storefronts type an ASCII apostrophe (U+0027) just as
+     often; and חצאית was filed under `dress`, which the fitting room read as a top
+     because its only lower-body test was `type === "pants" || type === "bottoms"`.
+     A skirt is lower-body, so it belongs here. */
   var CATEGORY_KEYWORDS = {
-    shirt: ["חולצה", "טישרט", "גופייה", "shirt", "tee", "top",
-            "blouse", "sweater", "hoodie", "crop"],
-    pants: ["מכנסיים", "ג׳ינס", "pants", "jeans", "trousers",
-            "shorts", "leggings", "skirt"],
-    dress: ["שמלה", "חצאית", "dress", "jumpsuit", "romper"],
-    outerwear: ["מעיל", "ג׳קט", "coat", "jacket", "blazer", "cardigan"]
+    pants: ["מכנס", "ג'ינס", "ג׳ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "לגינ",
+            "pants", "jeans", "trousers", "shorts", "leggings", "skirt", "bermuda",
+            "chinos", "joggers", "sweatpants"],
+    shirt: ["חולצ", "טישרט", "טי-שירט", "סווטשירט", "סוודר", "גופי", "טופ",
+            "shirt", "tee", "top", "blouse", "sweater", "hoodie", "crop", "polo", "tank"],
+    dress: ["שמלה", "dress", "jumpsuit", "romper"],
+    outerwear: ["מעיל", "ז'קט", "ז׳קט", "ג׳קט", "ג'קט", "coat", "jacket", "blazer", "cardigan"]
   };
-  var DEFAULT_CATEGORY = "tops";
+  /* NOT "tops". A guess that is indistinguishable from a verdict is what let every miss
+     above reach the fitting room as a confident upper-body classification, suppressing
+     the room's own (stronger) classifier. "unknown" is forwarded as-is and parseHandoff()
+     treats it as absent, so the room classifies the title itself. */
+  var DEFAULT_CATEGORY = "unknown";
 
   /* src substrings that mark an image as decorative, never a garment */
   var EXCLUDE_SRC = ["logo", "icon", "sprite", "placeholder", "blank", "pixel"];
@@ -259,14 +276,42 @@
     return name || d.title || "Garment";
   }
 
-  function detectCategory(name) {
-    var haystack = ((name || "") + " " + (d.title || "")).toLowerCase();
+  /* "ג'ינס"/"denim" name a lower-body garment AND a material, so "ז'קט ג'ינס" (a denim
+     JACKET) matches the pants list on the fabric alone. Returning "pants" there is not a
+     near-miss: the widget's verdict is EXPLICIT, so it outranks the fitting room's own
+     (smarter) classifier, and a denim jacket would be fitted as trousers. Mirrors
+     classifyGarmentTitle()'s FABRIC_AMBIGUOUS pass in fitting-room/app.js - keep the two
+     in step, since whichever one is wrong is the one that wins. */
+  var FABRIC_AMBIGUOUS = ["ג'ינס", "ג׳ינס", "jeans", "denim"];
+
+  function matchCategory(haystack) {
     for (var cat in CATEGORY_KEYWORDS) {
       var words = CATEGORY_KEYWORDS[cat];
       for (var i = 0; i < words.length; i++) {
         if (haystack.indexOf(words[i].toLowerCase()) !== -1) return cat;
       }
     }
+    return null;
+  }
+
+  function detectCategory(name) {
+    var haystack = ((name || "") + " " + (d.title || "")).toLowerCase();
+    var hit = matchCategory(haystack);
+    /* Only re-test when the hit came from the pants list AND a fabric word is present -
+       so "מכנס ג'ינס" (real lower-body evidence) is untouched, while "ז'קט ג'ינס" falls
+       through to the garment noun that actually names the product. */
+    if (hit === "pants") {
+      var stripped = haystack;
+      for (var f = 0; f < FABRIC_AMBIGUOUS.length; f++) {
+        stripped = stripped.split(FABRIC_AMBIGUOUS[f]).join(" ");
+      }
+      if (stripped !== haystack) {
+        var reHit = matchCategory(stripped);
+        if (reHit && reHit !== "pants") return reHit;
+        if (!reHit) return DEFAULT_CATEGORY;   // the fabric WAS the only evidence
+      }
+    }
+    if (hit) return hit;
     return DEFAULT_CATEGORY;
   }
 

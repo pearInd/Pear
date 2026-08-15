@@ -129,29 +129,33 @@ const topsPrompt    = imageOnlyPrompt(SHIRT);
 console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserve the live top ──");
 {
   check("commands replacement of ONLY the lower garment",
-    /Fit and replace ONLY the subject's lower garment \(pants\/shorts\) using the exact lower garment from the reference image\./.test(bottomsPrompt),
+    /Fit and replace ONLY the subject's lower garment \(pants\/shorts\) using the exact shorts\/pants shown in the reference image\./.test(bottomsPrompt),
     bottomsPrompt);
   /* THE HALF THAT FIXES THE REPORTED BUG. Without this sentence the reference's shirt is
      unclaimed territory, and an unstated region is exactly what this codebase's history
      keeps recording as the thing that gets reinterpreted. */
-  check("strictly preserves the shopper's LIVE upper garment as seen on camera",
-    /Strictly preserve the subject's live upper garment \(shirt\/top\) as seen on camera\./.test(bottomsPrompt),
+  check("strictly preserves the shopper's LIVE upper garment, completely unchanged",
+    /Strictly keep and preserve the subject's live shirt\/upper garment completely unchanged\./.test(bottomsPrompt),
     bottomsPrompt);
-  check("explicitly bans rendering ANY upper clothing FROM THE REFERENCE",
-    /Do NOT apply or render any shirt, jacket, or upper clothing from the reference image\./.test(bottomsPrompt),
-    "naming the reference as the source is the point - the model wearing the product is packaging");
+  /* The anchor points at the reference TWICE - once to name the target region, once to
+     say which part of the photo to read it from. On a packshot that almost always shows
+     a model wearing a shirt as well, the second is what stops the shirt coming along. */
+  check("names the shorts/pants as the thing to read OUT of the reference image",
+    /using the exact shorts\/pants shown in the reference image/.test(bottomsPrompt),
+    "the model wearing the product is packaging, not content");
 }
 
 console.log("\n── §3 THE TOPS PROMPT: isolate the upper garment, preserve the live bottoms ──");
 {
   check("commands replacement of ONLY the upper garment",
-    /Fit and replace ONLY the subject's upper garment using the exact upper garment from the reference image\./.test(topsPrompt),
+    /Fit and replace ONLY the subject's upper garment \(shirt\/top\) using the exact upper garment from the reference image\./.test(topsPrompt),
     topsPrompt);
   check("strictly preserves the shopper's LIVE lower garment",
     /Strictly preserve the subject's live pants\/lower garment as seen on camera\./.test(topsPrompt),
     topsPrompt);
-  check("explicitly bans altering the lower clothing",
-    /Do NOT replace or alter the subject's lower clothing\./.test(topsPrompt), topsPrompt);
+  check("...and names the region it is replacing, so the two branches are symmetric",
+    /upper garment \(shirt\/top\)/.test(topsPrompt) &&
+    /lower garment \(pants\/shorts\)/.test(bottomsPrompt), topsPrompt);
 }
 
 console.log("\n── §4 THE CONTRADICTION IS GONE: no t-shirt anchor on a trouser reference ──");

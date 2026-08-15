@@ -44,6 +44,11 @@ export const CONFIG = Object.freeze({
   APPLY_TIMEOUT_MS:        10000,  // max wait for the initial garment apply to settle
   HEALTH_PROBE_TIMEOUT_MS: 4000,   // pre-use /api/health probe abort window
   TOAST_DURATION_MS:       2600,   // toast visible duration
+  /* Tier-2 garment classification (see resolveGarmentCategory). Deliberately short: it
+     runs only for titles the keyword tier could not read, its answer only refines a
+     category that is already usable, and it sits on the path to go-live. Expiring is a
+     normal outcome here, not an error - the tier-1 default stands. */
+  CATEGORY_LLM_TIMEOUT_MS: 2500,
 
   /* ── secure proxy endpoints (same-origin; see ../server.js) ─────────────── */
   TOKEN_ENDPOINT:  "/api/realtime-token",

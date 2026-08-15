@@ -2079,6 +2079,84 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
   });
 });
 
+/* POST /api/classify-garment   -   TIER 2 of the garment category resolver.
+   Request:  { title: string }
+   Response: { category: "top"|"bottom"|"unknown", source: "gemini"|"unconfigured"|"error" }
+
+   THE TIER BELOW THIS ONE ANSWERS ALMOST EVERYTHING. app.js classifies titles by Hebrew
+   stem and English word boundary and only calls here when that ABSTAINS - an unreadable
+   title ("FOX Essentials 2024"), or one naming both regions at once. So this is a
+   low-volume endpoint by construction, and it must stay that way: it exists because the
+   keyword tier's honest "I don't know" needs somewhere to go, not as the primary path.
+
+   IT NEVER RETURNS A 5xx FOR A CLASSIFICATION IT CANNOT MAKE. "unknown" is a first-class
+   answer here, and the client treats it exactly like a timeout - fall back to tier 1's
+   default. An error status would turn a refinement that was always optional into a
+   console error on a working try-on, which is how the /api/classify-images path learned
+   to record a fallback rather than fail a batch. Same reasoning, same shape.
+
+   TEXT ONLY, DELIBERATELY. Classifying the product IMAGE would be more accurate and is
+   what /api/classify-images already does for front/back - but that call is measured at
+   ~2.5s warm and ~27s cold, and this one sits on the path to go-live behind a 2.5s client
+   timeout. A title is one short string, so this stays a fast text call. */
+app.post("/api/classify-garment", classifyLimiter, async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  const title = typeof req.body?.title === "string" ? req.body.title.trim().slice(0, 300) : "";
+  if (!title) {
+    return res.status(400).json({ error: "missing_title", message: "title: string is required." });
+  }
+  if (!GEMINI_API_KEY) {
+    // Soft, not 503: the client's tier-1 default is already a usable answer.
+    return res.json({ category: "unknown", source: "unconfigured" });
+  }
+
+  try {
+    const resp = await fetch(GEMINI_CLASSIFY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text:
+          "You classify a single clothing product by the body region it is worn on. " +
+          "Answer 'bottom' for anything worn on the lower body (trousers, jeans, shorts, " +
+          "bermuda, skirts, leggings). Answer 'top' for anything worn on the upper body " +
+          "(shirts, t-shirts, sweaters, hoodies, jackets, coats). " +
+          "Titles are often Hebrew; Hebrew inflects by suffix, so match the word stem " +
+          "(מכנס covers מכנסי and מכנסיים; חולצ covers חולצה and חולצת). " +
+          "If the item covers both regions (a dress, a jumpsuit, a full set) or the title " +
+          "genuinely does not identify a garment, answer 'unknown'. Never guess." }] },
+        contents: [{ parts: [{ text: `Product title: ${title}` }] }],
+        generationConfig: {
+          // Deterministic, for the same reason classifyFrontBackDetailed() is: the same
+          // product must not classify differently between two sessions.
+          temperature: 0,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: { category: { type: "STRING", enum: ["top", "bottom", "unknown"] } },
+            required: ["category"],
+          },
+        },
+      }),
+    });
+    if (!resp.ok) {
+      console.warn(`[classify-garment] Gemini HTTP ${resp.status} for "${title}"`);
+      return res.json({ category: "unknown", source: "error" });
+    }
+    const data = await resp.json();
+    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+    const category = JSON.parse(raw)?.category;
+    const ok = category === "top" || category === "bottom";
+    console.log(`[classify-garment] "${title}" → ${ok ? category : "unknown"}`);
+    return res.json({ category: ok ? category : "unknown", source: "gemini" });
+  } catch (e) {
+    console.warn("[classify-garment] failed:", e?.message || e);
+    return res.json({ category: "unknown", source: "error" });
+  }
+});
+
 /* POST /api/store-catalog - { domain, type } → { items: [{ image_url, classification }] }
    Backs "Complete the Look" for a widget/store session (see fetchStoreLookItems in
    fitting-room/app.js): recommends garments already cached for the SAME store domain

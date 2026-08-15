@@ -268,7 +268,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   check("the live composite payload is the category anchor, at every pose",
     built === api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Fit and replace ONLY the subject's upper garment using the exact upper garment from the reference image/.test(built),
+    /^Fit and replace ONLY the subject's upper garment \(shirt\/top\) using the exact upper garment/.test(built),
     built);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
@@ -405,7 +405,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Fit and replace ONLY the subject's upper garment using the exact upper garment/;
+  const FROZEN = /^Fit and replace ONLY the subject's upper garment \(shirt\/top\) using the exact upper garment/;
   for (const prof of [false, true]) {
     check(`the category anchor is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
@@ -756,7 +756,7 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     "if this ever passes again, inpaintLock was restored - update app.js's restore list");
   check("what survives at both poses is the category anchor, byte-identical",
     square === built &&
-    /Fit and replace ONLY the subject's upper garment using the exact upper garment/.test(square) &&
+    /Fit and replace ONLY the subject's upper garment \(shirt\/top\) using the exact upper garment/.test(square) &&
     /Preserve a closed back and normal un-knotted hem/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);

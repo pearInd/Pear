@@ -90,19 +90,18 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
    garment description, still has no interpolation hole. It varies on exactly ONE axis -
    which body region is being replaced - and NOT on colour, variant, angle or pose. */
 const TOPS_SPEC =
-  "Fit and replace ONLY the subject's upper garment using the exact upper garment from" +
-  " the reference image. Strictly preserve the subject's live pants/lower garment as" +
-  " seen on camera. Do NOT replace or alter the subject's lower clothing." +
+  "Fit and replace ONLY the subject's upper garment (shirt/top) using the exact upper" +
+  " garment from the reference image. Strictly preserve the subject's live pants/lower" +
+  " garment as seen on camera." +
   " Maintain the exact same abdomen/stomach depth, waist" +
   " volume, and torso thickness continuously through all 360-degree rotations\u2014never" +
   " flatten or reset body size mid-stream. Preserve a closed back and" +
   " normal un-knotted hem. Use only the reference image's graphics, fabric texture," +
   " and color.";
 const BOTTOMS_SPEC =
-  "Fit and replace ONLY the subject's lower garment (pants/shorts) using the exact lower" +
-  " garment from the reference image. Strictly preserve the subject's live upper garment" +
-  " (shirt/top) as seen on camera. Do NOT apply or render any shirt, jacket, or upper" +
-  " clothing from the reference image." +
+  "Fit and replace ONLY the subject's lower garment (pants/shorts) using the exact" +
+  " shorts/pants shown in the reference image. Strictly keep and preserve the subject's" +
+  " live shirt/upper garment completely unchanged." +
   " Maintain the exact same abdomen/stomach depth, waist" +
   " volume, and torso thickness continuously through all 360-degree rotations\u2014never" +
   " flatten or reset body size mid-stream." +
@@ -146,15 +145,17 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
     "naming the wrong layer is unrecoverable by any later clause");
   check("(1) BOTTOMS leads the same way, mirrored - the fix for the reported bug",
     BOTTOMS_SPEC.indexOf("Fit and replace ONLY the subject's lower garment (pants/shorts)") === 0 &&
-    /Strictly preserve the subject's live upper garment \(shirt\/top\) as seen on camera/.test(BOTTOMS_SPEC));
+    /Strictly keep and preserve the subject's live shirt\/upper garment completely unchanged/.test(BOTTOMS_SPEC));
   check("...and the reference is still bound in that same first sentence, both branches",
-    /^Fit and replace ONLY the subject's upper garment using the exact upper garment from the reference image/.test(TOPS_SPEC) &&
-    /^Fit and replace ONLY the subject's lower garment \(pants\/shorts\) using the exact lower garment from the reference image/.test(BOTTOMS_SPEC),
+    /^Fit and replace ONLY the subject's upper garment \(shirt\/top\) using the exact upper garment from the reference image/.test(TOPS_SPEC) &&
+    /^Fit and replace ONLY the subject's lower garment \(pants\/shorts\) using the exact shorts\/pants shown in the reference image/.test(BOTTOMS_SPEC),
     "the asset anchor must not depend on the extraction sentence that trails");
-  /* THE PROVENANCE HALF, bottoms only. "Preserve the live top" alone leaves the
-     reference's shirt unclaimed, and an unstated region is what gets reinterpreted. */
-  check("...and BOTTOMS additionally disclaims the reference's OWN upper garment",
-    /Do NOT apply or render any shirt, jacket, or upper clothing from the reference image/.test(BOTTOMS_SPEC),
+  /* THE BOTTOMS ANCHOR NAMES THE TARGET TWICE - "lower garment (pants/shorts)" and then
+     "the exact shorts/pants shown in the reference image". That is deliberate rather than
+     redundant: the second half is what points at WHICH REGION OF THE REFERENCE to read,
+     on an image that almost always photographs a model wearing a shirt as well. */
+  check("...and BOTTOMS names the garment again as the thing to read OUT of the reference",
+    /using the exact shorts\/pants shown in the reference image/.test(BOTTOMS_SPEC),
     "the model wearing the product is packaging, not content");
   /* (2) PERSISTENCE. Three quantities named individually because "volume" alone is
      satisfiable by any one of them, and the transition named explicitly because the
