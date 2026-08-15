@@ -329,10 +329,10 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   for (const prof of [false, true]) {
     const out = lockApi.buildCompositePrompt(lockItem, "front", prof);
     check(`the frozen prompt carries the render directive at inProfile=${prof}`,
-      /Fit and drape the exact garment from the reference image strictly onto the subject's live body shape/.test(out),
+      /Fit and drape the exact garment from the reference image strictly onto the subject's live body shape, waistline/.test(out),
       out.slice(0, 400));
     check(`...and its provenance split at inProfile=${prof}`,
-      /Extract only the garment's texture, pattern, and design from the reference image/.test(out),
+      /Extract ONLY the garment's texture, pattern, and design from the reference image/.test(out),
       out.slice(0, 400));
   }
 
@@ -405,7 +405,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Fit and drape the exact garment from the reference image strictly onto the subject's live body shape/;
+  const FROZEN = /^Fit and drape the exact garment from the reference image strictly onto the subject's live body shape, waistline/;
   for (const prof of [false, true]) {
     check(`the frozen prompt is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
@@ -739,7 +739,7 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     "if this ever passes again, inpaintLock was restored - update app.js's restore list");
   check("what survives at both poses is the frozen prompt, byte-identical",
     square === built && /Fit and drape the exact garment from the reference image/.test(square) &&
-    /do not copy the original model's body proportions/.test(square));
+    /do not force the original model's body proportions onto the user/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

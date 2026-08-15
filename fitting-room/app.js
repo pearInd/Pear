@@ -292,14 +292,27 @@ const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
       });
     } catch (_) {}
 
-    // (1) playoutDelayHint = 0 - flush the client jitter buffer immediately on every
-    //     incoming video track. Chromium-only; the `in` guard silently no-ops elsewhere.
+    /* (1) CLIENT JITTER BUFFER, on every incoming video track.
+       This used to force the buffer to zero ("render ASAP"), which is what produced the
+       freeze report - see PLAYOUT_DELAY_HINT's own comment in config.js for why a buffer
+       of nothing stalls the picture on any transient bitrate shift rather than absorbing
+       it. The value is now a small non-zero target and this hook just applies it.
+
+       BOTH APIs are set from the SAME number, because browser support is split and which
+       one wins is not ours to decide: playoutDelayHint is the legacy Chromium property
+       (seconds), jitterBufferTarget is the standard replacement (milliseconds) and is what
+       current Chrome actually honours. Setting one and not the other means a browser
+       upgrade silently changes this app's buffering behaviour. Each is feature-detected
+       independently - an `in` guard rather than a UA check - so a browser with neither
+       simply keeps its own default, which is the correct fallback: every implementation's
+       default is a NON-zero adaptive buffer, and the only way to get the stall back is to
+       explicitly ask for zero. */
     pc.addEventListener("track", (e) => {
       try {
         const r = e.receiver;
-        if (r && "playoutDelayHint" in r && e.track && e.track.kind === "video") {
-          r.playoutDelayHint = PLAYOUT_DELAY_HINT;
-        }
+        if (!r || !e.track || e.track.kind !== "video") return;
+        if ("playoutDelayHint" in r) r.playoutDelayHint = PLAYOUT_DELAY_HINT;
+        if ("jitterBufferTarget" in r) r.jitterBufferTarget = PLAYOUT_DELAY_HINT * 1000;
       } catch (_) {}
     });
 
@@ -5979,12 +5992,19 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    retired when the prompt froze. They are back, but INSIDE the frozen string rather than
    beside it, which is the whole point: they cannot be shed, cannot be reordered, and
    cannot be separated from the instruction they qualify. Each sentence now carries one:
-     1. drape onto the SUBJECT's live shape - the live feed is the body source;
-     2. adapt volume/drape/curvature to real torso, abdomen depth and pose AT ALL ANGLES -
-        the 90-degree case profileLateral was written for, stated as physics rather than
-        as a special case, so it needs no pose flag to switch it on;
-     3. extract ONLY texture/pattern/design from the reference - the provenance split, and
-        the explicit ban on copying the reference model's proportions.
+     1. drape onto the SUBJECT's live shape, WAISTLINE and true physical contours - the
+        live feed is the body source, and the waist is named because it is the region the
+        report is actually about;
+     2. adapt volume/drape/curvature to real abdomen depth, BODY WIDTH and pose AT ALL
+        ANGLES - the 90-degree case profileLateral was written for, stated as physics
+        rather than as a special case, so it needs no pose flag to switch it on. Depth and
+        width are named as separate axes on purpose: head-on the silhouette is width and
+        edge-on it is depth, and a clause naming only one leaves the other undefended at
+        exactly the angle where it is the whole outline;
+     3. extract ONLY texture/pattern/design from the reference - the provenance split -
+        and do not FORCE the model's proportions onto the user. "Force onto" rather than
+        "copy" is the sharper phrasing: the failure is not the model politely copying a
+        shape, it is the shopper's real body being overridden by one.
 
    NOTE WHAT LEFT: the enumerated "without inventing any tuxedos, suits, or unrequested
    garments" tail is gone. That is deliberate and it is this file's own recorded next step
@@ -6017,11 +6037,14 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
                                 so the pose sentence is the model's job to read off
                                 the live frame, which is where it always came from.
      · profileLateral           the 90-degree flank/depth directive. SUPERSEDED, not
-                                simply lost: the frozen string's "abdomen depth, and pose
-                                at all angles" states the same physics without a pose flag
-                                to gate it. Same for bodyFidelity ("true torso
-                                dimensions") and modelAgnostic ("do not copy the original
-                                model's body proportions") - see the revision note above.
+                                simply lost: the frozen string's "abdomen depth, body
+                                width, and pose at all angles" states the same physics
+                                without a pose flag to gate it, and names BOTH silhouette
+                                axes rather than only the edge-on one. Same for
+                                bodyFidelity ("live body shape, waistline, and true
+                                physical contours") and modelAgnostic ("do not force the
+                                original model's body proportions onto the user") - see
+                                the revision note above.
      · inpaintLock              face/skin/hands/background passthrough. THE LARGEST
                                 LOSS and the one to restore first if the model starts
                                 repainting the shopper's room or face: nothing else
@@ -6039,10 +6062,11 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    that clause count is what was drowning the image. */
 const IMAGE_ONLY_PROMPT =
   "Fit and drape the exact garment from the reference image strictly onto the subject's" +
-  " live body shape and contours. Adapt the fabric volume, drape, and curvature in" +
-  " real-time to match the user's true torso dimensions, abdomen depth, and pose at all" +
-  " angles. Extract only the garment's texture, pattern, and design from the reference" +
-  " image—do not copy the original model's body proportions.";
+  " live body shape, waistline, and true physical contours. Adapt the fabric volume," +
+  " drape, and curvature in real-time to match the user's actual abdomen depth, body" +
+  " width, and pose at all angles. Extract ONLY the garment's texture, pattern, and" +
+  " design from the reference image—do not force the original model's body proportions" +
+  " onto the user.";
 
 /* The dense clause table. Deliberately lower-case and lightly punctuated wherever the
    meaning survives it: ALL-CAPS and heavy punctuation both tokenize worse than prose,
@@ -6065,8 +6089,8 @@ const IMAGE_ONLY_PROMPT =
                       reference image"; its enumerated noun list is deliberately NOT
                       reproduced (see this table's own assetLock comment).
      · bodyFidelity   → "match the user's true torso dimensions".
-     · modelAgnostic  → "do not copy the original model's body proportions".
-     · profileLateral → "abdomen depth, and pose at all angles".
+     · modelAgnostic  → "do not force the original model's body proportions onto the user".
+     · profileLateral → "abdomen depth, body width, and pose at all angles".
 
    THE REST ARE GENUINELY GONE from the wire, and are the ones worth buying back first:
      · inpaintLock    face/skin/hands/background passthrough. THE LARGEST LOSS.
@@ -8897,33 +8921,65 @@ function armFirstFrameBilling(video, gen) {
                              and that is the common case: the transport is "connected"
                              throughout, the frames simply stop.
 
-   WHAT A FREEZE ACTUALLY COSTS, and why a recovery is more than a nudge. Two distinct
+   FIRST, THOUGH: THIS IS THE SECOND HALF OF THE FIX, NOT THE FIRST. The primary cause of
+   the reported "plays, freezes 1-2s, resumes" is that the receiver was configured with NO
+   jitter buffer at all (PLAYOUT_DELAY_HINT was 0), so any transient bitrate shift had
+   nothing in reserve to play and the picture held until the stream caught up. That is
+   fixed where it is caused - in config.js and the track handler at the top of this file -
+   and it is what should make freezes rare. What follows catches the ones that still
+   happen, and more importantly catches what a freeze can leave BEHIND.
+
+   WHAT A FREEZE ACTUALLY COSTS, and why a recovery is more than a nudge. Three distinct
    things can be wrong when frames stop:
      1. THE ELEMENT stalled - a paused/suspended <video>, a backgrounded tab, a decoder
         hiccup. play() fixes it and nothing else needs to happen.
-     2. THE CONDITIONING was lost - the transport was rebuilt under us (an SDK reconnect
+     2. THE SESSION went quiet - the transport is up but nothing is flowing. A small
+        control message re-asserts it end-to-end without touching the image.
+     3. THE CONDITIONING was lost - the transport was rebuilt under us (an SDK reconnect
         this file was not told about, an ICE restart), so Decart is generating from
         whatever getInitialState() replayed rather than from the garment actually
         selected. The picture comes back, dressed in the wrong thing, and every existing
         signal in this file still reports success.
-   So recovery is staged: ping first, and only if the freeze persists, force the CURRENT
-   garment reference back onto the wire (see invalidateWireState). The second step is the
-   whole point - a resumed stream that is no longer conditioned on the shopper's garment
-   is exactly the failure this is here to prevent, and it is indistinguishable from a
-   healthy stream from the outside.
+   So recovery is staged cheapest-first: element ping, then an SDK keep-alive that sends
+   no image, then - only if the freeze outlives both - forcing the CURRENT garment
+   reference back onto the wire (see invalidateWireState). Ordering by cost is what lets
+   the threshold sit at 800ms: the first two stages are safe to fire during a stall that
+   may well resolve on its own, because neither adds meaningful traffic to a transport
+   that is already struggling. Stage 3 is the one that matters and the one that must be
+   rate-limited - a resumed stream no longer conditioned on the shopper's garment is
+   exactly the failure this is here to prevent, and it is indistinguishable from a healthy
+   stream from the outside.
+
+   NO TEARDOWN, NO ERROR UI, AT ANY STAGE. Every recovery here runs on the existing
+   session and is invisible to the shopper: no reconnect, no toast, no state change, no
+   "Go Live" reset. A freeze is a transient the app should absorb, and a session torn down
+   or an error banner shown mid-window is strictly worse than a stream that stutters once
+   and continues. The only visible trace is in the console.
 
    DELIBERATELY LIGHTWEIGHT. One rVFC chain (the same mechanism armFirstFrameBilling
    already uses, so no new frame-detection machinery) plus a 500ms interval that does
    nothing but compare two numbers. It reads no pixels - sampleVideoLuma() is a canvas
    readback and far too expensive to run on a poll - and takes no action at all on a
    healthy stream. */
-const FRAME_FREEZE_MS = 1500;              // no decoded frame for this long while live == frozen
-const FRAME_FREEZE_POLL_MS = 500;          // watchdog tick; 3 ticks inside the freeze window
-/* Minimum gap between two RE-ANCHOR attempts. A freeze that outlives the first attempt
-   must not turn into a re-upload storm: each one ships the full garment blob through the
-   datachannel, and doing that every 500ms would starve the very stream it is repairing.
-   Comfortably longer than a set() round-trip, comfortably shorter than the 5s window. */
+/* 800ms, down from 1500. The stall being reported is 1-2 seconds long, so a 1500ms
+   threshold could only ever act at the very end of one - or miss a short one entirely -
+   and inside a 5s billed window that is most of the session gone before anything moves.
+   Not lower than this: at the 10fps this app runs inference at, frames legitimately
+   arrive ~100ms apart and a slow frame is normal, so a threshold near the frame interval
+   would fire on healthy jitter. 800ms is ~8 missed frames - unambiguous. */
+const FRAME_FREEZE_MS = 800;
+const FRAME_FREEZE_POLL_MS = 250;          // 3+ ticks inside the freeze window, so it is caught near its start
+/* Minimum gap between two full RE-ANCHOR attempts (stage 2). The keep-alive ping in
+   stage 1 is a small control message and is NOT rate-limited by this; a re-anchor ships
+   the whole garment blob through the datachannel, and doing that on every 250ms tick
+   would starve the very stream it is repairing. Comfortably longer than a set()
+   round-trip, comfortably shorter than the 5s window. */
 const FRAME_FREEZE_RECOVER_COOLDOWN_MS = 2500;
+/* Gap between keep-alive pings. Cheap, but not free: each is a datachannel message, and
+   firing one every 250ms tick through a two-second stall would add traffic to a transport
+   that is already struggling. One every ~600ms re-asserts liveness without contributing
+   to the problem. */
+const FRAME_FREEZE_PING_MS = 600;
 
 let freezeWatcher = null;                  // { stop } while running, else null
 
@@ -8939,6 +8995,7 @@ function createFrameFreezeWatcher(video, gen) {
   let lastMediaTime = -1;           // rVFC-less fallback signal: video.currentTime
   let frozenSince = null;           // when the current freeze began, or null while healthy
   let lastRecoverAt = 0;
+  let lastPingAt = 0;
   let recovering = false;
   let pings = 0, reanchors = 0;
 
@@ -9002,16 +9059,40 @@ function createFrameFreezeWatcher(video, gen) {
 
     recovering = true;
     try {
-      /* STEP 1 - THE FRAME PING. Cheapest cause, cheapest fix, and safe to repeat: a
+      /* STAGE 1a - THE ELEMENT PING. Cheapest cause, cheapest fix, and safe to repeat: a
          <video> that autoplay or a decoder hiccup left paused resumes here with no
-         session traffic at all. Done on every frozen tick, because it costs nothing and
+         session traffic at all. Tried on every frozen tick, because it costs nothing and
          a stall can begin at any point during a longer outage. */
       if (video.paused || video.readyState < 2) {
-        pings++;
         try { await video.play(); } catch (_) { /* autoplay policy, or already playing */ }
       }
 
-      /* STEP 2 - THE RE-ANCHOR, rate-limited. If frames are still absent the element is
+      /* STAGE 1b - THE SDK KEEP-ALIVE. A small control message on the existing session:
+         setPrompt() takes session.sendPrompt(), which never touches the image, so this
+         re-asserts liveness end-to-end without re-uploading a single byte of garment and
+         without any teardown, reconnect or UI change. That is what makes it safe to fire
+         DURING a stall rather than after it - the stream is already struggling, and the
+         one thing recovery must not do is add a few hundred KB of base64 to it.
+
+         It deliberately bypasses applyGarment(): that path would compare the payload to
+         what it believes is on the wire, find both halves identical (one frozen prompt,
+         one memoized Blob) and correctly skip - which is right for an ordinary update and
+         exactly wrong here, where re-asserting the unchanged state IS the point. Sent
+         through clampPromptForWire() like every other dispatch, so this send site cannot
+         become the one that bypasses the budget guard. */
+      if (rtClient && Date.now() - lastPingAt >= FRAME_FREEZE_PING_MS) {
+        lastPingAt = Date.now();
+        pings++;
+        const keepAlive = clampPromptForWire(IMAGE_ONLY_PROMPT, "freezeKeepAlive");
+        console.log("[DECART PROMPT DEBUG]", keepAlive, "(keep-alive ping - no image, no teardown)");
+        try {
+          await rtClient.setPrompt(keepAlive, { enhance: false });
+        } catch (e) {
+          console.warn("[PEAR] freeze keep-alive ping failed:", e?.message || e);
+        }
+      }
+
+      /* STAGE 2 - THE RE-ANCHOR, rate-limited. If frames are still absent the element is
          not the problem, and the live hypothesis is that the transport was rebuilt under
          us: Decart is either generating nothing or generating from the SDK's replayed
          initial state rather than the garment on screen. Forcing the wire state stale is

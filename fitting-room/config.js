@@ -113,7 +113,31 @@ export const CONFIG = Object.freeze({
      / decode path - a real but bounded win (tens of ms). They are applied via a
      native-RTCPeerConnection hook in app.js because the SDK (LiveKit) owns the
      peer connection; app.js never sees the receiver or SDP directly. */
-  PLAYOUT_DELAY_HINT: 0,            // seconds; 0 = decode+render immediately, no anti-jitter buffering (Chromium only)
+  /* ── THE STUTTER KNOB. Was 0, and 0 is what produced the freeze report ───────
+     "Plays fine for a second, freezes for 1-2s, resumes." That is textbook
+     zero-jitter-buffer behaviour, and this file's own stats-monitor comment in
+     app.js already named it before anyone connected the two: "High jitter +
+     playoutDelayHint:0 = visible stutter."
+
+     At 0 the receiver renders each frame the instant it is decodable and holds
+     NOTHING in reserve. That is optimal only on a perfectly even arrival rate.
+     Real transports are not even - a transient bitrate shift, a TURN relay hiccup,
+     one late packet in a frame - and with no buffer to absorb it there is nothing
+     to play while the receiver waits, so the picture holds on its last frame until
+     the stream catches up. The stall is not a lost connection and never trips any
+     connection-state handler; it is the buffer running dry.
+
+     80ms is deliberately small: about one frame at the 10fps inference rate this
+     app runs at, so it buys a full frame of slack while adding less latency than
+     the neural inference varies by between two consecutive frames. The perceived
+     ~1s in this feed is dominated by server-side inference and RTT (see the scope
+     note above) - 80ms is inside the noise of that, and it is being traded for the
+     difference between a smooth stream and a visible 1-2s freeze.
+
+     Raise toward 0.15 if stutter persists on poor networks; drop back to 0 only to
+     reproduce the original report. Also applied as jitterBufferTarget (the standard
+     API, in ms) - see the track handler in app.js. */
+  PLAYOUT_DELAY_HINT: 0.08,         // seconds of client-side anti-jitter buffering; 0 = render ASAP, and stall on any jitter
   PREFER_LOW_LATENCY_CODEC: true,   // SDP munge ON: codec reorder + b=AS / b=TIAS bandwidth injection.
   // H264 is hardware-decoded on virtually all modern devices (iOS, Android, Windows, Mac);
   // VP8 is software-decoded on most mobile - putting H264 first cuts decode CPU + latency.

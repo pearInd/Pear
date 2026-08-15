@@ -53,6 +53,7 @@
 import { readFileSync } from "node:fs";
 
 const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const CFG = readFileSync(new URL("../fitting-room/config.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -77,10 +78,11 @@ const api = new Function(...Object.keys(sandbox),
 const TEE = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 const SPEC =
   "Fit and drape the exact garment from the reference image strictly onto the subject's" +
-  " live body shape and contours. Adapt the fabric volume, drape, and curvature in" +
-  " real-time to match the user's true torso dimensions, abdomen depth, and pose at all" +
-  " angles. Extract only the garment's texture, pattern, and design from the reference" +
-  " image\u2014do not copy the original model's body proportions.";
+  " live body shape, waistline, and true physical contours. Adapt the fabric volume," +
+  " drape, and curvature in real-time to match the user's actual abdomen depth, body" +
+  " width, and pose at all angles. Extract ONLY the garment's texture, pattern, and" +
+  " design from the reference image\u2014do not force the original model's body proportions" +
+  " onto the user.";
 
 console.log("── §1 THE FROZEN STRING: product-specified, and genuinely constant ──");
 {
@@ -97,15 +99,25 @@ console.log("── §1 THE FROZEN STRING: product-specified, and genuinely cons
      notice it any more, because there is no assembly left to log. */
   check("(1) it binds the drape to the PROVIDED asset AND the LIVE body, not to a concept",
     /Fit and drape the exact garment from the reference image/.test(SPEC) &&
-    /strictly onto the subject's live body shape and contours/.test(SPEC));
+    /strictly onto the subject's live body shape, waistline, and true physical contours/.test(SPEC));
   check("(2) it states the body physics: real volume, abdomen depth, every angle",
     /Adapt the fabric volume, drape, and curvature in real-time/.test(SPEC) &&
-    /the user's true torso dimensions, abdomen depth, and pose at all angles/.test(SPEC),
+    /the user's actual abdomen depth, body width, and pose at all angles/.test(SPEC),
     "DENSE.bodyFidelity + DENSE.profileLateral, folded in and un-sheddable");
   check("(3) it states the provenance split - cloth from the reference, body from the feed",
-    /Extract only the garment's texture, pattern, and design from the reference image/.test(SPEC) &&
-    /do not copy the original model's body proportions/.test(SPEC),
+    /Extract ONLY the garment's texture, pattern, and design from the reference image/.test(SPEC) &&
+    /do not force the original model's body proportions onto the user/.test(SPEC),
     "DENSE.modelAgnostic, folded in");
+
+  /* BOTH SILHOUETTE AXES ARE NAMED, and this is the assertion the abdomen report earned.
+     Head-on a body's outline is its WIDTH; edge-on, width foreshortens to nearly nothing
+     and the entire outline is DEPTH. A clause naming only one leaves the other undefended
+     at exactly the angle where it is the whole silhouette - which is the gap the retired
+     SIDE_PROFILE_DEPTH was written against, and the reason "waistline" is named alongside
+     the generic contour language. */
+  check("...naming BOTH silhouette axes - depth AND width - plus the waist explicitly",
+    /abdomen depth/.test(SPEC) && /body width/.test(SPEC) && /waistline/.test(SPEC),
+    "one axis alone is undefended at 90 degrees, where the other IS the outline");
 
   /* NOT POSE-GATED, and that is the substantive win over the clause it replaces.
      DENSE.profileLateral rode behind an `inProfile` ternary and shed edge-on under budget
@@ -323,10 +335,21 @@ console.log("\n── §6 A FREEZE MUST NOT RESUME UNCONDITIONED ──");
      prompt that says "the reference image" and no reference on the wire. */
   const watcher = SRC.slice(SRC.indexOf("function createFrameFreezeWatcher(video, gen)"),
                             SRC.indexOf("function startFrameFreezeWatch"));
-  check("the freeze threshold is the specified 1500ms",
-    /const FRAME_FREEZE_MS = 1500;/.test(SRC));
-  check("...checked often enough to see it - at least 3 ticks inside the window",
-    /const FRAME_FREEZE_POLL_MS = 500;/.test(SRC));
+  check("the freeze threshold is the specified 800ms",
+    /const FRAME_FREEZE_MS = 800;/.test(SRC));
+  check("...checked often enough to catch it near its START, not its end",
+    /const FRAME_FREEZE_POLL_MS = 250;/.test(SRC));
+  /* THE PRIMARY FIX IS NOT HERE. A receiver with no jitter buffer stalls on any transient
+     bitrate shift - this file's own stats-monitor comment named it years before the
+     report ("High jitter + playoutDelayHint:0 = visible stutter"). The watchdog catches
+     what still slips through; the buffer is what stops most of them happening. */
+  check("the receiver is given a real jitter buffer, not zero",
+    /PLAYOUT_DELAY_HINT: 0\.0[5-9]|PLAYOUT_DELAY_HINT: 0\.1[0-5]/.test(CFG),
+    "0 means render-ASAP with nothing in reserve - the stall the report describes");
+  check("...applied through BOTH the legacy and the standard API, from one number",
+    /r\.playoutDelayHint = PLAYOUT_DELAY_HINT;/.test(SRC) &&
+    /r\.jitterBufferTarget = PLAYOUT_DELAY_HINT \* 1000;/.test(SRC),
+    "support is split; setting one lets a browser upgrade silently change buffering");
   check("frames are detected via rVFC, with a currentTime fallback where it is missing",
     /video\.requestVideoFrameCallback\(onFrame\)/.test(watcher) &&
     /if \(!hasRVFC\) \{[\s\S]{0,160}video\.currentTime/.test(watcher),
@@ -345,14 +368,26 @@ console.log("\n── §6 A FREEZE MUST NOT RESUME UNCONDITIONED ──");
     /lastFrameAt = Date\.now\(\);\s*\n\s*frozenSince = null;\s*\n\s*return;/.test(watcher),
     "otherwise the tab coming back reads as a multi-second stall");
 
-  /* STAGED RECOVERY: ping first (free, safe to repeat), re-anchor second (expensive,
-     rate-limited). The order matters - a paused element does not need a re-upload. */
-  check("step 1 is a frame ping on the element itself",
+  /* STAGED RECOVERY, CHEAPEST FIRST: element ping, then an SDK keep-alive that sends no
+     image, then the full re-anchor. Ordering by cost is what lets the threshold sit at
+     800ms - the first two are safe to fire during a stall that may resolve on its own,
+     because neither adds meaningful traffic to a transport already struggling. */
+  check("stage 1a is a frame ping on the element itself",
     /if \(video\.paused \|\| video\.readyState < 2\)[\s\S]{0,120}video\.play\(\)/.test(watcher));
-  check("step 2 forces the garment back onto the wire, not merely a prompt nudge",
+  check("stage 1b is an SDK keep-alive that carries NO image and no teardown",
+    /await rtClient\.setPrompt\(keepAlive, \{ enhance: false \}\)/.test(watcher) &&
+    !/rtClient\.set\(/.test(watcher),
+    "setPrompt takes sendPrompt(), which never touches the image");
+  check("...rate-limited separately from the re-anchor, and cheaply",
+    /const FRAME_FREEZE_PING_MS = 600;/.test(SRC) &&
+    /Date\.now\(\) - lastPingAt >= FRAME_FREEZE_PING_MS/.test(watcher));
+  check("...and a failed ping is swallowed, never surfaced as an error UI",
+    /catch \(e\) \{\s*\n\s*console\.warn\("\[PEAR\] freeze keep-alive ping failed/.test(watcher),
+    "a freeze must be absorbed, not shown to the shopper");
+  check("stage 2 forces the garment back onto the wire, not merely a prompt nudge",
     /invalidateWireState\(`frame freeze/.test(watcher) && /await applyActive\(\)/.test(watcher),
     "a frozen prompt + memoized blob would otherwise match on both halves and skip");
-  check("...rate-limited, so a long freeze is not a re-upload storm",
+  check("...rate-limited on its OWN clock, so a long freeze is not a re-upload storm",
     /const FRAME_FREEZE_RECOVER_COOLDOWN_MS = 2500;/.test(SRC) &&
     /Date\.now\(\) - lastRecoverAt < FRAME_FREEZE_RECOVER_COOLDOWN_MS/.test(watcher));
   check("...and never runs before the first garment was acknowledged",
@@ -380,6 +415,14 @@ console.log("\n── §6 A FREEZE MUST NOT RESUME UNCONDITIONED ──");
   check("...and touches neither billing, the recorder nor isGarmentApplied",
     !/isGarmentApplied|billingStarted|stopRecording|dressedFrameReady/.test(invalidate),
     "conflating the two re-arms the reveal on a session that never stopped");
+
+  /* NO TEARDOWN AND NO ERROR UI AT ANY STAGE - a freeze is a transient the app absorbs.
+     A session torn down or a banner shown mid-window is strictly worse than a stream that
+     stutters once and continues, and the watchdog is the one component with both the
+     motive and the reach to do it. */
+  check("recovery never tears the session down or shows the shopper an error",
+    !/stopLive\(\)|teardown\(\)|toast\(/.test(watcher),
+    "the only visible trace of a recovery is in the console");
 
   /* Lifecycle: it can fire applyActive(), so it must never outlive the session. */
   check("armed on the remote stream, so a warm-up stall is covered too",

@@ -28,12 +28,24 @@ function check(label, cond, detail) {
   if (!cond && detail !== undefined) console.log(`        ${detail}`);
 }
 
-console.log("── §1 THE DEBUG LOG RIDES ALL FOUR REAL DISPATCH SITES ──");
+console.log("── §1 THE DEBUG LOG RIDES EVERY REAL DISPATCH SITE ──");
 {
   const tag = "[DECART PROMPT DEBUG]";
+  /* FIVE since the frame-freeze watchdog landed: its keep-alive ping is a real setPrompt()
+     on the live session, and a dispatch nobody can see in the transcript is exactly the
+     kind this log exists for - it fires during a stall, when the console is the only
+     window into what the client is doing about it. */
   const count = (APP.match(/\[DECART PROMPT DEBUG\]/g) || []).length;
-  check("exactly 4 occurrences - one per real send site, no more, no fewer",
-    count === 4, `found ${count}`);
+  check("exactly 5 occurrences - one per real send site, no more, no fewer",
+    count === 5, `found ${count}`);
+
+  const keepAlive = APP.slice(APP.indexOf("STAGE 1b - THE SDK KEEP-ALIVE"),
+                              APP.indexOf("STAGE 2 - THE RE-ANCHOR"));
+  check("the freeze keep-alive logs immediately before its setPrompt()",
+    keepAlive.indexOf(tag) !== -1 &&
+    keepAlive.indexOf(tag) < keepAlive.indexOf("await rtClient.setPrompt("), keepAlive);
+  check("...and says what it is, so it is not mistaken for a garment update in a trace",
+    /keep-alive ping - no image, no teardown/.test(keepAlive));
 
   // applyGarment()'s prompt-only fast path: setPrompt(), no image re-upload.
   const fastPath = APP.slice(APP.indexOf('console.log("[PEAR] prompt-only update'),
