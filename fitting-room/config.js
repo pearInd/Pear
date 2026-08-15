@@ -19,6 +19,8 @@
  * @property {number}   PROMPT_MAX_CHARS        Hard cap on any assembled prompt (Decart rejects >226 tokens).
  * @property {boolean}  LOWER_BODY_GUARD_ENABLED Composite the shopper's own raw lower-body pixels back over Decart's output (default OFF - validate live first).
  * @property {number}   LOWER_BODY_GUARD_FRAC   Fraction of frame height, from the bottom, that the guard protects.
+ * @property {boolean}  LOWER_BODY_GUARD_AUTO_CALIBRATE Derive LOWER_BODY_GUARD_FRAC per-session from a detected face box instead of the fixed fraction.
+ * @property {number}   LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS Head-heights from crown to waist, used by the calibration above.
  * @property {number}   PLAYOUT_DELAY_HINT      Chromium RTCRtpReceiver.playoutDelayHint (seconds). 0 = render ASAP.
  * @property {boolean}  PREFER_LOW_LATENCY_CODEC Opt-in SDP codec-preference munge (default OFF - see note below).
  * @property {string[]} CODEC_PREFERENCE        Codec order tried when the munge flag is ON (reorder only, never remove).
@@ -105,6 +107,25 @@ export const CONFIG = Object.freeze({
      smaller visible defect than erring toward clipping into the rendered shirt. Tune only
      against a live camera, never by reasoning about it in the abstract. */
   LOWER_BODY_GUARD_FRAC: 0.34,
+  /* Auto-calibrates LOWER_BODY_GUARD_FRAC once per session from a detected face box
+     (FaceDetector - the same browser API the orientation watcher already uses, no new
+     dependency) instead of relying on the one fixed guess above for every shopper at
+     every distance from the camera. See calibrateLowerBodyGuard()'s own comment in
+     app.js for the method and its honest limits. Falls back to the static
+     LOWER_BODY_GUARD_FRAC whenever no face is found or FaceDetector is unavailable, so
+     turning this off just means "always use the fixed fraction" - the guard itself is
+     still governed entirely by LOWER_BODY_GUARD_ENABLED above. */
+  LOWER_BODY_GUARD_AUTO_CALIBRATE: true,
+  /* Head-heights from crown to waist - the classic figure-drawing/anthropometric
+     convention (~7.5 head-heights top to sole; waist sits roughly half that up from the
+     ground, around 3.5-4 heads down from the crown). 3.8 is a reasonable adult default,
+     not a measurement of any specific shopper. Assumes an adult, upright, roughly
+     front-facing posture; children are proportioned differently (relatively larger
+     heads) and this app already tracks a kids/adult signal elsewhere
+     (resolvedGarmentAgeGroup() in app.js) that a future refinement could read to pick a
+     different ratio - not wired up here, so this stays the same class of change as the
+     guard itself: one clear, testable mechanism, not several unvalidated ones at once. */
+  LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS: 3.8,
 
   /* ── realtime latency tuning (CLIENT-side only) ─────────────────────────────
      ⚠️ Scope reality check: the ~1s a user perceives in the Lucy-VTON feed is

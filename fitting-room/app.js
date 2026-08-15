@@ -41,6 +41,8 @@ const {
   PROMPT_MAX_CHARS,
   LOWER_BODY_GUARD_ENABLED,
   LOWER_BODY_GUARD_FRAC,
+  LOWER_BODY_GUARD_AUTO_CALIBRATE,
+  LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS,
   PLAYOUT_DELAY_HINT,
   PREFER_LOW_LATENCY_CODEC,
   CODEC_PREFERENCE,
@@ -734,6 +736,44 @@ function pickSizeCategory(age) {
 function resolvedGarmentAgeGroup() {
   const ag = activeItem?.ageGroup ?? pendingAgeGroup;
   return (ag === "kids" || ag === "adult") ? ag : "uncertain";
+}
+
+/* KIDS/ADULT SIZE-CATEGORY GUARD - a deterministic go-live gate, not a guess (unlike
+   the lower-body pixel guard above, whose boundary genuinely IS one). calculateSize()
+   already refuses to RECOMMEND a kids size to a body sized against the adult chart
+   (its adultFits/childFits split); this closes the one gap that leaves open: a shopper
+   who already HAS an adult size resolved hitting Go Live on a garment
+   resolvedGarmentAgeGroup() reports as kids-only. Reuses that same ageGroup/
+   currentSizeCategory state rather than adding a new product-sizes data source this
+   codebase doesn't otherwise ingest. */
+
+/**
+ * @param {"kids"|"adult"|"uncertain"} garmentAgeGroup - resolvedGarmentAgeGroup()'s output
+ * @returns {boolean}
+ */
+function isKidsProduct(garmentAgeGroup) {
+  return garmentAgeGroup === "kids";
+}
+
+/**
+ * @param {"child"|"adult"|null} userSizeCategory - currentSizeCategory
+ * @param {"kids"|"adult"|"uncertain"} garmentAgeGroup - resolvedGarmentAgeGroup()'s output
+ * @returns {boolean} false only for a confidently-kids item against a confidently-adult
+ *   shopper; every other combination (uncertain garment, child shopper, no size resolved
+ *   yet) passes - never block on ambiguity, matching liveBlockReason()/livePendingReason().
+ */
+function isCompatibleSizeCategory(userSizeCategory, garmentAgeGroup) {
+  return !(isKidsProduct(garmentAgeGroup) && userSizeCategory === "adult");
+}
+
+/* go-live gate paralleling liveBlockReason()/livePendingReason() just below - returns
+   the localized message when an adult-sized shopper is about to launch a kids-only
+   garment, else null. Bilingual inline string, matching itemBlockReason()/
+   itemPendingReason()'s own convention rather than routing through i18n.js, since this
+   sits in the same gate family and neither of those go through t() either. */
+function sizeCategoryMismatchReason() {
+  if (isCompatibleSizeCategory(currentSizeCategory, resolvedGarmentAgeGroup())) return null;
+  return "הפריט אינו בטווח המידות שלך (מידת ילדים) · This item is not within your size range (Kids item)";
 }
 
 /* Shows/hides the #age field's own form-group, independent of whatever
@@ -8429,6 +8469,12 @@ async function goLive() {
   const pendingReason = livePendingReason();
   if (pendingReason) { toast(pendingReason); return; }
 
+  // Same shape, same place in the gate chain: an adult shopper cannot launch a
+  // kids-only garment. See sizeCategoryMismatchReason()'s own comment for why this
+  // reuses ageGroup/currentSizeCategory rather than a new sizes-array data source.
+  const sizeReason = sizeCategoryMismatchReason();
+  if (sizeReason) { toast(sizeReason); return; }
+
   busy = true;                         // Task 10 - claim the flow before ANY await
   $("captureBtn").disabled = true;
   $("camError").hidden = true;
@@ -8804,6 +8850,77 @@ function finalizeVideoClip() {
    reason: #aiVideo is never touched, never re-parented, never has its role changed. This
    only ever paints on top of it via the stacked #lowerBodyGuard canvas (style.css). */
 let lowerBodyGuardRAF = null;
+/* The LIVE value the paint loop actually reads, distinct from the static
+   LOWER_BODY_GUARD_FRAC config constant it starts equal to. calibrateLowerBodyGuard()
+   (below) updates THIS, never the config constant - the config value stays the fallback
+   for when calibration is off, unavailable, or hasn't found a face yet. Reset to the
+   static default in stopLowerBodyGuard() so a new session never inherits a previous
+   one's calibration (different shopper, different distance from the camera). */
+let lowerBodyGuardFrac = LOWER_BODY_GUARD_FRAC;
+
+/* ── Auto-calibration - one reading per session, not a guess held forever ──────────
+   THE GAP THIS CLOSES: LOWER_BODY_GUARD_FRAC is one fixed number for every shopper at
+   every distance from the camera. Standing close, the real waist line sits far higher
+   in frame than a 34%-from-bottom guess; standing back, far lower - "if the user moves
+   the suit is still visible" is exactly this, restated.
+
+   THE METHOD: FaceDetector (Shape Detection API) - the SAME browser primitive the
+   orientation watcher already uses elsewhere in this file (see ORIENT_FACE_SIZE), so
+   this adds no new dependency, not the multi-MB WASM segmentation model this file has
+   already declined once. A face box plus a standard figure-drawing proportion (a
+   person's waist sits roughly LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS head-heights below
+   the crown) gives an ESTIMATED waist line calibrated to how THIS shopper is actually
+   framed, instead of one number guessed for everyone.
+
+   STILL A HEURISTIC - said plainly, not oversold. It assumes an adult, upright, roughly
+   front-facing posture at the moment it samples; it degrades to the static
+   LOWER_BODY_GUARD_FRAC whenever no face is found, the browser lacks FaceDetector, or
+   the shopper is turned away. It runs ONCE, at go-live, not every frame - recalculating
+   continuously would make the guard line visibly JITTER as a head naturally bobs,
+   trading one visible defect for another. Fire-and-forget from its caller: it updates
+   lowerBodyGuardFrac in the background, and the paint loop (which reads that variable
+   fresh every frame already) picks up the refined value on whichever frame it resolves,
+   with zero extra wiring - go-live is never blocked waiting on it. */
+async function calibrateLowerBodyGuard() {
+  if (!LOWER_BODY_GUARD_ENABLED || !LOWER_BODY_GUARD_AUTO_CALIBRATE) return;
+  if (typeof FaceDetector === "undefined") return;   // graceful degrade - stays on the static fraction
+  const webcam = $("webcam");
+  if (!webcam || webcam.videoWidth === 0) return;
+
+  try {
+    const detector = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
+    /* Scaled down WITHOUT cropping - preserves the real aspect ratio, unlike the
+       orientation watcher's own square 96x96/256x256 canvases (built for a different
+       purpose: a fixed-size pixel histogram, where the crop-to-square doesn't matter).
+       Here it would: a cropped canvas would make a Y-fraction in IT disagree with the
+       same Y-fraction of the real webcam frame. A uniform scale-down has no such
+       distortion, so the face box's fraction of THIS canvas's height is exactly its
+       fraction of the webcam's real height - no separate coordinate mapping needed. */
+    const scale = 256 / Math.max(webcam.videoWidth, webcam.videoHeight);
+    const cw = Math.max(1, Math.round(webcam.videoWidth * scale));
+    const ch = Math.max(1, Math.round(webcam.videoHeight * scale));
+    const cv = document.createElement("canvas");
+    cv.width = cw; cv.height = ch;
+    cv.getContext("2d").drawImage(webcam, 0, 0, cw, ch);
+
+    const faces = await detector.detect(cv);
+    if (!faces || !faces.length) return;               // no face found - keep the static fraction
+    const box = faces[0].boundingBox;
+    const faceTopFrac = box.y / ch, faceHeightFrac = box.height / ch;
+    const waistFrac = faceTopFrac + faceHeightFrac * LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS;
+
+    /* Clamped, not trusted outright: a spurious tiny detection (a face in a photo on
+       the wall behind the shopper, a bad reading) must not produce a guard that
+       protects nearly nothing or nearly the whole frame. */
+    lowerBodyGuardFrac = Math.min(0.55, Math.max(0.15, 1 - waistFrac));
+    console.log(`[PEAR] lower-body guard calibrated: ${(lowerBodyGuardFrac * 100).toFixed(0)}% ` +
+      `of frame height (face at ${(faceTopFrac * 100).toFixed(0)}%, ` +
+      `${(faceHeightFrac * 100).toFixed(0)}% tall)`);
+  } catch (e) {
+    console.warn("[PEAR] lower-body guard calibration failed - staying on the static fraction:",
+      e?.message || e);
+  }
+}
 
 function startLowerBodyGuard() {
   if (!LOWER_BODY_GUARD_ENABLED) return;      // the whole feature is a no-op until validated live
@@ -8813,6 +8930,7 @@ function startLowerBodyGuard() {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   card().classList.add("lower-body-guard-active");   // CSS gate: .show-live is the other half
+  calibrateLowerBodyGuard();   // fire-and-forget - see its own comment for why
 
   function paint() {
     // isLive() re-checked every frame, not just at start: the guard must stop painting
@@ -8824,7 +8942,9 @@ function startLowerBodyGuard() {
     const w = webcam.videoWidth, h = webcam.videoHeight;
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
-    const bandY = Math.round(h * (1 - LOWER_BODY_GUARD_FRAC));
+    // lowerBodyGuardFrac, not the LOWER_BODY_GUARD_FRAC config constant directly - reads
+    // whatever calibrateLowerBodyGuard() has refined it to, fresh every frame.
+    const bandY = Math.round(h * (1 - lowerBodyGuardFrac));
     ctx.clearRect(0, 0, w, h);
     ctx.save();
     /* Selfie-mirror correction. #webcam's DECODED frame (what drawImage sees) is never
@@ -8858,6 +8978,10 @@ function stopLowerBodyGuard() {
     const ctx = canvas.getContext("2d");
     if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
+  // Reset to the static default so the NEXT session starts from the documented
+  // fallback, not a stale calibration left over from a different shopper standing at
+  // a different distance from the camera.
+  lowerBodyGuardFrac = LOWER_BODY_GUARD_FRAC;
 }
 
 /* Paint the final dressed frame onto the on-screen #resultCanvas at full capture
@@ -8890,11 +9014,15 @@ function freezeFinalFrame() {
      AI edit anywhere in it, so there is nothing there for the guard to protect against,
      and re-drawing over it would be a no-op at best. */
   if (LOWER_BODY_GUARD_ENABLED && src === ai && webcam && webcam.videoWidth > 0) {
+    // lowerBodyGuardFrac, not the static config constant - the snapshot must protect
+    // the SAME band the live view was actually painting at the moment of capture,
+    // calibrated or not, or the kept "masterpiece" could disagree with what the
+    // shopper watched live.
     // Source band in WEBCAM's own coordinate space and destination band in the
     // CANVAS's (ai's w/h) - these can legitimately differ in resolution, so the two
     // must be computed independently rather than reusing one Y offset for both.
-    const srcBandY = Math.round(webcam.videoHeight * (1 - LOWER_BODY_GUARD_FRAC));
-    const dstBandY = Math.round(h * (1 - LOWER_BODY_GUARD_FRAC));
+    const srcBandY = Math.round(webcam.videoHeight * (1 - lowerBodyGuardFrac));
+    const dstBandY = Math.round(h * (1 - lowerBodyGuardFrac));
     ctx.save();
     ctx.translate(w, 0);
     ctx.scale(-1, 1);

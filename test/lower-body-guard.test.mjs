@@ -62,8 +62,17 @@ console.log("── §1 SHIPS OFF: the config default, and what that actually ga
    guarded logic, and assert on what it actually did. */
 const code = extract("let lowerBodyGuardRAF = null;", "/* Paint the final dressed frame");
 
+/* `autoCalibrate` defaults to false here on purpose: §2-§6 below test the paint loop
+   and lifecycle, not calibration, and calibrateLowerBodyGuard() is called fire-and-
+   forget from inside startLowerBodyGuard() - if it were left enabled with no FaceDetector
+   stub provided, its FIRST real statement past the disabled guard would throw a
+   ReferenceError inside an async function, which becomes a REJECTED PROMISE nobody
+   awaits. That used to pass silently here only because this file's own process.exit()
+   at the bottom races ahead of Node's unhandled-rejection reporting - an accident of
+   timing, not a real guarantee, and not how the calibration tests in §7-§8 are built. */
 function harness({ enabled = true, frac = 0.34, isLiveVal = true,
-                    webcamW = 1000, webcamH = 1800 } = {}) {
+                    webcamW = 1000, webcamH = 1800, autoCalibrate = false,
+                    headToWaistUnits = 3.8, faceDetectorAvailable = false, faces = [] } = {}) {
   const rafCalls = [];
   let rafHandle = 0;
   const canvasCtx = { calls: [] };
@@ -82,18 +91,48 @@ function harness({ enabled = true, frac = 0.34, isLiveVal = true,
     add(c) { this.added.push(c); }, remove(c) { this.removed.push(c); } };
   const cardEl = { classList };
 
+  // A separate, minimal recorder for the CALIBRATION canvas (document.createElement),
+  // distinct from #lowerBodyGuard's own canvasCtx above - the real code creates its own
+  // scratch canvas for the face-detection pass, never reusing the guard canvas.
+  const calibCtx = { calls: [] };
+  const calibCanvasProxy = new Proxy({}, {
+    get(_, prop) {
+      if (prop === "canvas") return undefined;
+      return (...args) => calibCtx.calls.push({ op: String(prop), args });
+    },
+  });
+  const calibCanvasEl = { width: 0, height: 0, getContext: () => calibCanvasProxy };
+  const documentStub = { createElement: (tag) => (tag === "canvas" ? calibCanvasEl : null) };
+
+  let detectCalls = 0;
+  const FaceDetectorStub = faceDetectorAvailable
+    ? function FaceDetector(opts) {
+        this.opts = opts;
+        this.detect = async () => { detectCalls++; return faces; };
+      }
+    : undefined;
+
   const sandbox = {
     LOWER_BODY_GUARD_ENABLED: enabled,
     LOWER_BODY_GUARD_FRAC: frac,
+    LOWER_BODY_GUARD_AUTO_CALIBRATE: autoCalibrate,
+    LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS: headToWaistUnits,
     $: (id) => (id === "webcam" ? webcamEl : id === "lowerBodyGuard" ? canvasEl : null),
     card: () => cardEl,
     isLive: () => isLiveVal,
+    document: documentStub,
+    FaceDetector: FaceDetectorStub,
+    console: { log() {}, warn() {} },
     requestAnimationFrame: (cb) => { rafHandle++; rafCalls.push({ handle: rafHandle, cb }); return rafHandle; },
     cancelAnimationFrame: (h) => { rafCalls.push({ cancelled: h }); },
   };
   const fn = new Function(...Object.keys(sandbox),
-    code + "\nreturn { startLowerBodyGuard, stopLowerBodyGuard, state: () => ({ lowerBodyGuardRAF }) };");
-  return { api: fn(...Object.values(sandbox)), rafCalls, canvasCtx, canvasEl, classList, webcamEl };
+    code + "\nreturn { startLowerBodyGuard, stopLowerBodyGuard, calibrateLowerBodyGuard," +
+    " state: () => ({ lowerBodyGuardRAF, lowerBodyGuardFrac }) };");
+  return {
+    api: fn(...Object.values(sandbox)), rafCalls, canvasCtx, canvasEl, classList, webcamEl,
+    calibCtx, calibCanvasEl, detectCalls: () => detectCalls,
+  };
 }
 
 console.log("\n── §2 DISABLED: a complete no-op, not a paused loop ──");
@@ -205,7 +244,123 @@ console.log("\n── §6 TEARDOWN: stops the loop, ungates the CSS, clears the 
   check("calling stop() again when already stopped does not throw", threw === false);
 }
 
-console.log("\n── §7 LIFECYCLE WIRING: every real exit path stops it ──");
+console.log("\n── §7 AUTO-CALIBRATION: graceful degradation, before anything about accuracy ──");
+{
+  /* THE GAP THIS FEATURE CLOSES: LOWER_BODY_GUARD_FRAC is one fixed number for every
+     shopper at every distance from the camera - "if the user moves, the suit is still
+     visible" is exactly that. calibrateLowerBodyGuard() derives a per-session estimate
+     from a detected face box instead. Every assertion below is about the MECHANISM
+     (does it degrade safely, does it clamp, does it use the right coordinate space) -
+     none of them prove 3.8 head-heights is the right ratio for how this app is actually
+     framed. That still needs a live camera, same as the guard fraction itself. */
+  const { api, detectCalls } = harness({ autoCalibrate: false, enabled: true, faceDetectorAvailable: true });
+  await api.calibrateLowerBodyGuard();
+  check("LOWER_BODY_GUARD_AUTO_CALIBRATE:false short-circuits before ever touching FaceDetector",
+    detectCalls() === 0, `detect() called ${detectCalls()} times`);
+  check("...and the fraction stays at the static default, untouched",
+    api.state().lowerBodyGuardFrac === 0.34);
+}
+{
+  const { api, detectCalls } = harness({ autoCalibrate: true, enabled: true, faceDetectorAvailable: false });
+  await api.calibrateLowerBodyGuard();
+  check("no FaceDetector in this browser: degrades to the static fraction, no throw",
+    api.state().lowerBodyGuardFrac === 0.34);
+}
+{
+  const { api, detectCalls } = harness({ autoCalibrate: true, enabled: true,
+    faceDetectorAvailable: true, faces: [] });
+  await api.calibrateLowerBodyGuard();
+  check("FaceDetector available but finds nothing: still degrades to the static fraction",
+    detectCalls() === 1 && api.state().lowerBodyGuardFrac === 0.34);
+}
+{
+  // enabled:false must short-circuit calibration too, not just the paint loop - the
+  // guard being off means NOTHING about it should run, calibration included.
+  const { api, detectCalls } = harness({ autoCalibrate: true, enabled: false, faceDetectorAvailable: true });
+  await api.calibrateLowerBodyGuard();
+  check("LOWER_BODY_GUARD_ENABLED:false short-circuits calibration too",
+    detectCalls() === 0);
+}
+
+console.log("\n── §8 AUTO-CALIBRATION: the geometry, executed against real numbers ──");
+{
+  /* A face detected at 10% down the frame, 15% of the frame tall, in a canvas SCALED
+     (not cropped) from a 1000x1800 webcam frame down to its 256px-longest-side form -
+     since the canvas preserves the real aspect ratio, these fractions apply directly to
+     the real webcam frame with no separate coordinate conversion needed (that property
+     is the entire reason calibrateLowerBodyGuard() scales rather than crops - see its
+     own comment). waistFrac = 0.10 + 0.15*3.8 = 0.67 -> guard = 1 - 0.67 = 0.33. */
+  const { api } = harness({
+    autoCalibrate: true, enabled: true, faceDetectorAvailable: true, headToWaistUnits: 3.8,
+    webcamW: 1000, webcamH: 1800,
+    faces: [{ boundingBox: { y: 0, height: 0 } }],   // placeholder, overwritten below
+  });
+  // The stub canvas is 256px on the LONGER side (1800 -> ch=256, cw=142); express the
+  // face box in THAT canvas's own pixel space, matching what the real code hands to
+  // FaceDetector.detect().
+  const ch = 256;
+  const faceTopFrac = 0.10, faceHeightFrac = 0.15;
+  const { api: api2, calibCanvasEl } = harness({
+    autoCalibrate: true, enabled: true, faceDetectorAvailable: true, headToWaistUnits: 3.8,
+    webcamW: 1000, webcamH: 1800,
+    faces: [{ boundingBox: { y: faceTopFrac * ch, height: faceHeightFrac * ch } }],
+  });
+  await api2.calibrateLowerBodyGuard();
+  const expected = 1 - (faceTopFrac + faceHeightFrac * 3.8);
+  check(`derives the expected guard fraction from face position + head-to-waist ratio (~${expected.toFixed(2)})`,
+    Math.abs(api2.state().lowerBodyGuardFrac - expected) < 0.01,
+    `got ${api2.state().lowerBodyGuardFrac}`);
+  check("the calibration canvas is scaled to preserve aspect, not force-cropped to a square\n" +
+        "        (a crop would make this exact fraction math wrong)",
+    calibCanvasEl.width !== calibCanvasEl.height, `${calibCanvasEl.width}x${calibCanvasEl.height}`);
+}
+{
+  // A spurious/tiny detection must not produce a guard that protects almost nothing
+  // or almost the whole frame - clamped to [0.15, 0.55].
+  const { api: lowApi } = harness({
+    autoCalibrate: true, enabled: true, faceDetectorAvailable: true, headToWaistUnits: 3.8,
+    faces: [{ boundingBox: { y: 0, height: 5 } }],   // face pinned at the very top - waist "high"
+  });
+  await lowApi.calibrateLowerBodyGuard();
+  check("clamps to the floor (0.15) rather than an implausibly small guard",
+    lowApi.state().lowerBodyGuardFrac >= 0.15, String(lowApi.state().lowerBodyGuardFrac));
+
+  const { api: highApi } = harness({
+    autoCalibrate: true, enabled: true, faceDetectorAvailable: true, headToWaistUnits: 3.8,
+    webcamH: 1800,
+    faces: [{ boundingBox: { y: 200, height: 200 } }],   // large face low in frame - waist "low"
+  });
+  await highApi.calibrateLowerBodyGuard();
+  check("clamps to the ceiling (0.55) rather than guarding nearly the whole frame",
+    highApi.state().lowerBodyGuardFrac <= 0.55, String(highApi.state().lowerBodyGuardFrac));
+}
+{
+  // Fire-and-forget from startLowerBodyGuard() itself - not just directly callable.
+  const { api, detectCalls } = harness({
+    autoCalibrate: true, enabled: true, faceDetectorAvailable: true,
+    faces: [{ boundingBox: { y: 25, height: 38 } }],
+  });
+  api.startLowerBodyGuard();
+  await new Promise((r) => setTimeout(r, 0));   // let the fire-and-forget microtask settle
+  check("startLowerBodyGuard() itself triggers calibration, without being asked to await it",
+    detectCalls() === 1);
+}
+{
+  // stopLowerBodyGuard() must reset the LIVE value, not just cancel the loop - otherwise
+  // a second session inherits a stale calibration from a different shopper.
+  const { api } = harness({
+    autoCalibrate: true, enabled: true, faceDetectorAvailable: true,
+    faces: [{ boundingBox: { y: 25, height: 38 } }],
+  });
+  await api.calibrateLowerBodyGuard();
+  check("sanity: calibration actually moved the value away from the static default",
+    api.state().lowerBodyGuardFrac !== 0.34);
+  api.stopLowerBodyGuard();
+  check("stop() resets lowerBodyGuardFrac back to the static config default",
+    api.state().lowerBodyGuardFrac === 0.34);
+}
+
+console.log("\n── §9 LIFECYCLE WIRING: every real exit path stops it ──");
 {
   /* Structural, not executed - re-running startBillingWindow()/stopLive()/
      beginFreezeHold()/teardown() in full would mean reconstructing this file's entire
@@ -230,7 +385,7 @@ console.log("\n── §7 LIFECYCLE WIRING: every real exit path stops it ──
     /stopLowerBodyGuard\(\);/.test(teardown), teardown);
 }
 
-console.log("\n── §8 freezeFinalFrame(): the KEPT snapshot gets the same protection ──");
+console.log("\n── §10 freezeFinalFrame(): the KEPT snapshot gets the same protection ──");
 {
   const ff = extract("function freezeFinalFrame()", "\n/* ── Live countdown overlay");
   check("bakes the guard only when the AI-edited stream was the primary source",
@@ -250,7 +405,7 @@ console.log("\n── §8 freezeFinalFrame(): the KEPT snapshot gets the same pr
     /catch \(_\) \{ \/\* best-effort/.test(ff));
 }
 
-console.log("\n── §9 ADDITIVE ONLY: the DOM/CSS layer, and that #aiVideo is untouched ──");
+console.log("\n── §11 ADDITIVE ONLY: the DOM/CSS layer, and that #aiVideo is untouched ──");
 {
   check("index.html adds #lowerBodyGuard stacked AFTER #aiVideo (paints on top by DOM order)",
     HTML.indexOf('id="aiVideo"') < HTML.indexOf('id="lowerBodyGuard"') &&

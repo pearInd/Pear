@@ -141,6 +141,7 @@ const SUITES = [
   ["variant-sync", "variant-sync.test.mjs"],
   ["decart-debug-log", "decart-debug-log.test.mjs"],
   ["lower-body-guard", "lower-body-guard.test.mjs"],
+  ["kids-adult-size-guard", "kids-adult-size-guard.test.mjs"],
 ];
 
 let failed = 0;
