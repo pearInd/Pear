@@ -138,6 +138,7 @@ console.log("\n── §3 isCompatibleSizeCategory(): the end-to-end reported sc
 {
   const { isCompatibleSizeCategory } = cat;
   const KIDS_TEE = ["8", "10", "12", "14", "16"];
+  const ADULT_SML = ["S", "M", "L"];
 
   check("THE BUG, END TO END: adult body + kids-only product + 'uncertain' classifier\n" +
         "        is now INCOMPATIBLE (this returned true before the fix)",
@@ -147,13 +148,37 @@ console.log("\n── §3 isCompatibleSizeCategory(): the end-to-end reported sc
     isCompatibleSizeCategory("child", KIDS_TEE, "uncertain") === true);
 
   check("an adult body on an adult product is fine",
-    isCompatibleSizeCategory("adult", ["S", "M", "L"], "uncertain") === true);
+    isCompatibleSizeCategory("adult", ADULT_SML, "uncertain") === true);
 
   check("an unresolved body category never blocks",
     isCompatibleSizeCategory(null, KIDS_TEE, "uncertain") === true);
 
   check("no size list + uncertain classifier still never blocks (unchanged)",
     isCompatibleSizeCategory("adult", [], "uncertain") === true);
+
+  /* THE REVERSE-DIRECTION BUG: isKidsProduct() reads the real size list first and
+     correctly zeroed adultFits for a kids product, but nothing mirrored that for an
+     ADULT product against a CHILD body - isCompatibleSizeCategory() only ever tested
+     the kids-product+adult-body direction. A product with a real S/M/L list and an
+     "uncertain" classifier read (common: the classifier abstains on packshots with
+     no model) let a child body through to a genuine CHILD_SIZE_CHART match instead
+     of being blocked. Fixed by isAdultProduct(), a mirror of isKidsProduct(). */
+  check("THE REVERSE BUG, END TO END: child body + adult-only product + 'uncertain'\n" +
+        "        classifier is now INCOMPATIBLE (this returned true before the fix)",
+    isCompatibleSizeCategory("child", ADULT_SML, "uncertain") === false);
+
+  check("...and still incompatible with NO classifier verdict at all (size list alone decides)",
+    isCompatibleSizeCategory("child", ADULT_SML, undefined) === false);
+
+  check("...but a wrong 'kids' classifier verdict can't override a real adult size list\n" +
+        "        (the deterministic signal wins in BOTH directions, not just the blocking one)",
+    isCompatibleSizeCategory("child", ADULT_SML, "kids") === false);
+
+  check("an adult body on the same product remains fine",
+    isCompatibleSizeCategory("adult", ADULT_SML, "uncertain") === true);
+
+  check("no size list + uncertain classifier still never blocks a child body either (unchanged)",
+    isCompatibleSizeCategory("child", [], "uncertain") === true);
 }
 
 console.log("\n── §4 THE SIZE SELECTOR renders the HOST PRODUCT's real variants ──");
