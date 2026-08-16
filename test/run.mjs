@@ -85,6 +85,25 @@
                       ALL SIX builders carry it - parity with STRICT_INPAINT, since this
                       file already records a clause being missed at one site - and that it
                       is NOT pose-gated, unlike the two genuinely edge-on clauses.
+     body-topology    "I turned 90 degrees and my shirt stretched with me." The body was
+                      established ONCE, by the go-live presence gate, and never re-asked -
+                      so the render stayed conditioned on the frame it was born in, and a
+                      model handed a body that no longer matches its conditioning does the
+                      cheapest thing available and DEFORMS the drape it already has. The
+                      fix splits the two halves that were being fused: the GARMENT is
+                      static and invariant, the BODY is dynamic and lives only in the
+                      current frame. A continuous monitor re-measures the torso every tick
+                      (yaw, pitch, depth, profile box - all scale-invariant, so walking
+                      toward the lens is not a change of shape) and forces a REAL
+                      re-conditioning dispatch when the live body has moved away from the
+                      shape the current render was drawn against. Asserts the geometry,
+                      the thresholds, the baseline semantics that make a slow turn fire at
+                      all (it compares against the CONDITIONED shape, never the previous
+                      frame), the hold-and-resume fallback for a body that goes unreadable
+                      mid-rotation, that the dispatch actually reaches the wire past
+                      applyGarment's no-op skip - and, most importantly, that the monitor
+                      can never touch the garment half: no asset selection, no prompt edit,
+                      no reference read.
      turn-hold        The last dressed frame is held from the FIRST sign of a turn, not
                       from the confirmed flip 2.5s later - the uncovered window is where
                       the shopper's real shirt came back. Plus every release path,
@@ -173,6 +192,7 @@ const SUITES = [
   ["garment-category-detection", "garment-category-detection.test.mjs"],
   ["body-presence-gate", "body-presence-gate.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
+  ["body-topology", "body-topology.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],
   ["signaling-retry", "signaling-retry.test.mjs"],

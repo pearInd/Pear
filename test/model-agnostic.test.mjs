@@ -109,7 +109,8 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      logos, and cut", which states the same rule inside the anchor where it cannot shed -
      and adds logos and cut, which the old wording did not name. */
   check("the shipped prompt names the reference as the only source of cloth",
-    /Exactly match color, pattern, logos, and cut\./.test(out), out);
+    /the EXACT static shirt from the reference image/.test(out) &&
+    /Strictly preserve the original shirt texture, pattern, and color\./.test(out), out);
   check("...the discard is still carried by exhaustion, not stated outright",
     !/ignoring the original model's body/.test(out), out);
   /* ── THE BODY-VOLUME GUARANTEE IS OFF THE WIRE, and this suite is where that has to
@@ -133,7 +134,7 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      It used to be a ranking argument (MED, shed under pressure); it is now structural. */
   for (const prof of [false, true]) {
     check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
-      /Exactly match color, pattern, logos, and cut\./
+      /Strictly preserve the original shirt texture, pattern, and color\./
         .test(api.buildCompositePrompt(TEE, "front", prof)));
   }
 
@@ -175,8 +176,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     /inpaintLock    face\/skin\/hands\/background passthrough\. THE LARGEST LOSS/.test(SRC) &&
     /Restore: add \[P\.HIGH, DENSE\.inpaintLock\]/.test(SRC));
 
-  /* ── THE BUDGET IS NO LONGER THE CONSTRAINT. THE EDITORIAL RULE IS. ─────────
-     Tops runs 170 characters and bottoms 239 against a 650 ceiling, so every retired
+  /* ── THE BUDGET IS NOT THE CONSTRAINT. THE EDITORIAL RULE IS. ──────────────
+     Tops runs 342 characters and bottoms 320 against a 650 ceiling, so every retired
      clause would fit, on either side, with room to spare. That makes this section's job
      the opposite of what it used to be: it no longer warns that a restore will silently
      shed, it warns that a restore will silently SUCCEED.
@@ -186,15 +187,19 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      budget headroom is not permission. Anything added back is a deliberate bet against
      that mechanism and needs a live session to justify it, not a character count.
 
-     THE 69-CHARACTER GAP BETWEEN THE BRANCHES IS THE ONE SPEND MADE ON THAT BET, and it
-     was made against a REPRODUCED report rather than against spare capacity: bottoms
-     carries the lower-body scoping that stops a trouser try-on repainting the live top
-     (garment-category-prompt.test.mjs §2-§3 own the wording). Bounded on both sides here,
-     so neither branch can creep back toward the assembly this whole sequence undid. */
+     TWO SPENDS HAVE BEEN MADE ON THAT BET, both against REPRODUCED reports rather than
+     against spare capacity: the lower-body scoping on bottoms (a trouser try-on
+     repainting the live top), and the per-frame adaptation sentence on both branches (the
+     0-degree drape stretched over a turned shopper). The second is the larger, and it is
+     why the branches now sit within ~20 characters of each other instead of 69 apart -
+     the tops anchor grew more, because the tops wording carries the belly-volume clause.
+     garment-category-prompt.test.mjs §2-§3 and image-first.test.mjs §1 own the wording.
+     Bounded on both sides here, so neither branch can creep back toward the assembly this
+     whole sequence undid. */
   const tops = api.imageOnlyPrompt(TEE);
   const bottoms = api.imageOnlyPrompt(JEANS);
-  check("both branches stay ultra-minimal, and the gap between them stays the scoping",
-    tops.length <= 200 && bottoms.length <= 260 && bottoms.length - tops.length === 69,
+  check("both branches stay minimal, and the gap between them stays small",
+    tops.length <= 360 && bottoms.length <= 360 && Math.abs(bottoms.length - tops.length) <= 40,
     `tops=${tops.length} bottoms=${bottoms.length} gap=${bottoms.length - tops.length}`);
 
   const both = api.fitPrompt([
@@ -207,7 +212,7 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     both.length <= 650,
     `${both.length} chars - fits, which is exactly why the rule has to be written down`);
   check("...and app.js states that the budget is no longer the constraint",
-    /The budget is no longer the\s*\n?\s*constraint/.test(SRC),
+    /The budget is not\s*\n?\s*the constraint/.test(SRC),
     "a reader who checks only the character count will draw the wrong conclusion");
   /* \u2500\u2500 THE TABLE IN app.js MUST BE THE ARITHMETIC, NOT A MEMORY OF IT \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
      It has been wrong before - it survived two collapses describing a 634-character tops
@@ -217,8 +222,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  216, 285],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 235, 304],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  388, 366],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 407, 385],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -227,13 +232,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(170 chars - anchor\)             BOTTOMS \(239 chars - anchor \+ lower-body scope\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 216  fits              \u2192 285  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 235  fits              \u2192 304  fits/.test(SRC),
+    /TOPS \(342 chars - anchor\)             BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 388  fits              \u2192 366  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 407  fits              \u2192 385  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /480 characters are free on tops and 411 on\s*\n?\s*bottoms/.test(SRC),
+    /308 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
 }
 
@@ -263,7 +268,7 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
     check(`the category anchor survives a pathologically long name (inProfile=${prof})`,
-      /Overlay and fit the EXACT upper garment from the reference image/.test(out),
+      /Drape and fit the EXACT static shirt from the reference image/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }

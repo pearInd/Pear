@@ -44,6 +44,13 @@ const {
   POSE_WASM_BASE,
   POSE_MODEL_URL,
   POSE_TASKS_MODULE,
+  BODY_TOPOLOGY_ENABLED,
+  BODY_TOPOLOGY_SAMPLE_MS,
+  BODY_TRACK_MIN_VISIBILITY,
+  BODY_ROTATION_DELTA_DEG,
+  BODY_VOLUME_DELTA,
+  BODY_RECONDITION_COOLDOWN_MS,
+  BODY_TRACK_HOLD_MS,
   TOKEN_ENDPOINT,
   HEALTH_ENDPOINT,
   SDK_URLS,
@@ -3119,7 +3126,20 @@ async function ensureOnline() {
    Decart's Lucy VTON realtime diffusion model over WebRTC - there is no pose/landmark
    API in this pipeline to swap frames for (that would be a different, MediaPipe-style
    architecture; see project history). The real lever here is exactly what's already
-   enforced above: fewer frames/sec, smaller frames, no redundant capture. */
+   enforced above: fewer frames/sec, smaller frames, no redundant capture.
+   MediaPipe landmarks ARE read now (see CONTINUOUS BODY TOPOLOGY), but strictly as a
+   local MONITOR - they never go on the wire and never replace a frame. They only decide
+   WHEN to re-condition the session against the live feed.
+
+   ── THIS LOOP IS THE "SPATIAL BASE", AND IT IS NEVER LATCHED ──────────────────
+   Worth stating plainly, because the stretched-garment report reads like a frozen body
+   keyframe and is not one: what goes to Decart from here is the CURRENT camera frame,
+   ten times a second, for the entire session. Nothing anywhere captures a body frame and
+   re-sends it. The only latched asset in this pipeline is the GARMENT reference passed to
+   rtClient.set({ image }) - which is exactly the half that is supposed to be invariant.
+   So the body was always live; what was missing was any signal telling the model to
+   re-read it once its conditioning had gone stale, which is what the topology monitor
+   supplies. */
 function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width = LIVE_W, height = LIVE_H } = {}) {
   const srcTrack = srcStream.getVideoTracks()[0];
   // No video track (camera failed) - hand the stream back untouched; nothing to throttle.
@@ -6794,13 +6814,18 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    REFERENCE as the thing not to copy an upper garment from, not just the live frame as
    the thing to keep.
 
-   READ THE NEXT BLOCK FOR THE CURRENT WORDING. The paragraph above is the record of WHY
-   the lock lives inside the anchor rather than beside it, and that reasoning still holds.
-   The sentences it describes do not: the strict-1:1 revision below rewrote both anchors,
-   and what bottoms carries today is "onto the subject's lower body" plus "Keep the
-   subject's upper body and background unmodified." - the live frame half, stated
-   explicitly, with the reference half now implied by the anchor naming one garment. */
-/* ── REVISION: STRICT 1:1, BOTH BRANCHES ─────────────────────────────────────────
+   READ THE LAST BLOCK IN THIS RUN FOR THE CURRENT WORDING. The paragraph above is the
+   record of WHY the lock lives inside the anchor rather than beside it, and that
+   reasoning still holds. The sentences it describes do not - two revisions have rewritten
+   both anchors since. What bottoms carries today is region naming inside its lead ("the
+   live subject's CURRENT lower-body contour"); the explicit pin on the opposite layer
+   came off with the dynamic-drape revision and is retired as KEEP_OPPOSITE_LAYER. */
+/* ── REVISION: STRICT 1:1, BOTH BRANCHES (SUPERSEDED - see DYNAMIC BODY below) ────
+   HISTORY, NOT THE LIVE WORDING. This block is the record of the three reports that
+   collapsed both anchors to a 1:1 reference lock, and of the fourth that put the
+   lower-body scoping back on bottoms. The dynamic-drape revision further down replaced
+   both strings; what survives from here is the scoping (folded into the new bottoms lead)
+   and the retirement list below, which is still accurate about what is off the wire.
    THE THIRD REPORT IN THIS SEQUENCE, and a different failure from the first two. The
    first was the WRONG REGION (a t-shirt anchor on a trouser reference). The second was
    the WRONG GARMENT (generic black shorts instead of the photographed white ones). This
@@ -6827,14 +6852,16 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    Every clause below is a reproduced regression, and all of them came off the wire in
    this revision. ONE OF THEM IS BACK - read the first bullet before the rest:
 
-     · the OPPOSITE-LAYER LOCK - RESTORED ON BOTTOMS, still absent on tops. That clause
-       was the fix for the FIRST report in this sequence: trying on trousers putting the
-       catalog model's shirt on the shopper. Collapsing it away left the scoping implicit
-       - "the EXACT shorts/pants ... onto the subject" names a garment but no region - and
-       the bottoms branch is the exact configuration that report was filed against, so it
-       carries the scoping explicitly again: "onto the subject's lower body", plus "Keep
-       the subject's upper body and background unmodified." at the end. That costs 69
-       characters against 480 free and buys back a reproduced regression.
+     · the OPPOSITE-LAYER LOCK - SPLIT IN TWO by the revisions since. Its job was the fix
+       for the FIRST report in this sequence: trying on trousers putting the catalog
+       model's shirt on the shopper. Collapsing it away left the scoping implicit - "the
+       EXACT shorts/pants ... onto the subject" names a garment but no region - and the
+       bottoms branch is the exact configuration that report was filed against, so the
+       scoping went back on there and nowhere else.
+       WHERE EACH HALF LIVES TODAY: the REGION NAMING survives, folded into the new
+       bottoms lead ("the live subject's CURRENT lower-body contour"). The explicit PIN on
+       the opposite layer does not - it came off with the dynamic-drape revision and is
+       retired as KEEP_OPPOSITE_LAYER, one line from being back.
        THE TOPS BRANCH IS STILL IMPLICITLY SCOPED. No shirt-replacement report has been
        filed through it - the reported failure is a trouser try-on repainting the top,
        not the inverse - so tops keeps the shorter string on the same one-branch-at-a-
@@ -6850,46 +6877,110 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
      · CLOSED_BACK_HEM - the knotted-hem and open-back-flap artifacts. Still assembled on
        the full-look path, which was never collapsed; off the wire on both single-garment
        branches.
-     · REFERENCE_EXTRACTION - superseded rather than lost: "Exactly match color, pattern,
-       logos, and cut" states the same provenance rule in the anchor itself.
+     · REFERENCE_EXTRACTION - superseded rather than lost: the anchor's own fidelity
+       sentence states the same provenance rule ("Strictly preserve the original ...
+       texture, pattern, and color" today; "Exactly match color, pattern, logos, and cut"
+       under the 1:1 revision this block was written for).
 
-   THE RESTORE PATHS, and they are not uniform. VOLUME_PERSISTENCE, FRONTAL_VOLUME,
-   TEMPORAL_PERSISTENCE, CLOSED_BACK_HEM and REFERENCE_EXTRACTION are each still on file
-   as a constant, so each of those restores is one line in imageOnlyPrompt(). THE
-   OPPOSITE-LAYER LOCK IS THE EXCEPTION: its wording was inline in these two strings and
-   was never a constant of its own, which is why it is written out above rather than
-   named. The budget is no longer the constraint - tops runs 170 characters and bottoms
-   239 against a 650 ceiling - so anything bought back is a deliberate choice about TEXT
-   VOLUME COMPETING WITH THE REFERENCE, which is the mechanism all three fidelity reports
-   in this sequence share. Add one at a time, and re-test against a live session. */
+   THE RESTORE PATHS ARE NOW UNIFORM, which they were not when this block was written.
+   VOLUME_PERSISTENCE, FRONTAL_VOLUME, TEMPORAL_PERSISTENCE, CLOSED_BACK_HEM,
+   REFERENCE_EXTRACTION and - since the dynamic-drape revision named it - KEEP_OPPOSITE_
+   LAYER are each on file as a constant, so every restore here is one line in
+   imageOnlyPrompt(). The budget is not the constraint: tops runs 342 characters and
+   bottoms 320 against a 650 ceiling. Anything bought back is a deliberate choice about
+   TEXT VOLUME COMPETING WITH THE REFERENCE, which is the mechanism every fidelity report
+   in this sequence shares. Add one at a time, and re-test against a live session. */
 
-/* The strict lock, in one constant because three anchors carry it - both category
-   branches and the full look - and three copies of a product-specified sentence is three
-   places for it to drift. The first sentence supersedes REFERENCE_EXTRACTION (same
-   provenance rule, and it names logos and cut); the second is the hallucination clamp
-   this revision exists for, banning all three edits - invent, add, alter - because adding
-   a stripe and altering a stripe are different operations. Leading space: these are
-   appended to an anchor, never used alone. */
+/* The strict lock. STILL LIVE - lookAnchorPrompt() carries it - but no longer on the two
+   single-garment branches, which the dynamic-drape revision below rewrote around a
+   different fidelity sentence. Kept in one constant because more than one anchor uses it
+   and two copies of a product-specified sentence are two places for it to drift. The
+   first sentence supersedes REFERENCE_EXTRACTION (same provenance rule, and it names
+   logos and cut); the second is the hallucination clamp, banning all three edits -
+   invent, add, alter - because adding a stripe and altering a stripe are different
+   operations. Leading space: it is appended to an anchor, never used alone. */
 const STRICT_REFERENCE_LOCK =
   " Exactly match color, pattern, logos, and cut." +
   " Do NOT invent, add, or alter any details.";
 
+/* ── REVISION: DYNAMIC BODY, STATIC GARMENT ──────────────────────────────────────
+   THE REPORT: a shopper who is fitted at 0 degrees and then turns 90, or who adds real
+   profile volume (a cushion under the shirt, a belly the front view does not show), gets
+   the ORIGINAL drape stretched and warped over the new shape instead of a garment
+   re-draped over it. The fabric smears; the cut distorts.
+
+   THE DIAGNOSIS IS A SPLIT THIS FILE HAD NEVER STATED. Two things are being fused every
+   frame, and they have opposite requirements:
+     · THE GARMENT is STATIC and INVARIANT. One reference image, one cut, one colour, one
+       print, for the whole session. Nothing about the shopper may change it.
+     · THE BODY is DYNAMIC and VARIABLE. Its contour, depth, volume and orientation are
+       different in every single frame, and the frame is the only place they exist.
+   Every previous revision of these anchors said "overlay and fit ... onto the subject" -
+   a subject with no tense. A model reading that has no instruction to re-derive anything
+   per frame, so the cheapest completion is to keep the drape it already produced and
+   deform it to the new outline. That is the reported artifact, restated.
+
+   WHAT THE NEW WORDING DOES, sentence by sentence, on both branches:
+     1. binds to the EXACT STATIC garment from the reference (the invariant half), and
+        names the target as the subject's CURRENT contour IN THIS FRAME (the variable
+        half). "Static" and "current" in one sentence is the whole split;
+     2. instructs an ADAPTATION rather than a transform - silhouette, angle, depth and
+        volume - and names the two failure modes it must not use to get there
+        (stretching, warping / distorting);
+     3. re-asserts the invariant on the attributes a re-drape is most likely to smear.
+
+   IT IS PAIRED WITH RUNTIME MACHINERY, and neither half works alone. Text cannot make a
+   model re-read a body it is never re-conditioned on: under strict image-only prompting
+   the payload is byte-identical from one dispatch to the next, so applyGarment()'s no-op
+   skip means a re-anchor sends nothing at all. The CONTINUOUS BODY TOPOLOGY monitor -
+   makeBodyTopologyTracker(), sampled by startPresenceWatcher(), dispatched by
+   reconditionForTopology() - is what makes this sentence true: it watches the live
+   skeleton and forces a real re-conditioning dispatch when the body has actually moved
+   away from the shape the current render was drawn against. Read the two together;
+   deleting either leaves the other lying.
+
+   ── WHAT THE NEW WORDING GAVE UP, both branches ─────────────────────────────────
+   Written down because both are reproduced regressions and this is the file that has to
+   admit it if either returns:
+     · THE HALLUCINATION CLAMP ("Do NOT invent, add, or alter any details.") is off the
+       single-garment branches. What replaces it is weaker by construction: "Strictly
+       preserve the original texture, pattern, and color" forbids CHANGING the garment
+       but does not forbid ADDING to it. If invented detail comes back, the restore is one
+       line - append STRICT_REFERENCE_LOCK to the anchor - and the constant is right above
+       so it never has to be rewritten from memory.
+     · THE OPPOSITE-LAYER PIN on bottoms ("Keep the subject's upper body and background
+       unmodified.") is off with it. The primary half of that fix SURVIVES - the bottoms
+       lead still names the region ("the live subject's CURRENT lower-body contour"), and
+       an unscoped anchor was the actual configuration the shirt-replacement report was
+       filed against - but the explicit pin on the opposite layer is gone. Retired as
+       KEEP_OPPOSITE_LAYER below rather than deleted, so that restore is one line too.
+   Budget is not the constraint for either: tops runs 342 characters and bottoms 320
+   against a 650 ceiling. The constraint is the one every report in this sequence shares -
+   TEXT VOLUME COMPETING WITH THE REFERENCE IMAGE. Add one at a time, re-tested live. */
+
+/* Retired with the dynamic-drape revision, kept verbatim so its restore is genuinely one
+   line (`[P.HIGH, KEEP_OPPOSITE_LAYER]` in imageOnlyPrompt's bottoms branch) rather than
+   a re-derivation. Bottoms only: no report has ever been filed of a TOP try-on repainting
+   the shopper's live trousers, so there has never been a tops equivalent to retire. */
+const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodified.";
+
 const CATEGORY_ANCHOR = Object.freeze({
-  /* The two strings share one spine - lead, then STRICT_REFERENCE_LOCK - and differ in
-     exactly two places: the garment noun, and the lower-body SCOPING that only bottoms
-     carries. That asymmetry is deliberate and is the one thing to read before editing
-     either: the invented-detail failure this revision targets is not region-specific, so
-     the lock is symmetric; the shirt-replacement failure IS region-specific - a trouser
-     try-on repainting the live top - so the scoping sits on the branch it was reported
-     against rather than on both. See the bullet list above. */
+  /* The two strings share one spine - bind the static garment, adapt to the current
+     contour, preserve the original - and differ in exactly two places: the garment noun,
+     and WHICH contour is named (whole-body on tops, lower-body on bottoms). The
+     lower-body naming is what keeps the shirt-replacement fix alive on the branch it was
+     reported against; see the bullet list above for the half of it that came off. */
   top:
-    "Overlay and fit the EXACT upper garment from the reference image onto the subject." +
-    STRICT_REFERENCE_LOCK,
+    "Drape and fit the EXACT static shirt from the reference image onto the live" +
+    " subject's CURRENT body contour and volume in this frame. Dynamically adapt the" +
+    " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
+    " without stretching or warping the fabric. Strictly preserve the original shirt" +
+    " texture, pattern, and color.",
   bottom:
-    "Overlay and fit the EXACT shorts/pants from the reference image onto the subject's" +
-    " lower body." +
-    STRICT_REFERENCE_LOCK +
-    " Keep the subject's upper body and background unmodified.",
+    "Drape and fit the EXACT static pants/shorts from the reference image onto the live" +
+    " subject's CURRENT lower-body contour and volume in this frame. Dynamically adapt" +
+    " the fit to the subject's exact waistline, leg profile, depth, and angle without" +
+    " distorting the garment design. Strictly preserve original pattern and color.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -6987,16 +7078,24 @@ function isBottomsGarment(item) {
  * The image-only prompt, resolved for THIS garment's category.
  *
  * ONE P.CORE PART, ON BOTH BRANCHES. There is no assembly left here: the function SELECTS
- * a frozen anchor (170 chars on tops, 239 on bottoms) and hands it to fitPrompt() as a
+ * a frozen anchor (342 chars on tops, 320 on bottoms) and hands it to fitPrompt() as a
  * single part. The seven-clause assembly this used to run - and the priority tags that
  * decided what shed out of it - is described in CATEGORY_ANCHOR's comment above, together
  * with what came off the wire and how to put any of it back.
+ *
+ * FROZEN PER CATEGORY, NOT PER FRAME - and that is deliberate even though the anchor now
+ * talks about "this frame". The per-frame half of the fix is not text: it is
+ * the topology monitor (see reconditionForTopology) forcing a genuine re-conditioning
+ * dispatch when the live body has moved, so the model re-reads a CURRENT frame rather
+ * than being handed a description of one. Interpolating live measurements into the prompt would put this
+ * function straight back into the text-volume competition every report in this sequence
+ * was caused by, and would make the string non-constant for no gain.
  *
  * STILL ROUTED THROUGH fitPrompt() rather than returned raw, and that is not ceremony at
  * this length: it normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit
  * that lengthens an anchor - or adds the second part the restore notes describe - is
  * clamped HERE instead of over-running into clampPromptForWire()'s hard slice, which cuts
- * at the END and would take the "do NOT invent" sentence with it. The budget itself is
+ * at the END and would take the fidelity sentence with it. The budget itself is
  * Decart's and app.js:5862 explicitly forbids raising it ("the ceiling is the API's, not
  * ours").
  *
@@ -7005,18 +7104,20 @@ function isBottomsGarment(item) {
  */
 function imageOnlyPrompt(item) {
   /* ONE PART, BOTH BRANCHES. There is no assembly left on either side - see
-     CATEGORY_ANCHOR above for the three reports that drove it there, for the full list
-     of what came off the wire, and for why bottoms carries 69 characters of lower-body
-     scoping that tops does not.
+     CATEGORY_ANCHOR above for the reports that drove it there, for the full list of what
+     came off the wire, and for why bottoms names the lower body where tops names the
+     whole contour.
 
-     STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at 170/239 chars:
+     STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at 342/320 chars:
      it normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that
      lengthens an anchor is clamped here instead of over-running into
      clampPromptForWire()'s hard slice, which cuts at the END and would take the
-     "do NOT invent" sentence with it.
+     fidelity sentence with it.
 
-     TO BUY A CLAUSE BACK, add it as a second part here. The budget is no longer the
-     constraint - 480 characters are free on tops and 411 on bottoms - so the only
+     TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, STRICT_REFERENCE_LOCK]`
+     for the hallucination clamp, `[P.HIGH, KEEP_OPPOSITE_LAYER]` on the bottoms branch for
+     the opposite-layer pin; both are the retirements this revision made. The budget is not
+     the constraint - 308 characters are free on tops and 330 on bottoms - so the only
      question is whether that text is worth the weight it takes away from the reference
      image, which is the mechanism every report in this sequence shares. One at a time,
      re-tested live. */
@@ -7100,15 +7201,15 @@ function lookAnchorPrompt() {
                       the moment "it gave me the model's shoulders" is reported again.
 
    ── THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP ────
-   The number has moved five times, so read the CURRENT row rather than remembering an
+   The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS (170 chars - anchor)             BOTTOMS (239 chars - anchor + lower-body scope)
-     + DENSE.bodyFidelity  (45) → 216  fits              → 285  fits
-     + DENSE.modelAgnostic (64) → 235  fits              → 304  fits
-     + both of them        (110)→ 281  fits              → 350  fits
+     TOPS (342 chars - anchor)             BOTTOMS (320 chars - anchor, lower-body scoped)
+     + DENSE.bodyFidelity  (45) → 388  fits              → 366  fits
+     + DENSE.modelAgnostic (64) → 407  fits              → 385  fits
+     + both of them        (110)→ 453  fits              → 431  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 480 characters are free on tops and 411 on
+   NOTHING SHEDS ANY MORE, on either branch. 308 characters are free on tops and 330 on
    bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.
@@ -7116,10 +7217,13 @@ function lookAnchorPrompt() {
    HEADROOM IS NOT PERMISSION. Tops was collapsed from 634 characters and bottoms from
    616 precisely BECAUSE text volume was outweighing the reference pixels - the tuxedo,
    the generic black shorts and the invented stripe are one mechanism seen three times.
-   The 69 characters bottoms spends on "onto the subject's lower body" plus "Keep the
-   subject's upper body and background unmodified." are the only spend made since, and
-   they bought back a REPRODUCED shirt-replacement report rather than filling space.
-   Size every further restore the same way: evidence first, then the character count.
+   Two spends have been made since, both against REPRODUCED reports rather than to fill
+   space: the lower-body scoping on bottoms (the shirt-replacement report), and the
+   per-frame adaptation sentence on both branches (the stretched-garment report). The
+   second is why the two anchors are ~170 characters longer than the 1:1 collapse left
+   them, and it is also why the branches are now within 22 characters of each other
+   rather than 69 apart. Size every further restore the same way: evidence first, then
+   the character count.
 
    IF A RESTORE EVER DOES OVERRUN, the cheapest text to reclaim, in order:
      · CLOSED_BACK_HEM (49) - a P.MED, and now only on the full-look path.
@@ -8108,13 +8212,19 @@ const ROTATION_CONTINUITY =
    the front" instruction. */
 const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like logos or front-pockets) when the BACK view is requested.";
 
-/* `angleText` is angleClause()'s output, passed IN rather than concatenated on by the
+/* THE MAIN ENTRY POINT for a single-garment dispatch, and the function the dynamic-drape
+   contract is stated through: it resolves to CATEGORY_ANCHOR.top or .bottom, which are the
+   two strings that tell the model the GARMENT is static and the BODY is per-frame. See
+   CATEGORY_ANCHOR for the wording, the failure it answers, and the two clamps it gave up.
+
+   `angleText` is angleClause()'s output, passed IN rather than concatenated on by the
    caller. That is what makes the budget enforceable: the old shape was
    `buildPrompt(item) + angleClause(...)`, two independently-sized strings glued together
    downstream, so neither half could know the total and nothing could shed a clause when
    the pair overran. Threaded through here, the orientation clause becomes one more
    priority-tagged part in a single fitPrompt() call - and it ranks CORE, because a prompt
-   that has lost its orientation clause renders the wrong side of the garment. */
+   that has lost its orientation clause renders the wrong side of the garment. It is
+   retained-and-unused today (see buildCompositePrompt's note on the same seam). */
 function buildPrompt(item, angleText = "") {              // eslint-disable-line no-unused-vars
   return imageOnlyPrompt(item);
 }
@@ -10800,6 +10910,348 @@ function makePresenceGate(needed = POSE_CONSECUTIVE_FRAMES) {
   };
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+   CONTINUOUS BODY TOPOLOGY - the dynamic half of "static garment, dynamic body"
+   ══════════════════════════════════════════════════════════════════════════════
+   THE REPORT: the garment is fitted while the shopper faces the camera, and then it is
+   STRETCHED over whatever they do next. Turn 90 degrees and the 0-degree drape is smeared
+   across a side-on silhouette; put a cushion under the shirt and the same drape is
+   inflated over it. The cut warps, the print skews, the fabric reads as painted-on.
+
+   THE CAUSE IS ARCHITECTURAL, not a threshold. Everything upstream treated the body as a
+   fact established ONCE: awaitBodyPresence() is a gate - it asks "is anyone there?" at
+   go-live and then it is done. Nothing afterwards ever re-asked what SHAPE that body is.
+   So the render stayed conditioned on the frame it was born in, and a diffusion model
+   handed a body that no longer matches its conditioning does the cheapest available
+   thing - it deforms what it already has.
+
+   THE SPLIT THIS ENFORCES, and it is the whole design:
+     · THE GARMENT is STATIC and INVARIANT. Its cut, fabric, print and colour come from
+       one reference image and nothing here may touch them. This module never reads the
+       garment, never rewrites the prompt, and never selects a different asset.
+     · THE BODY is DYNAMIC and VARIABLE, and it lives only in the current frame. Its
+       orientation, profile depth and volume are re-measured every tick.
+   When the live body has moved far enough from the shape the CURRENT render was
+   conditioned against, this asks for a re-conditioning frame: same garment, same
+   reference, re-draped over the contour that is actually in front of the camera now.
+
+   WHAT IT MEASURES, said plainly, because the honest limits matter more than the numbers:
+   BlazePose gives 33 joints. It does not give a body scan, and there is no landmark for
+   "belly". What a skeleton CAN see is the torso's PROJECTION - how far the shoulder line
+   has rotated out of the image plane, how much the torso leans toward or away from the
+   lens, how much depth separates the shoulders from the hips, and the aspect of the box
+   the four torso joints span. Turning changes the first two; adding real volume at the
+   waist pushes the hips forward relative to the shoulders and squares up that box, which
+   moves the last two. So this is a CHANGE DETECTOR on the body's contour, not a
+   measurement of it - which is exactly what is needed, because the only decision it
+   drives is "re-drape against the live frame or not". Decart re-reads the actual pixels;
+   this only has to know when to ask.
+
+   EVERYTHING IS SCALE-INVARIANT ON PURPOSE. Every metric is a ratio or an angle, never a
+   pixel count, so a shopper stepping toward the camera does not read as a body that
+   changed shape - the same reasoning torsoWidth() already applies on the orientation
+   watcher's own baseline.
+
+   IT RUNS ON THE LOOP THAT ALREADY EXISTED. startPresenceWatcher() is now the session's
+   single pose sampler: one detectForVideo() per tick, feeding the presence gate and this
+   monitor from the same result. Two independent samplers would have doubled a WASM/GPU
+   inference on a phone AND risked MediaPipe's monotonic-timestamp contract (two callers
+   landing on the same performance.now() millisecond throws outright). */
+
+/* The four joints that define the torso. Shoulders and hips only: they bound the region
+   both garment categories are actually draped over, they are the joints BlazePose places
+   most reliably, and adding knees/elbows would make a shopper waving an arm read as a
+   body that changed shape. */
+const TORSO_LANDMARKS = Object.freeze([
+  POSE_LANDMARK.LEFT_SHOULDER, POSE_LANDMARK.RIGHT_SHOULDER,
+  POSE_LANDMARK.LEFT_HIP, POSE_LANDMARK.RIGHT_HIP,
+]);
+
+/**
+ * Is this skeleton readable enough to MEASURE from?
+ *
+ * The bar is BODY_TRACK_MIN_VISIBILITY, deliberately below the presence gate's
+ * POSE_MIN_CONFIDENCE. The gate is deciding whether to spend a shopper's credits; this is
+ * deciding whether a frame can be measured, and the frames it most needs - mid-rotation,
+ * one shoulder occluded - are exactly the ones a go-live-grade bar throws away. Failing
+ * this is NOT "no body": it means "not measurable this frame", which is what starts the
+ * hold-and-resume path rather than a re-drape against a guess.
+ * @param {Array<{x?:number,y?:number,visibility?:number}>|null|undefined} landmarks
+ * @param {number} minVisibility
+ * @returns {boolean}
+ */
+function torsoReadable(landmarks, minVisibility = BODY_TRACK_MIN_VISIBILITY) {
+  if (!Array.isArray(landmarks) || !landmarks.length) return false;
+  return TORSO_LANDMARKS.every((i) => {
+    const lm = landmarks[i];
+    return !!lm && Number.isFinite(lm.x) && Number.isFinite(lm.y) &&
+      Number(lm.visibility ?? 0) >= minVisibility;
+  });
+}
+
+/**
+ * The angle, in degrees, by which a body segment has rotated OUT of the image plane.
+ *
+ * `inPlane` is the segment's extent across the image, `outOfPlane` its extent in depth.
+ * asin(outOfPlane / length) is 0 when the segment lies flat across the camera and ±90
+ * when it points straight at (or away from) it. Written this way rather than as
+ * atan2(z, x) on purpose: atan2 answers 0 or 180 for a square-on subject depending on
+ * which landmark index happens to sit on which side of the image, so a sign convention
+ * change in a future MediaPipe release would silently invert it. This form only ever
+ * depends on the RATIO, so 0 always means square-on.
+ * @returns {number|null} null when the segment has no measurable length.
+ */
+function planarAngleDeg(inPlane, outOfPlane) {
+  const len = Math.hypot(inPlane, outOfPlane);
+  if (!(len > 1e-6)) return null;
+  return Math.asin(Math.max(-1, Math.min(1, outOfPlane / len))) * (180 / Math.PI);
+}
+
+/**
+ * Shoulder-line yaw: 0 = square to the camera, ±90 = fully edge-on. This is the channel
+ * the ">15 degrees and the body is a different shape" rule reads, and it is a genuinely
+ * 3D measurement - unlike the orientation watcher's silhouette-width heuristic, which
+ * infers the same turn from a 96px canvas because it has no landmarks to work with.
+ * @param {Array<{x:number,z?:number}>} pts world (or image) landmarks
+ * @returns {number|null}
+ */
+function bodyYawDegrees(pts) {
+  const L = pts && pts[POSE_LANDMARK.LEFT_SHOULDER], R = pts && pts[POSE_LANDMARK.RIGHT_SHOULDER];
+  if (!L || !R) return null;
+  return planarAngleDeg(R.x - L.x, (R.z ?? 0) - (L.z ?? 0));
+}
+
+/**
+ * Torso pitch: the shoulder-to-hip axis leaning toward or away from the lens. 0 = upright
+ * and square. Separate from yaw because leaning over a counter changes which part of the
+ * garment faces the camera just as much as turning does, and the garment has to be
+ * re-draped for it the same way.
+ * @returns {number|null}
+ */
+function bodyPitchDegrees(pts) {
+  if (!pts) return null;
+  const ls = pts[POSE_LANDMARK.LEFT_SHOULDER], rs = pts[POSE_LANDMARK.RIGHT_SHOULDER];
+  const lh = pts[POSE_LANDMARK.LEFT_HIP],      rh = pts[POSE_LANDMARK.RIGHT_HIP];
+  if (!ls || !rs || !lh || !rh) return null;
+  const shoulderY = (ls.y + rs.y) / 2, hipY = (lh.y + rh.y) / 2;
+  const shoulderZ = ((ls.z ?? 0) + (rs.z ?? 0)) / 2, hipZ = ((lh.z ?? 0) + (rh.z ?? 0)) / 2;
+  return planarAngleDeg(shoulderY - hipY, shoulderZ - hipZ);
+}
+
+/**
+ * Torso DEPTH as a fraction of torso height - the volumetric channel.
+ *
+ * The numerator is how much depth separates the four torso joints; the denominator is the
+ * shoulder-to-hip distance, which normalises out both build and distance from the camera.
+ * It rises when the shopper turns (depth replaces width) AND when real volume is added at
+ * the waist (the hips move forward relative to the shoulders). Both are "the body this
+ * garment is draped on is a different shape now", which is the only question being asked.
+ * @returns {number|null}
+ */
+function bodyDepthRatio(pts) {
+  if (!pts) return null;
+  const torso = TORSO_LANDMARKS.map((i) => pts[i]);
+  if (torso.some((p) => !p)) return null;
+  const zs = torso.map((p) => Number(p.z ?? 0));
+  if (zs.some((z) => !Number.isFinite(z))) return null;
+  const shoulderY = (torso[0].y + torso[1].y) / 2, hipY = (torso[2].y + torso[3].y) / 2;
+  const height = Math.abs(shoulderY - hipY);
+  if (!(height > 1e-6)) return null;
+  return (Math.max(...zs) - Math.min(...zs)) / height;
+}
+
+/**
+ * The torso's profile bounding box in NORMALISED image coordinates, and its aspect.
+ *
+ * Normalised, so it is already resolution- and distance-independent. `aspect` (width over
+ * height) is the silhouette channel: a square-on shopper is wide, a side-on one is narrow,
+ * and a shopper who has gained profile volume is neither - which is why it is read
+ * alongside depth rather than instead of it.
+ * @returns {{w:number,h:number,aspect:number}|null}
+ */
+function bodyProfileBox(landmarks) {
+  if (!Array.isArray(landmarks)) return null;
+  const pts = TORSO_LANDMARKS.map((i) => landmarks[i]);
+  if (pts.some((p) => !p || !Number.isFinite(p.x) || !Number.isFinite(p.y))) return null;
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const w = Math.max(...xs) - Math.min(...xs);
+  const h = Math.max(...ys) - Math.min(...ys);
+  if (!(h > 1e-6)) return null;
+  return { w, h, aspect: w / h };
+}
+
+/**
+ * One frame's body topology, or null when the frame cannot be measured.
+ *
+ * WORLD LANDMARKS FIRST, image landmarks as the fallback. worldLandmarks are metric and
+ * hip-centred, which is what makes the angles real angles; the normalised image set
+ * carries a z that is only roughly comparable to x, so the same formulas still produce a
+ * usable CHANGE signal from it, just a less precise one. Visibility is always read off the
+ * IMAGE set - worldLandmarks do not reliably carry it.
+ * @param {{landmarks?:Array, worldLandmarks?:Array}|null} result a PoseLandmarker result
+ * @returns {{yaw:number, pitch:number, depth:number, aspect:number}|null}
+ */
+function bodyContourSignature(result, minVisibility = BODY_TRACK_MIN_VISIBILITY) {
+  const image = result && Array.isArray(result.landmarks) ? result.landmarks[0] : null;
+  if (!torsoReadable(image, minVisibility)) return null;
+  const world = result && Array.isArray(result.worldLandmarks) && result.worldLandmarks[0]
+    ? result.worldLandmarks[0] : image;
+  const yaw = bodyYawDegrees(world), pitch = bodyPitchDegrees(world);
+  const depth = bodyDepthRatio(world), box = bodyProfileBox(image);
+  if (yaw === null || pitch === null || depth === null || !box) return null;
+  return { yaw, pitch, depth, aspect: box.aspect };
+}
+
+/* Proportional change between two readings, guarded against a near-zero denominator so a
+   ratio that legitimately passes through ~0 cannot manufacture an infinite delta. */
+function relativeDelta(a, b) {
+  const base = Math.max(Math.abs(a), Math.abs(b), 0.05);
+  return Math.abs(b - a) / base;
+}
+
+/**
+ * How far apart two topologies are: rotation on two axes, and one fused volume/contour
+ * figure taken as the LARGER of the depth and aspect changes. Larger rather than averaged
+ * - the two channels see different halves of the same event, and averaging would let a
+ * strong signal on one be diluted by a quiet one on the other.
+ *
+ * THE TWO CHANNELS ARE MEASURED DIFFERENTLY, and that asymmetry is load-bearing rather
+ * than an oversight. DEPTH is compared ABSOLUTELY: it is already a normalised ratio on a
+ * bounded scale (~0 for a flat square-on torso, ~1 edge-on) and it legitimately PASSES
+ * THROUGH ZERO, where any proportional measure explodes - a shopper shifting their weight
+ * two degrees took the depth ratio from 0.00 to 0.03, which is a 100% relative change and
+ * a nothing of an absolute one. Reading it relatively fired a full image re-upload on
+ * standing still. ASPECT is compared PROPORTIONALLY: it is a width-over-height ratio with
+ * no meaningful zero, so "20% narrower than they were" is the statement that means
+ * something about it.
+ * @returns {{yaw:number, pitch:number, volume:number}}
+ */
+function topologyDelta(prev, next) {
+  return {
+    yaw:    Math.abs(next.yaw - prev.yaw),
+    pitch:  Math.abs(next.pitch - prev.pitch),
+    volume: Math.max(Math.abs(next.depth - prev.depth),
+                     relativeDelta(prev.aspect, next.aspect)),
+  };
+}
+
+/**
+ * Does this delta warrant re-draping? Returns the REASON rather than a boolean, because
+ * the reason is what goes in the log line a live session gets diagnosed from.
+ *
+ * "LEAN" AND "VOLUME" ARE NOT CLEANLY SEPARABLE FROM FOUR JOINTS, and pretending otherwise
+ * would be the dishonest version of this function. A torso that gains depth at the waist
+ * also tilts the shoulder-to-hip axis in the model's own estimate, so added belly volume
+ * most often reports as "lean". That is a LABELLING limit, not a detection gap: both
+ * reasons produce the identical response - re-drape against the live frame - and the frame
+ * is where the actual volume is visible. The reason string exists to make a console trace
+ * readable, and it is ordered rotation → lean → volume so the strongest, most
+ * unambiguous signal names the event.
+ * @returns {"rotation"|"lean"|"volume"|null}
+ */
+function topologyShift(delta, rotationDeg = BODY_ROTATION_DELTA_DEG, volumeDelta = BODY_VOLUME_DELTA) {
+  if (delta.yaw    >= rotationDeg) return "rotation";
+  if (delta.pitch  >= rotationDeg) return "lean";
+  if (delta.volume >= volumeDelta) return "volume";
+  return null;
+}
+
+/**
+ * The monitor's state machine.
+ *
+ * THE BASELINE IS "THE SHAPE THE CURRENT RENDER WAS CONDITIONED ON", not "the previous
+ * frame". That is the single most important line in this file's new code: comparing
+ * against the previous frame would mean a slow, continuous turn never trips anything at
+ * all (each step is tiny), while a baseline that only moves when a re-drape is actually
+ * dispatched accumulates drift until it matters. Standing still costs nothing; turning
+ * gradually still fires, once, at the point the drape has genuinely gone stale.
+ *
+ * IT NEVER RE-BASES ON A QUIET FRAME, for the same reason.
+ *
+ * THE HOLD IS THE FALLBACK the spec asks for. An unreadable frame is not a new body: it
+ * is no information. The tracker holds its baseline (and therefore the last valid fit -
+ * nothing is dispatched, so nothing changes on screen) for BODY_TRACK_HOLD_MS, then gives
+ * up and re-acquires from the next clean read. Past that point the shopper has been gone
+ * long enough that startPresenceWatcher()'s own absent→present path owns the recovery, and
+ * two re-conditioning dispatches for one event would be one too many - hence "dropped"
+ * returns a fresh acquisition rather than a shift.
+ *
+ * COOLDOWN LIVES HERE, not at the call site, so the "did it move?" decision and the "may
+ * we send?" decision cannot drift apart: a shift suppressed by the cooldown must NOT move
+ * the baseline, or the movement it represents would be silently forgotten.
+ *
+ * @param {{rotationDeg?:number, volumeDelta?:number, cooldownMs?:number, holdMs?:number,
+ *          now?:() => number}} [opts] injectable for tests
+ */
+function makeBodyTopologyTracker(opts = {}) {
+  const rotationDeg = opts.rotationDeg ?? BODY_ROTATION_DELTA_DEG;
+  const volumeDelta = opts.volumeDelta ?? BODY_VOLUME_DELTA;
+  const cooldownMs  = opts.cooldownMs  ?? BODY_RECONDITION_COOLDOWN_MS;
+  const holdMs      = opts.holdMs      ?? BODY_TRACK_HOLD_MS;
+  const now         = opts.now         ?? (() => Date.now());
+
+  let baseline = null;      // the topology the CURRENT render was conditioned against
+  /* null while the skeleton is readable, otherwise the timestamp it went unreadable at.
+     A null sentinel rather than 0, because 0 is a legitimate timestamp on an injected
+     clock and a falsy-check would then restart the hold on every tick - reporting a hold
+     that never ages and therefore never reaches its ceiling. */
+  let lostAt = null;
+  /* -Infinity, not 0: 0 is a real timestamp on any injected clock, and it would make the
+     FIRST shift of a session look like one that had just been sent - swallowing it into a
+     cooldown for a movement nothing had yet responded to. "Never signalled" is its own
+     value, so it gets one. */
+  let lastSignalAt = -Infinity;
+
+  return {
+    get baseline() { return baseline; },
+    /* Called after something ELSE has re-conditioned the session (a presence re-entry, a
+       garment swap): the render no longer corresponds to the stored baseline, so the next
+       readable frame must establish a new one instead of being compared to a stale shape. */
+    reset() { baseline = null; lostAt = null; },
+    /**
+     * @param {object|null} sig bodyContourSignature() for this frame, or null if unreadable
+     * @returns {{state:"waiting"|"acquired"|"stable"|"resumed"|"hold"|"dropped"|"cooldown"|"shift",
+     *            reason?:string, delta?:object, heldMs?:number}}
+     */
+    feed(sig) {
+      const t = now();
+      if (!sig) {
+        if (!baseline) return { state: "waiting" };
+        if (lostAt === null) lostAt = t;
+        if (t - lostAt >= holdMs) { baseline = null; lostAt = null; return { state: "dropped" }; }
+        return { state: "hold", heldMs: t - lostAt };
+      }
+      const heldMs = lostAt === null ? 0 : t - lostAt;
+      lostAt = null;
+      if (!baseline) { baseline = sig; return { state: "acquired" }; }
+
+      const delta = topologyDelta(baseline, sig);
+      const reason = topologyShift(delta, rotationDeg, volumeDelta);
+      /* Back in view and still the same shape: the hold did its job, the fit that was
+         held is still the right one, and nothing needs to be sent. */
+      if (!reason) return { state: heldMs ? "resumed" : "stable", delta, heldMs };
+      if (t - lastSignalAt < cooldownMs) return { state: "cooldown", reason, delta, heldMs };
+      lastSignalAt = t;
+      baseline = sig;
+      /* The reason is tagged when it arrives out of a hold, because "they turned" and
+         "they turned while we could not see them" are different stories in a log. */
+      return { state: "shift", reason: heldMs ? `${reason}-after-hold` : reason, delta, heldMs };
+    },
+  };
+}
+
+/* MediaPipe's VIDEO running mode rejects a timestamp that is not strictly greater than
+   the last one it saw, and it throws rather than returning empty. performance.now() is
+   monotonic but not strictly increasing - two calls inside the same millisecond return
+   the same value - so every detectForVideo() in this file goes through here. It costs one
+   comparison and removes an entire class of "Packet timestamp mismatch" session failure. */
+let _lastPoseTimestamp = 0;
+function detectPoseFrame(detector, video) {
+  const ts = Math.max(performance.now(), _lastPoseTimestamp + 1);
+  _lastPoseTimestamp = ts;
+  return detector.detectForVideo(video, ts);
+}
+
 /* The loaded PoseLandmarker, as a memoized PROMISE - so N callers during preload share
    one download, and a second call never restarts it. Resolves to null on every failure. */
 let _poseLandmarkerPromise = null;
@@ -10835,7 +11287,11 @@ function loadPoseLandmarker() {
    typically many seconds before they press go-live - so by the time the gate needs the
    detector it is already resident, and the critical path pays nothing. */
 function preloadPoseDetector() {
-  if (!POSE_GATE_ENABLED) return;
+  /* Either consumer is reason enough to warm it: the gate needs it at go-live, and the
+     topology monitor needs it for the whole session after that. Warming for one and not
+     the other would put a multi-MB WASM download on the live path for whichever flag
+     happened to be off. */
+  if (!POSE_GATE_ENABLED && !BODY_TOPOLOGY_ENABLED) return;
   loadPoseLandmarker().catch(() => {});   // .catch is belt-and-braces; it never rejects
 }
 
@@ -10884,8 +11340,7 @@ async function awaitBodyPresence(isBottoms) {
       let verdict = null;
       if (detector && video.videoWidth) {
         try {
-          verdict = presenceFromPoseResult(
-            detector.detectForVideo(video, performance.now()), category);
+          verdict = presenceFromPoseResult(detectPoseFrame(detector, video), category);
         } catch (e) {
           console.warn("[PEAR] pose detect failed, degrading:", e?.message || e);
           verdict = null;
@@ -10939,15 +11394,47 @@ function hidePresenceOverlay() {
    It reuses applyActive() and the same `applying` mutex maybeReanchorPrompt() uses, for
    the same reason: a swap or a profile transition may already own the wire. */
 let presenceWatcherTimer = null;
+/* The live tracker instance, kept at module scope only so teardown can drop it. Its state
+   is per-session by construction: startPresenceWatcher() builds a new one each time. */
+let bodyTopology = null;
 
+/**
+ * THE SESSION'S SINGLE POSE SAMPLER, feeding two independent consumers off ONE inference.
+ *
+ *   · PRESENCE (unchanged): did the shopper leave the frame, and did they come back?
+ *     Answers with the go-live-grade landmark bar and re-conditions on re-entry.
+ *   · TOPOLOGY (new): has the BODY this render was draped on actually changed shape -
+ *     rotated past BODY_ROTATION_DELTA_DEG, leaned, or gained profile volume? See the
+ *     CONTINUOUS BODY TOPOLOGY block above for why that question has to be asked every
+ *     frame rather than once at go-live.
+ *
+ * ONE detectForVideo() PER TICK IS THE POINT. These were nearly built as two loops, and
+ * that would have been wrong twice over: a second BlazePose inference per tick on a phone
+ * is real battery and thermal cost for a question the first inference already answered,
+ * and two callers racing the same landmarker can land on the same performance.now()
+ * millisecond, which MediaPipe rejects outright (see detectPoseFrame).
+ *
+ * EACH HALF DEGRADES INDEPENDENTLY. A null presence verdict (no usable reading) skips the
+ * presence half without touching the streak - the pre-existing behaviour - and the
+ * topology half still runs, because "cannot judge presence" and "cannot measure shape"
+ * are different failures with different bars.
+ */
 function startPresenceWatcher() {
-  if (!POSE_GATE_ENABLED || presenceWatcherTimer) return;
+  if ((!POSE_GATE_ENABLED && !BODY_TOPOLOGY_ENABLED) || presenceWatcherTimer) return;
   const video = $("webcam");
   if (!video) return;
   const category = isBottomsGarment(activeItem) ? "bottom" : "top";
   const gate = makePresenceGate();
   let wasPresent = true;      // the go-live gate just confirmed presence
   let inFlight = false;
+  bodyTopology = BODY_TOPOLOGY_ENABLED ? makeBodyTopologyTracker() : null;
+
+  /* Faster when the topology monitor is on: presence only has to notice somebody walking
+     away, but topology has to catch a turn WHILE it is happening. Still one inference per
+     tick, so the extra rate is the only thing being paid for. */
+  const tickMs = BODY_TOPOLOGY_ENABLED
+    ? Math.min(POSE_SAMPLE_MS * 2, BODY_TOPOLOGY_SAMPLE_MS)
+    : POSE_SAMPLE_MS * 2;
 
   presenceWatcherTimer = setInterval(async () => {
     if (inFlight || !isLive()) return;
@@ -10955,29 +11442,55 @@ function startPresenceWatcher() {
     try {
       const detector = await loadPoseLandmarker();
       if (!detector || !video.videoWidth) return;
-      let verdict;
-      try {
-        verdict = presenceFromPoseResult(
-          detector.detectForVideo(video, performance.now()), category);
-      } catch (_) { return; }
-      if (verdict === null) return;
-      const present = gate.feed(verdict === true);
-      if (present && !wasPresent) {
-        wasPresent = true;
-        hidePresenceOverlay();
-        await reconditionForPresence();
-      } else if (!present && wasPresent && verdict === false) {
-        wasPresent = false;
-        showPresenceOverlay();
+      let result;
+      try { result = detectPoseFrame(detector, video); } catch (_) { return; }
+
+      /* ── Consumer one: presence ─────────────────────────────────────────────
+         A null verdict still means "cannot judge this frame" and still leaves the streak
+         untouched, exactly as before - it is now a skipped BLOCK rather than an early
+         return, so it no longer takes the topology half down with it. */
+      if (POSE_GATE_ENABLED) {
+        const verdict = presenceFromPoseResult(result, category);
+        if (verdict !== null) {
+          const present = gate.feed(verdict === true);
+          if (present && !wasPresent) {
+            wasPresent = true;
+            hidePresenceOverlay();
+            await reconditionForPresence();
+            /* That dispatch re-conditioned the render, so whatever shape the tracker was
+               holding is no longer the shape on screen. Re-acquire rather than compare the
+               next frame against a baseline the render has already moved off. */
+            if (bodyTopology) bodyTopology.reset();
+          } else if (!present && wasPresent && verdict === false) {
+            wasPresent = false;
+            showPresenceOverlay();
+          }
+        }
+      }
+
+      /* ── Consumer two: body topology ────────────────────────────────────────
+         Only "shift" dispatches. "hold" is the fallback for a body that went unreadable
+         mid-rotation and is deliberately silent - holding the last valid fit IS sending
+         nothing - and "cooldown" is a shift the rate limit swallowed, which the tracker
+         remembers so the movement is not lost. */
+      if (bodyTopology) {
+        const step = bodyTopology.feed(bodyContourSignature(result));
+        if (step.state === "shift") await reconditionForTopology(step);
+        else if (ORIENT_DEBUG && (step.state === "hold" || step.state === "resumed" || step.state === "cooldown")) {
+          console.log(`[PEAR][TOPOLOGY] ${step.state}` +
+            (step.heldMs ? ` (held ${step.heldMs}ms)` : "") +
+            (step.reason ? ` | ${step.reason} suppressed by cooldown` : ""));
+        }
       }
     } finally {
       inFlight = false;
     }
-  }, POSE_SAMPLE_MS * 2);
+  }, tickMs);
 }
 
 function stopPresenceWatcher() {
   if (presenceWatcherTimer) { clearInterval(presenceWatcherTimer); presenceWatcherTimer = null; }
+  bodyTopology = null;        // a new session measures a new body from scratch
   hidePresenceOverlay();
 }
 
@@ -11006,6 +11519,63 @@ async function reconditionForPresence() {
     console.warn("[PEAR] presence re-condition failed:", e?.message || e);
   } finally {
     presenceReconditionInFlight = false;
+  }
+}
+
+/* ── Re-drape on the CURRENT body contour ─────────────────────────────────────
+   The dispatch half of the topology monitor. Its sibling above answers "they came back";
+   this answers "they are a different shape than the garment was drawn for".
+
+   WHY THIS FORCES A FULL set() RATHER THAN A setPrompt(). The prompt is constant per
+   category, so applyGarment()'s no-op skip is not an optimisation here - it is the whole
+   obstacle. With the reference already on the wire and the prompt byte-identical, a
+   re-anchor sends NOTHING, which is precisely why re-asserting text could never fix the
+   stretched-garment report: there was no dispatch, so the model never re-read the body.
+   Clearing the three wire-state fields is the documented way to force a real one (it is
+   exactly what __pearDebugReinjectGarment does, and what applyGarment's own comment
+   prescribes for this case: "the fix is to make the re-anchor force a full re-upload").
+   What Decart then receives is the invariant garment reference against a LIVE frame that
+   now shows the new contour - which is a re-drape, not a re-warp of the old one.
+
+   THE COST IS REAL AND IS BOUNDED DELIBERATELY. A full set() re-uploads the packshot
+   inside a billed window, and applyGarment's flicker-fix comment records that swapping
+   the reference mid-rotation is itself capable of making a print flicker. Three things
+   keep that in hand: BODY_RECONDITION_COOLDOWN_MS (~5 dispatches per 5s session at
+   worst), the tracker only firing on movement that actually cleared a threshold, and the
+   guard below.
+
+   NEVER DURING A FRONT/BACK SWAP. _orientHoldActive means the orientation watcher has
+   frozen the view and is mid-swap of the reference ITSELF; that path already re-applies
+   the whole payload when it lands, so firing here would both collide with it and
+   re-upload an asset that is about to be replaced. Skipping is free - the tracker keeps
+   the movement in its baseline and the next tick re-offers it.
+
+   SAME UN-SHARED-MUTEX CAVEAT as reconditionForPresence(): the watcher's `applying` flag
+   is a closure local. A collision sends the same payload twice, never a wrong one. */
+let topologyReconditionInFlight = false;
+
+async function reconditionForTopology(step) {
+  if (topologyReconditionInFlight || !isLive() || !isGarmentApplied) return;
+  if (_orientHoldActive) return;
+  topologyReconditionInFlight = true;
+  try {
+    const d = step.delta || {};
+    console.log(`[PEAR] body contour changed (${step.reason}) at t=${sessionElapsedMs()}ms` +
+      ` - re-draping the SAME garment on the CURRENT frame (no re-bill)` +
+      ` | Δyaw=${(d.yaw ?? 0).toFixed(1)}° Δpitch=${(d.pitch ?? 0).toFixed(1)}°` +
+      ` Δvolume=${((d.volume ?? 0) * 100).toFixed(0)}%` +
+      (step.heldMs ? ` | resumed after a ${step.heldMs}ms tracking hold` : ""));
+    /* All three, for the reason debugReinjectGarment() clears all three: the first two
+       bypass the "same image already on the wire" shortcut, the third gets past the
+       "...and the prompt is unchanged too" no-op skip sitting in front of it. */
+    lastSentImageRef = null;
+    rtImageOnWire = false;
+    lastSentPrompt = null;
+    await applyActive();
+  } catch (e) {
+    console.warn("[PEAR] body-contour re-condition failed:", e?.message || e);
+  } finally {
+    topologyReconditionInFlight = false;
   }
 }
 /* ── end body-presence gate ── */

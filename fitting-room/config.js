@@ -17,6 +17,13 @@
  * @property {string}   HEALTH_ENDPOINT         Same-origin proxy health route used by the pre-use check.
  * @property {string[]} SDK_URLS                Ordered Decart SDK CDN fallbacks.
  * @property {number}   PROMPT_MAX_CHARS        Hard cap on any assembled prompt (Decart rejects >226 tokens).
+ * @property {boolean}  BODY_TOPOLOGY_ENABLED   Re-drape the garment on the live body contour whenever it changes, instead of holding the go-live silhouette.
+ * @property {number}   BODY_TOPOLOGY_SAMPLE_MS Cadence of the live pose loop that feeds both the presence watcher and the topology monitor (ms).
+ * @property {number}   BODY_TRACK_MIN_VISIBILITY Per-landmark visibility bar for TRACKING (below the gate's, so a half-occluded turn is still readable).
+ * @property {number}   BODY_ROTATION_DELTA_DEG Yaw/pitch change from the conditioned pose that triggers a re-drape (degrees).
+ * @property {number}   BODY_VOLUME_DELTA       Relative torso depth/aspect change that triggers a re-drape (0..1).
+ * @property {number}   BODY_RECONDITION_COOLDOWN_MS Minimum gap between two re-conditioning dispatches (ms).
+ * @property {number}   BODY_TRACK_HOLD_MS      How long a lost skeleton holds the last valid fit before the baseline is dropped (ms).
  * @property {boolean}  LOWER_BODY_GUARD_ENABLED Composite the shopper's own raw lower-body pixels back over Decart's output (default OFF - validate live first).
  * @property {number}   LOWER_BODY_GUARD_FRAC   Fraction of frame height, from the bottom, that the guard protects.
  * @property {boolean}  LOWER_BODY_GUARD_AUTO_CALIBRATE Derive LOWER_BODY_GUARD_FRAC per-session from a detected face box instead of the fixed fraction.
@@ -73,6 +80,58 @@ export const CONFIG = Object.freeze({
   POSE_MODEL_URL: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/" +
                   "pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
   POSE_TASKS_MODULE: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14",
+
+  /* ── Continuous body-topology monitor (see startBodyTopologyTracking in app.js) ──
+     THE PRINCIPLE THIS ENFORCES: the GARMENT is static and invariant - one reference
+     image, one cut, one colour, for the whole session. The BODY is not. It rotates, it
+     leans, it gains profile depth when the shopper turns side-on or puts a cushion under
+     their shirt. The gate above is a one-shot question ("is anyone there?") asked once at
+     go-live; everything after it used to treat that first silhouette as the shape the
+     garment was fitted to for the rest of the window, so a shopper who turned 90 degrees
+     got the 0-degree drape STRETCHED over a side-on body instead of a fresh drape over
+     the side-on contour.
+     This block turns the same detector into a continuous monitor: it re-reads the torso
+     topology every tick and, when the live body has genuinely moved away from the shape
+     the current render was conditioned on, asks Decart to re-drape against the CURRENT
+     frame. It never touches the garment reference, which is exactly the invariant half.
+
+     COSTS ARE REAL, so the thresholds are set to fire on events and not on fidgeting: a
+     re-conditioning frame is a full rtClient.set() (the prompt is constant, so setPrompt()
+     alone is provably a no-op - see applyGarment's skip), which re-uploads the packshot
+     inside a billed window. BODY_RECONDITION_COOLDOWN_MS is what bounds that. */
+  BODY_TOPOLOGY_ENABLED:   true,
+  /* Sampling cadence for the live loop. Slightly faster than the presence watcher's old
+     240ms because this one has to catch a turn IN PROGRESS, and the same loop now feeds
+     both consumers off ONE detectForVideo() call - so this is cheaper than the two
+     independent samplers it replaces, not more expensive. */
+  BODY_TOPOLOGY_SAMPLE_MS: 200,
+  /* Per-landmark visibility bar for TRACKING, deliberately below POSE_MIN_CONFIDENCE
+     (0.78, the bar for opening a billed session). A shoulder that is half-occluded
+     mid-turn is exactly the frame this monitor most needs to read, and holding it to the
+     gate's bar would blind the monitor during the rotation it exists to track. Below this
+     the frame is treated as UNREADABLE rather than as a new shape - which is what drives
+     the hold-and-resume fallback. */
+  BODY_TRACK_MIN_VISIBILITY: 0.5,
+  /* Rotation (yaw or pitch) away from the conditioned pose that counts as a new body.
+     15 degrees is the spec'd figure and it is a sensible one: a shopper shifting weight
+     moves the shoulder line by a few degrees, a deliberate turn clears this within a
+     couple of samples. */
+  BODY_ROTATION_DELTA_DEG: 15,
+  /* Relative change in the torso's depth/aspect signature that counts as a volumetric
+     change - the cushion-under-the-shirt case, and any other contour expansion the
+     skeleton can actually see. 0.18 = 18%, comfortably above landmark jitter (a few
+     percent between adjacent frames) and below a real change in profile. */
+  BODY_VOLUME_DELTA:       0.18,
+  /* Floor between two re-conditioning dispatches. Each one is a full set() with the
+     reference image attached, so this is the knob that decides how much of a 5s window
+     a continuously-moving shopper can spend re-uploading a packshot. ~5 per session. */
+  BODY_RECONDITION_COOLDOWN_MS: 900,
+  /* How long a lost skeleton is HELD before the monitor gives up on the last valid
+     reading. Sharp rotations black out the landmarks for a few frames; holding the last
+     good fit across that gap and resuming from it is the difference between "the garment
+     rode the turn" and "the garment re-derived itself from a frame with no body in it".
+     Past this, the baseline is dropped and the next clean read re-acquires from scratch. */
+  BODY_TRACK_HOLD_MS:      1500,
 
   /* ── secure proxy endpoints (same-origin; see ../server.js) ─────────────── */
   TOKEN_ENDPOINT:  "/api/realtime-token",

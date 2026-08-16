@@ -268,7 +268,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   check("the live composite payload is the category anchor, at every pose",
     built === api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Overlay and fit the EXACT upper garment from the reference image onto the subject\./.test(built),
+    /^Drape and fit the EXACT static shirt from the reference image onto the live subject's CURRENT body contour/.test(built),
     built);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
@@ -330,14 +330,22 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
     const out = lockApi.buildCompositePrompt(lockItem, "front", prof);
     /* THE VOLUME AND PROVENANCE CLAUSES ARE BOTH OFF THE WIRE NOW - the anchor was
        collapsed to a strict 1:1 reference lock after a third report (invented detail on
-       the CORRECT garment). What this section is actually about survives unchanged and is
-       what is asserted instead: the payload is pose-invariant, and the reference binding
-       plus the no-invent clamp cannot shed at either pose. */
+       the CORRECT garment), then rewritten again around the static-garment/dynamic-body
+       split after a fourth (the 0-degree drape STRETCHED over a turned shopper). What
+       this section is actually about survives every one of those and is what is asserted
+       instead: the payload is pose-invariant, and the reference binding plus the fidelity
+       clamp cannot shed at either pose.
+
+       NOTE THE ONE THING THAT DID CHANGE HERE. The prompt is still byte-identical at both
+       poses - but the model no longer has to infer the turn from text alone, because the
+       topology monitor re-conditions the session on the live frame when the body actually
+       rotates (body-topology.test.mjs). The prompt's pose-invariance is now a deliberate
+       division of labour rather than a gap. */
     check(`the anchor carries its reference binding at inProfile=${prof}`,
-      /the EXACT upper garment from the reference image/.test(out),
+      /the EXACT static shirt from the reference image/.test(out),
       out.slice(0, 400));
-    check(`...and the no-invent clamp at inProfile=${prof}`,
-      /Do NOT invent, add, or alter any details\./.test(out),
+    check(`...and the fidelity clamp at inProfile=${prof}`,
+      /Strictly preserve the original shirt texture, pattern, and color\./.test(out),
       out.slice(0, 400));
   }
 
@@ -410,7 +418,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Overlay and fit the EXACT upper garment from the reference image onto the subject\./;
+  const FROZEN = /^Drape and fit the EXACT static shirt from the reference image onto the live subject's CURRENT body contour/;
   for (const prof of [false, true]) {
     check(`the category anchor is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
@@ -425,7 +433,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
   const jeans = { name: "Glide Slim", custom: true, garmentType: "lower_body" };
   check("the BOTTOMS anchor is equally pose-invariant, and is a different string",
     api.buildCompositePrompt(jeans, "front", false) === api.buildCompositePrompt(jeans, "front", true) &&
-    /^Overlay and fit the EXACT shorts\/pants from the reference image/.test(
+    /^Drape and fit the EXACT static pants\/shorts from the reference image/.test(
       api.buildCompositePrompt(jeans, "front", false)) &&
     api.buildCompositePrompt(jeans, "front", false) !== api.buildCompositePrompt(item, "front", false),
     api.buildCompositePrompt(jeans, "front", false).slice(0, 200));
@@ -759,13 +767,14 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
   check("the passthrough clamp is retired with them - the largest loss, recorded",
     !/pass through untouched/.test(square) && !/pass through untouched/.test(built),
     "if this ever passes again, inpaintLock was restored - update app.js's restore list");
-  /* CLOSED_BACK_HEM went off the wire with the 1:1 collapse - see CATEGORY_ANCHOR in
-     app.js for the full list and the restore path. Byte-identity across poses is the
-     property this section owns, and it is unaffected. */
+  /* CLOSED_BACK_HEM went off the wire with the 1:1 collapse, and the invent/add/alter
+     clamp with the dynamic-drape revision after it - see CATEGORY_ANCHOR in app.js for
+     the full list and the restore path for each. Byte-identity across poses is the
+     property this section owns, and it is unaffected by either. */
   check("what survives at both poses is the category anchor, byte-identical",
     square === built &&
-    /^Overlay and fit the EXACT upper garment from the reference image onto the subject\./.test(square) &&
-    /Do NOT invent, add, or alter any details\./.test(square));
+    /^Drape and fit the EXACT static shirt from the reference image onto the live subject's CURRENT body contour/.test(square) &&
+    /Strictly preserve the original shirt texture, pattern, and color\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

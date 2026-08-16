@@ -303,12 +303,13 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
   check("NEITHER branch carries the continuous-tracking directive any more",
     !/Continuously track/.test(top) && !/Continuously track/.test(bot),
     `tops=${top.length} bottoms=${bot.length} - both collapsed to a 1:1 reference lock`);
-  /* Both stay ultra-minimal, which is what replaced the directive. Bottoms is the longer
-     of the two by 69 characters and that is NOT this clause creeping back: it is the
-     lower-body scoping restored after the shirt-replacement report (see CATEGORY_ANCHOR
-     in app.js). The bound is per branch so that spend cannot be mistaken for room. */
-  check("...and both are ultra-minimal, which is what replaced it",
-    top.length <= 200 && bot.length <= 260 && !/as soon as visible/.test(bot),
+  /* Both stay minimal, which is what replaced the directive. They grew by ~80 characters
+     in the dynamic-drape revision and that is NOT this clause creeping back: it is the
+     per-frame adaptation sentence, which says nothing about the subject being absent (the
+     bound below is per branch so that spend cannot be mistaken for room, and the "as soon
+     as visible" absence is asserted separately, twice, right here and below). */
+  check("...and both are still minimal, which is what replaced it",
+    top.length <= 360 && bot.length <= 360 && !/as soon as visible/.test(bot),
     `tops=${top.length} bottoms=${bot.length}`);
   /* The clause itself must stay on file, or "one line to re-add" stops being true. */
   check("...but the clause is still ON FILE, so the restore really is one line",
@@ -331,8 +332,8 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
     top.length <= CONFIG.PROMPT_MAX_CHARS && bot.length <= CONFIG.PROMPT_MAX_CHARS,
     `tops=${top.length} bottoms=${bot.length}`);
   check("the category anchor still leads - persistence language must not displace it",
-    /^Overlay and fit the EXACT upper garment from the reference image/.test(top) &&
-    /^Overlay and fit the EXACT shorts\/pants from the reference image/.test(bot),
+    /^Drape and fit the EXACT static shirt from the reference image/.test(top) &&
+    /^Drape and fit the EXACT static pants\/shorts from the reference image/.test(bot),
     "each branch must open on its own anchor, whatever else it carries");
 }
 
