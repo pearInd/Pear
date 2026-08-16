@@ -33,11 +33,15 @@
          unmodified rather than spending a second token to fail again;
      §5  supersession on either leg returns false instead of continuing go-live's success
          path against a session that no longer exists;
-     §6  a second failure ends the session, so "a genuine hang is visible" still holds.
+     §6  a second failure ends the session, so "a genuine hang is visible" still holds;
+     §7  the COLD-START leash - the first apply gets 2.5s, not 10s, because the long bound
+         is one a shopper answers by closing the widget - and the force flag without which
+         the reconnect was a no-op for the very case it exists for.
 
    This drives the REAL extracted function from app.js - not a reimplementation - via a
    sandbox whose applyActive/connectRealtime/fallback timing the test controls directly. */
 import { readFileSync } from "node:fs";
+import { CONFIG } from "../fitting-room/config.js";
 
 const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
@@ -88,30 +92,33 @@ async function run({
   fallbackImpl = () => Promise.resolve(),
   connectImpl = () => Promise.resolve(),
   timeoutMs = 20,
+  coldStartMs = timeoutMs,
   busy = true,
 } = {}) {
   const calls = { connect: 0, fallback: 0, waits: 0, toasts: [], warns: 0 };
   const quiet = { log() {}, warn() { calls.warns++; }, error() {} };
   const fn = new Function(
     "applyActiveImpl", "fallbackImpl", "connectImpl", "APPLY_TIMEOUT_MS",
-    "CONNECT_TIMEOUT_MS", "setTimeout", "clearTimeout", "calls", "startBusy", "console",
+    "COLD_START_ACK_MS", "CONNECT_TIMEOUT_MS", "setTimeout", "clearTimeout", "calls",
+    "startBusy", "console", "resetConditionWire",
     "return (async () => {\n" +
     "let sessionGen = 1;\n" +
     "let busy = startBusy;\n" +
     "const bump = () => { sessionGen++; };\n" +
     "const applyActive = () => applyActiveImpl(bump);\n" +
     "const applyFallbackConditioning = () => { calls.fallback++; return fallbackImpl(bump); };\n" +
-    // The real connectRealtime() claims a fresh generation - that is why the recovery
-    // re-reads sessionGen afterwards instead of comparing against the one it started with.
-    "const connectRealtime = async () => { calls.connect++; await connectImpl(); sessionGen++; };\n" +
+    // The real one takes { force } and claims a fresh generation - which is why the
+    // recovery re-reads sessionGen afterwards rather than comparing against genBefore.
+    "const connectRealtime = async (opts) => { calls.connect++; calls.forced = !!(opts && opts.force); await connectImpl(); sessionGen++; };\n" +
     "const waitConnected = async () => { calls.waits++; };\n" +
     "const toast = (m) => calls.toasts.push(m);\n" +
     block +
     "\nreturn { result: await applyConditioningWithRecovery(), calls };\n" +
     "})();"
   );
-  return fn(applyActiveImpl, fallbackImpl, connectImpl, timeoutMs, timeoutMs,
-            setTimeout, clearTimeout, calls, busy, quiet);
+  return fn(applyActiveImpl, fallbackImpl, connectImpl, timeoutMs, coldStartMs, timeoutMs,
+            setTimeout, clearTimeout, calls, busy, quiet,
+            () => { calls.flushes = (calls.flushes || 0) + 1; });
 }
 
 console.log("\n── §2 THE HAPPY PATH IS UNTOUCHED ──");
@@ -225,7 +232,49 @@ console.log("\n── §6 A SECOND FAILURE STILL ENDS THE SESSION ──");
     threw && /fallback/.test(threw.message), threw?.message);
 }
 
-console.log("\n── §7 A LATE REJECTION AFTER THE RACE MUST NOT GO UNHANDLED ──");
+console.log("\n── §7 THE COLD-START LEASH, AND A RECONNECT THAT ACTUALLY RECONNECTS ──");
+{
+  /* ── THE FIRST APPLY GETS A MUCH SHORTER BUDGET ─────────────────────────────
+     REPORTED: the first attempt hangs and the shopper closes and reopens the widget.
+     APPLY_TIMEOUT_MS (10s) is the right bound for "this session is dead" and the wrong
+     one for the first thing a shopper ever sees - they give up long before it fires, so
+     the manual reopen happened instead of the automatic reconnect. Driven here rather
+     than pattern-matched: the mock resolves BETWEEN the two budgets, so a build that
+     still used the long one would report success and this would fail. */
+  const { result, calls } = await run({
+    applyActiveImpl: () => new Promise((resolve) => setTimeout(resolve, 40)),
+    coldStartMs: 10,        // the cold-start leash - expires first
+    timeoutMs: 200,         // APPLY_TIMEOUT_MS - would have let the apply through
+  });
+  check("the FIRST apply is bounded by the cold-start leash, not the full budget",
+    calls.connect === 1 && result === true,
+    `connect=${calls.connect} result=${result} - a 40ms apply must not survive a 10ms leash`);
+  check("...and the leash is the config value, not a literal",
+    /await race\(applyActive\(\), "", COLD_START_ACK_MS\);/.test(block) &&
+    CONFIG.COLD_START_ACK_MS >= 1500 && CONFIG.COLD_START_ACK_MS <= 4000,
+    `${CONFIG.COLD_START_ACK_MS}ms - short enough to beat a shopper's patience, long enough to clear a healthy apply`);
+  check("...while the RECOVERY leg keeps the full budget",
+    /await race\(applyFallbackConditioning\(\), "fallback"\);/.test(block),
+    "a second short leash would spend the recovery before it could land");
+
+  /* ── THE RECONNECT HAS TO ACTUALLY RECONNECT ────────────────────────────────
+     connectRealtime() early-returns when `rtClient && isLive()`, and the hang this
+     recovers from is a set() that never answers on a session the SDK still reports as
+     CONNECTED - so isLive() is true and the bare call reset nothing at all. The recovery
+     was a no-op for the exact case it exists for. force:true is what makes it real. */
+  check("the recovery forces a fresh session rather than early-returning on a live one",
+    calls.forced === true,
+    "connectRealtime() bails on a session that looks healthy - which is precisely this one");
+  check("...and app.js says why the flag exists, where the next reader will look",
+    /`force` EXISTS FOR THE COLD-START RECOVERY, and without it that recovery was a no-op/.test(SRC));
+  /* THE QUEUE IS FLUSHED FIRST. The write that never came back may still be sitting in
+     the wire queue, and a new session's first write must not be queued behind it. */
+  check("...and the pending condition queue is flushed before the reconnect",
+    calls.flushes === 1 && block.indexOf("resetConditionWire();") < block.indexOf("connectRealtime({ force: true })"),
+    `flushes=${calls.flushes}`);
+}
+
+console.log("\n── §8 A LATE REJECTION AFTER THE RACE MUST NOT GO UNHANDLED ──");
 {
   /* Node's own unhandledRejection listener is the actual observer: without the
      `promise.catch(() => {})` inside race(), a mock rejecting well after the race has

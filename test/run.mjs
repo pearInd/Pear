@@ -104,6 +104,24 @@
                       applyGarment's no-op skip - and, most importantly, that the monitor
                       can never touch the garment half: no asset selection, no prompt edit,
                       no reference read.
+     first-frame-integrity
+                      "It renders a grey sweater for a second, then my shirt." Raw camera
+                      frames start flowing the instant the WebRTC session opens, and
+                      rtClient.set() - the call that delivers the reference - lands strictly
+                      after that. In the window between the two, Decart is asked to render a
+                      dressed person with nothing but its own prior, and its prior is a plain
+                      grey top. The three existing reveal gates cannot catch it: a generic
+                      sweater is not black, does not flicker, and arrives after the apply
+                      resolved - armFirstFrameBilling's own comment names the hole. The fix is
+                      upstream: withhold FRAMES (never the track - captureStream(0) emits only
+                      on requestFrame, so the handshake is unaffected) until the garment is
+                      acknowledged, so there is no window in which a default can be generated.
+                      Asserts the gate on the REAL throttle driven against a fake camera, that
+                      it opens from the single call site that means "a garment is on the wire",
+                      that it self-releases loudly rather than stranding a session, the
+                      prefetch that keeps the gated window short (every item now, not only
+                      dual-view ones - and warm bytes ONLY, never a fetch moved onto the
+                      go-live path), and the frame budget on the wire.
      turn-hold        The last dressed frame is held from the FIRST sign of a turn, not
                       from the confirmed flip 2.5s later - the uncovered window is where
                       the shopper's real shirt came back. Plus every release path,
@@ -204,6 +222,7 @@ const SUITES = [
   ["body-presence-gate", "body-presence-gate.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
   ["body-topology", "body-topology.test.mjs"],
+  ["first-frame-integrity", "first-frame-integrity.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],
   ["signaling-retry", "signaling-retry.test.mjs"],

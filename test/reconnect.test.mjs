@@ -58,7 +58,7 @@ function extract(startMarker, endMarker) {
 
 /* ═══════════════════════════ onConnectionChange ═══════════════════════════ */
 
-const optsCode = extract("function buildRealtimeConnectOpts(gen)", "\nasync function connectRealtime()");
+const optsCode = extract("function buildRealtimeConnectOpts(gen)", "\nasync function connectRealtime({");
 
 function makeConnHarness() {
   const calls = { applyActive: 0, stopLive: 0, setConn: [], toast: [], order: [] };
@@ -207,7 +207,7 @@ const applyActiveCode = extract("async function applyActive() {",
   "\n/**\n * Render BOTH garments of a verified look in ONE realtime set() call");
 
 function makeApplyHarness(initialConnState, initialGarmentApplied = false) {
-  const calls = { resolveLook: 0, applyGarment: 0, applyLook: 0 };
+  const calls = { resolveLook: 0, applyGarment: 0, applyLook: 0, gateReleases: [] };
   const sandbox = {
     console: { log() {}, warn() {} },
     APPLY_ATTEMPTS: 2, APPLY_RETRY_MS: 1,     // 1ms so a real (unskipped) run stays fast in the suite
@@ -217,6 +217,12 @@ function makeApplyHarness(initialConnState, initialGarmentApplied = false) {
     activeItem: { id: "x" },
     connState: initialConnState,
     isGarmentApplied: initialGarmentApplied,
+    /* The atomic conditioning gate's release, recorded rather than ignored: applyActive()
+       is the ONE place that decides a garment is genuinely on the wire, which is exactly
+       the moment frames may start flowing to Decart. See createThrottledInputStream()'s
+       "atomic conditioning gate" comment; input-gate coverage lives in
+       first-frame-integrity.test.mjs. */
+    releaseInputGate: (why) => { calls.gateReleases.push(why); },
   };
   const body = applyActiveCode +
     "\nreturn { applyActive, state: () => ({ isGarmentApplied }) };";

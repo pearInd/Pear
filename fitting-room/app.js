@@ -44,6 +44,9 @@ const {
   POSE_WASM_BASE,
   POSE_MODEL_URL,
   POSE_TASKS_MODULE,
+  INPUT_GATE_ENABLED,
+  INPUT_GATE_MAX_MS,
+  COLD_START_ACK_MS,
   BODY_TOPOLOGY_ENABLED,
   BODY_TOPOLOGY_SAMPLE_MS,
   BODY_TRACK_MIN_VISIBILITY,
@@ -2258,6 +2261,19 @@ function setActiveItem(item, opts = {}) {
      still lands before go-live. It re-renders the chip itself if the answer moves. */
   refineActiveItemCategory(item).catch((e) =>
     console.warn("[PEAR] refineActiveItemCategory() failed, tier-1 category stands:", e?.message || e));
+  /* ── PREFETCH THE REFERENCE THE MOMENT A GARMENT IS CHOSEN ──────────────────
+     Not at go-live, and no longer only for dual-view items. prewarmOrientationAssets()
+     was reachable ONLY from the two branches that set currentAngle = AUTO_ANGLE, so a
+     front-only garment - most of the catalog - had NOTHING warmed: the first time its
+     image was touched was inside the go-live apply, which then shipped a URL for Decart
+     to fetch server-side before it could condition on anything. That is the "assembling
+     the reference takes too long" delay and the first second of generic output, from the
+     same cause.
+     Fire-and-forget by design: it fetches the front (and the back and the stitched
+     composite when those exist), and every one of those is a cache fill nothing waits on.
+     By the time the shopper presses the button the bytes are resident and
+     referenceImageFor() hands them over directly - see garmentBlobIfWarm(). */
+  prewarmOrientationAssets();
   // Fire-and-forget: builds the FRONT|BACK composite the instant a distinct back is
   // already known (e.g. an inline ?garment_url_back=), instead of waiting for go-live.
   ensureActiveGarmentComposite(item);
@@ -3267,7 +3283,10 @@ async function ensureOnline() {
    So the body was always live; what was missing was any signal telling the model to
    re-read it once its conditioning had gone stale, which is what the topology monitor
    supplies. */
-function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width = LIVE_W, height = LIVE_H } = {}) {
+function createThrottledInputStream(srcStream, {
+  fps = LIVE_INFERENCE_FPS, width = LIVE_W, height = LIVE_H,
+  gated = INPUT_GATE_ENABLED, gateMaxMs = INPUT_GATE_MAX_MS,
+} = {}) {
   const srcTrack = srcStream.getVideoTracks()[0];
   // No video track (camera failed) - hand the stream back untouched; nothing to throttle.
   if (!srcTrack) return { stream: srcStream, dispose: () => {} };
@@ -3299,6 +3318,42 @@ function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width
   let disposed = false;
   let timer = null;
   const frameMs = 1000 / fps;
+  /* ── THE ATOMIC CONDITIONING GATE ─────────────────────────────────────────────
+     REPORTED: for the first second of a session Decart renders a generic grey
+     long-sleeve sweater, and only then switches to the garment that was actually asked
+     for. The reveal is already gated three ways (armFirstFrameBilling: the apply
+     resolved, the frame is non-black, and it stayed that way for 3 frames / 300ms) - and
+     that function's own comment names the hole those three cannot close: "isDressedFrame()
+     cannot distinguish 'the real garment' from 'Decart's generic/default output'". A
+     generic sweater is not black and does not flicker, so it satisfies every gate there is.
+
+     THE ONLY WAY TO WIN IS NOT TO GIVE IT ANYTHING TO GENERATE FROM. The generic frame
+     exists because raw camera frames start flowing the instant the WebRTC session opens,
+     which is BEFORE rtClient.set() has delivered the reference - so Decart is asked to
+     render a dressed person while the only thing it has is its own prior. Hold the frames
+     until the conditioning is acknowledged and there is no such window: the first frame it
+     ever receives is one it can already condition correctly, so the first frame it ever
+     emits carries the real garment. Nothing to hide, nothing to fade over.
+
+     THE TRACK STAYS LIVE THROUGHOUT - this withholds FRAMES, not the track. captureStream(0)
+     emits only on requestFrame(), so simply not calling it produces a live video track with
+     no frames on it, which is what the WebRTC handshake needs to complete normally.
+
+     IT CANNOT STRAND A SESSION. The gate self-releases after gateMaxMs no matter what, so a
+     path that forgets to call release() costs a late start rather than a dead session - and
+     says so loudly, because reaching that timer is a bug in the caller, not a slow network. */
+  let gateOpen = !gated;
+  let gateTimer = null;
+  if (gated) {
+    gateTimer = setTimeout(() => {
+      gateTimer = null;
+      if (disposed || gateOpen) return;
+      console.warn(`[PEAR] input gate: auto-released after ${gateMaxMs}ms without an explicit`,
+        "release - the garment apply never reported success. Streaming raw frames now so the",
+        "session is not stranded; the first rendered frames may not carry the garment.");
+      gateOpen = true;
+    }, gateMaxMs);
+  }
 
   // Cover-fit + horizontal mirror: fill width×height (preserve aspect, center-crop)
   // and flip X so the canvas track already carries the selfie orientation.
@@ -3315,7 +3370,7 @@ function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width
   };
 
   const tick = () => {
-    if (disposed) return;
+    if (disposed || !gateOpen) return;   // gated: a live track carrying no frames yet
     try {
       drawFrame();
       if (outTrack && typeof outTrack.requestFrame === "function") outTrack.requestFrame();
@@ -3327,9 +3382,23 @@ function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width
 
   return {
     stream: out,
+    get gateOpen() { return gateOpen; },
+    /* Idempotent, and called from applyActive() the moment a garment is genuinely on the
+       wire - which is every path that can dress a session (go-live, the cold-start
+       recovery's fallback, an SDK-reconnect re-apply), so no single call site has to
+       remember. Returns whether THIS call was the one that opened it, for the log line. */
+    release: (why = "garment acknowledged") => {
+      if (gateOpen) return false;
+      gateOpen = true;
+      if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
+      console.log(`[PEAR] input gate released (${why}) - streaming to Decart now;`,
+        "its first frame is conditioned on the real reference");
+      return true;
+    },
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
       if (timer) { clearInterval(timer); timer = null; }
       try { outTrack && outTrack.stop(); } catch (_) {}
       try { video.pause(); } catch (_) {}
@@ -3339,6 +3408,22 @@ function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width
       try { srcStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
     },
   };
+}
+
+/**
+ * Open the input gate for the CURRENT session - see createThrottledInputStream's own
+ * "atomic conditioning gate" comment for what is being withheld and why.
+ *
+ * ONE CALL SITE OWNS THE MEANING: applyActive(), immediately after isGarmentApplied
+ * becomes true. That is the exact definition of "a garment is on the wire", and it covers
+ * every path that can reach it - go-live's first apply, the cold-start recovery's
+ * lightweight fallback, an SDK-reconnect re-apply - without any of them having to know
+ * this gate exists. Idempotent, so the ~8 re-anchors per session that follow are no-ops.
+ * @param {string} why  short reason, for the one log line the release prints
+ * @returns {void}
+ */
+function releaseInputGate(why) {
+  if (inputThrottle && typeof inputThrottle.release === "function") inputThrottle.release(why);
 }
 
 /**
@@ -3490,8 +3575,14 @@ function buildRealtimeConnectOpts(gen) {
   };
 }
 
-async function connectRealtime() {
-  if (rtClient && isLive()) return;
+async function connectRealtime({ force = false } = {}) {
+  /* `force` EXISTS FOR THE COLD-START RECOVERY, and without it that recovery was a no-op.
+     The hang it recovers from is a set() that never gets a response on a session the SDK
+     still reports as connected - so isLive() is TRUE, and this early return fired before
+     anything was reset. The whole point of that path is to throw away a session that
+     looks healthy and is not, so it says so explicitly. Every other caller keeps the
+     original behaviour: never open a second session on top of a working one. */
+  if (!force && rtClient && isLive()) return;
   if (connecting) return;
 
   // Bug 3 fix: explicitly close any stale/dropped session before opening a new one
@@ -4014,8 +4105,31 @@ function garmentBlobCached(url) {
       return null;
     }
   })();
+  /* The settled value, parked ON the promise. garmentBlobIfWarm() below needs to answer
+     "are these bytes ALREADY here?" without awaiting - awaiting a still-pending fetch is
+     precisely the stall it exists to avoid - and hanging the result off the cached job
+     keeps that answer in lockstep with the LRU for free: evicting the promise evicts the
+     value with it, so there is no second map to keep honest. */
+  job.then((blob) => { job.settled = blob || null; }, () => {});
   lruSet(_assetBlobCache, url, job);
   return job;
+}
+
+/**
+ * The warm bytes for this URL, or null - NEVER a fetch, never a wait.
+ *
+ * This is the whole prefetch payoff, and the "never" is the point. referenceImageFor()
+ * calls it on the go-live critical path: a hit means Decart is handed the actual image
+ * bytes and has nothing to fetch before it can condition, and a miss falls straight
+ * through to the proxied URL exactly as before. Awaiting on a miss would trade the
+ * server-side fetch for a client-side one at the worst possible moment.
+ * @param {string} url
+ * @returns {Blob|null}
+ */
+function garmentBlobIfWarm(url) {
+  if (!url) return null;
+  const job = _assetBlobCache.get(url);
+  return (job && job.settled) || null;
 }
 
 /* Warm the cache with the front AND back assets of the active subject (both halves of a
@@ -4044,7 +4158,10 @@ function prewarmOrientationAssets() {
         }
       });
     } else {
-      console.warn('[PEAR] prewarm back blob: SKIPPED - this garment has no distinct back image');
+      /* console.log, not warn: since this prewarm runs for EVERY item rather than only
+         for dual-view ones, "no distinct back" is the ordinary case for most of the
+         catalog and a warning here would train readers to ignore the channel. */
+      console.log('[PEAR] prewarm back blob: skipped - this garment has no distinct back image');
     }
     /* Composite mode: warm the STITCHED reference too. It is what actually reaches
        rtClient.set(), and building it needs both bitmaps decoded - doing that lazily
@@ -7805,6 +7922,22 @@ async function referenceImageFor(item, activeImg = activeImageOf(item), out = {}
     if (blob) return blob;
     console.warn("[PEAR] AI Auto - Blob pre-cache miss; falling back to proxied URL reference");
   }
+  /* ── SINGLE-VIEW GETS THE SAME TREATMENT, IF THE BYTES ARE ALREADY HERE ──────
+     "Sending bytes, not a URL, is what makes the swap instant" was true for AI Auto and
+     was never applied to the front-only path - which is most of the catalog. A URL means
+     DECART fetches the image before it can condition on it, and until that lands the only
+     thing it can render a garment from is its own prior: the reported generic grey sweater
+     for the first second of the session. Handing over bytes removes that fetch entirely.
+     WARM ONLY - garmentBlobIfWarm(), never garmentBlobCached(). On a hit this is free; on
+     a miss it falls through to the URL immediately rather than moving the fetch onto the
+     go-live path, where it would cost more than the server-side one it replaced. The hit
+     rate is what setActiveItem()'s prewarm exists to raise. */
+  const warm = garmentBlobIfWarm(activeImg);
+  if (warm) {
+    console.log("[PEAR] reference: warm bytes (prefetched) -", abbrevImg(activeImg),
+      `${(warm.size / 1024).toFixed(0)}KB - Decart has nothing to fetch before conditioning`);
+    return warm;
+  }
   return garmentImageRef(activeImg);
 }
 
@@ -8464,6 +8597,7 @@ async function applyActive() {
       if (look) await applyLook(look.top, look.bottom);
       else await applyGarment(activeItem);
       isGarmentApplied = true;       // rtClient.set() resolved - the NEXT rendered frame is dressed
+      releaseInputGate("applyActive");
       return;
     } catch (e) {
       if (attempt === APPLY_ATTEMPTS || !rtClient || !isLive()) throw e;
@@ -10564,7 +10698,7 @@ function watchPostFireLuma(video, gen, armedAt) {
 async function applyConditioningWithRecovery() {
   /* Attached unconditionally, independent of whether the race times out - a promise that
      eventually settles AFTER we have moved on must never become an unhandled rejection. */
-  const race = (promise, label) => {
+  const race = (promise, label, budgetMs = APPLY_TIMEOUT_MS) => {
     promise.catch(() => {});
     let timer;
     return Promise.race([
@@ -10580,14 +10714,21 @@ async function applyConditioningWithRecovery() {
           const e = new Error(`timeout ממתין ליישום הבגד (rtClient.set לא הגיב${label ? " - " + label : ""})`);
           e.isApplyTimeout = true;
           reject(e);
-        }, APPLY_TIMEOUT_MS);
+        }, budgetMs);
       }),
     ]);
   };
 
   const genBefore = sessionGen;
   try {
-    await race(applyActive());
+    /* THE COLD-START LEASH, not APPLY_TIMEOUT_MS. This is the FIRST thing a shopper sees,
+       and 10 seconds of a loading overlay is not a bound they will wait out - they close
+       the widget and reopen it, which is the "it never works on the first try" report
+       almost verbatim. COLD_START_ACK_MS (2.5s) is past the p99 of a healthy first apply,
+       so the automatic reconnect below happens instead of the manual one. The RECOVERY leg
+       keeps the full budget: by then the shopper has been told what is happening, and a
+       second reconnect would cost more than it could buy. */
+    await race(applyActive(), "", COLD_START_ACK_MS);
     return sessionGen === genBefore;   // superseded mid-wait → the caller stops here
   } catch (err) {
     // Superseded while we were waiting (a manual Stop, a fresh connect): the session this
@@ -10599,10 +10740,15 @@ async function applyConditioningWithRecovery() {
       "\n  → resetting the realtime client once and retrying with a lightweight payload");
     toast("מרענן חיבור מדידה... · Refreshing the fitting connection…");
 
-    /* The reset. connectRealtime() bumps sessionGen itself, which is why nothing below
-       compares against genBefore any more - and it clears the wire queue (see
-       resetConditionWire), so the retry starts against an empty one. */
-    await connectRealtime();
+    /* FLUSH FIRST, then reset. The queue may still hold the write that never came back,
+       and its epoch must be retired before a new session's first write is queued behind
+       it - connectRealtime() does this too, but doing it here as well makes the flush
+       unconditional rather than a side effect of a call that could early-return.
+       force:true is load-bearing: the SDK still reports this session as connected (that
+       is exactly the failure - a live-looking session that will not acknowledge a write),
+       so without it connectRealtime() returns immediately and recovers nothing. */
+    resetConditionWire();
+    await connectRealtime({ force: true });
     await waitConnected(CONNECT_TIMEOUT_MS);
     const genAfter = sessionGen;
 
@@ -10651,6 +10797,7 @@ async function applyFallbackConditioning() {
     () => rtClient.set({ prompt, enhance: false, ...(image ? { image } : {}) }));
 
   isGarmentApplied = true;         // the wire holds a garment - the next frame is dressed
+  releaseInputGate("fallback conditioning");
   lastSentImageRef = image || null;
   rtImageOnWire = !!image;
   lastSentPrompt = prompt;
@@ -11738,6 +11885,16 @@ function startPresenceWatcher() {
 
   presenceWatcherTimer = setInterval(async () => {
     if (inFlight || !isLive()) return;
+    /* ── NO INFERENCE THE SHOPPER CANNOT SEE THE RESULT OF ─────────────────────
+       detectForVideo() is a WASM/GPU pass on the main thread - the same thread that
+       services the WebRTC datachannel and paints the UI - and it is the single most
+       expensive thing this loop does. On a hidden tab its two consumers are both moot:
+       nobody is looking at a presence overlay, and a body whose topology changed while
+       the tab was backgrounded is re-measured on the first visible tick anyway (the
+       tracker holds its baseline, then re-offers the shift). Skipping is free, and it
+       stops a backgrounded session from competing with the foreground page for the
+       thread that has to keep the stream flowing. */
+    if (typeof document !== "undefined" && document.hidden) return;
     inFlight = true;
     try {
       const detector = await loadPoseLandmarker();
