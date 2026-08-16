@@ -1070,6 +1070,30 @@ function isKidsProduct(sizes, garmentAgeGroup) {
 }
 
 /**
+ * Mirror of isKidsProduct - true only when the product is CONFIDENTLY adult.
+ * Needed because the childFits guard was zeroing only on garmentAgeGroup ===
+ * "adult" (the classifier verdict), never on the real size list - so an adult
+ * product with a real S/M/L list but an "uncertain" classifier read (common:
+ * the classifier is instructed to abstain on packshots with no model) let a
+ * child-bodied shopper through to a genuine CHILD_SIZE_CHART match instead of
+ * being blocked, same class of bug isKidsProduct itself was written to fix.
+ * @param {string[]|string|null} sizes
+ * @param {"kids"|"adult"|"uncertain"|undefined} garmentAgeGroup
+ * @returns {boolean}
+ */
+function isAdultProduct(sizes, garmentAgeGroup) {
+  const list = parseSizeList(sizes);
+  if (list.length) {
+    if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return true;
+    // Not every token kids-numeric -> an adult numeric run (e.g. 28-44 waist)
+    // or unrecognised labels, treated as adult, mirroring isKidsProduct's
+    // "not confidently kids" default for a deterministic size list.
+    return !list.every((s) => KIDS_NUMERIC_SIZES.has(s));
+  }
+  return garmentAgeGroup === "adult";
+}
+
+/**
  * The shopper's OWN scale, derived with NO garment constraint applied.
  *
  * WHY THIS IS NOT currentSizeCategory. calculateSize() deliberately forces
@@ -1099,12 +1123,15 @@ function userBodyCategory(height, weight) {
  * @param {"child"|"adult"|null} userCategory - userBodyCategory()'s garment-independent verdict
  * @param {string[]|string|null} sizes - the host product's own size list, when known
  * @param {"kids"|"adult"|"uncertain"|undefined} garmentAgeGroup - classifier fallback only
- * @returns {boolean} false only for a confidently-kids product against a confidently-adult
- *   body; every other combination (unknown product category, child body, no measurements
- *   yet) passes - never block on ambiguity, matching liveBlockReason()/livePendingReason().
+ * @returns {boolean} false for a confidently-kids product against a confidently-adult
+ *   body, OR a confidently-adult product against a child body; every other combination
+ *   (unknown product category, no measurements yet) passes - never block on ambiguity,
+ *   matching liveBlockReason()/livePendingReason().
  */
 function isCompatibleSizeCategory(userCategory, sizes, garmentAgeGroup) {
-  return !(isKidsProduct(sizes, garmentAgeGroup) && userCategory === "adult");
+  if (isKidsProduct(sizes, garmentAgeGroup) && userCategory === "adult") return false;
+  if (isAdultProduct(sizes, garmentAgeGroup) && userCategory === "child") return false;
+  return true;
 }
 
 /* go-live gate paralleling liveBlockReason()/livePendingReason() just below - returns
@@ -1309,7 +1336,7 @@ function calculateSize() {
   const bodyAdultFits = ZARA_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
   currentBodyCategory = bodyAdultFits.length ? "adult" : (bodyChildFits.length ? "child" : null);
 
-  const childFits = garmentAgeGroup === "adult" ? [] : bodyChildFits;
+  const childFits = isAdultProduct(resolvedGarmentSizes(), garmentAgeGroup) ? [] : bodyChildFits;
   const adultFits = isKidsProduct(resolvedGarmentSizes(), garmentAgeGroup) ? [] : bodyAdultFits;
 
   // Overlap zone (genuinely fits BOTH charts, e.g. ~170-172cm/54-60kg) defaults
