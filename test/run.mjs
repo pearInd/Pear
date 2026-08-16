@@ -145,11 +145,22 @@
                       first second (and never rejecting the orphaned promise) could hang
                       it forever - "connected" already showing, the shopper's real
                       camera already live under it, the garment never arriving, no
-                      error. Asserts the race against APPLY_TIMEOUT_MS, that a real
-                      rejection still propagates unmodified, that a session superseded
-                      mid-wait bails instead of continuing go-live's success path, and
-                      that a late settlement after the timeout already won never surfaces
-                      as an unhandled rejection.
+                      error. Then the bound started firing for real, and ENDING the
+                      session on it turned out to be the wrong response: shoppers got
+                      "המדידה החיה נכשלה: timeout ממתין ליישום הבגד" in a modal for a
+                      stage whose likeliest cause is a transport still settling - or, before
+                      the wire mutex landed, a SECOND set() colliding with this one (goLive
+                      arms the orientation watcher before its own first apply, so a shopper
+                      already standing edge-on trips a pose transition inside ~500ms). The
+                      timeout now buys ONE recovery: reset the client, re-send a lightweight
+                      payload carrying the pristine garment image, and say so in a toast.
+                      Asserts the race against APPLY_TIMEOUT_MS, that the recovery fires
+                      exactly once and in order, that it is scoped to TIMEOUTS (a definite
+                      failure still propagates unmodified rather than spending a second
+                      token to fail again), that a session superseded on either leg bails
+                      instead of continuing go-live's success path, that a SECOND failure
+                      still ends the session visibly, and that a late settlement after the
+                      timeout already won never surfaces as an unhandled rejection.
      variant-sync     A colour swatch moved the reference PHOTO and nothing else: the
                       prompt still named the item's BASE colour and the cart still sent
                       the base SKU, so Decart got a red packshot told it was black and a

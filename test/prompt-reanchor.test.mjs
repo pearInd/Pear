@@ -71,7 +71,7 @@ console.log("\n── §1 THE CADENCE IS DERIVED, so it can never silently outli
    is seeded per-test and readable back afterward via state(). */
 function harness({
   autoProfile = false, applying = false, lastReanchorAt = 0, disposed = false,
-  isLiveVal = true, garmentApplied = true, reanchorMs = 100,
+  isLiveVal = true, garmentApplied = true, reanchorMs = 100, wireBusyVal = false,
   applyActiveImpl = () => Promise.resolve(), debug = false,
 }) {
   const events = [];
@@ -80,6 +80,11 @@ function harness({
     disposedInit: disposed,
     REANCHOR_MS: reanchorMs,
     isLive: () => isLiveVal,
+    /* The CROSS-SITE half of the mutex. `applying` is a closure local this function shares
+       with maybeUpdateProfile/maybeSwap only; wireBusy() is what it uses to see the send
+       sites it cannot - goLive's first apply, the presence re-condition, the body-topology
+       re-drape. §3 drives both states. */
+    wireBusy: () => wireBusyVal,
     isGarmentApplied: garmentApplied,
     applyActive: applyActiveImpl,
     sessionElapsedMs: () => 1234,
@@ -123,6 +128,30 @@ console.log("\n── §3 the guards: cadence, mutex, liveness, and nothing-yet-
     applyActiveImpl: () => { calls++; return Promise.resolve(); } });
   await api.maybeReanchorPrompt();
   check("never overlaps an in-flight swap/transition (respects the shared applying mutex)", calls === 0);
+}
+{
+  /* ── AND THE MUTEX IT CANNOT SEE FROM ITS OWN CLOSURE ──────────────────────
+     `applying` is shared with maybeUpdateProfile/maybeSwap and with nothing else. Every
+     other write to this wire - goLive's first apply, the presence re-condition, the
+     body-topology re-drape - happens outside this watcher entirely, so `applying` is
+     false while they are in flight and this function would happily add a concurrent
+     set() on top. Two set() calls on one session is the reported
+     "rtClient.set לא הגיב" go-live timeout; wireBusy() is what closes it.
+
+     SKIPPED, NOT QUEUED, and deliberately: a re-anchor re-asserts an UNCHANGED state on a
+     cadence, so the cheapest correct response to a busy wire is to do nothing and come
+     back on the next tick - queueing it would build the backlog the mutex exists to
+     prevent. It must also not stamp its clock, or one deferred turn would cost the
+     session a full REANCHOR_MS of steering. */
+  let calls = 0;
+  const { api } = harness({ wireBusyVal: true, lastReanchorAt: 0,
+    applyActiveImpl: () => { calls++; return Promise.resolve(); } });
+  await api.maybeReanchorPrompt();
+  check("never stacks on a write from ANOTHER send site (the cross-site wire mutex)",
+    calls === 0, `calls=${calls}`);
+  check("...and a deferred re-anchor does not consume its cadence slot",
+    api.state().lastReanchorAt === 0,
+    "stamping the clock for a send that never happened costs a whole REANCHOR_MS of steering");
 }
 {
   let calls = 0;

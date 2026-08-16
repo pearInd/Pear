@@ -90,6 +90,10 @@ function makeHarness({ scriptedErrors = [], mintFails = false } = {}) {
     isLive: () => false,
     setConn: () => {},
     armFirstFrameBilling: () => {},
+    /* A fresh session starts with an empty conditioning queue - see resetConditionWire().
+       Stubbed rather than executed: this suite owns the retry around realtime.connect(),
+       and the queue's own lifecycle is asserted in composite.test.mjs. */
+    resetConditionWire: () => {},
 
     // Mutable module-level state connectRealtime() reads/writes, as real `let`s.
     rtClient: null, connState: "idle", connecting: false,

@@ -31,19 +31,20 @@ function check(label, cond, detail) {
 console.log("── §1 THE DEBUG LOG RIDES EVERY REAL DISPATCH SITE ──");
 {
   const tag = "[DECART PROMPT DEBUG]";
-  /* FIVE since the frame-freeze watchdog landed: its keep-alive ping is a real setPrompt()
-     on the live session, and a dispatch nobody can see in the transcript is exactly the
-     kind this log exists for - it fires during a stall, when the console is the only
-     window into what the client is doing about it. */
+  /* SIX. Five were already here - two in applyGarment, two in applyLook, and the
+     frame-freeze watchdog's keep-alive ping. The sixth is the go-live recovery's
+     lightweight fallback, and it is the one this log matters most for: it only ever fires
+     after the normal apply has already timed out, so the transcript is the only record of
+     what was actually sent on the second attempt. */
   const count = (APP.match(/\[DECART PROMPT DEBUG\]/g) || []).length;
-  check("exactly 5 occurrences - one per real send site, no more, no fewer",
-    count === 5, `found ${count}`);
+  check("exactly 6 occurrences - one per real send site, no more, no fewer",
+    count === 6, `found ${count}`);
 
   const keepAlive = APP.slice(APP.indexOf("STAGE 1b - THE SDK KEEP-ALIVE"),
                               APP.indexOf("STAGE 2 - THE RE-ANCHOR"));
   check("the freeze keep-alive logs immediately before its setPrompt()",
     keepAlive.indexOf(tag) !== -1 &&
-    keepAlive.indexOf(tag) < keepAlive.indexOf("await rtClient.setPrompt("), keepAlive);
+    keepAlive.indexOf(tag) < keepAlive.indexOf("rtClient.setPrompt("), keepAlive);
   check("...and says what it is, so it is not mistaken for a garment update in a trace",
     /keep-alive ping - no image, no teardown/.test(keepAlive));
 

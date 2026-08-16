@@ -664,6 +664,106 @@ function invalidateWireState(why) {
   lastSentPrompt = null;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+   THE CONDITIONING WIRE, SERIALISED - one write at a time, from every send site
+   ══════════════════════════════════════════════════════════════════════════════
+   REPORTED: "timeout ממתין ליישום הבגד (rtClient.set לא הגיב)" at go-live - the initial
+   apply never resolving, the session dying before the first dressed frame.
+
+   THE RACE, precisely. goLive() arms the orientation watcher (syncOrientationWatcher)
+   BEFORE it issues its own first applyActive(), and that watcher samples every
+   ORIENT_SAMPLE_MS. maybeUpdateProfile() fires on a pose TRANSITION and is guarded on
+   `applying`, a cooldown, `disposed` and isLive() - but NOT on isGarmentApplied. So a
+   shopper who is already edge-on when they press go-live trips a profile transition
+   inside ~500ms, and its applyActive() lands ON TOP of the one goLive() is still
+   awaiting: two rtClient.set() calls in flight on one session, each with an image
+   attached, during the exact second the WebRTC transport is still settling. One of them
+   never gets a response, and the one that hangs is as likely to be go-live's as not.
+
+   THIS FILE ALREADY KNEW. reconditionForPresence()'s comment says it outright: "Hoisting
+   one real mutex for all three send sites is the right fix and is deliberately NOT
+   bundled into this change." The topology monitor made it four send sites, which is what
+   turned a narrow window into a reproducible one. This is that mutex.
+
+   TWO DISCIPLINES, AND THE DIFFERENCE MATTERS:
+     · QUEUE (the default) for anything a person asked for - go-live, a garment swap, a
+       colour change, a confirmed front/back flip. These must never be dropped, so they
+       serialise: each waits for the wire to be free, then writes.
+     · SKIP (wireBusy() at the call site) for the CONTINUOUS background re-conditioning -
+       the re-anchor cadence, the presence re-entry, the body-topology re-drape. These
+       re-assert a state that is about to be re-derived anyway, so a skipped one costs
+       nothing and the next tick offers it again. Queueing them instead would build
+       exactly the backlog this exists to prevent.
+
+   IT IS NOT A TIMEOUT. A send that genuinely hangs holds this queue, which is why the
+   go-live path races it against APPLY_TIMEOUT_MS and recovers (see
+   applyConditioningWithRecovery). The mutex stops writes from COLLIDING; the timeout is
+   what stops one from stalling the session forever. Both are needed. */
+let isSettingCondition = false;   // true only while a write is actually on the wire
+let wireWrites = 0;               // queued + in flight - what wireBusy() reports
+let wireQueue = Promise.resolve();
+/* Bumped by resetConditionWire(). A write that was in flight against a client we have
+   since disconnected can still settle - or reject - long after the reset, and its
+   `finally` would otherwise decrement a counter that no longer describes it: straight to
+   -1 if nothing else was running, or to a false "the wire is free" while a NEW write is
+   genuinely in flight, which is precisely the concurrent-set() collision this mutex
+   exists to prevent. Each write remembers the epoch it belongs to and only touches the
+   shared state while that epoch is still current. */
+let wireEpoch = 0;
+
+/** @returns {boolean} true when a conditioning write is queued or in flight. */
+function wireBusy() { return wireWrites > 0; }
+
+/**
+ * Run ONE conditioning write with exclusive access to the wire.
+ *
+ * Rejections propagate to the caller unchanged - applyActive()'s bounded retry depends on
+ * seeing them - but they never break the queue: the next write runs whether its
+ * predecessor resolved or threw.
+ *
+ * @param {string} label   send site, for the skip/serialise log lines
+ * @param {() => Promise<any>} send  performs the actual rtClient.set()/setPrompt()
+ * @returns {Promise<boolean>} false only when a skipIfBusy call declined to send
+ */
+function sendCondition(label, send, { skipIfBusy = false } = {}) {
+  if (skipIfBusy && wireBusy()) {
+    console.log(`[PEAR] ${label}: a conditioning write is already in flight - skipped`,
+      "(background re-conditioning is re-offered on the next tick)");
+    return Promise.resolve(false);
+  }
+  if (wireBusy()) {
+    console.log(`[PEAR] ${label}: waiting for the wire - ${wireWrites} write(s) ahead of it`);
+  }
+  const epoch = wireEpoch;
+  wireWrites++;
+  const run = async () => {
+    if (epoch !== wireEpoch) return false;   // the session this write was for is gone
+    isSettingCondition = true;
+    try {
+      await send();
+      return true;
+    } finally {
+      if (epoch === wireEpoch) { isSettingCondition = false; wireWrites--; }
+    }
+  };
+  /* Both handlers, so a REJECTED predecessor still releases the queue - a single failed
+     set() must not wedge every later write for the life of the session. */
+  const next = wireQueue.then(run, run);
+  wireQueue = next.then(() => {}, () => {});
+  return next;
+}
+
+/* Cleared with the session: a queue entry from a torn-down client must not make the next
+   session's first apply believe the wire is busy. The promise chain itself is replaced
+   rather than cancelled - an in-flight send against a dead rtClient will settle or reject
+   on its own, and either way its `finally` has already stopped mattering by then. */
+function resetConditionWire() {
+  wireEpoch++;
+  isSettingCondition = false;
+  wireWrites = 0;
+  wireQueue = Promise.resolve();
+}
+
 /* Pre-minted ek_ token cache - populated by warmupSDKAndToken() on room entry so
    mintEphemeralToken() can skip the network round-trip at go-live time. */
 let _tokenCache = null; // { apiKey: string, expiresAt: number } | null
@@ -3408,6 +3508,11 @@ async function connectRealtime() {
   lastSentImageRef = null;
   rtImageOnWire = false;
   lastSentPrompt = null;
+  /* ...and the QUEUE with them. A write left pending against the client we just
+     disconnected would otherwise make this session's very first apply see wireBusy() and
+     wait behind a promise that can no longer settle - the go-live hang, reintroduced by
+     the very mutex that exists to prevent it. */
+  resetConditionWire();
   debugStreamCheckedThisGen = false;   // DEBUG WRAPPER: re-arm the undressed-stream check for this session
   if (firstFrameGuardTimer) { clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null; }
 
@@ -3580,6 +3685,7 @@ function teardown() {
   lastSentImageRef = null;
   rtImageOnWire = false;
   lastSentPrompt = null;
+  resetConditionWire();          // nothing may be queued for a session that no longer exists
 
   // Bug 3 fix: stop this session's cloned camera tracks (the WebRTC sender side).
   // localStream - the real camera/preview - is intentionally left running.
@@ -4984,6 +5090,22 @@ function createOrientationWatcher() {
          (profileBuf.length >= ORIENT_PROFILE_ENTER && mean >= ORIENT_PROFILE_ENTER_SCORE));
     if (next === autoProfile) return;
     if (applying || Date.now() - lastProfileAt < ORIENT_PROFILE_COOLDOWN_MS) return;
+    /* ── THE GO-LIVE RACE, closed here ────────────────────────────────────────
+       This watcher is armed by goLive() BEFORE goLive() issues its own first
+       applyActive(), and this function is guarded on `applying` (a closure local, invisible
+       to every other send site), a cooldown, `disposed` and isLive() - but NOT on
+       isGarmentApplied. A shopper who is already edge-on when they press go-live therefore
+       trips a pose transition inside ~500ms and fires an applyActive() ON TOP of the one
+       goLive() is still awaiting: two set() calls in flight on a transport that is still
+       settling, which is the reported "rtClient.set לא הגיב" timeout.
+       wireBusy() is the cross-site half of the mutex `applying` could never provide. The
+       pose axis is re-evaluated every ORIENT_SAMPLE_MS, so a skipped transition costs one
+       sample; autoProfile is deliberately NOT advanced below, so the transition is still
+       pending and the next tick offers it again. */
+    if (wireBusy()) {
+      console.log("[PEAR] AI Auto - pose transition deferred: a conditioning write is in flight");
+      return;
+    }
     /* No `currentAngle !== AUTO_ANGLE` bail here (unlike maybeSwap) - this axis runs for
        single-view items too now (see syncOrientationWatcher()'s dualView/singleView
        split), where currentAngle never becomes AUTO_ANGLE at all. disposed/isLive() are
@@ -5035,6 +5157,12 @@ function createOrientationWatcher() {
      re-send an identical prompt a moment later. */
   async function maybeReanchorPrompt() {
     if (applying) return;                        // a swap or transition update owns the wire
+    /* ...and the same question asked ACROSS send sites, which `applying` cannot see: the
+       presence re-condition, the topology re-drape and goLive's own first apply all write
+       to this wire without holding that closure flag. A re-anchor is the most skippable
+       write in the file - it re-asserts an unchanged state on a cadence - so it never
+       queues, it just waits for its next turn. */
+    if (wireBusy()) return;
     if (Date.now() - lastReanchorAt < REANCHOR_MS) return;
     if (disposed || !isLive()) return;
     /* Nothing has been rendered yet - there is no steering to re-assert, and firing here
@@ -7894,7 +8022,11 @@ async function applyGarment(item) {
        above already established that a raw data: URL or Blob here can flood the console. */
     console.log("[DECART PROMPT DEBUG]", payload.prompt, abbrevImg(imageRef),
       "(prompt-only - image already on the wire, unchanged)");
-    await rtClient.setPrompt(payload.prompt, { enhance: false });
+    /* Through the wire mutex like every other write. It is a small control message rather
+       than an image upload, but it is still a write on the same signaling channel, and
+       "small" is not "free" when the channel is mid-handshake - see sendCondition(). */
+    await sendCondition("applyGarment/prompt-only",
+      () => rtClient.setPrompt(payload.prompt, { enhance: false }));
     lastSentPrompt = payload.prompt;
     return;
   }
@@ -7904,7 +8036,7 @@ async function applyGarment(item) {
   // prompt-only-flip.test.mjs/side-profile.test.mjs against a fixed sandbox global list
   // that doesn't include this - a bare call would throw ReferenceError there.
   if (typeof verifyGarmentAsset === "function") verifyGarmentAsset(payload, "applyGarment");
-  await rtClient.set(payload);
+  await sendCondition("applyGarment", () => rtClient.set(payload));
   /* Stamped only AFTER set() resolves, which is what makes a retry correct: applyActive()
      re-enters this function on a rejection, and if these had been written optimistically
      the second attempt would see its own reference "already on the wire" and take the
@@ -8401,15 +8533,20 @@ async function applyLook(top, bottom) {
   console.log("[DECART PROMPT DEBUG]", prompt, abbrevImg(primaryImage));
   // DEBUG WRAPPER, typeof-guarded - see the matching comment in applyGarment().
   if (typeof verifyGarmentAsset === "function") verifyGarmentAsset(payload, "applyLook");
-  try {
-    await rtClient.set(payload);
-  } catch (e) {
-    // A stricter SDK build may reject the enriched shape - retry with the minimal contract.
-    console.warn("look payload rejected, retrying minimal:", e?.message || e);
-    console.log("[DECART PROMPT DEBUG] (retry, minimal payload)", prompt, abbrevImg(primaryImage));
-    // Same omit-don't-null rule as the enriched payload above.
-    await rtClient.set({ prompt, enhance: false, ...(primaryImage ? { image: primaryImage } : {}) });
-  }
+  /* ONE wire slot for BOTH attempts, deliberately: the minimal retry is a fallback for
+     the SAME dispatch, so releasing the mutex between them would let a queued write slip
+     in and leave the look half-applied behind someone else's payload. */
+  await sendCondition("applyLook", async () => {
+    try {
+      await rtClient.set(payload);
+    } catch (e) {
+      // A stricter SDK build may reject the enriched shape - retry with the minimal contract.
+      console.warn("look payload rejected, retrying minimal:", e?.message || e);
+      console.log("[DECART PROMPT DEBUG] (retry, minimal payload)", prompt, abbrevImg(primaryImage));
+      // Same omit-don't-null rule as the enriched payload above.
+      await rtClient.set({ prompt, enhance: false, ...(primaryImage ? { image: primaryImage } : {}) });
+    }
+  });
   /* Keep the reference tracker honest: a look sends its OWN stitched image, so whatever
      applyGarment() last recorded is no longer what the model holds. Without this, going
      look → single garment could match a stale lastSentImageRef and take the prompt-only
@@ -10272,7 +10409,11 @@ function createFrameFreezeWatcher(video, gen) {
           "freezeKeepAlive");
         console.log("[DECART PROMPT DEBUG]", keepAlive, "(keep-alive ping - no image, no teardown)");
         try {
-          await rtClient.setPrompt(keepAlive, { enhance: false });
+          /* SKIPPED rather than queued when the wire is busy: this ping exists to poke a
+             session that appears to be doing NOTHING, so a write already in flight is
+             itself the evidence that the poke is unnecessary. */
+          await sendCondition("freezeKeepAlive",
+            () => rtClient.setPrompt(keepAlive, { enhance: false }), { skipIfBusy: true });
         } catch (e) {
           console.warn("[PEAR] freeze keep-alive ping failed:", e?.message || e);
         }
@@ -10357,6 +10498,136 @@ function watchPostFireLuma(video, gen, armedAt) {
     }
   };
   tick();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   THE INITIAL APPLY, WITH ONE RECOVERY - "rtClient.set לא הגיב"
+   ══════════════════════════════════════════════════════════════════════════════
+   THE FAILURE: the bounded race around goLive()'s first applyActive() fires, goLive()
+   throws, and the shopper gets "המדידה החיה נכשלה: timeout ממתין ליישום הבגד" in the
+   modal with the session torn down under it. The bound itself is right - an unbounded
+   await here is the silent-undress hang it was added for - but ENDING THE SESSION is a
+   heavy response to the likeliest cause, which is a signaling channel that had not
+   finished settling when the first write went out.
+
+   WHAT THIS DOES INSTEAD, exactly once:
+     1. resets and re-initialises the realtime client (connectRealtime() disconnects the
+        stale one, disposes its throttle/input, claims a fresh sessionGen, and opens a new
+        session on a freshly minted token - it is already the file's re-init path, not a
+        new one);
+     2. sends a LIGHTWEIGHT conditioning payload instead of re-running the full apply -
+        see applyFallbackConditioning();
+     3. tells the shopper what is happening in one inline toast, in the same voice as
+        every other status message in this flow.
+   A second failure is a real one and rethrows into goLive()'s existing handler, so the
+   "genuine hang ends the session visibly" guarantee is unchanged - it just now takes two
+   failures instead of one.
+
+   ONE ATTEMPT, NOT A LOOP. Each attempt costs up to APPLY_TIMEOUT_MS against a shopper
+   watching a loading overlay, and a second reconnect that also cannot get a write through
+   is describing a broken transport, not a race. Two attempts is the same bound
+   applyActive() itself uses for the same reason.
+
+   SUPERSEDE CHECKS ARE ON EVERY LEG, and they cannot use one captured generation:
+   connectRealtime() deliberately bumps sessionGen, so the recovery path re-reads it
+   afterwards. What is being detected is a teardown or a manual Stop DURING a wait, which
+   is `busy` going false or `sessionGen` moving for a reason this function did not cause.
+   @returns {Promise<boolean>} true when the garment is on the wire; false when the
+   session was superseded and the caller must simply stop. */
+async function applyConditioningWithRecovery() {
+  /* Attached unconditionally, independent of whether the race times out - a promise that
+     eventually settles AFTER we have moved on must never become an unhandled rejection. */
+  const race = (promise, label) => {
+    promise.catch(() => {});
+    let timer;
+    return Promise.race([
+      promise.finally(() => clearTimeout(timer)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          /* TAGGED, because only a TIMEOUT earns the reconnect below. A real rejection -
+             an expired token, a permission failure, the signaling error signaling-retry
+             already narrows on - is a definite answer, and answering it by minting a
+             second token and opening a second session spends a shopper's time and a
+             credit to arrive at the same failure. Those rethrow unchanged, exactly as
+             they did before this recovery existed. */
+          const e = new Error(`timeout ממתין ליישום הבגד (rtClient.set לא הגיב${label ? " - " + label : ""})`);
+          e.isApplyTimeout = true;
+          reject(e);
+        }, APPLY_TIMEOUT_MS);
+      }),
+    ]);
+  };
+
+  const genBefore = sessionGen;
+  try {
+    await race(applyActive());
+    return sessionGen === genBefore;   // superseded mid-wait → the caller stops here
+  } catch (err) {
+    // Superseded while we were waiting (a manual Stop, a fresh connect): the session this
+    // apply was FOR no longer exists, so let whichever path superseded it own what
+    // happens next rather than opening ANOTHER one on top.
+    if (sessionGen !== genBefore || !busy) return false;
+    if (!err || !err.isApplyTimeout) throw err;   // a definite failure - see race()'s note
+    console.warn("[PEAR] initial apply did not land -", err?.message || err,
+      "\n  → resetting the realtime client once and retrying with a lightweight payload");
+    toast("מרענן חיבור מדידה... · Refreshing the fitting connection…");
+
+    /* The reset. connectRealtime() bumps sessionGen itself, which is why nothing below
+       compares against genBefore any more - and it clears the wire queue (see
+       resetConditionWire), so the retry starts against an empty one. */
+    await connectRealtime();
+    await waitConnected(CONNECT_TIMEOUT_MS);
+    const genAfter = sessionGen;
+
+    await race(applyFallbackConditioning(), "fallback");
+    if (sessionGen !== genAfter) return false;
+    console.log("[PEAR] fitting connection refreshed - lightweight conditioning applied");
+    return true;
+  }
+}
+
+/**
+ * The retry payload: the pristine garment image and its category anchor, and nothing else.
+ *
+ * DELIBERATELY NOT applyActive(). That path can resolve a stitched FRONT|BACK composite or
+ * a two-garment look Blob, decode bitmaps, and ship a few hundred KB - work that is
+ * correct for a healthy session and is exactly the wrong thing to put on a channel that
+ * just failed to acknowledge a write. This sends a proxied URL reference (garmentImageRef,
+ * no fetch, no decode, no canvas) plus the same frozen anchor imageOnlyPrompt() resolves
+ * for that garment, so the shopper still gets THEIR garment rather than a degraded or
+ * invented one - the reference is pristine, only the delivery is lighter.
+ *
+ * FOR A FULL LOOK it sends the TOP. One image is all set() accepts (see applyLook), the
+ * stitched two-garment composite is precisely the heavy asset being avoided, and the next
+ * ordinary applyActive() - a re-anchor, a swap, the topology monitor - restores the full
+ * look on a channel that has proven it works. Half a look beats a dead session.
+ *
+ * It stamps the wire state on success like every other dispatch, so the session's
+ * bookkeeping stays true and the next apply can take its usual fast path.
+ * @returns {Promise<void>}
+ */
+async function applyFallbackConditioning() {
+  const look = resolveLook();
+  const item = look ? look.top : activeItem;
+  if (!item || !rtClient) throw new Error("no garment / no client for the fallback apply");
+
+  const gallery = galleryOf(item) || {};
+  const image = garmentImageRef(gallery.front || item.img || gallery.back);
+  const prompt = clampPromptForWire(imageOnlyPrompt(item), "fallbackConditioning");
+
+  console.log("[PEAR] fallback conditioning:", item.name,
+    "| reference:", abbrevImg(image) || "(none - prompt only)",
+    look ? "| full look reduced to its TOP for this send" : "");
+  console.log("[DECART PROMPT DEBUG]", prompt, abbrevImg(image), "(lightweight fallback)");
+
+  await sendCondition("fallbackConditioning",
+    () => rtClient.set({ prompt, enhance: false, ...(image ? { image } : {}) }));
+
+  isGarmentApplied = true;         // the wire holds a garment - the next frame is dressed
+  lastSentImageRef = image || null;
+  rtImageOnWire = !!image;
+  lastSentPrompt = prompt;
+  if (image) lastAckedImageRef = image;
 }
 
 /**
@@ -10567,24 +10838,12 @@ async function goLive() {
        becomes the SAME visible "live measurement failed" + stopLive() this function
        already produces for any other go-live failure, instead of a silently undressed
        session with a healthy-looking badge. */
-    {
-      const guardGen = sessionGen;
-      const applyPromise = applyActive();          // rtClient.set({ prompt, image(s), enhance:false })
-      // Attached unconditionally, independent of whether the race below times out - a
-      // promise that eventually settles AFTER we've moved on (timed out, or superseded
-      // by a later connect/teardown) must never become an unhandled rejection.
-      applyPromise.catch(() => {});
-      await Promise.race([
-        applyPromise,
-        new Promise((_, reject) => setTimeout(
-          () => reject(new Error("timeout ממתין ליישום הבגד (rtClient.set לא הגיב)")),
-          APPLY_TIMEOUT_MS)),
-      ]);
-      // Superseded while we were waiting (a manual Stop, a fresh connect) - the session
-      // this apply was FOR no longer exists; let whichever path superseded it own what
-      // happens next instead of continuing go-live's success sequence against a dead one.
-      if (guardGen !== sessionGen) return;
-    }
+    /* IT NOW RECOVERS ONCE BEFORE IT GIVES UP. The bounded race below is unchanged in
+       purpose; what changed is what happens when it fires. A timeout used to end the
+       session outright, putting the raw "rtClient.set לא הגיב" string in front of the
+       shopper - a harsh outcome for the stage whose likeliest cause is a transport that
+       had not finished settling. See applyConditioningWithRecovery(). */
+    if (!await applyConditioningWithRecovery()) return;
     // Log every garment being worn - both top AND bottom when a full look is active.
     const _trackSize = activeTryOnSize || currentUserSize;
     const _look = resolveLook();
@@ -10750,6 +11009,7 @@ function stopBilling() {
   stopStatsMonitor();
   if (rtClient) { try { rtClient.disconnect(); } catch (_) {} rtClient = null; }
   lastSentImageRef = null; rtImageOnWire = false; lastSentPrompt = null;   // session over - nothing is on the wire
+  resetConditionWire();
   /* Unlike teardown(), this deliberately leaves the watcher and the paint loop alive for
      the frozen-hold tail - so a turn hold raised a moment before the window closed has
      nothing left to release it, and its overlay (z-index 6, inside #cameraCard) would sit
@@ -11210,10 +11470,17 @@ function makeBodyTopologyTracker(opts = {}) {
     reset() { baseline = null; lostAt = null; },
     /**
      * @param {object|null} sig bodyContourSignature() for this frame, or null if unreadable
-     * @returns {{state:"waiting"|"acquired"|"stable"|"resumed"|"hold"|"dropped"|"cooldown"|"shift",
-     *            reason?:string, delta?:object, heldMs?:number}}
+     * @param {{canDispatch?: boolean}} [gate] false when the wire cannot accept a write
+     *        right now (see wireBusy). A shift found under a closed gate is reported as
+     *        "deferred" and the baseline is NOT advanced, so the movement is re-offered on
+     *        the next evaluation instead of being silently absorbed. This lives inside the
+     *        tracker for the same reason the cooldown does: the "did it move?" decision and
+     *        the "may we send?" decision must not be able to drift apart, and a baseline
+     *        advanced for a write that never happened is exactly that drift.
+     * @returns {{state:"waiting"|"acquired"|"stable"|"resumed"|"hold"|"dropped"|"cooldown"
+     *            |"deferred"|"shift", reason?:string, delta?:object, heldMs?:number}}
      */
-    feed(sig) {
+    feed(sig, { canDispatch = true } = {}) {
       const t = now();
       if (!sig) {
         if (!baseline) return { state: "waiting" };
@@ -11231,6 +11498,7 @@ function makeBodyTopologyTracker(opts = {}) {
          held is still the right one, and nothing needs to be sent. */
       if (!reason) return { state: heldMs ? "resumed" : "stable", delta, heldMs };
       if (t - lastSignalAt < cooldownMs) return { state: "cooldown", reason, delta, heldMs };
+      if (!canDispatch) return { state: "deferred", reason, delta, heldMs };
       lastSignalAt = t;
       baseline = sig;
       /* The reason is tagged when it arrives out of a hold, because "they turned" and
@@ -11427,14 +11695,19 @@ function startPresenceWatcher() {
   const gate = makePresenceGate();
   let wasPresent = true;      // the go-live gate just confirmed presence
   let inFlight = false;
+  let lastTopologyAt = 0;
   bodyTopology = BODY_TOPOLOGY_ENABLED ? makeBodyTopologyTracker() : null;
 
-  /* Faster when the topology monitor is on: presence only has to notice somebody walking
-     away, but topology has to catch a turn WHILE it is happening. Still one inference per
-     tick, so the extra rate is the only thing being paid for. */
-  const tickMs = BODY_TOPOLOGY_ENABLED
-    ? Math.min(POSE_SAMPLE_MS * 2, BODY_TOPOLOGY_SAMPLE_MS)
-    : POSE_SAMPLE_MS * 2;
+  /* ── THE LOOP RATE IS THE PRESENCE RATE, UNCHANGED ────────────────────────────
+     An earlier revision sped this loop up to BODY_TOPOLOGY_SAMPLE_MS so the topology
+     monitor would catch a turn sooner. That was the wrong lever: it raised the rate of
+     the MediaPipe inference - the expensive part, on the same thread that has to service
+     the WebRTC datachannel - for the benefit of the cheap part, the arithmetic on four
+     landmarks. The loop is back on the presence cadence it has always used, and the
+     topology consumer is throttled INDEPENDENTLY below (~3/s, its own elapsed check), so
+     re-evaluations can never outpace what the wire can absorb. Net effect: the inference
+     load is exactly what it was before the monitor existed. */
+  const tickMs = POSE_SAMPLE_MS * 2;
 
   presenceWatcherTimer = setInterval(async () => {
     if (inFlight || !isLive()) return;
@@ -11444,6 +11717,7 @@ function startPresenceWatcher() {
       if (!detector || !video.videoWidth) return;
       let result;
       try { result = detectPoseFrame(detector, video); } catch (_) { return; }
+      const now = Date.now();
 
       /* ── Consumer one: presence ─────────────────────────────────────────────
          A null verdict still means "cannot judge this frame" and still leaves the streak
@@ -11473,13 +11747,17 @@ function startPresenceWatcher() {
          mid-rotation and is deliberately silent - holding the last valid fit IS sending
          nothing - and "cooldown" is a shift the rate limit swallowed, which the tracker
          remembers so the movement is not lost. */
-      if (bodyTopology) {
-        const step = bodyTopology.feed(bodyContourSignature(result));
+      if (bodyTopology && now - lastTopologyAt >= BODY_TOPOLOGY_SAMPLE_MS) {
+        lastTopologyAt = now;
+        /* THE GATE, evaluated here and passed IN. A shift found while the wire is busy
+           must not advance the tracker's baseline, or the movement would be absorbed by a
+           dispatch that never happened - see feed()'s own note. */
+        const step = bodyTopology.feed(bodyContourSignature(result), { canDispatch: !wireBusy() });
         if (step.state === "shift") await reconditionForTopology(step);
-        else if (ORIENT_DEBUG && (step.state === "hold" || step.state === "resumed" || step.state === "cooldown")) {
+        else if (ORIENT_DEBUG && step.state !== "stable") {
           console.log(`[PEAR][TOPOLOGY] ${step.state}` +
             (step.heldMs ? ` (held ${step.heldMs}ms)` : "") +
-            (step.reason ? ` | ${step.reason} suppressed by cooldown` : ""));
+            (step.reason ? ` | ${step.reason} held back` : ""));
         }
       }
     } finally {
@@ -11511,6 +11789,10 @@ let presenceReconditionInFlight = false;
 
 async function reconditionForPresence() {
   if (presenceReconditionInFlight || !isLive() || !isGarmentApplied) return;
+  /* The shared mutex the comment above used to say was missing. Presence is re-sampled
+     every tick, so a deferred re-condition is re-offered ~200ms later - cheaper than
+     queueing a write behind one that is already going to re-condition this session. */
+  if (wireBusy()) return;
   presenceReconditionInFlight = true;
   try {
     console.log(`[PEAR] presence regained at t=${sessionElapsedMs()}ms - re-conditioning (no re-bill)`);
@@ -11557,6 +11839,19 @@ let topologyReconditionInFlight = false;
 async function reconditionForTopology(step) {
   if (topologyReconditionInFlight || !isLive() || !isGarmentApplied) return;
   if (_orientHoldActive) return;
+  /* THE SHARED MUTEX, and this is the send site that made hoisting it urgent: this one
+     forces a full image re-upload, so stacking it on an in-flight write is the most
+     expensive collision available.
+     BELT AND BRACES, not the primary guard. The primary one is the `canDispatch` gate the
+     sampler passes INTO the tracker, which is what keeps a declined shift from advancing
+     the baseline - by the time a shift reaches this function the tracker has already
+     committed to it, so declining here does lose that one movement. Reaching this branch
+     therefore means a caller skipped the gate; it is here so that mistake degrades to a
+     missed re-drape rather than to a collision on the wire. */
+  if (wireBusy()) {
+    console.log("[PEAR] body-contour re-drape deferred: a conditioning write is in flight");
+    return;
+  }
   topologyReconditionInFlight = true;
   try {
     const d = step.delta || {};

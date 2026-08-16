@@ -100,11 +100,19 @@ export const CONFIG = Object.freeze({
      alone is provably a no-op - see applyGarment's skip), which re-uploads the packshot
      inside a billed window. BODY_RECONDITION_COOLDOWN_MS is what bounds that. */
   BODY_TOPOLOGY_ENABLED:   true,
-  /* Sampling cadence for the live loop. Slightly faster than the presence watcher's old
-     240ms because this one has to catch a turn IN PROGRESS, and the same loop now feeds
-     both consumers off ONE detectForVideo() call - so this is cheaper than the two
-     independent samplers it replaces, not more expensive. */
-  BODY_TOPOLOGY_SAMPLE_MS: 200,
+  /* How often the topology is RE-EVALUATED - not how often the camera is sampled. The
+     live pose loop runs on the presence cadence (POSE_SAMPLE_MS * 2) and feeds both
+     consumers off ONE detectForVideo() call; this throttles the topology consumer on top
+     of that, to ~3 evaluations per second.
+     THE FLOOR IS THE WIRE, NOT THE CPU. A shift can dispatch a full rtClient.set() with
+     the reference attached, and re-evaluating faster than the signaling channel can
+     absorb is how a set() ends up with no response at all - the reported
+     "rtClient.set לא הגיב" timeout. 350ms sits inside the 300-500ms band that keeps this
+     to 2-3 evaluations/s, and BODY_RECONDITION_COOLDOWN_MS then bounds how many of those
+     may actually reach the wire. An earlier revision drove the whole LOOP at 200ms for
+     this consumer's benefit, which raised the cost of the expensive half (the WASM/GPU
+     inference) to speed up the cheap half (arithmetic on four landmarks). */
+  BODY_TOPOLOGY_SAMPLE_MS: 350,
   /* Per-landmark visibility bar for TRACKING, deliberately below POSE_MIN_CONFIDENCE
      (0.78, the bar for opening a billed session). A shoulder that is half-occluded
      mid-turn is exactly the frame this monitor most needs to read, and holding it to the

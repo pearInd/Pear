@@ -34,7 +34,11 @@
      §5  the fallback - a body that goes unreadable mid-turn HOLDS the last valid fit and
          resumes from it, rather than re-deriving a fit from a frame with no body in it;
      §6  the wiring - one detector call per tick feeding both consumers, a dispatch that
-         genuinely reaches the wire, the invariance of the garment half, and teardown.
+         genuinely reaches the wire, the invariance of the garment half, and teardown;
+     §7  the throttling - the rate limits that keep this monitor from flooding the
+         signaling channel, and the gate that lets a shift be DEFERRED without being
+         forgotten. Added after the monitor's first revision produced
+         "rtClient.set לא הגיב" at go-live; apply-timeout.test.mjs owns the recovery.
 
    Sibling suites: body-presence-gate.test.mjs owns the go-live gate and the presence half
    of the same loop; side-profile.test.mjs owns the orientation watcher's own edge-on
@@ -473,6 +477,66 @@ console.log("\n── §6 THE WIRING: one inference, a real dispatch, and a tear
     /THIS LOOP IS THE "SPATIAL BASE", AND IT IS NEVER LATCHED/.test(SRC) &&
     /The only latched asset in this pipeline is the GARMENT reference/.test(SRC),
     "the report reads like a frozen body keyframe; the file has to say why it is not one");
+}
+
+console.log("\n── §7 THROTTLING: the wire is the floor, not the CPU ──");
+{
+  /* THE REGRESSION THIS SECTION EXISTS FOR: "המדידה החיה נכשלה: timeout ממתין ליישום הבגד
+     (rtClient.set לא הגיב)". A monitor that re-evaluates faster than the signaling channel
+     can absorb turns every movement into a queued image re-upload, and a set() issued into
+     that backlog is the one that never gets a response. Two independent limits keep this
+     bounded, and they are asserted separately because they fail separately. */
+  check(`the topology is re-evaluated at most ~3×/s (${CONFIG.BODY_TOPOLOGY_SAMPLE_MS}ms)`,
+    CONFIG.BODY_TOPOLOGY_SAMPLE_MS >= 300 && CONFIG.BODY_TOPOLOGY_SAMPLE_MS <= 500,
+    `${CONFIG.BODY_TOPOLOGY_SAMPLE_MS}ms - the spec'd band is 300-500ms`);
+  check("...and at most one re-conditioning DISPATCH per cooldown on top of that",
+    CONFIG.BODY_RECONDITION_COOLDOWN_MS >= CONFIG.BODY_TOPOLOGY_SAMPLE_MS,
+    "a cooldown shorter than the evaluation interval bounds nothing");
+
+  /* ── THE LOOP RATE IS THE PRESENCE RATE, AND THE THROTTLE IS SEPARATE ───────
+     An earlier revision sped the whole LOOP up to the topology interval, which raised the
+     rate of the expensive half (a WASM/GPU inference, on the thread that services the
+     datachannel) to benefit the cheap half (arithmetic on four landmarks). The loop is
+     back on the presence cadence and the topology consumer carries its own elapsed check,
+     so the inference load is exactly what it was before this monitor existed. */
+  const watcher = extract("function startPresenceWatcher", "/* ── end body-presence gate ── */");
+  check("the sampler runs at the PRESENCE cadence, not the topology one",
+    /const tickMs = POSE_SAMPLE_MS \* 2;/.test(watcher),
+    "raising the inference rate for the consumer that does not need it is the wrong lever");
+  check("...and the topology consumer throttles itself on top of that loop",
+    /now - lastTopologyAt >= BODY_TOPOLOGY_SAMPLE_MS/.test(watcher) &&
+    /lastTopologyAt = now;/.test(watcher),
+    "without its own gate the consumer inherits whatever the loop happens to run at");
+
+  /* ── A DEFERRED SHIFT IS NOT A FORGOTTEN ONE ───────────────────────────────
+     The gate that skips a re-drape while the wire is busy lives INSIDE feed(), for the
+     same reason the cooldown does: a baseline advanced for a dispatch that never happened
+     absorbs the movement silently, and the body stays mis-fitted for the rest of the
+     session. This is the exact bug that a naive `if (wireBusy()) return;` at the call site
+     would have introduced, since feed() had already moved the baseline by then. */
+  let t = 0;
+  const tracker = api.makeBodyTopologyTracker({ now: () => t });
+  tracker.feed(sig({ yawDeg: 0 }));
+  t += 400;
+  const blocked = tracker.feed(sig({ yawDeg: 40 }), { canDispatch: false });
+  check("a shift found while the wire is busy is reported as deferred, not as a shift",
+    blocked.state === "deferred" && blocked.reason === "rotation",
+    JSON.stringify(blocked));
+  t += 400;
+  const retried = tracker.feed(sig({ yawDeg: 40 }), { canDispatch: true });
+  check("...and the SAME movement still fires once the wire frees up",
+    retried.state === "shift" && retried.reason === "rotation",
+    "a deferred shift that advanced the baseline would leave the body mis-fitted for good");
+  check("the watcher passes that gate from the live wire state",
+    /bodyTopology\.feed\(bodyContourSignature\(result\), \{ canDispatch: !wireBusy\(\) \}\)/.test(watcher),
+    "the gate is useless if the call site does not tell it what the wire is doing");
+
+  /* THE LAST LINE OF DEFENCE, one level down: even with the gate above, the dispatcher
+     re-checks. Cheap, and it covers any future caller that forgets to pass the gate. */
+  const recondition = extract("async function reconditionForTopology(", "\n}\n/* ── end body-presence gate");
+  check("...and the dispatcher itself declines a busy wire regardless",
+    /if \(wireBusy\(\)\) \{/.test(recondition),
+    "a defence that depends on every caller remembering is not a defence");
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

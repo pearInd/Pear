@@ -329,12 +329,21 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
   /* Every rtClient.set()/setPrompt() call must draw from a guarded string. This is the
      count that catches a NEW send site being added straight from a builder.
 
-     FIVE now, not four: the frame-freeze watchdog's keep-alive ping is a real dispatch -
-     setPrompt() on the live session, deliberately bypassing applyGarment() (which would
-     compare the payload to what it believes is on the wire, find both halves identical
-     and correctly skip - right for an update, wrong for a liveness ping). It draws from
-     clampPromptForWire(..., "freezeKeepAlive") like every other site, which is the
-     property this section is actually about; the number is just how it is caught.
+     SIX now. Five were already here: two in applyGarment (the full set and the prompt-only
+     fast path), two in applyLook (its enriched payload and the minimal retry behind it),
+     and the frame-freeze watchdog's keep-alive ping - a real setPrompt() on the live
+     session, deliberately bypassing applyGarment(). The sixth is the go-live recovery's
+     lightweight fallback (applyFallbackConditioning), which is the one most likely to be
+     written as a quick raw send, since it exists precisely for the moment the normal path
+     has already failed. It draws from clampPromptForWire(..., "fallbackConditioning")
+     like every other site, which is the property this section is actually about; the
+     number is just how it is caught.
+
+     THE AWAIT MOVED, WHICH IS WHY THE PATTERN NO LONGER LOOKS FOR ONE. Every send now sits
+     inside a sendCondition() callback - the wire mutex - so the call itself is `() =>
+     rtClient.set(...)` and the await is on the queue. Asserted separately below, because
+     "goes through the mutex" is now as load-bearing as "draws from a guarded prompt": two
+     concurrent set() calls on a settling transport is the reported go-live timeout.
 
      THE PROMPT INSIDE THAT CLAMP IS RESOLVED, not constant (see
      garment-category-prompt.test.mjs §6 for both resolutions): per CATEGORY, because
@@ -343,9 +352,53 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
      anchor over a two-garment payload tells the model to put the shopper's real shirt back
      over the look's top. The clamp is what this section asserts; the resolution is checked
      here only far enough that the ping cannot regress to a bare constant. */
-  const sends = (SRC.match(/await rtClient\.set\(|await rtClient\.setPrompt\(/g) || []).length;
+  /* Matched on CALL SYNTAX, not on the bare name: this file discusses rtClient.set() in
+     dozens of comments and log strings, and a counter that cannot tell a call from an
+     explanation would either force the documentation to be deleted or pass no matter what
+     the code does. The two real forms are the mutex callback (`() => rtClient.set(...)`)
+     and a direct await inside one (the applyLook pair). */
+  const SEND = /(?:await |\(\) => )rtClient\.(?:set|setPrompt)\(/g;
+  const CODE = SRC;
+  const sends = (CODE.match(SEND) || []).length;
   check(`all ${sends} rtClient send sites draw from a guarded prompt`,
-    sends === 5, `${sends} send sites found - if this changed, verify the new one is clamped`);
+    sends === 6, `${sends} send sites found - if this changed, verify the new one is clamped`);
+  /* ── AND EVERY ONE OF THEM GOES THROUGH THE WIRE MUTEX ──────────────────────
+     Asserted by PROXIMITY rather than by counting sendCondition() calls, because the two
+     applyLook sends deliberately share ONE wire slot (the minimal payload is a fallback
+     for the same dispatch, so releasing the mutex between them would let a queued write
+     leave the look half-applied). What must hold is that no send reaches rtClient without
+     a sendCondition() opening the block it sits in. */
+  const unguarded = [];
+  for (const m of CODE.matchAll(SEND)) {
+    /* 900 characters of look-back, because applyLook's minimal retry sits behind a long
+       comment inside the same callback. Wide enough to cover a real callback body, far too
+       narrow to reach an unrelated one elsewhere in a 13k-line file. */
+    if (!/sendCondition\(/.test(CODE.slice(Math.max(0, m.index - 900), m.index))) {
+      unguarded.push(CODE.slice(Math.max(0, m.index - 60), m.index + 40).replace(/\s+/g, " "));
+    }
+  }
+  check("...and every one of them is issued inside the wire mutex, never directly",
+    unguarded.length === 0,
+    unguarded.join("\n        ") || "");
+  check("...with the mutex serialising a user-driven write rather than dropping it",
+    /function sendCondition\(label, send, \{ skipIfBusy = false \} = \{\}\)/.test(SRC) &&
+    /const next = wireQueue\.then\(run, run\);/.test(SRC),
+    "a queue that only survives a RESOLVED predecessor wedges on the first failed send");
+  /* ── AND THE COUNTER SURVIVES A SESSION BOUNDARY ────────────────────────────
+     The go-live recovery reconnects while a write may still be hung against the client it
+     just disconnected. That write can settle minutes later, and its `finally` would then
+     decrement a counter that no longer describes it - to -1 if nothing else is running, or
+     to a false "the wire is free" while a NEW write is genuinely in flight, which hands
+     back exactly the concurrent-set() collision the mutex exists to prevent. */
+  check("...and a write from a torn-down session cannot corrupt the live counter",
+    /let wireEpoch = 0;/.test(SRC) &&
+    /const epoch = wireEpoch;/.test(SRC) &&
+    /if \(epoch === wireEpoch\) \{ isSettingCondition = false; wireWrites--; \}/.test(SRC) &&
+    /function resetConditionWire\(\) \{\s*\n\s*wireEpoch\+\+;/.test(SRC),
+    "a reset that does not invalidate in-flight writes is a reset in name only");
+  check("...and every session boundary actually resets it",
+    (SRC.match(/resetConditionWire\(\);/g) || []).length >= 3,
+    "connectRealtime, teardown and the end-of-window stop each end a session");
   const ping = (SRC.match(/const keepAlive = clampPromptForWire\([\s\S]{0,400}?"freezeKeepAlive"\);/) || [""])[0];
   check("the freeze keep-alive is clamped too, so recovery cannot bypass the budget guard",
     ping !== "" && /imageOnlyPrompt\(activeItem\)/.test(ping) &&

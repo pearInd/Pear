@@ -51,6 +51,11 @@ function makeHarness({ composite = true } = {}) {
        prompt+image), so the guard must be transparent to it. Its own truncation
        behaviour is covered in composite.test.mjs. */
     clampPromptForWire: (p) => p,
+    /* The wire mutex, as a TRANSPARENT pass-through - not a no-op stub. This suite is
+       about WHICH payload shape reaches the wire (prompt-only vs prompt+image), so the
+       send must actually happen; the mutex's own serialise/skip behaviour is covered by
+       composite.test.mjs and apply-timeout.test.mjs. */
+    sendCondition: (_label, send) => send(),
     rtClient: {
       set: async (p) => { sent.push({ kind: "set", hasImage: p.image !== undefined, image: p.image, prompt: p.prompt }); },
       setPrompt: async (prompt, opts) => { sent.push({ kind: "setPrompt", prompt, opts }); },

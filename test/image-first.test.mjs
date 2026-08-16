@@ -406,7 +406,7 @@ console.log("\n── §5 AN IMAGE ON EVERY UPDATE AND EVERY RETRY ──");
      the wire bookkeeping must not have been written optimistically - otherwise attempt
      two sees its own reference "already on the wire" and retries a failed image upload
      by not uploading the image. */
-  const setIdx = apply.indexOf("await rtClient.set(payload);");
+  const setIdx = apply.indexOf('sendCondition("applyGarment", () => rtClient.set(payload));');
   const stampIdx = apply.indexOf("lastSentImageRef = imageRef || null;");
   check("the wire bookkeeping is stamped only AFTER set() resolves, so a retry re-uploads",
     setIdx !== -1 && stampIdx > setIdx, `set@${setIdx} stamp@${stampIdx}`);
@@ -497,9 +497,16 @@ console.log("\n── §6 A FREEZE MUST NOT RESUME UNCONDITIONED ──");
   check("stage 1a is a frame ping on the element itself",
     /if \(video\.paused \|\| video\.readyState < 2\)[\s\S]{0,120}video\.play\(\)/.test(watcher));
   check("stage 1b is an SDK keep-alive that carries NO image and no teardown",
-    /await rtClient\.setPrompt\(keepAlive, \{ enhance: false \}\)/.test(watcher) &&
+    /rtClient\.setPrompt\(keepAlive, \{ enhance: false \}\)/.test(watcher) &&
     !/rtClient\.set\(/.test(watcher),
     "setPrompt takes sendPrompt(), which never touches the image");
+  /* ...and it SKIPS rather than queues when the wire is busy. This ping exists to poke a
+     session that appears to be doing nothing, so a write already in flight is itself the
+     evidence that the poke is unnecessary - and queueing a liveness nudge behind a stalled
+     write is how a recovery mechanism becomes part of the stall. */
+  check("...and it is skipped, not queued, while another write holds the wire",
+    /sendCondition\("freezeKeepAlive",[\s\S]{0,160}\{ skipIfBusy: true \}\)/.test(watcher),
+    watcher.slice(watcher.indexOf("STAGE 1b"), watcher.indexOf("STAGE 1b") + 900));
   check("...rate-limited separately from the re-anchor, and cheaply",
     /const FRAME_FREEZE_PING_MS = 600;/.test(SRC) &&
     /Date\.now\(\) - lastPingAt >= FRAME_FREEZE_PING_MS/.test(watcher));
