@@ -333,21 +333,24 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
      setPrompt() on the live session, deliberately bypassing applyGarment() (which would
      compare the payload to what it believes is on the wire, find both halves identical
      and correctly skip - right for an update, wrong for a liveness ping). It draws from
-     clampPromptForWire(imageOnlyPrompt(activeItem), "freezeKeepAlive") like every other
-     site, which is the property this section is actually about; the number is just how it
-     is caught.
+     clampPromptForWire(..., "freezeKeepAlive") like every other site, which is the
+     property this section is actually about; the number is just how it is caught.
 
-     THE PROMPT IS RESOLVED PER GARMENT CATEGORY now, not a module constant (see
-     garment-category-prompt.test.mjs): re-asserting a TOPS anchor over a live trouser
-     session would put the catalog model's shirt on the shopper through the RECOVERY path,
-     which is the same bug the apply path was fixed for. The clamp is what this asserts;
-     the category resolution is asserted alongside it so the ping can never regress to a
-     constant. */
+     THE PROMPT INSIDE THAT CLAMP IS RESOLVED, not constant (see
+     garment-category-prompt.test.mjs §6 for both resolutions): per CATEGORY, because
+     re-asserting a TOPS anchor over a live trouser session would put the catalog model's
+     shirt on the shopper through the RECOVERY path, and per LOOK, because a single-garment
+     anchor over a two-garment payload tells the model to put the shopper's real shirt back
+     over the look's top. The clamp is what this section asserts; the resolution is checked
+     here only far enough that the ping cannot regress to a bare constant. */
   const sends = (SRC.match(/await rtClient\.set\(|await rtClient\.setPrompt\(/g) || []).length;
   check(`all ${sends} rtClient send sites draw from a guarded prompt`,
     sends === 5, `${sends} send sites found - if this changed, verify the new one is clamped`);
+  const ping = (SRC.match(/const keepAlive = clampPromptForWire\([\s\S]{0,400}?"freezeKeepAlive"\);/) || [""])[0];
   check("the freeze keep-alive is clamped too, so recovery cannot bypass the budget guard",
-    /clampPromptForWire\(imageOnlyPrompt\([^)]*\), "freezeKeepAlive"\)/.test(SRC));
+    ping !== "" && /imageOnlyPrompt\(activeItem\)/.test(ping) &&
+    /buildLookPrompt\(/.test(ping),
+    ping || 'no clampPromptForWire(..., "freezeKeepAlive") found');
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

@@ -2074,17 +2074,20 @@ function setActiveItem(item, opts = {}) {
      opposite things to the shopper:
        · "Try this on" - a catalog card, a store handoff, a custom upload, a replay.
          ONE garment. The opposite slot must be cleared so applyActive() sends the
-         SINGLE-garment prompt, whose KEEP_TOP / KEEP_BOTTOMS clause pins the layer
-         we are not replacing to the live camera.
+         SINGLE-garment prompt, which is scoped to the layer being replaced rather
+         than to the whole subject.
        · "Add to Look" (הוסף ללוק) - the shopper is explicitly assembling an outfit,
          so the opposite slot survives and both garments render in one pass.
      Additively, a shopper who had EVER selected trousers left activeOutfit.bottom
      populated for the rest of the session. Picking a shirt afterwards therefore made
      resolveLook() return a complete look, and applyLook() substituted BOTH layers -
      replacing real trousers the shopper never asked to try on. That is deterministic
-     state leakage, not a model hallucination: the prompt carrying KEEP_BOTTOMS was
-     simply never the one on the wire. It surfaces on stepping back because that is
-     when the lower body enters frame and the substitution becomes visible. */
+     state leakage, not a model hallucination: the single-garment prompt - the only one
+     that pins the untouched layer - was simply never the one on the wire. It surfaces on
+     stepping back because that is when the lower body enters frame and the substitution
+     becomes visible. (The clause it used to name, KEEP_BOTTOMS, is retired: no builder
+     assembles the DENSE table any more, and the pin now lives inside
+     CATEGORY_ANCHOR.bottom. The state bug and its fix are unaffected either way.) */
   const slot = slotOf(item);
   activeOutfit[slot] = item;
   if (!opts.additive) {
@@ -6789,7 +6792,14 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    unstated region is precisely what this file's history keeps recording as the thing that
    gets reinterpreted (see STRICT_INPAINT's comment). So the bottoms branch names the
    REFERENCE as the thing not to copy an upper garment from, not just the live frame as
-   the thing to keep. */
+   the thing to keep.
+
+   READ THE NEXT BLOCK FOR THE CURRENT WORDING. The paragraph above is the record of WHY
+   the lock lives inside the anchor rather than beside it, and that reasoning still holds.
+   The sentences it describes do not: the strict-1:1 revision below rewrote both anchors,
+   and what bottoms carries today is "onto the subject's lower body" plus "Keep the
+   subject's upper body and background unmodified." - the live frame half, stated
+   explicitly, with the reference half now implied by the anchor naming one garment. */
 /* ── REVISION: STRICT 1:1, BOTH BRANCHES ─────────────────────────────────────────
    THE THIRD REPORT IN THIS SEQUENCE, and a different failure from the first two. The
    first was the WRONG REGION (a t-shirt anchor on a trouser reference). The second was
@@ -6802,52 +6812,98 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    operations explicitly - invent, add, alter - because adding a stripe and altering a
    stripe are different edits and only the first was previously excluded.
 
-   BOTH BRANCHES ARE NOW COLLAPSED AND SYMMETRIC. The previous revision cut bottoms only,
-   on the principle of one branch at a time on evidence; tops kept its seven-sentence
-   assembly. This finishes the job at the product owner's direction, and the two strings
-   are now identical apart from the garment noun.
+   BOTH BRANCHES ARE COLLAPSED, AND THE CLAMP IS SYMMETRIC. The previous revision cut
+   bottoms only, on the principle of one branch at a time on evidence; tops kept its
+   seven-sentence assembly. This finishes the job at the product owner's direction: every
+   word either string says about the GARMENT is now the same word.
+
+   THE SCOPING IS NOT SYMMETRIC, and that is the one asymmetry left. The collapse also
+   took the opposite-layer lock, which re-opened the shirt-replacement report through the
+   bottoms branch - the one it was filed against - so 69 characters of lower-body scoping
+   went back on THERE and nowhere else. Same rule as every revision before it: one branch
+   at a time, on evidence. Full detail in the first bullet below.
 
    ── WHAT THIS REMOVES, AND WHY IT IS WRITTEN DOWN HERE ──────────────────────────
-   Every clause below is a reproduced regression, and all of them are now off the wire:
+   Every clause below is a reproduced regression, and all of them came off the wire in
+   this revision. ONE OF THEM IS BACK - read the first bullet before the rest:
 
-     · the OPPOSITE-LAYER LOCK. Neither string says "preserve the live upper/lower
-       garment" any more. That clause was the fix for the FIRST report in this sequence -
-       trying on trousers putting the catalog model's shirt on the shopper. The scoping
-       now rests entirely on "the EXACT shorts/pants ... onto the subject" naming one
-       region, which is implicit where it used to be explicit. IF SHIRT-REPLACEMENT
-       RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST - it is the only loss here that
-       re-opens a previously fixed report rather than degrading fidelity.
+     · the OPPOSITE-LAYER LOCK - RESTORED ON BOTTOMS, still absent on tops. That clause
+       was the fix for the FIRST report in this sequence: trying on trousers putting the
+       catalog model's shirt on the shopper. Collapsing it away left the scoping implicit
+       - "the EXACT shorts/pants ... onto the subject" names a garment but no region - and
+       the bottoms branch is the exact configuration that report was filed against, so it
+       carries the scoping explicitly again: "onto the subject's lower body", plus "Keep
+       the subject's upper body and background unmodified." at the end. That costs 69
+       characters against 480 free and buys back a reproduced regression.
+       THE TOPS BRANCH IS STILL IMPLICITLY SCOPED. No shirt-replacement report has been
+       filed through it - the reported failure is a trouser try-on repainting the top,
+       not the inverse - so tops keeps the shorter string on the same one-branch-at-a-
+       time-on-evidence principle the bottoms collapse itself was made under.
+       IF SHIRT-REPLACEMENT RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST - it is the only
+       loss here that re-opens a previously fixed report rather than degrading fidelity,
+       and on tops the restore is the bottoms sentence with the two regions swapped
+       (or KEEP_TOP, declared further down this file).
      · VOLUME_PERSISTENCE / FRONTAL_VOLUME - "it slimmed me down", and the head-on
        stomach-projection gap.
      · TEMPORAL_PERSISTENCE - the prompt's half of the late-entry presence fix. The gate
        and the watcher still run for both categories, so the mechanism survives.
-     · CLOSED_BACK_HEM - the knotted-hem and open-back-flap artifacts.
+     · CLOSED_BACK_HEM - the knotted-hem and open-back-flap artifacts. Still assembled on
+       the full-look path, which was never collapsed; off the wire on both single-garment
+       branches.
      · REFERENCE_EXTRACTION - superseded rather than lost: "Exactly match color, pattern,
        logos, and cut" states the same provenance rule in the anchor itself.
 
-   All of them remain on file as constants, so each restore is one line in
-   imageOnlyPrompt(). The budget is no longer the constraint - both branches now run ~168
-   characters against a 650 ceiling - so anything bought back is a deliberate choice about
-   TEXT VOLUME COMPETING WITH THE REFERENCE, which is the mechanism all three reports in
-   this sequence share. Add one at a time, and re-test against a live session. */
+   THE RESTORE PATHS, and they are not uniform. VOLUME_PERSISTENCE, FRONTAL_VOLUME,
+   TEMPORAL_PERSISTENCE, CLOSED_BACK_HEM and REFERENCE_EXTRACTION are each still on file
+   as a constant, so each of those restores is one line in imageOnlyPrompt(). THE
+   OPPOSITE-LAYER LOCK IS THE EXCEPTION: its wording was inline in these two strings and
+   was never a constant of its own, which is why it is written out above rather than
+   named. The budget is no longer the constraint - tops runs 170 characters and bottoms
+   239 against a 650 ceiling - so anything bought back is a deliberate choice about TEXT
+   VOLUME COMPETING WITH THE REFERENCE, which is the mechanism all three fidelity reports
+   in this sequence share. Add one at a time, and re-test against a live session. */
+
+/* The strict lock, in one constant because three anchors carry it - both category
+   branches and the full look - and three copies of a product-specified sentence is three
+   places for it to drift. The first sentence supersedes REFERENCE_EXTRACTION (same
+   provenance rule, and it names logos and cut); the second is the hallucination clamp
+   this revision exists for, banning all three edits - invent, add, alter - because adding
+   a stripe and altering a stripe are different operations. Leading space: these are
+   appended to an anchor, never used alone. */
+const STRICT_REFERENCE_LOCK =
+  " Exactly match color, pattern, logos, and cut." +
+  " Do NOT invent, add, or alter any details.";
+
 const CATEGORY_ANCHOR = Object.freeze({
-  /* The two strings are identical apart from the garment noun. That symmetry is
-     deliberate: the previous revisions diverged the branches to solve region-specific
-     problems, and this one is aimed at a failure mode - invented detail - that has
-     nothing to do with which half of the body is being dressed. */
+  /* The two strings share one spine - lead, then STRICT_REFERENCE_LOCK - and differ in
+     exactly two places: the garment noun, and the lower-body SCOPING that only bottoms
+     carries. That asymmetry is deliberate and is the one thing to read before editing
+     either: the invented-detail failure this revision targets is not region-specific, so
+     the lock is symmetric; the shirt-replacement failure IS region-specific - a trouser
+     try-on repainting the live top - so the scoping sits on the branch it was reported
+     against rather than on both. See the bullet list above. */
   top:
     "Overlay and fit the EXACT upper garment from the reference image onto the subject." +
-    " Exactly match color, pattern, logos, and cut." +
-    " Do NOT invent, add, or alter any details.",
+    STRICT_REFERENCE_LOCK,
   bottom:
-    "Overlay and fit the EXACT shorts/pants from the reference image onto the subject." +
-    " Exactly match color, pattern, logos, and cut." +
-    " Do NOT invent, add, or alter any details.",
+    "Overlay and fit the EXACT shorts/pants from the reference image onto the subject's" +
+    " lower body." +
+    STRICT_REFERENCE_LOCK +
+    " Keep the subject's upper body and background unmodified.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
    parts. Every one of these is a reproduced regression and the wording is deliberately
-   unchanged from the string it came out of - only the t-shirt ANCHOR was replaced. */
+   unchanged from the string it came out of - only the t-shirt ANCHOR was replaced.
+
+   WHAT IS STILL ASSEMBLED, so nothing here reads as dead code by accident:
+   VOLUME_PERSISTENCE and CLOSED_BACK_HEM ship on the FULL-LOOK path (lookAnchorPrompt),
+   which was never collapsed. FRONTAL_VOLUME and REFERENCE_EXTRACTION are referenced by no
+   builder at all - retired, not deleted, and kept verbatim because a restore that starts
+   by rewriting the clause is not a restore. REFERENCE_EXTRACTION is the newer of the two
+   retirements: STRICT_REFERENCE_LOCK's first sentence states the same provenance rule and
+   also names logos and cut, so shipping both would spend budget restating one
+   instruction. Deleting either constant breaks image-first.test.mjs §1 on purpose. */
 const VOLUME_PERSISTENCE =
   "Maintain the exact same abdomen/stomach depth, waist volume, and torso thickness" +
   " continuously through all 360-degree rotations—never flatten or reset body size" +
@@ -6930,36 +6986,40 @@ function isBottomsGarment(item) {
 /**
  * The image-only prompt, resolved for THIS garment's category.
  *
- * ASSEMBLED THROUGH fitPrompt(), not concatenated, and that is not ceremony: the tops
- * branch runs 702 characters against a 650 budget that app.js:5862 explicitly forbids
- * raising ("the ceiling is the API's, not ours"). Concatenation would overrun into
- * clampPromptForWire()'s hard slice, which cuts at the END - taking REFERENCE_EXTRACTION,
- * the clause that stops the tuxedo, and cutting it mid-sentence. Priority tags make that
- * shed a CHOICE instead: FRONTAL_VOLUME (P.MED) drops first on tops, and it is the right
- * one to lose because it is the only part here that is a refinement of a bias the two
- * P.HIGH/P.CORE clauses already assert, rather than a distinct guarantee.
+ * ONE P.CORE PART, ON BOTH BRANCHES. There is no assembly left here: the function SELECTS
+ * a frozen anchor (170 chars on tops, 239 on bottoms) and hands it to fitPrompt() as a
+ * single part. The seven-clause assembly this used to run - and the priority tags that
+ * decided what shed out of it - is described in CATEGORY_ANCHOR's comment above, together
+ * with what came off the wire and how to put any of it back.
  *
- * If the anchor is ever shortened, the shed clause returns on its own. That is the
- * property worth having, and it is why this is not four string literals.
+ * STILL ROUTED THROUGH fitPrompt() rather than returned raw, and that is not ceremony at
+ * this length: it normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit
+ * that lengthens an anchor - or adds the second part the restore notes describe - is
+ * clamped HERE instead of over-running into clampPromptForWire()'s hard slice, which cuts
+ * at the END and would take the "do NOT invent" sentence with it. The budget itself is
+ * Decart's and app.js:5862 explicitly forbids raising it ("the ceiling is the API's, not
+ * ours").
  *
  * @param {object|null} item - the garment being fitted; null resolves to the tops branch.
  * @returns {string}
  */
 function imageOnlyPrompt(item) {
-  /* ONE CLAUSE, BOTH BRANCHES. There is no assembly left on either side - see
-     CATEGORY_ANCHOR above for the three reports that drove it there and for the full
-     list of what came off the wire.
+  /* ONE PART, BOTH BRANCHES. There is no assembly left on either side - see
+     CATEGORY_ANCHOR above for the three reports that drove it there, for the full list
+     of what came off the wire, and for why bottoms carries 69 characters of lower-body
+     scoping that tops does not.
 
-     STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at ~168 characters:
+     STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at 170/239 chars:
      it normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that
      lengthens an anchor is clamped here instead of over-running into
      clampPromptForWire()'s hard slice, which cuts at the END and would take the
      "do NOT invent" sentence with it.
 
      TO BUY A CLAUSE BACK, add it as a second part here. The budget is no longer the
-     constraint - there are ~480 characters free - so the only question is whether that
-     text is worth the weight it takes away from the reference image, which is the
-     mechanism every report in this sequence shares. One at a time, re-tested live. */
+     constraint - 480 characters are free on tops and 411 on bottoms - so the only
+     question is whether that text is worth the weight it takes away from the reference
+     image, which is the mechanism every report in this sequence shares. One at a time,
+     re-tested live. */
   return fitPrompt([
     [P.CORE, isBottomsGarment(item) ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
   ]);
@@ -6975,6 +7035,24 @@ const LOOK_ANCHOR =
  * than isolate one. See buildLookPrompt() for why it cannot route through
  * imageOnlyPrompt(). Assembled the same way so it inherits the same budget guarantee.
  *
+ * IT CARRIES THE STRICT LOCK TOO, and that is what this revision added here. The 1:1
+ * collapse rewrote both category anchors around STRICT_REFERENCE_LOCK and left this path
+ * on its old four-clause assembly, so the INVENTED-DETAIL report - the right garment
+ * rendered with textures the reference never had - stayed reproducible through Full Look
+ * while being fixed everywhere else. Nothing about that failure is specific to how many
+ * garments are being replaced, so the clamp belongs on every path that reaches Decart.
+ *
+ * REFERENCE_EXTRACTION CAME OFF IN THE SAME EDIT rather than sitting beside it: the lock's
+ * first sentence IS the provenance rule ("Exactly match color, pattern, logos, and cut"),
+ * which this file already documents as superseding it, and shipping both would spend ~67
+ * characters restating one instruction - the text-volume-against-the-reference mechanism
+ * every report in this sequence shares. Net change: +20 characters, 533 of 650.
+ *
+ * VOLUME_PERSISTENCE and CLOSED_BACK_HEM STAY, unlike on the single-garment branches. This
+ * path was never collapsed, no full-look report has been filed against clause count, and
+ * removing them here would be a change made on no evidence. They are also the two clauses
+ * a full-look render needs most, since it replaces the torso garment and the hem with it.
+ *
  * A FUNCTION, not a module constant, and deliberately so: a `const X = fitPrompt(...)` at
  * module scope runs at LOAD time, which makes PROMPT_MAX_CHARS a load-order dependency for
  * every consumer - including the test harnesses that slice this file into a sandbox and
@@ -6985,10 +7063,9 @@ const LOOK_ANCHOR =
  */
 function lookAnchorPrompt() {
   return fitPrompt([
-    [P.CORE, LOOK_ANCHOR],
+    [P.CORE, LOOK_ANCHOR + STRICT_REFERENCE_LOCK],
     [P.HIGH, VOLUME_PERSISTENCE],
     [P.MED,  CLOSED_BACK_HEM],
-    [P.CORE, REFERENCE_EXTRACTION],
   ]);
 }
 
@@ -7022,28 +7099,34 @@ function lookAnchorPrompt() {
                       an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
                       the moment "it gave me the model's shoulders" is reported again.
 
-   ── THE RESTORE BUDGET IS NOW ASYMMETRIC, AND THAT IS DELIBERATE ─────────────
-   The number has moved four times, so read the CURRENT row rather than remembering one:
+   ── THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP ────
+   The number has moved five times, so read the CURRENT row rather than remembering an
+   older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS (634 chars - full assembly)      BOTTOMS (258 chars - anchor only)
-     + DENSE.bodyFidelity  (45) → 680  does NOT fit      → 304  fits
-     + DENSE.modelAgnostic (64) → 699  does NOT fit      → 323  fits
+     TOPS (170 chars - anchor)             BOTTOMS (239 chars - anchor + lower-body scope)
+     + DENSE.bodyFidelity  (45) → 216  fits              → 285  fits
+     + DENSE.modelAgnostic (64) → 235  fits              → 304  fits
+     + both of them        (110)→ 281  fits              → 350  fits
 
-   TOPS HAS ZERO HEADROOM. Adding anything there is silently shed by fitPrompt(), which is
-   the failure mode this whole file exists to make visible. Size every restore against it.
+   NOTHING SHEDS ANY MORE, on either branch. 480 characters are free on tops and 411 on
+   bottoms, so every retired clause in this table would go back with room to spare. That
+   INVERTS the warning this note used to carry: the risk is no longer that a restore
+   silently sheds, it is that a restore silently SUCCEEDS.
 
-   BOTTOMS HAS 392 CHARACTERS FREE AND MUST NOT SPEND THEM. That headroom is not a budget,
-   it is the fix: the branch was collapsed from 616 characters to 258 precisely BECAUSE
-   text volume was outweighing the reference pixels and producing generic black shorts
-   instead of the photographed ones. Refilling it re-creates the bug the emptiness cures.
-   If a clause genuinely must go back on bottoms, treat it as reopening the black-shorts
-   report, not as spending spare capacity.
+   HEADROOM IS NOT PERMISSION. Tops was collapsed from 634 characters and bottoms from
+   616 precisely BECAUSE text volume was outweighing the reference pixels - the tuxedo,
+   the generic black shorts and the invented stripe are one mechanism seen three times.
+   The 69 characters bottoms spends on "onto the subject's lower body" plus "Keep the
+   subject's upper body and background unmodified." are the only spend made since, and
+   they bought back a REPRODUCED shirt-replacement report rather than filling space.
+   Size every further restore the same way: evidence first, then the character count.
 
-   TO BUY HEADROOM ON TOPS, cheapest first:
-     · FRONTAL_VOLUME (P.MED, 177) is already shed there - nothing left to reclaim.
-     · CLOSED_BACK_HEM (49) is the next P.MED.
-     · TEMPORAL_PERSISTENCE.top (~150) - but see the presence-gate suite first; dropping
-       it removes the prompt's half of the late-entry fix.
+   IF A RESTORE EVER DOES OVERRUN, the cheapest text to reclaim, in order:
+     · CLOSED_BACK_HEM (49) - a P.MED, and now only on the full-look path.
+     · VOLUME_PERSISTENCE (171) - P.HIGH on the full-look path; read model-agnostic
+       .test.mjs first, it is the record of the body clauses.
+     · TEMPORAL_PERSISTENCE (~150 per branch) is already off both single-garment
+       branches - see the presence-gate suite before putting it back, not after.
      · The anchors are product-specified wording - change them deliberately or not at all.
    The order to restore in is below.
 
@@ -7057,7 +7140,12 @@ function lookAnchorPrompt() {
      · pose, poseProfile, frontRef, backReal, backInferred, side
                       orientation steering, now carried by the ASSET the watcher swaps
                       to rather than by a sentence.
-     · keepTop, keepBottoms   the opposite-layer lock.
+     · keepTop         the opposite-layer lock, TOPS ONLY. The bottoms half of it is back
+                      on the wire - written INTO CATEGORY_ANCHOR.bottom ("Keep the
+                      subject's upper body and background unmodified.") rather than
+                      assembled from keepBottoms, because inside the anchor it cannot shed
+                      and costs no extra clause. Restoring it on tops means mirroring that
+                      sentence, not appending this table's two-word "Top unchanged."
      · rotation       "the garment dropped mid-turn". The mechanical half of that fix
                       (the prompt-only flip in applyGarment, and the OrientationWatcher's
                       turn hold) is code, not prompt, and is untouched by this.
@@ -8239,13 +8327,20 @@ function buildLookPrompt(top, bottom, angleText = "") {   // eslint-disable-line
      If a look starts rendering only the shirt, or blending the two, DENSE.lookPanels is
      the first clause to buy back - and it is the one clause in this file whose absence
      costs a whole FEATURE rather than a degree of fidelity. */
-  /* DELIBERATELY NOT imageOnlyPrompt(). Both category branches there pin the OPPOSITE
-     layer to the live camera, which is exactly the instruction a full look must not
-     carry: addToLook() ships a two-garment payload precisely because the shopper asked
-     for both layers to be substituted, and telling the model to preserve the live top
-     while handing it a stitched TOP+BOTTOM reference is a contradiction that resolves
-     however the sampler feels like resolving it. This anchor claims both layers instead;
-     everything after it is the same shared tail the other two branches use. */
+  /* DELIBERATELY NOT imageOnlyPrompt(). The BOTTOMS branch there pins the opposite layer
+     to the live camera - "Keep the subject's upper body and background unmodified." -
+     which is exactly the instruction a full look must not carry: addToLook() ships a
+     two-garment payload precisely because the shopper asked for both layers to be
+     substituted, and telling the model to preserve the live top while handing it a
+     stitched TOP+BOTTOM reference is a contradiction that resolves however the sampler
+     feels like resolving it.
+
+     THE TOPS BRANCH IS NOT SAFE HERE EITHER, and it is worth saying why, because it no
+     longer carries that sentence: it still names ONE region ("the EXACT upper garment
+     ... onto the subject") against a reference holding two garments, which is the
+     wrong-region contradiction that opened this whole sequence. Neither branch is a
+     substitute for this one. This anchor claims both layers instead, and carries the same
+     STRICT_REFERENCE_LOCK the two single-garment branches do. */
   return lookAnchorPrompt();
 }
 
@@ -10044,8 +10139,27 @@ function createFrameFreezeWatcher(video, gen) {
         pings++;
         /* Resolved per category like every other dispatch: re-asserting a TOPS anchor
            over a live trouser session is the same contradiction this branch exists to
-           remove, arriving through the recovery path instead of the apply path. */
-        const keepAlive = clampPromptForWire(imageOnlyPrompt(activeItem), "freezeKeepAlive");
+           remove, arriving through the recovery path instead of the apply path.
+
+           AND PER LOOK, which is the same rule one level up. applyActive() branches on
+           resolveLook() before choosing applyLook() vs applyGarment(); this ping did not,
+           so during an "Add to Look" session it re-asserted a SINGLE-garment anchor over
+           a two-garment payload. That was survivable while both anchors were bare, and
+           stopped being so when the bottoms branch got its opposite-layer scoping back:
+           "Keep the subject's upper body and background unmodified." tells the model to
+           put the shopper's real shirt back, which is precisely the contradiction
+           buildLookPrompt() documents as the thing a full-look payload must never carry.
+           It would also persist - this send site bypasses applyGarment() and never
+           updates lastSentPrompt, so nothing corrects it until the next explicit apply.
+
+           Routed through buildLookPrompt() rather than lookAnchorPrompt() so this stays
+           the SAME builder applyLook() uses: if the look prompt ever starts assembling
+           again, recovery follows it without a second edit here. */
+        const keepAliveLook = resolveLook();
+        const keepAlive = clampPromptForWire(
+          keepAliveLook ? buildLookPrompt(keepAliveLook.top, keepAliveLook.bottom)
+                        : imageOnlyPrompt(activeItem),
+          "freezeKeepAlive");
         console.log("[DECART PROMPT DEBUG]", keepAlive, "(keep-alive ping - no image, no teardown)");
         try {
           await rtClient.setPrompt(keepAlive, { enhance: false });

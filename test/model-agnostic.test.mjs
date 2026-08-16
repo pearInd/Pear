@@ -176,20 +176,26 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     /Restore: add \[P\.HIGH, DENSE\.inpaintLock\]/.test(SRC));
 
   /* ── THE BUDGET IS NO LONGER THE CONSTRAINT. THE EDITORIAL RULE IS. ─────────
-     Both branches now run ~169 characters against a 650 ceiling, so every retired clause
-     would fit, on either side, with room to spare. That makes this section's job the
-     opposite of what it used to be: it no longer warns that a restore will silently shed,
-     it warns that a restore will silently SUCCEED.
+     Tops runs 170 characters and bottoms 239 against a 650 ceiling, so every retired
+     clause would fit, on either side, with room to spare. That makes this section's job
+     the opposite of what it used to be: it no longer warns that a restore will silently
+     shed, it warns that a restore will silently SUCCEED.
 
      Text volume competing with the reference image is the mechanism behind all three
-     reports in this sequence - wrong region, wrong garment, invented detail - so budget
-     headroom is not permission. Anything added back is a deliberate bet against that
-     mechanism and needs a live session to justify it, not a character count. */
+     fidelity reports in this sequence - wrong region, wrong garment, invented detail - so
+     budget headroom is not permission. Anything added back is a deliberate bet against
+     that mechanism and needs a live session to justify it, not a character count.
+
+     THE 69-CHARACTER GAP BETWEEN THE BRANCHES IS THE ONE SPEND MADE ON THAT BET, and it
+     was made against a REPRODUCED report rather than against spare capacity: bottoms
+     carries the lower-body scoping that stops a trouser try-on repainting the live top
+     (garment-category-prompt.test.mjs §2-§3 own the wording). Bounded on both sides here,
+     so neither branch can creep back toward the assembly this whole sequence undid. */
   const tops = api.imageOnlyPrompt(TEE);
   const bottoms = api.imageOnlyPrompt(JEANS);
-  check("both branches are ultra-minimal and near-identical in length",
-    tops.length <= 200 && bottoms.length <= 200 && Math.abs(tops.length - bottoms.length) <= 5,
-    `tops=${tops.length} bottoms=${bottoms.length}`);
+  check("both branches stay ultra-minimal, and the gap between them stays the scoping",
+    tops.length <= 200 && bottoms.length <= 260 && bottoms.length - tops.length === 69,
+    `tops=${tops.length} bottoms=${bottoms.length} gap=${bottoms.length - tops.length}`);
 
   const both = api.fitPrompt([
     [api.P.CORE, bottoms],
@@ -203,10 +209,32 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   check("...and app.js states that the budget is no longer the constraint",
     /The budget is no longer the\s*\n?\s*constraint/.test(SRC),
     "a reader who checks only the character count will draw the wrong conclusion");
-  check("...and app.js records the new arithmetic, per branch",
-    /THE RESTORE BUDGET IS NOW ASYMMETRIC, AND THAT IS DELIBERATE/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 680  does NOT fit      \u2192 304  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 699  does NOT fit      \u2192 323  fits/.test(SRC));
+  /* \u2500\u2500 THE TABLE IN app.js MUST BE THE ARITHMETIC, NOT A MEMORY OF IT \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+     It has been wrong before - it survived two collapses describing a 634-character tops
+     assembly with "ZERO HEADROOM" while the branch actually ran 170 characters with 480
+     free, which is advice pointing the opposite way from the truth. So each printed row
+     is recomputed here against the REAL fitPrompt() and the REAL DENSE table, and the
+     text is required to match the number. A stale row now fails this suite. */
+  const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
+  const arithmetic = [
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  216, 285],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 235, 304],
+  ];
+  for (const [name, clause, expTop, expBottom] of arithmetic) {
+    check(`the ${name.trim()} row is the arithmetic this code actually produces`,
+      row(tops, clause) === expTop && row(bottoms, clause) === expBottom,
+      `tops=${row(tops, clause)} (doc ${expTop}) bottoms=${row(bottoms, clause)} (doc ${expBottom})`);
+  }
+  check("...and app.js prints that arithmetic, per branch, with both branches fitting",
+    /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
+    /TOPS \(170 chars - anchor\)             BOTTOMS \(239 chars - anchor \+ lower-body scope\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 216  fits              \u2192 285  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 235  fits              \u2192 304  fits/.test(SRC),
+    "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
+  check("...and it no longer claims a headroom that stopped being true two revisions ago",
+    !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
+    /480 characters are free on tops and 411 on\s*\n?\s*bottoms/.test(SRC),
+    "nothing sheds on either branch any more - the old table said the opposite");
 }
 
 console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");

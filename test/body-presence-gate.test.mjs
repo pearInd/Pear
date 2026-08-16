@@ -303,8 +303,13 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
   check("NEITHER branch carries the continuous-tracking directive any more",
     !/Continuously track/.test(top) && !/Continuously track/.test(bot),
     `tops=${top.length} bottoms=${bot.length} - both collapsed to a 1:1 reference lock`);
+  /* Both stay ultra-minimal, which is what replaced the directive. Bottoms is the longer
+     of the two by 69 characters and that is NOT this clause creeping back: it is the
+     lower-body scoping restored after the shirt-replacement report (see CATEGORY_ANCHOR
+     in app.js). The bound is per branch so that spend cannot be mistaken for room. */
   check("...and both are ultra-minimal, which is what replaced it",
-    top.length <= 200 && bot.length <= 200, `tops=${top.length} bottoms=${bot.length}`);
+    top.length <= 200 && bot.length <= 260 && !/as soon as visible/.test(bot),
+    `tops=${top.length} bottoms=${bot.length}`);
   /* The clause itself must stay on file, or "one line to re-add" stops being true. */
   check("...but the clause is still ON FILE, so the restore really is one line",
     /TEMPORAL_PERSISTENCE = Object\.freeze\(\{[\s\S]{0,600}?bottom:/.test(SRC),

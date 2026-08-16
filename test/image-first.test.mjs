@@ -89,23 +89,30 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
    THE MODE IS INTACT. The prompt is still constant per dispatch, still assembles no
    garment description, still has no interpolation hole. It varies on exactly ONE axis -
    which body region is being replaced - and NOT on colour, variant, angle or pose. */
-/* BOTH BRANCHES ARE NOW STRICT 1:1 REFERENCE LOCKS, ~169 characters each, identical
-   apart from the garment noun. Three reports drove this, each a different failure:
+/* BOTH BRANCHES ARE STRICT 1:1 REFERENCE LOCKS - the same lead, the same match clause and
+   the same hallucination clamp - and BOTTOMS carries lower-body scoping on top of it.
+   Four reports drove the pair to this shape, each a different failure:
      1. WRONG REGION   - a t-shirt anchor on a trouser reference (the category branch).
      2. WRONG GARMENT  - generic black shorts instead of the photographed white ones
                          (bottoms collapsed).
      3. INVENTED DETAIL- the right garment with textures the reference never had
                          (both collapsed, and "invent/add/alter" all banned).
-   See CATEGORY_ANCHOR in app.js for the full list of what came off the wire and the
-   restore path for each. */
+     4. SHIRT REPLACEMENT - report 1's failure, re-opened by the collapse that fixed 3:
+                         with the scoping implicit, a trouser try-on could take the
+                         reference model's top too. Bottoms names its region and pins the
+                         other one again (170 chars tops, 239 bottoms).
+   See CATEGORY_ANCHOR in app.js for the full list of what came off the wire, what went
+   back on, and the restore path for each. */
 const TOPS_SPEC =
   "Overlay and fit the EXACT upper garment from the reference image onto the subject." +
   " Exactly match color, pattern, logos, and cut." +
   " Do NOT invent, add, or alter any details.";
 const BOTTOMS_SPEC =
-  "Overlay and fit the EXACT shorts/pants from the reference image onto the subject." +
+  "Overlay and fit the EXACT shorts/pants from the reference image onto the subject's" +
+  " lower body." +
   " Exactly match color, pattern, logos, and cut." +
-  " Do NOT invent, add, or alter any details.";
+  " Do NOT invent, add, or alter any details." +
+  " Keep the subject's upper body and background unmodified.";
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
@@ -120,14 +127,23 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     api.imageOnlyPrompt(TEE) === TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
   check("the BOTTOMS branch matches the specified wording byte for byte",
     api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
-  check("the two differ ONLY by the garment noun",
-    TOPS_SPEC.replace("upper garment", "G") === BOTTOMS_SPEC.replace("shorts/pants", "G"),
-    "the failure this revision targets - invented detail - is not region-specific");
+  /* ONE SPINE, ONE DELIBERATE DIVERGENCE. The invented-detail failure is not
+     region-specific, so the match clause and the clamp are byte-identical on both sides;
+     the shirt-replacement failure IS region-specific, so the lower-body scoping sits on
+     bottoms alone. Asserted as an EXACT delta rather than a "starts with", so that any
+     other divergence - a reworded clamp on one branch, a stray clause - fails here. */
+  check("the two share one spine, differing only by noun and the bottoms scoping",
+    BOTTOMS_SPEC
+      .replace("shorts/pants", "G")
+      .replace("onto the subject's lower body.", "onto the subject.")
+      .replace(" Keep the subject's upper body and background unmodified.", "") ===
+    TOPS_SPEC.replace("upper garment", "G"),
+    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
 
   /* THREE SENTENCES, THREE JOBS. Asserted individually because the failure mode of a
      minimal prompt is a well-meant reword that quietly drops one - and there is no
      fitPrompt() shed log to catch it, because there is no assembly left to log. */
-  const LEAD = /^Overlay and fit the EXACT (upper garment|shorts\/pants) from the reference image onto the subject\./;
+  const LEAD = /^Overlay and fit the EXACT (upper garment|shorts\/pants) from the reference image onto the subject(?:'s lower body)?\./;
   check("(1) it leads by BINDING to the reference and naming the target region",
     LEAD.test(TOPS_SPEC) && LEAD.test(BOTTOMS_SPEC),
     "a prompt that names the wrong layer cannot be rescued by anything after it");
@@ -146,16 +162,23 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      because adding a stripe and altering a stripe are different edits, and the previous
      revision only forbade inventing a whole garment. */
   check("(3) it bans inventing, adding AND altering - all three verbs",
-    /Do NOT invent, add, or alter any details\.$/.test(TOPS_SPEC) &&
-    /Do NOT invent, add, or alter any details\.$/.test(BOTTOMS_SPEC),
+    /Do NOT invent, add, or alter any details\./.test(TOPS_SPEC) &&
+    /Do NOT invent, add, or alter any details\./.test(BOTTOMS_SPEC),
     "banning invention alone still permits embellishing the correct garment");
+  /* WHERE IT SITS DIFFERS, and only because bottoms appends its scoping pin after it -
+     the clamp is still the last thing said about the GARMENT on both branches. Asserted
+     so that "somebody appended a clause" cannot hide behind the loosened check above. */
+  check("...and nothing follows it except the bottoms scoping pin",
+    /Do NOT invent, add, or alter any details\.$/.test(TOPS_SPEC) &&
+    /Do NOT invent, add, or alter any details\. Keep the subject's upper body and background unmodified\.$/
+      .test(BOTTOMS_SPEC),
+    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
 
   /* ── WHAT CAME OFF THE WIRE, asserted as ABSENCE + a live restore path ──────
      Every one of these is a reproduced regression. They are RETIRED, not deleted: each
      constant is still on file, so a restore is one line in imageOnlyPrompt(). Asserting
      both halves is what stops a deliberate removal decaying into a forgotten one. */
   const RETIRED = [
-    ["the opposite-layer lock",     /preserve the subject's live/i,          /const KEEP_BOTTOMS = /],
     ["body-volume persistence",     /abdomen\/stomach depth/,                /const VOLUME_PERSISTENCE =/],
     ["frontal volume",              /In front-facing \(0-degree\) views/,    /const FRONTAL_VOLUME =/],
     ["closed back / un-knotted hem",/closed back and normal un-knotted hem/, /const CLOSED_BACK_HEM =/],
@@ -167,13 +190,41 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     check("...but still on file, so its restore is genuinely one line",
       constantRe.test(SRC), String(constantRe) + " not found in app.js");
   }
-  /* THE ONE LOSS THAT RE-OPENS A FIXED REPORT, singled out because it is not merely a
-     fidelity trade: the opposite-layer lock is what stopped a trouser try-on putting the
-     catalog model's shirt on the shopper. Scoping now rests entirely on the anchor naming
-     ONE region, so app.js has to carry that warning where a future debugger will find it. */
-  check("app.js flags the opposite-layer lock as the FIRST thing to restore",
+  /* ── THE OPPOSITE-LAYER LOCK IS NOT IN THAT TABLE, and that is the point ────
+     It is the one clause here that is no longer uniformly retired - it is BACK on bottoms
+     and still off on tops - and it is also the one that was never a constant: its wording
+     was inline in these two strings. So the table's shape ("absent from the wire, present
+     as a constant") would assert the wrong thing twice over. It previously did exactly
+     that, pointing at KEEP_BOTTOMS - a 271-character DENSE-era string that exists for its
+     own reasons - which made the check pass no matter what the anchors said.
+
+     What replaces it: the live scoping text on bottoms, its absence on tops, and a restore
+     path for tops that is real WORDING in app.js rather than a symbol that happens to
+     resolve. Bottoms is the branch the shirt-replacement report was filed through - a
+     trouser try-on that repainted the shopper's live top - so that is the branch that
+     carries the fix. */
+  check("bottoms scopes the fit to the LOWER BODY, not merely to 'the subject'",
+    /onto the subject's lower body\./.test(BOTTOMS_SPEC),
+    "an unscoped anchor is the exact configuration the shirt-replacement report was filed against");
+  check("...and bottoms pins the opposite layer and the background as unmodified",
+    /Keep the subject's upper body and background unmodified\.$/.test(BOTTOMS_SPEC),
+    "naming the region to edit is not the same as forbidding an edit to the other one");
+  check("...and it never pins the very layer it is replacing",
+    !/Keep the subject's lower body/.test(BOTTOMS_SPEC),
+    "a bottoms prompt that preserves the lower body cancels itself");
+  check("tops is still implicitly scoped - the documented, evidence-led asymmetry",
+    !/unmodified/.test(TOPS_SPEC) && !/upper body\./.test(TOPS_SPEC),
+    "if this fails the branches re-converged - update the asymmetry note in app.js with it");
+  check("app.js flags the opposite-layer lock as the FIRST thing to restore on tops",
     /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC),
     "the only removal here that re-opens a previously fixed report");
+  check("...and records which branch got it back, with the tops restore spelled out",
+    /RESTORED ON BOTTOMS, still absent on tops/.test(SRC) &&
+    /on tops the restore is the bottoms sentence with the two regions swapped/.test(SRC),
+    "a restore note that names no wording is not a restore path");
+  check("...with the pre-collapse KEEP_TOP wording still on file as the fallback",
+    /const KEEP_TOP\s+= " Keep the person's existing upper body exactly as it is in the live camera/.test(SRC),
+    "the DENSE-era constant is the alternative to mirroring the bottoms sentence");
 
   /* CONSTANT, not merely short. A template literal here is how a description creeps back
      in one field at a time, which is the exact history this mode is reacting to. */
