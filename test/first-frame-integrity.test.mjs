@@ -31,6 +31,9 @@
          call site that owns that meaning;
      §3  it cannot strand a session - a caller that never reports success costs a late
          start, loudly, never a black screen;
+     §3b the DISPLAY half - the feed is held at opacity 0 (not display:none, which would
+         stop the frames the reveal gate measures) until the one statement that adds
+         .show-live, and the inline styles are handed back to the stylesheet afterwards;
      §4  the prefetch that makes the gated window short: every item, not just dual-view
          ones, and warm bytes only - never a fetch moved onto the go-live path;
      §5  the frame budget sent to Decart, asserted as a deliberate figure rather than a
@@ -200,6 +203,75 @@ console.log("\n── §3 IT CANNOT STRAND A SESSION ──");
   check("...and disposing clears the ceiling timer with everything else",
     (() => { const d = makeThrottle({ gated: true }); d.throttle.dispose(); return d.state.timers.size === 0; })(),
     "a timer outliving its throttle fires into a session that no longer exists");
+}
+
+console.log("\n── §3b THE DISPLAY GATE: the second lock on the same door ──");
+{
+  /* THE INPUT GATE depends on Decart behaving as expected - no frames in, no frames out.
+     This one depends on nothing: whatever arrives, the shopper does not see it until Model
+     Ready. Both are wanted, and the second was ALSO its own bug, not merely belt-and-braces.
+
+     THE BUG: style.css hides #aiVideo until .show-live (added only at Model Ready), but
+     onRemoteStream set `aiVideo.style.display = "block"` the instant the remote stream
+     arrived - and an inline style beats a stylesheet rule. So the feed was displayed from
+     the first remote frame with the reveal class still absent, and the only thing between
+     it and the shopper was #scanOverlay: rgba(8,8,10,.34) plus a 3px blur. A 34%-opaque
+     scrim dims a garment; it does not hide one. */
+  const CSS = readFileSync(new URL("../fitting-room/style.css", import.meta.url), "utf8");
+  check("the scan overlay is a translucent scrim, so it was never hiding anything",
+    /\.scan-overlay \{[\s\S]{0,220}background: rgba\(8,8,10,\.34\)/.test(CSS),
+    "if this ever becomes opaque the gate is still right, but the diagnosis below changes");
+  check("...and the stylesheet still expects .show-live to be what reveals the feed",
+    /\.camera-card #aiVideo \{ display: none; \}/.test(CSS) &&
+    /\.camera-card\.show-live #aiVideo \{ display: block;/.test(CSS));
+
+  const onRemote = extract("onRemoteStream: (editedStream) => {", "onConnectionChange:");
+  check("the feed is held at opacity 0 the moment a stream arrives",
+    /gateAiFeed\(aiVideo\);/.test(onRemote),
+    "an inline display:block with nothing over it is the reported flash");
+  /* OPACITY, NOT display:none - and this is load-bearing rather than stylistic.
+     armFirstFrameBilling() detects Model Ready by SAMPLING this element (rVFC + a luma
+     read), so it has to keep decoding and presenting throughout the gated window. A
+     display:none video is not composited and may stop firing rVFC entirely, which would
+     deadlock the very gate this serves. */
+  check("...by opacity, so it keeps decoding and can still be sampled for Model Ready",
+    /aiVideo\.style\.display = "block";/.test(onRemote) &&
+    /function gateAiFeed\(aiVideo\) \{[\s\S]{0,160}opacity = "0";/.test(SRC) &&
+    !/function gateAiFeed\(aiVideo\) \{[\s\S]{0,160}display = "none"/.test(SRC),
+    "display:none would stop the frames the reveal gate is waiting to measure");
+
+  /* ONE REVEAL, in the same statement that flips the state class, so the pixels and the
+     documented state can never disagree. */
+  const reveal = extract("card().classList.add(\"show-live\");", "startLowerBodyGuard();");
+  check("the ONLY reveal is the statement that adds .show-live",
+    /revealAiFeed\(\);/.test(reveal) &&
+    (SRC.match(/revealAiFeed\(\)/g) || []).length === 2,   // the definition + the one call
+    "a second reveal site is a second way to show an unconditioned frame");
+  check("...and it fades rather than cuts",
+    /transition = `opacity \$\{AI_FEED_FADE_MS\}ms ease-out`/.test(SRC) &&
+    /const AI_FEED_FADE_MS = 220;/.test(SRC));
+  /* NO FIXED SLEEP. The "let the placeholder frames clear" pause already exists and is
+     evidence-based rather than a guess: MODEL_READY_STABLE_FRAMES consecutive qualifying
+     decodes spanning MODEL_READY_STABLE_MS. A fixed setTimeout on top would add dead time
+     to every healthy session and still not prove anything about the content. */
+  check("the settling window is measured, not slept through",
+    /const MODEL_READY_STABLE_FRAMES = 3;/.test(SRC) &&
+    /const MODEL_READY_STABLE_MS     = 300;/.test(SRC) &&
+    !/await new Promise\(r => setTimeout\(r, 200\)\)/.test(SRC),
+    "a fixed pause costs every session the same delay and proves nothing about the frame");
+
+  /* THE INLINE STYLES MUST NOT OUTLIVE THE SESSION. This is where the pre-existing clip
+     bug lived: teardown left an inline display:none that nothing ever cleared, so a
+     history clip added .show-clip - whose entire job is to display #aiVideo - and lost to
+     the leftover inline rule. Clearing hands the element back to the stylesheet. */
+  check("retiring the feed hands display AND opacity back to the stylesheet",
+    /function resetAiFeedVisibility\(\) \{[\s\S]{0,220}ai\.style\.opacity = "";[\s\S]{0,60}ai\.style\.display = "";/.test(SRC));
+  check("...and every path that retires or re-uses the element calls it",
+    (SRC.match(/resetAiFeedVisibility\(\)/g) || []).length === 4,   // definition + 2 teardowns + clip replay
+    `${(SRC.match(/resetAiFeedVisibility\(\)/g) || []).length} sites - expected the definition, both teardowns and the clip player`);
+  check("...including the history-clip player, which is different content in the same element",
+    /resetAiFeedVisibility\(\);\s*\/\/ a clip is different content/.test(SRC),
+    "a clip inheriting a dead session's opacity:0 renders nothing at all");
 }
 
 console.log("\n── §4 THE PREFETCH THAT KEEPS THE GATED WINDOW SHORT ──");

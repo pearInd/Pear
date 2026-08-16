@@ -3463,7 +3463,14 @@ function buildRealtimeConnectOpts(gen) {
       // video element so the garment warps/tracks the user in realtime.
       const aiVideo = document.querySelector("#aiVideo");
       aiVideo.srcObject = editedStream;
-      aiVideo.style.display = "block";   // make sure it's visible
+      /* display:block keeps it laid out, decoding and firing rVFC - which
+         armFirstFrameBilling() below depends on to detect Model Ready at all. What it does
+         NOT do any more is make it VISIBLE: gateAiFeed() holds it at opacity 0 until the
+         reveal, because an inline display:block was overriding the stylesheet rule that
+         was supposed to keep this hidden until .show-live, leaving only a 34%-opaque
+         scrim between the shopper and whatever Decart rendered first. See gateAiFeed(). */
+      aiVideo.style.display = "block";
+      gateAiFeed(aiVideo);
       aiVideo.style.transform = "none";  // edited feed is already correctly oriented
       // Force the video onto its own GPU compositing layer so the browser doesn't
       // re-rasterize it in software on every frame repaint. translateZ(0) is the
@@ -3823,6 +3830,7 @@ function teardown() {
   // it on top, and a stale srcObject would block the next session's first frame).
   const ai = $("aiVideo");
   if (ai) { ai.style.display = "none"; ai.srcObject = null; }
+  resetAiFeedVisibility();   // never leave a dead session's opacity:0 on a reused element
 
   // Bug 3 fix: clear every guard so the next try-on starts from a pristine state.
   connState = "idle";
@@ -4559,6 +4567,75 @@ function orientFadeEl() {
   card.appendChild(c);
   _orientFadeCanvas = c;
   return c;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   THE AI FEED'S VISIBILITY - the DISPLAY half of the conditioning gate
+   ══════════════════════════════════════════════════════════════════════════════
+   THE INPUT GATE (createThrottledInputStream) is the primary fix for the grey-sweater
+   flash: it withholds camera frames until the reference is acknowledged, so Decart never
+   generates a placeholder frame in the first place. This is the second lock on the same
+   door, and it exists because the first one depends on a remote service behaving as
+   expected while this one does not depend on anything at all.
+
+   THE HOLE IT CLOSES IS REAL AND WAS ITS OWN BUG. style.css hides #aiVideo until the card
+   carries .show-live - which is added only at Model Ready - but onRemoteStream() set
+   `aiVideo.style.display = "block"` the moment the remote stream arrived, and an INLINE
+   style beats a stylesheet rule. So the AI feed was displayed from the first remote frame,
+   with the reveal class still absent, and the only thing standing between it and the
+   shopper was #scanOverlay - which is `rgba(8,8,10,.34)` plus a 3px blur. A 34%-opaque
+   scrim does not hide a garment; it dims one. Whatever Decart rendered in that window was
+   visible through it, slightly darkened, which is exactly what the report describes.
+
+   OPACITY, NOT display:none, AND THAT IS DELIBERATE. armFirstFrameBilling() decides Model
+   Ready by SAMPLING this element - requestVideoFrameCallback plus a luma read - so it must
+   keep decoding and presenting frames throughout the gated window. A display:none video is
+   not composited and may stop firing rVFC entirely, which would deadlock the very gate
+   this is meant to serve. opacity:0 keeps the element in the render tree, decoding and
+   presenting exactly as before, and contributing nothing visible.
+   The two `ai.style.display !== "none"` readers (captureHoldFrame, freezeFinalFrame) are
+   therefore untouched: display still means what it always meant. */
+const AI_FEED_FADE_MS = 220;
+
+/* Hold the feed invisible while it decodes. Called from onRemoteStream, i.e. the instant
+   there is a stream at all - before which there is nothing to hide. */
+function gateAiFeed(aiVideo) {
+  if (!aiVideo) return;
+  aiVideo.style.transition = "none";
+  aiVideo.style.opacity = "0";
+}
+
+/* Fade it in. Called from the ONE place that already decides Model Ready - the same
+   statement that adds .show-live - so the pixels and the state class can never disagree.
+   A transition rather than a cut: by this point three consecutive qualifying frames have
+   decoded, so the content is settled and the fade is pure polish over a correct frame. */
+function revealAiFeed() {
+  const ai = $("aiVideo");
+  if (!ai) return;
+  ai.style.transition = `opacity ${AI_FEED_FADE_MS}ms ease-out`;
+  ai.style.opacity = "1";
+}
+
+/* Hand #aiVideo back to the stylesheet. MUST run wherever the element is retired or given
+   different content - a session teardown, or a history clip loading into the same player -
+   or that content inherits an opacity:0 from a session that is already over and renders
+   nothing at all.
+
+   IT CLEARS `display` TOO, AND THAT FIXES A SEPARATE PRE-EXISTING BUG. The teardown paths
+   set an inline display:none to undo onRemoteStream's inline display:block, and nothing
+   ever cleared it - so a history clip afterwards added .show-clip, whose whole job is
+   `.camera-card.show-clip #aiVideo { display: block; }`, and lost to the leftover inline
+   rule. The clip played with the element still hidden. Clearing rather than re-asserting
+   is the fix for both: the stylesheet's base rule already hides #aiVideo, so the visual
+   outcome at teardown is identical, and the state classes can govern again the way they
+   were written to. This is the ONE place inline visibility is undone, so there is no
+   second copy to forget. */
+function resetAiFeedVisibility() {
+  const ai = $("aiVideo");
+  if (!ai) return;
+  ai.style.transition = "";
+  ai.style.opacity = "";
+  ai.style.display = "";
 }
 
 /* Snapshot the live #aiVideo frame into the overlay and show it at full opacity with NO
@@ -10194,6 +10271,12 @@ function startBillingWindow(gen) {
   stopScanTimer();
   $("scanOverlay").hidden = true;
   card().classList.add("show-live");
+  /* THE ONLY PLACE THE FEED BECOMES VISIBLE, and it is deliberately the same statement
+     that flips the state class. Everything above this line has already been verified:
+     the garment apply resolved, the frame is non-black, and it stayed that way for
+     MODEL_READY_STABLE_FRAMES/_MS - so this fades in over content that is settled rather
+     than over content that is merely present. */
+  revealAiFeed();
   startLowerBodyGuard();   // no-op unless LOWER_BODY_GUARD_ENABLED - see its own comment
   /* Late-entry recovery starts with the billed window: from here on, a shopper who
      drifts out of shot and steps back in gets the garment re-conditioned into the
@@ -11202,6 +11285,7 @@ function stopBilling() {
   if (realtimeInput) { try { realtimeInput.getTracks().forEach((t) => t.stop()); } catch (_) {} realtimeInput = null; }
   const ai = $("aiVideo");
   if (ai) { ai.style.display = "none"; ai.srcObject = null; }
+  resetAiFeedVisibility();   // never leave a dead session's opacity:0 on a reused element
   connState = "idle";
   connecting = false;
   setConn("idle");
@@ -14135,6 +14219,8 @@ function playClipInMainPlayer(url, idx, ts) {
   if (!ai || !url) { if (idx != null) openFitLightbox(idx); return; }
 
   resetToLive();                       // clean any frozen result / stale replay first (clears activeClipTs)
+  resetAiFeedVisibility();             // a clip is different content - it must not inherit
+                                       // the conditioning gate's opacity from a past session
   ai.srcObject = null;                 // detach any (dead) WebRTC stream
   ai.src = url;
   ai.loop = true; ai.muted = true; ai.playsInline = true;
