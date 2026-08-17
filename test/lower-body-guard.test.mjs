@@ -46,10 +46,27 @@ function extract(startMarker, endMarker) {
   return APP.slice(start, end);
 }
 
-console.log("── §1 SHIPS OFF: the config default, and what that actually gates ──");
+console.log("── §1 SHIPS ON NOW: the config default, and why it moved ──");
 {
-  check("LOWER_BODY_GUARD_ENABLED defaults to false in the REAL config module",
-    CONFIG.LOWER_BODY_GUARD_ENABLED === false, String(CONFIG.LOWER_BODY_GUARD_ENABLED));
+  /* ── IT WAS OFF FOR ONE STATED REASON, AND THAT REASON IS GONE ──────────────
+     config.js: "there is no body-part detector in this codebase to derive it from the
+     shopper's ACTUAL waist position, and adding one means a multi-MB WASM+model CDN
+     dependency". MediaPipe Pose was subsequently taken on for the body-presence gate and
+     now runs CONTINUOUSLY for the topology monitor - it reports LEFT_HIP/RIGHT_HIP, the
+     exact landmark that objection said was unobtainable. The boundary is the shopper's own
+     hip line, re-read live, so the seam-across-a-shirt-hem failure the objection describes
+     is one a hip-derived boundary structurally cannot have.
+
+     AND THE FAILURE IT PREVENTS IS NOW REPRODUCED: trying on a SHIRT, the shopper lifts a
+     leg into frame wearing light blue shorts and Decart renders black long trousers. The
+     prompt forbids that in words; Decart's set() has no mask channel, so this is the only
+     mechanism in the pipeline that can make it a guarantee rather than a request. */
+  check("LOWER_BODY_GUARD_ENABLED is ON in the REAL config module",
+    CONFIG.LOWER_BODY_GUARD_ENABLED === true, String(CONFIG.LOWER_BODY_GUARD_ENABLED));
+  check("...and config.js records that the objection was answered, not overruled",
+    /THAT DEPENDENCY IS ALREADY HERE/.test(
+      readFileSync(new URL("../fitting-room/config.js", import.meta.url), "utf8")),
+    "flipping a documented kill switch without answering its reason is how a fix regresses");
   check("LOWER_BODY_GUARD_FRAC is a sane fraction (0,1) - not a raw pixel count, not >1",
     typeof CONFIG.LOWER_BODY_GUARD_FRAC === "number" &&
     CONFIG.LOWER_BODY_GUARD_FRAC > 0 && CONFIG.LOWER_BODY_GUARD_FRAC < 1,
@@ -72,7 +89,8 @@ const code = extract("let lowerBodyGuardRAF = null;", "/* Paint the final dresse
    timing, not a real guarantee, and not how the calibration tests in §7-§8 are built. */
 function harness({ enabled = true, frac = 0.34, isLiveVal = true,
                     webcamW = 1000, webcamH = 1800, autoCalibrate = false,
-                    headToWaistUnits = 3.8, faceDetectorAvailable = false, faces = [] } = {}) {
+                    headToWaistUnits = 3.8, faceDetectorAvailable = false, faces = [],
+                    bottomsActive = false, poseLine = null, poseTorso = 0.3 } = {}) {
   const rafCalls = [];
   let rafHandle = 0;
   const canvasCtx = { calls: [] };
@@ -118,6 +136,17 @@ function harness({ enabled = true, frac = 0.34, isLiveVal = true,
     LOWER_BODY_GUARD_AUTO_CALIBRATE: autoCalibrate,
     LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS: headToWaistUnits,
     $: (id) => (id === "webcam" ? webcamEl : id === "lowerBodyGuard" ? canvasEl : null),
+    /* The guard is category-aware now: it protects whichever region is NOT being fitted,
+       so it has to know what is being fitted. §11 drives both categories. */
+    isBottomsGarment: () => !!bottomsActive,
+    activeItem: { id: "x" },
+    BODY_GUARD_MARGIN_FRAC: CONFIG.BODY_GUARD_MARGIN_FRAC,
+    POSE_LANDMARK: Object.freeze({
+      LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12, LEFT_HIP: 23, RIGHT_HIP: 24,
+    }),
+    torsoReadable: () => poseLine !== null,
+    BODY_TRACK_MIN_VISIBILITY: 0.5,
+    poseLine, poseTorso,
     card: () => cardEl,
     isLive: () => isLiveVal,
     document: documentStub,
@@ -127,8 +156,13 @@ function harness({ enabled = true, frac = 0.34, isLiveVal = true,
     cancelAnimationFrame: (h) => { rafCalls.push({ cancelled: h }); },
   };
   const fn = new Function(...Object.keys(sandbox),
-    code + "\nreturn { startLowerBodyGuard, stopLowerBodyGuard, calibrateLowerBodyGuard," +
-    " state: () => ({ lowerBodyGuardRAF, lowerBodyGuardFrac }) };");
+    code +
+    /* Seed the live hip line the way the pose loop would, so §11 can drive a pose-derived
+       boundary without reproducing updateBodyGuardLine()'s landmark plumbing. */
+    "\nif (poseLine !== null) { bodyGuardLine = poseLine; bodyGuardTorso = poseTorso; }" +
+    "\nreturn { startLowerBodyGuard, stopLowerBodyGuard, calibrateLowerBodyGuard," +
+    " guardedRegion, guardBand, paintGuardBand, updateBodyGuardLine," +
+    " state: () => ({ lowerBodyGuardRAF, lowerBodyGuardFrac, bodyGuardLine }) };");
   return {
     api: fn(...Object.values(sandbox)), rafCalls, canvasCtx, canvasEl, classList, webcamEl,
     calibCtx, calibCanvasEl, detectCalls: () => detectCalls,
@@ -387,11 +421,18 @@ console.log("\n── §9 LIFECYCLE WIRING: every real exit path stops it ──
 
 console.log("\n── §10 freezeFinalFrame(): the KEPT snapshot gets the same protection ──");
 {
+  /* ── THREE CALLERS, ONE HELPER ─────────────────────────────────────────────
+     The band, its boundary and the mirror correction used to be written out separately in
+     the live guard and again in freezeFinalFrame. There are three consumers now - the live
+     canvas, the RECORDER and the frozen frame - and three copies of this arithmetic is
+     three chances for the saved artefact to disagree with what the shopper watched. They
+     all call paintGuardBand(), so the properties below are asserted where they now live. */
   const ff = extract("function freezeFinalFrame()", "\n/* ── Live countdown overlay");
+  const gb = extract("function paintGuardBand(ctx, webcam, w, h)", "\nfunction startLowerBodyGuard");
   check("bakes the guard only when the AI-edited stream was the primary source",
-    /src === ai/.test(ff), ff.slice(0, 400));
+    /if \(!mirror\) paintGuardBand\(ctx, webcam, w, h\);/.test(ff), ff.slice(-500));
   check("gated on the same config flag as the live view - one on/off switch, not two",
-    /LOWER_BODY_GUARD_ENABLED && src === ai/.test(ff));
+    /if \(!LOWER_BODY_GUARD_ENABLED/.test(gb), gb.slice(0, 300));
   check("does NOT apply when the fallback branch (raw webcam, no AI edit at all) was used",
     !/mirror && LOWER_BODY_GUARD_ENABLED/.test(ff),
     "the webcam-fallback branch has nothing for the guard to protect against");
@@ -399,10 +440,90 @@ console.log("\n── §10 freezeFinalFrame(): the KEPT snapshot gets the same p
         "        resolutions can legitimately differ - reusing one offset for both would\n" +
         "        silently misalign the composited band on any camera that doesn't happen\n" +
         "        to match the AI stream's exact resolution)",
-    /const srcBandY = Math\.round\(webcam\.videoHeight/.test(ff) &&
-    /const dstBandY = Math\.round\(h /.test(ff), ff);
+    /const dst = guardBand\(h\);/.test(gb) &&
+    /const src = guardBand\(webcam\.videoHeight\);/.test(gb), gb);
   check("a failed guard paint is caught and does not fail the whole snapshot",
-    /catch \(_\) \{ \/\* best-effort/.test(ff));
+    /catch \(_\) \{[\s\S]{0,160}best-effort/.test(gb), gb.slice(-400));
+  /* THE RECORDER IS THE THIRD CONSUMER, and the one that was silently missing: its paint
+     loop draws #aiVideo directly and has never seen the overlay canvases stacked over it,
+     so without this the saved clip and poster would show the invented garment the live
+     view was protecting the shopper from. */
+  const rec = extract("const beginRecorder = () => {", "\n/** Halt the canvas paint loop");
+  check("the RECORDER bakes it too, so the clip cannot disagree with the live view",
+    /ctx\.drawImage\(video, 0, 0, w, h\);\s*\n\s*paintGuardBand\(ctx, \$\("webcam"\), w, h\);/.test(rec),
+    rec.slice(-400));
+}
+
+console.log("\n── §10b CATEGORY-AWARE: it guards whichever region is NOT being fitted ──");
+{
+  /* THE NAMES SAY "LOWER BODY"; THE BEHAVIOUR IS "THE NON-TARGET REGION". The feature was
+     built for tops, where the un-fitted half is always the lower body. A BOTTOMS try-on has
+     the mirror failure - step back, the torso enters frame, and a shirt is invented - so
+     the guard has to move to the other half. The DOM id and these function names were left
+     alone deliberately (stable identifiers with history in three files); guardedRegion() is
+     the thing to read. */
+  const tops = harness({ bottomsActive: false, poseLine: 0.6, poseTorso: 0.3 });
+  const bots = harness({ bottomsActive: true,  poseLine: 0.6, poseTorso: 0.3 });
+  check("a TOPS try-on guards the LOWER body",
+    tops.api.guardedRegion() === "lower");
+  check("a BOTTOMS try-on guards the UPPER body - the mirror failure",
+    bots.api.guardedRegion() === "upper",
+    "a shopper stepping back during a trousers session gets an invented shirt otherwise");
+
+  const H = 1000;
+  const lower = tops.api.guardBand(H), upper = bots.api.guardBand(H);
+  check("...and the two bands are on opposite sides of the hip line, never overlapping",
+    lower.y1 === H && upper.y0 === 0 && upper.y1 < lower.y0,
+    JSON.stringify({ lower, upper }));
+
+  /* THE MARGIN ALWAYS PUSHES AWAY FROM THE GARMENT BEING FITTED. The hip line is where the
+     body halves meet, not where a garment ends: a shirt hem falls a little below the hips
+     and a waistband rides a little above. Guarding right at the line would clip whichever
+     one overhangs - the seam-across-a-hem defect this feature was held back for. */
+  const hipPx = Math.round(H * 0.6);
+  check("the margin pushes the boundary DOWN for tops, clear of a long shirt hem",
+    lower.y0 > hipPx, `band starts at ${lower.y0}, hips at ${hipPx}`);
+  check("...and UP for bottoms, clear of a high waistband",
+    upper.y1 < hipPx, `band ends at ${upper.y1}, hips at ${hipPx}`);
+  check("...scaled by TORSO length, so it means the same close up and far back",
+    /const margin = \(bodyGuardTorso \|\| 0\) \* BODY_GUARD_MARGIN_FRAC;/.test(APP) &&
+    CONFIG.BODY_GUARD_MARGIN_FRAC > 0 && CONFIG.BODY_GUARD_MARGIN_FRAC < 0.5,
+    String(CONFIG.BODY_GUARD_MARGIN_FRAC));
+}
+
+console.log("\n── §10c THE BOUNDARY IS THE SHOPPER'S OWN HIP LINE ──");
+{
+  /* This is the objection config.js documented as the reason to ship disabled - "a GUESS
+     calibrated to nothing about the actual shopper" - answered rather than overruled. */
+  const posed = harness({ poseLine: 0.62, poseTorso: 0.3 });
+  const band = posed.api.guardBand(1000);
+  check("with a pose reading the band is derived from the hips, not the fraction",
+    band.source === "pose", JSON.stringify(band));
+  check("...and it tracks the shopper: a higher hip line moves the band up with it",
+    harness({ poseLine: 0.45, poseTorso: 0.3 }).api.guardBand(1000).y0 <
+    harness({ poseLine: 0.75, poseTorso: 0.3 }).api.guardBand(1000).y0);
+  /* THE FALLBACK SURVIVES, for frames before the detector has a reading - a browser with
+     no WebAssembly, a dead CDN, landmarks below the tracking bar. Guarding on a rough
+     boundary beats not guarding at all now that the failure it prevents is reproduced. */
+  const cold = harness({ poseLine: null, frac: 0.34 });
+  const coldBand = cold.api.guardBand(1000);
+  check("with NO pose reading it falls back to the static/calibrated fraction",
+    coldBand.source === "fraction" && coldBand.y0 === 660 && coldBand.y1 === 1000,
+    JSON.stringify(coldBand));
+  /* The static fraction only ever described a LOWER band. Re-using that number for an
+     upper-body guard would be a guess about a guess, and the bottoms direction has no
+     reproduced report yet - so it guards nothing rather than guessing. */
+  check("...but a BOTTOMS session with no pose reading guards nothing, rather than guessing",
+    harness({ bottomsActive: true, poseLine: null }).api.guardBand(1000) === null,
+    "the static fraction describes a lower band; inverting it would be a guess about a guess");
+  check("the live hip line is fed from the pose loop that is already running",
+    /updateBodyGuardLine\(result\);/.test(APP) &&
+    /function updateBodyGuardLine\(result\)/.test(APP),
+    "a second detector pass for this would be a whole extra inference per tick");
+  check("...and is cleared with the session, like the calibration beside it",
+    /bodyGuardLine = null;\s*\n\s*bodyGuardTorso = null;/.test(
+      extract("function stopLowerBodyGuard()", "\n/* Paint the final dressed frame")),
+    "a hip line describes one specific body - it must not survive into another shopper's session");
 }
 
 console.log("\n── §11 ADDITIVE ONLY: the DOM/CSS layer, and that #aiVideo is untouched ──");

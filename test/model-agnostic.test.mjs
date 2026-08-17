@@ -109,7 +109,7 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      logos, and cut", which states the same rule inside the anchor where it cannot shed -
      and adds logos and cut, which the old wording did not name. */
   check("the shipped prompt names the reference as the only source of cloth",
-    /the exact reference shirt/.test(out) &&
+    /the reference shirt/.test(out) &&
     /Fit ONLY/.test(out), out);
   check("...the discard is still carried by exhaustion, not stated outright",
     !/ignoring the original model's body/.test(out), out);
@@ -134,7 +134,7 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      It used to be a ranking argument (MED, shed under pressure); it is now structural. */
   for (const prof of [false, true]) {
     check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
-      /Fit ONLY the exact reference shirt/
+      /Fit ONLY the reference shirt/
         .test(api.buildCompositePrompt(TEE, "front", prof)));
   }
 
@@ -222,8 +222,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  389, 380],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 408, 399],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  365, 369],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 384, 388],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -268,7 +268,7 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
     check(`the category anchor survives a pathologically long name (inProfile=${prof})`,
-      /Fit ONLY the exact reference shirt/.test(out),
+      /Fit ONLY the reference shirt/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }

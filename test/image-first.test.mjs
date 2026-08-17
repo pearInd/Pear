@@ -119,17 +119,16 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
    See CATEGORY_ANCHOR in app.js for the full list of what came off the wire, what went
    back on, and the restore path for each. */
 const TOPS_SPEC =
-  "Fit ONLY the exact reference shirt onto the subject's upper body. Dynamically adjust" +
-  " the shirt cut, shoulder width, and torso drape to match the subject's exact live" +
-  " body width and build (narrow or wide). Strictly preserve the subject's actual live" +
-  " lower clothing/pants exactly as seen on camera without changing, inventing, or" +
-  " replacing them.";
+  "Fit ONLY the reference shirt onto the subject's upper torso. For any lower body" +
+  " parts, legs, or shorts that enter the camera frame during the video, pass through" +
+  " and strictly preserve the subject's LIVE camera feed clothing (color, pattern," +
+  " length) without generating, replacing, or inventing any new pants or garments.";
 const BOTTOMS_SPEC =
-  "Fit ONLY the exact reference pants/shorts onto the subject's lower body. Dynamically" +
-  " adjust the waistline, leg width, and length to match the subject's exact live lower" +
-  " body build (narrow or wide). Strictly preserve the subject's actual live upper" +
-  " clothing/shirt exactly as seen on camera without changing, inventing, or replacing" +
-  " it.";
+  "Fit ONLY the reference pants/shorts onto the subject's lower body. For any upper" +
+  " body parts, torso, or shirt that enter the camera frame during the video, pass" +
+  " through and strictly preserve the subject's LIVE camera feed clothing (color," +
+  " pattern, length) without generating, replacing, or inventing any new top or" +
+  " garments.";
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
@@ -152,12 +151,12 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      clause cannot be slipped onto either branch, which is the regression this whole
      suite exists to catch. §1 then checks each of the three per branch, below. */
   const sentences = (s) => s.split(/(?<=\.)\s+/).filter(Boolean);
-  check("both branches are exactly three sentences: bind, adapt, preserve",
-    sentences(TOPS_SPEC).length === 3 && sentences(BOTTOMS_SPEC).length === 3,
+  check("both branches are exactly two sentences: scope, then pass-through",
+    sentences(TOPS_SPEC).length === 2 && sentences(BOTTOMS_SPEC).length === 2,
     `tops=${sentences(TOPS_SPEC).length} bottoms=${sentences(BOTTOMS_SPEC).length}`);
-  check("...and both open on the SAME five words - the exclusive-scope binding",
-    TOPS_SPEC.startsWith("Fit ONLY the exact reference ") &&
-    BOTTOMS_SPEC.startsWith("Fit ONLY the exact reference "),
+  check("...and both open on the SAME three words - the exclusive-scope binding",
+    TOPS_SPEC.startsWith("Fit ONLY the reference ") &&
+    BOTTOMS_SPEC.startsWith("Fit ONLY the reference "),
     `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
 
   /* THREE SENTENCES, THREE JOBS. Asserted individually because the failure mode of a
@@ -171,13 +170,13 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      let the model deform a drape it had already produced. */
   /* "Fit ONLY" scopes the whole instruction in the first two words - before any noun is
      introduced - which is where a leading-token model is most sensitive. */
-  const LEAD = /^Fit ONLY the exact reference (shirt|pants\/shorts) onto the subject's (upper|lower) body\./;
+  const LEAD = /^Fit ONLY the reference (shirt|pants\/shorts) onto the subject's (upper torso|lower body)\./;
   check("(1) it scopes to ONE garment and ONE region, in the first sentence",
     LEAD.test(TOPS_SPEC) && LEAD.test(BOTTOMS_SPEC),
     "an unscoped anchor is what let a try-on claim the whole reference");
-  check("...and each branch names the region it dresses, and only that one",
-    /upper body/.test(TOPS_SPEC) && !/lower body\./.test(TOPS_SPEC) &&
-    /lower body/.test(BOTTOMS_SPEC) && !/upper body\./.test(BOTTOMS_SPEC),
+  check("...and each branch FITS one region only",
+    /onto the subject's upper torso\./.test(TOPS_SPEC) &&
+    /onto the subject's lower body\./.test(BOTTOMS_SPEC),
     "a lower-body garment fitted to 'the body' is report 1 through the new wording");
   /* (2) THE ADAPTATION, which is the sentence the stretched-garment report exists for. It
      must instruct a re-drape AND name the two ways of faking one, because "adapt to the
@@ -187,36 +186,53 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      three times and WIDTH not once - so a slender build got a shirt that hung off the
      shoulders and a broad one got a clipped, warped drape. Both directions are named
      explicitly, so it cannot be read as "make it bigger". */
-  check("(2) it demands a DYNAMIC adjustment to the subject's live WIDTH and build",
-    /Dynamically adjust the shirt cut, shoulder width, and torso drape/.test(TOPS_SPEC) &&
-    /Dynamically adjust the waistline, leg width, and length/.test(BOTTOMS_SPEC));
-  check("...naming BOTH directions, so it cannot read as 'make it bigger'",
-    /body width and build \(narrow or wide\)/.test(TOPS_SPEC) &&
-    /lower body build \(narrow or wide\)/.test(BOTTOMS_SPEC),
+  /* (2) THE EVENT, NOT JUST THE REGION - and this is what the previous lock was missing.
+     It said "preserve the subject's actual live lower clothing", which a model can read as
+     describing what was in frame WHEN THE SESSION STARTED. In the report, nothing was: the
+     legs entered at 00:03, so that sentence had no referent at 00:00 and the region was
+     effectively unstated by the time it mattered. This names the entry itself. */
+  check("(2) it names the ENTRY of the non-target region mid-video, not just the region",
+    /that enter the camera frame during the video/.test(TOPS_SPEC) &&
+    /that enter the camera frame during the video/.test(BOTTOMS_SPEC),
+    "a region that is out of frame at t=0 has no referent unless its arrival is named");
+  check("...enumerating what actually enters, so 'legs' cannot be read as 'not clothing'",
+    /lower body parts, legs, or shorts/.test(TOPS_SPEC) &&
+    /upper body parts, torso, or shirt/.test(BOTTOMS_SPEC),
     `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
   /* (3) THE NON-TARGET LOCK - the second report, and the sentence that closes it. Try on a
      shirt, step back so your legs enter frame, and the model invented trousers nobody
      asked for. This names the shopper's OWN clothes as the thing to preserve, sources them
      from the camera, and bans all three edits on them. */
-  check("(3) it closes by locking the OPPOSITE layer to the live camera feed",
-    /Strictly preserve the subject's actual live lower clothing\/pants exactly as seen on camera/.test(TOPS_SPEC) &&
-    /Strictly preserve the subject's actual live upper clothing\/shirt exactly as seen on camera/.test(BOTTOMS_SPEC),
-    "a region that enters frame with nothing said about it is what gets reinterpreted");
-  check("...banning all three edits on it - changing, inventing AND replacing",
-    /without changing, inventing, or replacing them\.$/.test(TOPS_SPEC) &&
-    /without changing, inventing, or replacing it\.$/.test(BOTTOMS_SPEC),
+  check("(3) it routes that region to the LIVE CAMERA FEED, by name",
+    /pass through and strictly preserve the subject's LIVE camera feed clothing/.test(TOPS_SPEC) &&
+    /pass through and strictly preserve the subject's LIVE camera feed clothing/.test(BOTTOMS_SPEC),
+    "'preserve' without a source still leaves the model to decide what it is preserving");
+  /* LENGTH is the attribute the report turned on: light blue SHORTS came back as long
+     black trousers, so colour and pattern alone would not have described the failure. */
+  check("...naming colour, pattern AND length - length is what the report turned on",
+    /\(color, pattern, length\)/.test(TOPS_SPEC) && /\(color, pattern, length\)/.test(BOTTOMS_SPEC),
+    "shorts rendered as long trousers is a LENGTH failure before it is a colour one");
+  check("...and banning all three edits - generating, replacing AND inventing",
+    /without generating, replacing, or inventing any new pants or garments\.$/.test(TOPS_SPEC) &&
+    /without generating, replacing, or inventing any new top or garments\.$/.test(BOTTOMS_SPEC),
     "forbidding invention alone still permits altering what is already there");
+  /* THE PROMPT IS THE ASK; THE GUARD IS THE GUARANTEE. Decart's set() has no mask channel,
+     so this wording is a probabilistic bias and nothing more. Asserted together so the
+     pair cannot be separated by a later edit that trusts the text alone. */
+  check("...and the hard guarantee ships alongside it, not instead of it",
+    /function paintGuardBand\(ctx, webcam, w, h\)/.test(SRC) &&
+    /LOWER_BODY_GUARD_ENABLED: true/.test(CFG),
+    "a prompt that asks for pass-through with nothing enforcing it is a request, not a fix");
   /* SYMMETRIC, and that is new. The lock sat on bottoms alone for three revisions on a
      one-branch-at-a-time-on-evidence rule, then came off entirely. Both branches carry it
      now: no report has been filed of a tops try-on repainting real trousers, but the
      mechanism is identical and the evidence for one direction is evidence for the other. */
   check("...on BOTH branches - the asymmetry is deliberately over",
-    /Strictly preserve the subject's actual live/.test(TOPS_SPEC) &&
-    /Strictly preserve the subject's actual live/.test(BOTTOMS_SPEC));
-  check("...and neither pins the very layer it is replacing",
-    !/preserve the subject's actual live upper clothing/.test(TOPS_SPEC) &&
-    !/preserve the subject's actual live lower clothing/.test(BOTTOMS_SPEC),
-    "a prompt that preserves the layer it is editing cancels itself");
+    /LIVE camera feed clothing/.test(TOPS_SPEC) && /LIVE camera feed clothing/.test(BOTTOMS_SPEC));
+  check("...and neither passes through the very layer it is fitting",
+    !/upper body parts, torso, or shirt/.test(TOPS_SPEC) &&
+    !/lower body parts, legs, or shorts/.test(BOTTOMS_SPEC),
+    "a prompt that passes through the layer it is editing cancels itself");
   /* THE RUNTIME HALF. This wording promises a per-frame fit, and text alone cannot keep
      that promise: with a constant prompt and the reference already on the wire,
      applyGarment() dispatches nothing at all. Asserted here, in the suite that owns the
@@ -256,6 +272,12 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     ["the garment's own texture/pattern/colour clamp",
                                     /Strictly preserve the original shirt texture/,
                                     /const STRICT_REFERENCE_LOCK =/],
+    /* NEW: the build/width sentence. The morphology monitor that decides WHEN to
+       re-condition is untouched, so what is retired is the prompt's half of the width
+       axis - watch for a loose drape on a slender build. */
+    ["the build/width adjustment sentence",
+                                    /Dynamically adjust the shirt cut, shoulder width/,
+                                    /the build\/width adjustment sentence \("Dynamically adjust the shirt cut,/],
   ];
   for (const [label, absent, constantRe] of RETIRED) {
     check(label + ": off the wire on BOTH branches",
@@ -279,8 +301,8 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
   check("bottoms still scopes the fit to the LOWER BODY, in its lead",
     /onto the subject's lower body\./.test(BOTTOMS_SPEC),
     "an unscoped anchor is the exact configuration the shirt-replacement report was filed against");
-  check("...and tops scopes to the UPPER body in exactly the same place",
-    /onto the subject's upper body\./.test(TOPS_SPEC));
+  check("...and tops scopes to the UPPER TORSO in exactly the same place",
+    /onto the subject's upper torso\./.test(TOPS_SPEC));
   check("app.js flags the opposite-layer lock as the FIRST thing to restore on tops",
     /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC),
     "the note stays even though the clause is back - it is the record of why");

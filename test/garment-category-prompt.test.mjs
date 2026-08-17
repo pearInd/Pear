@@ -154,7 +154,7 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
      invent/add/alter clamp and the explicit "keep the upper body unmodified" pin. Both
      are retired-with-a-restore-path in app.js; image-first.test.mjs §1 owns that table. */
   check("opens by scoping to ONE garment and ONE region, nothing before it",
-    bottomsPrompt.indexOf("Fit ONLY the exact reference pants/shorts onto the subject's lower body.") === 0,
+    bottomsPrompt.indexOf("Fit ONLY the reference pants/shorts onto the subject's lower body.") === 0,
     bottomsPrompt);
   /* THE SCOPING SURVIVED THE REWRITE, and that is what this pair of checks is for: the
      region naming moved INTO the lead rather than being dropped with the pin. */
@@ -162,19 +162,21 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
     /onto the subject's lower body\./.test(bottomsPrompt),
     "an unscoped anchor is what let a trouser try-on claim the whole reference");
   check("...and never claims the upper garment as the thing to FIT",
-    !/reference shirt/.test(bottomsPrompt) && !/onto the subject's upper body/.test(bottomsPrompt),
+    !/reference shirt/.test(bottomsPrompt) && !/onto the subject's upper torso/.test(bottomsPrompt),
     bottomsPrompt);
   /* THE PER-FRAME INSTRUCTION, which is the sentence this revision exists for. Both
      halves are asserted: adapt to the live shape, and do not fake it by deforming cloth. */
-  check("...instructs a live adjustment of the waistline, leg width and length",
-    /Dynamically adjust the waistline, leg width, and length to match the subject's exact live lower body build/
+  /* THE NON-TARGET LOCK, aimed at the MOMENT it fails. Step back mid-session in a trouser
+     try-on and the torso enters frame; the previous wording described the region but not
+     its arrival, so at t=0 - when the torso was out of shot - it had nothing to point at. */
+  check("...names the ENTRY of the upper body mid-video, not just the region",
+    /For any upper body parts, torso, or shirt that enter the camera frame during the video/
       .test(bottomsPrompt), bottomsPrompt);
-  check("...naming BOTH directions, so it cannot read as 'make it bigger'",
-    /\(narrow or wide\)/.test(bottomsPrompt), bottomsPrompt);
-  /* THE NON-TARGET LOCK. Step back mid-session in a trouser try-on and the torso enters
-     frame; without this the model invents a shirt nobody asked for. */
-  check("...and closes by locking the live SHIRT to the camera, unaltered",
-    /Strictly preserve the subject's actual live upper clothing\/shirt exactly as seen on camera without changing, inventing, or replacing it\.$/
+  check("...and routes it to the LIVE camera feed by name, with length among the attributes",
+    /pass through and strictly preserve the subject's LIVE camera feed clothing \(color, pattern, length\)/
+      .test(bottomsPrompt), bottomsPrompt);
+  check("...banning generation, replacement AND invention of a top",
+    /without generating, replacing, or inventing any new top or garments\.$/
       .test(bottomsPrompt), bottomsPrompt);
 
   /* THE SIZE PROPERTY IS STILL A FIX, so it is asserted as a number rather than trusted
@@ -191,13 +193,12 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
 
 console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour ──");
 {
-  check("scopes to the EXACT reference shirt and the upper body, nothing before it",
-    topsPrompt.indexOf("Fit ONLY the exact reference shirt onto the subject's upper body.") === 0,
+  check("scopes to the reference shirt and the upper TORSO, nothing before it",
+    topsPrompt.indexOf("Fit ONLY the reference shirt onto the subject's upper torso.") === 0,
     topsPrompt);
-  check("...and carries the same build-adjustment and non-target lock as bottoms",
-    /Dynamically adjust the shirt cut, shoulder width, and torso drape/.test(topsPrompt) &&
-    /Strictly preserve the subject's actual live lower clothing\/pants exactly as seen on camera without changing, inventing, or replacing them\.$/
-      .test(topsPrompt),
+  check("...and carries the mirror of the bottoms non-target lock",
+    /For any lower body parts, legs, or shorts that enter the camera frame during the video/.test(topsPrompt) &&
+    /without generating, replacing, or inventing any new pants or garments\.$/.test(topsPrompt),
     topsPrompt);
 
   /* ── ONE SHAPE, ONE DELIBERATE DIVERGENCE ───────────────────────────────────
@@ -207,8 +208,8 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      one this suite exists for: WHICH region the anchor claims. image-first.test.mjs §1
      owns the sentence-by-sentence contract. */
   check("both open on the same exclusive-scope binding",
-    topsPrompt.startsWith("Fit ONLY the exact reference ") &&
-    bottomsPrompt.startsWith("Fit ONLY the exact reference "),
+    topsPrompt.startsWith("Fit ONLY the reference ") &&
+    bottomsPrompt.startsWith("Fit ONLY the reference "),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
   /* ── EACH NAMES BOTH REGIONS NOW, AND THAT IS THE POINT ────────────────────
      The old rule was "each branch mentions its own garment and never the other's". It
@@ -216,16 +217,16 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      a tops prompt that never says "pants" cannot tell the model to leave them alone. What
      replaces it is the stronger property: each branch FITS one region and PRESERVES the
      other, and never the reverse. */
-  check("...and each FITS its own region while PRESERVING the other",
-    /Fit ONLY the exact reference shirt/.test(topsPrompt) &&
-    /preserve the subject's actual live lower clothing\/pants/.test(topsPrompt) &&
-    /Fit ONLY the exact reference pants\/shorts/.test(bottomsPrompt) &&
-    /preserve the subject's actual live upper clothing\/shirt/.test(bottomsPrompt),
+  check("...and each FITS its own region while PASSING THROUGH the other",
+    /Fit ONLY the reference shirt/.test(topsPrompt) &&
+    /lower body parts, legs, or shorts/.test(topsPrompt) &&
+    /Fit ONLY the reference pants\/shorts/.test(bottomsPrompt) &&
+    /upper body parts, torso, or shirt/.test(bottomsPrompt),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
-  check("...and neither preserves the very layer it is fitting",
-    !/preserve the subject's actual live upper clothing/.test(topsPrompt) &&
-    !/preserve the subject's actual live lower clothing/.test(bottomsPrompt),
-    "a prompt that preserves the layer it is editing cancels itself");
+  check("...and neither passes through the very layer it is fitting",
+    !/upper body parts, torso, or shirt/.test(topsPrompt) &&
+    !/lower body parts, legs, or shorts/.test(bottomsPrompt),
+    "a prompt that passes through the layer it is editing cancels itself");
 
   /* ── THE ASYMMETRY ITSELF, asserted so it cannot drift by accident ───────────
      Tops does NOT carry the opposite-layer lock. That is the one-branch-at-a-time-on-
@@ -241,7 +242,8 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      the model invents trousers - so both branches carry it, and app.js's asymmetry note
      is history rather than live policy. */
   check("tops DOES carry the opposite-layer lock now - the asymmetry is over",
-    /preserve the subject's actual live lower clothing\/pants/.test(topsPrompt),
+    /lower body parts, legs, or shorts/.test(topsPrompt) &&
+    /LIVE camera feed clothing/.test(topsPrompt),
     `the report that closed the asymmetry was a tops try-on inventing trousers: ${topsPrompt}`);
   check("the opposite-layer lock is recorded in app.js with a per-branch restore path",
     /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC) &&
