@@ -24,7 +24,8 @@
  * @property {number}   BODY_TOPOLOGY_SAMPLE_MS Cadence of the live pose loop that feeds both the presence watcher and the topology monitor (ms).
  * @property {number}   BODY_TRACK_MIN_VISIBILITY Per-landmark visibility bar for TRACKING (below the gate's, so a half-occluded turn is still readable).
  * @property {number}   BODY_ROTATION_DELTA_DEG Yaw/pitch change from the conditioned pose that triggers a re-drape (degrees).
- * @property {number}   BODY_VOLUME_DELTA       Relative torso depth/aspect change that triggers a re-drape (0..1).
+ * @property {number}   BODY_VOLUME_DELTA       Absolute torso-depth change that triggers a re-drape (0..1) - the front-to-back axis.
+ * @property {number}   BODY_BUILD_DELTA        Relative shoulder-to-torso / hip-to-shoulder change that triggers a re-drape (0..1) - the narrow-vs-wide axis.
  * @property {number}   BODY_RECONDITION_COOLDOWN_MS Minimum gap between two re-conditioning dispatches (ms).
  * @property {number}   BODY_TRACK_HOLD_MS      How long a lost skeleton holds the last valid fit before the baseline is dropped (ms).
  * @property {boolean}  LOWER_BODY_GUARD_ENABLED Composite the shopper's own raw lower-body pixels back over Decart's output (default OFF - validate live first).
@@ -162,6 +163,19 @@ export const CONFIG = Object.freeze({
      skeleton can actually see. 0.18 = 18%, comfortably above landmark jitter (a few
      percent between adjacent frames) and below a real change in profile. */
   BODY_VOLUME_DELTA:       0.18,
+  /* Relative change in the subject's BUILD - shoulder-to-torso, or the hip-to-shoulder
+     taper - that counts as a different body to drape for. This is the WIDTH axis, and it
+     is the one a garment's cut actually has to track: a slender build needs the shirt
+     scaled down cleanly rather than left hanging off the shoulders, a broader one needs it
+     stretched along the outer torso rather than clipped. Nothing else this monitor
+     measures can tell those apart - yaw and pitch are orientation, and depth is the
+     front-to-back axis, so a narrow and a wide shopper at the same angle look identical
+     on all three.
+     15%, slightly tighter than the volume threshold, because these are ratios of two
+     confidently-placed joints rather than an estimated depth: the landmark noise floor is
+     lower, so the bar can be. It is comfortably above the frame-to-frame jitter of a
+     shoulder landmark and well below the gap between two genuinely different builds. */
+  BODY_BUILD_DELTA:        0.15,
   /* Floor between two re-conditioning dispatches. Each one is a full set() with the
      reference image attached, so this is the knob that decides how much of a 5s window
      a continuously-moving shopper can spend re-uploading a packshot. ~5 per session. */

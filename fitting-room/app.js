@@ -52,6 +52,7 @@ const {
   BODY_TRACK_MIN_VISIBILITY,
   BODY_ROTATION_DELTA_DEG,
   BODY_VOLUME_DELTA,
+  BODY_BUILD_DELTA,
   BODY_RECONDITION_COOLDOWN_MS,
   BODY_TRACK_HOLD_MS,
   TOKEN_ENDPOINT,
@@ -7313,23 +7314,70 @@ const STRICT_REFERENCE_LOCK =
    the shopper's live trousers, so there has never been a tops equivalent to retire. */
 const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodified.";
 
+/* ── REVISION: MORPHOLOGY + A SYMMETRIC NON-TARGET LOCK ──────────────────────────
+   TWO REPORTS, and the second one closes a hole this file opened itself.
+
+   REPORT ONE - BUILD. The drape did not track how wide or narrow the subject actually is:
+   on a slender build the garment hung loose, hovering off the shoulders and waist; on a
+   broader one it clipped and warped rather than following the outer torso. The previous
+   anchors asked for adaptation to "silhouette, angle, depth, and belly volume" - which
+   names the DEPTH axis three times and the WIDTH axis not once. These name the width axis
+   explicitly, per region: shoulder width and torso drape on tops, waistline and leg width
+   on bottoms, both qualified "narrow or wide" so the instruction covers both directions
+   rather than reading as "make it bigger".
+
+   REPORT TWO - THE NON-TARGET GARMENT. Try on a shirt, then step back so your legs enter
+   frame, and the model would invent trousers it was never asked for (and the mirror case
+   for a bottoms try-on and the shopper's real shirt). This is the shirt-replacement family
+   of report, arriving through a NEW trigger: not a mis-scoped anchor, but a region that
+   simply enters frame mid-session with nothing said about it. An unstated region is what
+   this file's history keeps recording as the thing that gets reinterpreted.
+
+   THE OPPOSITE-LAYER LOCK IS BACK, AND THIS TIME ON BOTH BRANCHES. It was dropped in the
+   dynamic-drape revision and flagged there as the loss most likely to re-open a fixed
+   report; it did exactly that. What ships now is stronger than what was removed: the old
+   pin said "keep the subject's upper body and background unmodified", which describes a
+   REGION, while these name the shopper's actual CLOTHES as the thing to preserve and
+   source them from the camera ("exactly as seen on camera"), then ban all three edits on
+   them - changing, inventing, replacing. And it is symmetric: no report has been filed of
+   a tops try-on repainting real trousers, but the mechanism is identical and the evidence
+   for one direction is evidence for the shape of the other.
+
+   "Fit ONLY" IS DOING WORK, in the first two words of both strings. It scopes the whole
+   instruction before any noun is introduced, which is where a leading-token model is most
+   sensitive - the same reasoning buildCompositePrompt() records for putting the anchor
+   first in the first place.
+
+   ── WHAT THIS TRADES AWAY, written down because both are reproduced regressions ──
+     · THE GARMENT-FIDELITY CLAMP. "Strictly preserve the original shirt texture, pattern,
+       and color" is gone: that sentence has been REPURPOSED to the opposite layer. The
+       garment's own provenance now rests on "the exact reference shirt" alone. Report 3 in
+       this sequence (invented detail on the correct garment) and the black-shorts report
+       (wrong colour) are the two to watch, and the restore is one line -
+       [P.HIGH, STRICT_REFERENCE_LOCK] in imageOnlyPrompt(), the constant is still on file.
+     · THE PER-FRAME TENSE. "CURRENT ... in this frame" is gone with it. The runtime half
+       is untouched and is what actually re-reads the body (see the topology monitor), so
+       what is lost is the prompt's restatement of it rather than the behaviour.
+   307 characters are free on tops and 316 on bottoms, so neither loss was forced by
+   budget - both are the same deliberate bet every revision here makes: text volume
+   competing with the reference image. One at a time, re-tested live. */
 const CATEGORY_ANCHOR = Object.freeze({
-  /* The two strings share one spine - bind the static garment, adapt to the current
-     contour, preserve the original - and differ in exactly two places: the garment noun,
-     and WHICH contour is named (whole-body on tops, lower-body on bottoms). The
-     lower-body naming is what keeps the shirt-replacement fix alive on the branch it was
-     reported against; see the bullet list above for the half of it that came off. */
+  /* The two strings are structurally identical - scope, then adapt to build, then lock the
+     opposite layer - and differ only in which region each of the three names. That
+     symmetry IS the fix for report two: the non-target garment is protected on both
+     branches by construction, so neither can be the one somebody forgets. */
   top:
-    "Drape and fit the EXACT static shirt from the reference image onto the live" +
-    " subject's CURRENT body contour and volume in this frame. Dynamically adapt the" +
-    " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
-    " without stretching or warping the fabric. Strictly preserve the original shirt" +
-    " texture, pattern, and color.",
+    "Fit ONLY the exact reference shirt onto the subject's upper body. Dynamically adjust" +
+    " the shirt cut, shoulder width, and torso drape to match the subject's exact live" +
+    " body width and build (narrow or wide). Strictly preserve the subject's actual live" +
+    " lower clothing/pants exactly as seen on camera without changing, inventing, or" +
+    " replacing them.",
   bottom:
-    "Drape and fit the EXACT static pants/shorts from the reference image onto the live" +
-    " subject's CURRENT lower-body contour and volume in this frame. Dynamically adapt" +
-    " the fit to the subject's exact waistline, leg profile, depth, and angle without" +
-    " distorting the garment design. Strictly preserve original pattern and color.",
+    "Fit ONLY the exact reference pants/shorts onto the subject's lower body. Dynamically" +
+    " adjust the waistline, leg width, and length to match the subject's exact live lower" +
+    " body build (narrow or wide). Strictly preserve the subject's actual live upper" +
+    " clothing/shirt exactly as seen on camera without changing, inventing, or replacing" +
+    " it.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -11599,6 +11647,60 @@ function bodyProfileBox(landmarks) {
 }
 
 /**
+ * THE SPATIAL SCALE MATRIX - how wide and how long this body actually is.
+ *
+ * WHAT IT IS FOR. The garment has to sit tightly on a slender build and stretch
+ * proportionally on a broad one, and the axis that decides which is WIDTH - shoulder
+ * breadth, hip breadth, and how both relate to torso length. Every other measurement in
+ * this module is about ORIENTATION (yaw, pitch) or DEPTH (the volume channel); none of
+ * them can tell a narrow shopper from a wide one, because a narrow body and a wide body
+ * at the same angle produce the same angles and very nearly the same depth ratio.
+ *
+ * TWO SCALE-INVARIANT DESCRIPTORS, and the invariance is the entire point. Raw widths in
+ * metres or pixels conflate build with distance from the lens - a slim shopper standing
+ * close measures wider than a broad one standing back - so neither raw number is
+ * comparable to anything. Dividing by torso length removes it:
+ *   · BUILD  = shoulder width / torso length. The headline narrow-vs-wide figure.
+ *   · TAPER  = hip width / shoulder width. The shape between them, which BUILD cannot
+ *              see: two people with identical shoulders and torsos, one straight and one
+ *              much wider at the hip, are the same BUILD and a different garment problem.
+ *              This is the descriptor that decides how a trouser waistband has to sit.
+ *
+ * IT IS A MEASUREMENT, NOT A COMMAND. Nothing here reaches the wire: Decart's realtime
+ * set() accepts exactly { prompt, enhance, image } and strips every other key (verified
+ * against @decartai/sdk@0.1.5's setInputSchema, z.core.$strip), so there is no payload
+ * field a bounding box could be fed into even in principle. What this drives is WHEN to
+ * re-condition - a build that no longer matches the one the current render was drawn for
+ * is a re-drape, and the live frame is what carries the actual shape to Decart. The
+ * prompt states the requirement ("narrow or wide"); this decides when to restate it.
+ *
+ * @param {Array} world  world (metric) landmarks - widths are only comparable in these
+ * @param {Array} image  normalised image landmarks - the on-screen bounding box
+ * @returns {{shoulderW:number, hipW:number, torsoLen:number, build:number, taper:number,
+ *            box:{w:number,h:number,aspect:number}}|null}
+ */
+function bodyScaleMatrix(world, image) {
+  const box = bodyProfileBox(image);
+  if (!world || !box) return null;
+  const ls = world[POSE_LANDMARK.LEFT_SHOULDER], rs = world[POSE_LANDMARK.RIGHT_SHOULDER];
+  const lh = world[POSE_LANDMARK.LEFT_HIP],      rh = world[POSE_LANDMARK.RIGHT_HIP];
+  if (!ls || !rs || !lh || !rh) return null;
+  /* Widths span x AND z, not x alone: a shopper at any angle other than square-on has
+     part of their breadth pointing at the camera, and measuring only the on-screen
+     component would read every turn as a body that suddenly got narrower. */
+  const shoulderW = Math.hypot(rs.x - ls.x, (rs.z ?? 0) - (ls.z ?? 0));
+  const hipW      = Math.hypot(rh.x - lh.x, (rh.z ?? 0) - (lh.z ?? 0));
+  const torsoLen  = Math.abs(((ls.y + rs.y) / 2) - ((lh.y + rh.y) / 2));
+  if (!(torsoLen > 1e-6) || !(shoulderW > 1e-6)) return null;
+  return {
+    shoulderW, hipW, torsoLen,
+    build: shoulderW / torsoLen,
+    taper: hipW / shoulderW,
+    box,
+  };
+}
+
+/**
  * One frame's body topology, or null when the frame cannot be measured.
  *
  * WORLD LANDMARKS FIRST, image landmarks as the fallback. worldLandmarks are metric and
@@ -11607,7 +11709,7 @@ function bodyProfileBox(landmarks) {
  * usable CHANGE signal from it, just a less precise one. Visibility is always read off the
  * IMAGE set - worldLandmarks do not reliably carry it.
  * @param {{landmarks?:Array, worldLandmarks?:Array}|null} result a PoseLandmarker result
- * @returns {{yaw:number, pitch:number, depth:number, aspect:number}|null}
+ * @returns {{yaw:number, pitch:number, depth:number, build:number, taper:number}|null}
  */
 function bodyContourSignature(result, minVisibility = BODY_TRACK_MIN_VISIBILITY) {
   const image = result && Array.isArray(result.landmarks) ? result.landmarks[0] : null;
@@ -11615,9 +11717,9 @@ function bodyContourSignature(result, minVisibility = BODY_TRACK_MIN_VISIBILITY)
   const world = result && Array.isArray(result.worldLandmarks) && result.worldLandmarks[0]
     ? result.worldLandmarks[0] : image;
   const yaw = bodyYawDegrees(world), pitch = bodyPitchDegrees(world);
-  const depth = bodyDepthRatio(world), box = bodyProfileBox(image);
-  if (yaw === null || pitch === null || depth === null || !box) return null;
-  return { yaw, pitch, depth, aspect: box.aspect };
+  const depth = bodyDepthRatio(world), scale = bodyScaleMatrix(world, image);
+  if (yaw === null || pitch === null || depth === null || !scale) return null;
+  return { yaw, pitch, depth, build: scale.build, taper: scale.taper };
 }
 
 /* Proportional change between two readings, guarded against a near-zero denominator so a
@@ -11628,28 +11730,40 @@ function relativeDelta(a, b) {
 }
 
 /**
- * How far apart two topologies are: rotation on two axes, and one fused volume/contour
- * figure taken as the LARGER of the depth and aspect changes. Larger rather than averaged
- * - the two channels see different halves of the same event, and averaging would let a
- * strong signal on one be diluted by a quiet one on the other.
+ * How far apart two topologies are, on four axes that answer four different questions:
+ * has the subject TURNED (yaw), LEANED (pitch), changed BUILD (the width axis), or changed
+ * VOLUME (the depth axis)?
  *
- * THE TWO CHANNELS ARE MEASURED DIFFERENTLY, and that asymmetry is load-bearing rather
- * than an oversight. DEPTH is compared ABSOLUTELY: it is already a normalised ratio on a
- * bounded scale (~0 for a flat square-on torso, ~1 edge-on) and it legitimately PASSES
- * THROUGH ZERO, where any proportional measure explodes - a shopper shifting their weight
- * two degrees took the depth ratio from 0.00 to 0.03, which is a 100% relative change and
- * a nothing of an absolute one. Reading it relatively fired a full image re-upload on
- * standing still. ASPECT is compared PROPORTIONALLY: it is a width-over-height ratio with
- * no meaningful zero, so "20% narrower than they were" is the statement that means
- * something about it.
- * @returns {{yaw:number, pitch:number, volume:number}}
+ * BUILD AND VOLUME ARE SEPARATE ON PURPOSE, and separating them is what this revision
+ * added. They used to be one fused figure - depth OR the profile box's aspect - which
+ * meant a genuinely wider body was reported as "volume", the same word used for a shopper
+ * leaning in. They are different garment problems: volume is a cushion under a shirt, and
+ * build is a different person's shoulders. The prompt now names the width axis explicitly
+ * ("narrow or wide"), so the monitor has to be able to notice when it changes.
+ *
+ * BUILD FUSES ITS OWN TWO DESCRIPTORS by the LARGER of them: shoulder-to-torso, and the
+ * hip-to-shoulder taper. Larger rather than averaged, for the same reason the old fused
+ * figure took a max - they see different halves of the same event (a broader shopper moves
+ * BUILD; a pear-shaped one at the same shoulder width moves only TAPER), and averaging
+ * would let a strong signal on one be diluted by a quiet one on the other.
+ *
+ * THE MEASURES ARE NOT ALL THE SAME KIND, and that asymmetry is load-bearing. DEPTH is
+ * compared ABSOLUTELY: it is already a normalised ratio on a bounded scale (~0 for a flat
+ * square-on torso, ~1 edge-on) and it legitimately PASSES THROUGH ZERO, where any
+ * proportional measure explodes - a shopper shifting their weight two degrees took the
+ * depth ratio from 0.00 to 0.03, which is a 100% relative change and a nothing of an
+ * absolute one. Reading it relatively fired a full image re-upload on standing still.
+ * BUILD and TAPER are compared PROPORTIONALLY: they are ratios with no meaningful zero, so
+ * "15% broader than the body this was drawn for" is the statement that means something.
+ * @returns {{yaw:number, pitch:number, build:number, volume:number}}
  */
 function topologyDelta(prev, next) {
   return {
     yaw:    Math.abs(next.yaw - prev.yaw),
     pitch:  Math.abs(next.pitch - prev.pitch),
-    volume: Math.max(Math.abs(next.depth - prev.depth),
-                     relativeDelta(prev.aspect, next.aspect)),
+    build:  Math.max(relativeDelta(prev.build, next.build),
+                     relativeDelta(prev.taper, next.taper)),
+    volume: Math.abs(next.depth - prev.depth),
   };
 }
 
@@ -11667,9 +11781,15 @@ function topologyDelta(prev, next) {
  * unambiguous signal names the event.
  * @returns {"rotation"|"lean"|"volume"|null}
  */
-function topologyShift(delta, rotationDeg = BODY_ROTATION_DELTA_DEG, volumeDelta = BODY_VOLUME_DELTA) {
+function topologyShift(delta, rotationDeg = BODY_ROTATION_DELTA_DEG,
+                       volumeDelta = BODY_VOLUME_DELTA, buildDelta = BODY_BUILD_DELTA) {
   if (delta.yaw    >= rotationDeg) return "rotation";
   if (delta.pitch  >= rotationDeg) return "lean";
+  /* BUILD ahead of VOLUME. Both can move on one event, and the more specific name is the
+     more useful one in a trace: "the body got wider" is actionable, "the body changed"
+     is not. Rotation still outranks both, because a turn moves every channel at once and
+     naming it anything else would be misleading. */
+  if (delta.build  >= buildDelta)  return "build";
   if (delta.volume >= volumeDelta) return "volume";
   return null;
 }
@@ -11704,6 +11824,7 @@ function topologyShift(delta, rotationDeg = BODY_ROTATION_DELTA_DEG, volumeDelta
 function makeBodyTopologyTracker(opts = {}) {
   const rotationDeg = opts.rotationDeg ?? BODY_ROTATION_DELTA_DEG;
   const volumeDelta = opts.volumeDelta ?? BODY_VOLUME_DELTA;
+  const buildDelta  = opts.buildDelta  ?? BODY_BUILD_DELTA;
   const cooldownMs  = opts.cooldownMs  ?? BODY_RECONDITION_COOLDOWN_MS;
   const holdMs      = opts.holdMs      ?? BODY_TRACK_HOLD_MS;
   const now         = opts.now         ?? (() => Date.now());
@@ -11751,7 +11872,7 @@ function makeBodyTopologyTracker(opts = {}) {
       if (!baseline) { baseline = sig; return { state: "acquired" }; }
 
       const delta = topologyDelta(baseline, sig);
-      const reason = topologyShift(delta, rotationDeg, volumeDelta);
+      const reason = topologyShift(delta, rotationDeg, volumeDelta, buildDelta);
       /* Back in view and still the same shape: the hold did its job, the fit that was
          held is still the right one, and nothing needs to be sent. */
       if (!reason) return { state: heldMs ? "resumed" : "stable", delta, heldMs };
@@ -12126,6 +12247,7 @@ async function reconditionForTopology(step) {
     console.log(`[PEAR] body contour changed (${step.reason}) at t=${sessionElapsedMs()}ms` +
       ` - re-draping the SAME garment on the CURRENT frame (no re-bill)` +
       ` | Δyaw=${(d.yaw ?? 0).toFixed(1)}° Δpitch=${(d.pitch ?? 0).toFixed(1)}°` +
+      ` Δbuild=${((d.build ?? 0) * 100).toFixed(0)}%` +
       ` Δvolume=${((d.volume ?? 0) * 100).toFixed(0)}%` +
       (step.heldMs ? ` | resumed after a ${step.heldMs}ms tracking hold` : ""));
     /* All three, for the reason debugReinjectGarment() clears all three: the first two

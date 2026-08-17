@@ -153,26 +153,29 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
      WHAT IT DROPPED is asserted below rather than left to be discovered: the
      invent/add/alter clamp and the explicit "keep the upper body unmodified" pin. Both
      are retired-with-a-restore-path in app.js; image-first.test.mjs §1 owns that table. */
-  check("opens by binding the STATIC garment to the reference, nothing before it",
-    bottomsPrompt.indexOf("Drape and fit the EXACT static pants/shorts from the reference image") === 0,
+  check("opens by scoping to ONE garment and ONE region, nothing before it",
+    bottomsPrompt.indexOf("Fit ONLY the exact reference pants/shorts onto the subject's lower body.") === 0,
     bottomsPrompt);
   /* THE SCOPING SURVIVED THE REWRITE, and that is what this pair of checks is for: the
      region naming moved INTO the lead rather than being dropped with the pin. */
   check("...scopes the fit to the LOWER BODY, keeping the shirt-replacement report closed",
-    /onto the live subject's CURRENT lower-body contour and volume in this frame\./.test(bottomsPrompt),
+    /onto the subject's lower body\./.test(bottomsPrompt),
     "an unscoped anchor is what let a trouser try-on claim the whole reference");
-  check("...and never claims the upper body it must not touch",
-    !/upper garment/.test(bottomsPrompt) && !/\bshirt\b/.test(bottomsPrompt),
+  check("...and never claims the upper garment as the thing to FIT",
+    !/reference shirt/.test(bottomsPrompt) && !/onto the subject's upper body/.test(bottomsPrompt),
     bottomsPrompt);
   /* THE PER-FRAME INSTRUCTION, which is the sentence this revision exists for. Both
      halves are asserted: adapt to the live shape, and do not fake it by deforming cloth. */
-  check("...instructs a live re-drape on the waistline, leg profile, depth and angle",
-    /Dynamically adapt the fit to the subject's exact waistline, leg profile, depth, and angle/
+  check("...instructs a live adjustment of the waistline, leg width and length",
+    /Dynamically adjust the waistline, leg width, and length to match the subject's exact live lower body build/
       .test(bottomsPrompt), bottomsPrompt);
-  check("...without reaching that fit by distorting the garment's own design",
-    /without distorting the garment design\./.test(bottomsPrompt), bottomsPrompt);
-  check("...and closes by pinning pattern and colour as the invariant half",
-    /Strictly preserve original pattern and color\.$/.test(bottomsPrompt), bottomsPrompt);
+  check("...naming BOTH directions, so it cannot read as 'make it bigger'",
+    /\(narrow or wide\)/.test(bottomsPrompt), bottomsPrompt);
+  /* THE NON-TARGET LOCK. Step back mid-session in a trouser try-on and the torso enters
+     frame; without this the model invents a shirt nobody asked for. */
+  check("...and closes by locking the live SHIRT to the camera, unaltered",
+    /Strictly preserve the subject's actual live upper clothing\/shirt exactly as seen on camera without changing, inventing, or replacing it\.$/
+      .test(bottomsPrompt), bottomsPrompt);
 
   /* THE SIZE PROPERTY IS STILL A FIX, so it is asserted as a number rather than trusted
      to stay small because someone remembered why. It grew by 81 characters here, and that
@@ -188,12 +191,13 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
 
 console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour ──");
 {
-  check("binds the EXACT static shirt to the reference, nothing before it",
-    topsPrompt.indexOf("Drape and fit the EXACT static shirt from the reference image") === 0,
+  check("scopes to the EXACT reference shirt and the upper body, nothing before it",
+    topsPrompt.indexOf("Fit ONLY the exact reference shirt onto the subject's upper body.") === 0,
     topsPrompt);
-  check("...and carries the same per-frame adaptation and preserve clauses as bottoms",
-    /Dynamically adapt the garment drape to the subject's exact/.test(topsPrompt) &&
-    /Strictly preserve the original shirt texture, pattern, and color\.$/.test(topsPrompt),
+  check("...and carries the same build-adjustment and non-target lock as bottoms",
+    /Dynamically adjust the shirt cut, shoulder width, and torso drape/.test(topsPrompt) &&
+    /Strictly preserve the subject's actual live lower clothing\/pants exactly as seen on camera without changing, inventing, or replacing them\.$/
+      .test(topsPrompt),
     topsPrompt);
 
   /* ── ONE SHAPE, ONE DELIBERATE DIVERGENCE ───────────────────────────────────
@@ -202,14 +206,26 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      the SHAPE they share and the axis they differ on. The divergence is still exactly the
      one this suite exists for: WHICH region the anchor claims. image-first.test.mjs §1
      owns the sentence-by-sentence contract. */
-  check("both open on the same static/reference binding",
-    topsPrompt.startsWith("Drape and fit the EXACT static ") &&
-    bottomsPrompt.startsWith("Drape and fit the EXACT static "),
+  check("both open on the same exclusive-scope binding",
+    topsPrompt.startsWith("Fit ONLY the exact reference ") &&
+    bottomsPrompt.startsWith("Fit ONLY the exact reference "),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
-  check("...and each names the region it replaces, and only that one",
-    /\bshirt\b/.test(topsPrompt) && !/pants|shorts|lower-body/.test(topsPrompt) &&
-    /pants\/shorts/.test(bottomsPrompt) && !/\bshirt\b/.test(bottomsPrompt),
+  /* ── EACH NAMES BOTH REGIONS NOW, AND THAT IS THE POINT ────────────────────
+     The old rule was "each branch mentions its own garment and never the other's". It
+     cannot hold any more, because the non-target lock has to NAME the layer it protects -
+     a tops prompt that never says "pants" cannot tell the model to leave them alone. What
+     replaces it is the stronger property: each branch FITS one region and PRESERVES the
+     other, and never the reverse. */
+  check("...and each FITS its own region while PRESERVING the other",
+    /Fit ONLY the exact reference shirt/.test(topsPrompt) &&
+    /preserve the subject's actual live lower clothing\/pants/.test(topsPrompt) &&
+    /Fit ONLY the exact reference pants\/shorts/.test(bottomsPrompt) &&
+    /preserve the subject's actual live upper clothing\/shirt/.test(bottomsPrompt),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
+  check("...and neither preserves the very layer it is fitting",
+    !/preserve the subject's actual live upper clothing/.test(topsPrompt) &&
+    !/preserve the subject's actual live lower clothing/.test(bottomsPrompt),
+    "a prompt that preserves the layer it is editing cancels itself");
 
   /* ── THE ASYMMETRY ITSELF, asserted so it cannot drift by accident ───────────
      Tops does NOT carry the opposite-layer lock. That is the one-branch-at-a-time-on-
@@ -218,9 +234,15 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      oversight. Two things therefore have to hold: tops stays implicitly scoped, and
      app.js keeps the restore path in the words a future debugger will search for when
      the mirror-image report finally does arrive. */
-  check("tops does not carry the opposite-layer lock - the evidence-led asymmetry",
-    !/unmodified/.test(topsPrompt) && !/lower body/.test(topsPrompt),
-    `if this fails the branches converged - update app.js's asymmetry note too: ${topsPrompt}`);
+  /* ── THE ASYMMETRY IS DELIBERATELY OVER ────────────────────────────────────
+     For three revisions the opposite-layer lock sat on bottoms alone, under a
+     one-branch-at-a-time-on-evidence rule: no report had been filed of a TOP try-on
+     repainting real trousers. One has now - step back mid-session in a shirt try-on and
+     the model invents trousers - so both branches carry it, and app.js's asymmetry note
+     is history rather than live policy. */
+  check("tops DOES carry the opposite-layer lock now - the asymmetry is over",
+    /preserve the subject's actual live lower clothing\/pants/.test(topsPrompt),
+    `the report that closed the asymmetry was a tops try-on inventing trousers: ${topsPrompt}`);
   check("the opposite-layer lock is recorded in app.js with a per-branch restore path",
     /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC) &&
     /WHERE EACH HALF LIVES TODAY/.test(SRC),

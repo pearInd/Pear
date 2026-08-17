@@ -75,6 +75,7 @@ const sandbox = {
   BODY_TRACK_MIN_VISIBILITY: CONFIG.BODY_TRACK_MIN_VISIBILITY,
   BODY_ROTATION_DELTA_DEG: CONFIG.BODY_ROTATION_DELTA_DEG,
   BODY_VOLUME_DELTA: CONFIG.BODY_VOLUME_DELTA,
+  BODY_BUILD_DELTA: CONFIG.BODY_BUILD_DELTA,
   BODY_RECONDITION_COOLDOWN_MS: CONFIG.BODY_RECONDITION_COOLDOWN_MS,
   BODY_TRACK_HOLD_MS: CONFIG.BODY_TRACK_HOLD_MS,
   performance: { now: () => 0 },
@@ -82,7 +83,7 @@ const sandbox = {
 };
 const api = new Function(...Object.keys(sandbox),
   code + "\nreturn { TORSO_LANDMARKS, torsoReadable, planarAngleDeg, bodyYawDegrees," +
-  " bodyPitchDegrees, bodyDepthRatio, bodyProfileBox, bodyContourSignature," +
+  " bodyPitchDegrees, bodyDepthRatio, bodyProfileBox, bodyScaleMatrix, bodyContourSignature," +
   " relativeDelta, topologyDelta, topologyShift, makeBodyTopologyTracker };"
 )(...Object.values(sandbox));
 
@@ -150,8 +151,8 @@ console.log("── §1 THE GEOMETRY: angles that mean something, ratios that su
      would burn a re-conditioning dispatch (and its image re-upload) on nothing at all. */
   const near = sig({ scale: 1 }), far = sig({ scale: 0.6 });
   check("stepping toward the camera does NOT read as a change of shape",
-    Math.abs(near.yaw - far.yaw) < 0.01 && Math.abs(near.aspect - far.aspect) < 0.01 &&
-    Math.abs(near.depth - far.depth) < 0.01,
+    Math.abs(near.yaw - far.yaw) < 0.01 && Math.abs(near.depth - far.depth) < 0.01 &&
+    Math.abs(near.build - far.build) < 0.01 && Math.abs(near.taper - far.taper) < 0.01,
     JSON.stringify({ near, far }));
   check("...and the shift test agrees, which is what actually matters",
     api.topologyShift(api.topologyDelta(near, far)) === null);
@@ -237,12 +238,28 @@ console.log("\n── §3 THE DECISION: what counts as a different body ──")
     /"LEAN" AND "VOLUME" ARE NOT CLEANLY SEPARABLE FROM FOUR JOINTS/.test(SRC) &&
     /added belly volume\s*\n?\s*\*? ?most often reports as "lean"/.test(SRC),
     "a reason string taken literally is worse than one explained");
-  /* THE ASPECT CHANNEL ON ITS OWN: a torso that broadens without rotating or leaning.
-     This is the one event only the volume channel can see, so it is what proves the
-     channel is wired rather than dead weight behind the two angular ones. */
-  check("a broadened torso with no rotation and no lean reads as a volume shift",
-    api.topologyShift(api.topologyDelta(square, sig({ width: 1.35 }))) === "volume",
+  /* ── THE WIDTH AXIS, ON ITS OWN CHANNEL ────────────────────────────────────
+     A torso that broadens without rotating or leaning. This used to report as "volume",
+     fused with depth into one figure - which was both imprecise and actively misleading in
+     a trace, because a wider body and a shopper leaning in are different garment problems.
+     It is now its own channel, named for what it is, and the prompt names the same axis
+     ("narrow or wide"). This is the case that proves the channel is wired rather than dead
+     weight behind the angular ones. */
+  check("a broadened torso with no rotation and no lean reads as a BUILD shift",
+    api.topologyShift(api.topologyDelta(square, sig({ width: 1.35 }))) === "build",
     JSON.stringify(api.topologyDelta(square, sig({ width: 1.35 }))));
+  check("...and a build change inside the threshold does not fire",
+    api.topologyShift(api.topologyDelta(square, sig({ width: 1.05 }))) === null,
+    JSON.stringify(api.topologyDelta(square, sig({ width: 1.05 }))));
+  check(`the build threshold is the config value (${CONFIG.BODY_BUILD_DELTA})`,
+    CONFIG.BODY_BUILD_DELTA > 0 && CONFIG.BODY_BUILD_DELTA <= 0.25 &&
+    /delta\.build  >= buildDelta\)  return "build";/.test(SRC));
+  /* BUILD IS RANKED ABOVE VOLUME, and below rotation. A turn moves every channel at once,
+     so naming it anything but "rotation" would mislead; between the other two the more
+     specific name is the more useful one in a trace. */
+  check("...and build outranks volume in the reason string, but never rotation",
+    SRC.indexOf('return "rotation"') < SRC.indexOf('return "build"') &&
+    SRC.indexOf('return "build"') < SRC.indexOf('return "volume"'));
   /* THE THRESHOLD IS THE SPEC'D ONE. Asserted against config rather than hardcoded, so
      the two cannot drift, and the spec'd figure is named in the label. */
   check("the rotation threshold is the spec'd 15 degrees, read from config",
@@ -251,9 +268,33 @@ console.log("\n── §3 THE DECISION: what counts as a different body ──")
   /* THE FUSED VOLUME FIGURE TAKES THE MAX, not the mean: the two channels see different
      halves of the same event, and averaging would let a strong signal on one be diluted
      by a quiet one on the other. */
-  check("the volume figure is the LARGER of the depth and aspect changes, never the mean",
-    /volume: Math\.max\(Math\.abs\(next\.depth - prev\.depth\),\s*\n?\s*relativeDelta\(prev\.aspect, next\.aspect\)\)/.test(SRC),
+  /* BUILD fuses its OWN two descriptors by the larger of them - shoulder-to-torso and the
+     hip-to-shoulder taper. Larger rather than averaged, because they see different halves
+     of the same event: a broader shopper moves BUILD, a pear-shaped one at the same
+     shoulder width moves only TAPER, and averaging would let a strong signal on one be
+     diluted by a quiet one on the other. VOLUME is now depth alone - splitting them is
+     what gave the width axis its own name. */
+  check("the build figure is the LARGER of its two descriptors, never the mean",
+    /build:  Math\.max\(relativeDelta\(prev\.build, next\.build\),\s*\n?\s*relativeDelta\(prev\.taper, next\.taper\)\)/.test(SRC),
     "an averaged signal is a signal one quiet channel can veto");
+  check("...and volume is now the DEPTH axis alone, not a fused figure",
+    /volume: Math\.abs\(next\.depth - prev\.depth\),/.test(SRC),
+    "fusing width into volume is what made a wider body report as 'volume'");
+  /* THE SCALE MATRIX ITSELF: named measurements, all scale-invariant. A slim shopper
+     standing close measures wider in raw units than a broad one standing back, so raw
+     widths are comparable to nothing - dividing by torso length is what makes them mean
+     something. */
+  const m = api.bodyScaleMatrix(skeleton(), skeleton());
+  check("the scale matrix reports the named measurements the prompt's width axis needs",
+    m && ["shoulderW", "hipW", "torsoLen", "build", "taper", "box"].every((k) => k in m),
+    JSON.stringify(m));
+  check("...and widths span x AND z, so a turn is not read as a sudden narrowing",
+    (() => {
+      const square = api.bodyScaleMatrix(skeleton(), skeleton());
+      const turned = api.bodyScaleMatrix(skeleton({ yawDeg: 55 }), skeleton({ yawDeg: 55 }));
+      return Math.abs(square.shoulderW - turned.shoulderW) < 1e-9;
+    })(),
+    "measuring only the on-screen component makes every rotation look like a thinner body");
   /* ── DEPTH IS ABSOLUTE, ASPECT IS RELATIVE, AND THAT IS A BUG FIX ───────────
      The first build compared BOTH proportionally, and depth legitimately passes through
      zero (a flat, square-on torso reads 0.00). A two-degree weight shift took it to 0.03,

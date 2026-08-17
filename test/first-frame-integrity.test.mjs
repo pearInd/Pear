@@ -346,5 +346,24 @@ console.log("\n── §5 THE FRAME BUDGET ON THE WIRE ──");
     (watcher.match(/detectPoseFrame\(/g) || []).length === 1);
 }
 
+console.log("\n── §6 THE SAFETY MACHINERY IS UNTOUCHED BY LATER REVISIONS ──");
+{
+  /* Every prompt/morphology revision lands in the same file as the cold-start machinery,
+     and the cheapest way to break a session is to edit one and disturb the other. These
+     are the four locks that keep go-live reliable; asserted here as a single fence so a
+     future change to the fitting logic cannot quietly remove one. */
+  check("the input gate still exists and is still driven by config",
+    /gated = INPUT_GATE_ENABLED/.test(SRC) && CONFIG.INPUT_GATE_ENABLED === true);
+  check("the wire mutex still serialises every conditioning write",
+    /function sendCondition\(label, send, \{ skipIfBusy = false \} = \{\}\)/.test(SRC) &&
+    /const next = wireQueue\.then\(run, run\);/.test(SRC));
+  check("the cold-start leash and its one recovery are still in place",
+    /await race\(applyActive\(\), "", COLD_START_ACK_MS\);/.test(SRC) &&
+    /await connectRealtime\(\{ force: true \}\);/.test(SRC));
+  check("the loading overlay still gates the reveal, and the fade still rides it",
+    /card\(\)\.classList\.add\("show-live"\);[\s\S]{0,600}revealAiFeed\(\);/.test(SRC) &&
+    /\$\("scanOverlay"\)\.hidden = true;/.test(SRC));
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);
