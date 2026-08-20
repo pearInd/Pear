@@ -1,10 +1,11 @@
 # PEAR Store Scanner
 
 Standalone crawler that visits a storefront, finds every product page, collects
-garment images, and classifies each one as front/back using Gemini. Results are
-cached in the same Supabase `garment_cache` table the main PEAR server reads
-from, so a garment scanned here is never re-classified by the widget later
-(and vice versa).
+garment images, and classifies each one as front/back AND kids/adult
+(`age_group`) using Gemini, in one call per image. Results are cached in the
+same Supabase `garment_cache` table the main PEAR server reads from, so a
+garment scanned here is never re-classified by the widget later (and vice
+versa).
 
 This is a separate script from the main PEAR server - it has its own
 `package.json` and `.env`, and is meant to be run standalone or deployed as
@@ -25,7 +26,9 @@ Fill in `.env`:
 - `SUPABASE_SERVICE_ROLE_KEY` - Supabase Dashboard → Settings → API (service role, not anon)
 
 The `garment_cache` table must exist - see `supabase_setup_v5.sql` in the
-project root.
+project root. For `age_group` to be written, `archive/supabase_setup_v11.sql`
+must also have been run (the scanner degrades gracefully and just skips those
+two columns if it hasn't).
 
 No browser is involved. Shopify stores are detected from the homepage HTML
 and scanned via the `/products.json` catalog API - every product and its
