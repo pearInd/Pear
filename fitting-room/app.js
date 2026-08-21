@@ -61,11 +61,6 @@ const {
   HEALTH_ENDPOINT,
   SDK_URLS,
   PROMPT_MAX_CHARS,
-  LOWER_BODY_GUARD_ENABLED,
-  LOWER_BODY_GUARD_FRAC,
-  LOWER_BODY_GUARD_AUTO_CALIBRATE,
-  LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS,
-  BODY_GUARD_MARGIN_FRAC,
   PLAYOUT_DELAY_HINT,
   PREFER_LOW_LATENCY_CODEC,
   CODEC_PREFERENCE,
@@ -3826,7 +3821,6 @@ function teardown() {
   // backstop: stopLive()/beginFreezeHold() already call this at their own call sites,
   // but teardown() is what EVERY exit path eventually reaches, so a future path that
   // disconnects without going through either of those two still stops it here.
-  stopLowerBodyGuard();
   stopPresenceWatcher();
 
   // Cancel the no-first-frame safety timer and reset the billing-armed guard so the next
@@ -7480,95 +7474,44 @@ const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodi
    307 characters are free on tops and 316 on bottoms, so neither loss was forced by
    budget - both are the same deliberate bet every revision here makes: text volume
    competing with the reference image. One at a time, re-tested live. */
-const CATEGORY_ANCHOR = Object.freeze({
-  /* ── REVISION: THE NON-TARGET LOCK, AIMED AT THE MOMENT IT FAILS ──────────────
-     REPORTED WITH A RECORDING: a SHIRT try-on. At 00:00 the shopper is close and their
-     legs are out of frame entirely. At 00:03 they lift a leg in - wearing light blue
-     shorts - and Decart renders black long trousers over it.
+/* ── REVISION: ONE SURFACE, ONE INSTRUCTION ──────────────────────────────────────
+   THE REPORT, third of its family: the frame renders as two zones - Decart's output on
+   top, a raw camera feed or black block underneath. The CLIENT cause is gone for good in
+   this revision (the compositing guard is deleted, not disabled - see THE NON-TARGET
+   REGION GUARD IS GONE), and this is the prompt half of the same cleanup: a single
+   product-specified instruction that describes ONE continuous surface and asks for
+   nothing that could read as a second source or a region boundary.
 
-     THE PREVIOUS LOCK WAS ALREADY THERE and did not hold, which is the whole reason for
-     this wording. It said "strictly preserve the subject's actual live lower
-     clothing/pants exactly as seen on camera" - a statement about a region the model
-     could reasonably read as describing what was in frame WHEN THE SESSION STARTED. At
-     00:00 there was no lower clothing in frame at all, so at 00:03 there was nothing for
-     that sentence to point at, and a region with no referent is the unstated region this
-     file keeps recording as the thing that gets invented.
+   ⚠️ THIS PAIR IS CATEGORY-AGNOSTIC, AND THAT IS A KNOWN, RECORDED RISK ───────────
+   Both branches now ship the SAME string. It names "the target clothing item" rather than
+   the shirt or the pants, and it does not say which region the garment belongs on. That is
+   the specified wording and it is what ships, but this file's history says plainly what an
+   unscoped anchor costs: the SHIRT-REPLACEMENT report - a trouser try-on that claimed the
+   whole reference and repainted the shopper's live top - was filed against exactly this
+   configuration, and every revision since had named a region to keep it closed. The
+   invented-non-target-garment family (the black-long-trousers report) loses its wording
+   too, and it no longer has the runtime guard behind it either.
 
-     SO THE NEW WORDING NAMES THE EVENT, not just the region: "for any lower body parts,
-     legs, or shorts that ENTER the camera frame DURING THE VIDEO". It also names the
-     attributes to carry across (color, pattern, length - length is the one the report
-     turned on: shorts became long trousers) and bans all three edits on them.
+   SO THE RESTORE IS KEPT ONE LINE AWAY, verbatim, rather than left to the commit log. If
+   a try-on starts claiming the wrong region or inventing the opposite layer, swap the two
+   values below back to CATEGORY_SCOPED.top / .bottom - the routing through
+   isBottomsGarment() is untouched and still selects per category, so the mechanism is
+   already there and only the strings changed. */
+/* ── RETIRED CLAUSES, kept verbatim so each restore is one line ──────────────────
+   Off the wire, every one a reproduced regression. Listed here rather than left in the
+   commit log, which is the convention the rest of this file follows and which
+   image-first.test.mjs §2 enforces as a pair (absent from the prompt, present on file).
 
-     THE TWO STRINGS ARE STRUCTURALLY IDENTICAL and mirror each other exactly, because the
-     failure is symmetric: a shopper who steps back during a TROUSERS session reveals their
-     torso and gets an invented shirt by the same mechanism.
-
-     WORDS ARE A BIAS, NOT A GUARANTEE, and this revision ships the guarantee alongside
-     them: the non-target region guard composites the shopper's own camera pixels back over
-     that region after the frame returns. Decart's set() has no mask channel, so the prompt
-     is the only thing that can ask and the guard is the only thing that can enforce. Read
-     them as one fix - see THE NON-TARGET REGION GUARD in this file.
-
-     WHAT CAME OFF: the build/width adjustment sentence ("Dynamically adjust the shirt cut,
-     shoulder width, and torso drape to match the subject's exact live body width and build
-     (narrow or wide)", and the waistline/leg-width mirror on bottoms). Restoring it is one
-     line - append it to the anchor - and the morphology monitor that decides WHEN to
-     re-condition is untouched, so what is lost is the prompt's half of the width axis.
-     Watch for a loose drape on a slender build; that is the report this would answer. */
-  /* ── REVISION: FULL FRAME, AND THE BLACK BAR NAMED OUT LOUD ──────────────────
-     THE PREVIOUS PAIR WAS WRITTEN FOR A PIPELINE THAT NO LONGER EXISTS. It described the
-     non-target region as something to "pass through ... from the LIVE camera feed", which
-     was the prompt half of a two-part fix whose other half - the compositing guard - is
-     now OFF (config.js LOWER_BODY_GUARD_ENABLED, and its own comment says why: the guard
-     was rendering a solid black rectangle over the lower half of the canvas). A prompt
-     that instructs a model to "pass through the live camera feed" for one region is
-     describing a compositing operation the model cannot perform. Left in place it is a
-     standing invitation to render SOMETHING that reads as a different source for that
-     region - which is the family the black-bar report belongs to.
-
-     SO BOTH BRANCHES NOW SCOPE TO THE WHOLE FRAME. "in the full video frame" is the
-     positive statement, "without adding black bars" is the negative one, and the black bar
-     is named explicitly because a defect the model has demonstrably produced is worth one
-     token to forbid by name. The preserve-list is stated as the subject's OWN natural
-     features (face, hair, the non-target half, background) rather than as a region routed
-     to another source, so every sentence describes something a single-stream image-to-image
-     model can actually do.
-
-     "Fit ONLY" IS STILL DOING THE SAME WORK in the first two words of both strings - it
-     scopes the instruction before any noun is introduced, where a leading-token model is
-     most sensitive, which is the same reasoning buildCompositePrompt() records for putting
-     the anchor first at all.
-
-     WHAT CAME OFF, written down because this file's history is a list of wordings that
-     were removed and had to come back: the ENTER-THE-FRAME EVENT clause ("for any lower
-     body parts, legs, or shorts that ENTER the camera frame DURING THE VIDEO") and its
-     attribute list (color, pattern, LENGTH). That clause was aimed at one specific report -
-     shorts becoming long trousers when a leg entered frame mid-session - and length is the
-     attribute that report turned on. What replaces it is a broader, shorter preservation
-     statement plus the invented-garment ban ("inventing extra garments"), which covers the
-     same failure in fewer tokens but says nothing about LENGTH. If the shorts-to-trousers
-     report returns, that clause is what answers it and it is recorded here verbatim.
-     The two strings stay structurally identical and mirror each other, because the failure
-     is symmetric in both directions. */
-  /* ── REVISION: THE UNIFIED CONTINUOUS FRAME ──────────────────────────────────
-     The previous pair already scoped to "the full video frame" and banned black bars by
-     name. This pair keeps both and adds the two things that revision was missing:
-
-     1. THE REGION IS NAMED AGAIN. "onto the subject's upper torso" / "lower body" came
-        out when the frame-scoping went in, on the reasoning that a half-frame scope was
-        what the black-bar report was filed against. That was one step too far: the region
-        says WHERE THE GARMENT GOES, which is not the same claim as where the model may
-        render. Both are stated now - the garment is placed on a region, ACROSS a
-        continuous frame - so neither report can be re-opened by the other's fix.
-     2. "DO NOT SLICE THE CANVAS" IS EXPLICIT. The reported artifact is a frame cut into
-        two disconnected blocks, and the ban now names that operation as well as the black
-        bar it fills the gap with. Two ways of describing one defect, because the model
-        produced both descriptions of it.
-
-     AND THE NON-TARGET CLOTHING IS PRESERVED BY NAME AGAIN ("the subject's natural lower
-     clothing"), where the previous pair only named the body region. That is the clause the
-     invented-trousers report turns on, and it is worth restating now that the compositing
-     guard which used to enforce it is off. */
+     · the build/width adjustment sentence ("Dynamically adjust the shirt cut, shoulder
+       width, and torso drape to match the subject's exact live body width and build
+       (narrow or wide)", and the waistline/leg-width mirror on bottoms). The morphology
+       monitor that decides WHEN to re-condition is untouched, so what is retired is the
+       prompt's half of the width axis - watch for a loose drape on a slender build.
+     · the enter-the-frame event clause ("for any lower body parts, legs, or shorts that
+       ENTER the camera frame DURING THE VIDEO"), with its attribute list naming colour,
+       pattern and LENGTH. Length is the attribute the black-shorts-to-long-trousers
+       report turned on, and nothing on the wire names it now. */
+const CATEGORY_SCOPED = Object.freeze({
   top:
     "Fit ONLY the exact reference shirt onto the subject's upper torso across this" +
     " unified continuous frame. Do not slice the canvas, insert black bars, or invent" +
@@ -7579,6 +7522,22 @@ const CATEGORY_ANCHOR = Object.freeze({
     " unified continuous frame. Do not slice the canvas, insert black bars, or invent" +
     " upper body garments. Strictly preserve the subject's natural upper clothing and" +
     " live background.",
+});
+
+/* The specified single instruction. Two sentences: bind the garment to the subject in the
+   stream, then require one seamless surface. "without splitting or masking" names both
+   halves of the reported artifact - the split itself, and the masking that produced it. */
+const UNIFIED_ANCHOR =
+  "Fit the target clothing item onto the subject in this video stream." +
+  " Render the complete frame seamlessly across the entire viewport" +
+  " without splitting or masking.";
+
+/* Both keys resolve to the same string today. The SHAPE is kept - and isBottomsGarment()
+   still selects between them at every call site - so restoring per-category wording is a
+   value swap rather than re-plumbing the routing. */
+const CATEGORY_ANCHOR = Object.freeze({
+  top:    UNIFIED_ANCHOR,
+  bottom: UNIFIED_ANCHOR,
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -7715,7 +7674,7 @@ function imageOnlyPrompt(item) {
      TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, STRICT_REFERENCE_LOCK]`
      for the hallucination clamp, `[P.HIGH, KEEP_OPPOSITE_LAYER]` on the bottoms branch for
      the opposite-layer pin; both are the retirements this revision made. The budget is not
-     the constraint - 396 characters are free on tops and 390 on bottoms - so the only
+     the constraint - 489 characters are free on each branch - so the only
      question is whether that text is worth the weight it takes away from the reference
      image, which is the mechanism every report in this sequence shares. One at a time,
      re-tested live. */
@@ -7831,13 +7790,13 @@ function lookAnchorPrompt() {
    The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS (254 chars - anchor)             BOTTOMS (260 chars - anchor)
-     + DENSE.bodyFidelity  (45) → 300  fits              → 306  fits
-     + DENSE.modelAgnostic (64) → 319  fits              → 325  fits
-     + both of them        (110)→ 365  fits              → 371  fits
+     TOPS (161 chars - anchor)             BOTTOMS (161 chars - same string now)
+     + DENSE.bodyFidelity  (45) → 207  fits              → 207  fits
+     + DENSE.modelAgnostic (64) → 226  fits              → 226  fits
+     + both of them        (110)→ 272  fits              → 272  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 396 characters are free on tops and 390 on
-   bottoms, so every retired clause in this table would go back with room to spare. That
+   NOTHING SHEDS ANY MORE, on either branch. 489 characters are free on each
+   branch, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.
 
@@ -10563,7 +10522,6 @@ function startBillingWindow(gen) {
      MODEL_READY_STABLE_FRAMES/_MS - so this fades in over content that is settled rather
      than over content that is merely present. */
   revealAiFeed();
-  startLowerBodyGuard();   // no-op unless LOWER_BODY_GUARD_ENABLED - see its own comment
   /* Late-entry recovery starts with the billed window: from here on, a shopper who
      drifts out of shot and steps back in gets the garment re-conditioned into the
      window ALREADY RUNNING - never a second billed one. See startPresenceWatcher(). */
@@ -10706,7 +10664,6 @@ function armFirstFrameBilling(video, gen) {
          per tick, no extra inference - and it is deliberately outside the two consumer
          blocks below, because the guard must keep tracking the body whether or not
          presence and topology happen to be enabled. */
-      updateBodyGuardLine(result);
       if (now - lastLogAt >= 80) {   // throttled - avoid one line per decoded frame
         lastLogAt = now;
         const s = sampleVideoLuma(video);
@@ -11480,7 +11437,6 @@ function stopLive() {
 
   teardown();                          // rtClient.disconnect() → billing stops now (also hides #aiVideo)
   card().classList.remove("show-live");
-  stopLowerBodyGuard();
   stopPresenceWatcher();
   if (frozen) card().classList.add("show-result");   // surface the frozen snapshot as the final result
   setLiveControls(false);              // reset the button back to "Go Live" so a new session can start
@@ -11516,7 +11472,6 @@ function beginFreezeHold() {
   // 4) Surface the frozen result for the remainder of the window; lock the control so
   //    a mid-hold click can't start a second session before the clip finalizes.
   card().classList.remove("show-live");
-  stopLowerBodyGuard();
   stopPresenceWatcher();
   if (frozen) card().classList.add("show-result");
   $("captureBtn").disabled = true;
@@ -11595,24 +11550,6 @@ function finalizeVideoClip() {
   toast("⏱ הסרטון בן " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות מוכן ✓");
 }
 
-/* ── Lower-body compositing guard (config.js LOWER_BODY_GUARD_ENABLED) ────────
-   THE PROBLEM THIS EXISTS FOR: nothing in @decartai/sdk@0.1.5's realtime API can put a
-   hard boundary on what Decart is allowed to touch (setInputSchema is exactly { prompt,
-   enhance, image } - no mask/ROI/region parameter exists to configure). A prompt can ask
-   the model not to alter the trousers; it cannot GUARANTEE it, and a live report showed
-   it failing that ask (a hallucinated tuxedo/altered trousers reaching the screen). This
-   is the one lever that CAN guarantee it: after Decart renders, paint the shopper's own
-   raw camera pixels back over whatever is below the guard line, in the browser, where
-   nothing the model does can override it.
-
-   WHY IT IS OFF BY DEFAULT: see LOWER_BODY_GUARD_ENABLED's own comment in config.js.
-   Short version - the boundary is a fixed fraction of frame height, not a real body-part
-   detection, so it is a guess that can clip into a correctly-rendered shirt for a
-   shopper framed close to the camera. Must be validated live before flipping true.
-
-   ADDITIVE ONLY, matching lux-interactions.js's own stated design rule for exactly this
-   reason: #aiVideo is never touched, never re-parented, never has its role changed. This
-   only ever paints on top of it via the stacked #lowerBodyGuard canvas (style.css). */
 /* ── Body-presence gate - "the first try is always glitchy" ──────────────────────
    THE FAILURE. Decart conditions on the frame it is handed. Press go-live while still
    reaching for the mouse, half out of shot, or mid-turn, and the garment is fitted to
@@ -12508,279 +12445,31 @@ async function reconditionForTopology(step) {
 }
 /* ── end body-presence gate ── */
 
-let lowerBodyGuardRAF = null;
-/* The LIVE value the paint loop actually reads, distinct from the static
-   LOWER_BODY_GUARD_FRAC config constant it starts equal to. calibrateLowerBodyGuard()
-   (below) updates THIS, never the config constant - the config value stays the fallback
-   for when calibration is off, unavailable, or hasn't found a face yet. Reset to the
-   static default in stopLowerBodyGuard() so a new session never inherits a previous
-   one's calibration (different shopper, different distance from the camera). */
-let lowerBodyGuardFrac = LOWER_BODY_GUARD_FRAC;
+/* ── THE NON-TARGET REGION GUARD IS GONE ──────────────────────────────────────
+   REMOVED, not disabled. It composited the shopper's own raw camera pixels back over the
+   half of the frame that was not being fitted, which is EXACTLY the reported artifact:
+   "the top 50% is Decart's AI output and the bottom 50% is a separate raw camera feed."
+   That was the feature working as designed, and the design is wrong for this product.
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   THE NON-TARGET REGION GUARD - CURRENTLY OFF (config.js LOWER_BODY_GUARD_ENABLED)
-   ══════════════════════════════════════════════════════════════════════════════
-   ⚠️ READ THIS FIRST: everything below describes what this mechanism DOES when enabled,
-   and it is not enabled. It was turned on, and a recording showed it rendering the lower
-   half of the live canvas as a SOLID BLACK RECTANGLE - its own band geometry (guardBand()
-   puts the boundary at the hip line, which in a torso-forward framing sits at about half
-   the frame height). The band's source is a drawImage() off #webcam, which is
-   visibility:hidden throughout .show-live while the input throttle re-negotiates the
-   shared camera source underneath it via applyConstraints() on a clone of the same track.
-   Beyond the readback, a hard-edged rectangular composite over a diffusion output shows a
-   seam wherever the two sources disagree on exposure, white balance or latency.
+   IT SHIPPED OFF FIRST, then came out entirely, because a flag is not an architecture.
+   While the code existed, one config edit could put a hybrid split back on screen, and
+   three separate reports of the same symptom is enough evidence that the mechanism should
+   not be one edit away. THE DISPLAY SURFACE NOW HAS EXACTLY ONE SOURCE: #aiVideo, bound
+   to Decart's WebRTC stream. Nothing in this file draws the webcam onto anything the
+   shopper sees while a session is live.
 
-   IT IS KEPT INTACT, NOT DELETED, so the restore is one flag rather than a rewrite from
-   the commit log - and lower-body-guard.test.mjs still exercises the whole mechanism,
-   including that it paints NOTHING while the flag is off. Anything that re-enables it has
-   to answer the black band and the cover/stretch mismatch (style.css #lowerBodyGuard)
-   first. config.js's LOWER_BODY_GUARD_ENABLED comment carries the full arc.
+   WHAT WENT WITH IT, stated plainly because it was a real guarantee: Decart's set()
+   exposes { prompt, enhance, image } and no mask channel, so there is now NO hard stop
+   against an invented non-target garment - the black-long-trousers report rests entirely
+   on the prompt, which is a probabilistic bias. That is the accepted trade: a guaranteed
+   visible split on every session is worse than an occasional hallucination. If it has to
+   come back it must come back as something that is not a hard-edged rectangular composite
+   over a diffusion output - git history has the full mechanism and both of its config
+   comments.
 
-   REPORTED: trying on a SHIRT, the shopper lifts a leg into frame wearing light blue
-   shorts, and Decart renders black long trousers over it. The prompt forbids exactly this
-   in words ("pass through and strictly preserve the subject's LIVE camera feed clothing"),
-   and words are a probabilistic bias on a diffusion model, not a guarantee. Decart's
-   realtime set() exposes { prompt, enhance, image } and NO mask channel, so there is no
-   way to protect a region on the server - it cannot be told "leave these pixels alone".
-
-   THIS IS WHERE IT CAN BE MADE ABSOLUTE, and it is the only place: composite the shopper's
-   OWN untouched camera pixels back over the non-target region, in the browser, after the
-   frame comes back. Whatever Decart invented below the waist never reaches the screen.
-
-   ── THE NAMES SAY "LOWER BODY"; THE BEHAVIOUR IS "WHICHEVER REGION IS NOT BEING FITTED" ──
-   The DOM id (#lowerBodyGuard), the CSS class and these function names are historical -
-   the feature was built for tops only, where the non-target region is always the lower
-   body. It is category-aware now: a BOTTOMS try-on guards the UPPER body instead, because
-   a shopper who steps back during a trousers session gets an invented shirt by the exact
-   same mechanism. The names were left alone deliberately - they are stable identifiers
-   with history in three files - so read guardedRegion() for what actually happens.
-
-   ── THE BOUNDARY IS THE SHOPPER'S OWN HIP LINE ──────────────────────────────────
-   Not a fraction of frame height. config.js records why the feature shipped disabled: a
-   fixed fraction is "a GUESS calibrated to nothing about the actual shopper" that could
-   "clip into the bottom of a correctly-rendered SHIRT". MediaPipe Pose - taken on for the
-   presence gate, now running continuously for the topology monitor - reports the hips, so
-   the boundary is re-read live from the body it is actually guarding. BODY_GUARD_MARGIN_FRAC
-   pushes it clear of a hem that overhangs the line. The static fraction remains the
-   fallback for frames where no pose reading is available; guarding on a rough boundary
-   beats not guarding at all, now that the failure it prevents is reproduced. */
-
-/* The live hip line as a fraction of frame height from the TOP, or null when the current
-   frame yielded no usable reading. Written by the pose loop, read by three paint paths. */
-let bodyGuardLine = null;
-/* Torso length in the same normalised units, for scaling the margin. */
-let bodyGuardTorso = null;
-
-/**
- * Update the guard boundary from a PoseLandmarker result. Called once per pose tick, on
- * the loop that was already running - this costs one more read of landmarks that have
- * already been computed, not another inference.
- * @param {{landmarks?:Array}|null} result
- * @returns {void}
- */
-function updateBodyGuardLine(result) {
-  const lm = result && Array.isArray(result.landmarks) ? result.landmarks[0] : null;
-  if (!torsoReadable(lm)) return;            // keep the last good line rather than guessing
-  const ls = lm[POSE_LANDMARK.LEFT_SHOULDER], rs = lm[POSE_LANDMARK.RIGHT_SHOULDER];
-  const lh = lm[POSE_LANDMARK.LEFT_HIP],      rh = lm[POSE_LANDMARK.RIGHT_HIP];
-  const hipY = (lh.y + rh.y) / 2, shoulderY = (ls.y + rs.y) / 2;
-  if (!Number.isFinite(hipY) || !Number.isFinite(shoulderY)) return;
-  bodyGuardLine = Math.min(1, Math.max(0, hipY));
-  bodyGuardTorso = Math.abs(hipY - shoulderY);
-}
-
-/** Which half of the body must NOT be synthesised for the active garment. */
-function guardedRegion() {
-  return isBottomsGarment(activeItem) ? "upper" : "lower";
-}
-
-/**
- * The band of the frame to restore from the live camera, in pixels.
- *
- * PREFERS THE LIVE HIP LINE, falls back to the static/face-calibrated fraction. The margin
- * always pushes AWAY from the region being fitted - down for a tops try-on so a long shirt
- * hem is never clipped, up for a bottoms try-on so a high waistband is not.
- * @param {number} h frame height in pixels
- * @returns {{y0:number, y1:number, source:"pose"|"fraction"}|null} null = guard nothing
- */
-function guardBand(h) {
-  const region = guardedRegion();
-  const margin = (bodyGuardTorso || 0) * BODY_GUARD_MARGIN_FRAC;
-  if (bodyGuardLine !== null) {
-    const line = region === "lower"
-      ? Math.min(1, bodyGuardLine + margin)     // guard BELOW the hips, pushed down
-      : Math.max(0, bodyGuardLine - margin);    // guard ABOVE the hips, pushed up
-    const y = Math.round(h * line);
-    return region === "lower"
-      ? { y0: y, y1: h, source: "pose" }
-      : { y0: 0, y1: y, source: "pose" };
-  }
-  /* No pose reading yet. The static fraction only ever described a LOWER band, so it is
-     the fallback for that region alone - inventing an upper-body equivalent out of the
-     same number would be a guess about a guess, and for bottoms the un-guarded failure is
-     the one this feature has no report for yet. */
-  if (region !== "lower") return null;
-  const y = Math.round(h * (1 - lowerBodyGuardFrac));
-  return { y0: y, y1: h, source: "fraction" };
-}
-
-/**
- * Composite the shopper's real camera pixels over the non-target band of a destination
- * context. Shared by all three paths that must agree: the on-screen guard canvas, the
- * recorder, and the final frozen frame.
- *
- * THE SELFIE-MIRROR CORRECTION IS THE SUBTLE PART. #webcam's DECODED frame is never
- * mirrored - only its CSS display is - while #aiVideo comes back from Decart already
- * correctly oriented. Drawing the webcam raw would composite a mirror-flipped band under a
- * correctly-oriented one: buttons, pockets and prints landing on the wrong side at the
- * seam. This is the same translate+scale freezeFinalFrame() uses for its own webcam
- * fallback, applied to the guarded band alone.
- * @returns {boolean} true if a band was painted
- */
-function paintGuardBand(ctx, webcam, w, h) {
-  if (!LOWER_BODY_GUARD_ENABLED || !ctx || !webcam || !webcam.videoWidth) return false;
-  const dst = guardBand(h);
-  if (!dst || dst.y1 <= dst.y0) return false;
-  /* SOURCE AND DESTINATION BANDS ARE COMPUTED INDEPENDENTLY, and that is not pedantry:
-     the webcam's native resolution and the destination canvas's are routinely different -
-     the recorder sizes itself to #aiVideo, the frozen frame to whatever Decart returned -
-     so reusing one offset for both silently misaligns the composited band on any camera
-     whose aspect or scale does not happen to match. Each band is a fraction of ITS OWN
-     surface's height. (The live guard canvas is sized to the webcam, so there the two
-     agree - which is exactly why this was easy to get wrong.) */
-  const src = guardBand(webcam.videoHeight);
-  if (!src || src.y1 <= src.y0) return false;
-  ctx.save();
-  ctx.translate(w, 0);
-  ctx.scale(-1, 1);
-  try {
-    ctx.drawImage(webcam,
-      0, src.y0, webcam.videoWidth, src.y1 - src.y0,
-      0, dst.y0, w,                 dst.y1 - dst.y0);
-  } catch (_) {
-    /* best-effort: a failed guard paint must never fail the frame it was protecting */
-    ctx.restore();
-    return false;
-  }
-  ctx.restore();
-  return true;
-}
-
-/* ── Auto-calibration - one reading per session, not a guess held forever ──────────
-   THE GAP THIS CLOSES: LOWER_BODY_GUARD_FRAC is one fixed number for every shopper at
-   every distance from the camera. Standing close, the real waist line sits far higher
-   in frame than a 34%-from-bottom guess; standing back, far lower - "if the user moves
-   the suit is still visible" is exactly this, restated.
-
-   THE METHOD: FaceDetector (Shape Detection API) - the SAME browser primitive the
-   orientation watcher already uses elsewhere in this file (see ORIENT_FACE_SIZE), so
-   this adds no new dependency, not the multi-MB WASM segmentation model this file has
-   already declined once. A face box plus a standard figure-drawing proportion (a
-   person's waist sits roughly LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS head-heights below
-   the crown) gives an ESTIMATED waist line calibrated to how THIS shopper is actually
-   framed, instead of one number guessed for everyone.
-
-   STILL A HEURISTIC - said plainly, not oversold. It assumes an adult, upright, roughly
-   front-facing posture at the moment it samples; it degrades to the static
-   LOWER_BODY_GUARD_FRAC whenever no face is found, the browser lacks FaceDetector, or
-   the shopper is turned away. It runs ONCE, at go-live, not every frame - recalculating
-   continuously would make the guard line visibly JITTER as a head naturally bobs,
-   trading one visible defect for another. Fire-and-forget from its caller: it updates
-   lowerBodyGuardFrac in the background, and the paint loop (which reads that variable
-   fresh every frame already) picks up the refined value on whichever frame it resolves,
-   with zero extra wiring - go-live is never blocked waiting on it. */
-async function calibrateLowerBodyGuard() {
-  if (!LOWER_BODY_GUARD_ENABLED || !LOWER_BODY_GUARD_AUTO_CALIBRATE) return;
-  if (typeof FaceDetector === "undefined") return;   // graceful degrade - stays on the static fraction
-  const webcam = $("webcam");
-  if (!webcam || webcam.videoWidth === 0) return;
-
-  try {
-    const detector = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
-    /* Scaled down WITHOUT cropping - preserves the real aspect ratio, unlike the
-       orientation watcher's own square 96x96/256x256 canvases (built for a different
-       purpose: a fixed-size pixel histogram, where the crop-to-square doesn't matter).
-       Here it would: a cropped canvas would make a Y-fraction in IT disagree with the
-       same Y-fraction of the real webcam frame. A uniform scale-down has no such
-       distortion, so the face box's fraction of THIS canvas's height is exactly its
-       fraction of the webcam's real height - no separate coordinate mapping needed. */
-    const scale = 256 / Math.max(webcam.videoWidth, webcam.videoHeight);
-    const cw = Math.max(1, Math.round(webcam.videoWidth * scale));
-    const ch = Math.max(1, Math.round(webcam.videoHeight * scale));
-    const cv = document.createElement("canvas");
-    cv.width = cw; cv.height = ch;
-    cv.getContext("2d").drawImage(webcam, 0, 0, cw, ch);
-
-    const faces = await detector.detect(cv);
-    if (!faces || !faces.length) return;               // no face found - keep the static fraction
-    const box = faces[0].boundingBox;
-    const faceTopFrac = box.y / ch, faceHeightFrac = box.height / ch;
-    const waistFrac = faceTopFrac + faceHeightFrac * LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS;
-
-    /* Clamped, not trusted outright: a spurious tiny detection (a face in a photo on
-       the wall behind the shopper, a bad reading) must not produce a guard that
-       protects nearly nothing or nearly the whole frame. */
-    lowerBodyGuardFrac = Math.min(0.55, Math.max(0.15, 1 - waistFrac));
-    console.log(`[PEAR] lower-body guard calibrated: ${(lowerBodyGuardFrac * 100).toFixed(0)}% ` +
-      `of frame height (face at ${(faceTopFrac * 100).toFixed(0)}%, ` +
-      `${(faceHeightFrac * 100).toFixed(0)}% tall)`);
-  } catch (e) {
-    console.warn("[PEAR] lower-body guard calibration failed - staying on the static fraction:",
-      e?.message || e);
-  }
-}
-
-function startLowerBodyGuard() {
-  if (!LOWER_BODY_GUARD_ENABLED) return;      // the whole feature is a no-op until validated live
-  if (lowerBodyGuardRAF) return;              // already running - never stack a second loop
-  const webcam = $("webcam"), canvas = $("lowerBodyGuard");
-  if (!webcam || !canvas) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  card().classList.add("lower-body-guard-active");   // CSS gate: .show-live is the other half
-  calibrateLowerBodyGuard();   // fire-and-forget - see its own comment for why
-
-  function paint() {
-    // isLive() re-checked every frame, not just at start: the guard must stop painting
-    // the instant the session ends, not ride one more rAF tick into a torn-down state.
-    if (!isLive() || webcam.videoWidth === 0) {
-      lowerBodyGuardRAF = requestAnimationFrame(paint);
-      return;
-    }
-    const w = webcam.videoWidth, h = webcam.videoHeight;
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
-    ctx.clearRect(0, 0, w, h);
-    /* One helper, three callers - see paintGuardBand(). The band, its boundary and the
-       mirror correction all live there so the live view, the recording and the frozen
-       result cannot disagree about which pixels were the shopper's own. */
-    paintGuardBand(ctx, webcam, w, h);
-    lowerBodyGuardRAF = requestAnimationFrame(paint);
-  }
-  lowerBodyGuardRAF = requestAnimationFrame(paint);
-}
-
-/* Idempotent and safe to call from multiple teardown paths (see the three call sites) -
-   exactly the redundant-safety style teardown() itself already uses for its other
-   timers, because "did the rAF loop actually stop" must never depend on remembering the
-   one right place to ask. */
-function stopLowerBodyGuard() {
-  if (lowerBodyGuardRAF) { cancelAnimationFrame(lowerBodyGuardRAF); lowerBodyGuardRAF = null; }
-  const card_ = card();
-  if (card_) card_.classList.remove("lower-body-guard-active");
-  const canvas = $("lowerBodyGuard");
-  if (canvas) {
-    const ctx = canvas.getContext("2d");
-    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }
-  // Reset to the static default so the NEXT session starts from the documented
-  // fallback, not a stale calibration left over from a different shopper standing at
-  // a different distance from the camera. The live hip line goes with it, for the same
-  // reason and more so: it describes one specific body.
-  lowerBodyGuardFrac = LOWER_BODY_GUARD_FRAC;
-  bodyGuardLine = null;
-  bodyGuardTorso = null;
-}
+   THE WEBCAM STILL FEEDS DECART. #webcam remains the capture source and is still cloned
+   into createThrottledInputStream() as the model's INPUT; what it no longer does is reach
+   the display. Input from the camera, output from Decart, one element each. */
 
 /* Paint the final dressed frame onto the on-screen #resultCanvas at full capture
    resolution and return its JPEG dataURL. Doubles as (1) the frozen "masterpiece"
@@ -12805,11 +12494,6 @@ function freezeFinalFrame() {
   if (mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
   try { ctx.drawImage(src, 0, 0, w, h); } catch (_) { ctx.restore(); return null; }
   ctx.restore();
-  /* The same guard the live view and the recorder apply. Only meaningful on the AI branch:
-     the fallback branch is ALREADY the raw webcam, so there is nothing of Decart's in it to
-     protect the shopper from. Without this the saved "masterpiece" would be the one
-     artefact of the session still showing an invented non-target garment. */
-  if (!mirror) paintGuardBand(ctx, webcam, w, h);
   try { return cv.toDataURL("image/jpeg", 0.85); } catch (_) { return null; }
 }
 
@@ -12955,14 +12639,11 @@ function startRecording() {
         if (recordCanvas.width !== w || recordCanvas.height !== h) {
           recordCanvas.width = w; recordCanvas.height = h;
         }
-        /* THE GUARD RIDES THE RECORDING TOO. This loop draws #aiVideo directly and has
-           never seen the overlay canvases stacked over it on screen - which was fine while
-           they were transient (the orientation cross-fade), and is not fine for the
-           non-target guard: without this the clip and the saved poster would show the
-           invented trousers the live view was protecting the shopper from. */
+        /* ONE SOURCE, HERE TOO. This loop draws #aiVideo and nothing else - the guard
+           that used to composite raw camera pixels over it is gone, so the recorded clip
+           and the saved poster are the same single Decart surface the shopper watched. */
         try {
           ctx.drawImage(video, 0, 0, w, h);
-          paintGuardBand(ctx, $("webcam"), w, h);
           beginRecorder();
         } catch (_) {}
       }

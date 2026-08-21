@@ -242,7 +242,9 @@ console.log("\n── §3b THE DISPLAY GATE: the second lock on the same door �
 
   /* ONE REVEAL, in the same statement that flips the state class, so the pixels and the
      documented state can never disagree. */
-  const reveal = extract("card().classList.add(\"show-live\");", "startLowerBodyGuard();");
+  /* End marker follows the reveal. It used to be startLowerBodyGuard(); that call is gone
+     with the compositing guard, so this anchors on the next surviving statement instead. */
+  const reveal = extract("card().classList.add(\"show-live\");", "startPresenceWatcher();");
   check("the ONLY reveal is the statement that adds .show-live",
     /revealAiFeed\(\);/.test(reveal) &&
     (SRC.match(/revealAiFeed\(\)/g) || []).length === 2,   // the definition + the one call

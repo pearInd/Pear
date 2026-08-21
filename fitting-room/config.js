@@ -30,11 +30,6 @@
  * @property {number}   BODY_BUILD_DELTA        Relative shoulder-to-torso / hip-to-shoulder change that triggers a re-drape (0..1) - the narrow-vs-wide axis.
  * @property {number}   BODY_RECONDITION_COOLDOWN_MS Minimum gap between two re-conditioning dispatches (ms).
  * @property {number}   BODY_TRACK_HOLD_MS      How long a lost skeleton holds the last valid fit before the baseline is dropped (ms).
- * @property {boolean}  LOWER_BODY_GUARD_ENABLED Composite the shopper's own raw pixels back over Decart's output for the region NOT being fitted. OFF - it was rendering a black rectangle over half the canvas; see its own comment.
- * @property {number}   LOWER_BODY_GUARD_FRAC   Fraction of frame height, from the bottom, that the guard protects.
- * @property {boolean}  LOWER_BODY_GUARD_AUTO_CALIBRATE Derive LOWER_BODY_GUARD_FRAC per-session from a detected face box instead of the fixed fraction.
- * @property {number}   LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS Head-heights from crown to waist, used by the calibration above.
- * @property {number}   BODY_GUARD_MARGIN_FRAC  How far past the hip line the guard boundary sits, as a fraction of torso length, always away from the region being fitted.
  * @property {number}   PLAYOUT_DELAY_HINT      Chromium RTCRtpReceiver.playoutDelayHint (seconds). 0 = render ASAP.
  * @property {boolean}  PREFER_LOW_LATENCY_CODEC Opt-in SDP codec-preference munge (default OFF - see note below).
  * @property {string[]} CODEC_PREFERENCE        Codec order tried when the munge flag is ON (reorder only, never remove).
@@ -238,117 +233,6 @@ export const CONFIG = Object.freeze({
      a real prompt is ever rejected again; raising it spends that margin. */
   PROMPT_MAX_CHARS: 650,
 
-  /* ── lower-body compositing guard - a CODE-level backstop, not a prompt ──────
-     THE HONEST REASON THIS EXISTS. @decartai/sdk@0.1.5's realtime set()/setPrompt()
-     accept exactly { prompt, enhance, image } (setInputSchema, z.core.$strip - unknown
-     keys are DISCARDED, not forwarded, confirmed against the compiled SDK, not just its
-     types). There is no mask, ROI, region or segmentation parameter on this API surface
-     at all - "enforce strict regional masking" is not a config to turn on, because Decart
-     never exposes one. A prompt can ASK the model not to touch the trousers; nothing in
-     this SDK can make that a hard guarantee. This is the one lever that can: composite
-     the shopper's OWN, unedited lower-body pixels back over whatever Decart rendered
-     there, in the browser, after the fact - so even a full hallucinated tuxedo below the
-     belt never reaches the screen.
-
-     ── IT IS ON NOW, AND THE REASON IT WAS OFF IS GONE ─────────────────────────
-     THE ORIGINAL OBJECTION, kept verbatim because it was correct and because its
-     resolution is the whole story: "The boundary is a FIXED FRACTION of frame height -
-     there is no body-part detector in this codebase to derive it from the shopper's
-     ACTUAL waist position, and adding one (MediaPipe/BodyPix or similar) means a
-     multi-MB WASM+model CDN dependency, which this codebase has already rejected once
-     for the same reason. A fixed fraction is therefore a GUESS calibrated to nothing
-     about the actual shopper: framed close to camera, it can clip into the bottom of a
-     correctly-rendered SHIRT, restoring raw unedited pixels across a band of garment that
-     was fine - trading an occasional hallucination for a guaranteed visible seam."
-
-     THAT DEPENDENCY IS ALREADY HERE. MediaPipe Pose was taken on for the body-presence
-     gate and now runs CONTINUOUSLY for the topology monitor, on the loop that samples
-     every POSE_SAMPLE_MS * 2. It reports LEFT_HIP/RIGHT_HIP - the exact landmark the
-     objection said this codebase had no way to obtain. The boundary is no longer a
-     fraction guessed for everyone; it is this shopper's own hip line, re-read live. The
-     seam-across-a-shirt-hem failure the objection describes is the failure a hip-derived
-     boundary structurally cannot have, and BODY_GUARD_MARGIN_FRAC below pushes it further
-     clear for the case a hem genuinely falls past the hips.
-
-     THE REPORT THAT MADE IT URGENT: trying on a SHIRT, the shopper lifts a leg into frame
-     wearing light blue shorts, and Decart renders black long trousers over it. The prompt
-     now forbids that in words, but words are a probabilistic bias on a diffusion model and
-     this is the only mechanism in the pipeline that can make it a HARD guarantee - Decart's
-     set() exposes { prompt, enhance, image } and no mask channel, so the non-target region
-     cannot be protected on the server at all. It is protected here, in the browser, after
-     the fact, by compositing the shopper's own untouched pixels back over it.
-
-     THE STATIC FRACTION SURVIVES AS THE FALLBACK, for the frames where the pose read is
-     unavailable (detector still loading, landmarks below the tracking bar, a browser with
-     no WebAssembly). Guarding on a rough boundary beats not guarding at all, which is the
-     opposite of the original trade because the failure it now prevents is reproduced.
-
-     ── AND IT IS OFF AGAIN, ON A RECORDING OF THE GUARD ITSELF ────────────────
-     REPORTED WITH A VIDEO: the lower half of the live canvas renders as a solid black
-     rectangle with a hard horizontal seam across the middle of the frame. That geometry
-     is this feature's, and nothing else's in the pipeline: guardBand() puts its boundary
-     at the shopper's hip line, which for a torso-forward selfie framing sits at roughly
-     half the frame height - exactly where the seam appears. Everything below it is the
-     band paintGuardBand() composites, so a band that paints black IS the reported defect.
-
-     WHY THE BAND CAN COME BACK BLACK, and why "fix the readback" was not the call: the
-     band's source is drawImage(#webcam, …), and #webcam is visibility:hidden for the whole
-     of .show-live (style.css) while the camera source is simultaneously being reconfigured
-     underneath it - createThrottledInputStream() calls applyConstraints() on a CLONE of
-     the same device track, and a clone's constraints re-negotiate the shared source. A
-     readback of a hidden element off a re-negotiating source is not a thing to make
-     reliable; it is a thing to stop depending on.
-
-     THE DEEPER PROBLEM IS THE LAYER, NOT THE READBACK. The guard is a hard-edged
-     rectangular composite over a diffusion output. Even painting perfectly it produces a
-     visible seam wherever the two sources disagree on exposure, white balance or latency,
-     and its canvas is stretched (no object-fit) over videos that are object-fit:cover, so
-     the two layers do not even agree on which pixels are which. The product direction is
-     the opposite one: ONE full-frame stream, edge to edge, no partial layer over it.
-
-     WHAT GOING OFF GIVES UP, stated plainly because it is a reproduced report: the hard
-     guarantee against an invented non-target garment (the black-long-trousers report). It
-     falls back to the prompt, which is a probabilistic bias and not a guarantee - see
-     CATEGORY_ANCHOR in app.js for the wording that now carries it alone. The mechanism
-     below is kept intact and tested, so restoring it is this one flag; anything that
-     restores it must first answer the black band and the cover/stretch mismatch above. */
-  LOWER_BODY_GUARD_ENABLED: false,
-  /* Fraction of the camera-card's frame HEIGHT, measured from the bottom, that gets the
-     shopper's own raw camera pixels composited back over Decart's output. 0.34 is a
-     rough midpoint for a torso-forward selfie framing (roughly waist-down) - conservative
-     on purpose: erring toward occasionally missing a sliver of upper trouser is a much
-     smaller visible defect than erring toward clipping into the rendered shirt. Tune only
-     against a live camera, never by reasoning about it in the abstract. */
-  LOWER_BODY_GUARD_FRAC: 0.34,
-  /* Auto-calibrates LOWER_BODY_GUARD_FRAC once per session from a detected face box
-     (FaceDetector - the same browser API the orientation watcher already uses, no new
-     dependency) instead of relying on the one fixed guess above for every shopper at
-     every distance from the camera. See calibrateLowerBodyGuard()'s own comment in
-     app.js for the method and its honest limits. Falls back to the static
-     LOWER_BODY_GUARD_FRAC whenever no face is found or FaceDetector is unavailable, so
-     turning this off just means "always use the fixed fraction" - the guard itself is
-     still governed entirely by LOWER_BODY_GUARD_ENABLED above. */
-  LOWER_BODY_GUARD_AUTO_CALIBRATE: true,
-  /* Head-heights from crown to waist - the classic figure-drawing/anthropometric
-     convention (~7.5 head-heights top to sole; waist sits roughly half that up from the
-     ground, around 3.5-4 heads down from the crown). 3.8 is a reasonable adult default,
-     not a measurement of any specific shopper. Assumes an adult, upright, roughly
-     front-facing posture; children are proportioned differently (relatively larger
-     heads) and this app already tracks a kids/adult signal elsewhere
-     (resolvedGarmentAgeGroup() in app.js) that a future refinement could read to pick a
-     different ratio - not wired up here, so this stays the same class of change as the
-     guard itself: one clear, testable mechanism, not several unvalidated ones at once. */
-  LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS: 3.8,
-  /* How far past the hip line the guard boundary is pushed, as a fraction of the measured
-     TORSO LENGTH, always AWAY from the region being fitted. The hip line is where the two
-     body halves meet, not where a garment ends: a shirt hem routinely falls a little below
-     the hips, and trousers ride a little above them. Guarding right at the line would clip
-     whichever garment overhangs it - the exact seam-across-a-hem defect the feature was
-     held back for. A tenth of a torso is a few centimetres on a real body: enough to clear
-     a normal hem, small enough that a hallucination cannot hide in it.
-     Scaled by torso length rather than frame height so it means the same thing whether the
-     shopper is standing close or far back. */
-  BODY_GUARD_MARGIN_FRAC: 0.10,
 
   /* ── realtime latency tuning (CLIENT-side only) ─────────────────────────────
      ⚠️ Scope reality check: the ~1s a user perceives in the Lucy-VTON feed is

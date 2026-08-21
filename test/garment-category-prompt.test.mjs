@@ -126,161 +126,78 @@ const SHIRT = { garmentType: "upper_body", name: "Ion Crew Tee" };
 const bottomsPrompt = imageOnlyPrompt(PANTS);
 const topsPrompt    = imageOnlyPrompt(SHIRT);
 
-console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserve the live top ──");
+console.log("\n── §2 THE ANCHOR: one specified string, on both routes ──");
 {
-  /* ── REVISION: DYNAMIC BODY, STATIC GARMENT ─────────────────────────────────
-     THE HISTORY THIS BRANCH CARRIES, in order, because each revision answered a real
-     screenshot and the current wording is the sum of them:
-       · 616 characters across six sentences, four of them about body volume and layer
-         preservation rather than about the garment;
-       · cut to a bare reference lock after a white/cream basketball short rendered as
-         generic BLACK shorts - the tuxedo failure through the lower-body branch, and the
-         mechanism is this file's own: with no negative_prompt and no image-strength on
-         Decart's set(), the ONLY lever over how hard the image is weighed against the
-         text is HOW MUCH TEXT THERE IS;
-       · cut again to the strict 1:1 form both branches shared, after invented detail
-         appeared on the CORRECT garment;
-       · re-scoped to the lower body after a trouser try-on repainted the shopper's live
-         top - "onto the subject" names a garment but no region.
+  /* ── REVISION: THE BRANCHES COLLAPSED INTO ONE STRING ──────────────────────
+     §2 and §3 used to be the bottoms prompt and the tops prompt, asserted separately
+     because they were different strings carrying mirrored clauses. They are the same
+     string now - one product-specified instruction that names no region and no garment
+     type - so what those two sections proved has to be re-stated rather than mechanically
+     find-and-replaced, and the part that GENUINELY WENT AWAY has to be admitted rather
+     than quietly dropped. That is §3's job below.
 
-     THE CURRENT REVISION ANSWERS A DIFFERENT FAILURE ENTIRELY: the fit was right at
-     0 degrees and then STRETCHED over the shopper as they turned. So the wording now
-     states, in one sentence, that the garment is EXACT and STATIC while the body it is
-     drawn on is CURRENT and per-frame - and it names the lower-body contour where the
-     previous revision named the lower body, so the re-scoping above survives intact.
-     320 characters against a 650 ceiling.
-
-     WHAT IT DROPPED is asserted below rather than left to be discovered: the
-     invent/add/alter clamp and the explicit "keep the upper body unmodified" pin. Both
-     are retired-with-a-restore-path in app.js; image-first.test.mjs §1 owns that table. */
-  /* ── REVISION: FULL FRAME, AND THE BLACK BAR NAMED OUT LOUD ────────────────
-     THE PREVIOUS WORDING WAS HALF OF A TWO-PART FIX WHOSE OTHER HALF IS GONE. It told the
-     model to "pass through and strictly preserve the subject's LIVE camera feed clothing"
-     for the non-target region - the prompt half of a pair whose runtime half, the
-     compositing guard, is now OFF (it was rendering a black rectangle over half the
-     canvas; see config.js LOWER_BODY_GUARD_ENABLED and lower-body-guard.test.mjs §1).
-
-     A PROMPT CANNOT PASS A REGION THROUGH FROM ANOTHER SOURCE. Decart's set() takes
-     { prompt, enhance, image } and runs one image-to-image stream; "route this band to the
-     live camera feed" describes a compositing operation the model has no way to perform,
-     so what it can actually act on is the suggestion that some region comes from somewhere
-     else - which is the same family as rendering a flat black band for it.
-
-     SO BOTH BRANCHES SCOPE TO THE WHOLE FRAME NOW, positively ("in the full video frame")
-     and negatively ("without adding black bars"), with the non-target region named as one
-     of the subject's OWN natural features to keep rather than as a second source. */
-  check("opens by scoping to ONE garment, ONE region, and a CONTINUOUS frame",
-    bottomsPrompt.indexOf("Fit ONLY the exact reference pants/shorts onto the subject's lower body across this unified continuous frame.") === 0,
+     WHY IT COLLAPSED: the reported artifact is a frame rendering as two zones (Decart's
+     output on top, a raw camera feed or black block underneath). The client cause is
+     deleted in this revision - the compositing guard is gone, not merely disabled - and
+     this is its prompt half: one instruction describing ONE continuous surface, asking
+     for nothing that could read as a second source or a region boundary. */
+  check("both routes resolve to the specified string, byte for byte",
+    bottomsPrompt === "Fit the target clothing item onto the subject in this video stream." +
+      " Render the complete frame seamlessly across the entire viewport without splitting or masking." &&
+    topsPrompt === bottomsPrompt,
+    `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
+  check("...it binds the garment to the subject, in the stream",
+    /^Fit the target clothing item onto the subject in this video stream\./.test(bottomsPrompt),
     bottomsPrompt);
-  /* BOTH HALVES OF THE LEAD, asserted separately because they answer different reports and
-     a previous revision dropped one while fixing the other. The REGION says where the
-     garment goes (the shirt-replacement report); the FRAME says where the model may render
-     (the split-canvas report). Neither substitutes for the other. */
-  check("...the region is named again - where the garment GOES",
-    /onto the subject's lower body\b/.test(bottomsPrompt),
-    "an unscoped anchor is what let a trouser try-on claim the whole reference");
-  check("...and the frame is named too - where the model may RENDER",
-    /across this unified continuous frame\./.test(bottomsPrompt),
-    "a half-frame render is the defect this half of the lead exists to forbid");
-  check("...and never claims the upper garment as the thing to FIT",
-    !/reference shirt/.test(bottomsPrompt) && !/onto the subject's upper torso/.test(bottomsPrompt),
+  check("...and demands the complete frame across the entire viewport",
+    /Render the complete frame seamlessly across the entire viewport/.test(bottomsPrompt),
     bottomsPrompt);
-  check("...bans BOTH descriptions of the artifact: slicing, and the bar that fills it",
-    /Do not slice the canvas, insert black bars, or invent upper body garments\./
-      .test(bottomsPrompt), bottomsPrompt);
-  check("...and preserves the non-target CLOTHING by name, not just the body region",
-    /Strictly preserve the subject's natural upper clothing and live background\.$/
-      .test(bottomsPrompt), bottomsPrompt);
-
-  /* THE SIZE PROPERTY IS STILL A FIX, so it is asserted as a number rather than trusted
-     to stay small because someone remembered why. It grew by 81 characters here, and that
-     is the deliberate spend of this revision: the per-frame instruction is the only thing
-     that was bought, and image-first.test.mjs §1 pins that it is exactly three sentences. */
-  check("the bottoms prompt stays minimal - three instructions, not an assembly",
-    bottomsPrompt.length <= 360,
-    `${bottomsPrompt.length} chars - was 616 across six sentences four revisions ago`);
-  check("...and carries NO body-volume or temporal clause - the deliberate trade",
-    !/360-degree rotations/.test(bottomsPrompt) && !/as soon as visible/.test(bottomsPrompt),
-    "dropped on purpose: a correct garment with imperfect volume beats a wrong garment");
+  check("...forbidding BOTH operations behind the report - splitting and masking",
+    /without splitting or masking\.$/.test(bottomsPrompt), bottomsPrompt);
+  check("...and asking for no pass-through the model has no second stream for",
+    !/pass through/.test(bottomsPrompt) && !/LIVE camera feed/.test(bottomsPrompt),
+    "the guard that made pass-through real is deleted; the prompt must not still promise it");
+  check("the prompt stays minimal - two sentences, not an assembly",
+    bottomsPrompt.length <= 200,
+    `${bottomsPrompt.length} chars - was 616 across six sentences at its worst`);
 }
 
-console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour ──");
+console.log("\n── §3 WHAT THE COLLAPSE GAVE UP, and where the restore lives ──");
 {
-  check("scopes to the reference shirt, the upper TORSO and a CONTINUOUS frame",
-    topsPrompt.indexOf("Fit ONLY the exact reference shirt onto the subject's upper torso across this unified continuous frame.") === 0,
-    topsPrompt);
-  check("...and carries the exact mirror of the bottoms clauses",
-    /Do not slice the canvas, insert black bars, or invent lower body garments\./.test(topsPrompt) &&
-    /Strictly preserve the subject's natural lower clothing and live background\.$/.test(topsPrompt),
-    topsPrompt);
+  /* ⚠️ THIS SECTION EXISTS TO STOP A KNOWN RISK BECOMING A FORGOTTEN ONE.
+     The specified string is category-agnostic. It says "the target clothing item", not the
+     shirt or the pants, and it never says which region the garment belongs on. Every
+     revision since the SHIRT-REPLACEMENT report - a trouser try-on that claimed the whole
+     reference and repainted the shopper's live top - had named a region specifically to
+     keep that closed, and §4 below is the assertion that was written for it.
 
-  /* ── ONE SHAPE, ONE DELIBERATE DIVERGENCE ───────────────────────────────────
-     The branches no longer normalise into one string - they are worded per region now (a
-     waistline is not a belly; a leg profile is not a silhouette) - so what is asserted is
-     the SHAPE they share and the axis they differ on. The divergence is still exactly the
-     one this suite exists for: WHICH region the anchor claims. image-first.test.mjs §1
-     owns the sentence-by-sentence contract. */
-  check("both open on the same exclusive-scope binding",
-    topsPrompt.startsWith("Fit ONLY the exact reference ") &&
-    bottomsPrompt.startsWith("Fit ONLY the exact reference "),
+     So these checks do not pretend the protection survived. They pin that (a) it is
+     genuinely gone, so nobody reads the old section titles and assumes otherwise, and
+     (b) the restore is one line and the wording is on file verbatim. */
+  check("the anchor names NO region - the shirt-replacement protection is genuinely off",
+    !/upper torso/.test(topsPrompt) && !/lower body/.test(bottomsPrompt),
+    "if this starts failing, the collapse was reverted and §2/§3 should be rewritten");
+  check("...and names no garment type either, on either route",
+    !/reference shirt/.test(topsPrompt) && !/reference pants/.test(bottomsPrompt),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
-  /* ── EACH NAMES BOTH REGIONS NOW, AND THAT IS THE POINT ────────────────────
-     The old rule was "each branch mentions its own garment and never the other's". It
-     cannot hold any more, because the non-target lock has to NAME the layer it protects -
-     a tops prompt that never says "pants" cannot tell the model to leave them alone. What
-     replaces it is the stronger property: each branch FITS one region and PRESERVES the
-     other, and never the reverse. */
-  check("...and each FITS its own garment while PRESERVING the opposite layer's clothing",
-    /Fit ONLY the exact reference shirt/.test(topsPrompt) &&
-    /preserve the subject's natural lower clothing/.test(topsPrompt) &&
-    /Fit ONLY the exact reference pants\/shorts/.test(bottomsPrompt) &&
-    /preserve the subject's natural upper clothing/.test(bottomsPrompt),
-    `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
-  /* THE SELF-CANCELLING PROMPT, restated for the new wording: a branch that lists the very
-     region it is editing among the things to "strictly preserve" is instructing the model
-     both to change it and to leave it alone. The old phrasing had the same hazard through
-     "pass through"; this is that check, retargeted. */
-  check("...and neither preserves the very region it is fitting",
-    !/preserve[^.]*upper body/.test(topsPrompt) &&
-    !/preserve[^.]*lower body/.test(bottomsPrompt),
-    "a prompt that preserves the layer it is editing cancels itself");
-  /* BOTH SCOPE TO THE FULL FRAME AND BOTH BAN THE BAR. This is the property the whole
-     revision turns on, so it is asserted on the PAIR rather than only per branch - a fix
-     applied to one branch and forgotten on the other is this file's recurring failure. */
-  check("...and BOTH carry the continuous frame and the slice/bar ban - symmetric, not one-sided",
-    /across this unified continuous frame\./.test(topsPrompt) &&
-    /across this unified continuous frame\./.test(bottomsPrompt) &&
-    /Do not slice the canvas, insert black bars/.test(topsPrompt) &&
-    /Do not slice the canvas, insert black bars/.test(bottomsPrompt),
-    `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
-
-  /* ── THE ASYMMETRY ITSELF, asserted so it cannot drift by accident ───────────
-     Tops does NOT carry the opposite-layer lock. That is the one-branch-at-a-time-on-
-     evidence rule this file has followed throughout - no report has been filed of a top
-     try-on repainting the shopper's live trousers - and it is a live bet, not an
-     oversight. Two things therefore have to hold: tops stays implicitly scoped, and
-     app.js keeps the restore path in the words a future debugger will search for when
-     the mirror-image report finally does arrive. */
-  /* ── THE ASYMMETRY IS DELIBERATELY OVER ────────────────────────────────────
-     For three revisions the opposite-layer lock sat on bottoms alone, under a
-     one-branch-at-a-time-on-evidence rule: no report had been filed of a TOP try-on
-     repainting real trousers. One has now - step back mid-session in a shirt try-on and
-     the model invents trousers - so both branches carry it, and app.js's asymmetry note
-     is history rather than live policy. */
-  check("tops DOES carry the opposite-layer lock now - the asymmetry is over",
-    /invent lower body garments/.test(topsPrompt) &&
-    /natural lower clothing/.test(topsPrompt),
-    `the report that closed the asymmetry was a tops try-on inventing trousers: ${topsPrompt}`);
-  check("the opposite-layer lock is recorded in app.js with a per-branch restore path",
-    /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC) &&
-    /WHERE EACH HALF LIVES TODAY/.test(SRC),
-    "the only removal here that re-opens a previously fixed report");
-  /* THE PIN ITSELF IS NOW RETIRED ON BOTTOMS TOO - the region naming survived into the
-     new lead, the explicit pin did not. Named as a constant rather than left inline, so
-     the restore is one line on either branch instead of a sentence to reconstruct. */
-  check("...and the retired pin is on file as a constant, restorable on either branch",
-    /const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodified\.";/.test(SRC),
-    "an inline sentence that was deleted is not a restore path");
+  check("...and carries no opposite-layer preservation clause any more",
+    !/natural lower clothing/.test(topsPrompt) && !/natural upper clothing/.test(bottomsPrompt),
+    "the invented-non-target-garment family now rests on nothing at all - guard AND wording");
+  check("the per-category wording is kept on file, verbatim, for a one-line restore",
+    /const CATEGORY_SCOPED = Object\.freeze\(\{/.test(SRC) &&
+    /Fit ONLY the exact reference shirt onto the subject's upper torso/.test(SRC) &&
+    /Fit ONLY the exact reference pants\/shorts onto the subject's lower body/.test(SRC),
+    "a restore that starts from the commit log is not a restore path");
+  check("...and app.js names the reports the collapse re-exposes",
+    /SHIRT-REPLACEMENT report/.test(SRC) &&
+    /CATEGORY-AGNOSTIC, AND THAT IS A KNOWN, RECORDED RISK/.test(SRC),
+    "the risk has to be readable from the file, not only from this suite");
+  /* THE ROUTING IS UNTOUCHED, which is what makes the restore a value swap rather than
+     re-plumbing: isBottomsGarment() still selects between .top and .bottom at every call
+     site. They simply hold the same string today. */
+  check("the per-category ROUTING still exists and is still selected on",
+    /isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top/.test(SRC),
+    "collapsing the values must not collapse the mechanism that selects them");
 }
 
 console.log("\n── §4 THE CONTRADICTION IS GONE: no t-shirt anchor on a trouser reference ──");
@@ -290,8 +207,14 @@ console.log("\n── §4 THE CONTRADICTION IS GONE: no t-shirt anchor on a trou
   check("the BOTTOMS prompt never names a t-shirt / shirt as the garment to fit",
     !/Fit a standard t-shirt/.test(bottomsPrompt) && !/fit a t-shirt/i.test(bottomsPrompt),
     bottomsPrompt);
-  check("the two branches are genuinely DIFFERENT strings",
-    bottomsPrompt !== topsPrompt);
+  /* This used to assert the two branches were different strings. They are the same string
+     now - deliberately, see §3 - so what survives is the half that still means something:
+     whichever route is taken, the anchor never names the WRONG garment, because it names
+     no garment type at all. */
+  check("neither route can name the wrong garment - the anchor names no garment type",
+    !/t-shirt/i.test(bottomsPrompt) && !/\bshirt\b/i.test(bottomsPrompt) &&
+    !/\bpants\b/i.test(topsPrompt),
+    `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
   /* Symmetry: each branch must pin the layer the other one replaces, and neither may
      claim to preserve the layer it is itself editing. */
   check("neither prompt preserves the very layer it is replacing",

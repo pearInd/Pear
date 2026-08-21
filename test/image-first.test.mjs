@@ -118,116 +118,104 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
                          334 bottoms.
    See CATEGORY_ANCHOR in app.js for the full list of what came off the wire, what went
    back on, and the restore path for each. */
-const TOPS_SPEC =
-  "Fit ONLY the exact reference shirt onto the subject's upper torso across this" +
-  " unified continuous frame. Do not slice the canvas, insert black bars, or invent" +
-  " lower body garments. Strictly preserve the subject's natural lower clothing and" +
-  " live background.";
-const BOTTOMS_SPEC =
-  "Fit ONLY the exact reference pants/shorts onto the subject's lower body across this" +
-  " unified continuous frame. Do not slice the canvas, insert black bars, or invent" +
-  " upper body garments. Strictly preserve the subject's natural upper clothing and" +
-  " live background.";
-/* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
-   for the region named in the preserve list, which \u00a71 checks per branch. */
-const SPEC = TOPS_SPEC;
+/* ── THE SPECIFIED WORDING IS NOW ONE STRING FOR BOTH BRANCHES ─────────────────
+   Product-specified, and byte-exact for the reason this suite has always given: a
+   paraphrase that reads the same to a human is a different token sequence to a diffusion
+   model. What changed in this revision is that there is only ONE of them. */
+const UNIFIED_SPEC =
+  "Fit the target clothing item onto the subject in this video stream." +
+  " Render the complete frame seamlessly across the entire viewport" +
+  " without splitting or masking.";
+const TOPS_SPEC = UNIFIED_SPEC;
+const BOTTOMS_SPEC = UNIFIED_SPEC;
+const SPEC = UNIFIED_SPEC;
 
-console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely constant ──");
+console.log("── §1 THE ANCHOR: product-specified, and genuinely constant ──");
 {
-  /* Byte-exact, because the wording is a product decision rather than an implementation
-     detail - a paraphrase that reads the same to a human is a different token sequence to
-     a diffusion model, and these are the strings whose exact form was specified from
-     outside this file. */
   check("the TOPS branch matches the specified wording byte for byte",
-    api.imageOnlyPrompt(TEE) === TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
+    api.imageOnlyPrompt(TEE) === UNIFIED_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
   check("the BOTTOMS branch matches the specified wording byte for byte",
-    api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
-  /* ONE SHAPE, THREE SENTENCES, SAME ORDER: scope the garment to a region AND to a
-     continuous frame, ban the two ways the frame gets broken, then preserve everything
-     that is not the target garment. Asserted as an exact sentence count so a fourth
-     clause cannot be slipped onto either branch, which is the regression this whole suite
-     exists to catch - every report in the list above was answered by ADDING a sentence,
-     and the two worst were caused by it. */
-  const sentences = (s) => s.split(/(?<=\.)\s+/).filter(Boolean);
-  check("both branches are exactly three sentences: scope, ban, preserve",
-    sentences(TOPS_SPEC).length === 3 && sentences(BOTTOMS_SPEC).length === 3,
-    `tops=${sentences(TOPS_SPEC).length} bottoms=${sentences(BOTTOMS_SPEC).length}`);
-  check("...and both open on the SAME four words - the exclusive-scope binding",
-    TOPS_SPEC.startsWith("Fit ONLY the exact reference ") &&
-    BOTTOMS_SPEC.startsWith("Fit ONLY the exact reference "),
-    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
+    api.imageOnlyPrompt(JEANS) === UNIFIED_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
+  check("...and they are the SAME string - the branches no longer differ at all",
+    api.imageOnlyPrompt(TEE) === api.imageOnlyPrompt(JEANS),
+    "this revision collapsed the two anchors deliberately; §1b records the risk");
 
-  /* THREE SENTENCES, THREE JOBS, asserted individually because the failure mode of a
-     minimal prompt is a well-meant reword that quietly drops one - and there is no
-     fitPrompt() shed log to catch it, because there is no assembly left to log. */
-  /* (1) THE LEAD CARRIES BOTH SCOPES NOW, and that pairing is what this revision fixes.
-     The REGION ("onto the subject's upper torso") says where the garment GOES - it is the
-     shirt-replacement report's answer. The FRAME ("across this unified continuous frame")
-     says where the model may RENDER - it is the split-canvas report's answer. A previous
-     revision replaced the first with the second and thereby re-opened what it had already
-     fixed; they are different claims and both are load-bearing. "Fit ONLY" still scopes
-     the whole instruction in the first two words, where a leading-token model is most
-     sensitive. */
-  const LEAD = /^Fit ONLY the exact reference (shirt|pants\/shorts) onto the subject's (upper torso|lower body) across this unified continuous frame\./;
-  check("(1) the lead scopes ONE garment to ONE region ACROSS a continuous frame",
-    LEAD.test(TOPS_SPEC) && LEAD.test(BOTTOMS_SPEC),
-    "region and frame are different claims - dropping either re-opens a fixed report");
-  check("...and each branch binds ONE garment only",
-    /^Fit ONLY the exact reference shirt /.test(TOPS_SPEC) &&
-    /^Fit ONLY the exact reference pants\/shorts /.test(BOTTOMS_SPEC),
-    "a lower-body garment fitted from the shirt reference is report 1 through the new wording");
-  check("...each fitting its OWN region, never the other's",
-    /onto the subject's upper torso/.test(TOPS_SPEC) && !/lower body across/.test(TOPS_SPEC) &&
-    /onto the subject's lower body/.test(BOTTOMS_SPEC) && !/upper torso across/.test(BOTTOMS_SPEC),
-    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
-  /* (2) THE BAN, naming BOTH descriptions of one artifact. The report describes a frame
-     "cut into two disconnected blocks" and a "solid black rectangle" filling half of it -
-     the slicing and the fill are the same defect seen two ways, so both are forbidden by
-     name rather than hoping one implies the other. The invented-garment ban rides the same
-     sentence because it is the same kind of claim: a thing the model must not add. */
-  check("(2) it bans SLICING the canvas and the black bar that fills the cut",
-    /Do not slice the canvas, insert black bars, or invent lower body garments\./.test(TOPS_SPEC) &&
-    /Do not slice the canvas, insert black bars, or invent upper body garments\./.test(BOTTOMS_SPEC),
-    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
-  check("...and the invented non-target garment is banned in that same sentence",
-    /invent lower body garments/.test(TOPS_SPEC) && /invent upper body garments/.test(BOTTOMS_SPEC),
-    "the invented-trousers report is answered by this clause alone now that the guard is off");
-  /* (3) THE PRESERVATION CLAUSE names the shopper's actual CLOTHING again, not merely the
-     body region it sits on. "Preserve the lower body" is satisfied by a correctly-shaped
-     leg wearing invented trousers; "preserve the natural lower clothing" is not. That
-     distinction is the whole of the shirt-replacement family, and it matters more now
-     that the compositing guard which used to enforce it is off. */
-  check("(3) it preserves the non-target CLOTHING by name, plus the live background",
-    /Strictly preserve the subject's natural lower clothing and live background\.$/.test(TOPS_SPEC) &&
-    /Strictly preserve the subject's natural upper clothing and live background\.$/.test(BOTTOMS_SPEC),
-    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
-  check("...and no longer instructs a pass-through the model has no second stream for",
-    !/pass through/.test(TOPS_SPEC) && !/LIVE camera feed/.test(TOPS_SPEC) &&
-    !/pass through/.test(BOTTOMS_SPEC) && !/LIVE camera feed/.test(BOTTOMS_SPEC),
-    "the guard that made pass-through real is off; the prompt must not still promise it");
-  check("...the live BACKGROUND is preserved on both branches",
-    /live background/.test(TOPS_SPEC) && /live background/.test(BOTTOMS_SPEC),
-    "the scene is what a shopper notices first when a fit goes wrong");
-  /* THE GUARANTEE IS GONE, AND THAT IS THE TRADE THIS SEQUENCE MADE. The pair that shipped
-     with a runtime guard compositing the shopper's own pixels back over the non-target
-     region had the only HARD stop available - Decart's set() has no mask channel. It was
-     rendering a black rectangle over half the canvas, so it is off, and the invented-garment
-     family now rests on the prompt alone. Asserted as a matched pair (mechanism present,
-     flag off) so this stays a decision on file rather than drift. */
-  check("...the hard guarantee is OFF, and the prompt now carries this alone",
-    /function paintGuardBand\(ctx, webcam, w, h\)/.test(SRC) &&
-    /LOWER_BODY_GUARD_ENABLED: false/.test(CFG),
-    "the mechanism stays on file so the restore is one flag - see lower-body-guard.test.mjs §1");
-  check("...on BOTH branches - the asymmetry is deliberately over",
-    /invent lower body garments/.test(TOPS_SPEC) && /invent upper body garments/.test(BOTTOMS_SPEC));
-  check("...and neither preserves the very layer it is fitting",
-    !/preserve[^.]*upper body/.test(TOPS_SPEC) &&
-    !/preserve[^.]*lower body/.test(BOTTOMS_SPEC),
-    "a prompt that preserves the layer it is editing cancels itself");
-  /* THE RUNTIME HALF. This wording promises a per-frame fit, and text alone cannot keep
-     that promise: with a constant prompt and the reference already on the wire,
-     applyGarment() dispatches nothing at all. Asserted here, in the suite that owns the
-     wording, so the two halves can never be separated by a later edit. */
+  const sentences = (s) => s.split(/(?<=\.)\s+/).filter(Boolean);
+  check("exactly two sentences: bind the garment, then require one surface",
+    sentences(UNIFIED_SPEC).length === 2, String(sentences(UNIFIED_SPEC).length));
+
+  /* (1) THE BIND. "Fit the target clothing item onto the subject" names the garment as the
+     thing being placed and the subject as what it goes on. It does NOT name a region -
+     see §1b, which is where that is accounted for rather than glossed. */
+  check("(1) it binds the garment to the subject, in the stream",
+    /^Fit the target clothing item onto the subject in this video stream\./.test(UNIFIED_SPEC),
+    UNIFIED_SPEC);
+  /* (2) THE SURFACE. This is the sentence the whole revision exists for. It asks for the
+     COMPLETE frame across the ENTIRE viewport, and forbids the two operations that
+     produced the reported artifact - splitting it, and masking part of it. */
+  check("(2) it demands the complete frame across the entire viewport",
+    /Render the complete frame seamlessly across the entire viewport/.test(UNIFIED_SPEC),
+    UNIFIED_SPEC);
+  check("...and forbids BOTH operations behind the report: splitting and masking",
+    /without splitting or masking\.$/.test(UNIFIED_SPEC), UNIFIED_SPEC);
+  check("...and instructs no pass-through the model has no second stream for",
+    !/pass through/.test(UNIFIED_SPEC) && !/LIVE camera feed/.test(UNIFIED_SPEC),
+    "the guard that made pass-through real is deleted; the prompt must not still promise it");
+}
+
+console.log("\n── §1b THE COLLAPSE IS A RECORDED RISK, not an oversight ──");
+{
+  /* THIS SUITE'S JOB IS TO MAKE THE TRADE VISIBLE. The specified string is
+     category-agnostic: it names "the target clothing item", not the shirt or the pants,
+     and it does not say which region the garment belongs on. Every revision since the
+     SHIRT-REPLACEMENT report - a trouser try-on that claimed the whole reference and
+     repainted the shopper's live top - had named a region to keep that closed. So these
+     assertions do not pretend the risk is gone; they pin that the RESTORE is real. */
+  check("the anchor is genuinely region-free - stated, not discovered later",
+    !/upper torso/.test(UNIFIED_SPEC) && !/lower body/.test(UNIFIED_SPEC) &&
+    !/reference shirt/.test(UNIFIED_SPEC) && !/reference pants/.test(UNIFIED_SPEC),
+    "if this ever starts failing, the collapse was quietly reverted and §1 should say so");
+  check("...and the per-category wording is kept on file, verbatim, for a one-line restore",
+    /const CATEGORY_SCOPED = Object\.freeze\(\{/.test(SRC) &&
+    /Fit ONLY the exact reference shirt onto the subject's upper torso/.test(SRC) &&
+    /Fit ONLY the exact reference pants\/shorts onto the subject's lower body/.test(SRC),
+    "a restore that starts from the commit log is not a restore path");
+  check("...and app.js records WHICH reports the collapse re-exposes",
+    /SHIRT-REPLACEMENT report/.test(SRC) && /CATEGORY-AGNOSTIC, AND THAT IS A KNOWN, RECORDED RISK/.test(SRC),
+    "the risk has to be readable from the file, not only from this suite");
+  /* THE ROUTING SURVIVES THE COLLAPSE, which is what makes the restore one line rather
+     than re-plumbing: isBottomsGarment() still selects between .top and .bottom, they just
+     happen to hold the same string today. */
+  check("...and the per-category ROUTING is untouched - both keys still exist and are selected",
+    /const CATEGORY_ANCHOR = Object\.freeze\(\{\n  top:\s+UNIFIED_ANCHOR,\n  bottom: UNIFIED_ANCHOR,\n\}\);/.test(SRC) &&
+    /isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top/.test(SRC),
+    "collapsing the values must not collapse the mechanism that selects them");
+}
+
+console.log("\n── §1c THE GUARD IS DELETED, NOT DISABLED ──");
+{
+  /* THE REPORTED ARTIFACT, third filing: "the top 50% is Decart's AI output and the bottom
+     50% is a separate raw camera feed." That is precisely what the non-target region guard
+     did - composite the shopper's own camera pixels back over the half not being fitted.
+     It shipped off first; a flag is not an architecture, and one config edit could put the
+     split back on screen. It is gone now, and these assertions are what keep it gone. */
+  check("no compositing-guard code survives anywhere in app.js",
+    !/paintGuardBand/.test(SRC) && !/function guardBand/.test(SRC) &&
+    !/startLowerBodyGuard/.test(SRC) && !/lowerBodyGuardRAF/.test(SRC),
+    "flag-off left the mechanism one edit away from painting a split again");
+  check("...its config constants are gone too, so nothing can re-enable it",
+    !/LOWER_BODY_GUARD/.test(CFG) && !/BODY_GUARD_MARGIN_FRAC/.test(CFG),
+    "a constant with no consumer is a promise that the consumer is coming back");
+  check("...and app.js records what the deletion gave up",
+    /THE NON-TARGET REGION GUARD IS GONE/.test(SRC) &&
+    /no mask channel/.test(SRC),
+    "the lost guarantee is real and has to stay on file");
+  /* THE DISPLAY SURFACE HAS ONE SOURCE. Asserted as an absence across the whole file: no
+     path may draw the webcam onto anything the shopper watches during a live session. */
+  check("nothing draws #webcam onto the display or the recording during a session",
+    !/drawImage\(webcam,\s*\n?\s*0, src\.y0/.test(SRC) &&
+    !/paintGuardBand\(ctx, \$\("webcam"\), w, h\)/.test(SRC),
+    "input comes from the camera, output comes from Decart, one element each");
   check("...and the per-frame promise is backed by a real re-conditioning dispatch",
     /function reconditionForTopology\(/.test(SRC) &&
     /lastSentImageRef = null;/.test(SRC.slice(SRC.indexOf("async function reconditionForTopology("))),
@@ -297,14 +285,13 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      PRESERVE clause, which is where it now does its work. Both halves are still asserted
      separately, because they still fail separately: naming what to fit does not forbid an
      edit elsewhere, and forbidding one does not name the other. */
-  check("the region AND the continuous frame are both in the lead, on both branches",
-    /^Fit ONLY the exact reference pants\/shorts onto the subject's lower body across this unified continuous frame\./.test(BOTTOMS_SPEC) &&
-    /^Fit ONLY the exact reference shirt onto the subject's upper torso across this unified continuous frame\./.test(TOPS_SPEC),
-    "the region answers shirt-replacement, the frame answers the split canvas - both stay");
-  check("...and the non-target layer is named in the PRESERVE clause as CLOTHING",
-    /preserve the subject's natural upper clothing/.test(BOTTOMS_SPEC) &&
-    /preserve the subject's natural lower clothing/.test(TOPS_SPEC),
-    "naming the body region is not the same claim as naming the clothes on it");
+  /* THE REGION AND THE PRESERVE CLAUSE BOTH CAME OFF in the collapse - §1b owns that
+     trade and its restore path. What still has to hold here is the half the reported
+     artifact turns on: the anchor asks for ONE surface and forbids breaking it. */
+  check("the anchor demands one unbroken surface, which is what the report is about",
+    /Render the complete frame seamlessly across the entire viewport without splitting or masking\.$/
+      .test(UNIFIED_SPEC),
+    "the split/mask ban is the one clause this revision cannot afford to lose");
   check("app.js flags the opposite-layer lock as the FIRST thing to restore on tops",
     /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC),
     "the note stays even though the clause is back - it is the record of why");
@@ -352,11 +339,17 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
       api.buildCompositePrompt(item, angle, prof) === expected,
       api.buildCompositePrompt(item, angle, prof));
   }
-  /* THE AXIS ITSELF, asserted once: category is the ONLY thing that moves the prompt. */
-  check("the two branches are genuinely different, and category is the only axis",
-    TOPS_SPEC !== BOTTOMS_SPEC &&
+  /* THE AXIS ITSELF. It used to be "category is the ONLY thing that moves the prompt";
+     the collapse removed even that, so what is asserted now is total invariance - angle,
+     pose and category all leave the string untouched. The category ROUTING still exists
+     and is still exercised (§1b), which is what keeps the restore one line; it simply
+     selects between two identical values today. */
+  check("the anchor is invariant across angle, pose AND category - nothing moves it",
+    TOPS_SPEC === BOTTOMS_SPEC &&
     api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(TEE, "back", true) &&
-    api.buildCompositePrompt(JEANS, "front", false) === api.buildCompositePrompt(JEANS, "back", true));
+    api.buildCompositePrompt(JEANS, "front", false) === api.buildCompositePrompt(JEANS, "back", true) &&
+    api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(JEANS, "back", true),
+    "a constant prompt is the whole premise of strict image-only conditioning");
 
   /* Structural, across the builders this sandbox cannot execute. The four together are
      every path that can reach rtClient.set() with a prompt. */

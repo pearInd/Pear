@@ -1254,15 +1254,11 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .camera-card.show-live #aiVideo { display: block; transform: none; }
 .camera-card.show-live #webcam { visibility: hidden; }
 
-/* ── Lower-body compositing guard (config.js LOWER_BODY_GUARD_ENABLED) ────────
-   Stacked ABOVE #aiVideo in DOM order (index.html), so it paints on top by default -
-   no z-index needed to win against the video layers, only against the frame border
-   (::after, z-index 5) and swatch rail (z-index 7), which must both stay above it.
-   transform:none, unlike the base #webcam/#aiVideo rule: startLowerBodyGuard() reads
-   raw pixels FROM #webcam via drawImage() (which ignores CSS transforms - it sees the
-   decoded frame, not the mirrored display) and applies its OWN ctx.scale(-1,1) before
-   drawing, matching #aiVideo's un-mirrored orientation by construction rather than by
-   another CSS transform stacking on top of a canvas that already contains the flip. */
+/* ── ONE DISPLAY SURFACE ───────────────────────────────────────────────────────
+   The #lowerBodyGuard overlay canvas that used to stack above #aiVideo is GONE - it
+   composited raw camera pixels over the half of the frame that was not being fitted,
+   which is the reported "top half AI, bottom half camera" split. #aiVideo is now the only
+   element that ever shows a live stream, and it shows Decart's and nothing else. */
 /* ── Body-presence prompt ─────────────────────────────────────────────────────
    Shown while the presence gate waits for the shopper to step into frame. Visibility is
    owned entirely by the `hidden` attribute from app.js - there is no class-based gate
@@ -1320,24 +1316,6 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   .presence-overlay__frame { animation: none; opacity: 0.8; }
 }
 
-/* object-fit:cover is NOT decoration here, it is the half of this rule that was missing.
-   The canvas BITMAP is sized to the webcam's native resolution (startLowerBodyGuard sets
-   canvas.width/height from videoWidth/videoHeight - often 16:9), while #webcam and
-   #aiVideo underneath it are object-fit:cover inside a card that is routinely portrait.
-   Without a matching fit the bitmap is STRETCHED to the box while the videos are
-   CENTRE-CROPPED into it, so the two layers disagree about which pixels are which - a
-   band this canvas paints at "the hip line" lands somewhere else entirely on the video
-   below it. Matching the fit is what makes the overlay geometry mean the same thing as
-   the feed geometry. (The guard itself ships off - see LOWER_BODY_GUARD_ENABLED - so this
-   is currently inert; it is corrected in place so re-enabling it starts from a layer that
-   is at least aligned.) */
-.camera-card #lowerBodyGuard {
-  position: absolute; inset: 0; width: 100%; height: 100%;
-  object-fit: cover;
-  z-index: 2; pointer-events: none; transform: none;
-  display: none; background: transparent;
-}
-.camera-card.show-live.lower-body-guard-active #lowerBodyGuard { display: block; }
 
 /* ── Colour swatches - variant bubbles pinned to the camera stage ─────────────
    The only floating gallery control left on the live stage. Pinned to the inline-start
@@ -1512,7 +1490,6 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .camera-card.size-mismatched #webcam,
 .camera-card.size-mismatched #aiVideo,
 .camera-card.size-mismatched #resultCanvas,
-.camera-card.size-mismatched #lowerBodyGuard,
 .camera-card.size-mismatched .camera-card__placeholder { display: none !important; }
 .camera-card.size-mismatched .camera-card__size-mismatch {
   position: static; margin: 0; align-self: center;

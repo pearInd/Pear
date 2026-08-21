@@ -423,13 +423,6 @@
             <video id="webcam" playsinline autoplay muted></video>
             <!-- hidden source video carrying the Lucy-VTON-edited realtime stream -->
             <video id="aiVideo" playsinline autoplay muted></video>
-            <!-- Lower-body compositing guard (config.js LOWER_BODY_GUARD_ENABLED, default OFF -
-                 see its comment there before turning this on). ADDITIVE ONLY: stacked above
-                 #aiVideo, transparent everywhere except the bottom guarded band, pointer-events
-                 disabled so it never intercepts a click/gesture meant for the video beneath it
-                 or the swatch strip above it. #aiVideo itself is completely untouched by this -
-                 it keeps playing exactly as before; this only ever paints on top of it. -->
-            <canvas id="lowerBodyGuard" aria-hidden="true"></canvas>
             <!-- the frozen "masterpiece" snapshot is painted here -->
             <canvas id="resultCanvas"></canvas>
 
@@ -716,7 +709,7 @@
   <span class="lang-switch__thumb" aria-hidden="true"></span>
 </button>
 
-<script type="module" src="app.js?v=45"></script>
+<script type="module" src="app.js?v=46"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
      header shrink. Pure enhancement - touches no app.js logic or state. -->
 <script src="mobile-ux.js" defer></script>
