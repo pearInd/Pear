@@ -1320,8 +1320,20 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   .presence-overlay__frame { animation: none; opacity: 0.8; }
 }
 
+/* object-fit:cover is NOT decoration here, it is the half of this rule that was missing.
+   The canvas BITMAP is sized to the webcam's native resolution (startLowerBodyGuard sets
+   canvas.width/height from videoWidth/videoHeight - often 16:9), while #webcam and
+   #aiVideo underneath it are object-fit:cover inside a card that is routinely portrait.
+   Without a matching fit the bitmap is STRETCHED to the box while the videos are
+   CENTRE-CROPPED into it, so the two layers disagree about which pixels are which - a
+   band this canvas paints at "the hip line" lands somewhere else entirely on the video
+   below it. Matching the fit is what makes the overlay geometry mean the same thing as
+   the feed geometry. (The guard itself ships off - see LOWER_BODY_GUARD_ENABLED - so this
+   is currently inert; it is corrected in place so re-enabling it starts from a layer that
+   is at least aligned.) */
 .camera-card #lowerBodyGuard {
   position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover;
   z-index: 2; pointer-events: none; transform: none;
   display: none; background: transparent;
 }

@@ -222,8 +222,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  365, 369],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 384, 388],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  250, 251],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 269, 270],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -232,13 +232,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(342 chars - anchor\)             BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 388  fits              \u2192 366  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 407  fits              \u2192 385  fits/.test(SRC),
+    /TOPS \(204 chars - anchor\)             BOTTOMS \(205 chars - anchor\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 250  fits              \u2192 251  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 269  fits              \u2192 270  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /308 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
+    /446 characters are free on tops and 445 on\s*\n?\s*bottoms/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
 }
 

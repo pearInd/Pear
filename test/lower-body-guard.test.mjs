@@ -9,16 +9,18 @@
    browser, where nothing the model does can override it - a real code-level backstop,
    not another sentence added to the prompt.
 
-   WHY IT SHIPS OFF BY DEFAULT (LOWER_BODY_GUARD_ENABLED: false in config.js): the
-   boundary is a FIXED FRACTION of frame height, not a real body-part detector - there is
-   none in this codebase, and adding one means a multi-MB WASM+model CDN dependency this
-   codebase has already rejected once, for the same reason, on the upload detector. A
-   fixed fraction is a guess: framed close to the camera, it can clip into the bottom of
-   a CORRECTLY rendered shirt, trading an occasional hallucination for a guaranteed
-   visible seam on every session. That trade needs a live camera to validate, not
-   reasoning about it in the abstract - so this suite proves the MECHANISM is correct
-   (idempotent, torn down on every exit path, mirror-corrected, never fires while off),
-   not that the fixed fraction is the right number for how this app is actually framed.
+   WHY IT SHIPS OFF (LOWER_BODY_GUARD_ENABLED: false in config.js): the flag has moved
+   twice and §1 carries the full arc. Short version - it was off because the boundary was
+   a fixed fraction of frame height with no body-part detector behind it; it went ON when
+   MediaPipe Pose arrived and supplied a real hip line; it is off AGAIN because a recording
+   showed it painting the lower half of the canvas as a solid black rectangle, and because
+   a hard-edged rectangular composite over a diffusion output shows a seam wherever the two
+   sources disagree at all. The product direction is one full-frame stream, edge to edge.
+
+   SO WHAT THIS SUITE PROVES IS THE MECHANISM, not the policy: idempotent start, torn down
+   on every exit path, mirror-corrected, category-aware, a pose-derived boundary with its
+   documented fallback - and, decisively while the flag is off, that it paints NOTHING.
+   That is what keeps the flag a real restore path instead of a pile of dead code.
 
    ADDITIVE ONLY, matching lux-interactions.js's own stated design rule: #aiVideo is
    never touched, re-parented, or given a new role. This only ever paints on top of it
@@ -46,31 +48,61 @@ function extract(startMarker, endMarker) {
   return APP.slice(start, end);
 }
 
-console.log("── §1 SHIPS ON NOW: the config default, and why it moved ──");
+console.log("── §1 SHIPS OFF AGAIN: the config default, and why it moved back ──");
 {
-  /* ── IT WAS OFF FOR ONE STATED REASON, AND THAT REASON IS GONE ──────────────
-     config.js: "there is no body-part detector in this codebase to derive it from the
-     shopper's ACTUAL waist position, and adding one means a multi-MB WASM+model CDN
-     dependency". MediaPipe Pose was subsequently taken on for the body-presence gate and
-     now runs CONTINUOUSLY for the topology monitor - it reports LEFT_HIP/RIGHT_HIP, the
-     exact landmark that objection said was unobtainable. The boundary is the shopper's own
-     hip line, re-read live, so the seam-across-a-shirt-hem failure the objection describes
-     is one a hip-derived boundary structurally cannot have.
+  /* ── IT WENT ON, AND A RECORDING OF THE GUARD ITSELF PUT IT BACK ────────────
+     THE FULL ARC, because this flag has now moved twice and each move has to carry its
+     own reason:
 
-     AND THE FAILURE IT PREVENTS IS NOW REPRODUCED: trying on a SHIRT, the shopper lifts a
-     leg into frame wearing light blue shorts and Decart renders black long trousers. The
-     prompt forbids that in words; Decart's set() has no mask channel, so this is the only
-     mechanism in the pipeline that can make it a guarantee rather than a request. */
-  check("LOWER_BODY_GUARD_ENABLED is ON in the REAL config module",
-    CONFIG.LOWER_BODY_GUARD_ENABLED === true, String(CONFIG.LOWER_BODY_GUARD_ENABLED));
-  check("...and config.js records that the objection was answered, not overruled",
-    /THAT DEPENDENCY IS ALREADY HERE/.test(
+     OFF originally - the boundary was a fixed fraction of frame height with no body-part
+     detector behind it. ON - MediaPipe Pose arrived for the presence gate and supplied
+     LEFT_HIP/RIGHT_HIP, so the boundary became the shopper's own hip line and the
+     black-long-trousers report made a hard guarantee worth having.
+
+     OFF AGAIN, on a video of the guard misfiring: the lower half of the live canvas
+     renders as a SOLID BLACK RECTANGLE with a hard horizontal seam across the middle.
+     That geometry is this feature's and nothing else's - guardBand() puts its boundary at
+     the hip line, which in a torso-forward selfie framing sits at about half the frame
+     height, and everything below it is the band paintGuardBand() composites. The band's
+     source is drawImage(#webcam, ...) off an element that is visibility:hidden for the
+     whole of .show-live while the camera source is being re-negotiated underneath it by
+     the input throttle's applyConstraints() on a clone of the same device track.
+
+     AND THE LAYER IS WRONG EVEN WHEN IT PAINTS. A hard-edged rectangular composite over a
+     diffusion output shows a seam wherever the two sources disagree on exposure, white
+     balance or latency. The direction is one full-frame stream, edge to edge.
+
+     WHAT THIS SUITE STILL PROVES: the MECHANISM, in full - idempotent start, torn down on
+     every exit path, mirror-corrected, category-aware, pose-derived boundary with its
+     fraction fallback, and (§2) that it paints NOTHING while the flag is off. That is what
+     makes the flag a real restore path rather than a pile of dead code, and any restore
+     has to answer the black band and the cover/stretch mismatch first. */
+  check("LOWER_BODY_GUARD_ENABLED is OFF in the REAL config module",
+    CONFIG.LOWER_BODY_GUARD_ENABLED === false, String(CONFIG.LOWER_BODY_GUARD_ENABLED));
+  check("...and config.js records WHY it went back off, not just that it did",
+    /AND IT IS OFF AGAIN, ON A RECORDING OF THE GUARD ITSELF/.test(
       readFileSync(new URL("../fitting-room/config.js", import.meta.url), "utf8")),
     "flipping a documented kill switch without answering its reason is how a fix regresses");
+  check("...and the earlier ON-reasoning is kept, not deleted - the arc stays readable",
+    /THAT DEPENDENCY IS ALREADY HERE/.test(
+      readFileSync(new URL("../fitting-room/config.js", import.meta.url), "utf8")),
+    "a flag that has moved twice needs both moves on file");
+  check("the mechanism is NOT deleted - the restore path is this one flag",
+    /function paintGuardBand/.test(APP) && /function guardBand/.test(APP) &&
+    /function startLowerBodyGuard/.test(APP),
+    "off means off, not gone - otherwise re-enabling means rewriting it from the commit log");
   check("LOWER_BODY_GUARD_FRAC is a sane fraction (0,1) - not a raw pixel count, not >1",
     typeof CONFIG.LOWER_BODY_GUARD_FRAC === "number" &&
     CONFIG.LOWER_BODY_GUARD_FRAC > 0 && CONFIG.LOWER_BODY_GUARD_FRAC < 1,
     String(CONFIG.LOWER_BODY_GUARD_FRAC));
+  /* THE ALIGNMENT BUG THE VIDEO ALSO EXPOSED, fenced so a re-enable cannot inherit it.
+     The canvas BITMAP is sized to the webcam's native resolution while the videos beneath
+     it are object-fit:cover inside a routinely-portrait card. Without a matching fit the
+     overlay is stretched where the feed is centre-cropped, so a band painted at "the hip
+     line" lands somewhere else entirely on the frame below. */
+  check("#lowerBodyGuard is object-fit:cover, matching the video layers it composites over",
+    /#lowerBodyGuard\s*\{[^}]*object-fit:\s*cover/.test(CSS),
+    "a stretched overlay over a centre-cropped video cannot agree about which pixels are which");
 }
 
 /* Extract the two functions AND execute them against a hand-built sandbox - the same

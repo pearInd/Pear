@@ -227,6 +227,7 @@ const SUITES = [
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],
   ["signaling-retry", "signaling-retry.test.mjs"],
   ["reconnect", "reconnect.test.mjs"],
+  ["rtc-error-boundary", "rtc-error-boundary.test.mjs"],
   ["apply-timeout", "apply-timeout.test.mjs"],
   ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],
   ["variant-sync", "variant-sync.test.mjs"],

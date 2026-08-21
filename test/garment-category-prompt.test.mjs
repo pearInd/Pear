@@ -153,31 +153,41 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
      WHAT IT DROPPED is asserted below rather than left to be discovered: the
      invent/add/alter clamp and the explicit "keep the upper body unmodified" pin. Both
      are retired-with-a-restore-path in app.js; image-first.test.mjs §1 owns that table. */
-  check("opens by scoping to ONE garment and ONE region, nothing before it",
-    bottomsPrompt.indexOf("Fit ONLY the reference pants/shorts onto the subject's lower body.") === 0,
+  /* ── REVISION: FULL FRAME, AND THE BLACK BAR NAMED OUT LOUD ────────────────
+     THE PREVIOUS WORDING WAS HALF OF A TWO-PART FIX WHOSE OTHER HALF IS GONE. It told the
+     model to "pass through and strictly preserve the subject's LIVE camera feed clothing"
+     for the non-target region - the prompt half of a pair whose runtime half, the
+     compositing guard, is now OFF (it was rendering a black rectangle over half the
+     canvas; see config.js LOWER_BODY_GUARD_ENABLED and lower-body-guard.test.mjs §1).
+
+     A PROMPT CANNOT PASS A REGION THROUGH FROM ANOTHER SOURCE. Decart's set() takes
+     { prompt, enhance, image } and runs one image-to-image stream; "route this band to the
+     live camera feed" describes a compositing operation the model has no way to perform,
+     so what it can actually act on is the suggestion that some region comes from somewhere
+     else - which is the same family as rendering a flat black band for it.
+
+     SO BOTH BRANCHES SCOPE TO THE WHOLE FRAME NOW, positively ("in the full video frame")
+     and negatively ("without adding black bars"), with the non-target region named as one
+     of the subject's OWN natural features to keep rather than as a second source. */
+  check("opens by scoping to ONE garment and the FULL FRAME, nothing before it",
+    bottomsPrompt.indexOf("Fit ONLY the reference pants/shorts onto the subject in the full video frame.") === 0,
     bottomsPrompt);
-  /* THE SCOPING SURVIVED THE REWRITE, and that is what this pair of checks is for: the
-     region naming moved INTO the lead rather than being dropped with the pin. */
-  check("...scopes the fit to the LOWER BODY, keeping the shirt-replacement report closed",
-    /onto the subject's lower body\./.test(bottomsPrompt),
-    "an unscoped anchor is what let a trouser try-on claim the whole reference");
+  check("...scopes the fit to the FULL VIDEO FRAME - the anti-crop instruction",
+    /in the full video frame\./.test(bottomsPrompt),
+    "a half-frame render is the defect this wording exists to forbid");
   check("...and never claims the upper garment as the thing to FIT",
     !/reference shirt/.test(bottomsPrompt) && !/onto the subject's upper torso/.test(bottomsPrompt),
     bottomsPrompt);
-  /* THE PER-FRAME INSTRUCTION, which is the sentence this revision exists for. Both
-     halves are asserted: adapt to the live shape, and do not fake it by deforming cloth. */
-  /* THE NON-TARGET LOCK, aimed at the MOMENT it fails. Step back mid-session in a trouser
-     try-on and the torso enters frame; the previous wording described the region but not
-     its arrival, so at t=0 - when the torso was out of shot - it had nothing to point at. */
-  check("...names the ENTRY of the upper body mid-video, not just the region",
-    /For any upper body parts, torso, or shirt that enter the camera frame during the video/
+  /* THE NON-TARGET REGION IS STILL NAMED - that requirement did not go away with the
+     wording that carried it. What changed is HOW: it is listed among the subject's own
+     natural features to preserve, not routed to a feed the model cannot read. */
+  check("...names the UPPER BODY among the subject's own features to preserve",
+    /Strictly preserve the subject's natural face, upper body, and background/
       .test(bottomsPrompt), bottomsPrompt);
-  check("...and routes it to the LIVE camera feed by name, with length among the attributes",
-    /pass through and strictly preserve the subject's LIVE camera feed clothing \(color, pattern, length\)/
-      .test(bottomsPrompt), bottomsPrompt);
-  check("...banning generation, replacement AND invention of a top",
-    /without generating, replacing, or inventing any new top or garments\.$/
-      .test(bottomsPrompt), bottomsPrompt);
+  check("...forbids the black bar BY NAME - a defect the model has demonstrably produced",
+    /without adding black bars/.test(bottomsPrompt), bottomsPrompt);
+  check("...and still bans inventing a garment nobody asked for",
+    /or inventing extra garments\.$/.test(bottomsPrompt), bottomsPrompt);
 
   /* THE SIZE PROPERTY IS STILL A FIX, so it is asserted as a number rather than trusted
      to stay small because someone remembered why. It grew by 81 characters here, and that
@@ -193,13 +203,21 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
 
 console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour ──");
 {
-  check("scopes to the reference shirt and the upper TORSO, nothing before it",
-    topsPrompt.indexOf("Fit ONLY the reference shirt onto the subject's upper torso.") === 0,
+  check("scopes to the reference shirt and the FULL FRAME, nothing before it",
+    topsPrompt.indexOf("Fit ONLY the reference shirt onto the subject in the full video frame.") === 0,
     topsPrompt);
-  check("...and carries the mirror of the bottoms non-target lock",
-    /For any lower body parts, legs, or shorts that enter the camera frame during the video/.test(topsPrompt) &&
-    /without generating, replacing, or inventing any new pants or garments\.$/.test(topsPrompt),
+  check("...and carries the mirror of the bottoms preservation clause",
+    /Strictly preserve the subject's natural face, hair, lower body, and background/.test(topsPrompt) &&
+    /without adding black bars or inventing extra garments\.$/.test(topsPrompt),
     topsPrompt);
+  /* HAIR IS ON THE TOPS BRANCH ONLY, and it is not an oversight: a shirt is fitted at the
+     shoulders and neckline, which is exactly where hair falls and where a re-drawn collar
+     takes it with it. A bottoms fit is nowhere near it. Asserted so the asymmetry reads as
+     a decision rather than a typo the next time these two strings are diffed. */
+  check("...and 'hair' is on the TOPS branch specifically - the collar/shoulder region",
+    /natural face, hair, lower body/.test(topsPrompt) &&
+    !/hair/.test(bottomsPrompt),
+    `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
 
   /* ── ONE SHAPE, ONE DELIBERATE DIVERGENCE ───────────────────────────────────
      The branches no longer normalise into one string - they are worded per region now (a
@@ -217,16 +235,29 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      a tops prompt that never says "pants" cannot tell the model to leave them alone. What
      replaces it is the stronger property: each branch FITS one region and PRESERVES the
      other, and never the reverse. */
-  check("...and each FITS its own region while PASSING THROUGH the other",
+  check("...and each FITS its own garment while PRESERVING the opposite region",
     /Fit ONLY the reference shirt/.test(topsPrompt) &&
-    /lower body parts, legs, or shorts/.test(topsPrompt) &&
+    /preserve the subject's natural face, hair, lower body/.test(topsPrompt) &&
     /Fit ONLY the reference pants\/shorts/.test(bottomsPrompt) &&
-    /upper body parts, torso, or shirt/.test(bottomsPrompt),
+    /preserve the subject's natural face, upper body/.test(bottomsPrompt),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
-  check("...and neither passes through the very layer it is fitting",
-    !/upper body parts, torso, or shirt/.test(topsPrompt) &&
-    !/lower body parts, legs, or shorts/.test(bottomsPrompt),
-    "a prompt that passes through the layer it is editing cancels itself");
+  /* THE SELF-CANCELLING PROMPT, restated for the new wording: a branch that lists the very
+     region it is editing among the things to "strictly preserve" is instructing the model
+     both to change it and to leave it alone. The old phrasing had the same hazard through
+     "pass through"; this is that check, retargeted. */
+  check("...and neither preserves the very region it is fitting",
+    !/preserve[^.]*upper body/.test(topsPrompt) &&
+    !/preserve[^.]*lower body/.test(bottomsPrompt),
+    "a prompt that preserves the layer it is editing cancels itself");
+  /* BOTH SCOPE TO THE FULL FRAME AND BOTH BAN THE BAR. This is the property the whole
+     revision turns on, so it is asserted on the PAIR rather than only per branch - a fix
+     applied to one branch and forgotten on the other is this file's recurring failure. */
+  check("...and BOTH scope to the full frame and ban the black bar - symmetric, not one-sided",
+    /in the full video frame\./.test(topsPrompt) &&
+    /in the full video frame\./.test(bottomsPrompt) &&
+    /without adding black bars/.test(topsPrompt) &&
+    /without adding black bars/.test(bottomsPrompt),
+    `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
 
   /* ── THE ASYMMETRY ITSELF, asserted so it cannot drift by accident ───────────
      Tops does NOT carry the opposite-layer lock. That is the one-branch-at-a-time-on-
@@ -242,8 +273,7 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      the model invents trousers - so both branches carry it, and app.js's asymmetry note
      is history rather than live policy. */
   check("tops DOES carry the opposite-layer lock now - the asymmetry is over",
-    /lower body parts, legs, or shorts/.test(topsPrompt) &&
-    /LIVE camera feed clothing/.test(topsPrompt),
+    /lower body/.test(topsPrompt) && /inventing extra garments/.test(topsPrompt),
     `the report that closed the asymmetry was a tops try-on inventing trousers: ${topsPrompt}`);
   check("the opposite-layer lock is recorded in app.js with a per-branch restore path",
     /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC) &&

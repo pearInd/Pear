@@ -20,6 +20,8 @@
  * @property {boolean}  INPUT_GATE_ENABLED      Withhold camera frames from Decart until the garment reference is acknowledged, so its first rendered frame can never be a generic default.
  * @property {number}   INPUT_GATE_MAX_MS       Self-release ceiling for that gate (ms) - a caller that never reports success costs a late start, never a dead session.
  * @property {number}   COLD_START_ACK_MS       Ack window for the FIRST apply of a session (ms) before the automatic reconnect; later applies use APPLY_TIMEOUT_MS.
+ * @property {number}   ERROR_MODAL_THRESHOLD   Consecutive rtClient errors inside ERROR_WINDOW_MS before the shopper is shown a modal; below it they are logged and the SDK recovers.
+ * @property {number}   ERROR_WINDOW_MS         Rolling window for that count (ms).
  * @property {boolean}  BODY_TOPOLOGY_ENABLED   Re-drape the garment on the live body contour whenever it changes, instead of holding the go-live silhouette.
  * @property {number}   BODY_TOPOLOGY_SAMPLE_MS Cadence of the live pose loop that feeds both the presence watcher and the topology monitor (ms).
  * @property {number}   BODY_TRACK_MIN_VISIBILITY Per-landmark visibility bar for TRACKING (below the gate's, so a half-occluded turn is still readable).
@@ -28,7 +30,7 @@
  * @property {number}   BODY_BUILD_DELTA        Relative shoulder-to-torso / hip-to-shoulder change that triggers a re-drape (0..1) - the narrow-vs-wide axis.
  * @property {number}   BODY_RECONDITION_COOLDOWN_MS Minimum gap between two re-conditioning dispatches (ms).
  * @property {number}   BODY_TRACK_HOLD_MS      How long a lost skeleton holds the last valid fit before the baseline is dropped (ms).
- * @property {boolean}  LOWER_BODY_GUARD_ENABLED Composite the shopper's own raw pixels back over Decart's output for the region NOT being fitted - the only hard guarantee against an invented non-target garment.
+ * @property {boolean}  LOWER_BODY_GUARD_ENABLED Composite the shopper's own raw pixels back over Decart's output for the region NOT being fitted. OFF - it was rendering a black rectangle over half the canvas; see its own comment.
  * @property {number}   LOWER_BODY_GUARD_FRAC   Fraction of frame height, from the bottom, that the guard protects.
  * @property {boolean}  LOWER_BODY_GUARD_AUTO_CALIBRATE Derive LOWER_BODY_GUARD_FRAC per-session from a detected face box instead of the fixed fraction.
  * @property {number}   LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS Head-heights from crown to waist, used by the calibration above.
@@ -90,6 +92,26 @@ export const CONFIG = Object.freeze({
      so the automatic reconnect happens instead of the manual one. Only the FIRST apply of
      a session uses it; everything after keeps the full budget. */
   COLD_START_ACK_MS: 2500,
+
+  /* ── The transient-error boundary (see rtClient.on("error") in app.js) ──────
+     REPORTED as "the session crashes after ~5 seconds". It did not crash: 5s is
+     LIVE_DURATION_MS, the billed window, and the deliberate rtClient.disconnect() that
+     closes it emits a parting "error" like any WebRTC transport being torn down. The
+     handler was unconditional, so the normal, successful end of EVERY session painted a
+     failure modal over the frozen result. The generation/isLive checks in that handler are
+     what fix that specific case; these two numbers cover the other half - a real but
+     TRANSIENT error mid-stream.
+
+     WHY A COUNT AND NOT A BOOLEAN: the SDK already reconnects internally (5 attempts) and
+     signals genuine death by driving the connection state to "disconnected", which
+     app.js's onConnectionStateChange retires the session on. So one "error" event means a
+     frame dropped and the recovery is already running - interrupting the shopper for it is
+     strictly wrong. Three inside four seconds is a transport that is failing rather than
+     hiccupping, and by then the SDK is most of the way through its own attempts anyway.
+     The window is rolling and per-session (the counter lives in the connect closure), so
+     three spread across a long session never accumulate into a false alarm. */
+  ERROR_MODAL_THRESHOLD: 3,
+  ERROR_WINDOW_MS: 4000,
 
   /* ── Body-presence gate (see awaitBodyPresence in app.js) ────────────────
      Decart conditions on the frame it is handed, and the session is hard-capped at
@@ -259,8 +281,38 @@ export const CONFIG = Object.freeze({
      THE STATIC FRACTION SURVIVES AS THE FALLBACK, for the frames where the pose read is
      unavailable (detector still loading, landmarks below the tracking bar, a browser with
      no WebAssembly). Guarding on a rough boundary beats not guarding at all, which is the
-     opposite of the original trade because the failure it now prevents is reproduced. */
-  LOWER_BODY_GUARD_ENABLED: true,
+     opposite of the original trade because the failure it now prevents is reproduced.
+
+     ── AND IT IS OFF AGAIN, ON A RECORDING OF THE GUARD ITSELF ────────────────
+     REPORTED WITH A VIDEO: the lower half of the live canvas renders as a solid black
+     rectangle with a hard horizontal seam across the middle of the frame. That geometry
+     is this feature's, and nothing else's in the pipeline: guardBand() puts its boundary
+     at the shopper's hip line, which for a torso-forward selfie framing sits at roughly
+     half the frame height - exactly where the seam appears. Everything below it is the
+     band paintGuardBand() composites, so a band that paints black IS the reported defect.
+
+     WHY THE BAND CAN COME BACK BLACK, and why "fix the readback" was not the call: the
+     band's source is drawImage(#webcam, …), and #webcam is visibility:hidden for the whole
+     of .show-live (style.css) while the camera source is simultaneously being reconfigured
+     underneath it - createThrottledInputStream() calls applyConstraints() on a CLONE of
+     the same device track, and a clone's constraints re-negotiate the shared source. A
+     readback of a hidden element off a re-negotiating source is not a thing to make
+     reliable; it is a thing to stop depending on.
+
+     THE DEEPER PROBLEM IS THE LAYER, NOT THE READBACK. The guard is a hard-edged
+     rectangular composite over a diffusion output. Even painting perfectly it produces a
+     visible seam wherever the two sources disagree on exposure, white balance or latency,
+     and its canvas is stretched (no object-fit) over videos that are object-fit:cover, so
+     the two layers do not even agree on which pixels are which. The product direction is
+     the opposite one: ONE full-frame stream, edge to edge, no partial layer over it.
+
+     WHAT GOING OFF GIVES UP, stated plainly because it is a reproduced report: the hard
+     guarantee against an invented non-target garment (the black-long-trousers report). It
+     falls back to the prompt, which is a probabilistic bias and not a guarantee - see
+     CATEGORY_ANCHOR in app.js for the wording that now carries it alone. The mechanism
+     below is kept intact and tested, so restoring it is this one flag; anything that
+     restores it must first answer the black band and the cover/stretch mismatch above. */
+  LOWER_BODY_GUARD_ENABLED: false,
   /* Fraction of the camera-card's frame HEIGHT, measured from the bottom, that gets the
      shopper's own raw camera pixels composited back over Decart's output. 0.34 is a
      rough midpoint for a torso-forward selfie framing (roughly waist-down) - conservative

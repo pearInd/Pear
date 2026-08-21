@@ -47,6 +47,8 @@ const {
   INPUT_GATE_ENABLED,
   INPUT_GATE_MAX_MS,
   COLD_START_ACK_MS,
+  ERROR_MODAL_THRESHOLD,
+  ERROR_WINDOW_MS,
   BODY_TOPOLOGY_ENABLED,
   BODY_TOPOLOGY_SAMPLE_MS,
   BODY_TRACK_MIN_VISIBILITY,
@@ -3731,9 +3733,62 @@ async function connectRealtime({ force = false } = {}) {
       return;
     }
 
+    /* ── THE TRANSIENT-ERROR BOUNDARY ────────────────────────────────────────────
+       REPORTED: "after roughly 5 seconds of streaming the session crashes with an error
+       modal". Five seconds is not a coincidence and it is not a crash - it is
+       LIVE_DURATION_MS, the billed window, landing exactly on schedule. What happens there
+       is beginFreezeHold() -> stopBilling() -> rtClient.disconnect(), and a WebRTC
+       transport being torn down on purpose routinely emits one last "error" on its way
+       out. The previous handler was unconditional, so the NORMAL end of every session
+       painted a Hebrew failure modal over the frozen result the shopper was meant to be
+       looking at. The session had already succeeded; only the reporting was broken.
+
+       THREE THINGS ARE WRONG WITH AN UNCONDITIONAL HANDLER, and all three are fixed here:
+
+       1. IT HAD NO GENERATION CHECK. Every other callback in this file closes over `gen`
+          and bails once sessionGen has moved on (see onRemoteStream and
+          onConnectionStateChange right above). This one did not, so a dead session's dying
+          error surfaced over whatever the NEXT session was doing.
+
+       2. IT DID NOT KNOW THE WINDOW HAD CLOSED. stopBilling() bumps sessionGen, so the
+          check in (1) covers the deliberate teardown too - but only because of that side
+          effect, which is exactly the kind of thing that stops being true quietly. isLive()
+          is asserted as well, so an error arriving against a connection this file has
+          already retired is dropped on its own merits rather than by coincidence.
+
+       3. A TRANSIENT ERROR IS NOT A TERMINAL ONE. The SDK reconnects internally (5 attempts,
+          scheduleReconnect() in stream-session.js) and only gives up by driving the state
+          machine to "disconnected" - which onConnectionStateChange above already catches and
+          retires the session on. So a single "error" event mid-stream means a frame dropped,
+          not that the session is over: it is logged and swallowed, and the SDK is left to
+          recover. Only a run of ERROR_MODAL_THRESHOLD of them inside ERROR_WINDOW_MS - a
+          transport that is genuinely failing rather than hiccupping - is worth interrupting
+          the shopper for. The counter is per-session by construction: it lives in this
+          connect call's closure, so a new session starts at zero with no reset to forget.
+
+       WHAT THIS GIVES UP: a one-off fatal error that somehow never moves the connection
+       state would now be logged rather than shown. That is the right trade - the console
+       keeps every one of them, and the failure this was actually producing (a modal over a
+       perfectly good result, once per session, for every shopper) is not a trade at all. */
+    let transientErrors = 0, transientWindowAt = 0;
     rtClient.on("error", (err) => {
-      console.error("[session] Decart error:", err?.message || String(err));
-      showCamError("שגיאת Decart: " + (err?.message || err));
+      const msg = err?.message || String(err);
+      /* A torn-down or superseded session's dying breath - including the deliberate
+         disconnect at the end of every billed window. Never user-facing. */
+      if (gen !== sessionGen || !isLive()) {
+        console.warn("[session] Decart error after the session closed - ignored:", msg);
+        return;
+      }
+      const now = Date.now();
+      if (now - transientWindowAt > ERROR_WINDOW_MS) { transientErrors = 0; transientWindowAt = now; }
+      transientErrors++;
+      if (transientErrors < ERROR_MODAL_THRESHOLD) {
+        console.warn(`[session] Decart error ${transientErrors}/${ERROR_MODAL_THRESHOLD} ` +
+          `in ${ERROR_WINDOW_MS}ms - transient, letting the SDK recover:`, msg);
+        return;
+      }
+      console.error("[session] Decart error:", msg);
+      showCamError("שגיאת Decart: " + msg);
     });
 
     connState = (rtClient.getConnectionState && rtClient.getConnectionState()) || "connected";
@@ -7397,17 +7452,49 @@ const CATEGORY_ANCHOR = Object.freeze({
      line - append it to the anchor - and the morphology monitor that decides WHEN to
      re-condition is untouched, so what is lost is the prompt's half of the width axis.
      Watch for a loose drape on a slender build; that is the report this would answer. */
+  /* ── REVISION: FULL FRAME, AND THE BLACK BAR NAMED OUT LOUD ──────────────────
+     THE PREVIOUS PAIR WAS WRITTEN FOR A PIPELINE THAT NO LONGER EXISTS. It described the
+     non-target region as something to "pass through ... from the LIVE camera feed", which
+     was the prompt half of a two-part fix whose other half - the compositing guard - is
+     now OFF (config.js LOWER_BODY_GUARD_ENABLED, and its own comment says why: the guard
+     was rendering a solid black rectangle over the lower half of the canvas). A prompt
+     that instructs a model to "pass through the live camera feed" for one region is
+     describing a compositing operation the model cannot perform. Left in place it is a
+     standing invitation to render SOMETHING that reads as a different source for that
+     region - which is the family the black-bar report belongs to.
+
+     SO BOTH BRANCHES NOW SCOPE TO THE WHOLE FRAME. "in the full video frame" is the
+     positive statement, "without adding black bars" is the negative one, and the black bar
+     is named explicitly because a defect the model has demonstrably produced is worth one
+     token to forbid by name. The preserve-list is stated as the subject's OWN natural
+     features (face, hair, the non-target half, background) rather than as a region routed
+     to another source, so every sentence describes something a single-stream image-to-image
+     model can actually do.
+
+     "Fit ONLY" IS STILL DOING THE SAME WORK in the first two words of both strings - it
+     scopes the instruction before any noun is introduced, where a leading-token model is
+     most sensitive, which is the same reasoning buildCompositePrompt() records for putting
+     the anchor first at all.
+
+     WHAT CAME OFF, written down because this file's history is a list of wordings that
+     were removed and had to come back: the ENTER-THE-FRAME EVENT clause ("for any lower
+     body parts, legs, or shorts that ENTER the camera frame DURING THE VIDEO") and its
+     attribute list (color, pattern, LENGTH). That clause was aimed at one specific report -
+     shorts becoming long trousers when a leg entered frame mid-session - and length is the
+     attribute that report turned on. What replaces it is a broader, shorter preservation
+     statement plus the invented-garment ban ("inventing extra garments"), which covers the
+     same failure in fewer tokens but says nothing about LENGTH. If the shorts-to-trousers
+     report returns, that clause is what answers it and it is recorded here verbatim.
+     The two strings stay structurally identical and mirror each other, because the failure
+     is symmetric in both directions. */
   top:
-    "Fit ONLY the reference shirt onto the subject's upper torso. For any lower body" +
-    " parts, legs, or shorts that enter the camera frame during the video, pass through" +
-    " and strictly preserve the subject's LIVE camera feed clothing (color, pattern," +
-    " length) without generating, replacing, or inventing any new pants or garments.",
+    "Fit ONLY the reference shirt onto the subject in the full video frame." +
+    " Strictly preserve the subject's natural face, hair, lower body, and background" +
+    " without adding black bars or inventing extra garments.",
   bottom:
-    "Fit ONLY the reference pants/shorts onto the subject's lower body. For any upper" +
-    " body parts, torso, or shirt that enter the camera frame during the video, pass" +
-    " through and strictly preserve the subject's LIVE camera feed clothing (color," +
-    " pattern, length) without generating, replacing, or inventing any new top or" +
-    " garments.",
+    "Fit ONLY the reference pants/shorts onto the subject in the full video frame." +
+    " Strictly preserve the subject's natural face, upper body, and background" +
+    " without adding black bars or inventing extra garments.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -7544,7 +7631,7 @@ function imageOnlyPrompt(item) {
      TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, STRICT_REFERENCE_LOCK]`
      for the hallucination clamp, `[P.HIGH, KEEP_OPPOSITE_LAYER]` on the bottoms branch for
      the opposite-layer pin; both are the retirements this revision made. The budget is not
-     the constraint - 308 characters are free on tops and 330 on bottoms - so the only
+     the constraint - 446 characters are free on tops and 445 on bottoms - so the only
      question is whether that text is worth the weight it takes away from the reference
      image, which is the mechanism every report in this sequence shares. One at a time,
      re-tested live. */
@@ -7631,15 +7718,22 @@ function lookAnchorPrompt() {
    The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS (342 chars - anchor)             BOTTOMS (320 chars - anchor, lower-body scoped)
-     + DENSE.bodyFidelity  (45) → 388  fits              → 366  fits
-     + DENSE.modelAgnostic (64) → 407  fits              → 385  fits
-     + both of them        (110)→ 453  fits              → 431  fits
+     TOPS (204 chars - anchor)             BOTTOMS (205 chars - anchor)
+     + DENSE.bodyFidelity  (45) → 250  fits              → 251  fits
+     + DENSE.modelAgnostic (64) → 269  fits              → 270  fits
+     + both of them        (110)→ 315  fits              → 316  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 308 characters are free on tops and 330 on
+   NOTHING SHEDS ANY MORE, on either branch. 446 characters are free on tops and 445 on
    bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.
+
+   THE HEADROOM JUMPED ~140 CHARACTERS IN THE FULL-FRAME REVISION, and that is worth one
+   line so the next reader does not mistake it for slack that was always there. The
+   previous pair spent most of their length routing the non-target region to the live
+   camera feed - the prompt half of a fix whose runtime half (the compositing guard) is
+   now off. That clause went with it. The space it freed is not a budget to spend; it is
+   the measure of how much text was describing a pipeline that no longer exists.
 
    HEADROOM IS NOT PERMISSION. Tops was collapsed from 634 characters and bottoms from
    616 precisely BECAUSE text volume was outweighing the reference pixels - the tuxedo,
@@ -7647,9 +7741,9 @@ function lookAnchorPrompt() {
    Two spends have been made since, both against REPRODUCED reports rather than to fill
    space: the lower-body scoping on bottoms (the shirt-replacement report), and the
    per-frame adaptation sentence on both branches (the stretched-garment report). The
-   second is why the two anchors are ~170 characters longer than the 1:1 collapse left
-   them, and it is also why the branches are now within 22 characters of each other
-   rather than 69 apart. Size every further restore the same way: evidence first, then
+   second is why the two anchors grew past the 1:1 collapse at all; the full-frame
+   revision then handed most of that back, and the branches are now within ONE character
+   of each other rather than 69 apart - they differ by a single region word. Size every further restore the same way: evidence first, then
    the character count.
 
    IF A RESTORE EVER DOES OVERRUN, the cheapest text to reclaim, in order:
@@ -12310,8 +12404,24 @@ let lowerBodyGuardRAF = null;
 let lowerBodyGuardFrac = LOWER_BODY_GUARD_FRAC;
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   THE NON-TARGET REGION GUARD - the only HARD zero-invention guarantee available
+   THE NON-TARGET REGION GUARD - CURRENTLY OFF (config.js LOWER_BODY_GUARD_ENABLED)
    ══════════════════════════════════════════════════════════════════════════════
+   ⚠️ READ THIS FIRST: everything below describes what this mechanism DOES when enabled,
+   and it is not enabled. It was turned on, and a recording showed it rendering the lower
+   half of the live canvas as a SOLID BLACK RECTANGLE - its own band geometry (guardBand()
+   puts the boundary at the hip line, which in a torso-forward framing sits at about half
+   the frame height). The band's source is a drawImage() off #webcam, which is
+   visibility:hidden throughout .show-live while the input throttle re-negotiates the
+   shared camera source underneath it via applyConstraints() on a clone of the same track.
+   Beyond the readback, a hard-edged rectangular composite over a diffusion output shows a
+   seam wherever the two sources disagree on exposure, white balance or latency.
+
+   IT IS KEPT INTACT, NOT DELETED, so the restore is one flag rather than a rewrite from
+   the commit log - and lower-body-guard.test.mjs still exercises the whole mechanism,
+   including that it paints NOTHING while the flag is off. Anything that re-enables it has
+   to answer the black band and the cover/stretch mismatch (style.css #lowerBodyGuard)
+   first. config.js's LOWER_BODY_GUARD_ENABLED comment carries the full arc.
+
    REPORTED: trying on a SHIRT, the shopper lifts a leg into frame wearing light blue
    shorts, and Decart renders black long trousers over it. The prompt forbids exactly this
    in words ("pass through and strictly preserve the subject's LIVE camera feed clothing"),
