@@ -109,7 +109,7 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      logos, and cut", which states the same rule inside the anchor where it cannot shed -
      and adds logos and cut, which the old wording did not name. */
   check("the shipped prompt names the reference as the only source of cloth",
-    /the reference shirt/.test(out) &&
+    /the exact reference shirt/.test(out) &&
     /Fit ONLY/.test(out), out);
   check("...the discard is still carried by exhaustion, not stated outright",
     !/ignoring the original model's body/.test(out), out);
@@ -134,7 +134,7 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      It used to be a ranking argument (MED, shed under pressure); it is now structural. */
   for (const prof of [false, true]) {
     check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
-      /Fit ONLY the reference shirt/
+      /Fit ONLY the exact reference shirt/
         .test(api.buildCompositePrompt(TEE, "front", prof)));
   }
 
@@ -222,8 +222,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  250, 251],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 269, 270],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  300, 306],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 319, 325],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -232,13 +232,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(204 chars - anchor\)             BOTTOMS \(205 chars - anchor\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 250  fits              \u2192 251  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 269  fits              \u2192 270  fits/.test(SRC),
+    /TOPS \(254 chars - anchor\)             BOTTOMS \(260 chars - anchor\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 300  fits              \u2192 306  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 319  fits              \u2192 325  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /446 characters are free on tops and 445 on\s*\n?\s*bottoms/.test(SRC),
+    /396 characters are free on tops and 390 on\s*\n?\s*bottoms/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
 }
 
@@ -268,7 +268,7 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
     check(`the category anchor survives a pathologically long name (inProfile=${prof})`,
-      /Fit ONLY the reference shirt/.test(out),
+      /Fit ONLY the exact reference shirt/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }

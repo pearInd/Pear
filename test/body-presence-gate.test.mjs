@@ -332,8 +332,8 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
     top.length <= CONFIG.PROMPT_MAX_CHARS && bot.length <= CONFIG.PROMPT_MAX_CHARS,
     `tops=${top.length} bottoms=${bot.length}`);
   check("the category anchor still leads - persistence language must not displace it",
-    /^Fit ONLY the reference shirt onto the subject in the full video frame\./.test(top) &&
-    /^Fit ONLY the reference pants\/shorts onto the subject in the full video frame\./.test(bot),
+    /^Fit ONLY the exact reference shirt onto the subject's upper torso across this unified continuous frame\./.test(top) &&
+    /^Fit ONLY the exact reference pants\/shorts onto the subject's lower body across this unified continuous frame\./.test(bot),
     "each branch must open on its own anchor, whatever else it carries");
 }
 

@@ -169,25 +169,28 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
      SO BOTH BRANCHES SCOPE TO THE WHOLE FRAME NOW, positively ("in the full video frame")
      and negatively ("without adding black bars"), with the non-target region named as one
      of the subject's OWN natural features to keep rather than as a second source. */
-  check("opens by scoping to ONE garment and the FULL FRAME, nothing before it",
-    bottomsPrompt.indexOf("Fit ONLY the reference pants/shorts onto the subject in the full video frame.") === 0,
+  check("opens by scoping to ONE garment, ONE region, and a CONTINUOUS frame",
+    bottomsPrompt.indexOf("Fit ONLY the exact reference pants/shorts onto the subject's lower body across this unified continuous frame.") === 0,
     bottomsPrompt);
-  check("...scopes the fit to the FULL VIDEO FRAME - the anti-crop instruction",
-    /in the full video frame\./.test(bottomsPrompt),
-    "a half-frame render is the defect this wording exists to forbid");
+  /* BOTH HALVES OF THE LEAD, asserted separately because they answer different reports and
+     a previous revision dropped one while fixing the other. The REGION says where the
+     garment goes (the shirt-replacement report); the FRAME says where the model may render
+     (the split-canvas report). Neither substitutes for the other. */
+  check("...the region is named again - where the garment GOES",
+    /onto the subject's lower body\b/.test(bottomsPrompt),
+    "an unscoped anchor is what let a trouser try-on claim the whole reference");
+  check("...and the frame is named too - where the model may RENDER",
+    /across this unified continuous frame\./.test(bottomsPrompt),
+    "a half-frame render is the defect this half of the lead exists to forbid");
   check("...and never claims the upper garment as the thing to FIT",
     !/reference shirt/.test(bottomsPrompt) && !/onto the subject's upper torso/.test(bottomsPrompt),
     bottomsPrompt);
-  /* THE NON-TARGET REGION IS STILL NAMED - that requirement did not go away with the
-     wording that carried it. What changed is HOW: it is listed among the subject's own
-     natural features to preserve, not routed to a feed the model cannot read. */
-  check("...names the UPPER BODY among the subject's own features to preserve",
-    /Strictly preserve the subject's natural face, upper body, and background/
+  check("...bans BOTH descriptions of the artifact: slicing, and the bar that fills it",
+    /Do not slice the canvas, insert black bars, or invent upper body garments\./
       .test(bottomsPrompt), bottomsPrompt);
-  check("...forbids the black bar BY NAME - a defect the model has demonstrably produced",
-    /without adding black bars/.test(bottomsPrompt), bottomsPrompt);
-  check("...and still bans inventing a garment nobody asked for",
-    /or inventing extra garments\.$/.test(bottomsPrompt), bottomsPrompt);
+  check("...and preserves the non-target CLOTHING by name, not just the body region",
+    /Strictly preserve the subject's natural upper clothing and live background\.$/
+      .test(bottomsPrompt), bottomsPrompt);
 
   /* THE SIZE PROPERTY IS STILL A FIX, so it is asserted as a number rather than trusted
      to stay small because someone remembered why. It grew by 81 characters here, and that
@@ -203,21 +206,13 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
 
 console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour ──");
 {
-  check("scopes to the reference shirt and the FULL FRAME, nothing before it",
-    topsPrompt.indexOf("Fit ONLY the reference shirt onto the subject in the full video frame.") === 0,
+  check("scopes to the reference shirt, the upper TORSO and a CONTINUOUS frame",
+    topsPrompt.indexOf("Fit ONLY the exact reference shirt onto the subject's upper torso across this unified continuous frame.") === 0,
     topsPrompt);
-  check("...and carries the mirror of the bottoms preservation clause",
-    /Strictly preserve the subject's natural face, hair, lower body, and background/.test(topsPrompt) &&
-    /without adding black bars or inventing extra garments\.$/.test(topsPrompt),
+  check("...and carries the exact mirror of the bottoms clauses",
+    /Do not slice the canvas, insert black bars, or invent lower body garments\./.test(topsPrompt) &&
+    /Strictly preserve the subject's natural lower clothing and live background\.$/.test(topsPrompt),
     topsPrompt);
-  /* HAIR IS ON THE TOPS BRANCH ONLY, and it is not an oversight: a shirt is fitted at the
-     shoulders and neckline, which is exactly where hair falls and where a re-drawn collar
-     takes it with it. A bottoms fit is nowhere near it. Asserted so the asymmetry reads as
-     a decision rather than a typo the next time these two strings are diffed. */
-  check("...and 'hair' is on the TOPS branch specifically - the collar/shoulder region",
-    /natural face, hair, lower body/.test(topsPrompt) &&
-    !/hair/.test(bottomsPrompt),
-    `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
 
   /* ── ONE SHAPE, ONE DELIBERATE DIVERGENCE ───────────────────────────────────
      The branches no longer normalise into one string - they are worded per region now (a
@@ -226,8 +221,8 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      one this suite exists for: WHICH region the anchor claims. image-first.test.mjs §1
      owns the sentence-by-sentence contract. */
   check("both open on the same exclusive-scope binding",
-    topsPrompt.startsWith("Fit ONLY the reference ") &&
-    bottomsPrompt.startsWith("Fit ONLY the reference "),
+    topsPrompt.startsWith("Fit ONLY the exact reference ") &&
+    bottomsPrompt.startsWith("Fit ONLY the exact reference "),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
   /* ── EACH NAMES BOTH REGIONS NOW, AND THAT IS THE POINT ────────────────────
      The old rule was "each branch mentions its own garment and never the other's". It
@@ -235,11 +230,11 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      a tops prompt that never says "pants" cannot tell the model to leave them alone. What
      replaces it is the stronger property: each branch FITS one region and PRESERVES the
      other, and never the reverse. */
-  check("...and each FITS its own garment while PRESERVING the opposite region",
-    /Fit ONLY the reference shirt/.test(topsPrompt) &&
-    /preserve the subject's natural face, hair, lower body/.test(topsPrompt) &&
-    /Fit ONLY the reference pants\/shorts/.test(bottomsPrompt) &&
-    /preserve the subject's natural face, upper body/.test(bottomsPrompt),
+  check("...and each FITS its own garment while PRESERVING the opposite layer's clothing",
+    /Fit ONLY the exact reference shirt/.test(topsPrompt) &&
+    /preserve the subject's natural lower clothing/.test(topsPrompt) &&
+    /Fit ONLY the exact reference pants\/shorts/.test(bottomsPrompt) &&
+    /preserve the subject's natural upper clothing/.test(bottomsPrompt),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
   /* THE SELF-CANCELLING PROMPT, restated for the new wording: a branch that lists the very
      region it is editing among the things to "strictly preserve" is instructing the model
@@ -252,11 +247,11 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
   /* BOTH SCOPE TO THE FULL FRAME AND BOTH BAN THE BAR. This is the property the whole
      revision turns on, so it is asserted on the PAIR rather than only per branch - a fix
      applied to one branch and forgotten on the other is this file's recurring failure. */
-  check("...and BOTH scope to the full frame and ban the black bar - symmetric, not one-sided",
-    /in the full video frame\./.test(topsPrompt) &&
-    /in the full video frame\./.test(bottomsPrompt) &&
-    /without adding black bars/.test(topsPrompt) &&
-    /without adding black bars/.test(bottomsPrompt),
+  check("...and BOTH carry the continuous frame and the slice/bar ban - symmetric, not one-sided",
+    /across this unified continuous frame\./.test(topsPrompt) &&
+    /across this unified continuous frame\./.test(bottomsPrompt) &&
+    /Do not slice the canvas, insert black bars/.test(topsPrompt) &&
+    /Do not slice the canvas, insert black bars/.test(bottomsPrompt),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
 
   /* ── THE ASYMMETRY ITSELF, asserted so it cannot drift by accident ───────────
@@ -273,7 +268,8 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      the model invents trousers - so both branches carry it, and app.js's asymmetry note
      is history rather than live policy. */
   check("tops DOES carry the opposite-layer lock now - the asymmetry is over",
-    /lower body/.test(topsPrompt) && /inventing extra garments/.test(topsPrompt),
+    /invent lower body garments/.test(topsPrompt) &&
+    /natural lower clothing/.test(topsPrompt),
     `the report that closed the asymmetry was a tops try-on inventing trousers: ${topsPrompt}`);
   check("the opposite-layer lock is recorded in app.js with a per-branch restore path",
     /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC) &&
@@ -383,12 +379,41 @@ console.log("\n── §6 EVERY BUILDER BRANCHES - one constant left is the bug,
     !/Use only the reference image's graphics/.test(look) &&
     (look.match(/Exactly match color/g) || []).length === 1,
     "two provenance sentences spend budget restating one instruction - the mechanism itself");
-  /* The two clauses this path keeps and the single-garment branches do not. No full-look
-     report has been filed against clause count, so removing them here would be a change
-     made on no evidence - and they are the two a both-layer render needs most. */
-  check("...while the volume and hem clauses it never collapsed are still assembled",
-    /360-degree rotations/.test(look) && /un-knotted hem/.test(look), look);
-  check(`...and the whole thing fits the ${CONFIG.PROMPT_MAX_CHARS}-char budget with nothing shed`,
+  /* ── THE PANEL CLAUSE, AND WHAT IT COST ────────────────────────────────────
+     THE HOLE IT CLOSES: this path ships a STITCHED reference - two garment panels
+     stacked vertically - and for several revisions the prompt said nothing at all about
+     that layout. buildLookPrompt() takes an `angleText` argument and applyLook() passes
+     DENSE.lookPanels into it, but the function returns lookAnchorPrompt() without ever
+     reading it, so the explaining clause was never on the wire.
+
+     IT BECAME LOAD-BEARING when the stitcher's black separator bar came out (see
+     LOOK_DIVIDER in app.js - the bar was being reproduced onto the shopper as a split
+     frame). That bar was doing two jobs: it was the defect, and it was also the only
+     signal that the reference held two separate garments. So this is a straight swap of a
+     VISUAL instruction the model copies into its output for a TEXTUAL one it can follow
+     without copying, and the two halves must ship together - hence both asserted here. */
+  check("the stacked-panel layout is EXPLAINED on the wire, not left to be inferred",
+    /The reference stacks two garments; render both at once in one continuous frame\./.test(look),
+    look);
+  check("...and reproducing that layout into the video is banned in the same breath",
+    /Never draw its panel gap or bars into the video\./.test(look), look);
+  check("...paired with the stitcher no longer PAINTING a bar to be copied",
+    /const LOOK_DIVIDER = 0;/.test(SRC) && !/High-contrast 200px SOLID BLACK separator bar/.test(SRC),
+    "the prompt half and the pixel half are one fix - neither works alone");
+
+  /* THE VOLUME CLAUSE SURVIVES; THE HEM CLAUSE IS THE PRICE. The assembly runs past the
+     budget with the panel clause in, so fitPrompt() sheds the lowest-priority part - which
+     is what the P tiers exist for. CLOSED_BACK_HEM is P.MED precisely because it was
+     always meant to go first. Asserted as a PAIR (one kept, one shed) rather than left to
+     be discovered, because a silent shed is how this file's budget notes went stale
+     before: if a knotted hem or open back is reported on the FULL-LOOK path specifically,
+     this is the trade that did it. */
+  check("...the 360-degree volume clause is kept - it is what a both-layer render needs most",
+    /360-degree rotations/.test(look), look);
+  check("...and CLOSED_BACK_HEM is the documented shed, not a silent one",
+    !/un-knotted hem/.test(look) && /CLOSED_BACK_HEM \("closed back and normal un-knotted hem"\) is/.test(SRC),
+    "the loss has to be on file in app.js next to the clause that caused it");
+  check(`...and the whole thing lands inside the ${CONFIG.PROMPT_MAX_CHARS}-char budget`,
     look.length <= CONFIG.PROMPT_MAX_CHARS, `${look.length} chars`);
 
   /* ── THE KEEP-ALIVE PING RESOLVES THE SAME TWO WAYS THE APPLY PATH DOES ─────

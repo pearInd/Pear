@@ -5776,6 +5776,8 @@ function drawSectionLabel(ctx, text, anchorX, top, fontPx, align) {
 }
 
 /* ── Full-Look compositor - "TOP + BOTTOM Stitched Reference" ─────────────────
+   NOTE: the black bar this used to draw between the halves is gone - it was being
+   reproduced onto the shopper as a split frame. See LOOK_DIVIDER.
    Same rigid-geometry technique the removed front|back stitcher used, but stacked
    VERTICALLY: the TOP garment (shirt) boxed into the upper half, the BOTTOM garment
    (trousers) boxed into the lower half, separated by the same wide black no-man's-land
@@ -5788,8 +5790,40 @@ function drawSectionLabel(ctx, text, anchorX, top, fontPx, align) {
    Memoized per top+bottom URL pair; falls back to null (caller falls back to the
    top-only reference) on any decode/composite failure. */
 const LOOK_W   = 1024, LOOK_H = 2048, LOOK_SEP = 200;
-const LOOK_PAD = 44;                                // black gutter framing each half (isolated panel)
+const LOOK_PAD = 44;                                // backdrop-coloured inset framing each half
 const LOOK_BOX = (LOOK_H - LOOK_SEP) / 2;           // 924px per half
+/* ── THE SEPARATOR IS NOT BLACK ANY MORE, and this is the same fix the front/back
+   stitcher already shipped one screen down - read COMPOSITE_DIVIDER's comment, it is the
+   same lesson learned on the same kind of image.
+
+   REPORTED: the live canvas renders as two disconnected blocks with a solid black
+   rectangle filling the lower half. The reference image handed to rtClient.set({ image })
+   for a full look WAS that picture: a pure-black 1024x2048 canvas, a garment panel top and
+   bottom, and a 200px SOLID BLACK bar across the middle. A video-to-video diffusion model
+   conditioned on an image whose single highest-contrast feature is a black horizontal band
+   has every reason to put a black horizontal band in its output - which is exactly what
+   the front/back path recorded when its own divider was a fixed #3a3a3a between two white
+   packshots: "the highest-contrast feature in the whole reference, and the one that ended
+   up painted on the shopper."
+
+   SO THE BAND IS NOW THE PANELS' OWN BACKDROP COLOUR, sampled from the packshots by
+   sampleBackdrop() exactly as the front/back gutter is. The two halves meet with no edge
+   at all, so there is no seam for the model to copy. The GEOMETRY is unchanged - the gap
+   is still 200px and the panels are still isolated - because separation was never the
+   problem; CONTRAST was.
+
+   LOOK_DIVIDER is the switch back, kept for the same reason COMPOSITE_DIVIDER is: if a
+   future model build genuinely needs an explicit boundary, set it > 0 and it draws in the
+   sampled contrast ink rather than hard-coded black, so it can never invert into a black
+   bar on a dark shoot. */
+const LOOK_DIVIDER = 0;      // 0 = seamless backdrop gap (default). >0 = divider width in px.
+/* The TOP/BOTTOM markers move INTO the separator gap. They are load-bearing - the
+   labelled-panel technique is what makes a stitched reference render as two garments
+   rather than one - so they are not removed, for the reason COMPOSITE_LABELS records. But
+   text drawn ON a garment is text that can be composited onto the shopper, and the gap
+   between the panels is the one region of this reference that contains no garment pixels
+   at all. Set false to drop them and rely on position + the prompt's panel clause. */
+const LOOK_LABELS = true;
 const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Blob|null>  (LRU-capped, see BLOB_CACHE_MAX)
 
 /* ── Stitched Garment Composite Engine ───────────────────────────────────────────
@@ -6063,10 +6097,12 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
 
 /**
  * Stitch a TOP + BOTTOM garment asset into ONE fixed 1024×2048 reference Blob: TOP boxed
- * into the upper half (inset by a 44px black gutter) + "TOP" white marker, a WIDE 200px
- * opaque black separator bar, BOTTOM boxed into the lower half (same gutter) + "BOTTOM"
- * white marker. Same rigid geometry + wide bar + gutter that keeps the front/back stitch
- * from bleeding - here it keeps the shirt and pants from bleeding into each other.
+ * into the upper half, a 200px SEAMLESS gap carrying both markers, BOTTOM boxed into the
+ * lower half. The surround and the gap are the packshots' own sampled backdrop colour, so
+ * the panels are separated geometrically without any high-contrast edge - see LOOK_DIVIDER
+ * for the report that changed this, and COMPOSITE_DIVIDER for the same lesson learned on
+ * the front/back stitch first. Same rigid geometry that keeps the front/back stitch from
+ * bleeding - here it keeps the shirt and pants from bleeding into each other.
  * @param {string} topUrl     upper-body garment image URL (http(s)/data:/blob:)
  * @param {string} bottomUrl  lower-body garment image URL
  * @returns {Promise<Blob|null>}  JPEG Blob, or null on any failure (caller falls back
@@ -6088,33 +6124,60 @@ function stitchLookBlob(topUrl, bottomUrl) {
       const canvas = off || Object.assign(document.createElement("canvas"), { width: LOOK_W, height: LOOK_H });
       const ctx    = canvas.getContext("2d");
 
-      ctx.fillStyle = "#000";
+      /* Sampled from the two packshots, so the surround and the gap between the panels are
+         the SAME colour as the background already inside each garment photo. Replaces the
+         pure-black fill that made this reference a picture of a black bar. Sampled before
+         the output canvas exists, for the reason the front/back stitcher gives: it
+         allocates scratch canvases of its own. */
+      const backdrop = sampleBackdrop([top, bottom]);
+
+      ctx.fillStyle = backdrop.fill;
       ctx.fillRect(0, 0, LOOK_W, LOOK_H);
 
       const pad = LOOK_PAD;
       const innerW = W - pad * 2, innerH = boxH - pad * 2;
 
-      // Upper half = TOP, clipped to its box so a wide packshot can't bleed toward the bar.
+      /* THE CLIPS STAY. They are not the canvas-splitting the report is about - this is an
+         off-DOM REFERENCE image being assembled, never the display surface - and each one
+         does real work: it stops a wide packshot bleeding out of its own half and into the
+         other garment's. Removing them would make the two garments bleed together, which
+         is the failure the panel layout exists to prevent. */
+      // Upper half = TOP, clipped to its box so a wide packshot can't cross the gap.
       ctx.save();
       ctx.beginPath(); ctx.rect(0, 0, W, boxH); ctx.clip();
       drawImageCover(ctx, top, pad, pad, innerW, innerH);
       ctx.restore();
 
-      // Lower half = BOTTOM, clipped to its box (starts after the bar).
+      // Lower half = BOTTOM, clipped to its box (starts after the gap).
       ctx.save();
       ctx.beginPath(); ctx.rect(0, bottomY, W, boxH); ctx.clip();
       drawImageCover(ctx, bottom, pad, bottomY + pad, innerW, innerH);
       ctx.restore();
 
-      // High-contrast 200px SOLID BLACK separator bar - the diffusion "no-man's-land".
-      ctx.fillStyle = "#000000";
-      ctx.fillRect(0, boxH, W, LOOK_SEP);
+      /* The separator is already painted - it is the backdrop fill above, so the gap has
+         no edge. Only an explicitly re-enabled divider draws anything here, and it draws
+         in sampled contrast ink at low alpha: a hint, never a hard black band. */
+      if (LOOK_DIVIDER > 0) {
+        const dividerH = Math.max(1, Math.round(LOOK_DIVIDER));
+        ctx.save();
+        ctx.fillStyle = backdrop.contrast;
+        ctx.globalAlpha = 0.28;
+        ctx.fillRect(0, boxH + Math.round((LOOK_SEP - dividerH) / 2), W, dividerH);
+        ctx.restore();
+      }
 
-      // Hard architectural markers: "TOP" in the upper half, "BOTTOM" in the lower half.
-      const fontPx = Math.round(W * 0.09);
-      const inset  = Math.round(W * 0.04);
-      drawSectionLabel(ctx, "TOP",    inset, inset, fontPx, "left");
-      drawSectionLabel(ctx, "BOTTOM", inset, bottomY + inset, fontPx, "left");
+      /* Markers CENTRED IN THE GAP - the one band of this reference with no garment pixels
+         in it. Each sits against the panel it names (TOP against the upper panel, BOTTOM
+         against the lower), so the identity signal survives while nothing is drawn over
+         cloth. drawSectionLabel paints its own white box and black text, so it stays
+         legible on whatever backdrop was sampled. */
+      if (LOOK_LABELS) {
+        const fontPx = Math.round(LOOK_SEP * 0.26);
+        const labelH = fontPx + Math.round(fontPx * 0.32) * 2;
+        const slack  = Math.max(0, Math.round((LOOK_SEP - labelH * 2) / 3));
+        drawSectionLabel(ctx, "TOP",    W / 2, boxH + slack, fontPx, "center");
+        drawSectionLabel(ctx, "BOTTOM", W / 2, boxH + slack * 2 + labelH, fontPx, "center");
+      }
       top.close?.(); bottom.close?.();             // release decoded bitmaps
 
       return off
@@ -7487,14 +7550,35 @@ const CATEGORY_ANCHOR = Object.freeze({
      report returns, that clause is what answers it and it is recorded here verbatim.
      The two strings stay structurally identical and mirror each other, because the failure
      is symmetric in both directions. */
+  /* ── REVISION: THE UNIFIED CONTINUOUS FRAME ──────────────────────────────────
+     The previous pair already scoped to "the full video frame" and banned black bars by
+     name. This pair keeps both and adds the two things that revision was missing:
+
+     1. THE REGION IS NAMED AGAIN. "onto the subject's upper torso" / "lower body" came
+        out when the frame-scoping went in, on the reasoning that a half-frame scope was
+        what the black-bar report was filed against. That was one step too far: the region
+        says WHERE THE GARMENT GOES, which is not the same claim as where the model may
+        render. Both are stated now - the garment is placed on a region, ACROSS a
+        continuous frame - so neither report can be re-opened by the other's fix.
+     2. "DO NOT SLICE THE CANVAS" IS EXPLICIT. The reported artifact is a frame cut into
+        two disconnected blocks, and the ban now names that operation as well as the black
+        bar it fills the gap with. Two ways of describing one defect, because the model
+        produced both descriptions of it.
+
+     AND THE NON-TARGET CLOTHING IS PRESERVED BY NAME AGAIN ("the subject's natural lower
+     clothing"), where the previous pair only named the body region. That is the clause the
+     invented-trousers report turns on, and it is worth restating now that the compositing
+     guard which used to enforce it is off. */
   top:
-    "Fit ONLY the reference shirt onto the subject in the full video frame." +
-    " Strictly preserve the subject's natural face, hair, lower body, and background" +
-    " without adding black bars or inventing extra garments.",
+    "Fit ONLY the exact reference shirt onto the subject's upper torso across this" +
+    " unified continuous frame. Do not slice the canvas, insert black bars, or invent" +
+    " lower body garments. Strictly preserve the subject's natural lower clothing and" +
+    " live background.",
   bottom:
-    "Fit ONLY the reference pants/shorts onto the subject in the full video frame." +
-    " Strictly preserve the subject's natural face, upper body, and background" +
-    " without adding black bars or inventing extra garments.",
+    "Fit ONLY the exact reference pants/shorts onto the subject's lower body across this" +
+    " unified continuous frame. Do not slice the canvas, insert black bars, or invent" +
+    " upper body garments. Strictly preserve the subject's natural upper clothing and" +
+    " live background.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -7631,7 +7715,7 @@ function imageOnlyPrompt(item) {
      TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, STRICT_REFERENCE_LOCK]`
      for the hallucination clamp, `[P.HIGH, KEEP_OPPOSITE_LAYER]` on the bottoms branch for
      the opposite-layer pin; both are the retirements this revision made. The budget is not
-     the constraint - 446 characters are free on tops and 445 on bottoms - so the only
+     the constraint - 396 characters are free on tops and 390 on bottoms - so the only
      question is whether that text is worth the weight it takes away from the reference
      image, which is the mechanism every report in this sequence shares. One at a time,
      re-tested live. */
@@ -7676,10 +7760,39 @@ const LOOK_ANCHOR =
  * on demand it costs nothing measurable and cannot fail at import.
  * @returns {string}
  */
+/* ── THE PANEL CLAUSE, and the trade that pays for it ───────────────────────────
+   THE HOLE THIS CLOSES: a full look ships a STITCHED reference - two garment panels
+   stacked vertically - and until now the prompt said nothing whatsoever about that
+   layout. buildLookPrompt() takes an `angleText` argument, applyLook() passes
+   DENSE.lookPanels into it, and the function returns lookAnchorPrompt() without ever
+   reading it. So the clause that explains the stacked layout has not been on the wire at
+   all, and the model was left to infer what a two-panel image meant on its own.
+
+   IT MATTERED MORE ONCE THE BLACK BAR CAME OUT. That bar was doing two jobs: it was the
+   defect (reproduced onto the shopper as a split frame - see LOOK_DIVIDER) and it was
+   also the only signal that the reference was two separate garments rather than one
+   photograph. Removing it without saying anything would trade a split frame for a blended
+   one. So this is a straight swap of a VISUAL instruction the model copies into its
+   output for a TEXTUAL one it can follow without copying - and the two halves ship
+   together, deliberately.
+
+   WHAT IT COSTS: CLOSED_BACK_HEM. The assembled look prompt runs 533 characters against
+   PROMPT_MAX_CHARS = 650, so this clause does not fit alongside every existing one and
+   fitPrompt() sheds the lowest-priority part to make room - which is what the P tiers are
+   for, and it lands at 612. CLOSED_BACK_HEM ("closed back and normal un-knotted hem") is
+   the loss, it is P.MED precisely because it was always the first thing meant to go, and
+   restoring it is a matter of shortening this clause rather than finding budget. If a
+   knotted hem or an open back comes back on the FULL-LOOK path specifically, this is the
+   trade that did it. Single-garment paths never assembled it and are unaffected. */
+const LOOK_PANEL_CLAUSE =
+  " The reference stacks two garments; render both at once in one continuous frame." +
+  " Never draw its panel gap or bars into the video.";
+
 function lookAnchorPrompt() {
   return fitPrompt([
     [P.CORE, LOOK_ANCHOR + STRICT_REFERENCE_LOCK],
     [P.HIGH, VOLUME_PERSISTENCE],
+    [P.HIGH, LOOK_PANEL_CLAUSE.trim()],
     [P.MED,  CLOSED_BACK_HEM],
   ]);
 }
@@ -7718,12 +7831,12 @@ function lookAnchorPrompt() {
    The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS (204 chars - anchor)             BOTTOMS (205 chars - anchor)
-     + DENSE.bodyFidelity  (45) → 250  fits              → 251  fits
-     + DENSE.modelAgnostic (64) → 269  fits              → 270  fits
-     + both of them        (110)→ 315  fits              → 316  fits
+     TOPS (254 chars - anchor)             BOTTOMS (260 chars - anchor)
+     + DENSE.bodyFidelity  (45) → 300  fits              → 306  fits
+     + DENSE.modelAgnostic (64) → 319  fits              → 325  fits
+     + both of them        (110)→ 365  fits              → 371  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 446 characters are free on tops and 445 on
+   NOTHING SHEDS ANY MORE, on either branch. 396 characters are free on tops and 390 on
    bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.
@@ -7742,8 +7855,9 @@ function lookAnchorPrompt() {
    space: the lower-body scoping on bottoms (the shirt-replacement report), and the
    per-frame adaptation sentence on both branches (the stretched-garment report). The
    second is why the two anchors grew past the 1:1 collapse at all; the full-frame
-   revision then handed most of that back, and the branches are now within ONE character
-   of each other rather than 69 apart - they differ by a single region word. Size every further restore the same way: evidence first, then
+   revision then handed most of that back; the unified-frame revision spent 50 of it again
+   restoring the region alongside the frame, and the branches are now within SIX characters
+   of each other rather than 69 apart - they differ only by their region nouns. Size every further restore the same way: evidence first, then
    the character count.
 
    IF A RESTORE EVER DOES OVERRUN, the cheapest text to reclaim, in order:
