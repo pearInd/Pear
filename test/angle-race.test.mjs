@@ -244,24 +244,44 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
      regenerated face or room. It is called out first in app.js's restore list for that
      reason, and pinned here so the ranking cannot drift. */
   const builders = [
-    ["buildPrompt (catalog)", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
-    ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
+    ["buildPrompt (catalog)", /function buildPrompt\(item, angle[\s\S]*?\n}/],
+    ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item, angle[\s\S]*?\n}/],
     ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
     ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
-  /* The prompt now BRANCHES ON GARMENT CATEGORY (garment-category-prompt.test.mjs): a
-     trouser reference used to be handed a t-shirt anchor, which put the catalog model's
-     shirt on the shopper. That branch does not touch what THIS suite is about - the
-     prompt still cannot vary by angle or pose, so it still cannot lose a race against
-     the reference image. Each builder DELEGATES to the resolver and assembles nothing of
-     its own, which is the property that keeps the TOCTOU freeze meaningful. */
+  /* ── REVISION: THE PROMPT NOW VARIES BY ANGLE, AND THE RACE PROTECTION MOVED WITH IT ──
+     THREE REPORTS made this section's premise stop being true: the back Blob was always
+     correctly on the wire (this suite's own angleClause()-race fix, still intact below,
+     made sure of that) while the PROMPT never once said "back" - buildPrompt/
+     buildCompositePrompt discarded the angle argument entirely and returned one frozen,
+     orientation-blind string. That is not a race, it is a permanent miss, and it is what
+     the top-level CATEGORY_ANCHOR/BACK_CATEGORY_ANCHOR revision (see app.js) fixes.
+
+     THE RACE PROTECTION THIS SUITE EXISTS FOR IS UNCHANGED, and that is the property
+     asserted here now: `angle` is a value the CALLER FROZE before its own await
+     (applyGarment's angleAtStart, exactly as before), never a live re-read performed
+     INSIDE the builder. A builder that called effectiveAngle() itself would reintroduce
+     the exact TOCTOU race this file already paid to fix once; one that receives a frozen
+     parameter cannot, regardless of how many strings that parameter selects between. So
+     "assembles nothing of its own" is checked as before (no fitPrompt() call - the
+     category/angle SELECTION happens in imageOnlyPrompt(), not in these wrappers), and a
+     new check confirms the parameter is genuinely threaded through rather than silently
+     dropped again. */
   for (const [name, re] of builders) {
     const body = (SRC.match(re) || [""])[0];
     const codeBody = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     check(`${name} delegates to the category resolver and assembles nothing`,
-      /return (imageOnlyPrompt\(item\)|lookAnchorPrompt\(\));/.test(codeBody) &&
+      /return (imageOnlyPrompt\(item(, angle)?\)|lookAnchorPrompt\(\));/.test(codeBody) &&
       !/fitPrompt\(/.test(codeBody), codeBody.slice(-300));
   }
+  check("buildPrompt/buildCustomPrompt/buildCompositePrompt all THREAD their angle param",
+    /function buildPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC) &&
+    /function buildCustomPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC) &&
+    /function buildCompositePrompt\(item, angle, inProfile\)[^\n]*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC),
+    "silently dropping the parameter again is the exact regression this revision fixed");
+  check("...and applyGarment() passes the FROZEN angleAtStart, never a live effectiveAngle() read",
+    /buildPrompt\(item, angleAtStart\)/.test(SRC) && !/buildPrompt\(item, effectiveAngle\(\)\)/.test(SRC),
+    "a live read here is the precise race this suite's angleClause() fix already closed once");
 
   check("the passthrough clamp is still on file, and named as the first to restore",
     /Face, skin, hands and background pass through untouched/.test(SRC) &&

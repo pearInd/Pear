@@ -112,25 +112,38 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
   check("...nor a subtype noun (SHIRT_NOUN/SUBTYPE_PROMPT are prompt-free now)",
     !/SHIRT_NOUN\[|SUBTYPE_PROMPT\[/.test(promptColour),
     "a garment noun is a description the model can satisfy without reading the image");
-  /* THE PROMPT NOW BRANCHES ON GARMENT CATEGORY (garment-category-prompt.test.mjs) - a
+  /* ── REVISION: A SECOND AXIS ARRIVED - ANGLE - AND COLOUR/VARIANT STILL IS NOT ONE ──
+     THE PROMPT NOW BRANCHES ON GARMENT CATEGORY (garment-category-prompt.test.mjs) - a
      trouser reference used to receive a t-shirt anchor, which put the catalog model's
-     shirt on the shopper. That is a branch on WHICH BODY REGION is being replaced, and it
-     is the only axis the prompt varies on: it still does not vary by colour, by variant,
-     by angle or by pose, which is the property THIS suite owns. Asserted as "every
-     builder routes through the resolver" rather than "every builder returns a constant",
-     because the constant is what had to go. */
-  check("every builder resolves its prompt through the category resolver",
-    (APP.match(/return imageOnlyPrompt\(item\);/g) || []).length >= 3 &&
+     shirt on the shopper - AND, as of this revision, on ANGLE too: three reports traced a
+     back-render gap to buildPrompt()/buildCompositePrompt() discarding their angle
+     argument, so the reference IMAGE swapped to the back Blob while the PROMPT kept
+     describing the front. imageOnlyPrompt(item, angle) now selects BACK_CATEGORY_ANCHOR
+     when angle==="back", CATEGORY_ANCHOR otherwise - see its own revision comment in
+     app.js for why `angle` is safe: it is a FROZEN parameter, threaded from a snapshot
+     taken before any await (applyGarment's angleAtStart), never a live re-read inside the
+     resolver, so this is a second value the prompt selects on, not a second RACE.
+
+     WHAT THIS SUITE OWNS IS UNCHANGED BY THAT: colour, variant and pose still do not
+     reach the prompt in any form, category and angle are the only two axes now, and both
+     are frozen snapshots rather than live reads. Asserted as "every builder routes
+     through the resolver" rather than "every builder returns a constant", because a
+     single frozen constant is what had to go for angle to work at all. */
+  check("every builder resolves its prompt through the category+angle resolver",
+    (APP.match(/return imageOnlyPrompt\(item, angle\);/g) || []).length >= 3 &&
     /return lookAnchorPrompt\(\);/.test(APP),
     "buildPrompt, buildCustomPrompt, buildCompositePrompt + the full-look exemption");
-  check("...and neither category anchor has an interpolation hole to leak a variant into",
+  check("...and neither anchor TABLE has an interpolation hole to leak a variant into",
     /const CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(APP) &&
+    /const BACK_CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(APP) &&
     !/CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,900}?\$\{/.test(APP),
     "a template hole here is how a colour word gets back onto the wire");
-  /* The resolver may branch on CATEGORY and nothing else. A second argument threaded in
-     from a variant/colour/angle is how a description creeps back onto the wire. */
-  check("...and the resolver branches on the garment's category alone",
-    /\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\]/.test(APP),
+  /* The resolver may branch on CATEGORY and ANGLE, and nothing else. A third input
+     threaded in from a variant/colour/pose is how a description creeps back onto the
+     wire - the exact failure this suite was written to catch on the category axis, now
+     checked against the wider (but still exactly two-axis) surface. */
+  check("...and the resolver branches on category and angle alone - nothing else",
+    /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;\s*\n\s*return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? table\.bottom : table\.top\],/.test(APP),
     "any other input to this function is a new axis the prompt can vary on");
   /* Comments stripped first: variantMetaOf's own doc block QUOTES the old call as the
      thing it replaced, and a check that trips over the explanation of the fix is worse

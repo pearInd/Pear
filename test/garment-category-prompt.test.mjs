@@ -123,90 +123,96 @@ console.log("── §1 CLASSIFICATION: garmentType wins, keywords are the fallb
 
 const PANTS = { garmentType: "lower_body", name: "Glide Slim" };
 const SHIRT = { garmentType: "upper_body", name: "Ion Crew Tee" };
-const bottomsPrompt = imageOnlyPrompt(PANTS);
-const topsPrompt    = imageOnlyPrompt(SHIRT);
+const bottomsPrompt     = imageOnlyPrompt(PANTS);           // angle defaults to "front"
+const topsPrompt        = imageOnlyPrompt(SHIRT);
+const bottomsBackPrompt = imageOnlyPrompt(PANTS, "back");
+const topsBackPrompt    = imageOnlyPrompt(SHIRT, "back");
 
-console.log("\n── §2 THE BOTTOMS ANCHOR: 1:1 proportions and the honest back-swap note ──");
+console.log("\n── §2 THE BOTTOMS ANCHOR: FRONT and BACK, both real strings now ──");
 {
-  /* ── REVISION: EXPLICIT PROPORTIONS, AND THE BACK SENTENCE NAMED HONESTLY ────
-     REPORTED as two bugs: "vertical stretching" and "the system fails to render the
-     back view". Neither is a client defect this prompt (or any prompt) can fix, and
-     app.js's own comment on CATEGORY_ANCHOR says so in full - the short version:
-
-     · There is no non-uniform scale anywhere in this pipeline to cause stretching -
-       object-fit:cover cannot stretch by CSS spec, and every draw path uses one scale
-       factor for both axes. The "1:1 physical aspect ratio" sentence is specified wording
-       adopted verbatim; it is a hedge against Decart's OWN model warping the drape (client
-       has no strength/fidelity parameter to steer that), not a fix for a client bug.
-     · Back-rendering for a real back photo is carried ENTIRELY by which reference IMAGE
-       is on the wire (createOrientationWatcher's maybeSwap()), not by this sentence -
-       buildPrompt(item, angleText) discards its angle argument unconditionally, so the
-       prompt text never varies by orientation. For an item with NO back photo, nothing
-       renders a back view at all - not even the dead DENSE.backInferred fallback, which
-       is unreachable for the same reason. */
-  check("opens by scoping to ONE garment, sourced as the ACTIVE reference",
-    bottomsPrompt.indexOf("Fit ONLY the active target pants onto the subject with exact 1:1 physical aspect ratio and zero distortion.") === 0,
+  /* ── REVISION: BACK_CATEGORY_ANCHOR IS REACHABLE - THREE REPORTS CLOSED THIS ────
+     Every previous revision here left angle undifferentiated: the prompt described the
+     front regardless of which side the image-swap had put on the wire. Three reports in a
+     row traced back-render failures to exactly that - the back Blob was correctly on the
+     wire while the prompt kept saying "front". imageOnlyPrompt(item, angle) now genuinely
+     branches; this section proves both halves for bottoms. */
+  check("FRONT opens by scoping to the reference, sourced as the active target",
+    bottomsPrompt.indexOf("Fit the EXACT FRONT side of the target pants onto the subject's waist/front.") === 0,
     bottomsPrompt);
-  check("...and never claims the upper garment as the thing to FIT",
-    !/target shirt/.test(bottomsPrompt), bottomsPrompt);
-  check("...states the specified 1:1/zero-distortion wording verbatim",
-    /with exact 1:1 physical aspect ratio and zero distortion\./.test(bottomsPrompt),
-    bottomsPrompt);
-  check("...and the back-swap sentence, describing behaviour the IMAGE swap actually carries",
-    /Automatically apply the back-side design of the pants when the subject turns around\./.test(bottomsPrompt),
-    bottomsPrompt);
-  check("...and pins the opposite layer AND the background, unchanged",
-    /Strictly preserve the user's natural proportions, face, upper body, and background\.$/.test(bottomsPrompt),
-    bottomsPrompt);
-  check("the prompt stays minimal - four instructions, not an assembly",
-    bottomsPrompt.length <= 420,
-    `${bottomsPrompt.length} chars - was 616 across six sentences at its worst`);
+  check("BACK opens with its own distinct lead - not the front string reused",
+    bottomsBackPrompt.indexOf("Fit the EXACT REAR/BACK side of the target pants onto the subject's back.") === 0 &&
+    bottomsBackPrompt !== bottomsPrompt,
+    bottomsBackPrompt);
+  check("...and BACK locks rear print, logos and back-seams - the spec's own emphasis",
+    /Precisely lock rear print, logos, and back-seams\./.test(bottomsBackPrompt), bottomsBackPrompt);
+  check("both carry the 1:1/zero-distortion clause, adopted verbatim from spec",
+    /Maintain 1:1 body ratio without distortion\./.test(bottomsPrompt) &&
+    /Maintain 1:1 body ratio without distortion\./.test(bottomsBackPrompt),
+    `front=${bottomsPrompt}\n        back=${bottomsBackPrompt}`);
+  check("both preserve the opposite layer AND the background, unchanged",
+    /Strictly preserve the user's natural proportions, face, upper body, and background\.$/.test(bottomsPrompt) &&
+    /Strictly preserve the user's natural proportions, face, upper body, and background\.$/.test(bottomsBackPrompt),
+    `front=${bottomsPrompt}\n        back=${bottomsBackPrompt}`);
+  check("...and never claims the upper garment as the thing to FIT, on either side",
+    !/target shirt/.test(bottomsPrompt) && !/target shirt/.test(bottomsBackPrompt),
+    `front=${bottomsPrompt}\n        back=${bottomsBackPrompt}`);
+  check("both prompts stay minimal - three sentences, not an assembly",
+    bottomsPrompt.length <= 420 && bottomsBackPrompt.length <= 420,
+    `front=${bottomsPrompt.length} back=${bottomsBackPrompt.length} chars`);
 }
 
-console.log("\n── §3 THE TOPS ANCHOR: the exact mirror, per region ──");
+console.log("\n── §3 THE TOPS ANCHOR: the exact mirror, per region AND per side ──");
 {
-  check("opens by scoping to the reference shirt",
-    topsPrompt.indexOf("Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect ratio and zero distortion.") === 0,
+  check("FRONT opens by scoping to the reference shirt",
+    topsPrompt.indexOf("Fit the EXACT FRONT side of the target shirt onto the subject's chest/front.") === 0,
     topsPrompt);
-  check("...carries the same 1:1/zero-distortion wording",
-    /with exact 1:1 physical aspect ratio and zero distortion\./.test(topsPrompt), topsPrompt);
-  check("...and the back-swap sentence, mirrored for the garment noun",
-    /Automatically apply the back-side design of the garment when the subject turns around\./.test(topsPrompt),
-    topsPrompt);
+  check("BACK opens with its own distinct lead",
+    topsBackPrompt.indexOf("Fit the EXACT REAR/BACK side of the target shirt onto the subject's back.") === 0 &&
+    topsBackPrompt !== topsPrompt,
+    topsBackPrompt);
+  check("...and carries the same rear-lock sentence as the bottoms BACK anchor",
+    /Precisely lock rear print, logos, and back-seams\./.test(topsBackPrompt), topsBackPrompt);
   check("...and pins the LOWER clothing plus background - the mirror of bottoms",
-    /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(topsPrompt),
-    topsPrompt);
+    /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(topsPrompt) &&
+    /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(topsBackPrompt),
+    `front=${topsPrompt}\n        back=${topsBackPrompt}`);
 
-  /* ── SYMMETRY, asserted on the PAIR ────────────────────────────────────────
-     A fix applied to one branch and forgotten on the other is this file's recurring
-     regression, so the shared shape is checked once rather than inferred from the two
-     sections above. */
-  check("both open on the same exclusive-scope binding",
-    topsPrompt.startsWith("Fit ONLY the active target ") &&
-    bottomsPrompt.startsWith("Fit ONLY the active target "),
-    `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
-  check("...both carry the 1:1 clause and the back-swap sentence",
-    /1:1 physical aspect ratio and zero distortion\./.test(topsPrompt) &&
-    /1:1 physical aspect ratio and zero distortion\./.test(bottomsPrompt) &&
-    /Automatically apply the back-side design/.test(topsPrompt) &&
-    /Automatically apply the back-side design/.test(bottomsPrompt),
-    `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
-  check("...and neither preserves the very layer it is fitting",
-    !/preserve[^.]*upper body/.test(topsPrompt) &&
-    !/preserve[^.]*lower body/.test(bottomsPrompt),
+  /* ── SYMMETRY, asserted on all four strings at once ────────────────────────
+     A fix applied to one branch/side and forgotten on another is this file's recurring
+     regression, so the shared shape is checked once here rather than inferred. */
+  check("all four (tops/bottoms × front/back) open on the same exclusive-scope binding",
+    topsPrompt.startsWith("Fit the EXACT FRONT side of the target ") &&
+    bottomsPrompt.startsWith("Fit the EXACT FRONT side of the target ") &&
+    topsBackPrompt.startsWith("Fit the EXACT REAR/BACK side of the target ") &&
+    bottomsBackPrompt.startsWith("Fit the EXACT REAR/BACK side of the target "),
+    [topsPrompt, bottomsPrompt, topsBackPrompt, bottomsBackPrompt].join("\n        "));
+  check("...all four carry the 1:1 clause; only the two BACK strings carry the rear-lock",
+    [topsPrompt, bottomsPrompt, topsBackPrompt, bottomsBackPrompt].every((p) =>
+      /Maintain 1:1 body ratio without distortion\./.test(p)) &&
+    /Precisely lock rear print/.test(topsBackPrompt) && /Precisely lock rear print/.test(bottomsBackPrompt) &&
+    !/Precisely lock rear print/.test(topsPrompt) && !/Precisely lock rear print/.test(bottomsPrompt),
+    "the rear-lock sentence is what makes a BACK render different in kind, not just in one word");
+  check("...and neither preserves the very layer it is fitting, on any of the four",
+    !/preserve[^.]*upper body/.test(topsPrompt) && !/preserve[^.]*upper body/.test(topsBackPrompt) &&
+    !/preserve[^.]*lower body/.test(bottomsPrompt) && !/preserve[^.]*lower body/.test(bottomsBackPrompt),
     "a prompt that preserves the layer it is editing cancels itself");
 
-  /* ── WHAT THE BACK-SWAP SENTENCE CANNOT DO ─────────────────────────────────
-     Named here rather than left to be discovered: this sentence is descriptive, not
-     causal. buildPrompt() discards its angle argument, so the prompt text is identical
-     on both sides of a turn; the actual swap is 100% carried by the reference image. */
-  check("app.js records that the prompt text cannot cause the back-swap it describes",
-    /buildPrompt\(item, angleText\) - the function behind/.test(SRC) &&
-    /DISCARDS it,\s*\n\s*returning imageOnlyPrompt\(item\) unconditionally/.test(SRC),
-    "the sentence describes what maybeSwap() already does in pixels, not a new capability");
-  check("...and names the real gap: no back photo means no back view, at all",
-    /THIS ONLY HAPPENS FOR AN ITEM WITH A REAL, DISTINCT BACK PHOTO/.test(SRC) &&
-    /needs either a generated back asset/.test(SRC),
+  /* ── WHAT THE PROMPT ALONE CANNOT DO, AND WHAT STILL CANNOT BE HELPED ─────────
+     Named here rather than left to be discovered: the prompt describes a side, it does
+     not select one. buildPrompt() discarding its angle argument WAS the reported bug;
+     the fix threads a frozen snapshot through, never a live re-read. And the honest
+     limit from the previous revision survives unchanged: an item with no real back photo
+     still never computes angle==="back" at all, so BACK_CATEGORY_ANCHOR being reachable
+     here does not mean every item can reach it. */
+  check("app.js records that buildPrompt() now threads angle rather than discarding it",
+    /buildPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC),
+    "a declared-but-unused parameter is the exact regression three reports were filed against");
+  check("...and that the selection is a frozen snapshot, never a live re-read",
+    /buildPrompt\(item, angleAtStart\)/.test(SRC) && !/buildPrompt\(item, effectiveAngle\(\)\)/.test(SRC),
+    "a live read here would reopen the TOCTOU race angle-race.test.mjs was written to close");
+  check("...and names the gap that remains: no back photo means no back angle, ever",
+    /THE ONE GAP THIS REVISION DOES NOT CLOSE/.test(SRC) &&
+    /canCombineViews\(\) still gates AI Auto on/.test(SRC),
     "an honest limit belongs on file, not just in a chat reply");
 }
 
@@ -256,11 +262,13 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\],\s*\n\s*\]\);/.test(SRC),
+    /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;\s*\n\s*return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? table\.bottom : table\.top\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
-  /* The category anchor is the one clause that must NEVER shed - it is the entire fix. */
-  check("the category anchor is tagged P.CORE so it can never be shed",
-    /\[P\.CORE,\s*(bottoms|isBottoms)[^\]]*ANCHOR|\[P\.CORE,\s*CATEGORY_ANCHOR/.test(SRC),
+  /* The selected anchor is the one clause that must NEVER shed - it is the entire fix,
+     for BOTH the category axis and (now) the front/back axis: whichever table `angle`
+     selected, the P.CORE tag is what stops it being dropped under budget pressure. */
+  check("the selected anchor is tagged P.CORE so it can never be shed",
+    /\[P\.CORE, isBottomsGarment\(item\) \? table\.bottom : table\.top\]/.test(SRC),
     "if the anchor can shed, the bug comes back under budget pressure");
 }
 

@@ -123,101 +123,133 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
    to a human is a different token sequence to a diffusion model. The previous revision
    collapsed these into one category-agnostic string and recorded the risk; this restores
    the scoping and adds two clauses aimed at the mid-session-revert report. */
+/* ── REVISION: FRONT AND BACK ARE NOW TWO REAL, DIFFERENT STRINGS ────────────────
+   Three reports in a row traced a back-render gap to the fact that no builder on the
+   active prompt path ever read the detected orientation - imageOnlyPrompt() shipped one
+   frozen string regardless of which side was showing. TOPS_SPEC/BOTTOMS_SPEC below are
+   now specifically the FRONT wording; BACK_TOPS_SPEC/BACK_BOTTOMS_SPEC are new. See
+   CATEGORY_ANCHOR/BACK_CATEGORY_ANCHOR in app.js for the full account. */
 const TOPS_SPEC =
-  "Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect" +
-  " ratio and zero distortion. Automatically apply the back-side design of the" +
-  " garment when the subject turns around. Strictly preserve the user's natural" +
-  " proportions, face, lower body, and background.";
+  "Fit the EXACT FRONT side of the target shirt onto the subject's chest/front." +
+  " Maintain 1:1 body ratio without distortion. Strictly preserve the user's" +
+  " natural proportions, face, lower body, and background.";
 const BOTTOMS_SPEC =
-  "Fit ONLY the active target pants onto the subject with exact 1:1 physical aspect" +
-  " ratio and zero distortion. Automatically apply the back-side design of the pants" +
-  " when the subject turns around. Strictly preserve the user's natural proportions," +
-  " face, upper body, and background.";
+  "Fit the EXACT FRONT side of the target pants onto the subject's waist/front." +
+  " Maintain 1:1 body ratio without distortion. Strictly preserve the user's" +
+  " natural proportions, face, upper body, and background.";
+const BACK_TOPS_SPEC =
+  "Fit the EXACT REAR/BACK side of the target shirt onto the subject's back." +
+  " Precisely lock rear print, logos, and back-seams. Maintain 1:1 body ratio" +
+  " without distortion. Strictly preserve the user's natural proportions, face," +
+  " lower body, and background.";
+const BACK_BOTTOMS_SPEC =
+  "Fit the EXACT REAR/BACK side of the target pants onto the subject's back." +
+  " Precisely lock rear print, logos, and back-seams. Maintain 1:1 body ratio" +
+  " without distortion. Strictly preserve the user's natural proportions, face," +
+  " upper body, and background.";
 const SPEC = TOPS_SPEC;
 
-console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely constant ──");
+console.log("── §1 THE TWO ANCHORS × TWO SIDES: product-specified, and now real ──");
 {
-  check("the TOPS branch matches the specified wording byte for byte",
+  check("FRONT/TOPS matches the specified wording byte for byte",
     api.imageOnlyPrompt(TEE) === TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
-  check("the BOTTOMS branch matches the specified wording byte for byte",
+  check("FRONT/BOTTOMS matches the specified wording byte for byte",
     api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
-  check("...and they are DIFFERENT strings - the category scoping is back",
-    api.imageOnlyPrompt(TEE) !== api.imageOnlyPrompt(JEANS),
-    "the previous revision collapsed them and re-opened the shirt-replacement report");
+  check("BACK/TOPS matches the specified wording byte for byte",
+    api.imageOnlyPrompt(TEE, "back") === BACK_TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE, "back")));
+  check("BACK/BOTTOMS matches the specified wording byte for byte",
+    api.imageOnlyPrompt(JEANS, "back") === BACK_BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS, "back")));
+  check("all four are DIFFERENT strings - category AND angle both genuinely scope now",
+    new Set([TOPS_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC]).size === 4,
+    "a collapsed pair re-opens the shirt-replacement report; a collapsed front/back re-opens THIS one");
 
   const sentences = (s) => s.split(/(?<=\.)\s+/).filter(Boolean);
-  check("both branches are exactly three sentences: scope, back-swap, preserve",
+  check("FRONT branches are exactly three sentences: scope, ratio, preserve",
     sentences(TOPS_SPEC).length === 3 && sentences(BOTTOMS_SPEC).length === 3,
     `tops=${sentences(TOPS_SPEC).length} bottoms=${sentences(BOTTOMS_SPEC).length}`);
-  check("...and both open on the SAME binding - exclusive scope, the active reference",
-    TOPS_SPEC.startsWith("Fit ONLY the active target ") &&
-    BOTTOMS_SPEC.startsWith("Fit ONLY the active target "),
-    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
+  check("BACK branches are exactly four sentences - the rear-lock is a real fourth clause",
+    sentences(BACK_TOPS_SPEC).length === 4 && sentences(BACK_BOTTOMS_SPEC).length === 4,
+    `back-tops=${sentences(BACK_TOPS_SPEC).length} back-bottoms=${sentences(BACK_BOTTOMS_SPEC).length}`);
+  check("...and all four open on a scope binding naming the ACTUAL side showing",
+    TOPS_SPEC.startsWith("Fit the EXACT FRONT side of the target ") &&
+    BOTTOMS_SPEC.startsWith("Fit the EXACT FRONT side of the target ") &&
+    BACK_TOPS_SPEC.startsWith("Fit the EXACT REAR/BACK side of the target ") &&
+    BACK_BOTTOMS_SPEC.startsWith("Fit the EXACT REAR/BACK side of the target "),
+    [TOPS_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC].join("\n        "));
 
-  /* (1) THE SCOPE, plus the specified 1:1/zero-distortion clause. "Fit ONLY" scopes the
-     whole instruction in the first two words, where a leading-token model is most
-     sensitive. The 1:1 clause is adopted verbatim from spec; app.js's own comment on
-     CATEGORY_ANCHOR records that no distortion bug exists in this client's pipeline to
-     fix - the sentence is a hedge against Decart's OWN drape warping, outside client
-     control either way (no strength/fidelity parameter on set()). */
-  const LEAD = /^Fit ONLY the active target (shirt|pants) onto the subject with exact 1:1 physical aspect ratio and zero distortion\./;
-  check("(1) it scopes ONE garment with the specified 1:1/zero-distortion clause",
-    LEAD.test(TOPS_SPEC) && LEAD.test(BOTTOMS_SPEC),
-    "an unscoped anchor is what let a try-on claim the whole reference");
-  check("...and each branch binds its OWN garment, never the other's",
+  /* (1) THE SCOPE. "Fit the EXACT ... side" scopes the whole instruction from the first
+     few words, where a leading-token model is most sensitive, AND names which side - the
+     thing three reports established was missing entirely from every previous revision. */
+  check("(1) each branch binds its OWN garment noun, never the other's, on both sides",
     /target shirt/.test(TOPS_SPEC) && !/target pants/.test(TOPS_SPEC) &&
-    /target pants/.test(BOTTOMS_SPEC) && !/target shirt/.test(BOTTOMS_SPEC),
-    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
+    /target pants/.test(BOTTOMS_SPEC) && !/target shirt/.test(BOTTOMS_SPEC) &&
+    /target shirt/.test(BACK_TOPS_SPEC) && !/target pants/.test(BACK_TOPS_SPEC) &&
+    /target pants/.test(BACK_BOTTOMS_SPEC) && !/target shirt/.test(BACK_BOTTOMS_SPEC),
+    [TOPS_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC].join("\n        "));
 
-  /* (2) THE BACK-SWAP SENTENCE, adopted verbatim from spec. It is DESCRIPTIVE, not
-     causal - see §1b for why, and why that matters. */
-  check("(2) it states the specified back-swap sentence, per garment noun",
-    /Automatically apply the back-side design of the garment when the subject turns around\./.test(TOPS_SPEC) &&
-    /Automatically apply the back-side design of the pants when the subject turns around\./.test(BOTTOMS_SPEC),
-    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
+  /* (2) THE REAR-LOCK, adopted verbatim from spec, and it is what makes a BACK render
+     different IN KIND from a front one rather than by one swapped word. */
+  check("(2) the rear-lock sentence appears on BOTH back branches, and on neither front one",
+    /Precisely lock rear print, logos, and back-seams\./.test(BACK_TOPS_SPEC) &&
+    /Precisely lock rear print, logos, and back-seams\./.test(BACK_BOTTOMS_SPEC) &&
+    !/Precisely lock rear print/.test(TOPS_SPEC) && !/Precisely lock rear print/.test(BOTTOMS_SPEC),
+    "a rear-lock on the FRONT render (or its absence on the back) is this fix half-applied");
 
-  /* (3) THE OPPOSITE-LAYER PIN. This is the clause the invented-non-target-garment family
+  /* (3) THE 1:1 CLAUSE, on all four - the specified proportions/distortion hedge is not a
+     per-side concern, so it does not vary by angle. */
+  check("(3) the 1:1/zero-distortion clause is on all four, unconditionally",
+    [TOPS_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC].every((p) =>
+      /Maintain 1:1 body ratio without distortion\./.test(p)));
+
+  /* (4) THE OPPOSITE-LAYER PIN. This is the clause the invented-non-target-garment family
      turns on, and it matters more than it ever has: the compositing guard that used to
      enforce it in pixels is deleted, so this wording is now the ONLY thing answering that
-     report. */
-  check("(3) it preserves the opposite layer, face, and background, unchanged",
+     report - on EVERY side, front and back alike. */
+  check("(4) it preserves the opposite layer, face, and background, on all four strings",
     /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(TOPS_SPEC) &&
-    /Strictly preserve the user's natural proportions, face, upper body, and background\.$/.test(BOTTOMS_SPEC),
-    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
-  check("...and neither preserves the very layer it is fitting",
-    !/preserve[^.]*upper body/.test(TOPS_SPEC) &&
-    !/preserve[^.]*lower body/.test(BOTTOMS_SPEC),
+    /Strictly preserve the user's natural proportions, face, upper body, and background\.$/.test(BOTTOMS_SPEC) &&
+    /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(BACK_TOPS_SPEC) &&
+    /Strictly preserve the user's natural proportions, face, upper body, and background\.$/.test(BACK_BOTTOMS_SPEC),
+    [TOPS_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC].join("\n        "));
+  check("...and none of the four preserves the very layer it is fitting",
+    !/preserve[^.]*upper body/.test(TOPS_SPEC) && !/preserve[^.]*upper body/.test(BACK_TOPS_SPEC) &&
+    !/preserve[^.]*lower body/.test(BOTTOMS_SPEC) && !/preserve[^.]*lower body/.test(BACK_BOTTOMS_SPEC),
     "a prompt that preserves the layer it is editing cancels itself");
-  check("...with no pass-through the model has no second stream for",
-    !/pass through/.test(TOPS_SPEC) && !/LIVE camera feed/.test(TOPS_SPEC) &&
-    !/pass through/.test(BOTTOMS_SPEC) && !/LIVE camera feed/.test(BOTTOMS_SPEC),
+  check("...with no pass-through the model has no second stream for, on any of the four",
+    ![TOPS_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC].some((p) =>
+      /pass through/.test(p) || /LIVE camera feed/.test(p)),
     "the guard that made pass-through real is deleted; the prompt must not still promise it");
 }
 
-console.log("\n── §1b WHAT THE BACK-SWAP SENTENCE CANNOT DO, however it is phrased ──");
+console.log("\n── §1b THE FIX ITSELF: angle is threaded, frozen, and TOCTOU-safe ──");
 {
-  /* "Automatically apply the back-side design... when the subject turns around" reads
-     like the SENTENCE causes the swap. It does not, and cannot: buildPrompt(item,
-     angleText) - the function behind every dispatch this anchor reaches - takes an angle
-     argument and DISCARDS it, returning imageOnlyPrompt(item) unconditionally, so the
-     prompt text is byte-identical whichever side is showing. The swap is carried entirely
-     by which REFERENCE IMAGE createOrientationWatcher's maybeSwap() puts on the wire.
-     Asserted so a future revision does not read this sentence as the mechanism and remove
-     the pixel-level swap thinking the words alone still cover it. */
-  check("app.js states that buildPrompt() discards its angle argument unconditionally",
-    /buildPrompt\(item, angleText\) - the function behind/.test(SRC) &&
-    /DISCARDS it,\s*\n\s*returning imageOnlyPrompt\(item\) unconditionally/.test(SRC),
-    "the sentence describes what maybeSwap() already does in pixels, not a new capability");
-  check("...and the runtime half that actually performs the swap is wired",
+  /* ── REVISION: THIS SECTION USED TO PROVE THE OPPOSITE ────────────────────────
+     It used to assert that buildPrompt() discarded its angle argument - correctly, for
+     three revisions, until three reports traced the resulting back-render gap to exactly
+     that. What is proven now is the fix and its safety property together: the parameter
+     is genuinely read (imageOnlyPrompt() branches on it), and it is READ AS A FROZEN
+     SNAPSHOT rather than a live re-read - which is what stops this fix from reopening the
+     TOCTOU "mixing bug" angle-race.test.mjs exists to catch (a prompt describing one side
+     while the already-resolved image reference describes the other). */
+  check("buildPrompt(item, angle) genuinely threads its parameter into imageOnlyPrompt()",
+    /function buildPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC),
+    "a declared-but-discarded parameter is the exact regression three reports were filed against");
+  check("...and imageOnlyPrompt() actually branches BACK_CATEGORY_ANCHOR vs CATEGORY_ANCHOR on it",
+    /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(SRC),
+    "declaring a back anchor table nobody ever selects is the same bug with extra steps");
+  check("applyGarment() passes the FROZEN angleAtStart, never a live effectiveAngle() read",
+    /buildPrompt\(item, angleAtStart\)/.test(SRC) && !/buildPrompt\(item, effectiveAngle\(\)\)/.test(SRC),
+    "a live read here reopens the precise TOCTOU race angle-race.test.mjs already fixed once");
+  check("...and the runtime half that actually performs the IMAGE swap is still wired underneath",
     /function createOrientationWatcher\(/.test(SRC) && /async function maybeSwap\(next\)/.test(SRC),
-    "a back-swap sentence with no image-swap mechanism behind it is a claim, not a fix");
-  /* THE HONEST LIMIT: for an item with no real, distinct back photo, nothing renders a
-     back view at all - not even DENSE.backInferred's text-only fallback, unreachable for
-     the identical reason (buildPrompt() never reads angle text). Recorded here so it is
-     not discovered by surprise from a support ticket. */
-  check("app.js names the real gap - no back photo means no back view, ever",
-    /THIS ONLY HAPPENS FOR AN ITEM WITH A REAL, DISTINCT BACK PHOTO/.test(SRC) &&
-    /needs either a generated back asset/.test(SRC),
+    "the prompt now agrees with the image; it does not replace what selects the image");
+  /* THE HONEST LIMIT: for an item with no real, distinct back photo, AUTO_ANGLE never
+     engages at all, so angle==="back" is never computed for it - BACK_CATEGORY_ANCHOR
+     being correctly wired does not help an item that never reaches it. Recorded here so
+     it is not discovered by surprise from a support ticket. */
+  check("app.js names the gap that remains - no back photo means angle never reaches \"back\"",
+    /THE ONE GAP THIS REVISION DOES NOT CLOSE/.test(SRC) &&
+    /canCombineViews\(\) still gates AI Auto on/.test(SRC),
     "an honest limit belongs on file, not just in a chat reply");
 }
 
@@ -340,7 +372,7 @@ console.log("\n── §1c THE GARMENT PIN: the mid-session revert, fixed in the
      restored. Asserted on the pair, because they came off together and a partial restore
      would leave one report closed and the other open. */
   check("both the region scope and the opposite-layer pin are on the wire again",
-    /onto the subject with exact 1:1/.test(TOPS_SPEC) &&
+    /onto the subject's (chest\/front|back)\./.test(TOPS_SPEC) &&
     /Strictly preserve the user's natural proportions, face, lower body, and background/.test(TOPS_SPEC) &&
     /Strictly preserve the user's natural proportions, face, upper body, and background/.test(BOTTOMS_SPEC),
     "the collapse re-opened shirt-replacement and the invented-garment family at once");
@@ -361,8 +393,8 @@ console.log("\n── §1c THE GARMENT PIN: the mid-session revert, fixed in the
     !/CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,900}?\$\{/.test(SRC),
     "no template hole anywhere in or adjacent to the declaration");
   check("...and the resolver only SELECTS an anchor, never builds one",
-    /\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\]/.test(SRC) &&
-    !/CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC),
+    /\[P\.CORE, isBottomsGarment\(item\) \? table\.bottom : table\.top\]/.test(SRC) &&
+    !/CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC) && !/BACK_CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC),
     "appending one clause is how the dozen came back last time");
   check("both sit far inside the 226-token ceiling, so the wire guard never clips them",
     TOPS_SPEC.length <= 650 && BOTTOMS_SPEC.length <= 650,
@@ -381,36 +413,50 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
     ["custom upload", { ...TEE, custom: true }, "front", true],
     ["pathological name", { ...TEE, name: "x".repeat(400) }, "front", true],
   ];
-  /* Each case now names the branch it must land in. The invariance being asserted is
-     unchanged in strength - byte-identical output across angle, pose, colour, custom-upload
-     and pathological-name - it is just measured against the anchor for that garment's
-     REGION rather than one global constant. */
+  /* ── REVISION: EACH CASE NOW EXPECTS ITS OWN SIDE, NOT ONE GLOBAL CONSTANT ────
+     This used to assert byte-identical output regardless of angle - that WAS the
+     premise of strict image-only conditioning, until the collapse it protected against
+     turned out to be a different, more expensive collapse: no builder ever varying by
+     angle at all, which is what left a back-facing shopper rendered against front-facing
+     words. What is asserted now is POSE-invariance (still real, still load-bearing - a
+     shopper leaning or turning edge-on must not perturb the prompt) alongside genuine
+     ANGLE-variance: front cases match the FRONT anchor for their region, back cases match
+     the BACK anchor for their region, and pose never moves either. */
   for (const [name, item, angle, prof] of cases) {
-    const expected = item.garmentType === "lower_body" ? BOTTOMS_SPEC : TOPS_SPEC;
-    check(`${name}: byte-identical to its category anchor`,
+    const isBottom = item.garmentType === "lower_body";
+    const expected = angle === "back"
+      ? (isBottom ? BACK_BOTTOMS_SPEC : BACK_TOPS_SPEC)
+      : (isBottom ? BOTTOMS_SPEC : TOPS_SPEC);
+    check(`${name}: byte-identical to its category+angle anchor`,
       api.buildCompositePrompt(item, angle, prof) === expected,
       api.buildCompositePrompt(item, angle, prof));
   }
-  /* THE AXIS ITSELF. It used to be "category is the ONLY thing that moves the prompt";
-     the collapse removed even that, so what is asserted now is total invariance - angle,
-     pose and category all leave the string untouched. The category ROUTING still exists
-     and is still exercised (§1b), which is what keeps the restore one line; it simply
-     selects between two identical values today. */
-  /* THE AXIS: category, and category alone. Angle and pose must never move the string -
-     that invariance is the premise of strict image-only conditioning - while the two
-     branches must stay genuinely different, which is the scoping this revision restored. */
-  check("category is the ONLY axis - angle and pose never move the prompt",
-    TOPS_SPEC !== BOTTOMS_SPEC &&
-    api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(TEE, "back", true) &&
-    api.buildCompositePrompt(JEANS, "front", false) === api.buildCompositePrompt(JEANS, "back", true) &&
-    api.buildCompositePrompt(TEE, "front", false) !== api.buildCompositePrompt(JEANS, "back", true),
-    "a per-angle prompt is what let a front clause ship with a back photo");
+  /* THE AXES: category and angle both move the prompt now, by design - that IS the fix.
+     Pose alone stays inert (a shopper turning edge-on must not perturb which of the four
+     strings ships), and the four strings themselves are checked pairwise distinct so a
+     future edit cannot quietly collapse any two of them back into one. */
+  check("pose alone never moves the prompt - only category and angle do",
+    api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(TEE, "front", true) &&
+    api.buildCompositePrompt(TEE, "back", false) === api.buildCompositePrompt(TEE, "back", true) &&
+    api.buildCompositePrompt(JEANS, "front", false) === api.buildCompositePrompt(JEANS, "front", true) &&
+    api.buildCompositePrompt(JEANS, "back", false) === api.buildCompositePrompt(JEANS, "back", true),
+    "a pose-sensitive prompt reintroduces the exact volume-of-text problem this mode exists to avoid");
+  check("...but angle DOES move it - front and back are genuinely different per category",
+    api.buildCompositePrompt(TEE, "front", false) !== api.buildCompositePrompt(TEE, "back", false) &&
+    api.buildCompositePrompt(JEANS, "front", false) !== api.buildCompositePrompt(JEANS, "back", false),
+    "an angle-invariant prompt here is the exact bug three reports were filed against");
+  check("...and all four category×angle combinations are pairwise distinct",
+    new Set([
+      api.buildCompositePrompt(TEE, "front", false), api.buildCompositePrompt(TEE, "back", false),
+      api.buildCompositePrompt(JEANS, "front", false), api.buildCompositePrompt(JEANS, "back", false),
+    ]).size === 4,
+    "any two of these collapsing to the same string is a silent regression on one axis");
 
   /* Structural, across the builders this sandbox cannot execute. The four together are
      every path that can reach rtClient.set() with a prompt. */
   const builders = [
-    ["buildPrompt", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
-    ["buildCustomPrompt", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
+    ["buildPrompt", /function buildPrompt\(item, angle[\s\S]*?\n}/],
+    ["buildCustomPrompt", /function buildCustomPrompt\(item, angle[\s\S]*?\n}/],
     ["buildLookPrompt", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
     ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
@@ -422,14 +468,20 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
     const codeBody = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     /* "Calls no assembler" is still the property, and it still means the same thing: no
        builder may assemble a garment DESCRIPTION. The single fitPrompt() call now lives
-       inside imageOnlyPrompt(), where it selects between two frozen literals and budgets
+       inside imageOnlyPrompt(), where it selects between the anchor TABLES and budgets
        the shared tail - it is not reachable from a builder, so a builder still cannot
-       introduce a clause. What each builder does is DELEGATE, and that is asserted. */
-    check(`${name}(): delegates to the category resolver, assembles nothing itself`,
-      /return (imageOnlyPrompt\(item\)|lookAnchorPrompt\(\));/.test(codeBody) &&
+       introduce a clause. What each builder does is DELEGATE - passing its angle straight
+       through where it has one - and that is asserted, not merely "still returns SOME
+       constant" (which would pass even if angle had quietly gone back to being dropped). */
+    check(`${name}(): delegates to the category+angle resolver, assembles nothing itself`,
+      /return (imageOnlyPrompt\(item(, angle)?\)|lookAnchorPrompt\(\));/.test(codeBody) &&
       !/fitPrompt\(/.test(codeBody) && !/DENSE\./.test(codeBody),
       codeBody.slice(-240) || "builder not found");
   }
+  check("...and buildPrompt/buildCustomPrompt/buildCompositePrompt specifically THREAD angle",
+    /return imageOnlyPrompt\(item, angle\);/.test(SRC) &&
+    (SRC.match(/return imageOnlyPrompt\(item, angle\);/g) || []).length >= 3,
+    "the three single-garment builders all forward angle - only buildLookPrompt is exempt (top+bottom, not front/back)");
 
   /* THE INVARIANT, stated as an absence - the only form that catches the real regression,
      which is somebody adding one more well-meant clause. Every clause this file ever grew

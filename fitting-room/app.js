@@ -4517,7 +4517,16 @@ const ORIENT_LOCK_MS        = 2500;  // OR this much sustained agreement - which
    turned around watch the FRONT render on their back for the first few seconds. */
 const ORIENT_ACQUIRE_FRAMES = 2;
 const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
-const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
+/* REQUESTED as a "zero-flicker debounce" tightened three times in a row (200ms, 150ms,
+   now 100ms). It is honoured on THIS specific knob rather than on ORIENT_LOCK_MS/FRAMES
+   above, and that distinction is the whole trade: this is the gap between two DISPATCHES
+   once a flip has already been decided, not the corroboration that DECIDES one. Cutting
+   ORIENT_LOCK_MS to 100ms would let a single noisy frame flip the reference - literally
+   the flicker this file fought to eliminate, and the reason the lock exists at all. This
+   constant, cut to match, only guards against two swap attempts landing back-to-back;
+   with the lock's own ~2.5s cadence between confirmed flips, 100ms vs 1500ms here changes
+   nothing about how often a swap actually fires - it only removes a redundant floor. */
+const ORIENT_COOLDOWN_MS    = 100;   // min gap between live reference swaps (anti-flap, secondary to the lock)
 /* Edge-on detection thresholds. Deliberately FAR looser than the orientation lock's,
    because the two protect different things and carry different costs when wrong. A wrong
    orientation flip swaps the garment reference and shows the wrong side of the shirt on a
@@ -4944,6 +4953,15 @@ function createOrientationWatcher() {
   faceCanvas.width = ORIENT_FACE_SIZE; faceCanvas.height = ORIENT_FACE_SIZE;
   const faceCtx = faceCanvas.getContext("2d", { willReadFrequently: true });
 
+  /* SKIN-RATIO + FACE VISIBILITY, NOT RAW POSE YAW - chosen deliberately, not by default.
+     MediaPipe's landmark confidence degrades sharply past ~90° rotation, which is exactly
+     the regime a back-facing subject lives in: a yaw computed from shoulder/hip geometry
+     does not survive a full turn, so a classifier built on it would be least reliable
+     exactly when it matters most. This is the classifier this file had to invent because
+     of that limit, not in ignorance of MediaPipe Pose - the topology monitor elsewhere in
+     this file uses BlazePose's own landmarks for a different job (WHEN to re-condition,
+     not front/back classification) precisely because that job doesn't need yaw to survive
+     180° of rotation. */
   const faceDetector = typeof FaceDetector !== "undefined"
     ? (() => { try { return new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch (_) { return null; } })()
     : null;
@@ -7593,47 +7611,36 @@ const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodi
    307 characters are free on tops and 316 on bottoms, so neither loss was forced by
    budget - both are the same deliberate bet every revision here makes: text volume
    competing with the reference image. One at a time, re-tested live. */
-/* ── REVISION: EXPLICIT 1:1 PROPORTIONS, AND THE BACK SENTENCE NAMED HONESTLY ────
-   THE PREVIOUS PAIR restored per-category scoping, the entire-stream lock and the
-   continuous-adaptation clause. This revision adds two things and keeps everything else.
+/* ── REVISION: THE PROMPT ACTUALLY VARIES BY ORIENTATION NOW ────────────────────
+   SUPERSEDES the previous revision's note here, which is worth summarising because it
+   documents exactly what changed: that note explained, correctly at the time, that
+   buildPrompt(item, angleText) discarded its angle argument and returned one frozen
+   string regardless of which side was showing - so back-rendering was carried entirely
+   by the reference IMAGE (createOrientationWatcher's maybeSwap()), never by the prompt.
+   THREE REPORTS in a row, each more specific than the last, landed on that exact gap:
+   the back Blob was correctly on the wire while the words beside it kept describing the
+   front. See CATEGORY_ANCHOR's own revision comment above and BACK_CATEGORY_ANCHOR below
+   for the fix - imageOnlyPrompt(item, angle) now genuinely selects between them, threaded
+   from applyGarment()'s frozen angleAtStart, never a live re-read (that TOCTOU discipline
+   is unchanged - see this function's opening comment and angle-race.test.mjs).
 
-   1. "EXACT 1:1 PHYSICAL ASPECT RATIO AND ZERO DISTORTION" is new text, and it is worth
-      being precise about what it can and cannot do. Nothing in this client's display or
-      capture pipeline EVER applies a non-uniform scale - object-fit:cover is defined by
-      the CSS spec to preserve the source aspect ratio unconditionally (it can only crop,
-      never stretch), createThrottledInputStream()'s drawFrame() computes ONE scale factor
-      for both axes, and getUserMedia() is called with `ideal` constraints only, which
-      never force a distorted capture. There is no distortion bug in this pipeline to fix.
-      The sentence still earns its place: it is a hedge against Decart's OWN model
-      introducing warp during the drape (a failure mode entirely outside client control,
-      since realtime set() has no strength/fidelity parameter to tune it with) - if that
-      is ever reported with a recording, LIVE_W/LIVE_H (see their own comment) is the
-      other half of this fix, not the prompt.
+   "EXACT 1:1 PHYSICAL ASPECT RATIO AND ZERO DISTORTION" remains adopted text, still worth
+   being precise about: nothing in this client's display or capture pipeline ever applies
+   a non-uniform scale (object-fit:cover cannot stretch by CSS spec; drawFrame() computes
+   one scale factor for both axes; getUserMedia() uses `ideal` only). There is no client-
+   side distortion bug this sentence answers - it is a hedge against Decart's OWN model
+   warping the drape, outside client control (no strength/fidelity parameter on set()).
 
-   2. "AUTOMATICALLY APPLY THE BACK-SIDE DESIGN WHEN THE SUBJECT TURNS AROUND" describes
-      behaviour this file ALREADY HAS, and is worth being equally precise about how. It is
-      NOT this sentence that causes it: buildPrompt(item, angleText) - the function behind
-      every dispatch this anchor reaches - takes an angle argument and DISCARDS it,
-      returning imageOnlyPrompt(item) unconditionally (see buildPrompt's own body). The
-      prompt text is therefore identical whichever side is showing; back-rendering is
-      carried ENTIRELY by which REFERENCE IMAGE is on the wire. createOrientationWatcher's
-      maybeSwap() is what does that: it classifies front/back from a skin-ratio + face-
-      visibility heuristic (chosen over raw pose yaw specifically because MediaPipe's
-      landmark confidence degrades sharply past ~90° rotation - the classifier this file
-      already had to invent because yaw does not survive a full turn), corroborates over
-      ORIENT_LOCK_MS before committing, and swaps GARMENT_FRONT for GARMENT_BACK in the
-      SAME rtClient.set() this anchor's prompt rides on.
-
-      ⚠️ THIS ONLY HAPPENS FOR AN ITEM WITH A REAL, DISTINCT BACK PHOTO. canCombineViews()
-      gates AI Auto on activeBackIsReal(item), and for anything without one, turning
-      around dispatches nothing at all - not even DENSE.backInferred's text-only "plain
-      back" fallback, which is unreachable for the same reason this sentence cannot steer
-      anything: buildPrompt() never reads angle text. An item with no back asset shows the
-      front, full stop, however long the shopper turns. That is a real, separate gap from
-      anything this revision closes, and it needs either a generated back asset (a
-      catalog/pre-processing decision) or reviving angle-aware prompt assembly (which
-      would reverse the "strict image-only, one frozen string" design multiple prior
-      revisions deliberately converged on) - not a sentence here. */
+   ⚠️ THE ONE GAP THIS REVISION DOES NOT CLOSE, unchanged from before: an item with no
+   real, distinct back photo. canCombineViews() still gates AI Auto on
+   activeBackIsReal(item), so AUTO_ANGLE never engages for such an item and no angle value
+   other than "front" is ever computed for it - BACK_CATEGORY_ANCHOR exists and is
+   correctly wired, but nothing ever calls imageOnlyPrompt(item, "back") for a garment
+   with no back asset to render. DENSE.backInferred's text-only "plain back" fallback
+   remains unreachable for the identical structural reason it always was. Closing THAT
+   gap needs either a generated back asset (a catalog/pre-processing decision) or wiring
+   AUTO_ANGLE to engage on a single-view item too, defaulting to the inferred-back prompt
+   instead of a real Blob swap - a materially different feature, not a line here. */
 /* ── RETIRED CLAUSES, kept verbatim so each restore is one line ──────────────────
    Off the wire, every one a reproduced regression. Recorded here rather than left in the
    commit log - the convention the rest of this file follows, and what image-first.test.mjs
@@ -7656,17 +7663,56 @@ const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodi
        mid-session-revert report on the TEXT side; THE GARMENT PIN (applyGarment's
        lastAckedImageRef fallback) answers it on the PAYLOAD side and is what actually
        fixed it - restoring this sentence alongside the pin is additive, not required. */
+/* ── REVISION: THE PROMPT FINALLY VARIES BY ORIENTATION - THREE REPORTS IN A ROW ────
+   REPORTED, three times in increasing detail: the back asset exists and is correctly
+   detected/swapped onto the wire, but the RENDER does not read as a back view. Traced to
+   the one fact every previous revision's "back-swap sentence" glossed over: it was
+   describing behaviour, not causing it, because NOTHING in the active prompt path has
+   ever read the detected orientation. buildPrompt(item, angleText) discarded its angle
+   argument; so did buildCompositePrompt(item, angle, inProfile) on the (off-by-default)
+   composite path. Both routed to the SAME frozen imageOnlyPrompt(item) regardless of
+   which side was showing - so a shopper turned fully around was rendered against a prompt
+   that never once said "back". The GARMENT_BACK Blob was correctly on the wire; the words
+   accompanying it kept describing the front.
+
+   THE FIX IS TO ACTUALLY THREAD THE ANGLE THROUGH, not to add another sentence hoping to
+   be noticed. imageOnlyPrompt(item, angle) now selects between this table (FRONT) and
+   BACK_CATEGORY_ANCHOR below by the angle it is CALLED WITH - never by re-reading live
+   orientation state itself, for the same TOCTOU reason applyGarment() freezes angleAtStart
+   before its own awaits: a prompt built against one snapshot and an image resolved against
+   a different one is the "mixing bug" this file has already fixed once (see
+   applyGarment()'s opening comment). Every caller with a real snapshot passes it in
+   (applyGarment via angleAtStart, buildCompositePrompt via its own angle param); callers
+   with no live orientation context (the freeze keep-alive ping, the presence-gate
+   recovery path) default to "front", which is what they always effectively rendered
+   before this revision and is therefore not a behaviour change for them. */
 const CATEGORY_ANCHOR = Object.freeze({
   top:
-    "Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect" +
-    " ratio and zero distortion. Automatically apply the back-side design of the" +
-    " garment when the subject turns around. Strictly preserve the user's natural" +
-    " proportions, face, lower body, and background.",
+    "Fit the EXACT FRONT side of the target shirt onto the subject's chest/front." +
+    " Maintain 1:1 body ratio without distortion. Strictly preserve the user's" +
+    " natural proportions, face, lower body, and background.",
   bottom:
-    "Fit ONLY the active target pants onto the subject with exact 1:1 physical aspect" +
-    " ratio and zero distortion. Automatically apply the back-side design of the pants" +
-    " when the subject turns around. Strictly preserve the user's natural proportions," +
-    " face, upper body, and background.",
+    "Fit the EXACT FRONT side of the target pants onto the subject's waist/front." +
+    " Maintain 1:1 body ratio without distortion. Strictly preserve the user's" +
+    " natural proportions, face, upper body, and background.",
+});
+
+/* THE BACK COUNTERPART, adopted verbatim from spec for the core clauses (garment noun and
+   the front/back region descriptor are the only substitutions - see CATEGORY_ANCHOR's
+   comment for why per-category nouns survive rather than the fully generic "target
+   garment" phrasing as literally given: dropping the opposite-layer preserve clause is
+   what the shirt-replacement report was filed against, twice, and this pair keeps it). */
+const BACK_CATEGORY_ANCHOR = Object.freeze({
+  top:
+    "Fit the EXACT REAR/BACK side of the target shirt onto the subject's back." +
+    " Precisely lock rear print, logos, and back-seams. Maintain 1:1 body ratio" +
+    " without distortion. Strictly preserve the user's natural proportions, face," +
+    " lower body, and background.",
+  bottom:
+    "Fit the EXACT REAR/BACK side of the target pants onto the subject's back." +
+    " Precisely lock rear print, logos, and back-seams. Maintain 1:1 body ratio" +
+    " without distortion. Strictly preserve the user's natural proportions, face," +
+    " upper body, and background.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -7788,11 +7834,17 @@ function isBottomsGarment(item) {
  * @param {object|null} item - the garment being fitted; null resolves to the tops branch.
  * @returns {string}
  */
-function imageOnlyPrompt(item) {
+function imageOnlyPrompt(item, angle = "front") {
   /* ONE PART, BOTH BRANCHES. There is no assembly left on either side - see
      CATEGORY_ANCHOR above for the reports that drove it there, for the full list of what
      came off the wire, and for why bottoms names the lower body where tops names the
      whole contour.
+
+     `angle` selects FRONT vs BACK (see CATEGORY_ANCHOR's own revision comment for why
+     this is a parameter, never a live re-read of orientation state). Anything other than
+     the literal string "back" resolves to FRONT - an unrecognised value defaults to the
+     side every caller rendered before this revision existed, rather than to a silent
+     back-render nobody asked for.
 
      STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at 342/320 chars:
      it normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that
@@ -7803,12 +7855,13 @@ function imageOnlyPrompt(item) {
      TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, STRICT_REFERENCE_LOCK]`
      for the hallucination clamp, `[P.HIGH, KEEP_OPPOSITE_LAYER]` on the bottoms branch for
      the opposite-layer pin; both are the retirements this revision made. The budget is not
-     the constraint - 372 characters are free on tops and 374 on bottoms - so the only
+     the constraint - 446 characters are free on tops and 446 on bottoms - so the only
      question is whether that text is worth the weight it takes away from the reference
      image, which is the mechanism every report in this sequence shares. One at a time,
      re-tested live. */
+  const table = angle === "back" ? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;
   return fitPrompt([
-    [P.CORE, isBottomsGarment(item) ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
+    [P.CORE, isBottomsGarment(item) ? table.bottom : table.top],
   ]);
 }
 
@@ -7919,12 +7972,12 @@ function lookAnchorPrompt() {
    The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS (278 chars - anchor)             BOTTOMS (276 chars - anchor)
-     + DENSE.bodyFidelity  (45) → 324  fits              → 322  fits
-     + DENSE.modelAgnostic (64) → 343  fits              → 341  fits
-     + both of them        (110)→ 389  fits              → 387  fits
+     TOPS (204 chars - anchor)             BOTTOMS (204 chars - anchor)
+     + DENSE.bodyFidelity  (45) → 250  fits              → 250  fits
+     + DENSE.modelAgnostic (64) → 269  fits              → 269  fits
+     + both of them        (110)→ 315  fits              → 315  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 372 characters are free on tops and 374 on
+   NOTHING SHEDS ANY MORE, on either branch. 446 characters are free on tops and 446 on
    bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.
@@ -8161,19 +8214,25 @@ function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
  * split FRONT|BACK reference is only legible alongside the panel contract that explains
  * it, and that contract is exactly the text this mode removes.
  *
- * THE PARAMETERS ARE RETAINED AND DELIBERATELY UNUSED. They are the seam: applyGarment()
- * still freezes `angleAtStart`/`profileAtStart` before its awaits and still threads them
- * here, so the TOCTOU plumbing that keeps the reference and the prompt describing the same
- * moment stays live and stays tested (angle-race, side-profile §6). Restoring any clause
- * is then a two-line edit here, not a re-derivation of that plumbing.
+ * `angle` IS NO LONGER UNUSED. It used to be retained purely as a seam - applyGarment()
+ * froze `angleAtStart`/`profileAtStart` before its awaits and threaded them here so the
+ * TOCTOU plumbing kept a place to plug into (angle-race, side-profile §6), but nothing
+ * downstream read it. It now selects FRONT vs BACK on imageOnlyPrompt() - see
+ * CATEGORY_ANCHOR's revision comment for the report that closed this gap: the back Blob
+ * was correctly on the wire while the prompt kept describing the front, on this
+ * (off-by-default) composite path exactly as on the default single-image one.
+ *
+ * `inProfile` STAYS RETAINED AND UNUSED - it is a genuinely separate axis (what pose the
+ * prompt asserts about the body, not which garment asset/side is the source), and no
+ * report has asked for it back. The seam stays live for the same TOCTOU reason.
  *
  * @param {object} item   the active garment (catalog or custom upload)
- * @param {"front"|"back"} angle  retained; see above
+ * @param {"front"|"back"} angle  selects the anchor table - see CATEGORY_ANCHOR
  * @param {boolean} inProfile     retained; see above
  * @returns {string}
  */
 function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item);
+  return imageOnlyPrompt(item, angle);
 }
 
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
@@ -8546,14 +8605,18 @@ async function applyGarment(item) {
     console.log('[PEAR] applyGarment blob:', isBlob ? 'ok' : 'NULL - will use URL fallback');
   }
 
-  /* Composite mode gets a purpose-built prompt (panel contract FIRST), not the generic
-     prompt with a clause bolted on the end - see buildCompositePrompt() for why order
-     is the substantive difference. Both branches are driven by `usingComposite`, so the
-     prompt can never describe a reference other than the one on the next line. */
+  /* BOTH BRANCHES NOW GET angleAtStart DIRECTLY, not angleClause()'s assembled string.
+     angleClause()'s only remaining live call site is buildLookPrompt() (a full-look
+     dispatch, which - like buildPrompt() until this revision - discards the string it
+     receives; unrelated to the fix here and untouched). This IS the fix for the reported
+     back-render gap: angleAtStart was already frozen, in scope, and TOCTOU-safe two lines
+     above; it was simply never passed to anything that used it. `usingComposite` still
+     governs which TABLE (buildCompositePrompt vs buildPrompt) is consulted, while `angle`
+     governs FRONT vs BACK on either one. */
   const payload = {
     prompt: clampPromptForWire(usingComposite
       ? buildCompositePrompt(item, angleAtStart, profileAtStart)
-      : buildPrompt(item, angleClause(item, angleAtStart, false, profileAtStart)),
+      : buildPrompt(item, angleAtStart),
       "applyGarment"),
     enhance: false,
     /* Unconditional: the garment pin above returns early rather than reaching here without
@@ -8986,21 +9049,25 @@ const ROTATION_CONTINUITY =
    the front" instruction. */
 const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like logos or front-pockets) when the BACK view is requested.";
 
-/* THE MAIN ENTRY POINT for a single-garment dispatch, and the function the dynamic-drape
-   contract is stated through: it resolves to CATEGORY_ANCHOR.top or .bottom, which are the
-   two strings that tell the model the GARMENT is static and the BODY is per-frame. See
-   CATEGORY_ANCHOR for the wording, the failure it answers, and the two clamps it gave up.
+/* THE MAIN ENTRY POINT for a single-garment dispatch. Resolves to CATEGORY_ANCHOR or
+   BACK_CATEGORY_ANCHOR by `angle`, then to .top or .bottom by category - the FRONT/BACK
+   axis and the top/bottom axis are independent, so both selections happen here rather
+   than pre-multiplying them into a four-way table. See CATEGORY_ANCHOR for the wording
+   and the report (three of them) that made `angle` a real selector instead of a
+   documented-but-discarded parameter.
 
-   `angleText` is angleClause()'s output, passed IN rather than concatenated on by the
-   caller. That is what makes the budget enforceable: the old shape was
-   `buildPrompt(item) + angleClause(...)`, two independently-sized strings glued together
-   downstream, so neither half could know the total and nothing could shed a clause when
-   the pair overran. Threaded through here, the orientation clause becomes one more
-   priority-tagged part in a single fitPrompt() call - and it ranks CORE, because a prompt
-   that has lost its orientation clause renders the wrong side of the garment. It is
-   retained-and-unused today (see buildCompositePrompt's note on the same seam). */
-function buildPrompt(item, angleText = "") {              // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item);
+   `angle` REPLACES what used to be angleClause()'s output threaded in as a pre-built
+   string. That older shape - `buildPrompt(item) + angleClause(...)`, two independently
+   sized strings glued together downstream - is what this function's signature still
+   echoes in spirit: the caller passes a snapshot taken before its own awaits (see
+   applyGarment()'s angleAtStart), never a value re-read live, so a prompt built against
+   one orientation and an image resolved against a different one - the "mixing bug" this
+   file has already fixed once - stays impossible by construction. angleClause() itself is
+   NOT called any more; its assembled panel-contract/pose/DENSE machinery is a different,
+   heavier design this revision deliberately did not revive - see its own comment for why
+   the minimal per-orientation anchor is the one that shipped instead. */
+function buildPrompt(item, angle = "front") {
+  return imageOnlyPrompt(item, angle);
 }
 
 /**
@@ -9020,8 +9087,8 @@ function buildPrompt(item, angleText = "") {              // eslint-disable-line
  * @param {object} item - a custom item ({ custom:true, garmentType, img, color })
  * @returns {string}
  */
-function buildCustomPrompt(item, angleText = "") {        // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item);
+function buildCustomPrompt(item, angle = "front") {
+  return imageOnlyPrompt(item, angle);
 }
 
 const APPLY_ATTEMPTS = 2;    // set() tries per apply - see applyActive()

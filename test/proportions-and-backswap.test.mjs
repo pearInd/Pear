@@ -84,7 +84,7 @@ console.log("── §1 NO STRETCH IS POSSIBLE, AND THE CROP IS NOW ~0% ON MOBIL
     "480x600 into the 4:3 desktop breakpoint crops MORE than the old square value did");
 }
 
-console.log("\n── §2 BACK-VIEW RENDERING: already built, wired, and image-driven ──");
+console.log("\n── §2 BACK-VIEW RENDERING: image-swap AND prompt now agree ──");
 {
   /* THE FEATURE EXISTS AND IS DEFAULT-ON for any item with a real back photo - no manual
      toggle needed, since setAngle() is documented as unwired to any UI. */
@@ -108,46 +108,57 @@ console.log("\n── §2 BACK-VIEW RENDERING: already built, wired, and image-d
     /backLooksFlat = await bitmapLooksFlat\(probe\);/.test(APP),
     "committing to a swap before the asset is known-good is what would show a blank back");
 
-  /* THE PROMPT PLAYS NO CAUSAL ROLE. The back-swap sentence is descriptive of what the
-     image-swap already does, not a mechanism of its own. */
-  check("buildPrompt() discards its angle argument unconditionally",
-    /function buildPrompt\(item, angleText = ""\)/.test(APP) &&
-    /return imageOnlyPrompt\(item\);/.test(APP.slice(APP.indexOf('function buildPrompt(item, angleText = "")'),
-                                                       APP.indexOf('function buildPrompt(item, angleText = "")') + 150)),
-    "eslint-disable-line no-unused-vars on angleText is the tell - it is intentionally unread");
-  check("...so the back-rendering signal is 100% carried by the reference IMAGE",
+  /* ── REVISION: THE PROMPT NO LONGER DISCARDS ITS ANGLE ARGUMENT ─────────────
+     THIS SECTION USED TO ASSERT THE OPPOSITE, correctly, at the time: buildPrompt()
+     discarded angleText and the back-rendering signal was carried entirely by the image.
+     Three reports later, that gap is closed - buildPrompt(item, angle) genuinely selects
+     BACK_CATEGORY_ANCHOR vs CATEGORY_ANCHOR now. What survives from the old assertion is
+     the part that was never about the bug: the swap is STILL image-driven at its core
+     (the prompt cannot MAKE a Blob swap happen, it can only describe the side once the
+     swap already has), and the TOCTOU discipline (a frozen snapshot, never a live read)
+     is unchanged - reasserted here rather than dropped, because that is the property that
+     keeps this fix from reintroducing the mixing-bug race angle-race.test.mjs exists for. */
+  check("buildPrompt(item, angle) genuinely selects between the two anchor tables",
+    /function buildPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(APP),
+    "a parameter that is declared but not threaded through is the exact regression fixed");
+  check("...and imageOnlyPrompt() branches on it - BACK_CATEGORY_ANCHOR is reachable",
+    /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(APP),
+    "declaring a back anchor table nobody ever selects is the same bug with extra steps");
+  check("applyGarment() passes the FROZEN angleAtStart - never a live effectiveAngle() read",
+    /buildPrompt\(item, angleAtStart\)/.test(APP) && !/buildPrompt\(item, effectiveAngle\(\)\)/.test(APP),
+    "a live read here reopens the exact TOCTOU race angle-race.test.mjs was written to fix");
+  check("...and the image-swap mechanism underneath is untouched - the fix is additive",
     /aiVideo\.srcObject = editedStream;/.test(APP) &&
     /await applyActive\(\);\s*\/\/ one rtClient\.set\(\) - pre-cached Blob payload/.test(APP),
-    "maybeSwap() dispatches the pre-validated Blob; the prompt text never varies by angle");
+    "the prompt now agrees with the image; it does not replace what selects the image");
 }
 
-console.log("\n── §3 THE REAL GAP: no back photo, no back view, ever ──");
+console.log("\n── §3 THE GAP THAT REMAINS: no back photo, no back view, still ──");
 {
-  /* Named explicitly rather than left to be discovered from a support ticket. Fixing it
-     needs either a generated back asset (catalog/pre-processing work) or reviving
-     angle-aware prompt assembly (a reversal of the strict image-only design several prior
-     revisions deliberately converged on) - neither of which this pass decided unilaterally. */
+  /* Named explicitly rather than left to be discovered from a support ticket, and
+     unchanged by this revision: AUTO_ANGLE never engages for an item with no real back
+     photo, so no angle value other than "front" is ever computed for it - it does not
+     matter that BACK_CATEGORY_ANCHOR now exists and is correctly wired, because nothing
+     ever calls imageOnlyPrompt(item, "back") for such an item. Closing this needs either
+     a generated back asset (catalog/pre-processing work) or wiring AUTO_ANGLE to engage
+     on a single-view item too - a materially different feature, not decided here. */
   check("DENSE.backInferred exists (the text-only 'plain back' fallback)",
     /backInferred:\s*"No back photo exists: infer a plain back/.test(APP));
-  /* Scoped to imageOnlyPrompt()'s own function body - the ACTUAL active prompt path
-     (applyGarment's payload.prompt traces to buildPrompt() -> imageOnlyPrompt(), which
-     never touches angleClause()/DENSE at all). "backInferred" appears plenty elsewhere in
-     the file, in comments and in the retired angleClause()/DENSE machinery - a whole-file
-     search would find those and report the wrong thing. */
-  const imageOnlyBody = APP.slice(APP.indexOf("function imageOnlyPrompt(item) {"),
-                                  APP.indexOf("function imageOnlyPrompt(item) {") + 2500);
-  const bodyEnd = imageOnlyBody.indexOf("\n}\n");
-  const scoped = imageOnlyBody.slice(0, bodyEnd > 0 ? bodyEnd : imageOnlyBody.length);
-  check("...but is genuinely UNREACHABLE - imageOnlyPrompt() never touches it",
-    !/backInferred/.test(scoped) && !/angleClause/.test(scoped),
-    "the active prompt path (buildPrompt -> imageOnlyPrompt) never consults angle at all");
-  check("an item without a real back photo never enters AUTO_ANGLE at all",
+  check("...but is still genuinely UNREACHABLE - imageOnlyPrompt() never touches it",
+    !/backInferred/.test(APP.slice(APP.indexOf("function imageOnlyPrompt(item, angle"),
+                                   APP.indexOf("function imageOnlyPrompt(item, angle") + 2500)),
+    "BACK_CATEGORY_ANCHOR being reachable does not make the text-only DENSE fallback reachable too");
+  check("an item without a real back photo still never enters AUTO_ANGLE at all",
     /currentAngle = canCombineViews\(activeItem\) \? AUTO_ANGLE : "front";/.test(APP),
     "no dual-view mode means no orientation watcher, means no back classification attempted");
-  check("app.js records the gap and the two legitimate ways to close it",
-    /THIS ONLY HAPPENS FOR AN ITEM WITH A REAL, DISTINCT BACK PHOTO/.test(APP) &&
-    /a generated back asset \(a\s*\n\s*catalog\/pre-processing decision\)/.test(APP) &&
-    /reviving angle-aware prompt assembly/.test(APP),
+  check("...so imageOnlyPrompt(item, \"back\") is simply never called for it",
+    /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(APP) &&
+    /currentAngle = canCombineViews\(activeItem\) \? AUTO_ANGLE : "front";/.test(APP),
+    "a reachable back anchor and an unreachable back angle can coexist - that IS this gap");
+  check("app.js records the remaining gap and the two legitimate ways to close it",
+    /THE ONE GAP THIS REVISION DOES NOT CLOSE/.test(APP) &&
+    /a generated back asset \(a catalog\/pre-processing decision\)/.test(APP) &&
+    /wiring\s*\n\s*AUTO_ANGLE to engage on a single-view item too/.test(APP),
     "an honest limit belongs on file - the next person should not have to re-derive this");
 }
 

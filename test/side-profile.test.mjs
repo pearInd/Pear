@@ -268,7 +268,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   check("the live composite payload is the category anchor, at every pose",
     built === api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect ratio and zero distortion\./.test(built),
+    /^Fit the EXACT FRONT side of the target shirt onto the subject's chest\/front\./.test(built),
     built);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
@@ -342,7 +342,7 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
        rotates (body-topology.test.mjs). The prompt's pose-invariance is now a deliberate
        division of labour rather than a gap. */
     check(`the anchor carries its reference binding at inProfile=${prof}`,
-      /Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect ratio/.test(out),
+      /Fit the EXACT FRONT side of the target shirt onto the subject's chest\/front/.test(out),
       out.slice(0, 400));
     check(`...and the non-target garment lock at inProfile=${prof}`,
       /Strictly preserve the user's natural proportions, face, lower body, and background/.test(out),
@@ -418,7 +418,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect ratio and zero distortion\./;
+  const FROZEN = /^Fit the EXACT FRONT side of the target shirt onto the subject's chest\/front\./;
   for (const prof of [false, true]) {
     check(`the category anchor is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
@@ -435,7 +435,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
   const jeans = { name: "Glide Slim", custom: true, garmentType: "lower_body" };
   check("the BOTTOMS route is equally pose-invariant, and is its own scoped string",
     api.buildCompositePrompt(jeans, "front", false) === api.buildCompositePrompt(jeans, "front", true) &&
-    /^Fit ONLY the active target pants onto the subject with exact 1:1 physical aspect ratio and zero distortion\./.test(
+    /^Fit the EXACT FRONT side of the target pants onto the subject's waist\/front\./.test(
       api.buildCompositePrompt(jeans, "front", false)) &&
     api.buildCompositePrompt(jeans, "front", false) !== api.buildCompositePrompt(item, "front", false),
     api.buildCompositePrompt(jeans, "front", false).slice(0, 200));
@@ -775,7 +775,7 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
      property this section owns, and it is unaffected by either. */
   check("what survives at both poses is the category anchor, byte-identical",
     square === built &&
-    /^Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect ratio and zero distortion\./.test(square) &&
+    /^Fit the EXACT FRONT side of the target shirt onto the subject's chest\/front\./.test(square) &&
     /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
@@ -793,9 +793,17 @@ console.log("\n── §6 NO TOCTOU: the pose is a frozen snapshot, like the ang
   const awaitAt = apply.indexOf("await referenceImageFor");
   check("...and the snapshot is taken BEFORE the reference is resolved",
     snapAt !== -1 && awaitAt !== -1 && snapAt < awaitAt, `snapshot@${snapAt} await@${awaitAt}`);
+  /* angleClause(item, angleAtStart, false, profileAtStart) is GONE from this call site -
+     that removal is the actual fix for the back-render gap (see CATEGORY_ANCHOR's revision
+     comment): angleClause()'s assembled string was computed and then silently discarded by
+     buildPrompt(), so the reference image swapped to the back Blob while the prompt kept
+     describing the front. buildPrompt(item, angleAtStart) replaces it - a real angle
+     selector now, not a placeholder - and it is STILL the frozen snapshot, never a live
+     effectiveAngle() read, which is the one property this suite actually owns. */
   check("both prompt builders receive the frozen snapshot, never a fresh read",
     /buildCompositePrompt\(item, angleAtStart, profileAtStart\)/.test(apply) &&
-    /angleClause\(item, angleAtStart, false, profileAtStart\)/.test(apply), apply.slice(-600));
+    /buildPrompt\(item, angleAtStart\)/.test(apply) &&
+    !/angleClause\(item, angleAtStart/.test(apply), apply.slice(-600));
   check("applyGarment never re-reads profileActive() after the await",
     apply.split("profileActive()").length - 1 === 1, "expected exactly one read");
 
