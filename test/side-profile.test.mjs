@@ -268,7 +268,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   check("the live composite payload is the category anchor, at every pose",
     built === api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Fit the target clothing item onto the subject in this video stream\./.test(built),
+    /^Fit ONLY the exact target shirt from the reference image onto the subject\./.test(built),
     built);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
@@ -342,10 +342,10 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
        rotates (body-topology.test.mjs). The prompt's pose-invariance is now a deliberate
        division of labour rather than a gap. */
     check(`the anchor carries its reference binding at inProfile=${prof}`,
-      /Fit the target clothing item onto the subject in this video stream/.test(out),
+      /Fit ONLY the exact target shirt from the reference image onto the subject/.test(out),
       out.slice(0, 400));
     check(`...and the non-target garment lock at inProfile=${prof}`,
-      /Render the complete frame seamlessly across the entire viewport without splitting or masking/.test(out),
+      /Strictly preserve the subject's live lower clothing and background completely unchanged/.test(out),
       out.slice(0, 400));
   }
 
@@ -418,7 +418,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Fit the target clothing item onto the subject in this video stream\./;
+  const FROZEN = /^Fit ONLY the exact target shirt from the reference image onto the subject\./;
   for (const prof of [false, true]) {
     check(`the category anchor is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
@@ -433,11 +433,11 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      isBottomsGarment() and that routing is still live (it simply selects between two
      identical values today - see image-first.test.mjs §1b). */
   const jeans = { name: "Glide Slim", custom: true, garmentType: "lower_body" };
-  check("the BOTTOMS route is equally pose-invariant, and resolves to the same anchor",
+  check("the BOTTOMS route is equally pose-invariant, and is its own scoped string",
     api.buildCompositePrompt(jeans, "front", false) === api.buildCompositePrompt(jeans, "front", true) &&
-    /^Fit the target clothing item onto the subject in this video stream\./.test(
+    /^Fit ONLY the exact target pants\/shorts from the reference image onto the subject\./.test(
       api.buildCompositePrompt(jeans, "front", false)) &&
-    api.buildCompositePrompt(jeans, "front", false) === api.buildCompositePrompt(item, "front", false),
+    api.buildCompositePrompt(jeans, "front", false) !== api.buildCompositePrompt(item, "front", false),
     api.buildCompositePrompt(jeans, "front", false).slice(0, 200));
   check("the retired isolation clause is no longer assembled at either pose",
     !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", false)) &&
@@ -775,8 +775,8 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
      property this section owns, and it is unaffected by either. */
   check("what survives at both poses is the category anchor, byte-identical",
     square === built &&
-    /^Fit the target clothing item onto the subject in this video stream\./.test(square) &&
-    /without splitting or masking\.$/.test(square));
+    /^Fit ONLY the exact target shirt from the reference image onto the subject\./.test(square) &&
+    /Strictly preserve the subject's live lower clothing and background completely unchanged\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

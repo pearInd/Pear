@@ -109,8 +109,8 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      logos, and cut", which states the same rule inside the anchor where it cannot shed -
      and adds logos and cut, which the old wording did not name. */
   check("the shipped prompt names the reference as the only source of cloth",
-    /the target clothing item/.test(out) &&
-    /^Fit /.test(out), out);
+    /the exact target shirt from the reference image/.test(out) &&
+    /^Fit ONLY/.test(out), out);
   check("...the discard is still carried by exhaustion, not stated outright",
     !/ignoring the original model's body/.test(out), out);
   /* ── THE BODY-VOLUME GUARANTEE IS OFF THE WIRE, and this suite is where that has to
@@ -134,7 +134,7 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      It used to be a ranking argument (MED, shed under pressure); it is now structural. */
   for (const prof of [false, true]) {
     check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
-      /Fit the target clothing item onto the subject in this video stream\./
+      /Fit ONLY the exact target shirt from the reference image onto the subject\./
         .test(api.buildCompositePrompt(TEE, "front", prof)));
   }
 
@@ -199,7 +199,7 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   const tops = api.imageOnlyPrompt(TEE);
   const bottoms = api.imageOnlyPrompt(JEANS);
   check("both branches stay minimal, and the gap between them stays small",
-    tops.length <= 360 && bottoms.length <= 360 && Math.abs(bottoms.length - tops.length) <= 40,
+    tops.length <= 420 && bottoms.length <= 420 && Math.abs(bottoms.length - tops.length) <= 60,
     `tops=${tops.length} bottoms=${bottoms.length} gap=${bottoms.length - tops.length}`);
 
   const both = api.fitPrompt([
@@ -222,8 +222,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  207, 207],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 226, 226],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  398, 435],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 417, 454],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -232,13 +232,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(161 chars - anchor\)             BOTTOMS \(161 chars - same string now\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 207  fits              \u2192 207  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 226  fits              \u2192 226  fits/.test(SRC),
+    /TOPS \(352 chars - anchor\)             BOTTOMS \(389 chars - anchor\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 398  fits              \u2192 435  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 417  fits              \u2192 454  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /489 characters are free on each\s*\n?\s*branch/.test(SRC),
+    /298 characters are free on tops and 261 on\s*\n?\s*bottoms/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
 }
 
@@ -268,7 +268,7 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
     check(`the category anchor survives a pathologically long name (inProfile=${prof})`,
-      /Fit the target clothing item onto the subject in this video stream\./.test(out),
+      /Fit ONLY the exact target shirt from the reference image onto the subject\./.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }

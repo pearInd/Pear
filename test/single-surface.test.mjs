@@ -154,10 +154,14 @@ console.log("\n── §4 THE INPUT PATH IS UNTOUCHED - camera in, Decart out �
   check("...and Decart's returned stream is what reaches the element",
     /onRemoteStream: \(editedStream\) =>/.test(APP));
   /* THE PROMPT HALF OF THE SAME INVARIANT, so the two cannot drift apart. */
-  check("the anchor asks for one unbroken surface, matching what the client now guarantees",
-    /Render the complete frame seamlessly across the entire viewport/.test(APP) &&
-    /without splitting or masking\./.test(APP),
-    "the client stopped splitting the frame; the prompt says so too");
+  /* The prompt half of the same invariant, so the two cannot drift apart. The wording is
+     per-category again (see garment-category-prompt.test.mjs), so what is asserted here is
+     the property both branches must share: the non-target region and the background are
+     preserved rather than re-rendered, which is what keeps the frame one continuous scene. */
+  check("both anchors preserve the opposite layer AND the background, unchanged",
+    /Strictly preserve the subject's live lower clothing and background completely/.test(APP) &&
+    /Strictly preserve the subject's live upper clothing and background completely/.test(APP),
+    "the client stopped compositing the frame; the prompt must not ask the model to either");
 }
 
 console.log(fails === 0 ? "\nALL CHECKS PASSED" : `\n${fails} CHECK(S) FAILED`);

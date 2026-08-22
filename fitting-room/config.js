@@ -29,6 +29,7 @@
  * @property {number}   BODY_VOLUME_DELTA       Absolute torso-depth change that triggers a re-drape (0..1) - the front-to-back axis.
  * @property {number}   BODY_BUILD_DELTA        Relative shoulder-to-torso / hip-to-shoulder change that triggers a re-drape (0..1) - the narrow-vs-wide axis.
  * @property {number}   BODY_RECONDITION_COOLDOWN_MS Minimum gap between two re-conditioning dispatches (ms).
+ * @property {number}   CONDITION_DEBOUNCE_MS   Trailing-edge coalescing window before a re-drape dispatches (ms); capped by the cooldown as a max-wait.
  * @property {number}   BODY_TRACK_HOLD_MS      How long a lost skeleton holds the last valid fit before the baseline is dropped (ms).
  * @property {number}   PLAYOUT_DELAY_HINT      Chromium RTCRtpReceiver.playoutDelayHint (seconds). 0 = render ASAP.
  * @property {boolean}  PREFER_LOW_LATENCY_CODEC Opt-in SDP codec-preference munge (default OFF - see note below).
@@ -198,6 +199,28 @@ export const CONFIG = Object.freeze({
      reference image attached, so this is the knob that decides how much of a 5s window
      a continuously-moving shopper can spend re-uploading a packshot. ~5 per session. */
   BODY_RECONDITION_COOLDOWN_MS: 900,
+
+  /* ── Condition-sync debounce (see the topology sampler in app.js) ───────────
+     A COALESCING WINDOW, not a rate limit - BODY_RECONDITION_COOLDOWN_MS above is the
+     rate limit and it is the stricter of the two. The difference is WHICH EDGE fires.
+
+     The cooldown fires on the LEADING edge: the first threshold crossing dispatches
+     immediately, which lands mid-movement. applyGarment()'s own flicker-fix comment
+     records what that costs - swapping the reference while the shopper is turning is
+     exactly when a print flickers or smears - and re-conditioning against a transient
+     half-turn pose asks the model to re-drape for a shape the body is already leaving.
+
+     This waits for the movement to SETTLE and then dispatches once, against the pose the
+     shopper actually came to rest in. 250ms is long enough to swallow the frames of a
+     turn (the sampler ticks at BODY_TOPOLOGY_SAMPLE_MS = 350ms, so this is under one
+     tick of extra latency) and short enough to feel immediate.
+
+     IT HAS A MAX-WAIT, and without one this would be a bug rather than a feature: a
+     shopper who never stops moving would reset the timer forever and get NO re-drape at
+     all - the exact opposite of continuous re-fitting. The pending dispatch fires no
+     later than BODY_RECONDITION_COOLDOWN_MS after the first shift that started it, so
+     continuous rotation still re-conditions on the cooldown's own cadence. */
+  CONDITION_DEBOUNCE_MS: 250,
   /* How long a lost skeleton is HELD before the monitor gives up on the last valid
      reading. Sharp rotations black out the landmarks for a few frames; holding the last
      good fit across that gap and resuming from it is the difference between "the garment

@@ -118,104 +118,157 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
                          334 bottoms.
    See CATEGORY_ANCHOR in app.js for the full list of what came off the wire, what went
    back on, and the restore path for each. */
-/* ── THE SPECIFIED WORDING IS NOW ONE STRING FOR BOTH BRANCHES ─────────────────
-   Product-specified, and byte-exact for the reason this suite has always given: a
-   paraphrase that reads the same to a human is a different token sequence to a diffusion
-   model. What changed in this revision is that there is only ONE of them. */
-const UNIFIED_SPEC =
-  "Fit the target clothing item onto the subject in this video stream." +
-  " Render the complete frame seamlessly across the entire viewport" +
-  " without splitting or masking.";
-const TOPS_SPEC = UNIFIED_SPEC;
-const BOTTOMS_SPEC = UNIFIED_SPEC;
-const SPEC = UNIFIED_SPEC;
+/* ── THE SPECIFIED WORDING, PER CATEGORY AGAIN ────────────────────────────────
+   Byte-exact for the reason this suite has always given: a paraphrase that reads the same
+   to a human is a different token sequence to a diffusion model. The previous revision
+   collapsed these into one category-agnostic string and recorded the risk; this restores
+   the scoping and adds two clauses aimed at the mid-session-revert report. */
+const TOPS_SPEC =
+  "Fit ONLY the exact target shirt from the reference image onto the subject." +
+  " Lock this exact shirt texture and design for the entire stream." +
+  " Continuously adapt the drape and cut to the subject's live body depth, angle," +
+  " and volume across all movements and rotations." +
+  " Strictly preserve the subject's live lower clothing and background completely" +
+  " unchanged.";
+const BOTTOMS_SPEC =
+  "Fit ONLY the exact target pants/shorts from the reference image onto the subject." +
+  " Lock this exact lower garment texture and design for the entire stream." +
+  " Continuously adapt the fit, waistline, and leg drape to the subject's live lower" +
+  " body depth, angle, and volume across all movements and rotations." +
+  " Strictly preserve the subject's live upper clothing and background completely" +
+  " unchanged.";
+const SPEC = TOPS_SPEC;
 
-console.log("── §1 THE ANCHOR: product-specified, and genuinely constant ──");
+console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely constant ──");
 {
   check("the TOPS branch matches the specified wording byte for byte",
-    api.imageOnlyPrompt(TEE) === UNIFIED_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
+    api.imageOnlyPrompt(TEE) === TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
   check("the BOTTOMS branch matches the specified wording byte for byte",
-    api.imageOnlyPrompt(JEANS) === UNIFIED_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
-  check("...and they are the SAME string - the branches no longer differ at all",
-    api.imageOnlyPrompt(TEE) === api.imageOnlyPrompt(JEANS),
-    "this revision collapsed the two anchors deliberately; §1b records the risk");
+    api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
+  check("...and they are DIFFERENT strings - the category scoping is back",
+    api.imageOnlyPrompt(TEE) !== api.imageOnlyPrompt(JEANS),
+    "the previous revision collapsed them and re-opened the shirt-replacement report");
 
   const sentences = (s) => s.split(/(?<=\.)\s+/).filter(Boolean);
-  check("exactly two sentences: bind the garment, then require one surface",
-    sentences(UNIFIED_SPEC).length === 2, String(sentences(UNIFIED_SPEC).length));
+  check("both branches are exactly four sentences: scope, lock, adapt, preserve",
+    sentences(TOPS_SPEC).length === 4 && sentences(BOTTOMS_SPEC).length === 4,
+    `tops=${sentences(TOPS_SPEC).length} bottoms=${sentences(BOTTOMS_SPEC).length}`);
+  check("...and both open on the SAME binding - exclusive scope, from the reference",
+    TOPS_SPEC.startsWith("Fit ONLY the exact target ") &&
+    BOTTOMS_SPEC.startsWith("Fit ONLY the exact target "),
+    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
 
-  /* (1) THE BIND. "Fit the target clothing item onto the subject" names the garment as the
-     thing being placed and the subject as what it goes on. It does NOT name a region -
-     see §1b, which is where that is accounted for rather than glossed. */
-  check("(1) it binds the garment to the subject, in the stream",
-    /^Fit the target clothing item onto the subject in this video stream\./.test(UNIFIED_SPEC),
-    UNIFIED_SPEC);
-  /* (2) THE SURFACE. This is the sentence the whole revision exists for. It asks for the
-     COMPLETE frame across the ENTIRE viewport, and forbids the two operations that
-     produced the reported artifact - splitting it, and masking part of it. */
-  check("(2) it demands the complete frame across the entire viewport",
-    /Render the complete frame seamlessly across the entire viewport/.test(UNIFIED_SPEC),
-    UNIFIED_SPEC);
-  check("...and forbids BOTH operations behind the report: splitting and masking",
-    /without splitting or masking\.$/.test(UNIFIED_SPEC), UNIFIED_SPEC);
-  check("...and instructs no pass-through the model has no second stream for",
-    !/pass through/.test(UNIFIED_SPEC) && !/LIVE camera feed/.test(UNIFIED_SPEC),
+  /* (1) THE SCOPE, restored. "Fit ONLY" scopes the whole instruction in the first two
+     words, where a leading-token model is most sensitive, and the garment is bound to the
+     REFERENCE IMAGE rather than described in words - which is the whole premise of strict
+     image-only conditioning. */
+  const LEAD = /^Fit ONLY the exact target (shirt|pants\/shorts) from the reference image onto the subject\./;
+  check("(1) it scopes ONE garment, sourced from the reference image",
+    LEAD.test(TOPS_SPEC) && LEAD.test(BOTTOMS_SPEC),
+    "an unscoped anchor is what let a try-on claim the whole reference");
+  check("...and each branch binds its OWN garment, never the other's",
+    /target shirt/.test(TOPS_SPEC) && !/target pants/.test(TOPS_SPEC) &&
+    /target pants\/shorts/.test(BOTTOMS_SPEC) && !/target shirt/.test(BOTTOMS_SPEC),
+    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
+
+  /* (2) THE TEMPORAL LOCK, which is what this revision adds. REPORTED: mid-session the
+     render reverts from the target garment to a generic one, then back. The decisive fix
+     is in the payload - see §1c - but the prompt is re-asserted on every re-drape, so
+     stating "for the entire stream" is what makes those re-assertions agree with each
+     other instead of merely repeating a first-frame instruction. */
+  check("(2) it locks the garment for the ENTIRE STREAM, not just the first frame",
+    /Lock this exact shirt texture and design for the entire stream\./.test(TOPS_SPEC) &&
+    /Lock this exact lower garment texture and design for the entire stream\./.test(BOTTOMS_SPEC),
+    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
+
+  /* (3) THE PER-FRAME TENSE, restored and per region: drape and cut on tops, fit,
+     waistline and leg drape on bottoms. It names depth, angle AND volume, which is the
+     360-degree requirement stated rather than implied. */
+  check("(3) it asks for CONTINUOUS adaptation across all movements and rotations",
+    /Continuously adapt the drape and cut to the subject's live body depth, angle, and volume across all movements and rotations\./.test(TOPS_SPEC) &&
+    /Continuously adapt the fit, waistline, and leg drape to the subject's live lower body depth, angle, and volume across all movements and rotations\./.test(BOTTOMS_SPEC),
+    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
+
+  /* (4) THE OPPOSITE-LAYER PIN, restored. This is the clause the invented-non-target-
+     garment family turns on, and it matters more than it ever has: the compositing guard
+     that used to enforce it in pixels is deleted, so this wording is now the ONLY thing
+     answering that report. */
+  check("(4) it preserves the opposite layer's CLOTHING and the background, unchanged",
+    /Strictly preserve the subject's live lower clothing and background completely unchanged\.$/.test(TOPS_SPEC) &&
+    /Strictly preserve the subject's live upper clothing and background completely unchanged\.$/.test(BOTTOMS_SPEC),
+    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
+  check("...and neither preserves the very layer it is fitting",
+    !/preserve[^.]*upper clothing/.test(TOPS_SPEC) &&
+    !/preserve[^.]*lower clothing/.test(BOTTOMS_SPEC),
+    "a prompt that preserves the layer it is editing cancels itself");
+  check("...with no pass-through the model has no second stream for",
+    !/pass through/.test(TOPS_SPEC) && !/LIVE camera feed/.test(TOPS_SPEC) &&
+    !/pass through/.test(BOTTOMS_SPEC) && !/LIVE camera feed/.test(BOTTOMS_SPEC),
     "the guard that made pass-through real is deleted; the prompt must not still promise it");
 }
 
-console.log("\n── §1b THE COLLAPSE IS A RECORDED RISK, not an oversight ──");
+console.log("\n── §1b WHAT THE WORDING CANNOT DO, however it is phrased ──");
 {
-  /* THIS SUITE'S JOB IS TO MAKE THE TRADE VISIBLE. The specified string is
-     category-agnostic: it names "the target clothing item", not the shirt or the pants,
-     and it does not say which region the garment belongs on. Every revision since the
-     SHIRT-REPLACEMENT report - a trouser try-on that claimed the whole reference and
-     repainted the shopper's live top - had named a region to keep that closed. So these
-     assertions do not pretend the risk is gone; they pin that the RESTORE is real. */
-  check("the anchor is genuinely region-free - stated, not discovered later",
-    !/upper torso/.test(UNIFIED_SPEC) && !/lower body/.test(UNIFIED_SPEC) &&
-    !/reference shirt/.test(UNIFIED_SPEC) && !/reference pants/.test(UNIFIED_SPEC),
-    "if this ever starts failing, the collapse was quietly reverted and §1 should say so");
-  check("...and the per-category wording is kept on file, verbatim, for a one-line restore",
-    /const CATEGORY_SCOPED = Object\.freeze\(\{/.test(SRC) &&
-    /Fit ONLY the exact reference shirt onto the subject's upper torso/.test(SRC) &&
-    /Fit ONLY the exact reference pants\/shorts onto the subject's lower body/.test(SRC),
-    "a restore that starts from the commit log is not a restore path");
-  check("...and app.js records WHICH reports the collapse re-exposes",
-    /SHIRT-REPLACEMENT report/.test(SRC) && /CATEGORY-AGNOSTIC, AND THAT IS A KNOWN, RECORDED RISK/.test(SRC),
-    "the risk has to be readable from the file, not only from this suite");
-  /* THE ROUTING SURVIVES THE COLLAPSE, which is what makes the restore one line rather
-     than re-plumbing: isBottomsGarment() still selects between .top and .bottom, they just
-     happen to hold the same string today. */
-  check("...and the per-category ROUTING is untouched - both keys still exist and are selected",
-    /const CATEGORY_ANCHOR = Object\.freeze\(\{\n  top:\s+UNIFIED_ANCHOR,\n  bottom: UNIFIED_ANCHOR,\n\}\);/.test(SRC) &&
-    /isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top/.test(SRC),
-    "collapsing the values must not collapse the mechanism that selects them");
+  /* "Adapt to the subject's live body depth, angle, and volume" reads like geometry is
+     being supplied. It is not, and cannot be: Decart's realtime set() accepts exactly
+     { prompt, enhance, image } and STRIPS every other key (z.core.$strip), so no landmark,
+     bounding box, depth map or orientation value can accompany the payload. What the pose
+     pipeline controls is WHEN to re-condition - never WHAT geometry to send. Asserted so a
+     future revision does not read the sentence as evidence and spend budget chasing it. */
+  check("app.js states plainly that no geometry can be sent alongside the image",
+    /STRIPS every other key/.test(SRC) && /never WHAT geometry to send/.test(SRC),
+    "the prompt asks; only the re-conditioning trigger acts");
+  check("...and the runtime half that makes the sentence true is wired",
+    /function reconditionForTopology\(/.test(SRC) && /function bodyScaleMatrix\(/.test(SRC),
+    "a continuous-adaptation promise with no dispatch behind it is a claim, not a fix");
 }
 
-console.log("\n── §1c THE GUARD IS DELETED, NOT DISABLED ──");
+console.log("\n── §1c THE GARMENT PIN: the mid-session revert, fixed in the payload ──");
 {
-  /* THE REPORTED ARTIFACT, third filing: "the top 50% is Decart's AI output and the bottom
-     50% is a separate raw camera feed." That is precisely what the non-target region guard
-     did - composite the shopper's own camera pixels back over the half not being fitted.
-     It shipped off first; a flag is not an architecture, and one config edit could put the
-     split back on screen. It is gone now, and these assertions are what keep it gone. */
-  check("no compositing-guard code survives anywhere in app.js",
-    !/paintGuardBand/.test(SRC) && !/function guardBand/.test(SRC) &&
-    !/startLowerBodyGuard/.test(SRC) && !/lowerBodyGuardRAF/.test(SRC),
-    "flag-off left the mechanism one edit away from painting a split again");
-  check("...its config constants are gone too, so nothing can re-enable it",
-    !/LOWER_BODY_GUARD/.test(CFG) && !/BODY_GUARD_MARGIN_FRAC/.test(CFG),
-    "a constant with no consumer is a promise that the consumer is coming back");
-  check("...and app.js records what the deletion gave up",
-    /THE NON-TARGET REGION GUARD IS GONE/.test(SRC) &&
-    /no mask channel/.test(SRC),
-    "the lost guarantee is real and has to stay on file");
-  /* THE DISPLAY SURFACE HAS ONE SOURCE. Asserted as an absence across the whole file: no
-     path may draw the webcam onto anything the shopper watches during a live session. */
-  check("nothing draws #webcam onto the display or the recording during a session",
-    !/drawImage\(webcam,\s*\n?\s*0, src\.y0/.test(SRC) &&
-    !/paintGuardBand\(ctx, \$\("webcam"\), w, h\)/.test(SRC),
-    "input comes from the camera, output comes from Decart, one element each");
+  /* REPORTED: mid-session the render briefly reverts from the target garment to a generic
+     one and then back. THE MECHANISM: applyGarment() built its payload with
+     `...(imageRef ? { image: imageRef } : {})`, so a dispatch that resolved no reference
+     shipped with NO image - and Decart, with nothing to condition on but its own prior,
+     renders a generic garment. The next dispatch that resolves puts the real one back.
+
+     WHY A MID-SESSION DISPATCH CAN RESOLVE NOTHING: reconditionForTopology() clears the
+     wire-state fields on purpose to force a full re-upload when the body moves, so the
+     reference is re-resolved several times per session and any miss was a chance to blank
+     the conditioning. */
+  /* Scoped to the payload literal, not the whole file: the old spelling survives in
+     comments that explain WHY it was wrong, and a naive absence check would read those as
+     the code still doing it. */
+  const payloadBlock = SRC.slice(SRC.indexOf("  const payload = {", SRC.indexOf("async function applyGarment")),
+                                 SRC.indexOf("console.group(\"[PEAR] applyGarment()"));
+  check("the payload's image key is unconditional - the absence cannot be spelled",
+    /image: imageRef,/.test(payloadBlock) &&
+    !/\.\.\.\(imageRef \?/.test(payloadBlock),
+    `an omitted key and an explicit null both blank the model's conditioning: ${payloadBlock}`);
+  check("...because it re-pins the session's ACKNOWLEDGED reference first",
+    /if \(!imageRef && lastAckedImageRef\) \{/.test(SRC),
+    "lastAckedImageRef is stamped only after a set() resolves - it is the session lock");
+  check("...and ABANDONS the dispatch when nothing is pinned, rather than blanking the model",
+    /DISPATCH ABANDONED\./.test(SRC),
+    "doing nothing keeps the conditioning Decart already holds - strictly better than none");
+  /* THE PIN IS SESSION-SCOPED, and that is not a detail: carrying one session's garment
+     into the next would pin the previous shopper's item onto a fresh try-on, which is a
+     worse failure than the one being fixed. Cleared at exactly three session boundaries. */
+  check("the pin is cleared at every session boundary - and only there",
+    (SRC.match(/(?<!let )lastAckedImageRef = null;/g) || []).length === 3,
+    "connectRealtime opening one, teardown() and stopBilling() ending one (the `let` is the declaration)");
+  /* Sliced to the FUNCTION BODY. "invalidateWireState" also appears in the pin's own
+     declaration comment - which explains that the pin survives it - and a proximity match
+     reads that prose as the code doing the opposite of what it says. */
+  const invalidateBody = SRC.slice(SRC.indexOf("function invalidateWireState(why) {"),
+                                   SRC.indexOf("\n}", SRC.indexOf("function invalidateWireState(why) {")));
+  check("...and NOT by invalidateWireState(), which is exactly when it must survive",
+    !/lastAckedImageRef = null/.test(invalidateBody),
+    `the transport changing is not the shopper changing garment: ${invalidateBody}`);
+  check("...nor by the topology re-drape, which clears the wire fields on purpose",
+    !/lastAckedImageRef = null/.test(
+      SRC.slice(SRC.indexOf("async function reconditionForTopology("),
+                SRC.indexOf("async function reconditionForTopology(") + 2000)),
+    "the re-drape forces a full re-upload - the pin is what that re-upload falls back to");
   check("...and the per-frame promise is backed by a real re-conditioning dispatch",
     /function reconditionForTopology\(/.test(SRC) &&
     /lastSentImageRef = null;/.test(SRC.slice(SRC.indexOf("async function reconditionForTopology("))),
@@ -285,13 +338,14 @@ console.log("\n── §1c THE GUARD IS DELETED, NOT DISABLED ──");
      PRESERVE clause, which is where it now does its work. Both halves are still asserted
      separately, because they still fail separately: naming what to fit does not forbid an
      edit elsewhere, and forbidding one does not name the other. */
-  /* THE REGION AND THE PRESERVE CLAUSE BOTH CAME OFF in the collapse - §1b owns that
-     trade and its restore path. What still has to hold here is the half the reported
-     artifact turns on: the anchor asks for ONE surface and forbids breaking it. */
-  check("the anchor demands one unbroken surface, which is what the report is about",
-    /Render the complete frame seamlessly across the entire viewport without splitting or masking\.$/
-      .test(UNIFIED_SPEC),
-    "the split/mask ban is the one clause this revision cannot afford to lose");
+  /* THE REGION AND THE PRESERVE CLAUSE ARE BOTH BACK, which is what this revision
+     restored. Asserted on the pair, because they came off together and a partial restore
+     would leave one report closed and the other open. */
+  check("both the region scope and the opposite-layer pin are on the wire again",
+    /onto the subject\./.test(TOPS_SPEC) &&
+    /Strictly preserve the subject's live lower clothing and background/.test(TOPS_SPEC) &&
+    /Strictly preserve the subject's live upper clothing and background/.test(BOTTOMS_SPEC),
+    "the collapse re-opened shirt-replacement and the invented-garment family at once");
   check("app.js flags the opposite-layer lock as the FIRST thing to restore on tops",
     /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC),
     "the note stays even though the clause is back - it is the record of why");
@@ -344,12 +398,15 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
      pose and category all leave the string untouched. The category ROUTING still exists
      and is still exercised (§1b), which is what keeps the restore one line; it simply
      selects between two identical values today. */
-  check("the anchor is invariant across angle, pose AND category - nothing moves it",
-    TOPS_SPEC === BOTTOMS_SPEC &&
+  /* THE AXIS: category, and category alone. Angle and pose must never move the string -
+     that invariance is the premise of strict image-only conditioning - while the two
+     branches must stay genuinely different, which is the scoping this revision restored. */
+  check("category is the ONLY axis - angle and pose never move the prompt",
+    TOPS_SPEC !== BOTTOMS_SPEC &&
     api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(TEE, "back", true) &&
     api.buildCompositePrompt(JEANS, "front", false) === api.buildCompositePrompt(JEANS, "back", true) &&
-    api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(JEANS, "back", true),
-    "a constant prompt is the whole premise of strict image-only conditioning");
+    api.buildCompositePrompt(TEE, "front", false) !== api.buildCompositePrompt(JEANS, "back", true),
+    "a per-angle prompt is what let a front clause ship with a back photo");
 
   /* Structural, across the builders this sandbox cannot execute. The four together are
      every path that can reach rtClient.set() with a prompt. */
@@ -488,13 +545,31 @@ console.log("\n── §5 AN IMAGE ON EVERY UPDATE AND EVERY RETRY ──");
 
   const look = SRC.slice(SRC.indexOf("async function applyLook(top, bottom) {"),
                          SRC.indexOf("function buildLookPrompt"));
-  /* `image: null` is NOT the same as no image key: it is an explicit empty value on a key
-     the SDK validates, and in a payload log it looks like a reference was delivered. */
-  check("applyLook omits the image key rather than sending image: null",
-    !/image: primaryImage,/.test(look) &&
-    /\.\.\.\(primaryImage \? \{ image: primaryImage \} : \{\}\)/.test(look));
+  /* ── SUPERSEDED BY A STRONGER CONTRACT ──────────────────────────────────────
+     This pair used to assert that the image key was OMITTED rather than set to null when
+     nothing resolved - a real distinction (an explicit empty value on a validated key
+     looks, in a payload log, like a reference was delivered) but the wrong ceiling.
+
+     THE REPORT THAT RAISED IT: mid-session the render reverts from the target garment to
+     a generic one and then back. Both spellings produce that. An image-less set() -
+     omitted key or explicit null - replaces the model's conditioning with its own prior,
+     which IS the placeholder garment; the next dispatch that resolves puts the real one
+     back. So the fix is not to spell the absence better, it is to never dispatch with an
+     absence: fall back to the session's acknowledged reference, and abandon the dispatch
+     if even that is empty. Doing nothing leaves the model conditioned on what it already
+     holds, which is strictly better than blanking it. */
+  check("applyLook sends the image key unconditionally - the absence cannot be spelled",
+    /image: primaryImage,/.test(look) &&
+    !/\.\.\.\(primaryImage \? \{ image: primaryImage \} : \{\}\)/.test(look));
   check("...on the minimal-retry path too, not just the enriched payload",
-    (look.match(/\.\.\.\(primaryImage \? \{ image: primaryImage \} : \{\}\)/g) || []).length === 2);
+    (look.match(/image: primaryImage/g) || []).length >= 2);
+  check("...because it re-pins the session's acknowledged reference first",
+    /if \(!primaryImage && lastAckedImageRef\) \{/.test(look),
+    "lastAckedImageRef is the immutable session lock - it survives invalidateWireState()");
+  check("...and ABANDONS the dispatch when nothing is pinned, rather than blanking the model",
+    /DISPATCH ABANDONED rather than sending an image-less payload/.test(look) &&
+    /\n\s*return;\n\s*\}/.test(look.slice(look.indexOf("DISPATCH ABANDONED"))),
+    "an image-less set() is worse than no set() - it destroys working conditioning");
   check("applyLook falls back to a raw garment ref before giving up",
     /garmentImageRef\(topImg\) \|\| garmentImageRef\(bottomImg\)/.test(look));
 

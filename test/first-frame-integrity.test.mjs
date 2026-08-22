@@ -321,17 +321,31 @@ console.log("\n── §4 THE PREFETCH THAT KEEPS THE GATED WINDOW SHORT ──"
 
 console.log("\n── §5 THE FRAME BUDGET ON THE WIRE ──");
 {
-  /* DELIBERATE, not inherited. 512x288 is 147k pixels; a square 512x512 is 262k - 78%
-     MORE data per frame on the same channel, and it does not match the 16:9 the camera
-     actually delivers, so it would have to letterbox or crop to get there. The constraint
-     being optimised is bytes per second through the datachannel, and this is already the
-     lighter of the two. Asserted with the arithmetic in the failure message so the next
-     person to reach for a square doesn't have to re-derive it. */
+  /* ── 16:9 → SQUARE, AND WHY THE OLD ARGUMENT HERE WAS INCOMPLETE ────────────
+     THIS ASSERTION USED TO PIN 512x288 and argue against a square on bandwidth: 147k
+     pixels versus 262k, 78% more data per frame on the same channel. That arithmetic is
+     correct and it is still the cost of this change. What it left out is what happens to
+     those bytes AFTER they arrive.
+
+     .camera-card is aspect-ratio 4/5 (0.80) and #aiVideo is object-fit:cover inside it.
+     Covering a 0.80 box with a 1.78 source discards (1.78-0.80)/1.78 ≈ 55% of the width -
+     so more than half of every frame Decart rendered was cropped off the sides before the
+     shopper saw it. The old rule optimised bytes per second on the wire while silently
+     throwing away most of what those bytes bought, which is the more expensive mistake.
+
+     512x512 (1.00) cuts the display crop to 20%. It costs 78% more pixels per frame and
+     buys back roughly 35 points of frame that were being discarded. Billing is per-SECOND
+     (LIVE_INFERENCE_FPS is unchanged at 10), so this is bandwidth and encode time, never
+     credits. IF THE UPLINK EVER BACKS UP, LIVE_INFERENCE_FPS IS THE DIAL - dropping back
+     to 16:9 would restore the 55% crop, which is the thing actually worth avoiding. */
   const w = Number((SRC.match(/const LIVE_W = (\d+), LIVE_H = (\d+);/) || [])[1]);
   const h = Number((SRC.match(/const LIVE_W = (\d+), LIVE_H = (\d+);/) || [])[2]);
   check("the frame sent to Decart is capped at 512 on its longest edge",
-    w === 512 && h === 288,
-    `${w}x${h} - a square 512x512 would be ${((512 * 512) / (w * h) - 1) * 100}% more pixels per frame`);
+    w === 512 && h === 512,
+    `${w}x${h} - the stage is 4/5, so a 16:9 source loses ~55% of its width to the cover crop`);
+  check("...and app.js records the crop arithmetic that justifies the extra pixels",
+    /512×288 → 512×512, AND THE REASON IS FRAMING, NOT SHARPNESS/.test(SRC),
+    "a resolution bump with no recorded reason is the next person's mystery regression");
   check("...and the rate is capped below the local capture rate",
     /const LIVE_FPS\s+= 15;/.test(SRC) && /const LIVE_INFERENCE_FPS\s+= 10;/.test(SRC),
     "the preview stays smooth locally; only 10 frames/s ever leave the browser");

@@ -91,11 +91,18 @@ function makeHarness({ composite = true } = {}) {
     _ref: null,
     _gallery: { front: "https://cdn.test/front.jpg", back: "https://cdn.test/back.jpg" },
   };
+  /* lastAckedImageRef MUST be declared here. applyGarment() assigns it, and an undeclared
+     assignment inside new Function() is sloppy-mode global creation - so without this line
+     one harness's acknowledged reference leaks onto globalThis and the NEXT harness's
+     garment pin reads it, which is both a false pass and a false fail depending on order.
+     Declaring it also makes endSession() a faithful session boundary: app.js clears the
+     pin at all three of its own, so a harness that did not would be testing a state the
+     app cannot reach. */
   const body =
-    "let lastSentImageRef = null; let rtImageOnWire = false;\n" +
+    "let lastSentImageRef = null; let rtImageOnWire = false; let lastAckedImageRef = null;\n" +
     applyGarmentSrc +
-    "\nreturn { applyGarment, state: () => ({ lastSentImageRef, rtImageOnWire })," +
-    " endSession: () => { lastSentImageRef = null; rtImageOnWire = false; } };";
+    "\nreturn { applyGarment, state: () => ({ lastSentImageRef, rtImageOnWire, lastAckedImageRef })," +
+    " endSession: () => { lastSentImageRef = null; rtImageOnWire = false; lastAckedImageRef = null; } };";
   const api = new Function(...Object.keys(sandbox), body)(...Object.values(sandbox));
   return { api, sent, sandbox };
 }
@@ -263,11 +270,22 @@ console.log("\n── a prompt-only path must never be taken with no image on th
   const bare = { ...item, img: undefined, composite: undefined };
   await api.applyGarment(bare);
   await api.applyGarment(bare);
-  check("null references never collapse into setPrompt()",
-    sent.every((s) => s.kind === "set"), JSON.stringify(sent.map((s) => s.kind)));
-  check("...and no image is invented onto the payload either",
-    sent.every((s) => s.hasImage === false), JSON.stringify(sent.map((s) => s.hasImage)));
-  check("and nothing is recorded as being on the wire", api.state().rtImageOnWire === false);
+  /* ── THE CONTRACT CHANGED, AND IT GOT STRICTER ─────────────────────────────
+     This used to assert that a resolve-nothing dispatch still went out as a set() with
+     no image key - the point being that it must not take the setPrompt() fast path.
+     Both halves of that are now moot, because it does not go out AT ALL.
+
+     THE REPORT: mid-session the render reverts from the target garment to a generic one
+     and then back. An image-less set() is exactly that - it replaces the model's
+     conditioning with its own prior, and the next dispatch that resolves puts the real
+     garment back. So resolving nothing must mean sending nothing: the model keeps the
+     conditioning it already has, which is strictly better than being blanked. */
+  check("a dispatch that resolves nothing is ABANDONED, not sent empty",
+    sent.length === 0, JSON.stringify(sent.map((s) => ({ k: s.kind, img: s.hasImage }))));
+  check("...so nothing is recorded as being on the wire either",
+    api.state().rtImageOnWire === false && api.state().lastSentImageRef === null);
+  check("...and no garment is pinned, because none was ever acknowledged",
+    api.state().lastAckedImageRef === null, String(api.state().lastAckedImageRef));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

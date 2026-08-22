@@ -230,6 +230,7 @@ const SUITES = [
   ["rtc-error-boundary", "rtc-error-boundary.test.mjs"],
   ["look-stitch-bar", "look-stitch-bar.test.mjs"],
   ["single-surface", "single-surface.test.mjs"],
+  ["cold-start-and-pin", "cold-start-and-pin.test.mjs"],
   ["apply-timeout", "apply-timeout.test.mjs"],
   ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],
   ["variant-sync", "variant-sync.test.mjs"],

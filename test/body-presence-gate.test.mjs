@@ -309,7 +309,7 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
      bound below is per branch so that spend cannot be mistaken for room, and the "as soon
      as visible" absence is asserted separately, twice, right here and below). */
   check("...and both are still minimal, which is what replaced it",
-    top.length <= 360 && bot.length <= 360 && !/as soon as visible/.test(bot),
+    top.length <= 420 && bot.length <= 420 && !/as soon as visible/.test(bot),
     `tops=${top.length} bottoms=${bot.length}`);
   /* The clause itself must stay on file, or "one line to re-add" stops being true. */
   check("...but the clause is still ON FILE, so the restore really is one line",
@@ -332,8 +332,8 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
     top.length <= CONFIG.PROMPT_MAX_CHARS && bot.length <= CONFIG.PROMPT_MAX_CHARS,
     `tops=${top.length} bottoms=${bot.length}`);
   check("the anchor still leads - persistence language must not displace it",
-    /^Fit the target clothing item onto the subject in this video stream\./.test(top) &&
-    /^Fit the target clothing item onto the subject in this video stream\./.test(bot),
+    /^Fit ONLY the exact target shirt from the reference image onto the subject\./.test(top) &&
+    /^Fit ONLY the exact target pants\/shorts from the reference image onto the subject\./.test(bot),
     "each branch must open on its own anchor, whatever else it carries");
 }
 

@@ -62,7 +62,12 @@ function makeHarness({ scriptedErrors = [], mintFails = false } = {}) {
     MediaStream: class { constructor(tracks) { this.tracks = tracks; } getTracks() { return this.tracks; } },
     document: { querySelector: () => ({ style: {}, play: () => Promise.resolve() }) },
 
-    LIVE_INFERENCE_FPS: 10, LIVE_W: 512, LIVE_H: 288,
+    LIVE_INFERENCE_FPS: 10, LIVE_W: 512, LIVE_H: 512,
+    /* The handshake budget. connectRealtime() now bounds each attempt and backs off
+       between them, so the total budget is read here rather than being implicit in a
+       single unbounded await - see the COLD-START comment in app.js. */
+    CONNECT_TIMEOUT_MS: 12000,
+    lastSentPrompt: null, lastAckedImageRef: null,
     localStream: { getVideoTracks: () => [{ clone: () => ({ id: "clone" }) }] },
 
     loadSDK: async () => ({
@@ -123,31 +128,57 @@ console.log("── THE FIX: a single signaling-race failure retries once and su
     mintCalls.length === 2 && mintCalls[1] === null, JSON.stringify(mintCalls));
 }
 
-console.log("\n── TWO consecutive signaling races give up (bounded retry, not a loop) ──");
+console.log("\n── THREE consecutive failures give up (bounded retry, not a loop) ──");
 {
+  /* ── THE BOUND MOVED FROM 2 TO 3, AND THE TRIGGER WIDENED ──────────────────
+     REPORTED: the first widget load often fails or needs the modal reopened to kickstart
+     rendering. The old retry covered exactly ONE failure shape - the "WebSocket is not
+     open" signaling race - and allowed one retry, so every other cold-start failure was
+     terminal on the first attempt and "reopen the modal" was just buying a second try by
+     hand. Retries are now general (see the fatal-error carve-out below) and bounded at
+     HANDSHAKE_MAX_ATTEMPTS, with exponential backoff between them. Still a bound, still
+     not a loop - that is what this section exists to keep true. */
   const { api, callCount } = makeHarness({
-    scriptedErrors: ["WebSocket is not open", "WebSocket is not open"],
+    scriptedErrors: ["WebSocket is not open", "WebSocket is not open", "WebSocket is not open"],
   });
   let threw = null;
   try { await api.connectRealtime(); } catch (e) { threw = e; }
-  check("connect() was attempted exactly twice, then gave up",
-    callCount() === 2, `called ${callCount()} times`);
+  check("connect() was attempted exactly three times, then gave up",
+    callCount() === 3, `called ${callCount()} times`);
   check("...and the error propagated to the caller (goLive() still shows the Hebrew banner)",
     threw && /WebSocket is not open/.test(threw.message), String(threw));
 }
 
+console.log("\n── a transient failure that is NOT the signaling race is retried too ──");
+{
+  /* THE WIDENING, asserted directly. A generic transient error used to be terminal on the
+     first attempt purely because its message did not match one hard-coded string, which
+     is the cold-start unreliability the report describes. */
+  const { api, callCount } = makeHarness({ scriptedErrors: ["ICE gathering stalled"] });
+  await api.connectRealtime();
+  check("a generic transient error retries rather than failing the first load",
+    callCount() === 2, `called ${callCount()} times`);
+  check("...and the session ends up connected", api.state().rtClient !== null);
+}
+
 console.log("\n── a DIFFERENT failure (bad key / permission) is NOT retried ──");
 {
-  /* The narrow message match is load-bearing: retrying an auth failure just doubles
-     the latency before the same inevitable error, and could mask a real
-     misconfiguration behind "it eventually worked" noise in the console. */
+  /* THE CARVE-OUT IS NOW WHAT IS LOAD-BEARING, since retries are general. An auth or
+     permission failure is a DEFINITE answer: retrying it three times with backoff spends
+     the shopper's time to arrive at the same place, and buries a real misconfiguration
+     under "it eventually worked" noise. isFatalConnectError() is the list. */
   const { api, callCount } = makeHarness({ scriptedErrors: ["401 Unauthorized: invalid api key"] });
   let threw = null;
   try { await api.connectRealtime(); } catch (e) { threw = e; }
-  check("connect() was attempted exactly ONCE - no retry on a non-signaling error",
+  check("connect() was attempted exactly ONCE - no retry on an auth failure",
     callCount() === 1, `called ${callCount()} times`);
   check("...and the real error is what reaches the caller, unmodified",
     threw && /invalid api key/.test(threw.message), String(threw));
+  const denied = makeHarness({ scriptedErrors: ["NotAllowedError: camera permission denied"] });
+  let threw2 = null;
+  try { await denied.api.connectRealtime(); } catch (e) { threw2 = e; }
+  check("...same for a permission denial - definite answers fail fast",
+    denied.callCount() === 1 && threw2, `called ${denied.callCount()} times`);
 }
 
 console.log("\n── the failed attempt's throttle is disposed before retrying or rethrowing ──");
@@ -157,10 +188,12 @@ console.log("\n── the failed attempt's throttle is disposed before retrying 
   check("on a successful retry, the FIRST (failed) attempt's throttle was disposed",
     retried.disposedThrottles.length === 1, `disposed ${retried.disposedThrottles.length}`);
 
-  const gaveUp = makeHarness({ scriptedErrors: ["WebSocket is not open", "WebSocket is not open"] });
+  const gaveUp = makeHarness({
+    scriptedErrors: ["WebSocket is not open", "WebSocket is not open", "WebSocket is not open"],
+  });
   try { await gaveUp.api.connectRealtime(); } catch (_) {}
-  check("on giving up, BOTH attempts' throttles were disposed - none leaked",
-    gaveUp.disposedThrottles.length === 2, `disposed ${gaveUp.disposedThrottles.length}`);
+  check("on giving up, EVERY attempt's throttle was disposed - none leaked",
+    gaveUp.disposedThrottles.length === 3, `disposed ${gaveUp.disposedThrottles.length}`);
   check("...and state was left clean (no dangling inputThrottle/realtimeInput)",
     gaveUp.api.state().inputThrottle === null && gaveUp.api.state().realtimeInput === null);
 }

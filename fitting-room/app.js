@@ -56,6 +56,7 @@ const {
   BODY_VOLUME_DELTA,
   BODY_BUILD_DELTA,
   BODY_RECONDITION_COOLDOWN_MS,
+  CONDITION_DEBOUNCE_MS,
   BODY_TRACK_HOLD_MS,
   TOKEN_ENDPOINT,
   HEALTH_ENDPOINT,
@@ -201,10 +202,28 @@ const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples - spans ~300ms of
 /* Capture + inference resolution. The SDK never forwards model.width/height to the
    session, so resolution MUST be enforced at the track level too - the throttler
    downscales the canvas to LIVE_W×LIVE_H before capture, so Decart receives this
-   size rather than the camera's native frame. LOWERED to 512×288 (16:9) to cut
-   quality/upload/encode overhead per the cost trade. Tokens scale with FRAMES, not
-   pixels, so this lowers visual quality + pipeline cost, not the token count itself. */
-const LIVE_W = 512, LIVE_H = 288;
+   size rather than the camera's native frame. Tokens scale with FRAMES, not pixels, so
+   this governs visual quality and pipeline cost, never the token count.
+
+   ── 512×288 → 512×512, AND THE REASON IS FRAMING, NOT SHARPNESS ────────────────
+   The old value was 16:9 (1.78) while .camera-card is aspect-ratio 4/5 (0.80). #aiVideo
+   is object-fit:cover inside that box, so covering a 0.80 frame with a 1.78 source throws
+   away (1.78-0.80)/1.78 ≈ 55% of the width Decart rendered. More than half of every frame
+   the model produced - and was conditioned to produce - was being cropped off the sides
+   before the shopper saw it, which reads as "the fit is too tight on the frame" and wastes
+   most of the pipeline's work.
+
+   512×512 (1.00) is the closest square-ish fit to a 4/5 stage without going portrait: the
+   cover crop drops to (1.00-0.80)/1.00 = 20%. It also matches what the model is happiest
+   with - a square input has no dominant axis for a full-body subject who may be centred,
+   turned, or leaning.
+
+   THE COST IS HONEST: 512×512 is 262144 px against 288's 147456, ~1.78× the pixels per
+   frame to encode and upload. LIVE_INFERENCE_FPS (10) is unchanged and billing is
+   per-SECOND, so this costs bandwidth and encode time, not credits. If the stream ever
+   shows backpressure on a slow uplink, LIVE_INFERENCE_FPS is the dial to turn - not this,
+   which would put the 55% crop straight back. */
+const LIVE_W = 512, LIVE_H = 512;
 
 /* Mobile detection (Feature 2 / mobile download fix). Drives two choices:
    (1) the MediaRecorder container - phone galleries reliably ingest H.264 MP4 but
@@ -643,6 +662,21 @@ let lastSentPrompt = null;
    moment that stops being knowable; this answers "what did Decart last acknowledge?" and
    stays true regardless - it is what a recovery re-anchors TO, and what lets the recovery
    verify it re-sent the same asset rather than silently substituting another. */
+/* ── THE GARMENT PIN ───────────────────────────────────────────────────────────
+   The last reference Decart ACKNOWLEDGED this session - stamped only after a set()
+   resolves, never optimistically. Two properties make it the right thing to fall back on:
+
+   IT SURVIVES A WIRE INVALIDATION. invalidateWireState() forgets what the transport holds
+   (a reconnect rebuilt it); it does not forget which garment the shopper is wearing. Same
+   for the topology re-drape, which clears the wire fields on purpose to force a re-upload.
+
+   IT DOES NOT SURVIVE A SESSION. Cleared at all three session boundaries - connectRealtime
+   opening one, teardown() and stopBilling() ending one - because pinning the previous
+   shopper's garment onto a fresh try-on is a worse failure than the one it prevents.
+
+   IT WAS WRITTEN AND NEVER READ until the mid-session-revert report: applyGarment() and
+   applyLook() now fall back to it when a dispatch resolves no reference, instead of
+   shipping an image-less payload that blanks the model's conditioning. */
 let lastAckedImageRef = null;
 
 /**
@@ -3632,6 +3666,14 @@ async function connectRealtime({ force = false } = {}) {
   lastSentImageRef = null;
   rtImageOnWire = false;
   lastSentPrompt = null;
+  /* THE GARMENT PIN IS SESSION-SCOPED, and this is one of exactly three places it may be
+     cleared - all of them session boundaries. applyGarment() falls back to it when a
+     dispatch resolves no reference, so carrying one session's acknowledged garment into
+     the NEXT session would pin the previous shopper's item onto a fresh try-on: worse
+     than the blank-conditioning bug the pin exists to fix. The mid-session clears
+     (invalidateWireState, the topology re-drape, the debug reinject) deliberately leave
+     it alone - that is precisely when it has to survive. */
+  lastAckedImageRef = null;
   /* ...and the QUEUE with them. A write left pending against the client we just
      disconnected would otherwise make this session's very first apply see wireBusy() and
      wait behind a promise that can no longer settle - the go-live hang, reintroduced by
@@ -3668,6 +3710,42 @@ async function connectRealtime({ force = false } = {}) {
        than silently eating 2x the latency. The cached ek_ token is invalidated
        before retrying: it already failed one join, and mintEphemeralToken()'s cache
        has no way to know that on its own. */
+    /* ── COLD-START: A BOUNDED HANDSHAKE, RETRIED WITH BACKOFF ─────────────────
+       REPORTED: on the first widget load the stream often fails, times out, or needs the
+       modal reopened before it renders. The retry directly above covers exactly ONE
+       failure - the "WebSocket is not open" signaling race - and only once. Everything
+       else reached the shopper as a hard failure on the first attempt, which is the
+       "reopen the modal to kickstart it" behaviour: reopening simply buys a second try.
+
+       TWO THINGS WERE MISSING, and a HANG is the important one. connect() that REJECTS
+       was at least visible; connect() that never settles was not bounded here at all, so
+       a stalled handshake sat until the caller's own waitConnected(CONNECT_TIMEOUT_MS)
+       gave up 12 seconds later - long past the point a shopper has closed the modal.
+
+       SO EACH ATTEMPT GETS ITS OWN CEILING, and the ceilings grow: 3s, then 6s, then
+       whatever is left of the total budget. A 3-second first attempt is past the p99 of a
+       healthy handshake, so a stall is caught while the shopper is still watching, and
+       the growth means a genuinely slow-but-alive network is not cut off at a fixed 3s -
+       which would have made cold starts fail MORE, not less. CONNECT_TIMEOUT_MS remains
+       the total budget; this only decides how it is spent.
+
+       ORPHAN CLEANUP IS NOT OPTIONAL. Abandoning a connect() does not cancel it - the SDK
+       may still complete the handshake and open a BILLED server-side session with nobody
+       holding the handle. Every abandoned attempt therefore keeps a disposer attached that
+       disconnects whatever it eventually produces. Leaking a billed session to save a
+       slow handshake would be a strictly worse bug than the one being fixed.
+
+       AND AUTH FAILURES STILL FAIL FAST. A bad key, a denied camera or an unpermitted
+       model is a definite answer; retrying it three times spends the shopper's time to
+       arrive at the same place. Only transient shapes are retried. */
+    const HANDSHAKE_CEILING_MS = 3000;   // first attempt; doubles each retry
+    const HANDSHAKE_MAX_ATTEMPTS = 3;
+    const handshakeStartedAt = Date.now();
+    /* Definite answers - never retried, however many attempts remain. */
+    const isFatalConnectError = (e) => {
+      const m = String(e?.message || e || "");
+      return /\b(401|403|invalid api key|unauthorized|forbidden|not permitted|permission denied|NotAllowedError)\b/i.test(m);
+    };
     let attempt = 0;
     for (;;) {
       attempt++;
@@ -3698,9 +3776,32 @@ async function connectRealtime({ force = false } = {}) {
       realtimeInput = inputThrottle.stream;
 
       try {
-        /* ── connect realtime ───────────────────────────────────────────────── */
+        /* ── connect realtime, under this attempt's ceiling ──────────────────── */
         // FIX: model passed as a plain string, NOT via models.realtime()
-        rtClient = await client.realtime.connect(realtimeInput, buildRealtimeConnectOpts(gen));
+        const spent    = Date.now() - handshakeStartedAt;
+        const remaining = Math.max(0, CONNECT_TIMEOUT_MS - spent);
+        const ceiling  = Math.min(HANDSHAKE_CEILING_MS * Math.pow(2, attempt - 1), remaining);
+        const connectP = client.realtime.connect(realtimeInput, buildRealtimeConnectOpts(gen));
+        let abandoned = false;
+        /* Attached unconditionally: an abandoned handshake that later succeeds must be
+           disconnected (it is a live billed session with no owner), and one that later
+           rejects must not surface as an unhandled rejection. */
+        connectP.then(
+          (c) => { if (abandoned) { console.warn("[PEAR] connectRealtime() - abandoned attempt connected late; disconnecting the orphan"); try { c.disconnect(); } catch (_) {} } },
+          () => {},
+        );
+        let ceilingTimer;
+        rtClient = await Promise.race([
+          connectP.finally(() => clearTimeout(ceilingTimer)),
+          new Promise((_, reject) => {
+            ceilingTimer = setTimeout(() => {
+              abandoned = true;
+              const e = new Error(`handshake did not settle within ${ceiling}ms`);
+              e.isHandshakeTimeout = true;
+              reject(e);
+            }, ceiling);
+          }),
+        ]);
         break;      // success - fall through to the post-connect code below
       } catch (e) {
         // Dispose THIS attempt's throttle/clone before either retrying (a fresh one is
@@ -3709,12 +3810,21 @@ async function connectRealtime({ force = false } = {}) {
         if (inputThrottle) { try { inputThrottle.dispose(); } catch (_) {} inputThrottle = null; }
         realtimeInput = null;
 
-        const isSignalingRace = /WebSocket is not open/.test(e?.message || "");
-        if (!isSignalingRace || attempt >= 2 || gen !== sessionGen) throw e;
+        const spent = Date.now() - handshakeStartedAt;
+        const budgetLeft = CONNECT_TIMEOUT_MS - spent > 250;
+        const retriable = !isFatalConnectError(e);
+        if (!retriable || attempt >= HANDSHAKE_MAX_ATTEMPTS || !budgetLeft || gen !== sessionGen) throw e;
 
-        console.warn("[PEAR] connectRealtime() - signaling race on attempt", attempt,
-          "(" + e.message + ") - invalidating cached token and retrying once…");
+        /* Exponential, and deliberately short: this is a handshake that already failed
+           fast, so the gap exists to let a momentarily-overloaded signaling server settle,
+           not to wait out a real outage. 250ms, 500ms - both well inside the budget. */
+        const backoffMs = 250 * Math.pow(2, attempt - 1);
+        console.warn(`[PEAR] connectRealtime() - attempt ${attempt} failed`,
+          `(${e?.isHandshakeTimeout ? "ceiling" : "error"}: ${e?.message || e});`,
+          `invalidating the cached token and retrying in ${backoffMs}ms…`);
         _tokenCache = null;             // do not reuse a token that just failed its join
+        await new Promise((r) => setTimeout(r, backoffMs));
+        if (gen !== sessionGen) return; // torn down while backing off
       }
     }
 
@@ -3861,6 +3971,8 @@ function teardown() {
   lastSentImageRef = null;
   rtImageOnWire = false;
   lastSentPrompt = null;
+  lastAckedImageRef = null;      // session boundary - the garment pin must not outlive it
+  cancelPendingRecondition();    // ...and no debounced re-drape may fire into a dead session
   resetConditionWire();          // nothing may be queued for a session that no longer exists
 
   // Bug 3 fix: stop this session's cloned camera tracks (the WebRTC sender side).
@@ -7474,70 +7586,72 @@ const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodi
    307 characters are free on tops and 316 on bottoms, so neither loss was forced by
    budget - both are the same deliberate bet every revision here makes: text volume
    competing with the reference image. One at a time, re-tested live. */
-/* ── REVISION: ONE SURFACE, ONE INSTRUCTION ──────────────────────────────────────
-   THE REPORT, third of its family: the frame renders as two zones - Decart's output on
-   top, a raw camera feed or black block underneath. The CLIENT cause is gone for good in
-   this revision (the compositing guard is deleted, not disabled - see THE NON-TARGET
-   REGION GUARD IS GONE), and this is the prompt half of the same cleanup: a single
-   product-specified instruction that describes ONE continuous surface and asks for
-   nothing that could read as a second source or a region boundary.
+/* ── REVISION: THE CATEGORY SCOPING IS BACK, WITH AN EXPLICIT LOCK ───────────────
+   THE PREVIOUS REVISION COLLAPSED BOTH BRANCHES into one category-agnostic string, and
+   that file recorded the risk in the same breath: naming no region re-opens the
+   SHIRT-REPLACEMENT report (a trouser try-on claiming the whole reference and repainting
+   the shopper's live top), and dropping the opposite-layer clause removed the only thing
+   still answering the invented-non-target-garment family now that the compositing guard
+   is deleted. Both are restored here, per category, and the retired CATEGORY_SCOPED
+   constant that held them is retired in turn - these ARE the scoped strings now.
 
-   ⚠️ THIS PAIR IS CATEGORY-AGNOSTIC, AND THAT IS A KNOWN, RECORDED RISK ───────────
-   Both branches now ship the SAME string. It names "the target clothing item" rather than
-   the shirt or the pants, and it does not say which region the garment belongs on. That is
-   the specified wording and it is what ships, but this file's history says plainly what an
-   unscoped anchor costs: the SHIRT-REPLACEMENT report - a trouser try-on that claimed the
-   whole reference and repainted the shopper's live top - was filed against exactly this
-   configuration, and every revision since had named a region to keep it closed. The
-   invented-non-target-garment family (the black-long-trousers report) loses its wording
-   too, and it no longer has the runtime guard behind it either.
+   WHAT IS NEW BEYOND THE RESTORE, and it is aimed at a specific report:
 
-   SO THE RESTORE IS KEPT ONE LINE AWAY, verbatim, rather than left to the commit log. If
-   a try-on starts claiming the wrong region or inventing the opposite layer, swap the two
-   values below back to CATEGORY_SCOPED.top / .bottom - the routing through
-   isBottomsGarment() is untouched and still selects per category, so the mechanism is
-   already there and only the strings changed. */
+   1. "Lock this exact <garment> texture and design for the ENTIRE STREAM." The reported
+      failure is a mid-session revert from the target garment to a generic one and back.
+      The decisive fix for that is in the payload, not the text - applyGarment() no longer
+      ships an image-less set() (see THE GARMENT PIN) - but the wording now states the
+      temporal requirement too, because the prompt is re-asserted on every re-drape and
+      "for the entire stream" is what makes those re-assertions say the same thing.
+
+   2. "CONTINUOUSLY adapt ... across all movements and rotations." The per-frame tense
+      came off two revisions ago and is back, per region: drape and cut on tops, fit,
+      waistline and leg drape on bottoms. It is paired with real runtime machinery rather
+      than standing alone - the topology monitor is what forces an actual re-conditioning
+      dispatch when the body has moved - so the sentence describes something the pipeline
+      genuinely does. Text alone could not keep this promise: with a constant prompt and
+      the reference already on the wire, applyGarment() dispatches nothing at all.
+
+   ⚠️ WHAT IT STILL CANNOT DO. "Adapt to the subject's live body depth, angle, and volume"
+   is a request, not a channel. Decart's realtime set() accepts exactly
+   { prompt, enhance, image } and STRIPS every other key (@decartai/sdk@0.1.5
+   setInputSchema, z.core.$strip), so no landmark, bounding box, depth map or orientation
+   value can be sent - not as an extra key, not alongside the image. What the pose
+   pipeline actually controls is WHEN to re-condition, never WHAT geometry to send. Read
+   bodyScaleMatrix() and reconditionForTopology() together with this wording; a future
+   revision that reads this sentence as evidence that geometry is on the wire will be
+   wrong, and the budget it spends chasing that will come out of the reference image. */
 /* ── RETIRED CLAUSES, kept verbatim so each restore is one line ──────────────────
-   Off the wire, every one a reproduced regression. Listed here rather than left in the
-   commit log, which is the convention the rest of this file follows and which
-   image-first.test.mjs §2 enforces as a pair (absent from the prompt, present on file).
+   Off the wire, every one a reproduced regression. Recorded here rather than left in the
+   commit log - the convention the rest of this file follows, and what image-first.test.mjs
+   §2 enforces as a pair (absent from the prompt, present on file).
 
      · the build/width adjustment sentence ("Dynamically adjust the shirt cut, shoulder
        width, and torso drape to match the subject's exact live body width and build
        (narrow or wide)", and the waistline/leg-width mirror on bottoms). The morphology
        monitor that decides WHEN to re-condition is untouched, so what is retired is the
-       prompt's half of the width axis - watch for a loose drape on a slender build.
+       prompt's half of the width axis - watch for a loose drape on a slender build. The
+       current "live body depth, angle, and volume" wording covers depth and rotation but
+       still does not name WIDTH.
      · the enter-the-frame event clause ("for any lower body parts, legs, or shorts that
        ENTER the camera frame DURING THE VIDEO"), with its attribute list naming colour,
        pattern and LENGTH. Length is the attribute the black-shorts-to-long-trousers
        report turned on, and nothing on the wire names it now. */
-const CATEGORY_SCOPED = Object.freeze({
-  top:
-    "Fit ONLY the exact reference shirt onto the subject's upper torso across this" +
-    " unified continuous frame. Do not slice the canvas, insert black bars, or invent" +
-    " lower body garments. Strictly preserve the subject's natural lower clothing and" +
-    " live background.",
-  bottom:
-    "Fit ONLY the exact reference pants/shorts onto the subject's lower body across this" +
-    " unified continuous frame. Do not slice the canvas, insert black bars, or invent" +
-    " upper body garments. Strictly preserve the subject's natural upper clothing and" +
-    " live background.",
-});
-
-/* The specified single instruction. Two sentences: bind the garment to the subject in the
-   stream, then require one seamless surface. "without splitting or masking" names both
-   halves of the reported artifact - the split itself, and the masking that produced it. */
-const UNIFIED_ANCHOR =
-  "Fit the target clothing item onto the subject in this video stream." +
-  " Render the complete frame seamlessly across the entire viewport" +
-  " without splitting or masking.";
-
-/* Both keys resolve to the same string today. The SHAPE is kept - and isBottomsGarment()
-   still selects between them at every call site - so restoring per-category wording is a
-   value swap rather than re-plumbing the routing. */
 const CATEGORY_ANCHOR = Object.freeze({
-  top:    UNIFIED_ANCHOR,
-  bottom: UNIFIED_ANCHOR,
+  top:
+    "Fit ONLY the exact target shirt from the reference image onto the subject." +
+    " Lock this exact shirt texture and design for the entire stream." +
+    " Continuously adapt the drape and cut to the subject's live body depth, angle," +
+    " and volume across all movements and rotations." +
+    " Strictly preserve the subject's live lower clothing and background completely" +
+    " unchanged.",
+  bottom:
+    "Fit ONLY the exact target pants/shorts from the reference image onto the subject." +
+    " Lock this exact lower garment texture and design for the entire stream." +
+    " Continuously adapt the fit, waistline, and leg drape to the subject's live lower" +
+    " body depth, angle, and volume across all movements and rotations." +
+    " Strictly preserve the subject's live upper clothing and background completely" +
+    " unchanged.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -7674,7 +7788,7 @@ function imageOnlyPrompt(item) {
      TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, STRICT_REFERENCE_LOCK]`
      for the hallucination clamp, `[P.HIGH, KEEP_OPPOSITE_LAYER]` on the bottoms branch for
      the opposite-layer pin; both are the retirements this revision made. The budget is not
-     the constraint - 489 characters are free on each branch - so the only
+     the constraint - 298 characters are free on tops and 261 on bottoms - so the only
      question is whether that text is worth the weight it takes away from the reference
      image, which is the mechanism every report in this sequence shares. One at a time,
      re-tested live. */
@@ -7790,13 +7904,13 @@ function lookAnchorPrompt() {
    The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS (161 chars - anchor)             BOTTOMS (161 chars - same string now)
-     + DENSE.bodyFidelity  (45) → 207  fits              → 207  fits
-     + DENSE.modelAgnostic (64) → 226  fits              → 226  fits
-     + both of them        (110)→ 272  fits              → 272  fits
+     TOPS (352 chars - anchor)             BOTTOMS (389 chars - anchor)
+     + DENSE.bodyFidelity  (45) → 398  fits              → 435  fits
+     + DENSE.modelAgnostic (64) → 417  fits              → 454  fits
+     + both of them        (110)→ 463  fits              → 500  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 489 characters are free on each
-   branch, so every retired clause in this table would go back with room to spare. That
+   NOTHING SHEDS ANY MORE, on either branch. 298 characters are free on tops and 261 on
+   bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.
 
@@ -8327,17 +8441,46 @@ async function applyGarment(item) {
       }
     }
   }
-  /* Still nothing. Loud, and at ERROR: every prompt this file builds now depends on an
-     image being on the wire, so this is a broken render, not a degraded one. It does NOT
-     throw - a live session that renders the shopper undressed is still recoverable by the
-     next applyActive()/re-anchor, while a throw ends the stream before the first frame. */
+  /* ── THE GARMENT PIN - never replace a good conditioning with none ────────────
+     REPORTED: mid-session the render briefly reverts from the target garment to a
+     generic/placeholder one, then returns to the target. That is this function, on this
+     exact path, and the mechanism is one line further down: the payload used to be built
+     with `...(imageRef ? { image: imageRef } : {})`, so a dispatch that could not resolve
+     a reference shipped with NO image at all. Decart then has nothing to condition on but
+     its own prior, which is precisely a generic garment - and the next dispatch that DOES
+     resolve puts the real one back. Revert, then restore. Exactly as reported.
+
+     WHY A MID-SESSION DISPATCH CAN RESOLVE NOTHING when go-live resolved fine:
+     reconditionForTopology() deliberately clears the three wire-state fields to force a
+     full re-upload when the body has moved (that is the whole re-drape mechanism), so the
+     reference is re-resolved from scratch several times per session. referenceImageFor()
+     can miss on any of them - a revoked object URL, an evicted LRU entry, a composite
+     rebuild that has not settled - and every miss was a chance to blank the conditioning.
+
+     lastAckedImageRef IS THE IMMUTABLE SESSION LOCK, and it already existed: it is stamped
+     only after Decart acknowledges a set(), and invalidateWireState() deliberately does
+     not clear it. It was written and never read. Reading it here is what makes the garment
+     pinned for the whole session rather than re-derived on every dispatch.
+
+     AND IF EVEN THAT IS EMPTY, THE DISPATCH IS ABANDONED. Sending an image-less payload
+     is strictly worse than sending nothing: nothing leaves the model conditioned on
+     whatever it already holds, while an image-less set() actively replaces that with the
+     model's own prior. The only case where a bare prompt was defensible was when the
+     prompt still described the garment in words; it does not any more. */
+  if (!imageRef && lastAckedImageRef) {
+    console.warn("[PEAR] applyGarment() - no reference resolved this dispatch; re-pinning the",
+      "session's acknowledged garment rather than sending an unconditioned payload:",
+      abbrevImg(lastAckedImageRef));
+    imageRef = lastAckedImageRef;
+  }
   if (!imageRef) {
     console.error("[PEAR] applyGarment() - NO garment asset could be resolved for", item.name,
-      `(id=${item.id}, angle=${angleAtStart}).`,
-      "\n  → the prompt is image-first and will have no reference to condition on;",
-      "Decart will render its own default garment.",
+      `(id=${item.id}, angle=${angleAtStart}), and nothing is pinned from earlier in this session.`,
+      "\n  → DISPATCH ABANDONED. An image-less set() would replace the model's conditioning",
+      "with its own prior, which renders a generic garment - the reported mid-session revert.",
       "\n  → check the item's gallery/img fields; window.__pearDebugReinjectGarment({ bustCache: true })",
       "forces a fresh resolve once they are fixed.");
+    return;
   }
 
   /* ── STRICT ORIENTATION/ASSET BINDING (last line of defence) ──────────────────
@@ -8398,7 +8541,10 @@ async function applyGarment(item) {
       : buildPrompt(item, angleClause(item, angleAtStart, false, profileAtStart)),
       "applyGarment"),
     enhance: false,
-    ...(imageRef ? { image: imageRef } : {}),
+    /* Unconditional: the garment pin above returns early rather than reaching here without
+       a reference, so this key can never be omitted. That omission WAS the mid-session
+       revert to a placeholder garment. */
+    image: imageRef,
   };
 
   console.group("[PEAR] applyGarment() - VTON payload debug");
@@ -8427,7 +8573,6 @@ async function applyGarment(item) {
   console.log("prompt   :", payload.prompt);
   console.groupEnd();
 
-  if (!imageRef) console.warn("[PEAR] applyGarment() - no img URL; prompt-only.");
 
   /* ── THE FLICKER FIX: a turn re-sends the PROMPT, not the picture ─────────────
      In composite mode the reference is byte-identical across an orientation flip - one
@@ -8989,23 +9134,32 @@ async function applyLook(top, bottom) {
     if (primaryImage) console.warn("[PEAR] applyLook() - stitch and top reference both failed;",
       "falling back to a single raw garment ref:", abbrevImg(primaryImage));
   }
+  /* THE SAME GARMENT PIN applyGarment() carries, for the same reason and against the same
+     report - a look re-conditions on every topology re-drape too, so it has exactly as
+     many chances to resolve nothing and blank the model's conditioning mid-session. */
+  if (!primaryImage && lastAckedImageRef) {
+    console.warn("[PEAR] applyLook() - no reference resolved this dispatch; re-pinning the",
+      "session's acknowledged reference rather than sending an unconditioned payload:",
+      abbrevImg(lastAckedImageRef));
+    primaryImage = lastAckedImageRef;
+  }
   if (!primaryImage) {
     console.error("[PEAR] applyLook() - NO garment asset resolved for this look",
-      `(${top?.name} + ${bottom?.name}).`,
-      "\n  → the prompt is image-first and has no reference to condition on;",
-      "Decart will render its own default garments.");
+      `(${top?.name} + ${bottom?.name}), and nothing is pinned from earlier in this session.`,
+      "\n  → DISPATCH ABANDONED rather than sending an image-less payload, which would",
+      "replace the model's conditioning with its own prior and render generic garments.");
+    return;
   }
   const images = [topImg, bottomImg].filter(Boolean).map(garmentImageRef).filter(Boolean);
 
   // ONE combined payload - both garments, one pass, same session.
-  /* The image key is OMITTED rather than set to null when nothing resolved. `image: null`
-     is not the same thing as no image: it is an explicit empty value on a key the SDK
-     validates, and it is exactly the "sent as an empty/default image state" shape that
-     looks, in a payload log, like a reference was delivered when none was. */
+  /* Unconditional now: the garment pin above returns early rather than reaching here with
+     nothing, so neither an omitted key nor an explicit `image: null` can go out. Both were
+     ways of shipping a payload that looks conditioned in a log and is not. */
   const payload = {
     prompt,
     enhance: false,
-    ...(primaryImage ? { image: primaryImage } : {}),   // SDK single-image slot: TOP+BOTTOM stitched composite (or fallback)
+    image: primaryImage,              // SDK single-image slot: TOP+BOTTOM stitched composite (or fallback)
     images,                           // both verified proxy URLs, bundled together
     garments: [                       // per-slot metadata incl. category (top|bottom)
       { category: "top",    type: top.garmentType,    image: topImg,    color: top.color,    subType: top.subType,    name: top.name,    angle: currentAngle },
@@ -9026,8 +9180,8 @@ async function applyLook(top, bottom) {
       // A stricter SDK build may reject the enriched shape - retry with the minimal contract.
       console.warn("look payload rejected, retrying minimal:", e?.message || e);
       console.log("[DECART PROMPT DEBUG] (retry, minimal payload)", prompt, abbrevImg(primaryImage));
-      // Same omit-don't-null rule as the enriched payload above.
-      await rtClient.set({ prompt, enhance: false, ...(primaryImage ? { image: primaryImage } : {}) });
+      // Same guaranteed-image rule as the enriched payload above.
+      await rtClient.set({ prompt, enhance: false, image: primaryImage });
     }
   });
   /* Keep the reference tracker honest: a look sends its OWN stitched image, so whatever
@@ -11512,6 +11666,8 @@ function stopBilling() {
   stopStatsMonitor();
   if (rtClient) { try { rtClient.disconnect(); } catch (_) {} rtClient = null; }
   lastSentImageRef = null; rtImageOnWire = false; lastSentPrompt = null;   // session over - nothing is on the wire
+  lastAckedImageRef = null;             // ...and the garment pin with them (session-scoped by design)
+  cancelPendingRecondition();           // a debounced re-drape must not outlive the billed window
   resetConditionWire();
   /* Unlike teardown(), this deliberately leaves the watcher and the paint loop alive for
      the frozen-hold tail - so a turn hold raised a moment before the window closed has
@@ -12322,7 +12478,7 @@ function startPresenceWatcher() {
            must not advance the tracker's baseline, or the movement would be absorbed by a
            dispatch that never happened - see feed()'s own note. */
         const step = bodyTopology.feed(bodyContourSignature(result), { canDispatch: !wireBusy() });
-        if (step.state === "shift") await reconditionForTopology(step);
+        if (step.state === "shift") scheduleRecondition(step);
         else if (ORIENT_DEBUG && step.state !== "stable") {
           console.log(`[PEAR][TOPOLOGY] ${step.state}` +
             (step.heldMs ? ` (held ${step.heldMs}ms)` : "") +
@@ -12403,6 +12559,56 @@ async function reconditionForPresence() {
 
    SAME UN-SHARED-MUTEX CAVEAT as reconditionForPresence(): the watcher's `applying` flag
    is a closure local. A collision sends the same payload twice, never a wrong one. */
+/* ── THE CONDITION-SYNC DEBOUNCE ──────────────────────────────────────────────
+   Coalesces a burst of topology shifts into ONE dispatch, fired once the movement has
+   settled. See CONDITION_DEBOUNCE_MS in config.js for why the trailing edge is the right
+   one - the short version is that the leading edge dispatches mid-turn, which is exactly
+   when swapping the reference makes a print flicker.
+
+   THE MAX-WAIT IS WHAT MAKES IT SAFE. A debounce alone would starve a shopper who keeps
+   moving: every new shift resets the timer, so continuous rotation would never dispatch
+   and "continuous re-fitting" would become none at all. The first shift of a burst stamps
+   pendingSince, and the dispatch fires no later than BODY_RECONDITION_COOLDOWN_MS after
+   it however much movement continues.
+
+   THE LATEST STEP WINS. Only one dispatch happens per burst, and it should describe where
+   the body ENDED UP, not where it was when the burst began - so each shift overwrites the
+   pending step rather than queueing behind it. */
+let conditionDebounceTimer = null;
+let pendingTopologyStep = null;
+let pendingTopologySince = 0;
+
+function scheduleRecondition(step) {
+  const now = Date.now();
+  if (!pendingTopologyStep) pendingTopologySince = now;
+  pendingTopologyStep = step;                       // latest wins - see above
+  const elapsed = now - pendingTopologySince;
+  const wait = Math.max(0, Math.min(CONDITION_DEBOUNCE_MS,
+                                    BODY_RECONDITION_COOLDOWN_MS - elapsed));
+  if (conditionDebounceTimer) clearTimeout(conditionDebounceTimer);
+  conditionDebounceTimer = setTimeout(() => {
+    conditionDebounceTimer = null;
+    const pending = pendingTopologyStep;
+    pendingTopologyStep = null;
+    if (!pending) return;
+    /* Re-checked at FIRE time, not schedule time: a 250ms window is long enough for the
+       session to end, and dispatching into a torn-down session is how a stale write ends
+       up queued against the next one. reconditionForTopology() guards this too; doing it
+       here as well keeps the timer from even entering that path. */
+    if (!isLive() || !isGarmentApplied) return;
+    reconditionForTopology(pending).catch((e) =>
+      console.warn("[PEAR] debounced re-condition failed:", e?.message || e));
+  }, wait);
+}
+
+/* Idempotent, and called from every path that ends a session - a pending re-drape must
+   never survive into a torn-down or superseded one. */
+function cancelPendingRecondition() {
+  if (conditionDebounceTimer) { clearTimeout(conditionDebounceTimer); conditionDebounceTimer = null; }
+  pendingTopologyStep = null;
+  pendingTopologySince = 0;
+}
+
 let topologyReconditionInFlight = false;
 
 async function reconditionForTopology(step) {
