@@ -5984,45 +5984,47 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
 
    Gated by COMPOSITE_MODE. If double-rendering reappears, flip that off and the
    per-orientation single-asset path (AI Auto) is back, unchanged. */
-/* THE KILL SWITCH, NOW THROWN - and this is the one behavioural change in strict
-   image-only mode that is not a prompt edit, so read this before flipping it back.
+/* THE KILL SWITCH THAT USED TO BE THROWN HERE - history, because the reasoning still
+   matters even though the conclusion below has changed.
 
    The composite is a SPLIT image: two garment views side by side, a sampled gutter
    between them, and 'FRONT'/'BACK' text markers below. Nothing about that layout is
-   self-evident to an image-conditioned model. Every bit of it was explained in words -
-   DENSE.contract named it a split photo, DENSE.select named the half in play,
-   DENSE.ignoreFurniture disclaimed the gutter and the markers - and IMAGE_ONLY_PROMPT
-   removes all three. What is left is a reference the model has to interpret unaided:
-   two garments, or a collage, or a garment with a seam down it. This file already has
-   the record of what that produces (23f5953: both panels' designs rendered on one
-   surface), and an ambiguous reference is precisely the condition under which a
-   diffusion model falls back on its own prior - which is the tuxedo.
+   self-evident to an image-conditioned model. For one stretch of this file's history
+   every bit of it was explained in words - DENSE.contract named it a split photo,
+   DENSE.select named the half in play, DENSE.ignoreFurniture disclaimed the gutter and
+   the markers - and then IMAGE_ONLY_PROMPT (the "strict image-only" revision) removed
+   all three, sending the per-orientation SINGLE asset instead: one clean photograph,
+   front or back, swapped by the OrientationWatcher when the shopper turns. The
+   justification at the time was real: a reference the model has to interpret unaided is
+   exactly the condition this file has a record of going wrong (23f5953, both panels'
+   designs rendered on one surface).
 
-   So strict image-only sends the per-orientation SINGLE asset instead: one clean
-   photograph of the garment, front or back, swapped by the OrientationWatcher when the
-   shopper turns. That reference needs no explanation at all, which is the entire point
-   of the mode. The path is not new - it is the pre-composite behaviour, still tested,
-   still the fallback whenever a stitch fails.
+   THAT COST SOMETHING TOO, and it is why this constant moved back. Strict image-only's
+   single-asset swap re-uploads the reference mid-turn instead of taking applyGarment()'s
+   prompt-only fast path - the very re-upload flicker the composite exists to avoid - and
+   it is what a shopper turning around actually experiences as latency/flicker at the
+   moment of the turn. See window.__pearDebugForceFullReupload, added to test exactly
+   that.
 
-   WHAT THROWING THIS COSTS, honestly: an orientation flip now changes the reference, so
-   it re-uploads the image mid-turn instead of taking applyGarment()'s prompt-only fast
-   path. That re-upload is what the composite was introduced to avoid, and the flicker it
-   can cause is documented at that fast path. Whether it actually causes it was already
-   in question - see window.__pearDebugForceFullReupload, added to test exactly that.
-   Only items shipping a genuine distinct rear photo were ever affected either way.
+   RESTORED AND NOW STANDARD. buildCompositePrompt() threads DENSE.contract + DENSE.select
+   (+ DENSE.pose/poseProfile/profileLateral for the edge-on case) back in - the split
+   reference no longer ships unexplained, so the specific bug this note used to warn about
+   (a collage with no key) is closed. COMPOSITE_DEFAULT flips to true below on explicit
+   request: every session now gets the stitched FRONT|BACK reference instead of the
+   per-orientation single-asset swap, so a shopper's PROMPT genuinely names both panels and
+   turning around is a prompt-only re-issue (no re-upload) rather than an asset swap.
 
-   HALF RESTORED, DELIBERATELY, AND THIS IS WHERE THAT STANDS. buildCompositePrompt() now
-   threads DENSE.contract + DENSE.select (+ DENSE.pose/poseProfile/profileLateral for the
-   edge-on case) back in - the split reference no longer ships unexplained, so the specific
-   bug this note used to warn about (a collage with no key) is closed. COMPOSITE_DEFAULT is
-   UNCHANGED below, on purpose: this exact
-   combination - today's per-side anchor leading a restored panel contract - has never run
-   in production, and both incidents this file is defending against (23f5953, the tuxedo
-   reports) were only ever caught live, never in review. Append ?composite=1 to the
-   fitting-room URL to run it for real before moving the default - that is what the flag is
-   for. Once a session confirms clean (no double-print, no invented garment), flip the
-   constant below in its own commit. */
-const COMPOSITE_DEFAULT = false;
+   WHAT TO WATCH FOR, because this exact combination - today's per-side anchor leading a
+   restored panel contract - had not run in production before this flip, and both incidents
+   this file defends against (23f5953's double-print, the tuxedo reports) were only ever
+   caught live: a render that shows BOTH panels at once (the model painting front and back
+   onto the body simultaneously) or a garment that isn't the reference photo at all. Either
+   one means revert this constant to false and re-open the investigation, not add more
+   prompt text - see IMAGE_ONLY_PROMPT's own history for why more text made the tuxedo
+   report worse, not better. ?composite=0 on the fitting-room URL forces the old
+   single-asset path back for a single session without touching this file, if a fast
+   A/B is needed before a revert. */
+const COMPOSITE_DEFAULT = true;
 const COMPOSITE_MODE = (() => {
   try {
     const q = new URLSearchParams(location.search).get("composite");

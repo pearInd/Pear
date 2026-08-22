@@ -545,33 +545,34 @@ console.log("\n── §3 THE RETIREMENT IS REVERSIBLE (this mode will need piec
     "the frozen snapshots must stay threaded even while unused");
 }
 
-console.log("\n── §4 THE COMPOSITE STANDS DOWN, and its switch still works ──");
+console.log("\n── §4 THE COMPOSITE IS STANDARD NOW, and its switch still works both ways ──");
 {
-  /* Not a prompt change, and the only behavioural one in this mode - so it is asserted
-     separately and with its reasoning attached. */
-  check("COMPOSITE_DEFAULT is off",
-    /const COMPOSITE_DEFAULT = false;/.test(SRC),
-    "a split reference with no panel contract is the 23f5953 double-print bug");
+  /* ── REVISION: COMPOSITE_DEFAULT FLIPPED ON EXPLICIT REQUEST ──────────────────
+     This section used to assert the opposite: COMPOSITE_DEFAULT off, with the panel
+     contract restore left as a documented-but-pending TODO. Both are done now - the
+     contract is back (§2 above) and the default moved with it, so every session gets the
+     stitched FRONT|BACK reference unless a URL override says otherwise. What this suite
+     still owns is that the switch itself keeps working in BOTH directions, and that the
+     risk this flip carries (an unverified-in-production combination, per app.js's own
+     note) stays visible on file rather than only in a chat reply. */
+  check("COMPOSITE_DEFAULT is on",
+    /const COMPOSITE_DEFAULT = true;/.test(SRC),
+    "the panel contract is restored, so a split reference no longer ships unexplained");
   check("...for the stated reason, not silently",
-    /THE KILL SWITCH, NOW THROWN/.test(SRC) &&
+    /RESTORED AND NOW STANDARD/.test(SRC) &&
     /a reference the model has to interpret unaided/.test(SRC));
-  check("the URL override still forces it back on for an A/B against a live session",
+  check("the URL override can still force the OLD single-asset path back on, for an A/B",
     /const q = new URLSearchParams\(location\.search\)\.get\("composite"\)/.test(SRC) &&
+    /if \(q === "0" \|\| q === "false"\)\s+return false;/.test(SRC));
+  check("...and can still force composite back on explicitly too, symmetric with the above",
     /if \(q === "1" \|\| q === "true"\)\s+return true;/.test(SRC));
-  /* ── REVISION: THE PANEL CONTRACT IS BACK; THE DEFAULT IS THE ONLY THING PENDING ──
-     buildCompositePrompt() no longer needs a restore instruction telling a future editor
-     to bring DENSE.contract/DENSE.select back - it already carries them (§2 above asserts
-     it threads angle in; composite.test.mjs and side-profile.test.mjs own its full output).
-     What is still pending, and now documented as such, is COMPOSITE_DEFAULT itself: this
-     specific combination has never run live, so the note names ?composite=1 as the
-     required A/B before the constant moves. */
-  check("...and app.js documents the composite prompt as restored, with only the default pending live verification",
-    /HALF RESTORED, DELIBERATELY/.test(SRC) &&
-    /has never run\s*\n?\s*in production/.test(SRC) &&
-    /before moving the default/.test(SRC),
-    "a pending, unverified default flip must stay visible on file, not just in a chat reply");
-  /* The single-asset path it falls back to is the pre-composite behaviour, still the
-     fallback whenever a stitch fails - so this is a switch, not a new code path. */
+  check("app.js documents this as an unverified-in-production flip, with a named revert path",
+    /WHAT TO WATCH FOR/.test(SRC) &&
+    /had not run\s*\n?\s*in production before this flip/.test(SRC) &&
+    /revert this constant to false/.test(SRC),
+    "a flip nobody has watched live must say so on file, not just in a chat reply");
+  /* The single-asset path is UNCHANGED code, still reachable via ?composite=0 or a failed
+     stitch - it did not get deleted when the default moved off it. */
   check("the per-orientation single-asset path is still what referenceImageFor() falls to",
     /if \(currentAngle === AUTO_ANGLE\) \{\s*\n\s*const blob = await garmentBlobCached\(activeImg\);/.test(SRC));
 }
