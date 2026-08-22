@@ -6021,12 +6021,29 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
    reconnect-and-retry on a stuck first apply) was already built before any of this ran -
    see armFirstFrameBilling()/gateAiFeed() and "THE INITIAL APPLY, WITH ONE RECOVERY".
 
-   STAYS OFF THIS TIME absent a genuinely different reference format (e.g. Decart-side
-   multi-image conditioning, if it ever ships one) - not a retry loop, not more prompt
-   text, not a fourth attempt at re-enabling the same mechanism. ?composite=1 forces the
-   composite path back on for a single session without touching this file, if a future
-   comparison is ever needed. */
-const COMPOSITE_DEFAULT = false;
+   FIFTH FLIP, BACK ON: true → false → true → false → true. Re-enabled by explicit
+   instruction minutes after the fourth flip, with the three-report history above unchanged
+   and re-stated at the time of asking. Nothing new was learned in between and nothing in
+   the mechanism changed; this is a standing preference for the combined reference over the
+   single-asset swap, holding the known reliability cost. It is written down this plainly
+   because the flip count is now the most useful thing on this constant: if a fourth report
+   arrives matching any of the three patterns above, that is the SAME mechanism again, not
+   a new bug, and the response is this constant - not a retry loop, not more prompt text,
+   not another investigation of the panel geometry (ruled out three times: both independent
+   createGarmentComposite() copies draw front-left/back-right, describeCompositeLayout()
+   guards it at runtime) and not another look at cold-start gating (already built and
+   verified: canvas at opacity:0 until rtClient.set() RESOLVES, frames withheld until
+   acknowledged, one bounded reconnect-and-retry - see armFirstFrameBilling()/gateAiFeed()
+   and "THE INITIAL APPLY, WITH ONE RECOVERY").
+
+   THE SINGLE-ASSET PATH STAYS, and deleting it was explicitly considered and rejected when
+   this flip was requested. It is not a "downgrade fallback" to be removed: it is the ONLY
+   path for a garment with no distinct back photo - most of the catalog - which cannot be
+   composited at all because there is no second image to stitch. It is also where
+   referenceImageFor() lands when a stitch legitimately fails. Removing it would not force
+   those items into combined mode; it would break them. ?composite=0 forces it on for a
+   single session without touching this file. */
+const COMPOSITE_DEFAULT = true;
 const COMPOSITE_MODE = (() => {
   try {
     const q = new URLSearchParams(location.search).get("composite");

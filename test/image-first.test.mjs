@@ -567,49 +567,57 @@ console.log("\n── §3 THE RETIREMENT IS REVERSIBLE (this mode will need piec
     "the frozen snapshots must stay threaded even while unused");
 }
 
-console.log("\n── §4 THE COMPOSITE IS OFF FOR GOOD - THREE REPORTS, ONE MECHANISM ──");
+console.log("\n── §4 THE COMPOSITE FLAG, AND THE PATH THAT MUST SURVIVE IT ──");
 {
-  /* ── REVISION: FOURTH FLIP - true → false → true → false, AND THIS ONE STICKS ──
-     THREE independent live reports now trace to the same mechanism: two mid-session (back
-     graphic on a front-facing frame; rotation degrading to a generic shirt) and a third at
-     COLD START - 3 identical go-live attempts on unchanged code producing 3 different
-     outcomes (slow-correct, never-correct, perfect). That last one is the decisive
-     evidence: variance across identical runs is model-conditioning reliability, not a
-     deterministic code race, and it is why no amount of gating/retry work would have
-     fixed it (all of which already existed anyway - see §5 and the initial-apply recovery).
-     The panel-contract restore (§2) was never what reverted and stays correct throughout.
-     This suite now pins the revert as durable, and pins the two conclusions that must
-     survive a future editor's good intentions: the code was ruled out, and neither more
-     prompt text nor another re-enable is the next move. */
-  check("COMPOSITE_DEFAULT is off",
-    /const COMPOSITE_DEFAULT = false;/.test(SRC),
-    "three live reports, one mechanism - the split reference costs more than it buys");
-  check("...for the stated reason, not silently, and the full flip history is preserved",
-    /FOURTH FLIP: true → false → true → false/.test(SRC) &&
-    /a reference the model has to interpret unaided/.test(SRC));
+  /* ── REVISION: FIFTH FLIP - true → false → true → false → true ────────────────
+     THE FLIP COUNT IS NOW THE POINT, so this section stopped asserting a direction and
+     started asserting the two things that must hold whichever way it is set. The history:
+     three independent live reports all trace to one mechanism - two mid-session (back
+     graphic on a front-facing frame; rotation degrading to a generic shirt) and one at
+     COLD START (3 identical go-live attempts on unchanged code producing 3 different
+     outcomes). That variance across identical runs is model-conditioning reliability on a
+     split reference, not a deterministic code race - which is why gating/retry work would
+     not have fixed it, and all of that gating existed already anyway (§5, and the
+     initial-apply recovery). Re-enabled anyway, by explicit instruction, holding that cost.
+
+     WHAT THIS SUITE PINS NOW: (1) the reasoning stays on file whichever way the constant
+     is set, so the next reader does not re-litigate a settled diagnosis, and (2) the
+     single-asset path SURVIVES - its removal was explicitly requested and explicitly
+     rejected, because it is the only path for a garment with no distinct back photo. */
+  check("COMPOSITE_DEFAULT is a real boolean either way, and the flip history is on file",
+    /const COMPOSITE_DEFAULT = (true|false);/.test(SRC) &&
+    /FIFTH FLIP, BACK ON: true → false → true → false → true/.test(SRC),
+    "the direction is the caller's call; the recorded history is what stops it being re-argued from scratch");
   check("...and app.js records the COLD-START variance as the decisive evidence",
     /3 identical go-live\s*\n?\s*attempts on unchanged code produced 3 different outcomes/.test(SRC) &&
     /signature of Decart's own/.test(SRC),
     "the 'why this is not a race' reasoning is what stops the next reader re-litigating it");
   check("...and records that the suspected cold-start gating ALREADY existed",
-    /the cold-start gating this report initially suspected/.test(SRC) &&
-    /was already built before any of this ran/.test(SRC),
+    /already built and\s*\n?\s*verified: canvas at opacity:0 until rtClient\.set\(\) RESOLVES/.test(SRC),
     "otherwise the next report gets 'fixed' by re-adding a gate that has always been there");
-  check("the URL override can still force composite back ON for a single session",
+  check("the URL override works in BOTH directions, so either mode is one URL away",
     /const q = new URLSearchParams\(location\.search\)\.get\("composite"\)/.test(SRC) &&
-    /if \(q === "1" \|\| q === "true"\)\s+return true;/.test(SRC));
-  check("...and can still force it off explicitly too, symmetric with the above",
+    /if \(q === "1" \|\| q === "true"\)\s+return true;/.test(SRC) &&
     /if \(q === "0" \|\| q === "false"\)\s+return false;/.test(SRC));
   check("app.js tells a future editor NOT to chase a recurrence with more prompt text",
-    /not a retry loop, not more prompt\s*\n?\s*text, not a fourth attempt at re-enabling/.test(SRC),
+    /not a retry loop, not more prompt text,/.test(SRC),
     "the tuxedo history already proved that more text is not the fix for this failure class");
-  check("...and names what WOULD justify revisiting it - a different reference format",
-    /STAYS OFF THIS TIME absent a genuinely different reference format/.test(SRC),
-    "a permanent 'no' with no stated reopening condition is how a decision rots into dogma");
-  /* The single-asset path is UNCHANGED code, and is once again what every session gets by
-     default - it never stopped being maintained while composite was the default. */
+  check("...and names a recurrence as the SAME mechanism, with this constant as the response",
+    /that is the SAME mechanism again, not\s*\n?\s*a new bug/.test(SRC),
+    "a fourth report matching the three known patterns is not a new investigation");
+  /* ── THE SINGLE-ASSET PATH IS LOAD-BEARING, NOT A FALLBACK ─────────────────
+     Its deletion was requested as "remove the angle:auto downgrade path" and rejected.
+     It is the ONLY reference path for a garment with no distinct back photo - most of the
+     catalog - which cannot be composited at all, there being no second image to stitch;
+     and it is where referenceImageFor() lands when a stitch legitimately fails. Asserted
+     as CODE PRESENT rather than as a default, precisely because the composite flag moves
+     and this must not move with it. */
   check("the per-orientation single-asset path is still what referenceImageFor() falls to",
-    /if \(currentAngle === AUTO_ANGLE\) \{\s*\n\s*const blob = await garmentBlobCached\(activeImg\);/.test(SRC));
+    /if \(currentAngle === AUTO_ANGLE\) \{\s*\n\s*const blob = await garmentBlobCached\(activeImg\);/.test(SRC),
+    "removing this does not force single-view items into combined mode - it breaks them");
+  check("...and app.js says WHY it cannot be removed, so the next request to delete it is answered",
+    /THE SINGLE-ASSET PATH STAYS, and deleting it was explicitly considered and rejected/.test(SRC) &&
+    /it would break them/.test(SRC));
 }
 
 console.log("\n── §5 AN IMAGE ON EVERY UPDATE AND EVERY RETRY ──");
