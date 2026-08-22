@@ -6006,27 +6006,29 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
    moment of the turn. See window.__pearDebugForceFullReupload, added to test exactly
    that.
 
-   TRIED AS THE DEFAULT, AND REVERTED ON LIVE EVIDENCE. buildCompositePrompt() still
-   threads DENSE.contract + DENSE.select (+ DENSE.pose/poseProfile/profileLateral for the
-   edge-on case) - the split reference no longer ships unexplained, that part of the fix
-   is real and stays - but COMPOSITE_DEFAULT went back to false after two production
-   reports showed the exact two failure modes this note warned would need a revert: the
-   BACK graphic rendering on a front-facing frame, and rotation degrading to a generic
-   plain shirt instead of holding the target print. Both are the 23f5953/tuxedo pattern,
-   not a code bug in this file - the panel geometry was checked on BOTH independent copies
-   (createGarmentComposite() here and in pear-widget.js) and both draw front-left/
-   back-right correctly, and describeCompositeLayout()'s own runtime consistency check
-   (below) had nothing to warn about. What is left, after ruling out the code, is that a
-   split reference asks more of Decart's own per-frame conditioning than a single clean
-   photo does, and that cost showed up live rather than in review - exactly the risk this
-   note named before any of this ran in production.
+   THIRD FLIP: true → false → true. Tried as the default, reverted after two production
+   reports (BACK graphic on a front-facing frame; rotation degrading to a generic plain
+   shirt), and re-enabled again on an explicit, informed decision to accept that same risk
+   rather than stay on the single-asset path - not because anything about the mechanism
+   changed. Re-read before assuming this is safer than last time: the panel geometry was
+   already checked on BOTH independent copies (createGarmentComposite() here and in
+   pear-widget.js, both draw front-left/back-right correctly) and describeCompositeLayout()
+   already guards against a drawing-order drift at runtime (below) - neither of those is
+   what caused the two reports. What is left, after ruling out the code twice now, is that
+   a split reference asks more of Decart's own per-frame conditioning than a single clean
+   photo does. That is a model-reliability cost, not a bug this file can fix by inspection.
 
-   DO NOT ADD MORE PROMPT TEXT to chase this - see IMAGE_ONLY_PROMPT's own history for why
-   more text made the tuxedo report worse, not better; the fix if this needs revisiting is
-   a different reference format entirely (e.g. Decart-side multi-image conditioning, if it
-   ever ships one), not a heavier composite prompt. ?composite=1 forces this path back on
-   for a single session if a future comparison is needed. */
-const COMPOSITE_DEFAULT = false;
+   DO NOT ADD MORE PROMPT TEXT to chase a recurrence - see IMAGE_ONLY_PROMPT's own history
+   for why more text made the tuxedo report worse, not better, and note that
+   STRICT_REFERENCE_LOCK (imageOnlyPrompt()'s own restore, "the shirt rendered white, not
+   RED") already rides this path too, since buildCompositePrompt() leads with
+   imageOnlyPrompt(). If either failure mode recurs, the next lever is reverting this
+   constant again, not adding a garment/colour DESCRIPTION - that is the one clause class
+   this file has twice-confirmed evidence competes with the reference pixels rather than
+   reinforcing them. ?composite=0 forces the single-asset path back on for a single
+   session without touching this file, if a fast comparison is needed before a third
+   revert. */
+const COMPOSITE_DEFAULT = true;
 const COMPOSITE_MODE = (() => {
   try {
     const q = new URLSearchParams(location.search).get("composite");
