@@ -545,34 +545,39 @@ console.log("\n── §3 THE RETIREMENT IS REVERSIBLE (this mode will need piec
     "the frozen snapshots must stay threaded even while unused");
 }
 
-console.log("\n── §4 THE COMPOSITE IS STANDARD NOW, and its switch still works both ways ──");
+console.log("\n── §4 THE COMPOSITE WAS TRIED AS STANDARD AND REVERTED ON LIVE EVIDENCE ──");
 {
-  /* ── REVISION: COMPOSITE_DEFAULT FLIPPED ON EXPLICIT REQUEST ──────────────────
-     This section used to assert the opposite: COMPOSITE_DEFAULT off, with the panel
-     contract restore left as a documented-but-pending TODO. Both are done now - the
-     contract is back (§2 above) and the default moved with it, so every session gets the
-     stitched FRONT|BACK reference unless a URL override says otherwise. What this suite
-     still owns is that the switch itself keeps working in BOTH directions, and that the
-     risk this flip carries (an unverified-in-production combination, per app.js's own
-     note) stays visible on file rather than only in a chat reply. */
-  check("COMPOSITE_DEFAULT is on",
-    /const COMPOSITE_DEFAULT = true;/.test(SRC),
-    "the panel contract is restored, so a split reference no longer ships unexplained");
+  /* ── REVISION: TWO PRODUCTION REPORTS, THE EXACT PREDICTED FAILURE MODE ───────
+     COMPOSITE_DEFAULT went true → false → true → false across this file's history. The
+     panel-contract restore (§2 above) is NOT what reverted - it stays, and is correct on
+     both independent copies (verified against pear-widget.js's own createGarmentComposite,
+     and against describeCompositeLayout()'s runtime consistency check, neither of which
+     found a panel-order bug). What reverted is the DEFAULT: two live reports showed the
+     back graphic on a front-facing frame and rotation degrading to a generic shirt - the
+     23f5953/tuxedo pattern this file has a record of, now confirmed live rather than only
+     hypothesised. This suite asserts the revert is real and reasoned, not silent, and that
+     the switch itself still works both ways for a future comparison. */
+  check("COMPOSITE_DEFAULT is off",
+    /const COMPOSITE_DEFAULT = false;/.test(SRC),
+    "two live reports reproduced the exact panel-confusion/generic-garment pattern this file already has a record of");
   check("...for the stated reason, not silently",
-    /RESTORED AND NOW STANDARD/.test(SRC) &&
+    /TRIED AS THE DEFAULT, AND REVERTED ON LIVE EVIDENCE/.test(SRC) &&
     /a reference the model has to interpret unaided/.test(SRC));
-  check("the URL override can still force the OLD single-asset path back on, for an A/B",
+  check("...and app.js records that BOTH independent panel-drawing copies were checked, not assumed",
+    /createGarmentComposite\(\) here and in pear-widget\.js\)/.test(SRC) &&
+    /describeCompositeLayout\(\)'s own runtime consistency check/.test(SRC),
+    "ruling out a code bug before blaming the model is what makes the revert reasoning trustworthy");
+  check("the URL override can still force composite back ON for a single session",
     /const q = new URLSearchParams\(location\.search\)\.get\("composite"\)/.test(SRC) &&
-    /if \(q === "0" \|\| q === "false"\)\s+return false;/.test(SRC));
-  check("...and can still force composite back on explicitly too, symmetric with the above",
     /if \(q === "1" \|\| q === "true"\)\s+return true;/.test(SRC));
-  check("app.js documents this as an unverified-in-production flip, with a named revert path",
-    /WHAT TO WATCH FOR/.test(SRC) &&
-    /had not run\s*\n?\s*in production before this flip/.test(SRC) &&
-    /revert this constant to false/.test(SRC),
-    "a flip nobody has watched live must say so on file, not just in a chat reply");
-  /* The single-asset path is UNCHANGED code, still reachable via ?composite=0 or a failed
-     stitch - it did not get deleted when the default moved off it. */
+  check("...and can still force it off explicitly too, symmetric with the above",
+    /if \(q === "0" \|\| q === "false"\)\s+return false;/.test(SRC));
+  check("app.js tells a future editor NOT to chase this with more prompt text",
+    /DO NOT ADD MORE PROMPT TEXT/.test(SRC) &&
+    /made the tuxedo report worse, not better/.test(SRC),
+    "the tuxedo history already proved that more text is not the fix for this failure class");
+  /* The single-asset path is UNCHANGED code, and is once again what every session gets by
+     default - it never stopped being maintained while composite was the default. */
   check("the per-orientation single-asset path is still what referenceImageFor() falls to",
     /if \(currentAngle === AUTO_ANGLE\) \{\s*\n\s*const blob = await garmentBlobCached\(activeImg\);/.test(SRC));
 }

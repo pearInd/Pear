@@ -6006,25 +6006,27 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
    moment of the turn. See window.__pearDebugForceFullReupload, added to test exactly
    that.
 
-   RESTORED AND NOW STANDARD. buildCompositePrompt() threads DENSE.contract + DENSE.select
-   (+ DENSE.pose/poseProfile/profileLateral for the edge-on case) back in - the split
-   reference no longer ships unexplained, so the specific bug this note used to warn about
-   (a collage with no key) is closed. COMPOSITE_DEFAULT flips to true below on explicit
-   request: every session now gets the stitched FRONT|BACK reference instead of the
-   per-orientation single-asset swap, so a shopper's PROMPT genuinely names both panels and
-   turning around is a prompt-only re-issue (no re-upload) rather than an asset swap.
+   TRIED AS THE DEFAULT, AND REVERTED ON LIVE EVIDENCE. buildCompositePrompt() still
+   threads DENSE.contract + DENSE.select (+ DENSE.pose/poseProfile/profileLateral for the
+   edge-on case) - the split reference no longer ships unexplained, that part of the fix
+   is real and stays - but COMPOSITE_DEFAULT went back to false after two production
+   reports showed the exact two failure modes this note warned would need a revert: the
+   BACK graphic rendering on a front-facing frame, and rotation degrading to a generic
+   plain shirt instead of holding the target print. Both are the 23f5953/tuxedo pattern,
+   not a code bug in this file - the panel geometry was checked on BOTH independent copies
+   (createGarmentComposite() here and in pear-widget.js) and both draw front-left/
+   back-right correctly, and describeCompositeLayout()'s own runtime consistency check
+   (below) had nothing to warn about. What is left, after ruling out the code, is that a
+   split reference asks more of Decart's own per-frame conditioning than a single clean
+   photo does, and that cost showed up live rather than in review - exactly the risk this
+   note named before any of this ran in production.
 
-   WHAT TO WATCH FOR, because this exact combination - today's per-side anchor leading a
-   restored panel contract - had not run in production before this flip, and both incidents
-   this file defends against (23f5953's double-print, the tuxedo reports) were only ever
-   caught live: a render that shows BOTH panels at once (the model painting front and back
-   onto the body simultaneously) or a garment that isn't the reference photo at all. Either
-   one means revert this constant to false and re-open the investigation, not add more
-   prompt text - see IMAGE_ONLY_PROMPT's own history for why more text made the tuxedo
-   report worse, not better. ?composite=0 on the fitting-room URL forces the old
-   single-asset path back for a single session without touching this file, if a fast
-   A/B is needed before a revert. */
-const COMPOSITE_DEFAULT = true;
+   DO NOT ADD MORE PROMPT TEXT to chase this - see IMAGE_ONLY_PROMPT's own history for why
+   more text made the tuxedo report worse, not better; the fix if this needs revisiting is
+   a different reference format entirely (e.g. Decart-side multi-image conditioning, if it
+   ever ships one), not a heavier composite prompt. ?composite=1 forces this path back on
+   for a single session if a future comparison is needed. */
+const COMPOSITE_DEFAULT = false;
 const COMPOSITE_MODE = (() => {
   try {
     const q = new URLSearchParams(location.search).get("composite");
