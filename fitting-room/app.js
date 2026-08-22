@@ -205,25 +205,32 @@ const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples - spans ~300ms of
    size rather than the camera's native frame. Tokens scale with FRAMES, not pixels, so
    this governs visual quality and pipeline cost, never the token count.
 
-   ── 512×288 → 512×512, AND THE REASON IS FRAMING, NOT SHARPNESS ────────────────
-   The old value was 16:9 (1.78) while .camera-card is aspect-ratio 4/5 (0.80). #aiVideo
-   is object-fit:cover inside that box, so covering a 0.80 frame with a 1.78 source throws
-   away (1.78-0.80)/1.78 ≈ 55% of the width Decart rendered. More than half of every frame
-   the model produced - and was conditioned to produce - was being cropped off the sides
-   before the shopper saw it, which reads as "the fit is too tight on the frame" and wastes
-   most of the pipeline's work.
+   ── 512×512 → 480×600, AND WHY THIS IS A CROP FIX, NOT A DISTORTION FIX ─────────
+   REPORTED as "vertical stretching / warped proportions". There is no non-uniform scale
+   anywhere in this pipeline to cause that - object-fit:cover is defined by the CSS spec
+   to preserve the source aspect ratio unconditionally (crop only, never stretch),
+   drawFrame() below computes ONE scale factor for both axes, and getUserMedia() uses
+   `ideal` constraints only, which never force a distorted capture. What CAN read as
+   "proportions look off" is aggressive CROPPING: the square 512×512 predecessor, cover-fit
+   into .camera-card's 4/5 (0.80) mobile stage, discarded (1.00-0.80)/1.00 = 20% of every
+   frame's WIDTH - a real, measurable effect, just not the one reported.
 
-   512×512 (1.00) is the closest square-ish fit to a 4/5 stage without going portrait: the
-   cover crop drops to (1.00-0.80)/1.00 = 20%. It also matches what the model is happiest
-   with - a square input has no dominant axis for a full-body subject who may be centred,
-   turned, or leaning.
+   480×600 is exactly 4:5 (0.80), matching the mobile stage - the app's primary surface,
+   and the one buildVideoConstraints() already special-cases with a 9:16 capture hint for
+   phones. The cover-fit crop on mobile drops to effectively 0%: every captured pixel
+   reaches the screen. Pixel count (288000) is close to the previous 262144, so this is not
+   a quality trade, only a framing one.
 
-   THE COST IS HONEST: 512×512 is 262144 px against 288's 147456, ~1.78× the pixels per
-   frame to encode and upload. LIVE_INFERENCE_FPS (10) is unchanged and billing is
-   per-SECOND, so this costs bandwidth and encode time, not credits. If the stream ever
-   shows backpressure on a slow uplink, LIVE_INFERENCE_FPS is the dial to turn - not this,
-   which would put the 55% crop straight back. */
-const LIVE_W = 512, LIVE_H = 512;
+   THE TRADE, stated because it is real: the desktop breakpoint (min-width:768px) widens
+   .camera-card to aspect-ratio 4/3 (1.33, landscape-leaning). A 4:5 portrait source
+   cover-fit into a 4:3 box crops ~40% off the TOP/BOTTOM there, versus ~25% under the old
+   square value - desktop gets MORE crop so mobile can get none. That is a deliberate bet
+   on which surface matters more, not an oversight; the fitting room's whole design (phone
+   camera, portrait stage, mobile-first constraints) says mobile is the primary case. If
+   desktop crop turns out to matter, the fix is a SECOND resolution for that breakpoint
+   (LIVE_W/LIVE_H are read once per session, not live-switchable mid-stream), not reverting
+   this. LIVE_INFERENCE_FPS remains the dial for bandwidth pressure, unrelated to either. */
+const LIVE_W = 480, LIVE_H = 600;
 
 /* Mobile detection (Feature 2 / mobile download fix). Drives two choices:
    (1) the MediaRecorder container - phone galleries reliably ingest H.264 MP4 but
@@ -7586,41 +7593,47 @@ const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodi
    307 characters are free on tops and 316 on bottoms, so neither loss was forced by
    budget - both are the same deliberate bet every revision here makes: text volume
    competing with the reference image. One at a time, re-tested live. */
-/* ── REVISION: THE CATEGORY SCOPING IS BACK, WITH AN EXPLICIT LOCK ───────────────
-   THE PREVIOUS REVISION COLLAPSED BOTH BRANCHES into one category-agnostic string, and
-   that file recorded the risk in the same breath: naming no region re-opens the
-   SHIRT-REPLACEMENT report (a trouser try-on claiming the whole reference and repainting
-   the shopper's live top), and dropping the opposite-layer clause removed the only thing
-   still answering the invented-non-target-garment family now that the compositing guard
-   is deleted. Both are restored here, per category, and the retired CATEGORY_SCOPED
-   constant that held them is retired in turn - these ARE the scoped strings now.
+/* ── REVISION: EXPLICIT 1:1 PROPORTIONS, AND THE BACK SENTENCE NAMED HONESTLY ────
+   THE PREVIOUS PAIR restored per-category scoping, the entire-stream lock and the
+   continuous-adaptation clause. This revision adds two things and keeps everything else.
 
-   WHAT IS NEW BEYOND THE RESTORE, and it is aimed at a specific report:
+   1. "EXACT 1:1 PHYSICAL ASPECT RATIO AND ZERO DISTORTION" is new text, and it is worth
+      being precise about what it can and cannot do. Nothing in this client's display or
+      capture pipeline EVER applies a non-uniform scale - object-fit:cover is defined by
+      the CSS spec to preserve the source aspect ratio unconditionally (it can only crop,
+      never stretch), createThrottledInputStream()'s drawFrame() computes ONE scale factor
+      for both axes, and getUserMedia() is called with `ideal` constraints only, which
+      never force a distorted capture. There is no distortion bug in this pipeline to fix.
+      The sentence still earns its place: it is a hedge against Decart's OWN model
+      introducing warp during the drape (a failure mode entirely outside client control,
+      since realtime set() has no strength/fidelity parameter to tune it with) - if that
+      is ever reported with a recording, LIVE_W/LIVE_H (see their own comment) is the
+      other half of this fix, not the prompt.
 
-   1. "Lock this exact <garment> texture and design for the ENTIRE STREAM." The reported
-      failure is a mid-session revert from the target garment to a generic one and back.
-      The decisive fix for that is in the payload, not the text - applyGarment() no longer
-      ships an image-less set() (see THE GARMENT PIN) - but the wording now states the
-      temporal requirement too, because the prompt is re-asserted on every re-drape and
-      "for the entire stream" is what makes those re-assertions say the same thing.
+   2. "AUTOMATICALLY APPLY THE BACK-SIDE DESIGN WHEN THE SUBJECT TURNS AROUND" describes
+      behaviour this file ALREADY HAS, and is worth being equally precise about how. It is
+      NOT this sentence that causes it: buildPrompt(item, angleText) - the function behind
+      every dispatch this anchor reaches - takes an angle argument and DISCARDS it,
+      returning imageOnlyPrompt(item) unconditionally (see buildPrompt's own body). The
+      prompt text is therefore identical whichever side is showing; back-rendering is
+      carried ENTIRELY by which REFERENCE IMAGE is on the wire. createOrientationWatcher's
+      maybeSwap() is what does that: it classifies front/back from a skin-ratio + face-
+      visibility heuristic (chosen over raw pose yaw specifically because MediaPipe's
+      landmark confidence degrades sharply past ~90° rotation - the classifier this file
+      already had to invent because yaw does not survive a full turn), corroborates over
+      ORIENT_LOCK_MS before committing, and swaps GARMENT_FRONT for GARMENT_BACK in the
+      SAME rtClient.set() this anchor's prompt rides on.
 
-   2. "CONTINUOUSLY adapt ... across all movements and rotations." The per-frame tense
-      came off two revisions ago and is back, per region: drape and cut on tops, fit,
-      waistline and leg drape on bottoms. It is paired with real runtime machinery rather
-      than standing alone - the topology monitor is what forces an actual re-conditioning
-      dispatch when the body has moved - so the sentence describes something the pipeline
-      genuinely does. Text alone could not keep this promise: with a constant prompt and
-      the reference already on the wire, applyGarment() dispatches nothing at all.
-
-   ⚠️ WHAT IT STILL CANNOT DO. "Adapt to the subject's live body depth, angle, and volume"
-   is a request, not a channel. Decart's realtime set() accepts exactly
-   { prompt, enhance, image } and STRIPS every other key (@decartai/sdk@0.1.5
-   setInputSchema, z.core.$strip), so no landmark, bounding box, depth map or orientation
-   value can be sent - not as an extra key, not alongside the image. What the pose
-   pipeline actually controls is WHEN to re-condition, never WHAT geometry to send. Read
-   bodyScaleMatrix() and reconditionForTopology() together with this wording; a future
-   revision that reads this sentence as evidence that geometry is on the wire will be
-   wrong, and the budget it spends chasing that will come out of the reference image. */
+      ⚠️ THIS ONLY HAPPENS FOR AN ITEM WITH A REAL, DISTINCT BACK PHOTO. canCombineViews()
+      gates AI Auto on activeBackIsReal(item), and for anything without one, turning
+      around dispatches nothing at all - not even DENSE.backInferred's text-only "plain
+      back" fallback, which is unreachable for the same reason this sentence cannot steer
+      anything: buildPrompt() never reads angle text. An item with no back asset shows the
+      front, full stop, however long the shopper turns. That is a real, separate gap from
+      anything this revision closes, and it needs either a generated back asset (a
+      catalog/pre-processing decision) or reviving angle-aware prompt assembly (which
+      would reverse the "strict image-only, one frozen string" design multiple prior
+      revisions deliberately converged on) - not a sentence here. */
 /* ── RETIRED CLAUSES, kept verbatim so each restore is one line ──────────────────
    Off the wire, every one a reproduced regression. Recorded here rather than left in the
    commit log - the convention the rest of this file follows, and what image-first.test.mjs
@@ -7630,28 +7643,30 @@ const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodi
        width, and torso drape to match the subject's exact live body width and build
        (narrow or wide)", and the waistline/leg-width mirror on bottoms). The morphology
        monitor that decides WHEN to re-condition is untouched, so what is retired is the
-       prompt's half of the width axis - watch for a loose drape on a slender build. The
-       current "live body depth, angle, and volume" wording covers depth and rotation but
-       still does not name WIDTH.
+       prompt's half of the width axis - watch for a loose drape on a slender build.
      · the enter-the-frame event clause ("for any lower body parts, legs, or shorts that
        ENTER the camera frame DURING THE VIDEO"), with its attribute list naming colour,
        pattern and LENGTH. Length is the attribute the black-shorts-to-long-trousers
-       report turned on, and nothing on the wire names it now. */
+       report turned on, and nothing on the wire names it now.
+     · the entire-stream lock ("Lock this exact shirt texture and design for the entire
+       stream") and the continuous-adaptation clause ("Continuously adapt the drape and
+       cut to the subject's live body depth, angle, and volume across all movements and
+       rotations") - superseded by the specified "1:1 physical aspect ratio... back-side
+       design" wording below, not dropped for budget. The entire-stream lock answered the
+       mid-session-revert report on the TEXT side; THE GARMENT PIN (applyGarment's
+       lastAckedImageRef fallback) answers it on the PAYLOAD side and is what actually
+       fixed it - restoring this sentence alongside the pin is additive, not required. */
 const CATEGORY_ANCHOR = Object.freeze({
   top:
-    "Fit ONLY the exact target shirt from the reference image onto the subject." +
-    " Lock this exact shirt texture and design for the entire stream." +
-    " Continuously adapt the drape and cut to the subject's live body depth, angle," +
-    " and volume across all movements and rotations." +
-    " Strictly preserve the subject's live lower clothing and background completely" +
-    " unchanged.",
+    "Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect" +
+    " ratio and zero distortion. Automatically apply the back-side design of the" +
+    " garment when the subject turns around. Strictly preserve the user's natural" +
+    " proportions, face, lower body, and background.",
   bottom:
-    "Fit ONLY the exact target pants/shorts from the reference image onto the subject." +
-    " Lock this exact lower garment texture and design for the entire stream." +
-    " Continuously adapt the fit, waistline, and leg drape to the subject's live lower" +
-    " body depth, angle, and volume across all movements and rotations." +
-    " Strictly preserve the subject's live upper clothing and background completely" +
-    " unchanged.",
+    "Fit ONLY the active target pants onto the subject with exact 1:1 physical aspect" +
+    " ratio and zero distortion. Automatically apply the back-side design of the pants" +
+    " when the subject turns around. Strictly preserve the user's natural proportions," +
+    " face, upper body, and background.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -7788,7 +7803,7 @@ function imageOnlyPrompt(item) {
      TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, STRICT_REFERENCE_LOCK]`
      for the hallucination clamp, `[P.HIGH, KEEP_OPPOSITE_LAYER]` on the bottoms branch for
      the opposite-layer pin; both are the retirements this revision made. The budget is not
-     the constraint - 298 characters are free on tops and 261 on bottoms - so the only
+     the constraint - 372 characters are free on tops and 374 on bottoms - so the only
      question is whether that text is worth the weight it takes away from the reference
      image, which is the mechanism every report in this sequence shares. One at a time,
      re-tested live. */
@@ -7904,12 +7919,12 @@ function lookAnchorPrompt() {
    The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS (352 chars - anchor)             BOTTOMS (389 chars - anchor)
-     + DENSE.bodyFidelity  (45) → 398  fits              → 435  fits
-     + DENSE.modelAgnostic (64) → 417  fits              → 454  fits
-     + both of them        (110)→ 463  fits              → 500  fits
+     TOPS (278 chars - anchor)             BOTTOMS (276 chars - anchor)
+     + DENSE.bodyFidelity  (45) → 324  fits              → 322  fits
+     + DENSE.modelAgnostic (64) → 343  fits              → 341  fits
+     + both of them        (110)→ 389  fits              → 387  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 298 characters are free on tops and 261 on
+   NOTHING SHEDS ANY MORE, on either branch. 372 characters are free on tops and 374 on
    bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.

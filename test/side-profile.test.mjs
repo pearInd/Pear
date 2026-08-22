@@ -268,7 +268,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
   check("the live composite payload is the category anchor, at every pose",
     built === api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Fit ONLY the exact target shirt from the reference image onto the subject\./.test(built),
+    /^Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect ratio and zero distortion\./.test(built),
     built);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
@@ -342,10 +342,10 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
        rotates (body-topology.test.mjs). The prompt's pose-invariance is now a deliberate
        division of labour rather than a gap. */
     check(`the anchor carries its reference binding at inProfile=${prof}`,
-      /Fit ONLY the exact target shirt from the reference image onto the subject/.test(out),
+      /Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect ratio/.test(out),
       out.slice(0, 400));
     check(`...and the non-target garment lock at inProfile=${prof}`,
-      /Strictly preserve the subject's live lower clothing and background completely unchanged/.test(out),
+      /Strictly preserve the user's natural proportions, face, lower body, and background/.test(out),
       out.slice(0, 400));
   }
 
@@ -418,7 +418,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Fit ONLY the exact target shirt from the reference image onto the subject\./;
+  const FROZEN = /^Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect ratio and zero distortion\./;
   for (const prof of [false, true]) {
     check(`the category anchor is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
@@ -435,7 +435,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
   const jeans = { name: "Glide Slim", custom: true, garmentType: "lower_body" };
   check("the BOTTOMS route is equally pose-invariant, and is its own scoped string",
     api.buildCompositePrompt(jeans, "front", false) === api.buildCompositePrompt(jeans, "front", true) &&
-    /^Fit ONLY the exact target pants\/shorts from the reference image onto the subject\./.test(
+    /^Fit ONLY the active target pants onto the subject with exact 1:1 physical aspect ratio and zero distortion\./.test(
       api.buildCompositePrompt(jeans, "front", false)) &&
     api.buildCompositePrompt(jeans, "front", false) !== api.buildCompositePrompt(item, "front", false),
     api.buildCompositePrompt(jeans, "front", false).slice(0, 200));
@@ -775,8 +775,8 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
      property this section owns, and it is unaffected by either. */
   check("what survives at both poses is the category anchor, byte-identical",
     square === built &&
-    /^Fit ONLY the exact target shirt from the reference image onto the subject\./.test(square) &&
-    /Strictly preserve the subject's live lower clothing and background completely unchanged\.$/.test(square));
+    /^Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect ratio and zero distortion\./.test(square) &&
+    /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

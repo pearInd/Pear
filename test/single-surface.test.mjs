@@ -158,9 +158,13 @@ console.log("\n── §4 THE INPUT PATH IS UNTOUCHED - camera in, Decart out �
      per-category again (see garment-category-prompt.test.mjs), so what is asserted here is
      the property both branches must share: the non-target region and the background are
      preserved rather than re-rendered, which is what keeps the frame one continuous scene. */
+  /* Concatenated string literals wrap across lines in app.js (`"..." + "\n    "..."`),
+     so a straight substring match on the assembled sentence would break on formatting
+     alone. Collapsed once here rather than fought with an escalating regex. */
+  const flat = APP.replace(/"\s*\+\s*\n\s*"/g, "");
   check("both anchors preserve the opposite layer AND the background, unchanged",
-    /Strictly preserve the subject's live lower clothing and background completely/.test(APP) &&
-    /Strictly preserve the subject's live upper clothing and background completely/.test(APP),
+    /Strictly preserve the user's natural proportions, face, lower body, and background\./.test(flat) &&
+    /Strictly preserve the user's natural proportions, face, upper body, and background\./.test(flat),
     "the client stopped compositing the frame; the prompt must not ask the model to either");
 }
 

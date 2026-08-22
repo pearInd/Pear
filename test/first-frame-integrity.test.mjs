@@ -321,31 +321,33 @@ console.log("\n── §4 THE PREFETCH THAT KEEPS THE GATED WINDOW SHORT ──"
 
 console.log("\n── §5 THE FRAME BUDGET ON THE WIRE ──");
 {
-  /* ── 16:9 → SQUARE, AND WHY THE OLD ARGUMENT HERE WAS INCOMPLETE ────────────
-     THIS ASSERTION USED TO PIN 512x288 and argue against a square on bandwidth: 147k
-     pixels versus 262k, 78% more data per frame on the same channel. That arithmetic is
-     correct and it is still the cost of this change. What it left out is what happens to
-     those bytes AFTER they arrive.
+  /* ── SQUARE → 4:5 PORTRAIT, MATCHING THE MOBILE STAGE EXACTLY ──────────────
+     REPORTED as "vertical stretching / warped proportions". There is no non-uniform scale
+     anywhere in this pipeline - object-fit:cover cannot stretch, by CSS spec, and every
+     draw path in this file uses one scale factor for both axes. What IS real is crop: the
+     square 512x512 predecessor, cover-fit into .camera-card's 4/5 (0.80) mobile stage,
+     discarded 20% of every frame's width before the shopper saw it.
 
-     .camera-card is aspect-ratio 4/5 (0.80) and #aiVideo is object-fit:cover inside it.
-     Covering a 0.80 box with a 1.78 source discards (1.78-0.80)/1.78 ≈ 55% of the width -
-     so more than half of every frame Decart rendered was cropped off the sides before the
-     shopper saw it. The old rule optimised bytes per second on the wire while silently
-     throwing away most of what those bytes bought, which is the more expensive mistake.
+     480x600 IS exactly 4:5 (0.80) - the mobile stage's own ratio, and the one
+     buildVideoConstraints() already special-cases with a 9:16 hint for phones. The crop
+     on the primary (mobile) surface drops to effectively 0%, at a near-identical pixel
+     budget (288000 vs 262144 - not a quality trade, only a framing one).
 
-     512x512 (1.00) cuts the display crop to 20%. It costs 78% more pixels per frame and
-     buys back roughly 35 points of frame that were being discarded. Billing is per-SECOND
-     (LIVE_INFERENCE_FPS is unchanged at 10), so this is bandwidth and encode time, never
-     credits. IF THE UPLINK EVER BACKS UP, LIVE_INFERENCE_FPS IS THE DIAL - dropping back
-     to 16:9 would restore the 55% crop, which is the thing actually worth avoiding. */
+     THE DESKTOP TRADE IS REAL AND STATED IN app.js: the >=768px breakpoint widens the
+     stage to 4:3 (1.33, landscape-leaning), and a 4:5 portrait source cover-fit into that
+     crops MORE there (~40% top/bottom) than the old square value did (~25%) - desktop
+     gives up some frame so mobile, the app's primary surface, gets none. */
   const w = Number((SRC.match(/const LIVE_W = (\d+), LIVE_H = (\d+);/) || [])[1]);
   const h = Number((SRC.match(/const LIVE_W = (\d+), LIVE_H = (\d+);/) || [])[2]);
-  check("the frame sent to Decart is capped at 512 on its longest edge",
-    w === 512 && h === 512,
-    `${w}x${h} - the stage is 4/5, so a 16:9 source loses ~55% of its width to the cover crop`);
-  check("...and app.js records the crop arithmetic that justifies the extra pixels",
-    /512×288 → 512×512, AND THE REASON IS FRAMING, NOT SHARPNESS/.test(SRC),
-    "a resolution bump with no recorded reason is the next person's mystery regression");
+  check("the frame sent to Decart matches the mobile stage's 4:5 aspect ratio exactly",
+    w === 480 && h === 600 && w / h === 0.8,
+    `${w}x${h} - .camera-card's mobile aspect-ratio is 4/5 = 0.80`);
+  check("...and app.js records the crop arithmetic that justifies the change",
+    /512×512 → 480×600, AND WHY THIS IS A CROP FIX, NOT A DISTORTION FIX/.test(SRC),
+    "a resolution change with no recorded reason is the next person's mystery regression");
+  check("...including the desktop trade, stated rather than hidden",
+    /desktop gets MORE crop so mobile can get none/.test(SRC),
+    "a trade-off that only helps one breakpoint has to say so, not just claim a win");
   check("...and the rate is capped below the local capture rate",
     /const LIVE_FPS\s+= 15;/.test(SRC) && /const LIVE_INFERENCE_FPS\s+= 10;/.test(SRC),
     "the preview stays smooth locally; only 10 frames/s ever leave the browser");

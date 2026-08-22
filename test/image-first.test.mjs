@@ -124,19 +124,15 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
    collapsed these into one category-agnostic string and recorded the risk; this restores
    the scoping and adds two clauses aimed at the mid-session-revert report. */
 const TOPS_SPEC =
-  "Fit ONLY the exact target shirt from the reference image onto the subject." +
-  " Lock this exact shirt texture and design for the entire stream." +
-  " Continuously adapt the drape and cut to the subject's live body depth, angle," +
-  " and volume across all movements and rotations." +
-  " Strictly preserve the subject's live lower clothing and background completely" +
-  " unchanged.";
+  "Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect" +
+  " ratio and zero distortion. Automatically apply the back-side design of the" +
+  " garment when the subject turns around. Strictly preserve the user's natural" +
+  " proportions, face, lower body, and background.";
 const BOTTOMS_SPEC =
-  "Fit ONLY the exact target pants/shorts from the reference image onto the subject." +
-  " Lock this exact lower garment texture and design for the entire stream." +
-  " Continuously adapt the fit, waistline, and leg drape to the subject's live lower" +
-  " body depth, angle, and volume across all movements and rotations." +
-  " Strictly preserve the subject's live upper clothing and background completely" +
-  " unchanged.";
+  "Fit ONLY the active target pants onto the subject with exact 1:1 physical aspect" +
+  " ratio and zero distortion. Automatically apply the back-side design of the pants" +
+  " when the subject turns around. Strictly preserve the user's natural proportions," +
+  " face, upper body, and background.";
 const SPEC = TOPS_SPEC;
 
 console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely constant ──");
@@ -150,56 +146,47 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     "the previous revision collapsed them and re-opened the shirt-replacement report");
 
   const sentences = (s) => s.split(/(?<=\.)\s+/).filter(Boolean);
-  check("both branches are exactly four sentences: scope, lock, adapt, preserve",
-    sentences(TOPS_SPEC).length === 4 && sentences(BOTTOMS_SPEC).length === 4,
+  check("both branches are exactly three sentences: scope, back-swap, preserve",
+    sentences(TOPS_SPEC).length === 3 && sentences(BOTTOMS_SPEC).length === 3,
     `tops=${sentences(TOPS_SPEC).length} bottoms=${sentences(BOTTOMS_SPEC).length}`);
-  check("...and both open on the SAME binding - exclusive scope, from the reference",
-    TOPS_SPEC.startsWith("Fit ONLY the exact target ") &&
-    BOTTOMS_SPEC.startsWith("Fit ONLY the exact target "),
+  check("...and both open on the SAME binding - exclusive scope, the active reference",
+    TOPS_SPEC.startsWith("Fit ONLY the active target ") &&
+    BOTTOMS_SPEC.startsWith("Fit ONLY the active target "),
     `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
 
-  /* (1) THE SCOPE, restored. "Fit ONLY" scopes the whole instruction in the first two
-     words, where a leading-token model is most sensitive, and the garment is bound to the
-     REFERENCE IMAGE rather than described in words - which is the whole premise of strict
-     image-only conditioning. */
-  const LEAD = /^Fit ONLY the exact target (shirt|pants\/shorts) from the reference image onto the subject\./;
-  check("(1) it scopes ONE garment, sourced from the reference image",
+  /* (1) THE SCOPE, plus the specified 1:1/zero-distortion clause. "Fit ONLY" scopes the
+     whole instruction in the first two words, where a leading-token model is most
+     sensitive. The 1:1 clause is adopted verbatim from spec; app.js's own comment on
+     CATEGORY_ANCHOR records that no distortion bug exists in this client's pipeline to
+     fix - the sentence is a hedge against Decart's OWN drape warping, outside client
+     control either way (no strength/fidelity parameter on set()). */
+  const LEAD = /^Fit ONLY the active target (shirt|pants) onto the subject with exact 1:1 physical aspect ratio and zero distortion\./;
+  check("(1) it scopes ONE garment with the specified 1:1/zero-distortion clause",
     LEAD.test(TOPS_SPEC) && LEAD.test(BOTTOMS_SPEC),
     "an unscoped anchor is what let a try-on claim the whole reference");
   check("...and each branch binds its OWN garment, never the other's",
     /target shirt/.test(TOPS_SPEC) && !/target pants/.test(TOPS_SPEC) &&
-    /target pants\/shorts/.test(BOTTOMS_SPEC) && !/target shirt/.test(BOTTOMS_SPEC),
+    /target pants/.test(BOTTOMS_SPEC) && !/target shirt/.test(BOTTOMS_SPEC),
     `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
 
-  /* (2) THE TEMPORAL LOCK, which is what this revision adds. REPORTED: mid-session the
-     render reverts from the target garment to a generic one, then back. The decisive fix
-     is in the payload - see §1c - but the prompt is re-asserted on every re-drape, so
-     stating "for the entire stream" is what makes those re-assertions agree with each
-     other instead of merely repeating a first-frame instruction. */
-  check("(2) it locks the garment for the ENTIRE STREAM, not just the first frame",
-    /Lock this exact shirt texture and design for the entire stream\./.test(TOPS_SPEC) &&
-    /Lock this exact lower garment texture and design for the entire stream\./.test(BOTTOMS_SPEC),
+  /* (2) THE BACK-SWAP SENTENCE, adopted verbatim from spec. It is DESCRIPTIVE, not
+     causal - see §1b for why, and why that matters. */
+  check("(2) it states the specified back-swap sentence, per garment noun",
+    /Automatically apply the back-side design of the garment when the subject turns around\./.test(TOPS_SPEC) &&
+    /Automatically apply the back-side design of the pants when the subject turns around\./.test(BOTTOMS_SPEC),
     `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
 
-  /* (3) THE PER-FRAME TENSE, restored and per region: drape and cut on tops, fit,
-     waistline and leg drape on bottoms. It names depth, angle AND volume, which is the
-     360-degree requirement stated rather than implied. */
-  check("(3) it asks for CONTINUOUS adaptation across all movements and rotations",
-    /Continuously adapt the drape and cut to the subject's live body depth, angle, and volume across all movements and rotations\./.test(TOPS_SPEC) &&
-    /Continuously adapt the fit, waistline, and leg drape to the subject's live lower body depth, angle, and volume across all movements and rotations\./.test(BOTTOMS_SPEC),
-    `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
-
-  /* (4) THE OPPOSITE-LAYER PIN, restored. This is the clause the invented-non-target-
-     garment family turns on, and it matters more than it ever has: the compositing guard
-     that used to enforce it in pixels is deleted, so this wording is now the ONLY thing
-     answering that report. */
-  check("(4) it preserves the opposite layer's CLOTHING and the background, unchanged",
-    /Strictly preserve the subject's live lower clothing and background completely unchanged\.$/.test(TOPS_SPEC) &&
-    /Strictly preserve the subject's live upper clothing and background completely unchanged\.$/.test(BOTTOMS_SPEC),
+  /* (3) THE OPPOSITE-LAYER PIN. This is the clause the invented-non-target-garment family
+     turns on, and it matters more than it ever has: the compositing guard that used to
+     enforce it in pixels is deleted, so this wording is now the ONLY thing answering that
+     report. */
+  check("(3) it preserves the opposite layer, face, and background, unchanged",
+    /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(TOPS_SPEC) &&
+    /Strictly preserve the user's natural proportions, face, upper body, and background\.$/.test(BOTTOMS_SPEC),
     `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
   check("...and neither preserves the very layer it is fitting",
-    !/preserve[^.]*upper clothing/.test(TOPS_SPEC) &&
-    !/preserve[^.]*lower clothing/.test(BOTTOMS_SPEC),
+    !/preserve[^.]*upper body/.test(TOPS_SPEC) &&
+    !/preserve[^.]*lower body/.test(BOTTOMS_SPEC),
     "a prompt that preserves the layer it is editing cancels itself");
   check("...with no pass-through the model has no second stream for",
     !/pass through/.test(TOPS_SPEC) && !/LIVE camera feed/.test(TOPS_SPEC) &&
@@ -207,20 +194,31 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     "the guard that made pass-through real is deleted; the prompt must not still promise it");
 }
 
-console.log("\n── §1b WHAT THE WORDING CANNOT DO, however it is phrased ──");
+console.log("\n── §1b WHAT THE BACK-SWAP SENTENCE CANNOT DO, however it is phrased ──");
 {
-  /* "Adapt to the subject's live body depth, angle, and volume" reads like geometry is
-     being supplied. It is not, and cannot be: Decart's realtime set() accepts exactly
-     { prompt, enhance, image } and STRIPS every other key (z.core.$strip), so no landmark,
-     bounding box, depth map or orientation value can accompany the payload. What the pose
-     pipeline controls is WHEN to re-condition - never WHAT geometry to send. Asserted so a
-     future revision does not read the sentence as evidence and spend budget chasing it. */
-  check("app.js states plainly that no geometry can be sent alongside the image",
-    /STRIPS every other key/.test(SRC) && /never WHAT geometry to send/.test(SRC),
-    "the prompt asks; only the re-conditioning trigger acts");
-  check("...and the runtime half that makes the sentence true is wired",
-    /function reconditionForTopology\(/.test(SRC) && /function bodyScaleMatrix\(/.test(SRC),
-    "a continuous-adaptation promise with no dispatch behind it is a claim, not a fix");
+  /* "Automatically apply the back-side design... when the subject turns around" reads
+     like the SENTENCE causes the swap. It does not, and cannot: buildPrompt(item,
+     angleText) - the function behind every dispatch this anchor reaches - takes an angle
+     argument and DISCARDS it, returning imageOnlyPrompt(item) unconditionally, so the
+     prompt text is byte-identical whichever side is showing. The swap is carried entirely
+     by which REFERENCE IMAGE createOrientationWatcher's maybeSwap() puts on the wire.
+     Asserted so a future revision does not read this sentence as the mechanism and remove
+     the pixel-level swap thinking the words alone still cover it. */
+  check("app.js states that buildPrompt() discards its angle argument unconditionally",
+    /buildPrompt\(item, angleText\) - the function behind/.test(SRC) &&
+    /DISCARDS it,\s*\n\s*returning imageOnlyPrompt\(item\) unconditionally/.test(SRC),
+    "the sentence describes what maybeSwap() already does in pixels, not a new capability");
+  check("...and the runtime half that actually performs the swap is wired",
+    /function createOrientationWatcher\(/.test(SRC) && /async function maybeSwap\(next\)/.test(SRC),
+    "a back-swap sentence with no image-swap mechanism behind it is a claim, not a fix");
+  /* THE HONEST LIMIT: for an item with no real, distinct back photo, nothing renders a
+     back view at all - not even DENSE.backInferred's text-only fallback, unreachable for
+     the identical reason (buildPrompt() never reads angle text). Recorded here so it is
+     not discovered by surprise from a support ticket. */
+  check("app.js names the real gap - no back photo means no back view, ever",
+    /THIS ONLY HAPPENS FOR AN ITEM WITH A REAL, DISTINCT BACK PHOTO/.test(SRC) &&
+    /needs either a generated back asset/.test(SRC),
+    "an honest limit belongs on file, not just in a chat reply");
 }
 
 console.log("\n── §1c THE GARMENT PIN: the mid-session revert, fixed in the payload ──");
@@ -342,9 +340,9 @@ console.log("\n── §1c THE GARMENT PIN: the mid-session revert, fixed in the
      restored. Asserted on the pair, because they came off together and a partial restore
      would leave one report closed and the other open. */
   check("both the region scope and the opposite-layer pin are on the wire again",
-    /onto the subject\./.test(TOPS_SPEC) &&
-    /Strictly preserve the subject's live lower clothing and background/.test(TOPS_SPEC) &&
-    /Strictly preserve the subject's live upper clothing and background/.test(BOTTOMS_SPEC),
+    /onto the subject with exact 1:1/.test(TOPS_SPEC) &&
+    /Strictly preserve the user's natural proportions, face, lower body, and background/.test(TOPS_SPEC) &&
+    /Strictly preserve the user's natural proportions, face, upper body, and background/.test(BOTTOMS_SPEC),
     "the collapse re-opened shirt-replacement and the invented-garment family at once");
   check("app.js flags the opposite-layer lock as the FIRST thing to restore on tops",
     /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC),

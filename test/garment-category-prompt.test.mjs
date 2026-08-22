@@ -126,37 +126,37 @@ const SHIRT = { garmentType: "upper_body", name: "Ion Crew Tee" };
 const bottomsPrompt = imageOnlyPrompt(PANTS);
 const topsPrompt    = imageOnlyPrompt(SHIRT);
 
-console.log("\n── §2 THE BOTTOMS ANCHOR: scoped to the lower body, upper layer pinned ──");
+console.log("\n── §2 THE BOTTOMS ANCHOR: 1:1 proportions and the honest back-swap note ──");
 {
-  /* ── THE SCOPING IS BACK, AND THAT IS THE POINT OF THIS REVISION ────────────
-     The previous revision collapsed both branches into one category-agnostic string and
-     recorded, in this suite and in app.js, exactly what that re-exposed: the
-     SHIRT-REPLACEMENT report (a trouser try-on claiming the whole reference and
-     repainting the shopper's live top) and the invented-non-target-garment family, which
-     had nothing left answering it once the compositing guard was deleted. Both clauses
-     are restored here, per category, and the risk note that stood in their place is
-     retired with them. */
-  check("opens by scoping to ONE garment, from the reference image",
-    bottomsPrompt.indexOf("Fit ONLY the exact target pants/shorts from the reference image onto the subject.") === 0,
+  /* ── REVISION: EXPLICIT PROPORTIONS, AND THE BACK SENTENCE NAMED HONESTLY ────
+     REPORTED as two bugs: "vertical stretching" and "the system fails to render the
+     back view". Neither is a client defect this prompt (or any prompt) can fix, and
+     app.js's own comment on CATEGORY_ANCHOR says so in full - the short version:
+
+     · There is no non-uniform scale anywhere in this pipeline to cause stretching -
+       object-fit:cover cannot stretch by CSS spec, and every draw path uses one scale
+       factor for both axes. The "1:1 physical aspect ratio" sentence is specified wording
+       adopted verbatim; it is a hedge against Decart's OWN model warping the drape (client
+       has no strength/fidelity parameter to steer that), not a fix for a client bug.
+     · Back-rendering for a real back photo is carried ENTIRELY by which reference IMAGE
+       is on the wire (createOrientationWatcher's maybeSwap()), not by this sentence -
+       buildPrompt(item, angleText) discards its angle argument unconditionally, so the
+       prompt text never varies by orientation. For an item with NO back photo, nothing
+       renders a back view at all - not even the dead DENSE.backInferred fallback, which
+       is unreachable for the same reason. */
+  check("opens by scoping to ONE garment, sourced as the ACTIVE reference",
+    bottomsPrompt.indexOf("Fit ONLY the active target pants onto the subject with exact 1:1 physical aspect ratio and zero distortion.") === 0,
     bottomsPrompt);
   check("...and never claims the upper garment as the thing to FIT",
     !/target shirt/.test(bottomsPrompt), bottomsPrompt);
-  /* THE TEMPORAL LOCK, which is new. The reported failure is a mid-session revert from
-     the target garment to a generic one and back. The decisive fix is in the payload -
-     applyGarment() no longer ships an image-less set(), see THE GARMENT PIN - but the
-     prompt is re-asserted on every re-drape, so it has to say the same thing each time. */
-  check("...locks the garment for the ENTIRE STREAM, not just the first frame",
-    /Lock this exact lower garment texture and design for the entire stream\./.test(bottomsPrompt),
+  check("...states the specified 1:1/zero-distortion wording verbatim",
+    /with exact 1:1 physical aspect ratio and zero distortion\./.test(bottomsPrompt),
     bottomsPrompt);
-  /* THE PER-FRAME TENSE, restored per region. Paired with real runtime machinery: the
-     topology monitor is what forces an actual re-conditioning dispatch when the body
-     moves. Text alone cannot keep this promise - with a constant prompt and the reference
-     already on the wire, applyGarment() dispatches nothing at all. */
-  check("...asks for CONTINUOUS adaptation across movements and rotations",
-    /Continuously adapt the fit, waistline, and leg drape to the subject's live lower body depth, angle, and volume across all movements and rotations\./.test(bottomsPrompt),
+  check("...and the back-swap sentence, describing behaviour the IMAGE swap actually carries",
+    /Automatically apply the back-side design of the pants when the subject turns around\./.test(bottomsPrompt),
     bottomsPrompt);
   check("...and pins the opposite layer AND the background, unchanged",
-    /Strictly preserve the subject's live upper clothing and background completely unchanged\.$/.test(bottomsPrompt),
+    /Strictly preserve the user's natural proportions, face, upper body, and background\.$/.test(bottomsPrompt),
     bottomsPrompt);
   check("the prompt stays minimal - four instructions, not an assembly",
     bottomsPrompt.length <= 420,
@@ -166,15 +166,15 @@ console.log("\n── §2 THE BOTTOMS ANCHOR: scoped to the lower body, upper la
 console.log("\n── §3 THE TOPS ANCHOR: the exact mirror, per region ──");
 {
   check("opens by scoping to the reference shirt",
-    topsPrompt.indexOf("Fit ONLY the exact target shirt from the reference image onto the subject.") === 0,
+    topsPrompt.indexOf("Fit ONLY the active target shirt onto the subject with exact 1:1 physical aspect ratio and zero distortion.") === 0,
     topsPrompt);
-  check("...locks that shirt for the entire stream",
-    /Lock this exact shirt texture and design for the entire stream\./.test(topsPrompt), topsPrompt);
-  check("...adapts drape and cut - the tops-side wording of the same continuous clause",
-    /Continuously adapt the drape and cut to the subject's live body depth, angle, and volume across all movements and rotations\./.test(topsPrompt),
+  check("...carries the same 1:1/zero-distortion wording",
+    /with exact 1:1 physical aspect ratio and zero distortion\./.test(topsPrompt), topsPrompt);
+  check("...and the back-swap sentence, mirrored for the garment noun",
+    /Automatically apply the back-side design of the garment when the subject turns around\./.test(topsPrompt),
     topsPrompt);
   check("...and pins the LOWER clothing plus background - the mirror of bottoms",
-    /Strictly preserve the subject's live lower clothing and background completely unchanged\.$/.test(topsPrompt),
+    /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(topsPrompt),
     topsPrompt);
 
   /* ── SYMMETRY, asserted on the PAIR ────────────────────────────────────────
@@ -182,30 +182,32 @@ console.log("\n── §3 THE TOPS ANCHOR: the exact mirror, per region ──")
      regression, so the shared shape is checked once rather than inferred from the two
      sections above. */
   check("both open on the same exclusive-scope binding",
-    topsPrompt.startsWith("Fit ONLY the exact target ") &&
-    bottomsPrompt.startsWith("Fit ONLY the exact target "),
+    topsPrompt.startsWith("Fit ONLY the active target ") &&
+    bottomsPrompt.startsWith("Fit ONLY the active target "),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
-  check("...both carry the entire-stream lock and the continuous-adaptation clause",
-    /for the entire stream\./.test(topsPrompt) && /for the entire stream\./.test(bottomsPrompt) &&
-    /Continuously adapt/.test(topsPrompt) && /Continuously adapt/.test(bottomsPrompt),
+  check("...both carry the 1:1 clause and the back-swap sentence",
+    /1:1 physical aspect ratio and zero distortion\./.test(topsPrompt) &&
+    /1:1 physical aspect ratio and zero distortion\./.test(bottomsPrompt) &&
+    /Automatically apply the back-side design/.test(topsPrompt) &&
+    /Automatically apply the back-side design/.test(bottomsPrompt),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
   check("...and neither preserves the very layer it is fitting",
-    !/preserve[^.]*upper clothing/.test(topsPrompt) &&
-    !/preserve[^.]*lower clothing/.test(bottomsPrompt),
+    !/preserve[^.]*upper body/.test(topsPrompt) &&
+    !/preserve[^.]*lower body/.test(bottomsPrompt),
     "a prompt that preserves the layer it is editing cancels itself");
 
-  /* ── WHAT THE WORDING STILL CANNOT DO ──────────────────────────────────────
-     "Adapt to live body depth, angle and volume" is a request, not a channel. Decart's
-     set() takes exactly { prompt, enhance, image } and STRIPS every other key, so no
-     landmark, bounding box or orientation value is on the wire - the pose pipeline
-     controls WHEN to re-condition, never WHAT geometry to send. Asserted so a future
-     reader does not mistake the sentence for evidence that geometry ships. */
-  check("app.js records that no geometry can accompany this wording",
-    /STRIPS every other key/.test(SRC) && /never WHAT geometry to send/.test(SRC),
-    "the prompt asks; only the re-conditioning trigger acts");
-  check("...and the runtime half that makes it true is still wired",
-    /function reconditionForTopology\(/.test(SRC) && /function bodyScaleMatrix\(/.test(SRC),
-    "a continuous-adaptation promise with no dispatch behind it is a claim, not a fix");
+  /* ── WHAT THE BACK-SWAP SENTENCE CANNOT DO ─────────────────────────────────
+     Named here rather than left to be discovered: this sentence is descriptive, not
+     causal. buildPrompt() discards its angle argument, so the prompt text is identical
+     on both sides of a turn; the actual swap is 100% carried by the reference image. */
+  check("app.js records that the prompt text cannot cause the back-swap it describes",
+    /buildPrompt\(item, angleText\) - the function behind/.test(SRC) &&
+    /DISCARDS it,\s*\n\s*returning imageOnlyPrompt\(item\) unconditionally/.test(SRC),
+    "the sentence describes what maybeSwap() already does in pixels, not a new capability");
+  check("...and names the real gap: no back photo means no back view, at all",
+    /THIS ONLY HAPPENS FOR AN ITEM WITH A REAL, DISTINCT BACK PHOTO/.test(SRC) &&
+    /needs either a generated back asset/.test(SRC),
+    "an honest limit belongs on file, not just in a chat reply");
 }
 
 console.log("\n── §4 THE CONTRADICTION IS GONE: no t-shirt anchor on a trouser reference ──");
