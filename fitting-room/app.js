@@ -2878,13 +2878,48 @@ async function startCamera(facing = cameraFacing) {
    block a paying user. 64×36 keeps this well under a millisecond.
    Shared by two callers: cameraLooksBlack() (local #webcam, the credit-saving gate)
    and armFirstFrameBilling() (remote #aiVideo, verifying the first real AI frame). */
+/* ── THE PROBE SURFACE, ALLOCATED ONCE FOR THE PAGE'S LIFETIME ──────────────────
+   sampleVideoLuma() used to build a fresh <canvas> element and a fresh 2D context on
+   EVERY call, and its hottest caller is not an occasional check: armFirstFrameBilling()'s
+   frameReady() runs it per decoded frame, off requestVideoFrameCallback, for the whole
+   reveal gate. That is a DOM element plus a GPU context allocated and thrown away at
+   frame rate, on the one path where a stutter is most visible - the moment the shopper
+   first sees themselves dressed.
+
+   The probe is 64x36 and its size never varies, so there is nothing per-call about the
+   surface itself. Hoisting it makes the steady-state cost one drawImage plus one
+   getImageData, which is the irreducible part.
+
+   OFFSCREENCANVAS WHERE AVAILABLE, and it is a real difference rather than a nicety here:
+   it is not a DOM node at all, so it never touches the document, cannot be reached by a
+   stylesheet or a mutation observer, and does not participate in layout even in principle.
+   The DOM fallback is behaviourally identical on browsers without it.
+
+   willReadFrequently STAYS TRUE on this one, deliberately, and the reasoning is the
+   opposite of a blanket rule: the flag asks for a CPU-backed surface, which makes
+   getImageData cheap and drawImage dearer. That is exactly the right trade for a canvas
+   whose entire job is to be read back, and exactly the WRONG one for a canvas that only
+   ever draws (the 10fps billing path, the recorder's paint loop) - which is why neither
+   of those sets it, and neither should be "upgraded" to. */
+let _lumaProbe = null;
+function lumaProbeContext(cw, ch) {
+  if (_lumaProbe) return _lumaProbe;
+  const surface = typeof OffscreenCanvas !== "undefined"
+    ? new OffscreenCanvas(cw, ch)
+    : Object.assign(document.createElement("canvas"), { width: cw, height: ch });
+  const ctx = surface.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  _lumaProbe = { surface, ctx };
+  return _lumaProbe;
+}
+
 function sampleVideoLuma(v) {
   if (!v || !v.videoWidth || !v.videoHeight) return { ready: false, avgLuma: 0, blackFrac: 1 };
   try {
     const cw = 64, ch = 36;                       // downscaled probe - cheap, enough for a luma verdict
-    const cnv = document.createElement("canvas");
-    cnv.width = cw; cnv.height = ch;
-    const ctx = cnv.getContext("2d", { willReadFrequently: true });
+    const probe = lumaProbeContext(cw, ch);
+    if (!probe) return { ready: false, avgLuma: 0, blackFrac: 1 };   // fail open, as below
+    const ctx = probe.ctx;
     ctx.drawImage(v, 0, 0, cw, ch);
     const data = ctx.getImageData(0, 0, cw, ch).data;
     const total = cw * ch;
@@ -6187,6 +6222,22 @@ function createGarmentComposite(frontImageUrl, backImageUrl, opts = {}) {
       const canvas = off || Object.assign(document.createElement("canvas"), { width: W, height: H });
       const ctx    = canvas.getContext("2d");
 
+      /* HIGH-QUALITY RESAMPLING, and it belongs on THIS canvas specifically. Both panels
+         are catalog packshots being downscaled into a fixed reference frame, and the
+         browser default (imageSmoothingQuality "low") is a cheap box filter that visibly
+         softens fine print and aliases tight weave patterns. This reference IS what
+         Decart reproduces onto the shopper, so a detail lost here is a detail lost in
+         every frame of the session.
+
+         IT COSTS NOTHING AT RUNTIME. This canvas is built once per garment pair and the
+         result is memoized; the extra filter taps are paid on a build that already
+         decodes two full packshots. Deliberately NOT applied to the live paint loops -
+         createThrottledInputStream()'s 10fps drawFrame and the recorder's rAF loop draw
+         every frame, where the same flag would be a per-frame cost against exactly the
+         lag this pass exists to remove. */
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+
       ctx.fillStyle = backdrop.fill;
       ctx.fillRect(0, 0, W, H);
 
@@ -6283,6 +6334,22 @@ function stitchLookBlob(topUrl, bottomUrl) {
       const off    = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(LOOK_W, LOOK_H) : null;
       const canvas = off || Object.assign(document.createElement("canvas"), { width: LOOK_W, height: LOOK_H });
       const ctx    = canvas.getContext("2d");
+
+      /* HIGH-QUALITY RESAMPLING, and it belongs on THIS canvas specifically. Both panels
+         are catalog packshots being downscaled into a fixed reference frame, and the
+         browser default (imageSmoothingQuality "low") is a cheap box filter that visibly
+         softens fine print and aliases tight weave patterns. This reference IS what
+         Decart reproduces onto the shopper, so a detail lost here is a detail lost in
+         every frame of the session.
+
+         IT COSTS NOTHING AT RUNTIME. This canvas is built once per garment pair and the
+         result is memoized; the extra filter taps are paid on a build that already
+         decodes two full packshots. Deliberately NOT applied to the live paint loops -
+         createThrottledInputStream()'s 10fps drawFrame and the recorder's rAF loop draw
+         every frame, where the same flag would be a per-frame cost against exactly the
+         lag this pass exists to remove. */
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
 
       /* Sampled from the two packshots, so the surround and the gap between the panels are
          the SAME colour as the background already inside each garment photo. Replaces the
