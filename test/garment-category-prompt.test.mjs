@@ -205,10 +205,10 @@ console.log("\n── §3 THE TOPS ANCHOR: the exact mirror, per region AND per 
      still never computes angle==="back" at all, so BACK_CATEGORY_ANCHOR being reachable
      here does not mean every item can reach it. */
   check("app.js records that buildPrompt() now threads angle rather than discarding it",
-    /buildPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC),
+    /buildPrompt\(item, angle = "front", morph = null\) \{\s*\n\s*return imageOnlyPrompt\(item, angle, morph\);/.test(SRC),
     "a declared-but-unused parameter is the exact regression three reports were filed against");
   check("...and that the selection is a frozen snapshot, never a live re-read",
-    /buildPrompt\(item, angleAtStart\)/.test(SRC) && !/buildPrompt\(item, effectiveAngle\(\)\)/.test(SRC),
+    /buildPrompt\(item, angleAtStart, morphAtStart\)/.test(SRC) && !/buildPrompt\(item, effectiveAngle\(\)/.test(SRC),
     "a live read here would reopen the TOCTOU race angle-race.test.mjs was written to close");
   check("...and names the gap that remains: no back photo means no back angle, ever",
     /THE ONE GAP THIS REVISION DOES NOT CLOSE/.test(SRC) &&
@@ -262,8 +262,40 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;\s*\n\s*return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? table\.bottom : table\.top\],\s*\n\s*\[P\.HIGH, STRICT_REFERENCE_LOCK\],\s*\n\s*\]\);/.test(SRC),
+    /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;\s*\n\s*const anatomy = morph && morph\.profile \? ANATOMY_LOCK\[morph\.profile\] : "";\s*\n\s*return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? table\.bottom : table\.top\],\s*\n\s*\[P\.HIGH, STRICT_REFERENCE_LOCK\],\s*\n\s*\[P\.MED,\s+anatomy\],\s*\n\s*\[P\.LOW,\s+anatomy \? ANATOMY_GUARDRAIL : ""\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
+  /* ── THE ANATOMY CLAUSES MUST BE SHEDDABLE, and this is where that is pinned ──────
+     The inverse of the assertion below. The anchor is P.CORE because it must never be
+     dropped; these two are P.MED/P.LOW because they must ALWAYS be droppable. Promoting
+     either to P.CORE is the change that would let a long anchor plus an anatomy clause
+     reach fitPrompt()'s hard slice, which cuts at the END - taking STRICT_REFERENCE_LOCK
+     off the wire on this path and DENSE.select off it on the composite one. Both are
+     reproduced production bugs (washed-out colour; the 23f5953 double print), so the
+     priority tags are load-bearing rather than decorative. */
+  check("the anatomy clauses are sheddable - never P.CORE",
+    /\[P\.MED,\s+anatomy\]/.test(SRC) && /\[P\.LOW,\s+anatomy \? ANATOMY_GUARDRAIL : ""\]/.test(SRC) &&
+    !/\[P\.CORE,\s+anatomy\]/.test(SRC) && !/\[P\.HIGH,\s+anatomy\]/.test(SRC),
+    "if these cannot shed, a long anchor truncates the fidelity/panel clause off the end");
+  /* THE BUDGET, WITH THE NEW CLAUSES ACTUALLY IN - the check §5 opened with, re-run on
+     the worst case that now exists. Asserting the bare prompts fits would no longer
+     prove anything: the clauses only appear when a body geometry was classified. */
+  for (const profile of ["curve", "broad"]) {
+    for (const [label, item] of [["tops", SHIRT], ["bottoms", PANTS]]) {
+      for (const angle of ["front", "back"]) {
+        const withAnatomy = imageOnlyPrompt(item, angle, { profile });
+        check(`${label}/${angle} + ${profile} anatomy still fits the ${CONFIG.PROMPT_MAX_CHARS}-char budget`,
+          withAnatomy.length <= CONFIG.PROMPT_MAX_CHARS, `${withAnatomy.length} chars`);
+      }
+    }
+  }
+  /* A null/absent morphology must produce EXACTLY the prompt that shipped before this
+     feature existed - the property that makes every degraded path (no detector, cold EMA,
+     dead-band build) a safe no-op rather than a different render. */
+  check("no morphology reading -> byte-identical to the pre-feature prompt",
+    imageOnlyPrompt(SHIRT, "front", null) === imageOnlyPrompt(SHIRT, "front") &&
+    !/Fit to (curved|broad-shoulder) geometry/.test(imageOnlyPrompt(SHIRT, "front", null)) &&
+    !/Fit to (curved|broad-shoulder) geometry/.test(imageOnlyPrompt(PANTS, "back", { profile: null })),
+    "an unclassified body must not change the prompt at all");
   /* The selected anchor is the one clause that must NEVER shed - it is the entire fix,
      for BOTH the category axis and (now) the front/back axis: whichever table `angle`
      selected, the P.CORE tag is what stops it being dropped under budget pressure. */

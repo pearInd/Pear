@@ -67,6 +67,12 @@ function makeHarness({ composite = true } = {}) {
        into the prompt builders; driven from sandbox._profile so the cases below can prove
        a pose change is prompt-only too - the reference image must not move for it. */
     profileActive: () => sandbox._profile,
+    /* The body-geometry axis, snapshotted beside angle and profile by the same TOCTOU
+       freeze. Driven from sandbox._morph so the cases below can prove that a morphology
+       re-classification is prompt-only too: the shopper's build changing must re-state
+       the drape, never re-upload the reference - the exact property this suite exists
+       for, arriving on a third channel. */
+    activeMorphology: () => sandbox._morph,
     activeImageOf: () => "https://cdn.test/front.jpg",
     referenceImageFor: async (_i, _a, out) => { out.composite = composite; return sandbox._ref; },
     compositeActiveFor: () => composite,
@@ -83,11 +89,13 @@ function makeHarness({ composite = true } = {}) {
     hasDedicatedAngle: () => true,
     describeCompositeLayout: () => "layout",
     // Both builders echo the profile flag so the assertions can read what was actually sent.
-    buildCompositePrompt: (_it, angle, inProfile) => `COMPOSITE_PROMPT_${angle}${inProfile ? "_PROFILE" : ""}`,
-    buildPrompt: () => "PLAIN_PROMPT",
+    buildCompositePrompt: (_it, angle, inProfile, morph) =>
+      `COMPOSITE_PROMPT_${angle}${inProfile ? "_PROFILE" : ""}${morph && morph.profile ? "_" + morph.profile.toUpperCase() : ""}`,
+    buildPrompt: (_it, _angle, morph) => `PLAIN_PROMPT${morph && morph.profile ? "_" + morph.profile.toUpperCase() : ""}`,
     angleClause: (_it, _a, _c, inProfile) => `_CLAUSE${inProfile ? "_PROFILE" : ""}`,
     _angle: "front",
     _profile: false,
+    _morph: null,
     _ref: null,
     _gallery: { front: "https://cdn.test/front.jpg", back: "https://cdn.test/back.jpg" },
   };

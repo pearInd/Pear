@@ -222,6 +222,7 @@ const SUITES = [
   ["body-presence-gate", "body-presence-gate.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
   ["body-topology", "body-topology.test.mjs"],
+  ["morphology-refit", "morphology-refit.test.mjs"],
   ["first-frame-integrity", "first-frame-integrity.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],

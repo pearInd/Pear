@@ -843,8 +843,8 @@ console.log("\n── §6 NO TOCTOU: the pose is a frozen snapshot, like the ang
      selector now, not a placeholder - and it is STILL the frozen snapshot, never a live
      effectiveAngle() read, which is the one property this suite actually owns. */
   check("both prompt builders receive the frozen snapshot, never a fresh read",
-    /buildCompositePrompt\(item, angleAtStart, profileAtStart\)/.test(apply) &&
-    /buildPrompt\(item, angleAtStart\)/.test(apply) &&
+    /buildCompositePrompt\(item, angleAtStart, profileAtStart, morphAtStart\)/.test(apply) &&
+    /buildPrompt\(item, angleAtStart, morphAtStart\)/.test(apply) &&
     !/angleClause\(item, angleAtStart/.test(apply), apply.slice(-600));
   check("applyGarment never re-reads profileActive() after the await",
     apply.split("profileActive()").length - 1 === 1, "expected exactly one read");

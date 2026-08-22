@@ -119,13 +119,13 @@ console.log("\n── §2 BACK-VIEW RENDERING: image-swap AND prompt now agree �
      is unchanged - reasserted here rather than dropped, because that is the property that
      keeps this fix from reintroducing the mixing-bug race angle-race.test.mjs exists for. */
   check("buildPrompt(item, angle) genuinely selects between the two anchor tables",
-    /function buildPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(APP),
+    /function buildPrompt\(item, angle = "front", morph = null\) \{\s*\n\s*return imageOnlyPrompt\(item, angle, morph\);/.test(APP),
     "a parameter that is declared but not threaded through is the exact regression fixed");
   check("...and imageOnlyPrompt() branches on it - BACK_CATEGORY_ANCHOR is reachable",
     /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(APP),
     "declaring a back anchor table nobody ever selects is the same bug with extra steps");
   check("applyGarment() passes the FROZEN angleAtStart - never a live effectiveAngle() read",
-    /buildPrompt\(item, angleAtStart\)/.test(APP) && !/buildPrompt\(item, effectiveAngle\(\)\)/.test(APP),
+    /buildPrompt\(item, angleAtStart, morphAtStart\)/.test(APP) && !/buildPrompt\(item, effectiveAngle\(\)/.test(APP),
     "a live read here reopens the exact TOCTOU race angle-race.test.mjs was written to fix");
   check("...and the image-swap mechanism underneath is untouched - the fix is additive",
     /aiVideo\.srcObject = editedStream;/.test(APP) &&

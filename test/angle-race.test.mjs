@@ -270,7 +270,7 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
     const body = (SRC.match(re) || [""])[0];
     const codeBody = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     check(`${name} delegates to the category resolver and assembles nothing`,
-      /return (imageOnlyPrompt\(item(, angle)?\)|lookAnchorPrompt\(\));/.test(codeBody) &&
+      /return (imageOnlyPrompt\(item(, angle(, morph)?)?\)|lookAnchorPrompt\(\));/.test(codeBody) &&
       !/fitPrompt\(/.test(codeBody), codeBody.slice(-300));
   }
   /* buildCompositePrompt IS AN EXCEPTION TO "assembles nothing", checked on its own terms.
@@ -281,17 +281,27 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
      the angle it assembles with is still the exact parameter it was called with, never a
      live effectiveAngle()/compositeActiveFor() read performed inside the builder - so the
      TOCTOU race this file exists to catch is still structurally impossible here. */
-  const compositeBody = (SRC.match(/function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/) || [""])[0];
+  const compositeBody = (SRC.match(/function buildCompositePrompt\(item, angle, inProfile, morph = null\)[\s\S]*?\n}/) || [""])[0];
   check("buildCompositePrompt assembles the panel contract, but calls no live orientation read",
     /imageOnlyPrompt\(item, angle\)/.test(compositeBody) &&
-    !/effectiveAngle\(\)/.test(compositeBody) && !/compositeActiveFor\(/.test(compositeBody),
+    !/effectiveAngle\(\)/.test(compositeBody) && !/compositeActiveFor\(/.test(compositeBody) &&
+    /* THE MORPHOLOGY PARAMETER IS THE SAME CONTRACT, one axis later. The anatomy clauses
+       are selected from `morph`, which is applyGarment()'s frozen morphAtStart - so a
+       builder that called activeMorphology() itself would reopen this suite's whole
+       subject on a third channel: a prompt draping for one body geometry beside a
+       reference resolved while the EMA read another. */
+    !/activeMorphology\(/.test(compositeBody),
     compositeBody);
-  check("buildPrompt/buildCustomPrompt THREAD their angle param",
-    /function buildPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC) &&
-    /function buildCustomPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC),
-    "silently dropping the parameter again is the exact regression this revision fixed");
+  check("buildPrompt/buildCustomPrompt THREAD their angle AND morph params",
+    /function buildPrompt\(item, angle = "front", morph = null\) \{\s*\n\s*return imageOnlyPrompt\(item, angle, morph\);/.test(SRC) &&
+    /function buildCustomPrompt\(item, angle = "front", morph = null\) \{\s*\n\s*return imageOnlyPrompt\(item, angle, morph\);/.test(SRC),
+    "silently dropping either parameter is the exact regression this revision fixed");
   check("...and applyGarment() passes the FROZEN angleAtStart, never a live effectiveAngle() read",
-    /buildPrompt\(item, angleAtStart\)/.test(SRC) && !/buildPrompt\(item, effectiveAngle\(\)\)/.test(SRC),
+    /buildPrompt\(item, angleAtStart, morphAtStart\)/.test(SRC) &&
+    !/buildPrompt\(item, effectiveAngle\(\)/.test(SRC) &&
+    /* morphAtStart is frozen in the same breath as angleAtStart and profileAtStart. A
+       live activeMorphology() read in the payload literal is the same race. */
+    !/buildPrompt\(item, angleAtStart, activeMorphology\(\)\)/.test(SRC),
     "a live read here is the precise race this suite's angleClause() fix already closed once");
 
   check("the passthrough clamp is still on file, and named as the first to restore",

@@ -31,6 +31,8 @@
  * @property {number}   BODY_RECONDITION_COOLDOWN_MS Minimum gap between two re-conditioning dispatches (ms).
  * @property {number}   CONDITION_DEBOUNCE_MS   Trailing-edge coalescing window before a re-drape dispatches (ms); capped by the cooldown as a max-wait.
  * @property {number}   BODY_TRACK_HOLD_MS      How long a lost skeleton holds the last valid fit before the baseline is dropped (ms).
+ * @property {number}   MORPH_MIN_SAMPLES       EMA samples required before a body-geometry classification may steer the prompt.
+ * @property {number}   MORPH_PROFILE_SWITCH_FRAMES Consecutive agreeing readings before a new body geometry is committed.
  * @property {number}   PLAYOUT_DELAY_HINT      Chromium RTCRtpReceiver.playoutDelayHint (seconds). 0 = render ASAP.
  * @property {boolean}  PREFER_LOW_LATENCY_CODEC Opt-in SDP codec-preference munge (default OFF - see note below).
  * @property {string[]} CODEC_PREFERENCE        Codec order tried when the munge flag is ON (reorder only, never remove).
@@ -227,6 +229,34 @@ export const CONFIG = Object.freeze({
      rode the turn" and "the garment re-derived itself from a frame with no body in it".
      Past this, the baseline is dropped and the next clean read re-acquires from scratch. */
   BODY_TRACK_HOLD_MS:      1500,
+
+  /* ── Morphological re-fitting (see the MORPHOLOGICAL RE-FITTING block in app.js) ──
+     How many EMA samples must land before a body-geometry classification is allowed to
+     steer the prompt. At the pose loop's 240ms cadence this is ~1s of tracking.
+
+     THE WARM-UP IS THE WHOLE POINT. With alpha = 0.15 the filter's first sample IS the
+     raw reading - there is nothing to average against yet - so dispatching on it would
+     ship a drape instruction derived from exactly one frame of landmarks, which is the
+     jitter the EMA exists to remove. Below this count snapshot() returns null and the
+     anatomy clause is simply not injected: the prompt falls back to the category anchor
+     it shipped before this feature existed, which is a safe default rather than a guess. */
+  MORPH_MIN_SAMPLES:       6,
+  /* Consecutive smoothed readings that must agree before a NEW body geometry replaces
+     the committed one.
+
+     THE EMA ALONE IS NOT ENOUGH, and this is the measured reason rather than a guess. At
+     alpha = 0.15 one wild frame moves the estimate 15% of the way to it - which bounds
+     the MAGNITUDE of the error but not its CONSEQUENCE, because a body already sitting
+     near a classification threshold only needs a small push to cross it. A shopper
+     measured at shoulder 1.0 / hip 1.1 (curve) reclassifies as broad off a SINGLE
+     blown-out frame, even though the smoothed widths barely moved.
+
+     Committing only after N consecutive agreeing readings makes that structurally
+     impossible: the outlier has to persist to be believed, which is precisely the
+     difference between a landmark glitch and a shopper who actually turned or swapped
+     places with someone else. Three at the pose loop's 240ms cadence is ~0.7s of
+     agreement - fast enough to feel live, long enough that no single frame decides. */
+  MORPH_PROFILE_SWITCH_FRAMES: 3,
 
   /* ── secure proxy endpoints (same-origin; see ../server.js) ─────────────── */
   TOKEN_ENDPOINT:  "/api/realtime-token",

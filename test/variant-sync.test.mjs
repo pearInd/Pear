@@ -136,22 +136,40 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
      to the two purely-delegating builders, and buildCompositePrompt is checked separately
      for the same underlying property (it selects on angle, never re-reads it live). */
   check("every builder resolves its prompt through the category+angle resolver",
-    (APP.match(/return imageOnlyPrompt\(item, angle\);/g) || []).length >= 2 &&
+    (APP.match(/return imageOnlyPrompt\(item, angle, morph\);/g) || []).length >= 2 &&
     /return lookAnchorPrompt\(\);/.test(APP) &&
-    /function buildCompositePrompt\(item, angle, inProfile\) \{[\s\S]*?imageOnlyPrompt\(item, angle\)/.test(APP),
+    /function buildCompositePrompt\(item, angle, inProfile, morph = null\) \{[\s\S]*?imageOnlyPrompt\(item, angle\)/.test(APP),
     "buildPrompt, buildCustomPrompt bare-return it; buildCompositePrompt calls it as part of its own assembly; buildLookPrompt is the full-look exemption");
   check("...and neither anchor TABLE has an interpolation hole to leak a variant into",
     /const CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(APP) &&
     /const BACK_CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(APP) &&
     !/CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,900}?\$\{/.test(APP),
     "a template hole here is how a colour word gets back onto the wire");
-  /* The resolver may branch on CATEGORY and ANGLE, and nothing else. A third input
-     threaded in from a variant/colour/pose is how a description creeps back onto the
-     wire - the exact failure this suite was written to catch on the category axis, now
-     checked against the wider (but still exactly two-axis) surface. */
-  check("...and the resolver branches on category and angle alone - nothing else",
-    /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;\s*\n\s*return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? table\.bottom : table\.top\],/.test(APP),
+  /* ── THE AXIS COUNT WENT FROM TWO TO THREE, AND WHY THAT IS STILL SAFE ─────────
+     This used to assert CATEGORY and ANGLE "and nothing else". Morphological re-fitting
+     added a third: BODY GEOMETRY, selecting an ANATOMY_LOCK clause off the live pose
+     EMA. Worth being exact about why that does not reopen what this suite guards.
+
+     THE REAL INVARIANT WAS NEVER THE AXIS COUNT - it is that no axis can put a garment
+     DESCRIPTION on the wire. The two failures this suite exists for are a colour word
+     and a variant noun reaching the prompt, and both arrive the same way: an axis whose
+     values are CATALOG METADATA, interpolated into a string. Body geometry is not
+     metadata - it is measured off the shopper's own skeleton, its values are a closed
+     two-entry table, and every character of both entries describes DRAPE, never the
+     garment. It cannot carry a colour, a variant or a product noun because none of those
+     exist anywhere on its path.
+
+     SO THE CHECK IS TIGHTER THAN A COUNT, and deliberately: the third axis must select
+     from ANATOMY_LOCK and nothing else. A future edit that interpolated so much as one
+     item field into that branch fails here, which is the property that actually matters.
+     The clauses' own sheddable priorities are asserted by image-first §2. */
+  check("...and the resolver branches on category, angle and body geometry alone",
+    /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;\s*\n\s*const anatomy = morph && morph\.profile \? ANATOMY_LOCK\[morph\.profile\] : "";\s*\n\s*return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? table\.bottom : table\.top\],/.test(APP),
     "any other input to this function is a new axis the prompt can vary on");
+  check("...and the geometry axis can only ever select a frozen ANATOMY_LOCK clause",
+    /const ANATOMY_LOCK = Object\.freeze\(\{/.test(APP) &&
+    !/ANATOMY_LOCK = Object\.freeze\(\{[\s\S]{0,400}?\$\{/.test(APP),
+    "a template hole in ANATOMY_LOCK is how a product word would reach the wire through the new axis");
   /* Comments stripped first: variantMetaOf's own doc block QUOTES the old call as the
      thing it replaced, and a check that trips over the explanation of the fix is worse
      than no check - it would force whoever reads it to delete the documentation. */

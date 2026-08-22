@@ -58,6 +58,8 @@ const {
   BODY_RECONDITION_COOLDOWN_MS,
   CONDITION_DEBOUNCE_MS,
   BODY_TRACK_HOLD_MS,
+  MORPH_MIN_SAMPLES,
+  MORPH_PROFILE_SWITCH_FRAMES,
   TOKEN_ENDPOINT,
   HEALTH_ENDPOINT,
   SDK_URLS,
@@ -7530,6 +7532,66 @@ const STRICT_REFERENCE_LOCK =
   " Exactly match color, pattern, logos, and cut." +
   " Do NOT invent, add, or alter any details.";
 
+
+/* ── DYNAMIC ANATOMY LOCK - the prompt half of morphological re-fitting ──────────
+   PAIRED WITH the MORPHOLOGICAL RE-FITTING block further down this file. That block
+   measures and classifies; these two strings are the only thing it is allowed to say on
+   the wire. Read them together - deleting either half leaves the other lying, the same
+   way the topology monitor and the "dynamic body" anchor depend on each other.
+
+   ── WHY THESE ARE ~100 CHARACTERS AND NOT THE ~290 THE SPEC WORDS ──────────────
+   Not a style preference - a measured hard constraint, recorded here so the next person
+   to "restore the full wording" reads the arithmetic before they do it:
+
+     PROMPT_MAX_CHARS is 650, and app.js:6769 forbids raising it because the ceiling is
+     Decart's (>226 tokens is a hard REJECT, not a truncation). The worst-case combined
+     prompt - buildCompositePrompt(item, "back", inProfile=true) - already measures 638.
+     That is TWELVE characters of headroom. Every part in that builder is P.CORE, which
+     fitPrompt() cannot shed, so an over-long addition does not degrade: it falls through
+     to the hard slice, which cuts at the END and would take DENSE.select ("Use the RIGHT
+     half only; ignore the LEFT") off the wire. A split reference with no panel contract
+     is the 23f5953 double-print bug, verbatim.
+
+   SO THE CLAUSES SHED INSTEAD OF TRUNCATING, and that is the whole design of how they
+   are wired (see buildCompositePrompt). They carry the spec's INSTRUCTION - which
+   geometry, where the fabric contours, where it tapers, where it wraps, that tension is
+   physical - and drop its ceremony: the "[Dynamic Anatomy Lock: ...]" label is metadata
+   addressed to a human reader, and a label costs the same budget as an instruction.
+
+   THEY DESCRIBE GEOMETRY, NEVER A PERSON, and that is deliberate on two counts. The
+   drafted wording named "physical female/curved anatomical proportions"; a sex word in a
+   prompt is a token a diffusion model can steer the whole subject toward, which is the
+   same mechanism as the tuxedo report - a description competing with the reference pixels,
+   here competing over the SHOPPER rather than the garment. What is measured is the ratio
+   of two skeletal widths, so what is said is the ratio of two skeletal widths. */
+const ANATOMY_LOCK = Object.freeze({
+  curve: "Fit to curved geometry: contour the chest, taper at the waist, wrap the hips, keep fabric tension true.",
+  broad: "Fit to broad-shoulder geometry: drape from the shoulders across the chest, falling down a straight torso.",
+});
+
+/* ── THE CONSISTENCY GUARDRAIL - only the half that is not already on the wire ────
+   The spec's MANDATORY block is four directives, and three of them are already shipping
+   verbatim in every prompt this file builds. Restating them would spend budget the
+   combined path measurably does not have (see above) to say things twice:
+
+     "exact 1:1 camera aspect ratio"      = CATEGORY_ANCHOR's "Maintain 1:1 body ratio
+                                            without distortion."
+     "exact original garment color/print" = STRICT_REFERENCE_LOCK's "Exactly match color,
+                                            pattern, logos, and cut."
+     "Zero hallucinations"                = STRICT_REFERENCE_LOCK's "Do NOT invent, add,
+                                            or alter any details."
+
+   What is genuinely NEW is what this says: the anchors preserve "proportions, face, ...
+   and background" but never name the NECK or HEAD as things not to stretch, and nothing
+   anywhere conditions colour/print fidelity on LIGHTING. Both are additions, so both are
+   here; the redundant three are not.
+
+   LOWEST PRIORITY OF THE TWO ADDITIONS, on purpose. If only one new clause fits, the
+   anatomy lock is the one that changes the render - this is a restatement-grade hedge
+   over instructions already present, so it is the correct thing to lose first. */
+const ANATOMY_GUARDRAIL =
+  "Never distort the neck, head or background; hold colour and print under any lighting.";
+
 /* ── REVISION: DYNAMIC BODY, STATIC GARMENT ──────────────────────────────────────
    THE REPORT: a shopper who is fitted at 0 degrees and then turns 90, or who adds real
    profile volume (a cushion under the shirt, a belly the front view does not show), gets
@@ -7861,7 +7923,7 @@ function isBottomsGarment(item) {
  * @param {object|null} item - the garment being fitted; null resolves to the tops branch.
  * @returns {string}
  */
-function imageOnlyPrompt(item, angle = "front") {
+function imageOnlyPrompt(item, angle = "front", morph = null) {
   /* TWO PARTS NOW, NOT ONE - the first clause bought back since this went to a single
      frozen anchor. See CATEGORY_ANCHOR above for the reports that drove the anchor split,
      for the full list of what came off the wire, and for why bottoms names the lower body
@@ -7897,10 +7959,24 @@ function imageOnlyPrompt(item, angle = "front") {
      not the constraint - comfortably inside the 650-char ceiling even with both bought
      back - so the only question for the next one is the same as this one: is the text
      worth the weight it takes from the reference image. One at a time, re-tested live. */
+  /* ── THE ANATOMY CLAUSES RIDE BELOW P.HIGH, AND THAT IS LOAD-BEARING ──────────
+     `morph` is a FROZEN snapshot passed in by the caller - never a live read of the
+     morphology filter - for exactly the TOCTOU reason `angle` is a parameter: a prompt
+     built against one reading and an image resolved against another is the mixing bug
+     applyGarment()'s opening comment records. A null morph (no detector, EMA still
+     warming, or a build in the classifier's dead band) injects nothing at all, which
+     resolves to the prompt this function returned before the feature existed.
+
+     Priorities are what keep this safe rather than merely short: P.MED/P.LOW mean
+     fitPrompt() SHEDS these two if an anchor ever grows, instead of letting the total
+     reach the hard slice that cuts the fidelity sentence off the end. */
   const table = angle === "back" ? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;
+  const anatomy = morph && morph.profile ? ANATOMY_LOCK[morph.profile] : "";
   return fitPrompt([
     [P.CORE, isBottomsGarment(item) ? table.bottom : table.top],
     [P.HIGH, STRICT_REFERENCE_LOCK],
+    [P.MED,  anatomy],
+    [P.LOW,  anatomy ? ANATOMY_GUARDRAIL : ""],
   ]);
 }
 
@@ -8284,14 +8360,33 @@ function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
  * @param {boolean} inProfile     threaded into angleClause() for the edge-on depth clause
  * @returns {string}
  */
-function buildCompositePrompt(item, angle, inProfile) {
+function buildCompositePrompt(item, angle, inProfile, morph = null) {
   const a = angle === "back" ? "back" : "front";
+  /* ── THE ANATOMY CLAUSES ARE ADDED HERE, NOT PASSED INTO imageOnlyPrompt() ──────
+     THIS IS THE ONE LINE THAT PROTECTS COMBINED MODE, so it is worth being explicit
+     about why the obvious form is wrong. Threading `morph` into the imageOnlyPrompt()
+     call above would fold the anatomy text INSIDE that call's return value - and this
+     builder consumes that value as a single [P.CORE, ...] part. Anything inside a P.CORE
+     part is unsheddable by construction, so the clause would ride all the way to
+     fitPrompt()'s hard slice and take DENSE.select off the END of the prompt with it.
+     That is the 23f5953 double-print bug (a split reference with no panel contract), and
+     it is precisely the regression this feature is forbidden to cause.
+
+     Adding them as SIBLING parts at P.MED/P.LOW gives the shed ladder instead, measured
+     against the real builder:
+       front, upright     451 -> 641 with both clauses            (both ship)
+       back,  upright     516 -> 706, sheds the guardrail -> 620  (anatomy ships)
+       back,  in profile  638 -> 828, sheds both        -> 638    (contract INTACT)
+     The worst case degrades to today's exact prompt, byte for byte. It never truncates. */
+  const anatomy = morph && morph.profile ? ANATOMY_LOCK[morph.profile] : "";
   return fitPrompt([
     [P.CORE, imageOnlyPrompt(item, angle)],
     [P.CORE, DENSE.contract],
     [P.CORE, inProfile ? DENSE.poseProfile[a] : DENSE.pose[a]],
     [P.CORE, DENSE.select[a]],
     [P.CORE, inProfile ? DENSE.profileLateral : ""],
+    [P.MED,  anatomy],
+    [P.LOW,  anatomy ? ANATOMY_GUARDRAIL : ""],
   ]);
 }
 
@@ -8536,6 +8631,13 @@ async function applyGarment(item) {
      moment than the reference resolved for. Cheaper to be one tick stale than internally
      inconsistent - and the next tick corrects it. */
   const profileAtStart = profileActive();
+  /* THE THIRD FREEZE, for the third thing that samples on its own clock. The morphology
+     EMA is fed by the pose loop every 240ms and is therefore free to re-classify during
+     the await below - and a prompt that opens by draping for one geometry while the
+     reference was resolved for a body reading another is the same self-contradiction the
+     two freezes above exist to prevent, arriving through a third channel. Snapshot here,
+     pass it down; never let a builder read the live filter. */
+  const morphAtStart = activeMorphology();
   const activeImg = activeImageOf(item);
   const refInfo   = {};                                          // ← filled in by referenceImageFor
   let   imageRef  = await referenceImageFor(item, activeImg, refInfo);   // Blob for combined, URL otherwise
@@ -8675,8 +8777,8 @@ async function applyGarment(item) {
      governs FRONT vs BACK on either one. */
   const payload = {
     prompt: clampPromptForWire(usingComposite
-      ? buildCompositePrompt(item, angleAtStart, profileAtStart)
-      : buildPrompt(item, angleAtStart),
+      ? buildCompositePrompt(item, angleAtStart, profileAtStart, morphAtStart)
+      : buildPrompt(item, angleAtStart, morphAtStart),
       "applyGarment"),
     enhance: false,
     /* Unconditional: the garment pin above returns early rather than reaching here without
@@ -8708,6 +8810,16 @@ async function applyGarment(item) {
       (item._compositeLayout ? ` · ${describeCompositeLayout(item._compositeLayout)}` : "") +
       (item.composite ? " · built by widget" : " · built locally")
     : "single-asset (no panel contract in the prompt)");
+  /* The morphology actually used by the payload above - frozen, not a fresh read, for
+     the same reason the angle line above reports angleAtStart. "off" distinguishes a
+     detector that never loaded from a body the classifier put in its dead band, because
+     those need completely different debugging. */
+  console.log("anatomy  :", morphAtStart
+    ? `${morphAtStart.profile || "neutral (dead band)"} · shoulder ${morphAtStart.shoulderWidth.toFixed(3)}` +
+      ` · hip ${morphAtStart.hipWidth.toFixed(3)}` +
+      ` · WHR ${morphAtStart.whr === null ? "n/a" : morphAtStart.whr.toFixed(3)}` +
+      ` · ${morphAtStart.samples} EMA samples`
+    : "off (no reading - detector absent, session cold, or EMA still warming)");
   console.log("prompt   :", payload.prompt);
   console.groupEnd();
 
@@ -9126,8 +9238,8 @@ const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like lo
    NOT called any more; its assembled panel-contract/pose/DENSE machinery is a different,
    heavier design this revision deliberately did not revive - see its own comment for why
    the minimal per-orientation anchor is the one that shipped instead. */
-function buildPrompt(item, angle = "front") {
-  return imageOnlyPrompt(item, angle);
+function buildPrompt(item, angle = "front", morph = null) {
+  return imageOnlyPrompt(item, angle, morph);
 }
 
 /**
@@ -9147,8 +9259,8 @@ function buildPrompt(item, angle = "front") {
  * @param {object} item - a custom item ({ custom:true, garmentType, img, color })
  * @returns {string}
  */
-function buildCustomPrompt(item, angle = "front") {
-  return imageOnlyPrompt(item, angle);
+function buildCustomPrompt(item, angle = "front", morph = null) {
+  return imageOnlyPrompt(item, angle, morph);
 }
 
 const APPLY_ATTEMPTS = 2;    // set() tries per apply - see applyActive()
@@ -12178,6 +12290,159 @@ function bodyScaleMatrix(world, image) {
   };
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   MORPHOLOGICAL RE-FITTING - the ANATOMY axis, on top of the existing scale matrix
+   ══════════════════════════════════════════════════════════════════════════════
+   WHAT THIS ADDS THAT bodyScaleMatrix() DID NOT. That function already measures the two
+   width descriptors (BUILD = shoulder/torso, TAPER = hip/shoulder) and its comment states
+   its own job plainly: it decides WHEN to re-condition, and "the prompt states the
+   requirement (narrow or wide); this decides when to restate it". What it never did was
+   CLASSIFY - turn those ratios into a named body geometry the prompt can be steered on.
+   That classification is this block, and it is strictly additive: nothing here feeds
+   topologyDelta(), moves a tracker baseline, or changes when a re-drape fires.
+
+   THE THRESHOLDS ARE THE SPEC'S, VERBATIM, and they leave a deliberate DEAD BAND:
+     hip >= shoulder * 0.9   -> "curve"    (hip-dominant / hourglass)
+     shoulder > hip * 1.2    -> "broad"    (shoulder-dominant / V-taper)
+   Since 1/1.2 = 0.8333, any body whose hip/shoulder ratio sits in [0.8333, 0.9) matches
+   NEITHER rule and classifies as null - no anatomy clause is injected at all. That gap is
+   a feature, not an oversight: it is the hysteresis that stops a mid-range build
+   oscillating between two contradictory draping instructions frame to frame, and it is
+   why this needs no separate hysteresis timer of the kind the ORIENTATION watcher carries.
+
+   THESE ARE BODY-GEOMETRY LABELS, NOT A SEX CLASSIFIER. The spec names typical male and
+   female morphologies as the motivating cases and that is fair as motivation, but what is
+   measured is the ratio of two skeletal widths and nothing else. Plenty of men are
+   hip-dominant and plenty of women are shoulder-dominant; both get the drape that matches
+   the body actually in frame, which is the entire point of measuring instead of assuming.
+   The strings this drives (ANATOMY_LOCK) therefore describe GEOMETRY, never a person. */
+
+/* Smoothing factor for the morphology EMA. Spec'd at 0.15: low enough that a single
+   noisy landmark frame moves the estimate ~15% of the way and no further, so the
+   classification cannot flip on one bad read. */
+const MORPH_EMA_ALPHA = 0.15;
+
+/**
+ * Classify a body geometry from two smoothed widths. Pure - no state, no clock.
+ *
+ * @param {number} shoulderWidth  smoothed shoulder breadth (world units)
+ * @param {number} hipWidth       smoothed hip/pelvic breadth (world units)
+ * @returns {"curve"|"broad"|null} null = neither rule matched (the dead band above)
+ */
+function geometryProfileFrom(shoulderWidth, hipWidth) {
+  if (!(shoulderWidth > 1e-6) || !(hipWidth > 1e-6)) return null;
+  if (hipWidth >= shoulderWidth * 0.9) return "curve";
+  if (shoulderWidth > hipWidth * 1.2)  return "broad";
+  return null;
+}
+
+/**
+ * Waist-to-hip ratio, ESTIMATED - and the estimate's limit is stated because it matters.
+ *
+ * BlazePose HAS NO WAIST LANDMARK. Its 33 points jump from shoulders (11/12) straight to
+ * hips (23/24); there is nothing at the natural waistline to measure. The honest
+ * approximation is that the torso tapers roughly linearly between the two width lines, so
+ * the waist sits near their midpoint. That is what this returns: midpoint width over hip
+ * width.
+ *
+ * CONSEQUENCE, said plainly: on a linear-taper assumption this is a monotone restatement
+ * of hip/shoulder, so it carries no information the profile branch above does not already
+ * have - which is exactly why geometryProfileFrom() does NOT branch on it. It is computed,
+ * carried on the signature and printed in the topology trace because a real WHR figure is
+ * what a human diagnosing a bad drape will ask for first, and because the moment a future
+ * model exposes a waist landmark this is the one function that has to change.
+ * @returns {number|null}
+ */
+function waistHipRatio(shoulderWidth, hipWidth) {
+  if (!(shoulderWidth > 1e-6) || !(hipWidth > 1e-6)) return null;
+  return ((shoulderWidth + hipWidth) / 2) / hipWidth;
+}
+
+/**
+ * The EMA filter over the two width metrics - PHASE 2, and the reason the prompt does not
+ * flicker.
+ *
+ * WHY THE PROMPT NEEDS THIS AND THE TRACKER DID NOT. makeBodyTopologyTracker() is immune
+ * to landmark jitter by construction: it compares against a baseline that only moves when
+ * a dispatch actually happens, so noise below the delta thresholds is discarded. A
+ * classification has no such baseline - it is re-read on every dispatch - so raw widths
+ * would let a body sitting near the 0.9 boundary alternate between "curve" and "broad"
+ * draping instructions, which is the flapping/flickering garment this smooths out.
+ *
+ * NO ALLOCATION PER FRAME. feed() mutates one pre-allocated object and returns it; the
+ * caller must not retain it across ticks (snapshot() is what hands out a stable copy).
+ * @param {{alpha?:number}} [opts]
+ */
+function makeMorphologyFilter(opts = {}) {
+  const alpha       = opts.alpha ?? MORPH_EMA_ALPHA;
+  const switchAfter = opts.switchAfter ?? MORPH_PROFILE_SWITCH_FRAMES;
+  let shoulderWidth = null, hipWidth = null;
+  /* Pre-allocated and mutated in place - this is read on the pose loop, and a fresh
+     object per tick is exactly the per-frame garbage that shows up as micro-stutter. */
+  const out = { shoulderWidth: 0, hipWidth: 0, whr: null, profile: null, samples: 0 };
+  let samples = 0;
+  /* THE COMMITTED classification, and the candidate trying to replace it. Two variables
+     rather than one because the EMA bounds how far a bad frame moves the WIDTHS but not
+     whether it crosses a THRESHOLD - see MORPH_PROFILE_SWITCH_FRAMES in config.js for the
+     worked example. `committed` is the only value that ever reaches a prompt. */
+  let committed = null, candidate = null, candidateRun = 0;
+
+  const ema = (prev, next) => (prev === null ? next : prev + alpha * (next - prev));
+
+  return {
+    reset() {
+      shoulderWidth = null; hipWidth = null; samples = 0;
+      committed = null; candidate = null; candidateRun = 0;
+    },
+    /**
+     * @param {{shoulderW:number, hipW:number}|null} scale bodyScaleMatrix() for this frame
+     * @returns {object|null} the shared, mutated reading - or null if unmeasurable
+     */
+    feed(scale) {
+      if (!scale || !(scale.shoulderW > 1e-6) || !(scale.hipW > 1e-6)) return null;
+      shoulderWidth = ema(shoulderWidth, scale.shoulderW);
+      hipWidth      = ema(hipWidth,      scale.hipW);
+      samples++;
+
+      /* ── COMMIT HYSTERESIS ────────────────────────────────────────────────────
+         A reading that AGREES with what is committed clears any candidate outright, so a
+         run has to be genuinely consecutive - an alternating A,B,A,B sequence (a body
+         sitting exactly on a threshold) never accumulates one and the committed value
+         holds, which is the flicker this exists to prevent. */
+      const reading = geometryProfileFrom(shoulderWidth, hipWidth);
+      if (reading === committed) {
+        candidate = null; candidateRun = 0;
+      } else {
+        if (reading === candidate) candidateRun++;
+        else { candidate = reading; candidateRun = 1; }
+        if (candidateRun >= switchAfter) {
+          committed = candidate; candidate = null; candidateRun = 0;
+        }
+      }
+
+      out.shoulderWidth = shoulderWidth;
+      out.hipWidth      = hipWidth;
+      out.whr           = waistHipRatio(shoulderWidth, hipWidth);
+      out.profile       = committed;
+      out.samples       = samples;
+      return out;
+    },
+    /* A STABLE COPY, for the one caller that keeps it: applyGarment() freezes the
+       morphology at dispatch time the same way it freezes angle and profile, and handing
+       it the mutable live object would reintroduce precisely the TOCTOU the freeze exists
+       to prevent - a prompt built against one reading and an image resolved against
+       another. Returns null until the EMA has warmed, so a cold first sample cannot ship
+       a classification drawn from one frame. */
+    snapshot() {
+      if (shoulderWidth === null || samples < MORPH_MIN_SAMPLES) return null;
+      /* `committed`, never the instantaneous reading - the hysteresis above is worthless
+         if the dispatch path can see around it. */
+      return { shoulderWidth, hipWidth, whr: out.whr, profile: committed, samples };
+    },
+  };
+}
+
 /**
  * One frame's body topology, or null when the frame cannot be measured.
  *
@@ -12189,11 +12454,26 @@ function bodyScaleMatrix(world, image) {
  * @param {{landmarks?:Array, worldLandmarks?:Array}|null} result a PoseLandmarker result
  * @returns {{yaw:number, pitch:number, depth:number, build:number, taper:number}|null}
  */
-function bodyContourSignature(result, minVisibility = BODY_TRACK_MIN_VISIBILITY) {
+/**
+ * Pull the two landmark sets out of a detector result, or null if this frame cannot be
+ * measured. Hoisted out of bodyContourSignature() when the morphology filter became a
+ * second consumer of the same frame: two copies of this three-line extraction could drift
+ * on the visibility bar or the world/image fallback, and then the topology monitor and the
+ * prompt would be describing different bodies from one inference.
+ * @returns {{image:Array, world:Array}|null}
+ */
+function torsoLandmarkSets(result, minVisibility = BODY_TRACK_MIN_VISIBILITY) {
   const image = result && Array.isArray(result.landmarks) ? result.landmarks[0] : null;
   if (!torsoReadable(image, minVisibility)) return null;
   const world = result && Array.isArray(result.worldLandmarks) && result.worldLandmarks[0]
     ? result.worldLandmarks[0] : image;
+  return { image, world };
+}
+
+function bodyContourSignature(result, minVisibility = BODY_TRACK_MIN_VISIBILITY) {
+  const sets = torsoLandmarkSets(result, minVisibility);
+  if (!sets) return null;
+  const { image, world } = sets;
   const yaw = bodyYawDegrees(world), pitch = bodyPitchDegrees(world);
   const depth = bodyDepthRatio(world), scale = bodyScaleMatrix(world, image);
   if (yaw === null || pitch === null || depth === null || !scale) return null;
@@ -12522,6 +12802,27 @@ let presenceWatcherTimer = null;
 /* The live tracker instance, kept at module scope only so teardown can drop it. Its state
    is per-session by construction: startPresenceWatcher() builds a new one each time. */
 let bodyTopology = null;
+/* The live morphology EMA, same lifecycle as the tracker above and for the same reason:
+   a new session measures a new body, so a stale filter must never survive teardown into
+   the next shopper's prompt. Read ONLY through activeMorphology(). */
+let bodyMorphology = null;
+
+/**
+ * The frozen body-geometry reading a dispatch should be built against, or null.
+ *
+ * NULL IS THE NORMAL, SAFE ANSWER and every caller treats it as "inject nothing": no pose
+ * detector (dead CDN, no WebGL - the whole module degrades, as loadPoseLandmarker()
+ * promises), no session running, the EMA still inside its MORPH_MIN_SAMPLES warm-up, or a
+ * build sitting in the classifier's dead band. In every one of those the prompt is exactly
+ * what it was before this feature existed.
+ *
+ * IT RETURNS A COPY, not the filter's live object - see makeMorphologyFilter().snapshot().
+ * @returns {{shoulderWidth:number, hipWidth:number, whr:number|null,
+ *            profile:"curve"|"broad"|null, samples:number}|null}
+ */
+function activeMorphology() {
+  return bodyMorphology ? bodyMorphology.snapshot() : null;
+}
 
 /**
  * THE SESSION'S SINGLE POSE SAMPLER, feeding two independent consumers off ONE inference.
@@ -12554,6 +12855,10 @@ function startPresenceWatcher() {
   let inFlight = false;
   let lastTopologyAt = 0;
   bodyTopology = BODY_TOPOLOGY_ENABLED ? makeBodyTopologyTracker() : null;
+  /* Gated on the SAME flag as the tracker. Both consume one pose result from one sampler,
+     and a morphology filter running with the topology monitor off would be measuring a
+     body nothing ever re-conditions against - real cost for an unreachable benefit. */
+  bodyMorphology = BODY_TOPOLOGY_ENABLED ? makeMorphologyFilter() : null;
 
   /* ── THE LOOP RATE IS THE PRESENCE RATE, UNCHANGED ────────────────────────────
      An earlier revision sped this loop up to BODY_TOPOLOGY_SAMPLE_MS so the topology
@@ -12609,7 +12914,24 @@ function startPresenceWatcher() {
         }
       }
 
-      /* ── Consumer two: body topology ────────────────────────────────────────
+      /* ── Consumer two: morphology (PHASE 1 + 2) ─────────────────────────────
+         DELIBERATELY OUTSIDE THE TOPOLOGY THROTTLE BELOW. The throttle exists to stop
+         re-conditioning DISPATCHES outpacing the wire; this consumer sends nothing, and
+         an EMA fed at 3/s instead of ~4/s just converges more slowly for no benefit. The
+         cost of being out here is one bodyScaleMatrix() - about twenty float operations
+         on four landmarks - against the WASM pose inference that already ran above.
+
+         NOTHING IS ALLOCATED PER TICK: feed() mutates one pre-allocated reading, and the
+         only object that ever escapes this loop is the copy activeMorphology() makes at
+         dispatch time. An unreadable frame simply does not feed the filter, so the last
+         good classification is HELD rather than reset - the same hold-don't-guess rule
+         the tracker applies to its baseline. */
+      if (bodyMorphology) {
+        const sets = torsoLandmarkSets(result);
+        if (sets) bodyMorphology.feed(bodyScaleMatrix(sets.world, sets.image));
+      }
+
+      /* ── Consumer three: body topology ──────────────────────────────────────
          Only "shift" dispatches. "hold" is the fallback for a body that went unreadable
          mid-rotation and is deliberately silent - holding the last valid fit IS sending
          nothing - and "cooldown" is a shift the rate limit swallowed, which the tracker
@@ -12636,6 +12958,7 @@ function startPresenceWatcher() {
 function stopPresenceWatcher() {
   if (presenceWatcherTimer) { clearInterval(presenceWatcherTimer); presenceWatcherTimer = null; }
   bodyTopology = null;        // a new session measures a new body from scratch
+  bodyMorphology = null;      // ...and a new body's own proportions, never the last one's
   hidePresenceOverlay();
 }
 

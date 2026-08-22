@@ -242,14 +242,14 @@ console.log("\n── §1b THE FIX ITSELF: angle is threaded, frozen, and TOCTOU
      SNAPSHOT rather than a live re-read - which is what stops this fix from reopening the
      TOCTOU "mixing bug" angle-race.test.mjs exists to catch (a prompt describing one side
      while the already-resolved image reference describes the other). */
-  check("buildPrompt(item, angle) genuinely threads its parameter into imageOnlyPrompt()",
-    /function buildPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC),
+  check("buildPrompt(item, angle, morph) genuinely threads its parameters into imageOnlyPrompt()",
+    /function buildPrompt\(item, angle = "front", morph = null\) \{\s*\n\s*return imageOnlyPrompt\(item, angle, morph\);/.test(SRC),
     "a declared-but-discarded parameter is the exact regression three reports were filed against");
   check("...and imageOnlyPrompt() actually branches BACK_CATEGORY_ANCHOR vs CATEGORY_ANCHOR on it",
     /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(SRC),
     "declaring a back anchor table nobody ever selects is the same bug with extra steps");
   check("applyGarment() passes the FROZEN angleAtStart, never a live effectiveAngle() read",
-    /buildPrompt\(item, angleAtStart\)/.test(SRC) && !/buildPrompt\(item, effectiveAngle\(\)\)/.test(SRC),
+    /buildPrompt\(item, angleAtStart, morphAtStart\)/.test(SRC) && !/buildPrompt\(item, effectiveAngle\(\)/.test(SRC),
     "a live read here reopens the precise TOCTOU race angle-race.test.mjs already fixed once");
   check("...and the runtime half that actually performs the IMAGE swap is still wired underneath",
     /function createOrientationWatcher\(/.test(SRC) && /async function maybeSwap\(next\)/.test(SRC),
@@ -501,15 +501,15 @@ console.log("\n── §2 EVERY SINGLE-ASSET BUILDER RETURNS IT, AND ASSEMBLES N
        through where it has one - and that is asserted, not merely "still returns SOME
        constant" (which would pass even if angle had quietly gone back to being dropped). */
     check(`${name}(): delegates to the category+angle resolver, assembles nothing itself`,
-      /return (imageOnlyPrompt\(item(, angle)?\)|lookAnchorPrompt\(\));/.test(codeBody) &&
+      /return (imageOnlyPrompt\(item(, angle(, morph)?)?\)|lookAnchorPrompt\(\));/.test(codeBody) &&
       !/fitPrompt\(/.test(codeBody) && !/DENSE\./.test(codeBody),
       codeBody.slice(-240) || "builder not found");
   }
-  check("...and buildPrompt/buildCustomPrompt specifically THREAD angle",
-    (SRC.match(/return imageOnlyPrompt\(item, angle\);/g) || []).length >= 2,
-    "the two single-asset builders forward angle - buildLookPrompt is exempt (top+bottom, not front/back)");
+  check("...and buildPrompt/buildCustomPrompt specifically THREAD angle and morph",
+    (SRC.match(/return imageOnlyPrompt\(item, angle, morph\);/g) || []).length >= 2,
+    "the two single-asset builders forward both - buildLookPrompt is exempt (top+bottom, not front/back)");
   /* buildCompositePrompt threads angle too, just not as a bare return - see §4. */
-  const compositeBody = (SRC.match(/function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/) || [""])[0];
+  const compositeBody = (SRC.match(/function buildCompositePrompt\(item, angle, inProfile, morph = null\)[\s\S]*?\n}/) || [""])[0];
   check("...and buildCompositePrompt still threads the SAME frozen angle into imageOnlyPrompt()",
     /imageOnlyPrompt\(item, angle\)/.test(compositeBody),
     "the composite path must select the same anchor the single-asset path would, for the same angle");
@@ -561,9 +561,9 @@ console.log("\n── §3 THE RETIREMENT IS REVERSIBLE (this mode will need piec
 
   /* The builders keep their parameters so a restore is a two-line edit rather than a
      re-derivation of applyGarment()'s TOCTOU freeze. */
-  check("the builders keep their angle/pose parameters as the restore seam",
-    /function buildCompositePrompt\(item, angle, inProfile\)/.test(SRC) &&
-    /buildCompositePrompt\(item, angleAtStart, profileAtStart\)/.test(SRC),
+  check("the builders keep their angle/pose/morphology parameters as the restore seam",
+    /function buildCompositePrompt\(item, angle, inProfile, morph = null\)/.test(SRC) &&
+    /buildCompositePrompt\(item, angleAtStart, profileAtStart, morphAtStart\)/.test(SRC),
     "the frozen snapshots must stay threaded even while unused");
 }
 
