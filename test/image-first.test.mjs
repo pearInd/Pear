@@ -567,40 +567,47 @@ console.log("\n── §3 THE RETIREMENT IS REVERSIBLE (this mode will need piec
     "the frozen snapshots must stay threaded even while unused");
 }
 
-console.log("\n── §4 THE COMPOSITE IS STANDARD AGAIN, RISK ACCEPTED KNOWINGLY ──");
+console.log("\n── §4 THE COMPOSITE IS OFF FOR GOOD - THREE REPORTS, ONE MECHANISM ──");
 {
-  /* ── REVISION: THIRD FLIP - true → false → true, ON AN INFORMED DECISION ──────
-     COMPOSITE_DEFAULT went back to true after being reverted for two production reports
-     (back graphic on a front-facing frame; rotation degrading to a generic shirt). Nothing
-     about the mechanism changed between the revert and this re-enable - the panel-contract
-     restore (§2 above) was never what reverted, it stayed correct on both independent
-     copies throughout - so this suite still asserts the SAME two things it asserted at the
-     revert (the code was checked, not assumed; don't chase a recurrence with more prompt
-     text), just against the flip having moved back to true. */
-  check("COMPOSITE_DEFAULT is on",
-    /const COMPOSITE_DEFAULT = true;/.test(SRC),
-    "re-enabled on an explicit, informed decision to accept the risk from the previous revert");
-  check("...for the stated reason, not silently, and the prior revert's history is preserved",
-    /THIRD FLIP: true → false → true/.test(SRC) &&
+  /* ── REVISION: FOURTH FLIP - true → false → true → false, AND THIS ONE STICKS ──
+     THREE independent live reports now trace to the same mechanism: two mid-session (back
+     graphic on a front-facing frame; rotation degrading to a generic shirt) and a third at
+     COLD START - 3 identical go-live attempts on unchanged code producing 3 different
+     outcomes (slow-correct, never-correct, perfect). That last one is the decisive
+     evidence: variance across identical runs is model-conditioning reliability, not a
+     deterministic code race, and it is why no amount of gating/retry work would have
+     fixed it (all of which already existed anyway - see §5 and the initial-apply recovery).
+     The panel-contract restore (§2) was never what reverted and stays correct throughout.
+     This suite now pins the revert as durable, and pins the two conclusions that must
+     survive a future editor's good intentions: the code was ruled out, and neither more
+     prompt text nor another re-enable is the next move. */
+  check("COMPOSITE_DEFAULT is off",
+    /const COMPOSITE_DEFAULT = false;/.test(SRC),
+    "three live reports, one mechanism - the split reference costs more than it buys");
+  check("...for the stated reason, not silently, and the full flip history is preserved",
+    /FOURTH FLIP: true → false → true → false/.test(SRC) &&
     /a reference the model has to interpret unaided/.test(SRC));
-  check("...and app.js records that BOTH independent panel-drawing copies were checked, not assumed",
-    /createGarmentComposite\(\) here and in/.test(SRC) &&
-    /pear-widget\.js, both draw front-left\/back-right correctly/.test(SRC) &&
-    /describeCompositeLayout\(\)\s*\n?\s*already guards against a drawing-order drift/.test(SRC),
-    "ruling out a code bug before re-accepting the risk is what makes the re-enable reasoning trustworthy");
-  check("the URL override can still force the single-asset path back ON for a single session",
+  check("...and app.js records the COLD-START variance as the decisive evidence",
+    /3 identical go-live\s*\n?\s*attempts on unchanged code produced 3 different outcomes/.test(SRC) &&
+    /signature of Decart's own/.test(SRC),
+    "the 'why this is not a race' reasoning is what stops the next reader re-litigating it");
+  check("...and records that the suspected cold-start gating ALREADY existed",
+    /the cold-start gating this report initially suspected/.test(SRC) &&
+    /was already built before any of this ran/.test(SRC),
+    "otherwise the next report gets 'fixed' by re-adding a gate that has always been there");
+  check("the URL override can still force composite back ON for a single session",
     /const q = new URLSearchParams\(location\.search\)\.get\("composite"\)/.test(SRC) &&
-    /if \(q === "0" \|\| q === "false"\)\s+return false;/.test(SRC));
-  check("...and can still force composite off explicitly too, symmetric with the above",
     /if \(q === "1" \|\| q === "true"\)\s+return true;/.test(SRC));
+  check("...and can still force it off explicitly too, symmetric with the above",
+    /if \(q === "0" \|\| q === "false"\)\s+return false;/.test(SRC));
   check("app.js tells a future editor NOT to chase a recurrence with more prompt text",
-    /DO NOT ADD MORE PROMPT TEXT/.test(SRC) &&
-    /made the tuxedo report worse, not better/.test(SRC),
+    /not a retry loop, not more prompt\s*\n?\s*text, not a fourth attempt at re-enabling/.test(SRC),
     "the tuxedo history already proved that more text is not the fix for this failure class");
-  check("...and names reverting the constant again as the next lever, not a garment description",
-    /the next lever is reverting this\s*\n?\s*constant again, not adding a garment\/colour DESCRIPTION/.test(SRC));
-  /* The single-asset path is UNCHANGED code, still reachable via ?composite=0 or a failed
-     stitch - it did not get deleted when the default moved back onto composite. */
+  check("...and names what WOULD justify revisiting it - a different reference format",
+    /STAYS OFF THIS TIME absent a genuinely different reference format/.test(SRC),
+    "a permanent 'no' with no stated reopening condition is how a decision rots into dogma");
+  /* The single-asset path is UNCHANGED code, and is once again what every session gets by
+     default - it never stopped being maintained while composite was the default. */
   check("the per-orientation single-asset path is still what referenceImageFor() falls to",
     /if \(currentAngle === AUTO_ANGLE\) \{\s*\n\s*const blob = await garmentBlobCached\(activeImg\);/.test(SRC));
 }

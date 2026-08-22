@@ -6006,29 +6006,27 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
    moment of the turn. See window.__pearDebugForceFullReupload, added to test exactly
    that.
 
-   THIRD FLIP: true → false → true. Tried as the default, reverted after two production
-   reports (BACK graphic on a front-facing frame; rotation degrading to a generic plain
-   shirt), and re-enabled again on an explicit, informed decision to accept that same risk
-   rather than stay on the single-asset path - not because anything about the mechanism
-   changed. Re-read before assuming this is safer than last time: the panel geometry was
-   already checked on BOTH independent copies (createGarmentComposite() here and in
-   pear-widget.js, both draw front-left/back-right correctly) and describeCompositeLayout()
-   already guards against a drawing-order drift at runtime (below) - neither of those is
-   what caused the two reports. What is left, after ruling out the code twice now, is that
-   a split reference asks more of Decart's own per-frame conditioning than a single clean
-   photo does. That is a model-reliability cost, not a bug this file can fix by inspection.
+   FOURTH FLIP: true → false → true → false. Three independent live reports now trace to
+   the same mechanism: two mid-session (BACK graphic on a front-facing frame; rotation
+   degrading to a generic plain shirt) and a third at COLD START (3 identical go-live
+   attempts on unchanged code produced 3 different outcomes - slow-correct, never-correct,
+   perfect). That variance across identical runs is the signature of Decart's own
+   per-frame conditioning reliability on a split reference, not a deterministic code race -
+   a real race would correlate with something observable; this didn't. Re-confirmed rather
+   than re-checked this time: the panel geometry was already ruled out twice (both
+   independent createGarmentComposite() copies draw front-left/back-right correctly;
+   describeCompositeLayout() already guards against a drawing-order drift at runtime,
+   below), and the cold-start gating this report initially suspected (canvas held at
+   opacity:0 until rtClient.set() resolves, frames withheld until acknowledged, one bounded
+   reconnect-and-retry on a stuck first apply) was already built before any of this ran -
+   see armFirstFrameBilling()/gateAiFeed() and "THE INITIAL APPLY, WITH ONE RECOVERY".
 
-   DO NOT ADD MORE PROMPT TEXT to chase a recurrence - see IMAGE_ONLY_PROMPT's own history
-   for why more text made the tuxedo report worse, not better, and note that
-   STRICT_REFERENCE_LOCK (imageOnlyPrompt()'s own restore, "the shirt rendered white, not
-   RED") already rides this path too, since buildCompositePrompt() leads with
-   imageOnlyPrompt(). If either failure mode recurs, the next lever is reverting this
-   constant again, not adding a garment/colour DESCRIPTION - that is the one clause class
-   this file has twice-confirmed evidence competes with the reference pixels rather than
-   reinforcing them. ?composite=0 forces the single-asset path back on for a single
-   session without touching this file, if a fast comparison is needed before a third
-   revert. */
-const COMPOSITE_DEFAULT = true;
+   STAYS OFF THIS TIME absent a genuinely different reference format (e.g. Decart-side
+   multi-image conditioning, if it ever ships one) - not a retry loop, not more prompt
+   text, not a fourth attempt at re-enabling the same mechanism. ?composite=1 forces the
+   composite path back on for a single session without touching this file, if a future
+   comparison is ever needed. */
+const COMPOSITE_DEFAULT = false;
 const COMPOSITE_MODE = (() => {
   try {
     const q = new URLSearchParams(location.search).get("composite");
