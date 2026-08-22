@@ -402,7 +402,7 @@ console.log("\n── §1c THE GARMENT PIN: the mid-session revert, fixed in the
 }
 
 
-console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──");
+console.log("\n── §2 EVERY SINGLE-ASSET BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──");
 {
   const cases = [
     ["FRONT square-on", TEE, "front", false],
@@ -421,44 +421,49 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
      words. What is asserted now is POSE-invariance (still real, still load-bearing - a
      shopper leaning or turning edge-on must not perturb the prompt) alongside genuine
      ANGLE-variance: front cases match the FRONT anchor for their region, back cases match
-     the BACK anchor for their region, and pose never moves either. */
+     the BACK anchor for their region, and pose never moves either.
+
+     READ OFF imageOnlyPrompt() DIRECTLY, not buildCompositePrompt() - the two diverged
+     when the composite path's panel contract was restored (see §4). This loop is about
+     the category+angle SELECTION, which imageOnlyPrompt() owns and every single-asset
+     builder (buildPrompt, buildCustomPrompt) delegates to unmodified; composite.test.mjs
+     and side-profile.test.mjs own what buildCompositePrompt() layers on top of it. */
   for (const [name, item, angle, prof] of cases) {
     const isBottom = item.garmentType === "lower_body";
     const expected = angle === "back"
       ? (isBottom ? BACK_BOTTOMS_SPEC : BACK_TOPS_SPEC)
       : (isBottom ? BOTTOMS_SPEC : TOPS_SPEC);
     check(`${name}: byte-identical to its category+angle anchor`,
-      api.buildCompositePrompt(item, angle, prof) === expected,
-      api.buildCompositePrompt(item, angle, prof));
+      api.imageOnlyPrompt(item, angle) === expected,
+      api.imageOnlyPrompt(item, angle));
   }
   /* THE AXES: category and angle both move the prompt now, by design - that IS the fix.
      Pose alone stays inert (a shopper turning edge-on must not perturb which of the four
      strings ships), and the four strings themselves are checked pairwise distinct so a
      future edit cannot quietly collapse any two of them back into one. */
   check("pose alone never moves the prompt - only category and angle do",
-    api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(TEE, "front", true) &&
-    api.buildCompositePrompt(TEE, "back", false) === api.buildCompositePrompt(TEE, "back", true) &&
-    api.buildCompositePrompt(JEANS, "front", false) === api.buildCompositePrompt(JEANS, "front", true) &&
-    api.buildCompositePrompt(JEANS, "back", false) === api.buildCompositePrompt(JEANS, "back", true),
-    "a pose-sensitive prompt reintroduces the exact volume-of-text problem this mode exists to avoid");
+    api.imageOnlyPrompt(TEE, "front") === api.imageOnlyPrompt(TEE, "front") &&
+    api.imageOnlyPrompt(TEE, "back") === api.imageOnlyPrompt(TEE, "back") &&
+    api.imageOnlyPrompt(JEANS, "front") === api.imageOnlyPrompt(JEANS, "front") &&
+    api.imageOnlyPrompt(JEANS, "back") === api.imageOnlyPrompt(JEANS, "back"),
+    "imageOnlyPrompt() takes no pose parameter at all - there is nothing for pose to move");
   check("...but angle DOES move it - front and back are genuinely different per category",
-    api.buildCompositePrompt(TEE, "front", false) !== api.buildCompositePrompt(TEE, "back", false) &&
-    api.buildCompositePrompt(JEANS, "front", false) !== api.buildCompositePrompt(JEANS, "back", false),
+    api.imageOnlyPrompt(TEE, "front") !== api.imageOnlyPrompt(TEE, "back") &&
+    api.imageOnlyPrompt(JEANS, "front") !== api.imageOnlyPrompt(JEANS, "back"),
     "an angle-invariant prompt here is the exact bug three reports were filed against");
   check("...and all four category×angle combinations are pairwise distinct",
     new Set([
-      api.buildCompositePrompt(TEE, "front", false), api.buildCompositePrompt(TEE, "back", false),
-      api.buildCompositePrompt(JEANS, "front", false), api.buildCompositePrompt(JEANS, "back", false),
+      api.imageOnlyPrompt(TEE, "front"), api.imageOnlyPrompt(TEE, "back"),
+      api.imageOnlyPrompt(JEANS, "front"), api.imageOnlyPrompt(JEANS, "back"),
     ]).size === 4,
     "any two of these collapsing to the same string is a silent regression on one axis");
 
-  /* Structural, across the builders this sandbox cannot execute. The four together are
-     every path that can reach rtClient.set() with a prompt. */
+  /* Structural, across the builders this sandbox cannot execute. buildCompositePrompt is
+     deliberately NOT in this list any more - see §4 for what it does instead and why. */
   const builders = [
     ["buildPrompt", /function buildPrompt\(item, angle[\s\S]*?\n}/],
     ["buildCustomPrompt", /function buildCustomPrompt\(item, angle[\s\S]*?\n}/],
     ["buildLookPrompt", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
-    ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
   for (const [name, re] of builders) {
     const body = (SRC.match(re) || [""])[0];
@@ -478,21 +483,29 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
       !/fitPrompt\(/.test(codeBody) && !/DENSE\./.test(codeBody),
       codeBody.slice(-240) || "builder not found");
   }
-  check("...and buildPrompt/buildCustomPrompt/buildCompositePrompt specifically THREAD angle",
-    /return imageOnlyPrompt\(item, angle\);/.test(SRC) &&
-    (SRC.match(/return imageOnlyPrompt\(item, angle\);/g) || []).length >= 3,
-    "the three single-garment builders all forward angle - only buildLookPrompt is exempt (top+bottom, not front/back)");
+  check("...and buildPrompt/buildCustomPrompt specifically THREAD angle",
+    (SRC.match(/return imageOnlyPrompt\(item, angle\);/g) || []).length >= 2,
+    "the two single-asset builders forward angle - buildLookPrompt is exempt (top+bottom, not front/back)");
+  /* buildCompositePrompt threads angle too, just not as a bare return - see §4. */
+  const compositeBody = (SRC.match(/function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/) || [""])[0];
+  check("...and buildCompositePrompt still threads the SAME frozen angle into imageOnlyPrompt()",
+    /imageOnlyPrompt\(item, angle\)/.test(compositeBody),
+    "the composite path must select the same anchor the single-asset path would, for the same angle");
 
   /* THE INVARIANT, stated as an absence - the only form that catches the real regression,
      which is somebody adding one more well-meant clause. Every clause this file ever grew
-     was individually justified; the sum is what produced the tuxedo. */
+     was individually justified; the sum is what produced the tuxedo. Scoped to exclude
+     buildCompositePrompt's own body: §4 asserts THAT function's DENSE usage precisely
+     (contract/select/pose only, never a garment description), so stripping it here avoids
+     asserting the same fact twice with different intent. */
   const codeOnly = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const codeOnlyNoComposite = codeOnly.replace(compositeBody.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""), "");
   check("no colour word or subtype noun reaches any prompt",
     !/colorName\(activeColorOf\(/.test(codeOnly) &&
     !/SHIRT_NOUN\[/.test(codeOnly) && !/SUBTYPE_PROMPT\[/.test(codeOnly));
-  check("no DENSE clause is assembled by any builder",
-    !/\[P\.(CORE|HIGH|MED|LOW|TRIM),\s*DENSE\./.test(codeOnly),
-    "the DENSE table is a restore library now, not an assembly source");
+  check("no DENSE clause is assembled by any builder EXCEPT buildCompositePrompt",
+    !/\[P\.(CORE|HIGH|MED|LOW|TRIM),\s*DENSE\./.test(codeOnlyNoComposite),
+    "the DENSE table is a restore library for every builder but the composite one, which now draws its panel contract from it");
   check("the size-override modifier no longer reaches the wire either",
     !/\[P\.\w+,\s*fitSentence\(/.test(codeOnly),
     "documented in IMAGE_ONLY_PROMPT's retirement list - the UI still works, the render ignores it");
@@ -545,9 +558,18 @@ console.log("\n── §4 THE COMPOSITE STANDS DOWN, and its switch still works 
   check("the URL override still forces it back on for an A/B against a live session",
     /const q = new URLSearchParams\(location\.search\)\.get\("composite"\)/.test(SRC) &&
     /if \(q === "1" \|\| q === "true"\)\s+return true;/.test(SRC));
-  check("...and re-enabling is documented as requiring the panel contract back with it",
-    /restore\s*\n?\s*DENSE\.contract \+ DENSE\.select in buildCompositePrompt\(\) in the same commit/.test(SRC),
-    "the worst of both modes is a split image with no key");
+  /* ── REVISION: THE PANEL CONTRACT IS BACK; THE DEFAULT IS THE ONLY THING PENDING ──
+     buildCompositePrompt() no longer needs a restore instruction telling a future editor
+     to bring DENSE.contract/DENSE.select back - it already carries them (§2 above asserts
+     it threads angle in; composite.test.mjs and side-profile.test.mjs own its full output).
+     What is still pending, and now documented as such, is COMPOSITE_DEFAULT itself: this
+     specific combination has never run live, so the note names ?composite=1 as the
+     required A/B before the constant moves. */
+  check("...and app.js documents the composite prompt as restored, with only the default pending live verification",
+    /HALF RESTORED, DELIBERATELY/.test(SRC) &&
+    /has never run\s*\n?\s*in production/.test(SRC) &&
+    /before moving the default/.test(SRC),
+    "a pending, unverified default flip must stay visible on file, not just in a chat reply");
   /* The single-asset path it falls back to is the pre-composite behaviour, still the
      fallback whenever a stitch fails - so this is a switch, not a new code path. */
   check("the per-orientation single-asset path is still what referenceImageFor() falls to",

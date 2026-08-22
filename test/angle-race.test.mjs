@@ -247,7 +247,6 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
     ["buildPrompt (catalog)", /function buildPrompt\(item, angle[\s\S]*?\n}/],
     ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item, angle[\s\S]*?\n}/],
     ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
-    ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
   /* ── REVISION: THE PROMPT NOW VARIES BY ANGLE, AND THE RACE PROTECTION MOVED WITH IT ──
      THREE REPORTS made this section's premise stop being true: the back Blob was always
@@ -274,10 +273,22 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
       /return (imageOnlyPrompt\(item(, angle)?\)|lookAnchorPrompt\(\));/.test(codeBody) &&
       !/fitPrompt\(/.test(codeBody), codeBody.slice(-300));
   }
-  check("buildPrompt/buildCustomPrompt/buildCompositePrompt all THREAD their angle param",
+  /* buildCompositePrompt IS AN EXCEPTION TO "assembles nothing", checked on its own terms.
+     COMPOSITE_MODE's own restore note (app.js) brought DENSE.contract/DENSE.select/
+     DENSE.pose back into this one builder - a real fitPrompt() call, unlike its three
+     siblings above - because a split reference needs the panel contract to be legible at
+     all (the 23f5953 double-print bug). What THIS suite cares about is untouched by that:
+     the angle it assembles with is still the exact parameter it was called with, never a
+     live effectiveAngle()/compositeActiveFor() read performed inside the builder - so the
+     TOCTOU race this file exists to catch is still structurally impossible here. */
+  const compositeBody = (SRC.match(/function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/) || [""])[0];
+  check("buildCompositePrompt assembles the panel contract, but calls no live orientation read",
+    /imageOnlyPrompt\(item, angle\)/.test(compositeBody) &&
+    !/effectiveAngle\(\)/.test(compositeBody) && !/compositeActiveFor\(/.test(compositeBody),
+    compositeBody);
+  check("buildPrompt/buildCustomPrompt THREAD their angle param",
     /function buildPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC) &&
-    /function buildCustomPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC) &&
-    /function buildCompositePrompt\(item, angle, inProfile\)[^\n]*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC),
+    /function buildCustomPrompt\(item, angle = "front"\) \{\s*\n\s*return imageOnlyPrompt\(item, angle\);/.test(SRC),
     "silently dropping the parameter again is the exact regression this revision fixed");
   check("...and applyGarment() passes the FROZEN angleAtStart, never a live effectiveAngle() read",
     /buildPrompt\(item, angleAtStart\)/.test(SRC) && !/buildPrompt\(item, effectiveAngle\(\)\)/.test(SRC),

@@ -129,10 +129,17 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
      are frozen snapshots rather than live reads. Asserted as "every builder routes
      through the resolver" rather than "every builder returns a constant", because a
      single frozen constant is what had to go for angle to work at all. */
+  /* buildCompositePrompt() is a partial exception since COMPOSITE_MODE's restore note
+     (app.js) brought its panel contract back: it still calls imageOnlyPrompt(item, angle)
+     for the anchor half, but no longer as a bare `return` - the call is one part of a
+     fitPrompt() assembly now, not the whole function body. So the bare-return count drops
+     to the two purely-delegating builders, and buildCompositePrompt is checked separately
+     for the same underlying property (it selects on angle, never re-reads it live). */
   check("every builder resolves its prompt through the category+angle resolver",
-    (APP.match(/return imageOnlyPrompt\(item, angle\);/g) || []).length >= 3 &&
-    /return lookAnchorPrompt\(\);/.test(APP),
-    "buildPrompt, buildCustomPrompt, buildCompositePrompt + the full-look exemption");
+    (APP.match(/return imageOnlyPrompt\(item, angle\);/g) || []).length >= 2 &&
+    /return lookAnchorPrompt\(\);/.test(APP) &&
+    /function buildCompositePrompt\(item, angle, inProfile\) \{[\s\S]*?imageOnlyPrompt\(item, angle\)/.test(APP),
+    "buildPrompt, buildCustomPrompt bare-return it; buildCompositePrompt calls it as part of its own assembly; buildLookPrompt is the full-look exemption");
   check("...and neither anchor TABLE has an interpolation hole to leak a variant into",
     /const CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(APP) &&
     /const BACK_CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(APP) &&

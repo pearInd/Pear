@@ -6011,11 +6011,17 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
    in question - see window.__pearDebugForceFullReupload, added to test exactly that.
    Only items shipping a genuine distinct rear photo were ever affected either way.
 
-   TO GO BACK: append ?composite=1 to the fitting-room URL (unchanged, and the right way
-   to A/B this against a live session), or flip this constant. If you flip it, restore
-   DENSE.contract + DENSE.select in buildCompositePrompt() in the same commit - a split
-   reference with no panel contract is the worst of both modes. Keep both paths working;
-   do not delete one for the other. */
+   HALF RESTORED, DELIBERATELY, AND THIS IS WHERE THAT STANDS. buildCompositePrompt() now
+   threads DENSE.contract + DENSE.select (+ DENSE.pose/poseProfile/profileLateral for the
+   edge-on case) back in - the split reference no longer ships unexplained, so the specific
+   bug this note used to warn about (a collage with no key) is closed. COMPOSITE_DEFAULT is
+   UNCHANGED below, on purpose: this exact
+   combination - today's per-side anchor leading a restored panel contract - has never run
+   in production, and both incidents this file is defending against (23f5953, the tuxedo
+   reports) were only ever caught live, never in review. Append ?composite=1 to the
+   fitting-room URL to run it for real before moving the default - that is what the flag is
+   for. Once a session confirms clean (no double-print, no invented garment), flip the
+   constant below in its own commit. */
 const COMPOSITE_DEFAULT = false;
 const COMPOSITE_MODE = (() => {
   try {
@@ -8195,44 +8201,62 @@ function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
 }
 
 /**
- * The prompt for a composite reference. Returns IMAGE_ONLY_PROMPT.
+ * The prompt for a composite (stitched FRONT|BACK) reference.
  *
- * ORDER USED TO BE THE POINT, and it moved twice before it stopped mattering. The
- * original shape was `buildPrompt(item) + angleClause(item)`: 1,403 characters of colour /
- * anatomy / fit / quality / hem / hard-negative boilerplate AHEAD of the panel contract,
- * pushing the single most important instruction in composite mode past the halfway mark of
- * a 2,636 character prompt. Lucy regenerates every frame from that prompt and the leading
- * tokens dominate, so that boilerplate was not merely wasteful - it was outranking the
- * contract. Fix one: put the panel contract first. Fix two (the tuxedo report): put the
- * image anchor first, because "which half of the reference to read" only matters once the
- * model is reading the reference at all.
+ * ORDER USED TO BE THE POINT, and it moved twice before it stopped mattering the way this
+ * revision cares about. The original shape was `buildPrompt(item) + angleClause(item)`:
+ * 1,403 characters of colour / anatomy / fit / quality / hem / hard-negative boilerplate
+ * AHEAD of the panel contract, pushing the single most important instruction in composite
+ * mode past the halfway mark of a 2,636 character prompt. Lucy regenerates every frame from
+ * that prompt and the leading tokens dominate, so that boilerplate was not merely wasteful -
+ * it was outranking the contract. Fix one put the panel contract first. Fix two (the tuxedo
+ * report) put the image anchor first. Fix three - the tuxedo survived both - dropped the
+ * boilerplate entirely and, with nothing left to explain the split, retired the panel
+ * contract along with it (COMPOSITE_DEFAULT = false): a split FRONT|BACK reference is only
+ * legible alongside the contract that explains it, and shipping one without the other is
+ * the 23f5953 double-print bug - the model paints both panels onto the body because nothing
+ * told it there even were two.
  *
- * FIX THREE - the tuxedo survived both - IS THAT THERE IS NOTHING TO ORDER. Every clause
- * is a token competing with the pixels, and ordering them only chooses which competitor
- * goes first. See IMAGE_ONLY_PROMPT for the mechanism and the full list of what this gave
- * up. The composite path itself is standing down with it (COMPOSITE_DEFAULT = false): a
- * split FRONT|BACK reference is only legible alongside the panel contract that explains
- * it, and that contract is exactly the text this mode removes.
+ * RESTORED HERE, per the "TO GO BACK" note this function used to carry: `DENSE.contract`,
+ * `DENSE.select`, `DENSE.pose`/`DENSE.poseProfile` and `DENSE.profileLateral` come back, and
+ * ONLY those - not the 1,403-character assembly fix three removed. This is the same clause
+ * set `angleClause()`'s composite branch already assembles (and has stayed live and tested
+ * as the documented restore path - side-profile.test.mjs proves every branch of it); it is
+ * inlined here rather than called, because angleClause() sits in a different region of the
+ * file than several test sandboxes extract as a standalone slice around this function, and a
+ * restore that only works when angleClause() happens to be in scope is not a restore. The
+ * anchor stays `imageOnlyPrompt(item, angle)` - the same per-category, per-side, tuxedo-safe
+ * sentence the single-asset path uses, now leading a composite prompt instead of standing
+ * alone in one.
  *
- * `angle` IS NO LONGER UNUSED. It used to be retained purely as a seam - applyGarment()
- * froze `angleAtStart`/`profileAtStart` before its awaits and threaded them here so the
- * TOCTOU plumbing kept a place to plug into (angle-race, side-profile §6), but nothing
- * downstream read it. It now selects FRONT vs BACK on imageOnlyPrompt() - see
- * CATEGORY_ANCHOR's revision comment for the report that closed this gap: the back Blob
- * was correctly on the wire while the prompt kept describing the front, on this
- * (off-by-default) composite path exactly as on the default single-image one.
+ * WHY THIS IS SAFE AGAINST THE TUXEDO REPORT, not merely against the double-print one: the
+ * garment description and the enumerated negative - the two clauses fix one and two removed,
+ * and the ones actually shown to compete with the pixels - are NOT part of what comes back.
+ * The composite clauses restored here have only ever stated the reference's LAYOUT (it is a
+ * split photo, which half is in play, which way the body is turned) - never what the garment
+ * looks like. That distinction is why restoring them does not reopen fix three.
  *
- * `inProfile` STAYS RETAINED AND UNUSED - it is a genuinely separate axis (what pose the
- * prompt asserts about the body, not which garment asset/side is the source), and no
- * report has asked for it back. The seam stays live for the same TOCTOU reason.
+ * STILL GATED BEHIND COMPOSITE_DEFAULT = false. This function is exercised by
+ * `?composite=1` for a live A/B before the default moves - see COMPOSITE_MODE's own
+ * comment. A live check is required precisely because this combination (today's per-side
+ * anchor leading a restored panel contract) has never shipped before; the tuxedo and
+ * double-print bugs it defends against were both reported from production, not caught in
+ * review.
  *
  * @param {object} item   the active garment (catalog or custom upload)
- * @param {"front"|"back"} angle  selects the anchor table - see CATEGORY_ANCHOR
- * @param {boolean} inProfile     retained; see above
+ * @param {"front"|"back"} angle  selects the anchor table and the panel - see CATEGORY_ANCHOR
+ * @param {boolean} inProfile     threaded into angleClause() for the edge-on depth clause
  * @returns {string}
  */
-function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item, angle);
+function buildCompositePrompt(item, angle, inProfile) {
+  const a = angle === "back" ? "back" : "front";
+  return fitPrompt([
+    [P.CORE, imageOnlyPrompt(item, angle)],
+    [P.CORE, DENSE.contract],
+    [P.CORE, inProfile ? DENSE.poseProfile[a] : DENSE.pose[a]],
+    [P.CORE, DENSE.select[a]],
+    [P.CORE, inProfile ? DENSE.profileLateral : ""],
+  ]);
 }
 
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back

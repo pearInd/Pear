@@ -249,30 +249,42 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
      composite payload. buildCompositePrompt() is not reachable from angleClause(), so a
      regression there would be invisible to every assertion above. */
   const { api } = run({ distinctBack: BACK });
-  const built = api.buildCompositePrompt(
-    { name: "Tee", custom: true, garmentType: "upper_body" }, "front", true);
+  const item = { name: "Tee", custom: true, garmentType: "upper_body" };
+  const built = api.buildCompositePrompt(item, "front", true);
+  const square = api.buildCompositePrompt(item, "front", false);
   /* ORDER USED TO BE THE CLAIM HERE, and it moved twice: the depth directive led first
      (at 90 degrees the body is what is got wrong), then the reference binding took the
      lead (the grey-shirt regression - what was got wrong was the GARMENT, at every
      angle), then the image anchor did (the tuxedo report).
 
-     STRICT IMAGE-ONLY ENDED THE ARGUMENT: buildCompositePrompt() no longer assembles
-     anything, so there is no order to assert. Every clause is a token competing with the
-     pixels, and ordering them only chooses which competitor goes first. What is asserted
-     instead is that the LIVE composite payload carries the frozen prompt and nothing
-     else - the same site, a different property.
+     STRICT IMAGE-ONLY STOOD THIS DOWN, then COMPOSITE_MODE's restore note (app.js)
+     brought it back for this ONE builder: a split reference needs the panel contract to
+     be legible (the 23f5953 double-print bug), so buildCompositePrompt() now leads with
+     the category anchor and follows it with the same contract/pose/select(/depth)
+     assembly angleClause() proves above - restored, not reinvented, so the order claim
+     applies to it again too.
 
-     angleClause() above still assembles and is still tested at every branch: it is the
-     restore path (its clauses are what a two-line edit plugs back in), and keeping it
-     proven is what stops "retired" from decaying into "deleted". */
-  check("the live composite payload is the category anchor, at every pose",
-    built === api.buildCompositePrompt(
-      { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Fit the EXACT FRONT side of the target shirt onto the subject's chest\/front\./.test(built),
+     angleClause() above still assembles independently and is still tested at every
+     branch: it is what this builder's tail is BUILT FROM, and keeping it proven is what
+     stops "retired" from decaying into "deleted". */
+  check("the live composite payload leads with the category anchor, at every pose",
+    /^Fit the EXACT FRONT side of the target shirt onto the subject's chest\/front\./.test(built) &&
+    /^Fit the EXACT FRONT side of the target shirt onto the subject's chest\/front\./.test(square),
     built);
-  check("...and omits it entirely on a square-on frame",
-    !DEPTH_MARKER.test(api.buildCompositePrompt(
-      { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false)));
+  check("...but is NOT pose-invariant any more - the restored pose/depth clause varies it",
+    built !== square, `square=${square}\n        edge=${built}`);
+  check("...carrying the depth clause edge-on",
+    DEPTH_MARKER.test(built));
+  check("...and omitting it entirely on a square-on frame",
+    !DEPTH_MARKER.test(square));
+  /* Same placement rule as angleClause()'s own assertion above: anchor first (leading
+     tokens dominate), then contract/pose/select, then the edge-on depth directive last. */
+  const anchorPos = built.indexOf("Fit the EXACT FRONT side");
+  const contractPos = built.indexOf("The reference image is a split photo");
+  const builtDepthPos = built.indexOf("EDGE-ON: keep their full front-to-back depth");
+  check("...and the anchor leads the whole payload, contract next, depth last",
+    anchorPos === 0 && contractPos > anchorPos && builtDepthPos > contractPos,
+    `anchor@${anchorPos} contract@${contractPos} depth@${builtDepthPos}`);
 }
 {
   /* Every branch, because a clause that reaches only the composite path leaves the
@@ -380,22 +392,25 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
   }
 }
 {
-  /* The live payload builder, unreachable from angleClause() - §3 makes the same point
-     for the depth clause. Ordering: body geometry, then the garment covering it, then the
-     garment description. The second clause only means anything given the first. */
+  /* The live payload builder, unreachable from angleClause() - the earlier §3 block makes
+     the same point for the depth clause; this one covers the lateral-synthesis clause
+     specifically, since it is asserted separately above (§3b) from DEPTH_MARKER. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
   const built = api.buildCompositePrompt(item, "front", true);
-  /* THE ORDERING CLAIM IS RETIRED WITH THE ASSEMBLY - see §3's note. The edge-on
-     directive is still built by angleClause() and still asserted at every branch above;
-     what it no longer does is ride the live composite payload, because that payload is
-     one frozen string. Pinned as an absence so the two facts cannot drift apart: if a
-     clause ever reappears in this builder, the mode has been half-undone. */
-  check("the live composite payload carries no assembled clause, at either pose",
-    !LATERAL_MARKER.test(built) && !DEPTH_MARKER.test(built) &&
-    !/Use the LEFT half only/.test(built) &&
-    !LATERAL_MARKER.test(api.buildCompositePrompt(item, "front", false)),
+  const square = api.buildCompositePrompt(item, "front", false);
+  /* THE ASSEMBLY IS BACK - see the earlier §3 block's note for why. The panel-selection
+     clause ("Use the LEFT half only...") is CORE and rides every pose, square-on
+     included - it is the one that answers the double-print bug and must never shed. The
+     lateral-synthesis clause is edge-on-only, same as DEPTH_MARKER, because the flank it
+     describes is only in view at 90 degrees. */
+  check("the live composite payload carries the panel-selection clause at either pose",
+    /Use the LEFT half only; ignore the RIGHT/.test(built) &&
+    /Use the LEFT half only; ignore the RIGHT/.test(square),
     built);
+  check("...and the lateral-synthesis clause edge-on only",
+    LATERAL_MARKER.test(built) && !LATERAL_MARKER.test(square),
+    `edge=${built}\n        square=${square}`);
 }
 
 console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ──");
@@ -424,19 +439,30 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
       api.buildCompositePrompt(item, "front", prof).slice(0, 300));
   }
-  check("...and it is byte-identical across both poses, not merely present in both",
-    api.buildCompositePrompt(item, "front", false) === api.buildCompositePrompt(item, "front", true));
-  /* POSE MUST NEVER BECOME AN AXIS. This suite owns that proof, and it now holds in the
-     strongest possible form: the anchor was collapsed to ONE string for both categories,
-     so nothing whatsoever varies it - not pose, not angle, not category. The bottoms
-     branch is still checked separately rather than assumed, because it routes through
-     isBottomsGarment() and that routing is still live (it simply selects between two
-     identical values today - see image-first.test.mjs §1b). */
+  /* ── REVISION: THE ANCHOR IS FROZEN; THE FULL COMPOSITE PAYLOAD NO LONGER IS ──────
+     Byte-identity across poses was the strongest form of this proof under strict
+     image-only, where buildCompositePrompt() returned nothing but the anchor. Now that
+     the panel contract + pose/depth clauses are restored (see §3's note), the payload
+     genuinely varies with pose again - by construction, since the pose sentence and the
+     edge-on depth directive are the whole point of restoring them. What MUST still never
+     vary is the ANCHOR ITSELF: not pose, not the fact that a panel contract follows it. */
+  check("...the anchor is a fixed PREFIX of the payload at both poses, not merely present in both",
+    api.buildCompositePrompt(item, "front", false).startsWith(
+      "Fit the EXACT FRONT side of the target shirt onto the subject's chest/front.") &&
+    api.buildCompositePrompt(item, "front", true).startsWith(
+      "Fit the EXACT FRONT side of the target shirt onto the subject's chest/front."),
+    "a pose that perturbs the ANCHOR (not just what follows it) reopens the shirt-replacement report");
+  check("...but the full payload DOES now vary by pose - that is the restored assembly working",
+    api.buildCompositePrompt(item, "front", false) !== api.buildCompositePrompt(item, "front", true),
+    "byte-identity here would mean the restore silently did nothing");
+  /* The bottoms branch is still checked separately rather than assumed, because it routes
+     through isBottomsGarment() and that routing is still live and still scopes its own
+     anchor - see image-first.test.mjs §1b. */
   const jeans = { name: "Glide Slim", custom: true, garmentType: "lower_body" };
-  check("the BOTTOMS route is equally pose-invariant, and is its own scoped string",
-    api.buildCompositePrompt(jeans, "front", false) === api.buildCompositePrompt(jeans, "front", true) &&
-    /^Fit the EXACT FRONT side of the target pants onto the subject's waist\/front\./.test(
-      api.buildCompositePrompt(jeans, "front", false)) &&
+  check("the BOTTOMS route has its own frozen anchor prefix, and its own pose variance",
+    api.buildCompositePrompt(jeans, "front", false).startsWith(
+      "Fit the EXACT FRONT side of the target pants onto the subject's waist/front.") &&
+    api.buildCompositePrompt(jeans, "front", false) !== api.buildCompositePrompt(jeans, "front", true) &&
     api.buildCompositePrompt(jeans, "front", false) !== api.buildCompositePrompt(item, "front", false),
     api.buildCompositePrompt(jeans, "front", false).slice(0, 200));
   check("the retired isolation clause is no longer assembled at either pose",
@@ -760,23 +786,39 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
      handled entirely by the model's own frame-to-frame coherence. That is a genuine bet,
      and DENSE.temporal is the clause to buy back first if fabric starts snapping at 90
      degrees. Stated explicitly so it is a known trade, not a silent one. */
-  check("no polish, pose or depth clause is assembled at either pose",
-    !/Stable print, no flicker/.test(square) && !/Stable print, no flicker/.test(built) &&
-    !/keep their full front-to-back depth/.test(built) &&
-    !/EDGE-ON/.test(built), built.slice(-260));
+  /* THE TEMPORAL/ROTATION POLISH CLAUSES stay retired at both poses - that part of the
+     original claim is unaffected by the composite restore, since only DENSE.contract/
+     select/pose/profileLateral came back, never DENSE.temporal/rotation/quality. The
+     depth/EDGE-ON half of the old check is inverted below instead of dropped: it is now
+     the restored behaviour, not an absence. */
+  check("no polish clause (temporal/rotation) is assembled at either pose",
+    !/Stable print, no flicker/.test(square) && !/Stable print, no flicker/.test(built),
+    built.slice(-260));
   check("body fidelity is retired at both poses too, not merely shed edge-on",
     !/never slim them/.test(square) && !/never slim them/.test(built), square.slice(-260));
   check("the passthrough clamp is retired with them - the largest loss, recorded",
     !/pass through untouched/.test(square) && !/pass through untouched/.test(built),
     "if this ever passes again, inpaintLock was restored - update app.js's restore list");
+  /* ── REVISION: THE DEPTH CLAUSE IS BACK ON THE EDGE-ON PAYLOAD ────────────────
+     This used to be an absence check (strict image-only removed it along with
+     everything else). COMPOSITE_MODE's restore note (app.js) brought it back
+     specifically for buildCompositePrompt() - the earlier §3/§3c blocks in this file
+     assert the same fact from the "restore" side; this one keeps the ANTI-SNAP framing
+     §5e was written for: the depth/rotation-continuity language a pose transition needs
+     is present again, at least for the front-to-back axis. */
+  check("the depth clause rides the edge-on payload now, and only the edge-on one",
+    /keep their full front-to-back depth/.test(built) && /EDGE-ON/.test(built) &&
+    !/keep their full front-to-back depth/.test(square) && !/EDGE-ON/.test(square),
+    `edge=${built.slice(-260)}\n        square=${square.slice(-260)}`);
   /* CLOSED_BACK_HEM went off the wire with the 1:1 collapse, and the invent/add/alter
      clamp with the dynamic-drape revision after it - see CATEGORY_ANCHOR in app.js for
-     the full list and the restore path for each. Byte-identity across poses is the
-     property this section owns, and it is unaffected by either. */
-  check("what survives at both poses is the category anchor, byte-identical",
-    square === built &&
-    /^Fit the EXACT FRONT side of the target shirt onto the subject's chest\/front\./.test(square) &&
-    /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(square));
+     the full list and the restore path for each. The ANCHOR (not the full payload, which
+     now varies with pose) is what stays byte-identical, and it is unaffected by either. */
+  check("the category anchor is a fixed prefix at both poses, preserve clause intact",
+    square.startsWith("Fit the EXACT FRONT side of the target shirt onto the subject's chest/front.") &&
+    built.startsWith("Fit the EXACT FRONT side of the target shirt onto the subject's chest/front.") &&
+    /Strictly preserve the user's natural proportions, face, lower body, and background\./.test(square) &&
+    /Strictly preserve the user's natural proportions, face, lower body, and background\./.test(built));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }
