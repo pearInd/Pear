@@ -150,8 +150,8 @@ console.log("\n── §2 THE BOTTOMS ANCHOR: FRONT and BACK, both real strings 
     /Maintain 1:1 body ratio without distortion\./.test(bottomsBackPrompt),
     `front=${bottomsPrompt}\n        back=${bottomsBackPrompt}`);
   check("both preserve the opposite layer AND the background, unchanged",
-    /Strictly preserve the user's natural proportions, face, upper body, and background\.$/.test(bottomsPrompt) &&
-    /Strictly preserve the user's natural proportions, face, upper body, and background\.$/.test(bottomsBackPrompt),
+    /Strictly preserve the user's natural proportions, face, upper body, and background\./.test(bottomsPrompt) &&
+    /Strictly preserve the user's natural proportions, face, upper body, and background\./.test(bottomsBackPrompt),
     `front=${bottomsPrompt}\n        back=${bottomsBackPrompt}`);
   check("...and never claims the upper garment as the thing to FIT, on either side",
     !/target shirt/.test(bottomsPrompt) && !/target shirt/.test(bottomsBackPrompt),
@@ -173,8 +173,8 @@ console.log("\n── §3 THE TOPS ANCHOR: the exact mirror, per region AND per 
   check("...and carries the same rear-lock sentence as the bottoms BACK anchor",
     /Precisely lock rear print, logos, and back-seams\./.test(topsBackPrompt), topsBackPrompt);
   check("...and pins the LOWER clothing plus background - the mirror of bottoms",
-    /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(topsPrompt) &&
-    /Strictly preserve the user's natural proportions, face, lower body, and background\.$/.test(topsBackPrompt),
+    /Strictly preserve the user's natural proportions, face, lower body, and background\./.test(topsPrompt) &&
+    /Strictly preserve the user's natural proportions, face, lower body, and background\./.test(topsBackPrompt),
     `front=${topsPrompt}\n        back=${topsBackPrompt}`);
 
   /* ── SYMMETRY, asserted on all four strings at once ────────────────────────
@@ -262,7 +262,7 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;\s*\n\s*return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? table\.bottom : table\.top\],\s*\n\s*\]\);/.test(SRC),
+    /const table = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;\s*\n\s*return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? table\.bottom : table\.top\],\s*\n\s*\[P\.HIGH, STRICT_REFERENCE_LOCK\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The selected anchor is the one clause that must NEVER shed - it is the entire fix,
      for BOTH the category axis and (now) the front/back axis: whichever table `angle`

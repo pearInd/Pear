@@ -7845,10 +7845,10 @@ function isBottomsGarment(item) {
  * @returns {string}
  */
 function imageOnlyPrompt(item, angle = "front") {
-  /* ONE PART, BOTH BRANCHES. There is no assembly left on either side - see
-     CATEGORY_ANCHOR above for the reports that drove it there, for the full list of what
-     came off the wire, and for why bottoms names the lower body where tops names the
-     whole contour.
+  /* TWO PARTS NOW, NOT ONE - the first clause bought back since this went to a single
+     frozen anchor. See CATEGORY_ANCHOR above for the reports that drove the anchor split,
+     for the full list of what came off the wire, and for why bottoms names the lower body
+     where tops names the whole contour.
 
      `angle` selects FRONT vs BACK (see CATEGORY_ANCHOR's own revision comment for why
      this is a parameter, never a live re-read of orientation state). Anything other than
@@ -7856,22 +7856,34 @@ function imageOnlyPrompt(item, angle = "front") {
      side every caller rendered before this revision existed, rather than to a silent
      back-render nobody asked for.
 
-     STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at 342/320 chars:
-     it normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that
-     lengthens an anchor is clamped here instead of over-running into
-     clampPromptForWire()'s hard slice, which cuts at the END and would take the
-     fidelity sentence with it.
+     ── REVISION: STRICT_REFERENCE_LOCK BOUGHT BACK - "the shirt rendered white, not RED" ──
+     REPORTED: a saturated reference (product screenshots showed RED, graphics intact)
+     rendered washed-out toward white/neutral, print faded. This is the "invented/altered
+     detail on the correct garment" failure class the anchor's own restore note named -
+     NOT the tuxedo class (a different garment entirely) that DENSE.assetLock/the colour
+     word retirement defends against. Adding the colour as TEXT ("the RED shirt") was
+     considered and rejected: that is exactly the mechanism (a description competing with
+     the reference pixels) that caused the tuxedo report twice; naming one product's colour
+     in a prompt every catalog item shares would also be false for every other item. The
+     clause bought back instead says nothing about what the garment IS - only that
+     whatever the reference shows must be reproduced exactly, which is the same shape as
+     the panel contract restored for composite mode: structural, not descriptive.
 
-     TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, STRICT_REFERENCE_LOCK]`
-     for the hallucination clamp, `[P.HIGH, KEEP_OPPOSITE_LAYER]` on the bottoms branch for
-     the opposite-layer pin; both are the retirements this revision made. The budget is not
-     the constraint - 446 characters are free on tops and 446 on bottoms - so the only
-     question is whether that text is worth the weight it takes away from the reference
-     image, which is the mechanism every report in this sequence shares. One at a time,
-     re-tested live. */
+     STILL ROUTED THROUGH fitPrompt() rather than returned raw: it normalises whitespace
+     and enforces PROMPT_MAX_CHARS, so a future edit that lengthens an anchor is clamped
+     here instead of over-running into clampPromptForWire()'s hard slice, which cuts at the
+     END and would take the fidelity sentence with it.
+
+     STILL TO BUY BACK, if a report names it specifically: `[P.HIGH, KEEP_OPPOSITE_LAYER]`
+     on the bottoms branch for the opposite-layer pin - a different concern (which region
+     stays untouched) from the colour/print fidelity this revision addresses. The budget is
+     not the constraint - comfortably inside the 650-char ceiling even with both bought
+     back - so the only question for the next one is the same as this one: is the text
+     worth the weight it takes from the reference image. One at a time, re-tested live. */
   const table = angle === "back" ? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;
   return fitPrompt([
     [P.CORE, isBottomsGarment(item) ? table.bottom : table.top],
+    [P.HIGH, STRICT_REFERENCE_LOCK],
   ]);
 }
 
@@ -7979,15 +7991,18 @@ function lookAnchorPrompt() {
                       the moment "it gave me the model's shoulders" is reported again.
 
    ── THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP ────
-   The number has moved six times, so read the CURRENT row rather than remembering an
-   older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
+   The number has moved seven times, so read the CURRENT row rather than remembering an
+   older one. The base row grew from 204 to 292 when STRICT_REFERENCE_LOCK was bought back
+   (see imageOnlyPrompt()'s own revision note - "the shirt rendered white, not RED"); the
+   two retired clauses below did not move, since neither touches that constant. Against
+   PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS (204 chars - anchor)             BOTTOMS (204 chars - anchor)
-     + DENSE.bodyFidelity  (45) → 250  fits              → 250  fits
-     + DENSE.modelAgnostic (64) → 269  fits              → 269  fits
-     + both of them        (110)→ 315  fits              → 315  fits
+     TOPS (292 chars - anchor + lock)      BOTTOMS (292 chars - anchor + lock)
+     + DENSE.bodyFidelity  (45) → 338  fits              → 338  fits
+     + DENSE.modelAgnostic (64) → 357  fits              → 357  fits
+     + both of them        (110)→ 403  fits              → 403  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 446 characters are free on tops and 446 on
+   NOTHING SHEDS ANY MORE, on either branch. 358 characters are free on tops and 358 on
    bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.

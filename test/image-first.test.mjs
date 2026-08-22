@@ -149,16 +149,27 @@ const BACK_BOTTOMS_SPEC =
   " upper body, and background.";
 const SPEC = TOPS_SPEC;
 
+/* ── REVISION: STRICT_REFERENCE_LOCK BOUGHT BACK - see imageOnlyPrompt()'s own comment ──
+   REPORTED: a saturated reference rendering washed-out toward white/neutral, print faded
+   - the "invented/altered detail on the correct garment" class, not the tuxedo class (a
+   different garment entirely). The four SPEC constants above stay the pure ANCHOR wording
+   (every sentence-count/prefix/suffix check on them below is still about the anchor
+   itself); this is the second, appended part imageOnlyPrompt() now actually returns. */
+const STRICT_REFERENCE_LOCK =
+  " Exactly match color, pattern, logos, and cut." +
+  " Do NOT invent, add, or alter any details.";
+const withLock = (spec) => (spec + STRICT_REFERENCE_LOCK).replace(/\s+/g, " ").trim();
+
 console.log("── §1 THE TWO ANCHORS × TWO SIDES: product-specified, and now real ──");
 {
   check("FRONT/TOPS matches the specified wording byte for byte",
-    api.imageOnlyPrompt(TEE) === TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
+    api.imageOnlyPrompt(TEE) === withLock(TOPS_SPEC), JSON.stringify(api.imageOnlyPrompt(TEE)));
   check("FRONT/BOTTOMS matches the specified wording byte for byte",
-    api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
+    api.imageOnlyPrompt(JEANS) === withLock(BOTTOMS_SPEC), JSON.stringify(api.imageOnlyPrompt(JEANS)));
   check("BACK/TOPS matches the specified wording byte for byte",
-    api.imageOnlyPrompt(TEE, "back") === BACK_TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE, "back")));
+    api.imageOnlyPrompt(TEE, "back") === withLock(BACK_TOPS_SPEC), JSON.stringify(api.imageOnlyPrompt(TEE, "back")));
   check("BACK/BOTTOMS matches the specified wording byte for byte",
-    api.imageOnlyPrompt(JEANS, "back") === BACK_BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS, "back")));
+    api.imageOnlyPrompt(JEANS, "back") === withLock(BACK_BOTTOMS_SPEC), JSON.stringify(api.imageOnlyPrompt(JEANS, "back")));
   check("all four are DIFFERENT strings - category AND angle both genuinely scope now",
     new Set([TOPS_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC]).size === 4,
     "a collapsed pair re-opens the shirt-replacement report; a collapsed front/back re-opens THIS one");
@@ -313,12 +324,6 @@ console.log("\n── §1c THE GARMENT PIN: the mid-session revert, fixed in the
     ["frontal volume",              /In front-facing \(0-degree\) views/,    /const FRONTAL_VOLUME =/],
     ["closed back / un-knotted hem",/closed back and normal un-knotted hem/, /const CLOSED_BACK_HEM =/],
     ["temporal persistence",        /as soon as visible/,                    /const TEMPORAL_PERSISTENCE = /],
-    /* NEW IN THE DYNAMIC-DRAPE REVISION, and the more expensive of its two losses. The
-       fidelity sentence that replaced it forbids CHANGING the garment but not ADDING to
-       it, so the invented-detail report (report 3) is the one to watch. The constant is
-       still live on the full-look path, so this restore is genuinely one line. */
-    ["the invent/add/alter clamp",  /Do NOT invent, add, or alter any details/,
-                                    /const STRICT_REFERENCE_LOCK =/],
     /* KEEP_OPPOSITE_LAYER's WORDING is retired - the live lock is phrased around the
        shopper's clothes and the camera rather than around a region - but the PROTECTION it
        provided is back on both branches (asserted below). The constant stays on file
@@ -347,6 +352,23 @@ console.log("\n── §1c THE GARMENT PIN: the mid-session revert, fixed in the
     check("...but still on file, so its restore is genuinely one line",
       constantRe.test(SRC), String(constantRe) + " not found in app.js");
   }
+  /* ── THE INVENT/ADD/ALTER CLAMP IS BACK ON THE WIRE - "shirt rendered white, not RED" ──
+     Formerly listed in RETIRED above (still absent from the bare SPEC anchor constants,
+     which is why it isn't there any more - that check is about the ANCHOR, not the full
+     prompt). imageOnlyPrompt() now appends STRICT_REFERENCE_LOCK as a second fitPrompt()
+     part on every branch, so a colour/print-fidelity report gets a real, targeted lever
+     instead of a text description competing with the pixels. */
+  check("STRICT_REFERENCE_LOCK is live on both categories and both angles",
+    api.imageOnlyPrompt(TEE).includes(STRICT_REFERENCE_LOCK.trim()) &&
+    api.imageOnlyPrompt(JEANS).includes(STRICT_REFERENCE_LOCK.trim()) &&
+    api.imageOnlyPrompt(TEE, "back").includes(STRICT_REFERENCE_LOCK.trim()) &&
+    api.imageOnlyPrompt(JEANS, "back").includes(STRICT_REFERENCE_LOCK.trim()));
+  check("...appended AFTER the anchor, not before it - leading tokens dominate this model",
+    api.imageOnlyPrompt(TEE).indexOf(STRICT_REFERENCE_LOCK.trim()) >
+      api.imageOnlyPrompt(TEE).indexOf("Fit the EXACT FRONT"));
+  check("...and it says nothing about what the garment IS - no colour word, no product noun",
+    !/red|blue|black|white|crimson/i.test(STRICT_REFERENCE_LOCK),
+    "a colour word here is the exact mechanism that caused the tuxedo report twice");
   /* ── THE OPPOSITE-LAYER LOCK IS BACK, ON BOTH BRANCHES ─────────────────────
      Its history is the whole argument for why it is now symmetric. It sat on BOTTOMS
      alone for three revisions under a one-branch-at-a-time-on-evidence rule; the
@@ -430,10 +452,10 @@ console.log("\n── §2 EVERY SINGLE-ASSET BUILDER RETURNS IT, AND ASSEMBLES N
      and side-profile.test.mjs own what buildCompositePrompt() layers on top of it. */
   for (const [name, item, angle, prof] of cases) {
     const isBottom = item.garmentType === "lower_body";
-    const expected = angle === "back"
+    const expected = withLock(angle === "back"
       ? (isBottom ? BACK_BOTTOMS_SPEC : BACK_TOPS_SPEC)
-      : (isBottom ? BOTTOMS_SPEC : TOPS_SPEC);
-    check(`${name}: byte-identical to its category+angle anchor`,
+      : (isBottom ? BOTTOMS_SPEC : TOPS_SPEC));
+    check(`${name}: byte-identical to its category+angle anchor plus the reference lock`,
       api.imageOnlyPrompt(item, angle) === expected,
       api.imageOnlyPrompt(item, angle));
   }

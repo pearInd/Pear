@@ -221,9 +221,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      is recomputed here against the REAL fitPrompt() and the REAL DENSE table, and the
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
+  /* Base row moved from 204 to 292 when STRICT_REFERENCE_LOCK was bought back into
+     imageOnlyPrompt() ("the shirt rendered white, not RED" - see its own revision note).
+     Neither retired clause below touches that constant, so only the base and every row
+     built on it shifted. */
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  250, 250],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 269, 269],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  338, 338],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 357, 357],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -232,13 +236,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(204 chars - anchor\)             BOTTOMS \(204 chars - anchor\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 250  fits              \u2192 250  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 269  fits              \u2192 269  fits/.test(SRC),
+    /TOPS \(292 chars - anchor \+ lock\)      BOTTOMS \(292 chars - anchor \+ lock\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 338  fits              \u2192 338  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 357  fits              \u2192 357  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /446 characters are free on tops and 446 on\s*\n?\s*bottoms/.test(SRC),
+    /358 characters are free on tops and 358 on\s*\n?\s*bottoms/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
 }
 
