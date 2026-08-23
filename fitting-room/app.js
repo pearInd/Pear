@@ -6472,7 +6472,7 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
    referenceImageFor() lands when a stitch legitimately fails. Removing it would not force
    those items into combined mode; it would break them. ?composite=0 forces it on for a
    single session without touching this file. */
-const COMPOSITE_DEFAULT = true;
+const COMPOSITE_DEFAULT = false;
 const COMPOSITE_MODE = (() => {
   try {
     const q = new URLSearchParams(location.search).get("composite");
