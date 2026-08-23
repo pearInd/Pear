@@ -11766,7 +11766,37 @@ async function applyFallbackConditioning() {
   if (!item || !rtClient) throw new Error("no garment / no client for the fallback apply");
 
   const gallery = galleryOf(item) || {};
-  const image = garmentImageRef(gallery.front || item.img || gallery.back);
+  let image = garmentImageRef(gallery.front || item.img || gallery.back);
+  /* ── THE LAST UNGUARDED SEND SITE ────────────────────────────────────────────
+     applyGarment() and applyLook() both carry the garment pin and both ABANDON a
+     dispatch that cannot resolve a reference. This one did neither, and it shipped
+     `...(image ? { image } : {})` - the exact spread applyGarment()'s own comment names
+     as the original mid-session-revert bug ("a dispatch that could not resolve a
+     reference shipped with NO image at all"). It was fixed in the two ordinary paths and
+     missed here, in the RECOVERY path, which is the worst place to leave it: this runs
+     after connectRealtime({ force: true }) has opened a BRAND NEW session, so the model
+     is not holding a previous reference to fall back on. An image-less set() here does
+     not dilute the conditioning, it IS the conditioning - a fresh session told to dress
+     someone with no reference at all, which renders whatever the prior suggests.
+
+     Worse, the three lines after the send are unconditional: isGarmentApplied = true and
+     releaseInputGate() would then mark the session dressed and start streaming frames
+     INTO that unconditioned model, so nothing downstream would ever correct it. */
+  if (!image && lastAckedImageRef) {
+    console.warn("[PEAR] fallbackConditioning() - no reference resolved; re-pinning the",
+      "session's acknowledged garment rather than sending an unconditioned payload:",
+      abbrevImg(lastAckedImageRef));
+    image = lastAckedImageRef;
+  }
+  if (!image) {
+    /* THROWN, NOT RETURNED, and that is the point. The caller treats a resolved
+       applyFallbackConditioning() as "the fitting connection refreshed" and returns true;
+       returning quietly here would report a recovered session that is streaming a garment
+       nobody chose. Throwing lets the failure surface, and leaves the new session's input
+       gate CLOSED - so no frames reach an unconditioned model in the meantime. */
+    throw new Error("fallback conditioning has no garment reference to send - " +
+      `nothing resolved for "${item.name}" and nothing pinned from earlier in this session`);
+  }
   const prompt = clampPromptForWire(imageOnlyPrompt(item), "fallbackConditioning");
 
   console.log("[PEAR] fallback conditioning:", item.name,
@@ -11774,15 +11804,20 @@ async function applyFallbackConditioning() {
     look ? "| full look reduced to its TOP for this send" : "");
   console.log("[DECART PROMPT DEBUG]", prompt, abbrevImg(image), "(lightweight fallback)");
 
+  /* Unconditional, like applyGarment()'s and applyLook()'s payloads: the guard above
+     throws rather than reaching here without a reference, so neither an omitted key nor an
+     explicit image:null can go out. Both matter - the SDK's schema accepts null and
+     documents it as "clear the current image", so a null here would actively blank the
+     conditioning rather than merely fail to set it. */
   await sendCondition("fallbackConditioning",
-    () => rtClient.set({ prompt, enhance: false, ...(image ? { image } : {}) }));
+    () => rtClient.set({ prompt, enhance: false, image }));
 
   isGarmentApplied = true;         // the wire holds a garment - the next frame is dressed
   releaseInputGate("fallback conditioning");
-  lastSentImageRef = image || null;
-  rtImageOnWire = !!image;
+  lastSentImageRef = image;
+  rtImageOnWire = true;
   lastSentPrompt = prompt;
-  if (image) lastAckedImageRef = image;
+  lastAckedImageRef = image;
 }
 
 /**

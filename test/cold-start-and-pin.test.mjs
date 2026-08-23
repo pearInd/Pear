@@ -251,5 +251,64 @@ console.log("\n── §5 THE CONDITION DEBOUNCE: executed, on an injected clock
     `${CONFIG.CONDITION_DEBOUNCE_MS} vs ${CONFIG.BODY_RECONDITION_COOLDOWN_MS}`);
 }
 
+console.log("\n── THE RECOVERY PATH CANNOT SHIP AN UNCONDITIONED PAYLOAD ──");
+{
+  /* THE LAST UNGUARDED SEND SITE, and it survived two rounds of fixing this exact bug.
+     applyGarment() and applyLook() were both given the garment pin and an explicit abort
+     after "the model reverts to a generic garment mid-session" was traced to a dispatch
+     that resolved no reference. applyFallbackConditioning() was missed, and it kept the
+     original spread - `...(image ? { image } : {})` - which omits the image key entirely
+     rather than failing.
+
+     THIS IS THE WORST PLACE TO LEAVE IT. The fallback runs after
+     connectRealtime({ force: true }) has opened a BRAND NEW session, so there is no
+     previously-held reference for an image-less set() to fall back on: it does not dilute
+     the conditioning, it IS the conditioning. And the three statements after the send are
+     unconditional - isGarmentApplied = true, releaseInputGate() - so an unconditioned
+     session would be marked dressed and start streaming frames into a model holding
+     nothing, with no later dispatch to correct it. That is a garment nobody chose,
+     persisting for the rest of the window. */
+  /* Sliced inline - this suite carries no extract() helper, and adding one for a single
+     use would be more machinery than the slice it replaces. */
+  const fbStart = SRC.indexOf("async function applyFallbackConditioning() {");
+  const fbEnd = SRC.indexOf("\n/**\n * Open ONE realtime session", fbStart);
+  if (fbStart === -1 || fbEnd === -1) throw new Error("could not slice applyFallbackConditioning from app.js");
+  const fb = SRC.slice(fbStart, fbEnd);
+
+  check("the fallback carries the garment pin, like the two ordinary send sites",
+    /if \(!image && lastAckedImageRef\)/.test(fb),
+    "a recovery that cannot resolve a reference must re-pin, not send nothing");
+  check("...and ABORTS rather than sending a payload with no image",
+    /throw new Error\("fallback conditioning has no garment reference to send/.test(fb),
+    "returning quietly here reports a recovered session that is streaming a random garment");
+  /* Thrown rather than returned on purpose: the caller treats a resolved
+     applyFallbackConditioning() as "the fitting connection refreshed" and returns true. */
+  const abortIdx = fb.indexOf("throw new Error(\"fallback conditioning has no garment");
+  const sendIdx = fb.indexOf("sendCondition(\"fallbackConditioning\"");
+  check("...before the send, not after it", abortIdx !== -1 && sendIdx > abortIdx,
+    `abort@${abortIdx} send@${sendIdx}`);
+  /* isGarmentApplied/releaseInputGate must be unreachable when the abort fires, or an
+     unconditioned session is marked dressed and starts streaming into it. */
+  /* lastIndexOf, not indexOf: the guard comment above the abort names releaseInputGate()
+     in prose, and matching that instead of the call would compare the wrong two positions. */
+  const gateIdx = fb.lastIndexOf("releaseInputGate(");
+  check("...so the session is never marked dressed on an unconditioned wire",
+    gateIdx > abortIdx, `abort@${abortIdx} gate@${gateIdx}`);
+
+  check("the image key is passed unconditionally, never spread away",
+    /rtClient\.set\(\{ prompt, enhance: false, image \}\)/.test(fb),
+    "the conditional spread omits the key entirely - the original form of this bug");
+  /* The SDK's schema accepts null for image and documents it as "clear the current
+     image", so an explicit null is not a no-op - it actively blanks the conditioning. */
+  check("...and never as an explicit null, which the SDK treats as CLEAR",
+    !/image: null/.test(fb) && !/image: image \|\| null/.test(fb));
+
+  /* Stated as an absence across the whole file: this is the property that kept being
+     re-broken one call site at a time. */
+  check("NO rtClient.set() call site anywhere still spreads the image away",
+    !/rtClient\.set\(\{[^}]*\.\.\.\(image/.test(SRC),
+    "every send site must either carry a resolved reference or abandon the dispatch");
+}
+
 console.log(fails === 0 ? "\nALL CHECKS PASSED" : `\n${fails} CHECK(S) FAILED`);
 process.exit(fails === 0 ? 0 : 1);
