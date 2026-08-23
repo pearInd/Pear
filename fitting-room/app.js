@@ -888,6 +888,11 @@ let recordedChunks = [];
 let recordedUrl = null;
 let recordedBlob = null;     // the finalized clip Blob - kept so we can build a File for the share sheet
 let recorderMime = null;     // the container/codec MediaRecorder actually negotiated (mp4 vs webm)
+/* The .mp4-typed view of recordedBlob, minted only when the two genuinely differ - i.e.
+   only on a browser that could not record MP4 at all. Held separately so its object URL
+   has an owner to revoke; see exportClipBlob() for why the export and the replay are
+   allowed to disagree about the container in the first place. */
+let exportUrl = null;
 let recordCanvas = null;     // off-DOM canvas mirroring the remote VTON frames
 let recordRaf = 0;           // requestAnimationFrame handle for the paint loop
 let recordingActive = false; // guards the paint loop + single-start per session
@@ -13816,24 +13821,47 @@ function setLiveControls(live) {
    5s window closes. On flush we build a Blob → object URL and reveal a clean
    "Download Video" button. Everything is torn down/revoked on the next session.
    ============================================================================= */
-/* Codec selection is platform-aware (mobile download fix):
-   • MOBILE - try H.264 MP4 first. iOS Photos / Android galleries natively save MP4,
-     and the MP4 container carries a correct duration header, which kills the
-     "broken 14-second clip" bug WebM exhibits (WebM from MediaRecorder ships no
-     top-level duration, so phone players show a bogus/black length).
-   • DESKTOP - keep the proven VP8/WebM path (Chrome/Firefox encode the canvas track
-     into .webm most reliably; a missing/unsupported codec is what left the file
-     black). MP4 stays as a tail fallback either way.
-   Every candidate is feature-tested via isTypeSupported before use. */
-function pickRecorderMime() {
-  if (typeof MediaRecorder === "undefined") return null;
-  const mp4  = ["video/mp4;codecs=h264", "video/mp4;codecs=avc1.42E01E", "video/mp4"];
+/* ── THE EXPORT CONTRACT: a clip leaves this app as .mp4, always ──────────────
+   One container name, one extension, in one place. Everything the shopper can save -
+   the Replay Zone's download button, the share sheet's File, the gallery lightbox -
+   reads these rather than deriving an extension from whatever the recorder negotiated.
+   That derivation is what used to hand out .webm on desktop. */
+const EXPORT_MIME = "video/mp4";
+const EXPORT_EXT  = "mp4";
+
+/* Codec selection, MP4-first on EVERY platform.
+   • MP4 IS NOW PREFERRED ON DESKTOP TOO. The previous order put WebM first here, on the
+     recorded grounds that "Chrome/Firefox encode the canvas track into .webm most
+     reliably; a missing/unsupported codec is what left the file black". That history is
+     why the WebM rungs below are kept in full rather than deleted - they are the
+     fallback, and the construction loop in beginRecorder() walks down to them the moment
+     an MP4 rung fails to build. If black desktop clips ever return, this order is the
+     first thing to look at.
+   • MOBILE was already MP4-first and stays that way: iOS Photos / Android galleries
+     natively ingest MP4, and the MP4 container carries a real top-level duration header,
+     which is what kills the "broken 14-second clip" WebM shows on phone players.
+
+   WHY THIS RETURNS A LIST RATHER THAN ONE WINNER, and it matters for the first rung:
+   isTypeSupported() answers a question about a TYPE STRING, not about the stream it will
+   be handed. `video/mp4;codecs=avc1.42E01E,mp4a.40.2` names an AAC AUDIO codec, and the
+   stream here is recordCanvas.captureStream(30) - video-only, by construction. Chromium
+   reports that string supported and can still throw NotSupportedError when asked to build
+   a recorder for it against a stream with no audio track. Under the old single-pick shape
+   that throw landed in beginRecorder()'s catch and killed the clip outright - no
+   recording at all, which is a far worse outcome than a WebM one. So every supported
+   candidate is returned in preference order and the caller tries them in turn.
+   @returns {string[]} supported mime types, most-preferred first */
+function recorderMimeCandidates() {
+  if (typeof MediaRecorder === "undefined") return [];
+  const mp4 = [
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4;codecs=h264",
+    "video/mp4",
+  ];
   const webm = ["video/webm;codecs=vp8", "video/webm", "video/webm;codecs=vp9"];
-  const candidates = IS_MOBILE ? [...mp4, ...webm] : [...webm, ...mp4];
-  for (const t of candidates) {
-    try { if (MediaRecorder.isTypeSupported(t)) return t; } catch (_) {}
-  }
-  return null;
+  return [...mp4, ...webm].filter((t) => {
+    try { return MediaRecorder.isTypeSupported(t); } catch (_) { return false; }
+  });
 }
 
 /**
@@ -13876,16 +13904,41 @@ function startRecording() {
   const beginRecorder = () => {
     if (mediaRecorder) return;
     const captured = recordCanvas.captureStream(30);   // 30 fps, video-only
-    try {
-      const mime = pickRecorderMime();
-      mediaRecorder = new MediaRecorder(captured, mime ? { mimeType: mime } : undefined);
-      // Record what the recorder ACTUALLY negotiated so the Blob/File + filename carry
-      // the true container (the browser may pick something other than our request).
-      recorderMime = (mediaRecorder.mimeType || mime || "").toLowerCase() || null;
-    } catch (e) {
-      console.warn("MediaRecorder unavailable:", e?.message || e);
-      stopPaintLoop();
-      return;
+    /* WALK THE LADDER, don't bet the clip on one rung. isTypeSupported() saying yes is not
+       the same as the recorder being constructible for THIS stream - see
+       recorderMimeCandidates() for the concrete case (an MP4 rung naming an audio codec,
+       against a video-only canvas capture). Each failure costs one throw and moves down;
+       only running out of rungs falls through to the browser's own default. */
+    for (const mime of recorderMimeCandidates()) {
+      try {
+        mediaRecorder = new MediaRecorder(captured, { mimeType: mime });
+        break;
+      } catch (e) {
+        console.warn(`[PEAR] recorder: ${mime} reported supported but would not build -`,
+          e?.message || e, "- trying the next candidate");
+      }
+    }
+    if (!mediaRecorder) {
+      /* No candidate built. Let the browser choose its own container rather than give up:
+         a clip in a format we did not ask for still exports as .mp4 (see exportClipBlob)
+         and is worth far more to the shopper than no clip. */
+      try {
+        mediaRecorder = new MediaRecorder(captured);
+        console.warn("[PEAR] recorder: no preferred codec was constructible;",
+          "falling back to the browser default -", mediaRecorder.mimeType || "(unreported)");
+      } catch (e) {
+        console.warn("MediaRecorder unavailable:", e?.message || e);
+        stopPaintLoop();
+        return;
+      }
+    }
+    // Record what the recorder ACTUALLY negotiated. This is the TRUE container, and it
+    // drives in-page replay - never the exported filename, which is always .mp4.
+    recorderMime = (mediaRecorder.mimeType || "").toLowerCase() || null;
+    if (recorderMime && recorderMime.indexOf("mp4") === -1) {
+      console.warn(`[PEAR] recorder: this browser gave us "${recorderMime}", not MP4.`,
+        "The exported file is still packaged and named .mp4 - see exportClipBlob() for",
+        "what that does and does not guarantee.");
     }
     mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) recordedChunks.push(e.data); };
     mediaRecorder.onstop = finalizeRecording;          // fires after stop() flushes the buffer
@@ -14159,6 +14212,10 @@ function finalizeRecording() {
   try { attachClipToLastFit(blob); } catch (_) {}
 
   if (recordedUrl) { try { URL.revokeObjectURL(recordedUrl); } catch (_) {} }
+  /* The previous session's .mp4-typed export URL dies with its blob. Revoked here as well
+     as in clearRecording() because a second session in the same page reaches this
+     function without necessarily passing through that one. */
+  if (exportUrl) { try { URL.revokeObjectURL(exportUrl); } catch (_) {} exportUrl = null; }
   recordedUrl = URL.createObjectURL(blob);
 
   // Populate the dedicated Replay Zone and fade it in below the camera card.
@@ -14171,6 +14228,46 @@ function finalizeRecording() {
   zone.classList.add("is-visible");
   // Two-rAF trick: browser paints display:block first, then transition fires.
   requestAnimationFrame(() => requestAnimationFrame(() => zone.classList.add("is-ready")));
+}
+
+/* ── THE .mp4 EXPORT, AND EXACTLY WHAT IT GUARANTEES ──────────────────────────
+   Every saved clip is packaged as video/mp4 and named .mp4. On every browser that can
+   record MP4 - which is all of mobile, plus current Safari and Chromium - that is simply
+   the truth: recordedBlob is already an MP4 and this returns it unchanged.
+
+   ON A BROWSER THAT CANNOT (desktop Firefox is the live case), THIS RE-LABELS RATHER THAN
+   CONVERTS. The bytes stay WebM; only the container name on the Blob and the extension on
+   the file change. That is a deliberate, requested trade and it is worth being precise
+   about which half of it works:
+     · it plays fine in browsers, which sniff the actual bytes rather than trusting a name;
+     · it will NOT open in QuickTime, iOS Photos, or Windows Photos, which trust the
+       extension and then find a container that is not MP4.
+   Honestly re-containerising WebM into MP4 needs a real transcode (ffmpeg.wasm, multiple
+   MB on the critical path) and is out of scope here. If a "the downloaded file won't
+   open" report arrives from a desktop Firefox user, this function is the answer and
+   EXPORT_MIME/EXPORT_EXT is the one place to change.
+
+   THE REPLAY IS DELIBERATELY LEFT TRUTHFUL. recordedBlob and recordedUrl keep the real
+   container, because they feed the in-page <video> and the gallery's Live Photo. Firefox
+   trusts a blob's declared type for playback, so re-labelling those would break the
+   preview on the exact browser where the re-label happens - trading a file that opens
+   everywhere-but-QuickTime for one that also fails to play in the app itself.
+   @returns {Blob|null} */
+function exportClipBlob() {
+  if (!recordedBlob) return null;
+  if (recordedBlob.type === EXPORT_MIME) return recordedBlob;
+  return new Blob([recordedBlob], { type: EXPORT_MIME });
+}
+
+/** `pear-tryon-20260823-142530.mp4` - sortable, filename-safe, no garment name to
+ *  escape. The timestamp is what keeps repeat downloads from colliding in the
+ *  browser's download folder. @returns {string} */
+function exportClipName() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const ts = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
+             `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  return `pear-tryon-${ts}.${EXPORT_EXT}`;
 }
 
 /**
@@ -14190,15 +14287,18 @@ function finalizeRecording() {
  */
 async function downloadRecording() {
   if (!recordedBlob && !recordedUrl) return;
-  const type = (recordedBlob && recordedBlob.type) || (recorderMime || "").split(";")[0] || "video/webm";
-  const ext = type.indexOf("mp4") > -1 ? "mp4" : "webm";
-  const base = (activeItem && activeItem.name ? activeItem.name : "session").replace(/\s+/g, "-");
-  const filename = `pear-fitting-${base}.${ext}`;
+  /* ONE container, one extension, both from the export contract - never derived from what
+     the recorder happened to negotiate. That derivation is what handed desktop users a
+     .webm; see exportClipBlob() for what the guarantee is worth when the bytes are not
+     actually MP4. */
+  const type = EXPORT_MIME;
+  const filename = exportClipName();
+  const blob = exportClipBlob();
 
   // 1) Native gallery save via the share sheet (the reliable mobile path).
-  if (recordedBlob && typeof navigator.canShare === "function" && typeof navigator.share === "function") {
+  if (blob && typeof navigator.canShare === "function" && typeof navigator.share === "function") {
     try {
-      const file = new File([recordedBlob], filename, { type });
+      const file = new File([blob], filename, { type });
       if (navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
@@ -14218,9 +14318,17 @@ async function downloadRecording() {
   //    immediate revoke) so mobile browsers that open it in a new tab can still
   //    read the blob and let the user long-press → "Save Video"; it is revoked on
   //    the next session (clearRecording / finalizeRecording).
-  if (!recordedUrl && recordedBlob) recordedUrl = URL.createObjectURL(recordedBlob);
+  /* The anchor gets the .mp4-TYPED blob, not the replay one. They are the same object
+     whenever the recorder produced MP4; when it did not, this is the object URL that
+     carries video/mp4, and minting it here (rather than in finalizeRecording) keeps the
+     cost on the download click instead of on every session that is never downloaded.
+     Cached on exportUrl so repeat clicks do not leak a URL per press. */
+  if (!exportUrl) {
+    if (blob) exportUrl = URL.createObjectURL(blob);
+    else if (!recordedUrl && recordedBlob) recordedUrl = URL.createObjectURL(recordedBlob);
+  }
   const a = document.createElement("a");
-  a.href = recordedUrl;
+  a.href = exportUrl || recordedUrl;
   a.download = filename;
   a.rel = "noopener";
   if (IS_MOBILE) a.target = "_blank";             // iOS w/o canShare: open so it can be saved manually
@@ -14234,6 +14342,7 @@ function clearRecording() {
   stopPaintLoop();                     // ensure no stale paint loop leaks into the next session
   stopReplay();                        // abort any in-progress local blob replay
   if (recordedUrl) { try { URL.revokeObjectURL(recordedUrl); } catch (_) {} recordedUrl = null; }
+  if (exportUrl) { try { URL.revokeObjectURL(exportUrl); } catch (_) {} exportUrl = null; }
   recordedChunks = [];
   recordedBlob = null;
   recorderMime = null;
@@ -15753,7 +15862,12 @@ function openFitLightbox(idx) {
   if (dlBtn) {
     if (clip) {
       dlBtn.hidden = false; dlBtn.href = clip;
-      dlBtn.download = `PEAR-fit-${it.ts}.${(recorderMime && recorderMime.includes("mp4")) ? "mp4" : "webm"}`;
+      /* The export contract reaches the gallery too - this used to be the one saved-clip
+         path that could still hand out a .webm, and it read recorderMime to decide, which
+         is wrong twice over: a gallery clip can outlive the session that recorded it, so
+         by the time this runs recorderMime may describe a DIFFERENT recording (or have
+         been nulled by clearRecording). The extension is a constant now, not a guess. */
+      dlBtn.download = `PEAR-fit-${it.ts}.${EXPORT_EXT}`;
       if (IS_MOBILE) dlBtn.target = "_blank";
     } else { dlBtn.hidden = true; dlBtn.removeAttribute("href"); }
   }
