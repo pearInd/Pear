@@ -5658,9 +5658,42 @@ function createOrientationWatcher() {
     /* Nothing has been rendered yet - there is no steering to re-assert, and firing here
        would race the very first applyActive() that goLive() is still awaiting. */
     if (!isGarmentApplied) return;
+    /* NEVER DURING A FRONT/BACK SWAP - the same guard reconditionForTopology() carries,
+       for the same reason, and it became load-bearing the moment this function started
+       re-uploading. _orientHoldActive means the orientation watcher has frozen the view
+       and is mid-swap of the reference ITSELF; that path re-applies the whole payload
+       when it lands, so firing here would collide with it AND re-upload an asset that is
+       about to be replaced - swapping the reference mid-rotation being the one thing
+       applyGarment()'s flicker-fix comment says makes a print flicker. Skipping costs
+       nothing: the cadence has not been stamped yet, so the next tick re-offers it. */
+    if (_orientHoldActive) return;
     applying = true;
     lastReanchorAt = Date.now();
     try {
+      /* ── RE-ASSERT THE IMAGE, BECAUSE THE PROMPT NO LONGER HAS ANYTHING TO SAY ──────
+         This function exists to counter mid-session drift - the model sliding back toward
+         its own prior, the person as photographed in their own clothes - and it used to do
+         that by re-issuing the prompt through applyGarment()'s prompt-only fast path.
+         Strict image-only conditioning removed the thing it was re-issuing: every builder
+         now returns one frozen IMAGE_ONLY_PROMPT, so the payload was byte-identical to
+         what Decart already held and applyGarment() correctly skipped it as a no-op. The
+         re-anchor had quietly become eight scheduled no-ops per session, which is why the
+         drift it was built to counter came back as "the garment turns into a random
+         shirt".
+
+         Nulling the reference is what puts the assertion back. applyGarment()'s
+         sameImageOnWire check goes false, the dispatch takes the full set({ image }) path,
+         and the model is handed the packshot again instead of a control message it has
+         already seen. applyGarment() re-stamps lastSentImageRef when the send resolves, so
+         a TURN immediately afterwards is still prompt-only - the flicker fix
+         prompt-only-flip.test.mjs guards is untouched by this.
+
+         THE COST IS REAL AND IS THE POINT OF THE GUARDS ABOVE. This is a few hundred KB
+         through the datachannel, up to REANCHOR_MS-spaced (~8×) inside a 5s billed window
+         - the same trade reconditionForTopology() already makes, bounded the same way: it
+         never fires mid-swap, never stacks on another send site (wireBusy), and never
+         runs before the first frame is dressed. */
+      lastSentImageRef = null;
       await applyActive();
       /* Session-relative, because that is the only form that is actually useful for the
          diagnosis this keeps being needed for: billingStartedAt is stamped on the SAME
@@ -5669,8 +5702,8 @@ function createOrientationWatcher() {
          reversion visible at t=2000ms in the clip" is a decidable statement; a wall-clock
          log line is not. */
       if (ORIENT_DEBUG) {
-        console.log(`[PEAR] AI Auto - prompt re-anchor at t=${sessionElapsedMs()}ms` +
-          ` | pose=${autoProfile ? "EDGE-ON" : "square-on"} | prompt-only, reference unchanged`);
+        console.log(`[PEAR] AI Auto - reference re-anchor at t=${sessionElapsedMs()}ms` +
+          ` | pose=${autoProfile ? "EDGE-ON" : "square-on"} | full re-upload, reference re-asserted`);
       }
     } catch (e) {
       console.warn("[PEAR] AI Auto prompt re-anchor:", e?.message || e);
@@ -8980,20 +9013,26 @@ async function applyGarment(item) {
        is now byte-identical to what Decart already holds - both halves of it - and
        setPrompt() would push a control message that provably changes nothing.
 
-       The re-anchor cadence is what makes this common rather than theoretical:
-       maybeReanchorPrompt() fires ~8 times per session specifically to re-assert the
-       steering, and every one of those now lands here. Skipping is the honest
-       behaviour, but it is worth being clear about what it means -
+       THE RE-ANCHOR USED TO LAND HERE, AND THAT WAS THE BUG. maybeReanchorPrompt()
+       fires ~8 times per session specifically to re-assert the steering against the
+       model's drift back toward "the person as photographed". Under strict image-only
+       conditioning there was nothing left in the prompt for it to re-state, so every one
+       of those dispatches arrived byte-identical and was skipped right here - the
+       re-anchor had silently become eight scheduled no-ops, and the drift it exists to
+       counter came back as a garment turning into a different one mid-session.
 
-       THE RE-ANCHOR IS A NO-OP IN THIS MODE. It exists because the model drifts back
-       toward "the person as photographed" mid-session, and re-stating the prompt is how
-       it was pulled back. There is nothing left in the prompt to re-state. The only
-       thing worth re-asserting now is the IMAGE, and that is a full set() with a real
-       bandwidth cost inside a 5s billed window - a deliberate policy choice, not
-       something to fall into by leaving a dispatch running. If drift-reversion returns,
-       the fix is to make the re-anchor force a full re-upload (lastSentImageRef = null
-       before applyActive(), exactly as __pearDebugReinjectGarment does), not to restore
-       a prompt clause purely to give setPrompt() something to carry. */
+       It now clears lastSentImageRef before applyActive(), exactly as
+       __pearDebugReinjectGarment does, so it takes the full set({ image }) path below and
+       re-asserts the only thing left worth re-asserting - the IMAGE. That is a real
+       bandwidth cost inside a 5s billed window, which is why it is bounded at that call
+       site rather than here (see maybeReanchorPrompt()'s own comment: never mid-swap,
+       never stacked on another send site, never before the first dressed frame).
+
+       WHAT STILL REACHES THIS BRANCH is everything that genuinely has nothing to send: a
+       colour tap that resolves to the reference already on the wire, a profile transition
+       whose payload is unchanged, a maybeUpdateProfile() that stamped the cadence without
+       changing anything. Skipping those is still the honest behaviour. What must NOT
+       happen again is a periodic re-assertion quietly degrading into one of them. */
     if (payload.prompt === lastSentPrompt) {
       console.log("[PEAR] no-op update skipped - reference AND prompt both unchanged",
         `(${angleAtStart}); strict image-only means a re-anchor has nothing to re-assert.`,
