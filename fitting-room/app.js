@@ -784,14 +784,6 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
   const run = async () => {
     if (epoch !== wireEpoch) return false;   // the session this write was for is gone
     isSettingCondition = true;
-    /* WHICH CALL SITE IS ON THE WIRE RIGHT NOW. The guard in instrumentRtClient() sits at
-       the SDK boundary, where every dispatch converges and none carries its own identity -
-       a payload arrives as a bare object. This is the one place that knows, and because
-       sendCondition() IS the mutex, exactly one write owns it at a time, so a plain
-       module-level variable is accurate rather than merely convenient. Diagnostics only:
-       nothing branches on it, so a stale value can misattribute a log line and can never
-       change what is sent. */
-    _wireLabel = label;
     try {
       await send();
       return true;
@@ -919,208 +911,6 @@ function verifyGarmentAsset(payload, source) {
     console.log(`[PEAR][DEBUG] ${source}() - garmentAsset OK:`, detail);
   }
   return valid;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════════
-   THE WIRE GUARD - one enforcement point at the SDK boundary
-   ───────────────────────────────────────────────────────────────────────────────
-   WHY THIS EXISTS RATHER THAN A FOURTH CALL-SITE FIX. "The garment turns into one
-   nobody chose, mid-session" has now been traced three times, and each time the fix was
-   applied to the call site that happened to be responsible: applyGarment() got the
-   garment pin, then applyLook() got the same pin, then applyFallbackConditioning() was
-   found still shipping the original conditional spread. Three fixes, one property, and
-   the property kept being false somewhere else. Auditing call sites cannot establish an
-   invariant - there is always another send site, and the next one added will not know.
-
-   So the invariant is enforced where every dispatch converges instead: rtClient.set()
-   itself. Nothing reaches Decart without passing through here, including code not yet
-   written.
-
-   ── THE SECOND FAILURE MODE, AND WHY A PRESENCE CHECK IS NOT ENOUGH ─────────────
-   A reference can be present, non-null, and still arrive as garbage. @decartai/sdk@0.1.5
-   utils/media.js imageToBase64() ends with a bare "return image;" after testing for a
-   data: URL and for an absolute http(s) URL - so a string that is NEITHER is returned
-   verbatim where base64 image bytes are expected. A blob: URL parses with protocol
-   "blob:" and hits it. So does any relative URL, because new URL() throws on one and
-   leaves the parsed value null. Neither errors, neither logs: the model is handed the
-   characters of the URL as its reference and renders whatever they decode to, which is an
-   arbitrary garment.
-
-   garmentImageRef() passes blob: URLs through verbatim today, on the stated belief that
-   the SDK handles them the way it handles data: URLs. It does not. That is the difference
-   between a reference that is MISSING - loud, and already guarded at three call sites -
-   and one that is CORRUPT, which until now was silent.
-
-   The classifier therefore answers "will the SDK actually be able to use this?", not "is
-   something there". ════════════════════════════════════════════════════════════════ */
-
-/**
- * Can @decartai/sdk's imageToBase64() actually turn this into image bytes?
- * @param {Blob|string|null|undefined} image
- * @returns {{usable: boolean, kind: string, detail: string}}
- */
-function classifyImageRef(image) {
-  if (image === undefined) return { usable: false, kind: "absent", detail: "no image key on the payload" };
-  if (image === null) return { usable: false, kind: "null", detail: "explicit null - the SDK documents this as CLEAR the current image" };
-  if (typeof Blob !== "undefined" && image instanceof Blob) {
-    return image.size > 0
-      ? { usable: true, kind: "blob", detail: "Blob " + image.size + " bytes " + (image.type || "(no type)") }
-      : { usable: false, kind: "empty-blob", detail: "0-byte Blob - the composite or a decode failed silently" };
-  }
-  if (typeof image !== "string") return { usable: false, kind: "wrong-type", detail: typeof image + ", neither Blob nor string" };
-  if (!image) return { usable: false, kind: "empty-string", detail: "empty string" };
-  let url = null;
-  try { url = new URL(image); } catch (_) { /* relative or malformed - falls through below */ }
-  if (url && url.protocol === "data:") {
-    const payload = image.split(",", 2)[1];
-    return payload
-      ? { usable: true, kind: "data-url", detail: "data: URL, " + payload.length + " base64 chars" }
-      : { usable: false, kind: "data-url-empty", detail: "data: URL with no payload after the comma" };
-  }
-  if (url && (url.protocol === "http:" || url.protocol === "https:")) {
-    return { usable: true, kind: "http-url", detail: image.slice(0, 90) };
-  }
-  /* THE SILENT-CORRUPTION BRANCH - see this block's header. */
-  return {
-    usable: false,
-    kind: "sdk-fallthrough",
-    detail: '"' + image.slice(0, 60) + '" is neither a Blob, a data: URL, nor an ABSOLUTE ' +
-      "http(s) URL. imageToBase64() returns such a string verbatim in place of base64 image " +
-      "bytes, so Decart is conditioned on garbage and renders an arbitrary garment",
-  };
-}
-
-/* The rolling record of what actually reached the wire this session. Diagnostics only -
-   nothing reads it back as a control input. Bounded, because a session issues dozens of
-   writes and an unbounded array in a page that is never reloaded is a leak. */
-const WIRE_JOURNAL_MAX = 80;
-const _wireJournal = [];
-let _wireLabel = "(unattributed)";   // set by sendCondition() - see its comment
-let _wireSeq = 0;
-
-function journalWire(entry) {
-  _wireJournal.push(entry);
-  while (_wireJournal.length > WIRE_JOURNAL_MAX) _wireJournal.shift();
-}
-
-/**
- * Wrap a freshly-connected client so every conditioning write is recorded and, for
- * set(), VALIDATED before it can reach the model.
- *
- * Mutates in place rather than returning a facade: the client also carries on(),
- * disconnect(), getConnectionState() and the SDK's own internals, and a wrapper object
- * would have to re-export all of them correctly forever. Idempotent, so a reconnect that
- * hands back the same client cannot double-wrap it.
- * @param {object} client
- * @returns {object} the same client
- */
-function instrumentRtClient(client) {
-  if (!client || client.__pearWireGuarded) return client;
-  const rawSet = typeof client.set === "function" ? client.set.bind(client) : null;
-  const rawSetPrompt = typeof client.setPrompt === "function" ? client.setPrompt.bind(client) : null;
-  if (!rawSet) return client;
-
-  client.set = async (payload) => {
-    const label = _wireLabel;
-    const seq = ++_wireSeq;
-    const p = payload && typeof payload === "object" ? payload : {};
-    let outgoing = p;
-    let cls = classifyImageRef(p.image);
-    let action = "sent";
-
-    if (!cls.usable) {
-      const pinned = classifyImageRef(lastAckedImageRef);
-      if (pinned.usable) {
-        /* console.error, not warn: this is a dispatch that WOULD have rendered a garment
-           nobody chose, and `label` is the answer to "which path did it". */
-        console.error("[PEAR][WIRE] " + label + " #" + seq +
-          " - unusable garment reference (" + cls.kind + "): " + cls.detail,
-          "\n  → re-pinning the session's acknowledged reference instead:", abbrevImg(lastAckedImageRef),
-          "\n  → THIS CALL SITE IS THE BUG. window.__pearWireJournal() has the full sequence.");
-        outgoing = Object.assign({}, p, { image: lastAckedImageRef });
-        cls = pinned;
-        action = "re-pinned";
-      } else {
-        console.error("[PEAR][WIRE] " + label + " #" + seq +
-          " - REFUSED (" + cls.kind + "): " + cls.detail,
-          "\n  → nothing is pinned from earlier in this session either, so there is no",
-          "correct reference to substitute.",
-          "\n  → sending anyway would replace the model's conditioning with its own prior,",
-          "which renders an arbitrary garment. Failing the dispatch is the lesser harm.");
-        journalWire({ seq, t: sessionElapsedMs(), label, method: "set", action: "REFUSED",
-          image: cls.kind, detail: cls.detail, promptLen: (p.prompt || "").length, ms: 0 });
-        throw new Error("[PEAR] wire guard refused set() from " + label + ": " + cls.detail);
-      }
-    }
-
-    const startedAt = Date.now();
-    try {
-      const r = await rawSet(outgoing);
-      journalWire({ seq, t: sessionElapsedMs(), label, method: "set", action,
-        image: cls.kind, detail: cls.detail, promptLen: (outgoing.prompt || "").length,
-        ms: Date.now() - startedAt });
-      return r;
-    } catch (e) {
-      journalWire({ seq, t: sessionElapsedMs(), label, method: "set", action: "REJECTED",
-        image: cls.kind, detail: (e && e.message) ? e.message : String(e),
-        promptLen: (outgoing.prompt || "").length, ms: Date.now() - startedAt });
-      throw e;
-    }
-  };
-
-  /* setPrompt() never touches the reference (session.sendPrompt - verified in
-     stream-session.js), so there is nothing here to validate. Journalled anyway: a
-     reference that went missing is diagnosed by reading the WHOLE sequence of writes, and
-     a gap where the prompt-only sends were would make that sequence unreadable. */
-  if (rawSetPrompt) {
-    client.setPrompt = async (prompt, opts) => {
-      const label = _wireLabel;
-      const seq = ++_wireSeq;
-      const startedAt = Date.now();
-      try {
-        const r = await rawSetPrompt(prompt, opts);
-        journalWire({ seq, t: sessionElapsedMs(), label, method: "setPrompt", action: "sent",
-          image: "(untouched)", detail: "prompt-only", promptLen: (prompt || "").length,
-          ms: Date.now() - startedAt });
-        return r;
-      } catch (e) {
-        journalWire({ seq, t: sessionElapsedMs(), label, method: "setPrompt", action: "REJECTED",
-          image: "(untouched)", detail: (e && e.message) ? e.message : String(e),
-          promptLen: (prompt || "").length, ms: Date.now() - startedAt });
-        throw e;
-      }
-    };
-  }
-
-  client.__pearWireGuarded = true;
-  return client;
-}
-
-/* THE ONE COMMAND TO ASK FOR after a session renders a garment nobody chose. Every write
-   in order, with t= on the same clock the console's other session-relative lines use - so
-   a row lines up against the timestamp in a screen recording. Always available rather than
-   behind a debug flag: this is the tool for a bug that only appears in front of a real
-   shopper, and a flag would mean it is off in exactly the session that mattered. */
-if (typeof window !== "undefined") {
-  window.__pearWireJournal = () => {
-    if (!_wireJournal.length) {
-      console.log("[PEAR][WIRE] nothing on the wire yet this session.");
-      return [];
-    }
-    console.table(_wireJournal.map((e) => ({
-      "#": e.seq, "t(ms)": e.t, from: e.label, method: e.method,
-      action: e.action, image: e.image, promptChars: e.promptLen, ms: e.ms,
-    })));
-    const bad = _wireJournal.filter((e) => e.action === "REFUSED" || e.action === "re-pinned");
-    if (bad.length) {
-      console.error("[PEAR][WIRE] dispatches that could not be conditioned as built:");
-      bad.forEach((e) => console.error("  #" + e.seq + " t=" + e.t + "ms  " + e.label +
-        "  " + e.action + "  " + e.detail));
-    } else {
-      console.log("[PEAR][WIRE] every dispatch carried a usable reference.");
-    }
-    return _wireJournal.slice();
-  };
 }
 
 /**
@@ -2972,23 +2762,6 @@ const card = () => $("cameraCard");
    so concurrent callers share ONE permission prompt and ONE MediaStream. */
 let cameraStartPromise = null;
 
-/* THE LATE-RESOLVING getUserMedia LEAK - the one way a closed fitting room could still
-   be holding the camera after its own teardown ran.
-
-   startCamera() awaits navigator.mediaDevices.getUserMedia(), and on a cold first open
-   that await is not short: it is however long the shopper takes to answer the browser
-   permission prompt. Nothing stopped them closing the modal while that prompt was still
-   up. fullTeardown() then ran against localStream === null - the stream did not exist
-   yet, so there was nothing for it to stop - and the getUserMedia promise resolved
-   AFTERWARDS, into a torn-down session, assigning a freshly-opened camera track to
-   localStream and binding it to #webcam. A live capture with no session left to own it,
-   and no code path that would ever stop it again.
-
-   The generation counter closes that window. startCamera() captures it before awaiting
-   and re-checks it after; fullTeardown() bumps it. A stream that arrives late finds the
-   generation moved and stops its own tracks on the spot instead of installing itself. */
-let cameraGen = 0;
-
 /**
  * Open the front camera exactly once and bind it to the #webcam element.
  * Idempotent and re-entrancy-safe: concurrent/repeat calls reuse the same
@@ -3051,26 +2824,13 @@ async function startCamera(facing = cameraFacing) {
   if (localStream) return true;
   if (cameraStartPromise) return cameraStartPromise;   // a request is already in flight
 
-  const gen = cameraGen;                     // see cameraGen's declaration
   cameraStartPromise = (async () => {
     showPearLoader(t("camStarting"));        // 🍐 loading cue while permission/stream opens
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      localStream = await navigator.mediaDevices.getUserMedia({
         video: buildVideoConstraints(facing),
         audio: false,
       });
-      /* THE SESSION ENDED WHILE THE PERMISSION PROMPT WAS UP. Assigned to a local first,
-         and published to localStream only once the generation still matches: a stream that
-         arrives after fullTeardown() must never become the module-level camera, because
-         nothing after this point would ever stop it again. Stop it here, where we still
-         hold the only reference to it. */
-      if (gen !== cameraGen) {
-        try { stream.getTracks().forEach((tr) => tr.stop()); } catch (_) {}
-        console.log("[PEAR] startCamera() resolved into a torn-down session - stream " +
-          "stopped instead of installed (camera released).");
-        return false;
-      }
-      localStream = stream;
       cameraFacing = facing;
       localStream.getVideoTracks().forEach((t) => {
         if ("contentHint" in t) t.contentHint = "motion";
@@ -4086,13 +3846,6 @@ async function connectRealtime({ force = false } = {}) {
             }, ceiling);
           }),
         ]);
-        /* THE INVARIANT IS ENFORCED HERE, on the one object every dispatch goes through.
-           Applied at assignment rather than at any call site, so a send path added later
-           inherits the guard without knowing it exists - which is the whole point (see
-           instrumentRtClient). Idempotent, and it mutates in place, so the client handed
-           to the rest of connectRealtime() below is the same object with the same on()/
-           disconnect()/getConnectionState() it had before. */
-        instrumentRtClient(rtClient);
         break;      // success - fall through to the post-connect code below
       } catch (e) {
         // Dispose THIS attempt's throttle/clone before either retrying (a fresh one is
@@ -4264,7 +4017,6 @@ function teardown() {
   lastSentPrompt = null;
   lastAckedImageRef = null;      // session boundary - the garment pin must not outlive it
   cancelPendingRecondition();    // ...and no debounced re-drape may fire into a dead session
-  redrapeCoverEnd("session-torn-down");   // ...nor may its cover outlive the session it covered
   resetConditionWire();          // nothing may be queued for a session that no longer exists
 
   // Bug 3 fix: stop this session's cloned camera tracks (the WebRTC sender side).
@@ -4303,26 +4055,12 @@ function teardown() {
  */
 function fullTeardown() {
   teardown();
-  /* Bumped BEFORE the stop below, not after: this is what a getUserMedia still awaiting a
-     permission decision gets re-checked against, and the ordering is what makes the guard
-     total. Clearing the cached promise alongside it means a later startCamera() on a
-     surviving document issues a genuinely fresh request rather than re-returning the one
-     this teardown just invalidated. */
-  cameraGen++;
-  cameraStartPromise = null;
   if (localStream) {
     try { localStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
     localStream = null;
   }
   const v = $("webcam");
-  if (v) {
-    v.srcObject = null;
-    /* srcObject = null detaches, but the element keeps its own internal handle on the
-       (already stopped) stream until it is reset. load() is what actually drops it, and it
-       is the difference between the device indicator going out now and going out whenever
-       the element is finally collected. Cheap, and safe on a detached element. */
-    try { v.load(); } catch (_) {}
-  }
+  if (v) v.srcObject = null;
 }
 
 /* The host widget sends this right before it removes our iframe from its DOM
@@ -5138,106 +4876,6 @@ function orientFadeReveal() {
   _orientFadeCanvas.style.opacity = "0";
 }
 
-/* ── THE RE-DRAPE'S FRAME COVER ────────────────────────────────────────────────
-   REPORTED, on video: the target garment is correct, then for a second or two it is a
-   plain generic tee, then it is correct again - during body movement.
-
-   THE MECHANISM IS THE ONE THE ATOMIC CONDITIONING GATE ALREADY DESCRIBES (see
-   createThrottledInputStream): Decart renders every frame it is handed, and a full
-   set({ image }) takes a datachannel round-trip to land. Frames arriving during that
-   round-trip are rendered against conditioning that is mid-replacement, so the most
-   probable completion is the model's own prior - a generic garment. The gate closes that
-   window at session start and is one-shot by design; nothing covered the same window when
-   reconditionForTopology() re-uploads on movement.
-
-   So cover it the way a front/back swap is already covered: snapshot the last good
-   dressed frame, hold it over #aiVideo while the re-upload is in flight, and cross-fade
-   back once the new conditioning has landed. The shopper sees their own last dressed
-   frame for the length of a round-trip instead of a garment they did not choose.
-
-   A SEPARATE COVER FROM THE ORIENTATION HOLD, DELIBERATELY, and not for tidiness. The two
-   have independent lifecycles and neither may release the other. The orientation watcher
-   calls orientHoldEnd("turn-abandoned") from its 250ms tick whenever no front/back turn is
-   in progress - which is nearly always during a plain re-drape - so sharing
-   _orientHoldActive would have let that tick tear this cover down mid-re-upload, within
-   one tick of it going up. Sharing the CANVAS has the same problem one layer down. Two
-   overlays, two z-indexes, two timers; when both happen to be up they hold the same
-   snapshot, so the stack reads identically either way.
-
-   THE TRADE, STATED PLAINLY: this shows a still frame during movement. A re-drape fires at
-   most every BODY_RECONDITION_COOLDOWN_MS (900ms), and each cover lasts a round-trip plus
-   ORIENT_FADE_HOLD_MS before a 260ms cross-fade - so a shopper who moves continuously
-   trades some live-motion fidelity for never seeing the wrong garment. That is the right
-   way round (a laggy self is recognisable; a stranger's shirt is not), but it is a real
-   trade and REDRAPE_HOLD_MAX_MS is what bounds the failure: a hung apply reveals the live
-   feed rather than leaving a still up, exactly as the turn hold's ceiling does. */
-const REDRAPE_HOLD_MAX_MS = 1800;   // ceiling - a stuck still is worse than an honest live frame
-let _redrapeHoldActive = false;
-let _redrapeHoldTimer  = null;
-let _redrapeCanvas     = null;
-
-function redrapeCoverEl() {
-  if (_redrapeCanvas) return _redrapeCanvas;
-  const card = $("cameraCard");
-  if (!card) return null;
-  if (!document.getElementById("pear-redrape-cover-styles")) {
-    const s = document.createElement("style");
-    s.id = "pear-redrape-cover-styles";
-    /* z-index 7 - one above the orientation fade's 6. When a turn is confirmed during a
-       re-drape both covers can be up; the turn's is the longer-lived and more important
-       of the two, but they carry the same snapshot, so which one wins the stack is
-       cosmetically irrelevant and the ordering is fixed only so it is not accidental. */
-    s.textContent =
-      "#redrapeCoverCanvas{position:absolute;inset:0;width:100%;height:100%;" +
-      "object-fit:cover;transform:none;z-index:7;pointer-events:none;" +
-      `opacity:0;transition:opacity ${ORIENT_FADE_MS}ms ease-out;}`;
-    document.head.appendChild(s);
-  }
-  const c = document.createElement("canvas");
-  c.id = "redrapeCoverCanvas";
-  card.appendChild(c);
-  _redrapeCanvas = c;
-  return c;
-}
-
-/* Snapshot #aiVideo and hold it at full opacity with NO transition - an instant cut onto a
-   frame identical to what is already on screen is invisible. Call BEFORE the re-upload.
-   @returns {boolean} whether a cover actually went up (false = nothing paintable yet, in
-   which case the caller must not wait for a fade it is not showing). */
-function redrapeCoverBegin() {
-  if (_redrapeHoldActive) return false;
-  const ai = $("aiVideo");
-  const c = redrapeCoverEl();
-  /* No decoded frame yet - there is nothing good to hold, and freezing a blank canvas over
-     a live feed would CREATE the artifact this exists to prevent. Degrade to uncovered. */
-  if (!ai || !c || !ai.videoWidth) return false;
-  c.width = ai.videoWidth; c.height = ai.videoHeight;
-  c.getContext("2d").drawImage(ai, 0, 0, c.width, c.height);
-  c.style.transition = "none";
-  c.style.opacity = "1";
-  void c.offsetWidth;              // flush so the transition below re-arms
-  c.style.transition = `opacity ${ORIENT_FADE_MS}ms ease-out`;
-  _redrapeHoldActive = true;
-  if (_redrapeHoldTimer) clearTimeout(_redrapeHoldTimer);
-  _redrapeHoldTimer = setTimeout(() => {
-    console.warn("[PEAR] body re-drape cover hit its", REDRAPE_HOLD_MAX_MS +
-      "ms ceiling; revealing the live feed");
-    redrapeCoverEnd("timeout");
-  }, REDRAPE_HOLD_MAX_MS);
-  return true;
-}
-
-/* Fade the cover out, revealing the (by now re-conditioned) live feed underneath.
-   Idempotent, and safe to call when no cover is up - every session-ending path calls it
-   unconditionally so a cover can never outlive the window that raised it. */
-function redrapeCoverEnd(reason) {
-  if (_redrapeHoldTimer) { clearTimeout(_redrapeHoldTimer); _redrapeHoldTimer = null; }
-  if (!_redrapeHoldActive) return;
-  _redrapeHoldActive = false;
-  if (_redrapeCanvas) _redrapeCanvas.style.opacity = "0";
-  if (ORIENT_DEBUG) console.log("[PEAR] body re-drape - releasing frame cover (" + reason + ")");
-}
-
 /* ── Freeze THROUGH the turn, not just through the swap ───────────────────────
    THE BUG: "when I turn around, my real shirt comes back for a moment."
 
@@ -5979,36 +5617,6 @@ function createOrientationWatcher() {
     applying = true;
     lastReanchorAt = Date.now();
     try {
-      /* ── DO NOT MAKE THIS FORCE A FULL RE-UPLOAD. TRIED; IT CAUSED THE BUG IT WAS
-         MEANT TO FIX. ──────────────────────────────────────────────────────────────
-         The reasoning that leads here is sound-looking and this file used to invite it:
-         under strict image-only conditioning the prompt is one frozen string, so every
-         re-anchor arrives byte-identical and applyGarment() skips it as a no-op, and the
-         obvious repair is to clear lastSentImageRef first so the dispatch re-asserts the
-         IMAGE instead. That was shipped (v68) and reverted after a video of the result.
-
-         WHY IT BACKFIRES. A full set({ image }) is a few hundred KB of base64 through the
-         datachannel, and while it is in flight Decart keeps receiving camera frames it has
-         to render against conditioning that is mid-replacement - so it falls back to its
-         own prior, which is a generic garment. That is not a hypothesis: it is the entire
-         reason THE ATOMIC CONDITIONING GATE exists (see createThrottledInputStream), and
-         that gate is ONE-SHOT - it covers the first apply and never re-closes, so nothing
-         covers a mid-session re-upload. At REANCHOR_MS (~625ms) this fired ~7 times per 5s
-         session, and the reported symptom was exactly the gate's own description: the
-         target garment replaced by a plain generic tee for a second or two, then back.
-         Revert, then restore, on a cadence.
-
-         WHAT THE NO-OP ACTUALLY COSTS: nothing. A skipped dispatch leaves the model
-         conditioned on what it already holds, which is the correct garment. The drift this
-         function was built for is real, but re-uploading the reference is not available as
-         a remedy while frames are flowing - it trades a slow drift for a hard dropout.
-         Any future attempt needs to cover the render window first (hold the last good
-         frame the way orientHoldStart does for a front/back swap), not just re-send.
-
-         reconditionForTopology() DOES force a re-upload, deliberately, and pays this same
-         cost - but only when the body actually moved, bounded by
-         BODY_RECONDITION_COOLDOWN_MS. That is a re-drape the shopper asked for by moving;
-         this would have been churn on a timer. */
       await applyActive();
       /* Session-relative, because that is the only form that is actually useful for the
          diagnosis this keeps being needed for: billingStartedAt is stamped on the SAME
@@ -6472,7 +6080,7 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
    referenceImageFor() lands when a stitch legitimately fails. Removing it would not force
    those items into combined mode; it would break them. ?composite=0 forces it on for a
    single session without touching this file. */
-const COMPOSITE_DEFAULT = false;
+const COMPOSITE_DEFAULT = true;
 const COMPOSITE_MODE = (() => {
   try {
     const q = new URLSearchParams(location.search).get("composite");
@@ -6824,37 +6432,11 @@ function stitchLookBlob(topUrl, bottomUrl) {
  */
 function garmentImageRef(cdnUrl) {
   if (!cdnUrl) return undefined;
-  /* "Upload Your Own Garment": a cropped custom garment is a self-contained data: URL -
-     NOT a fetchable http(s) CDN URL, so it is handed to the SDK verbatim. Routing it
-     through /api/img-proxy (which fetches a remote URL) would corrupt it. The SDK splits
-     a data: URL on its comma and base64-decodes the tail, so this shape is genuinely
-     understood on the other side. */
-  if (/^data:/i.test(cdnUrl)) return cdnUrl;
-  /* blob: WAS IN THAT SAME TEST, AND THAT WAS WRONG - the two shapes are not equivalent
-     to the SDK and the difference is silent. imageToBase64() tests for a data: URL and
-     for an ABSOLUTE http(s) URL, then falls through to a bare "return image;" - so a
-     blob: URL (protocol "blob:", matching neither branch) is returned VERBATIM in place
-     of base64 image bytes. Decart is then conditioned on the characters of a URL, which
-     decodes to nothing meaningful and renders an arbitrary garment. No error, no log:
-     the payload looks perfectly conditioned in every log line we print.
-
-     Returning undefined instead hands the problem to callers that already know how to
-     solve it: all four of this function's call sites sit in a || chain that continues to
-     another candidate, and behind those is the garment pin, which re-uses the reference
-     Decart has already ACKNOWLEDGED. A missing reference is recoverable; a corrupt one is
-     not, because nothing downstream can tell it apart from a good one.
-
-     The wire guard (instrumentRtClient) catches this shape too, at the boundary. That is
-     the backstop for paths that never call this function; this is the fix for the one
-     that does. */
-  if (/^blob:/i.test(cdnUrl)) {
-    console.error("[PEAR] garmentImageRef() - refusing a blob: URL as a wire reference:",
-      abbrevImg(cdnUrl),
-      "\n  → @decartai/sdk imageToBase64() would send these characters as if they were",
-      "base64 image bytes, and the model would render an arbitrary garment.",
-      "\n  → falling through to the caller's next candidate / the session garment pin.");
-    return undefined;
-  }
+  // "Upload Your Own Garment": a cropped custom garment is a self-contained
+  // data:/blob: URL - it is NOT a fetchable http(s) CDN URL, so it must be handed
+  // to the SDK verbatim. Routing it through /api/img-proxy (which fetches a remote
+  // URL) would corrupt it. Pass it straight through.
+  if (/^(data:|blob:)/i.test(cdnUrl)) return cdnUrl;
   const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
   if (isLocal) {
     console.log("[PEAR] garmentImageRef() - localhost, using raw CDN URL:", cdnUrl);
@@ -12009,37 +11591,7 @@ async function applyFallbackConditioning() {
   if (!item || !rtClient) throw new Error("no garment / no client for the fallback apply");
 
   const gallery = galleryOf(item) || {};
-  let image = garmentImageRef(gallery.front || item.img || gallery.back);
-  /* ── THE LAST UNGUARDED SEND SITE ────────────────────────────────────────────
-     applyGarment() and applyLook() both carry the garment pin and both ABANDON a
-     dispatch that cannot resolve a reference. This one did neither, and it shipped
-     `...(image ? { image } : {})` - the exact spread applyGarment()'s own comment names
-     as the original mid-session-revert bug ("a dispatch that could not resolve a
-     reference shipped with NO image at all"). It was fixed in the two ordinary paths and
-     missed here, in the RECOVERY path, which is the worst place to leave it: this runs
-     after connectRealtime({ force: true }) has opened a BRAND NEW session, so the model
-     is not holding a previous reference to fall back on. An image-less set() here does
-     not dilute the conditioning, it IS the conditioning - a fresh session told to dress
-     someone with no reference at all, which renders whatever the prior suggests.
-
-     Worse, the three lines after the send are unconditional: isGarmentApplied = true and
-     releaseInputGate() would then mark the session dressed and start streaming frames
-     INTO that unconditioned model, so nothing downstream would ever correct it. */
-  if (!image && lastAckedImageRef) {
-    console.warn("[PEAR] fallbackConditioning() - no reference resolved; re-pinning the",
-      "session's acknowledged garment rather than sending an unconditioned payload:",
-      abbrevImg(lastAckedImageRef));
-    image = lastAckedImageRef;
-  }
-  if (!image) {
-    /* THROWN, NOT RETURNED, and that is the point. The caller treats a resolved
-       applyFallbackConditioning() as "the fitting connection refreshed" and returns true;
-       returning quietly here would report a recovered session that is streaming a garment
-       nobody chose. Throwing lets the failure surface, and leaves the new session's input
-       gate CLOSED - so no frames reach an unconditioned model in the meantime. */
-    throw new Error("fallback conditioning has no garment reference to send - " +
-      `nothing resolved for "${item.name}" and nothing pinned from earlier in this session`);
-  }
+  const image = garmentImageRef(gallery.front || item.img || gallery.back);
   const prompt = clampPromptForWire(imageOnlyPrompt(item), "fallbackConditioning");
 
   console.log("[PEAR] fallback conditioning:", item.name,
@@ -12047,20 +11599,15 @@ async function applyFallbackConditioning() {
     look ? "| full look reduced to its TOP for this send" : "");
   console.log("[DECART PROMPT DEBUG]", prompt, abbrevImg(image), "(lightweight fallback)");
 
-  /* Unconditional, like applyGarment()'s and applyLook()'s payloads: the guard above
-     throws rather than reaching here without a reference, so neither an omitted key nor an
-     explicit image:null can go out. Both matter - the SDK's schema accepts null and
-     documents it as "clear the current image", so a null here would actively blank the
-     conditioning rather than merely fail to set it. */
   await sendCondition("fallbackConditioning",
-    () => rtClient.set({ prompt, enhance: false, image }));
+    () => rtClient.set({ prompt, enhance: false, ...(image ? { image } : {}) }));
 
   isGarmentApplied = true;         // the wire holds a garment - the next frame is dressed
   releaseInputGate("fallback conditioning");
-  lastSentImageRef = image;
-  rtImageOnWire = true;
+  lastSentImageRef = image || null;
+  rtImageOnWire = !!image;
   lastSentPrompt = prompt;
-  lastAckedImageRef = image;
+  if (image) lastAckedImageRef = image;
 }
 
 /**
@@ -12448,11 +11995,6 @@ function stopBilling() {
      nothing left to release it, and its overlay (z-index 6, inside #cameraCard) would sit
      on top of that tail for the rest of the session. */
   orientHoldEnd("billing-stopped");
-  /* Same exemption logic as the line above, same conclusion: the frozen-hold tail keeps
-     the watcher and paint loop alive, so a re-drape cover raised just before the window
-     closed has nothing left to release it and would sit on top of that tail (z-index 7,
-     inside #cameraCard) for the rest of the session. */
-  redrapeCoverEnd("billing-stopped");
   /* The freeze watchdog does NOT get that exemption, and the difference is what each one
      is for. The orientation watcher stays because the frozen-hold tail still has UI state
      to release; this one exists solely to keep a LIVE stream alive, and two lines above
@@ -13618,12 +13160,6 @@ async function reconditionForTopology(step) {
     return;
   }
   topologyReconditionInFlight = true;
-  /* RAISED BEFORE ANYTHING IS SENT, and before the three wire-state fields below are
-     cleared: at this instant #aiVideo still carries a correctly dressed frame, and that is
-     precisely the frame worth holding. A cover raised after the re-upload is in flight
-     would snapshot the generic-garment frame it exists to hide - the same mistake the
-     front/back hold made before it was moved to the first disagreeing vote. */
-  const covered = redrapeCoverBegin();
   try {
     const d = step.delta || {};
     console.log(`[PEAR] body contour changed (${step.reason}) at t=${sessionElapsedMs()}ms` +
@@ -13639,20 +13175,9 @@ async function reconditionForTopology(step) {
     rtImageOnWire = false;
     lastSentPrompt = null;
     await applyActive();
-    /* THE GRACE PERIOD, for the same reason maybeSwap() takes one after its own set():
-       applyActive() resolving means Decart ACKNOWLEDGED the new conditioning, not that a
-       frame rendered from it has arrived and decoded. Revealing on the acknowledgement
-       alone uncovers the last few frames of the OLD conditioning - a brief flash of
-       exactly what the cover was raised to hide. Skipped when no cover went up, because
-       then this is just latency added to a re-drape nobody is waiting on. */
-    if (covered) await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));
   } catch (e) {
     console.warn("[PEAR] body-contour re-condition failed:", e?.message || e);
   } finally {
-    /* In the finally, not after the await: a rejected applyActive() must still reveal the
-       live feed. Holding a still over a failed re-drape is the one outcome worse than the
-       flicker - the shopper is then frozen out of their own session with no recovery. */
-    redrapeCoverEnd("re-drape settled");
     topologyReconditionInFlight = false;
   }
 }

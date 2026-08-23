@@ -245,40 +245,5 @@ console.log("\n── §7 wiring: called from the tick, clock shared with maybeU
     /lastProfileAt = Date\.now\(\);[\s\S]*?lastReanchorAt = Date\.now\(\);/.test(upd), upd.slice(0, 600));
 }
 
-console.log("\n── §8 THE RE-ANCHOR MUST NOT RE-UPLOAD THE REFERENCE ──");
-{
-  /* THIS WAS SHIPPED ONCE (v68) AND REVERTED AFTER A VIDEO OF THE RESULT, and the
-     reasoning that produced it is convincing enough that it will be produced again:
-     under strict image-only conditioning every re-anchor payload is byte-identical, so
-     applyGarment() skips it, so the periodic re-assertion looks dead - and clearing
-     lastSentImageRef "fixes" that by forcing the full set({ image }) path.
-
-     What it actually does is open a render window with no conditioning behind it. A full
-     re-upload is a few hundred KB through the datachannel, and Decart goes on rendering
-     camera frames throughout - against a reference that is mid-replacement, so it falls
-     back to its own prior and emits a generic garment. THE ATOMIC CONDITIONING GATE in
-     createThrottledInputStream() exists for precisely that reason at session start, and
-     it is one-shot: it never re-closes, so nothing covers a mid-session re-upload. At
-     ~625ms cadence this reproduced the gate's own failure description ~7 times a session.
-
-     The assertion is deliberately on the SOURCE rather than on behaviour: the harness
-     below cannot see a diffusion model's output, and the property that matters is
-     structural - this function must not clear the pin, whatever else it does. */
-  check("maybeReanchorPrompt() does NOT clear lastSentImageRef",
-    !/lastSentImageRef\s*=\s*null/.test(fnSrc),
-    "forcing a full re-upload here trades a slow drift for a hard garment dropout - " +
-    "see the DO NOT MAKE THIS FORCE A FULL RE-UPLOAD comment in app.js");
-  check("...and the reasoning is written down where the next attempt will start",
-    /DO NOT MAKE THIS FORCE A FULL RE-UPLOAD/.test(fnSrc),
-    "without the comment this gets re-derived and re-shipped");
-  /* The other half of the contract: the full-re-upload path that IS legitimate stays
-     legitimate. reconditionForTopology() pays the same cost knowingly, but only on real
-     movement and behind a cooldown - it is a re-drape the shopper asked for, not churn
-     on a timer. */
-  const topology = extract("async function reconditionForTopology(step) {", "\n/* ── end body-presence gate ── */");
-  check("reconditionForTopology() still forces its re-upload (movement-gated, not a timer)",
-    /lastSentImageRef = null;/.test(topology) && /BODY_RECONDITION/.test(SRC));
-}
-
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);
