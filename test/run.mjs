@@ -243,6 +243,7 @@ const SUITES = [
   ["cart-size-variant", "cart-size-variant.test.mjs"],
   ["kids-product-sizes", "kids-product-sizes.test.mjs"],
   ["camera-lifecycle", "camera-lifecycle.test.mjs"],
+  ["redrape-cover", "redrape-cover.test.mjs"],
 ];
 
 let failed = 0;
