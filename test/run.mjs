@@ -244,6 +244,7 @@ const SUITES = [
   ["kids-product-sizes", "kids-product-sizes.test.mjs"],
   ["camera-lifecycle", "camera-lifecycle.test.mjs"],
   ["redrape-cover", "redrape-cover.test.mjs"],
+  ["wire-guard", "wire-guard.test.mjs"],
 ];
 
 let failed = 0;

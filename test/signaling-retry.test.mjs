@@ -99,6 +99,17 @@ function makeHarness({ scriptedErrors = [], mintFails = false } = {}) {
        Stubbed rather than executed: this suite owns the retry around realtime.connect(),
        and the queue's own lifecycle is asserted in composite.test.mjs. */
     resetConditionWire: () => {},
+    /* The wire guard connectRealtime() applies to every client it assigns. A transparent
+       pass-through here, NOT a no-op that swallows the client: the real one mutates set()
+       and setPrompt() in place and returns the same object, so returning the client
+       unchanged is faithful to what the code under test observes. Its own behaviour - the
+       classifier, the re-pin, the refusal - is asserted in wire-guard.test.mjs.
+
+       Stubbed rather than typeof-guarded at the call site on purpose: this is an
+       enforcement point, and a `typeof instrumentRtClient === "function"` guard in app.js
+       would let the guard silently vanish if the name were ever lost. The production call
+       stays unconditional; the harness supplies the dependency. */
+    instrumentRtClient: (c) => c,
 
     // Mutable module-level state connectRealtime() reads/writes, as real `let`s.
     rtClient: null, connState: "idle", connecting: false,

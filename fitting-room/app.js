@@ -784,6 +784,14 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
   const run = async () => {
     if (epoch !== wireEpoch) return false;   // the session this write was for is gone
     isSettingCondition = true;
+    /* WHICH CALL SITE IS ON THE WIRE RIGHT NOW. The guard in instrumentRtClient() sits at
+       the SDK boundary, where every dispatch converges and none carries its own identity -
+       a payload arrives as a bare object. This is the one place that knows, and because
+       sendCondition() IS the mutex, exactly one write owns it at a time, so a plain
+       module-level variable is accurate rather than merely convenient. Diagnostics only:
+       nothing branches on it, so a stale value can misattribute a log line and can never
+       change what is sent. */
+    _wireLabel = label;
     try {
       await send();
       return true;
@@ -911,6 +919,208 @@ function verifyGarmentAsset(payload, source) {
     console.log(`[PEAR][DEBUG] ${source}() - garmentAsset OK:`, detail);
   }
   return valid;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   THE WIRE GUARD - one enforcement point at the SDK boundary
+   ───────────────────────────────────────────────────────────────────────────────
+   WHY THIS EXISTS RATHER THAN A FOURTH CALL-SITE FIX. "The garment turns into one
+   nobody chose, mid-session" has now been traced three times, and each time the fix was
+   applied to the call site that happened to be responsible: applyGarment() got the
+   garment pin, then applyLook() got the same pin, then applyFallbackConditioning() was
+   found still shipping the original conditional spread. Three fixes, one property, and
+   the property kept being false somewhere else. Auditing call sites cannot establish an
+   invariant - there is always another send site, and the next one added will not know.
+
+   So the invariant is enforced where every dispatch converges instead: rtClient.set()
+   itself. Nothing reaches Decart without passing through here, including code not yet
+   written.
+
+   ── THE SECOND FAILURE MODE, AND WHY A PRESENCE CHECK IS NOT ENOUGH ─────────────
+   A reference can be present, non-null, and still arrive as garbage. @decartai/sdk@0.1.5
+   utils/media.js imageToBase64() ends with a bare "return image;" after testing for a
+   data: URL and for an absolute http(s) URL - so a string that is NEITHER is returned
+   verbatim where base64 image bytes are expected. A blob: URL parses with protocol
+   "blob:" and hits it. So does any relative URL, because new URL() throws on one and
+   leaves the parsed value null. Neither errors, neither logs: the model is handed the
+   characters of the URL as its reference and renders whatever they decode to, which is an
+   arbitrary garment.
+
+   garmentImageRef() passes blob: URLs through verbatim today, on the stated belief that
+   the SDK handles them the way it handles data: URLs. It does not. That is the difference
+   between a reference that is MISSING - loud, and already guarded at three call sites -
+   and one that is CORRUPT, which until now was silent.
+
+   The classifier therefore answers "will the SDK actually be able to use this?", not "is
+   something there". ════════════════════════════════════════════════════════════════ */
+
+/**
+ * Can @decartai/sdk's imageToBase64() actually turn this into image bytes?
+ * @param {Blob|string|null|undefined} image
+ * @returns {{usable: boolean, kind: string, detail: string}}
+ */
+function classifyImageRef(image) {
+  if (image === undefined) return { usable: false, kind: "absent", detail: "no image key on the payload" };
+  if (image === null) return { usable: false, kind: "null", detail: "explicit null - the SDK documents this as CLEAR the current image" };
+  if (typeof Blob !== "undefined" && image instanceof Blob) {
+    return image.size > 0
+      ? { usable: true, kind: "blob", detail: "Blob " + image.size + " bytes " + (image.type || "(no type)") }
+      : { usable: false, kind: "empty-blob", detail: "0-byte Blob - the composite or a decode failed silently" };
+  }
+  if (typeof image !== "string") return { usable: false, kind: "wrong-type", detail: typeof image + ", neither Blob nor string" };
+  if (!image) return { usable: false, kind: "empty-string", detail: "empty string" };
+  let url = null;
+  try { url = new URL(image); } catch (_) { /* relative or malformed - falls through below */ }
+  if (url && url.protocol === "data:") {
+    const payload = image.split(",", 2)[1];
+    return payload
+      ? { usable: true, kind: "data-url", detail: "data: URL, " + payload.length + " base64 chars" }
+      : { usable: false, kind: "data-url-empty", detail: "data: URL with no payload after the comma" };
+  }
+  if (url && (url.protocol === "http:" || url.protocol === "https:")) {
+    return { usable: true, kind: "http-url", detail: image.slice(0, 90) };
+  }
+  /* THE SILENT-CORRUPTION BRANCH - see this block's header. */
+  return {
+    usable: false,
+    kind: "sdk-fallthrough",
+    detail: '"' + image.slice(0, 60) + '" is neither a Blob, a data: URL, nor an ABSOLUTE ' +
+      "http(s) URL. imageToBase64() returns such a string verbatim in place of base64 image " +
+      "bytes, so Decart is conditioned on garbage and renders an arbitrary garment",
+  };
+}
+
+/* The rolling record of what actually reached the wire this session. Diagnostics only -
+   nothing reads it back as a control input. Bounded, because a session issues dozens of
+   writes and an unbounded array in a page that is never reloaded is a leak. */
+const WIRE_JOURNAL_MAX = 80;
+const _wireJournal = [];
+let _wireLabel = "(unattributed)";   // set by sendCondition() - see its comment
+let _wireSeq = 0;
+
+function journalWire(entry) {
+  _wireJournal.push(entry);
+  while (_wireJournal.length > WIRE_JOURNAL_MAX) _wireJournal.shift();
+}
+
+/**
+ * Wrap a freshly-connected client so every conditioning write is recorded and, for
+ * set(), VALIDATED before it can reach the model.
+ *
+ * Mutates in place rather than returning a facade: the client also carries on(),
+ * disconnect(), getConnectionState() and the SDK's own internals, and a wrapper object
+ * would have to re-export all of them correctly forever. Idempotent, so a reconnect that
+ * hands back the same client cannot double-wrap it.
+ * @param {object} client
+ * @returns {object} the same client
+ */
+function instrumentRtClient(client) {
+  if (!client || client.__pearWireGuarded) return client;
+  const rawSet = typeof client.set === "function" ? client.set.bind(client) : null;
+  const rawSetPrompt = typeof client.setPrompt === "function" ? client.setPrompt.bind(client) : null;
+  if (!rawSet) return client;
+
+  client.set = async (payload) => {
+    const label = _wireLabel;
+    const seq = ++_wireSeq;
+    const p = payload && typeof payload === "object" ? payload : {};
+    let outgoing = p;
+    let cls = classifyImageRef(p.image);
+    let action = "sent";
+
+    if (!cls.usable) {
+      const pinned = classifyImageRef(lastAckedImageRef);
+      if (pinned.usable) {
+        /* console.error, not warn: this is a dispatch that WOULD have rendered a garment
+           nobody chose, and `label` is the answer to "which path did it". */
+        console.error("[PEAR][WIRE] " + label + " #" + seq +
+          " - unusable garment reference (" + cls.kind + "): " + cls.detail,
+          "\n  → re-pinning the session's acknowledged reference instead:", abbrevImg(lastAckedImageRef),
+          "\n  → THIS CALL SITE IS THE BUG. window.__pearWireJournal() has the full sequence.");
+        outgoing = Object.assign({}, p, { image: lastAckedImageRef });
+        cls = pinned;
+        action = "re-pinned";
+      } else {
+        console.error("[PEAR][WIRE] " + label + " #" + seq +
+          " - REFUSED (" + cls.kind + "): " + cls.detail,
+          "\n  → nothing is pinned from earlier in this session either, so there is no",
+          "correct reference to substitute.",
+          "\n  → sending anyway would replace the model's conditioning with its own prior,",
+          "which renders an arbitrary garment. Failing the dispatch is the lesser harm.");
+        journalWire({ seq, t: sessionElapsedMs(), label, method: "set", action: "REFUSED",
+          image: cls.kind, detail: cls.detail, promptLen: (p.prompt || "").length, ms: 0 });
+        throw new Error("[PEAR] wire guard refused set() from " + label + ": " + cls.detail);
+      }
+    }
+
+    const startedAt = Date.now();
+    try {
+      const r = await rawSet(outgoing);
+      journalWire({ seq, t: sessionElapsedMs(), label, method: "set", action,
+        image: cls.kind, detail: cls.detail, promptLen: (outgoing.prompt || "").length,
+        ms: Date.now() - startedAt });
+      return r;
+    } catch (e) {
+      journalWire({ seq, t: sessionElapsedMs(), label, method: "set", action: "REJECTED",
+        image: cls.kind, detail: (e && e.message) ? e.message : String(e),
+        promptLen: (outgoing.prompt || "").length, ms: Date.now() - startedAt });
+      throw e;
+    }
+  };
+
+  /* setPrompt() never touches the reference (session.sendPrompt - verified in
+     stream-session.js), so there is nothing here to validate. Journalled anyway: a
+     reference that went missing is diagnosed by reading the WHOLE sequence of writes, and
+     a gap where the prompt-only sends were would make that sequence unreadable. */
+  if (rawSetPrompt) {
+    client.setPrompt = async (prompt, opts) => {
+      const label = _wireLabel;
+      const seq = ++_wireSeq;
+      const startedAt = Date.now();
+      try {
+        const r = await rawSetPrompt(prompt, opts);
+        journalWire({ seq, t: sessionElapsedMs(), label, method: "setPrompt", action: "sent",
+          image: "(untouched)", detail: "prompt-only", promptLen: (prompt || "").length,
+          ms: Date.now() - startedAt });
+        return r;
+      } catch (e) {
+        journalWire({ seq, t: sessionElapsedMs(), label, method: "setPrompt", action: "REJECTED",
+          image: "(untouched)", detail: (e && e.message) ? e.message : String(e),
+          promptLen: (prompt || "").length, ms: Date.now() - startedAt });
+        throw e;
+      }
+    };
+  }
+
+  client.__pearWireGuarded = true;
+  return client;
+}
+
+/* THE ONE COMMAND TO ASK FOR after a session renders a garment nobody chose. Every write
+   in order, with t= on the same clock the console's other session-relative lines use - so
+   a row lines up against the timestamp in a screen recording. Always available rather than
+   behind a debug flag: this is the tool for a bug that only appears in front of a real
+   shopper, and a flag would mean it is off in exactly the session that mattered. */
+if (typeof window !== "undefined") {
+  window.__pearWireJournal = () => {
+    if (!_wireJournal.length) {
+      console.log("[PEAR][WIRE] nothing on the wire yet this session.");
+      return [];
+    }
+    console.table(_wireJournal.map((e) => ({
+      "#": e.seq, "t(ms)": e.t, from: e.label, method: e.method,
+      action: e.action, image: e.image, promptChars: e.promptLen, ms: e.ms,
+    })));
+    const bad = _wireJournal.filter((e) => e.action === "REFUSED" || e.action === "re-pinned");
+    if (bad.length) {
+      console.error("[PEAR][WIRE] dispatches that could not be conditioned as built:");
+      bad.forEach((e) => console.error("  #" + e.seq + " t=" + e.t + "ms  " + e.label +
+        "  " + e.action + "  " + e.detail));
+    } else {
+      console.log("[PEAR][WIRE] every dispatch carried a usable reference.");
+    }
+    return _wireJournal.slice();
+  };
 }
 
 /**
@@ -3876,6 +4086,13 @@ async function connectRealtime({ force = false } = {}) {
             }, ceiling);
           }),
         ]);
+        /* THE INVARIANT IS ENFORCED HERE, on the one object every dispatch goes through.
+           Applied at assignment rather than at any call site, so a send path added later
+           inherits the guard without knowing it exists - which is the whole point (see
+           instrumentRtClient). Idempotent, and it mutates in place, so the client handed
+           to the rest of connectRealtime() below is the same object with the same on()/
+           disconnect()/getConnectionState() it had before. */
+        instrumentRtClient(rtClient);
         break;      // success - fall through to the post-connect code below
       } catch (e) {
         // Dispose THIS attempt's throttle/clone before either retrying (a fresh one is
@@ -6607,11 +6824,37 @@ function stitchLookBlob(topUrl, bottomUrl) {
  */
 function garmentImageRef(cdnUrl) {
   if (!cdnUrl) return undefined;
-  // "Upload Your Own Garment": a cropped custom garment is a self-contained
-  // data:/blob: URL - it is NOT a fetchable http(s) CDN URL, so it must be handed
-  // to the SDK verbatim. Routing it through /api/img-proxy (which fetches a remote
-  // URL) would corrupt it. Pass it straight through.
-  if (/^(data:|blob:)/i.test(cdnUrl)) return cdnUrl;
+  /* "Upload Your Own Garment": a cropped custom garment is a self-contained data: URL -
+     NOT a fetchable http(s) CDN URL, so it is handed to the SDK verbatim. Routing it
+     through /api/img-proxy (which fetches a remote URL) would corrupt it. The SDK splits
+     a data: URL on its comma and base64-decodes the tail, so this shape is genuinely
+     understood on the other side. */
+  if (/^data:/i.test(cdnUrl)) return cdnUrl;
+  /* blob: WAS IN THAT SAME TEST, AND THAT WAS WRONG - the two shapes are not equivalent
+     to the SDK and the difference is silent. imageToBase64() tests for a data: URL and
+     for an ABSOLUTE http(s) URL, then falls through to a bare "return image;" - so a
+     blob: URL (protocol "blob:", matching neither branch) is returned VERBATIM in place
+     of base64 image bytes. Decart is then conditioned on the characters of a URL, which
+     decodes to nothing meaningful and renders an arbitrary garment. No error, no log:
+     the payload looks perfectly conditioned in every log line we print.
+
+     Returning undefined instead hands the problem to callers that already know how to
+     solve it: all four of this function's call sites sit in a || chain that continues to
+     another candidate, and behind those is the garment pin, which re-uses the reference
+     Decart has already ACKNOWLEDGED. A missing reference is recoverable; a corrupt one is
+     not, because nothing downstream can tell it apart from a good one.
+
+     The wire guard (instrumentRtClient) catches this shape too, at the boundary. That is
+     the backstop for paths that never call this function; this is the fix for the one
+     that does. */
+  if (/^blob:/i.test(cdnUrl)) {
+    console.error("[PEAR] garmentImageRef() - refusing a blob: URL as a wire reference:",
+      abbrevImg(cdnUrl),
+      "\n  → @decartai/sdk imageToBase64() would send these characters as if they were",
+      "base64 image bytes, and the model would render an arbitrary garment.",
+      "\n  → falling through to the caller's next candidate / the session garment pin.");
+    return undefined;
+  }
   const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
   if (isLocal) {
     console.log("[PEAR] garmentImageRef() - localhost, using raw CDN URL:", cdnUrl);
