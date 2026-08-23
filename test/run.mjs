@@ -234,6 +234,7 @@ const SUITES = [
   ["single-surface", "single-surface.test.mjs"],
   ["lower-body-guard", "lower-body-guard.test.mjs"],
   ["cold-start-and-pin", "cold-start-and-pin.test.mjs"],
+  ["cold-start-passthrough", "cold-start-passthrough.test.mjs"],
   ["proportions-and-backswap", "proportions-and-backswap.test.mjs"],
   ["apply-timeout", "apply-timeout.test.mjs"],
   ["outfit-slot-isolation", "outfit-slot-isolation.test.mjs"],

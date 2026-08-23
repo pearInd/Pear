@@ -20,6 +20,11 @@
  * @property {boolean}  INPUT_GATE_ENABLED      Withhold camera frames from Decart until the garment reference is acknowledged, so its first rendered frame can never be a generic default.
  * @property {number}   INPUT_GATE_MAX_MS       Self-release ceiling for that gate (ms) - a caller that never reports success costs a late start, never a dead session.
  * @property {number}   COLD_START_ACK_MS       Ack window for the FIRST apply of a session (ms) before the automatic reconnect; later applies use APPLY_TIMEOUT_MS.
+ * @property {boolean}  PASSTHROUGH_PROBE_ENABLED Hold the reveal until Decart's output measurably differs from the camera input - the ack cannot prove the render switched.
+ * @property {number}   PASSTHROUGH_MAX_DELTA   Mean per-cell luma difference (0-255) below which the output is judged to be the input unchanged.
+ * @property {number}   PASSTHROUGH_GATE_MAX_MS Ceiling on how long that gate may hold the reveal before showing the feed anyway (ms).
+ * @property {number}   COLD_START_REDISPATCH_MS Gap between startup re-dispatches while the output still looks like a passthrough (ms).
+ * @property {number}   COLD_START_REDISPATCH_MAX Maximum startup re-dispatches before the gate gives up and reveals.
  * @property {number}   ERROR_MODAL_THRESHOLD   Consecutive rtClient errors inside ERROR_WINDOW_MS before the shopper is shown a modal; below it they are logged and the SDK recovers.
  * @property {number}   ERROR_WINDOW_MS         Rolling window for that count (ms).
  * @property {boolean}  BODY_TOPOLOGY_ENABLED   Re-drape the garment on the live body contour whenever it changes, instead of holding the go-live silhouette.
@@ -96,6 +101,66 @@ export const CONFIG = Object.freeze({
      so the automatic reconnect happens instead of the manual one. Only the FIRST apply of
      a session uses it; everything after keeps the full budget. */
   COLD_START_ACK_MS: 2500,
+
+  /* ── THE PASSTHROUGH GATE - what the ack cannot tell you ────────────────────
+     REPORTED WITH A RECORDING: a Stitch hoodie try-on. For 00:00-00:03 the shopper's own
+     black t-shirt renders completely unconditioned. At 00:04 they turn, the topology
+     monitor force-dispatches a re-drape, and the hoodie snaps into place.
+
+     THE DIAGNOSIS THAT LOOKS RIGHT AND IS NOT: "the first apply never fired". It fires.
+     goLive() calls applyConditioningWithRecovery() immediately after waitConnected(),
+     with no dependence on pose or movement whatsoever; applyActive() retries twice on its
+     own; COLD_START_ACK_MS bounds the ack at 2.5s and reconnects if it does not land; and
+     INPUT_GATE_ENABLED withholds camera frames from Decart entirely until the reference is
+     acknowledged. Every one of those already worked.
+
+     WHAT ACTUALLY FAILS IS THE REVEAL GATE. rtClient.set() resolves on `set_image_ack`,
+     which acknowledges that the server RECEIVED the reference - not that the render
+     pipeline has switched to it. armFirstFrameBilling() then decides the feed is ready
+     from three signals, and its own comment already conceded the hole: isDressedFrame()
+     "cannot distinguish 'the real garment' from Decart's generic/default output". It is a
+     luma probe. It cannot distinguish an unconditioned PASSTHROUGH either - a frame of the
+     shopper in their own clothes is non-black, perfectly stable, and arrives after the ack
+     resolved, so it satisfies all three gates and the feed is revealed on it.
+
+     THE FOURTH SIGNAL, and it needs no model and no dependency: compare Decart's OUTPUT
+     against the INPUT this client is sending it. The input throttle already keeps that
+     frame on a canvas. If the two are near-identical at 64x36, the pipeline is passing the
+     camera through untouched - which is the reported defect, measured rather than inferred.
+
+     IT CAN ONLY EVER SAY "DEFINITELY PASSTHROUGH". #aiVideo lags the input by roughly a
+     second, so on a shopper who is moving at all the two frames disagree for ordinary
+     reasons and the gate opens. Only a near-perfect match ACROSS that latency gap - which
+     for a live human is essentially impossible unless nothing is being rendered - holds it
+     shut. Every ambiguous case fails open, the same convention sampleVideoLuma() uses. */
+  PASSTHROUGH_PROBE_ENABLED: true,
+  /* Mean absolute per-cell luma difference (0-255) below which the output is judged to be
+     the input unchanged. Two DIFFERENT frames of the same still scene, one of them a
+     diffusion render, differ by far more than this; the same frame compared with itself
+     differs by ~0. 4.0 sits well below the noise floor of a real render and well above the
+     JPEG/scaling noise of a genuine passthrough, so it separates the two cleanly without
+     needing to be tuned per camera. */
+  PASSTHROUGH_MAX_DELTA: 4.0,
+  /* How long the passthrough gate may hold the reveal before giving up and showing the
+     feed anyway. A GATE THAT CAN HANG A SESSION IS WORSE THAN THE DEFECT IT PREVENTS:
+     FIRST_FRAME_TIMEOUT_MS would eventually tear the session down and show the shopper a
+     hard failure, which is a strictly worse outcome than an unconditioned render they can
+     at least see. Past this, the feed is revealed and the console says why. */
+  PASSTHROUGH_GATE_MAX_MS: 2600,
+  /* ── THE STARTUP RE-DISPATCH, keyed on the gate above ───────────────────────
+     While the output is still measurably a passthrough, re-assert the conditioning. This
+     is deliberately NOT keyed on a missing ack - a missing ack already has two mechanisms
+     behind it (applyActive's own retry and COLD_START_ACK_MS's reconnect), and the failure
+     being fixed here is the one where the ack came back FINE and the render did not
+     follow. Re-sending on the signal that actually indicates the failure is what makes
+     this a fix rather than a fourth retry of something that already succeeded.
+
+     THIS IS THE SAME THING THE TURN AT 00:04 DID, minus the turn. The report's own
+     evidence is that a re-dispatch lands: reconditionForTopology() force-dispatches on
+     movement and the garment appears immediately. That path stays exactly what it is - an
+     ongoing motion-refinement loop - and the first drape stops depending on it. */
+  COLD_START_REDISPATCH_MS: 500,
+  COLD_START_REDISPATCH_MAX: 3,
 
   /* ── The transient-error boundary (see rtClient.on("error") in app.js) ──────
      REPORTED as "the session crashes after ~5 seconds". It did not crash: 5s is

@@ -47,6 +47,11 @@ const {
   INPUT_GATE_ENABLED,
   INPUT_GATE_MAX_MS,
   COLD_START_ACK_MS,
+  PASSTHROUGH_PROBE_ENABLED,
+  PASSTHROUGH_MAX_DELTA,
+  PASSTHROUGH_GATE_MAX_MS,
+  COLD_START_REDISPATCH_MS,
+  COLD_START_REDISPATCH_MAX,
   ERROR_MODAL_THRESHOLD,
   ERROR_WINDOW_MS,
   BODY_TOPOLOGY_ENABLED,
@@ -3106,6 +3111,106 @@ async function cameraLooksBlack() {
   }
   return isBlack;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   THE PASSTHROUGH PROBE - is Decart rendering, or just forwarding the camera?
+   ══════════════════════════════════════════════════════════════════════════════
+   REPORTED WITH A RECORDING: a hoodie try-on where the shopper's own black t-shirt
+   renders unconditioned for three full seconds, and the hoodie only snaps in at 00:04
+   when they turn and the topology monitor force-dispatches a re-drape.
+
+   THE APPLY IS NOT THE PROBLEM, and that is worth stating plainly because it is where the
+   investigation naturally goes. goLive() calls applyConditioningWithRecovery() straight
+   after waitConnected(), unconditionally, with no pose or movement dependency anywhere in
+   the path; applyActive() retries twice; COLD_START_ACK_MS reconnects if the ack does not
+   land in 2.5s; and the input gate withholds frames from Decart until it does.
+
+   THE REVEAL GATE IS. rtClient.set() resolves on `set_image_ack` - the server RECEIVED the
+   reference, not the render pipeline switched to it - and armFirstFrameBilling()'s three
+   signals cannot tell the difference. Its own comment already conceded half of this:
+   isDressedFrame() "cannot distinguish 'the real garment' from Decart's generic/default
+   output". It is a luma probe, so it cannot distinguish an unconditioned PASSTHROUGH
+   either. A frame of the shopper in their own clothes is non-black, perfectly stable, and
+   arrives after the ack resolved - it passes every gate there is.
+
+   SO MEASURE THE THING THAT ACTUALLY DIFFERS: compare Decart's OUTPUT against the INPUT
+   this client is sending it. createThrottledInputStream() already keeps that exact frame
+   on a canvas for the WebRTC track, so both sides are already in memory, in the same
+   orientation (drawFrame() mirrors when it paints, and Decart returns what it was given).
+   Two 64x36 luma grids and a mean absolute difference is the whole mechanism - no model,
+   no CDN dependency, nothing this codebase has already declined once.
+
+   IT ONLY EVER SAYS "DEFINITELY PASSTHROUGH". #aiVideo lags the input by roughly a second,
+   so a shopper who is moving at all produces a large delta for entirely ordinary reasons
+   and the gate opens. Only a near-perfect match ACROSS that latency gap holds it shut, and
+   for a live human that is essentially impossible unless nothing is being rendered.
+   Everything ambiguous - no throttle, no frame, a readback that throws - fails OPEN, the
+   same convention sampleVideoLuma() uses directly above. */
+
+/* A SECOND cached probe surface, because _lumaProbe is a single shared context: sampling
+   two sources through one of them would have the second drawImage() overwrite the first
+   grid before it could be compared. Cached for the same reason that one is - this runs on
+   every decoded frame during the reveal wait, and ab28a30 already had to take a per-frame
+   canvas allocation back out of this path. */
+let _inputProbe = null;
+function inputProbeContext(cw, ch) {
+  if (_inputProbe) return _inputProbe;
+  const surface = typeof OffscreenCanvas !== "undefined"
+    ? new OffscreenCanvas(cw, ch)
+    : Object.assign(document.createElement("canvas"), { width: cw, height: ch });
+  const ctx = surface.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  _inputProbe = { surface, ctx };
+  return _inputProbe;
+}
+
+/* Pre-allocated so the comparison allocates nothing per frame. */
+const PROBE_W = 64, PROBE_H = 36;
+const _outGrid = new Float32Array(PROBE_W * PROBE_H);
+const _inGrid  = new Float32Array(PROBE_W * PROBE_H);
+
+/**
+ * Fill `out` with the Rec.601 luma of `source` downscaled to PROBE_W x PROBE_H.
+ * @returns {boolean} false if the source could not be read - callers must fail open
+ */
+function fillLumaGrid(source, probe, out) {
+  if (!source || !probe) return false;
+  try {
+    probe.ctx.drawImage(source, 0, 0, PROBE_W, PROBE_H);
+    const data = probe.ctx.getImageData(0, 0, PROBE_W, PROBE_H).data;
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+      out[p] = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    }
+    return true;
+  } catch (_) {
+    return false;   // tainted canvas, zero-size source, decode not ready - all fail open
+  }
+}
+
+/**
+ * How far Decart's output has moved from the input it was given.
+ *
+ * @param {HTMLVideoElement} out Decart's returned stream (#aiVideo)
+ * @returns {{ready:boolean, delta:number, passthrough:boolean}} ready:false = cannot judge,
+ *   and every caller must treat that as "let it through" rather than "hold".
+ */
+function outputPassthroughDelta(out) {
+  if (!PASSTHROUGH_PROBE_ENABLED) return { ready: false, delta: Infinity, passthrough: false };
+  const input = inputThrottle && inputThrottle.canvas;
+  if (!input || !input.width || !out || !out.videoWidth) {
+    return { ready: false, delta: Infinity, passthrough: false };
+  }
+  const outProbe = lumaProbeContext(PROBE_W, PROBE_H);
+  const inProbe  = inputProbeContext(PROBE_W, PROBE_H);
+  if (!fillLumaGrid(out, outProbe, _outGrid) || !fillLumaGrid(input, inProbe, _inGrid)) {
+    return { ready: false, delta: Infinity, passthrough: false };
+  }
+  let sum = 0;
+  for (let i = 0; i < _outGrid.length; i++) sum += Math.abs(_outGrid[i] - _inGrid[i]);
+  const delta = sum / _outGrid.length;
+  return { ready: true, delta, passthrough: delta < PASSTHROUGH_MAX_DELTA };
+}
+
 
 /* Flip between the front ("user") and rear ("environment") camera. Stops ALL current
    preview tracks before requesting the new device so single-camera machines don't
@@ -11582,6 +11687,85 @@ function armFirstFrameBilling(video, gen) {
     const s = sampleVideoLuma(video);
     return s.ready && s.avgLuma > CAMERA_BLACK_AVG_LUMA && s.blackFrac < CAMERA_BLACK_PIXEL_FRAC;
   };
+
+  /* ── The passthrough gate's two escape hatches ────────────────────────────────
+     BOTH OF THEM ARE PER-SESSION BY CONSTRUCTION, living in this closure rather than in
+     module state - the same reason the rtc-error-boundary counter does. armFirstFrameBilling
+     is called once per session, so there is no reset to forget and no way for one session's
+     spent attempts to be charged to the next one's cold start. */
+  let redispatches = 0;
+  let lastRedispatchAt = 0;
+  let gateExpiryLogged = false;
+
+  /* THE CEILING. A gate that can hold the reveal indefinitely does not degrade to "the
+     shopper waits" - it degrades to FIRST_FRAME_TIMEOUT_MS tearing the session down and
+     showing a hard failure, which is strictly worse than an unconditioned render they can
+     at least see and re-run. Past PASSTHROUGH_GATE_MAX_MS the gate stops voting. */
+  const passthroughGateExpired = () => {
+    const expired = Date.now() - armedAt >= PASSTHROUGH_GATE_MAX_MS;
+    if (expired && !gateExpiryLogged) {
+      gateExpiryLogged = true;
+      console.warn(`[PEAR] passthrough gate expired after ${PASSTHROUGH_GATE_MAX_MS}ms` +
+        ` (${redispatches} re-dispatch(es) sent) - revealing the feed anyway.`,
+        "The render may still be showing the shopper's own clothes; a hard failure here" +
+        " would be worse than an honest one.");
+    }
+    return expired;
+  };
+
+  /* RE-ASSERT THE CONDITIONING while the output is measurably still the camera.
+     KEYED ON THE PASSTHROUGH SIGNAL, NOT ON A MISSING ACK, and that distinction is the
+     whole fix. A missing ack already has two mechanisms behind it - applyActive()'s own
+     bounded retry and COLD_START_ACK_MS's reconnect-and-fallback - and neither of them
+     fires here, because the ack came back perfectly fine. What did not happen is the
+     render switching to it. So the re-send is triggered by the thing that is actually
+     wrong, which is also exactly what the shopper's own turn at 00:04 accidentally did.
+
+     skipIfBusy IS INHERITED, not bypassed: applyActive() goes through sendCondition(), so
+     a re-dispatch that lands while a write is genuinely on the wire is skipped and offered
+     again on the next frame rather than racing it. Two concurrent writes are worse than a
+     late one - see wireInFlight's declaration for what the SDK does with ambiguous acks. */
+  const redispatchColdStart = (myGen, delta) => {
+    if (redispatches >= COLD_START_REDISPATCH_MAX) return;
+    const now = Date.now();
+    if (now - lastRedispatchAt < COLD_START_REDISPATCH_MS) return;
+    if (myGen !== sessionGen || !isLive()) return;
+    if (wireBusy()) return;            // a write IS on the wire - let it land, re-offer next frame
+    lastRedispatchAt = now;
+    redispatches++;
+    console.warn(`[PEAR] output still matches the camera input (Δluma ${delta.toFixed(2)} <` +
+      ` ${PASSTHROUGH_MAX_DELTA}) ${now - armedAt}ms after the first frame -` +
+      ` re-dispatching the garment (${redispatches}/${COLD_START_REDISPATCH_MAX}).`,
+      "The reference was acknowledged; the render did not follow it.");
+    /* ALL THREE, mirroring reconditionForTopology() exactly - which is not a stylistic
+       choice but the empirical one: the report's own evidence is that the 00:04 topology
+       re-drape is what finally lands the garment, and this is what that path does. The
+       first two bypass applyGarment()'s "same image already on the wire" shortcut, the
+       third gets past the "...and the prompt is unchanged too" no-op skip in front of it.
+       Clearing only the image ref would be silently skipped by that third check.
+
+       ⚠️ THIS IS A FULL IMAGE RE-UPLOAD MID-SESSION, which this file has a standing rule
+       against: 0762bea reverted the re-anchor's re-upload because it caused the very
+       dropout it was meant to prevent, and the periodic re-anchor has been prompt-only
+       ever since. The rule is not being broken here, for two reasons worth writing down
+       rather than assuming. FIRST, that rule protects a HEALTHY stream - a re-upload
+       momentarily drops the render back to a generic garment, which is a real regression
+       when there was a correct garment on screen and no regression at all when the thing
+       on screen is the shopper's own t-shirt. There is nothing to drop out of. SECOND,
+       none of this is visible: the reveal has not fired, so .show-live is not set and the
+       scan overlay is still covering the card. The shopper sees the loading state either
+       way; only its duration changes.
+
+       Fire-and-forget, like every other background re-condition in this file: the next
+       decoded frame re-evaluates the gate, so there is nothing useful to await, and a
+       rejection here must not take the session down. */
+    lastSentImageRef = null;
+    rtImageOnWire = false;
+    lastSentPrompt = null;
+    applyActive().catch((e) =>
+      console.warn("[PEAR] cold-start re-dispatch failed:", e?.message || e));
+  };
+
   const fire = () => {
     if (done) return;
     done = true;
@@ -11612,14 +11796,31 @@ function armFirstFrameBilling(video, gen) {
   //      "settled" from "mid-transition, coincidentally not black this tick". Any frame
   //      that fails (1) or (2) resets the run to zero - this must be an UNBROKEN streak,
   //      not merely N good frames somewhere in the window.
+  //  (4) NOT A PASSTHROUGH - the gate the black-t-shirt report was filed against, and the
+  //      one the three above structurally could not be. Gate (1) proves the reference was
+  //      ACKNOWLEDGED, not that the render switched to it; (2) and (3) are luma checks,
+  //      and a frame of the shopper in their own clothes is non-black and perfectly
+  //      stable. All three passed on an unconditioned frame for three seconds. This one
+  //      compares Decart's output against the input we are sending it and holds the reveal
+  //      while they are the same picture - see outputPassthroughDelta(). It FAILS OPEN on
+  //      anything it cannot judge, and PASSTHROUGH_GATE_MAX_MS caps how long it may hold
+  //      even when it is sure, because a gate that can hang a session is worse than the
+  //      defect it prevents.
   // Re-checked on every subsequent decoded frame (rVFC, or the rAF poll below where
-  // rVFC is unavailable) until all three hold, THEN fire - so billing, the countdown, and
+  // rVFC is unavailable) until all four hold, THEN fire - so billing, the countdown, and
   // recording (started together in startBillingWindow) all begin on the first frame
   // that is genuinely ready, never before.
   const frameReady = () => {
     if (done || gen !== sessionGen) return;
     const dressed = isDressedFrame();
-    const qualifies = isGarmentApplied && dressed;
+    /* Evaluated only once the first three hold: it is the most expensive of the four (two
+       getImageData readbacks) and it is meaningless before the apply has even resolved. */
+    const probe = (isGarmentApplied && dressed)
+      ? outputPassthroughDelta(video)
+      : { ready: false, delta: Infinity, passthrough: false };
+    const stillRaw = probe.ready && probe.passthrough && !passthroughGateExpired();
+    if (stillRaw) redispatchColdStart(gen, probe.delta);
+    const qualifies = isGarmentApplied && dressed && !stillRaw;
     if (!qualifies) {
       stableSinceMs = null;
       stableFrameCount = 0;
@@ -11635,7 +11836,14 @@ function armFirstFrameBilling(video, gen) {
         console.log(`[PEAR][DEBUG] frame check +${now - armedAt}ms | isGarmentApplied=${isGarmentApplied}`,
           `| luma=${s.ready ? s.avgLuma.toFixed(1) : "n/a"} blackFrac=${s.ready ? s.blackFrac.toFixed(3) : "n/a"}`,
           `| dressed=${dressed} | stableFrameCount=${stableFrameCount}`,
-          `| stableFor=${stableSinceMs !== null ? now - stableSinceMs : "n/a"}ms`);
+          `| stableFor=${stableSinceMs !== null ? now - stableSinceMs : "n/a"}ms`,
+          /* THE FOURTH GATE, in the trace this debug flag exists to produce. The hypothesis
+             this wrapper was originally written to test - that the feed is revealed on a
+             frame that is not the garment - turned out to be right, and Δin is the number
+             that shows it: near zero means the output IS the camera. */
+          `| Δin=${probe.ready ? probe.delta.toFixed(2) : "n/a"}`,
+          `| passthrough=${probe.ready ? probe.passthrough : "n/a"}`,
+          `| redispatches=${redispatches}`);
       }
     }
     const stableLongEnough = stableSinceMs !== null && (Date.now() - stableSinceMs) >= MODEL_READY_STABLE_MS;
