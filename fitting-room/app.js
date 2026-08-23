@@ -2762,6 +2762,23 @@ const card = () => $("cameraCard");
    so concurrent callers share ONE permission prompt and ONE MediaStream. */
 let cameraStartPromise = null;
 
+/* THE LATE-RESOLVING getUserMedia LEAK - the one way a closed fitting room could still
+   be holding the camera after its own teardown ran.
+
+   startCamera() awaits navigator.mediaDevices.getUserMedia(), and on a cold first open
+   that await is not short: it is however long the shopper takes to answer the browser
+   permission prompt. Nothing stopped them closing the modal while that prompt was still
+   up. fullTeardown() then ran against localStream === null - the stream did not exist
+   yet, so there was nothing for it to stop - and the getUserMedia promise resolved
+   AFTERWARDS, into a torn-down session, assigning a freshly-opened camera track to
+   localStream and binding it to #webcam. A live capture with no session left to own it,
+   and no code path that would ever stop it again.
+
+   The generation counter closes that window. startCamera() captures it before awaiting
+   and re-checks it after; fullTeardown() bumps it. A stream that arrives late finds the
+   generation moved and stops its own tracks on the spot instead of installing itself. */
+let cameraGen = 0;
+
 /**
  * Open the front camera exactly once and bind it to the #webcam element.
  * Idempotent and re-entrancy-safe: concurrent/repeat calls reuse the same
@@ -2824,13 +2841,26 @@ async function startCamera(facing = cameraFacing) {
   if (localStream) return true;
   if (cameraStartPromise) return cameraStartPromise;   // a request is already in flight
 
+  const gen = cameraGen;                     // see cameraGen's declaration
   cameraStartPromise = (async () => {
     showPearLoader(t("camStarting"));        // 🍐 loading cue while permission/stream opens
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         video: buildVideoConstraints(facing),
         audio: false,
       });
+      /* THE SESSION ENDED WHILE THE PERMISSION PROMPT WAS UP. Assigned to a local first,
+         and published to localStream only once the generation still matches: a stream that
+         arrives after fullTeardown() must never become the module-level camera, because
+         nothing after this point would ever stop it again. Stop it here, where we still
+         hold the only reference to it. */
+      if (gen !== cameraGen) {
+        try { stream.getTracks().forEach((tr) => tr.stop()); } catch (_) {}
+        console.log("[PEAR] startCamera() resolved into a torn-down session - stream " +
+          "stopped instead of installed (camera released).");
+        return false;
+      }
+      localStream = stream;
       cameraFacing = facing;
       localStream.getVideoTracks().forEach((t) => {
         if ("contentHint" in t) t.contentHint = "motion";
@@ -4055,12 +4085,26 @@ function teardown() {
  */
 function fullTeardown() {
   teardown();
+  /* Bumped BEFORE the stop below, not after: this is what a getUserMedia still awaiting a
+     permission decision gets re-checked against, and the ordering is what makes the guard
+     total. Clearing the cached promise alongside it means a later startCamera() on a
+     surviving document issues a genuinely fresh request rather than re-returning the one
+     this teardown just invalidated. */
+  cameraGen++;
+  cameraStartPromise = null;
   if (localStream) {
     try { localStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
     localStream = null;
   }
   const v = $("webcam");
-  if (v) v.srcObject = null;
+  if (v) {
+    v.srcObject = null;
+    /* srcObject = null detaches, but the element keeps its own internal handle on the
+       (already stopped) stream until it is reset. load() is what actually drops it, and it
+       is the difference between the device indicator going out now and going out whenever
+       the element is finally collected. Cheap, and safe on a detached element. */
+    try { v.load(); } catch (_) {}
+  }
 }
 
 /* The host widget sends this right before it removes our iframe from its DOM
