@@ -114,15 +114,42 @@ console.log("\n── §2 THE HIDDEN DEFAULT, VERIFIED AGAINST THE INSTALLED SDK
   check("app.js explicitly overrides enhance:false at every send site (never relies on the SDK default)",
     /enhance: false,/.test(APP) && /\{ enhance: false \}/.test(APP), `${enhanceFalse} occurrences`);
 
-  /* client.realtime.connect()'s own opts (buildRealtimeConnectOpts) is a SEPARATE
-     schema from set()/setPrompt() and has its own optional `initialState.prompt.enhance`
-     - omitted entirely here, which is correct: no prompt/image/enhance is asserted at
-     connect time, so the first content-bearing payload is unambiguously the one
-     applyGarment()/applyLook() builds, not some earlier default this file never wrote. */
+  /* ── THIS INVARIANT WAS DELIBERATELY INVERTED, so the reasoning is worth keeping ──
+     It used to assert that connect() is given NO initialState, on the grounds that "the
+     first content-bearing payload is unambiguously the one applyGarment()/applyLook()
+     builds, not some earlier default this file never wrote."
+
+     The clause that mattered there is the last one: a default THIS FILE NEVER WROTE. That
+     was the hidden-default hazard this whole section audits for, and it is still the
+     hazard. What changed is that omitting the option turned out to cost more than it
+     bought, in two ways this suite could not see. client.realtime.connect() derives
+     initialImage/initialPrompt from this option and nothing else, so with it absent
+     StreamSession.getInitialState() returns undefined - which (a) leaves
+     InitialStateGate.hasCallerProvidedInitialState() false, so waitForReadiness() never
+     awaits initialStateAck and publishLocalTracks() runs immediately, switching OFF the
+     SDK's own "don't publish video until the conditioning is acknowledged" gate; and (b)
+     makes every SDK-internal reconnect rejoin the room with no conditioning at all,
+     because sendInitialState() returns on its first line. A rejoined room with live frames
+     and no reference renders from the model's own prior, which is the generic garment.
+
+     So the state IS now asserted at connect - but it is written by this file, explicitly,
+     with enhance:false, which is precisely the property the original check was protecting.
+     A default nobody wrote is the bug; a floor this file wrote on purpose is not. */
   const connectOpts = APP.slice(APP.indexOf("function buildRealtimeConnectOpts(gen)"),
-                                APP.indexOf("function buildRealtimeConnectOpts(gen)") + 900);
-  check("connect() is not given its own initialState - no separate default prompt to conflict with",
-    !/initialState/.test(connectOpts), connectOpts.slice(0, 300));
+                                APP.indexOf("\n/**\n * Single teardown that kills the server-side Decart session"));
+  check("connect() IS given an initialState - the SDK's own gate and reconnect replay need one",
+    /initialState: _sessionInitialState/.test(connectOpts), connectOpts.slice(0, 300));
+  const floor = APP.slice(APP.indexOf("function resolveInitialConditioning()"),
+                          APP.indexOf("let _sessionInitialState = null;"));
+  check("...and this file writes it, rather than letting the SDK default anything",
+    /prompt: \{ text: clampPromptForWire\(/.test(floor) && /image,/.test(floor),
+    floor.slice(-400));
+  check("...with enhance explicitly false, the same override every send site makes",
+    /enhance: false \}/.test(floor),
+    "modelStateSchema defaults initialState.prompt.enhance to TRUE - the exact hidden default this section audits for");
+  check("...and never ships a reference the SDK cannot read as image bytes",
+    /usableImageRef\(image\)\.usable/.test(floor),
+    "a floor the SDK re-sends on every reconnect is the worst place for a corrupt reference");
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

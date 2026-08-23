@@ -242,6 +242,8 @@ const SUITES = [
   ["size-mismatch-view", "size-mismatch-view.test.mjs"],
   ["cart-size-variant", "cart-size-variant.test.mjs"],
   ["kids-product-sizes", "kids-product-sizes.test.mjs"],
+  ["redrape-cover", "redrape-cover.test.mjs"],
+  ["wire-integrity", "wire-integrity.test.mjs"],
 ];
 
 let failed = 0;

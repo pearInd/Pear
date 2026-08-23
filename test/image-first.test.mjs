@@ -783,9 +783,36 @@ console.log("\n── §6 A FREEZE MUST NOT RESUME UNCONDITIONED ──");
      through a rebuilt transport still claiming the blob is on it. */
   const opts = SRC.slice(SRC.indexOf("function buildRealtimeConnectOpts(gen)"),
                          SRC.indexOf("async function connectRealtime"));
+  /* Comments stripped first, the same rule turn-hold and this file's own builder loop
+     already follow: the re-apply is now a bounded retry, and the block comment explaining
+     WHY it may not be fire-and-forget sits between the invalidate and the call. A distance
+     budget measured across that explanation would force whoever reads it to delete the
+     documentation to keep the check green - which is the wrong trade every time. The
+     property being asserted is the ORDER, and stripping is what lets it stay about order. */
+  const optsCode = opts.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  /* ORDER, ASSERTED AS ORDER. This used to be a 200-character proximity window, which read
+     as "invalidate, then re-apply" only for as long as the re-apply stayed a one-liner. It
+     is now a bounded retry loop, so the two are genuinely further apart and the budget was
+     measuring the wrong thing - a check that fails when correct code grows is a check that
+     will be deleted rather than understood. Two indices and a comparison say what was
+     always meant, and keep saying it however the recovery is written. */
+  const iInvalidate = optsCode.indexOf('invalidateWireState("SDK reconnect');
+  const iReapply = optsCode.indexOf("applyActive()", iInvalidate);
   check("a post-reconnect re-apply invalidates the wire state FIRST",
-    /invalidateWireState\("SDK reconnect[\s\S]{0,200}applyActive\(\)/.test(opts),
+    iInvalidate !== -1 && iReapply !== -1 && iInvalidate < iReapply,
     "without it the re-apply matches on both halves and dispatches nothing");
+  /* ...AND IT RETRIES, which is a separate property from the ordering above and was the
+     gap that made the ordering not quite enough. Nothing else re-asserts the garment after
+     a reconnect - the re-anchor is a no-op under a frozen prompt and the re-drape only
+     fires on movement - so a single rejected re-apply used to leave the session live,
+     billing, and conditioned on whatever the SDK replayed. */
+  check("...and retries rather than logging one rejection and giving up",
+    /attempt <= 3/.test(optsCode) && /post-reconnect re-apply attempt/.test(opts),
+    "a set() landing on a still-settling rebuilt transport is the likeliest outcome here");
+  check("...abandoning the retry the moment the session is superseded",
+    /const genAtReconnect = sessionGen;/.test(optsCode) &&
+    /if \(sessionGen !== genAtReconnect\) return;/.test(optsCode),
+    "a retry that outlives its session re-conditions someone else's try-on");
   const invalidate = (SRC.match(/function invalidateWireState\(why\) \{[\s\S]*?\n\}/) || [""])[0];
   check("invalidateWireState clears all three wire flags",
     /lastSentImageRef = null;/.test(invalidate) && /rtImageOnWire = false;/.test(invalidate) &&

@@ -106,8 +106,15 @@ function makeHarness({ composite = true } = {}) {
      Declaring it also makes endSession() a faithful session boundary: app.js clears the
      pin at all three of its own, so a harness that did not would be testing a state the
      app cannot reach. */
+  /* THE READABILITY GUARD, EXECUTED - not stubbed out. applyGarment() now asserts that the
+     reference it resolved is one the SDK's imageToBase64() can actually turn into bytes
+     before it builds a payload, and a stub that always said yes would let this suite keep
+     passing over a reference that reaches Decart as the characters of a URL. The real pair
+     is cheap and pure, so it goes in as itself. */
+  const guardSrc = extract("function usableImageRef(ref) {", "\n/**\n * Fires once per session");
   const body =
     "let lastSentImageRef = null; let rtImageOnWire = false; let lastAckedImageRef = null;\n" +
+    guardSrc +
     applyGarmentSrc +
     "\nreturn { applyGarment, state: () => ({ lastSentImageRef, rtImageOnWire, lastAckedImageRef })," +
     " endSession: () => { lastSentImageRef = null; rtImageOnWire = false; lastAckedImageRef = null; } };";

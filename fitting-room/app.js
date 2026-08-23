@@ -755,9 +755,42 @@ let wireQueue = Promise.resolve();
    exists to prevent. Each write remembers the epoch it belongs to and only touches the
    shared state while that epoch is still current. */
 let wireEpoch = 0;
+/* ── THE COUNTER THAT DOES NOT BELONG TO AN EPOCH ─────────────────────────────
+   THE HOLE THIS CLOSES. Everything above is epoch-scoped on purpose, and that is right
+   for the QUEUE - a write belonging to a torn-down session must not hold the next
+   session's queue. But wireWrites was also what wireBusy() reported, and
+   resetConditionWire() sets it to 0 while a send() that has ALREADY been handed to the
+   SDK is still awaiting its ack. For the length of that ack, wireBusy() answered "the
+   wire is free" about a wire that had a write on it.
 
-/** @returns {boolean} true when a conditioning write is queued or in flight. */
-function wireBusy() { return wireWrites > 0; }
+   THAT ANSWER IS LOAD-BEARING IN FIVE PLACES, all of them skip-gates: the re-anchor, the
+   presence re-condition, the topology re-drape, the freeze keep-alive, and the
+   `canDispatch` flag the topology tracker uses to decide whether a shift may advance its
+   baseline. Every one of them exists to keep a SECOND write off the wire, and every one
+   of them was being told the coast was clear.
+
+   WHY A SECOND CONCURRENT WRITE IS WORSE THAN A REDUNDANT ONE. @decartai/sdk@0.1.5
+   correlates acks by SHAPE, not by id: signaling-channel.js matches set_image with
+   `(msg) => msg.type === "set_image_ack"` - any ack matches any pending image write - and
+   matches prompts on `msg.prompt === text`, which under one frozen IMAGE_ONLY_PROMPT makes
+   two prompt sends indistinguishable. handleMessage() resolves the FIRST pending entry
+   that matches and breaks. So two concurrent writes mean the first ack back resolves the
+   older one regardless of which write it actually acknowledges - and applyGarment() stamps
+   lastAckedImageRef on that resolution. A reference the model never confirmed becomes the
+   session's pin, and the pin is what every later dispatch falls back to.
+
+   SO THIS COUNTER TRACKS THE WIRE, NOT THE SESSION: incremented immediately before send()
+   is invoked and decremented in a finally that runs unconditionally, epoch or no epoch.
+   IT CANNOT WEDGE. Every send path settles: rtClient.set() carries the SDK's 30s
+   updateTimeoutMs, setPrompt() its 15s promptTimeoutMs, and SignalingChannel.close()
+   rejects every pending ack outright - which is exactly what disconnecting the old client
+   does. The worst case is that background re-conditioning skips for the length of one
+   ack timeout, which is the correct behaviour, not a stall: a write IS on the wire. */
+let wireInFlight = 0;
+
+/** @returns {boolean} true when a conditioning write is queued, or genuinely on the wire
+ *  right now - including one left over from an epoch resetConditionWire() has retired. */
+function wireBusy() { return wireWrites > 0 || wireInFlight > 0; }
 
 /**
  * Run ONE conditioning write with exclusive access to the wire.
@@ -784,10 +817,18 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
   const run = async () => {
     if (epoch !== wireEpoch) return false;   // the session this write was for is gone
     isSettingCondition = true;
+    /* Claimed HERE - after the stale-epoch bail above, immediately before the send is
+       handed to the SDK. A queued write that never reaches this line never held the wire,
+       so it must not be counted as holding it. */
+    wireInFlight++;
     try {
       await send();
       return true;
     } finally {
+      /* UNCONDITIONAL, unlike the epoch-scoped release beside it: this write is on the
+         wire whether or not the session it belonged to still exists, and it stops being
+         on the wire when it settles - which is the only fact wireBusy() needs. */
+      wireInFlight--;
       if (epoch === wireEpoch) { isSettingCondition = false; wireWrites--; }
     }
   };
@@ -798,10 +839,16 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
   return next;
 }
 
-/* Cleared with the session: a queue entry from a torn-down client must not make the next
+/* Cleared with the session: a QUEUE entry from a torn-down client must not make the next
    session's first apply believe the wire is busy. The promise chain itself is replaced
    rather than cancelled - an in-flight send against a dead rtClient will settle or reject
-   on its own, and either way its `finally` has already stopped mattering by then. */
+   on its own, and its epoch-scoped `finally` has stopped mattering by then.
+
+   WHAT IT DELIBERATELY DOES NOT CLEAR IS wireInFlight - see its declaration. A write that
+   is physically on the wire is still on the wire after a reset, and zeroing that here is
+   exactly the bug: it let a background re-condition fire a SECOND write alongside one the
+   SDK could not tell apart from it. The queue is session state; wireInFlight is transport
+   state, and only the first of the two ends when a session does. */
 function resetConditionWire() {
   wireEpoch++;
   isSettingCondition = false;
@@ -900,9 +947,13 @@ function verifyGarmentAsset(payload, source) {
     detail = valid ? `Blob, ${asset.size} bytes, type=${asset.type || "?"}`
                     : "Blob is 0 bytes - decode/composite likely failed silently";
   } else if (typeof asset === "string" && asset.length > 0) {
-    valid = /^(https?:|data:|blob:)/i.test(asset);
+    /* blob: WAS IN THIS LIST and had to come out - see usableImageRef() below. The SDK
+       cannot read one, so counting it as valid made this diagnostic agree with the bug it
+       exists to find. "Recognizable URL" is not the question; "can imageToBase64() turn
+       this into bytes?" is. */
+    valid = usableImageRef(asset).usable;
     detail = valid ? `string ref (${asset.slice(0, 40)}…)`
-                    : `string but not a recognizable URL: "${asset.slice(0, 60)}"`;
+                    : `string the SDK cannot read as image bytes: "${asset.slice(0, 60)}"`;
   }
   if (!valid) {
     console.warn(`[PEAR][DEBUG] ${source}() - garmentAsset NOT valid before rtClient.set(): ${detail}`,
@@ -911,6 +962,83 @@ function verifyGarmentAsset(payload, source) {
     console.log(`[PEAR][DEBUG] ${source}() - garmentAsset OK:`, detail);
   }
   return valid;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   CAN THE SDK ACTUALLY TURN THIS INTO IMAGE BYTES?
+   ══════════════════════════════════════════════════════════════════════════════
+   NOT A PRESENCE CHECK. A reference can be present, non-null, the right rough shape, and
+   still arrive at the model as garbage - and that failure is completely silent, which is
+   what makes it worth a dedicated predicate rather than an `if` at each send site.
+
+   THE SDK CONTRACT, read rather than assumed (@decartai/sdk@0.1.5 utils/media.js,
+   imageToBase64): a Blob/File is read through FileReader; a string is tested for a data:
+   URL and for an ABSOLUTE http(s) URL; and then the function ends with a bare
+   `return image;`. A string that is neither is handed back VERBATIM and travels to Decart
+   in the image_data field where base64 bytes belong. Two real inputs reach it - a blob:
+   URL (new URL() parses it, protocol "blob:", no branch matches) and any relative URL
+   (new URL() throws, the parsed value stays null). Neither throws, neither logs. The model
+   is conditioned on the characters of a URL and renders an arbitrary garment.
+
+   WHY THIS LIVES HERE AND NOT IN utils/media.js. That file is inside node_modules, which
+   this repo gitignores and does not track - a fix there is invisible to git, is wiped by
+   the `npm ci` that nixpacks/Vercel run on every deploy, and would leave local tests green
+   while production stayed corrupt. The invariant has to be enforced on our side of the
+   boundary to survive an install, so it is enforced on the last line we own.
+
+   FAIL LOUD, NEVER SUBSTITUTE. This only classifies; it never rewrites a payload. The
+   correct recovery differs by cause and the callers already have one (the garment pin,
+   then an abandoned dispatch), so guessing here would hide the bug that produced the bad
+   reference in the first place.
+   @param {Blob|string|null|undefined} ref
+   @returns {{usable: boolean, kind: string, detail: string}} */
+function usableImageRef(ref) {
+  if (ref === undefined) return { usable: false, kind: "absent", detail: "no image on the payload" };
+  if (ref === null) return { usable: false, kind: "null", detail: "explicit null - the SDK documents this as CLEAR the current image" };
+  if (typeof Blob !== "undefined" && ref instanceof Blob) {
+    return ref.size > 0
+      ? { usable: true, kind: "blob", detail: `Blob ${ref.size} bytes ${ref.type || "(no type)"}` }
+      : { usable: false, kind: "empty-blob", detail: "0-byte Blob - a composite or decode failed silently" };
+  }
+  if (typeof ref !== "string") return { usable: false, kind: "wrong-type", detail: `${typeof ref}, neither Blob nor string` };
+  if (!ref) return { usable: false, kind: "empty-string", detail: "empty string" };
+  let url = null;
+  try { url = new URL(ref); } catch (_) { /* relative or malformed - handled below */ }
+  if (url && url.protocol === "data:") {
+    const payload = ref.split(",", 2)[1];
+    return payload
+      ? { usable: true, kind: "data-url", detail: `data: URL, ${payload.length} base64 chars` }
+      : { usable: false, kind: "data-url-empty", detail: "data: URL with nothing after the comma" };
+  }
+  if (url && (url.protocol === "http:" || url.protocol === "https:")) {
+    return { usable: true, kind: "http-url", detail: ref.slice(0, 90) };
+  }
+  /* THE SILENT-CORRUPTION BRANCH - see this block's header. */
+  return {
+    usable: false,
+    kind: "sdk-fallthrough",
+    detail: `"${ref.slice(0, 60)}" is neither a Blob, a data: URL, nor an ABSOLUTE http(s) ` +
+      "URL. imageToBase64() returns such a string verbatim in place of base64 image bytes, " +
+      "so Decart is conditioned on garbage and renders an arbitrary garment",
+  };
+}
+
+/**
+ * The hard stop, called by every send site immediately before it builds a payload.
+ * Throws rather than returning a verdict: each caller sits inside applyActive()'s bounded
+ * retry, so a throw is already the file's established way to say "this dispatch must not
+ * go out" without inventing a second error path per call site.
+ * @param {Blob|string|null|undefined} ref
+ * @param {string} where  caller name, for the message
+ * @returns {Blob|string} the same ref, when it is usable
+ */
+function assertUsableImageRef(ref, where) {
+  const cls = usableImageRef(ref);
+  if (cls.usable) return ref;
+  console.error(`[PEAR] ${where}() - REFUSED an unusable garment reference (${cls.kind}): ${cls.detail}`,
+    "\n  → the dispatch is abandoned. Sending it would replace the model's conditioning",
+    "with its own prior, which renders a garment nobody chose.");
+  throw new Error(`[PEAR] ${where}: unusable garment reference (${cls.kind}) - ${cls.detail}`);
 }
 
 /**
@@ -3418,10 +3546,21 @@ function createThrottledInputStream(srcStream, {
 
      IT CANNOT STRAND A SESSION. The gate self-releases after gateMaxMs no matter what, so a
      path that forgets to call release() costs a late start rather than a dead session - and
-     says so loudly, because reaching that timer is a bug in the caller, not a slow network. */
+     says so loudly, because reaching that timer is a bug in the caller, not a slow network.
+
+     IT IS NO LONGER ONE-SHOT, and that was a real gap rather than a simplification. The
+     window this closes - live frames reaching a session that holds no reference - opens
+     more than once. It opens at go-live, which is what the gate was built for, and it
+     opens again on every SDK-internal reconnect: scheduleReconnect() rebuilds the
+     transport and rejoins the room, and the rejoined session starts from whatever
+     conditioning the SDK replays, with our camera frames already flowing at it. release()
+     returning false forever meant the second window was completely uncovered. rearm()
+     closes it again, and re-arms the same self-release ceiling behind it, so a reconnect
+     that never lands still costs a late resume rather than a dead session. */
   let gateOpen = !gated;
   let gateTimer = null;
-  if (gated) {
+  const armGateTimer = () => {
+    if (gateTimer) clearTimeout(gateTimer);
     gateTimer = setTimeout(() => {
       gateTimer = null;
       if (disposed || gateOpen) return;
@@ -3430,7 +3569,8 @@ function createThrottledInputStream(srcStream, {
         "session is not stranded; the first rendered frames may not carry the garment.");
       gateOpen = true;
     }, gateMaxMs);
-  }
+  };
+  if (gated) armGateTimer();
 
   // Cover-fit + horizontal mirror: fill width×height (preserve aspect, center-crop)
   // and flip X so the canvas track already carries the selfie orientation.
@@ -3472,6 +3612,19 @@ function createThrottledInputStream(srcStream, {
         "its first frame is conditioned on the real reference");
       return true;
     },
+    /* Close the gate again on a transport this session did not rebuild - see the
+       "no longer one-shot" paragraph in the header. Returns whether THIS call closed it,
+       so a caller can tell a real re-arm from a no-op on an ungated or already-shut gate.
+       Deliberately a no-op when !gated: the flag is a config kill-switch, and a re-arm
+       that ignored it would put a gate back that the config asked not to exist. */
+    rearm: (why = "transport rebuilt") => {
+      if (!gated || disposed || !gateOpen) return false;
+      gateOpen = false;
+      armGateTimer();
+      console.log(`[PEAR] input gate RE-ARMED (${why}) - withholding frames again until the`,
+        "garment is re-acknowledged, so the rejoined session cannot render from its own prior");
+      return true;
+    },
     dispose: () => {
       if (disposed) return;
       disposed = true;
@@ -3504,12 +3657,119 @@ function releaseInputGate(why) {
 }
 
 /**
+ * Shut the input gate again for a transport that was rebuilt underneath us.
+ *
+ * ONE CALL SITE OWNS THIS TOO: onConnectionChange, the moment the SDK reports
+ * "reconnecting". That is the exact instant the session stops being one we know holds a
+ * garment - scheduleReconnect() tears the transport down and rejoins - and it is early
+ * enough that the frames arriving during the rebuild never reach a room with no reference
+ * in it. The matching release comes from the post-reconnect applyActive() by the ordinary
+ * route (applyActive → releaseInputGate), so no new release path is introduced.
+ * Same no-op-when-absent shape as releaseInputGate() above, for the same reason.
+ * @param {string} why  short reason, for the one log line the re-arm prints
+ * @returns {void}
+ */
+function rearmInputGate(why) {
+  if (inputThrottle && typeof inputThrottle.rearm === "function") inputThrottle.rearm(why);
+}
+
+/**
  * Mint an ephemeral ek_ token and open ONE Decart Lucy VTON realtime session
  * over WebRTC. Any stale/dropped client is disconnected first so no orphaned
  * server-side session keeps billing. SECURITY: the permanent dct_ key never
  * reaches the browser - only the short-lived ek_ token from the proxy does.
  * @returns {Promise<void>}
  */
+/* ══════════════════════════════════════════════════════════════════════════════
+   THE CONDITIONING FLOOR - what the SDK holds when this file is not looking
+   ══════════════════════════════════════════════════════════════════════════════
+   THIS FILE USED TO PASS NO initialState AT ALL, and the consequences were both larger
+   and quieter than the missing option suggests.
+
+   CONSEQUENCE ONE: THE SDK'S OWN GATE WAS DEAD. realtime/client.js derives
+   initialImage/initialImageRef/initialPrompt from this option and nothing else. With it
+   absent, StreamSession.getInitialState() returns undefined,
+   InitialStateGate.hasCallerProvidedInitialState() reads false, and waitForReadiness()
+   resolves WITHOUT awaiting initialStateAck - so publishLocalTracks() runs immediately.
+   The SDK ships a "do not publish video until the conditioning is acknowledged" gate and
+   it was switched off by omission. Our own input gate (createThrottledInputStream) was
+   standing in for it alone.
+
+   CONSEQUENCE TWO, AND THE REASON THIS IS NOT MERELY BELT-AND-BRACES: every SDK-internal
+   reconnect rejoined the room with NO CONDITIONING WHATSOEVER. scheduleReconnect() →
+   runOneConnect() → openAndJoin({ initialState }) - and sendInitialState() returns on its
+   first line when that is undefined. A fresh room, camera frames already flowing, and no
+   reference: Decart renders from its own prior, which is a generic garment, mid-session.
+   The comment that used to sit in onConnectionChange said the SDK "puts the shopper back
+   in whatever garment was live at the ORIGINAL go-live moment". It did not. It put them
+   in nothing, and that is strictly worse than the stale-but-real state described.
+
+   SO THIS IS A FLOOR, NOT THE CONDITIONING. It is deliberately the item's single front
+   packshot rather than the stitched FRONT|BACK composite: it is captured once, at connect,
+   and the SDK holds that same base64 for the life of the session, so a shopper who swaps
+   garments has a floor that goes stale. Stale-but-real is the point - it is what the
+   rejoined room renders during the round-trip before applyActive() re-derives the CURRENT
+   state on top of it. Small also matters, because client.js base64s this before the
+   handshake can proceed and the composite is the largest asset in the file.
+
+   WARM BYTES FIRST, and the URL only as a fallback: both reach the wire as the same
+   base64, but the Blob is already decoded here while the URL costs the SDK a fetch it
+   must finish before openAndJoin() can send anything. setActiveItem()'s prewarm is what
+   makes the warm path the common one.
+   @returns {{prompt: {text: string, enhance: boolean}, image: Blob|string}|null} */
+function resolveInitialConditioning() {
+  const look = resolveLook();
+  const item = look ? look.top : activeItem;   // one image slot - the TOP, as applyLook documents
+  if (!item) return null;
+  const g = galleryOf(item) || {};
+  const primary = g.front || item.img || g.back;
+  if (!primary) return null;
+  const image = garmentBlobIfWarm(primary) || garmentImageRef(primary);
+  /* The same readability contract every dispatch site enforces. A floor the SDK cannot
+     read is worse than no floor: it would re-engage the gate and then hand the model a URL
+     string as its reference on every reconnect for the rest of the session. */
+  if (!image || !usableImageRef(image).usable) {
+    console.warn("[PEAR] no usable initial conditioning could be resolved for", item.name,
+      "- connecting without one. The SDK's initial-state gate stays off for this session and",
+      "an internal reconnect will rejoin unconditioned; the input gate is what covers both.");
+    return null;
+  }
+  return {
+    prompt: { text: clampPromptForWire(imageOnlyPrompt(item), "initialConditioning"), enhance: false },
+    image,
+  };
+}
+
+/* Read by buildRealtimeConnectOpts() on every attempt of a connect. Module-level rather
+   than a parameter because the connect loop rebuilds its options object per attempt and
+   must rebuild them IDENTICALLY - and because dropInitialConditioning() below has to be
+   able to change the answer between attempts. */
+let _sessionInitialState = null;
+
+/** Resolve the floor for the session about to open. Safe to call repeatedly. */
+function primeInitialConditioning() {
+  _sessionInitialState = resolveInitialConditioning();
+  if (_sessionInitialState) {
+    console.log("[PEAR] initial conditioning primed -", abbrevImg(_sessionInitialState.image),
+      "| the SDK will withhold published video until Decart acknowledges it, and will",
+      "re-send it on any internal reconnect");
+  }
+}
+
+/* THE DEGRADATION PATH, and it is why priming is retriable state rather than a constant.
+   Passing initialState puts two new things on the handshake's critical path: a fetch +
+   base64 inside client.js, and an initialStateAck that openAndJoin() waits for. Either can
+   be what makes an attempt fail. Rather than retry the same heavier handshake and fail the
+   same way, a retried attempt goes bare - which is exactly the connect this file made
+   before, so the fallback is the known-good path rather than a new one. */
+function dropInitialConditioning(why) {
+  if (!_sessionInitialState) return;
+  _sessionInitialState = null;
+  console.warn("[PEAR] retrying the handshake WITHOUT initial conditioning -", why,
+    "\n  → the input gate still withholds frames until the garment is acknowledged;",
+    "what is lost is the SDK's own gate and its reconnect replay.");
+}
+
 /* The realtime.connect() options object, factored out of connectRealtime() so a
    retried connect attempt (see the signaling-race retry below) can rebuild it
    identically for each attempt without duplicating the callback bodies. `gen` is the
@@ -3529,6 +3789,16 @@ function buildRealtimeConnectOpts(gen) {
       width: LIVE_W,
       height: LIVE_H,
     },
+    /* THE CONDITIONING FLOOR - see resolveInitialConditioning() for what this buys and why
+       its absence was a bug rather than a missing nicety. Spread conditionally so a session
+       that could not resolve one connects exactly as it always did, rather than passing an
+       `initialState: null` that the SDK's zod schema would reject outright.
+       typeof-guarded like the three callbacks below: this function is extracted and
+       executed standalone by reconnect.test.mjs and signaling-retry.test.mjs against fixed
+       sandbox globals, and a bare reference to a module-level `let` they do not declare
+       would throw ReferenceError there. */
+    ...(typeof _sessionInitialState !== "undefined" && _sessionInitialState
+      ? { initialState: _sessionInitialState } : {}),
     mirror: "auto",
     onRemoteStream: (editedStream) => {
       if (gen !== sessionGen) return;    // stale callback from a torn-down session
@@ -3581,8 +3851,17 @@ function buildRealtimeConnectOpts(gen) {
          "did this already fire" gating needed for a just-once toast. The badge (setConn
          above) is the persistent indicator; this is the attention-catching one, matching
          the existing pattern for other state changes (e.g. the orientation flip toast). */
-      if (state === "reconnecting") toast("מתחבר מחדש…");
-      else if ((state === "connected" || state === "generating") && prevState === "reconnecting") {
+      if (state === "reconnecting") {
+        toast("מתחבר מחדש…");
+        /* SHUT THE INPUT GATE AGAIN, at the earliest instant we know the transport is
+           being rebuilt. scheduleReconnect() tears down and rejoins, and the rejoined room
+           holds only whatever the SDK replays - so frames that keep flowing during the
+           rebuild are frames Decart renders against conditioning this file has not
+           re-asserted yet. That is the same window the gate closes at go-live, arriving a
+           second time; it stayed open until the gate stopped being one-shot.
+           typeof-guarded for the reason the initialState spread above is. */
+        if (typeof rearmInputGate === "function") rearmInputGate("SDK reconnect in progress");
+      } else if ((state === "connected" || state === "generating") && prevState === "reconnecting") {
         toast("✓ החיבור חזר");
       }
 
@@ -3633,8 +3912,44 @@ function buildRealtimeConnectOpts(gen) {
            correct. Clearing here is what makes the re-apply a real set({ image }) and
            puts the CURRENT garment blob back on the new transport. */
         invalidateWireState("SDK reconnect - the transport was rebuilt underneath us");
-        applyActive().catch((e) =>
-          console.warn("[PEAR] post-reconnect re-apply failed:", e?.message || e));
+        /* ── THIS RE-APPLY IS THE RECOVERY, SO IT MAY NOT BE FIRE-AND-FORGET ──────
+           It used to be `.catch(console.warn)`: one attempt, and a warning if it failed.
+           But nothing else re-asserts the garment after a reconnect - the re-anchor is a
+           no-op under a frozen prompt, and the topology re-drape only fires if the shopper
+           happens to move - so a single rejection left the session streaming, billing, and
+           conditioned on nothing but whatever the SDK replayed, for the rest of its life.
+           A rejection here is also the LIKELIEST outcome at this exact moment: the SDK
+           reports "connected" the instant its own join completes, and applyActive()'s
+           first set() can easily land while the rebuilt transport is still settling -
+           which is precisely the transient this file already bounds with a retry at
+           go-live (see applyActive()'s own bounded-retry comment).
+           So: bounded, backing off, and abandoned the moment this session stops being the
+           current one. Three attempts against a rebuilt transport rather than two, because
+           the failure being ridden out here is a settling connection rather than a single
+           dropped write. Written inline with only the identifiers this function already
+           uses, so it stays executable in the two suites that run it standalone. */
+        (async () => {
+          const genAtReconnect = sessionGen;
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            if (sessionGen !== genAtReconnect) return;   // superseded - let whoever moved it own this
+            try {
+              await applyActive();
+              return;                                    // the garment is back on the wire
+            } catch (e) {
+              console.warn(`[PEAR] post-reconnect re-apply attempt ${attempt}/3 failed:`,
+                e?.message || e);
+              if (attempt === 3) break;
+              await new Promise((r) => setTimeout(r, 400 * attempt));
+            }
+          }
+          if (sessionGen !== genAtReconnect) return;
+          console.error("[PEAR] post-reconnect re-apply FAILED three times - this session is",
+            "live on a connection that will not accept a conditioning write.",
+            "\n  → the input gate was re-armed when the reconnect began and self-releases on",
+            "its own ceiling, so frames resume regardless; what they will NOT carry is a",
+            "re-asserted garment.",
+            "\n  → window.__pearDebugReinjectGarment() forces a fresh attempt by hand.");
+        })();
       }
 
       /* ── PERMANENT FAILURE CLEANUP ──────────────────────────────────────────
@@ -3790,6 +4105,11 @@ async function connectRealtime({ force = false } = {}) {
       const m = String(e?.message || e || "");
       return /\b(401|403|invalid api key|unauthorized|forbidden|not permitted|permission denied|NotAllowedError)\b/i.test(m);
     };
+    /* Resolved ONCE, before the first attempt, so every retry rebuilds the same options
+       object from the same floor - and so the cost of resolving it is paid once rather
+       than per attempt. typeof-guarded because this function is extracted and executed
+       standalone by signaling-retry.test.mjs against a fixed sandbox. */
+    if (typeof primeInitialConditioning === "function") primeInitialConditioning();
     let attempt = 0;
     for (;;) {
       attempt++;
@@ -3862,6 +4182,13 @@ async function connectRealtime({ force = false } = {}) {
         /* Exponential, and deliberately short: this is a handshake that already failed
            fast, so the gap exists to let a momentarily-overloaded signaling server settle,
            not to wait out a real outage. 250ms, 500ms - both well inside the budget. */
+        /* The heavier handshake goes first - see dropInitialConditioning(). Passing an
+           initialState adds a fetch+base64 and an ack the join waits for, so it is the
+           part of THIS attempt most likely to be what failed; the next one retries the
+           bare connect this file made before, which is the known-good shape. */
+        if (typeof dropInitialConditioning === "function") {
+          dropInitialConditioning(`attempt ${attempt}: ${e?.message || e}`);
+        }
         const backoffMs = 250 * Math.pow(2, attempt - 1);
         console.warn(`[PEAR] connectRealtime() - attempt ${attempt} failed`,
           `(${e?.isHandshakeTimeout ? "ceiling" : "error"}: ${e?.message || e});`,
@@ -4017,7 +4344,13 @@ function teardown() {
   lastSentPrompt = null;
   lastAckedImageRef = null;      // session boundary - the garment pin must not outlive it
   cancelPendingRecondition();    // ...and no debounced re-drape may fire into a dead session
+  redrapeCoverEnd("session-torn-down");   // ...nor may its cover outlive the session it covered
   resetConditionWire();          // nothing may be queued for a session that no longer exists
+  /* The conditioning floor is session-scoped like the pin above it, and for the same
+     reason: it holds a reference (often decoded bytes) for the garment THIS session was
+     opened with. connectRealtime() re-primes it on the next connect, so clearing here is
+     about not carrying one shopper's garment - or its memory - into the next try-on. */
+  _sessionInitialState = null;
 
   // Bug 3 fix: stop this session's cloned camera tracks (the WebRTC sender side).
   // localStream - the real camera/preview - is intentionally left running.
@@ -4874,6 +5207,108 @@ function orientFadeFreeze() {
 function orientFadeReveal() {
   if (!_orientFadeCanvas) return;
   _orientFadeCanvas.style.opacity = "0";
+}
+
+/* ── THE RE-DRAPE'S FRAME COVER ────────────────────────────────────────────────
+   REPORTED, on video: the target garment is correct, then for a second or two it is a
+   plain generic tee, then it is correct again - during body movement.
+
+   THE MECHANISM IS THE ONE THE ATOMIC CONDITIONING GATE ALREADY DESCRIBES (see
+   createThrottledInputStream): Decart renders every frame it is handed, and a full
+   set({ image }) takes a round-trip to land. Frames arriving during that round-trip are
+   rendered against conditioning that is mid-replacement, so the most probable completion
+   is the model's own prior - a generic garment. The gate closes that window at session
+   start; nothing covered the same window when reconditionForTopology() re-uploads on
+   movement.
+
+   So cover it the way a front/back swap is already covered: snapshot the last good
+   dressed frame, hold it over #aiVideo while the re-upload is in flight, and cross-fade
+   back once the new conditioning has landed. The shopper sees their own last dressed
+   frame for the length of a round-trip instead of a garment they did not choose.
+
+   A SEPARATE COVER FROM THE ORIENTATION HOLD, DELIBERATELY, and not for tidiness. The two
+   have independent lifecycles and neither may release the other. The orientation watcher
+   calls orientHoldEnd("turn-abandoned") from its 250ms tick whenever no front/back turn is
+   in progress - which is nearly always during a plain re-drape - so sharing
+   _orientHoldActive would have let that tick tear this cover down mid-re-upload, within
+   one tick of it going up. reconditionForTopology() also RETURNS EARLY while
+   _orientHoldActive is true, so raising that flag here would make the function skip
+   itself. Sharing the CANVAS has the same problem one layer down. Two overlays, two
+   z-indexes, two timers; when both happen to be up they hold the same snapshot, so the
+   stack reads identically either way.
+
+   THE TRADE, STATED PLAINLY: this shows a still frame during movement. A re-drape fires at
+   most every BODY_RECONDITION_COOLDOWN_MS (900ms), and each cover lasts a round-trip plus
+   ORIENT_FADE_HOLD_MS before a 260ms cross-fade - so a shopper who moves continuously
+   trades some live-motion fidelity for never seeing the wrong garment. That is the right
+   way round (a laggy self is recognisable; a stranger's shirt is not), but it is a real
+   trade and REDRAPE_HOLD_MAX_MS is what bounds the failure: a hung apply reveals the live
+   feed rather than leaving a still up, exactly as the turn hold's ceiling does. */
+const REDRAPE_HOLD_MAX_MS = 1800;   // ceiling - a stuck still is worse than an honest live frame
+let _redrapeHoldActive = false;
+let _redrapeHoldTimer  = null;
+let _redrapeCanvas     = null;
+
+function redrapeCoverEl() {
+  if (_redrapeCanvas) return _redrapeCanvas;
+  const card = $("cameraCard");
+  if (!card) return null;
+  if (!document.getElementById("pear-redrape-cover-styles")) {
+    const s = document.createElement("style");
+    s.id = "pear-redrape-cover-styles";
+    /* z-index 7 - one above the orientation fade's 6. When a turn is confirmed during a
+       re-drape both covers can be up; the turn's is the longer-lived and more important
+       of the two, but they carry the same snapshot, so which one wins the stack is
+       cosmetically irrelevant and the ordering is fixed only so it is not accidental. */
+    s.textContent =
+      "#redrapeCoverCanvas{position:absolute;inset:0;width:100%;height:100%;" +
+      "object-fit:cover;transform:none;z-index:7;pointer-events:none;" +
+      `opacity:0;transition:opacity ${ORIENT_FADE_MS}ms ease-out;}`;
+    document.head.appendChild(s);
+  }
+  const c = document.createElement("canvas");
+  c.id = "redrapeCoverCanvas";
+  card.appendChild(c);
+  _redrapeCanvas = c;
+  return c;
+}
+
+/* Snapshot #aiVideo and hold it at full opacity with NO transition - an instant cut onto a
+   frame identical to what is already on screen is invisible. Call BEFORE the re-upload.
+   @returns {boolean} whether a cover actually went up (false = nothing paintable yet, in
+   which case the caller must not wait for a fade it is not showing). */
+function redrapeCoverBegin() {
+  if (_redrapeHoldActive) return false;
+  const ai = $("aiVideo");
+  const c = redrapeCoverEl();
+  /* No decoded frame yet - there is nothing good to hold, and freezing a blank canvas over
+     a live feed would CREATE the artifact this exists to prevent. Degrade to uncovered. */
+  if (!ai || !c || !ai.videoWidth) return false;
+  c.width = ai.videoWidth; c.height = ai.videoHeight;
+  c.getContext("2d").drawImage(ai, 0, 0, c.width, c.height);
+  c.style.transition = "none";
+  c.style.opacity = "1";
+  void c.offsetWidth;              // flush so the transition below re-arms
+  c.style.transition = `opacity ${ORIENT_FADE_MS}ms ease-out`;
+  _redrapeHoldActive = true;
+  if (_redrapeHoldTimer) clearTimeout(_redrapeHoldTimer);
+  _redrapeHoldTimer = setTimeout(() => {
+    console.warn("[PEAR] body re-drape cover hit its", REDRAPE_HOLD_MAX_MS +
+      "ms ceiling; revealing the live feed");
+    redrapeCoverEnd("timeout");
+  }, REDRAPE_HOLD_MAX_MS);
+  return true;
+}
+
+/* Fade the cover out, revealing the (by now re-conditioned) live feed underneath.
+   Idempotent, and safe to call when no cover is up - every session-ending path calls it
+   unconditionally so a cover can never outlive the window that raised it. */
+function redrapeCoverEnd(reason) {
+  if (_redrapeHoldTimer) { clearTimeout(_redrapeHoldTimer); _redrapeHoldTimer = null; }
+  if (!_redrapeHoldActive) return;
+  _redrapeHoldActive = false;
+  if (_redrapeCanvas) _redrapeCanvas.style.opacity = "0";
+  if (ORIENT_DEBUG) console.log("[PEAR] body re-drape - releasing frame cover (" + reason + ")");
 }
 
 /* ── Freeze THROUGH the turn, not just through the swap ───────────────────────
@@ -6432,11 +6867,32 @@ function stitchLookBlob(topUrl, bottomUrl) {
  */
 function garmentImageRef(cdnUrl) {
   if (!cdnUrl) return undefined;
-  // "Upload Your Own Garment": a cropped custom garment is a self-contained
-  // data:/blob: URL - it is NOT a fetchable http(s) CDN URL, so it must be handed
-  // to the SDK verbatim. Routing it through /api/img-proxy (which fetches a remote
-  // URL) would corrupt it. Pass it straight through.
-  if (/^(data:|blob:)/i.test(cdnUrl)) return cdnUrl;
+  // "Upload Your Own Garment": a cropped custom garment is a self-contained data: URL -
+  // it is NOT a fetchable http(s) CDN URL, so it must be handed to the SDK verbatim.
+  // Routing it through /api/img-proxy (which fetches a remote URL) would corrupt it.
+  if (/^data:/i.test(cdnUrl)) return cdnUrl;
+  /* ── blob: IS REFUSED, and it used to be waved through beside data: ──────────
+     The line above used to read /^(data:|blob:)/ on the stated belief that the SDK
+     handles the two the same way. It does not, and the difference is silent.
+     @decartai/sdk@0.1.5 utils/media.js imageToBase64() tests a string for a data: URL and
+     for an ABSOLUTE http(s) URL, then ends with a bare `return image;` - so anything else
+     is returned VERBATIM where base64 image bytes are expected. `new URL("blob:…")`
+     parses with protocol "blob:" and lands in that fallthrough, as does any relative URL
+     (new URL() throws on one, leaving the parsed value null). Neither errors and neither
+     logs: Decart is handed the CHARACTERS OF THE URL as its garment reference and renders
+     whatever they decode to, which is an arbitrary garment.
+     Refused rather than converted because the conversion is async and this function is
+     not - garmentBlobCached() already fetches a blob: URL into real bytes, and that is the
+     path a blob: reference must take. Returning undefined puts the caller on its existing
+     no-reference path (the garment pin, then an abandoned dispatch), which is loud and
+     recoverable; passing it on is neither. */
+  if (/^blob:/i.test(cdnUrl)) {
+    console.error("[PEAR] garmentImageRef() - REFUSED a blob: URL.", abbrevImg(cdnUrl),
+      "\n  → the SDK's imageToBase64() cannot read one: it would ship the URL string itself",
+      "as the reference and render an arbitrary garment.",
+      "\n  → route blob: bytes through garmentBlobCached() and pass the Blob instead.");
+    return undefined;
+  }
   const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
   if (isLocal) {
     console.log("[PEAR] garmentImageRef() - localhost, using raw CDN URL:", cdnUrl);
@@ -8785,6 +9241,13 @@ async function applyGarment(item) {
       "forces a fresh resolve once they are fixed.");
     return;
   }
+  /* ── ...AND THAT IT IS A REFERENCE THE SDK CAN ACTUALLY READ ──────────────────
+     The three steps above answer "is something there". This answers "will it survive
+     imageToBase64()", which is a different question with a much quieter failure - see
+     usableImageRef(). Placed after the pin so a corrupt fresh resolve still gets the
+     chance to fall back to the acknowledged reference; if the PIN itself is unusable the
+     throw is correct, because there is then nothing in this session worth sending. */
+  assertUsableImageRef(imageRef, "applyGarment");
 
   /* ── STRICT ORIENTATION/ASSET BINDING (last line of defence) ──────────────────
      The pairing that produces "the chest print is rendered on the back" is a BACK
@@ -9471,6 +9934,11 @@ async function applyLook(top, bottom) {
       "replace the model's conditioning with its own prior and render generic garments.");
     return;
   }
+  /* The same readability check applyGarment() makes, for the same reason and in the same
+     position - after the pin, before the payload. A look has MORE ways to arrive here with
+     a bad reference than a single garment does (a stitch Blob, a top reference, a bare
+     garmentImageRef of either half), and every one of them lands on this line. */
+  assertUsableImageRef(primaryImage, "applyLook");
   const images = [topImg, bottomImg].filter(Boolean).map(garmentImageRef).filter(Boolean);
 
   // ONE combined payload - both garments, one pass, same session.
@@ -11591,23 +12059,64 @@ async function applyFallbackConditioning() {
   if (!item || !rtClient) throw new Error("no garment / no client for the fallback apply");
 
   const gallery = galleryOf(item) || {};
-  const image = garmentImageRef(gallery.front || item.img || gallery.back);
+  let image = garmentImageRef(gallery.front || item.img || gallery.back);
   const prompt = clampPromptForWire(imageOnlyPrompt(item), "fallbackConditioning");
 
+  /* ── THE LAST CALL SITE THAT COULD STILL SHIP AN UNCONDITIONED PAYLOAD ────────
+     This send used to read `...(image ? { image } : {})`, the same conditional spread
+     applyGarment() and applyLook() were both fixed out of - and it is the one place the
+     garment pin was never applied. It mattered more here than anywhere else, because of
+     the two lines that follow the send: this path also sets isGarmentApplied and opens the
+     input gate. An unresolved reference therefore blanked the model's conditioning,
+     declared the shopper dressed, and started streaming frames at it - in that order.
+
+     AN OMITTED image KEY IS NOT "LEAVE THE CONDITIONING ALONE". That is the assumption the
+     spread encoded and it is false at the protocol level: realtime/methods.js maps BOTH
+     undefined and null to session.setImage({ kind: "data", data: null }), which puts
+     `image_data: null` on the wire - an explicit CLEAR of the reference the model is
+     holding. There is no such thing as a prompt-only set(); there is only a set() that
+     wipes the image. (setPrompt() is the prompt-only path, and it is a different method.)
+
+     SO: the item's own lightweight reference, then the session's acknowledged pin, then
+     nothing at all - the same three-step ladder applyGarment() walks, with the same
+     ending. Throwing rather than returning is deliberate here where applyGarment() returns:
+     this function IS the recovery, and a recovery that quietly does nothing leaves
+     applyConditioningWithRecovery() reporting success over a session with no garment on
+     it. The throw reaches goLive()'s handler, which tells the shopper. */
+  if (!image && lastAckedImageRef) {
+    console.warn("[PEAR] applyFallbackConditioning() - no reference resolved; re-pinning the",
+      "session's acknowledged garment rather than sending an unconditioned payload:",
+      abbrevImg(lastAckedImageRef));
+    image = lastAckedImageRef;
+  }
+  if (!image) {
+    console.error("[PEAR] applyFallbackConditioning() - NO garment asset for", item.name,
+      "and nothing pinned from earlier in this session.",
+      "\n  → DISPATCH ABANDONED. set() without an image sends image_data: null, which",
+      "CLEARS the model's reference and renders a garment nobody chose.");
+    throw new Error("[PEAR] fallback conditioning: no usable garment reference to send");
+  }
+  assertUsableImageRef(image, "applyFallbackConditioning");
+
   console.log("[PEAR] fallback conditioning:", item.name,
-    "| reference:", abbrevImg(image) || "(none - prompt only)",
+    "| reference:", abbrevImg(image),
     look ? "| full look reduced to its TOP for this send" : "");
   console.log("[DECART PROMPT DEBUG]", prompt, abbrevImg(image), "(lightweight fallback)");
 
+  /* Unconditional now - the ladder above returns or throws rather than reaching here with
+     nothing, so neither an omitted key nor an explicit null can leave this line. */
   await sendCondition("fallbackConditioning",
-    () => rtClient.set({ prompt, enhance: false, ...(image ? { image } : {}) }));
+    () => rtClient.set({ prompt, enhance: false, image }));
 
   isGarmentApplied = true;         // the wire holds a garment - the next frame is dressed
   releaseInputGate("fallback conditioning");
-  lastSentImageRef = image || null;
-  rtImageOnWire = !!image;
+  /* Unconditional for the same reason the payload key is: `image` is guaranteed non-empty
+     by the ladder above, so the old `|| null` / `!!image` hedging described a state this
+     function can no longer be in. */
+  lastSentImageRef = image;
+  rtImageOnWire = true;
   lastSentPrompt = prompt;
-  if (image) lastAckedImageRef = image;
+  lastAckedImageRef = image;
 }
 
 /**
@@ -11995,6 +12504,11 @@ function stopBilling() {
      nothing left to release it, and its overlay (z-index 6, inside #cameraCard) would sit
      on top of that tail for the rest of the session. */
   orientHoldEnd("billing-stopped");
+  /* Same exemption logic as the line above, same conclusion: the frozen-hold tail keeps
+     the watcher and paint loop alive, so a re-drape cover raised just before the window
+     closed has nothing left to release it and would sit on top of that tail (z-index 7,
+     inside #cameraCard) for the rest of the session. */
+  redrapeCoverEnd("billing-stopped");
   /* The freeze watchdog does NOT get that exemption, and the difference is what each one
      is for. The orientation watcher stays because the frozen-hold tail still has UI state
      to release; this one exists solely to keep a LIVE stream alive, and two lines above
@@ -13160,6 +13674,12 @@ async function reconditionForTopology(step) {
     return;
   }
   topologyReconditionInFlight = true;
+  /* RAISED BEFORE ANYTHING IS SENT, and before the three wire-state fields below are
+     cleared: at this instant #aiVideo still carries a correctly dressed frame, and that is
+     precisely the frame worth holding. A cover raised after the re-upload is in flight
+     would snapshot the generic-garment frame it exists to hide - the same mistake the
+     front/back hold made before it was moved to the first disagreeing vote. */
+  const covered = redrapeCoverBegin();
   try {
     const d = step.delta || {};
     console.log(`[PEAR] body contour changed (${step.reason}) at t=${sessionElapsedMs()}ms` +
@@ -13175,9 +13695,21 @@ async function reconditionForTopology(step) {
     rtImageOnWire = false;
     lastSentPrompt = null;
     await applyActive();
+    /* THE GRACE PERIOD, for the same reason maybeSwap() takes one after its own set():
+       applyActive() resolving means Decart ACKNOWLEDGED the new conditioning - that is the
+       set_image_ack, which is exactly what rtClient.set() resolves on - not that a frame
+       rendered from it has arrived and decoded. Revealing on the acknowledgement alone
+       uncovers the last few frames of the OLD conditioning, a brief flash of precisely
+       what the cover was raised to hide. Skipped when no cover went up, because then this
+       is just latency added to a re-drape nobody is waiting on. */
+    if (covered) await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));
   } catch (e) {
     console.warn("[PEAR] body-contour re-condition failed:", e?.message || e);
   } finally {
+    /* In the finally, not after the await: a rejected applyActive() must still reveal the
+       live feed. Holding a still over a failed re-drape is the one outcome worse than the
+       flicker - the shopper is then frozen out of their own session with no recovery. */
+    redrapeCoverEnd("re-drape settled");
     topologyReconditionInFlight = false;
   }
 }
