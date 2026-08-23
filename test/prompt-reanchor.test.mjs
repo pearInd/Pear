@@ -9,24 +9,10 @@
    a single assertion asked to hold the whole generation window against a diffusion
    model's own prior (the person as photographed, in their own clothes).
 
-   FIX: maybeReanchorPrompt() periodically re-asserts the conditioning on a cadence
-   derived from the billed window.
-
-   WHAT IT RE-ASSERTS CHANGED, AND THIS SUITE CHANGED WITH IT. The first version re-issued
-   the CURRENT prompt through applyGarment()'s prompt-only setPrompt() fast path. Strict
-   image-only conditioning then removed the thing it was re-issuing - every builder returns
-   one frozen IMAGE_ONLY_PROMPT, so the payload became byte-identical to what Decart
-   already held and applyGarment() skipped it as a no-op. The re-anchor had silently
-   degraded into eight scheduled no-ops per session, and the drift came back as "the
-   garment turns into a random shirt mid-session". It now nulls lastSentImageRef first, so
-   the dispatch takes the full set({ image }) path and the model is handed the packshot
-   again.
-
-   THAT DOES NOT REOPEN THE FLICKER. prompt-only-flip.test.mjs guards the TURN - and
-   applyGarment() re-stamps lastSentImageRef when the send resolves, so a turn right after
-   a re-anchor is still prompt-only. The re-anchor additionally refuses to fire while
-   _orientHoldActive (mid front/back swap), which is the exact window in which swapping the
-   reference is what makes a print flicker. §7 below pins both halves.
+   FIX: maybeReanchorPrompt() periodically re-issues the CURRENT prompt, completely
+   unchanged, via the SAME prompt-only setPrompt() fast path applyGarment() already takes
+   when the reference image is unchanged - so it cannot reintroduce the image-reupload
+   flicker prompt-only-flip.test.mjs guards, and alters no prompt wording.
 
    TWO DEFECTS IN THE FIRST VERSION OF THIS, both covered below:
      1. CADENCE. It was hardcoded 4000ms against a LIVE_DURATION_MS of 5000ms, so it could
@@ -87,7 +73,6 @@ function harness({
   autoProfile = false, applying = false, lastReanchorAt = 0, disposed = false,
   isLiveVal = true, garmentApplied = true, reanchorMs = 100, wireBusyVal = false,
   applyActiveImpl = () => Promise.resolve(), debug = false,
-  orientHold = false, sentImageRef = "REF",
 }) {
   const events = [];
   const sandbox = {
@@ -104,21 +89,14 @@ function harness({
     applyActive: applyActiveImpl,
     sessionElapsedMs: () => 1234,
     ORIENT_DEBUG: debug,
-    _orientHoldActive: orientHold,
-    sentImageRefInit: sentImageRef,
     console: { log: (...a) => events.push({ op: "log", a }), warn: (...a) => events.push({ op: "warn", a }) },
   };
   const fn = new Function(...Object.keys(sandbox),
     "let autoProfile = autoProfileInit, applying = applyingInit, " +
     "lastReanchorAt = lastReanchorAtInit, disposed = disposedInit;\n" +
-    /* The module-level reference pin the function now clears to force a full re-upload.
-       Declared here for the same reason prompt-only-flip.test.mjs declares its own: an
-       undeclared assignment inside new Function() is sloppy-mode global creation, so one
-       harness's pin would leak onto globalThis and be read by the next. */
-    "let lastSentImageRef = sentImageRefInit;\n" +
     fnSrc +
     "\nreturn { maybeReanchorPrompt," +
-    " state: () => ({ autoProfile, applying, lastReanchorAt, disposed, lastSentImageRef }) };"
+    " state: () => ({ autoProfile, applying, lastReanchorAt, disposed }) };"
   );
   return { api: fn(...Object.values(sandbox)), events };
 }
@@ -225,7 +203,7 @@ console.log("\n── §5 TELEMETRY: session-relative, so it maps onto a screen 
   const line = events.find((e) => e.op === "log")?.a[0] || "";
   check("logs a session-relative timestamp", /t=1234ms/.test(line), line);
   check("...and the pose it re-anchored at", /pose=square-on/.test(line), line);
-  check("...and states it DID re-assert the reference", /reference re-asserted/.test(line), line);
+  check("...and states it did NOT re-upload the reference", /reference unchanged/.test(line), line);
 }
 {
   const { events } = harness({ lastReanchorAt: 0, reanchorMs: 50, debug: false });
@@ -267,33 +245,39 @@ console.log("\n── §7 wiring: called from the tick, clock shared with maybeU
     /lastProfileAt = Date\.now\(\);[\s\S]*?lastReanchorAt = Date\.now\(\);/.test(upd), upd.slice(0, 600));
 }
 
-console.log("\n── §8 THE RE-UPLOAD: what the re-anchor actually re-asserts ──");
+console.log("\n── §8 THE RE-ANCHOR MUST NOT RE-UPLOAD THE REFERENCE ──");
 {
-  /* THE REGRESSION THIS SECTION EXISTS FOR. Under strict image-only conditioning the
-     prompt is one frozen string, so re-issuing it is provably a no-op - applyGarment()
-     skips it by design. A re-anchor that does not clear the reference pin is therefore
-     not "a cheaper re-anchor", it is no re-anchor at all, and the drift it was built to
-     counter comes back with nothing in the logs to show for it. */
-  const { api } = harness({ lastReanchorAt: 0, reanchorMs: 50, sentImageRef: "REF" });
-  await api.maybeReanchorPrompt();
-  check("the reference pin is cleared, so the dispatch takes the full set({ image }) path",
-    api.state().lastSentImageRef === null,
-    "a re-anchor that leaves the pin set is a no-op under strict image-only conditioning");
-}
-{
-  /* Swapping the reference mid-rotation is the documented cause of a print flickering,
-     and _orientHoldActive is precisely "the watcher has frozen the view and is mid-swap
-     of the reference itself". reconditionForTopology() - the other full-re-upload send
-     site - carries the same guard. */
-  let calls = 0;
-  const { api } = harness({ lastReanchorAt: 0, reanchorMs: 50, orientHold: true,
-    applyActiveImpl: () => { calls++; return Promise.resolve(); } });
-  await api.maybeReanchorPrompt();
-  check("never re-uploads mid front/back swap (_orientHoldActive)", calls === 0, `calls=${calls}`);
-  check("...and leaves the pin alone, so the swap's own payload is not disturbed",
-    api.state().lastSentImageRef === "REF", String(api.state().lastSentImageRef));
-  check("...without consuming its cadence slot, so the next tick re-offers it",
-    api.state().lastReanchorAt === 0, String(api.state().lastReanchorAt));
+  /* THIS WAS SHIPPED ONCE (v68) AND REVERTED AFTER A VIDEO OF THE RESULT, and the
+     reasoning that produced it is convincing enough that it will be produced again:
+     under strict image-only conditioning every re-anchor payload is byte-identical, so
+     applyGarment() skips it, so the periodic re-assertion looks dead - and clearing
+     lastSentImageRef "fixes" that by forcing the full set({ image }) path.
+
+     What it actually does is open a render window with no conditioning behind it. A full
+     re-upload is a few hundred KB through the datachannel, and Decart goes on rendering
+     camera frames throughout - against a reference that is mid-replacement, so it falls
+     back to its own prior and emits a generic garment. THE ATOMIC CONDITIONING GATE in
+     createThrottledInputStream() exists for precisely that reason at session start, and
+     it is one-shot: it never re-closes, so nothing covers a mid-session re-upload. At
+     ~625ms cadence this reproduced the gate's own failure description ~7 times a session.
+
+     The assertion is deliberately on the SOURCE rather than on behaviour: the harness
+     below cannot see a diffusion model's output, and the property that matters is
+     structural - this function must not clear the pin, whatever else it does. */
+  check("maybeReanchorPrompt() does NOT clear lastSentImageRef",
+    !/lastSentImageRef\s*=\s*null/.test(fnSrc),
+    "forcing a full re-upload here trades a slow drift for a hard garment dropout - " +
+    "see the DO NOT MAKE THIS FORCE A FULL RE-UPLOAD comment in app.js");
+  check("...and the reasoning is written down where the next attempt will start",
+    /DO NOT MAKE THIS FORCE A FULL RE-UPLOAD/.test(fnSrc),
+    "without the comment this gets re-derived and re-shipped");
+  /* The other half of the contract: the full-re-upload path that IS legitimate stays
+     legitimate. reconditionForTopology() pays the same cost knowingly, but only on real
+     movement and behind a cooldown - it is a re-drape the shopper asked for, not churn
+     on a timer. */
+  const topology = extract("async function reconditionForTopology(step) {", "\n/* ── end body-presence gate ── */");
+  check("reconditionForTopology() still forces its re-upload (movement-gated, not a timer)",
+    /lastSentImageRef = null;/.test(topology) && /BODY_RECONDITION/.test(SRC));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

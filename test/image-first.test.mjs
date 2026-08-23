@@ -646,25 +646,15 @@ console.log("\n── §5 AN IMAGE ON EVERY UPDATE AND EVERY RETRY ──");
     setIdx !== -1 && stampIdx > setIdx, `set@${setIdx} stamp@${stampIdx}`);
 
   /* THE NO-OP SKIP, new in this mode. With a frozen prompt, "same image + same prompt" is
-     a dispatch that provably changes nothing. Skipping it is right, and it stays right -
-     what changed is WHO reaches it. */
+     a dispatch that provably changes nothing - which the re-anchor cadence would
+     otherwise fire ~8 times a session. Skipping it is right; pretending the re-anchor
+     still works would not be, so the code says so. */
   check("a dispatch with nothing new is skipped rather than sent",
     /if \(payload\.prompt === lastSentPrompt\) \{/.test(apply) &&
     /no-op update skipped - reference AND prompt both unchanged/.test(apply));
-  /* THE DRIFT BUG THIS BRANCH CAUSED. The re-anchor cadence used to land here ~8 times a
-     session: under strict image-only conditioning its payload was byte-identical, so the
-     periodic re-assertion the model needs was silently skipped and the garment drifted
-     into a different one mid-session. maybeReanchorPrompt() now clears the reference pin
-     before dispatching, so it takes the full set({ image }) path instead - see §8 of
-     prompt-reanchor.test.mjs. Both halves are pinned here: the history stays written down
-     where the next reader of this branch will find it, and the mechanism that keeps the
-     re-anchor out of it is asserted against the source rather than trusted. */
-  check("...and the re-anchor's former no-op landing is recorded as the bug it was",
-    /THE RE-ANCHOR USED TO LAND HERE, AND THAT WAS THE BUG/.test(apply),
-    "a periodic re-assertion must never silently degrade into the skip above again");
-  check("...while the re-anchor itself now re-asserts the IMAGE, so it no longer lands here",
-    /lastSentImageRef = null;\s*\n\s*await applyActive\(\);/.test(SRC),
-    "maybeReanchorPrompt() must clear the pin before applyActive() to force a full set()");
+  check("...and the dead re-anchor is documented, not left to be discovered",
+    /THE RE-ANCHOR IS A NO-OP IN THIS MODE/.test(apply),
+    "there is nothing left in the prompt to re-assert");
   check("lastSentPrompt is cleared everywhere the image bookkeeping is",
     (SRC.match(/lastSentPrompt = null;/g) || []).length >= 4,
     "a stale 'already sent' belief across a session boundary skips the first real dispatch");
