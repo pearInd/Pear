@@ -1,4 +1,4 @@
-/* ONE DISPLAY SURFACE - the architectural fence.
+/* ONE CONTINUOUS SURFACE - the architectural fence.
 
    THREE SEPARATE REPORTS of the same symptom got us here: the fitting frame rendering as
    two zones, Decart's AI output on top and a raw camera feed or black block underneath.
@@ -9,19 +9,38 @@
      3rd - the split was reported AGAIN, and the guard - still present, one flag away from
            painting a raw-camera band over half the frame - was deleted outright.
 
-   A FLAG IS NOT AN ARCHITECTURE. The lesson this suite encodes is that "the hybrid
-   renderer is disabled" is a weaker guarantee than "there is no hybrid renderer", and the
-   difference is one config edit made by someone who has not read three bug reports.
+   ── AND THEN THE DIAGNOSIS TURNED OUT TO BE WRONG ──────────────────────────────
+   The guard is back, because restoring it revealed what those three reports were actually
+   filed against. updateBodyGuardLine() - the function that reads the shopper's hip line,
+   the entire justification for the boundary - was called from inside a `if
+   (frameTimingDebug)` block against a `result` that does not exist in that scope. It never
+   ran. Every reported session used the fixed-fraction fallback that config.js had already
+   predicted would fail in exactly this way, sourced from an element that is
+   visibility:hidden while a session is live, composited with a hard edge. Three defects,
+   none of them "the mechanism is wrong".
 
-   THE INVARIANT, stated once: the shopper's display shows exactly ONE source at a time,
-   and while a session is live that source is Decart's WebRTC stream and nothing else. The
-   camera feeds Decart as INPUT; it never reaches the screen as output.
+   SO THIS SUITE CHANGED SHAPE, from "no hybrid renderer may exist" to "a hybrid renderer
+   may exist ONLY in the shape that answers all three defects". The weaker guarantee is
+   deliberate and the stronger assertions moved rather than went away: what is fenced now is
+   the source it reads, the boundary it derives, and the edge it draws. The absence checks
+   they replaced were guarding a mechanism that had never actually been given a fair run.
+
+   THE INVARIANT, restated for what it is now: the shopper's display shows ONE CONTINUOUS
+   SCENE. Exactly one element carries a live stream, exactly one carries the frozen result,
+   and any compositing over the live frame must be geometrically aligned to it, sourced from
+   pixels that are guaranteed to exist, and blended rather than butted.
 
    WHY IT IS ASSERTED ACROSS THREE FILES: the invariant is not expressible in any one of
    them. app.js decides what gets drawn, index.html decides what elements exist, style.css
    decides which are visible. A split can be reintroduced through any of the three, so all
    three are checked here rather than trusting each file's own suite to notice. */
 import { readFileSync } from "node:fs";
+import { CONFIG } from "../fitting-room/config.js";
+
+/* Read from the REAL config module, not a regex over its text: the feather is the
+   deletion's one stated condition for this mechanism existing at all, so what matters is
+   the value the browser will actually load. */
+const CONFIG_FEATHER = CONFIG.BODY_GUARD_FEATHER_FRAC;
 
 const APP  = readFileSync(new URL("../fitting-room/app.js",    import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const HTML = readFileSync(new URL("../fitting-room/index.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -42,24 +61,26 @@ const cardStart = HTML.indexOf('<video id="webcam"');
 const cardEnd   = HTML.indexOf('<div class="live-countdown"');
 const CARD = HTML.slice(cardStart, cardEnd);
 
-console.log("── §1 THE MEDIA STACK: three elements, three distinct roles ──");
+console.log("── §1 THE MEDIA STACK: four elements, four distinct roles ──");
 {
   const videos  = CARD.match(/<video\b[^>]*id="([^"]+)"/g)  || [];
   const canvases = CARD.match(/<canvas\b[^>]*id="([^"]+)"/g) || [];
   const ids = [...videos, ...canvases].map((t) => t.match(/id="([^"]+)"/)[1]).sort();
 
-  /* EXACTLY THREE, AND EXACTLY THESE. A fourth is how the overlay guard got here the first
-     time - it was added as an "additive only" layer stacked above #aiVideo, which is
-     precisely the shape of the reported artifact. */
-  check("exactly three media elements in the card - no more, no fewer",
-    ids.length === 3, JSON.stringify(ids));
-  check("...and they are exactly #webcam, #aiVideo, #resultCanvas",
-    JSON.stringify(ids) === JSON.stringify(["aiVideo", "resultCanvas", "webcam"]),
+  /* EXACTLY FOUR, AND EXACTLY THESE. The count is still fenced - a FIFTH element is how a
+     second renderer would arrive - but the guard overlay is now one of the four by design
+     rather than a violation. What makes it safe is not its absence; it is §3. */
+  check("exactly four media elements in the card - no more, no fewer",
+    ids.length === 4, JSON.stringify(ids));
+  check("...and they are exactly #webcam, #aiVideo, #lowerBodyGuard, #resultCanvas",
+    JSON.stringify(ids) === JSON.stringify(["aiVideo", "lowerBodyGuard", "resultCanvas", "webcam"]),
     JSON.stringify(ids));
-  /* THE DELETED OVERLAY, named so a revert is loud rather than quiet. */
-  check("the #lowerBodyGuard overlay canvas is gone from the markup",
-    !/lowerBodyGuard/.test(HTML),
-    "an overlay canvas stacked over #aiVideo is the reported split, by construction");
+  /* THE OVERLAY IS ADDITIVE AND MUST STAY THAT WAY: above #aiVideo in DOM order, never
+     intercepting input, never visible outside a live session. */
+  check("the guard overlay is stacked above #aiVideo and cannot take a gesture from it",
+    HTML.indexOf('id="aiVideo"') < HTML.indexOf('id="lowerBodyGuard"') &&
+    /#lowerBodyGuard\s*\{[^}]*pointer-events:\s*none/.test(CSS),
+    "additive only - #aiVideo keeps its role untouched");
 
   /* EACH ROLE, asserted where it is actually established rather than assumed from the id.
      #webcam is the capture source and MUST stay - Decart cannot be fed without it - so the
@@ -103,42 +124,82 @@ console.log("\n── §2 NEVER CONCURRENT: one visible source at a time ──"
     partial.length === 0, partial.join(" | "));
 }
 
-console.log("\n── §3 NOTHING DRAWS THE CAMERA ONTO THE DISPLAY ──");
+console.log("\n── §3 THE COMPOSITE IS BOUNDED: source, boundary, edge ──");
 {
-  /* THE JS HALF. The guard painted raw #webcam pixels over Decart's output on three
-     surfaces at once - the live overlay canvas, the recorder, and the frozen frame - so
-     all three are checked. These are absence assertions on purpose: the failure mode is
-     something being ADDED back, not something changing shape. */
-  check("no compositing-guard function survives",
-    !/paintGuardBand/.test(APP) && !/function guardBand/.test(APP) &&
-    !/guardedRegion/.test(APP) && !/startLowerBodyGuard/.test(APP) &&
-    !/stopLowerBodyGuard/.test(APP) && !/lowerBodyGuardRAF/.test(APP),
-    "flag-off left the mechanism one config edit away from painting a split again");
-  check("...no guard state variables either",
-    !/bodyGuardLine/.test(APP) && !/bodyGuardTorso/.test(APP) &&
-    !/lowerBodyGuardFrac/.test(APP) && !/calibrateLowerBodyGuard/.test(APP));
-  check("...and no config constant can turn one back on",
-    !/LOWER_BODY_GUARD/.test(CFG) && !/BODY_GUARD_MARGIN_FRAC/.test(CFG),
-    "a constant with no consumer reads as a promise that the consumer is coming back");
+  /* THE THREE DEFECTS, each fenced where it lives. These replaced a block of absence
+     assertions ("no guard code may exist"), and the trade is deliberate: absence was
+     protecting a mechanism that had never been given a fair run, because its boundary
+     never once executed. What is fenced now is the shape, not the existence.
+     lower-body-guard.test.mjs owns the behaviour; this owns the architecture. */
 
-  /* THE RECORDER draws #aiVideo and only #aiVideo, so the saved clip is the same single
-     surface the shopper watched rather than a differently-composited one. */
+  /* DEFECT 1 - THE BOUNDARY. updateBodyGuardLine() fails SILENTLY on anything it cannot
+     read, so a wrong call site produces no error anywhere: just a guard permanently on its
+     fallback. That is precisely what shipped, through three bug reports. */
+  const watcher = APP.slice(
+    APP.indexOf("presenceWatcherTimer = setInterval"),
+    APP.indexOf("function stopPresenceWatcher"));
+  check("the guard boundary is read in the pose loop, where a real result exists",
+    /updateBodyGuardLine\(result\)/.test(watcher) &&
+    (APP.match(/^\s*updateBodyGuardLine\(/gm) || []).length === 1,
+    "its previous call site was a debug block with no pose result in scope - it never ran");
+  /* Comments stripped: the call site's own comment names the debug block it used to live
+     in, so a raw scan matches the explanation rather than the code it warns about. */
+  const watcherCode = watcher.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  check("...and not behind a debug flag, which is where it was lost",
+    !/if \(frameTimingDebug\)[\s\S]*?updateBodyGuardLine/.test(watcherCode) &&
+    !/if \(frameTimingDebug\)/.test(watcherCode.slice(0, watcherCode.indexOf("updateBodyGuardLine"))),
+    "a boundary that only tracks while logging is on is not a boundary");
+
+  /* DEFECT 2 - THE SOURCE. #webcam is visibility:hidden for all of .show-live while the
+     input throttle re-negotiates the shared camera source underneath it, so a readback off
+     it can return nothing - and nothing, composited over half a frame, is the reported
+     black rectangle. */
+  check("the guard sources the throttle's canvas first, not the hidden #webcam element",
+    /function guardSource/.test(APP) &&
+    /const cv = inputThrottle && inputThrottle\.canvas;/.test(APP),
+    "those are the frames being sent to Decart - they cannot be blank while a session runs");
+  check("...and #webcam survives only as the explicit fallback, mirror-corrected",
+    /if \(cv && cv\.width > 0 && cv\.height > 0\) \{[\s\S]{0,200}mirror: false/.test(APP) &&
+    /videoWidth > 0\) \{[\s\S]{0,120}mirror: true/.test(APP),
+    "the throttle canvas is already mirrored; the webcam's decoded frame never is");
+
+  /* DEFECT 3 - THE EDGE. The deletion's stated condition for any restore. */
+  check("the boundary is feathered, and the ramp is configurable but non-zero by default",
+    /BODY_GUARD_FEATHER_FRAC/.test(CFG) &&
+    /GUARD_FEATHER_SLICES/.test(APP) &&
+    CONFIG_FEATHER > 0,
+    `BODY_GUARD_FEATHER_FRAC = ${CONFIG_FEATHER} - a hard edge is the reported defect`);
+  check("...and the alpha ramp is actually applied, not merely declared",
+    /ctx\.globalAlpha = alpha;/.test(APP),
+    "a constant with no consumer is a comment, not a blend");
+
+  /* GEOMETRY. The overlay bitmap and the video underneath must agree about which pixels are
+     which, or a band painted at "the hip line" lands somewhere else entirely. */
+  check("the overlay canvas is sized to #aiVideo, matching the frame it composites over",
+    /const w = ai\.videoWidth, h = ai\.videoHeight;/.test(APP),
+    "sizing it to the camera is how the two layers came to disagree");
+  check("...and CSS gives it the same object-fit as the layers beneath it",
+    /#lowerBodyGuard \{[\s\S]{0,200}object-fit: cover;/.test(CSS),
+    "a stretched overlay over a centre-cropped video cannot align");
+
+  /* THE RECORDER AND THE FROZEN FRAME must composite identically to the live view, or the
+     saved clip is a second renderer disagreeing with the one the shopper watched. */
   const recorder = APP.slice(APP.indexOf("recordCanvas.width !== w"));
-  check("the recorder paints #aiVideo alone - the clip matches what was on screen",
-    /ctx\.drawImage\(video, 0, 0, w, h\);\s*\n\s*beginRecorder\(\);/.test(recorder),
+  check("the recorder draws #aiVideo then the SAME guard helper over it",
+    /ctx\.drawImage\(video, 0, 0, w, h\);\s*\n\s*paintGuardBand\(ctx, w, h\);/.test(recorder),
     "a clip composited differently from the live view is a second renderer");
+  check("...and all three consumers go through one helper, never their own arithmetic",
+    (APP.match(/paintGuardBand\(ctx, w, h\);/g) || []).length === 3,
+    "the band was written out twice once before, and the two copies drifted");
 
-  /* EVERY REMAINING drawImage OF THE WEBCAM must be off-DOM. Enumerated by name so a new
-     one has to be justified here rather than slipped in. */
+  /* EVERY REMAINING drawImage OF THE WEBCAM must be off-DOM or the guard's own fallback.
+     Enumerated so a new one has to be justified here rather than slipped in. */
   const webcamDraws = (APP.match(/drawImage\(\s*(webcam|\$\("webcam"\)|v)\b/g) || []).length;
-  check("the surviving webcam readbacks are the known off-DOM ones only",
+  check("the surviving direct webcam readbacks are the known off-DOM ones only",
     webcamDraws <= 3 &&
     /function sampleVideoLuma/.test(APP) &&      // 64x36 luma probe, off-DOM
     /async function renderMockDemo/.test(APP),   // ?demo=1 only, never a live session
     `${webcamDraws} drawImage(webcam|v) sites - expected the luma probe, the mock demo, and no more`);
-  check("...and freezeFinalFrame composites nothing over the AI frame it captures",
-    !/if \(!mirror\) paintGuardBand/.test(APP),
-    "the saved masterpiece must be the same surface the shopper watched");
 }
 
 console.log("\n── §4 THE INPUT PATH IS UNTOUCHED - camera in, Decart out ──");

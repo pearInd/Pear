@@ -31,6 +31,12 @@
  * @property {number}   BODY_RECONDITION_COOLDOWN_MS Minimum gap between two re-conditioning dispatches (ms).
  * @property {number}   CONDITION_DEBOUNCE_MS   Trailing-edge coalescing window before a re-drape dispatches (ms); capped by the cooldown as a max-wait.
  * @property {number}   BODY_TRACK_HOLD_MS      How long a lost skeleton holds the last valid fit before the baseline is dropped (ms).
+ * @property {boolean}  LOWER_BODY_GUARD_ENABLED Composite the shopper's own raw pixels back over Decart's output for the region NOT being fitted - the only hard guarantee against an invented non-target garment.
+ * @property {number}   LOWER_BODY_GUARD_FRAC   Fraction of frame height, from the bottom, that the guard protects when no pose reading is available.
+ * @property {boolean}  LOWER_BODY_GUARD_AUTO_CALIBRATE Derive LOWER_BODY_GUARD_FRAC per-session from a detected face box instead of the fixed fraction.
+ * @property {number}   LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS Head-heights from crown to waist, used by the calibration above.
+ * @property {number}   BODY_GUARD_MARGIN_FRAC  How far past the hip line the guard boundary sits, as a fraction of torso length, always away from the region being fitted.
+ * @property {number}   BODY_GUARD_FEATHER_FRAC Height of the alpha ramp across the guard boundary, as a fraction of frame height - what stops it being a hard-edged composite.
  * @property {number}   MORPH_MIN_SAMPLES       EMA samples required before a body-geometry classification may steer the prompt.
  * @property {number}   MORPH_PROFILE_SWITCH_FRAMES Consecutive agreeing readings before a new body geometry is committed.
  * @property {number}   PLAYOUT_DELAY_HINT      Chromium RTCRtpReceiver.playoutDelayHint (seconds). 0 = render ASAP.
@@ -229,6 +235,100 @@ export const CONFIG = Object.freeze({
      rode the turn" and "the garment re-derived itself from a frame with no body in it".
      Past this, the baseline is dropped and the next clean read re-acquires from scratch. */
   BODY_TRACK_HOLD_MS:      1500,
+
+  /* ── THE NON-TARGET REGION GUARD ────────────────────────────────────────────
+     Composite the shopper's OWN untouched camera pixels back over the region that is NOT
+     being fitted, in the browser, after Decart's frame comes back. Decart's realtime
+     set() exposes { prompt, enhance, image } and NO mask channel, so a region cannot be
+     protected on the server at all. Words can ask; only the client can guarantee.
+
+     THE REPORT IT EXISTS FOR: trying on a SHIRT, the shopper lifts a leg into frame
+     wearing light blue shorts, and Decart renders black long trousers over it.
+
+     ── THIS FLAG HAS MOVED FOUR TIMES. READ THE ARC BEFORE MOVING IT AGAIN ──────
+     1. OFF at birth, for a stated reason: "there is no body-part detector in this
+        codebase to derive [the boundary] from the shopper's ACTUAL waist position, and
+        adding one means a multi-MB WASM+model CDN dependency" - so the boundary was a
+        fixed fraction of frame height, "a GUESS calibrated to nothing about the actual
+        shopper" that could "clip into the bottom of a correctly-rendered SHIRT".
+     2. ON, because that dependency arrived anyway: MediaPipe Pose was taken on for the
+        presence gate and runs continuously for the topology monitor, and it reports
+        LEFT_HIP/RIGHT_HIP - the exact landmark the objection said was unobtainable.
+     3. OFF again after a recording showed the lower half of the canvas as a solid black
+        rectangle with a hard seam across the middle.
+     4. DELETED outright after a third report of the same split, with a condition
+        attached to any restore: it "must not be a hard-edged rectangular composite over
+        a diffusion output".
+
+     ── WHY IT IS ON NOW, AND WHAT HAD TO BE TRUE FIRST ─────────────────────────
+     Step 3 was diagnosed as the hip line sitting mid-frame. It was not. Restoring the
+     code revealed that updateBodyGuardLine() - the function that reads the hip line -
+     was called from inside armFirstFrameBilling()'s `if (frameTimingDebug)` block, on a
+     `result` variable that does not exist in that scope. So in every session that was
+     ever shipped or reported: the call never ran (debug off), and would have been handed
+     `undefined` if it had. bodyGuardLine was ALWAYS null, guardBand() ALWAYS fell through
+     to the static fraction, and what three reports were filed against was the
+     fixed-fraction guess of step 1 - the one the original objection predicted would fail
+     exactly this way. The hip-derived boundary that justified step 2 has never once run.
+     It is wired into the real pose loop now, next to the `result` it needs.
+
+     THE OTHER TWO DEFECTS ARE ANSWERED IN app.js, not here, and both are structural:
+       · THE BLACK BAND. The source was drawImage(#webcam, ...), and #webcam is
+         visibility:hidden for all of .show-live while the input throttle re-negotiates
+         the shared camera source underneath it. The band now sources the throttle's OWN
+         canvas - the frames actually being sent to Decart - which is painting by
+         definition whenever there is a session to guard, and is already cover-fitted to
+         the same geometry Decart returns. #webcam stays as the fallback.
+       · THE HARD SEAM. BODY_GUARD_FEATHER_FRAC ramps alpha across the boundary instead
+         of butting two sources together, so a disagreement in exposure or white balance
+         reads as a gradient rather than an edge. That is the deletion's condition met.
+
+     IF IT IS REPORTED A FOURTH TIME, this flag is not the fix - the mechanism is. */
+  LOWER_BODY_GUARD_ENABLED: true,
+  /* Fraction of the frame HEIGHT, measured from the bottom, that gets the shopper's own
+     raw camera pixels composited back over Decart's output when NO pose reading is
+     available (detector still loading, landmarks below the tracking bar, a browser with
+     no WebAssembly). 0.34 is a rough midpoint for a torso-forward selfie framing.
+     THIS IS THE FALLBACK, NOT THE BOUNDARY. It is the number the original objection was
+     written about, and it is only ever reached on frames the hip line could not be read
+     from. Guarding on a rough boundary beats not guarding at all now that the failure it
+     prevents is reproduced - but the pose-derived line is what normally runs. */
+  LOWER_BODY_GUARD_FRAC: 0.34,
+  /* Auto-calibrates LOWER_BODY_GUARD_FRAC once per session from a detected face box
+     (FaceDetector - the Shape Detection API primitive the orientation watcher already
+     uses, not a new dependency). Refines only the FALLBACK above; the pose-derived hip
+     line outranks it whenever one is available. Degrades silently to the static
+     LOWER_BODY_GUARD_FRAC whenever no face is found or FaceDetector is unavailable, so
+     this can stay on with no failure path of its own. Whether the guard runs at all is
+     still governed entirely by LOWER_BODY_GUARD_ENABLED above. */
+  LOWER_BODY_GUARD_AUTO_CALIBRATE: true,
+  /* Head-heights from the crown to the waist, the figure-drawing proportion the
+     calibration above multiplies a detected face box by. 3.8 is the standard adult
+     figure ratio (~7.5 heads tall, waist at roughly half). A child or a heavily
+     foreshortened close-up has a different ratio - not wired up here, so this stays the
+     same class of change as the guard itself: one clear, testable mechanism. */
+  LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS: 3.8,
+  /* How far past the hip line the guard boundary is pushed, as a fraction of the measured
+     TORSO LENGTH, always AWAY from the region being fitted. The hip line is where the two
+     body halves meet, not where a garment ends: a shirt hem routinely falls a little below
+     the hips, and trousers ride a little above them. Guarding right at the line would clip
+     whichever garment overhangs it - the exact seam-across-a-hem defect the feature was
+     held back for. A tenth of a torso is a few centimetres on a real body: enough to clear
+     a normal hem, small enough that a hallucination cannot hide in it.
+     Scaled by torso length rather than frame height so it means the same thing whether the
+     shopper is standing close or far back. */
+  BODY_GUARD_MARGIN_FRAC: 0.10,
+  /* Height of the alpha ramp across the guard boundary, as a fraction of frame height.
+     THIS IS THE DELETION'S CONDITION, expressed as a number: "anything that brings it
+     back must not be a hard-edged rectangular composite over a diffusion output". Two
+     sources that disagree on exposure, white balance or latency show that disagreement as
+     a visible line when they are butted together, and as a gradient when they are ramped.
+     0.06 is roughly a finger's width at typical framing - long enough to read as a blend
+     rather than an edge, short enough that the guarded region is still genuinely the
+     shopper's own pixels rather than a half-strength wash over Decart's invention.
+     Set to 0 to composite with a hard edge; that is the configuration that was reported
+     three times, so it is not the default. */
+  BODY_GUARD_FEATHER_FRAC: 0.06,
 
   /* ── Morphological re-fitting (see the MORPHOLOGICAL RE-FITTING block in app.js) ──
      How many EMA samples must land before a body-geometry classification is allowed to
