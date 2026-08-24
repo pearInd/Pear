@@ -66,7 +66,7 @@ function check(label, cond, detail) {
 const code = SRC.slice(SRC.indexOf("const P = Object.freeze({ CORE"),
                        SRC.indexOf("/* Full-Look composite clause"));
 const sandbox = {
-  PROMPT_MAX_CHARS: 650, console: { warn() {}, log() {} },
+  PROMPT_MAX_CHARS: 700, console: { warn() {}, log() {} },
   SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
   colorName: () => "white",
   activeColorOf: (it) => (it && it.color) || "#fff", getSizeDelta: () => 0,
@@ -122,13 +122,18 @@ const TOPS_SPEC =
   "Fit ONLY the reference shirt onto the subject's upper torso. For any lower body" +
   " parts, legs, or shorts that enter the camera frame during the video, pass through" +
   " and strictly preserve the subject's LIVE camera feed clothing (color, pattern," +
-  " length) without generating, replacing, or inventing any new pants or garments.";
+  " length) without generating, replacing, or inventing any new pants or garments." +
+  /* THE FIDELITY CLAMP, bought back 2026-08-24 against a colour-drift report. It is the
+     restore imageOnlyPrompt()'s own note has prescribed since the 1:1 collapse, and the
+     budget note attached to it predicted this exact length (407). */
+  " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details.";
 const BOTTOMS_SPEC =
   "Fit ONLY the reference pants/shorts onto the subject's lower body. For any upper" +
   " body parts, torso, or shirt that enter the camera frame during the video, pass" +
   " through and strictly preserve the subject's LIVE camera feed clothing (color," +
   " pattern, length) without generating, replacing, or inventing any new top or" +
-  " garments.";
+  " garments." +
+  " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details.";
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
@@ -151,8 +156,12 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      clause cannot be slipped onto either branch, which is the regression this whole
      suite exists to catch. §1 then checks each of the three per branch, below. */
   const sentences = (s) => s.split(/(?<=\.)\s+/).filter(Boolean);
-  check("both branches are exactly two sentences: scope, then pass-through",
-    sentences(TOPS_SPEC).length === 2 && sentences(BOTTOMS_SPEC).length === 2,
+  /* FOUR NOW, not two: scope, pass-through, then STRICT_REFERENCE_LOCK's two sentences
+     (colour/cut match, then the invent-add-alter clamp). Bought back against a colour-drift
+     report. The count is still pinned - "minimal" has to stay a number somebody has to
+     change deliberately, or the compression this suite exists to defend erodes silently. */
+  check("both branches are exactly four sentences: scope, pass-through, match, clamp",
+    sentences(TOPS_SPEC).length === 4 && sentences(BOTTOMS_SPEC).length === 4,
     `tops=${sentences(TOPS_SPEC).length} bottoms=${sentences(BOTTOMS_SPEC).length}`);
   check("...and both open on the SAME three words - the exclusive-scope binding",
     TOPS_SPEC.startsWith("Fit ONLY the reference ") &&
@@ -212,10 +221,16 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
   check("...naming colour, pattern AND length - length is what the report turned on",
     /\(color, pattern, length\)/.test(TOPS_SPEC) && /\(color, pattern, length\)/.test(BOTTOMS_SPEC),
     "shorts rendered as long trousers is a LENGTH failure before it is a colour one");
+  /* NOT $-ANCHORED ANY MORE - the fidelity clamp follows this sentence. The tail is
+     asserted separately just below, so both ends stay pinned. */
   check("...and banning all three edits - generating, replacing AND inventing",
-    /without generating, replacing, or inventing any new pants or garments\.$/.test(TOPS_SPEC) &&
-    /without generating, replacing, or inventing any new top or garments\.$/.test(BOTTOMS_SPEC),
+    /without generating, replacing, or inventing any new pants or garments\./.test(TOPS_SPEC) &&
+    /without generating, replacing, or inventing any new top or garments\./.test(BOTTOMS_SPEC),
     "forbidding invention alone still permits altering what is already there");
+  check("...and the fidelity clamp closes both branches",
+    /Exactly match color, pattern, logos, and cut\. Do NOT invent, add, or alter any details\.$/.test(TOPS_SPEC) &&
+    /Exactly match color, pattern, logos, and cut\. Do NOT invent, add, or alter any details\.$/.test(BOTTOMS_SPEC),
+    "the colour drift report is what bought this back - it must not shed to the end");
   /* THE PROMPT IS THE ASK; THE GUARD IS THE GUARANTEE. Decart's set() has no mask channel,
      so this wording is a probabilistic bias and nothing more. Asserted together so the
      pair cannot be separated by a later edit that trusts the text alone. */
@@ -258,8 +273,10 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
        fidelity sentence that replaced it forbids CHANGING the garment but not ADDING to
        it, so the invented-detail report (report 3) is the one to watch. The constant is
        still live on the full-look path, so this restore is genuinely one line. */
-    ["the invent/add/alter clamp",  /Do NOT invent, add, or alter any details/,
-                                    /const STRICT_REFERENCE_LOCK =/],
+    /* STRICT_REFERENCE_LOCK IS BACK ON THE WIRE (colour-drift report), so it is no longer
+       a member of this retired-clause table - the pair it asserts is "absent from the
+       prompt, present on file", and the first half stopped being true. It is asserted as
+       PRESENT above instead. Left listed here would make this table a lie. */
     /* KEEP_OPPOSITE_LAYER's WORDING is retired - the live lock is phrased around the
        shopper's clothes and the camera rather than around a region - but the PROTECTION it
        provided is back on both branches (asserted below). The constant stays on file
@@ -327,7 +344,7 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     !/CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC),
     "appending one clause is how the dozen came back last time");
   check("both sit far inside the 226-token ceiling, so the wire guard never clips them",
-    TOPS_SPEC.length <= 650 && BOTTOMS_SPEC.length <= 650,
+    TOPS_SPEC.length <= 700 && BOTTOMS_SPEC.length <= 700,
     "tops=" + TOPS_SPEC.length + " bottoms=" + BOTTOMS_SPEC.length);
 }
 

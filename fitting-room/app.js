@@ -4790,7 +4790,18 @@ function redrapeCoverEnd(reason) {
    ORIENT_LOCK_FRAMES would swap the reference on a head-turn and re-introduce the
    flapping that threshold exists to stop; this covers the same window without touching
    the confirmation bar. */
-const ORIENT_TURN_HOLD_MAX_MS = 4000;  // hard ceiling - a stuck still frame is worse than a live one
+/* LOWERED 4000 -> 1800 against a "the stream is stuck" report. This is the CEILING, not
+   the normal path: a healthy turn releases on the swap (~ORIENT_LOCK_MS), well inside it,
+   so this only bounds the case where the swap never lands. At 4s that pathological hold
+   was long enough to read as a frozen stream; 1800 matches REDRAPE_HOLD_MAX_MS, so both
+   covers now fail open on the same budget.
+
+   THE CONFIRMATION WINDOW IS DELIBERATELY NOT TOUCHED. Shortening the hold on a HEALTHY
+   turn means lowering ORIENT_LOCK_FRAMES, and that is the threshold that stops a head-turn
+   from swapping the reference - see its comment. Capping the cover instead would just
+   uncover the mid-rotation frames this exists to hide, which is the "my real shirt comes
+   back for a moment" report it was built for. */
+const ORIENT_TURN_HOLD_MAX_MS = 1800;  // hard ceiling - a stuck still frame is worse than a live one
 let _orientHoldActive = false;
 let _orientHoldTimer  = null;
 
@@ -6609,6 +6620,16 @@ function hasDedicatedAngle(item) {
    below, add it to DENSE, and give it a priority. Do NOT re-add a whole constant, and
    do not raise PROMPT_MAX_CHARS to make one fit - the ceiling is the API's, not ours.
 
+   ⚠️ THAT LAST CLAUSE WAS BENT ONCE, 2026-08-24, AND IT IS RECORDED HERE RATHER THAN
+   QUIETLY. PROMPT_MAX_CHARS went 650 → 700 to fit the garment colour clamp. The reason it
+   is not the thing this sentence forbids: 700 is the value config.js's OWN rationale
+   specifies and always has ("WHY 700 AND NOT 904 ... 700 keeps ~22% headroom"), while the
+   API's ceiling is the ~904 characters that 226 tokens estimates to. 650 was a drift
+   BELOW the documented figure, not the documented figure itself, and no prompt rejection
+   is recorded against 700 - the "lower this if a real prompt is ever rejected" trigger
+   never fired. So this raised the budget to its specified value; it did not spend API
+   margin. Anything ABOVE 700 does, and this sentence still governs it.
+
    Angle-oriented prompt clauses. Switching the image alone isn't enough - Lucy
    regenerates every frame, so the prompt must ALSO name the viewing angle or the
    model keeps rendering a front. Front needs no clause. */
@@ -7367,8 +7388,19 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    logos and cut); the second is the hallucination clamp, banning all three edits -
    invent, add, alter - because adding a stripe and altering a stripe are different
    operations. Leading space: it is appended to an anchor, never used alone. */
+/* THE COLOUR HALF, SPLIT OUT SO IT CAN RIDE WHERE THE WHOLE CLAMP WILL NOT FIT.
+   REPORTED: the rendered garment drifts in hue and saturation away from the reference.
+   Nothing on the wire was pinning the GARMENT's colour - the "(color, pattern, length)"
+   in the category anchor governs the LIVE CAMERA's non-target clothing, which is a
+   different region and a different instruction. This is the sentence that pins the target.
+
+   Split rather than duplicated: STRICT_REFERENCE_LOCK below is still the same string it
+   has always been (its second sentence is the hallucination clamp, which is about
+   INVENTION rather than colour and is what the composite branch has no budget for). */
+const REFERENCE_COLOR_LOCK =
+  " Exactly match color, pattern, logos, and cut.";
 const STRICT_REFERENCE_LOCK =
-  " Exactly match color, pattern, logos, and cut." +
+  REFERENCE_COLOR_LOCK +
   " Do NOT invent, add, or alter any details.";
 
 /* ── REVISION: DYNAMIC BODY, STATIC GARMENT ──────────────────────────────────────
@@ -7667,6 +7699,12 @@ function imageOnlyPrompt(item) {
      re-tested live. */
   return fitPrompt([
     [P.CORE, isBottomsGarment(item) ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
+    /* BOUGHT BACK 2026-08-24 against a colour-drift report, and this is the restore this
+       function's own note has prescribed since the 1:1 collapse: "TO BUY A CLAUSE BACK,
+       add it as a second part here - [P.HIGH, STRICT_REFERENCE_LOCK] for the hallucination
+       clamp". The budget note attached to it predicted 407 chars, which is what it costs.
+       P.HIGH, so a pathological product name sheds it before it truncates the anchor. */
+    [P.HIGH, STRICT_REFERENCE_LOCK],
   ]);
 }
 
@@ -7745,15 +7783,17 @@ function lookAnchorPrompt() {
                       the moment "it gave me the model's shoulders" is reported again.
 
    ── THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP ────
-   The number has moved six times, so read the CURRENT row rather than remembering an
-   older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
+   The number has moved seven times, so read the CURRENT row rather than remembering an
+   older one. Against PROMPT_MAX_CHARS = 700, one space per part as fitPrompt() joins.
+   The BASELINE moved this revision: both anchors now carry STRICT_REFERENCE_LOCK, bought
+   back against a colour-drift report, which is why tops reads 407 rather than 342.
 
-     TOPS (342 chars - anchor)             BOTTOMS (320 chars - anchor, lower-body scoped)
-     + DENSE.bodyFidelity  (45) → 388  fits              → 366  fits
-     + DENSE.modelAgnostic (64) → 407  fits              → 385  fits
-     + both of them        (110)→ 453  fits              → 431  fits
+     TOPS (407 chars - anchor + lock)      BOTTOMS (411 chars - lower-body scoped + lock)
+     + DENSE.bodyFidelity  (45) → 453  fits              → 457  fits
+     + DENSE.modelAgnostic (64) → 472  fits              → 476  fits
+     + both of them        (109)→ 518  fits              → 522  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 308 characters are free on tops and 330 on
+   NOTHING SHEDS ANY MORE, on either branch. 293 characters are free on tops and 289 on
    bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.
@@ -8053,6 +8093,12 @@ function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line
        MORE here, not less: a composite reference is two catalog packshots side by side, so
        there is twice as much of the model's own body in the conditioning image. */
     [P.HIGH, DENSE.modelAgnostic],
+    /* THE COLOUR HALF ONLY. The full STRICT_REFERENCE_LOCK does not fit here even at the
+       restored 700-char cap (this branch would land at 729), and of its two sentences the
+       colour one is what the drift report was filed against. The hallucination clamp it
+       leaves behind is partly covered on this branch anyway - DENSE.panelExclusion already
+       forbids the specific invention that matters most here, marks from the ignored half. */
+    [P.HIGH, REFERENCE_COLOR_LOCK],
     [P.MED,  DENSE.ignoreFurniture],
   ]);
 }

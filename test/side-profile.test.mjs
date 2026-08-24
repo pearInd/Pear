@@ -80,7 +80,7 @@ function run({ angle = "front", inProfile = false, distinctBack, custom = false,
     /* The prompt budget the dense builders assemble against. Real value, not a stub:
        fitPrompt() SHEDS clauses to honour it, so a fake number here would test a
        different prompt than the one that ships. */
-    PROMPT_MAX_CHARS: 650,
+    PROMPT_MAX_CHARS: 700,
     console: { warn() {}, log() {} },
     KEEP_TOP: "_KEEP_TOP", KEEP_BOTTOMS: "_KEEP_BOTTOMS",
     STRICT_INPAINT: "_STRICT_INPAINT", IGNORE_SOURCE_ARTIFACTS: "_IGNORE_ARTIFACTS",
@@ -242,7 +242,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
     posePos !== -1 && selPos !== -1 && depthPos > posePos && depthPos > selPos,
     `pose@${posePos} select@${selPos} depth@${depthPos}`);
   check("...and the whole clause fits the token budget it was compressed for",
-    clause.length <= 650, `${clause.length} chars`);
+    clause.length <= 700, `${clause.length} chars`);
 }
 {
   /* Same placement rule in the OTHER builder - the one that assembles the real live
@@ -790,15 +790,14 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     square === built &&
     /Fit ONLY the reference shirt onto the subject's upper torso\./.test(square) &&
     /without generating, replacing, or inventing any new pants or garments\./.test(square) &&
-    /* THE TAIL IS THE ISOLATION CLAUSE NOW. The panel contract leads, the anchor sits
-       whole in the middle, and DENSE.ignoreFurniture - the only P.MED rung - is SHED to
-       make room for DENSE.modelAgnostic at P.HIGH. That shed is the intended shape of the
-       trade, not an accident: the furniture clause guards a cosmetic divider artifact that
-       the widget's seamless gutter already prevents, while the isolation clause answers a
-       reported render defect. Pinning both ends keeps that ordering honest. */
-    /Ignore the reference model's body; fit the cloth to THIS person\.$/.test(square));
+    /* THE TAIL IS THE COLOUR LOCK NOW. Order on this branch is contract → selector →
+       cross-panel ban → anchor → isolation → colour, with DENSE.ignoreFurniture (the only
+       P.MED rung) still shed to pay for them. Both ends are pinned rather than one, which
+       is what keeps a silent re-ordering from passing. */
+    /Ignore the reference model's body; fit the cloth to THIS person\./.test(square) &&
+    /Exactly match color, pattern, logos, and cut\.$/.test(square));
   check("both payloads stay inside the token budget",
-    square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
+    square.length <= 700 && built.length <= 700, `square=${square.length} edge=${built.length}`);
 }
 
 console.log("\n── §6 NO TOCTOU: the pose is a frozen snapshot, like the angle ──");

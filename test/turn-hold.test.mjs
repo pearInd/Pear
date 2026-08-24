@@ -95,7 +95,10 @@ console.log("\n── the ceiling: a hold can never outlive its own timer ──
 {
   const { api, events, fireTimers } = harness();
   api.orientHoldBegin("turn-detected");
-  check("a safety timer is armed", api.MAX === 4000, String(api.MAX));
+  /* 1800, lowered from 4000 against a "stuck stream" report - see the constant's own note.
+     What this section owns is unchanged: a hold may never outlive its timer. The VALUE is
+     pinned too, because the whole point of lowering it was that 4s read as a freeze. */
+  check("a safety timer is armed, at the lowered ceiling", api.MAX === 1800, String(api.MAX));
   fireTimers();
   check("the ceiling reveals the feed rather than sitting on a still",
     api.active() === false && events.some((e) => e.op === "reveal"), JSON.stringify(events.map((e) => e.op)));

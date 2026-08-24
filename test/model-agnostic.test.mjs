@@ -86,7 +86,7 @@ function check(label, cond, detail) {
 const code = SRC.slice(SRC.indexOf("const P = Object.freeze({ CORE"),
                        SRC.indexOf("/* Full-Look composite clause"));
 const sandbox = {
-  PROMPT_MAX_CHARS: 650, console: { warn() {}, log() {} },
+  PROMPT_MAX_CHARS: 700, console: { warn() {}, log() {} },
   SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
   colorName: () => "white",
   activeColorOf: (it) => (it && it.color) || "#fff", getSizeDelta: () => 0,
@@ -198,8 +198,10 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      whole sequence undid. */
   const tops = api.imageOnlyPrompt(TEE);
   const bottoms = api.imageOnlyPrompt(JEANS);
+  /* 360 → 420 for STRICT_REFERENCE_LOCK. The GAP bound is untouched at 40 and is the
+     stricter half anyway: it is what stops one branch growing without the other. */
   check("both branches stay minimal, and the gap between them stays small",
-    tops.length <= 360 && bottoms.length <= 360 && Math.abs(bottoms.length - tops.length) <= 40,
+    tops.length <= 420 && bottoms.length <= 420 && Math.abs(bottoms.length - tops.length) <= 40,
     `tops=${tops.length} bottoms=${bottoms.length} gap=${bottoms.length - tops.length}`);
 
   const both = api.fitPrompt([
@@ -209,7 +211,7 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   ]);
   check("every retired clause would now FIT - so nothing but judgement stops a restore",
     /never slim them/.test(both) && /Ignore the reference model's body/.test(both) &&
-    both.length <= 650,
+    both.length <= 700,
     `${both.length} chars - fits, which is exactly why the rule has to be written down`);
   check("...and app.js states that the budget is no longer the constraint",
     /The budget is not\s*\n?\s*the constraint/.test(SRC),
@@ -221,9 +223,11 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      is recomputed here against the REAL fitPrompt() and the REAL DENSE table, and the
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
+  /* Recomputed for the new baseline: both anchors carry STRICT_REFERENCE_LOCK now, so the
+     starting point is 407/411 rather than 342/320 and every row moved with it. */
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  365, 369],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 384, 388],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  453, 457],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 472, 476],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -232,13 +236,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(342 chars - anchor\)             BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 388  fits              \u2192 366  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 407  fits              \u2192 385  fits/.test(SRC),
+    /TOPS \(407 chars - anchor \+ lock\)      BOTTOMS \(411 chars - lower-body scoped \+ lock\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 453  fits              \u2192 457  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 472  fits              \u2192 476  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /308 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
+    /293 characters are free on tops and 289 on\s*\n?\s*bottoms/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
 }
 

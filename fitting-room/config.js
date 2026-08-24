@@ -213,8 +213,16 @@ export const CONFIG = Object.freeze({
      characters, so 226 tokens is ~904. 700 keeps ~22% headroom for the two things that
      tokenize WORSE than prose and that these prompts are full of: ALL-CAPS words and
      heavy punctuation, both of which split into more tokens per character. Lower this if
-     a real prompt is ever rejected again; raising it spends that margin. */
-  PROMPT_MAX_CHARS: 650,
+     a real prompt is ever rejected again; raising it spends that margin.
+
+     RESTORED TO 700 (2026-08-24). It had been sitting at 650 while every word of the
+     paragraph above argued for 700 - a mismatch, not a decision: no prompt rejection is
+     recorded against 700, and the "lower this if a real prompt is ever rejected" trigger
+     never fired. The 50 characters bought back are spent on the garment colour clamp
+     (REFERENCE_COLOR_LOCK / STRICT_REFERENCE_LOCK), against a reported hue-and-saturation
+     drift. At 700 the longest builder lands at 687, still ~22% under the ~904-character
+     estimate of the 226-token limit, which is the headroom this paragraph specifies. */
+  PROMPT_MAX_CHARS: 700,
 
   /* ── lower-body compositing guard - a CODE-level backstop, not a prompt ──────
      THE HONEST REASON THIS EXISTS. @decartai/sdk@0.1.5's realtime set()/setPrompt()

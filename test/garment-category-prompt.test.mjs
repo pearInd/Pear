@@ -175,16 +175,19 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
   check("...and routes it to the LIVE camera feed by name, with length among the attributes",
     /pass through and strictly preserve the subject's LIVE camera feed clothing \(color, pattern, length\)/
       .test(bottomsPrompt), bottomsPrompt);
+  /* NOT $-ANCHORED: STRICT_REFERENCE_LOCK now closes both branches (colour-drift report). */
   check("...banning generation, replacement AND invention of a top",
-    /without generating, replacing, or inventing any new top or garments\.$/
+    /without generating, replacing, or inventing any new top or garments\./
       .test(bottomsPrompt), bottomsPrompt);
 
   /* THE SIZE PROPERTY IS STILL A FIX, so it is asserted as a number rather than trusted
      to stay small because someone remembered why. It grew by 81 characters here, and that
      is the deliberate spend of this revision: the per-frame instruction is the only thing
      that was bought, and image-first.test.mjs §1 pins that it is exactly three sentences. */
-  check("the bottoms prompt stays minimal - three instructions, not an assembly",
-    bottomsPrompt.length <= 360,
+  /* CEILING RAISED 360 → 420 for STRICT_REFERENCE_LOCK, and only for it: the branch runs
+     411, so this still fails on the next unbudgeted clause. "Minimal" stays a number. */
+  check("the bottoms prompt stays minimal - four instructions, not an assembly",
+    bottomsPrompt.length <= 420,
     `${bottomsPrompt.length} chars - was 616 across six sentences four revisions ago`);
   check("...and carries NO body-volume or temporal clause - the deliberate trade",
     !/360-degree rotations/.test(bottomsPrompt) && !/as soon as visible/.test(bottomsPrompt),
@@ -198,7 +201,7 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
     topsPrompt);
   check("...and carries the mirror of the bottoms non-target lock",
     /For any lower body parts, legs, or shorts that enter the camera frame during the video/.test(topsPrompt) &&
-    /without generating, replacing, or inventing any new pants or garments\.$/.test(topsPrompt),
+    /without generating, replacing, or inventing any new pants or garments\./.test(topsPrompt),
     topsPrompt);
 
   /* ── ONE SHAPE, ONE DELIBERATE DIVERGENCE ───────────────────────────────────
@@ -296,8 +299,11 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that lengthens
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
+  /* Now TWO parts - the anchor at CORE and STRICT_REFERENCE_LOCK at HIGH. What this pins
+     is unchanged: the anchor is the CORE part and the call goes through fitPrompt(). */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\],\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\],/.test(SRC) &&
+    /\[P\.HIGH, STRICT_REFERENCE_LOCK\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix. */
   check("the category anchor is tagged P.CORE so it can never be shed",
