@@ -447,10 +447,15 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
       api.buildCompositePrompt(jeans, "front", false)) &&
     api.buildCompositePrompt(jeans, "front", false) !== api.buildCompositePrompt(item, "front", false),
     api.buildCompositePrompt(jeans, "front", false).slice(0, 200));
-  check("the retired isolation clause is no longer assembled at either pose",
-    !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", false)) &&
-    !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", true)),
-    "retired deliberately by the image-first refactor - see DENSE's restore note");
+  /* BOUGHT BACK 2026-08-24 on the COMPOSITE branch only, against the model-body-bleed
+     report. This suite's property is untouched by that: the clause is pose-INVARIANT, so
+     it may not become a second axis. Asserted as present at both poses AND identical
+     across them, which is the stronger of the two facts. */
+  check("the isolation clause is assembled at both poses, and does not vary by pose",
+    /[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", false)) &&
+    /[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", true)) &&
+    api.buildCompositePrompt(item, "front", false) === api.buildCompositePrompt(item, "front", true),
+    api.buildCompositePrompt(item, "front", false).slice(-160));
 }
 
 console.log("\n── §4 DECOUPLING: profile changes the POSE, never the panel/asset ──");
@@ -785,11 +790,13 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     square === built &&
     /Fit ONLY the reference shirt onto the subject's upper torso\./.test(square) &&
     /without generating, replacing, or inventing any new pants or garments\./.test(square) &&
-    /* NO LONGER THE TAIL: the panel contract leads this payload and the furniture-ignore
-       clause closes it, so the anchor now sits whole in the middle. Asserted as "present
-       intact" PLUS an explicit tail check, which is strictly more than the old $-anchor
-       proved - it pins both ends rather than assuming the anchor owned one of them. */
-    /Ignore the gap, the background and any FRONT\/BACK label\.$/.test(square));
+    /* THE TAIL IS THE ISOLATION CLAUSE NOW. The panel contract leads, the anchor sits
+       whole in the middle, and DENSE.ignoreFurniture - the only P.MED rung - is SHED to
+       make room for DENSE.modelAgnostic at P.HIGH. That shed is the intended shape of the
+       trade, not an accident: the furniture clause guards a cosmetic divider artifact that
+       the widget's seamless gutter already prevents, while the isolation clause answers a
+       reported render defect. Pinning both ends keeps that ordering honest. */
+    /Ignore the reference model's body; fit the cloth to THIS person\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

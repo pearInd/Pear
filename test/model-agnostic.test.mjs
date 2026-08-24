@@ -250,16 +250,38 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
      it, which is the exact failure mode - text volume drowning the image - that this whole
      sequence of changes is about. A half-done supersede (comment says superseded, one
      builder still assembles it) is what this catches. */
+  /* ── RESTORED 2026-08-24, ON THE COMPOSITE BRANCH ONLY ──────────────────────
+     The paragraph above is still the rule for the SINGLE-VIEW path and is still enforced
+     there: assembling this beside a frozen string that already implies it would spend
+     budget restating it. What changed is that the composite reference is TWO catalog
+     packshots side by side - twice as much of the model's own body in the conditioning
+     image - and a report was filed against exactly that bleed. So the constant ships
+     where the risk is, and nowhere else. bodyFidelity stays retired on both. */
   for (const prof of [false, true]) {
-    check(`buildCompositePrompt does not assemble it (inProfile=${prof})`,
-      !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", prof)));
+    check(`buildCompositePrompt DOES assemble it now (inProfile=${prof})`,
+      /[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", prof)));
     check(`...nor the body-fidelity clamp (inProfile=${prof})`,
       !/never slim them/.test(api.buildCompositePrompt(TEE, "front", prof)));
   }
+  /* THE SINGLE-VIEW HALF OF THE RETIREMENT, still asserted - this is what stops the
+     restore from quietly spreading to the path whose byte-identity five other suites
+     depend on. */
+  check("...and the SINGLE-VIEW resolver still assembles neither",
+    !/[Ii]gnore the reference model's body/.test(api.imageOnlyPrompt(TEE)) &&
+    !/never slim them/.test(api.imageOnlyPrompt(TEE)),
+    api.imageOnlyPrompt(TEE));
   const codeOnly = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  check("no builder anywhere in app.js still references either clause",
-    !/DENSE\.modelAgnostic/.test(codeOnly) && !/DENSE\.bodyFidelity/.test(codeOnly),
-    "found a live reference - the retirement is half-done");
+  /* EXACTLY ONE LIVE REFERENCE, and it is the composite builder. Counted rather than
+     merely forbidden, because "half-done" is still the failure this catches - it just
+     moved from "any reference at all" to "a reference outside the one path that earned
+     it". bodyFidelity remains fully retired. */
+  check("exactly one builder references modelAgnostic, and it is the composite one",
+    (codeOnly.match(/DENSE\.modelAgnostic/g) || []).length === 1 &&
+    /\[P\.HIGH, DENSE\.modelAgnostic\]/.test(codeOnly),
+    "found a live reference outside buildCompositePrompt - the restore has spread");
+  check("...and bodyFidelity is still retired everywhere",
+    !/DENSE\.bodyFidelity/.test(codeOnly),
+    "found a live reference - that retirement is half-done");
 
   /* What must survive unconditionally is the grounding the retired clause was
      progressively demoted behind. A pathological garment name is the case where shedding

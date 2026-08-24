@@ -3817,6 +3817,7 @@ function teardown() {
   lastSentImageRef = null;
   rtImageOnWire = false;
   lastSentPrompt = null;
+  redrapeCoverEnd("session-torn-down");   // a cover must never outlive the session it covered
   resetConditionWire();          // nothing may be queued for a session that no longer exists
 
   // Bug 3 fix: stop this session's cloned camera tracks (the WebRTC sender side).
@@ -4665,6 +4666,106 @@ function orientFadeFreeze() {
 function orientFadeReveal() {
   if (!_orientFadeCanvas) return;
   _orientFadeCanvas.style.opacity = "0";
+}
+
+/* ── THE RE-DRAPE'S FRAME COVER ────────────────────────────────────────────────
+   REPORTED, on video: the target garment is correct, then for a second or two it is a
+   plain generic tee, then it is correct again - during body movement.
+
+   THE MECHANISM IS THE ONE THE ATOMIC CONDITIONING GATE ALREADY DESCRIBES (see
+   createThrottledInputStream): Decart renders every frame it is handed, and a full
+   set({ image }) takes a datachannel round-trip to land. Frames arriving during that
+   round-trip are rendered against conditioning that is mid-replacement, so the most
+   probable completion is the model's own prior - a generic garment. The gate closes that
+   window at session start and is one-shot by design; nothing covered the same window when
+   reconditionForTopology() re-uploads on movement.
+
+   So cover it the way a front/back swap is already covered: snapshot the last good
+   dressed frame, hold it over #aiVideo while the re-upload is in flight, and cross-fade
+   back once the new conditioning has landed. The shopper sees their own last dressed
+   frame for the length of a round-trip instead of a garment they did not choose.
+
+   A SEPARATE COVER FROM THE ORIENTATION HOLD, DELIBERATELY, and not for tidiness. The two
+   have independent lifecycles and neither may release the other. The orientation watcher
+   calls orientHoldEnd("turn-abandoned") from its 250ms tick whenever no front/back turn is
+   in progress - which is nearly always during a plain re-drape - so sharing
+   _orientHoldActive would have let that tick tear this cover down mid-re-upload, within
+   one tick of it going up. Sharing the CANVAS has the same problem one layer down. Two
+   overlays, two z-indexes, two timers; when both happen to be up they hold the same
+   snapshot, so the stack reads identically either way.
+
+   THE TRADE, STATED PLAINLY: this shows a still frame during movement. A re-drape fires at
+   most every BODY_RECONDITION_COOLDOWN_MS (900ms), and each cover lasts a round-trip plus
+   ORIENT_FADE_HOLD_MS before a 260ms cross-fade - so a shopper who moves continuously
+   trades some live-motion fidelity for never seeing the wrong garment. That is the right
+   way round (a laggy self is recognisable; a stranger's shirt is not), but it is a real
+   trade and REDRAPE_HOLD_MAX_MS is what bounds the failure: a hung apply reveals the live
+   feed rather than leaving a still up, exactly as the turn hold's ceiling does. */
+const REDRAPE_HOLD_MAX_MS = 1800;   // ceiling - a stuck still is worse than an honest live frame
+let _redrapeHoldActive = false;
+let _redrapeHoldTimer  = null;
+let _redrapeCanvas     = null;
+
+function redrapeCoverEl() {
+  if (_redrapeCanvas) return _redrapeCanvas;
+  const card = $("cameraCard");
+  if (!card) return null;
+  if (!document.getElementById("pear-redrape-cover-styles")) {
+    const s = document.createElement("style");
+    s.id = "pear-redrape-cover-styles";
+    /* z-index 7 - one above the orientation fade's 6. When a turn is confirmed during a
+       re-drape both covers can be up; the turn's is the longer-lived and more important
+       of the two, but they carry the same snapshot, so which one wins the stack is
+       cosmetically irrelevant and the ordering is fixed only so it is not accidental. */
+    s.textContent =
+      "#redrapeCoverCanvas{position:absolute;inset:0;width:100%;height:100%;" +
+      "object-fit:cover;transform:none;z-index:7;pointer-events:none;" +
+      `opacity:0;transition:opacity ${ORIENT_FADE_MS}ms ease-out;}`;
+    document.head.appendChild(s);
+  }
+  const c = document.createElement("canvas");
+  c.id = "redrapeCoverCanvas";
+  card.appendChild(c);
+  _redrapeCanvas = c;
+  return c;
+}
+
+/* Snapshot #aiVideo and hold it at full opacity with NO transition - an instant cut onto a
+   frame identical to what is already on screen is invisible. Call BEFORE the re-upload.
+   @returns {boolean} whether a cover actually went up (false = nothing paintable yet, in
+   which case the caller must not wait for a fade it is not showing). */
+function redrapeCoverBegin() {
+  if (_redrapeHoldActive) return false;
+  const ai = $("aiVideo");
+  const c = redrapeCoverEl();
+  /* No decoded frame yet - there is nothing good to hold, and freezing a blank canvas over
+     a live feed would CREATE the artifact this exists to prevent. Degrade to uncovered. */
+  if (!ai || !c || !ai.videoWidth) return false;
+  c.width = ai.videoWidth; c.height = ai.videoHeight;
+  c.getContext("2d").drawImage(ai, 0, 0, c.width, c.height);
+  c.style.transition = "none";
+  c.style.opacity = "1";
+  void c.offsetWidth;              // flush so the transition below re-arms
+  c.style.transition = `opacity ${ORIENT_FADE_MS}ms ease-out`;
+  _redrapeHoldActive = true;
+  if (_redrapeHoldTimer) clearTimeout(_redrapeHoldTimer);
+  _redrapeHoldTimer = setTimeout(() => {
+    console.warn("[PEAR] body re-drape cover hit its", REDRAPE_HOLD_MAX_MS +
+      "ms ceiling; revealing the live feed");
+    redrapeCoverEnd("timeout");
+  }, REDRAPE_HOLD_MAX_MS);
+  return true;
+}
+
+/* Fade the cover out, revealing the (by now re-conditioned) live feed underneath.
+   Idempotent, and safe to call when no cover is up - every session-ending path calls it
+   unconditionally so a cover can never outlive the window that raised it. */
+function redrapeCoverEnd(reason) {
+  if (_redrapeHoldTimer) { clearTimeout(_redrapeHoldTimer); _redrapeHoldTimer = null; }
+  if (!_redrapeHoldActive) return;
+  _redrapeHoldActive = false;
+  if (_redrapeCanvas) _redrapeCanvas.style.opacity = "0";
+  if (ORIENT_DEBUG) console.log("[PEAR] body re-drape - releasing frame cover (" + reason + ")");
 }
 
 /* ── Freeze THROUGH the turn, not just through the swap ───────────────────────
@@ -7948,6 +8049,10 @@ function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line
        already records for the negative/positive pair in IMAGE_ONLY_PROMPT. */
     [P.CORE, DENSE.panelExclusion],
     [P.CORE, isBottomsGarment(item) ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
+    /* Same clause, same tier, same reason as imageOnlyPrompt() - see its note. It matters
+       MORE here, not less: a composite reference is two catalog packshots side by side, so
+       there is twice as much of the model's own body in the conditioning image. */
+    [P.HIGH, DENSE.modelAgnostic],
     [P.MED,  DENSE.ignoreFurniture],
   ]);
 }
@@ -11461,6 +11566,11 @@ function stopBilling() {
      nothing left to release it, and its overlay (z-index 6, inside #cameraCard) would sit
      on top of that tail for the rest of the session. */
   orientHoldEnd("billing-stopped");
+  /* Same exemption logic as the line above, same conclusion: the frozen-hold tail keeps
+     the watcher and paint loop alive, so a re-drape cover raised just before the window
+     closed has nothing left to release it and would sit on top of that tail (z-index 7,
+     inside #cameraCard) for the rest of the session. */
+  redrapeCoverEnd("billing-stopped");
   /* The freeze watchdog does NOT get that exemption, and the difference is what each one
      is for. The orientation watcher stays because the frozen-hold tail still has UI state
      to release; this one exists solely to keep a LIVE stream alive, and two lines above
@@ -12383,6 +12493,12 @@ async function reconditionForTopology(step) {
     return;
   }
   topologyReconditionInFlight = true;
+  /* RAISED BEFORE ANYTHING IS SENT, and before the three wire-state fields below are
+     cleared: at this instant #aiVideo still carries a correctly dressed frame, and that is
+     precisely the frame worth holding. A cover raised after the re-upload is in flight
+     would snapshot the generic-garment frame it exists to hide - the same mistake the
+     front/back hold made before it was moved to the first disagreeing vote. */
+  const covered = redrapeCoverBegin();
   try {
     const d = step.delta || {};
     console.log(`[PEAR] body contour changed (${step.reason}) at t=${sessionElapsedMs()}ms` +
@@ -12398,9 +12514,20 @@ async function reconditionForTopology(step) {
     rtImageOnWire = false;
     lastSentPrompt = null;
     await applyActive();
+    /* THE GRACE PERIOD, for the same reason maybeSwap() takes one after its own set():
+       applyActive() resolving means Decart ACKNOWLEDGED the new conditioning, not that a
+       frame rendered from it has arrived and decoded. Revealing on the acknowledgement
+       alone uncovers the last few frames of the OLD conditioning - a brief flash of
+       exactly what the cover was raised to hide. Skipped when no cover went up, because
+       then this is just latency added to a re-drape nobody is waiting on. */
+    if (covered) await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));
   } catch (e) {
     console.warn("[PEAR] body-contour re-condition failed:", e?.message || e);
   } finally {
+    /* In the finally, not after the await: a rejected applyActive() must still reveal the
+       live feed. Holding a still over a failed re-drape is the one outcome worse than the
+       flicker - the shopper is then frozen out of their own session with no recovery. */
+    redrapeCoverEnd("re-drape settled");
     topologyReconditionInFlight = false;
   }
 }
