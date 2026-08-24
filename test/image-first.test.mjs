@@ -407,10 +407,19 @@ console.log("\n── §2 EVERY SINGLE-VIEW BUILDER RETURNS IT, AND ASSEMBLES NO
     /* Pinned as an EXACT membership list, not "contains DENSE": the failure mode this
        whole section exists to catch is one more well-meant clause, and an exemption with
        no ceiling is how that comes back through the side door. */
-    check("buildCompositePrompt() assembles the panel contract, the selector and the anchor",
+    check("buildCompositePrompt() assembles the contract, selector, cross-panel ban and anchor",
       /\[P\.CORE, DENSE\.contract\]/.test(codeBody) &&
       /\[P\.CORE, DENSE\.select\[side\]\]/.test(codeBody) &&
+      /\[P\.CORE, DENSE\.panelExclusion\]/.test(codeBody) &&
       /CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\]/.test(codeBody),
+      codeBody.slice(-300));
+    /* THE BAN MAY NOT BE SHED. It is the destination half of the selector's source rule,
+       and a P.MED/P.LOW tier would let a long product name drop it while leaving "use the
+       RIGHT half only" in place - which is precisely the state the double-print report was
+       filed against. Pinned as a TIER, not merely as present. */
+    check("...and the cross-panel ban is CORE, so no budget pressure can shed it",
+      /\[P\.CORE, DENSE\.panelExclusion\]/.test(codeBody) &&
+      !/\[P\.(HIGH|MED|LOW|TRIM), DENSE\.panelExclusion\]/.test(codeBody),
       codeBody.slice(-300));
     check("...and nothing else - no pose, depth, polish or fidelity clause rides with it",
       !/DENSE\.(pose|poseProfile|lateral|depth|polish|fidelity)/.test(codeBody),

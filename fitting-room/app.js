@@ -7711,6 +7711,27 @@ const DENSE = Object.freeze({
     front:       "Use the LEFT half only; ignore the RIGHT.",
     back:        "Use the RIGHT half only; ignore the LEFT.",
   },
+  /* THE CROSS-PANEL BAN. "Use the RIGHT half only" names a SOURCE; on its own it does not
+     forbid a DESTINATION. Reported against exactly that gap: a shirt whose front reads
+     "GO HIKING" rendered that chest text onto the shopper's BACK alongside the rear
+     graphic when they turned - the model selected the right panel and still dragged the
+     left panel's lettering around the body.
+
+     This is the double-print regression that got the previous stitcher removed in
+     23f5953, and the wording here is deliberately the surviving compression of the two
+     clauses that were built to stop it and are still on file above:
+     COMPOSITE_PANEL_CONTRACT's "never blend, mirror or copy any detail from one half into
+     the other" and COMPOSITE_APPLY's "does not exist for this frame". Those two run ~450
+     characters together and cannot ride inside a 650-char budget alongside the category
+     anchor; this is the smallest phrasing that keeps both of their load-bearing halves -
+     the panel is GONE, and its MARKS may not land on the render.
+
+     NAMING THE MARKS IS THE MECHANISM, not padding: "print, text or logo" is the same
+     device backInferred uses ("Never copy the front print, logo or buttons onto it") and
+     the same one the anti-invention negative relies on. A bare "do not copy" leaves the
+     model to decide what counts. Text is named FIRST because lettering is what the report
+     was filed against and is the element a diffusion model most readily relocates. */
+  panelExclusion: "The ignored half does not exist for this frame: never mirror or copy its print, text or logo onto the rendered garment.",
   pose: {
     front:       "They face the camera.",
     back:        "They are turned around, back to camera.",
@@ -7915,6 +7936,12 @@ function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line
   return fitPrompt([
     [P.CORE, DENSE.contract],
     [P.CORE, DENSE.select[side]],
+    /* CORE, and directly after the selector rather than at the tail. The source rule and
+       the destination rule are one instruction split across two sentences, and the leading
+       tokens dominate - separating them by a shed-able clause is how the ban could go
+       missing while the selector stayed, which is the exact failure shape this file
+       already records for the negative/positive pair in IMAGE_ONLY_PROMPT. */
+    [P.CORE, DENSE.panelExclusion],
     [P.CORE, isBottomsGarment(item) ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
     [P.MED,  DENSE.ignoreFurniture],
   ]);
