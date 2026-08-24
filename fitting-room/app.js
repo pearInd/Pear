@@ -4345,8 +4345,35 @@ async function preloadGarmentAssets() {
    The watcher never touches the camera track (shared with the preview); stop() only
    detaches its own <video> sampler. Lifecycle is owned by syncOrientationWatcher(). */
 const ORIENT_SAMPLE_MS      = 250;   // ~4 analyses/s - cheap on a 96px canvas
-const ORIENT_LOCK_FRAMES    = 10;    // consecutive agreeing samples to unlock (~2.5s @ 250ms/sample)
-const ORIENT_LOCK_MS        = 2500;  // OR this much sustained agreement - whichever comes first (see note above)
+/* ── HALVED 2026-08-24, ON MEASURED EVIDENCE ────────────────────────────────
+   These were 10 / 2500 (~2.5s), sized to cover a window that turned out not to need
+   covering. The reasoning was that a half-turned shopper renders against pre-turn
+   conditioning and the most probable completion is their own clothing, so the reference
+   had to be held until a turn was certain.
+
+   WHAT THE EVIDENCE ACTUALLY SHOWS: the downloaded .mp4 records #aiVideo directly, with
+   no UI overlay in its path (see the recorder's paint loop), so it is the honest view of
+   what Decart sent. Across rotation it is clean - zero reversions to the shopper's own
+   clothing. The mechanism these thresholds were sized against is not firing.
+
+   WHY THAT IS CONSISTENT rather than lucky, at least for the session it was measured on:
+   in composite mode the reference is ONE stitched FRONT|BACK image, identical for both
+   orientations, so a confirmed turn re-issues set() with only the clause changed and the
+   Blob memoized - there is no conditioning-replacement window to render badly through.
+   See referenceImageFor()'s composite branch.
+
+   ⚠️ WHAT IS STILL BOUGHT WITH THIS, and the reason it is halved rather than removed: a
+   wrong flip does not merely look stuttery, it swaps the reference and renders the WRONG
+   SIDE of the garment on the shopper (see the edge-on note below). 5 samples is still
+   1.25s of SUSTAINED, confidence-gated agreement, which a glance over the shoulder does
+   not produce, and ORIENT_COOLDOWN_MS (1500) remains underneath as the secondary
+   anti-flap bar. If the wrong side starts appearing on head-turns, this is the first
+   number to put back.
+
+   KEPT IN STEP: the two are one threshold expressed two ways (5 x 250ms = 1250ms), so
+   ORIENT_LOCK_MS stays the throttled-tab backstop it was, at the same mark. */
+const ORIENT_LOCK_FRAMES    = 5;     // consecutive agreeing samples to unlock (~1.25s @ 250ms/sample)
+const ORIENT_LOCK_MS        = 1250;  // OR this much sustained agreement - whichever comes first (see note above)
 /* FIRST acquisition only - see PENDING_MODE below. Deliberately far lower than
    ORIENT_LOCK_FRAMES: that threshold's job is to stop a CONFIRMED state from
    flapping, and until the first reading lands there is no confirmed state to
@@ -4772,8 +4799,8 @@ function redrapeCoverEnd(reason) {
    THE BUG: "when I turn around, my real shirt comes back for a moment."
 
    The freeze above used to start inside maybeSwap() - i.e. only once the flip was
-   CONFIRMED, which is ORIENT_LOCK_FRAMES (10 samples ≈ 2.5s) after the shopper began
-   turning. It covered the reference swap and nothing else. But the reversion does not
+   CONFIRMED, which was then ORIENT_LOCK_FRAMES (10 samples ≈ 2.5s, now 5 ≈ 1.25s) after
+   the shopper began turning. It covered the reference swap and nothing else. But the reversion does not
    happen during the swap; it happens during those 2.5 seconds BEFORE it, while the
    shopper is mid-rotation, side-on and foreshortened, and the model is still being told
    "the person is FACING FORWARD, use the LEFT panel". Lucy regenerates every frame, and
@@ -4790,18 +4817,34 @@ function redrapeCoverEnd(reason) {
    ORIENT_LOCK_FRAMES would swap the reference on a head-turn and re-introduce the
    flapping that threshold exists to stop; this covers the same window without touching
    the confirmation bar. */
-/* LOWERED 4000 -> 1800 against a "the stream is stuck" report. This is the CEILING, not
-   the normal path: a healthy turn releases on the swap (~ORIENT_LOCK_MS), well inside it,
-   so this only bounds the case where the swap never lands. At 4s that pathological hold
-   was long enough to read as a frozen stream; 1800 matches REDRAPE_HOLD_MAX_MS, so both
-   covers now fail open on the same budget.
+/* 4000 -> 1800 -> 400, the last step on measured evidence rather than on argument.
 
-   THE CONFIRMATION WINDOW IS DELIBERATELY NOT TOUCHED. Shortening the hold on a HEALTHY
-   turn means lowering ORIENT_LOCK_FRAMES, and that is the threshold that stops a head-turn
-   from swapping the reference - see its comment. Capping the cover instead would just
-   uncover the mid-rotation frames this exists to hide, which is the "my real shirt comes
-   back for a moment" report it was built for. */
-const ORIENT_TURN_HOLD_MAX_MS = 1800;  // hard ceiling - a stuck still frame is worse than a live one
+   THE PARAGRAPH THAT USED TO SIT HERE SAID THE CONFIRMATION WINDOW WAS "DELIBERATELY NOT
+   TOUCHED", because capping the cover would uncover mid-rotation frames that render the
+   shopper's own shirt. That was the right call on the evidence available then. It is
+   superseded by evidence, not by preference: the .mp4 records #aiVideo with no overlay in
+   its path, and across rotation it shows zero reversions. There were no bad frames under
+   the cover to uncover - see ORIENT_LOCK_FRAMES' note for why that is structural in
+   composite mode.
+
+   SO THE COVER NOW SPANS THE DISPATCH, NOT THE DECISION. What is still worth hiding is
+   the swap's own datachannel round-trip; 400ms bounds that with room. The hold is raised
+   on the first disagreeing vote and released on swap completion, so on a healthy turn
+   this ceiling is what releases it - roughly a third of a blink instead of a second and a
+   half of stillness.
+
+   NOT ZERO, and that is deliberate. orientHoldBegin() snapshots and cross-fades; a
+   ceiling of ~0 would still raise the overlay and then fade it out over ORIENT_FADE_MS,
+   which is a visible blip for no cover at all. If the goal becomes "never hold", the
+   honest change is to stop calling orientHoldBegin() on this path, not to set this to a
+   number so small the mechanism only shows its seams.
+
+   ⚠️ THE EVIDENCE IS FROM A COMPOSITE SESSION. A single-asset item (a real distinct back
+   photo, no composite) DOES swap the reference Blob on a turn, so its conditioning-
+   replacement window is real and is now covered for 400ms instead of 1800. If garment
+   reversion is reported on a turn, check whether that item ships a composite before
+   touching anything else. */
+const ORIENT_TURN_HOLD_MAX_MS = 400;   // hard ceiling - spans the swap dispatch, not the decision
 let _orientHoldActive = false;
 let _orientHoldTimer  = null;
 

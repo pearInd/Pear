@@ -1,7 +1,7 @@
 /* "When I turn around, my real shirt comes back for a moment."
 
    ROOT CAUSE: the cross-fade freeze used to be raised inside maybeSwap() - i.e. only once
-   a flip was CONFIRMED, which is ORIENT_LOCK_FRAMES (10 samples ≈ 2.5s) after the shopper
+   a flip was CONFIRMED, which is ORIENT_LOCK_FRAMES (5 samples ≈ 1.25s) after the shopper
    started turning. But the reversion does not happen during the swap. It happens in those
    2.5 seconds BEFORE it, while the shopper is side-on and the model is still being told
    "the person is FACING FORWARD". Lucy regenerates every frame, and for a half-turned,
@@ -95,10 +95,12 @@ console.log("\n── the ceiling: a hold can never outlive its own timer ──
 {
   const { api, events, fireTimers } = harness();
   api.orientHoldBegin("turn-detected");
-  /* 1800, lowered from 4000 against a "stuck stream" report - see the constant's own note.
-     What this section owns is unchanged: a hold may never outlive its timer. The VALUE is
-     pinned too, because the whole point of lowering it was that 4s read as a freeze. */
-  check("a safety timer is armed, at the lowered ceiling", api.MAX === 1800, String(api.MAX));
+  /* 400 now: 4000 -> 1800 -> 400, the last step because the recorded stream proved there
+     were no bad frames under the cover (the .mp4 draws #aiVideo with no overlay in its
+     path and shows zero reversions across rotation). What this section owns is unchanged:
+     a hold may never outlive its timer. The VALUE is pinned because every one of those
+     steps was a deliberate trade against a report, not a tuning drift. */
+  check("a safety timer is armed, at the lowered ceiling", api.MAX === 400, String(api.MAX));
   fireTimers();
   check("the ceiling reveals the feed rather than sitting on a still",
     api.active() === false && events.some((e) => e.op === "reveal"), JSON.stringify(events.map((e) => e.op)));
