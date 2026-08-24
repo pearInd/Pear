@@ -4728,7 +4728,28 @@ function orientFadeReveal() {
    way round (a laggy self is recognisable; a stranger's shirt is not), but it is a real
    trade and REDRAPE_HOLD_MAX_MS is what bounds the failure: a hung apply reveals the live
    feed rather than leaving a still up, exactly as the turn hold's ceiling does. */
-const REDRAPE_HOLD_MAX_MS = 1800;   // ceiling - a stuck still is worse than an honest live frame
+/* 1800 -> 900. THIS IS A BACKSTOP, NOT THE NORMAL PATH, and that distinction is the whole
+   reason it is not 300: reconditionForTopology() releases on its own as soon as the new
+   conditioning has landed (see its finally), so this number only ever fires when that
+   never happens. Cutting it to 300 would not make a healthy re-drape snappier - it would
+   make the TIMEOUT fire before a normal set({ image }) round-trip completes, uncovering
+   exactly the generic-garment window this cover exists to hide. That is the defect
+   e937966 was written for: "the target garment is correct, then for a second or two it is
+   a plain generic tee".
+
+   900 IS CHOSEN, NOT SPLIT THE DIFFERENCE: it equals BODY_RECONDITION_COOLDOWN_MS, which
+   is the minimum gap before another re-drape may dispatch. A cover can therefore never
+   still be up when the next one becomes eligible - covers cannot queue behind each other,
+   which is the state that would read as a long freeze rather than a short one.
+
+   ⚠️ WHY THIS IS NOT THE TURN COVER'S 400. The .mp4 evidence that justified shortening
+   the turn hold does not transfer: a composite TURN is prompt-only (one stitched
+   reference, identical both ways, Blob memoized), while a RE-DRAPE is a full
+   set({ image }) - lastSentImageRef/rtImageOnWire/lastSentPrompt are all cleared first.
+   The conditioning-replacement window is real here in a way it is not there. Lowering
+   this further wants its own measurement: record a session, move the body WITHOUT
+   turning, and check the .mp4 for a generic garment at the re-drape. */
+const REDRAPE_HOLD_MAX_MS = 900;    // ceiling - a stuck still is worse than an honest live frame
 let _redrapeHoldActive = false;
 let _redrapeHoldTimer  = null;
 let _redrapeCanvas     = null;
@@ -4782,6 +4803,50 @@ function redrapeCoverBegin() {
     redrapeCoverEnd("timeout");
   }, REDRAPE_HOLD_MAX_MS);
   return true;
+}
+
+/**
+ * Resolve on the next PRESENTED frame of `video`, or after `maxMs`, whichever lands first.
+ *
+ * WHY THIS EXISTS, and why it is not just a shorter setTimeout. The cover used to be
+ * released a flat ORIENT_FADE_HOLD_MS after the dispatch resolved. Two things are wrong
+ * with a timer here, and the reported symptom is the second one:
+ *
+ *   1. AN ACK IS NOT A RENDER. applyActive() resolving means Decart ACCEPTED the new
+ *      conditioning, not that a frame produced from it has arrived and decoded. A fixed
+ *      grace is a guess at that gap.
+ *   2. setTimeout IS MAIN-THREAD, AND SO IS THE THING COMPETING WITH IT. detectForVideo()
+ *      is a WASM pass on the same thread that services the datachannel and paints the UI
+ *      (see the presence watcher's own note), so under pose-inference load the release
+ *      callback is queued behind it and the cover visibly outstays its welcome. That is
+ *      the "the hold drags out much longer on screen" report.
+ *
+ * requestVideoFrameCallback fires on frame PRESENTATION, driven by the compositor rather
+ * than by a queued timer, which is why the frame-freeze watcher already prefers it for
+ * exactly this reason. The timer stays as the ceiling and as the fallback for browsers
+ * without rVFC, so this is never SLOWER than what it replaces.
+ *
+ * HONEST LIMIT: the first presented frame after an ack is not guaranteed to be rendered
+ * from the new conditioning - a frame already in flight can arrive first. This is bounded
+ * by the same maxMs the fixed wait used, so the worst case is revealing a frame or two
+ * earlier than before; the best case is releasing a full grace period sooner. If early
+ * reveals are ever reported, wait for the SECOND frame rather than restoring the timer.
+ *
+ * @param {HTMLVideoElement|null} video
+ * @param {number} maxMs  ceiling, also the whole wait when rVFC is unavailable
+ * @returns {Promise<"frame"|"timeout">} which one won, for the log
+ */
+function nextPresentedFrame(video, maxMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (why) => { if (!settled) { settled = true; resolve(why); } };
+    const timer = setTimeout(() => finish("timeout"), maxMs);
+    if (video && typeof video.requestVideoFrameCallback === "function") {
+      try {
+        video.requestVideoFrameCallback(() => { clearTimeout(timer); finish("frame"); });
+      } catch (_) { /* fall through to the timer */ }
+    }
+  });
 }
 
 /* Fade the cover out, revealing the (by now re-conditioned) live feed underneath.
@@ -12609,7 +12674,10 @@ async function reconditionForTopology(step) {
        alone uncovers the last few frames of the OLD conditioning - a brief flash of
        exactly what the cover was raised to hide. Skipped when no cover went up, because
        then this is just latency added to a re-drape nobody is waiting on. */
-    if (covered) await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));
+    if (covered) {
+      const why = await nextPresentedFrame($("aiVideo"), ORIENT_FADE_HOLD_MS);
+      if (ORIENT_DEBUG) console.log("[PEAR] body re-drape - cover released on", why);
+    }
   } catch (e) {
     console.warn("[PEAR] body-contour re-condition failed:", e?.message || e);
   } finally {

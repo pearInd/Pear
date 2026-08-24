@@ -178,7 +178,7 @@ console.log("\n── §4 wiring: raised before the send, released in a finally,
      conditioning, not that a frame rendered from it has decoded. Revealing on the
      acknowledgement alone uncovers the last frames of the OLD conditioning. */
   check("a grace period separates the acknowledgement from the reveal",
-    /if \(covered\) await new Promise\(\(r\) => setTimeout\(r, ORIENT_FADE_HOLD_MS\)\);/.test(recondition),
+    /if \(covered\) \{\s*\n\s*const why = await nextPresentedFrame\(\$\("aiVideo"\), ORIENT_FADE_HOLD_MS\);/.test(recondition),
     "revealing on resolve alone flashes the frame the cover was raised to hide");
 
   /* A rejected applyActive() must still reveal. A still frame held over a failed re-drape
