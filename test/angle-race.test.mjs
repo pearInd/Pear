@@ -247,7 +247,6 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
     ["buildPrompt (catalog)", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
     ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
     ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
-    ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
   /* The prompt now BRANCHES ON GARMENT CATEGORY (garment-category-prompt.test.mjs): a
      trouser reference used to be handed a t-shirt anchor, which put the catalog model's
@@ -261,6 +260,27 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
     check(`${name} delegates to the category resolver and assembles nothing`,
       /return (imageOnlyPrompt\(item\)|lookAnchorPrompt\(\));/.test(codeBody) &&
       !/fitPrompt\(/.test(codeBody), codeBody.slice(-300));
+  }
+
+  /* ── THE ONE EXEMPTION, AND WHY IT IS NARROW ────────────────────────────────
+     buildCompositePrompt() assembles again, alone among the builders. It is the only one
+     whose reference is a SPLIT image, and this file's own argument for standing the
+     composite path down said why that is different: "a split FRONT|BACK reference is only
+     legible alongside the panel contract that explains it". The composite is no longer
+     hypothetical - the widget hands one over and referenceImageFor() sends it - so the
+     contract has to ride with it or the model sees an unexplained seam and renders the
+     LEFT panel onto a turned-around body. The single-view doctrine is untouched and is
+     what every check above still pins. */
+  {
+    const body = (SRC.match(/function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/) || [""])[0];
+    const codeBody = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    /* THE PROPERTY THIS SUITE OWNS IS UNCHANGED: it may not vary by ANGLE via a live read.
+       It now selects a panel from the FROZEN `angle` parameter, which is the same snapshot
+       discipline, not a new race - so what is pinned is that the selection reads the
+       parameter and never calls effectiveAngle() itself. */
+    check("buildCompositePrompt selects its panel from the FROZEN angle, never a live read",
+      /const side = angle === "back" \? "back" : "front";/.test(codeBody) &&
+      !/effectiveAngle\(/.test(codeBody), codeBody.slice(-300));
   }
 
   check("the passthrough clamp is still on file, and named as the first to restore",

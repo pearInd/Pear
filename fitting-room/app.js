@@ -5795,7 +5795,18 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
    to A/B this against a live session), or flip this constant. If you flip it, restore
    DENSE.contract + DENSE.select in buildCompositePrompt() in the same commit - a split
    reference with no panel contract is the worst of both modes. Keep both paths working;
-   do not delete one for the other. */
+   do not delete one for the other.
+
+   ── THAT RESTORE HAS SINCE BEEN DONE, AND FOR A REASON THIS PARAGRAPH DID NOT ANTICIPATE.
+   The panel contract is back in buildCompositePrompt() as of the COMBINED-handover fix, so
+   flipping the constant no longer carries that debt. It was not restored in order to flip
+   anything: the widget hands over a pre-stitched FRONT|BACK image (garment_composite), and
+   compositeActiveFor() was gating that handover behind distinctBackOf() - a test for a
+   separate back URL that a handed-over composite does not have by construction. The
+   composite was therefore discarded on exactly the items that shipped one, and the session
+   ran on the single-asset path while the "Now fitting" chip showed the shopper a composite.
+   An EXISTING unified composite now activates the path on its own; COMPOSITE_DEFAULT still
+   governs whether this room goes and BUILDS one, and is still false. */
 const COMPOSITE_DEFAULT = false;
 const COMPOSITE_MODE = (() => {
   try {
@@ -7858,26 +7869,55 @@ function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
  * image anchor first, because "which half of the reference to read" only matters once the
  * model is reading the reference at all.
  *
- * FIX THREE - the tuxedo survived both - IS THAT THERE IS NOTHING TO ORDER. Every clause
+ * FIX THREE - the tuxedo survived both - WAS THAT THERE IS NOTHING TO ORDER. Every clause
  * is a token competing with the pixels, and ordering them only chooses which competitor
  * goes first. See IMAGE_ONLY_PROMPT for the mechanism and the full list of what this gave
- * up. The composite path itself is standing down with it (COMPOSITE_DEFAULT = false): a
- * split FRONT|BACK reference is only legible alongside the panel contract that explains
- * it, and that contract is exactly the text this mode removes.
+ * up. That reasoning is untouched for a SINGLE-VIEW reference, which is what the ordinary
+ * path still sends and still describes with the bare anchor.
  *
- * THE PARAMETERS ARE RETAINED AND DELIBERATELY UNUSED. They are the seam: applyGarment()
- * still freezes `angleAtStart`/`profileAtStart` before its awaits and still threads them
- * here, so the TOCTOU plumbing that keeps the reference and the prompt describing the same
- * moment stays live and stays tested (angle-race, side-profile §6). Restoring any clause
- * is then a two-line edit here, not a re-derivation of that plumbing.
+ * ── WHY THE CONTRACT IS BACK, AND ONLY HERE ────────────────────────────────────
+ * The paragraph this replaces read: "a split FRONT|BACK reference is only legible
+ * alongside the panel contract that explains it, and that contract is exactly the text
+ * this mode removes." That was written as the argument for standing the composite path
+ * DOWN, and it is just as much the argument for what to do when a split reference arrives
+ * ANYWAY - which is exactly what the widget's garment_composite handover is.
+ *
+ * REPORTED: the shopper turns around and the back never renders. The handed-over
+ * composite was reaching the wire as the reference while the prompt described one
+ * undivided garment, so the model saw a seam it had never been told about and kept
+ * rendering the LEFT panel onto a turned-around body. Sending a two-panel image with a
+ * one-panel prompt is the worst of both modes by this file's own reasoning; the fix is
+ * not to stop sending the composite (it is what the shopper sees in the "Now fitting"
+ * chip) but to say what it is.
+ *
+ * SCOPE IS THE SAFETY PROPERTY. This rides only when a composite is ACTUALLY the
+ * reference - the call site keys off `usingComposite`, read from what referenceImageFor()
+ * RESOLVED rather than what it wanted, so a stitch that fails still falls back to the
+ * single-asset prompt. This is not COMPOSITE_DEFAULT coming back on: nothing here builds
+ * a split reference that did not already exist.
+ *
+ * THE PARAMETERS ARE NOW USED, and the seam they were kept for is what makes that safe:
+ * applyGarment() freezes `angleAtStart`/`profileAtStart` before its awaits and threads
+ * them here, so the panel this selects and the pixels on the wire describe the same
+ * moment (angle-race, side-profile §6).
  *
  * @param {object} item   the active garment (catalog or custom upload)
- * @param {"front"|"back"} angle  retained; see above
- * @param {boolean} inProfile     retained; see above
+ * @param {"front"|"back"} angle  which panel to read - frozen by the caller
+ * @param {boolean} inProfile     true when the shopper is edge-on
  * @returns {string}
  */
 function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item);
+  const side = angle === "back" ? "back" : "front";
+  /* CONTRACT FIRST, then the selector, then the anchor - fix one's order, and the one
+     thing fitPrompt()'s end-clamp preserves if a long product name ever pushes CORE over
+     budget. Losing the tail of the anchor still leaves a legible split reference; losing
+     the contract leaves an illegible one. */
+  return fitPrompt([
+    [P.CORE, DENSE.contract],
+    [P.CORE, DENSE.select[side]],
+    [P.CORE, isBottomsGarment(item) ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
+    [P.MED,  DENSE.ignoreFurniture],
+  ]);
 }
 
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
@@ -7933,8 +7973,30 @@ function canCombineViews(item) {
    single-view image would be worse than either option on its own. Requires a real,
    distinct back (distinctBackOf) and the auto orientation lock, since the clause names
    one panel based on the detected side. */
+function hasUnifiedComposite(item) {
+  return !!(item && (item.composite || item._compositeObjectUrl));
+}
+
 function compositeActiveFor(item) {
-  return COMPOSITE_MODE && currentAngle === AUTO_ANGLE && !resolveLook() && !!distinctBackOf(item);
+  /* BOTH OF THESE STAY UNCONDITIONAL. The clause names ONE panel by the DETECTED side, so
+     without the auto orientation lock there is no detected side to name; and a full look
+     is a different stitch entirely (TOP over BOTTOM - see LOOK_CLAUSE), whose panels this
+     contract would describe wrongly. */
+  if (currentAngle !== AUTO_ANGLE || resolveLook()) return false;
+  /* A UNIFIED COMPOSITE THAT ALREADY EXISTS OUTRANKS BOTH REMAINING GATES, and that is the
+     bug this closes. distinctBackOf() asks "is there a separate back URL to stitch FROM" -
+     the right question for a composite this room has yet to build, and the WRONG one for a
+     composite the widget already built and handed over, which by construction has no
+     separate back URL to find. COMPOSITE_MODE is likewise a question about whether to opt
+     IN to building one. Neither is a reason to discard a split reference that is already
+     the model's reference and already what the "Now fitting" chip shows the shopper.
+
+     Discarding it is what produced the report: referenceImageFor()'s handover branch sits
+     INSIDE this predicate, so a false here did not fall back to a single-view image - it
+     sent the composite with the single-view PROMPT, the one combination applyGarment()'s
+     COMPOSITE BINDING guard exists to catch in the opposite direction. */
+  if (hasUnifiedComposite(item)) return true;
+  return COMPOSITE_MODE && !!distinctBackOf(item);
 }
 
 /* `angleOverride`, when given, is used INSTEAD of a fresh effectiveAngle() read - see
@@ -8242,7 +8304,19 @@ async function applyGarment(item) {
     // the time this log line runs (which can differ - see this function's opening
     // comment. A log claiming a different angle than the payload it's describing
     // would make exactly this class of bug harder to diagnose, not easier).
-    currentAngle === AUTO_ANGLE ? `(AI Auto - ${vtonState()}, applied angle: ${angleAtStart}, pre-cached Blob)`
+    /* THE MODE IS NAMED HERE TOO, from usingComposite - what referenceImageFor() actually
+       RESOLVED, never what compositeActiveFor() wanted. Before this fix the mode silently
+       read FRONT_MODE on a session whose reference was a two-panel image, which is the
+       report this closes and is exactly the thing this line exists to make visible.
+
+       DELIBERATELY NOT `applied angle: composite`. The composite is the reference FORMAT;
+       the angle is still front or back, and it is what selects the panel. Reporting the
+       format in the angle slot would hide which side was applied - see the note directly
+       above about a log claiming a different angle than its payload. The panel that was
+       actually selected is spelled out on the `reference:` line below. */
+    currentAngle === AUTO_ANGLE
+      ? `(AI Auto - ${usingComposite ? "COMPOSITE_MODE" : vtonState()}, applied angle: ${angleAtStart}, ` +
+        `${usingComposite ? "COMBINED composite" : "pre-cached Blob"})`
       : hasDedicatedAngle(item) ? "(dedicated gallery image)" : "(front fallback + prompt)");
   console.log("subType  :", item.subType, "| color:", item.color);
   console.log("img URL  :", abbrevImg(activeImg));   // data: URLs abbreviated so a base64 blob can't flood the console

@@ -265,10 +265,14 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
      angleClause() above still assembles and is still tested at every branch: it is the
      restore path (its clauses are what a two-line edit plugs back in), and keeping it
      proven is what stops "retired" from decaying into "deleted". */
-  check("the live composite payload is the category anchor, at every pose",
+  /* STILL POSE-INVARIANT - that is this suite's property and it survives intact. What
+     changed is that the payload now LEADS with the panel contract, because the reference
+     it describes is a split image. The category anchor still ships whole, just behind it. */
+  check("the live composite payload is pose-invariant, and leads with the panel contract",
     built === api.buildCompositePrompt(
       { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Fit ONLY the reference shirt onto the subject's upper torso\./.test(built),
+    /^The reference image is a split photo of one garment: LEFT half its front, RIGHT half its back\./.test(built) &&
+    /Fit ONLY the reference shirt onto the subject's upper torso\./.test(built),
     built);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
@@ -391,9 +395,12 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
      what it no longer does is ride the live composite payload, because that payload is
      one frozen string. Pinned as an absence so the two facts cannot drift apart: if a
      clause ever reappears in this builder, the mode has been half-undone. */
-  check("the live composite payload carries no assembled clause, at either pose",
+  /* THE POSE CLAUSES STAY RETIRED - the absence this section owns is unchanged. The panel
+     SELECTOR is the one thing that is now present, and it is not a pose clause: it names
+     which half of the reference to read, which is the same at either pose. */
+  check("the live composite payload carries the panel selector and NO pose clause",
     !LATERAL_MARKER.test(built) && !DEPTH_MARKER.test(built) &&
-    !/Use the LEFT half only/.test(built) &&
+    /Use the LEFT half only/.test(built) &&
     !LATERAL_MARKER.test(api.buildCompositePrompt(item, "front", false)),
     built);
 }
@@ -418,7 +425,10 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
   const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Fit ONLY the reference shirt onto the subject's upper torso\./;
+  /* NOT ^-ANCHORED ANY MORE: the panel contract leads the composite payload (see the
+     builder). The property here is that the anchor ships WHOLE and identically at both
+     poses, which is unchanged - only its offset in the string moved. */
+  const FROZEN = /Fit ONLY the reference shirt onto the subject's upper torso\./;
   for (const prof of [false, true]) {
     check(`the category anchor is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
@@ -433,7 +443,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
   const jeans = { name: "Glide Slim", custom: true, garmentType: "lower_body" };
   check("the BOTTOMS anchor is equally pose-invariant, and is a different string",
     api.buildCompositePrompt(jeans, "front", false) === api.buildCompositePrompt(jeans, "front", true) &&
-    /^Fit ONLY the reference pants\/shorts onto the subject's lower body\./.test(
+    /Fit ONLY the reference pants\/shorts onto the subject's lower body\./.test(
       api.buildCompositePrompt(jeans, "front", false)) &&
     api.buildCompositePrompt(jeans, "front", false) !== api.buildCompositePrompt(item, "front", false),
     api.buildCompositePrompt(jeans, "front", false).slice(0, 200));
@@ -773,8 +783,13 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
      property this section owns, and it is unaffected by either. */
   check("what survives at both poses is the category anchor, byte-identical",
     square === built &&
-    /^Fit ONLY the reference shirt onto the subject's upper torso\./.test(square) &&
-    /without generating, replacing, or inventing any new pants or garments\.$/.test(square));
+    /Fit ONLY the reference shirt onto the subject's upper torso\./.test(square) &&
+    /without generating, replacing, or inventing any new pants or garments\./.test(square) &&
+    /* NO LONGER THE TAIL: the panel contract leads this payload and the furniture-ignore
+       clause closes it, so the anchor now sits whole in the middle. Asserted as "present
+       intact" PLUS an explicit tail check, which is strictly more than the old $-anchor
+       proved - it pins both ends rather than assuming the anchor owned one of them. */
+    /Ignore the gap, the background and any FRONT\/BACK label\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

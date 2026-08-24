@@ -332,7 +332,7 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
 }
 
 
-console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──");
+console.log("\n── §2 EVERY SINGLE-VIEW BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──");
 {
   const cases = [
     ["FRONT square-on", TEE, "front", false],
@@ -347,17 +347,23 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
      unchanged in strength - byte-identical output across angle, pose, colour, custom-upload
      and pathological-name - it is just measured against the anchor for that garment's
      REGION rather than one global constant. */
-  for (const [name, item, angle, prof] of cases) {
+  /* MEASURED ON THE RESOLVER ITSELF, not through buildCompositePrompt(). That builder used
+     to be a pure pass-through, which made it a convenient probe; it is not one any more
+     (see the exemption below), and probing the doctrine through the one path that is
+     exempt from it would assert nothing. imageOnlyPrompt() IS what every single-view
+     builder returns, so it is the honest place to measure invariance. */
+  for (const [name, item, angle, prof] of cases) {   // eslint-disable-line no-unused-vars
     const expected = item.garmentType === "lower_body" ? BOTTOMS_SPEC : TOPS_SPEC;
     check(`${name}: byte-identical to its category anchor`,
-      api.buildCompositePrompt(item, angle, prof) === expected,
-      api.buildCompositePrompt(item, angle, prof));
+      api.imageOnlyPrompt(item) === expected,
+      api.imageOnlyPrompt(item));
   }
   /* THE AXIS ITSELF, asserted once: category is the ONLY thing that moves the prompt. */
   check("the two branches are genuinely different, and category is the only axis",
     TOPS_SPEC !== BOTTOMS_SPEC &&
-    api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(TEE, "back", true) &&
-    api.buildCompositePrompt(JEANS, "front", false) === api.buildCompositePrompt(JEANS, "back", true));
+    api.imageOnlyPrompt(TEE) === api.imageOnlyPrompt(TEE) &&
+    api.imageOnlyPrompt(JEANS) === api.imageOnlyPrompt(JEANS) &&
+    api.imageOnlyPrompt(TEE) !== api.imageOnlyPrompt(JEANS));
 
   /* Structural, across the builders this sandbox cannot execute. The four together are
      every path that can reach rtClient.set() with a prompt. */
@@ -365,7 +371,6 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
     ["buildPrompt", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
     ["buildCustomPrompt", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
     ["buildLookPrompt", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
-    ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
   for (const [name, re] of builders) {
     const body = (SRC.match(re) || [""])[0];
@@ -387,13 +392,40 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
   /* THE INVARIANT, stated as an absence - the only form that catches the real regression,
      which is somebody adding one more well-meant clause. Every clause this file ever grew
      was individually justified; the sum is what produced the tuxedo. */
+  /* ── THE ONE EXEMPTION, AND WHY IT IS NARROW ────────────────────────────────
+     buildCompositePrompt() assembles again, alone among the builders. It is the only one
+     whose reference is a SPLIT image, and this file's own argument for standing the
+     composite path down said why that is different: "a split FRONT|BACK reference is only
+     legible alongside the panel contract that explains it". The composite is no longer
+     hypothetical - the widget hands one over and referenceImageFor() sends it - so the
+     contract has to ride with it or the model sees an unexplained seam and renders the
+     LEFT panel onto a turned-around body. The single-view doctrine is untouched and is
+     what every check above still pins. */
+  {
+    const body = (SRC.match(/function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/) || [""])[0];
+    const codeBody = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    /* Pinned as an EXACT membership list, not "contains DENSE": the failure mode this
+       whole section exists to catch is one more well-meant clause, and an exemption with
+       no ceiling is how that comes back through the side door. */
+    check("buildCompositePrompt() assembles the panel contract, the selector and the anchor",
+      /\[P\.CORE, DENSE\.contract\]/.test(codeBody) &&
+      /\[P\.CORE, DENSE\.select\[side\]\]/.test(codeBody) &&
+      /CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\]/.test(codeBody),
+      codeBody.slice(-300));
+    check("...and nothing else - no pose, depth, polish or fidelity clause rides with it",
+      !/DENSE\.(pose|poseProfile|lateral|depth|polish|fidelity)/.test(codeBody),
+      codeBody.slice(-300));
+  }
+
   const codeOnly = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  /* Every builder EXCEPT the split-reference one - see the exemption above. */
+  const codeNoComposite = codeOnly.replace(/function buildCompositePrompt\([\s\S]*?\n}/, "");
   check("no colour word or subtype noun reaches any prompt",
     !/colorName\(activeColorOf\(/.test(codeOnly) &&
     !/SHIRT_NOUN\[/.test(codeOnly) && !/SUBTYPE_PROMPT\[/.test(codeOnly));
-  check("no DENSE clause is assembled by any builder",
-    !/\[P\.(CORE|HIGH|MED|LOW|TRIM),\s*DENSE\./.test(codeOnly),
-    "the DENSE table is a restore library now, not an assembly source");
+  check("no DENSE clause is assembled by any SINGLE-VIEW builder",
+    !/\[P\.(CORE|HIGH|MED|LOW|TRIM),\s*DENSE\./.test(codeNoComposite),
+    "the DENSE table is a restore library for every path except the split reference");
   check("the size-override modifier no longer reaches the wire either",
     !/\[P\.\w+,\s*fitSentence\(/.test(codeOnly),
     "documented in IMAGE_ONLY_PROMPT's retirement list - the UI still works, the render ignores it");

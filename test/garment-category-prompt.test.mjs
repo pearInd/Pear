@@ -314,11 +314,23 @@ console.log("\n── §6 EVERY BUILDER BRANCHES - one constant left is the bug,
   check("NO builder returns a bare category-blind constant any more",
     bare === 0, `${bare} builder(s) still return the frozen tops-only string`);
 
-  for (const fn of ["buildPrompt", "buildCustomPrompt", "buildCompositePrompt"]) {
+  for (const fn of ["buildPrompt", "buildCustomPrompt"]) {
     const start = SRC.indexOf(`function ${fn}(`);
     const body = SRC.slice(start, SRC.indexOf("\n}", start));
     check(`${fn}() resolves its prompt per garment category`,
       /imageOnlyPrompt\(/.test(body), body.slice(0, 300));
+  }
+  /* THE COMPOSITE BUILDER REACHES THE SAME TABLE BY A DIFFERENT ROUTE. It cannot delegate
+     to imageOnlyPrompt() because it has to put the panel contract in FRONT of the anchor,
+     and that resolver returns a finished string. The property this suite owns is that the
+     prompt branches on CATEGORY - so what is asserted is the branch itself, on the same
+     table, rather than the call that happens to carry it elsewhere. */
+  {
+    const start = SRC.indexOf("function buildCompositePrompt(");
+    const body = SRC.slice(start, SRC.indexOf("\n}", start));
+    check("buildCompositePrompt() resolves its prompt per garment category",
+      /isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top/.test(body),
+      body.slice(0, 300));
   }
 
   /* The full-look builder is the deliberate exception and is asserted as such: it

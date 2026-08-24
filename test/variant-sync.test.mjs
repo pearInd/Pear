@@ -119,10 +119,15 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
      by angle or by pose, which is the property THIS suite owns. Asserted as "every
      builder routes through the resolver" rather than "every builder returns a constant",
      because the constant is what had to go. */
-  check("every builder resolves its prompt through the category resolver",
-    (APP.match(/return imageOnlyPrompt\(item\);/g) || []).length >= 3 &&
+  /* TWO, not three: buildCompositePrompt() now leads with the panel contract and so
+     resolves CATEGORY_ANCHOR directly instead of delegating (image-first §2 pins its exact
+     shape). The property THIS suite owns is untouched by that - it still does not vary by
+     colour or variant, which is asserted on the anchor table just below. */
+  check("every single-view builder resolves its prompt through the category resolver",
+    (APP.match(/return imageOnlyPrompt\(item\);/g) || []).length >= 2 &&
+    /isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top/.test(APP) &&
     /return lookAnchorPrompt\(\);/.test(APP),
-    "buildPrompt, buildCustomPrompt, buildCompositePrompt + the full-look exemption");
+    "buildPrompt, buildCustomPrompt + the composite and full-look exemptions");
   check("...and neither category anchor has an interpolation hole to leak a variant into",
     /const CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(APP) &&
     !/CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,900}?\$\{/.test(APP),
