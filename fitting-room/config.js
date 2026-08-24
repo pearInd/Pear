@@ -181,6 +181,32 @@ export const CONFIG = Object.freeze({
      reference image attached, so this is the knob that decides how much of a 5s window
      a continuously-moving shopper can spend re-uploading a packshot. ~5 per session. */
   BODY_RECONDITION_COOLDOWN_MS: 900,
+  /* ── THE SETTLE GATE - re-drape when the movement STOPS, not while it runs ──
+     REPORTED: the preview freezes during rotation specifically. The mechanism is
+     chaining, not any single cover. topologyShift() reports "rotation" whenever yaw has
+     moved BODY_ROTATION_DELTA_DEG from the shape the render was conditioned on, and a
+     180-degree turn passes that mark many times over. Each crossing that clears the
+     cooldown dispatches a re-drape and arms a cover, so a continuous turn produced a
+     train of them back to back - which reads as one long freeze.
+
+     Re-draping mid-turn is also wasted work: every intermediate pose is immediately
+     superseded by the next one, and the shopper never holds any of them long enough to
+     see the fit. What is worth conditioning on is the pose they STOP at.
+
+     So a shift now has to be quiet before it dispatches. BODY_SETTLE_DELTA_DEG is
+     measured against the PREVIOUS SAMPLE (is the body still moving right now?), not
+     against the baseline (has it moved since the render?) - two different questions, and
+     conflating them is what made the old code fire mid-turn. BODY_SETTLE_MS is how long
+     that stillness has to last.
+
+     TUNED, not guessed: at BODY_TOPOLOGY_SAMPLE_MS = 350 a 250ms floor means the very
+     next quiet sample can release the shift, so a shopper who stops turning waits about
+     one sample rather than a full cooldown. 5 degrees is comfortably above landmark
+     jitter on a stationary body and well below the 15-degree shift threshold, so it
+     cannot swallow a real movement - a shift held back this way is NOT lost, the tracker
+     keeps offering it until it settles. */
+  BODY_SETTLE_DELTA_DEG:   5,     // per-sample movement below this counts as "stopped"
+  BODY_SETTLE_MS:          250,   // ...and it has to stay stopped this long before dispatching
   /* How long a lost skeleton is HELD before the monitor gives up on the last valid
      reading. Sharp rotations black out the landmarks for a few frames; holding the last
      good fit across that gap and resuming from it is the difference between "the garment

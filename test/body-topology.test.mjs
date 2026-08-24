@@ -78,6 +78,8 @@ const sandbox = {
   BODY_BUILD_DELTA: CONFIG.BODY_BUILD_DELTA,
   BODY_RECONDITION_COOLDOWN_MS: CONFIG.BODY_RECONDITION_COOLDOWN_MS,
   BODY_TRACK_HOLD_MS: CONFIG.BODY_TRACK_HOLD_MS,
+  BODY_SETTLE_DELTA_DEG: CONFIG.BODY_SETTLE_DELTA_DEG,
+  BODY_SETTLE_MS: CONFIG.BODY_SETTLE_MS,
   performance: { now: () => 0 },
   console: { warn() {}, log() {} },
 };
@@ -325,15 +327,43 @@ console.log("\n── §4 THE TRACKER: the baseline is the CONDITIONED shape ─
     clock += 200;                                          // one sampler tick
     states.push(tracker.feed(sig({ yawDeg: deg })).state);
   }
-  check("a slow 90-degree turn taken in 5-degree steps still fires",
-    states.includes("shift"),
-    "a per-frame baseline would let a gradual turn slip past every threshold");
-  check("...and fires more than once across the whole rotation",
-    states.filter((s) => s === "shift").length >= 2,
+  /* ── THIS PROPERTY INVERTED 2026-08-24, DELIBERATELY ────────────────────────
+     These three used to assert that a continuous turn fires REPEATEDLY (">= 2", "<= 5").
+     That was the right reading of "drift must accumulate rather than be lost" - and it is
+     also, precisely, the reported defect: every firing arms #redrapeCoverCanvas, so one
+     90-degree turn produced a train of covers back to back and the preview froze for the
+     whole rotation.
+
+     THE ACCUMULATION PROPERTY IS NOT WEAKENED, and that distinction is the whole reason
+     this is a fix rather than a regression. The settle gate never drops a shift and never
+     advances the baseline past one: it HOLDS the movement while the body is still moving
+     and releases it the moment the movement stops. A gradual turn still cannot slip past
+     the threshold - it lands once, on the pose the shopper actually stopped at, instead of
+     many times on poses they only passed through. The "still on offer when it ends" half
+     is asserted immediately below, and is what proves nothing was swallowed. */
+  check("a continuous turn dispatches NOTHING while it is still turning",
+    !states.includes("shift"),
+    "a mid-turn firing arms a cover the shopper experiences as a freeze: " + states.join(" "));
+  /* The first samples read "stable", correctly: at 5 and 10 degrees the drift has not yet
+     reached BODY_ROTATION_DELTA_DEG, so there is no shift to hold back yet. What matters is
+     that from the first threshold crossing onward NOTHING slips back to "stable" or
+     "cooldown" - every sample is explicitly held, which is what proves the movement is
+     still on offer rather than absorbed. */
+  const firstHeld = states.indexOf("settling");
+  check("...and from the first threshold crossing on, every sample is HELD - never swallowed",
+    firstHeld !== -1 && states.slice(firstHeld).every((s) => s === "settling"),
     `states: ${states.join(",")}`);
-  check("...but not on every tick - the cooldown bounds the image re-uploads",
-    states.filter((s) => s === "shift").length <= 5,
-    `${states.filter((s) => s === "shift").length} dispatches across a 3.4s turn`);
+  /* THE MOVEMENT SURVIVES THE WAIT. Same tracker, same accumulated drift: the instant the
+     body stops, the shift that was held the whole way through is delivered - once. */
+  {
+    clock += 200;
+    const settledA = tracker.feed(sig({ yawDeg: 90 })).state;   // first quiet sample
+    clock += 200;
+    const settledB = tracker.feed(sig({ yawDeg: 90 })).state;   // ...and the one that clears settleMs
+    check("...and the held movement fires ONCE the turn stops, not never",
+      [settledA, settledB].includes("shift"),
+      `${settledA} / ${settledB} - a held shift that never lands is a dropped shift`);
+  }
 
   /* STANDING STILL COSTS NOTHING. The opposite failure: a monitor that fires on noise
      would re-upload the packshot repeatedly inside a 5s billed window. */
@@ -350,7 +380,9 @@ console.log("\n── §4 THE TRACKER: the baseline is the CONDITIONED shape ─
      would be silently absorbed and the body would stay mis-fitted for the rest of the
      session. */
   let t = 0;
-  const t3 = api.makeBodyTopologyTracker({ now: () => t });
+  /* settleMs:0 - this section owns the COOLDOWN axis. The settle gate sits in front of it
+     and would otherwise answer first, testing the wrong thing. */
+  const t3 = api.makeBodyTopologyTracker({ now: () => t, settleMs: 0 });
   t3.feed(sig({ yawDeg: 0 }));
   t += 200; const first = t3.feed(sig({ yawDeg: 40 }));
   t += 100; const blocked = t3.feed(sig({ yawDeg: 80 }));
@@ -371,7 +403,9 @@ console.log("\n── §5 THE FALLBACK: hold the last valid fit through a blind 
      what has to be asserted is that no dispatch happens while blind, and that the
      comparison on return is against the held baseline rather than against nothing. */
   let t = 0;
-  const tracker = api.makeBodyTopologyTracker({ now: () => t });
+  /* settleMs:0 - this section owns the TRACKING-HOLD axis (body unreadable, then back).
+     A body returning from a hold has no motion history to be still against anyway. */
+  const tracker = api.makeBodyTopologyTracker({ now: () => t, settleMs: 0 });
   tracker.feed(sig({ yawDeg: 0 }));
   const blind = [];
   for (let i = 0; i < 4; i++) { t += 200; blind.push(tracker.feed(null)); }
@@ -556,7 +590,8 @@ console.log("\n── §7 THROTTLING: the wire is the floor, not the CPU ──"
      session. This is the exact bug that a naive `if (wireBusy()) return;` at the call site
      would have introduced, since feed() had already moved the baseline by then. */
   let t = 0;
-  const tracker = api.makeBodyTopologyTracker({ now: () => t });
+  /* settleMs:0 - this section owns the WIRE-GATE axis; see the cooldown section's note. */
+  const tracker = api.makeBodyTopologyTracker({ now: () => t, settleMs: 0 });
   tracker.feed(sig({ yawDeg: 0 }));
   t += 400;
   const blocked = tracker.feed(sig({ yawDeg: 40 }), { canDispatch: false });

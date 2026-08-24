@@ -54,6 +54,8 @@ const {
   BODY_VOLUME_DELTA,
   BODY_BUILD_DELTA,
   BODY_RECONDITION_COOLDOWN_MS,
+  BODY_SETTLE_DELTA_DEG,
+  BODY_SETTLE_MS,
   BODY_TRACK_HOLD_MS,
   TOKEN_ENDPOINT,
   HEALTH_ENDPOINT,
@@ -12232,7 +12234,15 @@ function makeBodyTopologyTracker(opts = {}) {
   const buildDelta  = opts.buildDelta  ?? BODY_BUILD_DELTA;
   const cooldownMs  = opts.cooldownMs  ?? BODY_RECONDITION_COOLDOWN_MS;
   const holdMs      = opts.holdMs      ?? BODY_TRACK_HOLD_MS;
+  const settleDeg   = opts.settleDeg   ?? BODY_SETTLE_DELTA_DEG;
+  const settleMs    = opts.settleMs    ?? BODY_SETTLE_MS;
   const now         = opts.now         ?? (() => Date.now());
+  /* The PREVIOUS sample, and when the body was last seen moving. Distinct from `baseline`
+     on purpose: baseline answers "has it moved since the render?", these answer "is it
+     moving right NOW?". See BODY_SETTLE_DELTA_DEG in config.js for why the difference is
+     the whole fix. */
+  let prevSig = null;
+  let movingSince = null;
 
   let baseline = null;      // the topology the CURRENT render was conditioned against
   /* null while the skeleton is readable, otherwise the timestamp it went unreadable at.
@@ -12251,7 +12261,7 @@ function makeBodyTopologyTracker(opts = {}) {
     /* Called after something ELSE has re-conditioned the session (a presence re-entry, a
        garment swap): the render no longer corresponds to the stored baseline, so the next
        readable frame must establish a new one instead of being compared to a stale shape. */
-    reset() { baseline = null; lostAt = null; },
+    reset() { baseline = null; lostAt = null; prevSig = null; movingSince = null; },
     /**
      * @param {object|null} sig bodyContourSignature() for this frame, or null if unreadable
      * @param {{canDispatch?: boolean}} [gate] false when the wire cannot accept a write
@@ -12262,7 +12272,8 @@ function makeBodyTopologyTracker(opts = {}) {
      *        the "may we send?" decision must not be able to drift apart, and a baseline
      *        advanced for a write that never happened is exactly that drift.
      * @returns {{state:"waiting"|"acquired"|"stable"|"resumed"|"hold"|"dropped"|"cooldown"
-     *            |"deferred"|"shift", reason?:string, delta?:object, heldMs?:number}}
+     *            |"deferred"|"settling"|"shift", reason?:string, delta?:object,
+     *            heldMs?:number, movingMs?:number}}
      */
     feed(sig, { canDispatch = true } = {}) {
       const t = now();
@@ -12274,6 +12285,26 @@ function makeBodyTopologyTracker(opts = {}) {
       }
       const heldMs = lostAt === null ? 0 : t - lostAt;
       lostAt = null;
+
+      /* INSTANTANEOUS motion, sample-to-sample - the "is it moving right NOW?" half, as
+         opposed to `delta` below which asks "has it moved since the render?".
+
+         MEASURED BEFORE THE BASELINE EARLY-RETURN, and that placement is load-bearing: the
+         first readable sample returns "acquired" without ever reaching the code below, so
+         seeding prevSig there would leave the FIRST MOVING sample with no motion history.
+         It would read as still, clear the settle gate, and dispatch - one re-drape at the
+         very start of every turn, which is precisely the case this gate exists to stop.
+
+         Rotation axes only (yaw/pitch). Build and volume are proportions, not angles; they
+         do not sweep continuously the way a turn does, and holding a genuine build change
+         hostage to an unrelated stillness clock would delay the one kind of re-drape that
+         has no other trigger. */
+      if (prevSig) {
+        const step = topologyDelta(prevSig, sig);
+        if (Math.max(step.yaw, step.pitch) >= settleDeg) movingSince = t;
+      }
+      prevSig = sig;
+
       if (!baseline) { baseline = sig; return { state: "acquired" }; }
 
       const delta = topologyDelta(baseline, sig);
@@ -12282,6 +12313,18 @@ function makeBodyTopologyTracker(opts = {}) {
          held is still the right one, and nothing needs to be sent. */
       if (!reason) return { state: heldMs ? "resumed" : "stable", delta, heldMs };
       if (t - lastSignalAt < cooldownMs) return { state: "cooldown", reason, delta, heldMs };
+      /* ── SETTLE BEFORE DISPATCH ────────────────────────────────────────────
+         Ordered AFTER the cooldown and BEFORE canDispatch deliberately. After the
+         cooldown, because a rate-limited shift has nothing to settle for yet. Before the
+         wire gate, because "still moving" is a fact about the BODY and should read that
+         way in a trace even when the wire happens to be busy at the same instant.
+
+         Like "cooldown" and "deferred", this does NOT advance the baseline - the movement
+         is re-offered on the next evaluation, so nothing is lost by waiting for the turn
+         to finish. That is what makes this a debounce rather than a filter. */
+      if (movingSince !== null && t - movingSince < settleMs) {
+        return { state: "settling", reason, delta, heldMs, movingMs: t - movingSince };
+      }
       if (!canDispatch) return { state: "deferred", reason, delta, heldMs };
       lastSignalAt = t;
       baseline = sig;
@@ -12551,6 +12594,7 @@ function startPresenceWatcher() {
         else if (ORIENT_DEBUG && step.state !== "stable") {
           console.log(`[PEAR][TOPOLOGY] ${step.state}` +
             (step.heldMs ? ` (held ${step.heldMs}ms)` : "") +
+            (step.movingMs !== undefined ? ` (still moving, ${step.movingMs}ms quiet)` : "") +
             (step.reason ? ` | ${step.reason} held back` : ""));
         }
       }
