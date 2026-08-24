@@ -198,10 +198,11 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      whole sequence undid. */
   const tops = api.imageOnlyPrompt(TEE);
   const bottoms = api.imageOnlyPrompt(JEANS);
-  /* 360 → 420 for STRICT_REFERENCE_LOCK. The GAP bound is untouched at 40 and is the
-     stricter half anyway: it is what stops one branch growing without the other. */
+  /* 360 → 420 → 480: STRICT_REFERENCE_LOCK, then DENSE.inpaintLock. The GAP bound is
+     untouched at 40 and is the stricter half anyway: it is what stops one branch growing
+     without the other. */
   check("both branches stay minimal, and the gap between them stays small",
-    tops.length <= 420 && bottoms.length <= 420 && Math.abs(bottoms.length - tops.length) <= 40,
+    tops.length <= 480 && bottoms.length <= 480 && Math.abs(bottoms.length - tops.length) <= 40,
     `tops=${tops.length} bottoms=${bottoms.length} gap=${bottoms.length - tops.length}`);
 
   const both = api.fitPrompt([
@@ -225,9 +226,11 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
   /* Recomputed for the new baseline: both anchors carry STRICT_REFERENCE_LOCK now, so the
      starting point is 407/411 rather than 342/320 and every row moved with it. */
+  /* Recomputed again: both anchors now carry STRICT_REFERENCE_LOCK *and* DENSE.inpaintLock,
+     so the baseline is 464/468 and every row moved with it. */
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  453, 457],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 472, 476],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  510, 514],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 529, 533],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -236,13 +239,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(407 chars - anchor \+ lock\)      BOTTOMS \(411 chars - lower-body scoped \+ lock\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 453  fits              \u2192 457  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 472  fits              \u2192 476  fits/.test(SRC),
+    /TOPS \(464 chars - anchor \+ locks\)     BOTTOMS \(468 chars - lower-body scoped \+ locks\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 510  fits              \u2192 514  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 529  fits              \u2192 533  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /293 characters are free on tops and 289 on\s*\n?\s*bottoms/.test(SRC),
+    /236 characters are free on tops and 232 on\s*\n?\s*bottoms/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
 }
 
@@ -261,9 +264,23 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
      packshots side by side - twice as much of the model's own body in the conditioning
      image - and a report was filed against exactly that bleed. So the constant ships
      where the risk is, and nowhere else. bodyFidelity stays retired on both. */
+  /* ── AND IT SHEDS AGAIN, THIS TIME TO THE BUDGET RATHER THAN TO A DECISION ──
+     modelAgnostic is still ASSEMBLED by buildCompositePrompt (the reference is still two
+     catalog packshots and the risk it answers is real), but the composite branch is
+     saturated: contract + selector + cross-panel ban + anchor leaves room for two P.HIGH
+     clauses, and DENSE.inpaintLock and REFERENCE_COLOR_LOCK take them. fitPrompt() drops
+     the first index at the worst surviving priority, and modelAgnostic is first in the
+     array - deterministic, not incidental.
+
+     SO THE ASSERTION SPLITS: the SOURCE still references it (a silent deletion would be a
+     different and worse thing than a budget shed), and the RENDERED prompt does not carry
+     it. Both halves matter - one without the other cannot tell those two cases apart. */
+  check("buildCompositePrompt still ASSEMBLES it - not deleted, just outbid",
+    /\[P\.HIGH, DENSE\.modelAgnostic\]/.test(SRC),
+    "a budget shed and a deletion must not look the same in this suite");
   for (const prof of [false, true]) {
-    check(`buildCompositePrompt DOES assemble it now (inProfile=${prof})`,
-      /[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", prof)));
+    check(`...but the budget sheds it before it reaches the wire (inProfile=${prof})`,
+      !/[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(TEE, "front", prof)));
     check(`...nor the body-fidelity clamp (inProfile=${prof})`,
       !/never slim them/.test(api.buildCompositePrompt(TEE, "front", prof)));
   }

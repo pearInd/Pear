@@ -126,13 +126,18 @@ const TOPS_SPEC =
   /* THE FIDELITY CLAMP, bought back 2026-08-24 against a colour-drift report. It is the
      restore imageOnlyPrompt()'s own note has prescribed since the 1:1 collapse, and the
      budget note attached to it predicted this exact length (407). */
-  " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details.";
+  " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details." +
+  /* THE PASSTHROUGH CLAMP, bought back 2026-08-24 against a face/skin/background report.
+     app.js's restore list has named this "THE LARGEST LOSS and the one to restore first"
+     ever since it came off, with the restore spelled out as [P.HIGH, DENSE.inpaintLock]. */
+  " Face, skin, hands and background pass through untouched.";
 const BOTTOMS_SPEC =
   "For any upper body parts, torso, or shirt that enter the camera frame during the" +
   " video, pass through and strictly preserve the subject's LIVE camera feed clothing" +
   " (color, pattern, length) without generating, replacing, or inventing any new top" +
   " or garments. Fit ONLY the reference pants/shorts onto the subject's lower body." +
-  " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details.";
+  " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details." +
+  " Face, skin, hands and background pass through untouched.";
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
@@ -159,8 +164,8 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      (colour/cut match, then the invent-add-alter clamp). Bought back against a colour-drift
      report. The count is still pinned - "minimal" has to stay a number somebody has to
      change deliberately, or the compression this suite exists to defend erodes silently. */
-  check("both branches are exactly four sentences: scope, pass-through, match, clamp",
-    sentences(TOPS_SPEC).length === 4 && sentences(BOTTOMS_SPEC).length === 4,
+  check("both branches are exactly five sentences: pass-through, scope, match, clamp, inpaint",
+    sentences(TOPS_SPEC).length === 5 && sentences(BOTTOMS_SPEC).length === 5,
     `tops=${sentences(TOPS_SPEC).length} bottoms=${sentences(BOTTOMS_SPEC).length}`);
   /* ── THE LEAD CHANGED 2026-08-24, AND THE LEAD IS THE POINT ─────────────────
      The passthrough sentence now opens both branches; the substitution follows it. Same
@@ -235,10 +240,17 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     /without generating, replacing, or inventing any new pants or garments\./.test(TOPS_SPEC) &&
     /without generating, replacing, or inventing any new top or garments\./.test(BOTTOMS_SPEC),
     "forbidding invention alone still permits altering what is already there");
-  check("...and the fidelity clamp closes both branches",
-    /Exactly match color, pattern, logos, and cut\. Do NOT invent, add, or alter any details\.$/.test(TOPS_SPEC) &&
-    /Exactly match color, pattern, logos, and cut\. Do NOT invent, add, or alter any details\.$/.test(BOTTOMS_SPEC),
-    "the colour drift report is what bought this back - it must not shed to the end");
+  check("...and the fidelity clamp is present on both branches",
+    /Exactly match color, pattern, logos, and cut\. Do NOT invent, add, or alter any details\./.test(TOPS_SPEC) &&
+    /Exactly match color, pattern, logos, and cut\. Do NOT invent, add, or alter any details\./.test(BOTTOMS_SPEC),
+    "the colour drift report is what bought this back - it must not shed");
+  /* THE PASSTHROUGH CLAMP CLOSES THEM NOW. Pinned at the END specifically: it is P.HIGH, so
+     it is the first thing budget pressure would drop, and a silent shed would take the
+     face/skin/background protection with it while every other check here still passed. */
+  check("...and the passthrough clamp closes both branches",
+    /Face, skin, hands and background pass through untouched\.$/.test(TOPS_SPEC) &&
+    /Face, skin, hands and background pass through untouched\.$/.test(BOTTOMS_SPEC),
+    "restored against a face/skin/background report - it must not shed to the end");
   /* THE PROMPT IS THE ASK; THE GUARD IS THE GUARANTEE. Decart's set() has no mask channel,
      so this wording is a probabilistic bias and nothing more. Asserted together so the
      pair cannot be separated by a later edit that trusts the text alone. */
@@ -246,10 +258,16 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      it asserted the guarantee shipped, then that only the mechanism remained while the
      flag was off, and now that both are back. The prompt clause above asks; this enforces.
      Asserted together, as it always was, so a later edit cannot quietly separate them. */
-  check("...and the hard guarantee ships alongside it, not instead of it",
+  /* OFF AGAIN - the flag has moved three times in one day and config.js carries the log.
+     What is pinned here is the pairing's CURRENT state, honestly: the mechanism is intact
+     and correct (the three defects it was once disabled over are fixed, not reverted), and
+     the flag is the only thing off. While it reads false the clause above is an ASK with
+     nothing enforcing it, which is the accepted cost of the direct-stream requirement. */
+  check("...and the guarantee MECHANISM is still on file, one flag from restoration",
     /function paintGuardBand\(ctx, w, h\)/.test(SRC) &&
-    /LOWER_BODY_GUARD_ENABLED: true/.test(CFG),
-    "a prompt that asks for pass-through with nothing enforcing it is a request, not a fix");
+    /function guardSource\(\)/.test(SRC) &&
+    /LOWER_BODY_GUARD_ENABLED: false/.test(CFG),
+    "the mechanism must stay whole even while switched off - a half-deleted guard is not a switch");
   /* SYMMETRIC, and that is new. The lock sat on bottoms alone for three revisions on a
      one-branch-at-a-time-on-evidence rule, then came off entirely. Both branches carry it
      now: no report has been filed of a tops try-on repainting real trousers, but the
@@ -458,9 +476,14 @@ console.log("\n── §2 EVERY SINGLE-VIEW BUILDER RETURNS IT, AND ASSEMBLES NO
   check("no colour word or subtype noun reaches any prompt",
     !/colorName\(activeColorOf\(/.test(codeOnly) &&
     !/SHIRT_NOUN\[/.test(codeOnly) && !/SUBTYPE_PROMPT\[/.test(codeOnly));
-  check("no DENSE clause is assembled by any SINGLE-VIEW builder",
-    !/\[P\.(CORE|HIGH|MED|LOW|TRIM),\s*DENSE\./.test(codeNoComposite),
-    "the DENSE table is a restore library for every path except the split reference");
+  /* ONE NAMED EXEMPTION ON THE SINGLE-VIEW PATH, and it is pinned as a whitelist rather
+     than a hole: DENSE.inpaintLock, restored against a face/skin/background report and
+     named by app.js's own restore list as the first thing to buy back. Anything ELSE
+     assembled from DENSE here still fails, which is the property this check owns. */
+  const singleViewDense = (codeNoComposite.match(/\[P\.(?:CORE|HIGH|MED|LOW|TRIM),\s*DENSE\.\w+\]/g) || []);
+  check("the only DENSE clause any SINGLE-VIEW builder assembles is inpaintLock",
+    singleViewDense.every((m) => /DENSE\.inpaintLock/.test(m)),
+    `found: ${singleViewDense.join(" ") || "(none)"}`);
   check("the size-override modifier no longer reaches the wire either",
     !/\[P\.\w+,\s*fitSentence\(/.test(codeOnly),
     "documented in IMAGE_ONLY_PROMPT's retirement list - the UI still works, the render ignores it");

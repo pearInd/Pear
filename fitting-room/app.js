@@ -65,6 +65,7 @@ const {
   LOWER_BODY_GUARD_FRAC,
   LOWER_BODY_GUARD_AUTO_CALIBRATE,
   LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS,
+  UI_HOLD_OVERLAYS_ENABLED,
   BODY_GUARD_FEATHER_FRAC,
   BODY_GUARD_MARGIN_FRAC,
   PLAYOUT_DELAY_HINT,
@@ -4792,6 +4793,10 @@ function redrapeCoverEl() {
    @returns {boolean} whether a cover actually went up (false = nothing paintable yet, in
    which case the caller must not wait for a fade it is not showing). */
 function redrapeCoverBegin() {
+  /* Returning FALSE, not just skipping the paint: the caller reads this as "no cover went
+     up" and then skips its own post-dispatch frame wait, so disabling the overlay also
+     removes the latency it used to add. See UI_HOLD_OVERLAYS_ENABLED in config.js. */
+  if (!UI_HOLD_OVERLAYS_ENABLED) return false;
   if (_redrapeHoldActive) return false;
   const ai = $("aiVideo");
   const c = redrapeCoverEl();
@@ -4924,6 +4929,10 @@ let _orientHoldTimer  = null;
 
 /* @param {"turn-detected"|"swap"} reason - which stage raised the hold, for the log only */
 function orientHoldBegin(reason) {
+  /* Before the re-freeze guard, so _orientHoldActive is never set while disabled - which
+     matters beyond the overlay: reconditionForTopology() declines while a turn hold is up,
+     and a hold that can never be raised must not be able to suppress a re-drape either. */
+  if (!UI_HOLD_OVERLAYS_ENABLED) return;
   if (_orientHoldActive) return;        // NEVER re-freeze: a second snapshot this far into
                                         // the turn would capture the degraded frame we are
                                         // holding precisely to hide.
@@ -7845,6 +7854,21 @@ function imageOnlyPrompt(item) {
        clamp". The budget note attached to it predicted 407 chars, which is what it costs.
        P.HIGH, so a pathological product name sheds it before it truncates the anchor. */
     [P.HIGH, STRICT_REFERENCE_LOCK],
+    /* ── THE PASSTHROUGH CLAMP, BOUGHT BACK ────────────────────────────────────
+       REQUESTED: preserve the shopper's face, hair, skin, legs and background. This is the
+       clause built for exactly that, and app.js's own restore list has named it "THE
+       LARGEST LOSS and the one to restore first if the model starts repainting the
+       shopper's room or face" ever since it came off - with the restore spelled out as
+       "add [P.HIGH, DENSE.inpaintLock]".
+
+       55 CHARACTERS AGAINST THE 215 SPECIFIED, and it is the same instruction. The long
+       form re-names every region ("face, hair, skin, lower body (pants/shorts), legs,
+       background"), and Decart's set() has no negative_prompt field - every noun ships
+       inside the POSITIVE prompt where the sampler can steer toward it, which is the
+       mechanism behind this file's blue-jacket and tuxedo reports. The lower body is
+       already covered by the passthrough sentence that now LEADS this prompt, so naming it
+       a second time buys nothing and costs the budget twice. */
+    [P.HIGH, DENSE.inpaintLock],
   ]);
 }
 
@@ -7923,17 +7947,17 @@ function lookAnchorPrompt() {
                       the moment "it gave me the model's shoulders" is reported again.
 
    ── THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP ────
-   The number has moved seven times, so read the CURRENT row rather than remembering an
+   The number has moved eight times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 700, one space per part as fitPrompt() joins.
    The BASELINE moved this revision: both anchors now carry STRICT_REFERENCE_LOCK, bought
    back against a colour-drift report, which is why tops reads 407 rather than 342.
 
-     TOPS (407 chars - anchor + lock)      BOTTOMS (411 chars - lower-body scoped + lock)
-     + DENSE.bodyFidelity  (45) → 453  fits              → 457  fits
-     + DENSE.modelAgnostic (64) → 472  fits              → 476  fits
-     + both of them        (109)→ 518  fits              → 522  fits
+     TOPS (464 chars - anchor + locks)     BOTTOMS (468 chars - lower-body scoped + locks)
+     + DENSE.bodyFidelity  (45) → 510  fits              → 514  fits
+     + DENSE.modelAgnostic (64) → 529  fits              → 533  fits
+     + both of them        (109)→ 574  fits              → 578  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 293 characters are free on tops and 289 on
+   NOTHING SHEDS ANY MORE, on either branch. 236 characters are free on tops and 232 on
    bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.
@@ -8239,6 +8263,8 @@ function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line
        leaves behind is partly covered on this branch anyway - DENSE.panelExclusion already
        forbids the specific invention that matters most here, marks from the ignored half. */
     [P.HIGH, REFERENCE_COLOR_LOCK],
+    /* Same clause, same tier, same reason as imageOnlyPrompt() - see its note. */
+    [P.HIGH, DENSE.inpaintLock],
     [P.MED,  DENSE.ignoreFurniture],
   ]);
 }

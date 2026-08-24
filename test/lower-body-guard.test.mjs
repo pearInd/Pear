@@ -76,8 +76,13 @@ console.log("── §1 SHIPS OFF: the config default, and what that gives up �
      visibility:hidden #webcam, and the seam is a BODY_GUARD_FEATHER_FRAC alpha ramp
      rather than a hard rectangle. §2 still pins that OFF is a complete no-op, so the
      switch stays honest in both directions. */
-  check("LOWER_BODY_GUARD_ENABLED is ON in the REAL config module",
-    CONFIG.LOWER_BODY_GUARD_ENABLED === true, String(CONFIG.LOWER_BODY_GUARD_ENABLED));
+  /* OFF again - third move of this flag in one day; config.js carries the whole log and
+     the reasoning for each. The MECHANISM is unchanged and correct either way, which is
+     what §2-§11 below keep proving: the three defects it was once switched off over (dead
+     call site, #webcam black band, hard edge) are FIXED, so the next flip inherits a
+     working guard rather than the broken one. */
+  check("LOWER_BODY_GUARD_ENABLED is OFF in the REAL config module",
+    CONFIG.LOWER_BODY_GUARD_ENABLED === false, String(CONFIG.LOWER_BODY_GUARD_ENABLED));
   check("...and config.js records that the objection was answered, not overruled",
     /THAT DEPENDENCY IS ALREADY HERE/.test(
       readFileSync(new URL("../fitting-room/config.js", import.meta.url), "utf8")),

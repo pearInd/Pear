@@ -59,6 +59,12 @@ function harness({ videoWidth = 640, videoHeight = 480, hasCard = true } = {}) {
   const ai = { tag: "aiVideo", videoWidth, videoHeight };
   const styles = {};
   const sandbox = {
+    /* TRUE in the harness on purpose: the sections below test the hold MECHANISM - one
+       snapshot, idempotency, the timer ceiling, every teardown path - and a mechanism
+       that cannot be raised cannot be tested. The SHIPPED value is false (see
+       UI_HOLD_OVERLAYS_ENABLED in config.js), and that is asserted separately below so
+       the switch is pinned in both directions. */
+    UI_HOLD_OVERLAYS_ENABLED: true,
     ORIENT_DEBUG: false,
     ORIENT_FADE_MS: 260,
     console: { log() {}, warn: (...a) => events.push({ op: "warn", a }) },
@@ -208,5 +214,26 @@ console.log("\n── §4 wiring: raised before the send, released in a finally,
     /redrapeCoverEnd\("billing-stopped"\)/.test(SRC));
 }
 
+
+console.log("\n── SHIPPED OFF: the overlay is a complete no-op, not a paused one ──");
+{
+  /* The value the room actually runs with. Disabled by request: the fades and freezes were
+     more objectionable than what they hid, and the recorded .mp4 - which draws #aiVideo
+     with no overlay in its path - shows a clean stream across rotation. The harness above
+     forces it TRUE so the mechanism stays testable; this pins the shipped direction, so
+     the switch cannot be half-tested. */
+  const CFG = readFileSync(new URL("../fitting-room/config.js", import.meta.url), "utf8");
+  check("UI_HOLD_OVERLAYS_ENABLED is OFF in the shipped config",
+    /UI_HOLD_OVERLAYS_ENABLED: false,/.test(CFG),
+    "the harness enabling it must never be mistaken for the room enabling it");
+  /* A KILL SWITCH, NOT A DELETION. The check sits ahead of every other early-return in
+     redrapeCoverBegin, so a disabled overlay never sets its active flag, never snapshots and never
+     arms a timer - which is also what stops it leaking one into a teardown path. */
+  const start = SRC.indexOf("function redrapeCoverBegin(");
+  const body = SRC.slice(start, start + 500);
+  check("...and the switch is the FIRST thing redrapeCoverBegin() checks",
+    /^function redrapeCoverBegin\([^)]*\) \{[\s\S]{0,400}?if \(!UI_HOLD_OVERLAYS_ENABLED\) return/.test(body),
+    body.slice(0, 260));
+}
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);

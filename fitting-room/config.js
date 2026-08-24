@@ -314,7 +314,19 @@ export const CONFIG = Object.freeze({
      boundary read (updateBodyGuardLine) is called from a debug block in this tree and
      has never run in a shipped session - see rescue/pre-8eb4099-reset for the fixed
      version before re-enabling anything. */
-  LOWER_BODY_GUARD_ENABLED: true,
+  /* ── OFF AGAIN. THIS FLAG HAS MOVED THREE TIMES IN ONE DAY, SO READ THE LOG ──
+     off (100% direct stream requirement) -> on (the invented-trousers report that
+     requirement predicted) -> off (this change: no canvas compositing, prompt isolation
+     instead). The MECHANISM stays correct and on file either way - the three defects it
+     was once switched off over are fixed, not reverted, so the next flip is still one
+     word and does not re-inherit a dead call site, a black band or a hard edge.
+
+     WHAT OFF COSTS, unchanged from every previous time it was written down: this is the
+     only thing in the pipeline that can GUARANTEE the non-target region, because Decart's
+     set() has no mask channel. The prompt asks; without this, nothing enforces. The
+     leading passthrough clause and DENSE.inpaintLock are the ask, and they are the whole
+     protection while this reads false. */
+  LOWER_BODY_GUARD_ENABLED: false,
   /* Fraction of the frame height over which the band's alpha ramps from 0 at the boundary
      to 1 at its core. The condition 0f340c7's deletion attached to any restore was that it
      "must not be a hard-edged rectangular composite over a diffusion output" - two sources
@@ -324,6 +336,23 @@ export const CONFIG = Object.freeze({
      loop) or source-in, which reads the destination's alpha and is 1 across an opaque
      band, so the gradient would do nothing. */
   BODY_GUARD_FEATHER_FRAC: 0.06,
+
+  /* ── THE TWO HOLD OVERLAYS - #orientFadeCanvas and #redrapeCoverCanvas ──────
+     Both snapshot #aiVideo onto a canvas stacked over it and cross-fade back once new
+     conditioning has landed: the turn hold across an orientation swap, the re-drape cover
+     across a full set({ image }). They exist because Decart renders every frame it is
+     handed, so frames arriving mid-replacement render against half-swapped conditioning.
+
+     OFF BY REQUEST: the fades and freezes are more objectionable than what they hide, and
+     the recorded .mp4 - which draws #aiVideo with no overlay in its path - shows a clean
+     stream across rotation. With the settle gate (af041c7) a re-drape only dispatches once
+     the body has STOPPED moving, so the cover fires far less often than it used to anyway.
+
+     KILL SWITCH, NOT A DELETION, and deliberately so: orientHoldBegin()/redrapeCoverBegin()
+     return immediately when this is false, so every teardown path, every idempotency guard
+     and every "a hold may never outlive its timer" property stays exactly as tested. If a
+     mid-turn garment drop is reported, this is one word. */
+  UI_HOLD_OVERLAYS_ENABLED: false,
   /* Fraction of the camera-card's frame HEIGHT, measured from the bottom, that gets the
      shopper's own raw camera pixels composited back over Decart's output. 0.34 is a
      rough midpoint for a torso-forward selfie framing (roughly waist-down) - conservative

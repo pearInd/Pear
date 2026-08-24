@@ -451,10 +451,21 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      report. This suite's property is untouched by that: the clause is pose-INVARIANT, so
      it may not become a second axis. Asserted as present at both poses AND identical
      across them, which is the stronger of the two facts. */
-  check("the isolation clause is assembled at both poses, and does not vary by pose",
-    /[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", false)) &&
-    /[Ii]gnore the reference model's body/.test(api.buildCompositePrompt(item, "front", true)) &&
+  /* ── modelAgnostic NOW SHEDS ON THIS BRANCH, AND THAT IS A BUDGET FACT ──────
+     The composite branch is saturated: contract + selector + cross-panel ban + anchor is
+     already ~579 characters, and of the P.HIGH clauses only two fit. DENSE.inpaintLock
+     (face/skin/background, restored against a report) and REFERENCE_COLOR_LOCK win;
+     modelAgnostic is first in the array and therefore first to shed, which is
+     deterministic rather than incidental - fitPrompt() removes the first index at the
+     worst surviving priority.
+
+     WHAT IS PINNED IS THE POSE-INVARIANCE, which is this suite's actual property and is
+     unaffected: whatever survives the budget must be identical at both poses. */
+  check("the composite payload is pose-invariant, whatever the budget leaves standing",
     api.buildCompositePrompt(item, "front", false) === api.buildCompositePrompt(item, "front", true),
+    api.buildCompositePrompt(item, "front", false).slice(-160));
+  check("...and the passthrough clamp is what the budget kept",
+    /Face, skin, hands and background pass through untouched/.test(api.buildCompositePrompt(item, "front", false)),
     api.buildCompositePrompt(item, "front", false).slice(-160));
 }
 
@@ -779,9 +790,12 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     !/EDGE-ON/.test(built), built.slice(-260));
   check("body fidelity is retired at both poses too, not merely shed edge-on",
     !/never slim them/.test(square) && !/never slim them/.test(built), square.slice(-260));
-  check("the passthrough clamp is retired with them - the largest loss, recorded",
-    !/pass through untouched/.test(square) && !/pass through untouched/.test(built),
-    "if this ever passes again, inpaintLock was restored - update app.js's restore list");
+  /* RESTORED 2026-08-24 - the note this check used to carry said "if this ever passes
+     again, inpaintLock was restored, update app.js's restore list", and that is exactly
+     what happened. The list is updated; the assertion inverts with it. */
+  check("the passthrough clamp is back on the wire - the largest loss, recovered",
+    /pass through untouched/.test(square) && /pass through untouched/.test(built),
+    "restored against a face/skin/background report; app.js's restore list named it first");
   /* CLOSED_BACK_HEM went off the wire with the 1:1 collapse, and the invent/add/alter
      clamp with the dynamic-drape revision after it - see CATEGORY_ANCHOR in app.js for
      the full list and the restore path for each. Byte-identity across poses is the
@@ -790,12 +804,13 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     square === built &&
     /Fit ONLY the reference shirt onto the subject's upper torso\./.test(square) &&
     /without generating, replacing, or inventing any new pants or garments\./.test(square) &&
-    /* THE TAIL IS THE COLOUR LOCK NOW. Order on this branch is contract → selector →
-       cross-panel ban → anchor → isolation → colour, with DENSE.ignoreFurniture (the only
-       P.MED rung) still shed to pay for them. Both ends are pinned rather than one, which
-       is what keeps a silent re-ordering from passing. */
-    /Ignore the reference model's body; fit the cloth to THIS person\./.test(square) &&
-    /Exactly match color, pattern, logos, and cut\.$/.test(square));
+    /Face, skin, hands and background pass through untouched\./.test(square) &&
+    /* THE TAIL IS THE PASSTHROUGH CLAMP NOW. Order on this branch is contract → selector →
+       cross-panel ban → anchor → colour → inpaint, with BOTH P.MED (ignoreFurniture) and
+       the first P.HIGH (modelAgnostic) shed to pay for the two that survive - see the
+       budget note in §4. Both ends are pinned rather than one, which is what keeps a
+       silent re-ordering from passing. */
+    /Face, skin, hands and background pass through untouched\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 700 && built.length <= 700, `square=${square.length} edge=${built.length}`);
 }

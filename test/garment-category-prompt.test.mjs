@@ -194,10 +194,12 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
      to stay small because someone remembered why. It grew by 81 characters here, and that
      is the deliberate spend of this revision: the per-frame instruction is the only thing
      that was bought, and image-first.test.mjs §1 pins that it is exactly three sentences. */
-  /* CEILING RAISED 360 → 420 for STRICT_REFERENCE_LOCK, and only for it: the branch runs
-     411, so this still fails on the next unbudgeted clause. "Minimal" stays a number. */
-  check("the bottoms prompt stays minimal - four instructions, not an assembly",
-    bottomsPrompt.length <= 420,
+  /* CEILING 360 → 420 → 480, each step for ONE named clause and only that clause:
+     STRICT_REFERENCE_LOCK, then DENSE.inpaintLock. The branch runs 468, so this still
+     fails on the next unbudgeted addition. "Minimal" stays a number somebody has to
+     raise deliberately. */
+  check("the bottoms prompt stays minimal - five instructions, not an assembly",
+    bottomsPrompt.length <= 480,
     `${bottomsPrompt.length} chars - was 616 across six sentences four revisions ago`);
   check("...and carries NO body-volume or temporal clause - the deliberate trade",
     !/360-degree rotations/.test(bottomsPrompt) && !/as soon as visible/.test(bottomsPrompt),
@@ -316,7 +318,8 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      is unchanged: the anchor is the CORE part and the call goes through fitPrompt(). */
   check("both branches are assembled through fitPrompt(), not returned raw",
     /return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\],/.test(SRC) &&
-    /\[P\.HIGH, STRICT_REFERENCE_LOCK\],\s*\n\s*\]\);/.test(SRC),
+    /\[P\.HIGH, STRICT_REFERENCE_LOCK\],/.test(SRC) &&
+    /\[P\.HIGH, DENSE\.inpaintLock\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix. */
   check("the category anchor is tagged P.CORE so it can never be shed",
