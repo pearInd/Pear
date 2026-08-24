@@ -260,7 +260,27 @@ export const CONFIG = Object.freeze({
      unavailable (detector still loading, landmarks below the tracking bar, a browser with
      no WebAssembly). Guarding on a rough boundary beats not guarding at all, which is the
      opposite of the original trade because the failure it now prevents is reproduced. */
-  LOWER_BODY_GUARD_ENABLED: true,
+  /* ── DISABLED 2026-08-24, BY EXPLICIT PRODUCT REQUEST ───────────────────────
+     REQUIREMENT: the fitting frame shows ONLY the untouched full-frame WebRTC stream
+     from Decart - no canvas blending, no camera-pixel overlay, no split screen, no
+     bottom-half masking. Everything above this line is the case FOR the guard and is
+     left intact on purpose: it is the record of what turning this off gives up, not
+     stale prose to be cleaned away.
+
+     WHAT THIS COSTS, STATED PLAINLY: the non-target region reverts to PROMPT-ONLY
+     protection. Decart's set() exposes { prompt, enhance, image } and no mask channel,
+     so "Bottoms unchanged." is a REQUEST the model may ignore. The reproduced failure
+     this guard was built for - try on a shirt, lift a leg wearing light blue shorts,
+     get black long trousers back - has nothing structural stopping it again. That is
+     the accepted trade, not an oversight.
+
+     TURNING IT BACK ON IS THIS ONE WORD. Nothing was deleted: paintGuardBand(),
+     startLowerBodyGuard() and calibrateLowerBodyGuard() each short-circuit on this
+     flag, so the mechanism stays on file and needs no re-implementation. Note the
+     boundary read (updateBodyGuardLine) is called from a debug block in this tree and
+     has never run in a shipped session - see rescue/pre-8eb4099-reset for the fixed
+     version before re-enabling anything. */
+  LOWER_BODY_GUARD_ENABLED: false,
   /* Fraction of the camera-card's frame HEIGHT, measured from the bottom, that gets the
      shopper's own raw camera pixels composited back over Decart's output. 0.34 is a
      rough midpoint for a torso-forward selfie framing (roughly waist-down) - conservative

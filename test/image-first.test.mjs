@@ -219,10 +219,13 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
   /* THE PROMPT IS THE ASK; THE GUARD IS THE GUARANTEE. Decart's set() has no mask channel,
      so this wording is a probabilistic bias and nothing more. Asserted together so the
      pair cannot be separated by a later edit that trusts the text alone. */
-  check("...and the hard guarantee ships alongside it, not instead of it",
+  check("...and the guarantee MECHANISM is still on file, one flag from restoration",
     /function paintGuardBand\(ctx, webcam, w, h\)/.test(SRC) &&
-    /LOWER_BODY_GUARD_ENABLED: true/.test(CFG),
-    "a prompt that asks for pass-through with nothing enforcing it is a request, not a fix");
+    /LOWER_BODY_GUARD_ENABLED: false/.test(CFG),
+    "the compositing guard was disabled 2026-08-24 by request (100% direct Decart " +
+    "stream). The clause above is therefore an ASK with nothing enforcing it - which " +
+    "is the known cost, recorded in config.js. This check pins that the mechanism " +
+    "still exists and that the flag is the only thing off.");
   /* SYMMETRIC, and that is new. The lock sat on bottoms alone for three revisions on a
      one-branch-at-a-time-on-evidence rule, then came off entirely. Both branches carry it
      now: no report has been filed of a tops try-on repainting real trousers, but the

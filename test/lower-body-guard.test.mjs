@@ -46,7 +46,7 @@ function extract(startMarker, endMarker) {
   return APP.slice(start, end);
 }
 
-console.log("── §1 SHIPS ON NOW: the config default, and why it moved ──");
+console.log("── §1 SHIPS OFF: the config default, and what that gives up ──");
 {
   /* ── IT WAS OFF FOR ONE STATED REASON, AND THAT REASON IS GONE ──────────────
      config.js: "there is no body-part detector in this codebase to derive it from the
@@ -61,8 +61,15 @@ console.log("── §1 SHIPS ON NOW: the config default, and why it moved ─�
      leg into frame wearing light blue shorts and Decart renders black long trousers. The
      prompt forbids that in words; Decart's set() has no mask channel, so this is the only
      mechanism in the pipeline that can make it a guarantee rather than a request. */
-  check("LOWER_BODY_GUARD_ENABLED is ON in the REAL config module",
-    CONFIG.LOWER_BODY_GUARD_ENABLED === true, String(CONFIG.LOWER_BODY_GUARD_ENABLED));
+  /* ── TURNED OFF 2026-08-24 BY REQUEST: 100% direct Decart stream ────────────
+     The reasoning above is left standing because it is still true - it is the cost of
+     this flag, not an argument that the flag is wrong. What the suite pins now is the
+     OFF state, so that re-enabling is a deliberate edit here rather than a silent drift
+     back. §2 below (a complete no-op, not a paused loop) is the SHIPPED path now, and
+     §3-§11 keep exercising the enabled machinery against their own sandbox config so
+     the mechanism cannot rot while it is switched off. */
+  check("LOWER_BODY_GUARD_ENABLED is OFF in the REAL config module",
+    CONFIG.LOWER_BODY_GUARD_ENABLED === false, String(CONFIG.LOWER_BODY_GUARD_ENABLED));
   check("...and config.js records that the objection was answered, not overruled",
     /THAT DEPENDENCY IS ALREADY HERE/.test(
       readFileSync(new URL("../fitting-room/config.js", import.meta.url), "utf8")),
