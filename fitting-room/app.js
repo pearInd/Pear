@@ -65,6 +65,7 @@ const {
   LOWER_BODY_GUARD_FRAC,
   LOWER_BODY_GUARD_AUTO_CALIBRATE,
   LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS,
+  BODY_GUARD_FEATHER_FRAC,
   BODY_GUARD_MARGIN_FRAC,
   PLAYOUT_DELAY_HINT,
   PREFER_LOW_LATENCY_CODEC,
@@ -3391,6 +3392,12 @@ function createThrottledInputStream(srcStream, {
 
   return {
     stream: out,
+    /* THE FRAMES ACTUALLY BEING SENT TO DECART. Exposed for guardSource(): #webcam is
+       visibility:hidden for all of .show-live while applyConstraints() re-negotiates the
+       shared device track underneath it, which is the black-band defect. This canvas
+       cannot be blank while there is a session to guard, and it is already cover-fitted
+       and mirrored into the geometry Decart returns - so the guard needs no flip for it. */
+    canvas,
     get gateOpen() { return gateOpen; },
     /* Idempotent, and called from applyActive() the moment a garment is genuinely on the
        wire - which is every path that can dress a session (go-live, the cold-start
@@ -7656,17 +7663,40 @@ const CATEGORY_ANCHOR = Object.freeze({
      line - append it to the anchor - and the morphology monitor that decides WHEN to
      re-condition is untouched, so what is lost is the prompt's half of the width axis.
      Watch for a loose drape on a slender build; that is the report this would answer. */
+  /* ── ORDER REVERSED 2026-08-24: THE PASSTHROUGH LEADS ─────────────────────────
+     REPORTED AGAIN, same mechanism as the recording above: the lower body leaves frame,
+     re-enters, and comes back in invented trousers. The wording that names the event was
+     already on the wire and did not hold - so the lever left is not more words, it is
+     WHICH words the model reads first.
+
+     "The leading tokens dominate" is this file's own finding, recorded at
+     buildCompositePrompt() where it drove two separate re-orderings. Every revision since
+     has spent that lead position on the SUBSTITUTION ("Fit ONLY the reference shirt..."),
+     which is the instruction the model was already going to follow - it has a reference
+     image for it. The passthrough has no reference image; it is asking the model to leave
+     a region alone that it cannot see any evidence for. That is the instruction that
+     needs the attention, and it was sitting second.
+
+     COSTS NOTHING AND ADDS NOTHING. Byte-for-byte the same two sentences, in the other
+     order: no new clause, no new garment noun, identical length. That matters, because
+     Decart's set() has no negative_prompt field - every noun in a ban ships inside the
+     POSITIVE prompt, where it is a token the sampler can steer toward. This file records
+     two reproduced failures of exactly that (a blue jacket, then a tuxedo with bowtie and
+     badge), so "say pants more times" is the one move the evidence rules out.
+
+     ⚠️ THIS IS A BIAS, NOT A GUARANTEE, and the guard below is the guarantee - see
+     LOWER_BODY_GUARD_ENABLED in config.js. If the two ever disagree the guard wins,
+     because it composites real camera pixels and this only asks. */
   top:
-    "Fit ONLY the reference shirt onto the subject's upper torso. For any lower body" +
-    " parts, legs, or shorts that enter the camera frame during the video, pass through" +
-    " and strictly preserve the subject's LIVE camera feed clothing (color, pattern," +
-    " length) without generating, replacing, or inventing any new pants or garments.",
+    "For any lower body parts, legs, or shorts that enter the camera frame during the" +
+    " video, pass through and strictly preserve the subject's LIVE camera feed clothing" +
+    " (color, pattern, length) without generating, replacing, or inventing any new pants" +
+    " or garments. Fit ONLY the reference shirt onto the subject's upper torso.",
   bottom:
-    "Fit ONLY the reference pants/shorts onto the subject's lower body. For any upper" +
-    " body parts, torso, or shirt that enter the camera frame during the video, pass" +
-    " through and strictly preserve the subject's LIVE camera feed clothing (color," +
-    " pattern, length) without generating, replacing, or inventing any new top or" +
-    " garments.",
+    "For any upper body parts, torso, or shirt that enter the camera frame during the" +
+    " video, pass through and strictly preserve the subject's LIVE camera feed clothing" +
+    " (color, pattern, length) without generating, replacing, or inventing any new top" +
+    " or garments. Fit ONLY the reference pants/shorts onto the subject's lower body.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -10861,11 +10891,6 @@ function armFirstFrameBilling(video, gen) {
     }
     if (frameTimingDebug) {
       const now = Date.now();
-      /* THE GUARD BOUNDARY, off landmarks that have already been computed. One extra read
-         per tick, no extra inference - and it is deliberately outside the two consumer
-         blocks below, because the guard must keep tracking the body whether or not
-         presence and topology happen to be enabled. */
-      updateBodyGuardLine(result);
       if (now - lastLogAt >= 80) {   // throttled - avoid one line per decoded frame
         lastLogAt = now;
         const s = sampleVideoLuma(video);
@@ -12556,6 +12581,23 @@ function startPresenceWatcher() {
       try { result = detectPoseFrame(detector, video); } catch (_) { return; }
       const now = Date.now();
 
+      /* ── Consumer zero: THE GUARD BOUNDARY ──────────────────────────────────
+         Off landmarks that have already been computed - one extra read per tick, no extra
+         inference. DELIBERATELY OUTSIDE the consumer blocks below, and outside any debug
+         gate, because the non-target guard must keep tracking the body whether or not
+         presence and topology happen to be enabled.
+
+         ⚠️ THIS LINE IS THE FEATURE. Its previous call site was inside
+         armFirstFrameBilling()'s `if (frameTimingDebug)` block, against a `result` that
+         does not exist in that scope - so it never ran, bodyGuardLine stayed null forever,
+         and the guard silently spent three bug reports running on the fixed-fraction
+         fallback that config.js had already predicted would fail. updateBodyGuardLine()
+         returns silently on anything it cannot read, by design, which means a wrong call
+         site produces no error anywhere - only a guard that is quietly worse than the one
+         that was specified. If this moves, it moves to somewhere a real pose `result`
+         lives. */
+      updateBodyGuardLine(result);
+
       /* ── Consumer one: presence ─────────────────────────────────────────────
          A null verdict still means "cannot judge this frame" and still leaves the streak
          untouched, exactly as before - it is now a skipped BLOCK rather than an early
@@ -12847,26 +12889,86 @@ function guardBand(h) {
  * fallback, applied to the guarded band alone.
  * @returns {boolean} true if a band was painted
  */
-function paintGuardBand(ctx, webcam, w, h) {
-  if (!LOWER_BODY_GUARD_ENABLED || !ctx || !webcam || !webcam.videoWidth) return false;
+/* How many slices the alpha ramp is drawn in - see BODY_GUARD_FEATHER_FRAC. */
+const GUARD_FEATHER_SLICES = 14;
+
+/**
+ * Where the guard's pixels come from, and whether they need the selfie flip.
+ *
+ * PREFERS THE INPUT THROTTLE'S OWN CANVAS - the frames actually being sent to Decart.
+ * #webcam is the obvious source and is the wrong one: it is visibility:hidden for all of
+ * .show-live while createThrottledInputStream() calls applyConstraints() on a clone of the
+ * same device track, re-negotiating the shared source underneath it. Drawing from it
+ * produced the reported BLACK BAND. The throttle canvas cannot be blank while there is a
+ * session to guard, and it is already cover-fitted and mirrored into the geometry Decart
+ * returns, so it needs no correction.
+ *
+ * #webcam stays as the fallback for the paths that run with no throttle, where its
+ * unmirrored DECODED frame still needs the flip - which is why mirroring is a property of
+ * the SOURCE here rather than something applied unconditionally.
+ * @returns {{src:CanvasImageSource,w:number,h:number,mirror:boolean}|null}
+ */
+function guardSource() {
+  const cv = inputThrottle && inputThrottle.canvas;
+  if (cv && cv.width > 0 && cv.height > 0) {
+    return { src: cv, w: cv.width, h: cv.height, mirror: false };
+  }
+  const webcam = $("webcam");
+  if (webcam && webcam.videoWidth > 0) {
+    return { src: webcam, w: webcam.videoWidth, h: webcam.videoHeight, mirror: true };
+  }
+  return null;
+}
+
+function paintGuardBand(ctx, w, h) {
+  if (!LOWER_BODY_GUARD_ENABLED || !ctx) return false;
+  const source = guardSource();
+  if (!source) return false;
   const dst = guardBand(h);
   if (!dst || dst.y1 <= dst.y0) return false;
   /* SOURCE AND DESTINATION BANDS ARE COMPUTED INDEPENDENTLY, and that is not pedantry:
-     the webcam's native resolution and the destination canvas's are routinely different -
+     the source surface's resolution and the destination canvas's are routinely different -
      the recorder sizes itself to #aiVideo, the frozen frame to whatever Decart returned -
      so reusing one offset for both silently misaligns the composited band on any camera
      whose aspect or scale does not happen to match. Each band is a fraction of ITS OWN
-     surface's height. (The live guard canvas is sized to the webcam, so there the two
-     agree - which is exactly why this was easy to get wrong.) */
-  const src = guardBand(webcam.videoHeight);
+     surface's height. */
+  const src = guardBand(source.h);
   if (!src || src.y1 <= src.y0) return false;
+
+  const dstH = dst.y1 - dst.y0, srcH = src.y1 - src.y0;
+  const scale = srcH / dstH;                   // source rows per destination row
+  const lower = guardedRegion() === "lower";
+  /* Clamped to the band's own height: a very short band must not feather past its far side
+     and start letting Decart's invention back into the region this exists to protect. */
+  const feather = Math.max(0, Math.min(Math.round(h * BODY_GUARD_FEATHER_FRAC), dstH));
+
   ctx.save();
-  ctx.translate(w, 0);
-  ctx.scale(-1, 1);
+  /* THE SELFIE-MIRROR CORRECTION, applied only to the source that needs it. #webcam's
+     DECODED frame is never mirrored - only its CSS display is - while the throttle canvas
+     was mirrored when it was painted. Drawing an unmirrored webcam raw would composite a
+     flipped band under a correctly-oriented one: buttons, pockets and prints landing on
+     the wrong side of the seam. */
+  if (source.mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
+  /* One destination row range, drawn from the source rows that correspond to it. Every
+     draw in this function goes through here so the source mapping is written once. */
+  const slice = (dy0, dy1, alpha) => {
+    if (dy1 <= dy0) return;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(source.src,
+      0, src.y0 + (dy0 - dst.y0) * scale, source.w, (dy1 - dy0) * scale,
+      0, dy0,                             w,        dy1 - dy0);
+  };
   try {
-    ctx.drawImage(webcam,
-      0, src.y0, webcam.videoWidth, src.y1 - src.y0,
-      0, dst.y0, w,                 dst.y1 - dst.y0);
+    // The opaque core: everything past the ramp, at full strength.
+    if (lower) slice(dst.y0 + feather, dst.y1, 1);
+    else       slice(dst.y0, dst.y1 - feather, 1);
+    // The ramp: alpha 0 at the boundary climbing to 1 where the core begins.
+    for (let i = 0; i < GUARD_FEATHER_SLICES && feather > 0; i++) {
+      const a0 = i / GUARD_FEATHER_SLICES, a1 = (i + 1) / GUARD_FEATHER_SLICES;
+      const y0 = lower ? dst.y0 + feather * a0 : dst.y1 - feather * a1;
+      const y1 = lower ? dst.y0 + feather * a1 : dst.y1 - feather * a0;
+      slice(y0, y1, (a0 + a1) / 2);
+    }
   } catch (_) {
     /* best-effort: a failed guard paint must never fail the frame it was protecting */
     ctx.restore();
@@ -12964,7 +13066,7 @@ function startLowerBodyGuard() {
     /* One helper, three callers - see paintGuardBand(). The band, its boundary and the
        mirror correction all live there so the live view, the recording and the frozen
        result cannot disagree about which pixels were the shopper's own. */
-    paintGuardBand(ctx, webcam, w, h);
+    paintGuardBand(ctx, w, h);
     lowerBodyGuardRAF = requestAnimationFrame(paint);
   }
   lowerBodyGuardRAF = requestAnimationFrame(paint);
@@ -13019,7 +13121,7 @@ function freezeFinalFrame() {
      the fallback branch is ALREADY the raw webcam, so there is nothing of Decart's in it to
      protect the shopper from. Without this the saved "masterpiece" would be the one
      artefact of the session still showing an invented non-target garment. */
-  if (!mirror) paintGuardBand(ctx, webcam, w, h);
+  if (!mirror) paintGuardBand(ctx, w, h);
   try { return cv.toDataURL("image/jpeg", 0.85); } catch (_) { return null; }
 }
 
@@ -13220,7 +13322,7 @@ function startRecording() {
            invented trousers the live view was protecting the shopper from. */
         try {
           ctx.drawImage(video, 0, 0, w, h);
-          paintGuardBand(ctx, $("webcam"), w, h);
+          paintGuardBand(ctx, w, h);
           beginRecorder();
         } catch (_) {}
       }

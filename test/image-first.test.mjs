@@ -119,20 +119,19 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
    See CATEGORY_ANCHOR in app.js for the full list of what came off the wire, what went
    back on, and the restore path for each. */
 const TOPS_SPEC =
-  "Fit ONLY the reference shirt onto the subject's upper torso. For any lower body" +
-  " parts, legs, or shorts that enter the camera frame during the video, pass through" +
-  " and strictly preserve the subject's LIVE camera feed clothing (color, pattern," +
-  " length) without generating, replacing, or inventing any new pants or garments." +
+  "For any lower body parts, legs, or shorts that enter the camera frame during the" +
+  " video, pass through and strictly preserve the subject's LIVE camera feed clothing" +
+  " (color, pattern, length) without generating, replacing, or inventing any new pants" +
+  " or garments. Fit ONLY the reference shirt onto the subject's upper torso." +
   /* THE FIDELITY CLAMP, bought back 2026-08-24 against a colour-drift report. It is the
      restore imageOnlyPrompt()'s own note has prescribed since the 1:1 collapse, and the
      budget note attached to it predicted this exact length (407). */
   " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details.";
 const BOTTOMS_SPEC =
-  "Fit ONLY the reference pants/shorts onto the subject's lower body. For any upper" +
-  " body parts, torso, or shirt that enter the camera frame during the video, pass" +
-  " through and strictly preserve the subject's LIVE camera feed clothing (color," +
-  " pattern, length) without generating, replacing, or inventing any new top or" +
-  " garments." +
+  "For any upper body parts, torso, or shirt that enter the camera frame during the" +
+  " video, pass through and strictly preserve the subject's LIVE camera feed clothing" +
+  " (color, pattern, length) without generating, replacing, or inventing any new top" +
+  " or garments. Fit ONLY the reference pants/shorts onto the subject's lower body." +
   " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details.";
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
@@ -163,9 +162,14 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
   check("both branches are exactly four sentences: scope, pass-through, match, clamp",
     sentences(TOPS_SPEC).length === 4 && sentences(BOTTOMS_SPEC).length === 4,
     `tops=${sentences(TOPS_SPEC).length} bottoms=${sentences(BOTTOMS_SPEC).length}`);
-  check("...and both open on the SAME three words - the exclusive-scope binding",
-    TOPS_SPEC.startsWith("Fit ONLY the reference ") &&
-    BOTTOMS_SPEC.startsWith("Fit ONLY the reference "),
+  /* ── THE LEAD CHANGED 2026-08-24, AND THE LEAD IS THE POINT ─────────────────
+     The passthrough sentence now opens both branches; the substitution follows it. Same
+     two sentences, same bytes, other order - see CATEGORY_ANCHOR's own note. What these
+     checks pin is unchanged in KIND: each branch still opens on a fixed, known sentence
+     and nothing may be inserted before it. Which sentence that is became the fix. */
+  check("...and both open on the SAME words - the non-target passthrough",
+    TOPS_SPEC.startsWith("For any lower body parts") &&
+    BOTTOMS_SPEC.startsWith("For any upper body parts"),
     `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
 
   /* THREE SENTENCES, THREE JOBS. Asserted individually because the failure mode of a
@@ -177,10 +181,14 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      without "static" invites a re-cut, and "onto the subject" without "current ... in
      this frame" is the tense-less wording every previous revision shipped, which is what
      let the model deform a drape it had already produced. */
-  /* "Fit ONLY" scopes the whole instruction in the first two words - before any noun is
-     introduced - which is where a leading-token model is most sensitive. */
-  const LEAD = /^Fit ONLY the reference (shirt|pants\/shorts) onto the subject's (upper torso|lower body)\./;
-  check("(1) it scopes to ONE garment and ONE region, in the first sentence",
+  /* "Fit ONLY" still scopes the whole substitution in its own first two words. What
+     changed 2026-08-24 is that it is no longer the FIRST sentence: the non-target
+     passthrough leads now, because that is the instruction with no reference image behind
+     it and therefore the one that needs the leading-token weight. The scoping property is
+     unchanged and still pinned - it simply is not at position 0 any more, and the lead
+     that IS at position 0 is asserted separately above. */
+  const LEAD = /Fit ONLY the reference (shirt|pants\/shorts) onto the subject's (upper torso|lower body)\./;
+  check("(1) it scopes to ONE garment and ONE region, in its own sentence",
     LEAD.test(TOPS_SPEC) && LEAD.test(BOTTOMS_SPEC),
     "an unscoped anchor is what let a try-on claim the whole reference");
   check("...and each branch FITS one region only",
@@ -234,13 +242,14 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
   /* THE PROMPT IS THE ASK; THE GUARD IS THE GUARANTEE. Decart's set() has no mask channel,
      so this wording is a probabilistic bias and nothing more. Asserted together so the
      pair cannot be separated by a later edit that trusts the text alone. */
-  check("...and the guarantee MECHANISM is still on file, one flag from restoration",
-    /function paintGuardBand\(ctx, webcam, w, h\)/.test(SRC) &&
-    /LOWER_BODY_GUARD_ENABLED: false/.test(CFG),
-    "the compositing guard was disabled 2026-08-24 by request (100% direct Decart " +
-    "stream). The clause above is therefore an ASK with nothing enforcing it - which " +
-    "is the known cost, recorded in config.js. This check pins that the mechanism " +
-    "still exists and that the flag is the only thing off.");
+  /* THE PAIR IS WHOLE AGAIN. This check has been both halves of the same argument today:
+     it asserted the guarantee shipped, then that only the mechanism remained while the
+     flag was off, and now that both are back. The prompt clause above asks; this enforces.
+     Asserted together, as it always was, so a later edit cannot quietly separate them. */
+  check("...and the hard guarantee ships alongside it, not instead of it",
+    /function paintGuardBand\(ctx, w, h\)/.test(SRC) &&
+    /LOWER_BODY_GUARD_ENABLED: true/.test(CFG),
+    "a prompt that asks for pass-through with nothing enforcing it is a request, not a fix");
   /* SYMMETRIC, and that is new. The lock sat on bottoms alone for three revisions on a
      one-branch-at-a-time-on-evidence rule, then came off entirely. Both branches carry it
      now: no report has been filed of a tops try-on repainting real trousers, but the

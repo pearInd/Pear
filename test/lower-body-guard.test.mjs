@@ -61,15 +61,23 @@ console.log("── §1 SHIPS OFF: the config default, and what that gives up �
      leg into frame wearing light blue shorts and Decart renders black long trousers. The
      prompt forbids that in words; Decart's set() has no mask channel, so this is the only
      mechanism in the pipeline that can make it a guarantee rather than a request. */
-  /* ── TURNED OFF 2026-08-24 BY REQUEST: 100% direct Decart stream ────────────
-     The reasoning above is left standing because it is still true - it is the cost of
-     this flag, not an argument that the flag is wrong. What the suite pins now is the
-     OFF state, so that re-enabling is a deliberate edit here rather than a silent drift
-     back. §2 below (a complete no-op, not a paused loop) is the SHIPPED path now, and
-     §3-§11 keep exercising the enabled machinery against their own sandbox config so
-     the mechanism cannot rot while it is switched off. */
-  check("LOWER_BODY_GUARD_ENABLED is OFF in the REAL config module",
-    CONFIG.LOWER_BODY_GUARD_ENABLED === false, String(CONFIG.LOWER_BODY_GUARD_ENABLED));
+  /* ── BACK ON 2026-08-24, AND THE ROUND TRIP IS THE RECORD ───────────────────
+     Turned OFF earlier the same day for a "100% direct Decart stream" requirement, and
+     back ON after the failure that decision predicted was reported: the shopper's lower
+     body leaves frame, re-enters, and Decart renders invented trousers over their real
+     ones. The prompt clause that names that exact event was already on the wire and did
+     not hold - which is the whole content of config.js's line that set() "exposes
+     { prompt, enhance, image } and no mask channel, so the prompt can only ask".
+
+     THE THREE DEFECTS IT WAS SWITCHED OFF OVER ARE FIXED, not flagged around, which is
+     what makes this a restore rather than a fourth flip: the boundary read now runs from
+     the live pose loop (it was in a debug block, against an out-of-scope `result`, so it
+     never executed), the source is the input throttle's canvas rather than a
+     visibility:hidden #webcam, and the seam is a BODY_GUARD_FEATHER_FRAC alpha ramp
+     rather than a hard rectangle. §2 still pins that OFF is a complete no-op, so the
+     switch stays honest in both directions. */
+  check("LOWER_BODY_GUARD_ENABLED is ON in the REAL config module",
+    CONFIG.LOWER_BODY_GUARD_ENABLED === true, String(CONFIG.LOWER_BODY_GUARD_ENABLED));
   check("...and config.js records that the objection was answered, not overruled",
     /THAT DEPENDENCY IS ALREADY HERE/.test(
       readFileSync(new URL("../fitting-room/config.js", import.meta.url), "utf8")),
@@ -139,6 +147,12 @@ function harness({ enabled = true, frac = 0.34, isLiveVal = true,
 
   const sandbox = {
     LOWER_BODY_GUARD_ENABLED: enabled,
+    /* No throttle in this harness, so guardSource() takes its #webcam fallback - which is
+       the path these band-geometry assertions were written against, and the one that still
+       needs the selfie flip. The throttle-canvas preference is exercised where the throttle
+       exists; here the point is the band, not the source. */
+    inputThrottle: null,
+    BODY_GUARD_FEATHER_FRAC: CONFIG.BODY_GUARD_FEATHER_FRAC,
     LOWER_BODY_GUARD_FRAC: frac,
     LOWER_BODY_GUARD_AUTO_CALIBRATE: autoCalibrate,
     LOWER_BODY_GUARD_HEAD_TO_WAIST_UNITS: headToWaistUnits,
@@ -235,12 +249,27 @@ console.log("\n── §4 THE PAINT TICK: mirror-corrected, band geometry from t
 
   const draw = canvasCtx.calls.find((c) => c.op === "drawImage");
   check("drawImage source is the webcam element itself", draw && draw.args[0] === webcamEl);
+  /* ── MEASURED ACROSS EVERY SLICE, NOT OFF THE FIRST CALL ────────────────────
+     The band is drawn in pieces now: an opaque core, plus GUARD_FEATHER_SLICES thin
+     slices whose alpha ramps from 0 at the boundary to 1 at the core (the condition
+     0f340c7 attached to any restore - no hard-edged rectangle over a diffusion output).
+     So "where does the band start" is a question about the UNION of the draws, not about
+     whichever one happens to be emitted first. Asserting the union is also strictly
+     stronger than the old single-call check: it pins both edges of the region. */
   // bandY = round(h * (1 - frac)) = round(1800 * 0.66) = 1188
   const expectedBandY = Math.round(1800 * (1 - 0.34));
+  const draws = canvasCtx.calls.filter((c) => c.op === "drawImage");
+  const topY = Math.min(...draws.map((c) => c.args[6]));           // highest destination y
+  const botY = Math.max(...draws.map((c) => c.args[6] + c.args[8]));// lowest destination edge
   check(`the band starts at the fraction-derived Y (${expectedBandY}px), not a hardcoded pixel count`,
-    draw && draw.args[2] === expectedBandY, JSON.stringify(draw && draw.args));
+    topY === expectedBandY, `topY=${topY} across ${draws.length} slice(s)`);
   check("the band covers the FULL remaining height down to the bottom of the frame",
-    draw && draw.args[4] === (1800 - expectedBandY), JSON.stringify(draw && draw.args));
+    botY === 1800, `botY=${botY} across ${draws.length} slice(s)`);
+  /* THE RAMP ITSELF. One draw would mean the feather silently stopped being applied and
+     the hard edge came back - the exact regression the restore condition names. */
+  check("...and it is FEATHERED, not one hard-edged rectangle",
+    draws.length > 1 && draws.some((c) => c.args[6] > expectedBandY),
+    `${draws.length} draw(s) - a single full-strength rectangle is the banned shape`);
 
   check("re-schedules itself for the next frame (a loop, not a one-shot)",
     rafCalls.length === 2, `expected 2 scheduled frames, got ${rafCalls.length}`);
@@ -435,20 +464,24 @@ console.log("\n── §10 freezeFinalFrame(): the KEPT snapshot gets the same p
      three chances for the saved artefact to disagree with what the shopper watched. They
      all call paintGuardBand(), so the properties below are asserted where they now live. */
   const ff = extract("function freezeFinalFrame()", "\n/* ── Live countdown overlay");
-  const gb = extract("function paintGuardBand(ctx, webcam, w, h)", "\nfunction startLowerBodyGuard");
+  const gb = extract("function paintGuardBand(ctx, w, h)", "\nfunction startLowerBodyGuard");
   check("bakes the guard only when the AI-edited stream was the primary source",
-    /if \(!mirror\) paintGuardBand\(ctx, webcam, w, h\);/.test(ff), ff.slice(-500));
+    /if \(!mirror\) paintGuardBand\(ctx, w, h\);/.test(ff), ff.slice(-500));
   check("gated on the same config flag as the live view - one on/off switch, not two",
     /if \(!LOWER_BODY_GUARD_ENABLED/.test(gb), gb.slice(0, 300));
   check("does NOT apply when the fallback branch (raw webcam, no AI edit at all) was used",
     !/mirror && LOWER_BODY_GUARD_ENABLED/.test(ff),
     "the webcam-fallback branch has nothing for the guard to protect against");
-  check("source and destination band Y are computed independently (webcam and ai/canvas\n" +
+  /* Unchanged property, one renamed term: the source is guardSource()'s surface now
+     rather than #webcam directly, because #webcam is visibility:hidden for all of
+     .show-live and reading it there is what produced the black band. Both bands are still
+     derived from their OWN surface's height, which is the thing this asserts. */
+  check("source and destination band Y are computed independently (source and ai/canvas\n" +
         "        resolutions can legitimately differ - reusing one offset for both would\n" +
         "        silently misalign the composited band on any camera that doesn't happen\n" +
         "        to match the AI stream's exact resolution)",
     /const dst = guardBand\(h\);/.test(gb) &&
-    /const src = guardBand\(webcam\.videoHeight\);/.test(gb), gb);
+    /const src = guardBand\(source\.h\);/.test(gb), gb);
   check("a failed guard paint is caught and does not fail the whole snapshot",
     /catch \(_\) \{[\s\S]{0,160}best-effort/.test(gb), gb.slice(-400));
   /* THE RECORDER IS THE THIRD CONSUMER, and the one that was silently missing: its paint
@@ -457,7 +490,7 @@ console.log("\n── §10 freezeFinalFrame(): the KEPT snapshot gets the same p
      view was protecting the shopper from. */
   const rec = extract("const beginRecorder = () => {", "\n/** Halt the canvas paint loop");
   check("the RECORDER bakes it too, so the clip cannot disagree with the live view",
-    /ctx\.drawImage\(video, 0, 0, w, h\);\s*\n\s*paintGuardBand\(ctx, \$\("webcam"\), w, h\);/.test(rec),
+    /ctx\.drawImage\(video, 0, 0, w, h\);\s*\n\s*paintGuardBand\(ctx, w, h\);/.test(rec),
     rec.slice(-400));
 }
 

@@ -332,9 +332,14 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
   check(`both still fit the ${CONFIG.PROMPT_MAX_CHARS}-char budget`,
     top.length <= CONFIG.PROMPT_MAX_CHARS && bot.length <= CONFIG.PROMPT_MAX_CHARS,
     `tops=${top.length} bottoms=${bot.length}`);
+  /* ── THE LEAD CHANGED 2026-08-24, AND THE LEAD IS THE POINT ─────────────────
+     The passthrough sentence now opens both branches; the substitution follows it. Same
+     two sentences, same bytes, other order - see CATEGORY_ANCHOR's own note. What these
+     checks pin is unchanged in KIND: each branch still opens on a fixed, known sentence
+     and nothing may be inserted before it. Which sentence that is became the fix. */
   check("the category anchor still leads - persistence language must not displace it",
-    /^Fit ONLY the reference shirt onto the subject's upper torso\./.test(top) &&
-    /^Fit ONLY the reference pants\/shorts onto the subject's lower body\./.test(bot),
+    /^For any lower body parts, legs, or shorts that enter the camera frame/.test(top) &&
+    /^For any upper body parts, torso, or shirt that enter the camera frame/.test(bot),
     "each branch must open on its own anchor, whatever else it carries");
 }
 

@@ -314,7 +314,16 @@ export const CONFIG = Object.freeze({
      boundary read (updateBodyGuardLine) is called from a debug block in this tree and
      has never run in a shipped session - see rescue/pre-8eb4099-reset for the fixed
      version before re-enabling anything. */
-  LOWER_BODY_GUARD_ENABLED: false,
+  LOWER_BODY_GUARD_ENABLED: true,
+  /* Fraction of the frame height over which the band's alpha ramps from 0 at the boundary
+     to 1 at its core. The condition 0f340c7's deletion attached to any restore was that it
+     "must not be a hard-edged rectangular composite over a diffusion output" - two sources
+     that disagree on exposure, white balance or latency show that disagreement as a LINE
+     when butted together. Drawn as GUARD_FEATHER_SLICES thin slices rather than a gradient
+     mask: masking would need either an offscreen canvas (a per-frame allocation in a rAF
+     loop) or source-in, which reads the destination's alpha and is 1 across an opaque
+     band, so the gradient would do nothing. */
+  BODY_GUARD_FEATHER_FRAC: 0.06,
   /* Fraction of the camera-card's frame HEIGHT, measured from the bottom, that gets the
      shopper's own raw camera pixels composited back over Decart's output. 0.34 is a
      rough midpoint for a torso-forward selfie framing (roughly waist-down) - conservative

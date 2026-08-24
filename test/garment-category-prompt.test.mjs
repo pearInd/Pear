@@ -153,8 +153,18 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
      WHAT IT DROPPED is asserted below rather than left to be discovered: the
      invent/add/alter clamp and the explicit "keep the upper body unmodified" pin. Both
      are retired-with-a-restore-path in app.js; image-first.test.mjs §1 owns that table. */
-  check("opens by scoping to ONE garment and ONE region, nothing before it",
-    bottomsPrompt.indexOf("Fit ONLY the reference pants/shorts onto the subject's lower body.") === 0,
+  /* ── THE LEAD CHANGED 2026-08-24, AND THE LEAD IS THE POINT ─────────────────
+     The passthrough sentence now opens both branches; the substitution follows it. Same
+     two sentences, same bytes, other order - see CATEGORY_ANCHOR's own note. What these
+     checks pin is unchanged in KIND: each branch still opens on a fixed, known sentence
+     and nothing may be inserted before it. Which sentence that is became the fix. */
+  check("opens on the non-target passthrough, nothing before it",
+    bottomsPrompt.indexOf("For any upper body parts, torso, or shirt that enter the camera frame") === 0,
+    bottomsPrompt);
+  /* The substitution moved, it did not go away - pinned so a future edit cannot drop it
+     while still satisfying the lead check above. */
+  check("...and still scopes to ONE garment and ONE region, just after it",
+    bottomsPrompt.includes("Fit ONLY the reference pants/shorts onto the subject's lower body."),
     bottomsPrompt);
   /* THE SCOPING SURVIVED THE REWRITE, and that is what this pair of checks is for: the
      region naming moved INTO the lead rather than being dropped with the pin. */
@@ -196,8 +206,11 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
 
 console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour ──");
 {
-  check("scopes to the reference shirt and the upper TORSO, nothing before it",
-    topsPrompt.indexOf("Fit ONLY the reference shirt onto the subject's upper torso.") === 0,
+  check("opens on the non-target passthrough, nothing before it",
+    topsPrompt.indexOf("For any lower body parts, legs, or shorts that enter the camera frame") === 0,
+    topsPrompt);
+  check("...and still scopes to the reference shirt and the upper TORSO, just after it",
+    topsPrompt.includes("Fit ONLY the reference shirt onto the subject's upper torso."),
     topsPrompt);
   check("...and carries the mirror of the bottoms non-target lock",
     /For any lower body parts, legs, or shorts that enter the camera frame during the video/.test(topsPrompt) &&
@@ -210,9 +223,9 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      the SHAPE they share and the axis they differ on. The divergence is still exactly the
      one this suite exists for: WHICH region the anchor claims. image-first.test.mjs §1
      owns the sentence-by-sentence contract. */
-  check("both open on the same exclusive-scope binding",
-    topsPrompt.startsWith("Fit ONLY the reference ") &&
-    bottomsPrompt.startsWith("Fit ONLY the reference "),
+  check("both open on the same non-target passthrough",
+    topsPrompt.startsWith("For any lower body parts") &&
+    bottomsPrompt.startsWith("For any upper body parts"),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
   /* ── EACH NAMES BOTH REGIONS NOW, AND THAT IS THE POINT ────────────────────
      The old rule was "each branch mentions its own garment and never the other's". It
