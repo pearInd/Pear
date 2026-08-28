@@ -61,7 +61,7 @@ const sandbox = {
   getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
-  code + "\nreturn { isBottomsGarment, imageOnlyPrompt, lookAnchorPrompt, fitPrompt, P };")(...Object.values(sandbox));
+  code + "\nreturn { isBottomsGarment, bottomsLength, imageOnlyPrompt, lookAnchorPrompt, fitPrompt, BOTTOMS_REFERENCE_BIND, P };")(...Object.values(sandbox));
 
 const { isBottomsGarment, imageOnlyPrompt } = api;
 
@@ -194,12 +194,14 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
      to stay small because someone remembered why. It grew by 81 characters here, and that
      is the deliberate spend of this revision: the per-frame instruction is the only thing
      that was bought, and image-first.test.mjs §1 pins that it is exactly three sentences. */
-  /* CEILING 360 → 420 → 480, each step for ONE named clause and only that clause:
-     STRICT_REFERENCE_LOCK, then DENSE.inpaintLock. The branch runs 468, so this still
-     fails on the next unbudgeted addition. "Minimal" stays a number somebody has to
-     raise deliberately. */
-  check("the bottoms prompt stays minimal - five instructions, not an assembly",
-    bottomsPrompt.length <= 480,
+  /* CEILING 360 → 420 → 480 → 620, each step for ONE named clause and only that clause:
+     STRICT_REFERENCE_LOCK, then DENSE.inpaintLock, then BOTTOMS_REFERENCE_BIND (the hem
+     and product-detail lock - see §7). The branch runs 581 unknown / 607 short, so this
+     still fails on the next unbudgeted addition. "Minimal" stays a number somebody has to
+     raise deliberately, and it is deliberately NOT the 700 budget: 700 is what Decart
+     accepts, this is what the file is willing to spend. */
+  check("the bottoms prompt stays minimal - six instructions, not an assembly",
+    bottomsPrompt.length <= 620,
     `${bottomsPrompt.length} chars - was 616 across six sentences four revisions ago`);
   check("...and carries NO body-volume or temporal clause - the deliberate trade",
     !/360-degree rotations/.test(bottomsPrompt) && !/as soon as visible/.test(bottomsPrompt),
@@ -319,8 +321,15 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
   check("both branches are assembled through fitPrompt(), not returned raw",
     /return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\],/.test(SRC) &&
     /\[P\.HIGH, STRICT_REFERENCE_LOCK\],/.test(SRC) &&
-    /\[P\.HIGH, DENSE\.inpaintLock\],\s*\n\s*\]\);/.test(SRC),
+    /\[P\.HIGH, DENSE\.inpaintLock\],/.test(SRC) &&
+    /\[P\.HIGH, isBottomsGarment\(item\) \? BOTTOMS_REFERENCE_BIND\[bottomsLength\(item\)\] : ""\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
+  /* P.HIGH, NOT P.CORE - the bind must be sheddable. It is the newest and least
+     load-bearing clause on this branch, and the anchor it sits behind is the one thing
+     that must never be dropped under budget pressure. */
+  check("...and the bind is sheddable - P.HIGH, never P.CORE",
+    !/\[P\.CORE, isBottomsGarment\(item\) \? BOTTOMS_REFERENCE_BIND/.test(SRC),
+    "a P.CORE bind could push the anchor into fitPrompt()'s hard slice");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix. */
   check("the category anchor is tagged P.CORE so it can never be shed",
     /\[P\.CORE,\s*(bottoms|isBottoms)[^\]]*ANCHOR|\[P\.CORE,\s*CATEGORY_ANCHOR/.test(SRC),
@@ -422,6 +431,91 @@ console.log("\n── §6 EVERY BUILDER BRANCHES - one constant left is the bug,
   check("...and both branches go through the wire clamp, not around it",
     /clampPromptForWire\(/.test(ping) && ping.trim().endsWith('"freezeKeepAlive");'),
     ping);
+}
+
+console.log("\n\u2500\u2500 \u00a77 HEM LENGTH AND THE PRODUCT BIND: the lower-garment report \u2500\u2500");
+{
+  /* REPORTED: trying on lower garments renders generic trousers - wrong colour, wrong cut,
+     and knee-length shorts coming back full-length.
+
+     WHAT WAS ALREADY ON THE WIRE, so this section is not confused with a restatement:
+     "Exactly match color, pattern, logos, and cut" (the colour half, present and not
+     holding) and the upper-body passthrough that LEADS the anchor. This file's last two
+     revisions both concluded, against reproduced failures, that restating an instruction
+     which did not hold is the one move the evidence rules out.
+
+     WHAT WAS NOT ON THE WIRE AT ALL: the hem. The token "length" appears in the bottoms
+     anchor exactly once, inside the attribute list for the LIVE clothing being PRESERVED
+     - so the prompt spent its only length instruction on the garment it is not drawing,
+     and the model was free to pick a hem. That is new information, not a louder repeat,
+     which is the only kind of addition those revisions left open. */
+  const { bottomsLength, BOTTOMS_REFERENCE_BIND } = api;
+  const lower = (name) => ({ garmentType: "lower_body", name });
+
+  console.log("   -- resolution: a token decides, silence does NOT guess --");
+  check("English short tokens resolve SHORT",
+    ["Cargo Shorts", "Bermuda Short", "Denim Cut-Offs", "Swim Trunks"]
+      .every((n) => bottomsLength(lower(n)) === "short"),
+    "shorts is the length the report actually turned on");
+  check("Hebrew short tokens resolve SHORT - both spellings of the family",
+    bottomsLength(lower("\u05e9\u05d5\u05e8\u05d8 \u05d3\u05e0\u05d9\u05dd")) === "short" &&
+    bottomsLength(lower("\u05de\u05db\u05e0\u05e1\u05d9\u05d9\u05dd \u05e7\u05e6\u05e8\u05d9\u05dd")) === "short",
+    "Hebrew is the storefront's primary language - a Hebrew-only title is the common case");
+  check("long tokens resolve LONG, in both languages",
+    ["Slim Fit Jeans", "Wool Trousers", "Ribbed Leggings", "Stone Chinos"]
+      .every((n) => bottomsLength(lower(n)) === "long") &&
+    bottomsLength(lower("\u05d2'\u05d9\u05e0\u05e1 \u05e1\u05e7\u05d9\u05e0\u05d9")) === "long",
+    "a long hem stated explicitly is what stops a crop into shorts");
+
+  /* THE THIRD BRANCH IS THE ONE THAT MATTERS MOST, and it is a hedge on purpose. The
+     catalog's bottoms subTypes are "slim"/"regular"/"wide" - CUT, never LENGTH - so most
+     real products carry no length token at all. Asserting "reaches the ankle" on an item
+     that is actually shorts would be the reported bug, caused by us rather than by the
+     model: a confident wrong instruction is strictly worse than a missing one. */
+  check("an item with NO length token resolves UNKNOWN - never a guess",
+    ["Glide Slim", "Vector Regular", "Drift Wide", "Mono Slim"]
+      .every((n) => bottomsLength(lower(n)) === "unknown"),
+    "these are the real catalog names; subType is cut, not length");
+  check("...and null / empty never throws, resolving UNKNOWN",
+    bottomsLength(null) === "unknown" && bottomsLength({}) === "unknown");
+
+  /* THE REGEX TRAP, as its own case because it is the one a careless \bshorts?\b walks
+     into - and this resolver reads subType, which is exactly where "short_sleeve" lives. */
+  check("subType 'short_sleeve' does NOT read as SHORT",
+    bottomsLength({ garmentType: "lower_body", subType: "short_sleeve", name: "Tee" }) === "unknown",
+    "the classic false positive - 'short' is a substring of 'short_sleeve'");
+
+  console.log("   -- the strings: positive only, no banned outcome named --");
+  for (const [k, clause] of Object.entries(BOTTOMS_REFERENCE_BIND)) {
+    check(`${k}: binds the reference's own pockets, seams and fabric`,
+      /Reproduce the reference garment's own pockets, seams and fabric/.test(clause), clause);
+    /* Decart's set() has no negative_prompt field, so every noun in a ban ships inside the
+       POSITIVE prompt where the sampler can steer toward it - the mechanism behind this
+       file's blue-jacket and tuxedo reports. Each branch must state only the hem it wants,
+       never the hem it is avoiding. */
+    check(`   ...and names no banned outcome - the tuxedo mechanism`,
+      !/never |not |forbid|avoid/i.test(clause) || !/trousers|shorts/i.test(clause),
+      clause);
+  }
+  check("short states the knee, long states the ankle, unknown states neither",
+    /above the knee/.test(BOTTOMS_REFERENCE_BIND.short) &&
+    /reaches the ankle/.test(BOTTOMS_REFERENCE_BIND.long) &&
+    !/knee|ankle/.test(BOTTOMS_REFERENCE_BIND.unknown),
+    "the unknown branch must bind the hem to the reference without claiming to know it");
+  check("...and unknown still says the hem is not the model's to choose",
+    /its own hem length exactly as photographed/.test(BOTTOMS_REFERENCE_BIND.unknown),
+    "a hedge that says nothing at all would leave the reported gap exactly as it was");
+
+  console.log("   -- wiring and budget --");
+  check("TOPS never receives the bind - the report was filed on bottoms only",
+    !/hem/.test(imageOnlyPrompt({ garmentType: "upper_body", name: "Tee" })),
+    "a mirrored clause would spend budget on both branches for a one-branch failure");
+  for (const [n, want] of [["Cargo Shorts", "short"], ["Slim Fit Jeans", "long"], ["Glide Slim", "unknown"]]) {
+    const p = imageOnlyPrompt(lower(n));
+    check(`"${n}" ships its ${want} bind and fits the ${CONFIG.PROMPT_MAX_CHARS}-char budget`,
+      p.endsWith(BOTTOMS_REFERENCE_BIND[want].trim()) && p.length <= CONFIG.PROMPT_MAX_CHARS,
+      `${p.length} chars`);
+  }
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

@@ -93,7 +93,7 @@ const sandbox = {
   getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
-  code + "\nreturn { buildCompositePrompt, imageOnlyPrompt, fitPrompt, P, DENSE };")(...Object.values(sandbox));
+  code + "\nreturn { buildCompositePrompt, imageOnlyPrompt, fitPrompt, P, DENSE, BOTTOMS_REFERENCE_BIND };")(...Object.values(sandbox));
 
 const TEE   = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
@@ -201,9 +201,25 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   /* 360 → 420 → 480: STRICT_REFERENCE_LOCK, then DENSE.inpaintLock. The GAP bound is
      untouched at 40 and is the stricter half anyway: it is what stops one branch growing
      without the other. */
-  check("both branches stay minimal, and the gap between them stays small",
-    tops.length <= 480 && bottoms.length <= 480 && Math.abs(bottoms.length - tops.length) <= 40,
-    `tops=${tops.length} bottoms=${bottoms.length} gap=${bottoms.length - tops.length}`);
+  /* THE GAP IS NO LONGER SMALL, AND THAT IS NOW THE POINT OF THE CHECK. It was <=40 while
+     the two branches were the same clauses with two substitutions. BOTTOMS_REFERENCE_BIND
+     (the hem + product-detail lock, added against the generic-trousers report) ships on
+     bottoms only, because no equivalent failure has been reported on tops - so a ~120
+     character gap is now the CORRECT state and asserting it away would forbid the fix.
+     What is still worth pinning is that the gap is THAT CLAUSE and nothing else, so it is
+     measured against the clause's own length rather than a free-floating tolerance: if
+     bottoms drifts for any other reason, this still fails. */
+  /* THE RESIDUAL, once the bind is subtracted, is the 4 characters the two ANCHORS have
+     always differed by (CATEGORY_ANCHOR.top is 319, .bottom 323 - the branches were 464
+     and 468 before this revision). So the tolerance covers that pre-existing delta and
+     nothing more: any NEW bottoms-only text lands outside it and fails here, which is the
+     drift this check exists to catch now that a large legitimate gap hides it. */
+  const bind = api.BOTTOMS_REFERENCE_BIND.unknown.length;
+  const residual = (bottoms.length - tops.length) - bind;
+  check("both branches stay minimal, and the gap between them is exactly the bind",
+    tops.length <= 480 && bottoms.length <= 620 && residual >= 0 && residual <= 8,
+    `tops=${tops.length} bottoms=${bottoms.length} gap=${bottoms.length - tops.length} ` +
+    `bind=${bind} residual=${residual} (expected the 4-char anchor delta)`);
 
   const both = api.fitPrompt([
     [api.P.CORE, bottoms],
@@ -229,8 +245,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   /* Recomputed again: both anchors now carry STRICT_REFERENCE_LOCK *and* DENSE.inpaintLock,
      so the baseline is 464/468 and every row moved with it. */
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  510, 514],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 529, 533],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  510, 627],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 529, 646],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -239,13 +255,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(464 chars - anchor \+ locks\)     BOTTOMS \(468 chars - lower-body scoped \+ locks\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 510  fits              \u2192 514  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 529  fits              \u2192 533  fits/.test(SRC),
+    /TOPS \(464 chars - anchor \+ locks\)     BOTTOMS \(581 chars - \+ BOTTOMS_REFERENCE_BIND\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 510  fits              \u2192 627  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 529  fits              \u2192 646  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /236 characters are free on tops and 232 on\s*\n?\s*bottoms/.test(SRC),
+    /236 characters are free on tops and 119 on\s*\n?\s*bottoms/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
 }
 

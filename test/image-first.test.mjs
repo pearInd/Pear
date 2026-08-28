@@ -138,6 +138,30 @@ const BOTTOMS_SPEC =
   " or garments. Fit ONLY the reference pants/shorts onto the subject's lower body." +
   " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details." +
   " Face, skin, hands and background pass through untouched.";
+
+/* ── THE BOTTOMS BRANCH GAINED A CLAUSE THE TOPS BRANCH DID NOT ──────────────────
+   REPORTED: a lower-garment try-on renders generic trousers - wrong colour, wrong cut,
+   and knee-length shorts coming back full-length. BOTTOMS_REFERENCE_BIND answers the half
+   of that with no instruction anywhere on the wire: the hem. The word "length" was already
+   in BOTTOMS_SPEC above, but read where - it is inside the attribute list for the LIVE
+   clothing being PRESERVED, not the reference being RENDERED. So the prompt spent its only
+   length instruction on the garment it is not drawing.
+
+   RESOLVED THREE WAYS, and the suffix therefore is not constant. The catalog's bottoms
+   subTypes are cut ("slim"/"regular"/"wide"), never length, so it is inferred from the
+   product name and an unrecognised item gets a hedge rather than a guess - see
+   bottomsLength() in app.js. JEANS is "Glide Slim", which no token settles, so the
+   byte-exact check below uses the UNKNOWN suffix; garment-category-prompt.test.mjs owns
+   the per-branch resolution and the token table. */
+const BIND_UNKNOWN =
+  " Reproduce the reference garment's own pockets, seams and fabric," +
+  " and its own hem length exactly as photographed.";
+const BIND_SHORT =
+  " Reproduce the reference garment's own pockets, seams and fabric." +
+  " It is a SHORT garment: its hem sits above the knee - keep that exact hem.";
+const BIND_LONG =
+  " Reproduce the reference garment's own pockets, seams and fabric." +
+  " It is FULL LENGTH: its hem reaches the ankle - keep that exact hem.";
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
@@ -151,7 +175,18 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
   check("the TOPS branch matches the specified wording byte for byte",
     api.imageOnlyPrompt(TEE) === TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
   check("the BOTTOMS branch matches the specified wording byte for byte",
-    api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
+    api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC + BIND_UNKNOWN,
+    JSON.stringify(api.imageOnlyPrompt(JEANS)));
+  /* The bind is APPENDED, never interleaved - the specified wording above still reaches
+     Decart as one contiguous, byte-exact block, which is the property this section is for.
+     Asserted as a prefix so a future clause inserted into the middle fails here even if
+     every individual sentence survives somewhere in the string. */
+  check("...with the specified wording intact as a contiguous PREFIX, not interleaved",
+    api.imageOnlyPrompt(JEANS).startsWith(BOTTOMS_SPEC),
+    "a clause spliced into the middle changes the token order the wording was specified as");
+  check("...and the TOPS branch gains nothing - the report was filed on bottoms only",
+    !/hem/.test(api.imageOnlyPrompt(TEE)) && !/pockets, seams/.test(api.imageOnlyPrompt(TEE)),
+    api.imageOnlyPrompt(TEE));
   /* ONE SHAPE, THREE SENTENCES, SAME ORDER. The old pair could be normalised into one
      string because they differed by two substitutions; these two are worded per region
      (a waistline is not a belly, a leg profile is not a silhouette), so the invariant
@@ -397,7 +432,13 @@ console.log("\n── §2 EVERY SINGLE-VIEW BUILDER RETURNS IT, AND ASSEMBLES NO
      exempt from it would assert nothing. imageOnlyPrompt() IS what every single-view
      builder returns, so it is the honest place to measure invariance. */
   for (const [name, item, angle, prof] of cases) {   // eslint-disable-line no-unused-vars
-    const expected = item.garmentType === "lower_body" ? BOTTOMS_SPEC : TOPS_SPEC;
+    /* The bottoms case is built from TEE, so it carries subType "short_sleeve" - and it
+       must still resolve to the UNKNOWN bind, not the SHORT one. That is the regex trap
+       BOTTOMS_TOKENS documents ("a bare /short/ matches short_sleeve"), arriving through
+       the new length resolver instead: a tee mis-classified as bottoms upstream would
+       otherwise be told its hem sits above the knee. Asserted by expecting the unknown
+       suffix here rather than by a separate case, so it cannot be deleted independently. */
+    const expected = item.garmentType === "lower_body" ? BOTTOMS_SPEC + BIND_UNKNOWN : TOPS_SPEC;
     check(`${name}: byte-identical to its category anchor`,
       api.imageOnlyPrompt(item) === expected,
       api.imageOnlyPrompt(item));

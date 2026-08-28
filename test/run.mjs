@@ -255,7 +255,19 @@ for (const [name, file] of SUITES) {
   // logs heavily by design and that noise belongs in a browser console, not here.
   const lines = out.split("\n").filter((l) => /^(PASS|FAIL|SKIP)/.test(l) || /^\s{8}\S/.test(l));
   console.log(lines.join("\n") || out.trim());
-  if (r.status !== 0) failed++;
+  if (r.status !== 0) {
+    failed++;
+    /* A suite that THROWS exits non-zero without ever printing a FAIL line - a bad
+       reference in an assertion, a sandbox that does not export what the check reads.
+       The filter above keeps only PASS/FAIL/indented-detail lines, so a stack trace is
+       dropped and the run ends with a bare "1 suite(s) FAILING" naming nothing. That is
+       indistinguishable from a normal failure and sends the reader hunting suite by
+       suite. Print the tail whenever the exit code disagrees with the output. */
+    if (!lines.some((l) => /^FAIL/.test(l))) {
+      const tail = out.trim().split("\n").slice(-12).join("\n");
+      console.log(`\n  \u26a0 ${name} exited ${r.status} without a FAIL line - it threw. Tail:\n${tail}\n`);
+    }
+  }
 }
 
 console.log("\n" + "═".repeat(64));

@@ -308,9 +308,15 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
      per-frame adaptation sentence, which says nothing about the subject being absent (the
      bound below is per branch so that spend cannot be mistaken for room, and the "as soon
      as visible" absence is asserted separately, twice, right here and below). */
-  /* 360 → 420 → 480: STRICT_REFERENCE_LOCK, then DENSE.inpaintLock. Branches run 464/468. */
+  /* 360 → 420 → 480: STRICT_REFERENCE_LOCK, then DENSE.inpaintLock. Tops runs 464 and is
+     unchanged. BOTTOMS gets its own, higher ceiling from this revision on: it alone
+     carries BOTTOMS_REFERENCE_BIND (the hem + product-detail lock, added against the
+     generic-trousers report), which no tops failure has ever called for. The bound stays
+     PER BRANCH precisely so that spend cannot be mistaken for room on the other one, and
+     the "as soon as visible" absence - the thing this section is actually about - is
+     asserted independently of either number. */
   check("...and both are still minimal, which is what replaced it",
-    top.length <= 480 && bot.length <= 480 && !/as soon as visible/.test(bot),
+    top.length <= 480 && bot.length <= 620 && !/as soon as visible/.test(bot),
     `tops=${top.length} bottoms=${bot.length}`);
   /* The clause itself must stay on file, or "one line to re-add" stops being true. */
   check("...but the clause is still ON FILE, so the restore really is one line",

@@ -7909,6 +7909,88 @@ function isBottomsGarment(item) {
   return BOTTOMS_TOKENS.test(fields);
 }
 
+/* ── HEM LENGTH: the one attribute of the TARGET garment nothing on the wire binds ──
+   REPORTED: a lower-garment try-on renders generic trousers - wrong colour, wrong cut,
+   and knee-length shorts coming back as full-length trousers.
+
+   THE WORD "length" IS ALREADY IN BOTH ANCHORS AND POINTS THE WRONG WAY. Read
+   CATEGORY_ANCHOR.bottom: "pass through and strictly preserve the subject's LIVE camera
+   feed clothing (color, pattern, length)". That is the attribute list for the layer being
+   PRESERVED. The sentence about the layer being RENDERED is "Fit ONLY the reference
+   pants/shorts onto the subject's lower body" - which names the reference but says nothing
+   about reproducing any of its properties. So the prompt spends its only length
+   instruction on the garment it is not drawing, and the model is left to pick a hem.
+
+   WHY THIS IS NOT "SAY IT LOUDER". The colour half of the report has an instruction on the
+   wire already ("Exactly match color, pattern, logos, and cut"), and this file's last two
+   revisions both concluded - against reproduced failures - that restating an instruction
+   that did not hold is the one move the evidence rules out. Hem length is different in
+   kind: there is NO instruction to restate. This adds information the prompt has never
+   carried, which is the only kind of addition those revisions left open.
+
+   ── THREE-WAY, AND THE THIRD CASE IS THE IMPORTANT ONE ─────────────────────────────
+   The catalog's bottoms subTypes are "slim" / "regular" / "wide" - CUT, not LENGTH - so
+   there is no metadata field that answers this. Length is inferred from the product name,
+   which is reliable when a token is present ("Cargo Shorts", "שורט דנים") and absent
+   entirely for most of the catalog ("Glide Slim", "Vector Regular").
+
+   SO AN UNRECOGNISED ITEM GETS THE HEDGE, NEVER A GUESS. Asserting "reaches the ankle" on
+   an item that is actually shorts is the reported bug, caused by us instead of by the
+   model - strictly worse than the status quo, because it is a confident wrong instruction
+   rather than a missing one. The unknown branch therefore binds the hem to the REFERENCE
+   ("its own hem length, as photographed") without claiming to know what that length is,
+   which is still new information: it tells the model the hem is not its to choose.
+
+   ── PHRASED POSITIVELY, WITH NO BANNED OUTCOME NAMED ───────────────────────────────
+   "never extend it into full-length trousers" was drafted and rejected. Decart's set()
+   has no negative_prompt field, so every noun in a ban ships inside the POSITIVE prompt
+   where the sampler can steer toward it - the mechanism behind this file's blue-jacket and
+   tuxedo reports, and the reason the last revision refused a "STRICTLY FORBID generating
+   generic/hallucinated pant colors" clause. Each branch states only the hem it wants. */
+const SHORT_BOTTOMS_TOKENS =
+  /(שורט|מכנס\S*\s*קצר|\bshorts\b|\bbermuda\b|\bcut-?offs?\b|\btrunks\b)/i;
+/* \bshorts\b stays PLURAL-anchored for the same reason BOTTOMS_TOKENS documents: a bare
+   /short/ matches "short_sleeve", the subType this file sets on tees. This only runs on
+   items already classified as bottoms, so the blast radius is smaller - but a tee
+   mis-classified upstream would then also be told its hem sits above the knee. */
+const LONG_BOTTOMS_TOKENS =
+  /(ג['׳]ינס|טייץ|טייצ|לגינ|\btrousers\b|\bjeans\b|\bchinos\b|\bslacks\b|\bsweatpants\b|\bjoggers\b|\bleggings\b|\bculottes\b)/i;
+
+/**
+ * Hem length for a lower-body garment, inferred from its own text fields.
+ * @param {object|null} item
+ * @returns {"short"|"long"|"unknown"} "unknown" whenever no token settles it - never a guess.
+ */
+function bottomsLength(item) {
+  if (!item) return "unknown";
+  const fields = [item.type, item.category, item.subType, item.name, item.title]
+    .filter(Boolean).join(" ");
+  if (SHORT_BOTTOMS_TOKENS.test(fields)) return "short";
+  if (LONG_BOTTOMS_TOKENS.test(fields)) return "long";
+  return "unknown";
+}
+
+/* The bottoms-only fidelity clause, one per resolved length. Both sentences describe the
+   TARGET garment, which is the half of the report with no instruction on the wire at all.
+
+   POCKETS AND SEAMS are named because they are what distinguishes one pair of trousers
+   from the generic pair the model falls back to - and unlike a ban list, they are positive
+   attributes of a garment that IS in the reference image, so there is nothing here for the
+   sampler to steer toward that the pixels do not already show. That is the line this file
+   draws between a description that competes with the reference (the tuxedo mechanism) and
+   one that points at it. */
+const BOTTOMS_REFERENCE_BIND = Object.freeze({
+  short:
+    " Reproduce the reference garment's own pockets, seams and fabric." +
+    " It is a SHORT garment: its hem sits above the knee - keep that exact hem.",
+  long:
+    " Reproduce the reference garment's own pockets, seams and fabric." +
+    " It is FULL LENGTH: its hem reaches the ankle - keep that exact hem.",
+  unknown:
+    " Reproduce the reference garment's own pockets, seams and fabric," +
+    " and its own hem length exactly as photographed.",
+});
+
 /**
  * The image-only prompt, resolved for THIS garment's category.
  *
@@ -7979,6 +8061,17 @@ function imageOnlyPrompt(item) {
        already covered by the passthrough sentence that now LEADS this prompt, so naming it
        a second time buys nothing and costs the budget twice. */
     [P.HIGH, DENSE.inpaintLock],
+    /* ── THE TARGET GARMENT'S OWN PROPERTIES - bottoms only, and only here ──────────
+       The clause above this one preserves what is NOT being replaced; every clause before
+       it describes the reference's provenance in the abstract. Neither says to reproduce
+       the lower garment's pockets, seams or hem - see BOTTOMS_REFERENCE_BIND for why the
+       hem in particular had no instruction anywhere on the wire, and why the length is
+       resolved three ways with a hedge rather than guessed.
+
+       BOTTOMS ONLY, deliberately. No report has been filed of a TOP rendering at the wrong
+       length, and the tops anchor already carries its own region wording; a mirrored clause
+       here would spend budget on both branches to answer a failure reported on one. */
+    [P.HIGH, isBottomsGarment(item) ? BOTTOMS_REFERENCE_BIND[bottomsLength(item)] : ""],
   ]);
 }
 
@@ -8062,12 +8155,20 @@ function lookAnchorPrompt() {
    The BASELINE moved this revision: both anchors now carry STRICT_REFERENCE_LOCK, bought
    back against a colour-drift report, which is why tops reads 407 rather than 342.
 
-     TOPS (464 chars - anchor + locks)     BOTTOMS (468 chars - lower-body scoped + locks)
-     + DENSE.bodyFidelity  (45) → 510  fits              → 514  fits
-     + DENSE.modelAgnostic (64) → 529  fits              → 533  fits
-     + both of them        (109)→ 574  fits              → 578  fits
+     TOPS (464 chars - anchor + locks)     BOTTOMS (581 chars - + BOTTOMS_REFERENCE_BIND)
+     + DENSE.bodyFidelity  (45) → 510  fits              → 627  fits
+     + DENSE.modelAgnostic (64) → 529  fits              → 646  fits
+     + both of them        (109)→ 574  fits              → 691  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 236 characters are free on tops and 232 on
+   THE TWO BRANCHES ARE NO LONGER WITHIN A FEW CHARACTERS OF EACH OTHER, and that is the
+   one thing to read off this table rather than the individual rows. Bottoms carries
+   BOTTOMS_REFERENCE_BIND (the hem + product-detail lock, added against the generic-
+   trousers report) and tops does not, because no equivalent failure has been reported on
+   tops. The 117-character gap is that clause, not drift - and it means bottoms is now the
+   branch that runs out first: "+ both of them" leaves it 9 characters, where tops still
+   has 126. Cost a restore against BOTTOMS, never against tops.
+
+   NOTHING SHEDS ANY MORE, on either branch. 236 characters are free on tops and 119 on
    bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.
@@ -8375,6 +8476,13 @@ function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line
     [P.HIGH, REFERENCE_COLOR_LOCK],
     /* Same clause, same tier, same reason as imageOnlyPrompt() - see its note. */
     [P.HIGH, DENSE.inpaintLock],
+    /* Wired here too so the two builders cannot disagree about what a bottoms prompt
+       says - but this branch is saturated (683 of 700 before this line), so in practice
+       it SHEDS here and ships on the single-asset path. That is the correct way round:
+       COMPOSITE_DEFAULT is false, so single-asset is the path the report came from, and
+       a clause that cannot fit must not be allowed to push DENSE.select or
+       DENSE.panelExclusion off the end - both are reproduced production bugs. */
+    [P.MED,  isBottomsGarment(item) ? BOTTOMS_REFERENCE_BIND[bottomsLength(item)] : ""],
     [P.MED,  DENSE.ignoreFurniture],
   ]);
 }
