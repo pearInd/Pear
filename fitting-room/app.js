@@ -4158,6 +4158,107 @@ function garmentBlobIfWarm(url) {
   return (job && job.settled) || null;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+   THE WIRE ENCODING, PRE-PAID - the half of the swap cost the prefetch left behind
+   ──────────────────────────────────────────────────────────────────────────────
+   REPORTED: garment swaps lag the click even when the bytes are already resident -
+   which is precisely the case the prefetch above was built to create, so "fetch it
+   earlier" had already been spent. The remaining cost is not in this file at all;
+   it is in what the SDK does with what we hand it.
+
+   MEASURED AGAINST THE SDK (@decartai/sdk@0.1.5, utils/media.js imageToBase64 -
+   read, not assumed; the note at rtClient.set()'s flicker-fix comment already
+   records that set() re-encodes on every call):
+
+     a Blob      -> blobToBase64(): a FileReader.readAsDataURL round trip over the
+                    WHOLE image, resolved through an event-loop callback.
+     a data: URL -> image.split(",", 2)[1]. One synchronous string split. No decode,
+                    no FileReader, nothing that can be queued behind anything else.
+
+   So every swap pays a full base64 encode ON THE CLICK TICK. The raw cost is only
+   single-digit milliseconds, but FileReader resolves through the event loop and the
+   moment it runs is the moment the main thread is busiest - the WebRTC handshake,
+   the camera, the reveal-gate frame callbacks. What it actually costs is the encode
+   PLUS however long that queue is, which is the part the shopper sees.
+
+   THE FIX IS ENTIRELY A MATTER OF WHEN. Same encode, moved into the prewarm that
+   already fires the instant a garment is selected, while the shopper is still
+   looking at the catalog and the main thread is idle. By the time they press the
+   button the string is resident and the dispatch is a memcpy.
+
+   ── WHY A WeakMap KEYED ON THE BLOB, AND NOT A SECOND URL CACHE ─────────────────
+   The obvious shape - another url -> string Map beside _assetBlobCache - gets two
+   things wrong that this one gets right for free:
+
+     LIFETIME. A base64 string is ~1.37x the bytes it encodes, and it has to be held
+     ALONGSIDE the Blob (which the composite builder, the flatness probe and the
+     preload gate all still consume). A second Map means a second eviction clock and
+     a second memory ceiling to keep honest, and the LRU note above is already
+     emphatic about what unbounded Blob caching cost here. Keyed on the Blob, the
+     string becomes unreachable exactly when the Blob does - one clock, and the cap
+     that already exists governs both.
+
+     COVERAGE. A url key only fits references that HAVE a url. The stitched composite
+     is memoized under a `${front} ${back}` pair key inside createGarmentComposite(),
+     so a url cache would either miss it - and it is the LARGEST reference this app
+     sends, and in combined mode the only one - or have to duplicate that key format
+     at a second site. Blob identity works for every reference this file produces,
+     whatever built it.
+
+   WARM ONLY, NEVER ON DEMAND - the same discipline garmentBlobIfWarm() states, for
+   the same reason. A miss returns the Blob, so the worst case is byte-for-byte
+   today's behaviour: set() runs the FileReader itself, exactly as it does now.
+   Encoding here on a miss would move the cost back onto the critical path, which is
+   the whole thing this exists to remove. */
+const _wireEncodedBlobs = new WeakMap();   // Blob → its data: URL, pre-paid during prewarm
+
+/** Blob → data: URL, or null. Never throws - a failure just leaves the Blob in play. */
+function blobToDataUrl(blob) {
+  return new Promise((resolve) => {
+    try {
+      const fr = new FileReader();
+      fr.onloadend = () => resolve(typeof fr.result === "string" ? fr.result : null);
+      fr.onerror   = () => resolve(null);
+      fr.readAsDataURL(blob);
+    } catch (_) { resolve(null); }
+  });
+}
+
+/* Fire-and-forget: pre-pay the base64 for a Blob that is already built, so the dispatch
+   does not. Called from prewarmOrientationAssets() only - nothing awaits it, and any
+   failure leaves the Blob path exactly as it was. */
+async function prewarmWireEncoding(blob, label) {
+  if (!blob || _wireEncodedBlobs.has(blob)) return;
+  try {
+    const dataUrl = await blobToDataUrl(blob);
+    if (!dataUrl) return;
+    _wireEncodedBlobs.set(blob, dataUrl);
+    console.log(`[PEAR] wire encoding pre-paid for ${label}`,
+      `(${(dataUrl.length / 1024).toFixed(0)}KB base64) - set() will skip the FileReader`);
+  } catch (e) {
+    console.warn("[PEAR] wire pre-encode failed (harmless - the Blob path still works):", e?.message || e);
+  }
+}
+
+/**
+ * The cheapest wire form of a Blob already in hand: its pre-encoded data: URL when the
+ * prewarm got to it, else the Blob itself. Never encodes, never fetches, never waits.
+ * @param {Blob|null} blob @returns {string|Blob|null}
+ */
+function wireRefFor(blob) {
+  if (!blob) return null;
+  return _wireEncodedBlobs.get(blob) || blob;
+}
+
+/**
+ * The best reference already resident for this URL: a pre-encoded data: URL, else the
+ * warm Blob, else null. NEVER fetches, never encodes, never waits.
+ * @param {string} url @returns {string|Blob|null}
+ */
+function garmentWireRefIfWarm(url) {
+  return wireRefFor(garmentBlobIfWarm(url));
+}
+
 /* Warm the cache with the front AND back assets of the active subject (both halves of a
    full look) - fire-and-forget from setAngle/goLive so the fetches overlap the user's
    next action (or the WebRTC handshake) instead of serialising into the first swap. */
@@ -4171,12 +4272,17 @@ function prewarmOrientationAssets() {
     console.log('[PEAR] prewarm started for:', abbrevImg(frontUrl), '| back:', abbrevImg(backUrl));
     garmentBlobCached(frontUrl).then((frontBlob) => {
       console.log('[PEAR] prewarm front blob:', frontBlob ? `ok (${frontBlob.size.toLocaleString()} bytes)` : 'FAILED');
+      /* ...and pre-pay the base64 the SDK would otherwise charge to the click tick.
+         Chained off the fetch rather than fired beside it, so it encodes the Blob that
+         actually landed and is a no-op when the fetch failed - see prewarmWireEncoding(). */
+      prewarmWireEncoding(frontBlob, `front ${abbrevImg(frontUrl)}`);
     });
     // garmentBlobCached() now retries through the proxy AND the raw CDN internally
     // (fetchWithFallback), so no extra fallback layer is needed here - a null result
     // means all 3 rounds on both routes failed, which is a real, reportable failure.
     if (backUrl) {
       garmentBlobCached(backUrl).then((backBlob) => {
+        prewarmWireEncoding(backBlob, `back ${abbrevImg(backUrl)}`);   // a flip dispatches like a swap
         if (backBlob) {
           console.log(`[PEAR] prewarm back blob: ok (${backBlob.size.toLocaleString()} bytes) - turning around will render the real rear photo`);
         } else {
@@ -4195,6 +4301,10 @@ function prewarmOrientationAssets() {
     if (backUrl && COMPOSITE_MODE && !look) {
       createGarmentComposite(frontUrl, backUrl).then((c) => {
         console.log('[PEAR] prewarm composite:', c ? `ok (${(c.size / 1024).toFixed(0)}KB)` : 'FAILED - will fall back to single-asset');
+        /* The composite is the LARGEST reference this app sends (2048px, q0.95) and in
+           combined mode it is the only one, so it is the single biggest FileReader the
+           dispatch would otherwise pay for. */
+        prewarmWireEncoding(c, "composite");
       });
     }
   }
@@ -8456,7 +8566,7 @@ async function referenceImageFor(item, activeImg = activeImageOf(item), out = {}
        it is a data: URL. */
     if (item.composite) {
       const handed = await garmentBlobCached(item.composite);
-      if (handed) { out.composite = true; return handed; }
+      if (handed) { out.composite = true; return wireRefFor(handed); }
       console.warn("[PEAR] handed-over composite failed to decode - rebuilding locally");
     }
     const g = galleryOf(item);
@@ -8473,7 +8583,12 @@ async function referenceImageFor(item, activeImg = activeImageOf(item), out = {}
         } catch (_) { /* non-fatal: the chip just keeps showing the front photo */ }
       }
       out.composite = true;
-      return composite;
+      /* THE BLOB IS STILL WHAT THE CHIP GETS, and the ordering is load-bearing:
+         createObjectURL() above needs a real Blob, so the wire form is resolved only
+         after it. wireRefFor() hands back the pre-encoded string when the prewarm built
+         one and the Blob itself otherwise - the same bytes either way, so a miss is not
+         a fallback in any visible sense, only a slower encode inside set(). */
+      return wireRefFor(composite);
     }
     /* Both routes to a composite failed. out.composite stays false, so applyGarment()
        drops the panel prompt and steers the single asset below with the ordinary
@@ -8485,7 +8600,10 @@ async function referenceImageFor(item, activeImg = activeImageOf(item), out = {}
   // through effectiveAngle()). Sending bytes, not a URL, is what makes the swap instant.
   if (currentAngle === AUTO_ANGLE) {
     const blob = await garmentBlobCached(activeImg);
-    if (blob) return blob;
+    /* Same Blob this branch always returned, in its cheapest wire form: the pre-encoded
+       data: URL when the prewarm got to it (set() then splits a string instead of running
+       a FileReader over it), the Blob itself when it did not. See prewarmWireEncoding(). */
+    if (blob) return wireRefFor(blob);
     console.warn("[PEAR] AI Auto - Blob pre-cache miss; falling back to proxied URL reference");
   }
   /* ── SINGLE-VIEW GETS THE SAME TREATMENT, IF THE BYTES ARE ALREADY HERE ──────
@@ -8498,10 +8616,17 @@ async function referenceImageFor(item, activeImg = activeImageOf(item), out = {}
      a miss it falls through to the URL immediately rather than moving the fetch onto the
      go-live path, where it would cost more than the server-side one it replaced. The hit
      rate is what setActiveItem()'s prewarm exists to raise. */
-  const warm = garmentBlobIfWarm(activeImg);
+  const warm = garmentWireRefIfWarm(activeImg);
   if (warm) {
+    /* Either a pre-encoded data: URL (the fast case - set() just splits the string) or
+       the raw Blob (bytes are here, the encode is not pre-paid). Both skip the network;
+       only the first also skips the FileReader. `.size` exists on one and `.length` on
+       the other, so reading either unconditionally logs NaNKB - it is a log line, not a
+       behaviour difference, but a size that reads NaN is how a real one stops being read. */
+    const preEncoded = typeof warm === "string";
+    const kb = ((preEncoded ? warm.length : warm.size) / 1024).toFixed(0);
     console.log("[PEAR] reference: warm bytes (prefetched) -", abbrevImg(activeImg),
-      `${(warm.size / 1024).toFixed(0)}KB - Decart has nothing to fetch before conditioning`);
+      `${kb}KB${preEncoded ? " pre-encoded" : ""} - Decart has nothing to fetch before conditioning`);
     return warm;
   }
   return garmentImageRef(activeImg);

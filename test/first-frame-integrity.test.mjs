@@ -294,8 +294,43 @@ console.log("\n── §4 THE PREFETCH THAT KEEPS THE GATED WINDOW SHORT ──"
      because awaiting the fetch here would move it onto the go-live path - later and more
      visible than the server-side one it replaced. */
   const ref = extract("async function referenceImageFor(", "\nasync function applyGarment(item)");
+  /* garmentWireRefIfWarm() replaced the bare garmentBlobIfWarm() call here when the
+     base64 pre-encode landed: it returns the pre-encoded data: URL when one is resident
+     and the warm Blob otherwise, delegating to garmentBlobIfWarm() for the second case.
+     Both are BYTES - the property this check is about - and neither fetches. The
+     pre-encoded form is strictly better: rtClient.set() splits a data: URL instead of
+     running a FileReader over the Blob (see prewarmWireEncoding in app.js). */
   check("a warm reference is sent as BYTES, so Decart has nothing to fetch first",
-    /const warm = garmentBlobIfWarm\(activeImg\);/.test(ref) && /return warm;/.test(ref));
+    /const warm = garmentWireRefIfWarm\(activeImg\);/.test(ref) && /return warm;/.test(ref));
+  check("...and the warm resolver is still fetch-free and encode-free on the hot path",
+    /function garmentWireRefIfWarm\(url\) \{\s*\n\s*return wireRefFor\(garmentBlobIfWarm\(url\)\);\s*\n\}/.test(SRC) &&
+    /function wireRefFor\(blob\) \{[\s\S]{0,160}?return _wireEncodedBlobs\.get\(blob\) \|\| blob;/.test(SRC) &&
+    !/function wireRefFor\(blob\) \{[\s\S]{0,160}?await /.test(SRC),
+    "an await on this path would put a fetch or a FileReader back on the click tick");
+  /* THE MISS IS THE SAME BYTES, NOT A DEGRADED REFERENCE - the property that makes this
+     safe to ship without a flag. wireRefFor() returns the Blob it was given when nothing
+     was pre-paid, so an un-warmed swap behaves exactly as it did before this existed:
+     set() runs the FileReader itself. No path produces a WORSE reference, only a later
+     encode. Returning null on a miss would drop the reference entirely - an undressed
+     shopper - which is why the `|| blob` is asserted rather than assumed. */
+  check("...and a pre-encode miss returns the very Blob it was handed - never null",
+    /return _wireEncodedBlobs\.get\(blob\) \|\| blob;/.test(SRC),
+    "a null here would send a prompt with no reference at all");
+  /* The encode is only ever PRE-paid, from the fire-and-forget prewarm. If it ever becomes
+     reachable from the apply path it stops being an optimisation and becomes the stall it
+     was written to remove. */
+  check("...and the base64 encode happens only in the fire-and-forget prewarm",
+    /prewarmWireEncoding\(frontBlob, /.test(SRC) && !/await prewarmWireEncoding/.test(SRC) &&
+    !new RegExp("blobToDataUrl\\(").test(ref),
+    "encoding on demand would move the cost back onto the critical path");
+  /* ── THE CHIP STILL GETS A BLOB ─────────────────────────────────────────────────
+     createObjectURL() needs a real Blob; the wire wants the string. Both come off the
+     same composite, so ORDER is load-bearing - resolve the wire form only AFTER the
+     object URL is minted. Reversing these two blanks the "Now fitting" thumbnail, and
+     silently: createObjectURL on a string does not throw, it yields a useless URL. */
+  check("the composite's object URL is minted from the Blob, before the wire form is resolved",
+    /item\._compositeObjectUrl = URL\.createObjectURL\(composite\);[\s\S]{0,900}?return wireRefFor\(composite\);/.test(ref),
+    "createObjectURL on a data: string does not throw - it silently yields a useless URL");
   check("...and a cold one falls through to the URL rather than awaiting a fetch",
     !/await garmentBlobCached\(activeImg\)[\s\S]{0,200}const warm/.test(ref) &&
     /return garmentImageRef\(activeImg\);/.test(ref),
