@@ -198,12 +198,22 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      whole sequence undid. */
   const tops = api.imageOnlyPrompt(TEE);
   const bottoms = api.imageOnlyPrompt(JEANS);
-  /* 360 → 420 → 480: STRICT_REFERENCE_LOCK, then DENSE.inpaintLock. The GAP bound is
-     untouched at 40 and is the stricter half anyway: it is what stops one branch growing
-     without the other. */
-  check("both branches stay minimal, and the gap between them stays small",
-    tops.length <= 480 && bottoms.length <= 480 && Math.abs(bottoms.length - tops.length) <= 40,
-    `tops=${tops.length} bottoms=${bottoms.length} gap=${bottoms.length - tops.length}`);
+  /* THE GAP BOUND CAME OFF 2026-08-29, DELIBERATELY. It existed to catch one branch
+     growing without the other while both anchors carried only SHARED, universal clauses
+     (STRICT_REFERENCE_LOCK, then DENSE.inpaintLock) - a gap opening under that regime
+     really was a sign of drift. TOP_COVERAGE_LOCK breaks that premise on purpose: it is
+     TOPS ONLY, bought back against a sleeve-truncation report and an underwear-
+     hallucination report that bottoms has no mirror of (one-branch-at-a-time-on-
+     evidence, same rule image-first.test.mjs §1 and garment-category-prompt.test.mjs §3
+     already document for the opposite-layer lock). So the gap is now 135 characters by
+     design, and a bound written for the old regime would fail on the fix this revision
+     exists to ship. What still has to hold is each branch's OWN ceiling. */
+  check("both branches stay under their own ceiling",
+    tops.length <= 620 && bottoms.length <= 485,
+    `tops=${tops.length} bottoms=${bottoms.length}`);
+  check("...and the gap is exactly what TOP_COVERAGE_LOCK costs, not silent creep",
+    bottoms.length - tops.length === -135,
+    `gap=${bottoms.length - tops.length} - anything else means either branch moved for an unrelated reason`);
 
   const both = api.fitPrompt([
     [api.P.CORE, bottoms],
@@ -228,25 +238,35 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      starting point is 407/411 rather than 342/320 and every row moved with it. */
   /* Recomputed again: both anchors now carry STRICT_REFERENCE_LOCK *and* DENSE.inpaintLock,
      so the baseline is 464/468 and every row moved with it. */
+  /* Recomputed AGAIN 2026-08-29: tops also carries TOP_COVERAGE_LOCK now (bottoms does
+     not - see the gap check above), so the tops baseline is 616 and every tops row moved
+     with it; bottoms moved only by DENSE.inpaintLock's re-scoping, to 481. */
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  510, 514],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 529, 533],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  662, 527],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 681, 546],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
       row(tops, clause) === expTop && row(bottoms, clause) === expBottom,
       `tops=${row(tops, clause)} (doc ${expTop}) bottoms=${row(bottoms, clause)} (doc ${expBottom})`);
   }
-  check("...and app.js prints that arithmetic, per branch, with both branches fitting",
-    /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(464 chars - anchor \+ locks\)     BOTTOMS \(468 chars - lower-body scoped \+ locks\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 510  fits              \u2192 514  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 529  fits              \u2192 533  fits/.test(SRC),
+  check("...and app.js prints that arithmetic, per branch",
+    /THE RESTORE BUDGET: TOPS AND BOTTOMS DIVERGED THIS REVISION/.test(SRC) &&
+    /TOPS \(616 chars - anchor \+ locks \+ coverage\)   BOTTOMS \(481 chars - lower-body scoped \+ locks\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 662  fits {24}\u2192 527  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 681  fits, 19 free {16}\u2192 546  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
-  check("...and it no longer claims a headroom that stopped being true two revisions ago",
-    !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /236 characters are free on tops and 232 on\s*\n?\s*bottoms/.test(SRC),
-    "nothing sheds on either branch any more - the old table said the opposite");
+  /* Executed, not just read off the table: adding BOTH retired clauses to tops now sheds
+     modelAgnostic (its "Ignore the reference model's body" text must be ABSENT) while
+     keeping bodyFidelity (its "never slim them" text must survive); bottoms has room for
+     both and drops neither. */
+  const bothTops    = api.fitPrompt([[api.P.CORE, tops],    [api.P.HIGH, api.DENSE.bodyFidelity], [api.P.MED, api.DENSE.modelAgnostic]]);
+  const bothBottoms = api.fitPrompt([[api.P.CORE, bottoms], [api.P.HIGH, api.DENSE.bodyFidelity], [api.P.MED, api.DENSE.modelAgnostic]]);
+  check("...and it states which branch sheds when both retired clauses are added together",
+    /\+ both of them        \(109\)\u2192 662  SHEDS modelAgnostic \(MED\)    \u2192 592  fits/.test(SRC) &&
+    bothTops.length === 662 && /never slim them/.test(bothTops) && !/Ignore the reference model's body/.test(bothTops) &&
+    bothBottoms.length === 592 && /never slim them/.test(bothBottoms) && /Ignore the reference model's body/.test(bothBottoms),
+    "bottoms still fits both; tops sheds modelAgnostic - that asymmetry has to be documented, not silently true");
 }
 
 console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");

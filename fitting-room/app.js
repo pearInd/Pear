@@ -7529,6 +7529,50 @@ const STRICT_REFERENCE_LOCK =
   REFERENCE_COLOR_LOCK +
   " Do NOT invent, add, or alter any details.";
 
+/* ── TOP_COVERAGE_LOCK - two reports, one clause, TOPS ONLY ──────────────────────
+   REPORT ONE: a long-sleeve reference rendered short/elbow-rolled across four live
+   sessions. ROOT CAUSE: sleeve length reached the model exclusively through the
+   reference image's pixels (by design - see the image-first history above this
+   function), with nothing in the TEXT reinforcing it, while DENSE.inpaintLock's
+   unscoped "skin" was a live, P.HIGH, textually-explicit instruction to leave bare arm
+   skin alone. Two signals, one silent, one explicit and pulling the other way.
+   inpaintLock is now scoped ("non-covered skin") to remove the conflict; this clause is
+   the positive instruction that tells the model WHERE the sleeve fabric's coverage ends
+   - the reference image's own hem, not a specific length asserted in text. Deliberately
+   NOT "full-length" or "to the wrist": CATEGORY_ANCHOR.top is the single anchor for
+   every upper-body item, sleeveless and long-sleeve alike (subType is not read by any
+   prompt builder - confirmed dead per SHIRT_NOUN/SUBTYPE_PROMPT above), so asserting a
+   specific length in text would contradict the reference on every short-sleeve/tank
+   item, the exact text-vs-pixels shape already reproduced twice on this file (the
+   Spider-Man tuxedo, the black-shorts report).
+
+   REPORT TWO: underwear/waistband hallucinated below the hem during upper-body
+   sessions. CATEGORY_ANCHOR.top's non-target passthrough already bans inventing "new
+   pants or garments", but never names undergarments specifically - and this file's own
+   history is that an unnamed class is what gets reinvented after the named ones are
+   fixed (see the assetLock/tuxedo note earlier in this file). Named here as a plain
+   class noun, not an enumerated item list ("boxer waistband", "briefs") - Decart's
+   set() has no negative_prompt field, so an enumerated list ships as tokens in the
+   POSITIVE prompt for the sampler to steer toward, which is exactly how the "never
+   invent a jacket, coat, suit, TUXEDO... bowtie" list produced a tuxedo with a bowtie.
+
+   WHY P.HIGH, NOT FOLDED INTO CATEGORY_ANCHOR (P.CORE): CATEGORY_ANCHOR is shared
+   verbatim by buildCompositePrompt(), whose CORE alone (contract + selector +
+   panel-ban + anchor) already runs ~576 characters before this existed - adding this
+   clause's ~140 characters there pushes composite CORE to ~720, past PROMPT_MAX_CHARS,
+   which cannot be shed (CORE never sheds) and hits clampPromptForWire()'s hard slice -
+   silently truncating the panel contract, not just failing to add a fix. As a P.HIGH
+   part of imageOnlyPrompt() only, it has 84 characters of headroom on the single-view
+   path (616/700) and simply does not ride on the composite path at all, same tradeoff
+   this file already makes for modelAgnostic/ignoreFurniture there.
+
+   TOPS ONLY, on the one-branch-at-a-time-on-evidence rule this file uses throughout: no
+   report has been filed of a bottoms try-on inventing a top or exposing anything above
+   the waist, so bottoms is untouched. */
+const TOP_COVERAGE_LOCK =
+  "Nothing renders below the shirt hem, including undergarments. Cover live arm skin" +
+  " with sleeve fabric to the length shown in the reference.";
+
 /* ── REVISION: DYNAMIC BODY, STATIC GARMENT ──────────────────────────────────────
    THE REPORT: a shopper who is fitted at 0 degrees and then turns 90, or who adds real
    profile volume (a cushion under the shirt, a belly the front view does not show), gets
@@ -7839,13 +7883,15 @@ function imageOnlyPrompt(item) {
      clampPromptForWire()'s hard slice, which cuts at the END and would take the
      fidelity sentence with it.
 
-     TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, STRICT_REFERENCE_LOCK]`
-     for the hallucination clamp, `[P.HIGH, KEEP_OPPOSITE_LAYER]` on the bottoms branch for
-     the opposite-layer pin; both are the retirements this revision made. The budget is not
-     the constraint - 308 characters are free on tops and 330 on bottoms - so the only
-     question is whether that text is worth the weight it takes away from the reference
-     image, which is the mechanism every report in this sequence shares. One at a time,
-     re-tested live. */
+     TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, KEEP_OPPOSITE_LAYER]`
+     on the bottoms branch for the opposite-layer pin is the one retirement from this
+     revision still pending. STRICT_REFERENCE_LOCK and TOP_COVERAGE_LOCK are both bought
+     back below now (2026-08-24 and 2026-08-29). READ THE CURRENT ROW: headroom moves
+     every time one of these lands, so it is measured fresh rather than remembered - as
+     of TOP_COVERAGE_LOCK, tops runs 616/700 (84 free) and bottoms 481/700 (219 free).
+     The budget is rarely the constraint; the question is whether the text is worth the
+     weight it takes from the reference image, the mechanism every report in this
+     sequence shares. One at a time, re-tested live. */
   return fitPrompt([
     [P.CORE, isBottomsGarment(item) ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
     /* BOUGHT BACK 2026-08-24 against a colour-drift report, and this is the restore this
@@ -7868,6 +7914,13 @@ function imageOnlyPrompt(item) {
        mechanism behind this file's blue-jacket and tuxedo reports. The lower body is
        already covered by the passthrough sentence that now LEADS this prompt, so naming it
        a second time buys nothing and costs the budget twice. */
+    /* BOUGHT BACK 2026-08-29 against the sleeve-truncation and underwear-hallucination
+       reports - see TOP_COVERAGE_LOCK's own comment for the mechanism and the budget
+       math. Tops only ("" on bottoms is filtered out by fitPrompt()'s own `text &&
+       String(text).trim()` check, same pattern CATEGORY_ANCHOR's ternary above uses),
+       and ordered BEFORE inpaintLock so its arm-skin instruction leads the general skin
+       passthrough - this file's own "leading tokens dominate" finding. */
+    [P.HIGH, isBottomsGarment(item) ? "" : TOP_COVERAGE_LOCK],
     [P.HIGH, DENSE.inpaintLock],
   ]);
 }
@@ -7946,21 +7999,26 @@ function lookAnchorPrompt() {
                       an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
                       the moment "it gave me the model's shoulders" is reported again.
 
-   ── THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP ────
-   The number has moved eight times, so read the CURRENT row rather than remembering an
+   ── THE RESTORE BUDGET: TOPS AND BOTTOMS DIVERGED THIS REVISION ────────────
+   The number has moved nine times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 700, one space per part as fitPrompt() joins.
-   The BASELINE moved this revision: both anchors now carry STRICT_REFERENCE_LOCK, bought
-   back against a colour-drift report, which is why tops reads 407 rather than 342.
+   THE BASELINE SPLIT 2026-08-29: TOP_COVERAGE_LOCK (bought back against a sleeve-
+   truncation report and an underwear-hallucination report - see its own comment above
+   imageOnlyPrompt()) is TOPS ONLY, so tops jumped from 464 to 616 while bottoms moved
+   only by DENSE.inpaintLock's 13-character re-scoping, 468 → 481.
 
-     TOPS (464 chars - anchor + locks)     BOTTOMS (468 chars - lower-body scoped + locks)
-     + DENSE.bodyFidelity  (45) → 510  fits              → 514  fits
-     + DENSE.modelAgnostic (64) → 529  fits              → 533  fits
-     + both of them        (109)→ 574  fits              → 578  fits
+     TOPS (616 chars - anchor + locks + coverage)   BOTTOMS (481 chars - lower-body scoped + locks)
+     + DENSE.bodyFidelity  (45) → 662  fits                        → 527  fits
+     + DENSE.modelAgnostic (64) → 681  fits, 19 free                → 546  fits
+     + both of them        (109)→ 662  SHEDS modelAgnostic (MED)    → 592  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 236 characters are free on tops and 232 on
-   bottoms, so every retired clause in this table would go back with room to spare. That
-   INVERTS the warning this note used to carry: the risk is no longer that a restore
-   silently sheds, it is that a restore silently SUCCEEDS.
+   BOTTOMS STILL HAS ROOM FOR EVERYTHING, tops does not any more: 84 characters are free
+   on tops (219 on bottoms), and adding BOTH retired clauses to tops at once now exceeds
+   700 and fitPrompt() sheds the worse-priority one (modelAgnostic, P.MED) rather than
+   clamping - so a restore of one clause at a time still lands clean on tops, but "add
+   both back" silently drops the second on tops specifically, where it would not on
+   bottoms. That is a fact about THIS row, not a general warning - see the note above the
+   table this revision changed for why the two branches were allowed to diverge at all.
 
    HEADROOM IS NOT PERMISSION. Tops was collapsed from 634 characters and bottoms from
    616 precisely BECAUSE text volume was outweighing the reference pixels - the tuxedo,
@@ -8100,7 +8158,17 @@ const DENSE = Object.freeze({
      one to reintroduce. The noun already carries this signal correctly ("t-shirt" implies
      short sleeves, "tank top" sleeveless, "long-sleeve shirt" full coverage) without a
      separate, subType-blind passthrough clause fighting it. */
-  inpaintLock:   "Face, skin, hands and background pass through untouched.",
+  /* SCOPED 2026-08-29 against a sleeve-truncation report: a long-sleeve reference came
+     back short/elbow-rolled on live sessions where bare forearm skin was in frame. The
+     unscoped "skin" here is a P.HIGH clause competing directly with the garment's own
+     sleeve coverage - it told the model to leave arm skin exactly as the camera shows it,
+     with nothing anywhere qualifying that the sleeve fabric is supposed to cover some of
+     it. "non-covered" is the one-word scope: face/hands/background are still pinned
+     unconditionally (the largest-loss protection this clause exists for), and skin stays
+     protected everywhere the garment reference does not claim it. See TOP_COVERAGE_LOCK
+     below for the other half - this scoping removes the conflict, that clause is the
+     positive instruction the model can resolve it with. */
+  inpaintLock:   "Face, hands, background, and non-covered skin pass through untouched.",
   rotation:      "The garment stays on through any turn.",
   temporal:      "Stable print, no flicker.",
   quality:       "Photoreal fabric, natural light.",

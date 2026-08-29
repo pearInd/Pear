@@ -465,7 +465,7 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
     api.buildCompositePrompt(item, "front", false) === api.buildCompositePrompt(item, "front", true),
     api.buildCompositePrompt(item, "front", false).slice(-160));
   check("...and the passthrough clamp is what the budget kept",
-    /Face, skin, hands and background pass through untouched/.test(api.buildCompositePrompt(item, "front", false)),
+    /Face, hands, background, and non-covered skin pass through untouched/.test(api.buildCompositePrompt(item, "front", false)),
     api.buildCompositePrompt(item, "front", false).slice(-160));
 }
 
@@ -804,13 +804,16 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
     square === built &&
     /Fit ONLY the reference shirt onto the subject's upper torso\./.test(square) &&
     /without generating, replacing, or inventing any new pants or garments\./.test(square) &&
-    /Face, skin, hands and background pass through untouched\./.test(square) &&
+    /Face, hands, background, and non-covered skin pass through untouched\./.test(square) &&
     /* THE TAIL IS THE PASSTHROUGH CLAMP NOW. Order on this branch is contract → selector →
        cross-panel ban → anchor → colour → inpaint, with BOTH P.MED (ignoreFurniture) and
        the first P.HIGH (modelAgnostic) shed to pay for the two that survive - see the
        budget note in §4. Both ends are pinned rather than one, which is what keeps a
-       silent re-ordering from passing. */
-    /Face, skin, hands and background pass through untouched\.$/.test(square));
+       silent re-ordering from passing. RE-WORDED 2026-08-29 against a sleeve-truncation
+       report ("skin" scoped to "non-covered skin"); TOP_COVERAGE_LOCK itself does NOT
+       ride on this (composite) path - see its own comment in app.js for the composite
+       CORE-budget reason - so this branch's text is otherwise unchanged. */
+    /Face, hands, background, and non-covered skin pass through untouched\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 700 && built.length <= 700, `square=${square.length} edge=${built.length}`);
 }

@@ -194,12 +194,15 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
      to stay small because someone remembered why. It grew by 81 characters here, and that
      is the deliberate spend of this revision: the per-frame instruction is the only thing
      that was bought, and image-first.test.mjs §1 pins that it is exactly three sentences. */
-  /* CEILING 360 → 420 → 480, each step for ONE named clause and only that clause:
-     STRICT_REFERENCE_LOCK, then DENSE.inpaintLock. The branch runs 468, so this still
-     fails on the next unbudgeted addition. "Minimal" stays a number somebody has to
-     raise deliberately. */
+  /* CEILING 360 → 420 → 480 → 481, each step for ONE named clause and only that clause:
+     STRICT_REFERENCE_LOCK, then DENSE.inpaintLock, then DENSE.inpaintLock's own 2026-08-29
+     re-scoping ("skin" → "non-covered skin", +13 chars, against a sleeve-truncation
+     report - see its comment in app.js). Bottoms carries no TOP_COVERAGE_LOCK (that
+     clause is tops-only), so this is the ONLY change bottoms sees from that revision.
+     The branch runs 481, so this still fails on the next unbudgeted addition. "Minimal"
+     stays a number somebody has to raise deliberately. */
   check("the bottoms prompt stays minimal - five instructions, not an assembly",
-    bottomsPrompt.length <= 480,
+    bottomsPrompt.length <= 481,
     `${bottomsPrompt.length} chars - was 616 across six sentences four revisions ago`);
   check("...and carries NO body-volume or temporal clause - the deliberate trade",
     !/360-degree rotations/.test(bottomsPrompt) && !/as soon as visible/.test(bottomsPrompt),

@@ -127,17 +127,25 @@ const TOPS_SPEC =
      restore imageOnlyPrompt()'s own note has prescribed since the 1:1 collapse, and the
      budget note attached to it predicted this exact length (407). */
   " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details." +
+  /* THE COVERAGE LOCK, bought back 2026-08-29 against a sleeve-truncation report and an
+     underwear-hallucination report at once - see TOP_COVERAGE_LOCK's own comment in
+     app.js for the mechanism. TOPS ONLY: it is absent from BOTTOMS_SPEC below, checked
+     in §1. */
+  " Nothing renders below the shirt hem, including undergarments. Cover live arm skin" +
+  " with sleeve fabric to the length shown in the reference." +
   /* THE PASSTHROUGH CLAMP, bought back 2026-08-24 against a face/skin/background report.
      app.js's restore list has named this "THE LARGEST LOSS and the one to restore first"
-     ever since it came off, with the restore spelled out as [P.HIGH, DENSE.inpaintLock]. */
-  " Face, skin, hands and background pass through untouched.";
+     ever since it came off, with the restore spelled out as [P.HIGH, DENSE.inpaintLock].
+     RE-SCOPED 2026-08-29, same report as the coverage lock above: "skin" was unscoped
+     and fighting the sleeve's own coverage, so it is now "non-covered skin". */
+  " Face, hands, background, and non-covered skin pass through untouched.";
 const BOTTOMS_SPEC =
   "For any upper body parts, torso, or shirt that enter the camera frame during the" +
   " video, pass through and strictly preserve the subject's LIVE camera feed clothing" +
   " (color, pattern, length) without generating, replacing, or inventing any new top" +
   " or garments. Fit ONLY the reference pants/shorts onto the subject's lower body." +
   " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details." +
-  " Face, skin, hands and background pass through untouched.";
+  " Face, hands, background, and non-covered skin pass through untouched.";
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
@@ -160,12 +168,19 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      clause cannot be slipped onto either branch, which is the regression this whole
      suite exists to catch. §1 then checks each of the three per branch, below. */
   const sentences = (s) => s.split(/(?<=\.)\s+/).filter(Boolean);
-  /* FOUR NOW, not two: scope, pass-through, then STRICT_REFERENCE_LOCK's two sentences
-     (colour/cut match, then the invent-add-alter clamp). Bought back against a colour-drift
-     report. The count is still pinned - "minimal" has to stay a number somebody has to
-     change deliberately, or the compression this suite exists to defend erodes silently. */
-  check("both branches are exactly five sentences: pass-through, scope, match, clamp, inpaint",
-    sentences(TOPS_SPEC).length === 5 && sentences(BOTTOMS_SPEC).length === 5,
+  /* BOTTOMS IS FIVE: scope, pass-through, then STRICT_REFERENCE_LOCK's two sentences
+     (colour/cut match, then the invent-add-alter clamp), then inpaint. Bought back
+     against a colour-drift report and a face/skin/background report respectively.
+     TOPS IS SEVEN, not five, as of 2026-08-29: the same four plus TOP_COVERAGE_LOCK's
+     two sentences (hem/undergarment boundary, then sleeve-to-skin coverage), bought
+     back against the sleeve-truncation and underwear reports - see TOP_COVERAGE_LOCK's
+     own comment in app.js. The asymmetry is deliberate (tops-only, one-branch-at-a-
+     time-on-evidence - no report has been filed of the mirror bug on bottoms), not a
+     drift; §1 below asserts the coverage lock's absence from bottoms explicitly. Both
+     counts stay pinned - "minimal" has to stay a number somebody changes deliberately,
+     or the compression this suite exists to defend erodes silently. */
+  check("tops is seven sentences, bottoms five: the coverage lock is the one asymmetry",
+    sentences(TOPS_SPEC).length === 7 && sentences(BOTTOMS_SPEC).length === 5,
     `tops=${sentences(TOPS_SPEC).length} bottoms=${sentences(BOTTOMS_SPEC).length}`);
   /* ── THE LEAD CHANGED 2026-08-24, AND THE LEAD IS THE POINT ─────────────────
      The passthrough sentence now opens both branches; the substitution follows it. Same
@@ -244,13 +259,28 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     /Exactly match color, pattern, logos, and cut\. Do NOT invent, add, or alter any details\./.test(TOPS_SPEC) &&
     /Exactly match color, pattern, logos, and cut\. Do NOT invent, add, or alter any details\./.test(BOTTOMS_SPEC),
     "the colour drift report is what bought this back - it must not shed");
-  /* THE PASSTHROUGH CLAMP CLOSES THEM NOW. Pinned at the END specifically: it is P.HIGH, so
-     it is the first thing budget pressure would drop, and a silent shed would take the
-     face/skin/background protection with it while every other check here still passed. */
+  /* THE COVERAGE LOCK, 2026-08-29, TOPS ONLY. Both halves of the pair - the hem/
+     undergarment boundary and the sleeve-to-skin instruction - and its absence from
+     bottoms, which is the one deliberate asymmetry this revision introduces. */
+  check("...and the coverage lock's hem/undergarment boundary is on the TOPS branch only",
+    /Nothing renders below the shirt hem, including undergarments\./.test(TOPS_SPEC) &&
+    !/Nothing renders below the shirt hem, including undergarments\./.test(BOTTOMS_SPEC),
+    "a bottoms try-on has no shirt hem to bound - this must not leak onto that branch");
+  check("...and its sleeve-to-skin coverage instruction rides with it, tops only",
+    /Cover live arm skin with sleeve fabric to the length shown in the reference\./.test(TOPS_SPEC) &&
+    !/Cover live arm skin with sleeve fabric/.test(BOTTOMS_SPEC),
+    "the sleeve-truncation report is a tops-only failure mode");
+  /* THE PASSTHROUGH CLAMP CLOSES THEM NOW, STILL. Pinned at the END specifically: it is
+     P.HIGH, so it is the first thing budget pressure would drop, and a silent shed would
+     take the face/hands/background protection with it while every other check here
+     still passed. RE-WORDED 2026-08-29 (see app.js's own comment on DENSE.inpaintLock):
+     "skin" is now "non-covered skin", scoped against the sleeve-truncation report - an
+     unscoped passthrough was a live, explicit instruction competing with the garment's
+     own sleeve coverage. */
   check("...and the passthrough clamp closes both branches",
-    /Face, skin, hands and background pass through untouched\.$/.test(TOPS_SPEC) &&
-    /Face, skin, hands and background pass through untouched\.$/.test(BOTTOMS_SPEC),
-    "restored against a face/skin/background report - it must not shed to the end");
+    /Face, hands, background, and non-covered skin pass through untouched\.$/.test(TOPS_SPEC) &&
+    /Face, hands, background, and non-covered skin pass through untouched\.$/.test(BOTTOMS_SPEC),
+    "restored against a face/skin/background report, re-scoped against a sleeve-truncation one - it must not shed to the end");
   /* THE PROMPT IS THE ASK; THE GUARD IS THE GUARANTEE. Decart's set() has no mask channel,
      so this wording is a probabilistic bias and nothing more. Asserted together so the
      pair cannot be separated by a later edit that trusts the text alone. */
@@ -498,7 +528,7 @@ console.log("\n── §3 THE RETIREMENT IS REVERSIBLE (this mode will need piec
     /function fitPrompt\(parts, max = PROMPT_MAX_CHARS\)/.test(SRC) &&
     /const P = Object\.freeze\(\{ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 \}\)/.test(SRC));
   check("...the DENSE table survives, with every retired clause verbatim",
-    /inpaintLock:\s+"Face, skin, hands and background pass through untouched\."/.test(SRC) &&
+    /inpaintLock:\s+"Face, hands, background, and non-covered skin pass through untouched\."/.test(SRC) &&
     /contract:\s+"The reference image is a split photo of one garment/.test(SRC) &&
     /lookPanels:\s+"The reference stacks two garments/.test(SRC));
   check("...and angleClause() survives, so the orientation clauses stay proven",

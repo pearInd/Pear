@@ -284,7 +284,7 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
   }
 
   check("the passthrough clamp is still on file, and named as the first to restore",
-    /Face, skin, hands and background pass through untouched/.test(SRC) &&
+    /Face, hands, background, and non-covered skin pass through untouched/.test(SRC) &&
     /THE LARGEST[\s\S]{0,80}LOSS and the one to restore first/.test(SRC),
     "retiring a clause from assembly must not delete it, nor lose its ranking");
   check("the retired body-fidelity clamp is still on file too",
