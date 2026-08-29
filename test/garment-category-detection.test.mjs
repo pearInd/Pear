@@ -57,6 +57,13 @@ function check(label, cond, detail) {
 /* The real engine, executed. */
 const code = SRC.slice(SRC.indexOf("/* ── Garment category detection"),
                        SRC.indexOf("function toItem(raw)"));
+/* categoryFromSizeRun() is tier 1.5 of the same chain but lives beside the size
+   vocabulary it reads (KIDS_NUMERIC_SIZES / ADULT_ALPHA_SIZES / parseSizeList), which is
+   a screen above this slice. Lifted REAL rather than stubbed - a stub here would let the
+   thresholds drift without this suite noticing, and the thresholds are the whole point. */
+const SIZE_END = '? "bottom" : null;\n}';
+const sizeCode = SRC.slice(SRC.indexOf("const KIDS_NUMERIC_SIZES"),
+                           SRC.indexOf(SIZE_END) + SIZE_END.length);
 const mkApi = ({ geminiImpl } = {}) => {
   const calls = [];
   const sandbox = {
@@ -66,8 +73,9 @@ const mkApi = ({ geminiImpl } = {}) => {
     classifyGarmentViaLLM: geminiImpl || (async (t) => { calls.push(t); return null; }),
   };
   const api = new Function(...Object.keys(sandbox),
-    code + "\nreturn { classifyGarmentTitle, resolveGarmentCategory, categoryToGarmentType," +
-    " GARMENT_CATEGORY_KEYWORDS };")(...Object.values(sandbox));
+    sizeCode + "\n" + code +
+    "\nreturn { classifyGarmentTitle, resolveGarmentCategory, categoryToGarmentType," +
+    " GARMENT_CATEGORY_KEYWORDS, categoryFromSizeRun };")(...Object.values(sandbox));
   return { ...api, calls };
 };
 const api = mkApi();
@@ -180,7 +188,54 @@ console.log("\n── §5 THE RESOLUTION CHAIN: explicit metadata outranks a gue
     "tops is the majority of the catalog - but it is now the LAST resort, not the first");
 }
 
-console.log("\n── §6 THE LLM TIER: consulted only on abstention, and never fatal ──");
+console.log("\n── §5b TIER 1.5 - THE SIZE RUN, for titles that name a cut, not a garment ──");
+{
+  const { categoryFromSizeRun, resolveGarmentCategory } = api;
+  /* REPORTED: "STRAIGHT BASIC" and "LOOSE" ran through the TOPS pipeline while the size
+     selector correctly offered 26-38. Both halves matter. Those titles name a CUT and a
+     FIT - no garment noun anywhere - so every keyword tier abstains, correctly, and the
+     chain fell to its silent `return "top"`. But 26-38 is a WAIST run: the product was
+     stating its own region in the one field that was never ambiguous. */
+  check("the reported runs resolve as bottoms",
+    categoryFromSizeRun(["26","28","30","32","34","36","38"]) === "bottom" &&
+    categoryFromSizeRun("26,28,30,32,34,36,38") === "bottom" &&
+    categoryFromSizeRun(["30","32","34"]) === "bottom");
+
+  console.log("   -- and it ABSTAINS on everything that is not unambiguously a waist --");
+  check("letter sizes say nothing about region",
+    categoryFromSizeRun(["S","M","L"]) === null &&
+    categoryFromSizeRun(["28","30","M"]) === null,
+    "one letter size present is enough to disqualify the run");
+  check("a kids numeric run (2-18) falls below the floor",
+    categoryFromSizeRun(["8","10","12","14"]) === null &&
+    categoryFromSizeRun(["2","4","6"]) === null,
+    "this must never fight isKidsProduct for the same tokens");
+  check("a shirt NECK run (14-18) also falls below the floor",
+    categoryFromSizeRun(["14","15","16","17"]) === null);
+  check("an EU womens TOP run opens too high to be a waist",
+    categoryFromSizeRun(["34","36","38","40","42"]) === null &&
+    categoryFromSizeRun(["36","38","40"]) === null,
+    "34+ is where tops open; a waist run opens at 24-32");
+  check("non-numeric or empty lists abstain rather than throw",
+    categoryFromSizeRun(["ONE SIZE"]) === null && categoryFromSizeRun(["36R"]) === null &&
+    categoryFromSizeRun([]) === null && categoryFromSizeRun(null) === null &&
+    categoryFromSizeRun(undefined) === null);
+  check("it can prove a BOTTOM and never a top - a size run cannot prove a top",
+    ["S,M,L", "34,36,38", "8,10,12", ""].every((s) => categoryFromSizeRun(s) !== "top"));
+
+  console.log("   -- placed in the chain as evidence, below metadata, above the guess --");
+  check("explicit metadata still outranks the size run",
+    await resolveGarmentCategory({ garmentType: "upper_body", sizes: ["28","30","32"] }) === "top",
+    "a catalog that classified the item is not second-guessed by its ladder");
+  check("a title that DOES name a garment still outranks it",
+    await resolveGarmentCategory({ name: "Oxford Shirt", sizes: ["28","30","32"] }) === "top");
+  check("the reported item resolves to BOTTOM instead of defaulting to top",
+    await resolveGarmentCategory({ name: "STRAIGHT BASIC", sizes: ["26","28","30","32","34","36","38"] }) === "bottom" &&
+    await resolveGarmentCategory({ name: "LOOSE", sizes: ["30","32","34"] }) === "bottom");
+  check("...and with no sizes it still falls through to the old default",
+    await resolveGarmentCategory({ name: "STRAIGHT BASIC" }) === "top",
+    "the size run adds evidence; it does not invent any");
+}
 {
   /* THE COST CONTROL. A per-item network round trip on every catalog card would be both
      slow and billable; tier 1 already answers the overwhelming majority. */

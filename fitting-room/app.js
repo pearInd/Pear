@@ -1074,6 +1074,42 @@ function isKidsProduct(sizes, garmentAgeGroup) {
   return garmentAgeGroup === "kids";
 }
 
+/* ── THE SIZE RUN AS EVIDENCE - "STRAIGHT BASIC" and "LOOSE" ─────────────────────
+   REPORTED: long trousers ran through the tops pipeline while the size selector
+   correctly offered 26-38. Both halves of that sentence are the clue. The names carry
+   NO garment noun - "STRAIGHT BASIC" and "LOOSE" name a CUT and a FIT - so every keyword
+   tier abstains, correctly, and resolveGarmentCategory() falls to its silent `return
+   "top"`. That default is the same failure mode this file already records for the shorts
+   report: a sweep that guesses "top" has nothing left to escalate, and the guess ships.
+
+   But the shopper was looking at the right answer the whole time. A size run of 26-38 is
+   a WAIST measurement - it is the product telling us its own region, in the one field
+   that was never ambiguous. This file already reasons about exactly this vocabulary one
+   screen up, where KIDS_NUMERIC_SIZES documents that "adult numeric systems - waist/chest
+   28-44 - deliberately fall OUTSIDE this set".
+
+   IT ABSTAINS UNLESS THE RUN IS UNAMBIGUOUSLY A WAIST, which is what makes it safe to
+   put ahead of a guess and not merely another guess:
+     · any adult LETTER size present  -> abstain (S/M/L says nothing about region).
+     · any token that is not a plain number -> abstain (one-size, "36R", store labels).
+     · the run must sit inside 24-48  -> a kids run (2-18) and a shirt NECK run (14-18)
+       both fall below the floor and abstain.
+     · the run must START at 32 or lower -> a waist run opens at 24/26/28/30. An EU
+       women's TOP run opens at 34/36, so it abstains rather than being claimed here.
+   Nothing in this returns "top": a size run can prove a bottom, and cannot prove a top.
+   @param {string[]|string|null|undefined} sizes
+   @returns {"bottom"|null} */
+const WAIST_RUN_FLOOR = 24, WAIST_RUN_CEIL = 48, WAIST_RUN_OPENS_BY = 32;
+function categoryFromSizeRun(sizes) {
+  const list = parseSizeList(sizes);
+  if (!list.length) return null;
+  if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return null;
+  if (!list.every((s) => /^\d{1,2}$/.test(s))) return null;
+  const nums = list.map(Number);
+  if (!nums.every((n) => n >= WAIST_RUN_FLOOR && n <= WAIST_RUN_CEIL)) return null;
+  return Math.min(...nums) <= WAIST_RUN_OPENS_BY ? "bottom" : null;
+}
+
 /**
  * Mirror of isKidsProduct - true only when the product is CONFIDENTLY adult.
  * Needed because the childFits guard was zeroing only on garmentAgeGroup ===
@@ -1763,6 +1799,15 @@ async function resolveGarmentCategory(item) {
   const byTitle = classifyGarmentTitle(item.name, item.title, item.category);
   if (byTitle) return byTitle;
 
+  /* TIER 1.5 - the product's OWN size run, ahead of the network tier because it is free,
+     synchronous and deterministic, and ahead of the default because it is EVIDENCE rather
+     than a guess. It only ever returns "bottom", and only for a run that can only be a
+     waist; see categoryFromSizeRun(). This is the tier that answers "STRAIGHT BASIC" and
+     "LOOSE" - titles that name a cut and a fit, where every keyword tier rightly abstains
+     and the shopper is nonetheless being shown 26-38. */
+  const bySizes = categoryFromSizeRun(item.sizes);
+  if (bySizes) return bySizes;
+
   /* TIER 2. Bounded and swallowed: a classification call is an ENHANCEMENT, and it must
      never be able to stall or fail a try-on. Promise.race against a timer rather than an
      AbortController because the seam is a plain async function - callers may implement it
@@ -1792,6 +1837,12 @@ function toItem(raw) {
   if (EXPLICIT_BOTTOM_TYPES.has(explicit)) category = "bottom";
   else if (EXPLICIT_TOP_TYPES.has(explicit)) category = "top";
   else category = classifyGarmentTitle(raw?.name, raw?.title, raw?.category);
+  /* The size run is tier 1.5 here too, and for the same reason it is in
+     resolveGarmentCategory(): it is free and synchronous, so the grid can use it, and it
+     resolves the cut/fit-named products ("STRAIGHT BASIC", "LOOSE") that reach the LLM
+     tier only if the shopper actually selects them. `categoryResolved` follows it, so an
+     item settled by its sizes is not re-resolved over the network later. */
+  if (!category) category = categoryFromSizeRun(raw?.sizes);
   return { ...raw, garmentType: categoryToGarmentType(category ?? "top"), categoryResolved: !!category };
 }
 
@@ -2415,6 +2466,16 @@ window.addEventListener("message", (e) => {
     // The room may already be open - rebuild the ladder against the real variants and
     // re-check the block, rather than waiting for the next item swap.
     try { injectSizeSelector(); updateSizeMismatchUI(); } catch {}
+    /* A LATE SIZE LIST IS NEW CATEGORY EVIDENCE, and this is the half the report was
+       filed against: the ladder rebuilt to 26-38 while the chip still read "בגד עליון",
+       because nothing re-asked the category once the sizes landed. The item had been
+       resolved by DEFAULT (a cut/fit title like "STRAIGHT BASIC" abstains on every
+       keyword tier), so categoryResolved is false and this re-resolve is exactly what
+       it is for - an item already settled by real evidence returns at the guard. */
+    if (activeItem) {
+      refineActiveItemCategory(activeItem).catch((e) =>
+        console.warn("[PEAR] category re-resolve after late sizes failed:", e?.message || e));
+    }
   }
 
   if (typeof e.data.garment_age_group === "string") {
