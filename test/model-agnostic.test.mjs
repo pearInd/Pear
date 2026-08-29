@@ -201,18 +201,22 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   /* THE GAP BOUND CAME OFF 2026-08-29, DELIBERATELY. It existed to catch one branch
      growing without the other while both anchors carried only SHARED, universal clauses
      (STRICT_REFERENCE_LOCK, then DENSE.inpaintLock) - a gap opening under that regime
-     really was a sign of drift. TOP_COVERAGE_LOCK breaks that premise on purpose: it is
-     TOPS ONLY, bought back against a sleeve-truncation report and an underwear-
-     hallucination report that bottoms has no mirror of (one-branch-at-a-time-on-
-     evidence, same rule image-first.test.mjs §1 and garment-category-prompt.test.mjs §3
-     already document for the opposite-layer lock). So the gap is now 135 characters by
-     design, and a bound written for the old regime would fail on the fix this revision
-     exists to ship. What still has to hold is each branch's OWN ceiling. */
+     really was a sign of drift. TOP_COVERAGE_LOCK broke that premise on purpose: it
+     landed TOPS ONLY first, against a sleeve-truncation report and an underwear-
+     hallucination report. BOTTOM_COVERAGE_LOCK landed the SAME DAY against the mirrored
+     trouser-truncation report, so bottoms is no longer unmirrored - it is just a
+     SHORTER mirror (one sentence: leg-to-skin coverage only, no undergarment-equivalent
+     clause - see its own comment in app.js for why nothing was added to match its
+     sibling's shape). So the gap is now 51 characters by design, not 0 and not the 135
+     it was for the few hours between the two clauses landing - a bound written for
+     either earlier state would fail on the fix this revision ships. What still has to
+     hold is each branch's OWN ceiling, and that the gap is this SPECIFIC number rather
+     than merely "smaller than before". */
   check("both branches stay under their own ceiling",
-    tops.length <= 620 && bottoms.length <= 485,
+    tops.length <= 620 && bottoms.length <= 570,
     `tops=${tops.length} bottoms=${bottoms.length}`);
-  check("...and the gap is exactly what TOP_COVERAGE_LOCK costs, not silent creep",
-    bottoms.length - tops.length === -135,
+  check("...and the gap is exactly what the two coverage locks cost relative to each other, not silent creep",
+    bottoms.length - tops.length === -51,
     `gap=${bottoms.length - tops.length} - anything else means either branch moved for an unrelated reason`);
 
   const both = api.fitPrompt([
@@ -238,23 +242,26 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      starting point is 407/411 rather than 342/320 and every row moved with it. */
   /* Recomputed again: both anchors now carry STRICT_REFERENCE_LOCK *and* DENSE.inpaintLock,
      so the baseline is 464/468 and every row moved with it. */
-  /* Recomputed AGAIN 2026-08-29: tops also carries TOP_COVERAGE_LOCK now (bottoms does
-     not - see the gap check above), so the tops baseline is 616 and every tops row moved
-     with it; bottoms moved only by DENSE.inpaintLock's re-scoping, to 481. */
+  /* Recomputed AGAIN 2026-08-29, twice: TOP_COVERAGE_LOCK first (tops to 616), then
+     BOTTOM_COVERAGE_LOCK the same day (bottoms to 565, not 481 - its own, shorter
+     mirror, not "unchanged" - see the gap check above). Every row moved with both. */
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  662, 527],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 681, 546],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  662, 611],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 681, 630],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
       row(tops, clause) === expTop && row(bottoms, clause) === expBottom,
       `tops=${row(tops, clause)} (doc ${expTop}) bottoms=${row(bottoms, clause)} (doc ${expBottom})`);
   }
+  /* Whitespace-tolerant on purpose: this table's column alignment is cosmetic (it has
+     already needed re-flowing twice as the numbers grew), so pinning exact space counts
+     would fail on a harmless re-wrap. What has to hold is the NUMBERS and the verdicts. */
   check("...and app.js prints that arithmetic, per branch",
-    /THE RESTORE BUDGET: TOPS AND BOTTOMS DIVERGED THIS REVISION/.test(SRC) &&
-    /TOPS \(616 chars - anchor \+ locks \+ coverage\)   BOTTOMS \(481 chars - lower-body scoped \+ locks\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 662  fits {24}\u2192 527  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 681  fits, 19 free {16}\u2192 546  fits/.test(SRC),
+    /THE RESTORE BUDGET: TOPS AND BOTTOMS BOTH CARRY A COVERAGE LOCK NOW/.test(SRC) &&
+    /TOPS \(616 chars[\s\S]{0,40}BOTTOMS \(565 chars/.test(SRC) &&
+    /DENSE\.bodyFidelity\s+\(45\)\s+\u2192\s+662\s+fits[\s\S]{0,40}\u2192\s+611\s+fits/.test(SRC) &&
+    /DENSE\.modelAgnostic\s+\(64\)\s+\u2192\s+681\s+fits, 19 free[\s\S]{0,40}\u2192\s+630\s+fits, 70 free/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   /* Executed, not just read off the table: adding BOTH retired clauses to tops now sheds
      modelAgnostic (its "Ignore the reference model's body" text must be ABSENT) while
@@ -263,9 +270,9 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   const bothTops    = api.fitPrompt([[api.P.CORE, tops],    [api.P.HIGH, api.DENSE.bodyFidelity], [api.P.MED, api.DENSE.modelAgnostic]]);
   const bothBottoms = api.fitPrompt([[api.P.CORE, bottoms], [api.P.HIGH, api.DENSE.bodyFidelity], [api.P.MED, api.DENSE.modelAgnostic]]);
   check("...and it states which branch sheds when both retired clauses are added together",
-    /\+ both of them        \(109\)\u2192 662  SHEDS modelAgnostic \(MED\)    \u2192 592  fits/.test(SRC) &&
+    /\+ both of them\s+\(109\)\s*\u2192\s*662\s+SHEDS modelAgnostic \(MED\)\s*\u2192\s*676\s+fits/.test(SRC) &&
     bothTops.length === 662 && /never slim them/.test(bothTops) && !/Ignore the reference model's body/.test(bothTops) &&
-    bothBottoms.length === 592 && /never slim them/.test(bothBottoms) && /Ignore the reference model's body/.test(bothBottoms),
+    bothBottoms.length === 676 && /never slim them/.test(bothBottoms) && /Ignore the reference model's body/.test(bothBottoms),
     "bottoms still fits both; tops sheds modelAgnostic - that asymmetry has to be documented, not silently true");
 }
 

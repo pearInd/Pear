@@ -309,12 +309,13 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
      bound below is per branch so that spend cannot be mistaken for room, and the "as soon
      as visible" absence is asserted separately, twice, right here and below). */
   /* 360 → 420 → 480: STRICT_REFERENCE_LOCK, then DENSE.inpaintLock. Branches ran 464/468.
-     2026-08-29: tops also carries TOP_COVERAGE_LOCK (sleeve-truncation + underwear
-     reports, tops-only - see its comment in app.js), so tops alone moved to 616; bottoms
-     moved only by DENSE.inpaintLock's re-scoping, to 481. Ceilings are per-branch now for
-     the same reason model-agnostic.test.mjs §2 dropped its cross-branch gap bound. */
+     2026-08-29, twice the same day: tops picked up TOP_COVERAGE_LOCK (sleeve-truncation
+     + underwear reports) to 616, then bottoms picked up its own mirrored
+     BOTTOM_COVERAGE_LOCK (trouser-truncation report) to 565 - see both constants' own
+     comments in app.js. Ceilings are per-branch for the same reason model-agnostic
+     .test.mjs §2 dropped its cross-branch gap bound. */
   check("...and both are still minimal, which is what replaced it",
-    top.length <= 620 && bot.length <= 485 && !/as soon as visible/.test(bot),
+    top.length <= 620 && bot.length <= 570 && !/as soon as visible/.test(bot),
     `tops=${top.length} bottoms=${bot.length}`);
   /* The clause itself must stay on file, or "one line to re-add" stops being true. */
   check("...but the clause is still ON FILE, so the restore really is one line",

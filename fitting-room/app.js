@@ -5923,9 +5923,38 @@ function sampleBackdrop(imgs) {
 }
 
 /* object-fit: cover - fill the target rect (cropping overflow), preserving aspect ratio,
-   so a portrait packshot never squashes into its half of the reference. */
+   so a portrait packshot never squashes into its half of the reference. Right for
+   createGarmentComposite() (front/back stitch): its box dims are DERIVED from each
+   image's own aspect ratio (frontW = front.width * panelH/front.height), so the "crop"
+   is rounding-error only - there is no real overflow to cut. WRONG for a box whose
+   aspect is fixed independent of the source, which is exactly stitchLookBlob() below -
+   see drawImageContain() for that one. */
 function drawImageCover(ctx, img, dx, dy, dw, dh) {
   const scale = Math.max(dw / img.width, dh / img.height);
+  const w = img.width * scale, h = img.height * scale;
+  ctx.drawImage(img, dx + (dw - w) / 2, dy + (dh - h) / 2, w, h);
+}
+
+/* object-fit: contain - the WHOLE image fits inside the target rect, letterboxed rather
+   than cropped. BOUGHT BACK 2026-08-29 against a truncation report: stitchLookBlob()'s
+   per-garment box is a FIXED 936x836 (aspect ~1.12), independent of the photographed
+   garment's own shape. A full-length product shot (a model in long trousers or a
+   long-sleeve shirt, aspect commonly ~0.65-0.75 - much taller than wide) drawn with
+   drawImageCover() into that box gets scaled to the WIDTH match and the excess HEIGHT is
+   cropped symmetrically off the top and bottom - for a 0.7-aspect source that is over
+   20% of the image gone from each end, which is enough to crop the ankle hem (and,
+   independently, the head) out of the reference before Decart ever receives a byte of
+   it. No amount of prompt text can recover pixels that were never sent. Letterboxing
+   costs visible padding around a mismatched-aspect photo; that is a strictly smaller
+   loss than the pixels a crop discards, and it costs nothing on a well-matched one -
+   canvas.fillRect() already paints the box's own background before this draws, so the
+   bars are the same solid colour as everything else on that canvas, not a visible
+   artifact. Scoped to stitchLookBlob() only - see its own call sites - because
+   createGarmentComposite()'s box already avoids this by construction (see
+   drawImageCover()'s comment above); switching that path too would be an unevidenced
+   change to code that isn't reproducing this report. */
+function drawImageContain(ctx, img, dx, dy, dw, dh) {
+  const scale = Math.min(dw / img.width, dh / img.height);
   const w = img.width * scale, h = img.height * scale;
   ctx.drawImage(img, dx + (dw - w) / 2, dy + (dh - h) / 2, w, h);
 }
@@ -6293,16 +6322,22 @@ function stitchLookBlob(topUrl, bottomUrl) {
       const pad = LOOK_PAD;
       const innerW = W - pad * 2, innerH = boxH - pad * 2;
 
-      // Upper half = TOP, clipped to its box so a wide packshot can't bleed toward the bar.
+      /* Upper half = TOP, clipped to its box so a wide packshot can't bleed toward the
+         bar. drawImageContain(), not drawImageCover(): this box's aspect (~1.12) is
+         FIXED, not derived from the source photo, and a full-length garment shot is
+         commonly ~0.65-0.75 - cover-fitting that into a fixed box crops 20%+ off the
+         top and bottom, discarding the hem/cuff before Decart ever sees it. See
+         drawImageContain()'s own comment for the report this answers. The clip rect
+         stays as a no-op safety net; contain-mode never overflows it. */
       ctx.save();
       ctx.beginPath(); ctx.rect(0, 0, W, boxH); ctx.clip();
-      drawImageCover(ctx, top, pad, pad, innerW, innerH);
+      drawImageContain(ctx, top, pad, pad, innerW, innerH);
       ctx.restore();
 
-      // Lower half = BOTTOM, clipped to its box (starts after the bar).
+      // Lower half = BOTTOM, clipped to its box (starts after the bar). Same reasoning.
       ctx.save();
       ctx.beginPath(); ctx.rect(0, bottomY, W, boxH); ctx.clip();
-      drawImageCover(ctx, bottom, pad, bottomY + pad, innerW, innerH);
+      drawImageContain(ctx, bottom, pad, bottomY + pad, innerW, innerH);
       ctx.restore();
 
       // High-contrast 200px SOLID BLACK separator bar - the diffusion "no-man's-land".
@@ -7566,12 +7601,39 @@ const STRICT_REFERENCE_LOCK =
    path (616/700) and simply does not ride on the composite path at all, same tradeoff
    this file already makes for modelAgnostic/ignoreFurniture there.
 
-   TOPS ONLY, on the one-branch-at-a-time-on-evidence rule this file uses throughout: no
-   report has been filed of a bottoms try-on inventing a top or exposing anything above
-   the waist, so bottoms is untouched. */
+   WAS TOPS ONLY, on the one-branch-at-a-time-on-evidence rule this file uses
+   throughout - see BOTTOM_COVERAGE_LOCK below for the report that closed the gap. */
 const TOP_COVERAGE_LOCK =
   "Nothing renders below the shirt hem, including undergarments. Cover live arm skin" +
   " with sleeve fabric to the length shown in the reference.";
+
+/* ── BOTTOM_COVERAGE_LOCK - the mirror, bought back 2026-08-29 against a NEW report ──
+   Full-length trousers truncating to knee-length shorts - the leg-length analogue of
+   the sleeve-truncation report TOP_COVERAGE_LOCK answers, same mechanism: leg length
+   reaches the model only through the reference image's pixels, and inpaintLock's
+   (pre-scoping) unconditioned "skin" was fighting it exactly as it fought sleeve
+   coverage. Deliberately NOT "full trouser leg coverage... not shorts" (language
+   considered and rejected): CATEGORY_ANCHOR.bottom is the one anchor for every
+   lower-body item, and the bottom category genuinely includes real shorts (see
+   BOTTOMS_TOKENS/GARMENT_CATEGORY_KEYWORDS.bottom, which lists "שורטס"/"bermuda"/
+   "shorts" as bottom-category evidence) - asserting "not shorts" in text would force a
+   photographed pair of shorts into invented trousers, the same text-vs-pixels
+   contradiction TOP_COVERAGE_LOCK was written to avoid. Reference-deferential instead,
+   same as its sibling: it says WHERE coverage should end (the reference's own length),
+   never WHAT the garment class is.
+
+   NO UNDERGARMENT-STYLE SECOND SENTENCE: TOP_COVERAGE_LOCK also names undergarments as
+   an unnamed-class risk below the shirt hem. No report has been filed of a bottoms
+   try-on inventing socks, shoes or exposed ankle skin, so nothing is added here for it
+   - a clause with no evidence behind it is exactly the kind of unforced text-volume
+   spend this file's history argues against. One sentence, one report.
+
+   TOPS ONLY NO LONGER HOLDS as a description of this pair - it is BOTTOMS ONLY for
+   this clause, same rule, mirrored: no report has been filed of a tops try-on
+   exposing anything below the waist that this doesn't already cover via
+   TOP_COVERAGE_LOCK's own undergarment sentence. */
+const BOTTOM_COVERAGE_LOCK =
+  "Cover live leg skin with lower-garment fabric to the length shown in the reference.";
 
 /* ── REVISION: DYNAMIC BODY, STATIC GARMENT ──────────────────────────────────────
    THE REPORT: a shopper who is fitted at 0 degrees and then turns 90, or who adds real
@@ -7885,13 +7947,14 @@ function imageOnlyPrompt(item) {
 
      TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, KEEP_OPPOSITE_LAYER]`
      on the bottoms branch for the opposite-layer pin is the one retirement from this
-     revision still pending. STRICT_REFERENCE_LOCK and TOP_COVERAGE_LOCK are both bought
-     back below now (2026-08-24 and 2026-08-29). READ THE CURRENT ROW: headroom moves
-     every time one of these lands, so it is measured fresh rather than remembered - as
-     of TOP_COVERAGE_LOCK, tops runs 616/700 (84 free) and bottoms 481/700 (219 free).
-     The budget is rarely the constraint; the question is whether the text is worth the
-     weight it takes from the reference image, the mechanism every report in this
-     sequence shares. One at a time, re-tested live. */
+     revision still pending. STRICT_REFERENCE_LOCK, TOP_COVERAGE_LOCK and
+     BOTTOM_COVERAGE_LOCK are all bought back below now (2026-08-24, then twice on
+     2026-08-29). READ THE CURRENT ROW: headroom moves every time one of these lands, so
+     it is measured fresh rather than remembered - as of BOTTOM_COVERAGE_LOCK, tops runs
+     616/700 (84 free) and bottoms 565/700 (135 free). The budget is rarely the
+     constraint; the question is whether the text is worth the weight it takes from the
+     reference image, the mechanism every report in this sequence shares. One at a time,
+     re-tested live. */
   return fitPrompt([
     [P.CORE, isBottomsGarment(item) ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
     /* BOUGHT BACK 2026-08-24 against a colour-drift report, and this is the restore this
@@ -7915,12 +7978,15 @@ function imageOnlyPrompt(item) {
        already covered by the passthrough sentence that now LEADS this prompt, so naming it
        a second time buys nothing and costs the budget twice. */
     /* BOUGHT BACK 2026-08-29 against the sleeve-truncation and underwear-hallucination
-       reports - see TOP_COVERAGE_LOCK's own comment for the mechanism and the budget
-       math. Tops only ("" on bottoms is filtered out by fitPrompt()'s own `text &&
-       String(text).trim()` check, same pattern CATEGORY_ANCHOR's ternary above uses),
-       and ordered BEFORE inpaintLock so its arm-skin instruction leads the general skin
-       passthrough - this file's own "leading tokens dominate" finding. */
-    [P.HIGH, isBottomsGarment(item) ? "" : TOP_COVERAGE_LOCK],
+       reports, and again same day against the mirrored trouser-truncation report - see
+       TOP_COVERAGE_LOCK's and BOTTOM_COVERAGE_LOCK's own comments for the mechanism and
+       the budget math (bottoms has 135 characters of headroom left at 565/700, tops 84
+       at 616/700). Ordered BEFORE inpaintLock on both branches so the limb-coverage
+       instruction leads the general skin passthrough - this file's own "leading tokens
+       dominate" finding. Neither clause rides on the composite path - see
+       buildCompositePrompt()'s own note on why forcing them in there evicts an
+       already-reproduced-regression fix rather than merely costing budget. */
+    [P.HIGH, isBottomsGarment(item) ? BOTTOM_COVERAGE_LOCK : TOP_COVERAGE_LOCK],
     [P.HIGH, DENSE.inpaintLock],
   ]);
 }
@@ -7999,26 +8065,37 @@ function lookAnchorPrompt() {
                       an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
                       the moment "it gave me the model's shoulders" is reported again.
 
-   ── THE RESTORE BUDGET: TOPS AND BOTTOMS DIVERGED THIS REVISION ────────────
-   The number has moved nine times, so read the CURRENT row rather than remembering an
+   ── THE RESTORE BUDGET: TOPS AND BOTTOMS BOTH CARRY A COVERAGE LOCK NOW ─────
+   The number has moved ten times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 700, one space per part as fitPrompt() joins.
-   THE BASELINE SPLIT 2026-08-29: TOP_COVERAGE_LOCK (bought back against a sleeve-
-   truncation report and an underwear-hallucination report - see its own comment above
-   imageOnlyPrompt()) is TOPS ONLY, so tops jumped from 464 to 616 while bottoms moved
-   only by DENSE.inpaintLock's 13-character re-scoping, 468 → 481.
+   THE BASELINE SPLIT 2026-08-29, TWICE IN ONE DAY: TOP_COVERAGE_LOCK (sleeve-truncation
+   + underwear-hallucination reports) landed first, tops-only, taking tops from 464 to
+   616. BOTTOM_COVERAGE_LOCK (the mirrored trouser-truncation report) landed the same
+   day, taking bottoms from 481 to 565 - smaller because it is one sentence where its
+   sibling is two (no undergarment-equivalent risk has been reported on this branch;
+   see BOTTOM_COVERAGE_LOCK's own comment for why nothing was added to match anyway).
 
-     TOPS (616 chars - anchor + locks + coverage)   BOTTOMS (481 chars - lower-body scoped + locks)
-     + DENSE.bodyFidelity  (45) → 662  fits                        → 527  fits
-     + DENSE.modelAgnostic (64) → 681  fits, 19 free                → 546  fits
-     + both of them        (109)→ 662  SHEDS modelAgnostic (MED)    → 592  fits
+     TOPS (616 chars - anchor + locks + coverage)   BOTTOMS (565 chars - anchor + locks + coverage)
+     + DENSE.bodyFidelity  (45) → 662  fits                        → 611  fits
+     + DENSE.modelAgnostic (64) → 681  fits, 19 free                → 630  fits, 70 free
+     + both of them        (109)→ 662  SHEDS modelAgnostic (MED)    → 676  fits
 
    BOTTOMS STILL HAS ROOM FOR EVERYTHING, tops does not any more: 84 characters are free
-   on tops (219 on bottoms), and adding BOTH retired clauses to tops at once now exceeds
+   on tops (135 on bottoms), and adding BOTH retired clauses to tops at once now exceeds
    700 and fitPrompt() sheds the worse-priority one (modelAgnostic, P.MED) rather than
    clamping - so a restore of one clause at a time still lands clean on tops, but "add
    both back" silently drops the second on tops specifically, where it would not on
    bottoms. That is a fact about THIS row, not a general warning - see the note above the
    table this revision changed for why the two branches were allowed to diverge at all.
+
+   THE COMPOSITE PATH DID NOT MOVE - buildCompositePrompt() runs 692/700 (tops) and
+   696/700 (bottoms), UNCHANGED by either coverage lock, because neither was added
+   there. See buildCompositePrompt()'s own note, right after its closing brace, for why:
+   that branch has 4-8 characters of headroom before either clause is even considered,
+   already spent shedding DENSE.modelAgnostic and DENSE.ignoreFurniture to fit what is
+   already on the wire, so adding a coverage clause there does not compete for spare
+   budget - it deterministically evicts REFERENCE_COLOR_LOCK or DENSE.inpaintLock, a
+   different reproduced regression, on every single composite dispatch.
 
    HEADROOM IS NOT PERMISSION. Tops was collapsed from 634 characters and bottoms from
    616 precisely BECAUSE text volume was outweighing the reference pixels - the tuxedo,
@@ -8336,6 +8413,27 @@ function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line
     [P.MED,  DENSE.ignoreFurniture],
   ]);
 }
+/* ── WHY TOP_COVERAGE_LOCK / BOTTOM_COVERAGE_LOCK DO NOT RIDE HERE ────────────────
+   CONSIDERED for the truncation reports both clauses answer on the single-view path,
+   and REJECTED for THIS builder specifically - not a blanket "composite is exempt"
+   decision, a measured one. This branch already runs at 692/700 (tops) and 696/700
+   (bottoms) with NOTHING added - it is already shedding DENSE.modelAgnostic (a
+   reproduced "it gave me the model's shoulders" fix) and DENSE.ignoreFurniture just to
+   fit the clauses that are already here. That is 4-8 characters of headroom, not
+   enough for either coverage clause at any length, so adding one does not "cost
+   budget" the way it read the first time this was tried - it DETERMINISTICALLY evicts
+   one more already-reproduced-regression fix on every single composite dispatch:
+   either REFERENCE_COLOR_LOCK (the colour-drift fix) or DENSE.inpaintLock (the face/
+   skin/background fix, named elsewhere in this file as "THE LARGEST LOSS" when it was
+   off). Trading one live regression fix for another is a product decision about which
+   failure mode is worse, not a text-optimisation problem "safely incorporate" implies
+   away - and unlike the single-view fix, there is no slack left here to optimise into
+   being. Left as a documented gap rather than forced: composite mode is also OFF by
+   default (COMPOSITE_DEFAULT = false, image-first.test.mjs §4) and only activates for
+   a widget embed with a genuine distinct back photo, so it is real but narrower
+   traffic than the path already fixed. If a live report reproduces sleeve/leg
+   truncation SPECIFICALLY in composite mode, that is the evidence to size this
+   tradeoff against - re-run the arithmetic above first, it will have moved. */
 
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
    orientation). The reference image is TWO stacked, isolated garment photos

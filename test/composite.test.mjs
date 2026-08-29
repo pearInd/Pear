@@ -406,5 +406,53 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
     ping || 'no clampPromptForWire(..., "freezeKeepAlive") found');
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   stitchLookBlob() FIT MODE - "long trousers truncated to knee-length shorts"
+   ───────────────────────────────────────────────────────────────────────────
+   createGarmentComposite() above is proven lossless: its per-panel box dims are
+   DERIVED from that image's own aspect ratio, so drawImageCover() there crops at
+   most a rounding error. stitchLookBlob()'s box is different in kind - a FIXED
+   936x836 (LOOK_W/LOOK_H/LOOK_PAD below), independent of the photographed
+   garment's shape - so the same cover-fit crops real content: a full-length
+   product photo (aspect ~0.65-0.75, commonly much taller than the ~1.12 box) gets
+   scaled to the width match and loses 20%+ off the top AND bottom to the crop,
+   which is enough to remove the ankle hem (and the head) before Decart receives a
+   byte of the reference. There is no canvas-execution rig for stitchLookBlob()
+   here (unlike createGarmentComposite() above) - these are source-level checks,
+   proportionate to what changed: which fit primitive each call site uses, not a
+   full pixel-geometry harness. */
+console.log("\n── stitchLookBlob(): contain-fit, not cover-fit (ankle/wrist crop fix) ──");
+{
+  check("drawImageCover() scales by the LARGER ratio (cover: fills the box, crops overflow)",
+    /function drawImageCover\(ctx, img, dx, dy, dw, dh\) \{\s*\n\s*const scale = Math\.max\(dw \/ img\.width, dh \/ img\.height\);/.test(SRC));
+  check("drawImageContain() scales by the SMALLER ratio (contain: fits inside, letterboxed)",
+    /function drawImageContain\(ctx, img, dx, dy, dw, dh\) \{\s*\n\s*const scale = Math\.min\(dw \/ img\.width, dh \/ img\.height\);/.test(SRC));
+
+  const stitch = SRC.slice(SRC.indexOf("function stitchLookBlob"), SRC.indexOf("/* Full-Look composite clause"));
+  check("stitchLookBlob() draws the TOP half with drawImageContain, not drawImageCover",
+    /drawImageContain\(ctx, top, pad, pad, innerW, innerH\)/.test(stitch) &&
+    !/drawImageCover\(ctx, top,/.test(stitch));
+  check("...and the BOTTOM half the same way",
+    /drawImageContain\(ctx, bottom, pad, bottomY \+ pad, innerW, innerH\)/.test(stitch) &&
+    !/drawImageCover\(ctx, bottom,/.test(stitch));
+
+  /* createGarmentComposite() must NOT have been touched by this fix - its own box is
+     derived from source aspect (proven lossless above), so switching it too would be
+     an unevidenced change to a path that isn't reproducing this report. */
+  const frontBack = SRC.slice(SRC.indexOf("function createGarmentComposite"), SRC.indexOf("function stitchLookBlob"));
+  check("createGarmentComposite() (front/back) is UNCHANGED - still drawImageCover on both panels",
+    /drawImageCover\(ctx, front, 0, 0, fW, pH\)/.test(frontBack) &&
+    /drawImageCover\(ctx, back, backX, 0, bW, pH\)/.test(frontBack) &&
+    !/drawImageContain/.test(frontBack),
+    "the front/back stitch was proven lossless by construction - it was never the truncation source");
+
+  /* The box this crop was happening into, so a future resize of LOOK_W/LOOK_H/LOOK_PAD
+     is visible here rather than silently changing what "fixed aspect" means. */
+  check("the box aspect that made this a real crop (not a rounding one) is still ~1.12",
+    /const LOOK_W\s*=\s*1024, LOOK_H = 2048, LOOK_SEP = 200;/.test(SRC) &&
+    /const LOOK_PAD = 44;/.test(SRC),
+    "innerW=936/innerH=836 (≈1.12) vs a full-length photo's ~0.65-0.75 is the whole mechanism");
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);

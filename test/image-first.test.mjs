@@ -129,8 +129,9 @@ const TOPS_SPEC =
   " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details." +
   /* THE COVERAGE LOCK, bought back 2026-08-29 against a sleeve-truncation report and an
      underwear-hallucination report at once - see TOP_COVERAGE_LOCK's own comment in
-     app.js for the mechanism. TOPS ONLY: it is absent from BOTTOMS_SPEC below, checked
-     in §1. */
+     app.js for the mechanism. TOPS-SPECIFIC WORDING (its sibling on bottoms is one
+     sentence shorter - no undergarment-equivalent risk has been reported there), but
+     no longer the only branch that gets a coverage lock at all - see BOTTOMS_SPEC. */
   " Nothing renders below the shirt hem, including undergarments. Cover live arm skin" +
   " with sleeve fabric to the length shown in the reference." +
   /* THE PASSTHROUGH CLAMP, bought back 2026-08-24 against a face/skin/background report.
@@ -145,6 +146,12 @@ const BOTTOMS_SPEC =
   " (color, pattern, length) without generating, replacing, or inventing any new top" +
   " or garments. Fit ONLY the reference pants/shorts onto the subject's lower body." +
   " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details." +
+  /* THE MIRRORED COVERAGE LOCK, bought back 2026-08-29 - same day as its sibling above,
+     against the trouser-truncation report (long trousers rendering as knee-length
+     shorts). One sentence, not two: BOTTOM_COVERAGE_LOCK deliberately carries no
+     undergarment-equivalent clause - see its own comment in app.js for why nothing
+     was added just to mirror the shape of TOP_COVERAGE_LOCK. */
+  " Cover live leg skin with lower-garment fabric to the length shown in the reference." +
   " Face, hands, background, and non-covered skin pass through untouched.";
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
@@ -168,19 +175,20 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      clause cannot be slipped onto either branch, which is the regression this whole
      suite exists to catch. §1 then checks each of the three per branch, below. */
   const sentences = (s) => s.split(/(?<=\.)\s+/).filter(Boolean);
-  /* BOTTOMS IS FIVE: scope, pass-through, then STRICT_REFERENCE_LOCK's two sentences
-     (colour/cut match, then the invent-add-alter clamp), then inpaint. Bought back
-     against a colour-drift report and a face/skin/background report respectively.
-     TOPS IS SEVEN, not five, as of 2026-08-29: the same four plus TOP_COVERAGE_LOCK's
-     two sentences (hem/undergarment boundary, then sleeve-to-skin coverage), bought
-     back against the sleeve-truncation and underwear reports - see TOP_COVERAGE_LOCK's
-     own comment in app.js. The asymmetry is deliberate (tops-only, one-branch-at-a-
-     time-on-evidence - no report has been filed of the mirror bug on bottoms), not a
-     drift; §1 below asserts the coverage lock's absence from bottoms explicitly. Both
-     counts stay pinned - "minimal" has to stay a number somebody changes deliberately,
-     or the compression this suite exists to defend erodes silently. */
-  check("tops is seven sentences, bottoms five: the coverage lock is the one asymmetry",
-    sentences(TOPS_SPEC).length === 7 && sentences(BOTTOMS_SPEC).length === 5,
+  /* BOTH BRANCHES NOW CARRY A COVERAGE LOCK, as of 2026-08-29 (twice, same day): scope,
+     pass-through, then STRICT_REFERENCE_LOCK's two sentences (colour/cut match, then the
+     invent-add-alter clamp), then the coverage lock, then inpaint. TOPS IS SEVEN because
+     TOP_COVERAGE_LOCK is two sentences (hem/undergarment boundary, then sleeve-to-skin
+     coverage - bought back against the sleeve-truncation and underwear reports). BOTTOMS
+     IS SIX, not five any more: BOTTOM_COVERAGE_LOCK is one sentence (leg-to-skin coverage
+     only - bought back against the mirrored trouser-truncation report; see its own
+     comment in app.js for why it carries no undergarment-equivalent second sentence to
+     match its sibling's shape). The remaining one-sentence gap is real, not drift - §1
+     below asserts each branch's coverage wording explicitly. Both counts stay pinned -
+     "minimal" has to stay a number somebody changes deliberately, or the compression
+     this suite exists to defend erodes silently. */
+  check("tops is seven sentences, bottoms six: both branches carry a coverage lock now",
+    sentences(TOPS_SPEC).length === 7 && sentences(BOTTOMS_SPEC).length === 6,
     `tops=${sentences(TOPS_SPEC).length} bottoms=${sentences(BOTTOMS_SPEC).length}`);
   /* ── THE LEAD CHANGED 2026-08-24, AND THE LEAD IS THE POINT ─────────────────
      The passthrough sentence now opens both branches; the substitution follows it. Same
@@ -259,9 +267,10 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     /Exactly match color, pattern, logos, and cut\. Do NOT invent, add, or alter any details\./.test(TOPS_SPEC) &&
     /Exactly match color, pattern, logos, and cut\. Do NOT invent, add, or alter any details\./.test(BOTTOMS_SPEC),
     "the colour drift report is what bought this back - it must not shed");
-  /* THE COVERAGE LOCK, 2026-08-29, TOPS ONLY. Both halves of the pair - the hem/
-     undergarment boundary and the sleeve-to-skin instruction - and its absence from
-     bottoms, which is the one deliberate asymmetry this revision introduces. */
+  /* THE TOPS COVERAGE LOCK, 2026-08-29. Both halves of the pair - the hem/undergarment
+     boundary and the sleeve-to-skin instruction - and that its EXACT wording is tops-
+     specific: bottoms carries its own, differently-worded coverage lock (checked next),
+     not this one. */
   check("...and the coverage lock's hem/undergarment boundary is on the TOPS branch only",
     /Nothing renders below the shirt hem, including undergarments\./.test(TOPS_SPEC) &&
     !/Nothing renders below the shirt hem, including undergarments\./.test(BOTTOMS_SPEC),
@@ -269,7 +278,14 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
   check("...and its sleeve-to-skin coverage instruction rides with it, tops only",
     /Cover live arm skin with sleeve fabric to the length shown in the reference\./.test(TOPS_SPEC) &&
     !/Cover live arm skin with sleeve fabric/.test(BOTTOMS_SPEC),
-    "the sleeve-truncation report is a tops-only failure mode");
+    "the sleeve-truncation report is a tops-specific WORDING, no longer a tops-only fix");
+  /* THE BOTTOMS COVERAGE LOCK, same day, mirrored report. One sentence, not two - see
+     BOTTOM_COVERAGE_LOCK's own comment in app.js for why no undergarment-equivalent
+     clause was added just to match its sibling's shape. */
+  check("...and the mirrored leg-to-skin coverage instruction is on the BOTTOMS branch only",
+    /Cover live leg skin with lower-garment fabric to the length shown in the reference\./.test(BOTTOMS_SPEC) &&
+    !/Cover live leg skin with lower-garment fabric/.test(TOPS_SPEC),
+    "the trouser-truncation report is a bottoms-specific failure mode");
   /* THE PASSTHROUGH CLAMP CLOSES THEM NOW, STILL. Pinned at the END specifically: it is
      P.HIGH, so it is the first thing budget pressure would drop, and a silent shed would
      take the face/hands/background protection with it while every other check here

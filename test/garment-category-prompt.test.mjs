@@ -194,15 +194,16 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
      to stay small because someone remembered why. It grew by 81 characters here, and that
      is the deliberate spend of this revision: the per-frame instruction is the only thing
      that was bought, and image-first.test.mjs §1 pins that it is exactly three sentences. */
-  /* CEILING 360 → 420 → 480 → 481, each step for ONE named clause and only that clause:
-     STRICT_REFERENCE_LOCK, then DENSE.inpaintLock, then DENSE.inpaintLock's own 2026-08-29
-     re-scoping ("skin" → "non-covered skin", +13 chars, against a sleeve-truncation
-     report - see its comment in app.js). Bottoms carries no TOP_COVERAGE_LOCK (that
-     clause is tops-only), so this is the ONLY change bottoms sees from that revision.
-     The branch runs 481, so this still fails on the next unbudgeted addition. "Minimal"
-     stays a number somebody has to raise deliberately. */
-  check("the bottoms prompt stays minimal - five instructions, not an assembly",
-    bottomsPrompt.length <= 481,
+  /* CEILING 360 → 420 → 480 → 481 → 565, each step for ONE named clause and only that
+     clause: STRICT_REFERENCE_LOCK, then DENSE.inpaintLock, then DENSE.inpaintLock's own
+     2026-08-29 re-scoping ("skin" → "non-covered skin", +13 chars, against a sleeve-
+     truncation report), then BOTTOM_COVERAGE_LOCK itself the same day (+84 chars,
+     against the mirrored trouser-truncation report - see its comment in app.js). "Six
+     instructions" below, not five: the coverage lock is a genuinely new sentence, not a
+     reword. The branch runs 565, so this still fails on the next unbudgeted addition.
+     "Minimal" stays a number somebody has to raise deliberately. */
+  check("the bottoms prompt stays minimal - six instructions, not an assembly",
+    bottomsPrompt.length <= 565,
     `${bottomsPrompt.length} chars - was 616 across six sentences four revisions ago`);
   check("...and carries NO body-volume or temporal clause - the deliberate trade",
     !/360-degree rotations/.test(bottomsPrompt) && !/as soon as visible/.test(bottomsPrompt),
