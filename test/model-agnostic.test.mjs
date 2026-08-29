@@ -215,21 +215,45 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      nothing more: any NEW bottoms-only text lands outside it and fails here, which is the
      drift this check exists to catch now that a large legitimate gap hides it. */
   const bind = api.BOTTOMS_REFERENCE_BIND.unknown.length;
-  const residual = (bottoms.length - tops.length) - bind;
-  check("both branches stay minimal, and the gap between them is exactly the bind",
-    tops.length <= 480 && bottoms.length <= 620 && residual >= 0 && residual <= 8,
+  /* The gap is now TWO bottoms-only clauses plus the 4-character anchor delta the two
+     branches have always had: the waist-to-hem bind, and DENSE.modelAgnostic (moved here
+     from the composite branch this revision - see §3). Subtracting both must leave only
+     that delta, so any OTHER bottoms-only text still fails here even though the total gap
+     is now large enough to hide it. */
+  const residual = (bottoms.length - tops.length) - bind - api.DENSE.modelAgnostic.length - 1;
+  check("both branches stay minimal, and the gap is exactly the two bottoms-only clauses",
+    tops.length <= 480 && bottoms.length <= 680 && residual >= 0 && residual <= 8,
     `tops=${tops.length} bottoms=${bottoms.length} gap=${bottoms.length - tops.length} ` +
-    `bind=${bind} residual=${residual} (expected the 4-char anchor delta)`);
+    `bind=${bind} modelAgnostic=${api.DENSE.modelAgnostic.length} residual=${residual}`);
 
   const both = api.fitPrompt([
     [api.P.CORE, bottoms],
     [api.P.HIGH, api.DENSE.bodyFidelity],
     [api.P.MED,  api.DENSE.modelAgnostic],
   ]);
-  check("every retired clause would now FIT - so nothing but judgement stops a restore",
-    /never slim them/.test(both) && /Ignore the reference model's body/.test(both) &&
-    both.length <= 700,
-    `${both.length} chars - fits, which is exactly why the rule has to be written down`);
+  /* ── THIS FLIPPED FOR BOTTOMS, AND THE FLIP IS THE POINT ──────────────────────
+     It used to assert that every retired clause still FITS on bottoms, so that only
+     judgement - never the budget - stood between a reader and a restore. That was true at
+     468 and at 581. It is false at 657: bodyFidelity (45) would take the branch to 703 and
+     fitPrompt() sheds it instead. Asserting the old property would now require SHRINKING
+     the fix to keep a documentation claim true, which is backwards.
+
+     So it is asserted where it still holds (TOPS, 236 free) and inverted where it does not
+     (BOTTOMS, 43 free), because "a restore here silently sheds" is a genuinely different
+     hazard from "a restore here silently succeeds" and the file has to say which one a
+     reader is facing. app.js's table carries both halves; the check below pins that. */
+  const bothTops = api.fitPrompt([
+    [api.P.CORE, tops],
+    [api.P.HIGH, api.DENSE.bodyFidelity],
+    [api.P.MED,  api.DENSE.modelAgnostic],
+  ]);
+  check("on TOPS every retired clause still FITS - only judgement stops a restore there",
+    /never slim them/.test(bothTops) && /Ignore the reference model's body/.test(bothTops) &&
+    bothTops.length <= 700,
+    `${bothTops.length} chars - fits, which is exactly why the rule has to be written down`);
+  check("on BOTTOMS the budget now stops it - bodyFidelity SHEDS rather than shipping",
+    !/never slim them/.test(both) && both.length <= 700,
+    `${both.length} chars - the branch is saturated; a restore here silently sheds`);
   check("...and app.js states that the budget is no longer the constraint",
     /The budget is not\s*\n?\s*the constraint/.test(SRC),
     "a reader who checks only the character count will draw the wrong conclusion");
@@ -245,8 +269,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   /* Recomputed again: both anchors now carry STRICT_REFERENCE_LOCK *and* DENSE.inpaintLock,
      so the baseline is 464/468 and every row moved with it. */
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  510, 627],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 529, 646],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  510, 657],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 529, 657],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -255,13 +279,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(464 chars - anchor \+ locks\)     BOTTOMS \(581 chars - \+ BOTTOMS_REFERENCE_BIND\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 510  fits              \u2192 627  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 529  fits              \u2192 646  fits/.test(SRC),
+    /TOPS \(464 chars - anchor \+ locks\)     BOTTOMS \(657 chars - \+ bind \+ modelAgnostic\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 510  fits              \u2192 SHEDS \(would be 703\)/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 529  fits              \u2192 already LIVE on this branch/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /236 characters are free on tops and 119 on\s*\n?\s*bottoms/.test(SRC),
+    /43 characters\s*\n?\s*are free there against 236 on tops/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
 }
 
@@ -312,10 +336,34 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
      merely forbidden, because "half-done" is still the failure this catches - it just
      moved from "any reference at all" to "a reference outside the one path that earned
      it". bodyFidelity remains fully retired. */
-  check("exactly one builder references modelAgnostic, and it is the composite one",
-    (codeOnly.match(/DENSE\.modelAgnostic/g) || []).length === 1 &&
+  /* ── THE SCOPE WIDENED ONCE, ON EVIDENCE, AND IS STILL SCOPED ──────────────────
+     This asserted EXACTLY ONE live reference, in buildCompositePrompt. The reasoning was
+     sound and is quoted above: the composite reference is two packshots, so it carries
+     twice as much of another body, and the constant should ship "where the risk is, and
+     nowhere else". At the time the only reports were composite-shaped.
+
+     WHAT CHANGED IS THE EVIDENCE. Two consecutive reports of generic/wrong-colour lower
+     garments have since been filed against the SINGLE-VIEW path - the live one, since
+     COMPOSITE_DEFAULT is false - and on the composite branch this clause was shedding to
+     the budget anyway, so the sentence was reaching Decart on no path at all. A trousers
+     packshot is usually shot ON A MODEL, which puts another person's legs in another pair
+     of trousers directly into the conditioning image.
+
+     SO THE COUNT IS TWO, NOT "ANY". The check still has to fail on an unscoped restore,
+     which is what it was written for - so it pins the exact two call sites and, more
+     importantly, pins that the single-view one is still CONDITIONAL ON BOTTOMS. Dropping
+     the isBottomsGarment() guard would put it on tops, where no failure has been reported
+     and the retirement's reasoning still stands untouched. */
+  check("exactly two builders reference modelAgnostic - composite, and bottoms-only",
+    (codeOnly.match(/DENSE\.modelAgnostic/g) || []).length === 2 &&
     /\[P\.HIGH, DENSE\.modelAgnostic\]/.test(codeOnly),
-    "found a live reference outside buildCompositePrompt - the restore has spread");
+    "an unscoped restore is still the failure this catches");
+  check("...and the single-view one is gated on isBottomsGarment(), never unconditional",
+    /\[P\.HIGH, isBottomsGarment\(item\) \? DENSE\.modelAgnostic : ""\]/.test(codeOnly),
+    "ungated, this ships on tops - where the retirement's reasoning is still intact");
+  check("...so the TOPS prompt does not carry it",
+    !/Ignore the reference model's body/.test(api.imageOnlyPrompt(TEE)),
+    api.imageOnlyPrompt(TEE));
   check("...and bodyFidelity is still retired everywhere",
     !/DENSE\.bodyFidelity/.test(codeOnly),
     "found a live reference - that retirement is half-done");

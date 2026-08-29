@@ -7979,16 +7979,41 @@ function bottomsLength(item) {
    sampler to steer toward that the pixels do not already show. That is the line this file
    draws between a description that competes with the reference (the tuxedo mechanism) and
    one that points at it. */
+/* ── REVISION: THE SPAN, NOT JUST THE HEM ───────────────────────────────────────
+   REPORTED: lower-garment try-ons drift to a generic trouser - the diagnosis offered with
+   the report is that the pipeline "defaults to upper-body conditioning" and the lower
+   garment has no spatial region tagging, so the reference is not bound to a region and
+   the legs fall back to a prior.
+
+   THE PREVIOUS REVISION BOUND ONE END. It added the hem (above the knee / at the ankle /
+   as photographed), which is the BOTTOM boundary and was the half the shorts-to-trousers
+   report turned on. The TOP boundary was never stated anywhere on the wire: the anchor
+   says "onto the subject's lower body", which names a region without saying where it
+   starts. A garment with an unstated upper edge is free to ride up the torso, and it is
+   the same "unstated region gets reinterpreted" shape this file keeps recording.
+
+   SO EACH BRANCH NOW STATES A SPAN, waist to hem, rather than a hem alone. That is the
+   whole of the spatial half: two named anatomical endpoints, and nothing about attention,
+   masks or regions in the machine-learning sense - set() has no mask channel and no
+   cross-attention control (verified against @decartai/sdk@0.1.5 setInputSchema), so a
+   "SPATIAL TARGET:" label would be a token the model reads as prose, not a directive it
+   can act on. The endpoints are the part that carries information; the label is ceremony
+   that costs the same budget as an instruction. Same trade this file made for the
+   "[Dynamic Anatomy Lock: ...]" label.
+
+   COSTS ~2 CHARACTERS PER BRANCH. The hem sentence was already there; "sits at the waist
+   and" replaces "its hem", so the span ships essentially for free rather than displacing
+   the fidelity clause it sits beside. */
 const BOTTOMS_REFERENCE_BIND = Object.freeze({
   short:
     " Reproduce the reference garment's own pockets, seams and fabric." +
-    " It is a SHORT garment: its hem sits above the knee - keep that exact hem.",
+    " It sits at the waist and ends above the knee - keep that exact span.",
   long:
     " Reproduce the reference garment's own pockets, seams and fabric." +
-    " It is FULL LENGTH: its hem reaches the ankle - keep that exact hem.",
+    " It sits at the waist and ends at the ankle - keep that exact span.",
   unknown:
-    " Reproduce the reference garment's own pockets, seams and fabric," +
-    " and its own hem length exactly as photographed.",
+    " Reproduce the reference garment's own pockets, seams and fabric." +
+    " It sits at the waist and ends at its own photographed hem.",
 });
 
 /**
@@ -8072,6 +8097,31 @@ function imageOnlyPrompt(item) {
        length, and the tops anchor already carries its own region wording; a mirrored clause
        here would spend budget on both branches to answer a failure reported on one. */
     [P.HIGH, isBottomsGarment(item) ? BOTTOMS_REFERENCE_BIND[bottomsLength(item)] : ""],
+    /* ── modelAgnostic, ON THE BOTTOMS BRANCH ONLY - and why that is not a reversal ──
+       model-agnostic.test.mjs retired this from the single-view path with a specific,
+       calibrated reason, and it was right at the time: the composite reference is TWO
+       packshots side by side, so it carries twice as much of another person's body, and
+       the constant should "ship where the risk is, and nowhere else". Single-view carried
+       one packshot and no report.
+
+       WHAT CHANGED IS THE EVIDENCE, not the judgement. Two consecutive reports have now
+       been filed against the SINGLE-VIEW lower-garment path - "generic/random trousers,
+       wrong colour and cut" - and COMPOSITE_DEFAULT is false, so both landed on the path
+       this clause was absent from. Meanwhile the composite branch is saturated at 683 of
+       700 and sheds it there, so the sentence was reaching Decart on no path at all.
+
+       A CATALOG PACKSHOT OF TROUSERS IS USUALLY SHOT ON A MODEL, and that is the specific
+       reason this belongs on bottoms rather than everywhere: the reference then contains
+       another person's legs already wearing another pair of trousers, and nothing told the
+       model which of the two bodies to dress. "Generic trousers in the wrong colour" is
+       what that ambiguity looks like from the outside - the model resolving toward its own
+       prior for legs rather than toward the reference.
+
+       STILL SCOPED, which is the part that keeps faith with the retirement: tops is
+       untouched, because no tops report has been filed and the same reasoning that put
+       this on bottoms says nothing about the other branch. If a tops equivalent is ever
+       reported, that is a separate decision with its own evidence. */
+    [P.HIGH, isBottomsGarment(item) ? DENSE.modelAgnostic : ""],
   ]);
 }
 
@@ -8155,23 +8205,26 @@ function lookAnchorPrompt() {
    The BASELINE moved this revision: both anchors now carry STRICT_REFERENCE_LOCK, bought
    back against a colour-drift report, which is why tops reads 407 rather than 342.
 
-     TOPS (464 chars - anchor + locks)     BOTTOMS (581 chars - + BOTTOMS_REFERENCE_BIND)
-     + DENSE.bodyFidelity  (45) → 510  fits              → 627  fits
-     + DENSE.modelAgnostic (64) → 529  fits              → 646  fits
-     + both of them        (109)→ 574  fits              → 691  fits
+     TOPS (464 chars - anchor + locks)     BOTTOMS (657 chars - + bind + modelAgnostic)
+     + DENSE.bodyFidelity  (45) → 510  fits              → SHEDS (would be 703)
+     + DENSE.modelAgnostic (64) → 529  fits              → already LIVE on this branch
+     + both of them        (109)→ 574  fits              → n/a
 
-   THE TWO BRANCHES ARE NO LONGER WITHIN A FEW CHARACTERS OF EACH OTHER, and that is the
-   one thing to read off this table rather than the individual rows. Bottoms carries
-   BOTTOMS_REFERENCE_BIND (the hem + product-detail lock, added against the generic-
-   trousers report) and tops does not, because no equivalent failure has been reported on
-   tops. The 117-character gap is that clause, not drift - and it means bottoms is now the
-   branch that runs out first: "+ both of them" leaves it 9 characters, where tops still
-   has 126. Cost a restore against BOTTOMS, never against tops.
+   THE TWO BRANCHES HAVE COMPLETELY DIVERGED, and that - not any individual row - is the
+   thing to read off this table. Bottoms carries three clauses tops does not
+   (BOTTOMS_REFERENCE_BIND's waist-to-hem span, and DENSE.modelAgnostic), all added
+   against reported lower-garment failures that have no tops equivalent.
 
-   NOTHING SHEDS ANY MORE, on either branch. 236 characters are free on tops and 119 on
-   bottoms, so every retired clause in this table would go back with room to spare. That
-   INVERTS the warning this note used to carry: the risk is no longer that a restore
-   silently sheds, it is that a restore silently SUCCEEDS.
+   ⚠️ BOTTOMS IS NOW SATURATED, AND THE WARNING BELOW INVERTS BACK FOR IT. 43 characters
+   are free there against 236 on tops, so bodyFidelity no longer fits on bottoms at all:
+   fitPrompt() sheds it rather than shipping it. For THIS branch the old hazard is live
+   again - a restore silently SHEDS instead of silently succeeding - and a clause added
+   here without checking will simply not reach Decart. Cost every bottoms restore against
+   43 characters, and re-read this row rather than the tops one.
+
+   TOPS STILL HAS ROOM, and there the warning stands as written: 236 characters free, so
+   every retired clause would go back with room to spare. The risk on that branch is not
+   that a restore sheds, it is that a restore silently SUCCEEDS.
 
    HEADROOM IS NOT PERMISSION. Tops was collapsed from 634 characters and bottoms from
    616 precisely BECAUSE text volume was outweighing the reference pixels - the tuxedo,

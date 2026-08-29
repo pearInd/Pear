@@ -153,15 +153,24 @@ const BOTTOMS_SPEC =
    bottomsLength() in app.js. JEANS is "Glide Slim", which no token settles, so the
    byte-exact check below uses the UNKNOWN suffix; garment-category-prompt.test.mjs owns
    the per-branch resolution and the token table. */
+/* Each branch now states a SPAN (waist to hem), not a hem alone - the top boundary was
+   the half never stated anywhere on the wire, and an unstated upper edge lets the garment
+   ride up the torso. See BOTTOMS_REFERENCE_BIND's revision note in app.js. */
 const BIND_UNKNOWN =
-  " Reproduce the reference garment's own pockets, seams and fabric," +
-  " and its own hem length exactly as photographed.";
+  " Reproduce the reference garment's own pockets, seams and fabric." +
+  " It sits at the waist and ends at its own photographed hem.";
 const BIND_SHORT =
   " Reproduce the reference garment's own pockets, seams and fabric." +
-  " It is a SHORT garment: its hem sits above the knee - keep that exact hem.";
+  " It sits at the waist and ends above the knee - keep that exact span.";
 const BIND_LONG =
   " Reproduce the reference garment's own pockets, seams and fabric." +
-  " It is FULL LENGTH: its hem reaches the ankle - keep that exact hem.";
+  " It sits at the waist and ends at the ankle - keep that exact span.";
+/* BOTTOMS ONLY, and new this revision: two consecutive reports of generic trousers on the
+   SINGLE-VIEW path (the one COMPOSITE_DEFAULT=false makes live) moved this clause here
+   from the composite branch, where it had been shedding to the budget. A trousers packshot
+   is usually shot on a model, so the reference carries another person's legs in another
+   pair of trousers. Tops is deliberately untouched - no tops report exists. */
+const MODEL_AGNOSTIC = " Ignore the reference model's body; fit the cloth to THIS person.";
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
@@ -175,7 +184,7 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
   check("the TOPS branch matches the specified wording byte for byte",
     api.imageOnlyPrompt(TEE) === TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
   check("the BOTTOMS branch matches the specified wording byte for byte",
-    api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC + BIND_UNKNOWN,
+    api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC + BIND_UNKNOWN + MODEL_AGNOSTIC,
     JSON.stringify(api.imageOnlyPrompt(JEANS)));
   /* The bind is APPENDED, never interleaved - the specified wording above still reaches
      Decart as one contiguous, byte-exact block, which is the property this section is for.
@@ -438,7 +447,8 @@ console.log("\n── §2 EVERY SINGLE-VIEW BUILDER RETURNS IT, AND ASSEMBLES NO
        the new length resolver instead: a tee mis-classified as bottoms upstream would
        otherwise be told its hem sits above the knee. Asserted by expecting the unknown
        suffix here rather than by a separate case, so it cannot be deleted independently. */
-    const expected = item.garmentType === "lower_body" ? BOTTOMS_SPEC + BIND_UNKNOWN : TOPS_SPEC;
+    const expected = item.garmentType === "lower_body"
+      ? BOTTOMS_SPEC + BIND_UNKNOWN + MODEL_AGNOSTIC : TOPS_SPEC;
     check(`${name}: byte-identical to its category anchor`,
       api.imageOnlyPrompt(item) === expected,
       api.imageOnlyPrompt(item));

@@ -200,8 +200,8 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
      still fails on the next unbudgeted addition. "Minimal" stays a number somebody has to
      raise deliberately, and it is deliberately NOT the 700 budget: 700 is what Decart
      accepts, this is what the file is willing to spend. */
-  check("the bottoms prompt stays minimal - six instructions, not an assembly",
-    bottomsPrompt.length <= 620,
+  check("the bottoms prompt stays minimal - seven instructions, not an assembly",
+    bottomsPrompt.length <= 680,
     `${bottomsPrompt.length} chars - was 616 across six sentences four revisions ago`);
   check("...and carries NO body-volume or temporal clause - the deliberate trade",
     !/360-degree rotations/.test(bottomsPrompt) && !/as soon as visible/.test(bottomsPrompt),
@@ -322,7 +322,8 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
     /return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\],/.test(SRC) &&
     /\[P\.HIGH, STRICT_REFERENCE_LOCK\],/.test(SRC) &&
     /\[P\.HIGH, DENSE\.inpaintLock\],/.test(SRC) &&
-    /\[P\.HIGH, isBottomsGarment\(item\) \? BOTTOMS_REFERENCE_BIND\[bottomsLength\(item\)\] : ""\],\s*\n\s*\]\);/.test(SRC),
+    /\[P\.HIGH, isBottomsGarment\(item\) \? BOTTOMS_REFERENCE_BIND\[bottomsLength\(item\)\] : ""\],/.test(SRC) &&
+    /\[P\.HIGH, isBottomsGarment\(item\) \? DENSE\.modelAgnostic : ""\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* P.HIGH, NOT P.CORE - the bind must be sheddable. It is the newest and least
      load-bearing clause on this branch, and the anchor it sits behind is the one thing
@@ -498,13 +499,25 @@ console.log("\n\u2500\u2500 \u00a77 HEM LENGTH AND THE PRODUCT BIND: the lower-g
       clause);
   }
   check("short states the knee, long states the ankle, unknown states neither",
-    /above the knee/.test(BOTTOMS_REFERENCE_BIND.short) &&
-    /reaches the ankle/.test(BOTTOMS_REFERENCE_BIND.long) &&
+    /ends above the knee/.test(BOTTOMS_REFERENCE_BIND.short) &&
+    /ends at the ankle/.test(BOTTOMS_REFERENCE_BIND.long) &&
     !/knee|ankle/.test(BOTTOMS_REFERENCE_BIND.unknown),
     "the unknown branch must bind the hem to the reference without claiming to know it");
   check("...and unknown still says the hem is not the model's to choose",
-    /its own hem length exactly as photographed/.test(BOTTOMS_REFERENCE_BIND.unknown),
+    /ends at its own photographed hem/.test(BOTTOMS_REFERENCE_BIND.unknown),
     "a hedge that says nothing at all would leave the reported gap exactly as it was");
+  /* THE SPAN, added against the "no spatial region tagging" diagnosis. Both endpoints on
+     every branch: the hem was already bound, the WAIST never was, and an unstated upper
+     edge is what lets a lower garment ride up the torso. */
+  check("every branch states BOTH endpoints - the waist as well as the hem",
+    Object.values(BOTTOMS_REFERENCE_BIND).every((c) => /sits at the waist and ends/.test(c)),
+    "a hem with no stated top edge leaves the upper boundary to the model");
+  /* No "SPATIAL TARGET:" label. set() has no mask channel and no cross-attention control,
+     so a label is prose the model reads, not a directive it can act on - and it costs the
+     same budget as an instruction. The anatomical endpoints carry the information. */
+  check("...stated as anatomy, not as a machine-readable region label",
+    Object.values(BOTTOMS_REFERENCE_BIND).every((c) => !/SPATIAL TARGET|REGION:|BBOX|mask/i.test(c)),
+    "a label set() cannot act on is ceremony at the price of an instruction");
 
   console.log("   -- wiring and budget --");
   check("TOPS never receives the bind - the report was filed on bottoms only",
@@ -512,9 +525,17 @@ console.log("\n\u2500\u2500 \u00a77 HEM LENGTH AND THE PRODUCT BIND: the lower-g
     "a mirrored clause would spend budget on both branches for a one-branch failure");
   for (const [n, want] of [["Cargo Shorts", "short"], ["Slim Fit Jeans", "long"], ["Glide Slim", "unknown"]]) {
     const p = imageOnlyPrompt(lower(n));
+    /* includes(), not endsWith(): DENSE.modelAgnostic now follows the bind on this branch.
+       The ORDER is asserted separately below rather than inferred from position here, so
+       that inserting a clause between them fails on the ordering check instead of silently
+       passing a weaker containment test. */
     check(`"${n}" ships its ${want} bind and fits the ${CONFIG.PROMPT_MAX_CHARS}-char budget`,
-      p.endsWith(BOTTOMS_REFERENCE_BIND[want].trim()) && p.length <= CONFIG.PROMPT_MAX_CHARS,
+      p.includes(BOTTOMS_REFERENCE_BIND[want].trim()) && p.length <= CONFIG.PROMPT_MAX_CHARS,
       `${p.length} chars`);
+    check(`   ...with the bind ahead of the model-agnostic clause, and both last`,
+      p.indexOf(BOTTOMS_REFERENCE_BIND[want].trim()) < p.indexOf("Ignore the reference model's body") &&
+      p.trim().endsWith("Ignore the reference model's body; fit the cloth to THIS person."),
+      p);
   }
 }
 
