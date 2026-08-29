@@ -8139,16 +8139,41 @@ function bottomsLength(item) {
    COSTS ~2 CHARACTERS PER BRANCH. The hem sentence was already there; "sits at the waist
    and" replaces "its hem", so the span ships essentially for free rather than displacing
    the fidelity clause it sits beside. */
+/* ── REVISION: THE SPAN IS A COVERAGE CLAIM, NOT JUST TWO ENDPOINTS ─────────────
+   REPORTED: the shopper is wearing SHORTS, selects long trousers, and the render
+   in-paints only where the live shorts were - bare leg below that hem stays skin, so the
+   trousers come back cut off at mid-thigh.
+
+   THE ENDPOINTS WERE NEVER THE PROBLEM. "ends at the ankle" was already on the wire and
+   already correct. What was missing is that nothing said the leg ITSELF is the surface to
+   be clothed - so "ankle" read as a boundary on a region the model had separately been
+   told to leave alone (DENSE.inpaintLock's blanket "skin"; see its split, which is the
+   other half of this fix and has to ship with it). Between "do not touch skin" and "reach
+   the ankle", the model resolved the contradiction the conservative way: it painted only
+   over fabric that was already there.
+
+   SO EACH BRANCH NOW STATES WHAT IT COVERS, not only where it stops. "covers the whole
+   leg to the ankle" is an instruction about a surface; "ends at the ankle" was an
+   instruction about a coordinate, and a coordinate is easy to satisfy by simply stopping
+   early somewhere above it.
+
+   "whatever is underneath" RATHER THAN NAMING THE GARMENT. The report is specifically
+   about live shorts, and the obvious wording - "cover the subject's shorts" - puts the
+   noun "shorts" inside a prompt whose entire job is to render TROUSERS. set() has no
+   negative_prompt, so that noun ships positively and is a token the sampler can steer
+   toward: the exact mechanism behind this file's tuxedo and blue-jacket reports, aimed
+   this time at the failure being fixed. The paraphrase carries the same instruction and
+   introduces no garment. */
 const BOTTOMS_REFERENCE_BIND = Object.freeze({
   short:
     " Reproduce the reference garment's own pockets, seams and fabric." +
-    " It sits at the waist and ends above the knee - keep that exact span.",
+    " It sits at the waist and covers the thigh, ending above the knee.",
   long:
     " Reproduce the reference garment's own pockets, seams and fabric." +
-    " It sits at the waist and ends at the ankle - keep that exact span.",
+    " It sits at the waist and covers the whole leg to the ankle, whatever is underneath.",
   unknown:
     " Reproduce the reference garment's own pockets, seams and fabric." +
-    " It sits at the waist and ends at its own photographed hem.",
+    " It sits at the waist and covers the leg to its own photographed hem.",
 });
 
 /**
@@ -8220,7 +8245,9 @@ function imageOnlyPrompt(item) {
        mechanism behind this file's blue-jacket and tuxedo reports. The lower body is
        already covered by the passthrough sentence that now LEADS this prompt, so naming it
        a second time buys nothing and costs the budget twice. */
-    [P.HIGH, DENSE.inpaintLock],
+    /* CATEGORY-AWARE: the bottoms variant drops the blanket "skin", which was telling the
+       model to preserve the very leg the trousers have to cover. See DENSE.inpaintLockBottoms. */
+    [P.HIGH, isBottomsGarment(item) ? DENSE.inpaintLockBottoms : DENSE.inpaintLock],
     /* ── THE TARGET GARMENT'S OWN PROPERTIES - bottoms only, and only here ──────────
        The clause above this one preserves what is NOT being replaced; every clause before
        it describes the reference's provenance in the abstract. Neither says to reproduce
@@ -8340,8 +8367,8 @@ function lookAnchorPrompt() {
    The BASELINE moved this revision: both anchors now carry STRICT_REFERENCE_LOCK, bought
    back against a colour-drift report, which is why tops reads 407 rather than 342.
 
-     TOPS (464 chars - anchor + locks)     BOTTOMS (657 chars - + bind + modelAgnostic)
-     + DENSE.bodyFidelity  (45) → 510  fits              → SHEDS (would be 703)
+     TOPS (464 chars - anchor + locks)     BOTTOMS (667 chars - + bind + modelAgnostic)
+     + DENSE.bodyFidelity  (45) → 510  fits              → SHEDS (would be 713)
      + DENSE.modelAgnostic (64) → 529  fits              → already LIVE on this branch
      + both of them        (109)→ 574  fits              → n/a
 
@@ -8350,7 +8377,7 @@ function lookAnchorPrompt() {
    (BOTTOMS_REFERENCE_BIND's waist-to-hem span, and DENSE.modelAgnostic), all added
    against reported lower-garment failures that have no tops equivalent.
 
-   ⚠️ BOTTOMS IS NOW SATURATED, AND THE WARNING BELOW INVERTS BACK FOR IT. 43 characters
+   ⚠️ BOTTOMS IS NOW SATURATED, AND THE WARNING BELOW INVERTS BACK FOR IT. 33 characters
    are free there against 236 on tops, so bodyFidelity no longer fits on bottoms at all:
    fitPrompt() sheds it rather than shipping it. For THIS branch the old hazard is live
    again - a restore silently SHEDS instead of silently succeeding - and a clause added
@@ -8500,6 +8527,33 @@ const DENSE = Object.freeze({
      short sleeves, "tank top" sleeveless, "long-sleeve shirt" full coverage) without a
      separate, subType-blind passthrough clause fighting it. */
   inpaintLock:   "Face, skin, hands and background pass through untouched.",
+  /* ── THE SAME OBJECTION AS THE `arms` NOTE ABOVE, ONE WORD OVER ─────────────────
+     REPORTED: the shopper is wearing SHORTS, selects long trousers, and the render
+     in-paints only over the area the live shorts occupied - bare leg below the hem is
+     left as skin, so the trousers come back truncated at mid-thigh. Exactly the shape of
+     the "long jeans render as shorts" reports, but the cause is here rather than in the
+     length clause: the length clause says ankle, and THIS clause says do not touch skin.
+     Two instructions about the same pixels, pointing opposite ways.
+
+     THE NOTE ABOVE ALREADY MAKES THIS ARGUMENT and stops one noun short. It rejects
+     "arms" because for a long-sleeve item "a correct render DOES cover the arm in sleeve
+     fabric", so the clause "would contradict the substitution itself". Bare legs are that
+     case for every long lower garment in the catalog, and "skin" is the word that sweeps
+     them in - a shared, category-blind table applied to a per-category substitution.
+
+     SO THE LOCK IS SPLIT, NOT WEAKENED. Tops keeps the original byte for byte: for an
+     upper-body try-on, legs are genuinely not in play and blanket skin protection is
+     exactly right (it is what stops the model repainting the shopper's face and arms,
+     the report it was restored for). Bottoms names the upper-body skin it must still
+     protect - face, hands, arms - and drops only the blanket noun that was contradicting
+     the garment it is supposed to be fitting. Identical length, so this costs nothing on
+     a branch that has ~35 characters to spare.
+
+     WHAT THIS DELIBERATELY DOES NOT DO: name the legs as a target here. That belongs in
+     the clause that already describes the garment's span (BOTTOMS_REFERENCE_BIND), where
+     it reads as one instruction about the garment rather than as a passthrough clause
+     arguing with itself - which is the whole defect being fixed. */
+  inpaintLockBottoms: "Face, hands, arms and background pass through untouched.",
   rotation:      "The garment stays on through any turn.",
   temporal:      "Stable print, no flicker.",
   quality:       "Photoreal fabric, natural light.",
@@ -8663,7 +8717,9 @@ function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line
        forbids the specific invention that matters most here, marks from the ignored half. */
     [P.HIGH, REFERENCE_COLOR_LOCK],
     /* Same clause, same tier, same reason as imageOnlyPrompt() - see its note. */
-    [P.HIGH, DENSE.inpaintLock],
+    /* CATEGORY-AWARE: the bottoms variant drops the blanket "skin", which was telling the
+       model to preserve the very leg the trousers have to cover. See DENSE.inpaintLockBottoms. */
+    [P.HIGH, isBottomsGarment(item) ? DENSE.inpaintLockBottoms : DENSE.inpaintLock],
     /* Wired here too so the two builders cannot disagree about what a bottoms prompt
        says - but this branch is saturated (683 of 700 before this line), so in practice
        it SHEDS here and ships on the single-asset path. That is the correct way round:

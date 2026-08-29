@@ -269,8 +269,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   /* Recomputed again: both anchors now carry STRICT_REFERENCE_LOCK *and* DENSE.inpaintLock,
      so the baseline is 464/468 and every row moved with it. */
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  510, 657],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 529, 657],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  510, 667],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 529, 667],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -279,13 +279,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(464 chars - anchor \+ locks\)     BOTTOMS \(657 chars - \+ bind \+ modelAgnostic\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 510  fits              \u2192 SHEDS \(would be 703\)/.test(SRC) &&
+    /TOPS \(464 chars - anchor \+ locks\)     BOTTOMS \(667 chars - \+ bind \+ modelAgnostic\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 510  fits              \u2192 SHEDS \(would be 713\)/.test(SRC) &&
     /\+ DENSE\.modelAgnostic \(64\) \u2192 529  fits              \u2192 already LIVE on this branch/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /43 characters\s*\n?\s*are free there against 236 on tops/.test(SRC),
+    /33 characters\s*\n?\s*are free there against 236 on tops/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
 }
 

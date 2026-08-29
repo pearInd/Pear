@@ -137,7 +137,7 @@ const BOTTOMS_SPEC =
   " (color, pattern, length) without generating, replacing, or inventing any new top" +
   " or garments. Fit ONLY the reference pants/shorts onto the subject's lower body." +
   " Exactly match color, pattern, logos, and cut. Do NOT invent, add, or alter any details." +
-  " Face, skin, hands and background pass through untouched.";
+  " Face, hands, arms and background pass through untouched.";
 
 /* ── THE BOTTOMS BRANCH GAINED A CLAUSE THE TOPS BRANCH DID NOT ──────────────────
    REPORTED: a lower-garment try-on renders generic trousers - wrong colour, wrong cut,
@@ -156,15 +156,20 @@ const BOTTOMS_SPEC =
 /* Each branch now states a SPAN (waist to hem), not a hem alone - the top boundary was
    the half never stated anywhere on the wire, and an unstated upper edge lets the garment
    ride up the torso. See BOTTOMS_REFERENCE_BIND's revision note in app.js. */
+/* Each branch states what the garment COVERS, not only where it stops - see
+   BOTTOMS_REFERENCE_BIND's revision note. "ends at the ankle" is a coordinate, and a
+   coordinate is satisfiable by stopping early; "covers the whole leg to the ankle" is a
+   surface. That change ships together with DENSE.inpaintLockBottoms, which stopped
+   telling the model to preserve the very skin this clause has to clothe. */
 const BIND_UNKNOWN =
   " Reproduce the reference garment's own pockets, seams and fabric." +
-  " It sits at the waist and ends at its own photographed hem.";
+  " It sits at the waist and covers the leg to its own photographed hem.";
 const BIND_SHORT =
   " Reproduce the reference garment's own pockets, seams and fabric." +
-  " It sits at the waist and ends above the knee - keep that exact span.";
+  " It sits at the waist and covers the thigh, ending above the knee.";
 const BIND_LONG =
   " Reproduce the reference garment's own pockets, seams and fabric." +
-  " It sits at the waist and ends at the ankle - keep that exact span.";
+  " It sits at the waist and covers the whole leg to the ankle, whatever is underneath.";
 /* BOTTOMS ONLY, and new this revision: two consecutive reports of generic trousers on the
    SINGLE-VIEW path (the one COMPOSITE_DEFAULT=false makes live) moved this clause here
    from the composite branch, where it had been shedding to the budget. A trousers packshot
@@ -290,11 +295,27 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     "the colour drift report is what bought this back - it must not shed");
   /* THE PASSTHROUGH CLAMP CLOSES THEM NOW. Pinned at the END specifically: it is P.HIGH, so
      it is the first thing budget pressure would drop, and a silent shed would take the
-     face/skin/background protection with it while every other check here still passed. */
+     face/background protection with it while every other check here still passed.
+
+     THE TWO BRANCHES CARRY DIFFERENT VARIANTS, and that is the fix rather than a drift.
+     Tops keeps the blanket "skin": for an upper-body try-on the legs are not in play and
+     protecting all skin is exactly what stops the model repainting the shopper's face and
+     arms - the report it was restored for. Bottoms cannot use that word. A long trouser
+     render MUST cover leg skin, so "skin ... pass through untouched" told the model to
+     preserve the very surface the garment is being fitted onto, and it resolved that
+     contradiction by in-painting only where live fabric already was - the reported
+     "long trousers come back cut off at mid-thigh". The bottoms variant names the
+     upper-body skin it must still protect (face, hands, arms) and drops only the noun
+     that was arguing with the substitution. Identical length, so nothing shed to pay for
+     it. See DENSE.inpaintLockBottoms, whose comment records the same objection app.js
+     already made one noun over, for "arms" on long-sleeve tops. */
   check("...and the passthrough clamp closes both branches",
     /Face, skin, hands and background pass through untouched\.$/.test(TOPS_SPEC) &&
-    /Face, skin, hands and background pass through untouched\.$/.test(BOTTOMS_SPEC),
+    /Face, hands, arms and background pass through untouched\.$/.test(BOTTOMS_SPEC),
     "restored against a face/skin/background report - it must not shed to the end");
+  check("...and ONLY the tops branch blanket-protects skin",
+    /\bskin\b/.test(TOPS_SPEC) && !/\bskin\b/.test(BOTTOMS_SPEC),
+    "a bottoms prompt that protects skin contradicts the garment it is fitting");
   /* THE PROMPT IS THE ASK; THE GUARD IS THE GUARANTEE. Decart's set() has no mask channel,
      so this wording is a probabilistic bias and nothing more. Asserted together so the
      pair cannot be separated by a later edit that trusts the text alone. */

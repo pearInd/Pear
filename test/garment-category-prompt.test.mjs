@@ -321,7 +321,7 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
   check("both branches are assembled through fitPrompt(), not returned raw",
     /return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\],/.test(SRC) &&
     /\[P\.HIGH, STRICT_REFERENCE_LOCK\],/.test(SRC) &&
-    /\[P\.HIGH, DENSE\.inpaintLock\],/.test(SRC) &&
+    /\[P\.HIGH, isBottomsGarment\(item\) \? DENSE\.inpaintLockBottoms : DENSE\.inpaintLock\],/.test(SRC) &&
     /\[P\.HIGH, isBottomsGarment\(item\) \? BOTTOMS_REFERENCE_BIND\[bottomsLength\(item\)\] : ""\],/.test(SRC) &&
     /\[P\.HIGH, isBottomsGarment\(item\) \? DENSE\.modelAgnostic : ""\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
@@ -499,18 +499,38 @@ console.log("\n\u2500\u2500 \u00a77 HEM LENGTH AND THE PRODUCT BIND: the lower-g
       clause);
   }
   check("short states the knee, long states the ankle, unknown states neither",
-    /ends above the knee/.test(BOTTOMS_REFERENCE_BIND.short) &&
-    /ends at the ankle/.test(BOTTOMS_REFERENCE_BIND.long) &&
+    /ending above the knee/.test(BOTTOMS_REFERENCE_BIND.short) &&
+    /to the ankle/.test(BOTTOMS_REFERENCE_BIND.long) &&
     !/knee|ankle/.test(BOTTOMS_REFERENCE_BIND.unknown),
     "the unknown branch must bind the hem to the reference without claiming to know it");
   check("...and unknown still says the hem is not the model's to choose",
-    /ends at its own photographed hem/.test(BOTTOMS_REFERENCE_BIND.unknown),
+    /to its own photographed hem/.test(BOTTOMS_REFERENCE_BIND.unknown),
     "a hedge that says nothing at all would leave the reported gap exactly as it was");
+  /* COVERAGE, NOT A COORDINATE. Reported: a shopper in shorts selects long trousers and
+     the render in-paints only where the live shorts were, leaving bare leg below.
+     "ends at the ankle" was already on the wire, and it is a statement about a COORDINATE
+     - satisfiable by stopping early anywhere above it. Every branch now states the
+     SURFACE it clothes, which is the thing that was never said. Ships with
+     DENSE.inpaintLockBottoms; neither half works alone, because the other one was telling
+     the model to preserve that same skin. */
+  check("every branch says what the garment COVERS, not only where it stops",
+    Object.values(BOTTOMS_REFERENCE_BIND).every((c) => /covers the (whole leg|leg|thigh)/.test(c)),
+    "a coordinate can be satisfied by stopping early; a surface cannot");
+  check("...and the long branch claims the leg REGARDLESS of what is worn beneath",
+    /covers the whole leg to the ankle, whatever is underneath/.test(BOTTOMS_REFERENCE_BIND.long),
+    "this is the clause that answers the shorts-underneath report specifically");
+  /* Naming the garment underneath - "cover the subject's shorts" - would put the noun
+     "shorts" inside a prompt whose whole job is to render TROUSERS, and set() has no
+     negative_prompt so it ships positively. That is the tuxedo mechanism aimed straight
+     at the failure being fixed. */
+  check("...without naming the garment underneath",
+    Object.values(BOTTOMS_REFERENCE_BIND).every((c) => !/\bshorts\b|\bjeans\b|\btrousers\b/i.test(c)),
+    "a garment noun here is a token the sampler can steer toward");
   /* THE SPAN, added against the "no spatial region tagging" diagnosis. Both endpoints on
      every branch: the hem was already bound, the WAIST never was, and an unstated upper
      edge is what lets a lower garment ride up the torso. */
   check("every branch states BOTH endpoints - the waist as well as the hem",
-    Object.values(BOTTOMS_REFERENCE_BIND).every((c) => /sits at the waist and ends/.test(c)),
+    Object.values(BOTTOMS_REFERENCE_BIND).every((c) => /sits at the waist and covers/.test(c)),
     "a hem with no stated top edge leaves the upper boundary to the model");
   /* No "SPATIAL TARGET:" label. set() has no mask channel and no cross-attention control,
      so a label is prose the model reads, not a directive it can act on - and it costs the
@@ -582,7 +602,15 @@ console.log("\n\u2500\u2500 \u00a78 THE GERESH: one character that unclassified 
   console.log("   -- the prompt that now reaches Decart for that item --");
   const reported = imageOnlyPrompt({ type: "pants", subType: "wide", name: JEANS("\u2019") });
   check("it states the ankle, which it did not before this fix",
-    /ends at the ankle/.test(reported), reported);
+    /covers the whole leg to the ankle/.test(reported), reported);
+  /* The other half of the shorts-underneath fix, asserted on the RENDERED prompt rather
+     than on the constant: the blanket skin passthrough must be gone from this branch, or
+     it contradicts the coverage clause above and the model resolves that by painting only
+     over fabric that was already there. */
+  check("...and carries no blanket skin passthrough to contradict it",
+    !/Face, skin, hands/.test(reported) &&
+    /Face, hands, arms and background pass through untouched/.test(reported),
+    reported);
   check("...and never the unresolved-hem hedge",
     !/its own photographed hem/.test(reported), reported);
   check("...and still fits the budget",
