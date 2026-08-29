@@ -12398,16 +12398,44 @@ function setLiveControls(live) {
    construction throws. */
 function pickRecorderMimes() {
   if (typeof MediaRecorder === "undefined") return [];
+  /* H.264 LEADS - it is the profile QuickTime, Windows Photos, iOS Photos and every NLE
+     open without a transcode.
+
+     VP9/AV1-IN-MP4 FOLLOW, and they are why a Chromium session can stop falling back to
+     WebM. H.264 is patent-encumbered, so Chromium builds that ship without the
+     proprietary encoder (Linux distro packages, some embedded/CI builds) answer FALSE to
+     every avc1 query - which is the usual reason a "Chrome" session still saved .webm.
+     Those builds CAN still mux a real MP4 around a royalty-free codec. Player support is
+     narrower than H.264, but the bytes are a genuine MP4, which is the whole point.
+
+     WEBM REMAINS LAST AND REMAINS HONEST. When no MP4 encoder exists at all there is
+     nothing to force: MediaRecorder emits a Matroska/WebM byte stream, and relabelling
+     that Blob "video/mp4" or naming the file .mp4 does not transcode it - it produces a
+     file whose extension lies about its contents, which QuickTime and Windows Photos
+     refuse outright and iOS Photos rejects on import. A correct .webm is strictly more
+     useful than a corrupt .mp4, so the extension keeps following the real container. */
   const mp4 = [
     "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
     "video/mp4",
     "video/mp4;codecs=avc1.42E01E",
     "video/mp4;codecs=h264",
+    "video/mp4;codecs=vp09.00.10.08",
+    "video/mp4;codecs=av01.0.04M.08",
   ];
   const webm = ["video/webm;codecs=vp8", "video/webm", "video/webm;codecs=vp9"];
-  return [...mp4, ...webm].filter((t) => {
+  const supported = [...mp4, ...webm].filter((t) => {
     try { return MediaRecorder.isTypeSupported(t); } catch (_) { return false; }
   });
+
+  /* One line, once per session, and it is the FIRST thing to read when a clip comes back
+     .webm: it separates "this build genuinely has no MP4 encoder" (MP4: NONE) from "this
+     code never ran" (no line at all - a cached older app.js, which is what the index.html
+     cache-buster exists to prevent). Without it the fallback is silent and unattributable. */
+  console.log("[PEAR] recorder codec support - MP4:",
+    supported.filter((t) => t.indexOf("mp4") > -1).join(" | ") || "NONE (clip will save as .webm)",
+    "- WebM:", supported.filter((t) => t.indexOf("webm") > -1).join(" | ") || "NONE");
+
+  return supported;
 }
 
 /**

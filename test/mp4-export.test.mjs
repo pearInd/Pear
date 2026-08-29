@@ -49,38 +49,44 @@ function lift(signature) {
 }
 
 const MP4_LEAD = "video/mp4;codecs=avc1.42E01E,mp4a.40.2";
-const ALL_MP4  = [MP4_LEAD, "video/mp4", "video/mp4;codecs=avc1.42E01E", "video/mp4;codecs=h264"];
+const MP4_H264 = [MP4_LEAD, "video/mp4", "video/mp4;codecs=avc1.42E01E", "video/mp4;codecs=h264"];
+/* Royalty-free codecs muxed into a real MP4 container - the path still open to a
+   Chromium built without the proprietary H.264 encoder. */
+const MP4_FREE = ["video/mp4;codecs=vp09.00.10.08", "video/mp4;codecs=av01.0.04M.08"];
+const ALL_MP4  = [...MP4_H264, ...MP4_FREE];
 const ALL_WEBM = ["video/webm;codecs=vp8", "video/webm", "video/webm;codecs=vp9"];
+
+const PICKER = lift("function pickRecorderMimes()");
+/* The constructor loop lives inside startRecording()'s beginRecorder closure, so it is
+   sliced by its own landmarks rather than brace-matched. */
+const LOOP = APP.slice(APP.indexOf("    let chosen = null;"),
+                       APP.indexOf("    recorderMime = (mediaRecorder.mimeType"));
+
+/* env.supported → what isTypeSupported() approves; env.constructThrows → what the
+   constructor rejects anyway. Returns the mimeType actually negotiated, or null if the
+   loop gave up (which must never happen while a default constructor still works).
+   Module-scope because §1, §1b and §1c all drive it. */
+function negotiate(env) {
+  const FakeRecorder = function (stream, opts) {
+    const m = opts && opts.mimeType;
+    if (m && (env.constructThrows || []).includes(m)) {
+      const e = new Error("NotSupportedError"); e.name = "NotSupportedError"; throw e;
+    }
+    this.mimeType = m || env.defaultMime || "video/webm";
+  };
+  FakeRecorder.isTypeSupported = (t) => env.supported.includes(t);
+  return new Function("MediaRecorder", "console", "stopPaintLoop", `
+    ${PICKER}
+    let mediaRecorder = null;
+    const captured = {};
+${LOOP}
+    return mediaRecorder ? (mediaRecorder.mimeType || chosen) : null;
+  `)(FakeRecorder, { warn() {}, log() {} }, () => {});
+}
 
 console.log("── §1 MP4 IS ASKED FOR FIRST, AND A REJECTION NEVER COSTS THE CLIP ──");
 {
-  const picker = lift("function pickRecorderMimes()");
-  // The constructor loop lives inside startRecording()'s beginRecorder closure, so it
-  // is sliced by its own landmarks rather than brace-matched.
-  const loop = APP.slice(APP.indexOf("    let chosen = null;"),
-                         APP.indexOf("    recorderMime = (mediaRecorder.mimeType"));
-  check("the constructor loop drives pickRecorderMimes()", loop.includes("pickRecorderMimes()"), loop);
-
-  /* env.supported → what isTypeSupported() approves; env.constructThrows → what the
-     constructor rejects anyway. Returns the mimeType actually negotiated, or null if
-     the loop gave up (which must never happen while a default constructor works). */
-  function negotiate(env) {
-    const FakeRecorder = function (stream, opts) {
-      const m = opts && opts.mimeType;
-      if (m && (env.constructThrows || []).includes(m)) {
-        const e = new Error("NotSupportedError"); e.name = "NotSupportedError"; throw e;
-      }
-      this.mimeType = m || env.defaultMime || "video/webm";
-    };
-    FakeRecorder.isTypeSupported = (t) => env.supported.includes(t);
-    return new Function("MediaRecorder", "console", "stopPaintLoop", `
-      ${picker}
-      let mediaRecorder = null;
-      const captured = {};
-${loop}
-      return mediaRecorder ? (mediaRecorder.mimeType || chosen) : null;
-    `)(FakeRecorder, { warn() {} }, () => {});
-  }
+  check("the constructor loop drives pickRecorderMimes()", LOOP.includes("pickRecorderMimes()"), LOOP);
 
   check("Chromium-like (records both): takes H.264+AAC MP4, not WebM",
     negotiate({ supported: [...ALL_MP4, ...ALL_WEBM] }) === MP4_LEAD);
@@ -104,9 +110,54 @@ ${loop}
                 defaultMime: "video/x-host-default" }) === "video/x-host-default");
 }
 
+console.log("\n── §1b A CHROMIUM WITHOUT H.264 STILL GETS A REAL MP4 ──");
+{
+  /* The reported symptom - "Chrome/Chromium still downloads .webm" - is exactly what a
+     build without the proprietary H.264 encoder does: every avc1/h264 query answers
+     false. Such a build can still mux VP9 or AV1 into a genuine MP4 container, so MP4
+     has to be preferred on CODEC grounds rather than abandoned at the first H.264 miss. */
+  const noH264 = [...MP4_FREE, ...ALL_WEBM];
+  check("H.264-less Chromium: takes VP9-in-MP4 over WebM - a real .mp4, not a relabel",
+    negotiate({ supported: noH264 }) === "video/mp4;codecs=vp09.00.10.08");
+  check("AV1-in-MP4 is taken when it is the only MP4 on offer",
+    negotiate({ supported: ["video/mp4;codecs=av01.0.04M.08", ...ALL_WEBM] })
+      === "video/mp4;codecs=av01.0.04M.08");
+  check("H.264 still outranks the royalty-free MP4 codecs wherever both exist",
+    negotiate({ supported: ALL_MP4 }) === MP4_LEAD);
+  check("VP9-in-MP4 approved then rejected: falls through to WebM, never to nothing",
+    negotiate({ supported: noH264, constructThrows: MP4_FREE }) === "video/webm;codecs=vp8");
+}
+
+console.log("\n── §1c WITH NO MP4 ENCODER, THE FALLBACK STAYS HONEST ──");
+{
+  /* The one thing this suite exists to FORBID. With no MP4 encoder present MediaRecorder
+     emits a Matroska/WebM byte stream; calling the Blob "video/mp4" or the file ".mp4"
+     does not transcode it, it only makes the extension lie about the bytes. QuickTime and
+     Windows Photos refuse such a file outright and iOS Photos rejects it on import, so a
+     correct .webm is strictly more useful to the shopper than a corrupt .mp4. */
+  const webmOnly = negotiate({ supported: ALL_WEBM });
+  check("no MP4 encoder: the negotiated container is WebM, and is reported as WebM",
+    webmOnly === "video/webm;codecs=vp8", webmOnly);
+  const extOf = (t) => t.split(";")[0].indexOf("mp4") > -1 ? "mp4" : "webm";
+  check("...so the clip is named .webm - the extension always follows the real bytes",
+    extOf(webmOnly) === "webm");
+  check("the Blob is never constructed with a hardcoded video/mp4 type",
+    !APP.includes('new Blob(recordedChunks, { type: "video/mp4" })'),
+    "a literal video/mp4 Blob type would relabel WebM bytes as MP4");
+  check("...it is built from the container the recorder actually negotiated",
+    APP.includes("const blob = new Blob(recordedChunks, { type });"));
+  check("the download extension is derived from the Blob, never pinned to mp4",
+    APP.includes('const ext = type.indexOf("mp4") > -1 ? "mp4" : "webm";'));
+}
+
 console.log("\n── §2 THE SOURCE CONTRACT ──");
 {
   const picker = lift("function pickRecorderMimes()");
+  check("the runtime's codec support is logged, so a .webm fallback is attributable",
+    picker.includes('console.log("[PEAR] recorder codec support - MP4:"'), picker);
+  check("the royalty-free MP4 codecs are offered before any WebM candidate",
+    picker.indexOf("vp09") < picker.indexOf("video/webm") &&
+    picker.indexOf("av01") < picker.indexOf("video/webm"), picker);
   check("MP4 candidates are listed before any WebM candidate",
     picker.indexOf("video/mp4") < picker.indexOf("video/webm"), picker);
   check("the two spec'd MP4 types lead, in order (H.264+AAC, then bare video/mp4)",
