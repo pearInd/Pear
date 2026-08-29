@@ -1706,7 +1706,11 @@ const FABRIC_AMBIGUOUS = ["ג'ינס", "ג׳ינס", "jeans", "denim"];
 function classifyGarmentTitle(...texts) {
   const raw = texts.filter((t) => typeof t === "string" && t.trim()).join(" ");
   if (!raw) return null;
-  const text = raw.toLowerCase();
+  /* Folded BEFORE lowercasing and before any list is consulted - see foldGeresh(). A
+     smart-quoted "ג'ינס" matched no stem here, so this classifier ABSTAINED on a pair of
+     jeans and the verdict it forwards (or fails to) is what isBottomsGarment() then
+     treats as authoritative. */
+  const text = foldGeresh(raw).toLowerCase();
   const scan = (t) => ({
     bottom: hasHebrewStem(t, GARMENT_CATEGORY_KEYWORDS.bottom.he) ||
             hasEnglishWord(t, GARMENT_CATEGORY_KEYWORDS.bottom.en),
@@ -7878,6 +7882,49 @@ const TEMPORAL_PERSISTENCE = Object.freeze({
    a t-shirt as trousers and repaint the shopper's real jeans: the reported bug, inverted.
    Same reason "sweatpants"/"tracksuit" are listed in full rather than relying on \bpants\b
    to find them inside a compound. */
+/* ══════════════════════════════════════════════════════════════════════════════
+   APOSTROPHE FOLDING - the character that made a real product classify wrong
+   ──────────────────────────────────────────────────────────────────────────────
+   REPORTED, with a screenshot: the catalog item "ג'ינס WIDE - FOX" (long grey wide-leg
+   denim) rendered as short black shorts cut at mid-thigh. Diagnosed as the prompt lacking
+   length attributes. It does not lack them - bottomsLength() has resolved a hem since the
+   previous revision. It never FIRED for this product, and this is why.
+
+   EVERY LIST IN THIS FILE SPELLS "jeans" TWICE - ג'ינס with an ASCII apostrophe (U+0027)
+   and ג׳ינס with the Hebrew geresh (U+05F3) - and both of those comments say, correctly,
+   that storefronts use the two interchangeably. Neither anticipated the THIRD spelling,
+   which is the one a CMS actually emits: U+2019, the right single quotation mark that
+   every smart-quote substitution produces, and which is what lands in a product title
+   pasted out of a word processor or typed into most storefront admins.
+
+   WHAT IT COST, measured rather than assumed (see the §GERESH block in
+   garment-category-prompt.test.mjs, which runs the real functions over all five spellings):
+     · bottomsLength() fell through to "unknown", so the prompt said "ends at its own
+       photographed hem" instead of "ends at the ankle" - and an unbounded hem on a
+       wide-leg denim is exactly the mid-thigh truncation that was reported.
+     · With no `type` metadata to rescue it - the widget-handoff and custom-upload paths -
+       isBottomsGarment() returned FALSE, so a pair of jeans was fitted with
+       "Fit ONLY the reference shirt onto the subject's upper torso". That is the original
+       shirt-on-a-trouser-reference bug, reachable today, by one character.
+
+   ONE FOLD, NOT A SEVENTH LIST ENTRY. Adding U+2019 to the six lists that spell this word
+   would fix this report and leave the next variant to be discovered the same way. Folding
+   the text before it is matched fixes all of them at once, and keeps the lists readable:
+   they only ever have to spell the ASCII form. The Hebrew-geresh entries are left in place
+   - they are now redundant rather than wrong, and deleting them would be a second change
+   riding on this one.
+
+   FOLDS TO ASCII ' - the form every list already contains. Applied at the three entry
+   points that match free text: classifyGarmentTitle(), isBottomsGarment() and
+   bottomsLength(). widget/pear-widget.js carries its own copy for its own lists; the two
+   are kept in step for the reason its FABRIC_AMBIGUOUS comment already gives - whichever
+   one is wrong is the one that wins. */
+const GERESH_VARIANTS = /[\u2018\u2019\u02B9\u02BC\u2032\u00B4\u0060\u05F3]/g;
+/** Fold every apostrophe-like character a storefront emits to a plain ASCII quote. */
+function foldGeresh(text) {
+  return String(text ?? "").replace(GERESH_VARIANTS, "'");
+}
+
 const BOTTOMS_TOKENS =
   /(מכנס|ג['׳]ינס|חצאי|שורט|טייץ|טייצ|לגינ|\bpants\b|\btrousers\b|\bshorts\b|\bjeans\b|\bskirts?\b|\bleggings\b|\bchinos\b|\bjoggers\b|\bsweatpants\b|\btracksuit\b|\bslacks\b|\bculottes\b|\bbottoms?\b)/i;
 
@@ -7904,8 +7951,8 @@ function isBottomsGarment(item) {
   if (!item) return false;
   if (item.garmentType === "lower_body") return true;
   if (item.garmentType === "upper_body") return false;
-  const fields = [item.type, item.category, item.subType, item.name, item.title]
-    .filter(Boolean).join(" ");
+  const fields = foldGeresh(
+    [item.type, item.category, item.subType, item.name, item.title].filter(Boolean).join(" "));
   return BOTTOMS_TOKENS.test(fields);
 }
 
@@ -7963,8 +8010,8 @@ const LONG_BOTTOMS_TOKENS =
  */
 function bottomsLength(item) {
   if (!item) return "unknown";
-  const fields = [item.type, item.category, item.subType, item.name, item.title]
-    .filter(Boolean).join(" ");
+  const fields = foldGeresh(
+    [item.type, item.category, item.subType, item.name, item.title].filter(Boolean).join(" "));
   if (SHORT_BOTTOMS_TOKENS.test(fields)) return "short";
   if (LONG_BOTTOMS_TOKENS.test(fields)) return "long";
   return "unknown";

@@ -203,6 +203,13 @@
      often; and חצאית was filed under `dress`, which the fitting room read as a top
      because its only lower-body test was `type === "pants" || type === "bottoms"`.
      A skirt is lower-body, so it belongs here. */
+  /* Every apostrophe-like character a storefront emits, folded to one. Mirrors
+     foldGeresh() in fitting-room/app.js - keep the two in step. */
+  var GERESH_VARIANTS = /[\u2018\u2019\u02B9\u02BC\u2032\u00B4\u0060\u05F3]/g;
+  function foldGeresh(text) {
+    return String(text == null ? "" : text).replace(GERESH_VARIANTS, "'");
+  }
+
   var CATEGORY_KEYWORDS = {
     pants: ["מכנס", "ג'ינס", "ג׳ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "לגינ",
             "pants", "jeans", "trousers", "shorts", "leggings", "skirt", "bermuda",
@@ -295,7 +302,19 @@
   }
 
   function detectCategory(name) {
-    var haystack = ((name || "") + " " + (d.title || "")).toLowerCase();
+    /* ── APOSTROPHE FOLDING, kept in step with fitting-room/app.js ─────────────
+       The lists below spell "jeans" twice - ג'ינס (ASCII U+0027) and ג׳ינס (Hebrew
+       geresh U+05F3) - and both spellings miss the one a CMS actually emits: U+2019,
+       the right single quote every smart-quote substitution produces. A real catalog
+       item, "ג'ינס WIDE - FOX", matched NOTHING here and was forwarded as "unknown".
+
+       WHY THAT MATTERS MORE FROM THIS FILE than from the room: this widget's verdict is
+       EXPLICIT, and the comment on FABRIC_AMBIGUOUS below already records the rule -
+       whichever classifier is wrong is the one that wins, because an explicit category
+       outranks the room's own. Folding here and not there (or the reverse) would leave
+       exactly that asymmetry. Folds to ASCII ', which is the form every list already
+       contains, so no list needs a new entry. */
+    var haystack = foldGeresh((name || "") + " " + (d.title || "")).toLowerCase();
     var hit = matchCategory(haystack);
     /* Only re-test when the hit came from the pants list AND a fabric word is present -
        so "מכנס ג'ינס" (real lower-body evidence) is untouched, while "ז'קט ג'ינס" falls

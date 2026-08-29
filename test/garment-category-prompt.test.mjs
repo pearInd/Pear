@@ -61,7 +61,7 @@ const sandbox = {
   getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
-  code + "\nreturn { isBottomsGarment, bottomsLength, imageOnlyPrompt, lookAnchorPrompt, fitPrompt, BOTTOMS_REFERENCE_BIND, P };")(...Object.values(sandbox));
+  code + "\nreturn { isBottomsGarment, bottomsLength, foldGeresh, imageOnlyPrompt, lookAnchorPrompt, fitPrompt, BOTTOMS_REFERENCE_BIND, P };")(...Object.values(sandbox));
 
 const { isBottomsGarment, imageOnlyPrompt } = api;
 
@@ -537,6 +537,80 @@ console.log("\n\u2500\u2500 \u00a77 HEM LENGTH AND THE PRODUCT BIND: the lower-g
       p.trim().endsWith("Ignore the reference model's body; fit the cloth to THIS person."),
       p);
   }
+}
+
+console.log("\n\u2500\u2500 \u00a78 THE GERESH: one character that unclassified a real product \u2500\u2500");
+{
+  /* REPORTED, with a screenshot: the catalog item "\u05d2'\u05d9\u05e0\u05e1 WIDE - FOX" - long grey wide-leg
+     denim - rendered as short black shorts cut at mid-thigh. Filed as "the prompt lacks
+     length attributes". It does not: \u00a77 above pins that bottomsLength() resolves a hem and
+     that the long branch says "ends at the ankle". The instruction never FIRED for this
+     product, and one character is why.
+
+     Every list in app.js spells "jeans" twice - ASCII U+0027 and Hebrew geresh U+05F3 -
+     and both comments say storefronts use them interchangeably. Neither anticipated
+     U+2019, the right single quote that every smart-quote substitution emits and that
+     lands in any title pasted out of a word processor or typed in most storefront admins.
+
+     THIS SECTION RUNS THE REAL FUNCTIONS OVER EVERY SPELLING, because the failure was
+     invisible to every existing check: the two spellings that were listed both passed,
+     and nothing exercised a third. */
+  const { bottomsLength, foldGeresh } = api;
+  /* U+0027 ' , U+05F3 Hebrew geresh, U+2019 right single quote (the reported one),
+     U+02B9 modifier prime, U+2018 left single quote, U+00B4 acute, U+02BC apostrophe. */
+  const GERESH = ["'", "\u05f3", "\u2019", "\u02b9", "\u2018", "\u00b4", "\u02bc"];
+  const JEANS = (ch) => `\u05d2${ch}\u05d9\u05e0\u05e1 WIDE - FOX`;
+
+  console.log("   -- the reported product, every spelling a storefront emits --");
+  for (const ch of GERESH) {
+    const cp = "U+" + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+    /* WITH catalog metadata: `type` rescues the CATEGORY, but never the LENGTH - which is
+       read from the same free text. This is the reported render: correctly identified as
+       bottoms, then given no hem to honour. */
+    check(`${cp} with type:"pants" resolves LONG, not unknown`,
+      bottomsLength({ type: "pants", subType: "wide", name: JEANS(ch) }) === "long",
+      "an unresolved hem is the mid-thigh truncation that was reported");
+    /* WITHOUT metadata - the widget-handoff and custom-upload paths. Here the same
+       character decided the CATEGORY too, and the failure is far worse than a wrong hem:
+       a pair of jeans fitted with "Fit ONLY the reference shirt onto the subject's upper
+       torso" is the original shirt-on-a-trouser-reference bug, reachable today. */
+    check(`   ...and on name alone it is still BOTTOMS, never a top`,
+      isBottomsGarment({ name: JEANS(ch) }) === true,
+      "a jeans reference on the tops anchor is the bug this whole file exists for");
+  }
+
+  console.log("   -- the prompt that now reaches Decart for that item --");
+  const reported = imageOnlyPrompt({ type: "pants", subType: "wide", name: JEANS("\u2019") });
+  check("it states the ankle, which it did not before this fix",
+    /ends at the ankle/.test(reported), reported);
+  check("...and never the unresolved-hem hedge",
+    !/its own photographed hem/.test(reported), reported);
+  check("...and still fits the budget",
+    reported.length <= CONFIG.PROMPT_MAX_CHARS, `${reported.length} chars`);
+
+  console.log("   -- the fold itself --");
+  check("foldGeresh() maps every variant to a plain ASCII quote",
+    GERESH.every((ch) => foldGeresh(`\u05d2${ch}\u05d9\u05e0\u05e1`) === "\u05d2'\u05d9\u05e0\u05e1"),
+    "one fold is what stops the next variant being discovered the same way");
+  check("...and is null/undefined-safe, never throwing on a missing title",
+    foldGeresh(null) === "" && foldGeresh(undefined) === "" && foldGeresh(0) === "0");
+  /* The fold must not touch anything else. A regex that also folded, say, a hyphen would
+     quietly change "T-SHIRT" and every other list that matches on punctuation. */
+  check("...and leaves all other punctuation alone",
+    foldGeresh("T-SHIRT / 100% cotton (slim)") === "T-SHIRT / 100% cotton (slim)");
+
+  /* THE TWO CLASSIFIERS MUST FOLD ALIKE. pear-widget.js forwards an EXPLICIT category
+     that outranks the room's own, so folding in one and not the other leaves the widget
+     able to forward a wrong verdict the room cannot question - which its own
+     FABRIC_AMBIGUOUS comment already names as the rule. */
+  const WIDGET_SRC = readFileSync(new URL("../widget/pear-widget.js", import.meta.url), "utf8");
+  check("widget/pear-widget.js folds the same set before matching its own lists",
+    /var GERESH_VARIANTS = \/\[\\u2018\\u2019\\u02B9\\u02BC\\u2032\\u00B4\\u0060\\u05F3\]\/g;/.test(WIDGET_SRC) &&
+    /var haystack = foldGeresh\(/.test(WIDGET_SRC),
+    "an explicit widget verdict outranks the room - the two have to fold alike");
+  check("...and app.js's set is the same one, character for character",
+    /const GERESH_VARIANTS = \/\[\\u2018\\u2019\\u02B9\\u02BC\\u2032\\u00B4\\u0060\\u05F3\]\/g;/.test(SRC),
+    "two folds that drift are one classifier silently disagreeing with the other");
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

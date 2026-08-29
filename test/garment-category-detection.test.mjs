@@ -57,6 +57,13 @@ function check(label, cond, detail) {
 /* The real engine, executed. */
 const code = SRC.slice(SRC.indexOf("/* ── Garment category detection"),
                        SRC.indexOf("function toItem(raw)"));
+/* foldGeresh() lives further down app.js, beside the token tables that also need it, so
+   it falls outside the slice above - but classifyGarmentTitle() calls it. EXTRACTED from
+   the real source rather than stubbed here: a hand-written copy would pass this suite
+   while the shipped fold silently lost a character, which is the exact failure mode the
+   §GERESH cases below exist to catch. */
+const foldSrc = SRC.slice(SRC.indexOf("const GERESH_VARIANTS ="),
+                          SRC.indexOf("const BOTTOMS_TOKENS ="));
 const mkApi = ({ geminiImpl } = {}) => {
   const calls = [];
   const sandbox = {
@@ -66,8 +73,9 @@ const mkApi = ({ geminiImpl } = {}) => {
     classifyGarmentViaLLM: geminiImpl || (async (t) => { calls.push(t); return null; }),
   };
   const api = new Function(...Object.keys(sandbox),
-    code + "\nreturn { classifyGarmentTitle, resolveGarmentCategory, categoryToGarmentType," +
-    " GARMENT_CATEGORY_KEYWORDS };")(...Object.values(sandbox));
+    foldSrc + "\n" + code +
+    "\nreturn { classifyGarmentTitle, resolveGarmentCategory, categoryToGarmentType," +
+    " GARMENT_CATEGORY_KEYWORDS, foldGeresh };")(...Object.values(sandbox));
   return { ...api, calls };
 };
 const api = mkApi();
@@ -266,7 +274,11 @@ console.log("\n── §8 THE WIDGET AND THE ROOM MUST AGREE ──");
      case where that bites: "ז'קט ג'ינס" matches the pants list on the FABRIC, and would
      be forwarded as a confident garment_type=pants that the room then has no way to
      question. Executed against the REAL detectCategory, not asserted over source text. */
-  const wsrc = WIDGET.slice(WIDGET.indexOf("var CATEGORY_KEYWORDS = {"),
+  /* Slice from the widget's own foldGeresh() rather than from CATEGORY_KEYWORDS: the fold
+     runs before any list is consulted (see the block above it in pear-widget.js), so a
+     slice that starts below it executes detectCategory with the helper undefined. Taking
+     the real one keeps this suite testing the shipped fold rather than a stub. */
+  const wsrc = WIDGET.slice(WIDGET.indexOf("var GERESH_VARIANTS ="),
                             WIDGET.indexOf("function isExcludedSrc"));
   const detectCategory = new Function('var d={title:""};' + wsrc + "\nreturn detectCategory;")();
   check("the widget resolves a denim JACKET to outerwear, not pants",
