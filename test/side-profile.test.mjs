@@ -774,7 +774,8 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
   check("what survives at both poses is the category anchor, byte-identical",
     square === built &&
     /^Drape and fit the EXACT static shirt from the reference image onto the live subject's CURRENT body contour/.test(square) &&
-    /Strictly preserve the original shirt texture, pattern, and color\.$/.test(square));
+    /Strictly preserve the original shirt texture, pattern, and color\./.test(square) &&
+    /fully fastened, sitting flat and closed across the chest as shown\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }

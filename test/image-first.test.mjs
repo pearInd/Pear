@@ -146,6 +146,29 @@ const BACK_BOTTOMS_SPEC =
   " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
   " garment design. Strictly preserve original pattern and color.";
 
+/* THE ONE BOUGHT-BACK CLAUSE. Reported: a closed button-down rendered hanging open,
+   exposing the shopper's chest - the invented-detail class (right garment, wrong state),
+   which the anchor's restore note names as the class a clause may be spent on. Bought back
+   per the procedure that note prescribes: ONE part, at P.HIGH so fitPrompt() sheds it
+   before the anchor, tops + front only (a front placket is not in view from behind, and a
+   closure is not a lower-body feature).
+
+   IT IS STATED POSITIVELY ON PURPOSE. "Do not render open or unbuttoned" is the shape that
+   produced the tuxedo: set() has no negative_prompt, so a negation ships inside the
+   POSITIVE prompt where "open" and "unbuttoned" are tokens the sampler can steer toward -
+   exactly how DENSE.assetLock failed when it enumerated "TUXEDO, BOWTIE". \u00a72 scans for
+   those tokens and fails if any appear.
+
+   IT IS ALSO PRODUCT-NEUTRAL, so it opens no third axis: it never claims this garment HAS
+   buttons. On a tee there is no closure and it asks for nothing; on a button-down it pins
+   the fastening. Wording it per-product would need a has-buttons axis, and the prompt is
+   still a function of (category, angle) and nothing else. */
+const CLOSURE_SPEC =
+  "Reproduce the reference's front closure exactly: any buttons, zip or placket stay" +
+  " fully fastened, sitting flat and closed across the chest as shown.";
+/* What the tops+front branch actually ships: anchor, one space (fitPrompt's join), clause. */
+const TOPS_FRONT_SPEC = TOPS_SPEC + " " + CLOSURE_SPEC;
+
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
@@ -157,7 +180,14 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      a diffusion model, and these are the strings whose exact form was specified from
      outside this file. */
   check("the TOPS branch matches the specified wording byte for byte",
-    api.imageOnlyPrompt(TEE) === TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
+    api.imageOnlyPrompt(TEE) === TOPS_FRONT_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
+  check("...and its anchor is still the front anchor, unaltered, with the clause appended whole",
+    api.imageOnlyPrompt(TEE).startsWith(TOPS_SPEC + " ") &&
+    api.imageOnlyPrompt(TEE).endsWith(CLOSURE_SPEC),
+    "the clause must ride BESIDE the anchor, never be woven into it");
+  check("no negative token rides with it - the tuxedo shipped through a positive prompt",
+    !/\b(open|unbuttoned|undone|parted|exposed|never|avoid|don't|do not)\b/i.test(CLOSURE_SPEC),
+    CLOSURE_SPEC);
   check("the BOTTOMS branch matches the specified wording byte for byte",
     api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
   /* ONE SHAPE, THREE SENTENCES, SAME ORDER. The old pair could be normalised into one
@@ -281,10 +311,17 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     "no template hole anywhere in or adjacent to the declaration");
   check("...and the resolver only SELECTS an anchor, never builds one",
     /const anchors = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(SRC) &&
-    /\[P\.CORE, isBottomsGarment\(item\) \? anchors\.bottom : anchors\.top\]/.test(SRC) &&
+    /\[P\.CORE, bottoms \? anchors\.bottom : anchors\.top\]/.test(SRC) &&
     !/(BACK_)?CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC) &&
     !/anchors\.(top|bottom)\s*\+/.test(SRC),
     "appending one clause is how the dozen came back last time");
+  /* The closure lock is a SEPARATE PART handed to fitPrompt(), not text glued onto an
+     anchor. That is the distinction this whole section is about: a part can be shed under
+     budget pressure and can be counted; a concatenation can be neither. */
+  check("...and the bought-back clause is a separate part, never concatenated on",
+    /\.\.\.\(!bottoms && angle !== "back" \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),/.test(SRC) &&
+    !/FRONT_CLOSURE_LOCK\s*\+/.test(SRC) && !/\+\s*FRONT_CLOSURE_LOCK/.test(SRC),
+    "a concatenated clause cannot shed, and that is how the dozen came back last time");
   /* The angle axis must stay a SELECTOR. A back render that ships the front anchor plus a
      rear clause is the volume increase this suite's header is about. */
   check("the back anchors are frozen literals, with no interpolation hole either",
@@ -319,7 +356,7 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
     const back = angle === "back";
     const expected = item.garmentType === "lower_body"
       ? (back ? BACK_BOTTOMS_SPEC : BOTTOMS_SPEC)
-      : (back ? BACK_TOPS_SPEC : TOPS_SPEC);
+      : (back ? BACK_TOPS_SPEC : TOPS_FRONT_SPEC);
     check(`${name}: byte-identical to its category anchor`,
       api.buildCompositePrompt(item, angle, prof) === expected,
       api.buildCompositePrompt(item, angle, prof));
@@ -328,7 +365,7 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
      Pose is the one that has to be nailed down explicitly - it is the axis FIX ONE let
      through, and an edge-on render must still resolve to its square-on anchor exactly. */
   check("all four anchors are genuinely different from one another",
-    new Set([TOPS_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC]).size === 4);
+    new Set([TOPS_FRONT_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC]).size === 4);
   check("angle SELECTS: front and back differ, and each is its own frozen anchor",
     api.buildCompositePrompt(TEE, "front", false) !== api.buildCompositePrompt(TEE, "back", false) &&
     api.buildCompositePrompt(TEE, "back", false) === BACK_TOPS_SPEC);
@@ -337,9 +374,9 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
     api.buildCompositePrompt(TEE, "back", false) === api.buildCompositePrompt(TEE, "back", true) &&
     api.buildCompositePrompt(JEANS, "back", false) === api.buildCompositePrompt(JEANS, "back", true));
   check("an unrecognised angle falls to FRONT, never to a silent back-render",
-    api.buildCompositePrompt(TEE, undefined, false) === TOPS_SPEC &&
-    api.buildCompositePrompt(TEE, "sideways", false) === TOPS_SPEC &&
-    api.buildCompositePrompt(TEE, "BACK", false) === TOPS_SPEC);
+    api.buildCompositePrompt(TEE, undefined, false) === TOPS_FRONT_SPEC &&
+    api.buildCompositePrompt(TEE, "sideways", false) === TOPS_FRONT_SPEC &&
+    api.buildCompositePrompt(TEE, "BACK", false) === TOPS_FRONT_SPEC);
 
   /* Structural, across the builders this sandbox cannot execute. The four together are
      every path that can reach rtClient.set() with a prompt. */

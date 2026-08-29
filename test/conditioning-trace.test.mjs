@@ -170,9 +170,23 @@ console.log("\n── §4 SELECTING, NOT APPENDING ──");
   const resolver = lift("function imageOnlyPrompt(item, angle = \"front\")");
   check("the resolver picks a frozen anchor set by angle",
     resolver.includes('const anchors = angle === "back" ? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;'), resolver);
+  /* Exactly one CORE anchor still ships on every branch - that is the invariant, and it is
+     what keeps the angle axis volume-flat. The tops+front branch additionally carries ONE
+     bought-back P.HIGH clause (FRONT_CLOSURE_LOCK); P.HIGH matters because fitPrompt()
+     sheds it under budget pressure before it would ever touch the anchor. A second CORE,
+     or a clause concatenated onto an anchor, still fails. */
+  /* Comments stripped before counting: the resolver's own doc block discusses P.CORE and
+     P.HIGH by name to explain the shedding order, and a check that trips over the
+     explanation would force whoever reads it to delete the documentation. */
+  const resolverCode = resolver.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   check("exactly ONE anchor ships - volume stays flat across the angle axis",
-    /\[P\.CORE, isBottomsGarment\(item\) \? anchors\.bottom : anchors\.top\],/.test(resolver) &&
-    (resolver.match(/P\.CORE/g) || []).length === 1, resolver);
+    /\[P\.CORE, bottoms \? anchors\.bottom : anchors\.top\],/.test(resolverCode) &&
+    (resolverCode.match(/P\.CORE/g) || []).length === 1, resolverCode);
+  check("the one bought-back clause rides at P.HIGH, so it sheds before the anchor does",
+    (resolverCode.match(/P\.HIGH/g) || []).length === 1 &&
+    /\[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\]/.test(resolverCode), resolverCode);
+  check("...and it is scoped to tops + front, where a front closure is actually in view",
+    /!bottoms && angle !== "back"/.test(resolver), resolver);
   check("nothing is concatenated onto an anchor, front or back",
     !/anchors\.(top|bottom)\s*\+/.test(APP) && !/(BACK_)?CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(APP),
     "appending one clause is how the dozen came back last time");

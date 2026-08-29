@@ -130,9 +130,12 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
   /* The resolver may branch on CATEGORY and nothing else. A second argument threaded in
      from a variant/colour/angle is how a description creeps back onto the wire. */
   check("...and the resolver branches on the garment's category alone",
-    /\[P\.CORE, isBottomsGarment\(item\) \? anchors\.bottom : anchors\.top\]/.test(APP) &&
-    /const anchors = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(APP),
-    "category and ANGLE are the two permitted axes - a variant or colour input would be a third");
+    /\[P\.CORE, bottoms \? anchors\.bottom : anchors\.top\]/.test(APP) &&
+    /const anchors = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(APP) &&
+    /const bottoms = isBottomsGarment\(item\);/.test(APP) &&
+    /\.\.\.\(!bottoms && angle !== "back" \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\)/.test(APP),
+    "category and ANGLE are the only permitted inputs - the closure lock is a constant " +
+    "selected BY them, not a third axis; a variant or colour input would be");
   /* Comments stripped first: variantMetaOf's own doc block QUOTES the old call as the
      thing it replaced, and a check that trips over the explanation of the fix is worse
      than no check - it would force whoever reads it to delete the documentation. */

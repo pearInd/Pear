@@ -198,9 +198,23 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      whole sequence undid. */
   const tops = api.imageOnlyPrompt(TEE);
   const bottoms = api.imageOnlyPrompt(JEANS);
-  check("both branches stay minimal, and the gap between them stays small",
-    tops.length <= 360 && bottoms.length <= 360 && Math.abs(bottoms.length - tops.length) <= 40,
-    `tops=${tops.length} bottoms=${bottoms.length} gap=${bottoms.length - tops.length}`);
+  /* The tops branch now carries a SECOND part - FRONT_CLOSURE_LOCK, bought back against
+     the button-down-rendered-open report - so a flat "both branches are within 40 of each
+     other" no longer describes the code. Loosening the constant to fit would give up the
+     property; instead the lock is measured separately, so the original invariant still
+     holds where it always applied (the ANCHORS stay minimal and comparable) and the total
+     is bounded on top of it. A second clause creeping in would fail the total; an anchor
+     growing back toward the 634-character assembly would fail the anchor bound. */
+  const closure = (/Reproduce the reference's front closure[\s\S]*?as shown\./.exec(tops) || [""])[0];
+  const topsAnchor = tops.replace(closure, "").trim();
+  check("the ANCHORS stay minimal and comparable, as they always had to",
+    topsAnchor.length <= 360 && bottoms.length <= 360 &&
+    Math.abs(bottoms.length - topsAnchor.length) <= 40,
+    `tops anchor=${topsAnchor.length} bottoms=${bottoms.length} gap=${bottoms.length - topsAnchor.length}`);
+  check("...and the one bought-back clause is the ONLY thing on top of the tops anchor",
+    closure.length > 0 && tops.length === topsAnchor.length + 1 + closure.length &&
+    tops.length <= 500,
+    `tops=${tops.length} anchor=${topsAnchor.length} closure=${closure.length}`);
 
   const both = api.fitPrompt([
     [api.P.CORE, bottoms],
@@ -222,8 +236,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  388, 366],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 407, 385],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  537, 366],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 556, 385],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -232,13 +246,13 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS \(342 chars - anchor\)             BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 388  fits              \u2192 366  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 407  fits              \u2192 385  fits/.test(SRC),
+    /TOPS FRONT \(491 = 342 anchor \+ 148 closure lock\)  BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 537  fits              \u2192 366  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 556  fits              \u2192 385  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /308 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
+    /159 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
 }
 

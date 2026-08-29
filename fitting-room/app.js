@@ -1657,9 +1657,14 @@ const GARMENT_CATEGORY_KEYWORDS = Object.freeze({
   /* Hebrew entries are STEMS, matched as substrings so every inflection follows.
      English entries are matched with word boundaries - see WORD_BOUNDED below. */
   bottom: Object.freeze({
-    he: ["מכנס", "ג'ינס", "ג׳ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "טייצ", "לגינ"],
-    en: ["pants", "shorts", "trousers", "jeans", "skirt", "skirts", "bottoms", "bottom",
-         "leggings", "chinos", "joggers", "sweatpants", "slacks", "culottes", "bermuda"],
+    /* Kept in step with BOTTOMS_TOKENS - the two are separate mechanisms (stems+words
+       here, one regex there) over the same vocabulary, and a word added to only one of
+       them is a miss on whichever path the item happens to take. */
+    he: ["מכנס", "ג'ינס", "ג׳ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "טייצ", "לגינ",
+         "סווטפנט", "דגמח", "דגמ\"ח", "דגמ״ח"],
+    en: ["pants", "shorts", "trouser", "trousers", "jeans", "skirt", "skirts", "bottoms", "bottom",
+         "leggings", "chino", "chinos", "jogger", "joggers", "sweatpant", "sweatpants",
+         "slacks", "culottes", "bermuda", "bermudas", "capri", "capris", "palazzo"],
   }),
   top: Object.freeze({
     he: ["חולצ", "טישרט", "טי-שירט", "סווטשירט", "סוודר", "גופי", "ז'קט", "ז׳קט",
@@ -7421,6 +7426,36 @@ const STRICT_REFERENCE_LOCK =
    the shopper's live trousers, so there has never been a tops equivalent to retire. */
 const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodified.";
 
+/* ── FRONT CLOSURE - "the button-down rendered wide open" ────────────────────────
+   REPORTED: a closed button-down shirt rendered hanging open, exposing the shopper's
+   chest. This is the invented-detail class, not the tuxedo class - the right garment,
+   rendered in a state the reference never showed - so it is the class the anchor's own
+   restore note says a clause may be bought back for. Bought back per the procedure that
+   note prescribes: ONE part, added at P.HIGH, re-tested live.
+
+   STATED POSITIVELY, AND THAT IS NOT A STYLE CHOICE. The obvious wording - "do not
+   render open or unbuttoned" - is the exact shape that produced the tuxedo: Decart's
+   set() has no negative_prompt field (only { prompt, image, enhance }), so a negation
+   ships inside the POSITIVE prompt, where "open" and "unbuttoned" are tokens the sampler
+   can steer toward. image-first.test.mjs's header records DENSE.assetLock failing this
+   way when it spelled out "never invent a ... TUXEDO, BOWTIE". Naming the state we WANT
+   costs the same budget and cannot be sampled backwards.
+
+   PRODUCT-NEUTRAL, so it does not open a third prompt axis. It says nothing about
+   whether this garment HAS buttons: on a tee there is no closure and the sentence asks
+   for nothing, while on a button-down or a zip-through it pins the fastening. Wording it
+   per-product would need a has-buttons axis, which would break the frozen-anchor design
+   the category/angle axes are pinned to - and an "unbutton the placket" instruction on a
+   t-shirt reference is the same contradiction as an "upper garment" anchor on a trouser
+   reference, which this file already carries a bug report for.
+
+   TOPS + FRONT ONLY. A closure is a front-of-garment feature, so it is not spent on the
+   bottoms branch, and not on the back anchor where it is not in view. Both remain fully
+   determined by (category, angle) - no new axis. */
+const FRONT_CLOSURE_LOCK =
+  "Reproduce the reference's front closure exactly: any buttons, zip or placket stay" +
+  " fully fastened, sitting flat and closed across the chest as shown.";
+
 const CATEGORY_ANCHOR = Object.freeze({
   /* The two strings share one spine - bind the static garment, adapt to the current
      contour, preserve the original - and differ in exactly two places: the garment noun,
@@ -7542,8 +7577,35 @@ const TEMPORAL_PERSISTENCE = Object.freeze({
    a t-shirt as trousers and repaint the shopper's real jeans: the reported bug, inverted.
    Same reason "sweatpants"/"tracksuit" are listed in full rather than relying on \bpants\b
    to find them inside a compound. */
+/* SINGULARS ARE NOT OPTIONAL HERE. "Wool Trousers" matched and "Wide Leg Trouser" did
+   not; "Chinos" matched and "Chino" did not. A storefront writes whichever reads better
+   in its own layout, and a miss falls through to the tops default silently - the same
+   silent-default failure the Hebrew stem work above was filed against, in English.
+   `s?` everywhere a garment noun has a bare singular in real product titles.
+
+   STILL DELIBERATELY ABSENT, because each would cost more than it buys:
+     · "denim" / bare "jean" - a fabric, not a garment. "Denim Jacket" and "jean jacket"
+       are common real products and are TOPS; see FABRIC_AMBIGUOUS, which exists because
+       ג'ינס collides the same way.
+     · "cargo" - "Cargo Pants Print Tee" is the counter-example this file already
+       carries, and cargo names a POCKET STYLE that appears on jackets and shorts alike.
+     · "טרנינג" / "tracksuit" - names a two-piece set; the top half is as common a
+       product as the bottom. ("tracksuit" is grandfathered in below rather than added.)
+     · "overalls" / "dungarees" - genuinely full-body, so neither branch is right.
+   Each of these needs the title's OTHER nouns to disambiguate, which is tier 2's job -
+   and abstaining into tier 2 beats guessing here. */
 const BOTTOMS_TOKENS =
-  /(מכנס|ג['׳]ינס|חצאי|שורט|טייץ|טייצ|לגינ|\bpants\b|\btrousers\b|\bshorts\b|\bjeans\b|\bskirts?\b|\bleggings\b|\bchinos\b|\bjoggers\b|\bsweatpants\b|\btracksuit\b|\bslacks\b|\bculottes\b|\bbottoms?\b)/i;
+  /(מכנס|ג['׳]ינס|חצאי|שורט|טייץ|טייצ|לגינ|סווטפנט|דגמ["״'׳]?ח|\bpants\b|\btrousers?\b|\bshorts\b|\bjeans\b|\bskirts?\b|\bleggings\b|\bchinos?\b|\bjoggers?\b|\bsweatpants?\b|\btracksuit\b|\bslacks\b|\bculottes\b|\bbermudas?\b|\bcapris?\b|\bpalazzo\b|\bbottoms?\b)/i;
+
+/* The tops half of the same vocabulary, and it exists for ONE job: to outrank a bottoms
+   token when a title names an actual upper-body garment. See isBottomsGarment() for the
+   collision it resolves (denim jacket / ז'קט ג'ינס). Hebrew entries are STEMS and English
+   entries are word-bounded, for the reason GARMENT_CATEGORY_KEYWORDS spells out: Hebrew
+   inflects by suffix, while an English stem match on "short" would swallow "short sleeve".
+   Kept beside BOTTOMS_TOKENS rather than reusing GARMENT_CATEGORY_KEYWORDS because the
+   prompt-layer sandboxes slice this file from `const P = ...` and would not have it. */
+const TOPS_TOKENS =
+  /(חולצ|טישרט|טי-שירט|סווטשירט|סוודר|גופי|ז['׳]קט|מעיל|קפוצ|בלייזר|קרדיגן|\bshirts?\b|\bt-?shirts?\b|\btees?\b|\bjackets?\b|\bcoats?\b|\bhoodies?\b|\bsweaters?\b|\bsweatshirts?\b|\bblazers?\b|\bcardigans?\b|\bblouses?\b|\bpolos?\b|\btanks?\b|\bpullovers?\b|\btops?\b)/i;
 
 /**
  * Which body region a garment belongs to.
@@ -7570,6 +7632,18 @@ function isBottomsGarment(item) {
   if (item.garmentType === "upper_body") return false;
   const fields = [item.type, item.category, item.subType, item.name, item.title]
     .filter(Boolean).join(" ");
+  /* AN EXPLICIT TOP NOUN OUTRANKS A BOTTOMS TOKEN, and this is the same collision
+     classifyGarmentTitle() resolves with FABRIC_AMBIGUOUS one tier up - it just never
+     reached here. "ז'קט ג'ינס" and "denim jacket" match ג'ינס/jeans while naming a JACKET:
+     the garment noun is the subject and the fabric is a modifier of it, so the fabric must
+     not decide the region. Left unresolved, a denim-jacket try-on routes to the bottoms
+     branch and repaints the shopper's real trousers - the exact mirror of the long-trouser
+     report this pass was filed against.
+
+     RESOLVED TOWARD TOPS RATHER THAN BY REGEX ORDER, which also matches this function's
+     own documented default: when a title genuinely names both regions there is no evidence
+     to prefer one, and tops is the answer every predicate around it already gives. */
+  if (TOPS_TOKENS.test(fields)) return false;
   return BOTTOMS_TOKENS.test(fields);
 }
 
@@ -7630,8 +7704,15 @@ function imageOnlyPrompt(item, angle = "front") {
      against the SAME orientation reading. A prompt built from a fresh read while the image
      was resolved from the frozen one is the mixing bug that comment records. */
   const anchors = angle === "back" ? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;
+  const bottoms = isBottomsGarment(item);
+  /* THE SECOND PART the restore notes describe, and the first one actually bought back.
+     P.HIGH, not P.CORE: under budget pressure fitPrompt() sheds it before it will touch
+     the anchor, which is the correct order - a garment fitted with an unstated closure is
+     a worse render, but a garment fitted with no anchor at all is a different garment.
+     Tops + front only; see FRONT_CLOSURE_LOCK for why it is not spent elsewhere. */
   return fitPrompt([
-    [P.CORE, isBottomsGarment(item) ? anchors.bottom : anchors.top],
+    [P.CORE, bottoms ? anchors.bottom : anchors.top],
+    ...(!bottoms && angle !== "back" ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
   ]);
 }
 
@@ -7713,12 +7794,18 @@ function lookAnchorPrompt() {
    The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS (342 chars - anchor)             BOTTOMS (320 chars - anchor, lower-body scoped)
-     + DENSE.bodyFidelity  (45) → 388  fits              → 366  fits
-     + DENSE.modelAgnostic (64) → 407  fits              → 385  fits
-     + both of them        (110)→ 453  fits              → 431  fits
+     TOPS FRONT (491 = 342 anchor + 148 closure lock)  BOTTOMS (320 chars - anchor, lower-body scoped)
+     + DENSE.bodyFidelity  (45) → 537  fits              → 366  fits
+     + DENSE.modelAgnostic (64) → 556  fits              → 385  fits
+     + both of them        (110)→ 602  fits              → 431  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 308 characters are free on tops and 330 on
+   TOPS FRONT IS THE WORST CASE and the only row worth budgeting against: it is the one
+   branch carrying a second part (FRONT_CLOSURE_LOCK, the button-down closure report).
+   Tops BACK runs 412 - the back anchor is longer than the front one but carries no
+   closure lock, since a front placket is not in view - and bottoms carries one part on
+   both angles.
+
+   NOTHING SHEDS ANY MORE, on either branch. 159 characters are free on tops and 330 on
    bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.
