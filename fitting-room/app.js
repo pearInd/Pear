@@ -1465,11 +1465,25 @@ function parseHandoff() {
     try {
       const raw = JSON.parse(localStorage.getItem("pear_custom_garment") || "null");
       if (raw && raw.img) {
+        /* ── ABSTENTION SURVIVES THE HANDOFF ────────────────────────────────────
+           This was `const lower = raw.garmentType === "lower_body"` followed by
+           `type: lower ? "pants" : "shirt"`, and the else-branch was the bug: a stored
+           custom garment with NO garmentType (the ordinary case - the storefront crop UI
+           does not ask) came through as the explicit type "shirt". toItem() reads that
+           through EXPLICIT_TOP_TYPES, so the item arrived not merely mis-categorised but
+           categoryResolved:TRUE - which is the flag refineActiveItemCategory() gates on.
+           An uploaded pair of jeans was therefore a CONFIDENT top that the LLM tier was
+           forbidden from re-examining. That is the reported "custom uploads silently
+           default to shirt", and it is worse than the catalog path because the safety net
+           is switched off rather than merely bypassed.
+           Now: emit a type ONLY when the stored metadata actually said something. With it
+           absent, toItem() classifies the NAME, and failing that the LLM tier runs. */
         const lower = raw.garmentType === "lower_body";
+        const upper = raw.garmentType === "upper_body";
         const result = {
           id: null, custom: true,
           name: raw.name || "Your garment",
-          type: lower ? "pants" : "shirt",   // toItem() → garmentType (lower_body|upper_body)
+          ...(lower || upper ? { type: lower ? "pants" : "shirt" } : {}),
           subType: "",                       // no catalog subType → generic custom prompt
           color: raw.color || "#0B3C95",
           img: raw.img,                      // cropped garment data URL (rtClient image)
@@ -1514,8 +1528,18 @@ function parseHandoff() {
     const wTypeRaw = (q.get("garment_type") || "").toLowerCase().trim();
     const wType    = wTypeRaw === "unknown" ? "" : wTypeRaw;
     const wName    = q.get("garment_name") || q.get("name") || "";
-    const isPants  = EXPLICIT_BOTTOM_TYPES.has(wType) ||
-                     (!EXPLICIT_TOP_TYPES.has(wType) && classifyGarmentTitle(wName) === "bottom");
+    /* THREE-STATE, NOT TWO. The comment above records treating the widget's "unknown" as
+       absent so the room's own classifier can run - but the result was still collapsed to
+       `isPants ? "pants" : "shirt"`, so when the room's classifier ALSO abstained the
+       fallback was a confident "shirt" the room had no more basis for than the widget did.
+       That re-created, one level down, the exact failure the comment above describes.
+       `wSide` keeps the third state: null means nobody knew, and the item then carries no
+       `type` at all (see the spread below), which is what lets toItem() and then the LLM
+       tier answer instead of inheriting a guess. */
+    const wSide    = EXPLICIT_BOTTOM_TYPES.has(wType) ? "bottom"
+                   : EXPLICIT_TOP_TYPES.has(wType)    ? "top"
+                   : classifyGarmentTitle(wName);              // "bottom" | "top" | null
+    const isPants  = wSide === "bottom";
     // Multi-image gallery: the widget forwards ALL product photos as a comma-joined
     // list of individually-encoded URLs (?garment_images=), ALREADY sorted front-first
     // (pear-widget.js classifies them through /api/classify-images). Photo 1 is the
@@ -1544,7 +1568,9 @@ function parseHandoff() {
     const result = {
       id: null, custom: true,
       name: q.get("garment_name") || "Garment",
-      type: isPants ? "pants" : "shirt",   // toItem() → garmentType (lower_body|upper_body)
+      // Only when something actually classified it - see wSide above. Absent means
+      // "unclassified", which toItem() and refineActiveItemCategory() can still resolve.
+      ...(wSide ? { type: isPants ? "pants" : "shirt" } : {}),
       subType: "",                          // no catalog subType → generic custom prompt
       color: "#8a8f98",                     // neutral placeholder; the image is the reference
       img: (pearImages && pearImages[0]) || widgetUrl,   // first gallery photo = primary
@@ -1800,7 +1826,44 @@ function toItem(raw) {
   if (EXPLICIT_BOTTOM_TYPES.has(explicit)) category = "bottom";
   else if (EXPLICIT_TOP_TYPES.has(explicit)) category = "top";
   else category = classifyGarmentTitle(raw?.name, raw?.title, raw?.category);
-  return { ...raw, garmentType: categoryToGarmentType(category ?? "top"), categoryResolved: !!category };
+  /* ── ABSTENTION IS RECORDED AS ABSENCE, NOT AS A VERDICT ────────────────────────
+     THIS LINE USED TO READ `garmentType: categoryToGarmentType(category ?? "top")`,
+     and that `?? "top"` was the whole bug behind "long jeans render as a top / as
+     truncated shorts". It converted "tier 1 does not know" into the STRING
+     "upper_body" - which is indistinguishable, everywhere downstream, from a catalog
+     that positively declared the item an upper-body garment.
+
+     WHY THAT WAS FATAL RATHER THAN MERELY WRONG. Both readers treat an explicit
+     garmentType as GROUND TRUTH, and they are right to - a title sweep that could
+     override a catalog's own classification would let a product NAME re-categorise an
+     item the catalog already classified. But that contract only holds if the field is
+     only ever set when something actually KNEW:
+
+       · isBottomsGarment() short-circuits on `garmentType === "upper_body"` and never
+         reaches its keyword fallback.
+       · resolveGarmentCategory() short-circuits on the same value at TIER 1 - so the
+         type tier, the title tier and the LLM tier below it could never run.
+
+     And resolveGarmentCategory() is what refineActiveItemCategory() calls. So the
+     documented safety net for exactly these items - "the LLM tier runs later and only
+     for the ONE item the shopper actually selects" - was a guaranteed no-op: the
+     abstention had already been laundered into the confident answer that suppresses it.
+     Measured with a deliberately perfect classifier stub, the LLM tier was consulted
+     ZERO times for an abstained item.
+
+     THE FIX IS TO STOP MANUFACTURING METADATA. `categoryResolved: false` already
+     recorded the abstention and nothing read it; leaving garmentType ABSENT makes the
+     same fact legible to every reader without any of them having to know about a second
+     flag. Every consumer already handles a missing value correctly by construction:
+     slotOf() returns "top" for anything that is not lower_body (unchanged placement),
+     resolveLook() requires both exact strings so an unclassified item simply cannot form
+     a look until it is refined, and both resolvers now fall through to the tiers that
+     can actually answer. `categoryResolved` is kept - refineActiveItemCategory() gates
+     on it, and it still distinguishes "resolved to top" from "never resolved". */
+  const item = { ...raw, categoryResolved: !!category };
+  if (category) item.garmentType = categoryToGarmentType(category);
+  else delete item.garmentType;   // ...including one inherited from `raw` that was itself a guess
+  return item;
 }
 
 /* Memoized per title: the same product is re-resolved on every swatch change, every
@@ -1884,6 +1947,31 @@ async function refineActiveItemCategory(item) {
   activeOutfit[refinedSlot === "top" ? "bottom" : "top"] = null;
   renderActiveGarment();
   updateSizeMismatchUI();   // the size ladder is category-scoped too
+  /* ── AND RE-CONDITION, because none of the above reaches Decart ─────────────────
+     Every line before this one updates LOCAL state - the outfit slots, the chip, the
+     size ladder. The prompt already on the wire was built from the OLD category by
+     setActiveItem()'s applyActive(), which fires immediately and does not await this
+     refinement (deliberately - a network round trip must never gate a try-on).
+
+     So a refinement that correctly flipped a garment from top to bottom changed which
+     builder WOULD run next, and nothing ran it: the shopper kept watching a lower
+     garment being fitted with the upper-body anchor for the rest of the session, or
+     until some unrelated event happened to re-dispatch. That is the second half of the
+     reported "lower-body transformation is never applied" - the first half was that the
+     refinement could not run at all (see toItem()).
+
+     GUARDED THE SAME WAY THE FUNCTION ALREADY GUARDS ITSELF: this is only reached after
+     the sessionGen / activeItem re-check above, and only when the category actually
+     MOVED (the early return below `if (item.garmentType === garmentType)`), so a
+     no-change refinement still costs nothing. isLive() keeps it off the pre-session
+     path, where setActiveItem()'s own apply has not happened yet and there is no session
+     to condition. Fire-and-forget with a caught rejection, exactly like every other
+     applyActive() call site - a failed re-condition must not surface to the shopper. */
+  if (isLive()) {
+    console.log("[PEAR] category refined mid-session - re-conditioning with the correct anchor");
+    applyActive().catch((e) =>
+      console.warn("[PEAR] re-apply after category refinement failed:", e?.message || e));
+  }
 }
 
 /* =============================================================================

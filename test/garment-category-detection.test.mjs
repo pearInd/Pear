@@ -64,6 +64,13 @@ const code = SRC.slice(SRC.indexOf("/* ── Garment category detection"),
    §GERESH cases below exist to catch. */
 const foldSrc = SRC.slice(SRC.indexOf("const GERESH_VARIANTS ="),
                           SRC.indexOf("const BOTTOMS_TOKENS ="));
+/* toItem() SITS OUTSIDE THE SLICE ABOVE - the region deliberately ENDS at it - so until
+   now no suite in this repo has ever executed it. That is not a small gap: toItem() is
+   the function that decides what garmentType every catalog card carries, and it was the
+   one converting an abstention into a confident "upper_body". Pulled in as its own slice
+   so §9 can run it for real. */
+const toItemSrc = SRC.slice(SRC.indexOf("function toItem(raw)"),
+                            SRC.indexOf("/* Memoized per title"));
 const mkApi = ({ geminiImpl } = {}) => {
   const calls = [];
   const sandbox = {
@@ -73,9 +80,9 @@ const mkApi = ({ geminiImpl } = {}) => {
     classifyGarmentViaLLM: geminiImpl || (async (t) => { calls.push(t); return null; }),
   };
   const api = new Function(...Object.keys(sandbox),
-    foldSrc + "\n" + code +
+    foldSrc + "\n" + code + "\n" + toItemSrc +
     "\nreturn { classifyGarmentTitle, resolveGarmentCategory, categoryToGarmentType," +
-    " GARMENT_CATEGORY_KEYWORDS, foldGeresh };")(...Object.values(sandbox));
+    " GARMENT_CATEGORY_KEYWORDS, foldGeresh, toItem };")(...Object.values(sandbox));
   return { ...api, calls };
 };
 const api = mkApi();
@@ -307,6 +314,101 @@ console.log("\n── §9 THE SERVER TIER exists, is bounded, and fails soft ─
   check("...and returns a soft verdict rather than a 5xx when Gemini is unconfigured",
     /classify-garment[\s\S]{0,1400}?GEMINI_API_KEY[\s\S]{0,400}?category: "unknown"/.test(SERVER),
     "an unconfigured key must degrade to tier 1, not fail the request");
+}
+
+console.log("\n\u2500\u2500 \u00a79 ABSTENTION MUST NOT BECOME A VERDICT \u2500\u2500");
+{
+  /* REPORTED: long jeans render as truncated shorts, or get no lower-body treatment at
+     all. The cause was not the prompt - it was that "tier 1 does not know" was being
+     written into item state as the string "upper_body", which every reader below is
+     contractually required to treat as GROUND TRUTH.
+
+     THE CONTRACT IS RIGHT; THE DATA WAS LYING. \u00a75 above pins that an explicit garmentType
+     outranks a contradicting title, and it should - a title sweep that could override a
+     catalog's own classification is strictly worse than the metadata it second-guesses.
+     That contract is only safe while the field is set ONLY when something actually knew.
+     toItem()'s `category ?? "top"` broke exactly that precondition, and the damage
+     compounded: resolveGarmentCategory() short-circuits on the same value at TIER 1, so
+     the type, title and LLM tiers below it could never run - and resolveGarmentCategory()
+     is what refineActiveItemCategory() calls. The documented safety net for these very
+     items was a guaranteed no-op.
+
+     THIS SECTION EXECUTES toItem(), which no suite in this repo had ever done. */
+  const { toItem } = api;
+
+  console.log("   -- toItem(): a verdict is recorded, an abstention is not --");
+  check("an explicit type still produces a garmentType",
+    toItem({ type: "pants", name: "x" }).garmentType === "lower_body" &&
+    toItem({ type: "shirt", name: "x" }).garmentType === "upper_body");
+  check("...and is marked resolved",
+    toItem({ type: "pants", name: "x" }).categoryResolved === true);
+  check("a title tier 1 CAN name still produces a garmentType",
+    toItem({ name: "\u05de\u05db\u05e0\u05e1 \u05e7\u05e6\u05e8" }).garmentType === "lower_body" &&
+    toItem({ name: "Oxford Shirt" }).garmentType === "upper_body");
+  /* THE FIX, stated as the property that was violated. An unnameable title must leave
+     the field ABSENT - not "upper_body" - so that every reader below can tell "nobody
+     knew" from "the catalog said top". */
+  check("an UNNAMEABLE title leaves garmentType ABSENT, never stamped upper_body",
+    toItem({ name: "WIDE LEG DENIM" }).garmentType === undefined &&
+    toItem({ name: "FOX Essentials 2024" }).garmentType === undefined,
+    "a stamped guess is indistinguishable from a catalog verdict, and outranks every tier below it");
+  check("...and records the abstention in categoryResolved",
+    toItem({ name: "WIDE LEG DENIM" }).categoryResolved === false);
+  /* An inherited garmentType that was itself a guess must not survive either - otherwise
+     re-entering the room through a replay would launder the same stamp back in. */
+  check("...and a garmentType inherited from the raw object is dropped with it",
+    toItem({ name: "WIDE LEG DENIM", garmentType: "upper_body" }).garmentType === undefined,
+    "re-wrapping an already-stamped item would launder the guess straight back");
+
+  console.log("   -- the consequence: every tier below tier 1 can run again --");
+  /* THE MEASUREMENT THAT PROVES IT. A deliberately PERFECT classifier stub: if the chain
+     is intact it is consulted exactly once and its verdict is used; if the stamp is back
+     it is never called at all. Counting the calls is what separates those two states -
+     asserting only the verdict would pass on a lucky default. */
+  const seen = [];
+  const perfect = mkApi({ geminiImpl: async (t) => { seen.push(t); return "bottom"; } });
+  const abstained = perfect.toItem({ name: "WIDE LEG DENIM" });
+  const verdict = await perfect.resolveGarmentCategory(abstained);
+  check("an abstained item reaches the LLM tier, and its verdict is used",
+    seen.length === 1 && verdict === "bottom",
+    `${seen.length} call(s), verdict=${verdict} - zero calls means the stamp is back`);
+  /* The mirror: a REAL verdict must still short-circuit. The fix must not have widened
+     the hole by making genuine metadata re-litigable. */
+  const seen2 = [];
+  const perfect2 = mkApi({ geminiImpl: async (t) => { seen2.push(t); return "bottom"; } });
+  const resolved = perfect2.toItem({ type: "shirt", name: "Oxford Shirt" });
+  check("...while a genuine verdict still short-circuits at tier 1, LLM untouched",
+    (await perfect2.resolveGarmentCategory(resolved)) === "top" && seen2.length === 0,
+    "explicit metadata must still outrank everything below it - that contract is unchanged");
+
+  console.log("   -- parseHandoff(): the same laundering, two more places --");
+  /* Both handoff branches collapsed a three-state answer into `x ? "pants" : "shirt"`.
+     The else-branch is an EXPLICIT top marker, which toItem() then reads through
+     EXPLICIT_TOP_TYPES - so the item arrived categoryResolved:TRUE, and that flag is what
+     refineActiveItemCategory() gates on. A custom-uploaded pair of jeans was therefore a
+     CONFIDENT top the LLM tier was forbidden from re-examining: worse than the catalog
+     path, because the safety net was switched off rather than merely bypassed. */
+  check("the custom-upload branch emits a type ONLY when the stored metadata said so",
+    /\.\.\.\(lower \|\| upper \? \{ type: lower \? "pants" : "shirt" \} : \{\}\),/.test(SRC),
+    "an absent garmentType must not become the explicit type \"shirt\"");
+  check("...and the widget branch keeps a third state rather than collapsing to shirt",
+    /const wSide\s+= EXPLICIT_BOTTOM_TYPES\.has\(wType\) \? "bottom"/.test(SRC) &&
+    /\.\.\.\(wSide \? \{ type: isPants \? "pants" : "shirt" \} : \{\}\),/.test(SRC),
+    "the room abstaining must not produce a confident verdict the widget never gave");
+
+  console.log("   -- and a refinement that lands must reach Decart --");
+  /* Everything refineActiveItemCategory() did was LOCAL: outfit slots, the chip, the size
+     ladder. The prompt on the wire was built from the OLD category by setActiveItem()'s
+     applyActive(), which fires immediately and does not await the refinement. So a
+     correct flip changed which builder WOULD run next and nothing ran it. */
+  const refine = SRC.slice(SRC.indexOf("async function refineActiveItemCategory("),
+                           SRC.indexOf("\n}", SRC.indexOf("async function refineActiveItemCategory(")));
+  check("refineActiveItemCategory() re-conditions the live session after a flip",
+    /if \(isLive\(\)\) \{[\s\S]{0,300}?applyActive\(\)\.catch\(/.test(refine),
+    "a corrected category that never re-dispatches leaves the wrong anchor on the wire");
+  check("...only when live, and fire-and-forget like every other applyActive() site",
+    !/await applyActive\(\)/.test(refine),
+    "awaiting a re-condition here would gate the refinement on a network round trip");
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
