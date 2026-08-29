@@ -207,10 +207,12 @@ const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples - spans ~300ms of
    pixels, so this lowers visual quality + pipeline cost, not the token count itself. */
 const LIVE_W = 512, LIVE_H = 288;
 
-/* Mobile detection (Feature 2 / mobile download fix). Drives two choices:
-   (1) the MediaRecorder container - phone galleries reliably ingest H.264 MP4 but
-       frequently reject WebM; (2) the save path - iOS Safari ignores <a download>,
-       so on mobile we hand the clip to the native share sheet ("Save Video" → gallery).
+/* Mobile detection (Feature 2 / mobile download fix). Drives the SAVE PATH only:
+   iOS Safari ignores <a download>, so on mobile we hand the clip to the native
+   share sheet ("Save Video" → gallery) instead of trusting the anchor.
+   It no longer picks the recording container: pickRecorderMimes() asks for MP4
+   first on EVERY platform now, because desktop players/editors and phone galleries
+   both ingest H.264 MP4 without a transcode.
    iPadOS reports its platform as "Mac", so a touch-capable Mac counts as mobile too. */
 const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
   (/Mac/.test(navigator.platform) && navigator.maxTouchPoints > 1);
@@ -12379,24 +12381,33 @@ function setLiveControls(live) {
    5s window closes. On flush we build a Blob → object URL and reveal a clean
    "Download Video" button. Everything is torn down/revoked on the next session.
    ============================================================================= */
-/* Codec selection is platform-aware (mobile download fix):
-   • MOBILE - try H.264 MP4 first. iOS Photos / Android galleries natively save MP4,
-     and the MP4 container carries a correct duration header, which kills the
-     "broken 14-second clip" bug WebM exhibits (WebM from MediaRecorder ships no
-     top-level duration, so phone players show a bogus/black length).
-   • DESKTOP - keep the proven VP8/WebM path (Chrome/Firefox encode the canvas track
-     into .webm most reliably; a missing/unsupported codec is what left the file
-     black). MP4 stays as a tail fallback either way.
-   Every candidate is feature-tested via isTypeSupported before use. */
-function pickRecorderMime() {
-  if (typeof MediaRecorder === "undefined") return null;
-  const mp4  = ["video/mp4;codecs=h264", "video/mp4;codecs=avc1.42E01E", "video/mp4"];
+/* Codec selection - MP4 FIRST on every platform (forced-MP4 export):
+   • MP4 is the one container both phone galleries (iOS Photos / Android) and
+     desktop players/editors ingest without a transcode, and it carries a correct
+     top-level duration header - which kills the "broken 14-second clip" bug WebM
+     exhibits (WebM out of MediaRecorder ships no top-level duration, so players
+     show a bogus/black length). H.264 + AAC (avc1.42E01E,mp4a.40.2) is the most
+     portable profile, so it leads; bare "video/mp4" is the second ask, for engines
+     that only advertise the container.
+   • WebM is now the FALLBACK ONLY - reached when the host cannot record MP4 at all
+     (Firefox, older Chromium). A .webm beats no clip; it never beats a .mp4.
+   Returns the whole ORDERED list, not a single pick, and that is deliberate:
+   isTypeSupported() answers a codec question, not "will the constructor accept
+   this stream". The leading candidate names an audio codec while our canvas stream
+   is video-only, so the caller must stay free to walk to the next entry when
+   construction throws. */
+function pickRecorderMimes() {
+  if (typeof MediaRecorder === "undefined") return [];
+  const mp4 = [
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4",
+    "video/mp4;codecs=avc1.42E01E",
+    "video/mp4;codecs=h264",
+  ];
   const webm = ["video/webm;codecs=vp8", "video/webm", "video/webm;codecs=vp9"];
-  const candidates = IS_MOBILE ? [...mp4, ...webm] : [...webm, ...mp4];
-  for (const t of candidates) {
-    try { if (MediaRecorder.isTypeSupported(t)) return t; } catch (_) {}
-  }
-  return null;
+  return [...mp4, ...webm].filter((t) => {
+    try { return MediaRecorder.isTypeSupported(t); } catch (_) { return false; }
+  });
 }
 
 /**
@@ -12439,21 +12450,35 @@ function startRecording() {
   const beginRecorder = () => {
     if (mediaRecorder) return;
     const captured = recordCanvas.captureStream(30);   // 30 fps, video-only
-    try {
-      const mime = pickRecorderMime();
-      mediaRecorder = new MediaRecorder(captured, mime ? { mimeType: mime } : undefined);
-      // Record what the recorder ACTUALLY negotiated so the Blob/File + filename carry
-      // the true container (the browser may pick something other than our request).
-      recorderMime = (mediaRecorder.mimeType || mime || "").toLowerCase() || null;
-    } catch (e) {
-      console.warn("MediaRecorder unavailable:", e?.message || e);
+    // Walk the ordered candidate list. isTypeSupported() only vouches for the codec,
+    // so a candidate it approved can still be rejected by the constructor for THIS
+    // stream (the AAC-carrying MP4 type against a video-only canvas track is exactly
+    // that case). Falling through to the next entry - and finally to the browser's
+    // own default - keeps a clip guaranteed instead of trading MP4 for no recording.
+    let chosen = null;
+    for (const mime of [...pickRecorderMimes(), null]) {
+      try {
+        mediaRecorder = new MediaRecorder(captured, mime ? { mimeType: mime } : undefined);
+        chosen = mime;
+        break;
+      } catch (e) {
+        console.warn(`MediaRecorder rejected ${mime || "(browser default)"}:`, e?.message || e);
+        mediaRecorder = null;
+      }
+    }
+    if (!mediaRecorder) {
+      console.warn("MediaRecorder unavailable - clip recording disabled for this session");
       stopPaintLoop();
       return;
     }
+    // Record what the recorder ACTUALLY negotiated so the Blob/File + filename carry
+    // the true container (the browser may pick something other than our request).
+    recorderMime = (mediaRecorder.mimeType || chosen || "").toLowerCase() || null;
     mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) recordedChunks.push(e.data); };
     mediaRecorder.onstop = finalizeRecording;          // fires after stop() flushes the buffer
-    // 200ms timeslice → proper WebM cluster timecodes, so the clip reports its TRUE
-    // duration instead of the broken/inflated length a single-blob start() gives.
+    // 200ms timeslice → real fragment/cluster timecodes (MP4 fragments, WebM
+    // clusters alike), so the clip reports its TRUE duration instead of the
+    // broken/inflated length a single-blob start() gives.
     try { mediaRecorder.start(200); }
     catch (e) { console.warn("recorder start failed:", e?.message || e); stopPaintLoop(); mediaRecorder = null; }
   };
@@ -12705,7 +12730,12 @@ function ensureReplayZone() {
 /** Build the downloadable clip from the buffered chunks and reveal the Replay Zone. */
 function finalizeRecording() {
   if (!recordedChunks.length) return;
-  const raw = (recordedChunks[0] && recordedChunks[0].type) || recorderMime || "video/webm";
+  // The recorder's OWN mimeType is authoritative and leads: several engines hand
+  // back chunks with an empty .type, and Chromium can label MP4 chunks with a
+  // codec-laden variant. Stripping the codec parameters leaves the bare container,
+  // so an MP4 recording is written out as an explicit { type: "video/mp4" } Blob -
+  // which is what the .mp4 download, the share-sheet File, and the gallery all read.
+  const raw = recorderMime || (recordedChunks[0] && recordedChunks[0].type) || "video/webm";
   const type = raw.split(";")[0] || "video/webm";
   const blob = new Blob(recordedChunks, { type });
   recordedChunks = [];
@@ -12730,6 +12760,13 @@ function finalizeRecording() {
   requestAnimationFrame(() => requestAnimationFrame(() => zone.classList.add("is-ready")));
 }
 
+/* YYYYMMDD-HHMMSS in LOCAL time - the stamp carried by downloaded clip filenames. */
+function clipStamp(d = new Date()) {
+  const p = (v) => String(v).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-` +
+         `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
 /**
  * Save the recorded clip locally - mobile-first (mobile download fix).
  *
@@ -12748,9 +12785,14 @@ function finalizeRecording() {
 async function downloadRecording() {
   if (!recordedBlob && !recordedUrl) return;
   const type = (recordedBlob && recordedBlob.type) || (recorderMime || "").split(";")[0] || "video/webm";
-  const ext = type.indexOf("mp4") > -1 ? "mp4" : "webm";
-  const base = (activeItem && activeItem.name ? activeItem.name : "session").replace(/\s+/g, "-");
-  const filename = `pear-fitting-${base}.${ext}`;
+  const ext = type.indexOf("mp4") > -1 ? "mp4" : "webm";   // follows the Blob: MP4 saves as .mp4
+  // pear-tryon-<garment>-<YYYYMMDD-HHMMSS>.<ext>. The stamp stops a second fit of the
+  // same garment landing as "... (1).mp4"; the garment name stays because the filename
+  // is the only place the saved file says WHAT was tried on. Characters Windows/macOS
+  // reject in a filename are stripped first - garment names are free-form (incl. Hebrew).
+  const base = (activeItem && activeItem.name ? activeItem.name : "")
+    .trim().replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, "-");
+  const filename = `pear-tryon-${base ? base + "-" : ""}${clipStamp()}.${ext}`;
 
   // 1) Native gallery save via the share sheet (the reliable mobile path).
   if (recordedBlob && typeof navigator.canShare === "function" && typeof navigator.share === "function") {
@@ -13903,6 +13945,11 @@ const GALLERY_MAX = 18;                 // poster cap - stays well under the loc
 const CLIP_MAX = 12;                    // in-memory clip cap - bounds blob memory per session
 
 const liveClips = new Map();            // ts → object URL of the 5s clip (this session only)
+/* Container of each saved clip (ts → "video/mp4" | "video/webm"). Kept beside
+   liveClips instead of read off recorderMime at download time: clearRecording()
+   nulls recorderMime when the NEXT session starts, so a gallery download taken
+   after that would be mislabelled .webm no matter what was actually recorded. */
+const clipTypes = new Map();
 let lastFitTs = null;                   // ts of the entry awaiting its clip from finalizeRecording
 const compareSel = new Set();           // ts of fits picked for the Compare overlay (max 2)
 let activeClipTs = null;                // ts of the clip currently replaying in #aiVideo
@@ -13930,6 +13977,14 @@ function writeGallery(arr) {
 function dropClip(ts) {
   const url = liveClips.get(ts);
   if (url) { try { URL.revokeObjectURL(url); } catch (_) {} liveClips.delete(ts); }
+  clipTypes.delete(ts);
+}
+
+/* Extension for a SAVED gallery clip, read from the container stored WITH that clip
+   - never from recorderMime, which belongs to the LIVE session and is nulled by
+   clearRecording(), so an older MP4 clip would download mislabelled as .webm. */
+function clipExt(ts) {
+  return (clipTypes.get(ts) || "").indexOf("mp4") > -1 ? "mp4" : "webm";
 }
 
 /* Grab the current dressed frame as a small JPEG data-URL (the poster). Prefers
@@ -14002,6 +14057,7 @@ function attachClipToLastFit(blob) {
   let url = null;
   try { url = URL.createObjectURL(blob); } catch (_) { lastFitTs = null; return; }
   liveClips.set(lastFitTs, url);
+  clipTypes.set(lastFitTs, blob.type || "");
   // bound in-memory clips: revoke the oldest beyond CLIP_MAX
   while (liveClips.size > CLIP_MAX) dropClip(liveClips.keys().next().value);
   lastFitTs = null;
@@ -14188,6 +14244,7 @@ function loadGallery() { renderGallery(readGallery()); }
 function clearGallery() {
   liveClips.forEach((url) => { try { URL.revokeObjectURL(url); } catch (_) {} });
   liveClips.clear();
+  clipTypes.clear();
   compareSel.clear();
   activeClipTs = null;
   const bar = $("compareBar"); if (bar) bar.hidden = true;
@@ -14310,7 +14367,7 @@ function openFitLightbox(idx) {
   if (dlBtn) {
     if (clip) {
       dlBtn.hidden = false; dlBtn.href = clip;
-      dlBtn.download = `PEAR-fit-${it.ts}.${(recorderMime && recorderMime.includes("mp4")) ? "mp4" : "webm"}`;
+      dlBtn.download = `PEAR-fit-${it.ts}.${clipExt(it.ts)}`;
       if (IS_MOBILE) dlBtn.target = "_blank";
     } else { dlBtn.hidden = true; dlBtn.removeAttribute("href"); }
   }

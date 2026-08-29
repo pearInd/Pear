@@ -189,6 +189,18 @@
                       aspect-ratio gate, which rejects the plausible-SIZE/implausible-SHAPE
                       crops (shadow bands, wall columns) that every existing area gate
                       passes straight through to the VTON backend.
+     mp4-export       The recorded try-on clip is asked for as H.264 MP4 FIRST on every
+                      platform, not just on phones. WebM survives only as the fallback
+                      for hosts that cannot record MP4 (Firefox, older Chromium), because
+                      a .webm still beats no clip. Runs the real selection code and the
+                      real constructor loop against simulated engines - including the case
+                      that made the list ordered rather than a single pick: the leading
+                      MP4 type names an audio codec while the recorded canvas stream is
+                      video-only, so an engine can approve it via isTypeSupported and
+                      still throw on construction. Also pins that the Blob carries the
+                      negotiated container, that the filename suffix follows it, and that
+                      a SAVED gallery clip remembers its own container instead of reading
+                      the live session's recorderMime, which clearRecording() nulls.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -236,6 +248,7 @@ const SUITES = [
   ["size-mismatch-view", "size-mismatch-view.test.mjs"],
   ["cart-size-variant", "cart-size-variant.test.mjs"],
   ["kids-product-sizes", "kids-product-sizes.test.mjs"],
+  ["mp4-export", "mp4-export.test.mjs"],
 ];
 
 let failed = 0;
