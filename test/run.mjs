@@ -201,6 +201,25 @@
                       negotiated container, that the filename suffix follows it, and that
                       a SAVED gallery clip remembers its own container instead of reading
                       the live session's recorderMime, which clearRecording() nulls.
+     conditioning-trace
+                      Two reports that meet in applyGarment()'s dispatch. THE TRACE, for
+                      "I picked a specific garment and got a generic one": the prompt names
+                      no product at all, so a generic render means the reference image is
+                      not reaching the model - and every existing log describes the WIRE,
+                      proving only that set() RESOLVED. A resolved set() is receipt, not
+                      adoption. The trace samples the OUTPUT before the write and after the
+                      model has had time to switch, and says which happened. Asserts it is
+                      off without ?cond_trace=1, can never throw into a live apply, reports
+                      an unreadable feed as INCONCLUSIVE rather than as "unchanged" - and,
+                      most of all, that it is genuinely CALLED, in the right order: this
+                      codebase has already shipped a correct guard that nothing reached.
+                      THE ANGLE: buildPrompt() and buildCompositePrompt() both took the
+                      frozen orientation and discarded it, so every render shipped the
+                      FRONT anchor and turning around reproduced the chest print on the
+                      back. The angle now SELECTS between frozen anchors instead of
+                      appending a clause - which is the whole design, since the tuxedo
+                      regression was beaten by cutting total text volume competing with the
+                      reference image, and appending angleClause() here would re-open it.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -249,6 +268,7 @@ const SUITES = [
   ["cart-size-variant", "cart-size-variant.test.mjs"],
   ["kids-product-sizes", "kids-product-sizes.test.mjs"],
   ["mp4-export", "mp4-export.test.mjs"],
+  ["conditioning-trace", "conditioning-trace.test.mjs"],
 ];
 
 let failed = 0;

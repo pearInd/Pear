@@ -6111,6 +6111,112 @@ function abbrevImg(ref) {
   return ref.length > 100 ? ref.slice(0, 100) + "…" : ref;
 }
 
+/* ── CONDITIONING TRACE (?cond_trace=1) ──────────────────────────────────────────
+   THE REPORT THIS ANSWERS: "I picked a specific garment and got a generic one." The
+   prompt cannot be the cause - imageOnlyPrompt() emits one frozen anchor that names no
+   colour, no subtype and no garment beyond shirt/pants, and image-first.test.mjs pins
+   that absence. So a generic render means the REFERENCE IMAGE is not reaching the model,
+   and the existing logs cannot tell you that: they prove what was SENT and that set()
+   RESOLVED. A resolved set() is receipt, not adoption - the render can carry on exactly
+   as before while every line in the payload debug group looks correct.
+
+   WHAT THIS MEASURES INSTEAD: the AI output itself, sampled just before the write and
+   again after the model has had time to switch. If a new garment was conditioned and the
+   output did not move, the reference did not reach the render - which is the actual
+   failure, stated as a fact about pixels rather than about the wire.
+
+   IT IS A HEURISTIC AND IS LABELLED AS ONE. The feed is live video, so "unchanged" can
+   never be exact: the shopper breathes, the sensor adds noise. A garment swap moves an
+   8x8 average-hash and the torso's mean colour hard; micro-motion moves neither much. The
+   thresholds below separate those two cases and nothing finer - the numbers are printed
+   raw next to the verdict precisely so a borderline reading can be judged rather than
+   trusted. OFF unless ?cond_trace=1, because it samples a canvas on every apply. */
+const COND_TRACE = new URLSearchParams(location.search).get("cond_trace") === "1";
+
+/* An 8x8 average-hash of the current AI frame plus the mean colour of its torso band.
+   Returns null whenever the feed cannot be read - no frame yet, or a tainted canvas from
+   a cross-origin remote track - and a null on either side is reported as inconclusive
+   rather than silently scored as "unchanged", which would invent the very failure this
+   is here to detect. */
+function sampleRenderSignature() {
+  const ai = typeof $ === "function" ? $("aiVideo") : null;
+  if (!ai || !ai.videoWidth) return null;
+  const N = 8;
+  let px;
+  try {
+    const cnv = document.createElement("canvas");
+    cnv.width = N; cnv.height = N;
+    const ctx = cnv.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(ai, 0, 0, N, N);
+    px = ctx.getImageData(0, 0, N, N).data;
+  } catch (_) { return null; }
+
+  const grey = [];
+  for (let i = 0; i < N * N; i++) {
+    const o = i * 4;
+    grey.push(0.299 * px[o] + 0.587 * px[o + 1] + 0.114 * px[o + 2]);
+  }
+  const mean = grey.reduce((a, b) => a + b, 0) / grey.length;
+  const hash = grey.map((g) => (g > mean ? "1" : "0")).join("");
+
+  /* The middle two rows, edges excluded - where a replaced upper garment actually lives.
+     A swap between two different products moves this a long way; a shopper shifting their
+     weight inside the same garment does not. */
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let y = 3; y <= 4; y++) {
+    for (let x = 1; x < N - 1; x++) {
+      const o = (y * N + x) * 4;
+      r += px[o]; g += px[o + 1]; b += px[o + 2]; n++;
+    }
+  }
+  return { hash, torso: [Math.round(r / n), Math.round(g / n), Math.round(b / n)] };
+}
+
+/* Settle window before the second sample. Decart takes ~1s to warm up and switch (the
+   same figure startRecording()'s BLACK-FRAME FIX is built around), so sampling earlier
+   would report "unchanged" for a render that simply had not arrived yet - a false
+   positive for the exact bug being hunted. */
+const COND_TRACE_SETTLE_MS = 1600;
+
+/**
+ * Report whether a conditioning write actually changed the render.
+ * Fire-and-forget and fully try-wrapped: this is a diagnostic, and it must never be able
+ * to delay or fail a live apply.
+ * @param {object} item      the garment that was conditioned
+ * @param {*} imageRef       the reference handed to set({ image })
+ * @param {object|null} before  signature sampled immediately before the write
+ * @returns {void}
+ */
+function traceConditioning(item, imageRef, before) {
+  if (!COND_TRACE) return;
+  setTimeout(() => {
+    try {
+      const after = sampleRenderSignature();
+      const acked = imageRef && lastAckedImageRef === imageRef;
+      console.group("[PEAR CONDITIONING TRACE]", (item && item.name) || "(no item)");
+      console.log("reference sent  :", abbrevImg(imageRef));
+      console.log("set() resolved  :", acked ? "yes - Decart accepted this exact object" : "NO - or a different reference was stamped");
+      if (!before || !after) {
+        console.log("render moved    : not measurable (no frame yet, or a tainted canvas)");
+        console.log("verdict         : INCONCLUSIVE - could not sample the AI feed on both sides");
+      } else {
+        let dist = 0;
+        for (let i = 0; i < before.hash.length; i++) if (before.hash[i] !== after.hash[i]) dist++;
+        const dc = Math.round(Math.hypot(
+          after.torso[0] - before.torso[0],
+          after.torso[1] - before.torso[1],
+          after.torso[2] - before.torso[2]));
+        console.log("render moved    :", `hash ${dist}/64 changed · torso ΔRGB ${dc}`,
+          `(before rgb[${before.torso}] → after rgb[${after.torso}])`);
+        console.log("verdict         :", dist <= 2 && dc <= 12
+          ? "REFERENCE DID NOT REACH THE RENDER - the write was accepted but the output is unchanged within noise. This is the generic-garment failure; the prompt is not the cause."
+          : "reference reached the render - the output moved after conditioning");
+      }
+      console.groupEnd();
+    } catch (_) { /* a diagnostic must never break a live session */ }
+  }, COND_TRACE_SETTLE_MS);
+}
+
 /* ── Canonical image identity ────────────────────────────────────────────────────
    THE "FRONT PRINT RENDERED ON THE BACK" BUG. Six separate places decide whether an
    item ships a REAL, DISTINCT back photo, and every one of them compared raw URL
@@ -7334,6 +7440,48 @@ const CATEGORY_ANCHOR = Object.freeze({
     " distorting the garment design. Strictly preserve original pattern and color.",
 });
 
+/* THE BACK COUNTERPART - the single-asset rear render.
+   ────────────────────────────────────────────────────────────────────────────────
+   WHY THIS EXISTS AT ALL. applyGarment() resolves the orientation, freezes it as
+   `angleAtStart`, and used to hand it to buildPrompt() - which discarded it. Every
+   single-asset render therefore shipped the FRONT anchor no matter which way the shopper
+   was facing, so turning around re-rendered the chest print on their back. COMPOSITE mode
+   never had this bug (buildCompositePrompt() takes the angle and names the panel), which
+   is why it only ever reproduced with a front-only reference.
+
+   WHY A SECOND FROZEN ANCHOR AND NOT A CLAUSE APPENDED TO THE FIRST. This is the whole
+   constraint, and image-first.test.mjs's header is the record of it: the tuxedo regression
+   was reported TWICE, and the fix that finally held was reducing the TOTAL VOLUME of text
+   competing with the reference image - not removing text of any particular kind. FIX ONE
+   kept the structural clauses (panel contract, pose, passthrough locks) on the theory that
+   a clause describing no garment cannot summon one; the tuxedo survived it. So appending
+   angleClause()'s output here - contract + pose + selector + depth, the shape the call site
+   used to build - would re-open that failure through the front door. SELECTING between two
+   frozen strings holds volume flat instead: one anchor ships, exactly as before, and only
+   which one changes.
+
+   The front anchor above is deliberately left BYTE-IDENTICAL. Nothing about the
+   front-facing render changes with this pair; the only new behaviour is on the back. */
+const BACK_CATEGORY_ANCHOR = Object.freeze({
+  /* Same spine as the front anchors - bind the static garment, adapt to the current
+     contour, preserve the original - with the region re-pointed at the back and ONE
+     clause added: the rear print/logo/seam lock. A back render's characteristic failure
+     is not a wrong drape, it is the front graphic reproduced on the reverse, and that is
+     the only thing this pair says which the front pair does not. */
+  top:
+    "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
+    " the live subject's CURRENT back contour and volume in this frame. Precisely lock the" +
+    " rear print, logos, and back seams. Dynamically adapt the garment drape to the" +
+    " subject's exact silhouette, angle, depth, and back volume without stretching or" +
+    " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.",
+  bottom:
+    "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
+    " onto the live subject's CURRENT lower-body contour and volume in this frame." +
+    " Precisely lock the rear print, logos, and back seams. Dynamically adapt the fit to" +
+    " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
+    " garment design. Strictly preserve original pattern and color.",
+});
+
 /* The surviving halves of the old frozen string, split into individually priority-taggable
    parts. Every one of these is a reproduced regression and the wording is deliberately
    unchanged from the string it came out of - only the t-shirt ANCHOR was replaced.
@@ -7453,7 +7601,7 @@ function isBottomsGarment(item) {
  * @param {object|null} item - the garment being fitted; null resolves to the tops branch.
  * @returns {string}
  */
-function imageOnlyPrompt(item) {
+function imageOnlyPrompt(item, angle = "front") {
   /* ONE PART, BOTH BRANCHES. There is no assembly left on either side - see
      CATEGORY_ANCHOR above for the reports that drove it there, for the full list of what
      came off the wire, and for why bottoms names the lower body where tops names the
@@ -7472,8 +7620,18 @@ function imageOnlyPrompt(item) {
      question is whether that text is worth the weight it takes away from the reference
      image, which is the mechanism every report in this sequence shares. One at a time,
      re-tested live. */
+  /* `angle` SELECTS a frozen anchor, and only that - it is never interpolated, appended to,
+     or used to build a string. Anything other than the literal "back" resolves to FRONT:
+     an unrecognised value must land on the side every caller rendered before this parameter
+     existed, not on a silent back-render nobody asked for.
+
+     It is a PARAMETER rather than a live effectiveAngle() read for the TOCTOU reason
+     applyGarment() documents at length: the prompt and the reference image must be resolved
+     against the SAME orientation reading. A prompt built from a fresh read while the image
+     was resolved from the frozen one is the mixing bug that comment records. */
+  const anchors = angle === "back" ? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;
   return fitPrompt([
-    [P.CORE, isBottomsGarment(item) ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
+    [P.CORE, isBottomsGarment(item) ? anchors.bottom : anchors.top],
   ]);
 }
 
@@ -7801,7 +7959,7 @@ function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
  * @returns {string}
  */
 function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item);
+  return imageOnlyPrompt(item, angle);
 }
 
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
@@ -8152,7 +8310,7 @@ async function applyGarment(item) {
   const payload = {
     prompt: clampPromptForWire(usingComposite
       ? buildCompositePrompt(item, angleAtStart, profileAtStart)
-      : buildPrompt(item, angleClause(item, angleAtStart, false, profileAtStart)),
+      : buildPrompt(item, angleAtStart),
       "applyGarment"),
     enhance: false,
     ...(imageRef ? { image: imageRef } : {}),
@@ -8275,6 +8433,10 @@ async function applyGarment(item) {
   // prompt-only-flip.test.mjs/side-profile.test.mjs against a fixed sandbox global list
   // that doesn't include this - a bare call would throw ReferenceError there.
   if (typeof verifyGarmentAsset === "function") verifyGarmentAsset(payload, "applyGarment");
+  /* Sampled BEFORE the write, and typeof-guarded for the same reason the line above is:
+     prompt-only-flip/side-profile run this function standalone against a fixed sandbox
+     global list, where a bare reference would throw ReferenceError. */
+  const condBefore = typeof sampleRenderSignature === "function" ? sampleRenderSignature() : null;
   await sendCondition("applyGarment", () => rtClient.set(payload));
   /* Stamped only AFTER set() resolves, which is what makes a retry correct: applyActive()
      re-enters this function on a rejection, and if these had been written optimistically
@@ -8284,6 +8446,9 @@ async function applyGarment(item) {
   rtImageOnWire = !!imageRef;
   lastSentPrompt = payload.prompt;
   if (imageRef) lastAckedImageRef = imageRef;   // survives a wire invalidation - see its declaration
+  /* Stamped AFTER lastAckedImageRef, so the trace can report whether the ack it is
+     describing is the one for this very reference. */
+  if (typeof traceConditioning === "function") traceConditioning(item, imageRef, condBefore);
 }
 
 /**
@@ -8596,8 +8761,8 @@ const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like lo
    priority-tagged part in a single fitPrompt() call - and it ranks CORE, because a prompt
    that has lost its orientation clause renders the wrong side of the garment. It is
    retained-and-unused today (see buildCompositePrompt's note on the same seam). */
-function buildPrompt(item, angleText = "") {              // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item);
+function buildPrompt(item, angle = "front") {
+  return imageOnlyPrompt(item, angle);
 }
 
 /**
@@ -8617,8 +8782,8 @@ function buildPrompt(item, angleText = "") {              // eslint-disable-line
  * @param {object} item - a custom item ({ custom:true, garmentType, img, color })
  * @returns {string}
  */
-function buildCustomPrompt(item, angleText = "") {        // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item);
+function buildCustomPrompt(item, angle = "front") {
+  return imageOnlyPrompt(item, angle);
 }
 
 const APPLY_ATTEMPTS = 2;    // set() tries per apply - see applyActive()

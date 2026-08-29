@@ -273,11 +273,11 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\],\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? anchors\.bottom : anchors\.top\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix. */
   check("the category anchor is tagged P.CORE so it can never be shed",
-    /\[P\.CORE,\s*(bottoms|isBottoms)[^\]]*ANCHOR|\[P\.CORE,\s*CATEGORY_ANCHOR/.test(SRC),
+    /\[P\.CORE,\s*(bottoms|isBottoms)[^\]]*(ANCHOR|anchors)|\[P\.CORE,\s*(BACK_)?CATEGORY_ANCHOR/.test(SRC),
     "if the anchor can shed, the bug comes back under budget pressure");
 }
 

@@ -244,8 +244,8 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
      regenerated face or room. It is called out first in app.js's restore list for that
      reason, and pinned here so the ranking cannot drift. */
   const builders = [
-    ["buildPrompt (catalog)", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
-    ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
+    ["buildPrompt (catalog)", /function buildPrompt\(item, angle[\s\S]*?\n}/],
+    ["buildCustomPrompt (upload)", /function buildCustomPrompt\(item, angle[\s\S]*?\n}/],
     ["buildLookPrompt (full look)", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
     ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
@@ -259,7 +259,7 @@ console.log("\n── the inpainting + rotation clamps are present, and on EVERY
     const body = (SRC.match(re) || [""])[0];
     const codeBody = body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     check(`${name} delegates to the category resolver and assembles nothing`,
-      /return (imageOnlyPrompt\(item\)|lookAnchorPrompt\(\));/.test(codeBody) &&
+      /return (imageOnlyPrompt\(item, angle\)|lookAnchorPrompt\(\));/.test(codeBody) &&
       !/fitPrompt\(/.test(codeBody), codeBody.slice(-300));
   }
 

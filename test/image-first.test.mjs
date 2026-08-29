@@ -120,6 +120,32 @@ const BOTTOMS_SPEC =
   " subject's CURRENT lower-body contour and volume in this frame. Dynamically adapt" +
   " the fit to the subject's exact waistline, leg profile, depth, and angle without" +
   " distorting the garment design. Strictly preserve original pattern and color.";
+/* THE BACK COUNTERPARTS. The prompt is no longer byte-identical across ANGLE - and that is
+   a deliberate reversal of what this suite used to pin, made once the orientation-blind
+   render was reported: buildPrompt() and buildCompositePrompt() both took the frozen angle
+   and discarded it, so a shopper turning around got the FRONT anchor and, with it, the
+   chest print reproduced on their back.
+
+   THE INVARIANT THIS SUITE ACTUALLY DEFENDS IS UNCHANGED, because it was never "one string
+   for every case" for its own sake - it was TOTAL TEXT VOLUME competing with the reference
+   image (see this file's header: FIX ONE kept the structural clauses and the tuxedo
+   survived it). Selecting between two frozen anchors holds volume flat; exactly one anchor
+   still ships, and \u00a71 asserts the back pair is frozen, hole-free and inside the same
+   ceiling as the front pair. What would re-open the tuxedo is APPENDING a clause, and that
+   is asserted absent for the back anchors too. */
+const BACK_TOPS_SPEC =
+  "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
+  " the live subject's CURRENT back contour and volume in this frame. Precisely lock the" +
+  " rear print, logos, and back seams. Dynamically adapt the garment drape to the" +
+  " subject's exact silhouette, angle, depth, and back volume without stretching or" +
+  " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.";
+const BACK_BOTTOMS_SPEC =
+  "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
+  " onto the live subject's CURRENT lower-body contour and volume in this frame." +
+  " Precisely lock the rear print, logos, and back seams. Dynamically adapt the fit to" +
+  " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
+  " garment design. Strictly preserve original pattern and color.";
+
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
@@ -254,9 +280,20 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     !/CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,900}?\$\{/.test(SRC),
     "no template hole anywhere in or adjacent to the declaration");
   check("...and the resolver only SELECTS an anchor, never builds one",
-    /\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\]/.test(SRC) &&
-    !/CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC),
+    /const anchors = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(SRC) &&
+    /\[P\.CORE, isBottomsGarment\(item\) \? anchors\.bottom : anchors\.top\]/.test(SRC) &&
+    !/(BACK_)?CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC) &&
+    !/anchors\.(top|bottom)\s*\+/.test(SRC),
     "appending one clause is how the dozen came back last time");
+  /* The angle axis must stay a SELECTOR. A back render that ships the front anchor plus a
+     rear clause is the volume increase this suite's header is about. */
+  check("the back anchors are frozen literals, with no interpolation hole either",
+    /const BACK_CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(SRC) &&
+    !/BACK_CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,1200}?\$\{/.test(SRC),
+    "no template hole anywhere in or adjacent to the declaration");
+  check("the back pair sits inside the same ceiling as the front pair",
+    BACK_TOPS_SPEC.length <= 650 && BACK_BOTTOMS_SPEC.length <= 650,
+    "back tops=" + BACK_TOPS_SPEC.length + " back bottoms=" + BACK_BOTTOMS_SPEC.length);
   check("both sit far inside the 226-token ceiling, so the wire guard never clips them",
     TOPS_SPEC.length <= 650 && BOTTOMS_SPEC.length <= 650,
     "tops=" + TOPS_SPEC.length + " bottoms=" + BOTTOMS_SPEC.length);
@@ -274,27 +311,41 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
     ["custom upload", { ...TEE, custom: true }, "front", true],
     ["pathological name", { ...TEE, name: "x".repeat(400) }, "front", true],
   ];
-  /* Each case now names the branch it must land in. The invariance being asserted is
-     unchanged in strength - byte-identical output across angle, pose, colour, custom-upload
-     and pathological-name - it is just measured against the anchor for that garment's
-     REGION rather than one global constant. */
+  /* Each case names the branch it must land in - now REGION x ANGLE, four frozen anchors
+     rather than two. The invariance is unchanged in strength on every axis that was ever
+     the point: pose (edge-on vs square-on), colour, custom-upload and pathological name
+     still move the prompt not one byte. Angle now selects, and only selects. */
   for (const [name, item, angle, prof] of cases) {
-    const expected = item.garmentType === "lower_body" ? BOTTOMS_SPEC : TOPS_SPEC;
+    const back = angle === "back";
+    const expected = item.garmentType === "lower_body"
+      ? (back ? BACK_BOTTOMS_SPEC : BOTTOMS_SPEC)
+      : (back ? BACK_TOPS_SPEC : TOPS_SPEC);
     check(`${name}: byte-identical to its category anchor`,
       api.buildCompositePrompt(item, angle, prof) === expected,
       api.buildCompositePrompt(item, angle, prof));
   }
-  /* THE AXIS ITSELF, asserted once: category is the ONLY thing that moves the prompt. */
-  check("the two branches are genuinely different, and category is the only axis",
-    TOPS_SPEC !== BOTTOMS_SPEC &&
-    api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(TEE, "back", true) &&
-    api.buildCompositePrompt(JEANS, "front", false) === api.buildCompositePrompt(JEANS, "back", true));
+  /* THE AXES, asserted once: category and angle move the prompt, and NOTHING else does.
+     Pose is the one that has to be nailed down explicitly - it is the axis FIX ONE let
+     through, and an edge-on render must still resolve to its square-on anchor exactly. */
+  check("all four anchors are genuinely different from one another",
+    new Set([TOPS_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC]).size === 4);
+  check("angle SELECTS: front and back differ, and each is its own frozen anchor",
+    api.buildCompositePrompt(TEE, "front", false) !== api.buildCompositePrompt(TEE, "back", false) &&
+    api.buildCompositePrompt(TEE, "back", false) === BACK_TOPS_SPEC);
+  check("pose is still NOT an axis - edge-on resolves to the same anchor as square-on",
+    api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(TEE, "front", true) &&
+    api.buildCompositePrompt(TEE, "back", false) === api.buildCompositePrompt(TEE, "back", true) &&
+    api.buildCompositePrompt(JEANS, "back", false) === api.buildCompositePrompt(JEANS, "back", true));
+  check("an unrecognised angle falls to FRONT, never to a silent back-render",
+    api.buildCompositePrompt(TEE, undefined, false) === TOPS_SPEC &&
+    api.buildCompositePrompt(TEE, "sideways", false) === TOPS_SPEC &&
+    api.buildCompositePrompt(TEE, "BACK", false) === TOPS_SPEC);
 
   /* Structural, across the builders this sandbox cannot execute. The four together are
      every path that can reach rtClient.set() with a prompt. */
   const builders = [
-    ["buildPrompt", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
-    ["buildCustomPrompt", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
+    ["buildPrompt", /function buildPrompt\(item, angle[\s\S]*?\n}/],
+    ["buildCustomPrompt", /function buildCustomPrompt\(item, angle[\s\S]*?\n}/],
     ["buildLookPrompt", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
     ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
@@ -310,7 +361,7 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
        the shared tail - it is not reachable from a builder, so a builder still cannot
        introduce a clause. What each builder does is DELEGATE, and that is asserted. */
     check(`${name}(): delegates to the category resolver, assembles nothing itself`,
-      /return (imageOnlyPrompt\(item\)|lookAnchorPrompt\(\));/.test(codeBody) &&
+      /return (imageOnlyPrompt\(item, angle\)|lookAnchorPrompt\(\));/.test(codeBody) &&
       !/fitPrompt\(/.test(codeBody) && !/DENSE\./.test(codeBody),
       codeBody.slice(-240) || "builder not found");
   }

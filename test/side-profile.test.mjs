@@ -793,7 +793,7 @@ console.log("\n── §6 NO TOCTOU: the pose is a frozen snapshot, like the ang
     snapAt !== -1 && awaitAt !== -1 && snapAt < awaitAt, `snapshot@${snapAt} await@${awaitAt}`);
   check("both prompt builders receive the frozen snapshot, never a fresh read",
     /buildCompositePrompt\(item, angleAtStart, profileAtStart\)/.test(apply) &&
-    /angleClause\(item, angleAtStart, false, profileAtStart\)/.test(apply), apply.slice(-600));
+    /buildPrompt\(item, angleAtStart\)/.test(apply), apply.slice(-600));
   check("applyGarment never re-reads profileActive() after the await",
     apply.split("profileActive()").length - 1 === 1, "expected exactly one read");
 

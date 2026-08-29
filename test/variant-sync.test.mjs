@@ -120,7 +120,7 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
      builder routes through the resolver" rather than "every builder returns a constant",
      because the constant is what had to go. */
   check("every builder resolves its prompt through the category resolver",
-    (APP.match(/return imageOnlyPrompt\(item\);/g) || []).length >= 3 &&
+    (APP.match(/return imageOnlyPrompt\(item, angle\);/g) || []).length >= 3 &&
     /return lookAnchorPrompt\(\);/.test(APP),
     "buildPrompt, buildCustomPrompt, buildCompositePrompt + the full-look exemption");
   check("...and neither category anchor has an interpolation hole to leak a variant into",
@@ -130,8 +130,9 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
   /* The resolver may branch on CATEGORY and nothing else. A second argument threaded in
      from a variant/colour/angle is how a description creeps back onto the wire. */
   check("...and the resolver branches on the garment's category alone",
-    /\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\]/.test(APP),
-    "any other input to this function is a new axis the prompt can vary on");
+    /\[P\.CORE, isBottomsGarment\(item\) \? anchors\.bottom : anchors\.top\]/.test(APP) &&
+    /const anchors = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(APP),
+    "category and ANGLE are the two permitted axes - a variant or colour input would be a third");
   /* Comments stripped first: variantMetaOf's own doc block QUOTES the old call as the
      thing it replaced, and a check that trips over the explanation of the fix is worse
      than no check - it would force whoever reads it to delete the documentation. */
