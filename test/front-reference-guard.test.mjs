@@ -85,6 +85,7 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
       calls.push({ op: "applyActive" });
       if (applyThrows) throw new Error("set() failed: ack timeout");
     },
+    bodyTopology: { reset: () => calls.push({ op: "topologyReset" }) },
     abbrevImg: (s) => String(s),
     toast: (t) => calls.push({ op: "toast", t }),
     setTimeout: (fn) => { fn(); return 0; },
@@ -232,6 +233,64 @@ console.log("\n── §6 A FAILED DISPATCH MUST NOT LEAVE THE LOCK LYING ──
   await h.maybeSwap("back");
   check("a dispatch that succeeds still advances the lock",
     h.state().autoOrientation === "back" && h.calls.some((c) => c.op === "applyActive"));
+}
+
+console.log("\n── §7 A SWAP RE-CONDITIONS THE RENDER, so the topology baseline is stale ──");
+/* THE REPORT: after the panel split fixed the front/back binding, the small chest logo
+   still erodes on the RETURN leg of a 360 - the front comes back as a plain garment while
+   the large back graphic survives every turn.
+
+   THE MECHANISM IS REPEATED RE-DERIVATION, not a wrong reference. Every full set({ image })
+   makes the model re-derive the garment from the reference, and fine, low-contrast marks
+   degrade a little each time; a large high-contrast graphic does not. So the question is
+   not "is the front asset bound" (it is - §1 and §2) but "how many times is this session
+   re-conditioned for no reason".
+
+   ONE OF THOSE IS AVOIDABLE AND THIS IS IT. makeBodyTopologyTracker() holds a BASELINE -
+   "the topology the CURRENT render was conditioned against" - and dispatches a full
+   re-upload when the live body has moved away from it. maybeSwap() performs exactly such a
+   re-conditioning, and left the baseline describing the body from BEFORE the turn. The next
+   comparison therefore measures the new frame against a shape the render has already moved
+   off, which on a 360 is a large delta that has nothing to do with movement since the
+   render was made - so it trips the threshold and fires a redundant re-upload immediately
+   after the swap. Another re-derivation, another pass of erosion.
+
+   THE PRECEDENT IS THREE LINES AWAY. reconditionForPresence() already calls
+   bodyTopology.reset() for this exact reason, and says so: "That dispatch re-conditioned
+   the render, so whatever shape the tracker was holding is no longer the shape on screen.
+   Re-acquire rather than compare the next frame against a baseline the render has already
+   moved off." The orientation swap is the same kind of dispatch and was the one that did
+   not do it.
+
+   NO PROMPT CHANGE, deliberately. A clause naming the chest logo was tried and withdrawn -
+   it rendered a large print the reference never had (see front-print-lock.test.mjs). The
+   erosion is fought by re-conditioning LESS, not by describing the logo more. */
+{
+  const h = harness({ startOrientation: "back" });
+  await h.maybeSwap("front");
+  check("a completed swap re-acquires the topology baseline",
+    h.calls.some((c) => c.op === "topologyReset"),
+    "a stale baseline fires a redundant re-upload right after the swap - one more erosion pass");
+  check("...AFTER the apply, not before it",
+    h.calls.findIndex((c) => c.op === "topologyReset") >
+      h.calls.findIndex((c) => c.op === "applyActive"),
+    "resetting before the dispatch re-acquires against the shape being replaced");
+}
+{
+  const h = harness({ startOrientation: "front" });
+  await h.maybeSwap("back");
+  check("the outbound leg does it too - the erosion is per re-conditioning, not per side",
+    h.calls.some((c) => c.op === "topologyReset"));
+}
+{
+  /* A dispatch that FAILED conditioned nothing, so the baseline still describes what is
+     genuinely on screen. Resetting there would discard a valid baseline and re-acquire
+     against an unchanged render - a wasted cycle, and a lie about what was applied. */
+  const h = harness({ startOrientation: "front", applyThrows: true });
+  await h.maybeSwap("back");
+  check("a FAILED swap does NOT reset - nothing was re-conditioned",
+    !h.calls.some((c) => c.op === "topologyReset"),
+    "the baseline is a claim about the render; a failed dispatch did not change the render");
 }
 
 console.log(fails === 0 ? "\nfront-reference-guard: OK" : `\nfront-reference-guard: ${fails} FAILED`);

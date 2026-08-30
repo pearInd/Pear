@@ -5670,6 +5670,32 @@ function createOrientationWatcher() {
       // released whatever hold IT was responsible for; this stale continuation must not
       // release whatever the NEW one has since raised.
       if (disposed) return;
+      /* ── RE-ACQUIRE THE TOPOLOGY BASELINE - the erosion fix that is not a prompt ──────
+         REPORTED: with the panel split binding the right asset to each side, the small
+         chest logo STILL eroded on the return leg of a 360 while the large back graphic
+         survived every turn.
+
+         The mechanism is repeated re-derivation. Every full set({ image }) makes the model
+         re-derive the garment from the reference, and fine low-contrast marks degrade a
+         little on each pass where a big high-contrast graphic does not. So the question is
+         not whether the front asset is bound - it is - but how many times this session is
+         re-conditioned for no reason.
+
+         THIS WAS ONE OF THOSE TIMES. makeBodyTopologyTracker()'s baseline is "the topology
+         the CURRENT render was conditioned against". The apply above IS a re-conditioning,
+         and leaving the baseline describing the pre-turn body meant the next comparison
+         measured the new frame against a shape the render had already moved off - on a 360
+         a large delta that says nothing about movement SINCE the render was made. It
+         tripped the threshold and fired a redundant full re-upload right after the swap:
+         one more erosion pass, every single turn.
+
+         reconditionForPresence() already does exactly this, for exactly this reason, and
+         says so in its own comment. The orientation swap was the one re-conditioning
+         dispatch that did not. Placed AFTER the apply resolves - re-acquiring before it
+         would take a baseline against the render being replaced - and deliberately NOT in
+         the catch, because a failed dispatch conditioned nothing and the existing baseline
+         still describes what is genuinely on screen. */
+      if (bodyTopology) bodyTopology.reset();
       orientHoldEnd("swap-complete");
       toast(next === "back" ? "מציג גב · Back view" : "מציג חזית · Front view");
     } catch (e) {

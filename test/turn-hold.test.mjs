@@ -301,8 +301,16 @@ console.log("\n── wiring: a torn-down watcher's in-flight maybeSwap() can't 
     swap.slice(swap.indexOf("const backBlob"), swap.indexOf("const backBlob") + 120));
   check("guarded after the decode/flat-probe awaits (before the flat-image check uses the result)",
     /probe\.close\?\.\(\);\s*\n\s*\} catch \(_\)[^\n]*\n {6}if \(disposed\) return;[^\n]*\n {6}if \(backLooksFlat\)/.test(swap));
+  /* The guard still sits immediately after the awaits; what follows it grew. The swap now
+     re-acquires the topology baseline before releasing the hold (a completed apply IS a
+     re-conditioning, so the tracker's stored shape is stale - see front-reference-guard
+     SS7), and that too must be inside the guard: a superseded instance must not reset a
+     tracker a fresh one is already using. Asserted as "guard, then the reset, then the
+     hold" rather than as an exact adjacency. */
   check("guarded after the main apply + fade-hold awaits, before touching the hold/toast",
-    /ORIENT_FADE_HOLD_MS\)\);[^\n]*\n[\s\S]*?\n {6}if \(disposed\) return;\n {6}orientHoldEnd\("swap-complete"\);/.test(swap));
+    /ORIENT_FADE_HOLD_MS\)\);[^\n]*\n[\s\S]*?\n {6}if \(disposed\) return;[\s\S]*?orientHoldEnd\("swap-complete"\);/.test(swap) &&
+    swap.indexOf("if (disposed) return;\n      /* ── RE-ACQUIRE THE TOPOLOGY BASELINE") > -1,
+    "the reset and the hold release must both sit behind the superseded-instance guard");
   /* The catch grew a body - it now rolls the orientation lock back when a dispatch fails,
      so the lock cannot claim a side whose reference never reached the wire (that is what
      rendered a print-less back; see front-reference-guard.test.mjs §6). The guard this
