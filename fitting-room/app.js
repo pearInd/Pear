@@ -5481,6 +5481,11 @@ function createOrientationWatcher() {
 
     applying = true;
     lastSwapAt = Date.now();
+    /* THE LOCK IS A CLAIM ABOUT WHAT IS ON THE WIRE, so it is advanced here but ROLLED BACK
+       if the dispatch below fails - see the catch. Kept as an advance-then-revert rather
+       than a commit-after-success because renderPerspectiveSelector() and the prompt
+       builders read it DURING the dispatch, and they must describe the side being applied. */
+    const lockBefore = autoOrientation;
     autoOrientation = next;
     logVtonState();
     /* No-ops when the sampler already raised the hold on the first disagreeing vote,
@@ -5510,9 +5515,38 @@ function createOrientationWatcher() {
       orientHoldEnd("swap-complete");
       toast(next === "back" ? "מציג גב · Back view" : "מציג חזית · Front view");
     } catch (e) {
-      console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
-      if (!disposed) orientHoldEnd("swap-failed");   // never leave the frozen overlay stuck up on
-                                                      // failure - but only if THIS instance still owns it
+      /* ── ROLL THE LOCK BACK - "I turned around and the back print was gone" ─────
+         THE FAILURE THIS CLOSES. autoOrientation was advanced before the dispatch, and
+         until now a throw here left it pointing at a side whose reference never reached
+         Decart. effectiveAngle() then resolves to that side, so every SUBSEQUENT prompt -
+         the periodic re-anchor and every topology re-drape - is built from
+         BACK_CATEGORY_ANCHOR ("Precisely lock the rear print, logos, and back seams") and
+         sent against the FRONT photo still on the wire. This file already records what the
+         model does when told to reproduce a back it cannot see in its reference: it
+         SUPPRESSES the graphic rather than inventing one. The shopper turns around to plain
+         fabric with no print - the right garment, the right colour, no back graphic.
+
+         AND IT NEVER RECOVERED ON ITS OWN. The sampler keeps voting for the side the lock
+         now wrongly claims, so needsSwitch stays false and maybeSwap is never called again;
+         one failed dispatch stranded the orientation for the rest of the session. Restoring
+         the previous value makes the vote disagree again, which is exactly what lets the
+         next tick past ORIENT_COOLDOWN_MS retry the swap.
+
+         NOT A ROLLBACK OF THE REFERENCE, because there is nothing to undo: applyActive()
+         either landed a set() or it did not, and if it did not the wire still holds the
+         previous side. This restores the LOCK to match that. */
+      if (!disposed) {
+        autoOrientation = lockBefore;
+        console.warn("[PEAR] AI Auto swap apply FAILED - rolling the orientation lock back to",
+          String(lockBefore).toUpperCase(), "so the lock still describes what is on the wire:",
+          e?.message || e);
+        logVtonState();
+        renderPerspectiveSelector();
+        orientHoldEnd("swap-failed");   // never leave the frozen overlay stuck up on failure -
+                                        // but only if THIS instance still owns it
+      } else {
+        console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
+      }
     } finally {
       applying = false;
     }
