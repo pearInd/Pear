@@ -192,7 +192,8 @@ console.log("\n── §4 SELECTING, NOT APPENDING ──");
      `!bottoms && angle !== "back"` also appears in the plainTee line above it, so a laxer
      pattern would pass while the clause itself had lost a guard. */
   check("...and it is scoped to tops + front + has-a-closure, where one is actually in view",
-    /\.\.\.\(!bottoms && !plainTee && angle !== "back" \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\)/.test(resolverCode),
+    /\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\)/.test(resolverCode) &&
+    /const closure = !bottoms && angle !== "back" && hasFrontClosure\(item\);/.test(resolverCode),
     resolverCode);
   check("nothing is concatenated onto an anchor, front or back",
     !/anchors\.(top|bottom)\s*\+/.test(APP) && !/(BACK_)?CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(APP),

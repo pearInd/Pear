@@ -80,7 +80,7 @@ const api = new Function(...Object.keys(sandbox),
    assertions - which own the DEFAULT tops anchor plus its closure clause - would silently
    stop describing the string they were written for. The tee branch has its own byte-exact
    assertion below, and its own suite in plain-tee-fidelity.test.mjs. */
-const TOP       = { name: "Longsleeve Top", garmentType: "upper_body", color: "#fff", subType: "long_sleeve" };
+const TOP       = { name: "Oxford Button-Down Shirt", garmentType: "upper_body", color: "#fff", subType: "long_sleeve" };
 const PLAIN_TEE = { name: "Ion Crew Tee",   garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
 
@@ -374,7 +374,8 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      anchor. That is the distinction this whole section is about: a part can be shed under
      budget pressure and can be counted; a concatenation can be neither. */
   check("...and the bought-back clause is a separate part, never concatenated on",
-    /\.\.\.\(!bottoms && !plainTee && angle !== "back" \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),/.test(SRC) &&
+    /\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),/.test(SRC) &&
+    /const closure = !bottoms && angle !== "back" && hasFrontClosure\(item\);/.test(SRC) &&
     !/FRONT_CLOSURE_LOCK\s*\+/.test(SRC) && !/\+\s*FRONT_CLOSURE_LOCK/.test(SRC),
     "a concatenated clause cannot shed, and that is how the dozen came back last time");
   /* The angle axis must stay a SELECTOR. A back render that ships the front anchor plus a
@@ -401,17 +402,22 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
     ["BACK edge-on", TOP, "back", true],
     ["BOTTOMS edge-on", { ...TOP, garmentType: "lower_body" }, "front", true],
     ["custom upload", { ...TOP, custom: true }, "front", true],
-    ["pathological name", { ...TOP, name: "x".repeat(400) }, "front", true],
+    /* A 400-character garbage name names no closure, so it correctly lands on the
+       no-proven-closure branch and ships the ANCHOR ALONE. That is not a weakening of this
+       row: what it guards is "one frozen anchor, nothing assembled onto it", and that still
+       holds exactly. The name axis is deliberate now - see hasFrontClosure() - so the row
+       carries its own expected string rather than pretending the name is inert. */
+    ["pathological name", { ...TOP, name: "x".repeat(400) }, "front", true, TOPS_SPEC],
   ];
   /* Each case names the branch it must land in - now REGION x ANGLE, four frozen anchors
      rather than two. The invariance is unchanged in strength on every axis that was ever
      the point: pose (edge-on vs square-on), colour, custom-upload and pathological name
      still move the prompt not one byte. Angle now selects, and only selects. */
-  for (const [name, item, angle, prof] of cases) {
+  for (const [name, item, angle, prof, override] of cases) {
     const back = angle === "back";
-    const expected = item.garmentType === "lower_body"
+    const expected = override || (item.garmentType === "lower_body"
       ? (back ? BACK_BOTTOMS_SPEC : BOTTOMS_SPEC)
-      : (back ? BACK_TOPS_SPEC : TOPS_FRONT_SPEC);
+      : (back ? BACK_TOPS_SPEC : TOPS_FRONT_SPEC));
     check(`${name}: byte-identical to its category anchor`,
       api.buildCompositePrompt(item, angle, prof) === expected,
       api.buildCompositePrompt(item, angle, prof));

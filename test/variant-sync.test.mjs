@@ -143,7 +143,8 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
     /const anchors = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(APP) &&
     /const bottoms = isBottomsGarment\(item\);/.test(APP) &&
     /const plainTee = !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(APP) &&
-    /\.\.\.\(!bottoms && !plainTee && angle !== "back" \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\)/.test(APP),
+    /\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\)/.test(APP) &&
+    /const closure = !bottoms && angle !== "back" && hasFrontClosure\(item\);/.test(APP),
     "category, ANGLE and CONSTRUCTION are the only permitted inputs - each one selects a " +
     "constant rather than filling a hole; a variant or colour input would be a description");
   /* The new axis's predicate, held to the same rule. isPlainKnitTop() may read the catalog

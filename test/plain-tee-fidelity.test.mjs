@@ -173,10 +173,15 @@ console.log("\n── §3 NO REGRESSION: the garments that DO fasten still get t
     CLOSURE_RE.test(bd), bd);
   check("...and still opens on the unchanged 'EXACT static shirt' anchor",
     bd.indexOf("Drape and fit the EXACT static shirt from the reference image") === 0, bd);
-  check("an unclassifiable top keeps the OLD behaviour exactly - anchor plus lock",
+  /* CHANGED DELIBERATELY BY §6, which is why this reads as a reversal. It used to assert
+     "anchor plus lock" - an unrecognised top got the closure clause by default. That
+     default WAS the second bug: brand-named, Hebrew-titled and untitled tees are all
+     unrecognisable to the tee vocabulary and all got handed placket tokens. The anchor is
+     unchanged; only the clause is gone, and only where nothing proves it belongs. */
+  check("an unclassifiable top keeps the default ANCHOR, but no longer the closure clause",
     imageOnlyPrompt(UNKNOWN_TOP).indexOf("Drape and fit the EXACT static shirt") === 0 &&
-    CLOSURE_RE.test(imageOnlyPrompt(UNKNOWN_TOP)),
-    "the default branch must be byte-identical to what shipped before this change");
+    !CLOSURE_RE.test(imageOnlyPrompt(UNKNOWN_TOP)),
+    "an unproven top must not be handed closure tokens - see §6");
   check("the bottoms branch is untouched by the new axis",
     imageOnlyPrompt(JEANS) === imageOnlyPrompt({ garmentType: "lower_body", name: "Tee Joggers" }) &&
     !CLOSURE_RE.test(imageOnlyPrompt(JEANS)),
@@ -186,16 +191,26 @@ console.log("\n── §3 NO REGRESSION: the garments that DO fasten still get t
 console.log("\n── §4 VOLUME: the fix must SHRINK the prompt, never grow it ──");
 {
   const tee = imageOnlyPrompt(TEE);
-  const dflt = imageOnlyPrompt(UNKNOWN_TOP);
+  /* THE BASELINE IS A FASTENING TOP, not an unrecognised one, and §6 is why: an
+     unrecognised top no longer carries the closure clause either, so it is no longer the
+     "what a tee used to ship" comparison this assertion was written to make. A garment
+     that genuinely fastens still ships anchor + clause - exactly what every tee used to
+     get - so it is the honest baseline for the same question. */
+  const wasShipped = imageOnlyPrompt(BUTTONDOWN);
   check("the tee prompt is inside the budget every anchor shares",
     tee.length <= CONFIG.PROMPT_MAX_CHARS, `${tee.length} chars`);
   /* THE LOAD-BEARING ASSERTION OF THIS SUITE. Every report in app.js's prompt history
      shares one mechanism - text volume competing with the reference image - so a fix for
      a fidelity bug that ADDS text is the mechanism, reapplied. Dropping the closure
      clause buys more than the tee wording spends, and this pins that it stays true. */
-  check("...and is SHORTER than what a tee ships today, not longer",
-    tee.length < dflt.length,
-    `tee=${tee.length} default=${dflt.length} - a fidelity fix that grows the prompt is the bug`);
+  check("...and is SHORTER than the anchor-plus-clause every tee used to ship",
+    tee.length < wasShipped.length,
+    `tee=${tee.length} was=${wasShipped.length} - a fidelity fix that grows the prompt is the bug`);
+  /* And the branch most tops now land on is shorter still - the fix's real reach is the
+     unrecognised title, not the one that says "tee" on the tin. */
+  check("...and an unrecognised top ships less than it did before §6",
+    imageOnlyPrompt(UNKNOWN_TOP).length < wasShipped.length,
+    `unknown=${imageOnlyPrompt(UNKNOWN_TOP).length} was=${wasShipped.length}`);
   check("it is still ONE anchor - the tee branch did not become an assembly",
     tee.split(/(?<=\.)\s+/).filter(Boolean).length <= 4, tee);
 }
@@ -226,6 +241,73 @@ console.log("\n── §5 THE AXIS IS A SELECTOR, and its scope is deliberate �
     isPlainKnitTop({ name: "Vapor Sleeveless" }) === false &&
     isPlainKnitTop({ name: "גופיה" }) === false,
     "calling a tank a t-shirt is how you grow sleeves that were never in the reference");
+}
+
+console.log("\n── §6 THE BURDEN OF PROOF WAS ON THE WRONG SIDE ──");
+/* THE SECOND REPORT: "a vertical slit down the centre front - it looks split or buttoned
+   instead of a continuous knit tee." Same placket, after §1-§5 supposedly fixed it.
+
+   WHY THE FIRST FIX MISSED IT. isPlainKnitTop() demands POSITIVE PROOF of a tee before it
+   will withhold the closure clause, and that proof is an explicit tee noun in the title.
+   Real storefronts do not oblige: "PEAK", "PEAK Oversized", "חולצה אוברסייז" and a bare
+   widget handover with no title at all are all plain jersey tees, and every one of them
+   fell to the default branch and shipped "buttons, zip or placket" anyway. The fix worked
+   only for products whose titles already said what they were.
+
+   THE BURDEN IS INVERTED HERE. FRONT_CLOSURE_LOCK exists for garments that HAVE a front
+   closure; on anything else its four nouns are free-floating tokens the sampler can steer
+   toward, which is the entire mechanism. So it now ships only on POSITIVE evidence of a
+   closure (STRUCTURED_TOP_TOKENS - button/zip/placket/polo/henley/oxford/cardigan/jacket),
+   and an unrecognised top gets no closure tokens rather than getting them by default.
+
+   THE TRADE, STATED. A button-down whose title names no closure loses the lock and could
+   render open again (daabb47's report). That is the invented-detail class - the right
+   garment in a wrong state - and it is strictly less bad than the wrong-garment class this
+   is fixing, on a catalog where tees vastly outnumber button-downs. §6 pins that every
+   garment which DOES name a closure keeps it.
+
+   NOTE IT SPENDS NO TEXT. The fix removes a clause from most tops; it adds nothing. */
+{
+  const PEAK      = { garmentType: "upper_body", type: "shirt", subType: "short_sleeve", name: "PEAK Oversized" };
+  const HEB_OVER  = { garmentType: "upper_body", type: "shirt", name: "חולצה אוברסייז" };
+  const UNTITLED  = { garmentType: "upper_body" };
+
+  check("the reported garment - a brand-named oversized tee - ships NO closure tokens",
+    !CLOSURE_RE.test(imageOnlyPrompt(PEAK)) &&
+    !/\b(button|zip|placket|collar|pocket)\b/i.test(imageOnlyPrompt(PEAK)),
+    imageOnlyPrompt(PEAK));
+  check("...and neither does a Hebrew-titled one, the storefront's primary language",
+    !CLOSURE_RE.test(imageOnlyPrompt(HEB_OVER)));
+  check("...nor an untitled widget handover, which names nothing at all",
+    !CLOSURE_RE.test(imageOnlyPrompt(UNTITLED)),
+    "an unrecognised top must not be handed placket tokens by default");
+
+  console.log("   -- and every top that DOES fasten still keeps the lock --");
+  const fastened = ["Oxford Button-Down Shirt", "Pique Polo", "Nimbus Henley",
+                    "Zip-Through Hoodie", "Tee Shirt Cardigan", "חולצה מכופתרת"];
+  let allKept = true, missing = "";
+  for (const name of fastened) {
+    if (!CLOSURE_RE.test(imageOnlyPrompt({ garmentType: "upper_body", name }))) { allKept = false; missing = name; break; }
+  }
+  check("daabb47's report stays fixed for every garment that names a closure", allKept, missing);
+
+  /* The two branches are mutually exclusive by construction - a garment cannot be both a
+     plain knit tee and a fastening one - and asserting it stops a future edit producing a
+     prompt that names a placket and a seamless front in the same breath. */
+  check("no top ever gets the tee anchor AND the closure clause together",
+    ["PEAK Oversized", "Ion Crew Tee", "Oxford Button-Down Shirt", "Pique Polo", "", "Boxy Top"]
+      .every((name) => {
+        const p = imageOnlyPrompt({ garmentType: "upper_body", name });
+        return !(/EXACT static t-shirt/.test(p) && CLOSURE_RE.test(p));
+      }),
+    "a seamless front and a fastened placket in one prompt is a contradiction on the wire");
+
+  check("bottoms are untouched by the inverted burden",
+    !CLOSURE_RE.test(imageOnlyPrompt(JEANS)) &&
+    imageOnlyPrompt(JEANS) === imageOnlyPrompt({ garmentType: "lower_body", name: "Button Fly Jeans" }),
+    "a closure token in a TROUSER title must not reach the tops-only clause");
+  check("the back branch is still closure-free, as it always was",
+    !CLOSURE_RE.test(imageOnlyPrompt(BUTTONDOWN, "back")));
 }
 
 console.log(fails === 0 ? "\nplain-tee-fidelity: OK" : `\nplain-tee-fidelity: ${fails} FAILED`);

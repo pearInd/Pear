@@ -7751,6 +7751,43 @@ function isPlainKnitTop(item) {
   return PLAIN_TEE_TOKENS.test(fields);
 }
 
+/* ── THE BURDEN OF PROOF, INVERTED - "the tee still has a slit down the front" ────
+   THE SECOND REPORT, after the tee anchor above supposedly fixed the first: a plain
+   crewneck rendering with a vertical centre-front seam, split as though it buttoned.
+
+   WHY THE FIRST FIX MISSED IT. isPlainKnitTop() demands POSITIVE PROOF of a tee - an
+   explicit tee noun in the title - before it will withhold the closure clause. Real
+   storefronts do not oblige. "PEAK", "PEAK Oversized", "חולצה אוברסייז" and a bare widget
+   handover with no title at all are all plain jersey tees, and every one of them fell to
+   the default branch and was handed "buttons, zip or placket" anyway. The fix only ever
+   worked for products whose titles already said what they were, which is the minority.
+
+   SO THE DEFAULT WAS THE BUG, not the vocabulary. FRONT_CLOSURE_LOCK exists for garments
+   that HAVE a front closure; on anything else its four nouns are free-floating tokens in a
+   positive prompt, which is the whole mechanism this file keeps re-learning. Asking "can I
+   prove this is a tee?" puts the cost of every unrecognised title on the wrong side.
+   Asking "can I prove this FASTENS?" puts it on the side where being wrong is cheap.
+
+   THE TRADE, STATED PLAINLY BECAUSE IT IS A REAL ONE. A button-down whose title names no
+   closure now loses the lock and could render open again - daabb47's report. That is the
+   INVENTED-DETAIL class: the right garment in a wrong state. What it buys is the
+   WRONG-GARMENT class, on a catalog where tees vastly outnumber button-downs. This file
+   has ranked those twice already and both times the answer was the same - a garment fitted
+   with an unstated closure is a worse render, a garment fitted as a different garment is a
+   different garment.
+
+   IT SPENDS NO BUDGET. This removes a clause from most tops and adds nothing, which is the
+   direction every fidelity report in this file has wanted.
+
+   @param {object|null|undefined} item
+   @returns {boolean} true only when the title gives positive evidence of a front closure. */
+function hasFrontClosure(item) {
+  if (!item || isBottomsGarment(item)) return false;
+  const fields = [item.type, item.category, item.subType, item.name, item.title]
+    .filter(Boolean).join(" ");
+  return STRUCTURED_TOP_TOKENS.test(fields);
+}
+
 const CATEGORY_ANCHOR = Object.freeze({
   /* The two strings share one spine - bind the static garment, adapt to the current
      contour, preserve the original - and differ in exactly two places: the garment noun,
@@ -8011,9 +8048,16 @@ function imageOnlyPrompt(item, angle = "front") {
      the back pair is deliberately left alone. It SELECTS between frozen literals like the
      other two axes - still exactly one anchor on the wire, still nothing concatenated. */
   const plainTee = !bottoms && angle !== "back" && isPlainKnitTop(item);
+  /* POSITIVE EVIDENCE ONLY - see hasFrontClosure(). This used to be `!plainTee`, i.e. every
+     top we could not prove was a tee, which handed placket tokens to every brand-named,
+     Hebrew-titled and untitled tee in the catalog. The two predicates are mutually
+     exclusive by construction (isPlainKnitTop bails on the same structured tokens this
+     one requires), so a prompt can never name a seamless front and a fastened placket
+     together. */
+  const closure = !bottoms && angle !== "back" && hasFrontClosure(item);
   return fitPrompt([
     [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
-    ...(!bottoms && !plainTee && angle !== "back" ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
+    ...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
   ]);
 }
 
