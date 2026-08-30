@@ -173,24 +173,10 @@ const CLOSURE_SPEC =
   "Reproduce the reference's front closure exactly: any buttons, zip or placket stay" +
   " fully fastened, sitting flat and closed across the chest as shown.";
 /* What the tops+front branch actually ships: anchor, one space (fitPrompt's join), clause. */
-/* ── THE FRONT GRAPHIC LOCK - the mirror of a clause the BACK anchor always had ──
-   BACK_CATEGORY_ANCHOR.top says "Precisely lock the rear print, logos, and back seams",
-   and its own comment calls that the one thing the back pair says which the front pair does
-   not. Reported consequence: a chest logo that renders at go-live and is gone after a full
-   360, while the back graphic survives - a small mark no clause names erodes across the
-   re-conditionings a rotation forces, and one that is named does not.
-
-   It rides tops+front as a P.HIGH part rather than being written into the anchor, because
-   the anchors are P.CORE and byte-pinned here: text welded into one can never shed. §1
-   checks it names no GARMENT CLASS, which is the property that distinguishes it from
-   CLOSURE_SPEC - "buttons" and "placket" are construction a sampler can render instead of
-   the reference, a print is a property of whatever the reference already shows. */
-const PRINT_SPEC =
-  "Precisely lock the front print, chest logo, and graphics exactly as shown.";
-/* What the tops+front branch ships when the garment fastens and names NO graphic: anchor
-   plus the closure clause. The print lock is evidence-gated (hasGraphicPrint), so a title
-   that says nothing about a print gets nothing about one - which is the whole fixture set
-   here. §1 exercises the gated-on case separately. */
+/* A FRONT GRAPHIC LOCK WAS TRIED HERE AND WITHDRAWN - it rendered a chest print the
+   reference never had. front-print-lock.test.mjs owns that record and asserts the absence;
+   do not reintroduce a PRINT_SPEC without reading it. */
+/* What the tops+front branch actually ships: anchor, one space (fitPrompt join), clause. */
 const TOPS_FRONT_SPEC = TOPS_SPEC + " " + CLOSURE_SPEC;
 
 /* ── THE PLAIN-TEE ANCHOR - the third axis, and the correction to the note above ──
@@ -232,16 +218,6 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     api.imageOnlyPrompt(TOP).startsWith(TOPS_SPEC + " ") &&
     api.imageOnlyPrompt(TOP).endsWith(CLOSURE_SPEC),
     "the clause must ride BESIDE the anchor, never be woven into it");
-  /* THE GATED PRINT LOCK, on the one axis that turns it on. It leads the optional parts,
-     because array order is shed order and the two evidence-gated clauses that answer
-     earlier reports must outlive it under pressure. */
-  check("a garment whose title names a graphic gains the print lock, whole and in order",
-    api.imageOnlyPrompt({ ...TOP, name: "Oxford Button-Down Print Shirt" }) ===
-      TOPS_SPEC + " " + PRINT_SPEC + " " + CLOSURE_SPEC,
-    JSON.stringify(api.imageOnlyPrompt({ ...TOP, name: "Oxford Button-Down Print Shirt" })));
-  check("...and a title that names none gets no graphic vocabulary at all",
-    !/\b(print|logo|graphic)\b/i.test(api.imageOnlyPrompt(TOP)),
-    "an unconditional graphic clause is the shape CLOSURE_SPEC proved can be steered toward");
   check("no negative token rides with it - the tuxedo shipped through a positive prompt",
     !/\b(open|unbuttoned|undone|parted|exposed|never|avoid|don't|do not)\b/i.test(CLOSURE_SPEC),
     CLOSURE_SPEC);

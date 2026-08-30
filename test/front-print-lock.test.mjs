@@ -1,42 +1,40 @@
 #!/usr/bin/env node
-/* THE FRONT GRAPHIC - "the back text survives the turn, the chest logo does not"
+/* THE FRONT GRAPHIC CLAUSE - TRIED, AND WITHDRAWN
    =============================================================================
-   THE REPORT: a black tee with a small centred chest logo and a large back graphic. Both
-   render correctly at first. After a full 360 back to the front, the chest logo is gone and
-   the front reads as a plain black tee. The back graphic is unaffected throughout.
+   THIS SUITE ASSERTS AN ABSENCE, which is the only form that catches a well-meant clause
+   being added back. It used to assert the presence of FRONT_PRINT_LOCK; that clause is
+   gone, and the reason it is gone is worth more than the clause was.
 
-   THE ASYMMETRY IS IN THE ANCHORS, and it is one clause wide. BACK_CATEGORY_ANCHOR.top
-   carries "Precisely lock the rear print, logos, and back seams." CATEGORY_ANCHOR.top
-   carries no equivalent - its strongest statement about the garment's surface is "Strictly
-   preserve the original shirt texture, pattern, and color", which never names a print, a
-   logo or a graphic at all.
+   THE REPORT IT ANSWERED WAS REAL. A chest logo rendered at go-live and was gone after a
+   full 360, while the back graphic survived - because BACK_CATEGORY_ANCHOR.top carries
+   "Precisely lock the rear print, logos, and back seams" and the front anchor names no
+   print at all. That asymmetry still exists.
 
-   app.js SAYS SO ITSELF, in the back pair's own comment: the rear print lock is "the only
-   thing this pair says which the front pair does not". It was added for a back-specific
-   failure (the FRONT graphic reproduced on the reverse) and the front side was never given
-   the mirror of it, because no front-side report had been filed. This is that report.
+   THE FIX MADE IT WORSE. f543678 mirrored the back clause onto the front branch;
+   c2fbc1a gated it to garments whose titles name a graphic. Reported immediately after:
+   the front chest rendered a LARGE text graphic the reference never had, from go-live,
+   before any rotation.
 
-   WHY IT SURVIVES THE FIRST RENDER AND NOT THE ROUND TRIP. At go-live the model conditions
-   fresh on the front photo and reproduces it faithfully. A 360 puts several genuine
-   re-conditionings between then and the return - the two orientation swaps plus every
-   topology re-drape the movement triggers - and each one re-derives the garment from the
-   reference under the prompt it is given. A small high-frequency mark that no clause names
-   is the first thing to erode across successive re-derivations. The back graphic does not
-   erode because its anchor names it explicitly.
+   IT WAS NOT CROSS-CONTAMINATION, and that was checked rather than assumed: the front
+   prompt contained no rear vocabulary and the back prompt no chest vocabulary. §2 re-checks
+   that separation, because it is a property worth keeping regardless.
 
-   IT IS A SHED-ABLE PART, NOT AN EDIT TO THE ANCHOR. The anchors are P.CORE and byte-pinned
-   by image-first.test.mjs; growing one puts unshed-able text on the wire forever. The
-   established pattern for a bought-back clause - FRONT_CLOSURE_LOCK, SLEEVE_LENGTH_LOCK -
-   is a separate P.HIGH part, which fitPrompt() can drop under budget pressure before it
-   will touch the anchor. This follows it.
+   IT WAS THE THIRD TIME THIS FILE HAS WATCHED THE SAME MECHANISM. A garment feature named
+   in a positive prompt, with no negative_prompt to balance it, comes back MORE prominent
+   than the reference shows. DENSE.assetLock named garments and got a tuxedo.
+   FRONT_CLOSURE_LOCK named buttons and plackets and got a placket on plain tees. This named
+   prints and graphics and got a print.
 
-   THE RISK, STATED. FRONT_CLOSURE_LOCK called itself product-neutral and was not: "buttons"
-   and "placket" are garment FEATURES a sampler can steer toward, and they summoned a
-   placket onto plain tees. "print", "logo" and "graphic" are surface marks rather than
-   garment classes, and the identical wording has ridden the BACK anchor unconditionally
-   with no invented-print report on file - which is the in-repo evidence this is the safer
-   half of that distinction. §3 pins that it names no garment class, which is the property
-   that actually made the tuxedo.
+   GATING DID NOT SAVE IT, which is the part most likely to be re-tried. The theory was that
+   a garment whose title names a print can safely be told about its print. The reported
+   garment is titled "חולצה חלקה עם הדפס" - it names its print - so the gate passed and the
+   clause shipped anyway. The failure is not about WHICH garments receive the clause.
+
+   THE COST OF THE WITHDRAWAL IS ACCEPTED AND RECORDED: the erosion report is re-opened. A
+   small chest logo has no clause naming it and may fade again across the re-conditionings a
+   360 forces. A faded logo is a degraded render of the RIGHT garment; an invented chest
+   print is the wrong garment. If this is attempted a third time it needs a mechanism that
+   does not put the words on the wire.
    ============================================================================= */
 
 import { readFileSync } from "node:fs";
@@ -60,113 +58,81 @@ const sandbox = {
   getFitModifier: () => "", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
-  code + "\nreturn { imageOnlyPrompt, FRONT_PRINT_LOCK, CATEGORY_ANCHOR };")(...Object.values(sandbox));
+  code + "\nreturn { imageOnlyPrompt };")(...Object.values(sandbox));
 const { imageOnlyPrompt } = api;
 
-const PRINT_RE = /front print/i;
-const COVE     = { garmentType: "upper_body", type: "shirt", subType: "short_sleeve",
-                   name: "חולצה חלקה עם הדפס" };
-const PLAIN    = { garmentType: "upper_body", type: "shirt", subType: "short_sleeve",
-                   name: "Boxy Heavyweight Top" };
-const JEANS    = { garmentType: "lower_body", name: "Glide Slim" };
+/* The reported garment, titled the way the storefront titles it - it NAMES its print, which
+   is exactly why gating the clause did not save it. */
+const COVE  = { garmentType: "upper_body", type: "shirt", subType: "short_sleeve",
+                name: "חולצה חלקה עם הדפס" };
+const TEE   = { garmentType: "upper_body", name: "Graphic Print Tee" };
+const PLAIN = { garmentType: "upper_body", name: "Boxy Heavyweight Top" };
+const JEANS = { garmentType: "lower_body", name: "Glide Slim" };
 
-console.log("── §1 THE FRONT RENDER NAMES ITS GRAPHIC, as the back one already does ──");
+console.log("── §1 NO FRONT-GRAPHIC VOCABULARY REACHES THE WIRE ──");
 {
-  const front = imageOnlyPrompt(COVE);
-  check("the front prompt locks the chest print and logo",
-    PRINT_RE.test(front) && /logo/i.test(front), front);
-  check("...and still leads with the unchanged frozen anchor",
-    front.indexOf("Drape and fit the EXACT static shirt from the reference image") === 0,
-    "the anchor is P.CORE and byte-pinned - this rides beside it, never inside it");
-  check("...and stays inside the budget every anchor shares",
-    front.length <= CONFIG.PROMPT_MAX_CHARS, `${front.length} chars`);
+  /* Checked on the SHIPPED prompt for every shape that could plausibly re-acquire it,
+     including the two whose titles name a print - the gate that was tried would have let
+     both through. */
+  for (const [label, item] of [["the reported garment", COVE], ["a titled graphic tee", TEE],
+                               ["a plain top", PLAIN]]) {
+    const p = imageOnlyPrompt(item);
+    check(`${label} is told nothing about a front print, logo or graphic`,
+      !/\b(front print|chest logo|graphics?)\b/i.test(p), p);
+  }
+  check("the constant itself is gone, not merely unreferenced",
+    !/const FRONT_PRINT_LOCK\s*=/.test(SRC) && !/\[P\.HIGH, FRONT_PRINT_LOCK\]/.test(SRC),
+    "a retired-but-present constant is one line from shipping again by accident");
+  /* The withdrawal note is the load-bearing artifact here: without it the next reader sees
+     an obvious gap (the back anchor locks its print, the front does not) and closes it. */
+  check("...and the file records WHY, so the gap is not re-closed the same way",
+    /TRIED AND WITHDRAWN/.test(SRC) &&
+    /rendering a chest print the reference never had|LARGE text graphic the\n   reference never had/.test(SRC),
+    "an absence with no explanation reads as an oversight");
 }
 
-console.log("\n── §1b GATED ON EVIDENCE, so a plain garment is told nothing about graphics ──");
+console.log("\n── §2 THE TWO VIEW STATES STAY CLEANLY SEPARATED ──");
 {
-  /* THE TRADE, AND IT IS NOT FREE. Unconditional, this clause protected every graphic tee
-     including the ones whose titles say nothing. Gated, it protects only those the catalog
-     describes - and most graphic tees do not carry the word "print" in their name. What it
-     buys is that a PLAIN garment is never handed "print, chest logo, graphics" at all,
-     which is the shape FRONT_CLOSURE_LOCK proved can be steered toward: that clause called
-     itself product-neutral, shipped "buttons / zip / placket" to every top, and summoned a
-     placket onto plain tees. This is the same defence applied one clause earlier.
-
-     RECALL IS THE KNOWN COST. If a graphic tee whose title names no print loses its logo
-     across a 360 again, the gate is why, and un-gating is one line - see hasGraphicPrint. */
-  check("a garment whose title names a print gets the lock",
-    PRINT_RE.test(imageOnlyPrompt(COVE)) &&
-    PRINT_RE.test(imageOnlyPrompt({ garmentType: "upper_body", name: "Graphic Tee" })) &&
-    PRINT_RE.test(imageOnlyPrompt({ garmentType: "upper_body", name: "Logo Sweatshirt" })));
-  check("a plain garment is never handed graphic vocabulary at all",
-    !PRINT_RE.test(imageOnlyPrompt(PLAIN)) &&
-    !/\b(print|logo|graphic)\b/i.test(imageOnlyPrompt(PLAIN)),
-    imageOnlyPrompt(PLAIN));
-  check("...nor is an unrecognised top - silence means no claim, as everywhere else here",
-    !PRINT_RE.test(imageOnlyPrompt({ garmentType: "upper_body" })) &&
-    !PRINT_RE.test(imageOnlyPrompt({})));
-  check("a bottoms garment never gets it, whatever its title says",
-    !PRINT_RE.test(imageOnlyPrompt({ garmentType: "lower_body", name: "Print Joggers" })));
+  /* This was the mechanism proposed for the regression, and it was NOT the cause - but it
+     is a property worth pinning on its own, because a front prompt that mentioned the rear
+     print really would paint the back graphic on the chest. */
+  const front = imageOnlyPrompt(COVE, "front");
+  const back  = imageOnlyPrompt(COVE, "back");
+  check("the FRONT prompt carries no rear vocabulary at all",
+    !/\b(rear|back print|back seams|REAR\/BACK)\b/i.test(front), front);
+  check("the BACK prompt carries no chest vocabulary at all",
+    !/\b(chest logo|front print|belly)\b/i.test(back), back);
+  check("...and the back keeps its own rear-print lock, which has never misfired",
+    /Precisely lock the rear print, logos, and back seams/.test(back),
+    "evidence decides which side carries this, not symmetry");
+  check("the two are different strings, each selected whole by the angle axis",
+    front !== back &&
+    front.startsWith("Drape and fit the EXACT static shirt from the reference image") &&
+    back.startsWith("Drape and fit the EXACT static shirt's REAR/BACK side"));
+  /* Returning to front must yield the front string EXACTLY - no residue of the back anchor
+     can survive the round trip, because the anchors are selected rather than accumulated. */
+  check("a 360 back to front resolves to the front string byte-for-byte",
+    imageOnlyPrompt(COVE, "front") === front && !/rear/i.test(imageOnlyPrompt(COVE, "front")),
+    "the angle axis SELECTS a frozen anchor; there is no state to leak across a turn");
 }
 
-console.log("\n── §2 SCOPE: tops + front, where the back already has its own ──");
+console.log("\n── §3 THE BUDGET, with the clause gone ──");
 {
-  check("the BACK render is untouched - its anchor already locks the rear print",
-    !PRINT_RE.test(imageOnlyPrompt(COVE, "back")) &&
-    /Precisely lock the rear print, logos, and back seams/.test(imageOnlyPrompt(COVE, "back")),
-    "shipping both would spend budget restating one instruction on the same render");
-  check("bottoms gain nothing - a chest logo is not a lower-body feature",
-    !PRINT_RE.test(imageOnlyPrompt(JEANS)) &&
-    imageOnlyPrompt(JEANS) === imageOnlyPrompt({ garmentType: "lower_body", name: "Print Joggers" }));
-  check("a plain-knit tee gets it too when its title names a print",
-    PRINT_RE.test(imageOnlyPrompt({ garmentType: "upper_body", name: "Ion Crew Print Tee" })),
-    "the tee branch has the same gap as the default one");
-}
-
-console.log("\n── §3 IT NAMES A SURFACE MARK, NEVER A GARMENT CLASS ──");
-{
-  /* THE DISTINCTION THAT MATTERS. The tuxedo came from naming GARMENTS (jacket, suit,
-     tuxedo, bowtie) and the placket came from naming CONSTRUCTION (buttons, zip, placket) -
-     both are things a sampler can render INSTEAD of the reference. A print or a logo is a
-     property OF whatever garment the reference shows, not an alternative to it. */
-  const lock = (/const FRONT_PRINT_LOCK\s*=\s*\n?\s*"([\s\S]*?)";/.exec(SRC) || [, ""])[1];
-  check("the clause exists and is a frozen literal with no interpolation hole",
-    lock.length > 0 && !/\$\{/.test(lock), lock);
-  check("...and names no garment class the sampler could render instead",
-    !/\b(shirt|t-?shirt|tee|jacket|coat|suit|tuxedo|bowtie|dress|hoodie|sweater|blouse)\b/i.test(lock),
-    lock);
-  check("...and carries no negation - there is no negative_prompt field to put one in",
-    !/\b(do not|don't|never|avoid|without|no )\b/i.test(lock), lock);
-}
-
-console.log("\n── §4 SHED-ABLE, and the anchor never is ──");
-{
-  check("it is handed to fitPrompt as its own P.HIGH part, never concatenated on",
-    /\[P\.HIGH, FRONT_PRINT_LOCK\]/.test(SRC) &&
-    !/FRONT_PRINT_LOCK\s*\+/.test(SRC) && !/\+\s*FRONT_PRINT_LOCK/.test(SRC),
-    "a clause welded into a P.CORE anchor can never shed");
-  /* ── THE WORST CASE NOW FITS WHOLE, which is the point of trimming the two clauses this
-     file owns. Three optional parts can coincide - a long-sleeve fastening top that also
-     names a print - and before the trim their sum was 701 against the 650 cap, so
-     fitPrompt() shed one. Nothing was ever truncated on the wire (fitPrompt sheds whole
-     parts and only hard-slices when the CORE anchor alone overruns), but a clause silently
-     dropping is still a clause not doing its job. Both clauses this file introduced were
-     shortened until every combination fits with room left. */
   const worst = imageOnlyPrompt({ garmentType: "upper_body", subType: "long_sleeve",
-                                  name: "Oxford Button-Down Print Shirt" });
-  check("the worst case - closure + sleeve + print - fits without shedding anything",
+                                  name: "Oxford Button-Down Shirt" });
+  check("the worst case is anchor + closure + sleeve, all whole and inside the cap",
     worst.length <= CONFIG.PROMPT_MAX_CHARS &&
-    /front closure/.test(worst) && /full length/.test(worst) && PRINT_RE.test(worst),
-    `${worst.length} chars - all three parts must survive, not merely fit`);
-  check("...and the P.CORE anchor survives it intact",
-    worst.indexOf("Drape and fit the EXACT static shirt from the reference image") === 0,
-    "a garment with an unstated print is a worse render; one with no anchor is a different garment");
-  /* The ceiling is CHARACTERS, and it is this app's own - well inside Decart's real limit
-     of 226 TOKENS (~904 chars). Pinned here because the two get conflated, and the
-     conclusions differ: a 650-char prompt is roughly 160 tokens, nowhere near rejection. */
-  check("the shipped prompt is a complete string, never a mid-sentence truncation",
-    /\.$/.test(worst) && /\.$/.test(imageOnlyPrompt(COVE)) && /\.$/.test(imageOnlyPrompt(PLAIN)),
+    /front closure/.test(worst) && /full length/.test(worst),
+    `${worst.length} chars of ${CONFIG.PROMPT_MAX_CHARS}`);
+  check("...and every shipped prompt is a complete string, never a mid-sentence cut",
+    [COVE, TEE, PLAIN, JEANS].every((it) => /\.$/.test(imageOnlyPrompt(it))),
     "fitPrompt sheds whole parts; only a CORE anchor over the cap would ever be sliced");
+  /* The cap is CHARACTERS and is this app's own. Decart's real limit is 226 TOKENS
+     (~904 chars), so 650 characters is roughly 160 tokens - the two get conflated, and the
+     conclusions differ. */
+  check("the cap being measured is the character cap, well inside Decart's token limit",
+    CONFIG.PROMPT_MAX_CHARS === 650 && /Decart rejects >226 tokens/.test(
+      readFileSync(new URL("../fitting-room/config.js", import.meta.url), "utf8")));
 }
 
 console.log(fails === 0 ? "\nfront-print-lock: OK" : `\nfront-print-lock: ${fails} FAILED`);

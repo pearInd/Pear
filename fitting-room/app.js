@@ -7951,74 +7951,42 @@ function hasLongSleeves(item) {
 const SLEEVE_LENGTH_LOCK =
   "Sleeves are full length, covering the arm down to the wrist as shown.";
 
-/* ── THE FRONT GRAPHIC - "the back text survives the turn, the chest logo does not" ──
-   REPORTED: a black tee with a small centred chest logo and a large back graphic. Both
-   render correctly at first; after a full 360 back to the front the chest logo is gone and
-   the front reads as a plain black tee. The back graphic is unaffected throughout.
+/* ── THE FRONT GRAPHIC LOCK, TRIED AND WITHDRAWN - read before adding it back ────
+   THE REPORT IT ANSWERED: a chest logo that rendered at go-live and was gone after a full
+   360, while the back graphic survived. The asymmetry was real and is still real -
+   BACK_CATEGORY_ANCHOR.top carries "Precisely lock the rear print, logos, and back seams"
+   and the front anchor names no print at all.
 
-   THE ASYMMETRY IS ONE CLAUSE WIDE, and this file already named it.
-   BACK_CATEGORY_ANCHOR.top carries "Precisely lock the rear print, logos, and back seams",
-   and its own comment calls that "the only thing this pair says which the front pair does
-   not". CATEGORY_ANCHOR.top's strongest statement about the garment's surface is "Strictly
-   preserve the original shirt texture, pattern, and color" - which never names a print, a
-   logo or a graphic. The rear lock was added for a back-specific failure (the FRONT graphic
-   reproduced on the reverse); the front side never got the mirror of it because no
-   front-side report had been filed. This is that report.
+   WHAT WAS TRIED (f543678, gated in c2fbc1a): a P.HIGH FRONT_PRINT_LOCK - "Precisely lock
+   the front print, chest logo, and graphics exactly as shown." - mirroring the back
+   anchor's clause onto the front branch.
 
-   WHY IT SURVIVES THE FIRST RENDER AND NOT THE ROUND TRIP. At go-live the model conditions
-   fresh on the front photo and reproduces it faithfully. A 360 puts several genuine
-   re-conditionings between then and the return - both orientation swaps, plus every
-   topology re-drape the movement triggers - and each one re-derives the garment from the
-   reference under whatever the prompt says. A small high-frequency mark that no clause
-   names is the first thing to erode across successive re-derivations. The back graphic does
-   not erode because its anchor names it.
+   WHY IT CAME OFF. Reported immediately: the front chest rendered a LARGE text graphic the
+   reference never had, from go-live, before any rotation. The two prompts were verified
+   clean of each other - the front string contained no rear vocabulary and the back string
+   no chest vocabulary - so this was not cross-contamination between the states. It was the
+   clause doing what this file has now watched three separate clauses do: naming a garment
+   feature in a positive prompt with no negative_prompt to balance it, and getting a more
+   prominent version of that feature than the reference shows. DENSE.assetLock named
+   garments and got a tuxedo. FRONT_CLOSURE_LOCK named buttons and plackets and got a
+   placket on plain tees. This named prints and graphics and got a print.
 
-   A SHED-ABLE PART, NOT AN EDIT TO THE ANCHOR. The anchors are P.CORE and byte-pinned;
-   growing one puts unshed-able text on the wire for every garment forever. The established
-   pattern for a bought-back clause is a separate P.HIGH part, and this follows it.
+   GATING WAS NOT ENOUGH, which is the part worth remembering. c2fbc1a restricted it to
+   garments whose titles name a graphic, on the theory that a printed garment can safely be
+   told about its print. The reported garment is titled "חולצה חלקה עם הדפס" - it names its
+   print - so the gate passed and the clause shipped. The failure is not about WHICH
+   garments get the clause; it is about what naming a surface feature does at all.
 
-   GATED ON EVIDENCE, which is the revision after the first. It shipped unconditionally for
-   one revision on the strength of the BACK anchor's precedent - the identical wording rides
-   there for every back render with no invented-print report on file. That precedent is
-   real, but FRONT_CLOSURE_LOCK made the same product-neutrality claim and was wrong:
-   "buttons / zip / placket" shipped to every top and summoned a placket onto plain tees.
-   The cheapest way not to find out whether "print / logo / graphics" behaves the same is to
-   stop saying it to garments that have none.
+   THE BACK ANCHOR KEEPS ITS VERSION, and that is not inconsistent. It has ridden there
+   across many revisions with no invented-print report, and a back render has a failure
+   mode the front does not: the FRONT graphic reproduced on the reverse, which is what that
+   clause was written to stop. Evidence, not symmetry, decides which side carries it.
 
-   RECALL IS THE COST, and it is a real one. Unconditional, this protected every graphic tee
-   including those whose titles say nothing; gated, it protects only the ones the catalog
-   describes - and plenty of graphic tees never carry the word "print" in their name. If a
-   logo starts eroding across a 360 again on a garment whose title names no graphic, THIS
-   GATE IS WHY, and un-gating is one line: drop hasGraphicPrint() from the resolver and the
-   clause goes back to every tops+front render.
-
-   THE BUDGET, because it is what the trim above is for. Anchor + all three optional clauses
-   ran 701 characters against PROMPT_MAX_CHARS = 650, so fitPrompt() shed one. Nothing was
-   ever truncated on the wire - fitPrompt sheds WHOLE PARTS and only hard-slices if the CORE
-   anchor alone overruns - but a clause dropping silently is a clause not doing its job.
-   Trimming this and SLEEVE_LENGTH_LOCK brings the worst case under the cap intact. Note the
-   cap is CHARACTERS and is this app's own; Decart's real limit is 226 TOKENS (~904 chars),
-   so 650 characters is roughly 160 tokens and nowhere near rejection. */
-const GRAPHIC_PRINT_TOKENS =
-  /(הדפס|לוגו|גרפי|\bprints?\b|\bprinted\b|\bgraphics?\b|\blogos?\b|\btypograph|\bslogans?\b|\bmotifs?\b)/i;
-
-/**
- * Whether this garment is positively known to carry a front graphic.
- * Same shape and same safe default as hasFrontClosure()/hasLongSleeves(): bottoms never
- * qualify, and an item we cannot classify makes NO claim rather than a speculative one.
- * @param {object|null|undefined} item
- * @returns {boolean}
- */
-function hasGraphicPrint(item) {
-  if (!item || isBottomsGarment(item)) return false;
-  const fields = [item.category, item.subType, item.name, item.title]
-    .filter(Boolean).join(" ");
-  return GRAPHIC_PRINT_TOKENS.test(fields);
-}
-
-const FRONT_PRINT_LOCK =
-  "Precisely lock the front print, chest logo, and graphics exactly as shown.";
-
+   THE COST OF WITHDRAWING IT, stated: the erosion report above is re-opened. A small chest
+   logo has no clause naming it and may fade again across the re-conditionings a 360
+   forces. That is the accepted trade - a faded logo is a degraded render of the right
+   garment, an invented chest print is the wrong garment. If it is attempted a third time,
+   it needs a mechanism that does not put the words on the wire at all. */
 const CATEGORY_ANCHOR = Object.freeze({
   /* The two strings share one spine - bind the static garment, adapt to the current
      contour, preserve the original - and differ in exactly two places: the garment noun,
@@ -8290,26 +8258,14 @@ function imageOnlyPrompt(item, angle = "front") {
      a front-of-garment feature and genuinely is not in view from behind, while a sleeve is
      in view from every angle. See SLEEVE_LENGTH_LOCK. */
   const longSleeve = !bottoms && hasLongSleeves(item);
-  /* Tops + FRONT only, and only on positive evidence of a graphic - see hasGraphicPrint().
-     The back anchor already carries its own "Precisely lock the rear print, logos, and back
-     seams", so shipping both on one render would spend budget restating one instruction. */
-  const frontPrint = !bottoms && angle !== "back" && hasGraphicPrint(item);
-  /* ORDER IS SHED ORDER, and that is why the print lock leads. fitPrompt() drops the FIRST
-     part at the worst surviving priority, so the optional clauses shed left to right.
-     Anchor + all three is 701 characters against a 650 ceiling, so on a long-sleeve
-     fastening top that also carries a graphic, exactly one must go.
-
-     THE PRINT LOCK IS THE RIGHT ONE TO LOSE THERE. The other two are EVIDENCE-GATED - they
-     ship only because hasFrontClosure()/hasLongSleeves() proved something about THIS
-     garment, and each answers a reproduced report about it. The print lock is
-     unconditional: it rides every tops+front render whether or not the garment has any
-     graphic at all. Yielding to a proven claim is the correct ranking, and the case where
-     it happens is rare (a long-sleeve button-down with a chest print). Everywhere else -
-     including the plain tee this clause was reported for - all parts fit with room to
-     spare. */
+  /* NO FRONT GRAPHIC CLAUSE. One was tried and withdrawn - it rendered a large chest print
+     the reference never had. See the withdrawal note above CATEGORY_ANCHOR before adding
+     anything here that names a print, a logo or a graphic on the front branch. */
+  /* ORDER IS SHED ORDER. fitPrompt() drops the FIRST part at the worst surviving
+     priority, so these shed left to right. Anchor + both is 561 against a 650 ceiling, so
+     nothing sheds today; the ordering matters only if a third part is ever bought back. */
   return fitPrompt([
     [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
-    ...(frontPrint ? [[P.HIGH, FRONT_PRINT_LOCK]] : []),
     ...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
     ...(longSleeve ? [[P.HIGH, SLEEVE_LENGTH_LOCK]] : []),
   ]);
@@ -8398,14 +8354,12 @@ function lookAnchorPrompt() {
      + DENSE.modelAgnostic (64) → 556  fits              → 385  fits
      + both of them        (110)→ 602  fits              → 431  fits
 
-   THE ROW ABOVE IS THE COMMON CASE, NOT THE CEILING. Two further parts are gated on
-   evidence about the garment - FRONT_PRINT_LOCK (74) when the title names a graphic and
-   SLEEVE_LENGTH_LOCK (69) when it names a long sleeve - and a garment that trips both takes
-   tops+front to 636. That still fits, and every clause survives whole, but it leaves only
-   14 characters: a restore measured against the 491 row would shed on THAT garment while
-   appearing to fit here. Both clauses were trimmed to buy that margin (they ran 97 and 111
-   before, which summed to 701 and made fitPrompt drop one). Measure against 636, not 491,
-   before calling a restore free.
+   THE ROW ABOVE IS THE COMMON CASE, NOT THE CEILING. One further part is gated on evidence
+   about the garment - SLEEVE_LENGTH_LOCK (69) when the title or subType names a long sleeve
+   - which takes a long-sleeve fastening top to 561. Everything still fits whole, with 89
+   free. A third clause briefly rode here (FRONT_PRINT_LOCK, 74) and was withdrawn for
+   rendering a chest print the reference never had; while it was on, the three summed to 701
+   and fitPrompt shed one. Measure against 561, not 491, before calling a restore free.
 
    TOPS FRONT IS THE WORST CASE and the only row worth budgeting against: it is the one
    branch carrying a second part (FRONT_CLOSURE_LOCK, the button-down closure report).

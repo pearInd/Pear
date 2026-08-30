@@ -330,7 +330,7 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],\s*\n\s*\.\.\.\(frontPrint \? \[\[P\.HIGH, FRONT_PRINT_LOCK\]\] : \[\]\),\s*\n\s*\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),\s*\n\s*\.\.\.\(longSleeve \? \[\[P\.HIGH, SLEEVE_LENGTH_LOCK\]\] : \[\]\),\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],\s*\n\s*\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),\s*\n\s*\.\.\.\(longSleeve \? \[\[P\.HIGH, SLEEVE_LENGTH_LOCK\]\] : \[\]\),\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix.
      Whichever of the three the construction/category/angle axes select, it rides at

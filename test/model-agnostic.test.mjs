@@ -272,15 +272,14 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     /159 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
   /* THE ROW IS THE COMMON CASE, NOT THE CEILING, and that distinction has to be printed or
-     the table under-reports. Two evidence-gated clauses can push tops+front to 636, where
-     only 14 characters remain - a restore measured against the 491 row would shed there
-     while appearing to fit here. Recomputed against the real builder so the printed number
-     cannot drift from the code the way the 537/556 rows did. */
+     the table under-reports. The sleeve lock pushes a long-sleeve fastening top to 561.
+     Recomputed against the real builder so the printed number cannot drift from the code
+     the way the 537/556 rows once did - which is how the last stale table was caught. */
   const gated = api.imageOnlyPrompt({ garmentType: "upper_body", subType: "long_sleeve",
-                                      name: "Oxford Button-Down Print Shirt" });
+                                      name: "Oxford Button-Down Shirt" });
   check("...and it prints the gated worst case too, which is the number that binds",
-    gated.length === 636 && /takes\s*\n?\s*tops\+front to 636/.test(SRC) &&
-    /Measure against 636, not 491,/.test(SRC),
+    gated.length === 561 && /takes a long-sleeve fastening top to 561/.test(SRC) &&
+    /Measure against 561, not 491,/.test(SRC),
     `real worst case ${gated.length} - the table must name it or it under-reports`);
 }
 
