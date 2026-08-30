@@ -11856,21 +11856,47 @@ async function goLive() {
        it here means that failure surfaces (or is gracefully absorbed into a
        front-only run) BEFORE any camera/Decart resource - and any billing - is
        spent, never as a mid-turn surprise. */
-    if (currentAngle === AUTO_ANGLE) {
-      $("scanOverlay").hidden = false;
-      const preload = await preloadGarmentAssets();
-      if (!preload.ok) {
-        $("scanOverlay").hidden = true;
-        showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
-        toast("⚠ טעינת תמונת הבגד נכשלה");
-        return;   // finally{} resets busy + the capture button; no billed session opened
-      }
-      if (!preload.hasBack) {
-        // Known-bad/missing back BEFORE go-live - don't arm AI Auto with an asset we
-        // already know is broken. Front-only is a fully supported, never-blocked mode.
-        currentAngle = "front";
-        toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
-      }
+    /* ── IT RUNS ON EVERY RUN NOW, and that is this block's second bug report ─────
+       THE REPORT: re-running the SAME product returned four different garments across
+       four attempts - a pink open button-down, a plain white tee, a black shirt, a white
+       striped tee. Four garments from one unchanged input means the reference was not on
+       the wire at all: with a real image conditioning it Decart is stable, and with none
+       a stochastic sampler produces a different plausible shirt every time.
+
+       THE GATE WAS ITSELF GATED. This block - "Mandatory", blocking before any token mint,
+       connect or billing precisely so a missing asset can never surprise a live session -
+       ran only `if (currentAngle === AUTO_ANGLE)`. Every FRONT-ONLY run skipped it, and
+       renderPerspectiveSelector()'s own comment calls front-only most of the catalog.
+
+       WHAT THE SKIP COST, following referenceImageFor() down that path: not AUTO_ANGLE, so
+       it reaches garmentBlobIfWarm() - WARM ONLY, deliberately never fetching - and on a
+       miss falls through to garmentImageRef(), a proxied URL. A URL means DECART fetches
+       before it can condition, which garmentImageRef() puts at up to 20-25s against a ~5s
+       billed window. The reference could simply never arrive.
+
+       AND THAT IS WHY IT SHOWED UP ON RETAKES. setActiveItem()'s prewarm is
+       fire-and-forget, so a first run often has time to warm the cache and looks correct.
+       A retake, a history restore, or any run after _assetBlobCache (LRU, 10 entries) has
+       evicted the entry hits the cold path - which had no floor under it.
+
+       preloadGarmentAssets() already handled a front-only item correctly (it validates the
+       front and returns hasBack:false), so the fix is only to stop skipping it. The
+       DOWNGRADE below stays scoped to AI Auto: "back view unavailable" is meaningless on a
+       run that was never going to use one, and toasting it at every single-view shopper
+       would be a new defect introduced by the fix. */
+    $("scanOverlay").hidden = false;
+    const preload = await preloadGarmentAssets();
+    if (!preload.ok) {
+      $("scanOverlay").hidden = true;
+      showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
+      toast("⚠ טעינת תמונת הבגד נכשלה");
+      return;   // finally{} resets busy + the capture button; no billed session opened
+    }
+    if (currentAngle === AUTO_ANGLE && !preload.hasBack) {
+      // Known-bad/missing back BEFORE go-live - don't arm AI Auto with an asset we
+      // already know is broken. Front-only is a fully supported, never-blocked mode.
+      currentAngle = "front";
+      toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
     }
 
     // LOADING state: overlay + a live elapsed-time counter (generic copy, no model/

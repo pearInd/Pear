@@ -255,6 +255,7 @@ const SUITES = [
   ["front-reference-guard", "front-reference-guard.test.mjs"],
   ["redrape-cover", "redrape-cover.test.mjs"],
   ["sleeve-length", "sleeve-length.test.mjs"],
+  ["reference-determinism", "reference-determinism.test.mjs"],
   ["body-presence-gate", "body-presence-gate.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
   ["body-topology", "body-topology.test.mjs"],
