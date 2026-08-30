@@ -66,6 +66,8 @@ const { imageOnlyPrompt } = api;
 const PRINT_RE = /front print/i;
 const COVE     = { garmentType: "upper_body", type: "shirt", subType: "short_sleeve",
                    name: "חולצה חלקה עם הדפס" };
+const PLAIN    = { garmentType: "upper_body", type: "shirt", subType: "short_sleeve",
+                   name: "Boxy Heavyweight Top" };
 const JEANS    = { garmentType: "lower_body", name: "Glide Slim" };
 
 console.log("── §1 THE FRONT RENDER NAMES ITS GRAPHIC, as the back one already does ──");
@@ -80,6 +82,33 @@ console.log("── §1 THE FRONT RENDER NAMES ITS GRAPHIC, as the back one alre
     front.length <= CONFIG.PROMPT_MAX_CHARS, `${front.length} chars`);
 }
 
+console.log("\n── §1b GATED ON EVIDENCE, so a plain garment is told nothing about graphics ──");
+{
+  /* THE TRADE, AND IT IS NOT FREE. Unconditional, this clause protected every graphic tee
+     including the ones whose titles say nothing. Gated, it protects only those the catalog
+     describes - and most graphic tees do not carry the word "print" in their name. What it
+     buys is that a PLAIN garment is never handed "print, chest logo, graphics" at all,
+     which is the shape FRONT_CLOSURE_LOCK proved can be steered toward: that clause called
+     itself product-neutral, shipped "buttons / zip / placket" to every top, and summoned a
+     placket onto plain tees. This is the same defence applied one clause earlier.
+
+     RECALL IS THE KNOWN COST. If a graphic tee whose title names no print loses its logo
+     across a 360 again, the gate is why, and un-gating is one line - see hasGraphicPrint. */
+  check("a garment whose title names a print gets the lock",
+    PRINT_RE.test(imageOnlyPrompt(COVE)) &&
+    PRINT_RE.test(imageOnlyPrompt({ garmentType: "upper_body", name: "Graphic Tee" })) &&
+    PRINT_RE.test(imageOnlyPrompt({ garmentType: "upper_body", name: "Logo Sweatshirt" })));
+  check("a plain garment is never handed graphic vocabulary at all",
+    !PRINT_RE.test(imageOnlyPrompt(PLAIN)) &&
+    !/\b(print|logo|graphic)\b/i.test(imageOnlyPrompt(PLAIN)),
+    imageOnlyPrompt(PLAIN));
+  check("...nor is an unrecognised top - silence means no claim, as everywhere else here",
+    !PRINT_RE.test(imageOnlyPrompt({ garmentType: "upper_body" })) &&
+    !PRINT_RE.test(imageOnlyPrompt({})));
+  check("a bottoms garment never gets it, whatever its title says",
+    !PRINT_RE.test(imageOnlyPrompt({ garmentType: "lower_body", name: "Print Joggers" })));
+}
+
 console.log("\n── §2 SCOPE: tops + front, where the back already has its own ──");
 {
   check("the BACK render is untouched - its anchor already locks the rear print",
@@ -89,8 +118,8 @@ console.log("\n── §2 SCOPE: tops + front, where the back already has its ow
   check("bottoms gain nothing - a chest logo is not a lower-body feature",
     !PRINT_RE.test(imageOnlyPrompt(JEANS)) &&
     imageOnlyPrompt(JEANS) === imageOnlyPrompt({ garmentType: "lower_body", name: "Print Joggers" }));
-  check("a plain-knit tee gets it too - the tee anchor names no print either",
-    PRINT_RE.test(imageOnlyPrompt({ garmentType: "upper_body", name: "Ion Crew Tee" })),
+  check("a plain-knit tee gets it too when its title names a print",
+    PRINT_RE.test(imageOnlyPrompt({ garmentType: "upper_body", name: "Ion Crew Print Tee" })),
     "the tee branch has the same gap as the default one");
 }
 
@@ -116,18 +145,28 @@ console.log("\n── §4 SHED-ABLE, and the anchor never is ──");
     /\[P\.HIGH, FRONT_PRINT_LOCK\]/.test(SRC) &&
     !/FRONT_PRINT_LOCK\s*\+/.test(SRC) && !/\+\s*FRONT_PRINT_LOCK/.test(SRC),
     "a clause welded into a P.CORE anchor can never shed");
-  /* THE WORST CASE, spelled out because three optional parts can now coincide: a
-     long-sleeve fastening top that also has a print. fitPrompt() drops the FIRST part at
-     the worst surviving priority, so array order is the shed order - and this one is last,
-     so the two earlier-reported failures shed before the one reported now. Whatever sheds,
-     the anchor must survive and the total must be clamped. */
+  /* ── THE WORST CASE NOW FITS WHOLE, which is the point of trimming the two clauses this
+     file owns. Three optional parts can coincide - a long-sleeve fastening top that also
+     names a print - and before the trim their sum was 701 against the 650 cap, so
+     fitPrompt() shed one. Nothing was ever truncated on the wire (fitPrompt sheds whole
+     parts and only hard-slices when the CORE anchor alone overruns), but a clause silently
+     dropping is still a clause not doing its job. Both clauses this file introduced were
+     shortened until every combination fits with room left. */
   const worst = imageOnlyPrompt({ garmentType: "upper_body", subType: "long_sleeve",
-                                  name: "Oxford Button-Down Shirt" });
-  check("the worst case - closure + sleeve + print - is still clamped to the budget",
-    worst.length <= CONFIG.PROMPT_MAX_CHARS, `${worst.length} chars`);
+                                  name: "Oxford Button-Down Print Shirt" });
+  check("the worst case - closure + sleeve + print - fits without shedding anything",
+    worst.length <= CONFIG.PROMPT_MAX_CHARS &&
+    /front closure/.test(worst) && /full length/.test(worst) && PRINT_RE.test(worst),
+    `${worst.length} chars - all three parts must survive, not merely fit`);
   check("...and the P.CORE anchor survives it intact",
     worst.indexOf("Drape and fit the EXACT static shirt from the reference image") === 0,
     "a garment with an unstated print is a worse render; one with no anchor is a different garment");
+  /* The ceiling is CHARACTERS, and it is this app's own - well inside Decart's real limit
+     of 226 TOKENS (~904 chars). Pinned here because the two get conflated, and the
+     conclusions differ: a 650-char prompt is roughly 160 tokens, nowhere near rejection. */
+  check("the shipped prompt is a complete string, never a mid-sentence truncation",
+    /\.$/.test(worst) && /\.$/.test(imageOnlyPrompt(COVE)) && /\.$/.test(imageOnlyPrompt(PLAIN)),
+    "fitPrompt sheds whole parts; only a CORE anchor over the cap would ever be sliced");
 }
 
 console.log(fails === 0 ? "\nfront-print-lock: OK" : `\nfront-print-lock: ${fails} FAILED`);

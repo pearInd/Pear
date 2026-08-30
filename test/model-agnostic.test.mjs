@@ -221,9 +221,15 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     topsAnchor.length <= 360 && bottoms.length <= 360 &&
     Math.abs(bottoms.length - topsAnchor.length) <= 40,
     `tops anchor=${topsAnchor.length} bottoms=${bottoms.length} gap=${bottoms.length - topsAnchor.length}`);
+  /* The print lock is EVIDENCE-GATED now, so this fixture (a button-down whose title names
+     no graphic) legitimately carries only the closure clause. The invariant is not "how
+     many parts" but "nothing on top of the anchor except parts this suite can name": the
+     length must be exactly the anchor plus whichever known clauses are present, one join
+     space each. An unknown part appearing here still breaks the arithmetic. */
+  const present = [closure, print].filter((c) => c.length > 0);
   check("...and the bought-back clauses are the ONLY things on top of the tops anchor",
-    closure.length > 0 && print.length > 0 &&
-    tops.length === topsAnchor.length + 2 + closure.length + print.length &&
+    closure.length > 0 &&
+    tops.length === topsAnchor.length + present.length + present.reduce((n, c) => n + c.length, 0) &&
     tops.length <= 650,
     `tops=${tops.length} anchor=${topsAnchor.length} closure=${closure.length} print=${print.length}`);
 
@@ -247,29 +253,35 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  635, 366],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 589, 385],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  537, 366],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 556, 385],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
       row(tops, clause) === expTop && row(bottoms, clause) === expBottom,
       `tops=${row(tops, clause)} (doc ${expTop}) bottoms=${row(bottoms, clause)} (doc ${expBottom})`);
   }
-  check("...and app.js prints that arithmetic, per branch, including where tops no longer fits",
-    /THE RESTORE BUDGET: TOPS HAS RUN OUT OF IT, BOTTOMS HAS NOT/.test(SRC) &&
-    /TOPS FRONT \(589 = 342 anchor \+ 97 print lock \+ 148 closure lock\)  BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 635  fits              \u2192 366  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 654  DOES NOT FIT      \u2192 385  fits/.test(SRC),
+  check("...and app.js prints that arithmetic, per branch, with both branches fitting",
+    /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
+    /TOPS FRONT \(491 = 342 anchor \+ 148 closure lock\)  BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 537  fits              \u2192 366  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 556  fits              \u2192 385  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
-  /* THE HEADROOM CLAIM HAS INVERTED TWICE NOW, which is exactly why it is pinned to a
-     number rather than to a mood. It read "TOPS HAS ZERO HEADROOM" (wrong), then "nothing
-     sheds any more" (true for one revision), and the front graphic lock has now spent tops
-     back down to 61 free while bottoms still has 330. A restore on tops can shed again. */
-  check("...and the headroom it claims is the one the branches actually have",
+  check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    !/NOTHING SHEDS ANY MORE, on either branch/.test(SRC) &&
-    /61 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
-    "tops is 61 from the ceiling now - a table claiming otherwise is advice against the code");
+    /159 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
+    "nothing sheds on either branch any more - the old table said the opposite");
+  /* THE ROW IS THE COMMON CASE, NOT THE CEILING, and that distinction has to be printed or
+     the table under-reports. Two evidence-gated clauses can push tops+front to 636, where
+     only 14 characters remain - a restore measured against the 491 row would shed there
+     while appearing to fit here. Recomputed against the real builder so the printed number
+     cannot drift from the code the way the 537/556 rows did. */
+  const gated = api.imageOnlyPrompt({ garmentType: "upper_body", subType: "long_sleeve",
+                                      name: "Oxford Button-Down Print Shirt" });
+  check("...and it prints the gated worst case too, which is the number that binds",
+    gated.length === 636 && /takes\s*\n?\s*tops\+front to 636/.test(SRC) &&
+    /Measure against 636, not 491,/.test(SRC),
+    `real worst case ${gated.length} - the table must name it or it under-reports`);
 }
 
 console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");

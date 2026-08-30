@@ -250,7 +250,7 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
   check("...and carries the same per-frame adaptation and preserve clauses as bottoms",
     /Dynamically adapt the garment drape to the subject's exact/.test(topsPrompt) &&
     /Strictly preserve the original shirt texture, pattern, and color\./.test(topsPrompt) &&
-    /pattern, and color\. Precisely lock the front print, chest logo, and graphics[^.]*\. Reproduce the reference's front closure exactly:[^.]*as shown\.$/.test(topsPrompt),
+    /pattern, and color\. Reproduce the reference's front closure exactly:[^.]*as shown\.$/.test(topsPrompt),
     topsPrompt);
 
   /* ── ONE SHAPE, ONE DELIBERATE DIVERGENCE ───────────────────────────────────

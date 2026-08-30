@@ -186,10 +186,12 @@ const CLOSURE_SPEC =
    CLOSURE_SPEC - "buttons" and "placket" are construction a sampler can render instead of
    the reference, a print is a property of whatever the reference already shows. */
 const PRINT_SPEC =
-  "Precisely lock the front print, chest logo, and graphics exactly as they appear in" +
-  " the reference.";
-/* What the tops+front branch ships when the garment fastens: anchor, closure, print. */
-const TOPS_FRONT_SPEC = TOPS_SPEC + " " + PRINT_SPEC + " " + CLOSURE_SPEC;
+  "Precisely lock the front print, chest logo, and graphics exactly as shown.";
+/* What the tops+front branch ships when the garment fastens and names NO graphic: anchor
+   plus the closure clause. The print lock is evidence-gated (hasGraphicPrint), so a title
+   that says nothing about a print gets nothing about one - which is the whole fixture set
+   here. §1 exercises the gated-on case separately. */
+const TOPS_FRONT_SPEC = TOPS_SPEC + " " + CLOSURE_SPEC;
 
 /* ── THE PLAIN-TEE ANCHOR - the third axis, and the correction to the note above ──
    The comment on CLOSURE_SPEC calls it product-neutral: "on a tee there is no closure and
@@ -226,14 +228,20 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      outside this file. */
   check("the TOPS branch matches the specified wording byte for byte",
     api.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC, JSON.stringify(api.imageOnlyPrompt(TOP)));
-  /* Two clauses ride here now - closure, then the front graphic lock - so the tail is the
-     LAST of them rather than the closure. What this assertion owns is unchanged: the anchor
-     leads, whole and unaltered, and every clause sits BESIDE it rather than woven into it. */
-  check("...and its anchor is still the front anchor, unaltered, with the clauses appended whole",
+  check("...and its anchor is still the front anchor, unaltered, with the clause appended whole",
     api.imageOnlyPrompt(TOP).startsWith(TOPS_SPEC + " ") &&
-    api.imageOnlyPrompt(TOP).includes(" " + PRINT_SPEC + " ") &&
     api.imageOnlyPrompt(TOP).endsWith(CLOSURE_SPEC),
     "the clause must ride BESIDE the anchor, never be woven into it");
+  /* THE GATED PRINT LOCK, on the one axis that turns it on. It leads the optional parts,
+     because array order is shed order and the two evidence-gated clauses that answer
+     earlier reports must outlive it under pressure. */
+  check("a garment whose title names a graphic gains the print lock, whole and in order",
+    api.imageOnlyPrompt({ ...TOP, name: "Oxford Button-Down Print Shirt" }) ===
+      TOPS_SPEC + " " + PRINT_SPEC + " " + CLOSURE_SPEC,
+    JSON.stringify(api.imageOnlyPrompt({ ...TOP, name: "Oxford Button-Down Print Shirt" })));
+  check("...and a title that names none gets no graphic vocabulary at all",
+    !/\b(print|logo|graphic)\b/i.test(api.imageOnlyPrompt(TOP)),
+    "an unconditional graphic clause is the shape CLOSURE_SPEC proved can be steered toward");
   check("no negative token rides with it - the tuxedo shipped through a positive prompt",
     !/\b(open|unbuttoned|undone|parted|exposed|never|avoid|don't|do not)\b/i.test(CLOSURE_SPEC),
     CLOSURE_SPEC);
@@ -242,7 +250,7 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      branch - the erosion the lock answers is a property of the RENDER, not of which anchor
      was selected. */
   check("a plain knit tee matches its own specified wording byte for byte",
-    api.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC + " " + PRINT_SPEC,
+    api.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC,
     JSON.stringify(api.imageOnlyPrompt(PLAIN_TEE)));
   check("...and the closure clause is NOT spent on it - the reported cause, removed",
     !api.imageOnlyPrompt(PLAIN_TEE).includes(CLOSURE_SPEC) &&
@@ -431,7 +439,7 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
        row: what it guards is "one frozen anchor, nothing assembled onto it", and that still
        holds exactly. The name axis is deliberate now - see hasFrontClosure() - so the row
        carries its own expected string rather than pretending the name is inert. */
-    ["pathological name", { ...TOP, name: "x".repeat(400) }, "front", true, TOPS_SPEC + " " + PRINT_SPEC],
+    ["pathological name", { ...TOP, name: "x".repeat(400) }, "front", true, TOPS_SPEC],
   ];
   /* Each case names the branch it must land in - now REGION x ANGLE, four frozen anchors
      rather than two. The invariance is unchanged in strength on every axis that was ever

@@ -7945,9 +7945,11 @@ function hasLongSleeves(item) {
   return LONG_SLEEVE_TOKENS.test(fields);
 }
 
+/* TRIMMED from 111 characters to fit the three-clause case whole - see FRONT_PRINT_LOCK's
+   budget note. The meaning is unchanged: full-length sleeve, fabric to the wrist, taken
+   from the reference rather than invented. */
 const SLEEVE_LENGTH_LOCK =
-  "The sleeves are full length: fabric covers the entire arm down to the wrist, exactly" +
-  " as shown in the reference.";
+  "Sleeves are full length, covering the arm down to the wrist as shown.";
 
 /* ── THE FRONT GRAPHIC - "the back text survives the turn, the chest logo does not" ──
    REPORTED: a black tee with a small centred chest logo and a large back graphic. Both
@@ -7975,17 +7977,47 @@ const SLEEVE_LENGTH_LOCK =
    growing one puts unshed-able text on the wire for every garment forever. The established
    pattern for a bought-back clause is a separate P.HIGH part, and this follows it.
 
-   THE RISK, STATED, because FRONT_CLOSURE_LOCK made exactly this claim and was wrong.
-   "Buttons" and "placket" are garment CONSTRUCTION - things a sampler can render instead of
-   what the reference shows, which is how they summoned a placket onto plain tees. A print
-   or a logo is a property OF whatever garment is in the reference, not an alternative to
-   it, and this same wording has ridden the BACK anchor unconditionally with no
-   invented-print report on file. That precedent is the evidence, not the reasoning alone -
-   if a plain garment ever comes back wearing an invented graphic, this is the clause, and
-   the restore is to gate it the way hasFrontClosure() gates its own. */
+   GATED ON EVIDENCE, which is the revision after the first. It shipped unconditionally for
+   one revision on the strength of the BACK anchor's precedent - the identical wording rides
+   there for every back render with no invented-print report on file. That precedent is
+   real, but FRONT_CLOSURE_LOCK made the same product-neutrality claim and was wrong:
+   "buttons / zip / placket" shipped to every top and summoned a placket onto plain tees.
+   The cheapest way not to find out whether "print / logo / graphics" behaves the same is to
+   stop saying it to garments that have none.
+
+   RECALL IS THE COST, and it is a real one. Unconditional, this protected every graphic tee
+   including those whose titles say nothing; gated, it protects only the ones the catalog
+   describes - and plenty of graphic tees never carry the word "print" in their name. If a
+   logo starts eroding across a 360 again on a garment whose title names no graphic, THIS
+   GATE IS WHY, and un-gating is one line: drop hasGraphicPrint() from the resolver and the
+   clause goes back to every tops+front render.
+
+   THE BUDGET, because it is what the trim above is for. Anchor + all three optional clauses
+   ran 701 characters against PROMPT_MAX_CHARS = 650, so fitPrompt() shed one. Nothing was
+   ever truncated on the wire - fitPrompt sheds WHOLE PARTS and only hard-slices if the CORE
+   anchor alone overruns - but a clause dropping silently is a clause not doing its job.
+   Trimming this and SLEEVE_LENGTH_LOCK brings the worst case under the cap intact. Note the
+   cap is CHARACTERS and is this app's own; Decart's real limit is 226 TOKENS (~904 chars),
+   so 650 characters is roughly 160 tokens and nowhere near rejection. */
+const GRAPHIC_PRINT_TOKENS =
+  /(הדפס|לוגו|גרפי|\bprints?\b|\bprinted\b|\bgraphics?\b|\blogos?\b|\btypograph|\bslogans?\b|\bmotifs?\b)/i;
+
+/**
+ * Whether this garment is positively known to carry a front graphic.
+ * Same shape and same safe default as hasFrontClosure()/hasLongSleeves(): bottoms never
+ * qualify, and an item we cannot classify makes NO claim rather than a speculative one.
+ * @param {object|null|undefined} item
+ * @returns {boolean}
+ */
+function hasGraphicPrint(item) {
+  if (!item || isBottomsGarment(item)) return false;
+  const fields = [item.category, item.subType, item.name, item.title]
+    .filter(Boolean).join(" ");
+  return GRAPHIC_PRINT_TOKENS.test(fields);
+}
+
 const FRONT_PRINT_LOCK =
-  "Precisely lock the front print, chest logo, and graphics exactly as they appear in" +
-  " the reference.";
+  "Precisely lock the front print, chest logo, and graphics exactly as shown.";
 
 const CATEGORY_ANCHOR = Object.freeze({
   /* The two strings share one spine - bind the static garment, adapt to the current
@@ -8258,10 +8290,10 @@ function imageOnlyPrompt(item, angle = "front") {
      a front-of-garment feature and genuinely is not in view from behind, while a sleeve is
      in view from every angle. See SLEEVE_LENGTH_LOCK. */
   const longSleeve = !bottoms && hasLongSleeves(item);
-  /* Tops + FRONT only: the back anchor already carries its own "Precisely lock the rear
-     print, logos, and back seams", and shipping both on one render would spend budget
-     restating a single instruction - the mechanism every report in this file shares. */
-  const frontPrint = !bottoms && angle !== "back";
+  /* Tops + FRONT only, and only on positive evidence of a graphic - see hasGraphicPrint().
+     The back anchor already carries its own "Precisely lock the rear print, logos, and back
+     seams", so shipping both on one render would spend budget restating one instruction. */
+  const frontPrint = !bottoms && angle !== "back" && hasGraphicPrint(item);
   /* ORDER IS SHED ORDER, and that is why the print lock leads. fitPrompt() drops the FIRST
      part at the worst surviving priority, so the optional clauses shed left to right.
      Anchor + all three is 701 characters against a 650 ceiling, so on a long-sleeve
@@ -8357,22 +8389,23 @@ function lookAnchorPrompt() {
                       an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
                       the moment "it gave me the model's shoulders" is reported again.
 
-   ── THE RESTORE BUDGET: TOPS HAS RUN OUT OF IT, BOTTOMS HAS NOT ──────────────
-   The number has moved seven times, so read the CURRENT row rather than remembering an
+   ── THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP ────
+   The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS FRONT (589 = 342 anchor + 97 print lock + 148 closure lock)  BOTTOMS (320 chars - anchor, lower-body scoped)
-     + DENSE.bodyFidelity  (45) → 635  fits              → 366  fits
-     + DENSE.modelAgnostic (64) → 654  DOES NOT FIT      → 385  fits
-     + both of them        (110)→ 700  DOES NOT FIT      → 431  fits
+     TOPS FRONT (491 = 342 anchor + 148 closure lock)  BOTTOMS (320 chars - anchor, lower-body scoped)
+     + DENSE.bodyFidelity  (45) → 537  fits              → 366  fits
+     + DENSE.modelAgnostic (64) → 556  fits              → 385  fits
+     + both of them        (110)→ 602  fits              → 431  fits
 
-   THE TRAP INVERTED WITH THE FRONT GRAPHIC LOCK. For six revisions this table's warning was
-   "everything fits, so nothing but judgement stops you" - the headroom was real and the
-   restraint was a choice. FRONT_PRINT_LOCK (the chest logo eroding across a 360) spent 98
-   of that headroom, and tops+front is now 61 characters from the ceiling. A restore that
-   "fits" on paper can now silently SHED instead: fitPrompt() drops the first P.HIGH part,
-   which is the print lock, so restoring a clause here trades away the graphic lock without
-   saying so. Check the row before assuming a restore is free on this branch.
+   THE ROW ABOVE IS THE COMMON CASE, NOT THE CEILING. Two further parts are gated on
+   evidence about the garment - FRONT_PRINT_LOCK (74) when the title names a graphic and
+   SLEEVE_LENGTH_LOCK (69) when it names a long sleeve - and a garment that trips both takes
+   tops+front to 636. That still fits, and every clause survives whole, but it leaves only
+   14 characters: a restore measured against the 491 row would shed on THAT garment while
+   appearing to fit here. Both clauses were trimmed to buy that margin (they ran 97 and 111
+   before, which summed to 701 and made fitPrompt drop one). Measure against 636, not 491,
+   before calling a restore free.
 
    TOPS FRONT IS THE WORST CASE and the only row worth budgeting against: it is the one
    branch carrying a second part (FRONT_CLOSURE_LOCK, the button-down closure report).
@@ -8380,12 +8413,12 @@ function lookAnchorPrompt() {
    closure lock, since a front placket is not in view - and bottoms carries one part on
    both angles.
 
-   THE BRANCHES HAVE DIVERGED. 61 characters are free on tops and 330 on bottoms. On
-   BOTTOMS every retired clause in this table still goes back with room to spare, and the
-   warning that inverted two revisions ago still holds there: the risk is not that a restore
-   sheds, it is that a restore silently SUCCEEDS. On TOPS FRONT the old warning is live
-   again - the front graphic lock spent that headroom, so a restore here can shed the very
-   clause it was measured against.
+   NOTHING SHEDS ANY MORE for the garment the row above describes, on either branch:
+   159 characters are free on tops and 330 on bottoms, so every retired clause in this
+   table would go back with room to spare. That INVERTS the warning this note used to
+   carry: the risk is no longer that a restore silently sheds, it is that a restore
+   silently SUCCEEDS. The exception is the 636-character garment named above, where 14
+   are free and the old warning is still live.
 
    HEADROOM IS NOT PERMISSION. Tops was collapsed from 634 characters and bottoms from
    616 precisely BECAUSE text volume was outweighing the reference pixels - the tuxedo,
