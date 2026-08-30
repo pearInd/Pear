@@ -166,7 +166,13 @@ console.log("── §1 CLASSIFICATION: garmentType wins, keywords are the fallb
 }
 
 const PANTS = { garmentType: "lower_body", name: "Glide Slim" };
-const SHIRT = { garmentType: "upper_body", name: "Ion Crew Tee" };
+/* NOT a tee any more, and the rename is the point. imageOnlyPrompt() gained a CONSTRUCTION
+   axis (see PLAIN_TEE_ANCHOR in app.js): a plain knit tee now resolves to its own anchor
+   because the closure clause was summoning button-downs onto tees. §3 below owns the
+   DEFAULT tops anchor, so its fixture has to be a top that actually takes that branch -
+   otherwise these assertions keep passing against a string nobody ships any more. The tee
+   branch is owned by plain-tee-fidelity.test.mjs and by image-first.test.mjs §1. */
+const SHIRT = { garmentType: "upper_body", name: "Oxford Button-Down Shirt" };
 const bottomsPrompt = imageOnlyPrompt(PANTS);
 const topsPrompt    = imageOnlyPrompt(SHIRT);
 
@@ -323,11 +329,13 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, bottoms \? anchors\.bottom : anchors\.top\],\s*\n\s*\.\.\.\(!bottoms && angle !== "back" \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],\s*\n\s*\.\.\.\(!bottoms && !plainTee && angle !== "back" \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
-  /* The category anchor is the one clause that must NEVER shed - it is the entire fix. */
+  /* The category anchor is the one clause that must NEVER shed - it is the entire fix.
+     Whichever of the three the construction/category/angle axes select, it rides at
+     P.CORE: fitPrompt() sheds every other priority before it will touch this one. */
   check("the category anchor is tagged P.CORE so it can never be shed",
-    /\[P\.CORE,\s*(bottoms|isBottoms)[^\]]*(ANCHOR|anchors)|\[P\.CORE,\s*(BACK_)?CATEGORY_ANCHOR/.test(SRC),
+    /\[P\.CORE,\s*(plainTee|bottoms|isBottoms)[^\]]*(ANCHOR|anchors)|\[P\.CORE,\s*(BACK_)?CATEGORY_ANCHOR/.test(SRC),
     "if the anchor can shed, the bug comes back under budget pressure");
 }
 

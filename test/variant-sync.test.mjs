@@ -127,15 +127,34 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
     /const CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(APP) &&
     !/CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,900}?\$\{/.test(APP),
     "a template hole here is how a colour word gets back onto the wire");
-  /* The resolver may branch on CATEGORY and nothing else. A second argument threaded in
-     from a variant/colour/angle is how a description creeps back onto the wire. */
-  check("...and the resolver branches on the garment's category alone",
-    /\[P\.CORE, bottoms \? anchors\.bottom : anchors\.top\]/.test(APP) &&
+  /* The resolver may branch on the garment's FIXED IDENTITY and nothing else. What this
+     check has always been guarding is the variant/colour/size direction - a per-selection
+     value threaded in here is how a DESCRIPTION creeps back onto the wire one field at a
+     time, which is the history this whole mode reacts to.
+
+     THE AXIS COUNT WENT FROM TWO TO THREE and the guard is unchanged in kind. Construction
+     (is this a plain knit tee?) joined category and angle because the closure lock was
+     summoning button-downs onto plain tees - see PLAIN_TEE_ANCHOR. It is the same SHAPE as
+     the other two: a property of the product that cannot change while the session runs,
+     SELECTING between frozen literals. Colour, size and variant are none of those things,
+     and the second half of this check is what keeps them out. */
+  check("...and the resolver branches on the garment's fixed identity alone",
+    /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\]/.test(APP) &&
     /const anchors = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(APP) &&
     /const bottoms = isBottomsGarment\(item\);/.test(APP) &&
-    /\.\.\.\(!bottoms && angle !== "back" \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\)/.test(APP),
-    "category and ANGLE are the only permitted inputs - the closure lock is a constant " +
-    "selected BY them, not a third axis; a variant or colour input would be");
+    /const plainTee = !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(APP) &&
+    /\.\.\.\(!bottoms && !plainTee && angle !== "back" \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\)/.test(APP),
+    "category, ANGLE and CONSTRUCTION are the only permitted inputs - each one selects a " +
+    "constant rather than filling a hole; a variant or colour input would be a description");
+  /* The new axis's predicate, held to the same rule. isPlainKnitTop() may read the catalog
+     fields that identify WHAT the product is; the moment it reads colour, size or the
+     selected variant, this axis becomes the description channel the check above forbids. */
+  check("...and the construction predicate reads identity fields, never colour or variant",
+    /\[item\.type, item\.category, item\.subType, item\.name, item\.title\]/.test(
+      APP.slice(APP.indexOf("function isPlainKnitTop"), APP.indexOf("const CATEGORY_ANCHOR"))) &&
+    !/\bitem\.(color|colour|variant|variantId|size|sku)\b/.test(
+      APP.slice(APP.indexOf("function isPlainKnitTop"), APP.indexOf("const CATEGORY_ANCHOR"))),
+    "a colour read here would put the base colour back on the wire through a new door");
   /* Comments stripped first: variantMetaOf's own doc block QUOTES the old call as the
      thing it replaced, and a check that trips over the explanation of the fix is worse
      than no check - it would force whoever reads it to delete the documentation. */
