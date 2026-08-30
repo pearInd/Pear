@@ -99,7 +99,7 @@ const api = new Function(...Object.keys(sandbox),
    tee now resolves to its own anchor with no closure clause (see PLAIN_TEE_ANCHOR in
    app.js). The measurements below are written against the DEFAULT tops anchor plus that
    clause, so the fixture has to be a top that still takes that branch. */
-const TEE   = { name: "Oxford Button-Down Shirt", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
+const TEE   = { name: "Oxford Button-Down Shirt", garmentType: "upper_body", color: "#fff", subType: "long_sleeve" };
 const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
 
 console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes out ──");
@@ -209,29 +209,16 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      holds where it always applied (the ANCHORS stay minimal and comparable) and the total
      is bounded on top of it. A second clause creeping in would fail the total; an anchor
      growing back toward the 634-character assembly would fail the anchor bound. */
-  /* TWO bought-back parts ride the tops+front branch now: the front graphic lock (every
-     tops+front render - the chest logo eroding across a 360) and the closure lock (only on
-     a garment that provably fastens). Both are stripped to recover the ANCHOR, which is
-     what the comparison below is actually about; measuring the clauses separately is the
-     same technique the closure lock forced when it was the only one. */
   const closure = (/Reproduce the reference's front closure[\s\S]*?as shown\./.exec(tops) || [""])[0];
-  const print   = (/Precisely lock the front print[\s\S]*?the reference\./.exec(tops) || [""])[0];
-  const topsAnchor = tops.replace(closure, "").replace(print, "").replace(/\s+/g, " ").trim();
+  const topsAnchor = tops.replace(closure, "").trim();
   check("the ANCHORS stay minimal and comparable, as they always had to",
     topsAnchor.length <= 360 && bottoms.length <= 360 &&
     Math.abs(bottoms.length - topsAnchor.length) <= 40,
     `tops anchor=${topsAnchor.length} bottoms=${bottoms.length} gap=${bottoms.length - topsAnchor.length}`);
-  /* The print lock is EVIDENCE-GATED now, so this fixture (a button-down whose title names
-     no graphic) legitimately carries only the closure clause. The invariant is not "how
-     many parts" but "nothing on top of the anchor except parts this suite can name": the
-     length must be exactly the anchor plus whichever known clauses are present, one join
-     space each. An unknown part appearing here still breaks the arithmetic. */
-  const present = [closure, print].filter((c) => c.length > 0);
-  check("...and the bought-back clauses are the ONLY things on top of the tops anchor",
-    closure.length > 0 &&
-    tops.length === topsAnchor.length + present.length + present.reduce((n, c) => n + c.length, 0) &&
-    tops.length <= 650,
-    `tops=${tops.length} anchor=${topsAnchor.length} closure=${closure.length} print=${print.length}`);
+  check("...and the one bought-back clause is the ONLY thing on top of the tops anchor",
+    closure.length > 0 && tops.length === topsAnchor.length + 1 + closure.length &&
+    tops.length <= 500,
+    `tops=${tops.length} anchor=${topsAnchor.length} closure=${closure.length}`);
 
   const both = api.fitPrompt([
     [api.P.CORE, bottoms],
@@ -271,16 +258,6 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
     /159 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
     "nothing sheds on either branch any more - the old table said the opposite");
-  /* THE ROW IS THE COMMON CASE, NOT THE CEILING, and that distinction has to be printed or
-     the table under-reports. The sleeve lock pushes a long-sleeve fastening top to 561.
-     Recomputed against the real builder so the printed number cannot drift from the code
-     the way the 537/556 rows once did - which is how the last stale table was caught. */
-  const gated = api.imageOnlyPrompt({ garmentType: "upper_body", subType: "long_sleeve",
-                                      name: "Oxford Button-Down Shirt" });
-  check("...and it prints the gated worst case too, which is the number that binds",
-    gated.length === 561 && /takes a long-sleeve fastening top to 561/.test(SRC) &&
-    /Measure against 561, not 491,/.test(SRC),
-    `real worst case ${gated.length} - the table must name it or it under-reports`);
 }
 
 console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");

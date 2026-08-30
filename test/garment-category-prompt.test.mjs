@@ -241,12 +241,11 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
   check("binds the EXACT static shirt to the reference, nothing before it",
     topsPrompt.indexOf("Drape and fit the EXACT static shirt from the reference image") === 0,
     topsPrompt);
-  /* The preserve clause no longer ENDS the tops prompt: bought-back parts follow it on this
-     branch - the front graphic lock, then FRONT_CLOSURE_LOCK for a fastening garment. It is
-     still the end of the ANCHOR, which is what this assertion is about, so the anchor's tail
-     is pinned by what legitimately follows it: every clause after "pattern, and color." must
-     be one of the known parts, in the documented shed order (print, then closure, then
-     sleeve). An UNKNOWN fourth part appearing here still fails. */
+  /* The preserve clause no longer ENDS the tops prompt: FRONT_CLOSURE_LOCK follows it on
+     this branch (the button-down-rendered-open report). It is still the end of the ANCHOR,
+     which is what this assertion is about, so the tail is pinned against the anchor rather
+     than against the whole string - and the clause that legitimately follows it is named,
+     so a THIRD part appearing here would still fail. */
   check("...and carries the same per-frame adaptation and preserve clauses as bottoms",
     /Dynamically adapt the garment drape to the subject's exact/.test(topsPrompt) &&
     /Strictly preserve the original shirt texture, pattern, and color\./.test(topsPrompt) &&
@@ -330,7 +329,7 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],\s*\n\s*\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),\s*\n\s*\.\.\.\(longSleeve \? \[\[P\.HIGH, SLEEVE_LENGTH_LOCK\]\] : \[\]\),\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],\s*\n\s*\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix.
      Whichever of the three the construction/category/angle axes select, it rides at

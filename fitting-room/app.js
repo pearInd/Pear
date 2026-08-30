@@ -4280,164 +4280,6 @@ function prewarmOrientationAssets() {
  *   hasBack=false → at least one item's BACK is missing/broken - goLive() should proceed
  *                    FRONT-ONLY rather than arm AI Auto with a known-bad asset.
  */
-/* ── DUAL-PANEL REFERENCES - "the back text is on my chest before I even turn" ────
-   TWO SYMPTOMS, ONE CAUSE: the large BACK graphic rendered on the FRONT chest from session
-   start, and turning around giving a plain garment with no detailing.
-
-   NEITHER IS A PROMPT BUG, and that was checked before any of this was written. The front
-   and back anchors are clean of each other, COMPOSITE_DEFAULT is false so
-   buildCompositePrompt() reaches no live session, and the reference actually sent is
-   whatever galleryOf() calls `front`.
-
-   THE CAUSE IS THAT `front` IS SOMETIMES BOTH VIEWS IN ONE IMAGE. A storefront that
-   publishes its product as a single front|back diptych hands this room ONE photo. galleryOf
-   cannot see two views inside it, so distinctBackOf() finds no back, canCombineViews()
-   returns false, and the session runs front-only WITH THE DIPTYCH as its reference. The
-   model gets two garments in one frame and no panel contract explaining them - the
-   ambiguous-reference condition this file documents as sending a diffusion model back to
-   its own prior - and resolves it by painting both panels onto one torso. That is symptom
-   one. Because the session is front-only, turning around swaps nothing: symptom two.
-
-   THE FIX IS TO STOP HANDING IT AN AMBIGUOUS IMAGE, not to explain the ambiguity in words.
-   Explaining it is COMPOSITE_MODE, which renderPerspectiveSelector() documents as THE
-   BLANK-BACK BUG (23f5953: both panels' designs rendered on one surface). Splitting the
-   diptych into two clean single-view buffers feeds the architecture that already works -
-   AI Auto swapping between two unambiguous photos, one side at a time - and needs no prompt
-   change at all: the existing front/back anchors become correct the moment their references
-   are correct.
-
-   DETECTION IS DELIBERATELY CONSERVATIVE. A false positive cuts a legitimate photo in half,
-   which is worse than the bug. Explicit panel geometry from the widget is authoritative
-   when present. Without it, only an aspect ratio at or above DUAL_PANEL_MIN_RATIO qualifies
-   - wide enough that a single garment packshot essentially never reaches it. A 16:9
-   lifestyle shot (1.78) sits deliberately BELOW the bar. A diptych of two 3:4 portraits
-   (1.5) is a KNOWN MISS, accepted so that the 16:9 case can never be destroyed; if such a
-   product turns up, the widget's layout metadata is the way to catch it, not a lower bar. */
-const DUAL_PANEL_MIN_RATIO = 1.85;
-
-/* Panel geometry the widget actually drew, when it sent any. Shape mirrors
-   describeCompositeLayout(): { w, h, front_x, front_w, back_x, back_w }. */
-function usableDualPanelLayout(layout) {
-  const L = layout;
-  if (!L || !L.w || !L.front_w || !L.back_w) return null;
-  if (typeof L.front_x !== "number" || typeof L.back_x !== "number") return null;
-  return L;
-}
-
-/**
- * Whether this reference is two views side by side.
- * @param {number} w @param {number} h @param {object|null} layout widget-reported geometry
- * @returns {boolean}
- */
-function looksDualPanel(w, h, layout) {
-  if (usableDualPanelLayout(layout)) return true;
-  if (!w || !h) return false;
-  return (w / h) >= DUAL_PANEL_MIN_RATIO;
-}
-
-/**
- * Where each view lives inside a dual-panel reference.
- * Explicit geometry is used verbatim - including a height that excludes the label band this
- * file's own composites draw under the garments, because text cropped into a reference is
- * text that can be composited onto the shopper. It also binds BY ROLE rather than by
- * position: describeCompositeLayout() already warns that panels can be reversed, and a
- * splitter that assumed LEFT=FRONT would bind the back photo as the front for those.
- * Without geometry, the halves are split at the midpoint with the seam column belonging to
- * neither, so no sliver of one panel bleeds into the other.
- * @returns {{front:{x:number,y:number,w:number,h:number}, back:{x:number,y:number,w:number,h:number}}}
- */
-function dualPanelRects(w, h, layout) {
-  const L = usableDualPanelLayout(layout);
-  if (L) {
-    const ph = L.h || h;
-    return {
-      front: { x: L.front_x, y: 0, w: L.front_w, h: ph },
-      back:  { x: L.back_x,  y: 0, w: L.back_w,  h: ph },
-    };
-  }
-  const half = Math.floor(w / 2);
-  return {
-    front: { x: 0,      y: 0, w: half, h },
-    back:  { x: w - half, y: 0, w: half, h },
-  };
-}
-
-/**
- * Split a dual-panel reference into two clean single-view assets, in place.
- *
- * Writes item.img (front crop) and item.imgBack (back crop) as data: URLs, which is what
- * makes distinctBackOf() see a real back and canCombineViews() enable AI Auto. Everything
- * downstream - prewarm, the pre-load gate, maybeSwap, referenceImageFor - then works
- * unchanged, because they were only ever missing a second photo.
- *
- * data:, NEVER blob:. garmentImageRef() passes a blob: URL through verbatim, and the SDK's
- * imageToBase64() returns any string that is not a data: URL or an absolute http(s) URL
- * AS IF ITS CHARACTERS WERE BASE64 IMAGE BYTES - no error, no log, an arbitrary garment on
- * screen. data: is handled correctly by both.
- *
- * Fails closed: any error leaves the item exactly as it was. A garment carrying a front
- * crop and no back is worse than an unsplit diptych, because the first looks correct.
- * @param {object|null} item @returns {Promise<boolean>} true when a split was applied
- */
-async function deriveDualPanelViews(item) {
-  if (!item || item._panelsDerived) return false;
-  if (isBottomsGarment(item)) return false;
-  const g = galleryOf(item);
-  /* A garment that already ships two real photos is not this bug, and re-deriving one from
-     a crop would replace good assets with worse ones. */
-  if (distinctBackOf(item, g)) return false;
-  const src = g.front || item.img;
-  if (!src) return false;
-
-  try {
-    const blob = await garmentBlobCached(src);
-    if (!blob) return false;
-    const bmp = await createImageBitmap(blob);
-    const layout = usableDualPanelLayout(item._compositeLayout);
-    if (!looksDualPanel(bmp.width, bmp.height, layout)) { bmp.close?.(); return false; }
-
-    const rects = dualPanelRects(bmp.width, bmp.height, layout);
-    const cut = (r) => {
-      const c = typeof OffscreenCanvas !== "undefined"
-        ? new OffscreenCanvas(r.w, r.h)
-        : Object.assign(document.createElement("canvas"), { width: r.w, height: r.h });
-      c.getContext("2d", { alpha: false }).drawImage(bmp, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
-      return c;
-    };
-    const toDataUrl = async (c) => {
-      if (c.toDataURL) return c.toDataURL("image/jpeg", 0.95);
-      const b = await c.convertToBlob({ type: "image/jpeg", quality: 0.95 });
-      return await new Promise((res, rej) => {
-        const fr = new FileReader();
-        fr.onload = () => res(fr.result);
-        fr.onerror = rej;
-        fr.readAsDataURL(b);
-      });
-    };
-    const frontUrl = await toDataUrl(cut(rects.front));
-    const backUrl  = await toDataUrl(cut(rects.back));
-    bmp.close?.();
-    if (!frontUrl || !backUrl) return false;
-
-    item.img = frontUrl;
-    item.imgBack = backUrl;
-    item.backSource = "panel-split";
-    item._panelsDerived = true;
-    /* The nested colour gallery, if there is one, would otherwise keep serving the diptych
-       through galleryOf()'s first branch and silently win over the crops above. */
-    if (item.images && typeof item.images === "object") {
-      item.images = { ...item.images, front: frontUrl, back: backUrl };
-    }
-    console.log("[PEAR] dual-panel reference detected and SPLIT -",
-      `${bmp.width}x${bmp.height}`, layout ? "(widget layout)" : `(aspect ${(bmp.width / bmp.height).toFixed(2)})`,
-      "\n  this garment was rendering both panels on one torso; it now has a real front and back asset");
-    return true;
-  } catch (e) {
-    console.warn("[PEAR] dual-panel split failed - leaving the reference untouched:", e?.message || e);
-    return false;
-  }
-}
-
 async function preloadGarmentAssets() {
   const look = resolveLook();
   const items = (look ? [look.top, look.bottom] : [activeItem]).filter(Boolean);
@@ -4932,16 +4774,8 @@ function orientHoldBegin(reason) {
   if (_orientHoldActive) return;        // NEVER re-freeze: a second snapshot this far into
                                         // the turn would capture the degraded frame we are
                                         // holding precisely to hide.
-  /* THE HANDOFF FROM A RE-DRAPE COVER, and it is the same rule as the line above for the
-     same reason. If redrapeCoverBegin() already froze the overlay, the frame showing is a
-     good dressed one and a re-upload is in flight underneath it - capturing again here
-     would take the churn frame instead. Take ownership of the frame that is already up:
-     raise the hold and arm its ceiling, but do NOT re-freeze. redrapeCoverEnd() then
-     declines to reveal while this hold is active, so the overlay survives the handoff
-     intact and only orientHoldEnd() lifts it. */
-  const alreadyFrozen = _redrapeCoverActive;
   _orientHoldActive = true;
-  if (!alreadyFrozen) orientFadeFreeze();
+  orientFadeFreeze();
   if (_orientHoldTimer) clearTimeout(_orientHoldTimer);
   _orientHoldTimer = setTimeout(() => {
     console.warn("[PEAR] AI Auto - turn hold hit its", ORIENT_TURN_HOLD_MAX_MS + "ms ceiling; revealing the live feed");
@@ -4994,73 +4828,6 @@ function orientHoldEnd(reason) {
    turn-detected. It also never RAISES a hold: with none up there is nothing to bound, and
    an extend that could freeze the feed would put a still frame up that nobody decided on.
    @param {string} reason - which stage re-armed it, for the log only */
-/* ── THE RE-DRAPE COVER - "the BOSTON shorts go plain black when I move" ─────────
-   THE REPORT: a garment with strong identity - green, printed text - renders correctly and
-   then collapses to a generic one the moment the shopper moves. It returns, then goes
-   again, in time with the movement.
-
-   IT IS NOT A LOST REFERENCE. reconditionForTopology() re-uploads the SAME bytes; nothing
-   overwrites the active blob. What it does is clear lastSentImageRef / rtImageOnWire /
-   lastSentPrompt to force past applyGarment's no-op skip and issue a full set({ image }).
-   applyGarment's flicker-fix comment records the cost: while that write is in flight Decart
-   has nothing to condition on and renders from its own prior until the new reference lands.
-
-   WHICH IS WHY IT READS AS "MOVEMENT BREAKS IT". The topology sampler runs every
-   BODY_TOPOLOGY_SAMPLE_MS (350ms) and dispatches whenever a shift clears the threshold,
-   bounded by BODY_RECONDITION_COOLDOWN_MS (900ms) - so sustained movement re-uploads about
-   once a second, and every one of those windows was uncovered. On a plain tee the churn
-   frame is similar enough to pass unnoticed; on green shorts with text across them it is
-   unmistakable. The bug was never region-specific - the shorts just made it visible.
-
-   THE ORIENTATION SWAP ALREADY SOLVED THIS for its own re-upload (orientHoldBegin: freeze
-   the last good dressed frame, run the write underneath, cross-fade back once it lands).
-   The re-drape performs the same kind of write and had none of that cover.
-
-   WHY ITS OWN FLAG AND NOT THE ORIENTATION HOLD. That hold is released by a 250ms sampler
-   tick - orientHoldEnd("turn-abandoned") - which knows nothing about a re-drape. Sharing
-   one flag would let that tick reveal the feed in the middle of an in-flight re-upload,
-   which is precisely the window this exists to hide. Two mechanisms, one overlay, an
-   explicit handoff: whichever raises the freeze first owns the frame, and neither reveals
-   while the other still wants it. See orientHoldBegin's own handoff note below.
-
-   A SHORTER CEILING THAN THE TURN'S, deliberately. A re-drape is one set() with bytes
-   already resident; a turn spends ~2500ms confirming before its swap even starts. Reusing
-   4000ms here would sit on a still frame for seconds after a re-drape that had already
-   failed. */
-const REDRAPE_COVER_MAX_MS = 2500;
-let _redrapeCoverActive = false;
-let _redrapeCoverTimer  = null;
-
-function redrapeCoverBegin(reason) {
-  if (_redrapeCoverActive) return;
-  /* The turn hold already has a good frame up and owns the overlay; re-freezing would
-     capture whatever the churn is rendering right now. Take no ownership either - the
-     re-drape is standing down for the turn, which reconditionForTopology() also enforces
-     at its own entry. */
-  if (_orientHoldActive) return;
-  _redrapeCoverActive = true;
-  orientFadeFreeze();
-  if (_redrapeCoverTimer) clearTimeout(_redrapeCoverTimer);
-  _redrapeCoverTimer = setTimeout(() => {
-    console.warn("[PEAR] body-contour re-drape hit its", REDRAPE_COVER_MAX_MS + "ms cover ceiling; revealing the live feed");
-    redrapeCoverEnd("timeout");
-  }, REDRAPE_COVER_MAX_MS);
-  if (ORIENT_DEBUG) console.log("[PEAR] re-drape - holding last dressed frame (" + reason + ")");
-}
-
-function redrapeCoverEnd(reason) {
-  if (_redrapeCoverTimer) { clearTimeout(_redrapeCoverTimer); _redrapeCoverTimer = null; }
-  if (!_redrapeCoverActive) return;
-  _redrapeCoverActive = false;
-  /* THE HANDOFF. A turn can begin while this cover is up (the two samplers are
-     independent), and it will have taken ownership of the overlay WITHOUT re-freezing.
-     Revealing here would drop the shopper into the middle of the turn's own window, so
-     leave the frame up and let orientHoldEnd() do the reveal. */
-  if (_orientHoldActive) return;
-  orientFadeReveal();
-  if (ORIENT_DEBUG) console.log("[PEAR] re-drape - releasing cover (" + reason + ")");
-}
-
 function orientHoldExtend(reason) {
   if (!_orientHoldActive) return;
   if (_orientHoldTimer) clearTimeout(_orientHoldTimer);
@@ -5594,56 +5361,10 @@ function createOrientationWatcher() {
         toast("תמונת הגב אינה תקינה");
         return;
       }
-    } else if (GARMENT_FRONT) {
-      /* ── THE RETURN LEG - "I turned all the way round and came back in a Real Madrid
-         shirt." ────────────────────────────────────────────────────────────────────
-         THE ASYMMETRY THIS CLOSES. Everything above pre-flights the BACK asset before
-         committing to it, because committing first and finding the asset missing
-         afterwards is what produced the blank back view. The FRONT leg had none of it: it
-         fell straight through to `applying = true; autoOrientation = next; applyActive()`.
-
-         WHAT THAT COSTS ON THE WAY BACK. If the front bytes are not resident by then,
-         referenceImageFor() logs a pre-cache miss and falls back to a URL - and a URL means
-         DECART has to fetch it before it can condition on anything (garmentImageRef() puts
-         that at up to 20-25s). Until it lands the model has no reference and renders from
-         its own prior, which is where a jersey nobody selected comes from. The flip has
-         already committed, so the shopper watches it happen.
-
-         WHY THE BYTES GO MISSING ON THE RETURN LEG AND NOT THE OUTBOUND ONE. _assetBlobCache
-         is an LRU capped at BLOB_CACHE_MAX (10), shared across front, back, composites,
-         look stitches and every colour variant touched this session. The front entry is the
-         OLDEST of the pair by construction - fetched at go-live, where the back was fetched
-         at the first turn - so eviction reaches it first. A transient refetch failure does
-         the same. Neither is reachable outbound, because the branch above catches it.
-
-         NO CONTENT PROBE HERE, deliberately. The back gets one because a mislabelled or
-         soft-404'd rear photo is a real classification failure; the front asset is the one
-         the shopper picked and has already rendered correctly this session, so a flatness
-         check would only add a decode to the return path for a failure that cannot happen
-         without the front having been wrong from the start.
-
-         ABANDON, DO NOT DEGRADE. Returning without touching autoOrientation leaves the lock
-         where it is and the known-good reference on the wire; the sampler keeps voting, so
-         the next tick past the cooldown retries. That is exactly what the back branch does
-         with a missing asset, and it is the behaviour the shopper wants: the previous side
-         held a beat too long beats a garment nobody chose. */
-      const frontBlob = await garmentBlobCached(GARMENT_FRONT);
-      if (disposed) return;               // same superseded-instance guard as the back leg
-      if (!frontBlob) {
-        console.error("[PEAR] CRITICAL: GARMENT_FRONT unavailable at flip time; holding the",
-          "current side rather than committing to a reference that is not on the wire -", GARMENT_FRONT);
-        lastSwapAt = Date.now();          // throttle the retry to the normal swap cadence
-        return;
-      }
     }
 
     applying = true;
     lastSwapAt = Date.now();
-    /* THE LOCK IS A CLAIM ABOUT WHAT IS ON THE WIRE, so it is advanced here but ROLLED BACK
-       if the dispatch below fails - see the catch. Kept as an advance-then-revert rather
-       than a commit-after-success because renderPerspectiveSelector() and the prompt
-       builders read it DURING the dispatch, and they must describe the side being applied. */
-    const lockBefore = autoOrientation;
     autoOrientation = next;
     logVtonState();
     /* No-ops when the sampler already raised the hold on the first disagreeing vote,
@@ -5670,67 +5391,12 @@ function createOrientationWatcher() {
       // released whatever hold IT was responsible for; this stale continuation must not
       // release whatever the NEW one has since raised.
       if (disposed) return;
-      /* ── RE-ACQUIRE THE TOPOLOGY BASELINE - the erosion fix that is not a prompt ──────
-         REPORTED: with the panel split binding the right asset to each side, the small
-         chest logo STILL eroded on the return leg of a 360 while the large back graphic
-         survived every turn.
-
-         The mechanism is repeated re-derivation. Every full set({ image }) makes the model
-         re-derive the garment from the reference, and fine low-contrast marks degrade a
-         little on each pass where a big high-contrast graphic does not. So the question is
-         not whether the front asset is bound - it is - but how many times this session is
-         re-conditioned for no reason.
-
-         THIS WAS ONE OF THOSE TIMES. makeBodyTopologyTracker()'s baseline is "the topology
-         the CURRENT render was conditioned against". The apply above IS a re-conditioning,
-         and leaving the baseline describing the pre-turn body meant the next comparison
-         measured the new frame against a shape the render had already moved off - on a 360
-         a large delta that says nothing about movement SINCE the render was made. It
-         tripped the threshold and fired a redundant full re-upload right after the swap:
-         one more erosion pass, every single turn.
-
-         reconditionForPresence() already does exactly this, for exactly this reason, and
-         says so in its own comment. The orientation swap was the one re-conditioning
-         dispatch that did not. Placed AFTER the apply resolves - re-acquiring before it
-         would take a baseline against the render being replaced - and deliberately NOT in
-         the catch, because a failed dispatch conditioned nothing and the existing baseline
-         still describes what is genuinely on screen. */
-      if (bodyTopology) bodyTopology.reset();
       orientHoldEnd("swap-complete");
       toast(next === "back" ? "מציג גב · Back view" : "מציג חזית · Front view");
     } catch (e) {
-      /* ── ROLL THE LOCK BACK - "I turned around and the back print was gone" ─────
-         THE FAILURE THIS CLOSES. autoOrientation was advanced before the dispatch, and
-         until now a throw here left it pointing at a side whose reference never reached
-         Decart. effectiveAngle() then resolves to that side, so every SUBSEQUENT prompt -
-         the periodic re-anchor and every topology re-drape - is built from
-         BACK_CATEGORY_ANCHOR ("Precisely lock the rear print, logos, and back seams") and
-         sent against the FRONT photo still on the wire. This file already records what the
-         model does when told to reproduce a back it cannot see in its reference: it
-         SUPPRESSES the graphic rather than inventing one. The shopper turns around to plain
-         fabric with no print - the right garment, the right colour, no back graphic.
-
-         AND IT NEVER RECOVERED ON ITS OWN. The sampler keeps voting for the side the lock
-         now wrongly claims, so needsSwitch stays false and maybeSwap is never called again;
-         one failed dispatch stranded the orientation for the rest of the session. Restoring
-         the previous value makes the vote disagree again, which is exactly what lets the
-         next tick past ORIENT_COOLDOWN_MS retry the swap.
-
-         NOT A ROLLBACK OF THE REFERENCE, because there is nothing to undo: applyActive()
-         either landed a set() or it did not, and if it did not the wire still holds the
-         previous side. This restores the LOCK to match that. */
-      if (!disposed) {
-        autoOrientation = lockBefore;
-        console.warn("[PEAR] AI Auto swap apply FAILED - rolling the orientation lock back to",
-          String(lockBefore).toUpperCase(), "so the lock still describes what is on the wire:",
-          e?.message || e);
-        logVtonState();
-        renderPerspectiveSelector();
-        orientHoldEnd("swap-failed");   // never leave the frozen overlay stuck up on failure -
-                                        // but only if THIS instance still owns it
-      } else {
-        console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
-      }
+      console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
+      if (!disposed) orientHoldEnd("swap-failed");   // never leave the frozen overlay stuck up on
+                                                      // failure - but only if THIS instance still owns it
     } finally {
       applying = false;
     }
@@ -8030,17 +7696,6 @@ const STRUCTURED_TOP_TOKENS =
  */
 function isPlainKnitTop(item) {
   if (!item || isBottomsGarment(item)) return false;
-  /* A LONG SLEEVE DISQUALIFIES THE TEE ANCHOR, and this is the sleeveless exclusion in the
-     other direction. PLAIN_TEE_ANCHOR opens "the EXACT static t-shirt", and "t-shirt"
-     carries a sleeve length with it - PLAIN_TEE_TOKENS matches a bare \btees?\b, so "Long
-     Sleeve Tee" was resolving to an anchor that asserted short sleeves at a reference
-     showing long ones. app.js's retired SHIRT_NOUN note names this exact failure: a garment
-     noun is "WRONG for lower_body items and long-sleeve tops, where it asserts what the
-     reference contradicts". Calling a tank a t-shirt grows sleeves that were never there;
-     calling a long-sleeve tee a t-shirt cuts off sleeves that were. Same mistake, opposite
-     sign. Such items take the sleeve-neutral "shirt" anchor plus SLEEVE_LENGTH_LOCK, which
-     states the length rather than implying it. */
-  if (hasLongSleeves(item)) return false;
   const fields = [item.type, item.category, item.subType, item.name, item.title]
     .filter(Boolean).join(" ");
   if (STRUCTURED_TOP_TOKENS.test(fields)) return false;
@@ -8084,93 +7739,6 @@ function hasFrontClosure(item) {
   return STRUCTURED_TOP_TOKENS.test(fields);
 }
 
-/* ── SLEEVE LENGTH - "the long-sleeve shirt came back cut off at the elbows" ──────
-   REPORTED: a white full-sleeve button-down rendering as a short-sleeve shirt, fabric
-   stopping near the elbow. The RIGHT garment in a state the reference never showed, which
-   is the FRONT_CLOSURE_LOCK class exactly - and therefore the class this file's restore
-   note says a clause may be bought back for, by the procedure it prescribes: ONE part, at
-   P.HIGH, on positive evidence only.
-
-   NOTHING BOUND SLEEVE LENGTH AT ALL before this. A button-down gets the neutral "shirt"
-   anchor, which says nothing about sleeves, plus FRONT_CLOSURE_LOCK, which pins the
-   fastening and nothing else. The reference shows full sleeves; the model truncated them
-   anyway, and no text on the wire contradicted it.
-
-   STATED POSITIVELY. The obvious wording - "do NOT truncate or render short sleeves" -
-   names "short sleeves" inside a prompt that has no negative_prompt field to hold it, which
-   is the DENSE.assetLock shape that produced the tuxedo. Naming the length we WANT costs
-   the same budget and cannot be sampled backwards.
-
-   FRONT AND BACK, WHICH IS WHERE IT DIVERGES FROM THE CLOSURE LOCK, and the difference is
-   physical rather than stylistic: a placket is a front-of-garment feature and is genuinely
-   not in view from behind, so spending it on the back anchor would be waste. A SLEEVE is in
-   view from every angle. Scoping this to the front by symmetry with the closure lock would
-   leave the reported truncation live the moment the shopper turns around.
-
-   POSITIVE EVIDENCE ONLY, for the reason hasFrontClosure() documents: an unrecognised top
-   must degrade to the OLD behaviour, never to a new assertion about a garment nobody
-   verified. toItem() already defaults an unknown top's subType to "short_sleeve", so
-   silence here genuinely means "no long-sleeve claim" rather than "unknown". */
-const LONG_SLEEVE_TOKENS =
-  /(שרוול ארוך|\blong[- ]?sleeved?\b|\blongsleeves?\b|\bfull[- ]sleeved?\b)/i;
-
-/**
- * Whether this garment is positively known to have full-length sleeves.
- * subType is ground truth when present, exactly as it is for every other axis; the title
- * vocabulary is the fallback for items that arrived without it.
- * @param {object|null|undefined} item
- * @returns {boolean} true only on positive evidence of a long sleeve.
- */
-function hasLongSleeves(item) {
-  if (!item || isBottomsGarment(item)) return false;
-  if (item.subType === "long_sleeve") return true;
-  const fields = [item.category, item.subType, item.name, item.title]
-    .filter(Boolean).join(" ");
-  return LONG_SLEEVE_TOKENS.test(fields);
-}
-
-/* TRIMMED from 111 characters to fit the three-clause case whole - see FRONT_PRINT_LOCK's
-   budget note. The meaning is unchanged: full-length sleeve, fabric to the wrist, taken
-   from the reference rather than invented. */
-const SLEEVE_LENGTH_LOCK =
-  "Sleeves are full length, covering the arm down to the wrist as shown.";
-
-/* ── THE FRONT GRAPHIC LOCK, TRIED AND WITHDRAWN - read before adding it back ────
-   THE REPORT IT ANSWERED: a chest logo that rendered at go-live and was gone after a full
-   360, while the back graphic survived. The asymmetry was real and is still real -
-   BACK_CATEGORY_ANCHOR.top carries "Precisely lock the rear print, logos, and back seams"
-   and the front anchor names no print at all.
-
-   WHAT WAS TRIED (f543678, gated in c2fbc1a): a P.HIGH FRONT_PRINT_LOCK - "Precisely lock
-   the front print, chest logo, and graphics exactly as shown." - mirroring the back
-   anchor's clause onto the front branch.
-
-   WHY IT CAME OFF. Reported immediately: the front chest rendered a LARGE text graphic the
-   reference never had, from go-live, before any rotation. The two prompts were verified
-   clean of each other - the front string contained no rear vocabulary and the back string
-   no chest vocabulary - so this was not cross-contamination between the states. It was the
-   clause doing what this file has now watched three separate clauses do: naming a garment
-   feature in a positive prompt with no negative_prompt to balance it, and getting a more
-   prominent version of that feature than the reference shows. DENSE.assetLock named
-   garments and got a tuxedo. FRONT_CLOSURE_LOCK named buttons and plackets and got a
-   placket on plain tees. This named prints and graphics and got a print.
-
-   GATING WAS NOT ENOUGH, which is the part worth remembering. c2fbc1a restricted it to
-   garments whose titles name a graphic, on the theory that a printed garment can safely be
-   told about its print. The reported garment is titled "חולצה חלקה עם הדפס" - it names its
-   print - so the gate passed and the clause shipped. The failure is not about WHICH
-   garments get the clause; it is about what naming a surface feature does at all.
-
-   THE BACK ANCHOR KEEPS ITS VERSION, and that is not inconsistent. It has ridden there
-   across many revisions with no invented-print report, and a back render has a failure
-   mode the front does not: the FRONT graphic reproduced on the reverse, which is what that
-   clause was written to stop. Evidence, not symmetry, decides which side carries it.
-
-   THE COST OF WITHDRAWING IT, stated: the erosion report above is re-opened. A small chest
-   logo has no clause naming it and may fade again across the re-conditionings a 360
-   forces. That is the accepted trade - a faded logo is a degraded render of the right
-   garment, an invented chest print is the wrong garment. If it is attempted a third time,
-   it needs a mechanism that does not put the words on the wire at all. */
 const CATEGORY_ANCHOR = Object.freeze({
   /* The two strings share one spine - bind the static garment, adapt to the current
      contour, preserve the original - and differ in exactly two places: the garment noun,
@@ -8438,20 +8006,9 @@ function imageOnlyPrompt(item, angle = "front") {
      one requires), so a prompt can never name a seamless front and a fastened placket
      together. */
   const closure = !bottoms && angle !== "back" && hasFrontClosure(item);
-  /* NOT scoped to the front, and that asymmetry with `closure` is deliberate: a placket is
-     a front-of-garment feature and genuinely is not in view from behind, while a sleeve is
-     in view from every angle. See SLEEVE_LENGTH_LOCK. */
-  const longSleeve = !bottoms && hasLongSleeves(item);
-  /* NO FRONT GRAPHIC CLAUSE. One was tried and withdrawn - it rendered a large chest print
-     the reference never had. See the withdrawal note above CATEGORY_ANCHOR before adding
-     anything here that names a print, a logo or a graphic on the front branch. */
-  /* ORDER IS SHED ORDER. fitPrompt() drops the FIRST part at the worst surviving
-     priority, so these shed left to right. Anchor + both is 561 against a 650 ceiling, so
-     nothing sheds today; the ordering matters only if a third part is ever bought back. */
   return fitPrompt([
     [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
     ...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
-    ...(longSleeve ? [[P.HIGH, SLEEVE_LENGTH_LOCK]] : []),
   ]);
 }
 
@@ -8538,25 +8095,16 @@ function lookAnchorPrompt() {
      + DENSE.modelAgnostic (64) → 556  fits              → 385  fits
      + both of them        (110)→ 602  fits              → 431  fits
 
-   THE ROW ABOVE IS THE COMMON CASE, NOT THE CEILING. One further part is gated on evidence
-   about the garment - SLEEVE_LENGTH_LOCK (69) when the title or subType names a long sleeve
-   - which takes a long-sleeve fastening top to 561. Everything still fits whole, with 89
-   free. A third clause briefly rode here (FRONT_PRINT_LOCK, 74) and was withdrawn for
-   rendering a chest print the reference never had; while it was on, the three summed to 701
-   and fitPrompt shed one. Measure against 561, not 491, before calling a restore free.
-
    TOPS FRONT IS THE WORST CASE and the only row worth budgeting against: it is the one
    branch carrying a second part (FRONT_CLOSURE_LOCK, the button-down closure report).
    Tops BACK runs 412 - the back anchor is longer than the front one but carries no
    closure lock, since a front placket is not in view - and bottoms carries one part on
    both angles.
 
-   NOTHING SHEDS ANY MORE for the garment the row above describes, on either branch:
-   159 characters are free on tops and 330 on bottoms, so every retired clause in this
-   table would go back with room to spare. That INVERTS the warning this note used to
-   carry: the risk is no longer that a restore silently sheds, it is that a restore
-   silently SUCCEEDS. The exception is the 636-character garment named above, where 14
-   are free and the old warning is still live.
+   NOTHING SHEDS ANY MORE, on either branch. 159 characters are free on tops and 330 on
+   bottoms, so every retired clause in this table would go back with room to spare. That
+   INVERTS the warning this note used to carry: the risk is no longer that a restore
+   silently sheds, it is that a restore silently SUCCEEDS.
 
    HEADROOM IS NOT PERMISSION. Tops was collapsed from 634 characters and bottoms from
    616 precisely BECAUSE text volume was outweighing the reference pixels - the tuxedo,
@@ -12072,15 +11620,6 @@ async function goLive() {
        being reused, not re-attempted. Re-derive fresh from canCombineViews() on
        EVERY go-live so each run gets its own honest attempt at AI Auto, rather than
        inheriting a downgrade from a run that's already over. */
-    /* ...but FIRST, look inside the reference. A storefront that publishes its product as
-       one front|back diptych hands this room a single photo, so canCombineViews() below
-       sees no back and settles on front-only WITH THE DIPTYCH on the wire - which renders
-       both panels onto one torso. deriveDualPanelViews() turns that one image into two
-       clean single-view assets, and everything downstream then works unchanged. It must run
-       BEFORE the line below or the split lands after the mode has already been chosen, and
-       before the pre-load gate so the crops are what gets validated. No-ops for every
-       garment that is not a diptych, which is almost all of them. */
-    await deriveDualPanelViews(activeItem);
     currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
     /* Boot the lock UNRESOLVED (PENDING_MODE), not FRONT. This used to assert
        "the shopper is facing the camera" before a single frame had been sampled,
@@ -12102,47 +11641,21 @@ async function goLive() {
        it here means that failure surfaces (or is gracefully absorbed into a
        front-only run) BEFORE any camera/Decart resource - and any billing - is
        spent, never as a mid-turn surprise. */
-    /* ── IT RUNS ON EVERY RUN NOW, and that is this block's second bug report ─────
-       THE REPORT: re-running the SAME product returned four different garments across
-       four attempts - a pink open button-down, a plain white tee, a black shirt, a white
-       striped tee. Four garments from one unchanged input means the reference was not on
-       the wire at all: with a real image conditioning it Decart is stable, and with none
-       a stochastic sampler produces a different plausible shirt every time.
-
-       THE GATE WAS ITSELF GATED. This block - "Mandatory", blocking before any token mint,
-       connect or billing precisely so a missing asset can never surprise a live session -
-       ran only `if (currentAngle === AUTO_ANGLE)`. Every FRONT-ONLY run skipped it, and
-       renderPerspectiveSelector()'s own comment calls front-only most of the catalog.
-
-       WHAT THE SKIP COST, following referenceImageFor() down that path: not AUTO_ANGLE, so
-       it reaches garmentBlobIfWarm() - WARM ONLY, deliberately never fetching - and on a
-       miss falls through to garmentImageRef(), a proxied URL. A URL means DECART fetches
-       before it can condition, which garmentImageRef() puts at up to 20-25s against a ~5s
-       billed window. The reference could simply never arrive.
-
-       AND THAT IS WHY IT SHOWED UP ON RETAKES. setActiveItem()'s prewarm is
-       fire-and-forget, so a first run often has time to warm the cache and looks correct.
-       A retake, a history restore, or any run after _assetBlobCache (LRU, 10 entries) has
-       evicted the entry hits the cold path - which had no floor under it.
-
-       preloadGarmentAssets() already handled a front-only item correctly (it validates the
-       front and returns hasBack:false), so the fix is only to stop skipping it. The
-       DOWNGRADE below stays scoped to AI Auto: "back view unavailable" is meaningless on a
-       run that was never going to use one, and toasting it at every single-view shopper
-       would be a new defect introduced by the fix. */
-    $("scanOverlay").hidden = false;
-    const preload = await preloadGarmentAssets();
-    if (!preload.ok) {
-      $("scanOverlay").hidden = true;
-      showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
-      toast("⚠ טעינת תמונת הבגד נכשלה");
-      return;   // finally{} resets busy + the capture button; no billed session opened
-    }
-    if (currentAngle === AUTO_ANGLE && !preload.hasBack) {
-      // Known-bad/missing back BEFORE go-live - don't arm AI Auto with an asset we
-      // already know is broken. Front-only is a fully supported, never-blocked mode.
-      currentAngle = "front";
-      toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
+    if (currentAngle === AUTO_ANGLE) {
+      $("scanOverlay").hidden = false;
+      const preload = await preloadGarmentAssets();
+      if (!preload.ok) {
+        $("scanOverlay").hidden = true;
+        showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
+        toast("⚠ טעינת תמונת הבגד נכשלה");
+        return;   // finally{} resets busy + the capture button; no billed session opened
+      }
+      if (!preload.hasBack) {
+        // Known-bad/missing back BEFORE go-live - don't arm AI Auto with an asset we
+        // already know is broken. Front-only is a fully supported, never-blocked mode.
+        currentAngle = "front";
+        toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
+      }
     }
 
     // LOADING state: overlay + a live elapsed-time counter (generic copy, no model/
@@ -13178,31 +12691,12 @@ async function reconditionForPresence() {
      queueing a write behind one that is already going to re-condition this session. */
   if (wireBusy()) return;
   presenceReconditionInFlight = true;
-  /* COVER THE CHURN WINDOW BEFORE THE WRITE - the third re-upload site, and the last one
-     to get this. The orientation swap has orientHoldBegin(); the re-drape has this same
-     cover; this one had neither while issuing the identical full applyActive() dispatch.
-
-     REPORTED AS THE 360-DEGREE HALLUCINATION: "front and back render correctly through the
-     turn, but completing a full rotation back to face-forward brings up a completely
-     different shirt." presenceFromPoseResult() needs both shoulders AND both hips over
-     POSE_MIN_CONFIDENCE, and through the side-on quarters of a rotation one of each is
-     occluded by the shopper's own torso - so presence is LOST mid-turn and REGAINED the
-     instant they come back to front. That regain fires this function, uncovered, exactly
-     as the shopper arrives facing the camera. What is visible in the window is Decart
-     rendering from its own prior; on a plain tee it reads as a wobble, on a strong graphic
-     it reads as somebody else's jersey.
-
-     RAISED AFTER THE BAILS, DELIBERATELY. Every return above this line means no write is
-     going to happen, and a cover over a dispatch that never runs freezes the feed for
-     nothing. Released in the finally so a throw cannot strand a frozen feed. */
-  redrapeCoverBegin("presence-regain");
   try {
     console.log(`[PEAR] presence regained at t=${sessionElapsedMs()}ms - re-conditioning (no re-bill)`);
     await applyActive();
   } catch (e) {
     console.warn("[PEAR] presence re-condition failed:", e?.message || e);
   } finally {
-    redrapeCoverEnd("presence-regain-complete");
     presenceReconditionInFlight = false;
   }
 }
@@ -13256,12 +12750,6 @@ async function reconditionForTopology(step) {
     return;
   }
   topologyReconditionInFlight = true;
-  /* COVER THE CHURN WINDOW BEFORE THE WRITE, never after - see redrapeCoverBegin(). The
-     re-upload below is a full set({ image }), and until it lands Decart renders from its
-     own prior; on a garment with real identity (green shorts with text across them) that
-     reads to the shopper as the garment being replaced by a generic one every time they
-     move. Released in the finally so a throw cannot strand a frozen feed. */
-  redrapeCoverBegin(step.reason || "topology");
   try {
     const d = step.delta || {};
     console.log(`[PEAR] body contour changed (${step.reason}) at t=${sessionElapsedMs()}ms` +
@@ -13279,7 +12767,6 @@ async function reconditionForTopology(step) {
   } catch (e) {
     console.warn("[PEAR] body-contour re-condition failed:", e?.message || e);
   } finally {
-    redrapeCoverEnd("re-drape-complete");
     topologyReconditionInFlight = false;
   }
 }

@@ -80,7 +80,7 @@ const api = new Function(...Object.keys(sandbox),
    assertions - which own the DEFAULT tops anchor plus its closure clause - would silently
    stop describing the string they were written for. The tee branch has its own byte-exact
    assertion below, and its own suite in plain-tee-fidelity.test.mjs. */
-const TOP       = { name: "Oxford Button-Down Shirt", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
+const TOP       = { name: "Oxford Button-Down Shirt", garmentType: "upper_body", color: "#fff", subType: "long_sleeve" };
 const PLAIN_TEE = { name: "Ion Crew Tee",   garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
 
@@ -173,10 +173,6 @@ const CLOSURE_SPEC =
   "Reproduce the reference's front closure exactly: any buttons, zip or placket stay" +
   " fully fastened, sitting flat and closed across the chest as shown.";
 /* What the tops+front branch actually ships: anchor, one space (fitPrompt's join), clause. */
-/* A FRONT GRAPHIC LOCK WAS TRIED HERE AND WITHDRAWN - it rendered a chest print the
-   reference never had. front-print-lock.test.mjs owns that record and asserts the absence;
-   do not reintroduce a PRINT_SPEC without reading it. */
-/* What the tops+front branch actually ships: anchor, one space (fitPrompt join), clause. */
 const TOPS_FRONT_SPEC = TOPS_SPEC + " " + CLOSURE_SPEC;
 
 /* ── THE PLAIN-TEE ANCHOR - the third axis, and the correction to the note above ──
@@ -222,12 +218,8 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     !/\b(open|unbuttoned|undone|parted|exposed|never|avoid|don't|do not)\b/i.test(CLOSURE_SPEC),
     CLOSURE_SPEC);
   /* THE THIRD AXIS, held to every rule the other two are held to. */
-  /* The tee anchor names no print either, so it takes the same graphic lock as the default
-     branch - the erosion the lock answers is a property of the RENDER, not of which anchor
-     was selected. */
   check("a plain knit tee matches its own specified wording byte for byte",
-    api.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC,
-    JSON.stringify(api.imageOnlyPrompt(PLAIN_TEE)));
+    api.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC, JSON.stringify(api.imageOnlyPrompt(PLAIN_TEE)));
   check("...and the closure clause is NOT spent on it - the reported cause, removed",
     !api.imageOnlyPrompt(PLAIN_TEE).includes(CLOSURE_SPEC) &&
     !/\b(button|buttons|zip|placket|collar|pocket)\b/i.test(api.imageOnlyPrompt(PLAIN_TEE)),
