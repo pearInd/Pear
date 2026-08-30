@@ -4792,6 +4792,52 @@ function orientHoldEnd(reason) {
   if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - releasing hold (" + reason + ")");
 }
 
+/* ── THE CEILING WAS SPENT BEFORE THE SWAP EVEN STARTED ──────────────────────────
+   THE REPORT: "the print distorts and the video stutters when I turn around."
+
+   THE ARITHMETIC, which is the whole bug. orientHoldBegin() is raised on the FIRST
+   disagreeing vote - that is the fix directly above, and it is right - and arms
+   ORIENT_TURN_HOLD_MAX_MS (4000ms) there. But the flip is not CONFIRMED until
+   ORIENT_LOCK_FRAMES (10 samples at ORIENT_SAMPLE_MS 250 = 2500ms) or ORIENT_LOCK_MS
+   (2500ms), so roughly 2500 of those 4000ms are gone before maybeSwap() is even called.
+   What is left has to cover garmentBlobCached() (a real network fetch whenever the prewarm
+   missed), createImageBitmap + bitmapLooksFlat, applyActive() -> rtClient.set({ image }) ->
+   await ack, and ORIENT_FADE_HOLD_MS. On a cold back asset that does not fit.
+
+   orientHoldBegin("swap") CANNOT FIX IT, and must not be changed to: it is deliberately a
+   no-op while a hold is up, because the frame it would capture at that point is the
+   degraded mid-turn one the hold exists to hide. So the ceiling fires MID-SWAP, cross-fades
+   the frozen frame away while the reference is still in flight, and reveals exactly the
+   churn window applyGarment's flicker-fix comment describes - the model rendering from its
+   own prior until the new reference lands. That is the reported distortion.
+
+   IT ALSO UN-SUPPRESSES A SECOND WRITE, which is the stutter half. reconditionForTopology()
+   bails on `if (_orientHoldActive) return;`. The instant this ceiling clears that flag, a
+   turning body - precisely the movement that trips the topology threshold - can fire a full
+   image re-upload on top of the one still in flight; that function's own comment calls
+   stacking on an in-flight write "the most expensive collision available".
+
+   WHY NOT JUST RAISE THE CEILING. Its job is to bound a hold whose releasing event never
+   arrives, and a stuck still frame is worse than a live one. Raising it degrades every
+   genuinely stuck hold to buy headroom for one slow fetch. The swap gets its OWN window
+   instead: re-arm the timer when the swap actually begins, so the ceiling measures the
+   thing it is meant to bound rather than the confirmation wait that preceded it.
+
+   NO RE-FREEZE, and that is the entire difference from orientHoldBegin(). This touches the
+   timer and nothing else - the frame on screen stays the good dressed one captured at
+   turn-detected. It also never RAISES a hold: with none up there is nothing to bound, and
+   an extend that could freeze the feed would put a still frame up that nobody decided on.
+   @param {string} reason - which stage re-armed it, for the log only */
+function orientHoldExtend(reason) {
+  if (!_orientHoldActive) return;
+  if (_orientHoldTimer) clearTimeout(_orientHoldTimer);
+  _orientHoldTimer = setTimeout(() => {
+    console.warn("[PEAR] AI Auto - turn hold hit its", ORIENT_TURN_HOLD_MAX_MS + "ms ceiling; revealing the live feed");
+    orientHoldEnd("timeout");
+  }, ORIENT_TURN_HOLD_MAX_MS);
+  if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - re-arming hold ceiling (" + reason + ")");
+}
+
 function createOrientationWatcher() {
   const track = localStream && localStream.getVideoTracks()[0];
   if (!track) return null;                       // no camera yet - sync will retry later
@@ -5326,6 +5372,13 @@ function createOrientationWatcher() {
        we are holding with a mid-turn one. Still called because a flip can also arrive
        without a preceding turn-detected tick (a swap forced by other state). */
     orientHoldBegin("swap");
+    /* ...and because that call is a no-op on the normal path, the ceiling it would have
+       armed is still the one from turn-detected, ~2500ms of which the confirmation wait
+       already spent. Re-arm it HERE, before the apply, so the fetch/upload/ack below is
+       measured against a full window instead of the remainder of someone else's. See
+       orientHoldExtend() for what firing mid-swap actually costs - it reveals the churn
+       window AND un-suppresses reconditionForTopology() onto the in-flight write. */
+    orientHoldExtend("swap");
     console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase(),
       "| reference:", abbrevImg(next === "back" ? GARMENT_BACK : GARMENT_FRONT));
     renderPerspectiveSelector();
