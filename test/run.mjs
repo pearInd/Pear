@@ -253,6 +253,7 @@ const SUITES = [
   ["plain-tee-fidelity", "plain-tee-fidelity.test.mjs"],
   ["back-view-readiness", "back-view-readiness.test.mjs"],
   ["front-reference-guard", "front-reference-guard.test.mjs"],
+  ["redrape-cover", "redrape-cover.test.mjs"],
   ["body-presence-gate", "body-presence-gate.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
   ["body-topology", "body-topology.test.mjs"],

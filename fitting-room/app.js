@@ -4774,8 +4774,16 @@ function orientHoldBegin(reason) {
   if (_orientHoldActive) return;        // NEVER re-freeze: a second snapshot this far into
                                         // the turn would capture the degraded frame we are
                                         // holding precisely to hide.
+  /* THE HANDOFF FROM A RE-DRAPE COVER, and it is the same rule as the line above for the
+     same reason. If redrapeCoverBegin() already froze the overlay, the frame showing is a
+     good dressed one and a re-upload is in flight underneath it - capturing again here
+     would take the churn frame instead. Take ownership of the frame that is already up:
+     raise the hold and arm its ceiling, but do NOT re-freeze. redrapeCoverEnd() then
+     declines to reveal while this hold is active, so the overlay survives the handoff
+     intact and only orientHoldEnd() lifts it. */
+  const alreadyFrozen = _redrapeCoverActive;
   _orientHoldActive = true;
-  orientFadeFreeze();
+  if (!alreadyFrozen) orientFadeFreeze();
   if (_orientHoldTimer) clearTimeout(_orientHoldTimer);
   _orientHoldTimer = setTimeout(() => {
     console.warn("[PEAR] AI Auto - turn hold hit its", ORIENT_TURN_HOLD_MAX_MS + "ms ceiling; revealing the live feed");
@@ -4828,6 +4836,73 @@ function orientHoldEnd(reason) {
    turn-detected. It also never RAISES a hold: with none up there is nothing to bound, and
    an extend that could freeze the feed would put a still frame up that nobody decided on.
    @param {string} reason - which stage re-armed it, for the log only */
+/* ── THE RE-DRAPE COVER - "the BOSTON shorts go plain black when I move" ─────────
+   THE REPORT: a garment with strong identity - green, printed text - renders correctly and
+   then collapses to a generic one the moment the shopper moves. It returns, then goes
+   again, in time with the movement.
+
+   IT IS NOT A LOST REFERENCE. reconditionForTopology() re-uploads the SAME bytes; nothing
+   overwrites the active blob. What it does is clear lastSentImageRef / rtImageOnWire /
+   lastSentPrompt to force past applyGarment's no-op skip and issue a full set({ image }).
+   applyGarment's flicker-fix comment records the cost: while that write is in flight Decart
+   has nothing to condition on and renders from its own prior until the new reference lands.
+
+   WHICH IS WHY IT READS AS "MOVEMENT BREAKS IT". The topology sampler runs every
+   BODY_TOPOLOGY_SAMPLE_MS (350ms) and dispatches whenever a shift clears the threshold,
+   bounded by BODY_RECONDITION_COOLDOWN_MS (900ms) - so sustained movement re-uploads about
+   once a second, and every one of those windows was uncovered. On a plain tee the churn
+   frame is similar enough to pass unnoticed; on green shorts with text across them it is
+   unmistakable. The bug was never region-specific - the shorts just made it visible.
+
+   THE ORIENTATION SWAP ALREADY SOLVED THIS for its own re-upload (orientHoldBegin: freeze
+   the last good dressed frame, run the write underneath, cross-fade back once it lands).
+   The re-drape performs the same kind of write and had none of that cover.
+
+   WHY ITS OWN FLAG AND NOT THE ORIENTATION HOLD. That hold is released by a 250ms sampler
+   tick - orientHoldEnd("turn-abandoned") - which knows nothing about a re-drape. Sharing
+   one flag would let that tick reveal the feed in the middle of an in-flight re-upload,
+   which is precisely the window this exists to hide. Two mechanisms, one overlay, an
+   explicit handoff: whichever raises the freeze first owns the frame, and neither reveals
+   while the other still wants it. See orientHoldBegin's own handoff note below.
+
+   A SHORTER CEILING THAN THE TURN'S, deliberately. A re-drape is one set() with bytes
+   already resident; a turn spends ~2500ms confirming before its swap even starts. Reusing
+   4000ms here would sit on a still frame for seconds after a re-drape that had already
+   failed. */
+const REDRAPE_COVER_MAX_MS = 2500;
+let _redrapeCoverActive = false;
+let _redrapeCoverTimer  = null;
+
+function redrapeCoverBegin(reason) {
+  if (_redrapeCoverActive) return;
+  /* The turn hold already has a good frame up and owns the overlay; re-freezing would
+     capture whatever the churn is rendering right now. Take no ownership either - the
+     re-drape is standing down for the turn, which reconditionForTopology() also enforces
+     at its own entry. */
+  if (_orientHoldActive) return;
+  _redrapeCoverActive = true;
+  orientFadeFreeze();
+  if (_redrapeCoverTimer) clearTimeout(_redrapeCoverTimer);
+  _redrapeCoverTimer = setTimeout(() => {
+    console.warn("[PEAR] body-contour re-drape hit its", REDRAPE_COVER_MAX_MS + "ms cover ceiling; revealing the live feed");
+    redrapeCoverEnd("timeout");
+  }, REDRAPE_COVER_MAX_MS);
+  if (ORIENT_DEBUG) console.log("[PEAR] re-drape - holding last dressed frame (" + reason + ")");
+}
+
+function redrapeCoverEnd(reason) {
+  if (_redrapeCoverTimer) { clearTimeout(_redrapeCoverTimer); _redrapeCoverTimer = null; }
+  if (!_redrapeCoverActive) return;
+  _redrapeCoverActive = false;
+  /* THE HANDOFF. A turn can begin while this cover is up (the two samplers are
+     independent), and it will have taken ownership of the overlay WITHOUT re-freezing.
+     Revealing here would drop the shopper into the middle of the turn's own window, so
+     leave the frame up and let orientHoldEnd() do the reveal. */
+  if (_orientHoldActive) return;
+  orientFadeReveal();
+  if (ORIENT_DEBUG) console.log("[PEAR] re-drape - releasing cover (" + reason + ")");
+}
+
 function orientHoldExtend(reason) {
   if (!_orientHoldActive) return;
   if (_orientHoldTimer) clearTimeout(_orientHoldTimer);
@@ -12791,6 +12866,12 @@ async function reconditionForTopology(step) {
     return;
   }
   topologyReconditionInFlight = true;
+  /* COVER THE CHURN WINDOW BEFORE THE WRITE, never after - see redrapeCoverBegin(). The
+     re-upload below is a full set({ image }), and until it lands Decart renders from its
+     own prior; on a garment with real identity (green shorts with text across them) that
+     reads to the shopper as the garment being replaced by a generic one every time they
+     move. Released in the finally so a throw cannot strand a frozen feed. */
+  redrapeCoverBegin(step.reason || "topology");
   try {
     const d = step.delta || {};
     console.log(`[PEAR] body contour changed (${step.reason}) at t=${sessionElapsedMs()}ms` +
@@ -12808,6 +12889,7 @@ async function reconditionForTopology(step) {
   } catch (e) {
     console.warn("[PEAR] body-contour re-condition failed:", e?.message || e);
   } finally {
+    redrapeCoverEnd("re-drape-complete");
     topologyReconditionInFlight = false;
   }
 }
