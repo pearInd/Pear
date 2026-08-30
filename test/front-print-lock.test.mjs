@@ -107,7 +107,7 @@ console.log("\n── §2 THE TWO VIEW STATES STAY CLEANLY SEPARATED ──");
     "evidence decides which side carries this, not symmetry");
   check("the two are different strings, each selected whole by the angle axis",
     front !== back &&
-    front.startsWith("Drape and fit the EXACT static shirt from the reference image") &&
+    front.startsWith("Drape and fit the EXACT static top from the reference image") &&
     back.startsWith("Drape and fit the EXACT static shirt's REAR/BACK side"));
   /* Returning to front must yield the front string EXACTLY - no residue of the back anchor
      can survive the round trip, because the anchors are selected rather than accumulated. */

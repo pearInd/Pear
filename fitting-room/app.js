@@ -7477,7 +7477,7 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    VOLUME_PERSISTENCE, FRONTAL_VOLUME, TEMPORAL_PERSISTENCE, CLOSED_BACK_HEM,
    REFERENCE_EXTRACTION and - since the dynamic-drape revision named it - KEEP_OPPOSITE_
    LAYER are each on file as a constant, so every restore here is one line in
-   imageOnlyPrompt(). The budget is not the constraint: tops runs 342 characters and
+   imageOnlyPrompt(). The budget is not the constraint: tops runs 338 characters and
    bottoms 320 against a 650 ceiling. Anything bought back is a deliberate choice about
    TEXT VOLUME COMPETING WITH THE REFERENCE, which is the mechanism every fidelity report
    in this sequence shares. Add one at a time, and re-test against a live session. */
@@ -7545,7 +7545,7 @@ const STRICT_REFERENCE_LOCK =
        an unscoped anchor was the actual configuration the shirt-replacement report was
        filed against - but the explicit pin on the opposite layer is gone. Retired as
        KEEP_OPPOSITE_LAYER below rather than deleted, so that restore is one line too.
-   Budget is not the constraint for either: tops runs 342 characters and bottoms 320
+   Budget is not the constraint for either: tops runs 338 characters and bottoms 320
    against a 650 ceiling. The constraint is the one every report in this sequence shares -
    TEXT VOLUME COMPETING WITH THE REFERENCE IMAGE. Add one at a time, re-tested live. */
 
@@ -7745,11 +7745,42 @@ const CATEGORY_ANCHOR = Object.freeze({
      and WHICH contour is named (whole-body on tops, lower-body on bottoms). The
      lower-body naming is what keeps the shirt-replacement fix alive on the branch it was
      reported against; see the bullet list above for the half of it that came off. */
+  /* ── THE ANCHOR NOUN - "every casual top still renders with a collar and buttons" ──
+     THE THIRD REPORT in this sequence, after FRONT_CLOSURE_LOCK was gated (8d89805) and
+     the tee branch was split off (734b4b3). Casual tops and graphic tees were STILL
+     coming back as button-downs, and neither earlier fix was wrong - by then a plain top
+     reached the wire with zero closure TOKENS. The remaining lean was this noun.
+
+     PLAIN_TEE_ANCHOR's comment diagnosed it and fixed only half: "CATEGORY_ANCHOR.top
+     says 'the EXACT static SHIRT', and in English an unqualified 'shirt' leans
+     woven-and-buttoned. That was survivable while it was the only signal." It judged the
+     noun survivable alone and moved only the PROVEN tees off it. But this is the DEFAULT
+     branch, and isPlainKnitTop() demands positive proof - so every brand-named,
+     Hebrew-titled and untitled casual top in a real storefront (the majority) stayed on
+     the one word this file had already named as leaning toward a placket.
+
+     "top" IS CONSTRUCTION-NEUTRAL. It still commits to the upper body - the one thing
+     this anchor must keep saying, and the half that keeps the shirt-replacement fix alive
+     on the bottoms branch below - while saying nothing about weave, collar or closure in
+     either direction. A garment that genuinely fastens is now described by
+     FRONT_CLOSURE_LOCK, which states its closure explicitly and has evidence behind it,
+     rather than by a default noun that never did.
+
+     NOT A NEGATION, for the reason this file keeps re-learning. The obvious patch is "no
+     buttons, no collar, no placket"; set() has no negative_prompt, so those nouns would
+     ship in the POSITIVE prompt as tokens the sampler steers toward - the shape that
+     produced the tuxedo and daabb47's button-down. Removing the leaning word costs
+     nothing, cannot be sampled backwards, and RETURNS budget: 342 -> 338 chars.
+
+     FRONT + TOPS ONLY, on the one-branch-at-a-time-on-evidence rule. The report names
+     collars, plackets and buttons - all front features. BACK_CATEGORY_ANCHOR keeps
+     "shirt" byte-identical, exactly as PLAIN_TEE_ANCHOR left it; plain-tee-fidelity §7.4
+     pins that, and §7.1-§7.8 pin the rest of this note. */
   top:
-    "Drape and fit the EXACT static shirt from the reference image onto the live" +
+    "Drape and fit the EXACT static top from the reference image onto the live" +
     " subject's CURRENT body contour and volume in this frame. Dynamically adapt the" +
     " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
-    " without stretching or warping the fabric. Strictly preserve the original shirt" +
+    " without stretching or warping the fabric. Strictly preserve the original top" +
     " texture, pattern, and color.",
   bottom:
     "Drape and fit the EXACT static pants/shorts from the reference image onto the live" +
@@ -7934,7 +7965,7 @@ function isBottomsGarment(item) {
  * The image-only prompt, resolved for THIS garment's category.
  *
  * ONE P.CORE PART, ON BOTH BRANCHES. There is no assembly left here: the function SELECTS
- * a frozen anchor (342 chars on tops, 320 on bottoms) and hands it to fitPrompt() as a
+ * a frozen anchor (338 chars on tops, 320 on bottoms) and hands it to fitPrompt() as a
  * single part. The seven-clause assembly this used to run - and the priority tags that
  * decided what shed out of it - is described in CATEGORY_ANCHOR's comment above, together
  * with what came off the wire and how to put any of it back.
@@ -7964,7 +7995,7 @@ function imageOnlyPrompt(item, angle = "front") {
      came off the wire, and for why bottoms names the lower body where tops names the
      whole contour.
 
-     STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at 342/320 chars:
+     STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at 338/320 chars:
      it normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that
      lengthens an anchor is clamped here instead of over-running into
      clampPromptForWire()'s hard slice, which cuts at the END and would take the
@@ -8090,9 +8121,9 @@ function lookAnchorPrompt() {
    The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS FRONT (491 = 342 anchor + 148 closure lock)  BOTTOMS (320 chars - anchor, lower-body scoped)
-     + DENSE.bodyFidelity  (45) → 537  fits              → 366  fits
-     + DENSE.modelAgnostic (64) → 556  fits              → 385  fits
+     TOPS FRONT (487 = 338 anchor + 148 closure lock)  BOTTOMS (320 chars - anchor, lower-body scoped)
+     + DENSE.bodyFidelity  (45) → 533  fits              → 366  fits
+     + DENSE.modelAgnostic (64) → 552  fits              → 385  fits
      + both of them        (110)→ 602  fits              → 431  fits
 
    TOPS FRONT IS THE WORST CASE and the only row worth budgeting against: it is the one

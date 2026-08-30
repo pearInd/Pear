@@ -116,10 +116,10 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
    See CATEGORY_ANCHOR in app.js for the full list of what came off the wire, what went
    back on, and the restore path for each. */
 const TOPS_SPEC =
-  "Drape and fit the EXACT static shirt from the reference image onto the live" +
+  "Drape and fit the EXACT static top from the reference image onto the live" +
   " subject's CURRENT body contour and volume in this frame. Dynamically adapt the" +
   " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
-  " without stretching or warping the fabric. Strictly preserve the original shirt" +
+  " without stretching or warping the fabric. Strictly preserve the original top" +
   " texture, pattern, and color.";
 const BOTTOMS_SPEC =
   "Drape and fit the EXACT static pants/shorts from the reference image onto the live" +
@@ -260,7 +260,7 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      without "static" invites a re-cut, and "onto the subject" without "current ... in
      this frame" is the tense-less wording every previous revision shipped, which is what
      let the model deform a drape it had already produced. */
-  const LEAD = /^Drape and fit the EXACT static (shirt|pants\/shorts) from the reference image onto the live subject's CURRENT (body|lower-body) contour and volume in this frame\./;
+  const LEAD = /^Drape and fit the EXACT static (top|pants\/shorts) from the reference image onto the live subject's CURRENT (body|lower-body) contour and volume in this frame\./;
   check("(1) it binds the STATIC garment to the reference and the fit to THIS frame",
     LEAD.test(TOPS_SPEC) && LEAD.test(BOTTOMS_SPEC),
     "a prompt with no tense gives the model no reason to re-read the body");
@@ -282,7 +282,7 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
   /* (3) THE INVARIANT, restated last, on the attributes a re-drape is most likely to
      smear. This is what replaced STRICT_REFERENCE_LOCK on these two branches. */
   check("(3) it closes by pinning the garment's own attributes as unchanged",
-    /Strictly preserve the original shirt texture, pattern, and color\.$/.test(TOPS_SPEC) &&
+    /Strictly preserve the original top texture, pattern, and color\.$/.test(TOPS_SPEC) &&
     /Strictly preserve original pattern and color\.$/.test(BOTTOMS_SPEC),
     `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
   /* THE RUNTIME HALF. This wording promises a per-frame fit, and text alone cannot keep

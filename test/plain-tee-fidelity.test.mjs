@@ -171,15 +171,15 @@ console.log("\n── §3 NO REGRESSION: the garments that DO fasten still get t
   const bd = imageOnlyPrompt(BUTTONDOWN);
   check("a button-down still ships the closure lock - daabb47's report stays fixed",
     CLOSURE_RE.test(bd), bd);
-  check("...and still opens on the unchanged 'EXACT static shirt' anchor",
-    bd.indexOf("Drape and fit the EXACT static shirt from the reference image") === 0, bd);
+  check("...and still opens on the shared default anchor - now construction-neutral, see section 7.6",
+    bd.indexOf("Drape and fit the EXACT static top from the reference image") === 0, bd);
   /* CHANGED DELIBERATELY BY §6, which is why this reads as a reversal. It used to assert
      "anchor plus lock" - an unrecognised top got the closure clause by default. That
      default WAS the second bug: brand-named, Hebrew-titled and untitled tees are all
      unrecognisable to the tee vocabulary and all got handed placket tokens. The anchor is
      unchanged; only the clause is gone, and only where nothing proves it belongs. */
   check("an unclassifiable top keeps the default ANCHOR, but no longer the closure clause",
-    imageOnlyPrompt(UNKNOWN_TOP).indexOf("Drape and fit the EXACT static shirt") === 0 &&
+    imageOnlyPrompt(UNKNOWN_TOP).indexOf("Drape and fit the EXACT static top") === 0 &&
     !CLOSURE_RE.test(imageOnlyPrompt(UNKNOWN_TOP)),
     "an unproven top must not be handed closure tokens - see §6");
   check("the bottoms branch is untouched by the new axis",
@@ -308,6 +308,87 @@ console.log("\n── §6 THE BURDEN OF PROOF WAS ON THE WRONG SIDE ──");
     "a closure token in a TROUSER title must not reach the tops-only clause");
   check("the back branch is still closure-free, as it always was",
     !CLOSURE_RE.test(imageOnlyPrompt(BUTTONDOWN, "back")));
+}
+
+
+console.log("\n── §7 THE ANCHOR NOUN: the last button-down lean, on the DEFAULT branch ──");
+/* THE THIRD REPORT, after §6 supposedly finished this: casual tops and graphic tees
+   still coming back with a collar, a centre placket and a row of buttons.
+
+   §6 IS NOT WRONG, AND THAT IS THE POINT. It removed every closure TOKEN from the
+   default branch, and §2/§5 pin that they stay gone - an unclassifiable top ships zero
+   closure words today. The remaining lean is not a clause at all. It is the ANCHOR NOUN.
+
+   PLAIN_TEE_ANCHOR's own comment diagnosed this and then fixed only half of it:
+   "CATEGORY_ANCHOR.top says 'the EXACT static SHIRT', and in English an unqualified
+   'shirt' leans woven-and-buttoned. That was survivable while it was the only signal."
+   It judged the noun survivable ALONE and moved the tee branch off it. But the default
+   branch is where every brand-named, Hebrew-titled and untitled casual top lands - the
+   majority of a real storefront - and those items never reach the tee anchor. They were
+   left on the one word this file already identified as leaning toward a button-down.
+
+   THE FIX IS A NOUN SWAP INSIDE A FROZEN LITERAL - the cheapest shape this file allows.
+   No new axis, no new clause, no interpolation, and it REMOVES characters rather than
+   adding them, which is the direction §4 pins. "top" is construction-neutral: it commits
+   to the upper body, which is the one thing the anchor must keep saying, and says nothing
+   about weave, closure or collar either way.
+
+   WHY NOT A NEGATION. The obvious alternative is to spell out "no buttons, no collar, no
+   placket". set() has no negative_prompt, so those six nouns would ship in the POSITIVE
+   prompt - the exact mechanism §2 exists to reject, and the one that produced both the
+   tuxedo and daabb47's button-down. Removing the leaning word costs nothing and cannot be
+   sampled backwards.
+
+   FRONT + TOPS ONLY, on this file's one-branch-at-a-time-on-evidence rule. The report is
+   about collars, plackets and buttons - all front-of-garment features. BACK_CATEGORY_ANCHOR
+   is left byte-identical, exactly as PLAIN_TEE_ANCHOR left it, and §7.4 pins that. */
+{
+  const generic = imageOnlyPrompt(UNKNOWN_TOP);
+  const bd      = imageOnlyPrompt(BUTTONDOWN);
+  const tee     = imageOnlyPrompt(TEE);
+
+  /* "t-shirt" contains "shirt", and \bshirt\b matches inside it because the hyphen is a
+     word boundary. Strip the tee noun first, or this assertion silently passes on a
+     prompt that never changed. */
+  const bareShirt = (s) => /\bshirts?\b/i.test(s.replace(/t-shirts?/gi, ""));
+
+  check("§7.1 the DEFAULT tops anchor no longer names a 'shirt' - the woven-leaning noun",
+    !bareShirt(generic), generic);
+  check("...and names the construction-neutral upper-body noun instead",
+    generic.indexOf("Drape and fit the EXACT static top from the reference image") === 0 &&
+    /Strictly preserve the original top texture, pattern, and color\.$/.test(generic),
+    generic);
+
+  check("§7.2 it is still ONE frozen anchor - the noun swap assembled nothing",
+    generic.split("Drape and fit").length === 2 && !CLOSURE_RE.test(generic), generic);
+
+  /* The swap must not buy its neutrality back in characters - §4's direction applies to
+     every branch, not just the tee one. */
+  check("§7.3 it SHRINKS the wire, as every fidelity fix in this file must",
+    generic.length < 342, `expected < 342 (the pre-swap default), got ${generic.length}`);
+
+  check("§7.4 the BACK branch is byte-identical - no report, no change",
+    /EXACT static shirt's REAR\/BACK side/.test(imageOnlyPrompt(UNKNOWN_TOP, "back")),
+    "the back anchor is out of scope on the one-branch-at-a-time rule");
+
+  check("§7.5 the tee branch is untouched - it already had the right noun",
+    tee.indexOf("Drape and fit the EXACT static t-shirt from the reference image") === 0, tee);
+
+  /* A proven button-down is the one top for which "shirt" was ACCURATE. It loses the
+     noun and keeps the lock, which is the correct trade: the lock states the closure
+     positively and explicitly, so the construction is still fully determined - by the
+     clause that has evidence behind it rather than by a default noun that never did. */
+  check("§7.6 a proven button-down keeps its closure lock, which now carries the construction",
+    CLOSURE_RE.test(bd) && !bareShirt(bd), bd);
+
+  check("§7.7 bottoms are untouched - the noun swap is scoped to the tops branch",
+    /EXACT static pants\/shorts/.test(imageOnlyPrompt(JEANS)), imageOnlyPrompt(JEANS));
+
+  check("§7.8 no closure-family token reaches ANY non-fastening top - the whole report",
+    ["PEAK", "PEAK Oversized", "חולצה אוברסייז", "Vintage Graphic Print Top", "Boxy Top", ""]
+      .every((name) => !/button|placket|collar|lapel|\bzip|fasten|closure/i.test(
+        imageOnlyPrompt({ garmentType: "upper_body", name }))),
+    "a casual top must reach the wire with no construction words at all");
 }
 
 console.log(fails === 0 ? "\nplain-tee-fidelity: OK" : `\nplain-tee-fidelity: ${fails} FAILED`);
