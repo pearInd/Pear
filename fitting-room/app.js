@@ -5361,6 +5361,47 @@ function createOrientationWatcher() {
         toast("תמונת הגב אינה תקינה");
         return;
       }
+    } else if (GARMENT_FRONT) {
+      /* ── THE RETURN LEG - "I turned all the way round and came back in a Real Madrid
+         shirt." ────────────────────────────────────────────────────────────────────
+         THE ASYMMETRY THIS CLOSES. Everything above pre-flights the BACK asset before
+         committing to it, because committing first and finding the asset missing
+         afterwards is what produced the blank back view. The FRONT leg had none of it: it
+         fell straight through to `applying = true; autoOrientation = next; applyActive()`.
+
+         WHAT THAT COSTS ON THE WAY BACK. If the front bytes are not resident by then,
+         referenceImageFor() logs a pre-cache miss and falls back to a URL - and a URL means
+         DECART has to fetch it before it can condition on anything (garmentImageRef() puts
+         that at up to 20-25s). Until it lands the model has no reference and renders from
+         its own prior, which is where a jersey nobody selected comes from. The flip has
+         already committed, so the shopper watches it happen.
+
+         WHY THE BYTES GO MISSING ON THE RETURN LEG AND NOT THE OUTBOUND ONE. _assetBlobCache
+         is an LRU capped at BLOB_CACHE_MAX (10), shared across front, back, composites,
+         look stitches and every colour variant touched this session. The front entry is the
+         OLDEST of the pair by construction - fetched at go-live, where the back was fetched
+         at the first turn - so eviction reaches it first. A transient refetch failure does
+         the same. Neither is reachable outbound, because the branch above catches it.
+
+         NO CONTENT PROBE HERE, deliberately. The back gets one because a mislabelled or
+         soft-404'd rear photo is a real classification failure; the front asset is the one
+         the shopper picked and has already rendered correctly this session, so a flatness
+         check would only add a decode to the return path for a failure that cannot happen
+         without the front having been wrong from the start.
+
+         ABANDON, DO NOT DEGRADE. Returning without touching autoOrientation leaves the lock
+         where it is and the known-good reference on the wire; the sampler keeps voting, so
+         the next tick past the cooldown retries. That is exactly what the back branch does
+         with a missing asset, and it is the behaviour the shopper wants: the previous side
+         held a beat too long beats a garment nobody chose. */
+      const frontBlob = await garmentBlobCached(GARMENT_FRONT);
+      if (disposed) return;               // same superseded-instance guard as the back leg
+      if (!frontBlob) {
+        console.error("[PEAR] CRITICAL: GARMENT_FRONT unavailable at flip time; holding the",
+          "current side rather than committing to a reference that is not on the wire -", GARMENT_FRONT);
+        lastSwapAt = Date.now();          // throttle the retry to the normal swap cadence
+        return;
+      }
     }
 
     applying = true;
