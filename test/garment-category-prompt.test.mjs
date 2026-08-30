@@ -239,7 +239,7 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
 console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour ──");
 {
   check("binds the EXACT static shirt to the reference, nothing before it",
-    topsPrompt.indexOf("Drape and fit the EXACT static shirt from the reference image") === 0,
+    topsPrompt.indexOf("Drape and fit the EXACT static top from the reference image") === 0,
     topsPrompt);
   /* The preserve clause no longer ENDS the tops prompt: FRONT_CLOSURE_LOCK follows it on
      this branch (the button-down-rendered-open report). It is still the end of the ANCHOR,
@@ -248,7 +248,7 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      so a THIRD part appearing here would still fail. */
   check("...and carries the same per-frame adaptation and preserve clauses as bottoms",
     /Dynamically adapt the garment drape to the subject's exact/.test(topsPrompt) &&
-    /Strictly preserve the original shirt texture, pattern, and color\./.test(topsPrompt) &&
+    /Strictly preserve the original top texture, pattern, and color\./.test(topsPrompt) &&
     /pattern, and color\. Reproduce the reference's front closure exactly:[^.]*as shown\.$/.test(topsPrompt),
     topsPrompt);
 
@@ -263,8 +263,8 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
     bottomsPrompt.startsWith("Drape and fit the EXACT static "),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
   check("...and each names the region it replaces, and only that one",
-    /\bshirt\b/.test(topsPrompt) && !/pants|shorts|lower-body/.test(topsPrompt) &&
-    /pants\/shorts/.test(bottomsPrompt) && !/\bshirt\b/.test(bottomsPrompt),
+    /\btop\b/.test(topsPrompt) && !/pants|shorts|lower-body/.test(topsPrompt) &&
+    /pants\/shorts/.test(bottomsPrompt) && !/\btop\b/.test(bottomsPrompt),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
 
   /* ── THE ASYMMETRY ITSELF, asserted so it cannot drift by accident ───────────

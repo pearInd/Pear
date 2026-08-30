@@ -338,7 +338,7 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
     top.length <= CONFIG.PROMPT_MAX_CHARS && bot.length <= CONFIG.PROMPT_MAX_CHARS,
     `tops=${top.length} bottoms=${bot.length}`);
   check("the category anchor still leads - persistence language must not displace it",
-    /^Drape and fit the EXACT static shirt from the reference image/.test(top) &&
+    /^Drape and fit the EXACT static top from the reference image/.test(top) &&
     /^Drape and fit the EXACT static pants\/shorts from the reference image/.test(bot),
     "each branch must open on its own anchor, whatever else it carries");
 }

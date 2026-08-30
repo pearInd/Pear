@@ -113,8 +113,8 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      logos, and cut", which states the same rule inside the anchor where it cannot shed -
      and adds logos and cut, which the old wording did not name. */
   check("the shipped prompt names the reference as the only source of cloth",
-    /the EXACT static shirt from the reference image/.test(out) &&
-    /Strictly preserve the original shirt texture, pattern, and color\./.test(out), out);
+    /the EXACT static top from the reference image/.test(out) &&
+    /Strictly preserve the original top texture, pattern, and color\./.test(out), out);
   check("...the discard is still carried by exhaustion, not stated outright",
     !/ignoring the original model's body/.test(out), out);
   /* ── THE BODY-VOLUME GUARANTEE IS OFF THE WIRE, and this suite is where that has to
@@ -138,7 +138,7 @@ console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes ou
      It used to be a ranking argument (MED, shed under pressure); it is now structural. */
   for (const prof of [false, true]) {
     check(`carried at inProfile=${prof} - a sentence in a constant cannot shed`,
-      /Strictly preserve the original shirt texture, pattern, and color\./
+      /Strictly preserve the original top texture, pattern, and color\./
         .test(api.buildCompositePrompt(TEE, "front", prof)));
   }
 
@@ -240,8 +240,8 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  537, 366],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 556, 385],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  533, 366],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 552, 385],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
@@ -250,9 +250,9 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
   }
   check("...and app.js prints that arithmetic, per branch, with both branches fitting",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS FRONT \(491 = 342 anchor \+ 148 closure lock\)  BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 537  fits              \u2192 366  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 556  fits              \u2192 385  fits/.test(SRC),
+    /TOPS FRONT \(487 = 338 anchor \+ 148 closure lock\)  BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 533  fits              \u2192 366  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 552  fits              \u2192 385  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
   check("...and it no longer claims a headroom that stopped being true two revisions ago",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
@@ -286,7 +286,7 @@ console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) 
   for (const prof of [false, true]) {
     const out = api.buildCompositePrompt(pathological, "front", prof);
     check(`the category anchor survives a pathologically long name (inProfile=${prof})`,
-      /Drape and fit the EXACT static shirt from the reference image/.test(out),
+      /Drape and fit the EXACT static top from the reference image/.test(out),
       `${out.length} chars: ${out.slice(-160)}`);
   }
 }
