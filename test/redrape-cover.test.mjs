@@ -184,5 +184,71 @@ console.log("\n── §5 NOT A BOTTOMS FIX - the churn was never region-specifi
     "scoping this to bottoms would leave the identical bug live on every top");
 }
 
+console.log("\n── §6 THE THIRD WRITE SITE: presence regain, after a 360 ──");
+/* THE REPORT: "front and back both render correctly during the turn, but the moment I
+   complete a full 360 and come back to face-forward, it hallucinates a completely
+   different shirt - a Real Madrid jersey with sponsor logos."
+
+   IT IS THIS FILE'S OWN MECHANISM, through the one write site that never got the cover.
+   There are three mid-session re-uploads. The orientation swap has orientHoldBegin(). The
+   re-drape has redrapeCoverBegin(), added by the report above. reconditionForPresence()
+   has neither, and it issues the same full applyActive() dispatch.
+
+   WHY A 360 FIRES IT, SPECIFICALLY. presenceFromPoseResult() requires LEFT_SHOULDER,
+   RIGHT_SHOULDER, LEFT_HIP and RIGHT_HIP to each clear POSE_MIN_CONFIDENCE. Through the
+   side-on quarters of a rotation one shoulder and one hip are occluded by the shopper's
+   own torso, their visibility falls, and presence is LOST. Completing the turn brings all
+   four back at once, the gate flips `present && !wasPresent`, and the re-condition fires -
+   uncovered - exactly as the shopper arrives back at front. The churn window is then fully
+   visible, and what is visible in it is Decart rendering from its own prior. On a plain tee
+   that reads as a wobble; on a garment with a strong graphic it reads as a different shirt,
+   which is why the report names a specific jersey.
+
+   THE FIX IS THE SAME ONE, at the same distance from the write: raise before, release in a
+   finally. Nothing about the presence path makes it a different kind of dispatch. */
+{
+  /* BRACE-BALANCED, not marker-delimited. The nearest end marker sits well past
+     reconditionForTopology(), so a marker extract here would swallow the neighbour that
+     ALREADY has the cover and report a pass for a function that has none - the assertion
+     would be measuring the wrong body entirely. */
+  const lift = (signature) => {
+    const i = SRC.indexOf(signature);
+    if (i < 0) throw new Error("not found in app.js: " + signature);
+    let depth = 0;
+    for (let k = SRC.indexOf("{", i); k < SRC.length; k++) {
+      if (SRC[k] === "{") depth++;
+      else if (SRC[k] === "}" && --depth === 0) return SRC.slice(i, k + 1);
+    }
+    throw new Error("unbalanced braces: " + signature);
+  };
+  const fn = lift("async function reconditionForPresence()");
+  check("the extraction is the presence function alone, not its neighbour",
+    /presenceReconditionInFlight/.test(fn) && !/reconditionForTopology/.test(fn),
+    "a marker extract here reaches past into the function that already has the cover");
+  check("reconditionForPresence raises the cover too - it is the same kind of write",
+    /redrapeCoverBegin\(/.test(fn),
+    "an uncovered presence regain is the 360-degree hallucination");
+  check("...BEFORE its re-upload, not after it",
+    fn.indexOf("redrapeCoverBegin(") < fn.indexOf("await applyActive()"),
+    "a cover raised after the write covers nothing");
+  check("...and releases it in a finally, so a throw cannot strand a frozen feed",
+    /finally\s*\{[\s\S]*?redrapeCoverEnd\(/.test(fn),
+    "a throw mid-re-condition would otherwise hold a still frame until the ceiling");
+  /* The bails must stay AHEAD of the cover. Every one of them means "no write is going to
+     happen", and raising a cover over a dispatch that never runs freezes the feed for
+     nothing - the exact cost this suite exists to avoid spending. */
+  check("the early bails still run before the cover is raised",
+    fn.indexOf("if (presenceReconditionInFlight") < fn.indexOf("redrapeCoverBegin(") &&
+    fn.indexOf("if (wireBusy()) return;") < fn.indexOf("redrapeCoverBegin("),
+    "covering a dispatch that returns early would freeze the feed over nothing");
+  /* All three write sites now cover their window. Asserted together so a fourth one added
+     later has an obvious precedent to follow rather than a pattern to rediscover. */
+  check("all three mid-session re-upload sites are now covered",
+    /redrapeCoverBegin\(/.test(lift("async function reconditionForTopology(step)")) &&
+    /redrapeCoverBegin\(/.test(fn) &&
+    /orientHoldBegin\("swap"\)/.test(SRC),
+    "topology, presence and the orientation swap - the complete set");
+}
+
 console.log(fails === 0 ? "\nredrape-cover: OK" : `\nredrape-cover: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

@@ -13178,12 +13178,31 @@ async function reconditionForPresence() {
      queueing a write behind one that is already going to re-condition this session. */
   if (wireBusy()) return;
   presenceReconditionInFlight = true;
+  /* COVER THE CHURN WINDOW BEFORE THE WRITE - the third re-upload site, and the last one
+     to get this. The orientation swap has orientHoldBegin(); the re-drape has this same
+     cover; this one had neither while issuing the identical full applyActive() dispatch.
+
+     REPORTED AS THE 360-DEGREE HALLUCINATION: "front and back render correctly through the
+     turn, but completing a full rotation back to face-forward brings up a completely
+     different shirt." presenceFromPoseResult() needs both shoulders AND both hips over
+     POSE_MIN_CONFIDENCE, and through the side-on quarters of a rotation one of each is
+     occluded by the shopper's own torso - so presence is LOST mid-turn and REGAINED the
+     instant they come back to front. That regain fires this function, uncovered, exactly
+     as the shopper arrives facing the camera. What is visible in the window is Decart
+     rendering from its own prior; on a plain tee it reads as a wobble, on a strong graphic
+     it reads as somebody else's jersey.
+
+     RAISED AFTER THE BAILS, DELIBERATELY. Every return above this line means no write is
+     going to happen, and a cover over a dispatch that never runs freezes the feed for
+     nothing. Released in the finally so a throw cannot strand a frozen feed. */
+  redrapeCoverBegin("presence-regain");
   try {
     console.log(`[PEAR] presence regained at t=${sessionElapsedMs()}ms - re-conditioning (no re-bill)`);
     await applyActive();
   } catch (e) {
     console.warn("[PEAR] presence re-condition failed:", e?.message || e);
   } finally {
+    redrapeCoverEnd("presence-regain-complete");
     presenceReconditionInFlight = false;
   }
 }
