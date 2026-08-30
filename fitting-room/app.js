@@ -4280,6 +4280,164 @@ function prewarmOrientationAssets() {
  *   hasBack=false → at least one item's BACK is missing/broken - goLive() should proceed
  *                    FRONT-ONLY rather than arm AI Auto with a known-bad asset.
  */
+/* ── DUAL-PANEL REFERENCES - "the back text is on my chest before I even turn" ────
+   TWO SYMPTOMS, ONE CAUSE: the large BACK graphic rendered on the FRONT chest from session
+   start, and turning around giving a plain garment with no detailing.
+
+   NEITHER IS A PROMPT BUG, and that was checked before any of this was written. The front
+   and back anchors are clean of each other, COMPOSITE_DEFAULT is false so
+   buildCompositePrompt() reaches no live session, and the reference actually sent is
+   whatever galleryOf() calls `front`.
+
+   THE CAUSE IS THAT `front` IS SOMETIMES BOTH VIEWS IN ONE IMAGE. A storefront that
+   publishes its product as a single front|back diptych hands this room ONE photo. galleryOf
+   cannot see two views inside it, so distinctBackOf() finds no back, canCombineViews()
+   returns false, and the session runs front-only WITH THE DIPTYCH as its reference. The
+   model gets two garments in one frame and no panel contract explaining them - the
+   ambiguous-reference condition this file documents as sending a diffusion model back to
+   its own prior - and resolves it by painting both panels onto one torso. That is symptom
+   one. Because the session is front-only, turning around swaps nothing: symptom two.
+
+   THE FIX IS TO STOP HANDING IT AN AMBIGUOUS IMAGE, not to explain the ambiguity in words.
+   Explaining it is COMPOSITE_MODE, which renderPerspectiveSelector() documents as THE
+   BLANK-BACK BUG (23f5953: both panels' designs rendered on one surface). Splitting the
+   diptych into two clean single-view buffers feeds the architecture that already works -
+   AI Auto swapping between two unambiguous photos, one side at a time - and needs no prompt
+   change at all: the existing front/back anchors become correct the moment their references
+   are correct.
+
+   DETECTION IS DELIBERATELY CONSERVATIVE. A false positive cuts a legitimate photo in half,
+   which is worse than the bug. Explicit panel geometry from the widget is authoritative
+   when present. Without it, only an aspect ratio at or above DUAL_PANEL_MIN_RATIO qualifies
+   - wide enough that a single garment packshot essentially never reaches it. A 16:9
+   lifestyle shot (1.78) sits deliberately BELOW the bar. A diptych of two 3:4 portraits
+   (1.5) is a KNOWN MISS, accepted so that the 16:9 case can never be destroyed; if such a
+   product turns up, the widget's layout metadata is the way to catch it, not a lower bar. */
+const DUAL_PANEL_MIN_RATIO = 1.85;
+
+/* Panel geometry the widget actually drew, when it sent any. Shape mirrors
+   describeCompositeLayout(): { w, h, front_x, front_w, back_x, back_w }. */
+function usableDualPanelLayout(layout) {
+  const L = layout;
+  if (!L || !L.w || !L.front_w || !L.back_w) return null;
+  if (typeof L.front_x !== "number" || typeof L.back_x !== "number") return null;
+  return L;
+}
+
+/**
+ * Whether this reference is two views side by side.
+ * @param {number} w @param {number} h @param {object|null} layout widget-reported geometry
+ * @returns {boolean}
+ */
+function looksDualPanel(w, h, layout) {
+  if (usableDualPanelLayout(layout)) return true;
+  if (!w || !h) return false;
+  return (w / h) >= DUAL_PANEL_MIN_RATIO;
+}
+
+/**
+ * Where each view lives inside a dual-panel reference.
+ * Explicit geometry is used verbatim - including a height that excludes the label band this
+ * file's own composites draw under the garments, because text cropped into a reference is
+ * text that can be composited onto the shopper. It also binds BY ROLE rather than by
+ * position: describeCompositeLayout() already warns that panels can be reversed, and a
+ * splitter that assumed LEFT=FRONT would bind the back photo as the front for those.
+ * Without geometry, the halves are split at the midpoint with the seam column belonging to
+ * neither, so no sliver of one panel bleeds into the other.
+ * @returns {{front:{x:number,y:number,w:number,h:number}, back:{x:number,y:number,w:number,h:number}}}
+ */
+function dualPanelRects(w, h, layout) {
+  const L = usableDualPanelLayout(layout);
+  if (L) {
+    const ph = L.h || h;
+    return {
+      front: { x: L.front_x, y: 0, w: L.front_w, h: ph },
+      back:  { x: L.back_x,  y: 0, w: L.back_w,  h: ph },
+    };
+  }
+  const half = Math.floor(w / 2);
+  return {
+    front: { x: 0,      y: 0, w: half, h },
+    back:  { x: w - half, y: 0, w: half, h },
+  };
+}
+
+/**
+ * Split a dual-panel reference into two clean single-view assets, in place.
+ *
+ * Writes item.img (front crop) and item.imgBack (back crop) as data: URLs, which is what
+ * makes distinctBackOf() see a real back and canCombineViews() enable AI Auto. Everything
+ * downstream - prewarm, the pre-load gate, maybeSwap, referenceImageFor - then works
+ * unchanged, because they were only ever missing a second photo.
+ *
+ * data:, NEVER blob:. garmentImageRef() passes a blob: URL through verbatim, and the SDK's
+ * imageToBase64() returns any string that is not a data: URL or an absolute http(s) URL
+ * AS IF ITS CHARACTERS WERE BASE64 IMAGE BYTES - no error, no log, an arbitrary garment on
+ * screen. data: is handled correctly by both.
+ *
+ * Fails closed: any error leaves the item exactly as it was. A garment carrying a front
+ * crop and no back is worse than an unsplit diptych, because the first looks correct.
+ * @param {object|null} item @returns {Promise<boolean>} true when a split was applied
+ */
+async function deriveDualPanelViews(item) {
+  if (!item || item._panelsDerived) return false;
+  if (isBottomsGarment(item)) return false;
+  const g = galleryOf(item);
+  /* A garment that already ships two real photos is not this bug, and re-deriving one from
+     a crop would replace good assets with worse ones. */
+  if (distinctBackOf(item, g)) return false;
+  const src = g.front || item.img;
+  if (!src) return false;
+
+  try {
+    const blob = await garmentBlobCached(src);
+    if (!blob) return false;
+    const bmp = await createImageBitmap(blob);
+    const layout = usableDualPanelLayout(item._compositeLayout);
+    if (!looksDualPanel(bmp.width, bmp.height, layout)) { bmp.close?.(); return false; }
+
+    const rects = dualPanelRects(bmp.width, bmp.height, layout);
+    const cut = (r) => {
+      const c = typeof OffscreenCanvas !== "undefined"
+        ? new OffscreenCanvas(r.w, r.h)
+        : Object.assign(document.createElement("canvas"), { width: r.w, height: r.h });
+      c.getContext("2d", { alpha: false }).drawImage(bmp, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+      return c;
+    };
+    const toDataUrl = async (c) => {
+      if (c.toDataURL) return c.toDataURL("image/jpeg", 0.95);
+      const b = await c.convertToBlob({ type: "image/jpeg", quality: 0.95 });
+      return await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result);
+        fr.onerror = rej;
+        fr.readAsDataURL(b);
+      });
+    };
+    const frontUrl = await toDataUrl(cut(rects.front));
+    const backUrl  = await toDataUrl(cut(rects.back));
+    bmp.close?.();
+    if (!frontUrl || !backUrl) return false;
+
+    item.img = frontUrl;
+    item.imgBack = backUrl;
+    item.backSource = "panel-split";
+    item._panelsDerived = true;
+    /* The nested colour gallery, if there is one, would otherwise keep serving the diptych
+       through galleryOf()'s first branch and silently win over the crops above. */
+    if (item.images && typeof item.images === "object") {
+      item.images = { ...item.images, front: frontUrl, back: backUrl };
+    }
+    console.log("[PEAR] dual-panel reference detected and SPLIT -",
+      `${bmp.width}x${bmp.height}`, layout ? "(widget layout)" : `(aspect ${(bmp.width / bmp.height).toFixed(2)})`,
+      "\n  this garment was rendering both panels on one torso; it now has a real front and back asset");
+    return true;
+  } catch (e) {
+    console.warn("[PEAR] dual-panel split failed - leaving the reference untouched:", e?.message || e);
+    return false;
+  }
+}
+
 async function preloadGarmentAssets() {
   const look = resolveLook();
   const items = (look ? [look.top, look.bottom] : [activeItem]).filter(Boolean);
@@ -11888,6 +12046,15 @@ async function goLive() {
        being reused, not re-attempted. Re-derive fresh from canCombineViews() on
        EVERY go-live so each run gets its own honest attempt at AI Auto, rather than
        inheriting a downgrade from a run that's already over. */
+    /* ...but FIRST, look inside the reference. A storefront that publishes its product as
+       one front|back diptych hands this room a single photo, so canCombineViews() below
+       sees no back and settles on front-only WITH THE DIPTYCH on the wire - which renders
+       both panels onto one torso. deriveDualPanelViews() turns that one image into two
+       clean single-view assets, and everything downstream then works unchanged. It must run
+       BEFORE the line below or the split lands after the mode has already been chosen, and
+       before the pre-load gate so the crops are what gets validated. No-ops for every
+       garment that is not a diptych, which is almost all of them. */
+    await deriveDualPanelViews(activeItem);
     currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
     /* Boot the lock UNRESOLVED (PENDING_MODE), not FRONT. This used to assert
        "the shopper is facing the camera" before a single frame had been sampled,
