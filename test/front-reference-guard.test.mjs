@@ -61,7 +61,7 @@ const BACK  = "https://cdn.test/peak-back.jpg";
    as parameters would make every assignment invisible from out here. */
 function harness({ frontBlob = { size: 1, type: "image/jpeg" },
                    backBlob  = { size: 1, type: "image/jpeg" },
-                   startOrientation = "back", flat = false } = {}) {
+                   startOrientation = "back", flat = false, applyThrows = false } = {}) {
   const calls = [];
   const sandbox = {
     ORIENT_COOLDOWN_MS: 1500, AUTO_ANGLE: "auto", currentAngle: "auto",
@@ -81,7 +81,10 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
     orientHoldBegin: () => calls.push({ op: "holdBegin" }),
     orientHoldExtend: () => calls.push({ op: "holdExtend" }),
     orientHoldEnd: (r) => calls.push({ op: "holdEnd", r }),
-    applyActive: async () => { calls.push({ op: "applyActive" }); },
+    applyActive: async () => {
+      calls.push({ op: "applyActive" });
+      if (applyThrows) throw new Error("set() failed: ack timeout");
+    },
     abbrevImg: (s) => String(s),
     toast: (t) => calls.push({ op: "toast", t }),
     setTimeout: (fn) => { fn(); return 0; },
@@ -177,6 +180,58 @@ console.log("\n── §5 NO OUTPUT FRAME IS EVER USED AS AN INPUT REFERENCE ─
     !/aiVideo/i.test(dispatches), dispatches.slice(0, 200));
   check("the frozen turn overlay is display-only - it never becomes a reference",
     !/image:\s*_orientFadeCanvas/.test(SRC) && !/orientFadeEl\(\)[\s\S]{0,80}image:/.test(SRC));
+}
+
+console.log("\n── §6 A FAILED DISPATCH MUST NOT LEAVE THE LOCK LYING ──");
+/* THE REPORT: "I turn 180 degrees and the big back graphic is gone - just plain brown."
+   The garment renders, the colour is right, and the rear print is simply absent.
+
+   THE LOCK AND THE WIRE CAN DISAGREE, and that is the whole bug. maybeSwap() sets
+   `autoOrientation = next` BEFORE it dispatches, then awaits applyActive(). If that throws
+   - an ack timeout, a wire error, a dropped set() - the catch logs, releases the hold, and
+   leaves autoOrientation pointing at a side whose reference never reached Decart.
+
+   WHAT THAT PRODUCES IS EXACTLY A PRINT-LESS BACK. effectiveAngle() now resolves "back", so
+   every subsequent prompt - the periodic re-anchor and every topology re-drape - is built
+   from BACK_CATEGORY_ANCHOR, which says "Precisely lock the rear print, logos, and back
+   seams". That instruction is sent against the FRONT photo still on the wire, which has no
+   rear print in it. app.js already records what the model does when told to reproduce a
+   back it cannot see: it suppresses the graphic rather than inventing one. Brown fabric,
+   no print.
+
+   AND THE SESSION NEVER RECOVERS. The sampler keeps voting "back", which now AGREES with
+   the (wrong) lock, so needsSwitch is false and maybeSwap is never called again. One failed
+   dispatch strands the orientation for the rest of the session.
+
+   THE FIX: the lock is a claim about what is on the wire, so it may only be advanced by a
+   dispatch that actually succeeded. On failure it goes back to what it was, the vote
+   disagrees again, and the next tick past the cooldown retries. */
+{
+  const h = harness({ startOrientation: "front", applyThrows: true });
+  await h.maybeSwap("back");
+  check("a back swap whose dispatch throws rolls the lock back to FRONT",
+    h.state().autoOrientation === "front",
+    "a lock claiming BACK over a front reference is what suppresses the rear print");
+  check("...and the apply was genuinely attempted, so this is a rollback not a skip",
+    h.calls.some((c) => c.op === "applyActive"));
+  check("...and the frozen overlay is released rather than left up",
+    h.calls.some((c) => c.op === "holdEnd"));
+  check("...and `applying` is cleared so the retry is not blocked",
+    h.state().applying === false);
+}
+{
+  const h = harness({ startOrientation: "back", applyThrows: true });
+  await h.maybeSwap("front");
+  check("the return leg rolls back the same way - the rule is about the wire, not a side",
+    h.state().autoOrientation === "back");
+}
+{
+  /* The rollback must not make a later good swap impossible: after a failure the vote
+     disagrees with the restored lock again, which is exactly what lets the next tick retry. */
+  const h = harness({ startOrientation: "front" });
+  await h.maybeSwap("back");
+  check("a dispatch that succeeds still advances the lock",
+    h.state().autoOrientation === "back" && h.calls.some((c) => c.op === "applyActive"));
 }
 
 console.log(fails === 0 ? "\nfront-reference-guard: OK" : `\nfront-reference-guard: ${fails} FAILED`);
