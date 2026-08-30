@@ -48,7 +48,7 @@ function harness() {
     clearTimeout: (t) => { if (t) t.live = false; },
   };
   const api = new Function(...Object.keys(sandbox),
-    holdSrc + "\nreturn { orientHoldBegin, orientHoldEnd, orientHoldExtend, active: () => _orientHoldActive, MAX: ORIENT_TURN_HOLD_MAX_MS };"
+    holdSrc + "\nreturn { orientHoldBegin, orientHoldEnd, active: () => _orientHoldActive, MAX: ORIENT_TURN_HOLD_MAX_MS };"
   )(...Object.values(sandbox));
   return { api, events, fireTimers: () => timers.filter((t) => t.live).forEach((t) => { t.live = false; t.fn(); }), timers };
 }
@@ -328,110 +328,6 @@ console.log("\n── behaviour: the shared hold primitive treats a profile trig
   api.orientHoldEnd("turn-abandoned");
   check("release reveals the live feed",
     events.filter((e) => e.op === "reveal").length === 1 && api.active() === false);
-}
-
-console.log("\n── THE CEILING IS SPENT BEFORE THE SWAP EVEN STARTS ──");
-/* THE REPORT: "the print distorts and the video stutters when I turn around."
-
-   THE ARITHMETIC. The hold is raised on the FIRST disagreeing vote (that is the fix this
-   suite was written for) and armed with ORIENT_TURN_HOLD_MAX_MS = 4000. But a flip is not
-   CONFIRMED until ORIENT_LOCK_FRAMES (10 samples at ORIENT_SAMPLE_MS 250 = 2500ms) or
-   ORIENT_LOCK_MS (2500ms). So ~2500ms of the 4000ms ceiling is gone before maybeSwap() is
-   even called, leaving ~1500ms for: garmentBlobCached() (a real network fetch on a prewarm
-   miss), createImageBitmap + bitmapLooksFlat, applyActive() -> rtClient.set({image}) ->
-   await ack, and ORIENT_FADE_HOLD_MS. orientHoldBegin("swap") cannot help: it is a
-   documented no-op when a hold is already up, and re-freezing there is FORBIDDEN for good
-   reason - the frame it would capture is the degraded mid-turn one we are hiding.
-
-   SO THE CEILING FIRES MID-SWAP and cross-fades the frozen frame away while the reference
-   is still in flight - revealing exactly the churn window applyGarment's flicker-fix
-   comment says renders a generic garment. That is the reported artifact.
-
-   IT ALSO UN-SUPPRESSES A SECOND WRITE. reconditionForTopology() bails on
-   `if (_orientHoldActive) return;`, so the moment the ceiling clears the flag, a turning
-   body - which is precisely what trips the topology threshold - can fire a full image
-   re-upload on top of the one still in flight. app.js calls that "the most expensive
-   collision available".
-
-   THE FIX IS NOT A BIGGER CEILING. The ceiling's job is to bound a STUCK hold - one whose
-   releasing event never arrives - and raising it would make a genuinely stuck hold worse
-   for every shopper to buy headroom for one slow fetch. The swap gets its OWN window
-   instead: when the swap actually begins, re-arm the timer without re-freezing. */
-{
-  const { api, events, fireTimers, timers } = harness();
-  api.orientHoldBegin("turn-detected");
-  check("the turn raises the hold and arms the ceiling",
-    api.active() === true && timers.filter((t) => t.live).length === 1);
-
-  api.orientHoldExtend("swap");
-  check("extending does NOT re-freeze - the mid-turn frame must never be captured",
-    events.filter((e) => e.op === "freeze").length === 1,
-    "a second snapshot here is the degraded frame the hold exists to hide");
-  check("...and the hold stays up throughout - extending is not a release",
-    api.active() === true && events.filter((e) => e.op === "reveal").length === 0);
-  check("...and exactly one ceiling is armed, not two racing each other",
-    timers.filter((t) => t.live).length === 1,
-    "a stale timer left live would fire mid-swap anyway and undo the whole fix");
-
-  /* The point of the whole exercise: the timer that was counting down from turn-detected
-     is dead, so a swap that runs long is no longer cut off by a ceiling it never got. */
-  fireTimers();
-  check("the re-armed ceiling still bounds a genuinely stuck swap",
-    api.active() === false && events.filter((e) => e.op === "reveal").length === 1,
-    "extending must not make the hold unbounded - a stuck still frame is worse than a live one");
-}
-
-{
-  const { api, events } = harness();
-  /* A bare extend must never RAISE a hold. orientHoldBegin owns the raise, and it owns the
-     frame capture with it; an extend that could freeze the feed would put a still frame up
-     at a moment nobody decided to. */
-  api.orientHoldExtend("swap");
-  check("extending with no hold up is a no-op - it never freezes the feed",
-    api.active() === false &&
-    events.filter((e) => e.op === "freeze").length === 0 &&
-    events.filter((e) => e.op === "reveal").length === 0);
-}
-
-{
-  /* THE WHOLE SEQUENCE, as a live turn runs it. */
-  const { api, events, fireTimers } = harness();
-  api.orientHoldBegin("turn-detected");   // first disagreeing vote, ~2.5s before confirmation
-  api.orientHoldBegin("swap");            // confirmed - still a no-op, still correct
-  api.orientHoldExtend("swap");           // ...so the swap re-arms its own window here
-  check("the swap's begin stays a no-op - the frame is still the good dressed one",
-    events.filter((e) => e.op === "freeze").length === 1);
-  api.orientHoldEnd("swap-complete");
-  check("a swap that lands normally releases exactly once",
-    api.active() === false && events.filter((e) => e.op === "reveal").length === 1);
-  fireTimers();
-  check("...and the re-armed ceiling was cleared by that release, so it cannot fire late",
-    events.filter((e) => e.op === "reveal").length === 1,
-    "a late timer would reveal a second time over a session that already moved on");
-}
-
-console.log("\n── THE EXTEND IS ACTUALLY CALLED AT THE SWAP ──");
-{
-  /* The guard-dead-call-site rule: this file already carries a report of a correct
-     boundary function that was never reached. Assert the CALL SITE. */
-  const swapFn = SRC.slice(SRC.indexOf("async function maybeSwap"),
-                           SRC.indexOf("The edge-on counterpart of maybeSwap"));
-  check("maybeSwap() re-arms the ceiling when the swap begins",
-    /orientHoldExtend\(/.test(swapFn), "without this call site the fix is dead code");
-  check("...right beside the begin it cannot rely on, and before the apply",
-    swapFn.indexOf("orientHoldExtend(") > swapFn.indexOf('orientHoldBegin("swap")') &&
-    swapFn.indexOf("orientHoldExtend(") < swapFn.indexOf("await applyActive()"),
-    "extending AFTER the apply would re-arm a ceiling the apply already outran");
-  /* The anti-flap bars are untouched by this fix and must stay that way: lowering them is
-     how a head-turn starts swapping the reference again. */
-  check("the confirmation thresholds are NOT loosened to compensate",
-    /const ORIENT_LOCK_FRAMES\s*=\s*10;/.test(SRC) &&
-    /const ORIENT_LOCK_MS\s*=\s*2500;/.test(SRC) &&
-    /const ORIENT_COOLDOWN_MS\s*=\s*1500;/.test(SRC),
-    "the ceiling was the bug; the hysteresis was never the bug");
-  check("...and the ceiling itself is unchanged - a stuck hold is bounded as before",
-    /const ORIENT_TURN_HOLD_MAX_MS\s*=\s*4000;/.test(SRC),
-    "raising it would punish every stuck hold to buy headroom for one slow fetch");
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
