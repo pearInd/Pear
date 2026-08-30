@@ -254,6 +254,7 @@ const SUITES = [
   ["back-view-readiness", "back-view-readiness.test.mjs"],
   ["front-reference-guard", "front-reference-guard.test.mjs"],
   ["redrape-cover", "redrape-cover.test.mjs"],
+  ["sleeve-length", "sleeve-length.test.mjs"],
   ["body-presence-gate", "body-presence-gate.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
   ["body-topology", "body-topology.test.mjs"],

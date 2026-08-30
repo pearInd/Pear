@@ -7812,6 +7812,17 @@ const STRUCTURED_TOP_TOKENS =
  */
 function isPlainKnitTop(item) {
   if (!item || isBottomsGarment(item)) return false;
+  /* A LONG SLEEVE DISQUALIFIES THE TEE ANCHOR, and this is the sleeveless exclusion in the
+     other direction. PLAIN_TEE_ANCHOR opens "the EXACT static t-shirt", and "t-shirt"
+     carries a sleeve length with it - PLAIN_TEE_TOKENS matches a bare \btees?\b, so "Long
+     Sleeve Tee" was resolving to an anchor that asserted short sleeves at a reference
+     showing long ones. app.js's retired SHIRT_NOUN note names this exact failure: a garment
+     noun is "WRONG for lower_body items and long-sleeve tops, where it asserts what the
+     reference contradicts". Calling a tank a t-shirt grows sleeves that were never there;
+     calling a long-sleeve tee a t-shirt cuts off sleeves that were. Same mistake, opposite
+     sign. Such items take the sleeve-neutral "shirt" anchor plus SLEEVE_LENGTH_LOCK, which
+     states the length rather than implying it. */
+  if (hasLongSleeves(item)) return false;
   const fields = [item.type, item.category, item.subType, item.name, item.title]
     .filter(Boolean).join(" ");
   if (STRUCTURED_TOP_TOKENS.test(fields)) return false;
@@ -7854,6 +7865,55 @@ function hasFrontClosure(item) {
     .filter(Boolean).join(" ");
   return STRUCTURED_TOP_TOKENS.test(fields);
 }
+
+/* ── SLEEVE LENGTH - "the long-sleeve shirt came back cut off at the elbows" ──────
+   REPORTED: a white full-sleeve button-down rendering as a short-sleeve shirt, fabric
+   stopping near the elbow. The RIGHT garment in a state the reference never showed, which
+   is the FRONT_CLOSURE_LOCK class exactly - and therefore the class this file's restore
+   note says a clause may be bought back for, by the procedure it prescribes: ONE part, at
+   P.HIGH, on positive evidence only.
+
+   NOTHING BOUND SLEEVE LENGTH AT ALL before this. A button-down gets the neutral "shirt"
+   anchor, which says nothing about sleeves, plus FRONT_CLOSURE_LOCK, which pins the
+   fastening and nothing else. The reference shows full sleeves; the model truncated them
+   anyway, and no text on the wire contradicted it.
+
+   STATED POSITIVELY. The obvious wording - "do NOT truncate or render short sleeves" -
+   names "short sleeves" inside a prompt that has no negative_prompt field to hold it, which
+   is the DENSE.assetLock shape that produced the tuxedo. Naming the length we WANT costs
+   the same budget and cannot be sampled backwards.
+
+   FRONT AND BACK, WHICH IS WHERE IT DIVERGES FROM THE CLOSURE LOCK, and the difference is
+   physical rather than stylistic: a placket is a front-of-garment feature and is genuinely
+   not in view from behind, so spending it on the back anchor would be waste. A SLEEVE is in
+   view from every angle. Scoping this to the front by symmetry with the closure lock would
+   leave the reported truncation live the moment the shopper turns around.
+
+   POSITIVE EVIDENCE ONLY, for the reason hasFrontClosure() documents: an unrecognised top
+   must degrade to the OLD behaviour, never to a new assertion about a garment nobody
+   verified. toItem() already defaults an unknown top's subType to "short_sleeve", so
+   silence here genuinely means "no long-sleeve claim" rather than "unknown". */
+const LONG_SLEEVE_TOKENS =
+  /(שרוול ארוך|\blong[- ]?sleeved?\b|\blongsleeves?\b|\bfull[- ]sleeved?\b)/i;
+
+/**
+ * Whether this garment is positively known to have full-length sleeves.
+ * subType is ground truth when present, exactly as it is for every other axis; the title
+ * vocabulary is the fallback for items that arrived without it.
+ * @param {object|null|undefined} item
+ * @returns {boolean} true only on positive evidence of a long sleeve.
+ */
+function hasLongSleeves(item) {
+  if (!item || isBottomsGarment(item)) return false;
+  if (item.subType === "long_sleeve") return true;
+  const fields = [item.category, item.subType, item.name, item.title]
+    .filter(Boolean).join(" ");
+  return LONG_SLEEVE_TOKENS.test(fields);
+}
+
+const SLEEVE_LENGTH_LOCK =
+  "The sleeves are full length: fabric covers the entire arm down to the wrist, exactly" +
+  " as shown in the reference.";
 
 const CATEGORY_ANCHOR = Object.freeze({
   /* The two strings share one spine - bind the static garment, adapt to the current
@@ -8122,9 +8182,14 @@ function imageOnlyPrompt(item, angle = "front") {
      one requires), so a prompt can never name a seamless front and a fastened placket
      together. */
   const closure = !bottoms && angle !== "back" && hasFrontClosure(item);
+  /* NOT scoped to the front, and that asymmetry with `closure` is deliberate: a placket is
+     a front-of-garment feature and genuinely is not in view from behind, while a sleeve is
+     in view from every angle. See SLEEVE_LENGTH_LOCK. */
+  const longSleeve = !bottoms && hasLongSleeves(item);
   return fitPrompt([
     [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
     ...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
+    ...(longSleeve ? [[P.HIGH, SLEEVE_LENGTH_LOCK]] : []),
   ]);
 }
 

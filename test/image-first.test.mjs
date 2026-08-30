@@ -80,7 +80,7 @@ const api = new Function(...Object.keys(sandbox),
    assertions - which own the DEFAULT tops anchor plus its closure clause - would silently
    stop describing the string they were written for. The tee branch has its own byte-exact
    assertion below, and its own suite in plain-tee-fidelity.test.mjs. */
-const TOP       = { name: "Oxford Button-Down Shirt", garmentType: "upper_body", color: "#fff", subType: "long_sleeve" };
+const TOP       = { name: "Oxford Button-Down Shirt", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 const PLAIN_TEE = { name: "Ion Crew Tee",   garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
 

@@ -182,9 +182,16 @@ console.log("\n── §4 SELECTING, NOT APPENDING ──");
   check("exactly ONE anchor ships - volume stays flat across the angle axis",
     /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],/.test(resolverCode) &&
     (resolverCode.match(/P\.CORE/g) || []).length === 1, resolverCode);
-  check("the one bought-back clause rides at P.HIGH, so it sheds before the anchor does",
-    (resolverCode.match(/P\.HIGH/g) || []).length === 1 &&
-    /\[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\]/.test(resolverCode), resolverCode);
+  /* TWO bought-back clauses now - the closure lock and the sleeve-length lock, each on its
+     own positive-evidence predicate. The property is unchanged and is not about the count:
+     EVERY optional part rides at P.HIGH so fitPrompt() sheds it before it will touch the
+     anchor. Asserted as "no optional part is anything but P.HIGH" rather than as a fixed
+     number, so buying back a third clause by the documented procedure does not fail this. */
+  check("every bought-back clause rides at P.HIGH, so they shed before the anchor does",
+    /\[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\]/.test(resolverCode) &&
+    /\[\[P\.HIGH, SLEEVE_LENGTH_LOCK\]\]/.test(resolverCode) &&
+    (resolverCode.match(/P\.CORE/g) || []).length === 1 &&
+    !/\[\[P\.(MED|LOW|TRIM|CORE), /.test(resolverCode), resolverCode);
   /* NOW SCOPED THREE WAYS, not two. The closure lock was shipping on plain tees, where
      "buttons / zip / placket" were the only construction words on the wire and the model
      rendered a garment that had them - see PLAIN_TEE_ANCHOR and plain-tee-fidelity.test.mjs.

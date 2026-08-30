@@ -99,7 +99,7 @@ const api = new Function(...Object.keys(sandbox),
    tee now resolves to its own anchor with no closure clause (see PLAIN_TEE_ANCHOR in
    app.js). The measurements below are written against the DEFAULT tops anchor plus that
    clause, so the fixture has to be a top that still takes that branch. */
-const TEE   = { name: "Oxford Button-Down Shirt", garmentType: "upper_body", color: "#fff", subType: "long_sleeve" };
+const TEE   = { name: "Oxford Button-Down Shirt", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
 
 console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes out ──");
