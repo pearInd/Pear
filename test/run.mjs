@@ -251,6 +251,7 @@ const SUITES = [
   ["garment-category-prompt", "garment-category-prompt.test.mjs"],
   ["garment-category-detection", "garment-category-detection.test.mjs"],
   ["plain-tee-fidelity", "plain-tee-fidelity.test.mjs"],
+  ["back-view-readiness", "back-view-readiness.test.mjs"],
   ["body-presence-gate", "body-presence-gate.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
   ["body-topology", "body-topology.test.mjs"],

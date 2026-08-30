@@ -2642,6 +2642,21 @@ function renderPerspectiveSelector() {
   if (activeItem) {
     const wasAuto = currentAngle === AUTO_ANGLE;
     currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
+    /* THE ONE PLACE THE MODE IS DERIVED, so the one place worth stating WHY. Front-only is
+       a fully supported mode and most of the catalog is genuinely single-view - but it is
+       also the exact outcome a shopper reports as "I turned around and the back was
+       plain", and until now the reason was spread across four functions (one of which,
+       distinctBackOf's same-photo rejection, warns only once per pair and is silent on
+       every later item). Logged only on the front-only branch: on AI Auto there is nothing
+       to explain, and a line per swatch click is noise. */
+    if (currentAngle !== AUTO_ANGLE) {
+      const why = describeBackViewReadiness(activeItem);
+      console.log("[PEAR] front-only this item -", why.reason,
+        why.half ? `(look half: ${why.half})` : "",
+        "| front:", abbrevImg(why.front) || "(none)",
+        "| back:", abbrevImg(why.back) || "(none)",
+        "- call __pearDebugBackView() for the full picture");
+    }
     if (currentAngle === AUTO_ANGLE && !wasAuto) {
       autoOrientation = null;                  // PENDING - no startup FRONT lock; the camera decides
       autoProfile = false;                     // ...and no stale edge-on reading carried in
@@ -8275,6 +8290,85 @@ function canCombineViews(item) {
   const look = resolveLook();
   if (look) return ok(look.top) && ok(look.bottom);
   return ok(item);
+}
+
+/* ── WHY THIS ITEM HAS NO BACK VIEW - the same answer, in words ──────────────────
+   THE REPORT this exists for: "I turned around and the back was plain." From outside,
+   every route to that outcome looks identical, and the obvious diagnosis - "it defaulted
+   to single-front instead of the COMBINED composite" - is backwards. Forcing COMBINED is
+   what renderPerspectiveSelector() below calls THE BLANK-BACK BUG: one stitched reference
+   asks a model with no notion of panels to pick a half every frame, and it renders
+   fragments of both (23f5953). AI Auto - two clean single-view assets, swapped by the
+   OrientationWatcher - is the architecture that actually renders a rear view.
+
+   So the real question is always "why did this item not qualify for AI Auto", and
+   canCombineViews() answers it as a bare boolean while the four reasons behind it live in
+   four different places. One of them is genuinely invisible: distinctBackOf() rejects a
+   back that is the front under another URL spelling, warns ONCE per pair, and thereafter
+   says nothing - so on a later item that rejection leaves no trace, and it is
+   indistinguishable from an item that shipped no rear photo at all.
+
+   IT MUST NEVER DISAGREE WITH canCombineViews(), which is why it is built from the same
+   two calls (galleryOf, distinctBackOf) in the same order rather than re-deriving the
+   rules. A diagnostic that reports "ready" where the code decided otherwise sends the next
+   reader hunting in the wrong place - worse than none. back-view-readiness.test.mjs SS3
+   asserts the agreement across every shape both functions accept.
+
+   PURELY DIAGNOSTIC: nothing here decides anything. The mode is still canCombineViews()'s
+   call, and this only says why. */
+const BACK_VIEW_REASON = Object.freeze({
+  READY:                 "ready",
+  NO_ITEM:               "no-item",
+  NO_FRONT_ASSET:        "no-front-asset",
+  NO_BACK_ASSET:         "no-back-asset",
+  BACK_DUPLICATES_FRONT: "back-duplicates-front",
+});
+
+function backViewReadinessOf(item) {
+  if (!item) return { ready: false, reason: BACK_VIEW_REASON.NO_ITEM, front: "", back: "" };
+  const g = galleryOf(item);
+  const front = g.front || "";
+  const back  = g.back || "";
+  if (!front) return { ready: false, reason: BACK_VIEW_REASON.NO_FRONT_ASSET, front, back };
+  if (!back)  return { ready: false, reason: BACK_VIEW_REASON.NO_BACK_ASSET,  front, back };
+  /* The one rejection with no standing console trace - see distinctBackOf's dedupe. */
+  if (!distinctBackOf(item, g))
+    return { ready: false, reason: BACK_VIEW_REASON.BACK_DUPLICATES_FRONT, front, back };
+  return { ready: true, reason: BACK_VIEW_REASON.READY, front, back };
+}
+
+/**
+ * Why the active subject can or cannot render a rear view.
+ * @param {object|null} item single garment; ignored when a full look is active
+ * @returns {{ready:boolean, reason:string, front:string, back:string, half:(string|null)}}
+ *   `half` names which side of a full look disqualified it ("top"/"bottom"), else null.
+ */
+function describeBackViewReadiness(item) {
+  const look = resolveLook();
+  if (!look) return { ...backViewReadinessOf(item), half: null };
+  /* BOTH halves must ship a real back, matching canCombineViews()'s AND - and a look that
+     fails names the half, because "the back is plain" on a two-piece is otherwise a hunt
+     through two items to find the one missing an asset. */
+  for (const [half, it] of [["top", look.top], ["bottom", look.bottom]]) {
+    const r = backViewReadinessOf(it);
+    if (!r.ready) return { ...r, half };
+  }
+  return { ...backViewReadinessOf(look.top), half: null };
+}
+
+/* Answerable on a live session without a redeploy, which is the whole point: a shopper
+   reporting a plain back is reporting one of five states and cannot tell you which. */
+if (typeof window !== "undefined") {
+  window.__pearDebugBackView = () => {
+    const r = describeBackViewReadiness(activeItem);
+    console.log("[PEAR] back-view readiness:", r.reason,
+      r.half ? `(look half: ${r.half})` : "",
+      "\n  front:", abbrevImg(r.front) || "(none)",
+      "\n  back :", abbrevImg(r.back) || "(none)",
+      "\n  mode :", currentAngle,
+      r.ready ? "" : "\n  → the shopper will see the FRONT garment when they turn around");
+    return r;
+  };
 }
 
 /* Pick the angle clause for the active view. Back splits on whether a REAL back photo is
