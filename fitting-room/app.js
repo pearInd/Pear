@@ -7517,6 +7517,123 @@ const FRONT_CLOSURE_LOCK =
   "Reproduce the reference's front closure exactly: any buttons, zip or placket stay" +
   " fully fastened, sitting flat and closed across the chest as shown.";
 
+/* ── PLAIN KNIT TEE - "a plain white crewneck rendered as a button-down" ─────────
+   REPORTED: a plain white crewneck/V-neck t-shirt came back as a short-sleeve white
+   WOVEN BUTTON-DOWN - pointed collar, front placket, breast pocket. Not a garment from
+   another category (the tuxedo class) and not a wrong state of the right garment (the
+   open-placket class): the right garment in the WRONG CONSTRUCTION. Knit read as woven.
+
+   THE CAUSE IS THE CLAUSE DIRECTLY ABOVE, and this is the correction to its own comment.
+   FRONT_CLOSURE_LOCK calls itself PRODUCT-NEUTRAL - "on a tee there is no closure and the
+   sentence asks for nothing" - and that is the one assumption this file's whole history
+   says you may not make. set() has no negative_prompt, so everything ships in the POSITIVE
+   prompt, where "buttons", "zip", "placket" and "closed across the chest" are tokens the
+   sampler steers TOWARD. On a button-down they describe a garment the reference already
+   shows. On a plain tee they were, until this revision, the ONLY construction words on the
+   wire - so the model reconciled them the one way it could, by rendering a garment that
+   HAS a placket. The collar and the breast pocket are not in the sentence; they arrive
+   with the concept once it has been summoned, which is exactly how the tuxedo arrived
+   wearing a bowtie nobody asked for.
+
+   THE ANCHOR NOUN IS THE SECOND HALF OF IT. CATEGORY_ANCHOR.top says "the EXACT static
+   SHIRT", and in English an unqualified "shirt" leans woven-and-buttoned. That was
+   survivable while it was the only signal; paired with four closure tokens it stops being
+   survivable. The tee branch names a t-shirt instead, in both the bind sentence and the
+   preserve sentence.
+
+   WHY THIS IS NOT THE has-buttons AXIS FRONT_CLOSURE_LOCK REFUSED TO OPEN. That note
+   rejected WORDING THE CLAUSE PER PRODUCT - interpolating a garment's features into a
+   string, which is how a per-item DESCRIPTION creeps back one field at a time. This adds
+   no interpolation and no new text shape: it is a THIRD SELECTOR over frozen literals,
+   the same move the angle axis already makes. The prompt remains a pure function of
+   (category, angle, construction) onto a fixed set of constant strings, and exactly one
+   anchor plus at most one clause ever ships.
+
+   IT SPENDS NO BUDGET - IT RETURNS SOME. A tee ships ~431 characters where it used to ship
+   ~493, because dropping the closure clause buys more than the neckline sentence costs.
+   Every fidelity report in this file shares one mechanism - text volume competing with the
+   reference image - so a fidelity fix that GREW the prompt would be that mechanism applied
+   again. plain-tee-fidelity.test.mjs §4 pins the direction.
+
+   STATED POSITIVELY, for the reason FRONT_CLOSURE_LOCK states and this revision takes
+   further: the obvious patch here is "do NOT render buttons, collars, plackets, or chest
+   pockets", and that is the DENSE.assetLock shape that produced the tuxedo - a negation
+   that ships inside the positive prompt and names four more garment features on its way
+   through. Naming the construction we WANT costs the same budget and cannot be sampled
+   backwards.
+
+   FRONT + TOPS ONLY, like the clause it displaces. The summoning tokens were never on the
+   back branch, and no back-view report exists, so BACK_CATEGORY_ANCHOR is left byte-
+   identical on this file's one-branch-at-a-time-on-evidence rule. If a tee ever renders a
+   woven BACK YOKE, the restore is the same shape as this one: a tee entry in the back
+   pair, selected by the same predicate. */
+const PLAIN_TEE_ANCHOR =
+  "Drape and fit the EXACT static t-shirt from the reference image onto the live" +
+  " subject's CURRENT body contour and volume in this frame. Keep the reference's plain" +
+  " knit neckline and smooth unbroken front exactly as shown. Dynamically adapt the" +
+  " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
+  " without stretching or warping the fabric. Strictly preserve the original t-shirt" +
+  " texture, pattern, and color.";
+
+/* The tee vocabulary. Hebrew first, both geresh spellings, for the reason BOTTOMS_TOKENS
+   spells out: a Hebrew-only product title is the storefront's COMMON case, not an edge
+   case. English is \b-anchored and carries the bare singular as well as the plural,
+   because a storefront writes whichever reads better in its own layout.
+
+   SLEEVELESS IS DELIBERATELY ABSENT - no גופי, no tank, no singlet. A tank top has no
+   closure either, so it looks like it belongs here, but the anchor this predicate selects
+   NAMES A T-SHIRT, and handing a model the word "t-shirt" over a sleeveless reference
+   invites it to grow sleeves the reference never had. That trades a reported failure for
+   an unreported one. Tanks keep today's behaviour until either a report or a third anchor
+   justifies moving them. */
+const PLAIN_TEE_TOKENS =
+  /(טי[- ]?שירט|טישרט|חולצת טי|\bt-?shirts?\b|\btees?\b|\bcrew ?necks?\b|\bv-?necks?\b)/i;
+
+/* The tops that DO fasten, and therefore must keep FRONT_CLOSURE_LOCK. This list outranks
+   the tee list above, exactly as TOPS_TOKENS outranks BOTTOMS_TOKENS in isBottomsGarment()
+   and for the same reason: when a title names both, the STRUCTURED noun is the garment and
+   the other word is a modifier of it ("Tee Shirt Cardigan" is a cardigan).
+
+   A BARE "shirt" IS NOT IN THIS LIST, AND THAT IS THE LOAD-BEARING OMISSION. Every top in
+   this catalog ships with `type: "shirt"` (see the ITEMS table), and isPlainKnitTop() reads
+   the type field. A \bshirts?\b here would match every tee that ever reaches this function,
+   the predicate would return false for the entire catalog, and the fix above would be dead
+   code that still passes a unit test written against `name` alone. Only nouns that
+   genuinely imply a placket, a zip or an outer layer belong here.
+
+   POLO AND HENLEY ARE ON THE LIST ON PURPOSE: both are knitwear, both read as "basically a
+   tee" to a shopper, and both have a buttoned placket that daabb47's report is about. */
+const STRUCTURED_TOP_TOKENS =
+  /(מכופתר|כפתור|פולו|קרדיגן|בלייזר|ז['׳]קט|מעיל|קפוצ|\bbutton|\bzip|\bplackets?\b|\bpolos?\b|\bhenley\b|\boxford\b|\bchambray\b|\bflannels?\b|\bcardigans?\b|\bblazers?\b|\bjackets?\b|\bcoats?\b|\bhoodies?\b|\bshacket\b|\bblouses?\b)/i;
+
+/**
+ * Whether this garment is a PLAIN KNIT TOP - a tee with no closure and no collar.
+ *
+ * THE DEFAULT IS FALSE, and that is the whole safety property. An item we cannot classify
+ * keeps the behaviour that shipped before this predicate existed (the "shirt" anchor plus
+ * the closure lock), so an unrecognised title degrades to the OLD render rather than to a
+ * new one - the same reasoning isBottomsGarment() defaults to tops on.
+ *
+ * ORDER: bottoms first (a trouser title carrying a tee token must never reach the tops
+ * branch at all), then structured nouns, then the tee vocabulary. Reads the same metadata
+ * fields isBottomsGarment() reads, so one catalog shape feeds both predicates.
+ *
+ * subType "short_sleeve" IS NOT EVIDENCE, and the report is the proof: the hallucinated
+ * garment was itself a SHORT-SLEEVE button-down. Sleeve length says nothing about
+ * construction, so only an explicit garment noun counts here.
+ *
+ * @param {{garmentType?:string, type?:string, category?:string, subType?:string,
+ *          name?:string, title?:string}|null|undefined} item
+ * @returns {boolean} true only for a top whose construction has no front closure.
+ */
+function isPlainKnitTop(item) {
+  if (!item || isBottomsGarment(item)) return false;
+  const fields = [item.type, item.category, item.subType, item.name, item.title]
+    .filter(Boolean).join(" ");
+  if (STRUCTURED_TOP_TOKENS.test(fields)) return false;
+  return PLAIN_TEE_TOKENS.test(fields);
+}
+
 const CATEGORY_ANCHOR = Object.freeze({
   /* The two strings share one spine - bind the static garment, adapt to the current
      contour, preserve the original - and differ in exactly two places: the garment noun,
@@ -7771,9 +7888,15 @@ function imageOnlyPrompt(item, angle = "front") {
      the anchor, which is the correct order - a garment fitted with an unstated closure is
      a worse render, but a garment fitted with no anchor at all is a different garment.
      Tops + front only; see FRONT_CLOSURE_LOCK for why it is not spent elsewhere. */
+  /* THE THIRD SELECTOR - construction. Scoped to the FRONT TOPS branch, which is the only
+     place FRONT_CLOSURE_LOCK ever shipped and therefore the only place the button-down
+     hallucination could be summoned from; see PLAIN_TEE_ANCHOR for the report and for why
+     the back pair is deliberately left alone. It SELECTS between frozen literals like the
+     other two axes - still exactly one anchor on the wire, still nothing concatenated. */
+  const plainTee = !bottoms && angle !== "back" && isPlainKnitTop(item);
   return fitPrompt([
-    [P.CORE, bottoms ? anchors.bottom : anchors.top],
-    ...(!bottoms && angle !== "back" ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
+    [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
+    ...(!bottoms && !plainTee && angle !== "back" ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
   ]);
 }
 

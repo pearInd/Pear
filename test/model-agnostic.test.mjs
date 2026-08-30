@@ -95,7 +95,11 @@ const sandbox = {
 const api = new Function(...Object.keys(sandbox),
   code + "\nreturn { buildCompositePrompt, imageOnlyPrompt, fitPrompt, P, DENSE };")(...Object.values(sandbox));
 
-const TEE   = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
+/* Deliberately NOT a tee: imageOnlyPrompt() gained a construction axis, and a plain knit
+   tee now resolves to its own anchor with no closure clause (see PLAIN_TEE_ANCHOR in
+   app.js). The measurements below are written against the DEFAULT tops anchor plus that
+   clause, so the fixture has to be a top that still takes that branch. */
+const TEE   = { name: "Longsleeve Top", garmentType: "upper_body", color: "#fff", subType: "long_sleeve" };
 const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
 
 console.log("── §1 THE DIRECTIVE SHIPS, in the prompt that actually goes out ──");

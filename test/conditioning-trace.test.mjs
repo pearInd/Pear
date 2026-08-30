@@ -180,13 +180,20 @@ console.log("\n── §4 SELECTING, NOT APPENDING ──");
      explanation would force whoever reads it to delete the documentation. */
   const resolverCode = resolver.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   check("exactly ONE anchor ships - volume stays flat across the angle axis",
-    /\[P\.CORE, bottoms \? anchors\.bottom : anchors\.top\],/.test(resolverCode) &&
+    /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],/.test(resolverCode) &&
     (resolverCode.match(/P\.CORE/g) || []).length === 1, resolverCode);
   check("the one bought-back clause rides at P.HIGH, so it sheds before the anchor does",
     (resolverCode.match(/P\.HIGH/g) || []).length === 1 &&
     /\[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\]/.test(resolverCode), resolverCode);
-  check("...and it is scoped to tops + front, where a front closure is actually in view",
-    /!bottoms && angle !== "back"/.test(resolver), resolver);
+  /* NOW SCOPED THREE WAYS, not two. The closure lock was shipping on plain tees, where
+     "buttons / zip / placket" were the only construction words on the wire and the model
+     rendered a garment that had them - see PLAIN_TEE_ANCHOR and plain-tee-fidelity.test.mjs.
+     Asserted against the CLOSURE LINE specifically rather than anywhere in the function:
+     `!bottoms && angle !== "back"` also appears in the plainTee line above it, so a laxer
+     pattern would pass while the clause itself had lost a guard. */
+  check("...and it is scoped to tops + front + has-a-closure, where one is actually in view",
+    /\.\.\.\(!bottoms && !plainTee && angle !== "back" \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\)/.test(resolverCode),
+    resolverCode);
   check("nothing is concatenated onto an anchor, front or back",
     !/anchors\.(top|bottom)\s*\+/.test(APP) && !/(BACK_)?CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(APP),
     "appending one clause is how the dozen came back last time");
