@@ -308,13 +308,18 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
      per-frame adaptation sentence, which says nothing about the subject being absent (the
      bound below is per branch so that spend cannot be mistaken for room, and the "as soon
      as visible" absence is asserted separately, twice, right here and below). */
-  /* The tops branch carries a second part now (FRONT_CLOSURE_LOCK, bought back against the
-     button-down-rendered-open report), so the anchor is measured with that clause removed:
-     "minimal" is a property of the ANCHOR, and stripping the one known clause keeps the
-     bound honest instead of just raising the number until it passes. */
-  const topAnchor = top.replace(/Reproduce the reference's front closure[\s\S]*?as shown\./, "").trim();
+  /* The tops branch carries bought-back parts now - FRONT_PRINT_LOCK on every tops+front
+     render (the chest logo eroding across a 360) and FRONT_CLOSURE_LOCK when the garment
+     provably fastens - so the anchor is measured with the KNOWN clauses removed: "minimal"
+     is a property of the ANCHOR, and stripping only clauses this suite can name keeps the
+     bound honest instead of raising the number until it passes. An unknown part appearing
+     here still shows up in the full-string bound below. */
+  const topAnchor = top
+    .replace(/Reproduce the reference's front closure[\s\S]*?as shown\./, "")
+    .replace(/Precisely lock the front print[\s\S]*?the reference\./, "")
+    .replace(/\s+/g, " ").trim();
   check("...and both are still minimal, which is what replaced it",
-    topAnchor.length <= 360 && bot.length <= 360 && top.length <= 500 &&
+    topAnchor.length <= 360 && bot.length <= 360 && top.length <= 650 &&
     !/as soon as visible/.test(bot),
     `tops anchor=${topAnchor.length} (full ${top.length}) bottoms=${bot.length}`);
   /* The clause itself must stay on file, or "one line to re-add" stops being true. */

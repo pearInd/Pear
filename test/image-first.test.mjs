@@ -173,7 +173,23 @@ const CLOSURE_SPEC =
   "Reproduce the reference's front closure exactly: any buttons, zip or placket stay" +
   " fully fastened, sitting flat and closed across the chest as shown.";
 /* What the tops+front branch actually ships: anchor, one space (fitPrompt's join), clause. */
-const TOPS_FRONT_SPEC = TOPS_SPEC + " " + CLOSURE_SPEC;
+/* ── THE FRONT GRAPHIC LOCK - the mirror of a clause the BACK anchor always had ──
+   BACK_CATEGORY_ANCHOR.top says "Precisely lock the rear print, logos, and back seams",
+   and its own comment calls that the one thing the back pair says which the front pair does
+   not. Reported consequence: a chest logo that renders at go-live and is gone after a full
+   360, while the back graphic survives - a small mark no clause names erodes across the
+   re-conditionings a rotation forces, and one that is named does not.
+
+   It rides tops+front as a P.HIGH part rather than being written into the anchor, because
+   the anchors are P.CORE and byte-pinned here: text welded into one can never shed. §1
+   checks it names no GARMENT CLASS, which is the property that distinguishes it from
+   CLOSURE_SPEC - "buttons" and "placket" are construction a sampler can render instead of
+   the reference, a print is a property of whatever the reference already shows. */
+const PRINT_SPEC =
+  "Precisely lock the front print, chest logo, and graphics exactly as they appear in" +
+  " the reference.";
+/* What the tops+front branch ships when the garment fastens: anchor, closure, print. */
+const TOPS_FRONT_SPEC = TOPS_SPEC + " " + PRINT_SPEC + " " + CLOSURE_SPEC;
 
 /* ── THE PLAIN-TEE ANCHOR - the third axis, and the correction to the note above ──
    The comment on CLOSURE_SPEC calls it product-neutral: "on a tee there is no closure and
@@ -210,16 +226,24 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      outside this file. */
   check("the TOPS branch matches the specified wording byte for byte",
     api.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC, JSON.stringify(api.imageOnlyPrompt(TOP)));
-  check("...and its anchor is still the front anchor, unaltered, with the clause appended whole",
+  /* Two clauses ride here now - closure, then the front graphic lock - so the tail is the
+     LAST of them rather than the closure. What this assertion owns is unchanged: the anchor
+     leads, whole and unaltered, and every clause sits BESIDE it rather than woven into it. */
+  check("...and its anchor is still the front anchor, unaltered, with the clauses appended whole",
     api.imageOnlyPrompt(TOP).startsWith(TOPS_SPEC + " ") &&
+    api.imageOnlyPrompt(TOP).includes(" " + PRINT_SPEC + " ") &&
     api.imageOnlyPrompt(TOP).endsWith(CLOSURE_SPEC),
     "the clause must ride BESIDE the anchor, never be woven into it");
   check("no negative token rides with it - the tuxedo shipped through a positive prompt",
     !/\b(open|unbuttoned|undone|parted|exposed|never|avoid|don't|do not)\b/i.test(CLOSURE_SPEC),
     CLOSURE_SPEC);
   /* THE THIRD AXIS, held to every rule the other two are held to. */
+  /* The tee anchor names no print either, so it takes the same graphic lock as the default
+     branch - the erosion the lock answers is a property of the RENDER, not of which anchor
+     was selected. */
   check("a plain knit tee matches its own specified wording byte for byte",
-    api.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC, JSON.stringify(api.imageOnlyPrompt(PLAIN_TEE)));
+    api.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC + " " + PRINT_SPEC,
+    JSON.stringify(api.imageOnlyPrompt(PLAIN_TEE)));
   check("...and the closure clause is NOT spent on it - the reported cause, removed",
     !api.imageOnlyPrompt(PLAIN_TEE).includes(CLOSURE_SPEC) &&
     !/\b(button|buttons|zip|placket|collar|pocket)\b/i.test(api.imageOnlyPrompt(PLAIN_TEE)),
@@ -407,7 +431,7 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
        row: what it guards is "one frozen anchor, nothing assembled onto it", and that still
        holds exactly. The name axis is deliberate now - see hasFrontClosure() - so the row
        carries its own expected string rather than pretending the name is inert. */
-    ["pathological name", { ...TOP, name: "x".repeat(400) }, "front", true, TOPS_SPEC],
+    ["pathological name", { ...TOP, name: "x".repeat(400) }, "front", true, TOPS_SPEC + " " + PRINT_SPEC],
   ];
   /* Each case names the branch it must land in - now REGION x ANGLE, four frozen anchors
      rather than two. The invariance is unchanged in strength on every axis that was ever

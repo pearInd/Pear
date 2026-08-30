@@ -211,8 +211,15 @@ console.log("\n── §4 VOLUME: the fix must SHRINK the prompt, never grow it 
   check("...and an unrecognised top ships less than it did before §6",
     imageOnlyPrompt(UNKNOWN_TOP).length < wasShipped.length,
     `unknown=${imageOnlyPrompt(UNKNOWN_TOP).length} was=${wasShipped.length}`);
+  /* FOUR SENTENCES OF ANCHOR, plus the front graphic lock that every tops+front render now
+     carries (FRONT_PRINT_LOCK - the chest logo eroding across a 360). Counted against the
+     anchor rather than the whole string, so the property this owns - the tee branch is one
+     frozen anchor, not a re-grown assembly - still holds exactly. */
+  const teeAnchorOnly = tee.replace(/\s*Precisely lock the front print[\s\S]*$/, "");
   check("it is still ONE anchor - the tee branch did not become an assembly",
-    tee.split(/(?<=\.)\s+/).filter(Boolean).length <= 4, tee);
+    teeAnchorOnly.split(/(?<=\.)\s+/).filter(Boolean).length <= 4 &&
+    tee.length - teeAnchorOnly.length < 110,
+    teeAnchorOnly);
 }
 
 console.log("\n── §5 THE AXIS IS A SELECTOR, and its scope is deliberate ──");

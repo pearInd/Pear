@@ -7949,6 +7949,44 @@ const SLEEVE_LENGTH_LOCK =
   "The sleeves are full length: fabric covers the entire arm down to the wrist, exactly" +
   " as shown in the reference.";
 
+/* ── THE FRONT GRAPHIC - "the back text survives the turn, the chest logo does not" ──
+   REPORTED: a black tee with a small centred chest logo and a large back graphic. Both
+   render correctly at first; after a full 360 back to the front the chest logo is gone and
+   the front reads as a plain black tee. The back graphic is unaffected throughout.
+
+   THE ASYMMETRY IS ONE CLAUSE WIDE, and this file already named it.
+   BACK_CATEGORY_ANCHOR.top carries "Precisely lock the rear print, logos, and back seams",
+   and its own comment calls that "the only thing this pair says which the front pair does
+   not". CATEGORY_ANCHOR.top's strongest statement about the garment's surface is "Strictly
+   preserve the original shirt texture, pattern, and color" - which never names a print, a
+   logo or a graphic. The rear lock was added for a back-specific failure (the FRONT graphic
+   reproduced on the reverse); the front side never got the mirror of it because no
+   front-side report had been filed. This is that report.
+
+   WHY IT SURVIVES THE FIRST RENDER AND NOT THE ROUND TRIP. At go-live the model conditions
+   fresh on the front photo and reproduces it faithfully. A 360 puts several genuine
+   re-conditionings between then and the return - both orientation swaps, plus every
+   topology re-drape the movement triggers - and each one re-derives the garment from the
+   reference under whatever the prompt says. A small high-frequency mark that no clause
+   names is the first thing to erode across successive re-derivations. The back graphic does
+   not erode because its anchor names it.
+
+   A SHED-ABLE PART, NOT AN EDIT TO THE ANCHOR. The anchors are P.CORE and byte-pinned;
+   growing one puts unshed-able text on the wire for every garment forever. The established
+   pattern for a bought-back clause is a separate P.HIGH part, and this follows it.
+
+   THE RISK, STATED, because FRONT_CLOSURE_LOCK made exactly this claim and was wrong.
+   "Buttons" and "placket" are garment CONSTRUCTION - things a sampler can render instead of
+   what the reference shows, which is how they summoned a placket onto plain tees. A print
+   or a logo is a property OF whatever garment is in the reference, not an alternative to
+   it, and this same wording has ridden the BACK anchor unconditionally with no
+   invented-print report on file. That precedent is the evidence, not the reasoning alone -
+   if a plain garment ever comes back wearing an invented graphic, this is the clause, and
+   the restore is to gate it the way hasFrontClosure() gates its own. */
+const FRONT_PRINT_LOCK =
+  "Precisely lock the front print, chest logo, and graphics exactly as they appear in" +
+  " the reference.";
+
 const CATEGORY_ANCHOR = Object.freeze({
   /* The two strings share one spine - bind the static garment, adapt to the current
      contour, preserve the original - and differ in exactly two places: the garment noun,
@@ -8220,8 +8258,26 @@ function imageOnlyPrompt(item, angle = "front") {
      a front-of-garment feature and genuinely is not in view from behind, while a sleeve is
      in view from every angle. See SLEEVE_LENGTH_LOCK. */
   const longSleeve = !bottoms && hasLongSleeves(item);
+  /* Tops + FRONT only: the back anchor already carries its own "Precisely lock the rear
+     print, logos, and back seams", and shipping both on one render would spend budget
+     restating a single instruction - the mechanism every report in this file shares. */
+  const frontPrint = !bottoms && angle !== "back";
+  /* ORDER IS SHED ORDER, and that is why the print lock leads. fitPrompt() drops the FIRST
+     part at the worst surviving priority, so the optional clauses shed left to right.
+     Anchor + all three is 701 characters against a 650 ceiling, so on a long-sleeve
+     fastening top that also carries a graphic, exactly one must go.
+
+     THE PRINT LOCK IS THE RIGHT ONE TO LOSE THERE. The other two are EVIDENCE-GATED - they
+     ship only because hasFrontClosure()/hasLongSleeves() proved something about THIS
+     garment, and each answers a reproduced report about it. The print lock is
+     unconditional: it rides every tops+front render whether or not the garment has any
+     graphic at all. Yielding to a proven claim is the correct ranking, and the case where
+     it happens is rare (a long-sleeve button-down with a chest print). Everywhere else -
+     including the plain tee this clause was reported for - all parts fit with room to
+     spare. */
   return fitPrompt([
     [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
+    ...(frontPrint ? [[P.HIGH, FRONT_PRINT_LOCK]] : []),
     ...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
     ...(longSleeve ? [[P.HIGH, SLEEVE_LENGTH_LOCK]] : []),
   ]);
@@ -8301,14 +8357,22 @@ function lookAnchorPrompt() {
                       an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
                       the moment "it gave me the model's shoulders" is reported again.
 
-   ── THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP ────
-   The number has moved six times, so read the CURRENT row rather than remembering an
+   ── THE RESTORE BUDGET: TOPS HAS RUN OUT OF IT, BOTTOMS HAS NOT ──────────────
+   The number has moved seven times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS FRONT (491 = 342 anchor + 148 closure lock)  BOTTOMS (320 chars - anchor, lower-body scoped)
-     + DENSE.bodyFidelity  (45) → 537  fits              → 366  fits
-     + DENSE.modelAgnostic (64) → 556  fits              → 385  fits
-     + both of them        (110)→ 602  fits              → 431  fits
+     TOPS FRONT (589 = 342 anchor + 97 print lock + 148 closure lock)  BOTTOMS (320 chars - anchor, lower-body scoped)
+     + DENSE.bodyFidelity  (45) → 635  fits              → 366  fits
+     + DENSE.modelAgnostic (64) → 654  DOES NOT FIT      → 385  fits
+     + both of them        (110)→ 700  DOES NOT FIT      → 431  fits
+
+   THE TRAP INVERTED WITH THE FRONT GRAPHIC LOCK. For six revisions this table's warning was
+   "everything fits, so nothing but judgement stops you" - the headroom was real and the
+   restraint was a choice. FRONT_PRINT_LOCK (the chest logo eroding across a 360) spent 98
+   of that headroom, and tops+front is now 61 characters from the ceiling. A restore that
+   "fits" on paper can now silently SHED instead: fitPrompt() drops the first P.HIGH part,
+   which is the print lock, so restoring a clause here trades away the graphic lock without
+   saying so. Check the row before assuming a restore is free on this branch.
 
    TOPS FRONT IS THE WORST CASE and the only row worth budgeting against: it is the one
    branch carrying a second part (FRONT_CLOSURE_LOCK, the button-down closure report).
@@ -8316,10 +8380,12 @@ function lookAnchorPrompt() {
    closure lock, since a front placket is not in view - and bottoms carries one part on
    both angles.
 
-   NOTHING SHEDS ANY MORE, on either branch. 159 characters are free on tops and 330 on
-   bottoms, so every retired clause in this table would go back with room to spare. That
-   INVERTS the warning this note used to carry: the risk is no longer that a restore
-   silently sheds, it is that a restore silently SUCCEEDS.
+   THE BRANCHES HAVE DIVERGED. 61 characters are free on tops and 330 on bottoms. On
+   BOTTOMS every retired clause in this table still goes back with room to spare, and the
+   warning that inverted two revisions ago still holds there: the risk is not that a restore
+   sheds, it is that a restore silently SUCCEEDS. On TOPS FRONT the old warning is live
+   again - the front graphic lock spent that headroom, so a restore here can shed the very
+   clause it was measured against.
 
    HEADROOM IS NOT PERMISSION. Tops was collapsed from 634 characters and bottoms from
    616 precisely BECAUSE text volume was outweighing the reference pixels - the tuxedo,

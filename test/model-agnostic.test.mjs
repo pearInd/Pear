@@ -209,16 +209,23 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      holds where it always applied (the ANCHORS stay minimal and comparable) and the total
      is bounded on top of it. A second clause creeping in would fail the total; an anchor
      growing back toward the 634-character assembly would fail the anchor bound. */
+  /* TWO bought-back parts ride the tops+front branch now: the front graphic lock (every
+     tops+front render - the chest logo eroding across a 360) and the closure lock (only on
+     a garment that provably fastens). Both are stripped to recover the ANCHOR, which is
+     what the comparison below is actually about; measuring the clauses separately is the
+     same technique the closure lock forced when it was the only one. */
   const closure = (/Reproduce the reference's front closure[\s\S]*?as shown\./.exec(tops) || [""])[0];
-  const topsAnchor = tops.replace(closure, "").trim();
+  const print   = (/Precisely lock the front print[\s\S]*?the reference\./.exec(tops) || [""])[0];
+  const topsAnchor = tops.replace(closure, "").replace(print, "").replace(/\s+/g, " ").trim();
   check("the ANCHORS stay minimal and comparable, as they always had to",
     topsAnchor.length <= 360 && bottoms.length <= 360 &&
     Math.abs(bottoms.length - topsAnchor.length) <= 40,
     `tops anchor=${topsAnchor.length} bottoms=${bottoms.length} gap=${bottoms.length - topsAnchor.length}`);
-  check("...and the one bought-back clause is the ONLY thing on top of the tops anchor",
-    closure.length > 0 && tops.length === topsAnchor.length + 1 + closure.length &&
-    tops.length <= 500,
-    `tops=${tops.length} anchor=${topsAnchor.length} closure=${closure.length}`);
+  check("...and the bought-back clauses are the ONLY things on top of the tops anchor",
+    closure.length > 0 && print.length > 0 &&
+    tops.length === topsAnchor.length + 2 + closure.length + print.length &&
+    tops.length <= 650,
+    `tops=${tops.length} anchor=${topsAnchor.length} closure=${closure.length} print=${print.length}`);
 
   const both = api.fitPrompt([
     [api.P.CORE, bottoms],
@@ -240,24 +247,29 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  537, 366],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 556, 385],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  635, 366],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 589, 385],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
       row(tops, clause) === expTop && row(bottoms, clause) === expBottom,
       `tops=${row(tops, clause)} (doc ${expTop}) bottoms=${row(bottoms, clause)} (doc ${expBottom})`);
   }
-  check("...and app.js prints that arithmetic, per branch, with both branches fitting",
-    /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS FRONT \(491 = 342 anchor \+ 148 closure lock\)  BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 537  fits              \u2192 366  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 556  fits              \u2192 385  fits/.test(SRC),
+  check("...and app.js prints that arithmetic, per branch, including where tops no longer fits",
+    /THE RESTORE BUDGET: TOPS HAS RUN OUT OF IT, BOTTOMS HAS NOT/.test(SRC) &&
+    /TOPS FRONT \(589 = 342 anchor \+ 97 print lock \+ 148 closure lock\)  BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 635  fits              \u2192 366  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 654  DOES NOT FIT      \u2192 385  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
-  check("...and it no longer claims a headroom that stopped being true two revisions ago",
+  /* THE HEADROOM CLAIM HAS INVERTED TWICE NOW, which is exactly why it is pinned to a
+     number rather than to a mood. It read "TOPS HAS ZERO HEADROOM" (wrong), then "nothing
+     sheds any more" (true for one revision), and the front graphic lock has now spent tops
+     back down to 61 free while bottoms still has 330. A restore on tops can shed again. */
+  check("...and the headroom it claims is the one the branches actually have",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /159 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
-    "nothing sheds on either branch any more - the old table said the opposite");
+    !/NOTHING SHEDS ANY MORE, on either branch/.test(SRC) &&
+    /61 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
+    "tops is 61 from the ceiling now - a table claiming otherwise is advice against the code");
 }
 
 console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");
