@@ -747,7 +747,13 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
      That is a real regression risk for flicker at 90 degrees - it is recorded here so it
      is a known, chosen trade rather than a silent one. */
   const { api } = run({ distinctBack: BACK });
-  const item = { name: "Longsleeve Top", custom: true, garmentType: "upper_body" };
+  /* A FASTENING top, so the closure clause is genuinely on the wire for the tail assertion
+     below to mean anything. hasFrontClosure() now ships that clause only on positive
+     evidence of a closure (a title naming a button/zip/placket/polo/henley/oxford), because
+     handing those nouns to every unrecognised tee is what put a placket down the front of a
+     plain crewneck. Pose-invariance - the property this section owns - is unaffected either
+     way; the fixture just has to take the branch the assertion describes. */
+  const item = { name: "Oxford Button-Down Shirt", custom: true, garmentType: "upper_body" };
   const square = api.buildCompositePrompt(item, "front", false);
   const built  = api.buildCompositePrompt(item, "front", true);
   /* THE SHED LADDER IS GONE, and that is the assertion now. It was re-pinned twice - by
