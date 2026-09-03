@@ -7512,9 +7512,10 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
                                 stands between this prompt and a regenerated scene.
      · keepTop / keepBottoms    the opposite-layer lock.
      · ignoreFurniture          the "don't paint the panel divider onto the shirt" ban.
-     · fitSentence              the size-override selector's only route into the render.
-                                The UI still works and still re-applies; the chosen size
-                                no longer changes what Decart draws.
+     · fitSentence              RESTORED - see imageOnlyPrompt()'s SIZE-OVERRIDE RESTORE
+                                comment. Was the size-override selector's only route into
+                                the render; the chosen size now reaches Decart again, at
+                                P.MED, via getFitModifier()'s garment/fabric-only wording.
 
    TO RESTORE ONE: it is a two-line change - reinstate fitPrompt() in the builder that
    needs it and add [P.CORE, DENSE.<clause>] beside IMAGE_ONLY_PROMPT. fitPrompt(),
@@ -8176,9 +8177,48 @@ function imageOnlyPrompt(item, angle = "front") {
      one requires), so a prompt can never name a seamless front and a fastened placket
      together. */
   const closure = !bottoms && angle !== "back" && hasFrontClosure(item);
+  /* ── SIZE-OVERRIDE RESTORE - "I tried on a size down and it fit exactly like true-to-size" ──
+     REPORTED: shoppers who deliberately size up or down see no difference in how the
+     garment drapes - the size picker still works and still re-applies (setSizeOverride()),
+     but nothing about that choice ever reached Decart. This was the retirement
+     IMAGE_ONLY_PROMPT's comment names as fitSentence - "the size-override selector's only
+     route into the render" - cut along with everything else when this file went strict
+     image-only. It is being bought back alone, per that comment's restore procedure.
+
+     WHY THIS ONE IS SAFE TO BUY BACK: getFitModifier() (below) was rewritten after the
+     "it compressed me into a thinner frame" report specifically so every string attributes
+     tightness to the GARMENT and the FABRIC over a body whose dimensions are fixed, never
+     to the body's outline - see that function's header comment. Restoring it does not
+     reintroduce the mechanism that produced that bug; it only reconnects a clause that was
+     already rewritten to be safe.
+
+     P.MED, one tier BELOW the closure lock, ON PURPOSE - NOT AN OVERSIGHT TO "FIX" LATER.
+     A garment rendered at the wrong tension is a worse fit, but a button-down rendered
+     hanging open (FRONT_CLOSURE_LOCK's own report) is the worse failure, so under budget
+     pressure this sheds first. delta === 0 (no size override) returns a short "true-to-size"
+     phrase, so the common case costs little.
+
+     THE CONCRETE COST: on tops + front + closure (487/650 base, 163 free), the size-down
+     phrasings run 167 chars (delta -1) and 213 chars (delta -2) - both over the 163 free,
+     so fitPrompt() sheds them and a shopper who sizes DOWN on a button-front top sees no
+     tension text at all. True-to-size and sizing UP (88/89/147 chars) always fit. Every
+     other branch (plain tee, structured-no-closure, back, bottoms) has 219-330 free chars
+     and the fit sentence always survives, worst case ~230 chars (lower_body delta -2).
+
+     DO NOT "FIX" THIS BY RAISING TO P.HIGH. Priority ties are broken by array position in
+     fitPrompt(), not by severity - FRONT_CLOSURE_LOCK is added before this clause, so an
+     equal-priority tie is not guaranteed to protect it, and a shirt rendered wide open
+     (the report FRONT_CLOSURE_LOCK exists for) is worse than missing tension text. If the
+     size-down-on-a-closure-top gap ever gets its own report, the fix is to shrink something
+     ELSE on that branch to free the 4-50 chars needed, not to reorder these two tiers.
+     Documented in CLAUDE.md §0 as a known, deliberate limitation.
+
+     image-first.test.mjs's "size-override modifier no longer reaches the wire" check is
+     updated in the same commit - this clause is what it now asserts IS wired. */
   return fitPrompt([
     [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
     ...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
+    [P.MED, fitSentence(bottoms ? "lower_body" : "upper_body")],
   ]);
 }
 

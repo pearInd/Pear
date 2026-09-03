@@ -89,7 +89,11 @@ function run({ angle = "front", inProfile = false, distinctBack, custom = false,
     SUBTYPE_PROMPT: {}, SHIRT_NOUN: {},
     colorName: () => "black",
     getAnatomicalAnchor: () => "_ANCHOR",
-    getFitModifier: () => "_FIT",
+    /* "" not a marker: fitSentence() is now wired into imageOnlyPrompt() (P.MED), and this
+       suite's byte-identity checks read to the end of the closure clause. A non-empty
+       modifier would append "Fit: ..." past that point - image-first.test.mjs owns the
+       fit-sentence wiring itself, this suite stays about POSE invariance. */
+    getFitModifier: () => "",
     getSizeDelta: () => 0,
     getFabricModifier: () => "_FABRIC",
   };

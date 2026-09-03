@@ -70,7 +70,10 @@ const sandbox = {
   SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
   colorName: () => "white",
   activeColorOf: (it) => (it && it.color) || "#fff", getSizeDelta: () => 0,
-  getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
+  /* "" not a marker: §1/§2 read the anchor+closure text byte-exact, and a non-empty
+     modifier would append "Fit: ..." past the end they check. §3a below builds its OWN
+     sandbox with a real marker to test the fit-sentence wiring in isolation. */
+  getFitModifier: () => "", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
   code + "\nreturn { buildCompositePrompt, imageOnlyPrompt, fitPrompt, P, DENSE };")(...Object.values(sandbox));
@@ -474,9 +477,53 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
   check("no DENSE clause is assembled by any builder",
     !/\[P\.(CORE|HIGH|MED|LOW|TRIM),\s*DENSE\./.test(codeOnly),
     "the DENSE table is a restore library now, not an assembly source");
-  check("the size-override modifier no longer reaches the wire either",
-    !/\[P\.\w+,\s*fitSentence\(/.test(codeOnly),
-    "documented in IMAGE_ONLY_PROMPT's retirement list - the UI still works, the render ignores it");
+  /* RESTORED - "I sized down a tee and it rendered exactly like true-to-size". The size
+     picker (setSizeOverride()) always worked; fitSentence() was the only route its choice
+     had into the render, and it was cut with everything else when this file went strict
+     image-only. Bought back alone, at P.MED so a garment fitted with the wrong tension
+     sheds before FRONT_CLOSURE_LOCK (P.HIGH) or the anchor (P.CORE) ever would - see
+     imageOnlyPrompt()'s SIZE-OVERRIDE RESTORE comment in app.js. */
+  check("the size-override modifier is wired back in, at P.MED",
+    /\[P\.MED,\s*fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],/.test(codeOnly),
+    "documented in IMAGE_ONLY_PROMPT's retirement list, and in imageOnlyPrompt()'s own SIZE-OVERRIDE RESTORE comment");
+}
+
+console.log("\n── §2a THE FIT SENTENCE RIDES BESIDE THE ANCHOR, NEVER INTO IT ──");
+{
+  /* Its own sandbox: §1/§2 zero out getFitModifier() so their byte-exact checks read
+     cleanly to the end of the anchor/closure text. A real marker here proves the clause
+     actually reaches the string, in the right place, under the right conditions - the
+     thing an absence-only check (the retired form of this section) could never catch. */
+  const fitSandbox = { ...sandbox, getFitModifier: () => "TEST_FIT_MARKER" };
+  const fitApi = new Function(...Object.keys(fitSandbox),
+    code + "\nreturn { imageOnlyPrompt };")(...Object.values(fitSandbox));
+
+  check("it rides AFTER the anchor (and closure, where one ships), as its own sentence",
+    fitApi.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC + " Fit: TEST_FIT_MARKER.",
+    fitApi.imageOnlyPrompt(TOP));
+  check("...same on a plain tee, which has no closure clause to ride after",
+    fitApi.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC + " Fit: TEST_FIT_MARKER.",
+    fitApi.imageOnlyPrompt(PLAIN_TEE));
+  check("...same on bottoms, and on the back anchors",
+    fitApi.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC + " Fit: TEST_FIT_MARKER." &&
+    fitApi.imageOnlyPrompt(TOP, "back") === BACK_TOPS_SPEC + " Fit: TEST_FIT_MARKER.",
+    `${fitApi.imageOnlyPrompt(JEANS)}\n        ${fitApi.imageOnlyPrompt(TOP, "back")}`);
+  check("a size-neutral choice (delta 0, the common case) still costs only a short phrase",
+    !fitApi.imageOnlyPrompt(TOP).includes("undersized") &&
+    !fitApi.imageOnlyPrompt(TOP).includes("oversized"),
+    "TEST_FIT_MARKER stands in for getFitModifier() - this just guards the sentence shape");
+
+  /* Budget pressure: MED must shed before the anchor (CORE) or the closure lock (HIGH).
+     Set the ceiling to exactly what the anchor+closure need, with nothing left over for
+     the fit sentence - the tightest branch in the real table (tops+front+closure) leaves
+     only 70 of 650 chars free, against getFitModifier()'s ~215-char longest string, so
+     this is not a hypothetical squeeze. */
+  const tightSandbox = { ...fitSandbox, PROMPT_MAX_CHARS: TOPS_FRONT_SPEC.length };
+  const tightApi = new Function(...Object.keys(tightSandbox),
+    code + "\nreturn { imageOnlyPrompt };")(...Object.values(tightSandbox));
+  check("under budget pressure the fit sentence is what sheds, not the anchor or the closure",
+    tightApi.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC,
+    tightApi.imageOnlyPrompt(TOP));
 }
 
 console.log("\n── §3 THE RETIREMENT IS REVERSIBLE (this mode will need pieces back) ──");

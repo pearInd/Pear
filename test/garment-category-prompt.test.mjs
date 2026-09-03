@@ -58,7 +58,10 @@ const sandbox = {
   SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
   colorName: () => "white",
   activeColorOf: (it) => (it && it.color) || "#fff", getSizeDelta: () => 0,
-  getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
+  /* "" not "regular fit": fitSentence() is wired into imageOnlyPrompt() now (P.MED), and
+     this suite's assertions are byte-exact against the anchor+closure text. image-first.
+     test.mjs owns the fit-sentence wiring itself. */
+  getFitModifier: () => "", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
   code + "\nreturn { isBottomsGarment, imageOnlyPrompt, lookAnchorPrompt, fitPrompt, P };")(...Object.values(sandbox));
@@ -329,7 +332,7 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],\s*\n\s*\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],\s*\n\s*\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),\s*\n\s*\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix.
      Whichever of the three the construction/category/angle axes select, it rides at

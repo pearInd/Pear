@@ -90,7 +90,10 @@ const sandbox = {
   SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
   colorName: () => "white",
   activeColorOf: (it) => (it && it.color) || "#fff", getSizeDelta: () => 0,
-  getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
+  /* "" not "regular fit": fitSentence() is wired into imageOnlyPrompt() now (P.MED), and
+     this suite's assertions are byte-exact against the anchor text. image-first.test.mjs
+     owns the fit-sentence wiring itself. */
+  getFitModifier: () => "", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
   code + "\nreturn { buildCompositePrompt, imageOnlyPrompt, fitPrompt, P, DENSE };")(...Object.values(sandbox));
