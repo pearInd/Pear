@@ -87,9 +87,11 @@ Rules for a restore:
 - Priority is not decoration. `P.CORE` is undroppable; `fitPrompt()` sheds the
   highest priority number first under budget pressure. A clause that must never
   outrank the category anchor is `P.HIGH` or lower.
-- Budget is `PROMPT_MAX_CHARS` (Decart hard-rejects >226 tokens). Tops currently
-  use ~342 of 650 chars, bottoms ~320. Adding a clause can silently evict
-  another one — state the new total in the PR description.
+- Budget is `PROMPT_MAX_CHARS` (Decart hard-rejects >226 tokens). The category
+  anchor alone is 338 chars on tops, 320 on bottoms; with the restored
+  `fitSentence()` clause (§0), a real dispatch ships 338-644 chars on tops and
+  320-550 on bottoms depending on size delta and closure. Adding a clause can
+  silently evict another one — state the new total in the PR description.
 - Restore order recorded in `IMAGE_ONLY_PROMPT`'s comment: `inpaintLock` first
   (largest loss), then `modelAgnostic`.
 
@@ -111,16 +113,20 @@ wrong"*, *"it slimmed me down"*, *"front and back aren't right"*.
 | **A. Prompt text** | what the model is told | `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` | mostly dead |
 | **B. Reference image** | what the model is shown | `referenceImageFor`, `galleryOf`, `distinctBackOf`, `createGarmentComposite` | **live** |
 | **C. Orientation** | which asset is on the wire when | `OrientationWatcher`, `effectiveAngle`, `autoOrientation` | **live** |
-| **D. Size ladder** | the recommended size in the UI | `calculateSize`, `SIZE_SCALE`, `*_SIZE_CHART` | live in UI, **not** on the wire |
+| **D. Size ladder** | the recommended size in the UI | `calculateSize`, `SIZE_SCALE`, `*_SIZE_CHART` | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
 
 **Layer B is where most real fit/back-view problems actually live.** "The back
 came out plain" is almost never a prompt problem — it is `distinctBackOf()`
 returning `undefined`. Run `window.__pearDebugBackView()` in a live session; it
 returns one of five `BACK_VIEW_REASON` values and tells you which.
 
-**Layer D warning:** the size selector still works and still re-applies, but
-since `fitSentence()` is dead, *the chosen size no longer changes what Decart
-draws.* Never tell the user a size-ladder change will alter the render.
+**Layer D update:** the size selector's choice now DOES reach Decart, via
+`fitSentence()`/`getFitModifier()` at `P.MED` (§0) — sizing up or down changes
+the drape tension in the render. The one exception: on a top that also carries
+`FRONT_CLOSURE_LOCK`, sizing down 1-2 steps can get shed under budget pressure
+(163 free chars there vs. up to ~213 needed) — true-to-size and sizing up
+always land. Don't assume this is still dead; check `trace:prompt`'s
+reachability audit if in doubt.
 
 ---
 
