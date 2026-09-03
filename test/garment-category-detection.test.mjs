@@ -338,6 +338,21 @@ console.log("\n── §8 THE WIDGET AND THE ROOM MUST AGREE ──");
   check("the widget still classifies the reported item correctly end-to-end",
     detectCategory("מכנס קצר רגל - FOX") === "pants",
     "the original bug, at the layer it actually originated in");
+
+  /* THE SUBSTRING BUG - a health-check session found this by direct comparison against
+     classifyGarmentTitle()'s \b-boundaried English matching (§3 above): matchCategory()
+     used plain indexOf for BOTH Hebrew stems AND English words, and "shorts" is a
+     substring of "shortsleeve" with no space to stop it. A one-word product title (no
+     space before "sleeve") sent a plain tee to the pants branch. classifyGarmentTitle()
+     already had the fix (hasEnglishWord's \b regex, §3); the widget's matchCategory() did
+     not, and per CLAUDE.md §3 the widget's verdict is what wins. */
+  check('"Shortsleeve Tee" (one word) does NOT match "shorts" as a substring',
+    detectCategory("Shortsleeve Tee") === "shirt",
+    `got ${detectCategory("Shortsleeve Tee")} - "shorts" is a prefix of "shortsleeve" with no boundary`);
+  check("...while a real English plural still matches at a word boundary",
+    detectCategory("Cargo Shorts") === "pants" && detectCategory("Denim Shorts") === "pants");
+  check("...and the existing space-separated case keeps working (was already safe)",
+    detectCategory("Short Sleeve Tee") === "shirt");
 }
 
 console.log("\n── §9 THE SERVER TIER exists, is bounded, and fails soft ──");
