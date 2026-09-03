@@ -252,6 +252,7 @@ const SUITES = [
   ["garment-category-detection", "garment-category-detection.test.mjs"],
   ["plain-tee-fidelity", "plain-tee-fidelity.test.mjs"],
   ["back-view-readiness", "back-view-readiness.test.mjs"],
+  ["back-view-diagnostic", "back-view-diagnostic.test.mjs"],
   ["front-reference-guard", "front-reference-guard.test.mjs"],
   ["body-presence-gate", "body-presence-gate.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
