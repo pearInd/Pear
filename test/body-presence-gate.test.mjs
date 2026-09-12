@@ -308,9 +308,15 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
      per-frame adaptation sentence, which says nothing about the subject being absent (the
      bound below is per branch so that spend cannot be mistaken for room, and the "as soon
      as visible" absence is asserted separately, twice, right here and below). */
+  /* The tops branch carries a second part now (FRONT_CLOSURE_LOCK, bought back against the
+     button-down-rendered-open report), so the anchor is measured with that clause removed:
+     "minimal" is a property of the ANCHOR, and stripping the one known clause keeps the
+     bound honest instead of just raising the number until it passes. */
+  const topAnchor = top.replace(/Reproduce the reference's front closure[\s\S]*?as shown\./, "").trim();
   check("...and both are still minimal, which is what replaced it",
-    top.length <= 360 && bot.length <= 360 && !/as soon as visible/.test(bot),
-    `tops=${top.length} bottoms=${bot.length}`);
+    topAnchor.length <= 360 && bot.length <= 360 && top.length <= 500 &&
+    !/as soon as visible/.test(bot),
+    `tops anchor=${topAnchor.length} (full ${top.length}) bottoms=${bot.length}`);
   /* The clause itself must stay on file, or "one line to re-add" stops being true. */
   check("...but the clause is still ON FILE, so the restore really is one line",
     /TEMPORAL_PERSISTENCE = Object\.freeze\(\{[\s\S]{0,600}?bottom:/.test(SRC),
@@ -332,7 +338,7 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
     top.length <= CONFIG.PROMPT_MAX_CHARS && bot.length <= CONFIG.PROMPT_MAX_CHARS,
     `tops=${top.length} bottoms=${bot.length}`);
   check("the category anchor still leads - persistence language must not displace it",
-    /^Drape and fit the EXACT static shirt from the reference image/.test(top) &&
+    /^Drape and fit the EXACT static top from the reference image/.test(top) &&
     /^Drape and fit the EXACT static pants\/shorts from the reference image/.test(bot),
     "each branch must open on its own anchor, whatever else it carries");
 }

@@ -28,7 +28,6 @@ import { createDecartClient } from "@decartai/sdk";
 import { logTryOn } from "./lib/sheets.js";
 import { supabase } from "./lib/supabase.js";
 
-logTryOn({ garmentName: "Local Test Shirt", size: "XL" }).catch(e => console.error("Sheets test failed:", e.message));
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

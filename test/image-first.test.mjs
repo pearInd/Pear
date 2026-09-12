@@ -70,12 +70,21 @@ const sandbox = {
   SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
   colorName: () => "white",
   activeColorOf: (it) => (it && it.color) || "#fff", getSizeDelta: () => 0,
-  getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
+  /* "" not a marker: §1/§2 read the anchor+closure text byte-exact, and a non-empty
+     modifier would append "Fit: ..." past the end they check. §3a below builds its OWN
+     sandbox with a real marker to test the fit-sentence wiring in isolation. */
+  getFitModifier: () => "", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
   code + "\nreturn { buildCompositePrompt, imageOnlyPrompt, fitPrompt, P, DENSE };")(...Object.values(sandbox));
 
-const TEE   = { name: "Tee", garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
+/* A top that is NOT a plain knit tee, and that matters now: imageOnlyPrompt() gained a
+   CONSTRUCTION axis, so a fixture named "Tee" would take the tee branch and these
+   assertions - which own the DEFAULT tops anchor plus its closure clause - would silently
+   stop describing the string they were written for. The tee branch has its own byte-exact
+   assertion below, and its own suite in plain-tee-fidelity.test.mjs. */
+const TOP       = { name: "Oxford Button-Down Shirt", garmentType: "upper_body", color: "#fff", subType: "long_sleeve" };
+const PLAIN_TEE = { name: "Ion Crew Tee",   garmentType: "upper_body", color: "#fff", subType: "short_sleeve" };
 const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
 
 /* \u2500\u2500 ONE STRING BECAME TWO, AND THAT IS THE ONLY THING THAT CHANGED \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -110,16 +119,88 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
    See CATEGORY_ANCHOR in app.js for the full list of what came off the wire, what went
    back on, and the restore path for each. */
 const TOPS_SPEC =
-  "Drape and fit the EXACT static shirt from the reference image onto the live" +
+  "Drape and fit the EXACT static top from the reference image onto the live" +
   " subject's CURRENT body contour and volume in this frame. Dynamically adapt the" +
   " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
-  " without stretching or warping the fabric. Strictly preserve the original shirt" +
+  " without stretching or warping the fabric. Strictly preserve the original top" +
   " texture, pattern, and color.";
 const BOTTOMS_SPEC =
   "Drape and fit the EXACT static pants/shorts from the reference image onto the live" +
   " subject's CURRENT lower-body contour and volume in this frame. Dynamically adapt" +
   " the fit to the subject's exact waistline, leg profile, depth, and angle without" +
   " distorting the garment design. Strictly preserve original pattern and color.";
+/* THE BACK COUNTERPARTS. The prompt is no longer byte-identical across ANGLE - and that is
+   a deliberate reversal of what this suite used to pin, made once the orientation-blind
+   render was reported: buildPrompt() and buildCompositePrompt() both took the frozen angle
+   and discarded it, so a shopper turning around got the FRONT anchor and, with it, the
+   chest print reproduced on their back.
+
+   THE INVARIANT THIS SUITE ACTUALLY DEFENDS IS UNCHANGED, because it was never "one string
+   for every case" for its own sake - it was TOTAL TEXT VOLUME competing with the reference
+   image (see this file's header: FIX ONE kept the structural clauses and the tuxedo
+   survived it). Selecting between two frozen anchors holds volume flat; exactly one anchor
+   still ships, and \u00a71 asserts the back pair is frozen, hole-free and inside the same
+   ceiling as the front pair. What would re-open the tuxedo is APPENDING a clause, and that
+   is asserted absent for the back anchors too. */
+const BACK_TOPS_SPEC =
+  "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
+  " the live subject's CURRENT back contour and volume in this frame. Precisely lock the" +
+  " rear print, logos, and back seams. Dynamically adapt the garment drape to the" +
+  " subject's exact silhouette, angle, depth, and back volume without stretching or" +
+  " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.";
+const BACK_BOTTOMS_SPEC =
+  "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
+  " onto the live subject's CURRENT lower-body contour and volume in this frame." +
+  " Precisely lock the rear print, logos, and back seams. Dynamically adapt the fit to" +
+  " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
+  " garment design. Strictly preserve original pattern and color.";
+
+/* THE ONE BOUGHT-BACK CLAUSE. Reported: a closed button-down rendered hanging open,
+   exposing the shopper's chest - the invented-detail class (right garment, wrong state),
+   which the anchor's restore note names as the class a clause may be spent on. Bought back
+   per the procedure that note prescribes: ONE part, at P.HIGH so fitPrompt() sheds it
+   before the anchor, tops + front only (a front placket is not in view from behind, and a
+   closure is not a lower-body feature).
+
+   IT IS STATED POSITIVELY ON PURPOSE. "Do not render open or unbuttoned" is the shape that
+   produced the tuxedo: set() has no negative_prompt, so a negation ships inside the
+   POSITIVE prompt where "open" and "unbuttoned" are tokens the sampler can steer toward -
+   exactly how DENSE.assetLock failed when it enumerated "TUXEDO, BOWTIE". \u00a72 scans for
+   those tokens and fails if any appear.
+
+   IT IS ALSO PRODUCT-NEUTRAL, so it opens no third axis: it never claims this garment HAS
+   buttons. On a tee there is no closure and it asks for nothing; on a button-down it pins
+   the fastening. Wording it per-product would need a has-buttons axis, and the prompt is
+   still a function of (category, angle) and nothing else. */
+const CLOSURE_SPEC =
+  "Reproduce the reference's front closure exactly: any buttons, zip or placket stay" +
+  " fully fastened, sitting flat and closed across the chest as shown.";
+/* What the tops+front branch actually ships: anchor, one space (fitPrompt's join), clause. */
+const TOPS_FRONT_SPEC = TOPS_SPEC + " " + CLOSURE_SPEC;
+
+/* ── THE PLAIN-TEE ANCHOR - the third axis, and the correction to the note above ──
+   The comment on CLOSURE_SPEC calls it product-neutral: "on a tee there is no closure and
+   it asks for nothing." That was wrong, and the report is the proof - a plain white
+   crewneck rendered as a short-sleeve button-down with a pointed collar and a breast
+   pocket. set() has no negative_prompt, so "buttons", "zip" and "placket" ship in the
+   POSITIVE prompt, and on a tee they were the only construction words on the wire; the
+   model rendered a garment that had them. The collar and pocket came with the concept,
+   the way the tuxedo arrived wearing a bowtie.
+
+   THE FIX IS A SELECTOR, NOT A CLAUSE, which is the only reason it belongs in this suite's
+   world-view: a tee resolves to its own frozen anchor and the closure clause is not spent
+   on it. Volume goes DOWN. A negation - "do NOT render buttons, collars, plackets" - is
+   the DENSE.assetLock shape this file's header is the record of, and §1 checks that no such
+   token rides here either. Byte-exact for the same reason the other three are: a paraphrase
+   that reads the same to a human is a different token sequence to a diffusion model. */
+const PLAIN_TEE_SPEC =
+  "Drape and fit the EXACT static t-shirt from the reference image onto the live" +
+  " subject's CURRENT body contour and volume in this frame. Keep the reference's plain" +
+  " knit neckline and smooth unbroken front exactly as shown. Dynamically adapt the" +
+  " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
+  " without stretching or warping the fabric. Strictly preserve the original t-shirt" +
+  " texture, pattern, and color.";
+
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
 const SPEC = TOPS_SPEC;
@@ -131,7 +212,30 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      a diffusion model, and these are the strings whose exact form was specified from
      outside this file. */
   check("the TOPS branch matches the specified wording byte for byte",
-    api.imageOnlyPrompt(TEE) === TOPS_SPEC, JSON.stringify(api.imageOnlyPrompt(TEE)));
+    api.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC, JSON.stringify(api.imageOnlyPrompt(TOP)));
+  check("...and its anchor is still the front anchor, unaltered, with the clause appended whole",
+    api.imageOnlyPrompt(TOP).startsWith(TOPS_SPEC + " ") &&
+    api.imageOnlyPrompt(TOP).endsWith(CLOSURE_SPEC),
+    "the clause must ride BESIDE the anchor, never be woven into it");
+  check("no negative token rides with it - the tuxedo shipped through a positive prompt",
+    !/\b(open|unbuttoned|undone|parted|exposed|never|avoid|don't|do not)\b/i.test(CLOSURE_SPEC),
+    CLOSURE_SPEC);
+  /* THE THIRD AXIS, held to every rule the other two are held to. */
+  check("a plain knit tee matches its own specified wording byte for byte",
+    api.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC, JSON.stringify(api.imageOnlyPrompt(PLAIN_TEE)));
+  check("...and the closure clause is NOT spent on it - the reported cause, removed",
+    !api.imageOnlyPrompt(PLAIN_TEE).includes(CLOSURE_SPEC) &&
+    !/\b(button|buttons|zip|placket|collar|pocket)\b/i.test(api.imageOnlyPrompt(PLAIN_TEE)),
+    "four construction tokens with no garment to attach to is how the placket got summoned");
+  check("...and it was not replaced by a negation, which is the shape that made the tuxedo",
+    !/\b(never|avoid|don't|do not|without buttons|no buttons)\b/i.test(PLAIN_TEE_SPEC),
+    PLAIN_TEE_SPEC);
+  /* The direction matters more than the ceiling. Every report in this file's header shares
+     one mechanism - text volume competing with the reference image - so a fidelity fix that
+     GREW the prompt would be that mechanism, reapplied. */
+  check("...and it SHRINKS the wire: a tee now ships less text than the default branch",
+    PLAIN_TEE_SPEC.length < TOPS_FRONT_SPEC.length,
+    `tee=${PLAIN_TEE_SPEC.length} default=${TOPS_FRONT_SPEC.length}`);
   check("the BOTTOMS branch matches the specified wording byte for byte",
     api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
   /* ONE SHAPE, THREE SENTENCES, SAME ORDER. The old pair could be normalised into one
@@ -159,7 +263,7 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      without "static" invites a re-cut, and "onto the subject" without "current ... in
      this frame" is the tense-less wording every previous revision shipped, which is what
      let the model deform a drape it had already produced. */
-  const LEAD = /^Drape and fit the EXACT static (shirt|pants\/shorts) from the reference image onto the live subject's CURRENT (body|lower-body) contour and volume in this frame\./;
+  const LEAD = /^Drape and fit the EXACT static (top|pants\/shorts) from the reference image onto the live subject's CURRENT (body|lower-body) contour and volume in this frame\./;
   check("(1) it binds the STATIC garment to the reference and the fit to THIS frame",
     LEAD.test(TOPS_SPEC) && LEAD.test(BOTTOMS_SPEC),
     "a prompt with no tense gives the model no reason to re-read the body");
@@ -181,7 +285,7 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
   /* (3) THE INVARIANT, restated last, on the attributes a re-drape is most likely to
      smear. This is what replaced STRICT_REFERENCE_LOCK on these two branches. */
   check("(3) it closes by pinning the garment's own attributes as unchanged",
-    /Strictly preserve the original shirt texture, pattern, and color\.$/.test(TOPS_SPEC) &&
+    /Strictly preserve the original top texture, pattern, and color\.$/.test(TOPS_SPEC) &&
     /Strictly preserve original pattern and color\.$/.test(BOTTOMS_SPEC),
     `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
   /* THE RUNTIME HALF. This wording promises a per-frame fit, and text alone cannot keep
@@ -253,10 +357,39 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     /const CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(SRC) &&
     !/CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,900}?\$\{/.test(SRC),
     "no template hole anywhere in or adjacent to the declaration");
+  /* THREE AXES NOW, ALL SELECTORS. Construction joined category and angle when the closure
+     clause turned out to be summoning button-downs onto plain tees. The property this
+     check defends is unchanged: every axis picks a whole frozen string, so the number of
+     anchors on the wire stays exactly one no matter how many axes there are. */
   check("...and the resolver only SELECTS an anchor, never builds one",
-    /\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\]/.test(SRC) &&
-    !/CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC),
+    /const anchors = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(SRC) &&
+    /const plainTee = !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(SRC) &&
+    /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\]/.test(SRC) &&
+    !/(BACK_)?CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC) &&
+    !/anchors\.(top|bottom)\s*\+/.test(SRC) &&
+    !/PLAIN_TEE_ANCHOR\s*\+/.test(SRC) && !/\+\s*PLAIN_TEE_ANCHOR/.test(SRC),
     "appending one clause is how the dozen came back last time");
+  check("...and the tee anchor is a frozen literal too, with no interpolation hole",
+    /const PLAIN_TEE_ANCHOR\s*=\s*\n?\s*"/.test(SRC) &&
+    !/const PLAIN_TEE_ANCHOR[\s\S]{0,600}?\$\{/.test(SRC),
+    "a template hole here is how a per-item description creeps back one field at a time");
+  /* The closure lock is a SEPARATE PART handed to fitPrompt(), not text glued onto an
+     anchor. That is the distinction this whole section is about: a part can be shed under
+     budget pressure and can be counted; a concatenation can be neither. */
+  check("...and the bought-back clause is a separate part, never concatenated on",
+    /\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),/.test(SRC) &&
+    /const closure = !bottoms && angle !== "back" && hasFrontClosure\(item\);/.test(SRC) &&
+    !/FRONT_CLOSURE_LOCK\s*\+/.test(SRC) && !/\+\s*FRONT_CLOSURE_LOCK/.test(SRC),
+    "a concatenated clause cannot shed, and that is how the dozen came back last time");
+  /* The angle axis must stay a SELECTOR. A back render that ships the front anchor plus a
+     rear clause is the volume increase this suite's header is about. */
+  check("the back anchors are frozen literals, with no interpolation hole either",
+    /const BACK_CATEGORY_ANCHOR = Object\.freeze\(\{[^`]*?\}\);/s.test(SRC) &&
+    !/BACK_CATEGORY_ANCHOR = Object\.freeze\(\{[\s\S]{0,1200}?\$\{/.test(SRC),
+    "no template hole anywhere in or adjacent to the declaration");
+  check("the back pair sits inside the same ceiling as the front pair",
+    BACK_TOPS_SPEC.length <= 650 && BACK_BOTTOMS_SPEC.length <= 650,
+    "back tops=" + BACK_TOPS_SPEC.length + " back bottoms=" + BACK_BOTTOMS_SPEC.length);
   check("both sit far inside the 226-token ceiling, so the wire guard never clips them",
     TOPS_SPEC.length <= 650 && BOTTOMS_SPEC.length <= 650,
     "tops=" + TOPS_SPEC.length + " bottoms=" + BOTTOMS_SPEC.length);
@@ -266,35 +399,54 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
 console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──");
 {
   const cases = [
-    ["FRONT square-on", TEE, "front", false],
-    ["FRONT edge-on", TEE, "front", true],
-    ["BACK square-on", TEE, "back", false],
-    ["BACK edge-on", TEE, "back", true],
-    ["BOTTOMS edge-on", { ...TEE, garmentType: "lower_body" }, "front", true],
-    ["custom upload", { ...TEE, custom: true }, "front", true],
-    ["pathological name", { ...TEE, name: "x".repeat(400) }, "front", true],
+    ["FRONT square-on", TOP, "front", false],
+    ["FRONT edge-on", TOP, "front", true],
+    ["BACK square-on", TOP, "back", false],
+    ["BACK edge-on", TOP, "back", true],
+    ["BOTTOMS edge-on", { ...TOP, garmentType: "lower_body" }, "front", true],
+    ["custom upload", { ...TOP, custom: true }, "front", true],
+    /* A 400-character garbage name names no closure, so it correctly lands on the
+       no-proven-closure branch and ships the ANCHOR ALONE. That is not a weakening of this
+       row: what it guards is "one frozen anchor, nothing assembled onto it", and that still
+       holds exactly. The name axis is deliberate now - see hasFrontClosure() - so the row
+       carries its own expected string rather than pretending the name is inert. */
+    ["pathological name", { ...TOP, name: "x".repeat(400) }, "front", true, TOPS_SPEC],
   ];
-  /* Each case now names the branch it must land in. The invariance being asserted is
-     unchanged in strength - byte-identical output across angle, pose, colour, custom-upload
-     and pathological-name - it is just measured against the anchor for that garment's
-     REGION rather than one global constant. */
-  for (const [name, item, angle, prof] of cases) {
-    const expected = item.garmentType === "lower_body" ? BOTTOMS_SPEC : TOPS_SPEC;
+  /* Each case names the branch it must land in - now REGION x ANGLE, four frozen anchors
+     rather than two. The invariance is unchanged in strength on every axis that was ever
+     the point: pose (edge-on vs square-on), colour, custom-upload and pathological name
+     still move the prompt not one byte. Angle now selects, and only selects. */
+  for (const [name, item, angle, prof, override] of cases) {
+    const back = angle === "back";
+    const expected = override || (item.garmentType === "lower_body"
+      ? (back ? BACK_BOTTOMS_SPEC : BOTTOMS_SPEC)
+      : (back ? BACK_TOPS_SPEC : TOPS_FRONT_SPEC));
     check(`${name}: byte-identical to its category anchor`,
       api.buildCompositePrompt(item, angle, prof) === expected,
       api.buildCompositePrompt(item, angle, prof));
   }
-  /* THE AXIS ITSELF, asserted once: category is the ONLY thing that moves the prompt. */
-  check("the two branches are genuinely different, and category is the only axis",
-    TOPS_SPEC !== BOTTOMS_SPEC &&
-    api.buildCompositePrompt(TEE, "front", false) === api.buildCompositePrompt(TEE, "back", true) &&
-    api.buildCompositePrompt(JEANS, "front", false) === api.buildCompositePrompt(JEANS, "back", true));
+  /* THE AXES, asserted once: category and angle move the prompt, and NOTHING else does.
+     Pose is the one that has to be nailed down explicitly - it is the axis FIX ONE let
+     through, and an edge-on render must still resolve to its square-on anchor exactly. */
+  check("all four anchors are genuinely different from one another",
+    new Set([TOPS_FRONT_SPEC, BOTTOMS_SPEC, BACK_TOPS_SPEC, BACK_BOTTOMS_SPEC]).size === 4);
+  check("angle SELECTS: front and back differ, and each is its own frozen anchor",
+    api.buildCompositePrompt(TOP, "front", false) !== api.buildCompositePrompt(TOP, "back", false) &&
+    api.buildCompositePrompt(TOP, "back", false) === BACK_TOPS_SPEC);
+  check("pose is still NOT an axis - edge-on resolves to the same anchor as square-on",
+    api.buildCompositePrompt(TOP, "front", false) === api.buildCompositePrompt(TOP, "front", true) &&
+    api.buildCompositePrompt(TOP, "back", false) === api.buildCompositePrompt(TOP, "back", true) &&
+    api.buildCompositePrompt(JEANS, "back", false) === api.buildCompositePrompt(JEANS, "back", true));
+  check("an unrecognised angle falls to FRONT, never to a silent back-render",
+    api.buildCompositePrompt(TOP, undefined, false) === TOPS_FRONT_SPEC &&
+    api.buildCompositePrompt(TOP, "sideways", false) === TOPS_FRONT_SPEC &&
+    api.buildCompositePrompt(TOP, "BACK", false) === TOPS_FRONT_SPEC);
 
   /* Structural, across the builders this sandbox cannot execute. The four together are
      every path that can reach rtClient.set() with a prompt. */
   const builders = [
-    ["buildPrompt", /function buildPrompt\(item, angleText[\s\S]*?\n}/],
-    ["buildCustomPrompt", /function buildCustomPrompt\(item, angleText[\s\S]*?\n}/],
+    ["buildPrompt", /function buildPrompt\(item, angle[\s\S]*?\n}/],
+    ["buildCustomPrompt", /function buildCustomPrompt\(item, angle[\s\S]*?\n}/],
     ["buildLookPrompt", /function buildLookPrompt\(top, bottom, angleText[\s\S]*?\n}/],
     ["buildCompositePrompt", /function buildCompositePrompt\(item, angle, inProfile\)[\s\S]*?\n}/],
   ];
@@ -310,7 +462,7 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
        the shared tail - it is not reachable from a builder, so a builder still cannot
        introduce a clause. What each builder does is DELEGATE, and that is asserted. */
     check(`${name}(): delegates to the category resolver, assembles nothing itself`,
-      /return (imageOnlyPrompt\(item\)|lookAnchorPrompt\(\));/.test(codeBody) &&
+      /return (imageOnlyPrompt\(item, angle\)|lookAnchorPrompt\(\));/.test(codeBody) &&
       !/fitPrompt\(/.test(codeBody) && !/DENSE\./.test(codeBody),
       codeBody.slice(-240) || "builder not found");
   }
@@ -325,9 +477,53 @@ console.log("\n── §2 EVERY BUILDER RETURNS IT, AND ASSEMBLES NOTHING ──
   check("no DENSE clause is assembled by any builder",
     !/\[P\.(CORE|HIGH|MED|LOW|TRIM),\s*DENSE\./.test(codeOnly),
     "the DENSE table is a restore library now, not an assembly source");
-  check("the size-override modifier no longer reaches the wire either",
-    !/\[P\.\w+,\s*fitSentence\(/.test(codeOnly),
-    "documented in IMAGE_ONLY_PROMPT's retirement list - the UI still works, the render ignores it");
+  /* RESTORED - "I sized down a tee and it rendered exactly like true-to-size". The size
+     picker (setSizeOverride()) always worked; fitSentence() was the only route its choice
+     had into the render, and it was cut with everything else when this file went strict
+     image-only. Bought back alone, at P.MED so a garment fitted with the wrong tension
+     sheds before FRONT_CLOSURE_LOCK (P.HIGH) or the anchor (P.CORE) ever would - see
+     imageOnlyPrompt()'s SIZE-OVERRIDE RESTORE comment in app.js. */
+  check("the size-override modifier is wired back in, at P.MED",
+    /\[P\.MED,\s*fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],/.test(codeOnly),
+    "documented in IMAGE_ONLY_PROMPT's retirement list, and in imageOnlyPrompt()'s own SIZE-OVERRIDE RESTORE comment");
+}
+
+console.log("\n── §2a THE FIT SENTENCE RIDES BESIDE THE ANCHOR, NEVER INTO IT ──");
+{
+  /* Its own sandbox: §1/§2 zero out getFitModifier() so their byte-exact checks read
+     cleanly to the end of the anchor/closure text. A real marker here proves the clause
+     actually reaches the string, in the right place, under the right conditions - the
+     thing an absence-only check (the retired form of this section) could never catch. */
+  const fitSandbox = { ...sandbox, getFitModifier: () => "TEST_FIT_MARKER" };
+  const fitApi = new Function(...Object.keys(fitSandbox),
+    code + "\nreturn { imageOnlyPrompt };")(...Object.values(fitSandbox));
+
+  check("it rides AFTER the anchor (and closure, where one ships), as its own sentence",
+    fitApi.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC + " Fit: TEST_FIT_MARKER.",
+    fitApi.imageOnlyPrompt(TOP));
+  check("...same on a plain tee, which has no closure clause to ride after",
+    fitApi.imageOnlyPrompt(PLAIN_TEE) === PLAIN_TEE_SPEC + " Fit: TEST_FIT_MARKER.",
+    fitApi.imageOnlyPrompt(PLAIN_TEE));
+  check("...same on bottoms, and on the back anchors",
+    fitApi.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC + " Fit: TEST_FIT_MARKER." &&
+    fitApi.imageOnlyPrompt(TOP, "back") === BACK_TOPS_SPEC + " Fit: TEST_FIT_MARKER.",
+    `${fitApi.imageOnlyPrompt(JEANS)}\n        ${fitApi.imageOnlyPrompt(TOP, "back")}`);
+  check("a size-neutral choice (delta 0, the common case) still costs only a short phrase",
+    !fitApi.imageOnlyPrompt(TOP).includes("undersized") &&
+    !fitApi.imageOnlyPrompt(TOP).includes("oversized"),
+    "TEST_FIT_MARKER stands in for getFitModifier() - this just guards the sentence shape");
+
+  /* Budget pressure: MED must shed before the anchor (CORE) or the closure lock (HIGH).
+     Set the ceiling to exactly what the anchor+closure need, with nothing left over for
+     the fit sentence - the tightest branch in the real table (tops+front+closure) leaves
+     only 70 of 650 chars free, against getFitModifier()'s ~215-char longest string, so
+     this is not a hypothetical squeeze. */
+  const tightSandbox = { ...fitSandbox, PROMPT_MAX_CHARS: TOPS_FRONT_SPEC.length };
+  const tightApi = new Function(...Object.keys(tightSandbox),
+    code + "\nreturn { imageOnlyPrompt };")(...Object.values(tightSandbox));
+  check("under budget pressure the fit sentence is what sheds, not the anchor or the closure",
+    tightApi.imageOnlyPrompt(TOP) === TOPS_FRONT_SPEC,
+    tightApi.imageOnlyPrompt(TOP));
 }
 
 console.log("\n── §3 THE RETIREMENT IS REVERSIBLE (this mode will need pieces back) ──");

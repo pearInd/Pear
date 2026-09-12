@@ -1,0 +1,136 @@
+#!/usr/bin/env sh
+# ============================================================================
+# PEAR pre-commit
+# ----------------------------------------------------------------------------
+# Ordered fastest-to-slowest so a broken commit fails in seconds, not minutes.
+# Stage 3 only runs when app.js is actually staged.
+# ============================================================================
+
+echo "🍐 PEAR pre-commit"
+
+APP="fitting-room/app.js"
+STAGED=$(git diff --cached --name-only)
+
+# ── 1. Regression suite (the guardrail) ────────────────────────────────────
+echo ""
+echo "▸ regression suite"
+npm run test:unit || {
+  echo ""
+  echo "✖ A regression test failed."
+  echo "  These encode bugs that already shipped once. Do NOT delete the"
+  echo "  assertion to go green — fix the change, or update the test AND the"
+  echo "  comment block that records why the rule exists."
+  exit 1
+}
+
+# ── 2. Cross-file lockstep (see CLAUDE.md §3) ──────────────────────────────
+# These functions are duplicated across bundles with no shared module system.
+# Changing one copy without the other is silent and the failure surfaces only
+# in production, on one merchant's catalog.
+echo ""
+echo "▸ cross-file lockstep"
+touched_widget=$(echo "$STAGED" | grep -c "pear-widget.js" || true)
+touched_room=$(echo "$STAGED"   | grep -c "app.js" || true)
+
+if [ "$touched_widget" -gt 0 ] && [ "$touched_room" -eq 0 ]; then
+  for fn in canonicalPhoto upgradeImageUrl createGarmentComposite sampleBackdrop; do
+    if git diff --cached -U0 -- '*pear-widget.js' | grep -q "$fn"; then
+      echo "  ⚠ $fn changed in pear-widget.js but app.js is not staged."
+      echo "    Its twin (canonicalImageUrl / createGarmentComposite / sampleBackdrop)"
+      echo "    must move with it — see CLAUDE.md §3."
+      echo ""
+      printf "    Commit anyway? [y/N] "
+      read -r reply </dev/tty
+      case "$reply" in [Yy]*) ;; *) echo "✖ blocked."; exit 1;; esac
+      break
+    fi
+  done
+fi
+echo "  ok"
+
+# ── 3. Prompt drift — only when app.js is staged ───────────────────────────
+if echo "$STAGED" | grep -q "app.js"; then
+  echo ""
+  echo "▸ prompt trace (app.js staged)"
+
+  # trace-prompt.mjs resolves PROMPT_MAX_CHARS from config.js next to the
+  # app.js it's given (dirname(APP)/config.js) — it no longer falls back to a
+  # hardcoded default. So the HEAD-side snapshot must mirror the real layout:
+  # a bare /tmp/pear-app-head.js has no sibling config.js and the trace fails.
+  # Snapshot both files from HEAD into a scratch dir that preserves their
+  # relative directory, so dirname(head copy of APP)/config.js resolves.
+  APP_DIR=$(dirname "$APP")
+  CONFIG_REL="$APP_DIR/config.js"
+  HEAD_SNAPSHOT_DIR="/tmp/pear-head-snapshot"
+  HEAD_APP="$HEAD_SNAPSHOT_DIR/$APP"
+  HEAD_CONFIG="$HEAD_SNAPSHOT_DIR/$CONFIG_REL"
+
+  rm -rf "$HEAD_SNAPSHOT_DIR" 2>/dev/null
+  mkdir -p "$HEAD_SNAPSHOT_DIR/$APP_DIR"
+
+  # What the wire looks like in HEAD vs. what is about to be committed.
+  # config.js may not exist at HEAD (e.g. the commit that introduces it) —
+  # let that git show fail silently, same as the app.js one below; the trace
+  # then fails to resolve PROMPT_MAX_CHARS and we treat it as unavailable.
+  git show HEAD:"$CONFIG_REL" > "$HEAD_CONFIG" 2>/dev/null || true
+
+  head_trace_ok=1
+  if git show HEAD:"$APP" > "$HEAD_APP" 2>/dev/null; then
+    if node scripts/trace-prompt.mjs "$HEAD_APP" --json > /tmp/pear-prompt-head.json 2>/dev/null; then
+      head_trace_ok=0
+    else
+      head_trace_ok=$?
+    fi
+  fi
+
+  node scripts/trace-prompt.mjs "$APP" --json > /tmp/pear-prompt-new.json || {
+    echo "  ✖ a prompt branch is OVER the Decart budget — the session would be rejected."
+    exit 1
+  }
+
+  if [ "$head_trace_ok" -eq 0 ] && [ -s /tmp/pear-prompt-head.json ]; then
+    if diff -q /tmp/pear-prompt-head.json /tmp/pear-prompt-new.json >/dev/null; then
+      echo "  = wire strings UNCHANGED by this commit."
+      echo "    If this commit was meant to change how the garment renders,"
+      echo "    it did not: you likely edited a dead clause (CLAUDE.md §0)."
+      echo "    Run: npm run trace:prompt"
+    else
+      echo "  ± wire strings CHANGED — verify this was intended:"
+      node scripts/trace-prompt.mjs "$APP" | sed -n '/reach Decart/,/REACHABILITY/p' | head -30
+    fi
+  else
+    echo "  ⊘ HEAD-side trace unavailable, skipping wire-diff for this commit."
+  fi
+fi
+
+# ── 4. API + E2E ───────────────────────────────────────────────────────────
+# These two come from a separate bundle that is NOT installed in this repo.
+# Guarded deliberately: a hook that fails every commit on a missing script
+# gets disabled wholesale, taking stages 1-3 down with it. When the API/E2E
+# bundle lands and defines these scripts, the guard stops firing on its own
+# and both stages become blocking with no edit here.
+has_script() {
+  node -e "process.exit(require('./package.json').scripts?.['$1'] ? 0 : 1)" 2>/dev/null
+}
+
+echo ""
+echo "▸ api health"
+if has_script test:api; then
+  npm run test:api || { echo "✖ API tests failed."; exit 1; }
+else
+  echo "  ⊘ SKIPPED — no 'test:api' script in package.json (API bundle not installed)."
+fi
+
+echo ""
+echo "▸ widget e2e"
+if has_script test:e2e; then
+  npm run test:e2e || {
+    echo "✖ Widget E2E failed. Debug with: npm run test:e2e:ui"
+    exit 1
+  }
+else
+  echo "  ⊘ SKIPPED — no 'test:e2e' script in package.json (E2E bundle not installed)."
+fi
+
+echo ""
+echo "✅ all checks passed"

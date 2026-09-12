@@ -89,14 +89,24 @@ function run({ angle = "front", inProfile = false, distinctBack, custom = false,
     SUBTYPE_PROMPT: {}, SHIRT_NOUN: {},
     colorName: () => "black",
     getAnatomicalAnchor: () => "_ANCHOR",
-    getFitModifier: () => "_FIT",
+    /* "" not a marker: fitSentence() is now wired into imageOnlyPrompt() (P.MED), and this
+       suite's byte-identity checks read to the end of the closure clause. A non-empty
+       modifier would append "Fit: ..." past that point - image-first.test.mjs owns the
+       fit-sentence wiring itself, this suite stays about POSE invariance. */
+    getFitModifier: () => "",
     getSizeDelta: () => 0,
     getFabricModifier: () => "_FABRIC",
   };
   const fn = new Function(...Object.keys(sandbox),
     code + "\nreturn { angleClause, buildCompositePrompt, SIDE_PROFILE_DEPTH, COMPOSITE_SELECT, ANGLE_CLAUSE, CUSTOM_BACK_INFERRED };");
   const api = fn(...Object.values(sandbox));
-  const item = { name: "Tee", custom, img: "https://cdn.test/front.jpg" };
+  /* The fixtures in this suite were all named "Tee" until imageOnlyPrompt() gained a
+     CONSTRUCTION axis (PLAIN_TEE_ANCHOR in app.js - a plain knit tee resolves to its own
+     anchor, because the closure clause was summoning button-downs onto tees). Nothing here
+     is about construction; every assertion below is about POSE invariance and compares
+     against the DEFAULT tops anchor. So the fixture is a top that still takes that branch,
+     and this suite keeps measuring the thing it was written to measure. */
+  const item = { name: "Longsleeve Top", custom, img: "https://cdn.test/front.jpg" };
   return { clause: api.angleClause(item, angle, useComposite, inProfile), api };
 }
 
@@ -250,7 +260,7 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
      regression there would be invisible to every assertion above. */
   const { api } = run({ distinctBack: BACK });
   const built = api.buildCompositePrompt(
-    { name: "Tee", custom: true, garmentType: "upper_body" }, "front", true);
+    { name: "Longsleeve Top", custom: true, garmentType: "upper_body" }, "front", true);
   /* ORDER USED TO BE THE CLAIM HERE, and it moved twice: the depth directive led first
      (at 90 degrees the body is what is got wrong), then the reference binding took the
      lead (the grey-shirt regression - what was got wrong was the GARMENT, at every
@@ -267,12 +277,12 @@ console.log("\n── §3 THE DEPTH CLAUSE: the axis that only exists edge-on �
      proven is what stops "retired" from decaying into "deleted". */
   check("the live composite payload is the category anchor, at every pose",
     built === api.buildCompositePrompt(
-      { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false) &&
-    /^Drape and fit the EXACT static shirt from the reference image onto the live subject's CURRENT body contour/.test(built),
+      { name: "Longsleeve Top", custom: true, garmentType: "upper_body" }, "front", false) &&
+    /^Drape and fit the EXACT static top from the reference image onto the live subject's CURRENT body contour/.test(built),
     built);
   check("...and omits it entirely on a square-on frame",
     !DEPTH_MARKER.test(api.buildCompositePrompt(
-      { name: "Tee", custom: true, garmentType: "upper_body" }, "front", false)));
+      { name: "Longsleeve Top", custom: true, garmentType: "upper_body" }, "front", false)));
 }
 {
   /* Every branch, because a clause that reaches only the composite path leaves the
@@ -325,7 +335,7 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
      clause is how the negative could go missing while the positive stayed"). Asserted at
      both poses, unchanged in property if not in wording. */
   const { api: lockApi } = run({ distinctBack: BACK });
-  const lockItem = { name: "Tee", custom: false, garmentType: "upper_body" };
+  const lockItem = { name: "Longsleeve Top", custom: false, garmentType: "upper_body" };
   for (const prof of [false, true]) {
     const out = lockApi.buildCompositePrompt(lockItem, "front", prof);
     /* THE VOLUME AND PROVENANCE CLAUSES ARE BOTH OFF THE WIRE NOW - the anchor was
@@ -342,10 +352,10 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
        rotates (body-topology.test.mjs). The prompt's pose-invariance is now a deliberate
        division of labour rather than a gap. */
     check(`the anchor carries its reference binding at inProfile=${prof}`,
-      /the EXACT static shirt from the reference image/.test(out),
+      /the EXACT static top from the reference image/.test(out),
       out.slice(0, 400));
     check(`...and the fidelity clamp at inProfile=${prof}`,
-      /Strictly preserve the original shirt texture, pattern, and color\./.test(out),
+      /Strictly preserve the original top texture, pattern, and color\./.test(out),
       out.slice(0, 400));
   }
 
@@ -384,7 +394,7 @@ console.log("\n── §3b LATERAL SEAM SYNTHESIS: the band no reference view de
      for the depth clause. Ordering: body geometry, then the garment covering it, then the
      garment description. The second clause only means anything given the first. */
   const { api } = run({ distinctBack: BACK });
-  const item = { name: "Tee", custom: true, garmentType: "upper_body" };
+  const item = { name: "Longsleeve Top", custom: true, garmentType: "upper_body" };
   const built = api.buildCompositePrompt(item, "front", true);
   /* THE ORDERING CLAIM IS RETIRED WITH THE ASSEMBLY - see §3's note. The edge-on
      directive is still built by angleClause() and still asserted at every branch above;
@@ -417,8 +427,8 @@ console.log("\n── §3c THE FROZEN PROMPT rides BOTH orientation states ─�
      rendered frame again, at every angle now instead of only edge-on. That is the known
      cost of the trade, and model-agnostic.test.mjs §2 keeps the restore path asserted. */
   const { api } = run({ distinctBack: BACK });
-  const item = { name: "Tee", custom: true, garmentType: "upper_body" };
-  const FROZEN = /^Drape and fit the EXACT static shirt from the reference image onto the live subject's CURRENT body contour/;
+  const item = { name: "Longsleeve Top", custom: true, garmentType: "upper_body" };
+  const FROZEN = /^Drape and fit the EXACT static top from the reference image onto the live subject's CURRENT body contour/;
   for (const prof of [false, true]) {
     check(`the category anchor is what ships at inProfile=${prof} - never shed, never varied`,
       FROZEN.test(api.buildCompositePrompt(item, "front", prof)),
@@ -741,7 +751,13 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
      That is a real regression risk for flicker at 90 degrees - it is recorded here so it
      is a known, chosen trade rather than a silent one. */
   const { api } = run({ distinctBack: BACK });
-  const item = { name: "Tee", custom: true, garmentType: "upper_body" };
+  /* A FASTENING top, so the closure clause is genuinely on the wire for the tail assertion
+     below to mean anything. hasFrontClosure() now ships that clause only on positive
+     evidence of a closure (a title naming a button/zip/placket/polo/henley/oxford), because
+     handing those nouns to every unrecognised tee is what put a placket down the front of a
+     plain crewneck. Pose-invariance - the property this section owns - is unaffected either
+     way; the fixture just has to take the branch the assertion describes. */
+  const item = { name: "Oxford Button-Down Shirt", custom: true, garmentType: "upper_body" };
   const square = api.buildCompositePrompt(item, "front", false);
   const built  = api.buildCompositePrompt(item, "front", true);
   /* THE SHED LADDER IS GONE, and that is the assertion now. It was re-pinned twice - by
@@ -773,8 +789,9 @@ console.log("\n── §5e TRANSITION CONTINUITY: the anti-snap clauses ride on 
      property this section owns, and it is unaffected by either. */
   check("what survives at both poses is the category anchor, byte-identical",
     square === built &&
-    /^Drape and fit the EXACT static shirt from the reference image onto the live subject's CURRENT body contour/.test(square) &&
-    /Strictly preserve the original shirt texture, pattern, and color\.$/.test(square));
+    /^Drape and fit the EXACT static top from the reference image onto the live subject's CURRENT body contour/.test(square) &&
+    /Strictly preserve the original top texture, pattern, and color\./.test(square) &&
+    /fully fastened, sitting flat and closed across the chest as shown\.$/.test(square));
   check("both payloads stay inside the token budget",
     square.length <= 650 && built.length <= 650, `square=${square.length} edge=${built.length}`);
 }
@@ -793,7 +810,7 @@ console.log("\n── §6 NO TOCTOU: the pose is a frozen snapshot, like the ang
     snapAt !== -1 && awaitAt !== -1 && snapAt < awaitAt, `snapshot@${snapAt} await@${awaitAt}`);
   check("both prompt builders receive the frozen snapshot, never a fresh read",
     /buildCompositePrompt\(item, angleAtStart, profileAtStart\)/.test(apply) &&
-    /angleClause\(item, angleAtStart, false, profileAtStart\)/.test(apply), apply.slice(-600));
+    /buildPrompt\(item, angleAtStart\)/.test(apply), apply.slice(-600));
   check("applyGarment never re-reads profileActive() after the await",
     apply.split("profileActive()").length - 1 === 1, "expected exactly one read");
 

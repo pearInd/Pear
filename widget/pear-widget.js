@@ -202,16 +202,51 @@
      Hebrew geresh (U+05F3) while storefronts type an ASCII apostrophe (U+0027) just as
      often; and חצאית was filed under `dress`, which the fitting room read as a top
      because its only lower-body test was `type === "pants" || type === "bottoms"`.
-     A skirt is lower-body, so it belongs here. */
+     A skirt is lower-body, so it belongs here.
+
+     SPLIT INTO he/en - "I listed a Shortsleeve Tee and it was fitted as pants". Hebrew and
+     English used to share one flat array matched by plain indexOf, and "shorts" is a
+     substring of "shortsleeve" with no space to stop it - a one-word title with no boundary
+     between "short" and "sleeve" matched the pants list on "shorts" alone. English needs
+     word boundaries for exactly the reason classifyGarmentTitle()'s hasEnglishWord() in
+     fitting-room/app.js already does (§3 there: "\bshort\b would swallow 'short sleeve'" -
+     this is the same trap one word over, with no space to save it). Hebrew stays substring/
+     stem matching on purpose - \b sits at every Hebrew/Latin transition and nowhere useful
+     inside a Hebrew phrase, so a word-boundary test cannot replace stem matching there.
+     Mirrors GARMENT_CATEGORY_KEYWORDS's {he,en} split in app.js - keep the two in lockstep. */
   var CATEGORY_KEYWORDS = {
-    pants: ["מכנס", "ג'ינס", "ג׳ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "לגינ",
-            "pants", "jeans", "trousers", "shorts", "leggings", "skirt", "bermuda",
-            "chinos", "joggers", "sweatpants"],
-    shirt: ["חולצ", "טישרט", "טי-שירט", "סווטשירט", "סוודר", "גופי", "טופ",
-            "shirt", "tee", "top", "blouse", "sweater", "hoodie", "crop", "polo", "tank"],
-    dress: ["שמלה", "dress", "jumpsuit", "romper"],
-    outerwear: ["מעיל", "ז'קט", "ז׳קט", "ג׳קט", "ג'קט", "coat", "jacket", "blazer", "cardigan"]
+    pants: {
+      he: ["מכנס", "ג'ינס", "ג׳ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "לגינ"],
+      en: ["pants", "jeans", "trousers", "shorts", "leggings", "skirt", "bermuda",
+           "chinos", "joggers", "sweatpants"]
+    },
+    shirt: {
+      he: ["חולצ", "טישרט", "טי-שירט", "סווטשירט", "סוודר", "גופי", "טופ"],
+      en: ["shirt", "tee", "top", "blouse", "sweater", "hoodie", "crop", "polo", "tank"]
+    },
+    dress: {
+      he: ["שמלה"],
+      en: ["dress", "jumpsuit", "romper"]
+    },
+    outerwear: {
+      he: ["מעיל", "ז'קט", "ז׳קט", "ג׳קט", "ג'קט"],
+      en: ["coat", "jacket", "blazer", "cardigan"]
+    }
   };
+  /* Mirrors hasHebrewStem()/hasEnglishWord() in fitting-room/app.js exactly, minus the
+     arrow-function/const syntax this ES5 file avoids elsewhere. */
+  function hasHebrewStem(haystack, stems) {
+    for (var i = 0; i < stems.length; i++) {
+      if (haystack.indexOf(stems[i]) !== -1) return true;
+    }
+    return false;
+  }
+  function hasEnglishWord(haystack, words) {
+    for (var i = 0; i < words.length; i++) {
+      if (new RegExp("\\b" + words[i].replace(/-/g, "\\-") + "\\b", "i").test(haystack)) return true;
+    }
+    return false;
+  }
   /* NOT "tops". A guess that is indistinguishable from a verdict is what let every miss
      above reach the fitting room as a confident upper-body classification, suppressing
      the room's own (stronger) classifier. "unknown" is forwarded as-is and parseHandoff()
@@ -286,10 +321,8 @@
 
   function matchCategory(haystack) {
     for (var cat in CATEGORY_KEYWORDS) {
-      var words = CATEGORY_KEYWORDS[cat];
-      for (var i = 0; i < words.length; i++) {
-        if (haystack.indexOf(words[i].toLowerCase()) !== -1) return cat;
-      }
+      var kw = CATEGORY_KEYWORDS[cat];
+      if (hasHebrewStem(haystack, kw.he) || hasEnglishWord(haystack, kw.en)) return cat;
     }
     return null;
   }
@@ -408,6 +441,17 @@
      Next.js-hosted storefront would hand the API un-fetchable image URLs. */
   var RESIZER_RE = /\/(?:_next\/image|cdn-cgi\/image|_vercel\/image|imgproxy|thumbor|resize)\b|[?&]url=/i;
   function isResizerUrl(u) { return RESIZER_RE.test(u || ""); }
+
+  /* Query-string params known to be presentation/cache concerns, never asset identity.
+     Mirrors PRESENTATION_PARAMS in fitting-room/app.js's canonicalImageUrl() - keep the
+     two in lockstep. canonicalPhoto() below strips ONLY these; every other param is kept,
+     because a store that serves distinct photos as img.php?asset=front / ?asset=back has
+     its ENTIRE identity in the query string, and a canonicaliser that discards the whole
+     thing collapses a real front/back pair into one "duplicate" entry. */
+  var PRESENTATION_PARAMS = {
+    width: 1, height: 1, w: 1, h: 1, size: 1, quality: 1, q: 1, dpr: 1, format: 1, fm: 1,
+    crop: 1, fit: 1, scale: 1, v: 1, ver: 1, version: 1, t: 1, cache: 1, _: 1
+  };
 
   function upgradeImageUrl(url) {
     if (!url || /^data:/i.test(url)) return url;
@@ -535,12 +579,24 @@
      one photo getting through as a front/back PAIR is what bound the front image as the
      back reference downstream - and the fitting room then asked the model to
      "reproduce the BACK" while showing it the front, duplicating the chest print onto
-     the back. upgradeImageUrl() already strips the size markers, so canonicalising
-     through it makes those three collapse to one identity.
-     Mirrors canonicalImageUrl() in fitting-room/app.js - keep the two in lockstep. */
+     the back. upgradeImageUrl() already strips the size markers baked into the FILENAME
+     (the _800x.jpg / -300x300.jpg cases); this function's own job is the rest of the
+     identity - protocol, host case, hash, and the QUERY STRING.
+     Mirrors canonicalImageUrl() in fitting-room/app.js - keep the two in lockstep.
+
+     WAS `.split("?")[0]` - dropped the ENTIRE query string. That is too LOOSE for a store
+     whose photo identity lives IN the query string (img.php?asset=front vs ?asset=back):
+     both collapsed to the same bare path and a real back photo read as a duplicate of the
+     front. It was also too TIGHT in the other direction - it never normalised protocol or
+     stripped the hash, so http-vs-https or a #zoom fragment on the SAME photo compared as
+     different. Fixed the same way app.js's canonicalImageUrl() is: parse the URL, keep
+     ONLY the query params known to be presentation/cache (PRESENTATION_PARAMS above), drop
+     everything else including a param this file has never seen before - an unknown param
+     is far more likely to be part of the asset's identity than a new presentation concern
+     nobody wrote a name for yet. */
   function canonicalPhoto(u, depth) {
     if (!u) return "";
-    if (/^data:/i.test(u)) return u;
+    if (/^(?:data|blob):/i.test(u)) return u;
     /* Resizer endpoints: the identity is the `url=` param (the REAL asset), not the
        endpoint path. Keying on the path would make every image on a Next.js store
        canonicalise to ".../_next/image" - collapsing an entire product gallery into a
@@ -558,7 +614,23 @@
       }
       return u.toLowerCase();     // transform encoded in the path - compare whole
     }
-    return upgradeImageUrl(u).split("?")[0].toLowerCase();
+    var upgraded = upgradeImageUrl(u);
+    try {
+      var parsed = new URL(upgraded);
+      parsed.protocol = "https:";               // http/https of the same asset are the same asset
+      parsed.hostname = parsed.hostname.toLowerCase();
+      parsed.hash = "";
+      var keys = [];
+      parsed.searchParams.forEach(function (_v, k) { keys.push(k); });
+      for (var i = 0; i < keys.length; i++) {
+        if (Object.prototype.hasOwnProperty.call(PRESENTATION_PARAMS, keys[i].toLowerCase())) {
+          parsed.searchParams.delete(keys[i]);
+        }
+      }
+      return parsed.toString().toLowerCase();
+    } catch (_) {
+      return upgraded.split("?")[0].toLowerCase();   // unparseable - fall back to the bare path
+    }
   }
   function samePhoto(a, b) {
     return !!a && !!b && canonicalPhoto(a) === canonicalPhoto(b);

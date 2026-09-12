@@ -44,6 +44,9 @@ const {
   POSE_WASM_BASE,
   POSE_MODEL_URL,
   POSE_TASKS_MODULE,
+  INPUT_GATE_ENABLED,
+  INPUT_GATE_MAX_MS,
+  COLD_START_ACK_MS,
   BODY_TOPOLOGY_ENABLED,
   BODY_TOPOLOGY_SAMPLE_MS,
   BODY_TRACK_MIN_VISIBILITY,
@@ -204,10 +207,12 @@ const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples - spans ~300ms of
    pixels, so this lowers visual quality + pipeline cost, not the token count itself. */
 const LIVE_W = 512, LIVE_H = 288;
 
-/* Mobile detection (Feature 2 / mobile download fix). Drives two choices:
-   (1) the MediaRecorder container - phone galleries reliably ingest H.264 MP4 but
-       frequently reject WebM; (2) the save path - iOS Safari ignores <a download>,
-       so on mobile we hand the clip to the native share sheet ("Save Video" → gallery).
+/* Mobile detection (Feature 2 / mobile download fix). Drives the SAVE PATH only:
+   iOS Safari ignores <a download>, so on mobile we hand the clip to the native
+   share sheet ("Save Video" → gallery) instead of trusting the anchor.
+   It no longer picks the recording container: pickRecorderMimes() asks for MP4
+   first on EVERY platform now, because desktop players/editors and phone galleries
+   both ingest H.264 MP4 without a transcode.
    iPadOS reports its platform as "Mac", so a touch-capable Mac counts as mobile too. */
 const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
   (/Mac/.test(navigator.platform) && navigator.maxTouchPoints > 1);
@@ -1069,6 +1074,42 @@ function isKidsProduct(sizes, garmentAgeGroup) {
   return garmentAgeGroup === "kids";
 }
 
+/* ── THE SIZE RUN AS EVIDENCE - "STRAIGHT BASIC" and "LOOSE" ─────────────────────
+   REPORTED: long trousers ran through the tops pipeline while the size selector
+   correctly offered 26-38. Both halves of that sentence are the clue. The names carry
+   NO garment noun - "STRAIGHT BASIC" and "LOOSE" name a CUT and a FIT - so every keyword
+   tier abstains, correctly, and resolveGarmentCategory() falls to its silent `return
+   "top"`. That default is the same failure mode this file already records for the shorts
+   report: a sweep that guesses "top" has nothing left to escalate, and the guess ships.
+
+   But the shopper was looking at the right answer the whole time. A size run of 26-38 is
+   a WAIST measurement - it is the product telling us its own region, in the one field
+   that was never ambiguous. This file already reasons about exactly this vocabulary one
+   screen up, where KIDS_NUMERIC_SIZES documents that "adult numeric systems - waist/chest
+   28-44 - deliberately fall OUTSIDE this set".
+
+   IT ABSTAINS UNLESS THE RUN IS UNAMBIGUOUSLY A WAIST, which is what makes it safe to
+   put ahead of a guess and not merely another guess:
+     · any adult LETTER size present  -> abstain (S/M/L says nothing about region).
+     · any token that is not a plain number -> abstain (one-size, "36R", store labels).
+     · the run must sit inside 24-48  -> a kids run (2-18) and a shirt NECK run (14-18)
+       both fall below the floor and abstain.
+     · the run must START at 32 or lower -> a waist run opens at 24/26/28/30. An EU
+       women's TOP run opens at 34/36, so it abstains rather than being claimed here.
+   Nothing in this returns "top": a size run can prove a bottom, and cannot prove a top.
+   @param {string[]|string|null|undefined} sizes
+   @returns {"bottom"|null} */
+const WAIST_RUN_FLOOR = 24, WAIST_RUN_CEIL = 48, WAIST_RUN_OPENS_BY = 32;
+function categoryFromSizeRun(sizes) {
+  const list = parseSizeList(sizes);
+  if (!list.length) return null;
+  if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return null;
+  if (!list.every((s) => /^\d{1,2}$/.test(s))) return null;
+  const nums = list.map(Number);
+  if (!nums.every((n) => n >= WAIST_RUN_FLOOR && n <= WAIST_RUN_CEIL)) return null;
+  return Math.min(...nums) <= WAIST_RUN_OPENS_BY ? "bottom" : null;
+}
+
 /**
  * Mirror of isKidsProduct - true only when the product is CONFIDENTLY adult.
  * Needed because the childFits guard was zeroing only on garmentAgeGroup ===
@@ -1652,9 +1693,14 @@ const GARMENT_CATEGORY_KEYWORDS = Object.freeze({
   /* Hebrew entries are STEMS, matched as substrings so every inflection follows.
      English entries are matched with word boundaries - see WORD_BOUNDED below. */
   bottom: Object.freeze({
-    he: ["מכנס", "ג'ינס", "ג׳ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "טייצ", "לגינ"],
-    en: ["pants", "shorts", "trousers", "jeans", "skirt", "skirts", "bottoms", "bottom",
-         "leggings", "chinos", "joggers", "sweatpants", "slacks", "culottes", "bermuda"],
+    /* Kept in step with BOTTOMS_TOKENS - the two are separate mechanisms (stems+words
+       here, one regex there) over the same vocabulary, and a word added to only one of
+       them is a miss on whichever path the item happens to take. */
+    he: ["מכנס", "ג'ינס", "ג׳ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "טייצ", "לגינ",
+         "סווטפנט", "דגמח", "דגמ\"ח", "דגמ״ח"],
+    en: ["pants", "shorts", "trouser", "trousers", "jeans", "skirt", "skirts", "bottoms", "bottom",
+         "leggings", "chino", "chinos", "jogger", "joggers", "sweatpant", "sweatpants",
+         "slacks", "culottes", "bermuda", "bermudas", "capri", "capris", "palazzo"],
   }),
   top: Object.freeze({
     he: ["חולצ", "טישרט", "טי-שירט", "סווטשירט", "סוודר", "גופי", "ז'קט", "ז׳קט",
@@ -1753,6 +1799,15 @@ async function resolveGarmentCategory(item) {
   const byTitle = classifyGarmentTitle(item.name, item.title, item.category);
   if (byTitle) return byTitle;
 
+  /* TIER 1.5 - the product's OWN size run, ahead of the network tier because it is free,
+     synchronous and deterministic, and ahead of the default because it is EVIDENCE rather
+     than a guess. It only ever returns "bottom", and only for a run that can only be a
+     waist; see categoryFromSizeRun(). This is the tier that answers "STRAIGHT BASIC" and
+     "LOOSE" - titles that name a cut and a fit, where every keyword tier rightly abstains
+     and the shopper is nonetheless being shown 26-38. */
+  const bySizes = categoryFromSizeRun(item.sizes);
+  if (bySizes) return bySizes;
+
   /* TIER 2. Bounded and swallowed: a classification call is an ENHANCEMENT, and it must
      never be able to stall or fail a try-on. Promise.race against a timer rather than an
      AbortController because the seam is a plain async function - callers may implement it
@@ -1782,6 +1837,12 @@ function toItem(raw) {
   if (EXPLICIT_BOTTOM_TYPES.has(explicit)) category = "bottom";
   else if (EXPLICIT_TOP_TYPES.has(explicit)) category = "top";
   else category = classifyGarmentTitle(raw?.name, raw?.title, raw?.category);
+  /* The size run is tier 1.5 here too, and for the same reason it is in
+     resolveGarmentCategory(): it is free and synchronous, so the grid can use it, and it
+     resolves the cut/fit-named products ("STRAIGHT BASIC", "LOOSE") that reach the LLM
+     tier only if the shopper actually selects them. `categoryResolved` follows it, so an
+     item settled by its sizes is not re-resolved over the network later. */
+  if (!category) category = categoryFromSizeRun(raw?.sizes);
   return { ...raw, garmentType: categoryToGarmentType(category ?? "top"), categoryResolved: !!category };
 }
 
@@ -2258,6 +2319,19 @@ function setActiveItem(item, opts = {}) {
      still lands before go-live. It re-renders the chip itself if the answer moves. */
   refineActiveItemCategory(item).catch((e) =>
     console.warn("[PEAR] refineActiveItemCategory() failed, tier-1 category stands:", e?.message || e));
+  /* ── PREFETCH THE REFERENCE THE MOMENT A GARMENT IS CHOSEN ──────────────────
+     Not at go-live, and no longer only for dual-view items. prewarmOrientationAssets()
+     was reachable ONLY from the two branches that set currentAngle = AUTO_ANGLE, so a
+     front-only garment - most of the catalog - had NOTHING warmed: the first time its
+     image was touched was inside the go-live apply, which then shipped a URL for Decart
+     to fetch server-side before it could condition on anything. That is the "assembling
+     the reference takes too long" delay and the first second of generic output, from the
+     same cause.
+     Fire-and-forget by design: it fetches the front (and the back and the stitched
+     composite when those exist), and every one of those is a cache fill nothing waits on.
+     By the time the shopper presses the button the bytes are resident and
+     referenceImageFor() hands them over directly - see garmentBlobIfWarm(). */
+  prewarmOrientationAssets();
   // Fire-and-forget: builds the FRONT|BACK composite the instant a distinct back is
   // already known (e.g. an inline ?garment_url_back=), instead of waiting for go-live.
   ensureActiveGarmentComposite(item);
@@ -2392,6 +2466,16 @@ window.addEventListener("message", (e) => {
     // The room may already be open - rebuild the ladder against the real variants and
     // re-check the block, rather than waiting for the next item swap.
     try { injectSizeSelector(); updateSizeMismatchUI(); } catch {}
+    /* A LATE SIZE LIST IS NEW CATEGORY EVIDENCE, and this is the half the report was
+       filed against: the ladder rebuilt to 26-38 while the chip still read "בגד עליון",
+       because nothing re-asked the category once the sizes landed. The item had been
+       resolved by DEFAULT (a cut/fit title like "STRAIGHT BASIC" abstains on every
+       keyword tier), so categoryResolved is false and this re-resolve is exactly what
+       it is for - an item already settled by real evidence returns at the guard. */
+    if (activeItem) {
+      refineActiveItemCategory(activeItem).catch((e) =>
+        console.warn("[PEAR] category re-resolve after late sizes failed:", e?.message || e));
+    }
   }
 
   if (typeof e.data.garment_age_group === "string") {
@@ -2558,6 +2642,21 @@ function renderPerspectiveSelector() {
   if (activeItem) {
     const wasAuto = currentAngle === AUTO_ANGLE;
     currentAngle = canCombineViews(activeItem) ? AUTO_ANGLE : "front";
+    /* THE ONE PLACE THE MODE IS DERIVED, so the one place worth stating WHY. Front-only is
+       a fully supported mode and most of the catalog is genuinely single-view - but it is
+       also the exact outcome a shopper reports as "I turned around and the back was
+       plain", and until now the reason was spread across four functions (one of which,
+       distinctBackOf's same-photo rejection, warns only once per pair and is silent on
+       every later item). Logged only on the front-only branch: on AI Auto there is nothing
+       to explain, and a line per swatch click is noise. */
+    if (currentAngle !== AUTO_ANGLE) {
+      const why = describeBackViewReadiness(activeItem);
+      console.log("[PEAR] front-only this item -", why.reason,
+        why.half ? `(look half: ${why.half})` : "",
+        "| front:", abbrevImg(why.front) || "(none)",
+        "| back:", abbrevImg(why.back) || "(none)",
+        "- call __pearDebugBackView() for the full picture");
+    }
     if (currentAngle === AUTO_ANGLE && !wasAuto) {
       autoOrientation = null;                  // PENDING - no startup FRONT lock; the camera decides
       autoProfile = false;                     // ...and no stale edge-on reading carried in
@@ -3267,7 +3366,10 @@ async function ensureOnline() {
    So the body was always live; what was missing was any signal telling the model to
    re-read it once its conditioning had gone stale, which is what the topology monitor
    supplies. */
-function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width = LIVE_W, height = LIVE_H } = {}) {
+function createThrottledInputStream(srcStream, {
+  fps = LIVE_INFERENCE_FPS, width = LIVE_W, height = LIVE_H,
+  gated = INPUT_GATE_ENABLED, gateMaxMs = INPUT_GATE_MAX_MS,
+} = {}) {
   const srcTrack = srcStream.getVideoTracks()[0];
   // No video track (camera failed) - hand the stream back untouched; nothing to throttle.
   if (!srcTrack) return { stream: srcStream, dispose: () => {} };
@@ -3299,6 +3401,42 @@ function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width
   let disposed = false;
   let timer = null;
   const frameMs = 1000 / fps;
+  /* ── THE ATOMIC CONDITIONING GATE ─────────────────────────────────────────────
+     REPORTED: for the first second of a session Decart renders a generic grey
+     long-sleeve sweater, and only then switches to the garment that was actually asked
+     for. The reveal is already gated three ways (armFirstFrameBilling: the apply
+     resolved, the frame is non-black, and it stayed that way for 3 frames / 300ms) - and
+     that function's own comment names the hole those three cannot close: "isDressedFrame()
+     cannot distinguish 'the real garment' from 'Decart's generic/default output'". A
+     generic sweater is not black and does not flicker, so it satisfies every gate there is.
+
+     THE ONLY WAY TO WIN IS NOT TO GIVE IT ANYTHING TO GENERATE FROM. The generic frame
+     exists because raw camera frames start flowing the instant the WebRTC session opens,
+     which is BEFORE rtClient.set() has delivered the reference - so Decart is asked to
+     render a dressed person while the only thing it has is its own prior. Hold the frames
+     until the conditioning is acknowledged and there is no such window: the first frame it
+     ever receives is one it can already condition correctly, so the first frame it ever
+     emits carries the real garment. Nothing to hide, nothing to fade over.
+
+     THE TRACK STAYS LIVE THROUGHOUT - this withholds FRAMES, not the track. captureStream(0)
+     emits only on requestFrame(), so simply not calling it produces a live video track with
+     no frames on it, which is what the WebRTC handshake needs to complete normally.
+
+     IT CANNOT STRAND A SESSION. The gate self-releases after gateMaxMs no matter what, so a
+     path that forgets to call release() costs a late start rather than a dead session - and
+     says so loudly, because reaching that timer is a bug in the caller, not a slow network. */
+  let gateOpen = !gated;
+  let gateTimer = null;
+  if (gated) {
+    gateTimer = setTimeout(() => {
+      gateTimer = null;
+      if (disposed || gateOpen) return;
+      console.warn(`[PEAR] input gate: auto-released after ${gateMaxMs}ms without an explicit`,
+        "release - the garment apply never reported success. Streaming raw frames now so the",
+        "session is not stranded; the first rendered frames may not carry the garment.");
+      gateOpen = true;
+    }, gateMaxMs);
+  }
 
   // Cover-fit + horizontal mirror: fill width×height (preserve aspect, center-crop)
   // and flip X so the canvas track already carries the selfie orientation.
@@ -3315,7 +3453,7 @@ function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width
   };
 
   const tick = () => {
-    if (disposed) return;
+    if (disposed || !gateOpen) return;   // gated: a live track carrying no frames yet
     try {
       drawFrame();
       if (outTrack && typeof outTrack.requestFrame === "function") outTrack.requestFrame();
@@ -3327,9 +3465,23 @@ function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width
 
   return {
     stream: out,
+    get gateOpen() { return gateOpen; },
+    /* Idempotent, and called from applyActive() the moment a garment is genuinely on the
+       wire - which is every path that can dress a session (go-live, the cold-start
+       recovery's fallback, an SDK-reconnect re-apply), so no single call site has to
+       remember. Returns whether THIS call was the one that opened it, for the log line. */
+    release: (why = "garment acknowledged") => {
+      if (gateOpen) return false;
+      gateOpen = true;
+      if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
+      console.log(`[PEAR] input gate released (${why}) - streaming to Decart now;`,
+        "its first frame is conditioned on the real reference");
+      return true;
+    },
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
       if (timer) { clearInterval(timer); timer = null; }
       try { outTrack && outTrack.stop(); } catch (_) {}
       try { video.pause(); } catch (_) {}
@@ -3339,6 +3491,22 @@ function createThrottledInputStream(srcStream, { fps = LIVE_INFERENCE_FPS, width
       try { srcStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
     },
   };
+}
+
+/**
+ * Open the input gate for the CURRENT session - see createThrottledInputStream's own
+ * "atomic conditioning gate" comment for what is being withheld and why.
+ *
+ * ONE CALL SITE OWNS THE MEANING: applyActive(), immediately after isGarmentApplied
+ * becomes true. That is the exact definition of "a garment is on the wire", and it covers
+ * every path that can reach it - go-live's first apply, the cold-start recovery's
+ * lightweight fallback, an SDK-reconnect re-apply - without any of them having to know
+ * this gate exists. Idempotent, so the ~8 re-anchors per session that follow are no-ops.
+ * @param {string} why  short reason, for the one log line the release prints
+ * @returns {void}
+ */
+function releaseInputGate(why) {
+  if (inputThrottle && typeof inputThrottle.release === "function") inputThrottle.release(why);
 }
 
 /**
@@ -3378,7 +3546,14 @@ function buildRealtimeConnectOpts(gen) {
       // video element so the garment warps/tracks the user in realtime.
       const aiVideo = document.querySelector("#aiVideo");
       aiVideo.srcObject = editedStream;
-      aiVideo.style.display = "block";   // make sure it's visible
+      /* display:block keeps it laid out, decoding and firing rVFC - which
+         armFirstFrameBilling() below depends on to detect Model Ready at all. What it does
+         NOT do any more is make it VISIBLE: gateAiFeed() holds it at opacity 0 until the
+         reveal, because an inline display:block was overriding the stylesheet rule that
+         was supposed to keep this hidden until .show-live, leaving only a 34%-opaque
+         scrim between the shopper and whatever Decart rendered first. See gateAiFeed(). */
+      aiVideo.style.display = "block";
+      gateAiFeed(aiVideo);
       aiVideo.style.transform = "none";  // edited feed is already correctly oriented
       // Force the video onto its own GPU compositing layer so the browser doesn't
       // re-rasterize it in software on every frame repaint. translateZ(0) is the
@@ -3490,8 +3665,14 @@ function buildRealtimeConnectOpts(gen) {
   };
 }
 
-async function connectRealtime() {
-  if (rtClient && isLive()) return;
+async function connectRealtime({ force = false } = {}) {
+  /* `force` EXISTS FOR THE COLD-START RECOVERY, and without it that recovery was a no-op.
+     The hang it recovers from is a set() that never gets a response on a session the SDK
+     still reports as connected - so isLive() is TRUE, and this early return fired before
+     anything was reset. The whole point of that path is to throw away a session that
+     looks healthy and is not, so it says so explicitly. Every other caller keeps the
+     original behaviour: never open a second session on top of a working one. */
+  if (!force && rtClient && isLive()) return;
   if (connecting) return;
 
   // Bug 3 fix: explicitly close any stale/dropped session before opening a new one
@@ -3712,6 +3893,7 @@ function teardown() {
   lastSentImageRef = null;
   rtImageOnWire = false;
   lastSentPrompt = null;
+  redrapeCoverEnd("session-torn-down");   // a cover must never outlive the session it covered
   resetConditionWire();          // nothing may be queued for a session that no longer exists
 
   // Bug 3 fix: stop this session's cloned camera tracks (the WebRTC sender side).
@@ -3732,6 +3914,7 @@ function teardown() {
   // it on top, and a stale srcObject would block the next session's first frame).
   const ai = $("aiVideo");
   if (ai) { ai.style.display = "none"; ai.srcObject = null; }
+  resetAiFeedVisibility();   // never leave a dead session's opacity:0 on a reused element
 
   // Bug 3 fix: clear every guard so the next try-on starts from a pristine state.
   connState = "idle";
@@ -4014,8 +4197,31 @@ function garmentBlobCached(url) {
       return null;
     }
   })();
+  /* The settled value, parked ON the promise. garmentBlobIfWarm() below needs to answer
+     "are these bytes ALREADY here?" without awaiting - awaiting a still-pending fetch is
+     precisely the stall it exists to avoid - and hanging the result off the cached job
+     keeps that answer in lockstep with the LRU for free: evicting the promise evicts the
+     value with it, so there is no second map to keep honest. */
+  job.then((blob) => { job.settled = blob || null; }, () => {});
   lruSet(_assetBlobCache, url, job);
   return job;
+}
+
+/**
+ * The warm bytes for this URL, or null - NEVER a fetch, never a wait.
+ *
+ * This is the whole prefetch payoff, and the "never" is the point. referenceImageFor()
+ * calls it on the go-live critical path: a hit means Decart is handed the actual image
+ * bytes and has nothing to fetch before it can condition, and a miss falls straight
+ * through to the proxied URL exactly as before. Awaiting on a miss would trade the
+ * server-side fetch for a client-side one at the worst possible moment.
+ * @param {string} url
+ * @returns {Blob|null}
+ */
+function garmentBlobIfWarm(url) {
+  if (!url) return null;
+  const job = _assetBlobCache.get(url);
+  return (job && job.settled) || null;
 }
 
 /* Warm the cache with the front AND back assets of the active subject (both halves of a
@@ -4044,7 +4250,10 @@ function prewarmOrientationAssets() {
         }
       });
     } else {
-      console.warn('[PEAR] prewarm back blob: SKIPPED - this garment has no distinct back image');
+      /* console.log, not warn: since this prewarm runs for EVERY item rather than only
+         for dual-view ones, "no distinct back" is the ordinary case for most of the
+         catalog and a warning here would train readers to ignore the channel. */
+      console.log('[PEAR] prewarm back blob: skipped - this garment has no distinct back image');
     }
     /* Composite mode: warm the STITCHED reference too. It is what actually reaches
        rtClient.set(), and building it needs both bitmaps decoded - doing that lazily
@@ -4444,6 +4653,75 @@ function orientFadeEl() {
   return c;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+   THE AI FEED'S VISIBILITY - the DISPLAY half of the conditioning gate
+   ══════════════════════════════════════════════════════════════════════════════
+   THE INPUT GATE (createThrottledInputStream) is the primary fix for the grey-sweater
+   flash: it withholds camera frames until the reference is acknowledged, so Decart never
+   generates a placeholder frame in the first place. This is the second lock on the same
+   door, and it exists because the first one depends on a remote service behaving as
+   expected while this one does not depend on anything at all.
+
+   THE HOLE IT CLOSES IS REAL AND WAS ITS OWN BUG. style.css hides #aiVideo until the card
+   carries .show-live - which is added only at Model Ready - but onRemoteStream() set
+   `aiVideo.style.display = "block"` the moment the remote stream arrived, and an INLINE
+   style beats a stylesheet rule. So the AI feed was displayed from the first remote frame,
+   with the reveal class still absent, and the only thing standing between it and the
+   shopper was #scanOverlay - which is `rgba(8,8,10,.34)` plus a 3px blur. A 34%-opaque
+   scrim does not hide a garment; it dims one. Whatever Decart rendered in that window was
+   visible through it, slightly darkened, which is exactly what the report describes.
+
+   OPACITY, NOT display:none, AND THAT IS DELIBERATE. armFirstFrameBilling() decides Model
+   Ready by SAMPLING this element - requestVideoFrameCallback plus a luma read - so it must
+   keep decoding and presenting frames throughout the gated window. A display:none video is
+   not composited and may stop firing rVFC entirely, which would deadlock the very gate
+   this is meant to serve. opacity:0 keeps the element in the render tree, decoding and
+   presenting exactly as before, and contributing nothing visible.
+   The two `ai.style.display !== "none"` readers (captureHoldFrame, freezeFinalFrame) are
+   therefore untouched: display still means what it always meant. */
+const AI_FEED_FADE_MS = 220;
+
+/* Hold the feed invisible while it decodes. Called from onRemoteStream, i.e. the instant
+   there is a stream at all - before which there is nothing to hide. */
+function gateAiFeed(aiVideo) {
+  if (!aiVideo) return;
+  aiVideo.style.transition = "none";
+  aiVideo.style.opacity = "0";
+}
+
+/* Fade it in. Called from the ONE place that already decides Model Ready - the same
+   statement that adds .show-live - so the pixels and the state class can never disagree.
+   A transition rather than a cut: by this point three consecutive qualifying frames have
+   decoded, so the content is settled and the fade is pure polish over a correct frame. */
+function revealAiFeed() {
+  const ai = $("aiVideo");
+  if (!ai) return;
+  ai.style.transition = `opacity ${AI_FEED_FADE_MS}ms ease-out`;
+  ai.style.opacity = "1";
+}
+
+/* Hand #aiVideo back to the stylesheet. MUST run wherever the element is retired or given
+   different content - a session teardown, or a history clip loading into the same player -
+   or that content inherits an opacity:0 from a session that is already over and renders
+   nothing at all.
+
+   IT CLEARS `display` TOO, AND THAT FIXES A SEPARATE PRE-EXISTING BUG. The teardown paths
+   set an inline display:none to undo onRemoteStream's inline display:block, and nothing
+   ever cleared it - so a history clip afterwards added .show-clip, whose whole job is
+   `.camera-card.show-clip #aiVideo { display: block; }`, and lost to the leftover inline
+   rule. The clip played with the element still hidden. Clearing rather than re-asserting
+   is the fix for both: the stylesheet's base rule already hides #aiVideo, so the visual
+   outcome at teardown is identical, and the state classes can govern again the way they
+   were written to. This is the ONE place inline visibility is undone, so there is no
+   second copy to forget. */
+function resetAiFeedVisibility() {
+  const ai = $("aiVideo");
+  if (!ai) return;
+  ai.style.transition = "";
+  ai.style.opacity = "";
+  ai.style.display = "";
+}
+
 /* Snapshot the live #aiVideo frame into the overlay and show it at full opacity with NO
    transition (an instant cut onto a frame identical to what's already showing is
    invisible). Call BEFORE issuing the swap. */
@@ -4464,6 +4742,122 @@ function orientFadeFreeze() {
 function orientFadeReveal() {
   if (!_orientFadeCanvas) return;
   _orientFadeCanvas.style.opacity = "0";
+}
+
+/* ── THE RE-DRAPE'S FRAME COVER ────────────────────────────────────────────────
+   REPORTED, on video: the target garment is correct, then for a second or two it is a
+   plain generic tee, then it is correct again - during body movement.
+
+   THE MECHANISM IS THE ONE THE ATOMIC CONDITIONING GATE ALREADY DESCRIBES (see
+   createThrottledInputStream): Decart renders every frame it is handed, and a full
+   set({ image }) takes a datachannel round-trip to land. Frames arriving during that
+   round-trip are rendered against conditioning that is mid-replacement, so the most
+   probable completion is the model's own prior - a generic garment. The gate closes that
+   window at session start and is one-shot by design; nothing covered the same window when
+   reconditionForTopology() re-uploads on movement.
+
+   So cover it the way a front/back swap is already covered: snapshot the last good
+   dressed frame, hold it over #aiVideo while the re-upload is in flight, and cross-fade
+   back once the new conditioning has landed. The shopper sees their own last dressed
+   frame for the length of a round-trip instead of a garment they did not choose.
+
+   WHY THE TURN HOLD DOES NOT ALREADY COVER THIS. reconditionForTopology() bails on
+   `_orientHoldActive`, so the two never overlap - but that hold only ever rises for a
+   DUAL-VIEW item in AI Auto. Exactly one live item in PEAR_CATALOG ships a distinct rear
+   photo, so for every other top canCombineViews() is false, currentAngle is "front", the
+   watcher's front/back half is inert, and no hold is ever raised. Those are precisely the
+   items whose re-drape ran uncovered - and with COMPOSITE_DEFAULT false they are also the
+   ones whose reference genuinely is replaced on the wire. This is their cover.
+
+   A SEPARATE COVER FROM THE ORIENTATION HOLD, DELIBERATELY, and not for tidiness. The two
+   have independent lifecycles and neither may release the other. The orientation watcher
+   calls orientHoldEnd("turn-abandoned") from its 250ms tick whenever no front/back turn is
+   in progress - which is nearly always during a plain re-drape - so sharing
+   _orientHoldActive would have let that tick tear this cover down mid-re-upload, within
+   one tick of it going up. Sharing the CANVAS has the same problem one layer down. Two
+   overlays, two z-indexes, two timers; when both happen to be up they hold the same
+   snapshot, so the stack reads identically either way.
+
+   THE TRADE, STATED PLAINLY: this shows a still frame during movement. A re-drape fires at
+   most every BODY_RECONDITION_COOLDOWN_MS (900ms), and each cover lasts a round-trip plus
+   ORIENT_FADE_HOLD_MS before a 260ms cross-fade - so a shopper who moves continuously
+   trades some live-motion fidelity for never seeing the wrong garment. That is the right
+   way round (a laggy self is recognisable; a stranger's shirt is not), but it is a real
+   trade and REDRAPE_HOLD_MAX_MS is what bounds the failure: a hung apply reveals the live
+   feed rather than leaving a still up, exactly as the turn hold's ceiling does.
+
+   THE CEILING IS NOT A DURATION KNOB. The normal release is on applyActive() resolving,
+   which is what "uncover as soon as the fresh frame arrives" actually means here; this
+   number only bounds the case where that never happens. It must therefore stay clear of
+   what a WORST-CASE apply costs - APPLY_ATTEMPTS (2) round-trips with APPLY_RETRY_MS
+   (200ms) between them - or the ceiling fires mid-retry and uncovers the very frames the
+   cover was raised to hide. Shortening it does not make a healthy re-drape shorter; it
+   only converts a slow one back into the artifact. */
+const REDRAPE_HOLD_MAX_MS = 1800;   // ceiling - a stuck still is worse than an honest live frame
+let _redrapeHoldActive = false;
+let _redrapeHoldTimer  = null;
+let _redrapeCanvas     = null;
+
+function redrapeCoverEl() {
+  if (_redrapeCanvas) return _redrapeCanvas;
+  const card = $("cameraCard");
+  if (!card) return null;
+  if (!document.getElementById("pear-redrape-cover-styles")) {
+    const s = document.createElement("style");
+    s.id = "pear-redrape-cover-styles";
+    /* z-index 7 - one above the orientation fade's 6. When a turn is confirmed during a
+       re-drape both covers can be up; the turn's is the longer-lived and more important
+       of the two, but they carry the same snapshot, so which one wins the stack is
+       cosmetically irrelevant and the ordering is fixed only so it is not accidental. */
+    s.textContent =
+      "#redrapeCoverCanvas{position:absolute;inset:0;width:100%;height:100%;" +
+      "object-fit:cover;transform:none;z-index:7;pointer-events:none;" +
+      `opacity:0;transition:opacity ${ORIENT_FADE_MS}ms ease-out;}`;
+    document.head.appendChild(s);
+  }
+  const c = document.createElement("canvas");
+  c.id = "redrapeCoverCanvas";
+  card.appendChild(c);
+  _redrapeCanvas = c;
+  return c;
+}
+
+/* Snapshot #aiVideo and hold it at full opacity with NO transition - an instant cut onto a
+   frame identical to what is already on screen is invisible. Call BEFORE the re-upload.
+   @returns {boolean} whether a cover actually went up (false = nothing paintable yet, in
+   which case the caller must not wait for a fade it is not showing). */
+function redrapeCoverBegin() {
+  if (_redrapeHoldActive) return false;
+  const ai = $("aiVideo");
+  const c = redrapeCoverEl();
+  /* No decoded frame yet - there is nothing good to hold, and freezing a blank canvas over
+     a live feed would CREATE the artifact this exists to prevent. Degrade to uncovered. */
+  if (!ai || !c || !ai.videoWidth) return false;
+  c.width = ai.videoWidth; c.height = ai.videoHeight;
+  c.getContext("2d").drawImage(ai, 0, 0, c.width, c.height);
+  c.style.transition = "none";
+  c.style.opacity = "1";
+  void c.offsetWidth;              // flush so the transition below re-arms
+  c.style.transition = `opacity ${ORIENT_FADE_MS}ms ease-out`;
+  _redrapeHoldActive = true;
+  if (_redrapeHoldTimer) clearTimeout(_redrapeHoldTimer);
+  _redrapeHoldTimer = setTimeout(() => {
+    console.warn("[PEAR] body re-drape cover hit its", REDRAPE_HOLD_MAX_MS +
+      "ms ceiling; revealing the live feed");
+    redrapeCoverEnd("timeout");
+  }, REDRAPE_HOLD_MAX_MS);
+  return true;
+}
+
+/* Fade the cover out, revealing the (by now re-conditioned) live feed underneath.
+   Idempotent, and safe to call when no cover is up - every session-ending path calls it
+   unconditionally so a cover can never outlive the window that raised it. */
+function redrapeCoverEnd(reason) {
+  if (_redrapeHoldTimer) { clearTimeout(_redrapeHoldTimer); _redrapeHoldTimer = null; }
+  if (!_redrapeHoldActive) return;
+  _redrapeHoldActive = false;
+  if (_redrapeCanvas) _redrapeCanvas.style.opacity = "0";
+  if (ORIENT_DEBUG) console.log("[PEAR] body re-drape - releasing frame cover (" + reason + ")");
 }
 
 /* ── Freeze THROUGH the turn, not just through the swap ───────────────────────
@@ -5038,10 +5432,56 @@ function createOrientationWatcher() {
         toast("תמונת הגב אינה תקינה");
         return;
       }
+    } else if (GARMENT_FRONT) {
+      /* ── THE RETURN LEG - "I turned all the way round and came back in a Real Madrid
+         shirt." ────────────────────────────────────────────────────────────────────
+         THE ASYMMETRY THIS CLOSES. Everything above pre-flights the BACK asset before
+         committing to it, because committing first and finding the asset missing
+         afterwards is what produced the blank back view. The FRONT leg had none of it: it
+         fell straight through to `applying = true; autoOrientation = next; applyActive()`.
+
+         WHAT THAT COSTS ON THE WAY BACK. If the front bytes are not resident by then,
+         referenceImageFor() logs a pre-cache miss and falls back to a URL - and a URL means
+         DECART has to fetch it before it can condition on anything (garmentImageRef() puts
+         that at up to 20-25s). Until it lands the model has no reference and renders from
+         its own prior, which is where a jersey nobody selected comes from. The flip has
+         already committed, so the shopper watches it happen.
+
+         WHY THE BYTES GO MISSING ON THE RETURN LEG AND NOT THE OUTBOUND ONE. _assetBlobCache
+         is an LRU capped at BLOB_CACHE_MAX (10), shared across front, back, composites,
+         look stitches and every colour variant touched this session. The front entry is the
+         OLDEST of the pair by construction - fetched at go-live, where the back was fetched
+         at the first turn - so eviction reaches it first. A transient refetch failure does
+         the same. Neither is reachable outbound, because the branch above catches it.
+
+         NO CONTENT PROBE HERE, deliberately. The back gets one because a mislabelled or
+         soft-404'd rear photo is a real classification failure; the front asset is the one
+         the shopper picked and has already rendered correctly this session, so a flatness
+         check would only add a decode to the return path for a failure that cannot happen
+         without the front having been wrong from the start.
+
+         ABANDON, DO NOT DEGRADE. Returning without touching autoOrientation leaves the lock
+         where it is and the known-good reference on the wire; the sampler keeps voting, so
+         the next tick past the cooldown retries. That is exactly what the back branch does
+         with a missing asset, and it is the behaviour the shopper wants: the previous side
+         held a beat too long beats a garment nobody chose. */
+      const frontBlob = await garmentBlobCached(GARMENT_FRONT);
+      if (disposed) return;               // same superseded-instance guard as the back leg
+      if (!frontBlob) {
+        console.error("[PEAR] CRITICAL: GARMENT_FRONT unavailable at flip time; holding the",
+          "current side rather than committing to a reference that is not on the wire -", GARMENT_FRONT);
+        lastSwapAt = Date.now();          // throttle the retry to the normal swap cadence
+        return;
+      }
     }
 
     applying = true;
     lastSwapAt = Date.now();
+    /* THE LOCK IS A CLAIM ABOUT WHAT IS ON THE WIRE, so it is advanced here but ROLLED BACK
+       if the dispatch below fails - see the catch. Kept as an advance-then-revert rather
+       than a commit-after-success because renderPerspectiveSelector() and the prompt
+       builders read it DURING the dispatch, and they must describe the side being applied. */
+    const lockBefore = autoOrientation;
     autoOrientation = next;
     logVtonState();
     /* No-ops when the sampler already raised the hold on the first disagreeing vote,
@@ -5064,9 +5504,38 @@ function createOrientationWatcher() {
       orientHoldEnd("swap-complete");
       toast(next === "back" ? "מציג גב · Back view" : "מציג חזית · Front view");
     } catch (e) {
-      console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
-      if (!disposed) orientHoldEnd("swap-failed");   // never leave the frozen overlay stuck up on
-                                                      // failure - but only if THIS instance still owns it
+      /* ── ROLL THE LOCK BACK - "I turned around and the back print was gone" ─────
+         THE FAILURE THIS CLOSES. autoOrientation was advanced before the dispatch, and
+         until now a throw here left it pointing at a side whose reference never reached
+         Decart. effectiveAngle() then resolves to that side, so every SUBSEQUENT prompt -
+         the periodic re-anchor and every topology re-drape - is built from
+         BACK_CATEGORY_ANCHOR ("Precisely lock the rear print, logos, and back seams") and
+         sent against the FRONT photo still on the wire. This file already records what the
+         model does when told to reproduce a back it cannot see in its reference: it
+         SUPPRESSES the graphic rather than inventing one. The shopper turns around to plain
+         fabric with no print - the right garment, the right colour, no back graphic.
+
+         AND IT NEVER RECOVERED ON ITS OWN. The sampler keeps voting for the side the lock
+         now wrongly claims, so needsSwitch stays false and maybeSwap is never called again;
+         one failed dispatch stranded the orientation for the rest of the session. Restoring
+         the previous value makes the vote disagree again, which is exactly what lets the
+         next tick past ORIENT_COOLDOWN_MS retry the swap.
+
+         NOT A ROLLBACK OF THE REFERENCE, because there is nothing to undo: applyActive()
+         either landed a set() or it did not, and if it did not the wire still holds the
+         previous side. This restores the LOCK to match that. */
+      if (!disposed) {
+        autoOrientation = lockBefore;
+        console.warn("[PEAR] AI Auto swap apply FAILED - rolling the orientation lock back to",
+          String(lockBefore).toUpperCase(), "so the lock still describes what is on the wire:",
+          e?.message || e);
+        logVtonState();
+        renderPerspectiveSelector();
+        orientHoldEnd("swap-failed");   // never leave the frozen overlay stuck up on failure -
+                                        // but only if THIS instance still owns it
+      } else {
+        console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
+      }
     } finally {
       applying = false;
     }
@@ -5913,6 +6382,112 @@ function abbrevImg(ref) {
     return `Blob(${ref.type || "image"}, ${ref.size.toLocaleString()} bytes, stitched combined ref)`;
   if (/^data:/i.test(ref)) return `data:… (${ref.length.toLocaleString()} chars, custom crop)`;
   return ref.length > 100 ? ref.slice(0, 100) + "…" : ref;
+}
+
+/* ── CONDITIONING TRACE (?cond_trace=1) ──────────────────────────────────────────
+   THE REPORT THIS ANSWERS: "I picked a specific garment and got a generic one." The
+   prompt cannot be the cause - imageOnlyPrompt() emits one frozen anchor that names no
+   colour, no subtype and no garment beyond shirt/pants, and image-first.test.mjs pins
+   that absence. So a generic render means the REFERENCE IMAGE is not reaching the model,
+   and the existing logs cannot tell you that: they prove what was SENT and that set()
+   RESOLVED. A resolved set() is receipt, not adoption - the render can carry on exactly
+   as before while every line in the payload debug group looks correct.
+
+   WHAT THIS MEASURES INSTEAD: the AI output itself, sampled just before the write and
+   again after the model has had time to switch. If a new garment was conditioned and the
+   output did not move, the reference did not reach the render - which is the actual
+   failure, stated as a fact about pixels rather than about the wire.
+
+   IT IS A HEURISTIC AND IS LABELLED AS ONE. The feed is live video, so "unchanged" can
+   never be exact: the shopper breathes, the sensor adds noise. A garment swap moves an
+   8x8 average-hash and the torso's mean colour hard; micro-motion moves neither much. The
+   thresholds below separate those two cases and nothing finer - the numbers are printed
+   raw next to the verdict precisely so a borderline reading can be judged rather than
+   trusted. OFF unless ?cond_trace=1, because it samples a canvas on every apply. */
+const COND_TRACE = new URLSearchParams(location.search).get("cond_trace") === "1";
+
+/* An 8x8 average-hash of the current AI frame plus the mean colour of its torso band.
+   Returns null whenever the feed cannot be read - no frame yet, or a tainted canvas from
+   a cross-origin remote track - and a null on either side is reported as inconclusive
+   rather than silently scored as "unchanged", which would invent the very failure this
+   is here to detect. */
+function sampleRenderSignature() {
+  const ai = typeof $ === "function" ? $("aiVideo") : null;
+  if (!ai || !ai.videoWidth) return null;
+  const N = 8;
+  let px;
+  try {
+    const cnv = document.createElement("canvas");
+    cnv.width = N; cnv.height = N;
+    const ctx = cnv.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(ai, 0, 0, N, N);
+    px = ctx.getImageData(0, 0, N, N).data;
+  } catch (_) { return null; }
+
+  const grey = [];
+  for (let i = 0; i < N * N; i++) {
+    const o = i * 4;
+    grey.push(0.299 * px[o] + 0.587 * px[o + 1] + 0.114 * px[o + 2]);
+  }
+  const mean = grey.reduce((a, b) => a + b, 0) / grey.length;
+  const hash = grey.map((g) => (g > mean ? "1" : "0")).join("");
+
+  /* The middle two rows, edges excluded - where a replaced upper garment actually lives.
+     A swap between two different products moves this a long way; a shopper shifting their
+     weight inside the same garment does not. */
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let y = 3; y <= 4; y++) {
+    for (let x = 1; x < N - 1; x++) {
+      const o = (y * N + x) * 4;
+      r += px[o]; g += px[o + 1]; b += px[o + 2]; n++;
+    }
+  }
+  return { hash, torso: [Math.round(r / n), Math.round(g / n), Math.round(b / n)] };
+}
+
+/* Settle window before the second sample. Decart takes ~1s to warm up and switch (the
+   same figure startRecording()'s BLACK-FRAME FIX is built around), so sampling earlier
+   would report "unchanged" for a render that simply had not arrived yet - a false
+   positive for the exact bug being hunted. */
+const COND_TRACE_SETTLE_MS = 1600;
+
+/**
+ * Report whether a conditioning write actually changed the render.
+ * Fire-and-forget and fully try-wrapped: this is a diagnostic, and it must never be able
+ * to delay or fail a live apply.
+ * @param {object} item      the garment that was conditioned
+ * @param {*} imageRef       the reference handed to set({ image })
+ * @param {object|null} before  signature sampled immediately before the write
+ * @returns {void}
+ */
+function traceConditioning(item, imageRef, before) {
+  if (!COND_TRACE) return;
+  setTimeout(() => {
+    try {
+      const after = sampleRenderSignature();
+      const acked = imageRef && lastAckedImageRef === imageRef;
+      console.group("[PEAR CONDITIONING TRACE]", (item && item.name) || "(no item)");
+      console.log("reference sent  :", abbrevImg(imageRef));
+      console.log("set() resolved  :", acked ? "yes - Decart accepted this exact object" : "NO - or a different reference was stamped");
+      if (!before || !after) {
+        console.log("render moved    : not measurable (no frame yet, or a tainted canvas)");
+        console.log("verdict         : INCONCLUSIVE - could not sample the AI feed on both sides");
+      } else {
+        let dist = 0;
+        for (let i = 0; i < before.hash.length; i++) if (before.hash[i] !== after.hash[i]) dist++;
+        const dc = Math.round(Math.hypot(
+          after.torso[0] - before.torso[0],
+          after.torso[1] - before.torso[1],
+          after.torso[2] - before.torso[2]));
+        console.log("render moved    :", `hash ${dist}/64 changed · torso ΔRGB ${dc}`,
+          `(before rgb[${before.torso}] → after rgb[${after.torso}])`);
+        console.log("verdict         :", dist <= 2 && dc <= 12
+          ? "REFERENCE DID NOT REACH THE RENDER - the write was accepted but the output is unchanged within noise. This is the generic-garment failure; the prompt is not the cause."
+          : "reference reached the render - the output moved after conditioning");
+      }
+      console.groupEnd();
+    } catch (_) { /* a diagnostic must never break a live session */ }
+  }, COND_TRACE_SETTLE_MS);
 }
 
 /* ── Canonical image identity ────────────────────────────────────────────────────
@@ -6937,9 +7512,10 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
                                 stands between this prompt and a regenerated scene.
      · keepTop / keepBottoms    the opposite-layer lock.
      · ignoreFurniture          the "don't paint the panel divider onto the shirt" ban.
-     · fitSentence              the size-override selector's only route into the render.
-                                The UI still works and still re-applies; the chosen size
-                                no longer changes what Decart draws.
+     · fitSentence              RESTORED - see imageOnlyPrompt()'s SIZE-OVERRIDE RESTORE
+                                comment. Was the size-override selector's only route into
+                                the render; the chosen size now reaches Decart again, at
+                                P.MED, via getFitModifier()'s garment/fabric-only wording.
 
    TO RESTORE ONE: it is a two-line change - reinstate fitPrompt() in the builder that
    needs it and add [P.CORE, DENSE.<clause>] beside IMAGE_ONLY_PROMPT. fitPrompt(),
@@ -7041,7 +7617,7 @@ const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
    VOLUME_PERSISTENCE, FRONTAL_VOLUME, TEMPORAL_PERSISTENCE, CLOSED_BACK_HEM,
    REFERENCE_EXTRACTION and - since the dynamic-drape revision named it - KEEP_OPPOSITE_
    LAYER are each on file as a constant, so every restore here is one line in
-   imageOnlyPrompt(). The budget is not the constraint: tops runs 342 characters and
+   imageOnlyPrompt(). The budget is not the constraint: tops runs 338 characters and
    bottoms 320 against a 650 ceiling. Anything bought back is a deliberate choice about
    TEXT VOLUME COMPETING WITH THE REFERENCE, which is the mechanism every fidelity report
    in this sequence shares. Add one at a time, and re-test against a live session. */
@@ -7109,7 +7685,7 @@ const STRICT_REFERENCE_LOCK =
        an unscoped anchor was the actual configuration the shirt-replacement report was
        filed against - but the explicit pin on the opposite layer is gone. Retired as
        KEEP_OPPOSITE_LAYER below rather than deleted, so that restore is one line too.
-   Budget is not the constraint for either: tops runs 342 characters and bottoms 320
+   Budget is not the constraint for either: tops runs 338 characters and bottoms 320
    against a 650 ceiling. The constraint is the one every report in this sequence shares -
    TEXT VOLUME COMPETING WITH THE REFERENCE IMAGE. Add one at a time, re-tested live. */
 
@@ -7119,23 +7695,280 @@ const STRICT_REFERENCE_LOCK =
    the shopper's live trousers, so there has never been a tops equivalent to retire. */
 const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodified.";
 
+/* ── FRONT CLOSURE - "the button-down rendered wide open" ────────────────────────
+   REPORTED: a closed button-down shirt rendered hanging open, exposing the shopper's
+   chest. This is the invented-detail class, not the tuxedo class - the right garment,
+   rendered in a state the reference never showed - so it is the class the anchor's own
+   restore note says a clause may be bought back for. Bought back per the procedure that
+   note prescribes: ONE part, added at P.HIGH, re-tested live.
+
+   STATED POSITIVELY, AND THAT IS NOT A STYLE CHOICE. The obvious wording - "do not
+   render open or unbuttoned" - is the exact shape that produced the tuxedo: Decart's
+   set() has no negative_prompt field (only { prompt, image, enhance }), so a negation
+   ships inside the POSITIVE prompt, where "open" and "unbuttoned" are tokens the sampler
+   can steer toward. image-first.test.mjs's header records DENSE.assetLock failing this
+   way when it spelled out "never invent a ... TUXEDO, BOWTIE". Naming the state we WANT
+   costs the same budget and cannot be sampled backwards.
+
+   PRODUCT-NEUTRAL, so it does not open a third prompt axis. It says nothing about
+   whether this garment HAS buttons: on a tee there is no closure and the sentence asks
+   for nothing, while on a button-down or a zip-through it pins the fastening. Wording it
+   per-product would need a has-buttons axis, which would break the frozen-anchor design
+   the category/angle axes are pinned to - and an "unbutton the placket" instruction on a
+   t-shirt reference is the same contradiction as an "upper garment" anchor on a trouser
+   reference, which this file already carries a bug report for.
+
+   TOPS + FRONT ONLY. A closure is a front-of-garment feature, so it is not spent on the
+   bottoms branch, and not on the back anchor where it is not in view. Both remain fully
+   determined by (category, angle) - no new axis. */
+const FRONT_CLOSURE_LOCK =
+  "Reproduce the reference's front closure exactly: any buttons, zip or placket stay" +
+  " fully fastened, sitting flat and closed across the chest as shown.";
+
+/* ── PLAIN KNIT TEE - "a plain white crewneck rendered as a button-down" ─────────
+   REPORTED: a plain white crewneck/V-neck t-shirt came back as a short-sleeve white
+   WOVEN BUTTON-DOWN - pointed collar, front placket, breast pocket. Not a garment from
+   another category (the tuxedo class) and not a wrong state of the right garment (the
+   open-placket class): the right garment in the WRONG CONSTRUCTION. Knit read as woven.
+
+   THE CAUSE IS THE CLAUSE DIRECTLY ABOVE, and this is the correction to its own comment.
+   FRONT_CLOSURE_LOCK calls itself PRODUCT-NEUTRAL - "on a tee there is no closure and the
+   sentence asks for nothing" - and that is the one assumption this file's whole history
+   says you may not make. set() has no negative_prompt, so everything ships in the POSITIVE
+   prompt, where "buttons", "zip", "placket" and "closed across the chest" are tokens the
+   sampler steers TOWARD. On a button-down they describe a garment the reference already
+   shows. On a plain tee they were, until this revision, the ONLY construction words on the
+   wire - so the model reconciled them the one way it could, by rendering a garment that
+   HAS a placket. The collar and the breast pocket are not in the sentence; they arrive
+   with the concept once it has been summoned, which is exactly how the tuxedo arrived
+   wearing a bowtie nobody asked for.
+
+   THE ANCHOR NOUN IS THE SECOND HALF OF IT. CATEGORY_ANCHOR.top says "the EXACT static
+   SHIRT", and in English an unqualified "shirt" leans woven-and-buttoned. That was
+   survivable while it was the only signal; paired with four closure tokens it stops being
+   survivable. The tee branch names a t-shirt instead, in both the bind sentence and the
+   preserve sentence.
+
+   WHY THIS IS NOT THE has-buttons AXIS FRONT_CLOSURE_LOCK REFUSED TO OPEN. That note
+   rejected WORDING THE CLAUSE PER PRODUCT - interpolating a garment's features into a
+   string, which is how a per-item DESCRIPTION creeps back one field at a time. This adds
+   no interpolation and no new text shape: it is a THIRD SELECTOR over frozen literals,
+   the same move the angle axis already makes. The prompt remains a pure function of
+   (category, angle, construction) onto a fixed set of constant strings, and exactly one
+   anchor plus at most one clause ever ships.
+
+   IT SPENDS NO BUDGET - IT RETURNS SOME. A tee ships ~431 characters where it used to ship
+   ~493, because dropping the closure clause buys more than the neckline sentence costs.
+   Every fidelity report in this file shares one mechanism - text volume competing with the
+   reference image - so a fidelity fix that GREW the prompt would be that mechanism applied
+   again. plain-tee-fidelity.test.mjs §4 pins the direction.
+
+   STATED POSITIVELY, for the reason FRONT_CLOSURE_LOCK states and this revision takes
+   further: the obvious patch here is "do NOT render buttons, collars, plackets, or chest
+   pockets", and that is the DENSE.assetLock shape that produced the tuxedo - a negation
+   that ships inside the positive prompt and names four more garment features on its way
+   through. Naming the construction we WANT costs the same budget and cannot be sampled
+   backwards.
+
+   FRONT + TOPS ONLY, like the clause it displaces. The summoning tokens were never on the
+   back branch, and no back-view report exists, so BACK_CATEGORY_ANCHOR is left byte-
+   identical on this file's one-branch-at-a-time-on-evidence rule. If a tee ever renders a
+   woven BACK YOKE, the restore is the same shape as this one: a tee entry in the back
+   pair, selected by the same predicate. */
+const PLAIN_TEE_ANCHOR =
+  "Drape and fit the EXACT static t-shirt from the reference image onto the live" +
+  " subject's CURRENT body contour and volume in this frame. Keep the reference's plain" +
+  " knit neckline and smooth unbroken front exactly as shown. Dynamically adapt the" +
+  " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
+  " without stretching or warping the fabric. Strictly preserve the original t-shirt" +
+  " texture, pattern, and color.";
+
+/* The tee vocabulary. Hebrew first, both geresh spellings, for the reason BOTTOMS_TOKENS
+   spells out: a Hebrew-only product title is the storefront's COMMON case, not an edge
+   case. English is \b-anchored and carries the bare singular as well as the plural,
+   because a storefront writes whichever reads better in its own layout.
+
+   SLEEVELESS IS DELIBERATELY ABSENT - no גופי, no tank, no singlet. A tank top has no
+   closure either, so it looks like it belongs here, but the anchor this predicate selects
+   NAMES A T-SHIRT, and handing a model the word "t-shirt" over a sleeveless reference
+   invites it to grow sleeves the reference never had. That trades a reported failure for
+   an unreported one. Tanks keep today's behaviour until either a report or a third anchor
+   justifies moving them. */
+const PLAIN_TEE_TOKENS =
+  /(טי[- ]?שירט|טישרט|חולצת טי|\bt-?shirts?\b|\btees?\b|\bcrew ?necks?\b|\bv-?necks?\b)/i;
+
+/* The tops that DO fasten, and therefore must keep FRONT_CLOSURE_LOCK. This list outranks
+   the tee list above, exactly as TOPS_TOKENS outranks BOTTOMS_TOKENS in isBottomsGarment()
+   and for the same reason: when a title names both, the STRUCTURED noun is the garment and
+   the other word is a modifier of it ("Tee Shirt Cardigan" is a cardigan).
+
+   A BARE "shirt" IS NOT IN THIS LIST, AND THAT IS THE LOAD-BEARING OMISSION. Every top in
+   this catalog ships with `type: "shirt"` (see the ITEMS table), and isPlainKnitTop() reads
+   the type field. A \bshirts?\b here would match every tee that ever reaches this function,
+   the predicate would return false for the entire catalog, and the fix above would be dead
+   code that still passes a unit test written against `name` alone. Only nouns that
+   genuinely imply a placket, a zip or an outer layer belong here.
+
+   POLO AND HENLEY ARE ON THE LIST ON PURPOSE: both are knitwear, both read as "basically a
+   tee" to a shopper, and both have a buttoned placket that daabb47's report is about. */
+const STRUCTURED_TOP_TOKENS =
+  /(מכופתר|כפתור|פולו|קרדיגן|בלייזר|ז['׳]קט|מעיל|קפוצ|\bbutton|\bzip|\bplackets?\b|\bpolos?\b|\bhenley\b|\boxford\b|\bchambray\b|\bflannels?\b|\bcardigans?\b|\bblazers?\b|\bjackets?\b|\bcoats?\b|\bhoodies?\b|\bshacket\b|\bblouses?\b)/i;
+
+/**
+ * Whether this garment is a PLAIN KNIT TOP - a tee with no closure and no collar.
+ *
+ * THE DEFAULT IS FALSE, and that is the whole safety property. An item we cannot classify
+ * keeps the behaviour that shipped before this predicate existed (the "shirt" anchor plus
+ * the closure lock), so an unrecognised title degrades to the OLD render rather than to a
+ * new one - the same reasoning isBottomsGarment() defaults to tops on.
+ *
+ * ORDER: bottoms first (a trouser title carrying a tee token must never reach the tops
+ * branch at all), then structured nouns, then the tee vocabulary. Reads the same metadata
+ * fields isBottomsGarment() reads, so one catalog shape feeds both predicates.
+ *
+ * subType "short_sleeve" IS NOT EVIDENCE, and the report is the proof: the hallucinated
+ * garment was itself a SHORT-SLEEVE button-down. Sleeve length says nothing about
+ * construction, so only an explicit garment noun counts here.
+ *
+ * @param {{garmentType?:string, type?:string, category?:string, subType?:string,
+ *          name?:string, title?:string}|null|undefined} item
+ * @returns {boolean} true only for a top whose construction has no front closure.
+ */
+function isPlainKnitTop(item) {
+  if (!item || isBottomsGarment(item)) return false;
+  const fields = [item.type, item.category, item.subType, item.name, item.title]
+    .filter(Boolean).join(" ");
+  if (STRUCTURED_TOP_TOKENS.test(fields)) return false;
+  return PLAIN_TEE_TOKENS.test(fields);
+}
+
+/* ── THE BURDEN OF PROOF, INVERTED - "the tee still has a slit down the front" ────
+   THE SECOND REPORT, after the tee anchor above supposedly fixed the first: a plain
+   crewneck rendering with a vertical centre-front seam, split as though it buttoned.
+
+   WHY THE FIRST FIX MISSED IT. isPlainKnitTop() demands POSITIVE PROOF of a tee - an
+   explicit tee noun in the title - before it will withhold the closure clause. Real
+   storefronts do not oblige. "PEAK", "PEAK Oversized", "חולצה אוברסייז" and a bare widget
+   handover with no title at all are all plain jersey tees, and every one of them fell to
+   the default branch and was handed "buttons, zip or placket" anyway. The fix only ever
+   worked for products whose titles already said what they were, which is the minority.
+
+   SO THE DEFAULT WAS THE BUG, not the vocabulary. FRONT_CLOSURE_LOCK exists for garments
+   that HAVE a front closure; on anything else its four nouns are free-floating tokens in a
+   positive prompt, which is the whole mechanism this file keeps re-learning. Asking "can I
+   prove this is a tee?" puts the cost of every unrecognised title on the wrong side.
+   Asking "can I prove this FASTENS?" puts it on the side where being wrong is cheap.
+
+   THE TRADE, STATED PLAINLY BECAUSE IT IS A REAL ONE. A button-down whose title names no
+   closure now loses the lock and could render open again - daabb47's report. That is the
+   INVENTED-DETAIL class: the right garment in a wrong state. What it buys is the
+   WRONG-GARMENT class, on a catalog where tees vastly outnumber button-downs. This file
+   has ranked those twice already and both times the answer was the same - a garment fitted
+   with an unstated closure is a worse render, a garment fitted as a different garment is a
+   different garment.
+
+   IT SPENDS NO BUDGET. This removes a clause from most tops and adds nothing, which is the
+   direction every fidelity report in this file has wanted.
+
+   @param {object|null|undefined} item
+   @returns {boolean} true only when the title gives positive evidence of a front closure. */
+function hasFrontClosure(item) {
+  if (!item || isBottomsGarment(item)) return false;
+  const fields = [item.type, item.category, item.subType, item.name, item.title]
+    .filter(Boolean).join(" ");
+  return STRUCTURED_TOP_TOKENS.test(fields);
+}
+
 const CATEGORY_ANCHOR = Object.freeze({
   /* The two strings share one spine - bind the static garment, adapt to the current
      contour, preserve the original - and differ in exactly two places: the garment noun,
      and WHICH contour is named (whole-body on tops, lower-body on bottoms). The
      lower-body naming is what keeps the shirt-replacement fix alive on the branch it was
      reported against; see the bullet list above for the half of it that came off. */
+  /* ── THE ANCHOR NOUN - "every casual top still renders with a collar and buttons" ──
+     THE THIRD REPORT in this sequence, after FRONT_CLOSURE_LOCK was gated (8d89805) and
+     the tee branch was split off (734b4b3). Casual tops and graphic tees were STILL
+     coming back as button-downs, and neither earlier fix was wrong - by then a plain top
+     reached the wire with zero closure TOKENS. The remaining lean was this noun.
+
+     PLAIN_TEE_ANCHOR's comment diagnosed it and fixed only half: "CATEGORY_ANCHOR.top
+     says 'the EXACT static SHIRT', and in English an unqualified 'shirt' leans
+     woven-and-buttoned. That was survivable while it was the only signal." It judged the
+     noun survivable alone and moved only the PROVEN tees off it. But this is the DEFAULT
+     branch, and isPlainKnitTop() demands positive proof - so every brand-named,
+     Hebrew-titled and untitled casual top in a real storefront (the majority) stayed on
+     the one word this file had already named as leaning toward a placket.
+
+     "top" IS CONSTRUCTION-NEUTRAL. It still commits to the upper body - the one thing
+     this anchor must keep saying, and the half that keeps the shirt-replacement fix alive
+     on the bottoms branch below - while saying nothing about weave, collar or closure in
+     either direction. A garment that genuinely fastens is now described by
+     FRONT_CLOSURE_LOCK, which states its closure explicitly and has evidence behind it,
+     rather than by a default noun that never did.
+
+     NOT A NEGATION, for the reason this file keeps re-learning. The obvious patch is "no
+     buttons, no collar, no placket"; set() has no negative_prompt, so those nouns would
+     ship in the POSITIVE prompt as tokens the sampler steers toward - the shape that
+     produced the tuxedo and daabb47's button-down. Removing the leaning word costs
+     nothing, cannot be sampled backwards, and RETURNS budget: 342 -> 338 chars.
+
+     FRONT + TOPS ONLY, on the one-branch-at-a-time-on-evidence rule. The report names
+     collars, plackets and buttons - all front features. BACK_CATEGORY_ANCHOR keeps
+     "shirt" byte-identical, exactly as PLAIN_TEE_ANCHOR left it; plain-tee-fidelity §7.4
+     pins that, and §7.1-§7.8 pin the rest of this note. */
   top:
-    "Drape and fit the EXACT static shirt from the reference image onto the live" +
+    "Drape and fit the EXACT static top from the reference image onto the live" +
     " subject's CURRENT body contour and volume in this frame. Dynamically adapt the" +
     " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
-    " without stretching or warping the fabric. Strictly preserve the original shirt" +
+    " without stretching or warping the fabric. Strictly preserve the original top" +
     " texture, pattern, and color.",
   bottom:
     "Drape and fit the EXACT static pants/shorts from the reference image onto the live" +
     " subject's CURRENT lower-body contour and volume in this frame. Dynamically adapt" +
     " the fit to the subject's exact waistline, leg profile, depth, and angle without" +
     " distorting the garment design. Strictly preserve original pattern and color.",
+});
+
+/* THE BACK COUNTERPART - the single-asset rear render.
+   ────────────────────────────────────────────────────────────────────────────────
+   WHY THIS EXISTS AT ALL. applyGarment() resolves the orientation, freezes it as
+   `angleAtStart`, and used to hand it to buildPrompt() - which discarded it. Every
+   single-asset render therefore shipped the FRONT anchor no matter which way the shopper
+   was facing, so turning around re-rendered the chest print on their back. COMPOSITE mode
+   never had this bug (buildCompositePrompt() takes the angle and names the panel), which
+   is why it only ever reproduced with a front-only reference.
+
+   WHY A SECOND FROZEN ANCHOR AND NOT A CLAUSE APPENDED TO THE FIRST. This is the whole
+   constraint, and image-first.test.mjs's header is the record of it: the tuxedo regression
+   was reported TWICE, and the fix that finally held was reducing the TOTAL VOLUME of text
+   competing with the reference image - not removing text of any particular kind. FIX ONE
+   kept the structural clauses (panel contract, pose, passthrough locks) on the theory that
+   a clause describing no garment cannot summon one; the tuxedo survived it. So appending
+   angleClause()'s output here - contract + pose + selector + depth, the shape the call site
+   used to build - would re-open that failure through the front door. SELECTING between two
+   frozen strings holds volume flat instead: one anchor ships, exactly as before, and only
+   which one changes.
+
+   The front anchor above is deliberately left BYTE-IDENTICAL. Nothing about the
+   front-facing render changes with this pair; the only new behaviour is on the back. */
+const BACK_CATEGORY_ANCHOR = Object.freeze({
+  /* Same spine as the front anchors - bind the static garment, adapt to the current
+     contour, preserve the original - with the region re-pointed at the back and ONE
+     clause added: the rear print/logo/seam lock. A back render's characteristic failure
+     is not a wrong drape, it is the front graphic reproduced on the reverse, and that is
+     the only thing this pair says which the front pair does not. */
+  top:
+    "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
+    " the live subject's CURRENT back contour and volume in this frame. Precisely lock the" +
+    " rear print, logos, and back seams. Dynamically adapt the garment drape to the" +
+    " subject's exact silhouette, angle, depth, and back volume without stretching or" +
+    " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.",
+  bottom:
+    "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
+    " onto the live subject's CURRENT lower-body contour and volume in this frame." +
+    " Precisely lock the rear print, logos, and back seams. Dynamically adapt the fit to" +
+    " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
+    " garment design. Strictly preserve original pattern and color.",
 });
 
 /* The surviving halves of the old frozen string, split into individually priority-taggable
@@ -7198,8 +8031,35 @@ const TEMPORAL_PERSISTENCE = Object.freeze({
    a t-shirt as trousers and repaint the shopper's real jeans: the reported bug, inverted.
    Same reason "sweatpants"/"tracksuit" are listed in full rather than relying on \bpants\b
    to find them inside a compound. */
+/* SINGULARS ARE NOT OPTIONAL HERE. "Wool Trousers" matched and "Wide Leg Trouser" did
+   not; "Chinos" matched and "Chino" did not. A storefront writes whichever reads better
+   in its own layout, and a miss falls through to the tops default silently - the same
+   silent-default failure the Hebrew stem work above was filed against, in English.
+   `s?` everywhere a garment noun has a bare singular in real product titles.
+
+   STILL DELIBERATELY ABSENT, because each would cost more than it buys:
+     · "denim" / bare "jean" - a fabric, not a garment. "Denim Jacket" and "jean jacket"
+       are common real products and are TOPS; see FABRIC_AMBIGUOUS, which exists because
+       ג'ינס collides the same way.
+     · "cargo" - "Cargo Pants Print Tee" is the counter-example this file already
+       carries, and cargo names a POCKET STYLE that appears on jackets and shorts alike.
+     · "טרנינג" / "tracksuit" - names a two-piece set; the top half is as common a
+       product as the bottom. ("tracksuit" is grandfathered in below rather than added.)
+     · "overalls" / "dungarees" - genuinely full-body, so neither branch is right.
+   Each of these needs the title's OTHER nouns to disambiguate, which is tier 2's job -
+   and abstaining into tier 2 beats guessing here. */
 const BOTTOMS_TOKENS =
-  /(מכנס|ג['׳]ינס|חצאי|שורט|טייץ|טייצ|לגינ|\bpants\b|\btrousers\b|\bshorts\b|\bjeans\b|\bskirts?\b|\bleggings\b|\bchinos\b|\bjoggers\b|\bsweatpants\b|\btracksuit\b|\bslacks\b|\bculottes\b|\bbottoms?\b)/i;
+  /(מכנס|ג['׳]ינס|חצאי|שורט|טייץ|טייצ|לגינ|סווטפנט|דגמ["״'׳]?ח|\bpants\b|\btrousers?\b|\bshorts\b|\bjeans\b|\bskirts?\b|\bleggings\b|\bchinos?\b|\bjoggers?\b|\bsweatpants?\b|\btracksuit\b|\bslacks\b|\bculottes\b|\bbermudas?\b|\bcapris?\b|\bpalazzo\b|\bbottoms?\b)/i;
+
+/* The tops half of the same vocabulary, and it exists for ONE job: to outrank a bottoms
+   token when a title names an actual upper-body garment. See isBottomsGarment() for the
+   collision it resolves (denim jacket / ז'קט ג'ינס). Hebrew entries are STEMS and English
+   entries are word-bounded, for the reason GARMENT_CATEGORY_KEYWORDS spells out: Hebrew
+   inflects by suffix, while an English stem match on "short" would swallow "short sleeve".
+   Kept beside BOTTOMS_TOKENS rather than reusing GARMENT_CATEGORY_KEYWORDS because the
+   prompt-layer sandboxes slice this file from `const P = ...` and would not have it. */
+const TOPS_TOKENS =
+  /(חולצ|טישרט|טי-שירט|סווטשירט|סוודר|גופי|ז['׳]קט|מעיל|קפוצ|בלייזר|קרדיגן|\bshirts?\b|\bt-?shirts?\b|\btees?\b|\bjackets?\b|\bcoats?\b|\bhoodies?\b|\bsweaters?\b|\bsweatshirts?\b|\bblazers?\b|\bcardigans?\b|\bblouses?\b|\bpolos?\b|\btanks?\b|\bpullovers?\b|\btops?\b)/i;
 
 /**
  * Which body region a garment belongs to.
@@ -7226,6 +8086,18 @@ function isBottomsGarment(item) {
   if (item.garmentType === "upper_body") return false;
   const fields = [item.type, item.category, item.subType, item.name, item.title]
     .filter(Boolean).join(" ");
+  /* AN EXPLICIT TOP NOUN OUTRANKS A BOTTOMS TOKEN, and this is the same collision
+     classifyGarmentTitle() resolves with FABRIC_AMBIGUOUS one tier up - it just never
+     reached here. "ז'קט ג'ינס" and "denim jacket" match ג'ינס/jeans while naming a JACKET:
+     the garment noun is the subject and the fabric is a modifier of it, so the fabric must
+     not decide the region. Left unresolved, a denim-jacket try-on routes to the bottoms
+     branch and repaints the shopper's real trousers - the exact mirror of the long-trouser
+     report this pass was filed against.
+
+     RESOLVED TOWARD TOPS RATHER THAN BY REGEX ORDER, which also matches this function's
+     own documented default: when a title genuinely names both regions there is no evidence
+     to prefer one, and tops is the answer every predicate around it already gives. */
+  if (TOPS_TOKENS.test(fields)) return false;
   return BOTTOMS_TOKENS.test(fields);
 }
 
@@ -7233,7 +8105,7 @@ function isBottomsGarment(item) {
  * The image-only prompt, resolved for THIS garment's category.
  *
  * ONE P.CORE PART, ON BOTH BRANCHES. There is no assembly left here: the function SELECTS
- * a frozen anchor (342 chars on tops, 320 on bottoms) and hands it to fitPrompt() as a
+ * a frozen anchor (338 chars on tops, 320 on bottoms) and hands it to fitPrompt() as a
  * single part. The seven-clause assembly this used to run - and the priority tags that
  * decided what shed out of it - is described in CATEGORY_ANCHOR's comment above, together
  * with what came off the wire and how to put any of it back.
@@ -7257,13 +8129,13 @@ function isBottomsGarment(item) {
  * @param {object|null} item - the garment being fitted; null resolves to the tops branch.
  * @returns {string}
  */
-function imageOnlyPrompt(item) {
+function imageOnlyPrompt(item, angle = "front") {
   /* ONE PART, BOTH BRANCHES. There is no assembly left on either side - see
      CATEGORY_ANCHOR above for the reports that drove it there, for the full list of what
      came off the wire, and for why bottoms names the lower body where tops names the
      whole contour.
 
-     STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at 342/320 chars:
+     STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at 338/320 chars:
      it normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that
      lengthens an anchor is clamped here instead of over-running into
      clampPromptForWire()'s hard slice, which cuts at the END and would take the
@@ -7276,8 +8148,77 @@ function imageOnlyPrompt(item) {
      question is whether that text is worth the weight it takes away from the reference
      image, which is the mechanism every report in this sequence shares. One at a time,
      re-tested live. */
+  /* `angle` SELECTS a frozen anchor, and only that - it is never interpolated, appended to,
+     or used to build a string. Anything other than the literal "back" resolves to FRONT:
+     an unrecognised value must land on the side every caller rendered before this parameter
+     existed, not on a silent back-render nobody asked for.
+
+     It is a PARAMETER rather than a live effectiveAngle() read for the TOCTOU reason
+     applyGarment() documents at length: the prompt and the reference image must be resolved
+     against the SAME orientation reading. A prompt built from a fresh read while the image
+     was resolved from the frozen one is the mixing bug that comment records. */
+  const anchors = angle === "back" ? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;
+  const bottoms = isBottomsGarment(item);
+  /* THE SECOND PART the restore notes describe, and the first one actually bought back.
+     P.HIGH, not P.CORE: under budget pressure fitPrompt() sheds it before it will touch
+     the anchor, which is the correct order - a garment fitted with an unstated closure is
+     a worse render, but a garment fitted with no anchor at all is a different garment.
+     Tops + front only; see FRONT_CLOSURE_LOCK for why it is not spent elsewhere. */
+  /* THE THIRD SELECTOR - construction. Scoped to the FRONT TOPS branch, which is the only
+     place FRONT_CLOSURE_LOCK ever shipped and therefore the only place the button-down
+     hallucination could be summoned from; see PLAIN_TEE_ANCHOR for the report and for why
+     the back pair is deliberately left alone. It SELECTS between frozen literals like the
+     other two axes - still exactly one anchor on the wire, still nothing concatenated. */
+  const plainTee = !bottoms && angle !== "back" && isPlainKnitTop(item);
+  /* POSITIVE EVIDENCE ONLY - see hasFrontClosure(). This used to be `!plainTee`, i.e. every
+     top we could not prove was a tee, which handed placket tokens to every brand-named,
+     Hebrew-titled and untitled tee in the catalog. The two predicates are mutually
+     exclusive by construction (isPlainKnitTop bails on the same structured tokens this
+     one requires), so a prompt can never name a seamless front and a fastened placket
+     together. */
+  const closure = !bottoms && angle !== "back" && hasFrontClosure(item);
+  /* ── SIZE-OVERRIDE RESTORE - "I tried on a size down and it fit exactly like true-to-size" ──
+     REPORTED: shoppers who deliberately size up or down see no difference in how the
+     garment drapes - the size picker still works and still re-applies (setSizeOverride()),
+     but nothing about that choice ever reached Decart. This was the retirement
+     IMAGE_ONLY_PROMPT's comment names as fitSentence - "the size-override selector's only
+     route into the render" - cut along with everything else when this file went strict
+     image-only. It is being bought back alone, per that comment's restore procedure.
+
+     WHY THIS ONE IS SAFE TO BUY BACK: getFitModifier() (below) was rewritten after the
+     "it compressed me into a thinner frame" report specifically so every string attributes
+     tightness to the GARMENT and the FABRIC over a body whose dimensions are fixed, never
+     to the body's outline - see that function's header comment. Restoring it does not
+     reintroduce the mechanism that produced that bug; it only reconnects a clause that was
+     already rewritten to be safe.
+
+     P.MED, one tier BELOW the closure lock, ON PURPOSE - NOT AN OVERSIGHT TO "FIX" LATER.
+     A garment rendered at the wrong tension is a worse fit, but a button-down rendered
+     hanging open (FRONT_CLOSURE_LOCK's own report) is the worse failure, so under budget
+     pressure this sheds first. delta === 0 (no size override) returns a short "true-to-size"
+     phrase, so the common case costs little.
+
+     THE CONCRETE COST: on tops + front + closure (487/650 base, 163 free), the size-down
+     phrasings run 167 chars (delta -1) and 213 chars (delta -2) - both over the 163 free,
+     so fitPrompt() sheds them and a shopper who sizes DOWN on a button-front top sees no
+     tension text at all. True-to-size and sizing UP (88/89/147 chars) always fit. Every
+     other branch (plain tee, structured-no-closure, back, bottoms) has 219-330 free chars
+     and the fit sentence always survives, worst case ~230 chars (lower_body delta -2).
+
+     DO NOT "FIX" THIS BY RAISING TO P.HIGH. Priority ties are broken by array position in
+     fitPrompt(), not by severity - FRONT_CLOSURE_LOCK is added before this clause, so an
+     equal-priority tie is not guaranteed to protect it, and a shirt rendered wide open
+     (the report FRONT_CLOSURE_LOCK exists for) is worse than missing tension text. If the
+     size-down-on-a-closure-top gap ever gets its own report, the fix is to shrink something
+     ELSE on that branch to free the 4-50 chars needed, not to reorder these two tiers.
+     Documented in CLAUDE.md §0 as a known, deliberate limitation.
+
+     image-first.test.mjs's "size-override modifier no longer reaches the wire" check is
+     updated in the same commit - this clause is what it now asserts IS wired. */
   return fitPrompt([
-    [P.CORE, isBottomsGarment(item) ? CATEGORY_ANCHOR.bottom : CATEGORY_ANCHOR.top],
+    [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
+    ...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
+    [P.MED, fitSentence(bottoms ? "lower_body" : "upper_body")],
   ]);
 }
 
@@ -7359,12 +8300,18 @@ function lookAnchorPrompt() {
    The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS (342 chars - anchor)             BOTTOMS (320 chars - anchor, lower-body scoped)
-     + DENSE.bodyFidelity  (45) → 388  fits              → 366  fits
-     + DENSE.modelAgnostic (64) → 407  fits              → 385  fits
-     + both of them        (110)→ 453  fits              → 431  fits
+     TOPS FRONT (487 = 338 anchor + 148 closure lock)  BOTTOMS (320 chars - anchor, lower-body scoped)
+     + DENSE.bodyFidelity  (45) → 533  fits              → 366  fits
+     + DENSE.modelAgnostic (64) → 552  fits              → 385  fits
+     + both of them        (110)→ 602  fits              → 431  fits
 
-   NOTHING SHEDS ANY MORE, on either branch. 308 characters are free on tops and 330 on
+   TOPS FRONT IS THE WORST CASE and the only row worth budgeting against: it is the one
+   branch carrying a second part (FRONT_CLOSURE_LOCK, the button-down closure report).
+   Tops BACK runs 412 - the back anchor is longer than the front one but carries no
+   closure lock, since a front placket is not in view - and bottoms carries one part on
+   both angles.
+
+   NOTHING SHEDS ANY MORE, on either branch. 159 characters are free on tops and 330 on
    bottoms, so every retired clause in this table would go back with room to spare. That
    INVERTS the warning this note used to carry: the risk is no longer that a restore
    silently sheds, it is that a restore silently SUCCEEDS.
@@ -7605,7 +8552,7 @@ function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
  * @returns {string}
  */
 function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item);
+  return imageOnlyPrompt(item, angle);
 }
 
 /* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
@@ -7650,6 +8597,85 @@ function canCombineViews(item) {
   const look = resolveLook();
   if (look) return ok(look.top) && ok(look.bottom);
   return ok(item);
+}
+
+/* ── WHY THIS ITEM HAS NO BACK VIEW - the same answer, in words ──────────────────
+   THE REPORT this exists for: "I turned around and the back was plain." From outside,
+   every route to that outcome looks identical, and the obvious diagnosis - "it defaulted
+   to single-front instead of the COMBINED composite" - is backwards. Forcing COMBINED is
+   what renderPerspectiveSelector() below calls THE BLANK-BACK BUG: one stitched reference
+   asks a model with no notion of panels to pick a half every frame, and it renders
+   fragments of both (23f5953). AI Auto - two clean single-view assets, swapped by the
+   OrientationWatcher - is the architecture that actually renders a rear view.
+
+   So the real question is always "why did this item not qualify for AI Auto", and
+   canCombineViews() answers it as a bare boolean while the four reasons behind it live in
+   four different places. One of them is genuinely invisible: distinctBackOf() rejects a
+   back that is the front under another URL spelling, warns ONCE per pair, and thereafter
+   says nothing - so on a later item that rejection leaves no trace, and it is
+   indistinguishable from an item that shipped no rear photo at all.
+
+   IT MUST NEVER DISAGREE WITH canCombineViews(), which is why it is built from the same
+   two calls (galleryOf, distinctBackOf) in the same order rather than re-deriving the
+   rules. A diagnostic that reports "ready" where the code decided otherwise sends the next
+   reader hunting in the wrong place - worse than none. back-view-readiness.test.mjs SS3
+   asserts the agreement across every shape both functions accept.
+
+   PURELY DIAGNOSTIC: nothing here decides anything. The mode is still canCombineViews()'s
+   call, and this only says why. */
+const BACK_VIEW_REASON = Object.freeze({
+  READY:                 "ready",
+  NO_ITEM:               "no-item",
+  NO_FRONT_ASSET:        "no-front-asset",
+  NO_BACK_ASSET:         "no-back-asset",
+  BACK_DUPLICATES_FRONT: "back-duplicates-front",
+});
+
+function backViewReadinessOf(item) {
+  if (!item) return { ready: false, reason: BACK_VIEW_REASON.NO_ITEM, front: "", back: "" };
+  const g = galleryOf(item);
+  const front = g.front || "";
+  const back  = g.back || "";
+  if (!front) return { ready: false, reason: BACK_VIEW_REASON.NO_FRONT_ASSET, front, back };
+  if (!back)  return { ready: false, reason: BACK_VIEW_REASON.NO_BACK_ASSET,  front, back };
+  /* The one rejection with no standing console trace - see distinctBackOf's dedupe. */
+  if (!distinctBackOf(item, g))
+    return { ready: false, reason: BACK_VIEW_REASON.BACK_DUPLICATES_FRONT, front, back };
+  return { ready: true, reason: BACK_VIEW_REASON.READY, front, back };
+}
+
+/**
+ * Why the active subject can or cannot render a rear view.
+ * @param {object|null} item single garment; ignored when a full look is active
+ * @returns {{ready:boolean, reason:string, front:string, back:string, half:(string|null)}}
+ *   `half` names which side of a full look disqualified it ("top"/"bottom"), else null.
+ */
+function describeBackViewReadiness(item) {
+  const look = resolveLook();
+  if (!look) return { ...backViewReadinessOf(item), half: null };
+  /* BOTH halves must ship a real back, matching canCombineViews()'s AND - and a look that
+     fails names the half, because "the back is plain" on a two-piece is otherwise a hunt
+     through two items to find the one missing an asset. */
+  for (const [half, it] of [["top", look.top], ["bottom", look.bottom]]) {
+    const r = backViewReadinessOf(it);
+    if (!r.ready) return { ...r, half };
+  }
+  return { ...backViewReadinessOf(look.top), half: null };
+}
+
+/* Answerable on a live session without a redeploy, which is the whole point: a shopper
+   reporting a plain back is reporting one of five states and cannot tell you which. */
+if (typeof window !== "undefined") {
+  window.__pearDebugBackView = () => {
+    const r = describeBackViewReadiness(activeItem);
+    console.log("[PEAR] back-view readiness:", r.reason,
+      r.half ? `(look half: ${r.half})` : "",
+      "\n  front:", abbrevImg(r.front) || "(none)",
+      "\n  back :", abbrevImg(r.back) || "(none)",
+      "\n  mode :", currentAngle,
+      r.ready ? "" : "\n  → the shopper will see the FRONT garment when they turn around");
+    return r;
+  };
 }
 
 /* Pick the angle clause for the active view. Back splits on whether a REAL back photo is
@@ -7805,6 +8831,22 @@ async function referenceImageFor(item, activeImg = activeImageOf(item), out = {}
     if (blob) return blob;
     console.warn("[PEAR] AI Auto - Blob pre-cache miss; falling back to proxied URL reference");
   }
+  /* ── SINGLE-VIEW GETS THE SAME TREATMENT, IF THE BYTES ARE ALREADY HERE ──────
+     "Sending bytes, not a URL, is what makes the swap instant" was true for AI Auto and
+     was never applied to the front-only path - which is most of the catalog. A URL means
+     DECART fetches the image before it can condition on it, and until that lands the only
+     thing it can render a garment from is its own prior: the reported generic grey sweater
+     for the first second of the session. Handing over bytes removes that fetch entirely.
+     WARM ONLY - garmentBlobIfWarm(), never garmentBlobCached(). On a hit this is free; on
+     a miss it falls through to the URL immediately rather than moving the fetch onto the
+     go-live path, where it would cost more than the server-side one it replaced. The hit
+     rate is what setActiveItem()'s prewarm exists to raise. */
+  const warm = garmentBlobIfWarm(activeImg);
+  if (warm) {
+    console.log("[PEAR] reference: warm bytes (prefetched) -", abbrevImg(activeImg),
+      `${(warm.size / 1024).toFixed(0)}KB - Decart has nothing to fetch before conditioning`);
+    return warm;
+  }
   return garmentImageRef(activeImg);
 }
 
@@ -7940,7 +8982,7 @@ async function applyGarment(item) {
   const payload = {
     prompt: clampPromptForWire(usingComposite
       ? buildCompositePrompt(item, angleAtStart, profileAtStart)
-      : buildPrompt(item, angleClause(item, angleAtStart, false, profileAtStart)),
+      : buildPrompt(item, angleAtStart),
       "applyGarment"),
     enhance: false,
     ...(imageRef ? { image: imageRef } : {}),
@@ -8063,6 +9105,10 @@ async function applyGarment(item) {
   // prompt-only-flip.test.mjs/side-profile.test.mjs against a fixed sandbox global list
   // that doesn't include this - a bare call would throw ReferenceError there.
   if (typeof verifyGarmentAsset === "function") verifyGarmentAsset(payload, "applyGarment");
+  /* Sampled BEFORE the write, and typeof-guarded for the same reason the line above is:
+     prompt-only-flip/side-profile run this function standalone against a fixed sandbox
+     global list, where a bare reference would throw ReferenceError. */
+  const condBefore = typeof sampleRenderSignature === "function" ? sampleRenderSignature() : null;
   await sendCondition("applyGarment", () => rtClient.set(payload));
   /* Stamped only AFTER set() resolves, which is what makes a retry correct: applyActive()
      re-enters this function on a rejection, and if these had been written optimistically
@@ -8072,6 +9118,9 @@ async function applyGarment(item) {
   rtImageOnWire = !!imageRef;
   lastSentPrompt = payload.prompt;
   if (imageRef) lastAckedImageRef = imageRef;   // survives a wire invalidation - see its declaration
+  /* Stamped AFTER lastAckedImageRef, so the trace can report whether the ack it is
+     describing is the one for this very reference. */
+  if (typeof traceConditioning === "function") traceConditioning(item, imageRef, condBefore);
 }
 
 /**
@@ -8384,8 +9433,8 @@ const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like lo
    priority-tagged part in a single fitPrompt() call - and it ranks CORE, because a prompt
    that has lost its orientation clause renders the wrong side of the garment. It is
    retained-and-unused today (see buildCompositePrompt's note on the same seam). */
-function buildPrompt(item, angleText = "") {              // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item);
+function buildPrompt(item, angle = "front") {
+  return imageOnlyPrompt(item, angle);
 }
 
 /**
@@ -8405,8 +9454,8 @@ function buildPrompt(item, angleText = "") {              // eslint-disable-line
  * @param {object} item - a custom item ({ custom:true, garmentType, img, color })
  * @returns {string}
  */
-function buildCustomPrompt(item, angleText = "") {        // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item);
+function buildCustomPrompt(item, angle = "front") {
+  return imageOnlyPrompt(item, angle);
 }
 
 const APPLY_ATTEMPTS = 2;    // set() tries per apply - see applyActive()
@@ -8464,6 +9513,7 @@ async function applyActive() {
       if (look) await applyLook(look.top, look.bottom);
       else await applyGarment(activeItem);
       isGarmentApplied = true;       // rtClient.set() resolved - the NEXT rendered frame is dressed
+      releaseInputGate("applyActive");
       return;
     } catch (e) {
       if (attempt === APPLY_ATTEMPTS || !rtClient || !isLive()) throw e;
@@ -10060,6 +11110,12 @@ function startBillingWindow(gen) {
   stopScanTimer();
   $("scanOverlay").hidden = true;
   card().classList.add("show-live");
+  /* THE ONLY PLACE THE FEED BECOMES VISIBLE, and it is deliberately the same statement
+     that flips the state class. Everything above this line has already been verified:
+     the garment apply resolved, the frame is non-black, and it stayed that way for
+     MODEL_READY_STABLE_FRAMES/_MS - so this fades in over content that is settled rather
+     than over content that is merely present. */
+  revealAiFeed();
   startLowerBodyGuard();   // no-op unless LOWER_BODY_GUARD_ENABLED - see its own comment
   /* Late-entry recovery starts with the billed window: from here on, a shopper who
      drifts out of shot and steps back in gets the garment re-conditioned into the
@@ -10564,7 +11620,7 @@ function watchPostFireLuma(video, gen, armedAt) {
 async function applyConditioningWithRecovery() {
   /* Attached unconditionally, independent of whether the race times out - a promise that
      eventually settles AFTER we have moved on must never become an unhandled rejection. */
-  const race = (promise, label) => {
+  const race = (promise, label, budgetMs = APPLY_TIMEOUT_MS) => {
     promise.catch(() => {});
     let timer;
     return Promise.race([
@@ -10580,14 +11636,21 @@ async function applyConditioningWithRecovery() {
           const e = new Error(`timeout ממתין ליישום הבגד (rtClient.set לא הגיב${label ? " - " + label : ""})`);
           e.isApplyTimeout = true;
           reject(e);
-        }, APPLY_TIMEOUT_MS);
+        }, budgetMs);
       }),
     ]);
   };
 
   const genBefore = sessionGen;
   try {
-    await race(applyActive());
+    /* THE COLD-START LEASH, not APPLY_TIMEOUT_MS. This is the FIRST thing a shopper sees,
+       and 10 seconds of a loading overlay is not a bound they will wait out - they close
+       the widget and reopen it, which is the "it never works on the first try" report
+       almost verbatim. COLD_START_ACK_MS (2.5s) is past the p99 of a healthy first apply,
+       so the automatic reconnect below happens instead of the manual one. The RECOVERY leg
+       keeps the full budget: by then the shopper has been told what is happening, and a
+       second reconnect would cost more than it could buy. */
+    await race(applyActive(), "", COLD_START_ACK_MS);
     return sessionGen === genBefore;   // superseded mid-wait → the caller stops here
   } catch (err) {
     // Superseded while we were waiting (a manual Stop, a fresh connect): the session this
@@ -10599,10 +11662,15 @@ async function applyConditioningWithRecovery() {
       "\n  → resetting the realtime client once and retrying with a lightweight payload");
     toast("מרענן חיבור מדידה... · Refreshing the fitting connection…");
 
-    /* The reset. connectRealtime() bumps sessionGen itself, which is why nothing below
-       compares against genBefore any more - and it clears the wire queue (see
-       resetConditionWire), so the retry starts against an empty one. */
-    await connectRealtime();
+    /* FLUSH FIRST, then reset. The queue may still hold the write that never came back,
+       and its epoch must be retired before a new session's first write is queued behind
+       it - connectRealtime() does this too, but doing it here as well makes the flush
+       unconditional rather than a side effect of a call that could early-return.
+       force:true is load-bearing: the SDK still reports this session as connected (that
+       is exactly the failure - a live-looking session that will not acknowledge a write),
+       so without it connectRealtime() returns immediately and recovers nothing. */
+    resetConditionWire();
+    await connectRealtime({ force: true });
     await waitConnected(CONNECT_TIMEOUT_MS);
     const genAfter = sessionGen;
 
@@ -10651,6 +11719,7 @@ async function applyFallbackConditioning() {
     () => rtClient.set({ prompt, enhance: false, ...(image ? { image } : {}) }));
 
   isGarmentApplied = true;         // the wire holds a garment - the next frame is dressed
+  releaseInputGate("fallback conditioning");
   lastSentImageRef = image || null;
   rtImageOnWire = !!image;
   lastSentPrompt = prompt;
@@ -11041,6 +12110,9 @@ function stopBilling() {
      the frozen-hold tail - so a turn hold raised a moment before the window closed has
      nothing left to release it, and its overlay (z-index 6, inside #cameraCard) would sit
      on top of that tail for the rest of the session. */
+  /* The re-drape cover gets released here for the identical reason (z-index 7,
+     same parent) - the paragraph above is the whole argument for both. */
+  redrapeCoverEnd("billing-stopped");
   orientHoldEnd("billing-stopped");
   /* The freeze watchdog does NOT get that exemption, and the difference is what each one
      is for. The orientation watcher stays because the frozen-hold tail still has UI state
@@ -11055,6 +12127,7 @@ function stopBilling() {
   if (realtimeInput) { try { realtimeInput.getTracks().forEach((t) => t.stop()); } catch (_) {} realtimeInput = null; }
   const ai = $("aiVideo");
   if (ai) { ai.style.display = "none"; ai.srcObject = null; }
+  resetAiFeedVisibility();   // never leave a dead session's opacity:0 on a reused element
   connState = "idle";
   connecting = false;
   setConn("idle");
@@ -11738,6 +12811,16 @@ function startPresenceWatcher() {
 
   presenceWatcherTimer = setInterval(async () => {
     if (inFlight || !isLive()) return;
+    /* ── NO INFERENCE THE SHOPPER CANNOT SEE THE RESULT OF ─────────────────────
+       detectForVideo() is a WASM/GPU pass on the main thread - the same thread that
+       services the WebRTC datachannel and paints the UI - and it is the single most
+       expensive thing this loop does. On a hidden tab its two consumers are both moot:
+       nobody is looking at a presence overlay, and a body whose topology changed while
+       the tab was backgrounded is re-measured on the first visible tick anyway (the
+       tracker holds its baseline, then re-offers the shift). Skipping is free, and it
+       stops a backgrounded session from competing with the foreground page for the
+       thread that has to keep the stream flowing. */
+    if (typeof document !== "undefined" && document.hidden) return;
     inFlight = true;
     try {
       const detector = await loadPoseLandmarker();
@@ -11880,6 +12963,12 @@ async function reconditionForTopology(step) {
     return;
   }
   topologyReconditionInFlight = true;
+  /* RAISED BEFORE ANYTHING IS SENT, and before the three wire-state fields below are
+     cleared: at this instant #aiVideo still carries a correctly dressed frame, and that is
+     precisely the frame worth holding. A cover raised after the re-upload is in flight
+     would snapshot the generic-garment frame it exists to hide - the same mistake the
+     front/back hold made before it was moved to the first disagreeing vote. */
+  const covered = redrapeCoverBegin();
   try {
     const d = step.delta || {};
     console.log(`[PEAR] body contour changed (${step.reason}) at t=${sessionElapsedMs()}ms` +
@@ -11894,9 +12983,20 @@ async function reconditionForTopology(step) {
     rtImageOnWire = false;
     lastSentPrompt = null;
     await applyActive();
+    /* THE GRACE PERIOD, for the same reason maybeSwap() takes one after its own set():
+       applyActive() resolving means Decart ACKNOWLEDGED the new conditioning, not that a
+       frame rendered from it has arrived and decoded. Revealing on the acknowledgement
+       alone uncovers the last few frames of the OLD conditioning - a brief flash of
+       exactly what the cover was raised to hide. Skipped when no cover went up, because
+       then this is just latency added to a re-drape nobody is waiting on. */
+    if (covered) await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));
   } catch (e) {
     console.warn("[PEAR] body-contour re-condition failed:", e?.message || e);
   } finally {
+    /* In the finally, not after the await: a rejected applyActive() must still reveal the
+       live feed. Holding a still over a failed re-drape is the one outcome worse than the
+       flicker - the shopper is then frozen out of their own session with no recovery. */
+    redrapeCoverEnd("re-drape settled");
     topologyReconditionInFlight = false;
   }
 }
@@ -12138,24 +13238,61 @@ function setLiveControls(live) {
    5s window closes. On flush we build a Blob → object URL and reveal a clean
    "Download Video" button. Everything is torn down/revoked on the next session.
    ============================================================================= */
-/* Codec selection is platform-aware (mobile download fix):
-   • MOBILE - try H.264 MP4 first. iOS Photos / Android galleries natively save MP4,
-     and the MP4 container carries a correct duration header, which kills the
-     "broken 14-second clip" bug WebM exhibits (WebM from MediaRecorder ships no
-     top-level duration, so phone players show a bogus/black length).
-   • DESKTOP - keep the proven VP8/WebM path (Chrome/Firefox encode the canvas track
-     into .webm most reliably; a missing/unsupported codec is what left the file
-     black). MP4 stays as a tail fallback either way.
-   Every candidate is feature-tested via isTypeSupported before use. */
-function pickRecorderMime() {
-  if (typeof MediaRecorder === "undefined") return null;
-  const mp4  = ["video/mp4;codecs=h264", "video/mp4;codecs=avc1.42E01E", "video/mp4"];
+/* Codec selection - MP4 FIRST on every platform (forced-MP4 export):
+   • MP4 is the one container both phone galleries (iOS Photos / Android) and
+     desktop players/editors ingest without a transcode, and it carries a correct
+     top-level duration header - which kills the "broken 14-second clip" bug WebM
+     exhibits (WebM out of MediaRecorder ships no top-level duration, so players
+     show a bogus/black length). H.264 + AAC (avc1.42E01E,mp4a.40.2) is the most
+     portable profile, so it leads; bare "video/mp4" is the second ask, for engines
+     that only advertise the container.
+   • WebM is now the FALLBACK ONLY - reached when the host cannot record MP4 at all
+     (Firefox, older Chromium). A .webm beats no clip; it never beats a .mp4.
+   Returns the whole ORDERED list, not a single pick, and that is deliberate:
+   isTypeSupported() answers a codec question, not "will the constructor accept
+   this stream". The leading candidate names an audio codec while our canvas stream
+   is video-only, so the caller must stay free to walk to the next entry when
+   construction throws. */
+function pickRecorderMimes() {
+  if (typeof MediaRecorder === "undefined") return [];
+  /* H.264 LEADS - it is the profile QuickTime, Windows Photos, iOS Photos and every NLE
+     open without a transcode.
+
+     VP9/AV1-IN-MP4 FOLLOW, and they are why a Chromium session can stop falling back to
+     WebM. H.264 is patent-encumbered, so Chromium builds that ship without the
+     proprietary encoder (Linux distro packages, some embedded/CI builds) answer FALSE to
+     every avc1 query - which is the usual reason a "Chrome" session still saved .webm.
+     Those builds CAN still mux a real MP4 around a royalty-free codec. Player support is
+     narrower than H.264, but the bytes are a genuine MP4, which is the whole point.
+
+     WEBM REMAINS LAST AND REMAINS HONEST. When no MP4 encoder exists at all there is
+     nothing to force: MediaRecorder emits a Matroska/WebM byte stream, and relabelling
+     that Blob "video/mp4" or naming the file .mp4 does not transcode it - it produces a
+     file whose extension lies about its contents, which QuickTime and Windows Photos
+     refuse outright and iOS Photos rejects on import. A correct .webm is strictly more
+     useful than a corrupt .mp4, so the extension keeps following the real container. */
+  const mp4 = [
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4",
+    "video/mp4;codecs=avc1.42E01E",
+    "video/mp4;codecs=h264",
+    "video/mp4;codecs=vp09.00.10.08",
+    "video/mp4;codecs=av01.0.04M.08",
+  ];
   const webm = ["video/webm;codecs=vp8", "video/webm", "video/webm;codecs=vp9"];
-  const candidates = IS_MOBILE ? [...mp4, ...webm] : [...webm, ...mp4];
-  for (const t of candidates) {
-    try { if (MediaRecorder.isTypeSupported(t)) return t; } catch (_) {}
-  }
-  return null;
+  const supported = [...mp4, ...webm].filter((t) => {
+    try { return MediaRecorder.isTypeSupported(t); } catch (_) { return false; }
+  });
+
+  /* One line, once per session, and it is the FIRST thing to read when a clip comes back
+     .webm: it separates "this build genuinely has no MP4 encoder" (MP4: NONE) from "this
+     code never ran" (no line at all - a cached older app.js, which is what the index.html
+     cache-buster exists to prevent). Without it the fallback is silent and unattributable. */
+  console.log("[PEAR] recorder codec support - MP4:",
+    supported.filter((t) => t.indexOf("mp4") > -1).join(" | ") || "NONE (clip will save as .webm)",
+    "- WebM:", supported.filter((t) => t.indexOf("webm") > -1).join(" | ") || "NONE");
+
+  return supported;
 }
 
 /**
@@ -12198,21 +13335,35 @@ function startRecording() {
   const beginRecorder = () => {
     if (mediaRecorder) return;
     const captured = recordCanvas.captureStream(30);   // 30 fps, video-only
-    try {
-      const mime = pickRecorderMime();
-      mediaRecorder = new MediaRecorder(captured, mime ? { mimeType: mime } : undefined);
-      // Record what the recorder ACTUALLY negotiated so the Blob/File + filename carry
-      // the true container (the browser may pick something other than our request).
-      recorderMime = (mediaRecorder.mimeType || mime || "").toLowerCase() || null;
-    } catch (e) {
-      console.warn("MediaRecorder unavailable:", e?.message || e);
+    // Walk the ordered candidate list. isTypeSupported() only vouches for the codec,
+    // so a candidate it approved can still be rejected by the constructor for THIS
+    // stream (the AAC-carrying MP4 type against a video-only canvas track is exactly
+    // that case). Falling through to the next entry - and finally to the browser's
+    // own default - keeps a clip guaranteed instead of trading MP4 for no recording.
+    let chosen = null;
+    for (const mime of [...pickRecorderMimes(), null]) {
+      try {
+        mediaRecorder = new MediaRecorder(captured, mime ? { mimeType: mime } : undefined);
+        chosen = mime;
+        break;
+      } catch (e) {
+        console.warn(`MediaRecorder rejected ${mime || "(browser default)"}:`, e?.message || e);
+        mediaRecorder = null;
+      }
+    }
+    if (!mediaRecorder) {
+      console.warn("MediaRecorder unavailable - clip recording disabled for this session");
       stopPaintLoop();
       return;
     }
+    // Record what the recorder ACTUALLY negotiated so the Blob/File + filename carry
+    // the true container (the browser may pick something other than our request).
+    recorderMime = (mediaRecorder.mimeType || chosen || "").toLowerCase() || null;
     mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) recordedChunks.push(e.data); };
     mediaRecorder.onstop = finalizeRecording;          // fires after stop() flushes the buffer
-    // 200ms timeslice → proper WebM cluster timecodes, so the clip reports its TRUE
-    // duration instead of the broken/inflated length a single-blob start() gives.
+    // 200ms timeslice → real fragment/cluster timecodes (MP4 fragments, WebM
+    // clusters alike), so the clip reports its TRUE duration instead of the
+    // broken/inflated length a single-blob start() gives.
     try { mediaRecorder.start(200); }
     catch (e) { console.warn("recorder start failed:", e?.message || e); stopPaintLoop(); mediaRecorder = null; }
   };
@@ -12464,7 +13615,12 @@ function ensureReplayZone() {
 /** Build the downloadable clip from the buffered chunks and reveal the Replay Zone. */
 function finalizeRecording() {
   if (!recordedChunks.length) return;
-  const raw = (recordedChunks[0] && recordedChunks[0].type) || recorderMime || "video/webm";
+  // The recorder's OWN mimeType is authoritative and leads: several engines hand
+  // back chunks with an empty .type, and Chromium can label MP4 chunks with a
+  // codec-laden variant. Stripping the codec parameters leaves the bare container,
+  // so an MP4 recording is written out as an explicit { type: "video/mp4" } Blob -
+  // which is what the .mp4 download, the share-sheet File, and the gallery all read.
+  const raw = recorderMime || (recordedChunks[0] && recordedChunks[0].type) || "video/webm";
   const type = raw.split(";")[0] || "video/webm";
   const blob = new Blob(recordedChunks, { type });
   recordedChunks = [];
@@ -12489,6 +13645,13 @@ function finalizeRecording() {
   requestAnimationFrame(() => requestAnimationFrame(() => zone.classList.add("is-ready")));
 }
 
+/* YYYYMMDD-HHMMSS in LOCAL time - the stamp carried by downloaded clip filenames. */
+function clipStamp(d = new Date()) {
+  const p = (v) => String(v).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-` +
+         `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
 /**
  * Save the recorded clip locally - mobile-first (mobile download fix).
  *
@@ -12507,9 +13670,14 @@ function finalizeRecording() {
 async function downloadRecording() {
   if (!recordedBlob && !recordedUrl) return;
   const type = (recordedBlob && recordedBlob.type) || (recorderMime || "").split(";")[0] || "video/webm";
-  const ext = type.indexOf("mp4") > -1 ? "mp4" : "webm";
-  const base = (activeItem && activeItem.name ? activeItem.name : "session").replace(/\s+/g, "-");
-  const filename = `pear-fitting-${base}.${ext}`;
+  const ext = type.indexOf("mp4") > -1 ? "mp4" : "webm";   // follows the Blob: MP4 saves as .mp4
+  // pear-tryon-<garment>-<YYYYMMDD-HHMMSS>.<ext>. The stamp stops a second fit of the
+  // same garment landing as "... (1).mp4"; the garment name stays because the filename
+  // is the only place the saved file says WHAT was tried on. Characters Windows/macOS
+  // reject in a filename are stripped first - garment names are free-form (incl. Hebrew).
+  const base = (activeItem && activeItem.name ? activeItem.name : "")
+    .trim().replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, "-");
+  const filename = `pear-tryon-${base ? base + "-" : ""}${clipStamp()}.${ext}`;
 
   // 1) Native gallery save via the share sheet (the reliable mobile path).
   if (recordedBlob && typeof navigator.canShare === "function" && typeof navigator.share === "function") {
@@ -13662,6 +14830,11 @@ const GALLERY_MAX = 18;                 // poster cap - stays well under the loc
 const CLIP_MAX = 12;                    // in-memory clip cap - bounds blob memory per session
 
 const liveClips = new Map();            // ts → object URL of the 5s clip (this session only)
+/* Container of each saved clip (ts → "video/mp4" | "video/webm"). Kept beside
+   liveClips instead of read off recorderMime at download time: clearRecording()
+   nulls recorderMime when the NEXT session starts, so a gallery download taken
+   after that would be mislabelled .webm no matter what was actually recorded. */
+const clipTypes = new Map();
 let lastFitTs = null;                   // ts of the entry awaiting its clip from finalizeRecording
 const compareSel = new Set();           // ts of fits picked for the Compare overlay (max 2)
 let activeClipTs = null;                // ts of the clip currently replaying in #aiVideo
@@ -13689,6 +14862,14 @@ function writeGallery(arr) {
 function dropClip(ts) {
   const url = liveClips.get(ts);
   if (url) { try { URL.revokeObjectURL(url); } catch (_) {} liveClips.delete(ts); }
+  clipTypes.delete(ts);
+}
+
+/* Extension for a SAVED gallery clip, read from the container stored WITH that clip
+   - never from recorderMime, which belongs to the LIVE session and is nulled by
+   clearRecording(), so an older MP4 clip would download mislabelled as .webm. */
+function clipExt(ts) {
+  return (clipTypes.get(ts) || "").indexOf("mp4") > -1 ? "mp4" : "webm";
 }
 
 /* Grab the current dressed frame as a small JPEG data-URL (the poster). Prefers
@@ -13761,6 +14942,7 @@ function attachClipToLastFit(blob) {
   let url = null;
   try { url = URL.createObjectURL(blob); } catch (_) { lastFitTs = null; return; }
   liveClips.set(lastFitTs, url);
+  clipTypes.set(lastFitTs, blob.type || "");
   // bound in-memory clips: revoke the oldest beyond CLIP_MAX
   while (liveClips.size > CLIP_MAX) dropClip(liveClips.keys().next().value);
   lastFitTs = null;
@@ -13947,6 +15129,7 @@ function loadGallery() { renderGallery(readGallery()); }
 function clearGallery() {
   liveClips.forEach((url) => { try { URL.revokeObjectURL(url); } catch (_) {} });
   liveClips.clear();
+  clipTypes.clear();
   compareSel.clear();
   activeClipTs = null;
   const bar = $("compareBar"); if (bar) bar.hidden = true;
@@ -13978,6 +15161,8 @@ function playClipInMainPlayer(url, idx, ts) {
   if (!ai || !url) { if (idx != null) openFitLightbox(idx); return; }
 
   resetToLive();                       // clean any frozen result / stale replay first (clears activeClipTs)
+  resetAiFeedVisibility();             // a clip is different content - it must not inherit
+                                       // the conditioning gate's opacity from a past session
   ai.srcObject = null;                 // detach any (dead) WebRTC stream
   ai.src = url;
   ai.loop = true; ai.muted = true; ai.playsInline = true;
@@ -14067,7 +15252,7 @@ function openFitLightbox(idx) {
   if (dlBtn) {
     if (clip) {
       dlBtn.hidden = false; dlBtn.href = clip;
-      dlBtn.download = `PEAR-fit-${it.ts}.${(recorderMime && recorderMime.includes("mp4")) ? "mp4" : "webm"}`;
+      dlBtn.download = `PEAR-fit-${it.ts}.${clipExt(it.ts)}`;
       if (IS_MOBILE) dlBtn.target = "_blank";
     } else { dlBtn.hidden = true; dlBtn.removeAttribute("href"); }
   }

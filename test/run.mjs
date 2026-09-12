@@ -104,6 +104,24 @@
                       applyGarment's no-op skip - and, most importantly, that the monitor
                       can never touch the garment half: no asset selection, no prompt edit,
                       no reference read.
+     first-frame-integrity
+                      "It renders a grey sweater for a second, then my shirt." Raw camera
+                      frames start flowing the instant the WebRTC session opens, and
+                      rtClient.set() - the call that delivers the reference - lands strictly
+                      after that. In the window between the two, Decart is asked to render a
+                      dressed person with nothing but its own prior, and its prior is a plain
+                      grey top. The three existing reveal gates cannot catch it: a generic
+                      sweater is not black, does not flicker, and arrives after the apply
+                      resolved - armFirstFrameBilling's own comment names the hole. The fix is
+                      upstream: withhold FRAMES (never the track - captureStream(0) emits only
+                      on requestFrame, so the handshake is unaffected) until the garment is
+                      acknowledged, so there is no window in which a default can be generated.
+                      Asserts the gate on the REAL throttle driven against a fake camera, that
+                      it opens from the single call site that means "a garment is on the wire",
+                      that it self-releases loudly rather than stranding a session, the
+                      prefetch that keeps the gated window short (every item now, not only
+                      dual-view ones - and warm bytes ONLY, never a fetch moved onto the
+                      go-live path), and the frame budget on the wire.
      turn-hold        The last dressed frame is held from the FIRST sign of a turn, not
                       from the confirmed flip 2.5s later - the uncovered window is where
                       the shopper's real shirt came back. Plus every release path,
@@ -171,6 +189,37 @@
                       aspect-ratio gate, which rejects the plausible-SIZE/implausible-SHAPE
                       crops (shadow bands, wall columns) that every existing area gate
                       passes straight through to the VTON backend.
+     mp4-export       The recorded try-on clip is asked for as H.264 MP4 FIRST on every
+                      platform, not just on phones. WebM survives only as the fallback
+                      for hosts that cannot record MP4 (Firefox, older Chromium), because
+                      a .webm still beats no clip. Runs the real selection code and the
+                      real constructor loop against simulated engines - including the case
+                      that made the list ordered rather than a single pick: the leading
+                      MP4 type names an audio codec while the recorded canvas stream is
+                      video-only, so an engine can approve it via isTypeSupported and
+                      still throw on construction. Also pins that the Blob carries the
+                      negotiated container, that the filename suffix follows it, and that
+                      a SAVED gallery clip remembers its own container instead of reading
+                      the live session's recorderMime, which clearRecording() nulls.
+     conditioning-trace
+                      Two reports that meet in applyGarment()'s dispatch. THE TRACE, for
+                      "I picked a specific garment and got a generic one": the prompt names
+                      no product at all, so a generic render means the reference image is
+                      not reaching the model - and every existing log describes the WIRE,
+                      proving only that set() RESOLVED. A resolved set() is receipt, not
+                      adoption. The trace samples the OUTPUT before the write and after the
+                      model has had time to switch, and says which happened. Asserts it is
+                      off without ?cond_trace=1, can never throw into a live apply, reports
+                      an unreadable feed as INCONCLUSIVE rather than as "unchanged" - and,
+                      most of all, that it is genuinely CALLED, in the right order: this
+                      codebase has already shipped a correct guard that nothing reached.
+                      THE ANGLE: buildPrompt() and buildCompositePrompt() both took the
+                      frozen orientation and discarded it, so every render shipped the
+                      FRONT anchor and turning around reproduced the chest print on the
+                      back. The angle now SELECTS between frozen anchors instead of
+                      appending a clause - which is the whole design, since the tuxedo
+                      regression was beaten by cutting total text volume competing with the
+                      reference image, and appending angleClause() here would re-open it.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -184,6 +233,7 @@ import { fileURLToPath } from "node:url";
 
 const SUITES = [
   ["url-identity", "url-identity.test.mjs"],
+  ["url-identity-widget", "url-identity-widget.test.mjs"],
   ["view-resolution", "view-resolution.test.mjs"],
   ["composite", "composite.test.mjs"],
   ["widget-dom", "widget-dom.test.mjs"],
@@ -201,9 +251,14 @@ const SUITES = [
   ["image-first", "image-first.test.mjs"],
   ["garment-category-prompt", "garment-category-prompt.test.mjs"],
   ["garment-category-detection", "garment-category-detection.test.mjs"],
+  ["plain-tee-fidelity", "plain-tee-fidelity.test.mjs"],
+  ["back-view-readiness", "back-view-readiness.test.mjs"],
+  ["back-view-diagnostic", "back-view-diagnostic.test.mjs"],
+  ["front-reference-guard", "front-reference-guard.test.mjs"],
   ["body-presence-gate", "body-presence-gate.test.mjs"],
   ["model-agnostic", "model-agnostic.test.mjs"],
   ["body-topology", "body-topology.test.mjs"],
+  ["first-frame-integrity", "first-frame-integrity.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],
   ["signaling-retry", "signaling-retry.test.mjs"],
@@ -217,6 +272,8 @@ const SUITES = [
   ["size-mismatch-view", "size-mismatch-view.test.mjs"],
   ["cart-size-variant", "cart-size-variant.test.mjs"],
   ["kids-product-sizes", "kids-product-sizes.test.mjs"],
+  ["mp4-export", "mp4-export.test.mjs"],
+  ["conditioning-trace", "conditioning-trace.test.mjs"],
 ];
 
 let failed = 0;

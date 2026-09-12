@@ -58,7 +58,10 @@ const sandbox = {
   SUBTYPE_PROMPT: {}, SHIRT_NOUN: { short_sleeve: "t-shirt" },
   colorName: () => "white",
   activeColorOf: (it) => (it && it.color) || "#fff", getSizeDelta: () => 0,
-  getFitModifier: () => "regular fit", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
+  /* "" not "regular fit": fitSentence() is wired into imageOnlyPrompt() now (P.MED), and
+     this suite's assertions are byte-exact against the anchor+closure text. image-first.
+     test.mjs owns the fit-sentence wiring itself. */
+  getFitModifier: () => "", getAnatomicalAnchor: () => "", getFabricModifier: () => "",
 };
 const api = new Function(...Object.keys(sandbox),
   code + "\nreturn { isBottomsGarment, imageOnlyPrompt, lookAnchorPrompt, fitPrompt, P };")(...Object.values(sandbox));
@@ -119,10 +122,60 @@ console.log("── §1 CLASSIFICATION: garmentType wins, keywords are the fallb
     isBottomsGarment(null) === false && isBottomsGarment(undefined) === false &&
     isBottomsGarment({}) === false,
     "tops is the safe default: it is the overwhelming majority of the catalog");
+
+  console.log("   -- SINGULARS: the miss that sent long trousers down the tops branch --");
+  /* REPORTED: long trousers processed as an upper-body asset. The keyword list held only
+     the plural of several garment nouns, and a storefront writes whichever reads better in
+     its own layout - "Wide Leg Trouser" missed where "Wool Trousers" matched, and fell
+     through to the silent tops default. That is the same silent-default failure the Hebrew
+     stem work above was filed against, in English. */
+  check("singular English garment nouns match, not just their plurals",
+    isBottomsGarment({ name: "Wide Leg Trouser" }) === true &&
+    isBottomsGarment({ name: "Chino" }) === true &&
+    isBottomsGarment({ name: "Slim Jogger" }) === true &&
+    isBottomsGarment({ name: "Sweatpant" }) === true,
+    "a storefront writes the singular as readily as the plural");
+  check("...and the plurals still match, so nothing was traded away",
+    isBottomsGarment({ name: "Wool Trousers" }) === true &&
+    isBottomsGarment({ name: "Chinos" }) === true &&
+    isBottomsGarment({ name: "Joggers" }) === true &&
+    isBottomsGarment({ name: "Sweatpants" }) === true);
+  check("cuts that were absent entirely: bermuda / capri / palazzo",
+    isBottomsGarment({ name: "Bermuda" }) === true &&
+    isBottomsGarment({ name: "Capri Pant" }) === true &&
+    isBottomsGarment({ name: "Palazzo" }) === true);
+  check("Hebrew additions: סווטפנט stem and דגמ״ח in all three spellings",
+    isBottomsGarment({ name: "סווטפנטס" }) === true &&
+    isBottomsGarment({ name: "דגמח" }) === true &&
+    isBottomsGarment({ name: 'דגמ"ח' }) === true &&
+    isBottomsGarment({ name: "דגמ״ח" }) === true);
+  check("the reported case routes to bottoms in every spelling it ships under",
+    isBottomsGarment({ name: "LOOSE JEANS" }) === true &&
+    isBottomsGarment({ name: "ג'ינס LOOSE" }) === true &&
+    isBottomsGarment({ name: "מכנסי ג'ינס LOOSE" }) === true);
+
+  console.log("   -- and the words deliberately NOT added, each for a reason --");
+  /* Every one of these would buy a few product titles at the cost of misrouting a real,
+     common garment. Abstaining into tier 2 beats guessing here - see BOTTOMS_TOKENS. */
+  check("'denim' alone stays TOPS-safe - it is a fabric, and denim jackets are real",
+    isBottomsGarment({ name: "Denim Jacket" }) === false &&
+    isBottomsGarment({ name: "ז'קט ג'ינס" }) === false,
+    "adding bare denim would repaint the shopper's trousers for a jacket try-on");
+  check("'cargo' alone stays TOPS - it names a pocket style, not a region",
+    isBottomsGarment({ name: "Cargo Jacket" }) === false);
+  check("a bare fit word classifies nothing - 'LOOSE' is not a garment noun",
+    isBottomsGarment({ name: "LOOSE" }) === false,
+    "it must reach tier 2 rather than be guessed from an adjective");
 }
 
 const PANTS = { garmentType: "lower_body", name: "Glide Slim" };
-const SHIRT = { garmentType: "upper_body", name: "Ion Crew Tee" };
+/* NOT a tee any more, and the rename is the point. imageOnlyPrompt() gained a CONSTRUCTION
+   axis (see PLAIN_TEE_ANCHOR in app.js): a plain knit tee now resolves to its own anchor
+   because the closure clause was summoning button-downs onto tees. §3 below owns the
+   DEFAULT tops anchor, so its fixture has to be a top that actually takes that branch -
+   otherwise these assertions keep passing against a string nobody ships any more. The tee
+   branch is owned by plain-tee-fidelity.test.mjs and by image-first.test.mjs §1. */
+const SHIRT = { garmentType: "upper_body", name: "Oxford Button-Down Shirt" };
 const bottomsPrompt = imageOnlyPrompt(PANTS);
 const topsPrompt    = imageOnlyPrompt(SHIRT);
 
@@ -189,11 +242,17 @@ console.log("\n── §2 THE BOTTOMS PROMPT: isolate the lower garment, preserv
 console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour ──");
 {
   check("binds the EXACT static shirt to the reference, nothing before it",
-    topsPrompt.indexOf("Drape and fit the EXACT static shirt from the reference image") === 0,
+    topsPrompt.indexOf("Drape and fit the EXACT static top from the reference image") === 0,
     topsPrompt);
+  /* The preserve clause no longer ENDS the tops prompt: FRONT_CLOSURE_LOCK follows it on
+     this branch (the button-down-rendered-open report). It is still the end of the ANCHOR,
+     which is what this assertion is about, so the tail is pinned against the anchor rather
+     than against the whole string - and the clause that legitimately follows it is named,
+     so a THIRD part appearing here would still fail. */
   check("...and carries the same per-frame adaptation and preserve clauses as bottoms",
     /Dynamically adapt the garment drape to the subject's exact/.test(topsPrompt) &&
-    /Strictly preserve the original shirt texture, pattern, and color\.$/.test(topsPrompt),
+    /Strictly preserve the original top texture, pattern, and color\./.test(topsPrompt) &&
+    /pattern, and color\. Reproduce the reference's front closure exactly:[^.]*as shown\.$/.test(topsPrompt),
     topsPrompt);
 
   /* ── ONE SHAPE, ONE DELIBERATE DIVERGENCE ───────────────────────────────────
@@ -207,8 +266,8 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
     bottomsPrompt.startsWith("Drape and fit the EXACT static "),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
   check("...and each names the region it replaces, and only that one",
-    /\bshirt\b/.test(topsPrompt) && !/pants|shorts|lower-body/.test(topsPrompt) &&
-    /pants\/shorts/.test(bottomsPrompt) && !/\bshirt\b/.test(bottomsPrompt),
+    /\btop\b/.test(topsPrompt) && !/pants|shorts|lower-body/.test(topsPrompt) &&
+    /pants\/shorts/.test(bottomsPrompt) && !/\btop\b/.test(bottomsPrompt),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
 
   /* ── THE ASYMMETRY ITSELF, asserted so it cannot drift by accident ───────────
@@ -273,11 +332,13 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, isBottomsGarment\(item\) \? CATEGORY_ANCHOR\.bottom : CATEGORY_ANCHOR\.top\],\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],\s*\n\s*\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),\s*\n\s*\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
-  /* The category anchor is the one clause that must NEVER shed - it is the entire fix. */
+  /* The category anchor is the one clause that must NEVER shed - it is the entire fix.
+     Whichever of the three the construction/category/angle axes select, it rides at
+     P.CORE: fitPrompt() sheds every other priority before it will touch this one. */
   check("the category anchor is tagged P.CORE so it can never be shed",
-    /\[P\.CORE,\s*(bottoms|isBottoms)[^\]]*ANCHOR|\[P\.CORE,\s*CATEGORY_ANCHOR/.test(SRC),
+    /\[P\.CORE,\s*(plainTee|bottoms|isBottoms)[^\]]*(ANCHOR|anchors)|\[P\.CORE,\s*(BACK_)?CATEGORY_ANCHOR/.test(SRC),
     "if the anchor can shed, the bug comes back under budget pressure");
 }
 

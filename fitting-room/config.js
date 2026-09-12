@@ -17,6 +17,9 @@
  * @property {string}   HEALTH_ENDPOINT         Same-origin proxy health route used by the pre-use check.
  * @property {string[]} SDK_URLS                Ordered Decart SDK CDN fallbacks.
  * @property {number}   PROMPT_MAX_CHARS        Hard cap on any assembled prompt (Decart rejects >226 tokens).
+ * @property {boolean}  INPUT_GATE_ENABLED      Withhold camera frames from Decart until the garment reference is acknowledged, so its first rendered frame can never be a generic default.
+ * @property {number}   INPUT_GATE_MAX_MS       Self-release ceiling for that gate (ms) - a caller that never reports success costs a late start, never a dead session.
+ * @property {number}   COLD_START_ACK_MS       Ack window for the FIRST apply of a session (ms) before the automatic reconnect; later applies use APPLY_TIMEOUT_MS.
  * @property {boolean}  BODY_TOPOLOGY_ENABLED   Re-drape the garment on the live body contour whenever it changes, instead of holding the go-live silhouette.
  * @property {number}   BODY_TOPOLOGY_SAMPLE_MS Cadence of the live pose loop that feeds both the presence watcher and the topology monitor (ms).
  * @property {number}   BODY_TRACK_MIN_VISIBILITY Per-landmark visibility bar for TRACKING (below the gate's, so a half-occluded turn is still readable).
@@ -56,6 +59,35 @@ export const CONFIG = Object.freeze({
      category that is already usable, and it sits on the path to go-live. Expiring is a
      normal outcome here, not an error - the tier-1 default stands. */
   CATEGORY_LLM_TIMEOUT_MS: 2500,
+
+  /* ── First-frame integrity + cold start ──────────────────────────────────
+     REPORTED, from a screen recording: for the first second of a session Decart renders a
+     generic grey long-sleeve sweater, and only at ~00:02 does the requested shirt appear.
+     The reveal was already gated three ways (the apply resolved, the frame is non-black,
+     and it held for 3 frames / 300ms) and a generic sweater passes all three - it is not
+     black and it does not flicker. The frame existed at all because raw camera frames
+     start flowing the moment the session opens, BEFORE the reference has been delivered,
+     so Decart was asked to dress somebody using only its own prior.
+     THE GATE WITHHOLDS FRAMES, NOT THE TRACK: captureStream(0) emits only on
+     requestFrame(), so a gated throttle is a live video track with nothing on it - the
+     handshake completes normally and there is simply nothing to generate from until the
+     garment is acknowledged. See createThrottledInputStream(). */
+  INPUT_GATE_ENABLED: true,
+  /* Belt and braces on the gate: it self-releases after this long no matter what, so a
+     path that never reports a successful apply costs a late start rather than a session
+     that renders nothing at all. Sits comfortably under FIRST_FRAME_TIMEOUT_MS (the
+     all-or-nothing teardown) so the self-release always gets a chance to save the session
+     before that fires. Reaching it is a bug in the caller and logs as one. */
+  INPUT_GATE_MAX_MS: 6000,
+  /* THE COLD-START LEASH, and it is deliberately far shorter than APPLY_TIMEOUT_MS.
+     REPORTED: the first attempt often hangs and the shopper has to close and reopen the
+     widget. APPLY_TIMEOUT_MS (10s) is the right bound for "this session is dead", but as
+     the FIRST thing a shopper experiences it is an eternity - they give up and reopen
+     long before it fires, which is the reported behaviour rather than a separate bug.
+     2.5s is past the p99 of a healthy first apply and well inside a shopper's patience,
+     so the automatic reconnect happens instead of the manual one. Only the FIRST apply of
+     a session uses it; everything after keeps the full budget. */
+  COLD_START_ACK_MS: 2500,
 
   /* ── Body-presence gate (see awaitBodyPresence in app.js) ────────────────
      Decart conditions on the frame it is handed, and the session is hard-capped at
