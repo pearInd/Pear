@@ -4280,12 +4280,63 @@ function lruTouch(map, key) {
   return v;
 }
 
+/* ── PINNED KEYS - "I turned all the way round and came back in a Real Madrid shirt" ──
+   ────────────────────────────────────────────────────────────────────────────────
+   THE BUG THIS CLOSES, and it is the mechanical half of a report the return leg in
+   maybeSwap() already describes in full: after a 360° turn the front garment comes back
+   corrupted, re-proportioned, or replaced by something the shopper never picked.
+
+   THE CHAIN. _assetBlobCache is an LRU of 10 shared across front views, back views,
+   composites, look stitches and every colour variant touched this session. The ACTIVE
+   item's front entry is the oldest of its pair by construction - it is fetched at
+   go-live, where the back is fetched at the first turn - so eviction reaches it FIRST.
+   Turn away, touch a couple of variants, turn back, and the front bytes are gone.
+   referenceImageFor() then falls back to a URL, which means DECART has to fetch it
+   before it can condition on anything (garmentImageRef() measures that at up to 20-25s),
+   and until it lands the model has no reference and renders from its own prior. A prior
+   asked for "a t-shirt" produces a generic jersey with invented sponsor text - which is
+   exactly the reported "front chest graphics corrupted / repositioned after rotation".
+
+   maybeSwap()'s return leg already REFUSES to flip when this happens (abandon, do not
+   degrade), so the shopper no longer watches the wrong garment appear. But refusing to
+   flip means being stuck facing away from a garment whose bytes we simply let fall out
+   of a cache we control. This removes the cause rather than handling the symptom: the
+   ACTIVE item's own two assets are never candidates for eviction, so the return leg
+   always has bytes and the flip always completes.
+
+   THE CAP STAYS ADVISORY WHEN EVERYTHING IS PINNED. At most two keys are ever pinned
+   against a cap of ten, so the loop below cannot starve in practice - but if a future
+   change ever pins more than `max`, growing past the cap is strictly better than
+   evicting the one asset the live session is conditioned on. Bounded either way: the
+   pin set holds at most the active item's front and back. */
+const _pinnedBlobKeys = new Set();
+
+/**
+ * Pin the ACTIVE garment's assets so the shared LRU cannot evict them mid-session.
+ * Replaces the previous pin set wholesale - an item swap must not leave the old item's
+ * bytes pinned forever, which would turn this into a leak instead of a guard.
+ * @param {...(string|undefined|null)} urls
+ */
+function pinActiveGarmentBlobs(...urls) {
+  _pinnedBlobKeys.clear();
+  for (const u of urls) if (typeof u === "string" && u) _pinnedBlobKeys.add(u);
+  if (typeof console !== "undefined") {
+    console.log("[PEAR] blob LRU - pinned the active garment's assets:",
+      [..._pinnedBlobKeys].map((u) => (typeof abbrevImg === "function" ? abbrevImg(u) : u)).join(" | ") || "(none)");
+  }
+}
+
 /** Insert as most-recently-used, then evict the oldest entries beyond `max`. */
 function lruSet(map, key, value, max = BLOB_CACHE_MAX) {
   map.delete(key);                 // a re-set must count as fresh, not stay in place
   map.set(key, value);
   while (map.size > max) {
-    const oldest = map.keys().next().value;
+    /* Oldest UNPINNED entry, not simply the oldest. Scanning in insertion order keeps
+       the LRU semantics for everything else; pinned keys are skipped rather than
+       reordered, so they never mask a genuinely stale entry behind them. */
+    let oldest;
+    for (const k of map.keys()) { if (!_pinnedBlobKeys.has(k)) { oldest = k; break; } }
+    if (oldest === undefined) break;   // every entry is pinned - see the note above
     const evicted = map.get(oldest);
     map.delete(oldest);            // last reference dropped → Blob becomes GC-eligible
     // Defensive only: these caches never hold URL strings (see the note above),
@@ -5060,6 +5111,14 @@ function createOrientationWatcher() {
      photo must not qualify here: binding the front photo as GARMENT_BACK is what put
      the chest print on the back (see canonicalImageUrl's comment). */
   const GARMENT_BACK  = distinctBackOf(activeItem, gInit);
+  /* ── PIN BOTH ASSETS FOR AS LONG AS THIS WATCHER OWNS THE SESSION ─────────────────
+     These two URLs are the only images this watcher will ever put on the wire, and the
+     return leg below depends on their bytes still being resident when the shopper turns
+     back. They are pinned HERE rather than at fetch time because this is the one place
+     that knows which pair is ACTIVE - and because pinning is a replace, not an add, an
+     item swap rebuilds the watcher and re-pins the new pair, releasing the old one.
+     See _pinnedBlobKeys for the eviction chain this closes. */
+  pinActiveGarmentBlobs(GARMENT_FRONT, GARMENT_BACK);
   /* Fresh instance, fresh reading - a stale EDGE-ON from whatever item/session this
      watcher's predecessor last saw must never carry into this one. profileActive() trusts
      `!!orientWatcher` as proof the CURRENT watcher produced `autoProfile`'s current value;
@@ -12832,10 +12891,15 @@ function poseFrameQualifies(landmarks, category, minConfidence = POSE_MIN_CONFID
  * which is the exact failure mode this gate must never have.
  * @returns {boolean|null}
  */
+
 function presenceFromPoseResult(result, category) {
   if (!result || !Array.isArray(result.landmarks)) return null;
   if (!result.landmarks.length) return false;
-  return result.landmarks.some((set) => poseFrameQualifies(set, category, POSE_MIN_CONFIDENCE));
+  /* THE PRIMARY SUBJECT ONLY - never `.some()` across everyone in frame. A bystander
+     qualifying is not the shopper being present, and it is the same person
+     bodyContourSignature() measures, by construction. */
+  const i = primaryPoseIndex(result.landmarks);
+  return i >= 0 && poseFrameQualifies(result.landmarks[i], category, POSE_MIN_CONFIDENCE);
 }
 
 /**
@@ -12930,6 +12994,55 @@ function torsoReadable(landmarks, minVisibility = BODY_TRACK_MIN_VISIBILITY) {
     return !!lm && Number.isFinite(lm.x) && Number.isFinite(lm.y) &&
       Number(lm.visibility ?? 0) >= minVisibility;
   });
+}
+
+/* ── THE PRIMARY SUBJECT - "someone walked behind me and the garment glitched" ──────
+   ────────────────────────────────────────────────────────────────────────────────
+   WHO IS THE SHOPPER, when the room contains more than one person? Two functions used
+   to answer that question differently and neither answered it deliberately:
+   presenceFromPoseResult() took `.some()` over every detected pose (ANY person satisfies
+   the gate), while bodyContourSignature() reads `landmarks[0]` (whoever the detector
+   happened to list first). Two readings of "the subject" that can disagree is the same
+   shape as the TOCTOU rule §2.8 exists for, in a smaller key: the presence gate can be
+   held open by a bystander while the topology monitor measures somebody else, and the
+   re-conditioning dispatch that follows re-drapes the garment for a body that is not the
+   shopper's.
+
+   IT IS LATENT TODAY, and that is worth stating plainly rather than overselling the fix:
+   the detector is configured `numPoses: 1`, so both functions currently see the same
+   single pose and cannot disagree. What they cannot do is CHOOSE it - MediaPipe returns
+   whichever person it scored highest, which on a crowded shop floor need not be the
+   shopper standing centred in front of the camera.
+
+   WHAT THIS DOES AND DOES NOT FIX. It makes subject selection explicit and shared, so
+   the gate and the topology monitor are guaranteed to be talking about the same person,
+   and so the person chosen is the one framed for a try-on rather than the one the
+   detector liked best. It does NOT and cannot fix Decart's own segmentation: the mask is
+   computed server-side from the video frames, and nothing in this file can tell it which
+   body to cut around. A bystander physically in frame is still in the frames Decart
+   receives. Framing guidance is the only lever this side of the wire.
+
+   LARGEST TORSO WINS, not nearest-to-centre. Both were considered; torso area is the more
+   robust proxy for "standing closest to the camera, which is where the shopper is",
+   and it degrades gracefully - a partially cropped bystander at the frame edge scores
+   small, while centre-distance would rank a distant person walking through the middle
+   above a shopper standing slightly off-axis. Falls back to index 0 when no torso is
+   measurable, which is exactly today's behaviour. */
+function primaryPoseIndex(landmarkSets) {
+  if (!Array.isArray(landmarkSets) || !landmarkSets.length) return -1;
+  if (landmarkSets.length === 1) return 0;
+  let best = 0, bestArea = -1;
+  for (let i = 0; i < landmarkSets.length; i++) {
+    const set = landmarkSets[i];
+    if (!Array.isArray(set)) continue;
+    const pts = TORSO_LANDMARKS.map((idx) => set[idx]);
+    if (pts.some((p) => !p)) continue;
+    const xs = pts.map((p) => Number(p.x)), ys = pts.map((p) => Number(p.y));
+    if (xs.some((n) => !Number.isFinite(n)) || ys.some((n) => !Number.isFinite(n))) continue;
+    const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+    if (area > bestArea) { bestArea = area; best = i; }
+  }
+  return best;
 }
 
 /**
@@ -13035,10 +13148,22 @@ function bodyProfileBox(landmarks) {
  * @returns {{yaw:number, pitch:number, depth:number, aspect:number}|null}
  */
 function bodyContourSignature(result, minVisibility = BODY_TRACK_MIN_VISIBILITY) {
-  const image = result && Array.isArray(result.landmarks) ? result.landmarks[0] : null;
+  /* THE SAME SUBJECT THE PRESENCE GATE PICKED, resolved through the same helper rather
+     than by taking index 0. Two independent answers to "which of these people is the
+     shopper" can disagree, and a topology reading taken from a different body than the
+     one that opened the gate re-drapes the garment for the wrong torso. */
+  const sets = result && Array.isArray(result.landmarks) ? result.landmarks : null;
+  const subject = sets ? primaryPoseIndex(sets) : -1;
+  const image = subject >= 0 ? sets[subject] : null;
   if (!torsoReadable(image, minVisibility)) return null;
-  const world = result && Array.isArray(result.worldLandmarks) && result.worldLandmarks[0]
-    ? result.worldLandmarks[0] : image;
+  /* THE SAME INDEX, not 0. PoseLandmarker returns worldLandmarks PARALLEL to landmarks -
+     entry i of one is entry i of the other - so taking index 0 here while `image` came
+     from the primary-subject index would pair one person's metric skeleton with another
+     person's image coordinates. Every angle below is computed from `world` and the
+     bounding box from `image`; mixing subjects between them yields a yaw that belongs to
+     nobody. Falls back to `image` exactly as before when world data is unavailable. */
+  const world = result && Array.isArray(result.worldLandmarks) && result.worldLandmarks[subject]
+    ? result.worldLandmarks[subject] : image;
   const yaw = bodyYawDegrees(world), pitch = bodyPitchDegrees(world);
   const depth = bodyDepthRatio(world), box = bodyProfileBox(image);
   if (yaw === null || pitch === null || depth === null || !box) return null;
