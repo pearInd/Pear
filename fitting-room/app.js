@@ -3586,18 +3586,48 @@ function createThrottledInputStream(srcStream, {
     }, gateMaxMs);
   }
 
-  // Cover-fit + horizontal mirror: fill width×height (preserve aspect, center-crop)
-  // and flip X so the canvas track already carries the selfie orientation.
+  /* ── COVER-FIT, AND DELIBERATELY NOT MIRRORED ────────────────────────────────────
+     THE BUG THIS CLOSES: "the front chest text came back reversed" - PEAK rendering as
+     916tim9 after a turn.
+
+     THIS LINE USED TO READ `ctx.setTransform(-1, 0, 0, 1, width, 0)`, flipping every
+     frame before it left the browser, so that the SDK's mirror:"auto" would no-op on a
+     canvas track (which has no facingMode) and the edited feed would arrive already in
+     selfie orientation. The display cost nothing and the shopper saw what they expected,
+     so it looked free. It was not.
+
+     WHAT IT COST: Decart was conditioned on a MIRRORED WORLD. Every piece of real text
+     in frame - the room, the shopper's own shirt - reached the model reversed, while the
+     garment reference image it has to copy from is not reversed. Asked to paint
+     un-mirrored reference lettering into a scene whose every other glyph runs backwards,
+     the model's own prior for "text in this scene" is mirrored text, and it renders the
+     chest graphic to match the scene rather than the reference. No prompt clause can
+     reach that - you cannot instruct a model out of the geometry of its input.
+
+     SO THE FLIP MOVED TO THE DISPLAY LAYER, where it belongs: `.camera-card.show-live
+     #aiVideo { transform: scaleX(-1) }`. The shopper sees exactly the same selfie view as
+     before - this is not a visible change - but Decart now conditions on reality.
+
+     EVERY SURFACE THAT CONSUMES #aiVideo MOVED WITH IT, and they must stay in lockstep:
+       · #orientFadeCanvas / #redrapeCoverCanvas - overlays drawn FROM #aiVideo and
+         stacked over it, so they carry the same CSS transform or they stop aligning.
+       · recordCanvas, captureHoldFrame, the #resultCanvas snapshot, the thumbnail -
+         these BAKE pixels, so they apply the selfie flip themselves. Their `mirror` flag
+         used to be false for #aiVideo and true for #webcam; now every video source in
+         this file is reality-oriented and the flag is uniformly true.
+       · .camera-card.show-clip #aiVideo stays transform:none ON PURPOSE - a recorded
+         clip already has the flip baked in by the recorder, and mirroring it again on
+         replay would un-mirror it.
+       · The lower-body guard and the orientation watcher's 96px sampler read #webcam,
+         which was never flipped at source and is unaffected.
+     If you re-add a flip here, all of the above have to come back with it. */
   const drawFrame = () => {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) return;
     const scale = Math.max(width / vw, height / vh);
     const dw = vw * scale, dh = vh * scale;
     const dx = (width - dw) / 2, dy = (height - dh) / 2;
-    ctx.save();
-    ctx.setTransform(-1, 0, 0, 1, width, 0);   // mirror horizontally
     ctx.drawImage(video, dx, dy, dw, dh);
-    ctx.restore();
   };
 
   const tick = () => {
@@ -4631,6 +4661,60 @@ const ORIENT_LOCK_MS        = 2500;  // OR this much sustained agreement - which
 const ORIENT_ACQUIRE_FRAMES = 2;
 const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
 const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
+
+/* ── YAW CORROBORATION - the same 2.5s, seen from three sides ──────────────────────
+   ────────────────────────────────────────────────────────────────────────────────
+   THREE REPORTS, ONE CAUSE. "The real shirt bleeds through when I turn", "the back
+   graphic pops in late", and "the feed freezes during a turn" are the same
+   ORIENT_LOCK_FRAMES x ORIENT_SAMPLE_MS = 2.5 seconds of confirmation latency wearing
+   different faces. Hold ON and you get the freeze; hold OFF and the model re-renders a
+   half-turned shopper in their own shirt; swap late and the graphic arrives after the
+   turn. Each "fix" in isolation just moves the symptom to one of the other two.
+
+   The only lever that shrinks all three at once is CONFIRMING FASTER - and the reason
+   that was never done is the one written above ORIENT_LOCK_FRAMES: lowering it swaps the
+   reference on a head-turn and reintroduces flapping, which is worse than any of the
+   three.
+
+   SO CONFIRM FASTER ON MORE EVIDENCE, NOT ON A LOWER BAR. The shared pose loop already
+   computes bodyYawDegrees() every BODY_TOPOLOGY_SAMPLE_MS for the topology monitor, and
+   nothing in the orientation path has ever consumed it. It is a genuinely 3D measurement
+   off MediaPipe's torso landmarks - a different instrument entirely from the 96px
+   skin-ratio canvas and the face detector that produce the vote.
+
+   TWO INDEPENDENT SIGNALS, BOTH REQUIRED. The vote decides WHICH side; the yaw swing
+   only attests THAT a real torso rotation happened. Neither can stand in for the other:
+     · Yaw cannot pick a side. bodyYawDegrees() is asin(out-of-plane / length), capped at
+       +/-90, so a shopper facing the camera and one facing away read the same. It is
+       never consulted for direction - only to shorten a decision the vote already made.
+     · The vote cannot see a torso turn. That is exactly why a head-turn under a flickering
+       light could ever have raced it, which is what ORIENT_LOCK_FRAMES defends against -
+       and a head-turn moves the head, not the shoulders, so it produces almost no torso
+       yaw and earns no corroboration. The defence is intact where it was needed.
+
+   ORIENT_LOCK_FRAMES IS UNTOUCHED and remains the bar whenever yaw is unavailable, stale
+   or small: no pose detector, an occluded torso, a phone that never loaded the WASM
+   runtime, or simply a shopper who has not actually turned. Corroboration can only ever
+   ADD a faster path alongside it; it can never raise the bar and never lower it below
+   ORIENT_CORROBORATED_FRAMES.
+
+   THE NUMBERS. 45 degrees is a half-turn of the shoulder line - well past anything a
+   head-turn, a lean or a shrug produces, and reached early in a real rotation rather
+   than at its end. 4 frames is ~1s at ORIENT_SAMPLE_MS, still 4 agreeing votes rather
+   than a hair trigger. FRESH_MS is two topology samples: a yaw reading older than that
+   describes a body position the shopper has already left, and stale evidence must not
+   accelerate anything. */
+const ORIENT_CORROBORATED_FRAMES = 4;    // agreeing votes needed WITH a corroborating yaw swing
+const ORIENT_YAW_TURN_DEG        = 45;   // |yaw| swing that counts as a real torso rotation
+const ORIENT_YAW_FRESH_MS        = 600;  // a yaw reading older than this cannot corroborate
+
+/* Latest torso yaw MAGNITUDE and when it was measured, published by the shared pose loop
+   (startPresenceWatcher) and read by the orientation watcher. Module scope because the
+   two loops are deliberately separate - one MediaPipe inference per tick is the whole
+   point of the shared sampler, so the watcher reads the existing reading rather than
+   triggering a second one. null until the pose loop produces its first signature. */
+let _torsoYawAbs = null;
+let _torsoYawAt  = 0;
 /* Edge-on detection thresholds. Deliberately FAR looser than the orientation lock's,
    because the two protect different things and carry different costs when wrong. A wrong
    orientation flip swaps the garment reference and shows the wrong side of the shirt on a
@@ -4837,11 +4921,17 @@ function orientFadeEl() {
     const s = document.createElement("style");
     s.id = "pear-orient-fade-styles";
     s.textContent =
-      // transform:none (NOT the generic .camera-card mirroring rule) - #aiVideo itself is
-      // set to transform:none once live ("the edited feed is already correctly oriented",
-      // see onRemoteStream), and this overlay must line up pixel-for-pixel with THAT frame.
+      /* scaleX(-1), MATCHING #aiVideo - and it used to be transform:none, back when the
+         selfie flip was applied to the outgoing WebRTC canvas and #aiVideo's decoded
+         frames were therefore already mirrored. That flip moved to the display layer (see
+         drawFrame in this file and .camera-card.show-live #aiVideo in style.css), so the
+         frame this overlay copies out of #aiVideo is now un-mirrored. This canvas is
+         stacked directly over #aiVideo and must line up with it PIXEL FOR PIXEL - it holds
+         the same image - so it carries the same transform. If they ever disagree the held
+         frame flips the instant the hold begins, which is a far more visible artifact than
+         the one the hold exists to hide. */
       "#orientFadeCanvas{position:absolute;inset:0;width:100%;height:100%;" +
-      "object-fit:cover;transform:none;z-index:6;pointer-events:none;" +
+      "object-fit:cover;transform:scaleX(-1);z-index:6;pointer-events:none;" +
       `opacity:0;transition:opacity ${ORIENT_FADE_MS}ms ease-out;}`;
     document.head.appendChild(s);
   }
@@ -5009,8 +5099,13 @@ function redrapeCoverEl() {
        of the two, but they carry the same snapshot, so which one wins the stack is
        cosmetically irrelevant and the ordering is fixed only so it is not accidental. */
     s.textContent =
+      /* scaleX(-1), for the identical reason #orientFadeCanvas carries it: this canvas
+         holds a frame copied out of #aiVideo and is stacked over #aiVideo, so it must
+         share #aiVideo's display transform or the cover flips the moment it appears.
+         Both overlays moved together when the selfie flip left the outgoing WebRTC canvas
+         - see drawFrame. They hold the same snapshot, so they must never disagree. */
       "#redrapeCoverCanvas{position:absolute;inset:0;width:100%;height:100%;" +
-      "object-fit:cover;transform:none;z-index:7;pointer-events:none;" +
+      "object-fit:cover;transform:scaleX(-1);z-index:7;pointer-events:none;" +
       `opacity:0;transition:opacity ${ORIENT_FADE_MS}ms ease-out;}`;
     document.head.appendChild(s);
   }
@@ -5219,6 +5314,11 @@ function createOrientationWatcher() {
   logVtonState();
 
   let lastVote = null, streak = 0, streakSince = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
+  /* Torso yaw at the instant the current vote streak began, or null when no fresh reading
+     was available then. PER-WATCHER, like the streak it belongs to: a new watcher (item
+     swap, mode change) starts from a clean baseline rather than inheriting a pose from
+     whatever session preceded it - the same reason autoProfile is reset per instance. */
+  let yawAtStreakStart = null;
   /* Edge-on axis - its own rolling buffer, exit streak and cooldown, sharing only the
      `applying` mutex so a pose update and an asset swap can never be in flight at once.
      profileBuf holds the last ORIENT_PROFILE_WINDOW per-frame scores; squareStreak counts
@@ -5899,9 +5999,32 @@ function createOrientationWatcher() {
       const vote = await classify();
       if (vote) {
         if (vote === lastVote) streak++;
-        else { lastVote = vote; streak = 1; streakSince = Date.now(); }
+        else {
+          lastVote = vote; streak = 1; streakSince = Date.now();
+          /* Snapshot the torso yaw at the moment this streak began, so the swing below is
+             measured across THIS candidate turn rather than against a session-old pose.
+             Captured on the reset branch only - re-reading it every tick would let the
+             baseline creep along with the shopper and the swing would never accumulate. */
+          yawAtStreakStart = (_torsoYawAt && Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS)
+            ? _torsoYawAbs : null;
+        }
       }
       const held = lastVote ? Date.now() - streakSince : 0;
+
+      /* ── DID THE TORSO ACTUALLY ROTATE? ────────────────────────────────────────────
+         Independent, 3D corroboration for the vote - see ORIENT_CORROBORATED_FRAMES for
+         the full argument. Three things must all hold, and each rules out a specific way
+         of being wrong:
+           · a fresh reading exists          - stale yaw describes a pose already left;
+           · a baseline was captured         - without one there is no swing to measure;
+           · the swing clears the threshold  - a head-turn moves the head, not the
+                                               shoulders, and earns nothing here.
+         Abstains to false on every missing piece, which lands on ORIENT_LOCK_FRAMES -
+         exactly the behaviour that shipped before this existed. */
+      const yawFresh = _torsoYawAbs !== null && Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS;
+      const yawSwing = (yawFresh && yawAtStreakStart !== null)
+        ? Math.abs(_torsoYawAbs - yawAtStreakStart) : 0;
+      const yawCorroborates = yawSwing >= ORIENT_YAW_TURN_DEG;
       /* Two DIFFERENT transitions, with deliberately different bars:
 
          ACQUIRING (autoOrientation === null, PENDING_MODE) - establishing the first
@@ -5918,9 +6041,20 @@ function createOrientationWatcher() {
          confirmed, and that transition must be recorded rather than silently skipped. */
       const acquiring = autoOrientation === null;
       const needsSwitch = !!lastVote && (acquiring || lastVote !== autoOrientation);
+      /* THE FLIP BAR IS THE MINIMUM OF TWO PATHS, NEVER A LOWERED SINGLE ONE.
+         ORIENT_LOCK_FRAMES / ORIENT_LOCK_MS are byte-for-byte the bar they always were and
+         still carry every flip on their own. The corroborated path is an ADDITIONAL route
+         that requires MORE total evidence than the original - 4 agreeing votes AND a
+         45-degree torso rotation measured on a different instrument - in exchange for
+         reaching the decision in ~1s instead of ~2.5s. A flip can still only happen on a
+         vote streak; yaw never picks a side. Acquiring is untouched: there is no locked
+         side to protect, so it already settles on two samples. */
+      const flipBar = yawCorroborates
+        ? Math.min(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES)
+        : ORIENT_LOCK_FRAMES;
       const confirmed = needsSwitch && (acquiring
         ? streak >= ORIENT_ACQUIRE_FRAMES
-        : (streak >= ORIENT_LOCK_FRAMES || held >= ORIENT_LOCK_MS));
+        : (streak >= flipBar || held >= ORIENT_LOCK_MS));
 
       if (ORIENT_DEBUG) {
         const confidence = faceDetector && !fdBroken
@@ -5933,9 +6067,14 @@ function createOrientationWatcher() {
           : needsSwitch ? (acquiring ? "waiting-to-acquire" : "waiting-to-switch") : "locked";
         // Progress is reported against whichever threshold actually applies, so the
         // debug line never shows a pending state counting toward a bar it isn't using.
+        /* The flip bar is reported as the bar ACTUALLY IN FORCE this tick, plus the yaw
+           swing that set it - otherwise a corroborated flip looks like the hysteresis
+           silently failing, which is precisely the thing a tuner must be able to tell
+           apart from a real regression. */
         const progress = acquiring
           ? ` (${streak}/${ORIENT_ACQUIRE_FRAMES}f)`
-          : ` (${streak}/${ORIENT_LOCK_FRAMES}f, ${held}/${ORIENT_LOCK_MS}ms)`;
+          : ` (${streak}/${flipBar}f${yawCorroborates ? "+yaw" : ""}, ${held}/${ORIENT_LOCK_MS}ms` +
+            `, yawΔ${yawSwing.toFixed(0)}°)`;
         /* Pose is reported separately from the lock, because it IS separate - reading them
            on one line is what makes "locked FRONT, but edge-on right now" legible while
            tuning. ratio/score/width are the three numbers the thresholds are set from, so
@@ -12814,9 +12953,17 @@ function beginFreezeHold() {
    Returns null if nothing is paintable. */
 function captureHoldFrame() {
   const ai = $("aiVideo"), webcam = $("webcam");
+  /* ── mirror IS NOW TRUE ON BOTH BRANCHES, and the split is kept only to show that ──
+     #aiVideo used to be exempt from the selfie flip because drawFrame() mirrored frames
+     on their way OUT to Decart, so its decoded frames arrived already selfie-oriented.
+     That flip moved to the display layer so the model could be conditioned on reality
+     (see drawFrame), which makes EVERY video source in this file reality-oriented -
+     webcam and #aiVideo alike. drawImage reads DECODED frames and ignores CSS, so a
+     baked capture must apply the flip itself or it comes out reversed against the live
+     view it was captured from. */
   let src = null, mirror = false, w = 0, h = 0;
   if (ai && ai.videoWidth > 0 && ai.style.display !== "none") {
-    src = ai; w = ai.videoWidth; h = ai.videoHeight;
+    src = ai; w = ai.videoWidth; h = ai.videoHeight; mirror = true;   // selfie-flip, as for the webcam
   } else if (webcam && webcam.videoWidth > 0) {
     src = webcam; w = webcam.videoWidth; h = webcam.videoHeight; mirror = true;
   }
@@ -13663,7 +13810,22 @@ function startPresenceWatcher() {
         /* THE GATE, evaluated here and passed IN. A shift found while the wire is busy
            must not advance the tracker's baseline, or the movement would be absorbed by a
            dispatch that never happened - see feed()'s own note. */
-        const step = bodyTopology.feed(bodyContourSignature(result), { canDispatch: !wireBusy() });
+        const sig = bodyContourSignature(result);
+        /* ── PUBLISH THE YAW FOR THE ORIENTATION WATCHER ────────────────────────────
+           Free: this signature is already computed for the topology monitor, and the
+           expensive part (the MediaPipe inference) has already run. Publishing the yaw
+           costs one assignment and gives the watcher a genuinely 3D turn signal it has
+           never had - it decides front/back from a 96px skin-ratio heuristic and a face
+           detector, neither of which can see a torso rotating.
+           MAGNITUDE ONLY, and that is not a limitation to fix: bodyYawDegrees() is an
+           asin() form that caps at +/-90, so it cannot tell facing FROM facing AWAY. It
+           is deliberately never used to choose a side - only to corroborate that a real
+           turn is underway. See the watcher's corroboration note. */
+        if (sig && Number.isFinite(sig.yaw)) {
+          _torsoYawAbs = Math.abs(sig.yaw);
+          _torsoYawAt  = now;
+        }
+        const step = bodyTopology.feed(sig, { canDispatch: !wireBusy() });
         if (step.state === "shift") await reconditionForTopology(step);
         else if (ORIENT_DEBUG && step.state !== "stable") {
           console.log(`[PEAR][TOPOLOGY] ${step.state}` +
@@ -13946,9 +14108,12 @@ function stopLowerBodyGuard() {
 function freezeFinalFrame() {
   const ai = $("aiVideo");
   const webcam = $("webcam");
+  /* mirror is TRUE on both branches now - see captureHoldFrame's note. #aiVideo stopped
+     being "already correctly oriented" when the selfie flip moved off the outgoing WebRTC
+     canvas and onto the display layer, so a baked frame has to carry the flip itself. */
   let src = null, mirror = false, w = 0, h = 0;
   if (ai && ai.videoWidth > 0 && ai.style.display !== "none") {
-    src = ai; w = ai.videoWidth; h = ai.videoHeight;            // already correctly oriented
+    src = ai; w = ai.videoWidth; h = ai.videoHeight; mirror = true;   // selfie-flip, as for the webcam
   } else if (webcam && webcam.videoWidth > 0) {
     src = webcam; w = webcam.videoWidth; h = webcam.videoHeight; mirror = true;  // selfie-mirror
   }
@@ -14176,6 +14341,10 @@ function startRecording() {
       // the captured final frame so canvas.captureStream keeps emitting and the clip
       // grows to VIDEO_LENGTH_MS. beginRecorder() is idempotent - it covers the case
       // where the first real frame only arrived right at the billing cap.
+      /* NO FLIP HERE. recordHoldSrc comes from captureHoldFrame(), which already bakes
+         the selfie flip in - flipping again would mirror the frozen tail of the clip
+         against the live portion that precedes it. The two branches differ on purpose:
+         one draws an already-oriented canvas, the other draws raw decoded video. */
       try { ctx.drawImage(recordHoldSrc, 0, 0, recordCanvas.width, recordCanvas.height); beginRecorder(); } catch (_) {}
     } else {
       const w = video.videoWidth, h = video.videoHeight;
@@ -14183,7 +14352,22 @@ function startRecording() {
         if (recordCanvas.width !== w || recordCanvas.height !== h) {
           recordCanvas.width = w; recordCanvas.height = h;
         }
-        try { ctx.drawImage(video, 0, 0, w, h); beginRecorder(); } catch (_) {}
+        /* ── THE SELFIE FLIP, BAKED IN ──────────────────────────────────────────────
+           `video` is #aiVideo, and drawImage reads its DECODED frame, which ignores CSS
+           - so the scaleX(-1) that makes the live view a selfie does not reach the clip.
+           It has to be applied here or the downloaded file plays back reversed against
+           what the shopper watched while recording it.
+           This flip is NEW. It was unnecessary while drawFrame() mirrored frames on the
+           way out to Decart, because #aiVideo's decoded frames were already selfie-
+           oriented; that flip moved to the display layer so the model could be
+           conditioned on reality, and this is its other half. */
+        try {
+          ctx.save();
+          ctx.setTransform(-1, 0, 0, 1, w, 0);
+          ctx.drawImage(video, 0, 0, w, h);
+          ctx.restore();
+          beginRecorder();
+        } catch (_) { try { ctx.restore(); } catch (__) {} }
       }
     }
     recordRaf = requestAnimationFrame(paint);
@@ -15679,9 +15863,12 @@ function clipExt(ts) {
 function captureLiveFrame() {
   const ai = $("aiVideo");
   const webcam = $("webcam");
+  /* mirror is TRUE on both branches now - see captureHoldFrame's note. This one feeds the
+     saved-fit gallery thumbnail, so getting it wrong ships a permanently reversed image
+     into the shopper's history rather than a transient on-screen artifact. */
   let src = null, mirror = false, w = 0, h = 0;
   if (ai && ai.videoWidth > 0 && ai.style.display !== "none") {
-    src = ai; w = ai.videoWidth; h = ai.videoHeight;            // already correctly oriented
+    src = ai; w = ai.videoWidth; h = ai.videoHeight; mirror = true;   // selfie-flip, as for the webcam
   } else if (webcam && webcam.videoWidth > 0) {
     src = webcam; w = webcam.videoWidth; h = webcam.videoHeight; mirror = true;  // selfie-mirror
   }

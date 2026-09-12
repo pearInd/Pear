@@ -1250,8 +1250,16 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .camera-card.show-result #resultCanvas { display: block; }
 .camera-card.show-result #webcam { visibility: hidden; }
 
-/* LIVE try-on: AI-edited stream shown directly */
-.camera-card.show-live #aiVideo { display: block; transform: none; }
+/* LIVE try-on: AI-edited stream shown directly.
+   ── scaleX(-1), AND IT USED TO BE transform:none ────────────────────────────
+   The selfie flip now lives HERE instead of on the outgoing WebRTC canvas. It used to be
+   applied in drawFrame() before frames left the browser, which meant Decart was
+   conditioned on a mirrored world and rendered the garment's chest text backwards to
+   match the scene ("PEAK" -> "916tim9"); see the long note on drawFrame in app.js.
+   Moving it to the display layer is visually identical for the shopper - one flip either
+   way - but the model now sees reality. #aiVideo's DECODED frames are therefore
+   un-mirrored, which is what every canvas that samples it now assumes. */
+.camera-card.show-live #aiVideo { display: block; transform: scaleX(-1); }
 .camera-card.show-live #webcam { visibility: hidden; }
 
 /* ── Lower-body compositing guard (config.js LOWER_BODY_GUARD_ENABLED) ────────
@@ -1261,8 +1269,18 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    transform:none, unlike the base #webcam/#aiVideo rule: startLowerBodyGuard() reads
    raw pixels FROM #webcam via drawImage() (which ignores CSS transforms - it sees the
    decoded frame, not the mirrored display) and applies its OWN ctx.scale(-1,1) before
-   drawing, matching #aiVideo's un-mirrored orientation by construction rather than by
-   another CSS transform stacking on top of a canvas that already contains the flip. */
+   drawing, so the flip is already IN the canvas and a CSS transform here would stack a
+   second one on top of it.
+
+   UNCHANGED BY THE UN-MIRRORING REFACTOR, and worth stating because it looks like it
+   should have moved with everything else. The old wording claimed this matched
+   "#aiVideo's un-mirrored orientation", which stopped being true when the selfie flip
+   moved from the outgoing WebRTC canvas to the display layer (see drawFrame in app.js):
+   #aiVideo's decoded frames are now un-mirrored and its DISPLAY carries scaleX(-1).
+   This guard still lines up, because it samples #webcam - which was never flipped at
+   source and is therefore unaffected - and bakes its own flip, landing on the same
+   on-screen orientation as #aiVideo by a different route. Both are selfie on screen;
+   only the layer that applies the flip differs. */
 /* ── Body-presence prompt ─────────────────────────────────────────────────────
    Shown while the presence gate waits for the shopper to step into frame. Visibility is
    owned entirely by the `hidden` attribute from app.js - there is no class-based gate
@@ -1382,7 +1400,14 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   .pg-swatch { transition: none; }
 }
 
-/* CLIP replay: a saved history clip plays in #aiVideo (no live billing) */
+/* CLIP replay: a saved history clip plays in #aiVideo (no live billing).
+   ── transform:none, DELIBERATELY, and do NOT "fix" this to match show-live ──
+   A recorded clip already has the selfie flip BAKED INTO ITS PIXELS by the recorder's
+   paint loop (startRecording), because a downloaded file has no CSS to carry it.
+   Mirroring it again on replay would un-mirror it, so the shopper's saved clip would
+   play back reversed against the live view it was captured from. The two rules differ
+   because their sources differ: show-live plays un-mirrored decoded frames and needs the
+   flip; show-clip plays already-flipped pixels and must not get a second one. */
 .camera-card.show-clip #aiVideo { display: block; transform: none; }
 .camera-card.show-clip #webcam { visibility: hidden; }
 .camera-card.show-clip .camera-card__placeholder { display: none; }

@@ -251,6 +251,7 @@ const SUITES = [
   ["image-first", "image-first.test.mjs"],
   ["color-lock", "color-lock.test.mjs"],
   ["plain-back-anchor", "plain-back-anchor.test.mjs"],
+  ["orientation-yaw-mirror", "orientation-yaw-mirror.test.mjs"],
   ["garment-category-prompt", "garment-category-prompt.test.mjs"],
   ["garment-category-detection", "garment-category-detection.test.mjs"],
   ["plain-tee-fidelity", "plain-tee-fidelity.test.mjs"],

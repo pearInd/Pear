@@ -533,8 +533,18 @@ console.log("\n── §7 THROTTLING: the wire is the floor, not the CPU ──"
   check("...and the SAME movement still fires once the wire frees up",
     retried.state === "shift" && retried.reason === "rotation",
     "a deferred shift that advanced the baseline would leave the body mis-fitted for good");
+  /* THE SIGNATURE IS HOISTED INTO `sig` NOW, rather than being computed inline in the
+     feed() call. It gained a second consumer: the orientation watcher's yaw corroboration
+     reads _torsoYawAbs, which is published from this same signature (see
+     ORIENT_CORROBORATED_FRAMES). That is the entire point of the shared sampler - one
+     MediaPipe inference per tick, several consumers - so the value has to be named to be
+     used twice. Both halves are pinned separately below: that `sig` really is the
+     signature, and that the gate is still passed from the live wire state. */
+  check("the signature is computed once and named, so both consumers read the same reading",
+    /const sig = bodyContourSignature\(result\);/.test(watcher),
+    "two calls would mean two readings of the same tick, and a second inference on a phone");
   check("the watcher passes that gate from the live wire state",
-    /bodyTopology\.feed\(bodyContourSignature\(result\), \{ canDispatch: !wireBusy\(\) \}\)/.test(watcher),
+    /bodyTopology\.feed\(sig, \{ canDispatch: !wireBusy\(\) \}\)/.test(watcher),
     "the gate is useless if the call site does not tell it what the wire is doing");
 
   /* THE LAST LINE OF DEFENCE, one level down: even with the gate above, the dispatcher
