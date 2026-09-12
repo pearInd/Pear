@@ -1626,6 +1626,17 @@
          automatic front/back pairing. Sent only when there's more than one distinct image. */
       (garment.images && garment.images.length > 1
         ? "&garment_images=" + garment.images.map(encodeURIComponent).join(",") : "") +
+      /* ── THE CLASSIFICATION GATE ──────────────────────────────────────────────────
+         garment_url above is imgs[0] - the first gallery photo in DOM ORDER, scraped
+         off the PDP and validated by NOBODY. Merchants routinely lead with the most
+         striking photo, which is often the BACK. The room binds whatever arrives here
+         as the front reference, so on such a product it goes live rendering the back
+         graphic on the shopper's chest until the classifier's correction lands
+         (reported on the PEAK tee at 00:00-00:02).
+         This tells the room a verdict is coming so it can block try-on until then. Sent
+         ONLY when a classify call is genuinely about to run - a single-image product
+         with nothing to resolve must not arm a gate that will only ever time out. */
+      (garment.classifyPending ? "&classify_pending=1" : "") +
       (garment.variantId ? "&garment_variant_id=" + encodeURIComponent(garment.variantId) : "") +
       /* The product's REAL size list - the fitting room's PRIMARY kids/adult signal
          (see extractHostSizes / isKidsProduct there). Sent at open so the guard and the
@@ -1996,7 +2007,12 @@
           "| DOM-identified back:", openBack || "(none - server will resolve/synthesize)");
         var openedIframe = openModal({
           url: imgs[0], type: garment.category, name: garment.name,
-          back: openBack, images: imgs, variantId: garment.variantId
+          back: openBack, images: imgs, variantId: garment.variantId,
+          /* A classify call runs immediately below, so the room must treat imgs[0] as a
+             GUESS and block try-on until the verdict lands. Mirrors the condition that
+             actually gates the call, rather than being hardcoded true: if this ever
+             stops matching, the room waits for a message nobody sends. */
+          classifyPending: imgs.length > 0
         });
 
         /* ── COMBINED pipeline ────────────────────────────────────────────────────
@@ -2060,7 +2076,28 @@
                and only into the SAME modal that triggered the call (the shopper may have
                closed it, or opened a different product, in the meantime). */
             if (activeIframe !== openedIframe) return;
-            if (!composite && frontUrl === imgs[0] && backUrl === openBack) return;
+            /* ── THE VERDICT MUST ALWAYS BE ANNOUNCED, EVEN WHEN IT CHANGES NOTHING ──
+               This early-return exists so a verdict that AGREES with the DOM-order guess
+               does not churn the room's reference for no reason - re-anchoring
+               mid-session renders a generic garment, so the optimisation is correct and
+               stays. What it must NOT do any more is stay silent: the room now blocks
+               try-on until it hears a verdict (?classify_pending=1), and on a
+               well-marked-up store "the classifier agreed" is the COMMON path - so
+               returning here without a word left the gate to sit until its 30s timeout
+               on exactly the products that were never at risk.
+               A bare ready signal carries no garment fields, so the room releases the
+               gate and returns without touching activeItem. Nothing is re-anchored. */
+            if (!composite && frontUrl === imgs[0] && backUrl === openBack) {
+              console.log("[PEAR widget] classifier agreed with the DOM-order guess - " +
+                "sending a bare ready signal (no re-anchor)");
+              try {
+                openedIframe.contentWindow.postMessage(
+                  { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true }, PEAR_BASE);
+              } catch (e) {
+                console.warn("[PEAR widget] ready signal failed to post:", e && e.message);
+              }
+              return;
+            }
             try {
               openedIframe.contentWindow.postMessage({
                 type: "PEAR_UPDATE_GARMENT",
@@ -2108,6 +2145,23 @@
           });
         }).catch(function (err) {
           console.warn("[PEAR widget] combined pipeline failed, using DOM order as-is:", err && err.message);
+          /* ── TELL THE ROOM ANYWAY, OR THE GATE WAITS OUT ITS FULL TIMEOUT ──────────
+             The room blocks try-on until it hears a verdict (?classify_pending=1). A
+             failed classify is still an answer to "is one coming?" - it is just a
+             negative one - and staying silent here would make every classify failure
+             cost the shopper a 30s dead button before the backstop timer released it.
+             The room proceeds on the unvalidated DOM-order guess, which is exactly the
+             behaviour that shipped before the gate existed (CLAUDE.md 2.5: never block
+             on ambiguity; a wrong block stops a paying shopper).
+             Still guarded on the SAME modal - the shopper may have closed it or opened
+             a different product while the request was in flight. */
+          if (activeIframe !== openedIframe) return;
+          try {
+            openedIframe.contentWindow.postMessage(
+              { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true }, PEAR_BASE);
+          } catch (e) {
+            console.warn("[PEAR widget] ready signal failed to post after error:", e && e.message);
+          }
         });
       });
     }

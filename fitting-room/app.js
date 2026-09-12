@@ -2598,6 +2598,26 @@ window.addEventListener("message", (e) => {
     try { updateSizeMismatchUI(); } catch {}
   }
 
+  /* ── THE VERDICT LANDED - release the classification gate ─────────────────────────
+     RELEASED HERE, ABOVE THE `!front` GUARD BELOW, and the position is the whole point.
+     The widget sends a BARE ready signal ({ garment_classify_done: true }, no garment
+     fields) whenever the classifier agreed with the DOM-order guess - which on a
+     well-marked-up store is the COMMON path, and is precisely the case where nothing
+     needs re-anchoring. That message carries no garment_url, so the guard below returns
+     immediately; releasing after it would leave the gate sitting until its 30s timeout
+     on exactly the products that were never at risk.
+
+     RELEASING IS NOT RE-ANCHORING. This touches no reference and dispatches nothing -
+     the unchanged path still returns below without altering activeItem, so a mid-session
+     image churn cannot be introduced here (re-uploading a reference mid-session renders
+     a generic garment; the conditioning gate is one-shot).
+
+     typeof-GUARDED, per §2.7. composite-handoff.test.mjs slices this handler out and
+     executes it in a sandbox with no module scope, so a bare call is a ReferenceError
+     that fails the suite for a reason unrelated to what it tests - the same treatment
+     verifyGarmentAsset() gets at its call sites. */
+  if (typeof resolveClassifyGate === "function") resolveClassifyGate("classifier verdict received");
+
   const front = e.data.garment_url;
   const back = e.data.garment_back;
   if (!activeItem || !front) return;
@@ -7011,7 +7031,80 @@ function itemPendingReason(item) {
     return "מכינים תצוגה משולבת, רק רגע · Preparing the combined view";
   return null;
 }
+/* ── THE CLASSIFICATION GATE - "I faced forward and it printed the BACK graphic" ────
+   ────────────────────────────────────────────────────────────────────────────────
+   THE BUG THIS CLOSES, and it is NOT what it looks like. Reported as a front/back panel
+   inversion: on the PEAK tee, whose front carries a small text logo and whose back
+   carries a large mountain photo, the first two seconds of the session rendered the
+   MOUNTAIN on the shopper's chest while they faced forward.
+
+   Nothing is inverted. activeImageOf() maps effectiveAngle() straight onto galleryOf()'s
+   front/back keys, and at t=0 autoOrientation is null so effectiveAngle() resolves
+   "front". The front slot simply held the wrong photograph.
+
+   THE CHAIN. pear-widget.js opens this room IMMEDIATELY with ?garment_url=imgs[0] - the
+   first image in DOM ORDER, scraped off the PDP and validated by nobody - and only THEN
+   calls /api/classify-images. Merchants routinely lead a gallery with the most striking
+   photo, which on this product is the back. So the room binds the back photo as the
+   front reference, goes live on it if the shopper is quick, and Decart faithfully
+   renders the mountain print on their chest. The classifier's verdict arrives 2.5s warm
+   / ~27s cold as a PEAR_UPDATE_GARMENT correction and fixes activeItem.img - which is
+   exactly why the report is timestamped 00:00-00:02 and not for the whole clip.
+
+   So the fix is not a prompt clause and not a panel contract (there are no panels on the
+   wire - see COMPOSITE_DEFAULT). It is to refuse to go live on a reference that has not
+   been validated yet, which is what this gate does.
+
+   IT RELEASES ON A TIMEOUT, DELIBERATELY (CLAUDE.md §2.5 - never block on ambiguity).
+   A gate that waits forever on a failed or throttled classify call is a wrong block, and
+   a wrong block stops a paying shopper. The widget always sends a completion signal now,
+   including when the classifier agreed with the DOM guess and nothing changed; the timer
+   is the backstop for the case where that message never arrives at all (an older widget
+   build, a a torn-down iframe, a request that died). On release the session proceeds on
+   the unvalidated guess - today's behaviour, and strictly better than a dead button.
+
+   PAIRED WITH THE WIDGET, and both halves must ship together: ?classify_pending=1 is
+   only sent when a classify call is actually in flight, and the room only ever arms this
+   gate from that parameter. An older widget sends neither, so the gate never arms and
+   behaviour is unchanged. */
+const CLASSIFY_GATE_MAX_MS = 30000;   // > the ~27s measured cold synthesis, < a lost session
+let classifyPending = (() => {
+  try { return new URLSearchParams(location.search).get("classify_pending") === "1"; }
+  catch (_) { return false; }
+})();
+let classifyGateTimer = null;
+
+/** Release the gate. Idempotent - the correction and the timeout race, and either wins. */
+function resolveClassifyGate(why) {
+  if (classifyGateTimer) { clearTimeout(classifyGateTimer); classifyGateTimer = null; }
+  if (!classifyPending) return;
+  classifyPending = false;
+  console.log(`[PEAR] classification gate RELEASED (${why}) - try-on is now unblocked`);
+  /* One repaint so the capture button drops its pending/spinner state immediately,
+     rather than at whatever the next unrelated render happens to be. */
+  if (typeof renderActiveGarment === "function") renderActiveGarment();
+  if (typeof syncCaptureButtonPendingState === "function") syncCaptureButtonPendingState();
+}
+
+if (classifyPending) {
+  console.log("[PEAR] classification gate ARMED - the front/back pair is not validated yet; " +
+    "try-on is blocked until /api/classify-images answers");
+  classifyGateTimer = setTimeout(() => {
+    console.warn("[PEAR] classification gate TIMED OUT after", CLASSIFY_GATE_MAX_MS,
+      "ms - no verdict arrived; proceeding on the unvalidated DOM-order guess rather than " +
+      "stranding the shopper (CLAUDE.md 2.5)");
+    resolveClassifyGate("timeout");
+  }, CLASSIFY_GATE_MAX_MS);
+}
+
 function livePendingReason() {
+  /* THE CLASSIFICATION GATE COMES FIRST, before any per-item reason: until the verdict
+     lands nobody knows WHICH photo is the front, so there is no point asking whether
+     that photo's back view is ready. typeof-guarded because the extract-based suites
+     (pending-gate.test.mjs) run this function standalone with no module scope - §2.7. */
+  if (typeof classifyPending !== "undefined" && classifyPending) {
+    return "מאמתים את תמונות הבגד, רק רגע · Checking the garment photos";
+  }
   const look = resolveLook();
   if (look) return itemPendingReason(look.top) || itemPendingReason(look.bottom);
   return itemPendingReason(activeItem);
