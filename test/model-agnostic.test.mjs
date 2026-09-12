@@ -214,13 +214,30 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      growing back toward the 634-character assembly would fail the anchor bound. */
   const closure = (/Reproduce the reference's front closure[\s\S]*?as shown\./.exec(tops) || [""])[0];
   const topsAnchor = tops.replace(closure, "").trim();
-  check("the ANCHORS stay minimal and comparable, as they always had to",
-    topsAnchor.length <= 360 && bottoms.length <= 360 &&
-    Math.abs(bottoms.length - topsAnchor.length) <= 40,
+  /* BOUNDS RAISED, AND THE GAP DELIBERATELY WIDENED, for the lower-body isolation lock:
+     64 characters written into the tops anchors only (keepTop restored, after the
+     green-trousers report - see PLAIN_TEE_ANCHOR in app.js). Tops therefore moves 338 ->
+     403 while bottoms stays 320, so the "within 40 of each other" symmetry this line used
+     to assert is GONE BY DESIGN, not by drift: the branches are no longer supposed to be
+     comparable in length, because only one of them carries an opposite-layer lock.
+
+     The property that still matters, and is what these numbers are really for, is the
+     one the old comment names at the end: neither anchor may creep back toward the
+     634-character assembly this whole sequence undid. 403 leaves 231 characters of
+     headroom against that, so the guard is still doing its job. Raised to the current
+     value plus a small margin rather than to a round number well above it - a bound with
+     slack in it stops being a bound.
+
+     ASYMMETRIC BY BRANCH, on purpose: bottoms keeps the tighter 360 ceiling because
+     nothing was added to it, and a bottoms anchor arriving at 403 would be an unreviewed
+     change rather than this one. */
+  check("the ANCHORS stay well clear of the 634-char assembly they replaced",
+    topsAnchor.length <= 420 && bottoms.length <= 360 &&
+    topsAnchor.length < 634 && bottoms.length < 634,
     `tops anchor=${topsAnchor.length} bottoms=${bottoms.length} gap=${bottoms.length - topsAnchor.length}`);
   check("...and the one bought-back clause is the ONLY thing on top of the tops anchor",
     closure.length > 0 && tops.length === topsAnchor.length + 1 + closure.length &&
-    tops.length <= 500,
+    tops.length <= 570,
     `tops=${tops.length} anchor=${topsAnchor.length} closure=${closure.length}`);
 
   const both = api.fitPrompt([
@@ -242,25 +259,48 @@ console.log("\n── §2 THE RESTORE PATH IN app.js IS ACCURATE, not aspiration
      is recomputed here against the REAL fitPrompt() and the REAL DENSE table, and the
      text is required to match the number. A stale row now fails this suite. */
   const row = (base, clause) => api.fitPrompt([[api.P.CORE, base], [api.P.HIGH, clause]]).length;
+  /* Tops moves 533 -> 598 and 552 -> 617 because the tops ANCHOR moved 338 -> 403: the
+     lower-body isolation lock, written in after the green-trousers report. Bottoms is
+     untouched at 366/385, which is itself the check that the lock went onto tops only. */
   const arithmetic = [
-    ["bodyFidelity ", api.DENSE.bodyFidelity,  533, 366],
-    ["modelAgnostic", api.DENSE.modelAgnostic, 552, 385],
+    ["bodyFidelity ", api.DENSE.bodyFidelity,  598, 366],
+    ["modelAgnostic", api.DENSE.modelAgnostic, 617, 385],
   ];
   for (const [name, clause, expTop, expBottom] of arithmetic) {
     check(`the ${name.trim()} row is the arithmetic this code actually produces`,
       row(tops, clause) === expTop && row(bottoms, clause) === expBottom,
       `tops=${row(tops, clause)} (doc ${expTop}) bottoms=${row(bottoms, clause)} (doc ${expBottom})`);
   }
-  check("...and app.js prints that arithmetic, per branch, with both branches fitting",
+  check("...and app.js prints that arithmetic, per branch, matching the executed numbers",
     /THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP/.test(SRC) &&
-    /TOPS FRONT \(487 = 338 anchor \+ 148 closure lock\)  BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
-    /\+ DENSE\.bodyFidelity  \(45\) \u2192 533  fits              \u2192 366  fits/.test(SRC) &&
-    /\+ DENSE\.modelAgnostic \(64\) \u2192 552  fits              \u2192 385  fits/.test(SRC),
+    /TOPS FRONT \(552 = 403 anchor \+ 148 closure lock\)  BOTTOMS \(320 chars - anchor, lower-body scoped\)/.test(SRC) &&
+    /\+ DENSE\.bodyFidelity  \(45\) \u2192 598  fits              \u2192 366  fits/.test(SRC) &&
+    /\+ DENSE\.modelAgnostic \(64\) \u2192 617  fits              \u2192 385  fits/.test(SRC),
     "the printed table and the executed arithmetic have to agree, or the table is advice against the code");
-  check("...and it no longer claims a headroom that stopped being true two revisions ago",
+  /* \u2500\u2500 THE "NOTHING SHEDS" CLAIM IS RETRACTED, AND THAT IS WHAT THIS NOW PINS \u2500\u2500\u2500\u2500\u2500\u2500\u2500
+     This check used to REQUIRE the sentence "159 characters are free on tops and 330 on
+     bottoms", on the grounds that nothing sheds on either branch any more. That claim
+     was false when it was written: both figures were computed from the ANCHOR ALONE,
+     while the real dispatch has carried fitSentence() at P.MED since 2026-09-03 - up to
+     213 characters the arithmetic ignored. trace:prompt's branch table had the same
+     omission, so the tool and the table corroborated each other and neither matched the
+     wire. Both are corrected, and the claim is now pinned as an ABSENCE: app.js must NOT
+     assert that nothing sheds, and must carry the per-rung shed list instead. */
+  /* CHECKED POSITIONALLY, NOT AS A RAW ABSENCE, and the distinction is the point. The
+     false claim is QUOTED in app.js rather than deleted - §6 of CLAUDE.md: never delete a
+     root-cause note, update it - so `!/NOTHING SHEDS ANY MORE/` would fail against the
+     very retraction that fixes it, and the only way to pass would be to delete the
+     record. So what is asserted is that the phrase appears ONLY inside the retraction
+     (i.e. after the ⚠ marker), never standing alone as a current claim. */
+  const retractionAt = SRC.indexOf("AND THE PARAGRAPH THAT USED TO SIT HERE WAS WRONG");
+  const nothingShedsAt = SRC.indexOf("NOTHING SHEDS ANY MORE");
+  check("...and it does not re-assert the false 'nothing sheds' headroom",
     !/TOPS HAS ZERO HEADROOM/.test(SRC) && !/BOTTOMS HAS 392 CHARACTERS FREE/.test(SRC) &&
-    /159 characters are free on tops and 330 on\s*\n?\s*bottoms/.test(SRC),
-    "nothing sheds on either branch any more - the old table said the opposite");
+    retractionAt !== -1 &&
+    (nothingShedsAt === -1 || nothingShedsAt > retractionAt) &&
+    /WHAT ACTUALLY SHEDS TODAY/.test(SRC) &&
+    /fitSentence sheds/.test(SRC),
+    "an anchor-only character count is not the dispatch - that error cost a wrong restore once already");
 }
 
 console.log("\n── §3 THE CONSTANTS ARE OFF THE WIRE (the directive is not) ──");

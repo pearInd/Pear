@@ -233,6 +233,7 @@ import { fileURLToPath } from "node:url";
 
 const SUITES = [
   ["url-identity", "url-identity.test.mjs"],
+  ["url-identity-widget", "url-identity-widget.test.mjs"],
   ["view-resolution", "view-resolution.test.mjs"],
   ["composite", "composite.test.mjs"],
   ["widget-dom", "widget-dom.test.mjs"],
@@ -248,6 +249,7 @@ const SUITES = [
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
   ["side-profile", "side-profile.test.mjs"],
   ["image-first", "image-first.test.mjs"],
+  ["color-lock", "color-lock.test.mjs"],
   ["garment-category-prompt", "garment-category-prompt.test.mjs"],
   ["garment-category-detection", "garment-category-detection.test.mjs"],
   ["plain-tee-fidelity", "plain-tee-fidelity.test.mjs"],
@@ -274,6 +276,47 @@ const SUITES = [
   ["mp4-export", "mp4-export.test.mjs"],
   ["conditioning-trace", "conditioning-trace.test.mjs"],
 ];
+
+/* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────
+   THE BUG THIS CLOSES, and it is a hole in this whole directory rather than in any one
+   suite. Every suite here extracts a FRAGMENT of app.js - a function body, a const block,
+   a marked statement - and evaluates it in a sandbox. That is deliberate (app.js is a
+   15k-line browser script with DOM-coupled module scope and no module system), but it
+   means NOTHING here ever parses the file as a whole. So a top-level SyntaxError - the
+   classic being a duplicate `const` introduced by adding a constant whose name is already
+   taken 6,000 lines away - leaves every suite GREEN while the fitting room fails to load
+   at all for every shopper. That happened: a new FABRIC_COLOR_NAMES table was first added
+   as COLOR_NAMES, colliding with the existing label palette, and the full suite passed.
+
+   `node --check` parses without executing, which is exactly the check wanted here: syntax
+   only, no DOM, no side effects, no stubs to maintain. NOT `new Function(src)`, which was
+   the first attempt and cannot work - app.js is ESM (it imports CONFIG from config.js) and
+   `new Function` parses script syntax, so every run would have failed on the import line
+   and the check would have been reverted as broken. Runs FIRST and bails, since a file
+   that cannot parse makes every downstream result meaningless. */
+const PARSE_TARGETS = [
+  ["fitting-room/app.js", "../fitting-room/app.js"],
+  ["widget/pear-widget.js", "../widget/pear-widget.js"],
+];
+process.stdout.write(`\n─── parse preflight ${"─".repeat(45)}\n`);
+let parseFailed = false;
+for (const [label, rel] of PARSE_TARGETS) {
+  const target = fileURLToPath(new URL(rel, import.meta.url));
+  const r = spawnSync(process.execPath, ["--check", target], { encoding: "utf8" });
+  if (r.status === 0) {
+    console.log(`PASS  ${label} parses as a whole file`);
+  } else {
+    parseFailed = true;
+    const msg = ((r.stderr || "").match(/^\w*Error:.*$/m) || ["(no message)"])[0];
+    console.log(`FAIL  ${label} does NOT parse: ${msg}`);
+    console.log(`        no suite below can see this - they all sandbox fragments`);
+  }
+}
+if (parseFailed) {
+  console.log("\n" + "═".repeat(64));
+  console.log("PARSE FAILURE - the page would not load. Fix this before reading anything else.");
+  process.exit(1);
+}
 
 let failed = 0;
 for (const [name, file] of SUITES) {

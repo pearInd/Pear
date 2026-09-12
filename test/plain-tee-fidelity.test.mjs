@@ -214,8 +214,15 @@ console.log("\n── §4 VOLUME: the fix must SHRINK the prompt, never grow it 
   check("...and an unrecognised top ships less than it did before §6",
     imageOnlyPrompt(UNKNOWN_TOP).length < wasShipped.length,
     `unknown=${imageOnlyPrompt(UNKNOWN_TOP).length} was=${wasShipped.length}`);
+  /* 5, not 4, since the lower-body isolation lock ("Keep the subject's lower body, shoes,
+     and background unmodified.") was written into both tops anchors - keepTop restored,
+     after the green-trousers report. The point of this check is unchanged and is NOT
+     about the number: it is that the tee branch resolves to ONE frozen anchor rather than
+     becoming an assembly of parts. The sentence count is how that is measured, so it
+     tracks the anchor's real sentence count; §7.2's single-"Drape and fit" check is the
+     other half and is the one that actually catches an assembly. */
   check("it is still ONE anchor - the tee branch did not become an assembly",
-    tee.split(/(?<=\.)\s+/).filter(Boolean).length <= 4, tee);
+    tee.split(/(?<=\.)\s+/).filter(Boolean).length <= 5, tee);
 }
 
 console.log("\n── §5 THE AXIS IS A SELECTOR, and its scope is deliberate ──");
@@ -357,18 +364,45 @@ console.log("\n── §7 THE ANCHOR NOUN: the last button-down lean, on the DEF
 
   check("§7.1 the DEFAULT tops anchor no longer names a 'shirt' - the woven-leaning noun",
     !bareShirt(generic), generic);
+  /* The preserve clause is no longer the tail - the restored isolation lock follows it -
+     so the $ anchor moves onto the lock and the preserve clause is pinned in place
+     instead. Both are still pinned, which is what this check is for: the noun must be
+     "top" in the lead AND in the preserve clause, since naming it once neutrally and
+     once as "shirt" was the half-fix §7.1 was filed against. */
   check("...and names the construction-neutral upper-body noun instead",
     generic.indexOf("Drape and fit the EXACT static top from the reference image") === 0 &&
-    /Strictly preserve the original top texture, pattern, and color\.$/.test(generic),
+    /Strictly preserve the original top texture, pattern, and color\./.test(generic) &&
+    /Keep the subject's lower body, shoes, and background unmodified\.$/.test(generic),
     generic);
 
   check("§7.2 it is still ONE frozen anchor - the noun swap assembled nothing",
     generic.split("Drape and fit").length === 2 && !CLOSURE_RE.test(generic), generic);
 
   /* The swap must not buy its neutrality back in characters - §4's direction applies to
-     every branch, not just the tee one. */
-  check("§7.3 it SHRINKS the wire, as every fidelity fix in this file must",
-    generic.length < 342, `expected < 342 (the pre-swap default), got ${generic.length}`);
+     every branch, not just the tee one.
+
+     RE-SCOPED TO WHAT IT ACTUALLY PROTECTS, and this is a correction to the ASSERTION,
+     not a relaxation of the rule. It was written as a bare `generic.length < 342` on the
+     whole prompt, which measured the noun swap only for as long as nothing else was ever
+     added to the branch. Two clauses have legitimately been added since (fitSentence at
+     P.MED, and now the lower-body isolation lock inside the anchor), so the bare total
+     had started failing for reasons that have nothing to do with the noun swap - a check
+     that fails on unrelated changes stops being read as a real constraint.
+
+     What §7.3 exists to pin is: THE NOUN SWAP itself did not cost characters. So the
+     isolation lock is subtracted before comparing, which measures exactly that claim and
+     nothing else. The lock's own cost is not unmeasured - it is accounted for in
+     trace:prompt's size ladder and in PLAIN_TEE_ANCHOR's comment block, where the three
+     size rungs it spends are named individually.
+
+     The BROADER principle ("a fidelity fix that grows the prompt is the mechanism,
+     reapplied") is still asserted, and still against a real total, by §4's
+     `tee.length < wasShipped.length` above. That is the load-bearing one. */
+  const ISOLATION_LOCK = "Keep the subject's lower body, shoes, and background unmodified.";
+  const withoutLock = generic.replace(ISOLATION_LOCK, "").trim();
+  check("§7.3 the noun swap SHRINKS the wire, as every fidelity fix in this file must",
+    generic.includes(ISOLATION_LOCK) && withoutLock.length < 342,
+    `expected < 342 (the pre-swap default) net of the isolation lock, got ${withoutLock.length}`);
 
   check("§7.4 the BACK branch is byte-identical - no report, no change",
     /EXACT static shirt's REAR\/BACK side/.test(imageOnlyPrompt(UNKNOWN_TOP, "back")),

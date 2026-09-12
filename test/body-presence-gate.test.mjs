@@ -312,9 +312,18 @@ console.log("\n── §6 THE PROMPT: temporal persistence, per category, inside
      button-down-rendered-open report), so the anchor is measured with that clause removed:
      "minimal" is a property of the ANCHOR, and stripping the one known clause keeps the
      bound honest instead of just raising the number until it passes. */
+  /* RAISED FOR THE LOWER-BODY ISOLATION LOCK (64 chars, tops anchors only - keepTop
+     restored after the green-trousers report), which moves the tops anchor 338 -> 403 and
+     the full tops branch 487 -> 552. Bottoms keeps the tighter 360 bound because nothing
+     was added to it; an asymmetric pair of bounds is the point, since a bottoms anchor
+     arriving at 403 would be an unreviewed change rather than this one.
+     "Minimal" here has only ever meant "nowhere near the 634-character assembly this
+     replaced", and 403 still leaves 231 characters of clearance against that. The
+     directive this suite is actually about is asserted by ABSENCE, twice, above and
+     below - the bounds are the secondary guard against creep, not the primary check. */
   const topAnchor = top.replace(/Reproduce the reference's front closure[\s\S]*?as shown\./, "").trim();
   check("...and both are still minimal, which is what replaced it",
-    topAnchor.length <= 360 && bot.length <= 360 && top.length <= 500 &&
+    topAnchor.length <= 420 && bot.length <= 360 && top.length <= 570 &&
     !/as soon as visible/.test(bot),
     `tops anchor=${topAnchor.length} (full ${top.length}) bottoms=${bot.length}`);
   /* The clause itself must stay on file, or "one line to re-add" stops being true. */

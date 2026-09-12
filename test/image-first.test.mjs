@@ -118,12 +118,23 @@ const JEANS = { name: "Glide Slim", garmentType: "lower_body", color: "#222" };
                          dispatch happen at all; body-topology.test.mjs owns that side.
    See CATEGORY_ANCHOR in app.js for the full list of what came off the wire, what went
    back on, and the restore path for each. */
+/* THE FOURTH SENTENCE IS keepTop, RESTORED - "it repainted my green trousers".
+   Fitting a TOP altered the shopper's shorts/trousers, shoes and background on a branch
+   that only ever asked for the torso garment to change. The clause is the mirror of the
+   one CATEGORY_ANCHOR.bottom has carried all along, region flipped, written INSIDE the
+   anchor literal because that is where it cannot shed (and because conditioning-trace §4
+   pins imageOnlyPrompt() to exactly one P.CORE part, so a second undroppable part is not
+   available). It names a body REGION and never a garment noun - "pants/shorts/trousers"
+   would ship as positive tokens in a prompt with no negative_prompt, which is the tuxedo
+   mechanism this suite's header is the record of. 403 chars tops, 320 bottoms.
+   See PLAIN_TEE_ANCHOR's comment block in app.js for the measured budget cost. */
 const TOPS_SPEC =
   "Drape and fit the EXACT static top from the reference image onto the live" +
   " subject's CURRENT body contour and volume in this frame. Dynamically adapt the" +
   " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
   " without stretching or warping the fabric. Strictly preserve the original top" +
-  " texture, pattern, and color.";
+  " texture, pattern, and color. Keep the subject's lower body, shoes, and" +
+  " background unmodified.";
 const BOTTOMS_SPEC =
   "Drape and fit the EXACT static pants/shorts from the reference image onto the live" +
   " subject's CURRENT lower-body contour and volume in this frame. Dynamically adapt" +
@@ -193,13 +204,18 @@ const TOPS_FRONT_SPEC = TOPS_SPEC + " " + CLOSURE_SPEC;
    the DENSE.assetLock shape this file's header is the record of, and §1 checks that no such
    token rides here either. Byte-exact for the same reason the other three are: a paraphrase
    that reads the same to a human is a different token sequence to a diffusion model. */
+/* Carries the SAME restored isolation sentence as TOPS_SPEC, byte for byte. Both tops
+   branches share it because the report is against tops-front generally, not against one
+   construction; a lock that shipped on structured tops but not on tees would leave the
+   most common garment in the catalog leaking. */
 const PLAIN_TEE_SPEC =
   "Drape and fit the EXACT static t-shirt from the reference image onto the live" +
   " subject's CURRENT body contour and volume in this frame. Keep the reference's plain" +
   " knit neckline and smooth unbroken front exactly as shown. Dynamically adapt the" +
   " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
   " without stretching or warping the fabric. Strictly preserve the original t-shirt" +
-  " texture, pattern, and color.";
+  " texture, pattern, and color. Keep the subject's lower body, shoes, and" +
+  " background unmodified.";
 
 /* \u00a71's shared-tail assertions read this; the tail is identical in both branches except
    for the two top-specific construction clauses, which \u00a71 checks per branch. */
@@ -238,16 +254,23 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     `tee=${PLAIN_TEE_SPEC.length} default=${TOPS_FRONT_SPEC.length}`);
   check("the BOTTOMS branch matches the specified wording byte for byte",
     api.imageOnlyPrompt(JEANS) === BOTTOMS_SPEC, JSON.stringify(api.imageOnlyPrompt(JEANS)));
-  /* ONE SHAPE, THREE SENTENCES, SAME ORDER. The old pair could be normalised into one
-     string because they differed by two substitutions; these two are worded per region
-     (a waistline is not a belly, a leg profile is not a silhouette), so the invariant
-     that actually holds is STRUCTURAL: bind-and-scope, then adapt, then preserve - in
-     that order, with nothing appended. Asserted as an exact sentence count so a fourth
-     clause cannot be slipped onto either branch, which is the regression this whole
-     suite exists to catch. §1 then checks each of the three per branch, below. */
+  /* ONE SHAPE, SAME ORDER. The old pair could be normalised into one string because they
+     differed by two substitutions; these two are worded per region (a waistline is not a
+     belly, a leg profile is not a silhouette), so the invariant that actually holds is
+     STRUCTURAL: bind-and-scope, then adapt, then preserve - in that order, with nothing
+     appended beyond what this suite names. Asserted as an exact sentence count so a
+     clause cannot be slipped onto either branch unnoticed, which is the regression this
+     whole suite exists to catch. §1 then checks each sentence per branch, below.
+
+     TOPS IS FOUR SENTENCES NOW, BOTTOMS IS STILL THREE, and the counts are pinned
+     separately rather than loosened to "3 or 4" on both. The fourth on tops is the
+     restored lower-body isolation lock (see (4) below); bottoms has no counterpart and
+     a fourth sentence appearing there would be an unreviewed change, which is exactly
+     what this count is for. Widening the check to accept either count on either branch
+     would throw that away to save one line. */
   const sentences = (s) => s.split(/(?<=\.)\s+/).filter(Boolean);
-  check("both branches are exactly three sentences: bind, adapt, preserve",
-    sentences(TOPS_SPEC).length === 3 && sentences(BOTTOMS_SPEC).length === 3,
+  check("tops is four sentences (bind, adapt, preserve, isolate); bottoms is three",
+    sentences(TOPS_SPEC).length === 4 && sentences(BOTTOMS_SPEC).length === 3,
     `tops=${sentences(TOPS_SPEC).length} bottoms=${sentences(BOTTOMS_SPEC).length}`);
   check("...and both open on the SAME five words - the static/reference binding",
     TOPS_SPEC.startsWith("Drape and fit the EXACT static ") &&
@@ -284,10 +307,34 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
     "an adaptation instruction with no ban on warping is satisfied by warping");
   /* (3) THE INVARIANT, restated last, on the attributes a re-drape is most likely to
      smear. This is what replaced STRICT_REFERENCE_LOCK on these two branches. */
+  /* NO LONGER $-ANCHORED ON TOPS: the isolation lock is now the anchor's last sentence,
+     so this clause sits second-from-last there. Bottoms keeps its $ anchor - it has
+     carried its own opposite-layer mirror since it was written, as the clause BEFORE the
+     preserve sentence rather than after it, and that ordering is untouched. */
   check("(3) it closes by pinning the garment's own attributes as unchanged",
-    /Strictly preserve the original top texture, pattern, and color\.$/.test(TOPS_SPEC) &&
+    /Strictly preserve the original top texture, pattern, and color\./.test(TOPS_SPEC) &&
     /Strictly preserve original pattern and color\.$/.test(BOTTOMS_SPEC),
     `tops=${TOPS_SPEC}\n        bottoms=${BOTTOMS_SPEC}`);
+  /* (4) THE OPPOSITE-LAYER LOCK - ON TOPS ONLY, and the asymmetry now runs the OTHER WAY
+     from the one this suite used to assert.
+
+     BOTTOMS DELIBERATELY NOT ASSERTED TO CARRY ONE, because it does not, and the
+     discovery matters more than the assertion: app.js's keepTop restore note claimed
+     "the bottoms half of it is back on the wire - written INTO CATEGORY_ANCHOR.bottom".
+     That was false. BOTTOMS_SPEC below is the byte-exact bottoms anchor and it ends at
+     "Strictly preserve original pattern and color."; KEEP_OPPOSITE_LAYER is a retired
+     constant with no call site. The false claim is corrected at both ends in app.js.
+     Pinned as an explicit ABSENCE here so the next person to read that note cannot be
+     misled the same way, and so restoring it on bottoms is a deliberate act that has to
+     come through this line. */
+  check("(4) the tops anchor closes by isolating the layer it is NOT replacing",
+    /Keep the subject's lower body, shoes, and background unmodified\.$/.test(TOPS_SPEC) &&
+    !/pants|shorts|trousers/.test(TOPS_SPEC),
+    `tops=${TOPS_SPEC}`);
+  check("...and bottoms still has NO opposite-layer lock - retired, never restored",
+    !/unmodified/.test(BOTTOMS_SPEC) && /pattern and color\.$/.test(BOTTOMS_SPEC),
+    "if this fails someone restored it on bottoms - good, but update app.js's keepTop " +
+    "bullet, which now records the branch as unprotected");
   /* THE RUNTIME HALF. This wording promises a per-frame fit, and text alone cannot keep
      that promise: with a constant prompt and the reference already on the wire,
      applyGarment() dispatches nothing at all. Asserted here, in the suite that owns the
@@ -337,9 +384,16 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
   check("...and it never pins the very layer it is replacing",
     !/Keep the subject's lower body/.test(BOTTOMS_SPEC),
     "a bottoms prompt that preserves the lower body cancels itself");
-  check("tops is still implicitly scoped - the documented, evidence-led asymmetry",
-    !/unmodified/.test(TOPS_SPEC) && !/lower body/.test(TOPS_SPEC),
-    "if this fails the branches re-converged - update the asymmetry note in app.js with it");
+  /* THIS ASSERTION WAS ITS OWN INVERSE AND THE BET IT RECORDED LOST. It used to read
+     "tops is still implicitly scoped - the documented, evidence-led asymmetry", on the
+     stated grounds that no report had ever been filed of a top try-on repainting the
+     shopper's live trousers. One was: colour, shape and texture of the shopper's shorts,
+     plus shoes and background. So tops is now EXPLICITLY scoped and the asymmetry has
+     inverted - tops carries the lock, bottoms does not. Flipped rather than deleted,
+     because the flip is the record of how the decision was made. */
+  check("tops is now EXPLICITLY scoped - the asymmetry inverted on a real report",
+    /Keep the subject's lower body, shoes, and background unmodified\./.test(TOPS_SPEC),
+    "the green-trousers report closed this; if it is gone, so is that fix");
   check("app.js flags the opposite-layer lock as the FIRST thing to restore on tops",
     /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC),
     "the only removal here that re-opens a previously fixed report");

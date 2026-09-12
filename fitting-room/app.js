@@ -3,7 +3,7 @@
    ----------------------------------------------------------------------------
    Screen 1  Size calculator (required) ─► Screen 2  Isolated try-on room.
 
-   Engine: Decart Lucy VTON realtime ("lucy-vton-latest") over WebRTC (LiveKit).
+   Engine: Decart Lucy VTON realtime ("lucy-vton-3.5") over WebRTC (LiveKit).
    Verified against @decartai/sdk@0.1.5:
      • createDecartClient({ apiKey })  - apiKey is a short-lived ek_ token minted
        by the backend (/api/realtime-token); the permanent dct_ key never reaches
@@ -2552,6 +2552,15 @@ window.addEventListener("message", (e) => {
      photographed one downstream, because by the time it gets here it IS a real,
      distinct image asset that preloadGarmentAssets() will validate like any other. */
   activeItem.backSource = e.data.garment_back_source || "unknown";
+  /* ── SAMPLED MAIN-FABRIC COLOUR, from the same /api/classify-images call ──────────
+     Consumed by colorLockSentence() in the prompt builder. `typeof === "string"` and
+     not `||`, deliberately: an absent field (older widget build, or a colour the
+     classifier declined to sample) must leave this UNDEFINED so the clause abstains,
+     and must not be collapsed with a present-but-empty value into one "falsy" case
+     that reads as a verdict. Same null-vs-empty discipline as text_ocr server-side. */
+  if (typeof e.data.garment_color_hex === "string" && e.data.garment_color_hex) {
+    activeItem.colorHex = e.data.garment_color_hex;
+  }
   /* Unified COMBINED reference, stitched by the widget on the store page (see
      createGarmentComposite in pear-widget.js). When present it IS the model
      reference - referenceImageFor() uses it verbatim and skips stitching again, so
@@ -3168,7 +3177,12 @@ function resetToLive() {
         proxy (/api/realtime-token) and hand THAT to createDecartClient().
 
    NOTE: models.realtime() does not exist in @decartai/sdk@0.1.5 - the model is
-        passed as the plain object below (name "lucy-vton-latest" + stream opts).
+        passed as the plain object below (name "lucy-vton-3.5" + stream opts).
+        UPDATED 2026-09-12: bumped from the "lucy-vton-latest" alias to the
+        explicit "lucy-vton-3.5" version id so the wire model is verifiably
+        3.5 rather than whatever Decart's alias happens to resolve to today
+        (docs.platform.decart.ai never states that mapping). Keep this in
+        lockstep with server.js's DECART_VTON_MODEL fallback below.
    ============================================================================= */
 async function loadSDK() {
   let lastErr;
@@ -3525,7 +3539,7 @@ function releaseInputGate(why) {
 function buildRealtimeConnectOpts(gen) {
   return {
     model: {
-      name: "lucy-vton-latest",
+      name: "lucy-vton-3.5",
       urlPath: "/v1/stream",
       // NOTE: these are advisory only - the SDK ignores model.fps/width/height on
       // Chromium. The REAL cap is enforced upstream by createThrottledInputStream()
@@ -7775,13 +7789,90 @@ const FRONT_CLOSURE_LOCK =
    identical on this file's one-branch-at-a-time-on-evidence rule. If a tee ever renders a
    woven BACK YOKE, the restore is the same shape as this one: a tee entry in the back
    pair, selected by the same predicate. */
+/* ── THE LOWER-BODY ISOLATION LOCK - "it repainted my green trousers" ──────────────
+   REPORTED: fitting a TOP altered the shopper's shorts/trousers - colour, shape and
+   texture - along with shoes and background, on a branch that only ever asked for the
+   torso garment to change.
+
+   THIS IS keepTop, RESTORED - the clause IMAGE_ONLY_PROMPT's restore list names as
+   "the opposite-layer lock, TOPS ONLY".
+
+   ⚠ THE RESTORE NOTE THAT SENT YOU HERE WAS WRONG ON A FACT, AND IT IS NOW CORRECTED
+   IN PLACE (see IMAGE_ONLY_PROMPT's keepTop bullet). It said: "The bottoms half of it
+   is back on the wire - written INTO CATEGORY_ANCHOR.bottom ('Keep the subject's upper
+   body and background unmodified.')". It is NOT. Read CATEGORY_ANCHOR.bottom: it ends
+   at "Strictly preserve original pattern and color." and contains no opposite-layer
+   sentence at all. KEEP_OPPOSITE_LAYER still sits above as a retired constant with no
+   call site, exactly as the dynamic-drape revision left it, and `npm run trace:prompt`
+   prints the bottoms branch without it. So there was never a shipping mirror to copy;
+   this clause is the FIRST time either branch has carried an explicit opposite-layer
+   lock since that revision retired the bottoms one.
+
+   That does not change the shape chosen here - a region-named sentence inside the
+   anchor literal is still right, for the reasons below - but it does mean the bottoms
+   branch is STILL UNPROTECTED, and nothing here fixes that. Restoring it there is a
+   separate one-line change ([P.HIGH, KEEP_OPPOSITE_LAYER] on the bottoms branch, or
+   the same sentence written into the anchor) and a separate decision: no report has
+   been filed against bottoms, the bottoms branch has 100+ free chars at every rung, and
+   this file's rule is one clause at a time on evidence.
+
+   INSIDE THE ANCHOR LITERAL, NOT A NEW PART, for two independent reasons.
+   (a) Inside the anchor it CANNOT SHED. This clause exists to survive budget pressure -
+   a lock that disappears exactly when the prompt gets long is not a lock - and P.CORE
+   is the only tier that guarantees that. (b) conditioning-trace §4 asserts
+   imageOnlyPrompt() contains EXACTLY ONE P.CORE and EXACTLY ONE P.HIGH
+   (FRONT_CLOSURE_LOCK), so a second undroppable part is not structurally available even
+   if it were preferable.
+
+   A REGION, NOT GARMENT NOUNS - the single most important wording decision here, and
+   the reason this says "lower body" where the report said "pants/shorts/green trousers".
+   set() has no negative_prompt: every noun in this string ships in the POSITIVE prompt
+   as a token the sampler steers TOWARD. "Strictly preserve the subject's pants/shorts/
+   trousers" therefore hands a trouser token to a session whose shopper is wearing a
+   skirt, a dress or a kilt, and the documented consequence of naming a garment this way
+   is the tuxedo: CATEGORY_ANCHOR.top's own note records dropping the word "shirt" for
+   precisely this reason ("NOT A NEGATION, for the reason this file keeps re-learning").
+   A body REGION cannot be sampled into a garment. "shoes" is kept because it is a
+   distinct object rather than alternative leg-wear.
+
+   64 CHARACTERS, AND THE LENGTH WAS CHOSEN BY MEASUREMENT, NOT BY TASTE.
+   Do not lengthen this sentence without re-running `npm run trace:prompt` and reading
+   the size ladder. The first draft also named the waistline, at 75 chars, and those
+   extra 11 characters put tops+front+closure at 651 against a 650 budget - one
+   character over, which shed fitSentence() on ALL FIVE rungs of that branch and
+   effectively un-did the 2026-09-03 size restore for every button-front top. At 64 the
+   same branch lands on 640 and keeps its fit clause. The shed pattern is IDENTICAL at
+   64 and at the 56-char exact mirror of the bottoms sentence, so "shoes" is free and
+   "waistline" costs a whole ladder; that is the entire reason for this wording.
+
+   THE COST THAT REMAINS, measured - trace:prompt's size ladder is the record:
+     · plain tee, sizing DOWN 1-2 -> fitSentence sheds (663 and 709 needed vs 650).
+     · structured + closure, sizing UP 2 -> fitSentence sheds (699 vs 650).
+     · every other branch and rung keeps it, including all of bottoms and back.
+   That is the same trade CLAUDE.md §0 already documents for the closure branch,
+   widened by two rungs. It is the right way round - a lower body repainted on every
+   frame is a worse failure than a missing tension phrase at one end of the ladder -
+   but it IS a partial regression of the size feature restored on 2026-09-03, and it is
+   not free. To buy those rungs back, the text to reclaim is getFitModifier()'s
+   delta<=-2 phrasings (213 and 219 chars, the longest strings in the builder), NOT
+   this lock's priority: dropping it below P.CORE would let it shed under exactly the
+   budget pressure it exists to survive.
+
+   FRONT TOPS ONLY, on this file's one-branch-at-a-time-on-evidence rule.
+   BACK_CATEGORY_ANCHOR.top is deliberately left byte-identical (plain-tee-fidelity
+   §7.4 pins it), so a shopper who turns around loses this lock for as long as the rear
+   asset is on the wire. That is a KNOWN GAP, not an oversight - the report is against
+   the front view, the back branch has 25 free chars at its tightest rung, and adding
+   it there would shed the back branch's fit clause. If a rear-view lower-body leak is
+   ever reported, that is the moment to spend those characters. */
 const PLAIN_TEE_ANCHOR =
   "Drape and fit the EXACT static t-shirt from the reference image onto the live" +
   " subject's CURRENT body contour and volume in this frame. Keep the reference's plain" +
   " knit neckline and smooth unbroken front exactly as shown. Dynamically adapt the" +
   " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
   " without stretching or warping the fabric. Strictly preserve the original t-shirt" +
-  " texture, pattern, and color.";
+  " texture, pattern, and color. Keep the subject's lower body, shoes, and background" +
+  " unmodified.";
 
 /* The tee vocabulary. Hebrew first, both geresh spellings, for the reason BOTTOMS_TOKENS
    spells out: a Hebrew-only product title is the storefront's COMMON case, not an edge
@@ -7916,12 +8007,23 @@ const CATEGORY_ANCHOR = Object.freeze({
      collars, plackets and buttons - all front features. BACK_CATEGORY_ANCHOR keeps
      "shirt" byte-identical, exactly as PLAIN_TEE_ANCHOR left it; plain-tee-fidelity §7.4
      pins that, and §7.1-§7.8 pin the rest of this note. */
+  /* ── THE LOWER-BODY ISOLATION LOCK ──
+     keepTop, restored, after the "it repainted my green trousers" report. The last
+     sentence is the region-flipped counterpart of the retired KEEP_OPPOSITE_LAYER
+     constant above - NOT a copy of a clause the bottoms anchor ships, because it does
+     not ship one (that claim in the old restore note was false and is corrected at both
+     ends; bottoms remains unprotected). Full rationale - including why it names a REGION
+     rather than "pants/shorts/trousers" (those are positive tokens a sampler steers
+     toward; see this anchor's NOT A NEGATION note above), why it lives inside the anchor
+     literal, and the measured cost to fitSentence() on the tightest size rungs - is in
+     the comment block above PLAIN_TEE_ANCHOR, which carries the identical sentence. */
   top:
     "Drape and fit the EXACT static top from the reference image onto the live" +
     " subject's CURRENT body contour and volume in this frame. Dynamically adapt the" +
     " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
     " without stretching or warping the fabric. Strictly preserve the original top" +
-    " texture, pattern, and color.",
+    " texture, pattern, and color. Keep the subject's lower body, shoes, and" +
+    " background unmodified.",
   bottom:
     "Drape and fit the EXACT static pants/shorts from the reference image onto the live" +
     " subject's CURRENT lower-body contour and volume in this frame. Dynamically adapt" +
@@ -8219,6 +8321,17 @@ function imageOnlyPrompt(item, angle = "front") {
     [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
     ...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
     [P.MED, fitSentence(bottoms ? "lower_body" : "upper_body")],
+    /* ── THE COLOUR LOCK - per-product, sampled, and the lowest-priority part here ──
+       Names the garment's measured main-fabric colour instead of leaving the anchor's
+       "preserve the original color" to point at a value it never states - the
+       black/yellow hallucination report. The value is threaded per product
+       (server primary_color_hex -> widget garment_color_hex -> item.colorHex); it is
+       never baked into an anchor, so one product's colour cannot leak into another's
+       prompt. P.LOW is load-bearing: it sheds BEFORE fitSentence, which is the only
+       reason it can be added to branches that have 7-10 free characters left. It
+       abstains entirely on an unsampled or ambiguous colour. Full rationale, including
+       why the OCR text is deliberately NOT here, above colorLockSentence(). */
+    [P.LOW, colorLockSentence(item)],
   ]);
 }
 
@@ -8300,10 +8413,10 @@ function lookAnchorPrompt() {
    The number has moved six times, so read the CURRENT row rather than remembering an
    older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
 
-     TOPS FRONT (487 = 338 anchor + 148 closure lock)  BOTTOMS (320 chars - anchor, lower-body scoped)
-     + DENSE.bodyFidelity  (45) → 533  fits              → 366  fits
-     + DENSE.modelAgnostic (64) → 552  fits              → 385  fits
-     + both of them        (110)→ 602  fits              → 431  fits
+     TOPS FRONT (552 = 403 anchor + 148 closure lock)  BOTTOMS (320 chars - anchor, lower-body scoped)
+     + DENSE.bodyFidelity  (45) → 598  fits              → 366  fits
+     + DENSE.modelAgnostic (64) → 617  fits              → 385  fits
+     + both of them        (110)→ 663  OVER - sheds      → 431  fits
 
    TOPS FRONT IS THE WORST CASE and the only row worth budgeting against: it is the one
    branch carrying a second part (FRONT_CLOSURE_LOCK, the button-down closure report).
@@ -8311,10 +8424,34 @@ function lookAnchorPrompt() {
    closure lock, since a front placket is not in view - and bottoms carries one part on
    both angles.
 
-   NOTHING SHEDS ANY MORE, on either branch. 159 characters are free on tops and 330 on
-   bottoms, so every retired clause in this table would go back with room to spare. That
-   INVERTS the warning this note used to carry: the risk is no longer that a restore
-   silently sheds, it is that a restore silently SUCCEEDS.
+   THE TOPS ANCHOR IS 403, NOT 338, since the lower-body isolation lock (64 chars) was
+   written into it - keepTop restored, after the green-trousers report. That is what put
+   the both-clauses row over budget on tops, so the last row above is no longer a free
+   choice.
+
+   ⚠ AND THE PARAGRAPH THAT USED TO SIT HERE WAS WRONG, in the way this file keeps
+   re-learning. It said: "NOTHING SHEDS ANY MORE, on either branch. 159 characters are
+   free on tops and 330 on bottoms." Both halves were computed from the ANCHOR ALONE, as
+   if the anchor were the whole dispatch. It has not been since 2026-09-03, when
+   fitSentence() was restored at P.MED - so the figures omitted a live clause worth up to
+   213 characters and the "nothing sheds" claim was false on the day it was written.
+   `npm run trace:prompt` had the identical bug in its branch table and printed the same
+   flattering numbers, which is why the two agreed with each other and not with reality.
+   Both are fixed; the tracer now prints a per-branch SIZE LADDER, and it is the source
+   of truth for anything below.
+
+   WHAT ACTUALLY SHEDS TODAY (trace:prompt, size ladder, worst rung per branch):
+     · tops front, plain tee, sizing DOWN 1-2      → fitSentence sheds
+     · tops front, structured + closure, UP 2      → fitSentence sheds
+     · tops front, structured + closure, DOWN 1-2  → fitSentence sheds (pre-existing)
+     · everything else, every rung                 → nothing sheds
+   Free space on the DEFAULT dispatch (delta 0, the shopper who never touches the
+   picker): 159 on tops structured, 10 on tops structured+closure, 246 on bottoms front.
+   The 10 is the number to budget against, and it is why the colour lock rides at P.LOW.
+
+   So the warning this note carries is now the ORIGINAL one again, not its inverse: a
+   restore on the tops+closure branch does not have room, and will silently take the
+   size feature with it unless it is priced against the ladder first.
 
    HEADROOM IS NOT PERMISSION. Tops was collapsed from 634 characters and bottoms from
    616 precisely BECAUSE text volume was outweighing the reference pixels - the tuxedo,
@@ -8346,12 +8483,25 @@ function lookAnchorPrompt() {
      · pose, poseProfile, frontRef, backReal, backInferred, side
                       orientation steering, now carried by the ASSET the watcher swaps
                       to rather than by a sentence.
-     · keepTop         the opposite-layer lock, TOPS ONLY. The bottoms half of it is back
-                      on the wire - written INTO CATEGORY_ANCHOR.bottom ("Keep the
-                      subject's upper body and background unmodified.") rather than
-                      assembled from keepBottoms, because inside the anchor it cannot shed
-                      and costs no extra clause. Restoring it on tops means mirroring that
-                      sentence, not appending this table's two-word "Top unchanged."
+     · keepTop         the opposite-layer lock. NOW RESTORED ON TOPS - written INTO
+                      CATEGORY_ANCHOR.top and PLAIN_TEE_ANCHOR as "Keep the subject's
+                      lower body, shoes, and background unmodified." after the
+                      "it repainted my green trousers" report. Inside the anchor because
+                      there it cannot shed and costs no extra clause; region-named, never
+                      "pants/shorts/trousers", because those would ship as positive
+                      tokens (the tuxedo mechanism). See PLAIN_TEE_ANCHOR's comment block
+                      for the measured cost - it is paid for by fitSentence shedding on
+                      three size rungs.
+                      ⚠ CORRECTION, and the reason this bullet is worth re-reading: it
+                      used to claim "the bottoms half of it is back on the wire - written
+                      INTO CATEGORY_ANCHOR.bottom". THAT WAS FALSE. CATEGORY_ANCHOR.bottom
+                      ends at "Strictly preserve original pattern and color."; it has no
+                      opposite-layer sentence, KEEP_OPPOSITE_LAYER has no call site, and
+                      trace:prompt has always printed the bottoms branch without it.
+                      Anyone who restored the tops half by "mirroring that sentence" was
+                      copying a clause that did not exist. BOTTOMS IS STILL UNPROTECTED:
+                      restoring it there is a separate one-line change on separate
+                      evidence (none filed yet, 100+ free chars available on that branch).
      · rotation       "the garment dropped mid-turn". The mechanical half of that fix
                       (the prompt-only flip in applyGarment, and the OrientationWatcher's
                       turn hold) is code, not prompt, and is untouched by this.
@@ -8478,6 +8628,134 @@ const DENSE = Object.freeze({
 function fitSentence(garmentType) {
   const mod = getFitModifier(getSizeDelta(), garmentType);
   return mod ? `Fit: ${String(mod).trim()}.` : "";
+}
+
+/* ── THE COLOUR LOCK - "the white tee rendered black" / "it came back yellow" ──────
+   ────────────────────────────────────────────────────────────────────────────────
+   THE BUG THIS CLOSES. The anchors end with "Strictly preserve the original <noun>
+   texture, pattern, and color" - a clause that tells the model to preserve a colour
+   without ever NAMING one. That is a pointer, not a value: it only works while the
+   model is actually reading the colour off the reference, which is precisely what
+   fails in the reported case. A garment whose colour drifts has nothing in the prompt
+   contradicting the drift.
+
+   This names the measured value. The hex is sampled from the FRONT product photo's own
+   main fabric by the same Gemini call that classifies front/back (server.js
+   primary_color_hex -> widget garment_color_hex -> activeItem.colorHex), so it is
+   per-product data threaded through the payload, NOT text baked into a global anchor -
+   the distinction that keeps one product's colour out of every other product's prompt.
+
+   A NAME, NOT THE HEX, and this is the whole reason the mapping below exists. Decart's
+   set() takes a natural-language prompt into a text encoder; "#f8f8f5" is three bytes of
+   hex trivia to a tokenizer, while "white" is a word it has strong priors for. Shipping
+   the raw hex would spend characters to say almost nothing.
+
+   IT ABSTAINS RATHER THAN GUESSES - §6, and it matters more here than usual. A WRONG
+   colour name is strictly worse than no colour name: the anchor's generic "preserve the
+   original color" at least defers to the pixels, whereas "The garment is yellow" states
+   a value with full authority and will actively repaint a cream garment. So:
+     · an unparseable / absent hex -> "" (nothing ships; today's behaviour exactly).
+     · a hex that is not confidently near any named colour -> "" as well. This is the
+       important one: a muddy mid-tone is what a MULTICOLOUR OR PATTERNED garment's
+       "dominant colour" averages out to, and naming that average would flatten the
+       pattern the anchor is simultaneously trying to preserve.
+
+   P.LOW, WHICH IS LOWER THAN THE FIT SENTENCE, AND THAT IS DELIBERATE.
+   fitPrompt() sheds the highest priority NUMBER first, so at P.LOW (3) this is the
+   FIRST thing off the wire under pressure - before fitSentence (P.MED, 2), before
+   FRONT_CLOSURE_LOCK (P.HIGH, 1), before the anchor (P.CORE, 0). That ordering is the
+   condition on which this clause was allowed to exist at all: the tops branches have
+   7-10 free characters at their tightest rungs after the lower-body isolation lock, so
+   anything at P.MED or above would have displaced an already-shipping feature. At P.LOW
+   it is purely additive - it ships where there is room and silently stands down where
+   there is not. Check `npm run trace:prompt`'s size ladder before promoting it.
+
+   NOT the OCR text. text_ocr is threaded as far as the server response and deliberately
+   stops there: a partial or mis-read transcription ("BE YOUR OWN Healer" for "BE YOUR
+   OWN Healer WORLDWIDE") would be asserted to Decart as the garment's lettering and
+   render wrong text confidently, which is worse than the anchor's generic "preserve the
+   pattern". Its job is the duplicate-panel veto (server.js validateBackCandidate), where
+   a wrong value costs a rejected back rather than a wrong render. */
+/* ⚠ NOT the same table as COLOR_NAMES further down this file, and the duplication is
+   deliberate rather than an oversight. That one backs colorName() and is a HUMAN-FACING
+   label palette ("royal blue", "off-white", "light grey", "tan") which falls back to
+   "neutral" and therefore always answers. This one backs a PROMPT clause and must be
+   able to answer NOTHING - see the three gates below. Reusing the label palette here
+   would import its no-abstention contract, which is the one property this clause cannot
+   have; naming these FABRIC_* keeps the two from colliding at module scope, which they
+   originally did (a duplicate `const COLOR_NAMES` is a load-time SyntaxError that the
+   sandbox-extracting test suites cannot see, because they slice fragments rather than
+   loading the file). */
+const FABRIC_COLOR_NAMES = Object.freeze([
+  ["white",  0xff, 0xff, 0xff], ["black",  0x14, 0x14, 0x14],
+  ["grey",   0x80, 0x80, 0x80], ["silver", 0xc0, 0xc0, 0xc0],
+  ["charcoal", 0x36, 0x36, 0x3a],
+  ["red",    0xd0, 0x21, 0x21], ["burgundy", 0x6d, 0x10, 0x28],
+  ["orange", 0xe8, 0x7d, 0x1e], ["yellow", 0xf2, 0xd0, 0x2c],
+  ["green",  0x2e, 0x8b, 0x3f], ["olive",  0x6b, 0x6b, 0x2a],
+  ["blue",   0x2a, 0x5c, 0xc8], ["navy",   0x1b, 0x25, 0x50],
+  ["teal",   0x1d, 0x8a, 0x8a],
+  ["purple", 0x6f, 0x36, 0xa5], ["pink",   0xe8, 0x8f, 0xb0],
+  ["brown",  0x7a, 0x4b, 0x28], ["beige",  0xd8, 0xc4, 0xa0],
+  ["cream",  0xf3, 0xea, 0xd6],
+]);
+
+/* ── THREE GATES, AND EACH ONE CLOSES A DIFFERENT WAY OF BEING WRONG ──────────────
+   A single nearest-neighbour lookup with one distance threshold was the first version of
+   this, and measurement killed it: with a palette dense enough to name ordinary garment
+   colours, almost every input lands within any threshold loose enough to be useful. The
+   gates below were each added against a specific mis-naming found by computing the actual
+   distances, not by intuition.
+
+   (1) ABSOLUTE DISTANCE - the backstop. A colour far from every name gets none.
+
+   (2) MARGIN over the runner-up - the "which of these two is it" case. #7a6a55 sits at
+       olive=46, grey=49, brown=55: three names inside 9 units, so the nearest is not a
+       verdict, it is a coin toss. Gated at 12.
+
+   (3) NEUTRAL CONSISTENCY - THE IMPORTANT ONE, and the one a distance metric cannot
+       express. RGB Euclidean distance collapses every DESATURATED colour onto the grey
+       axis, and grey then wins by a LARGE margin, so gates (1) and (2) both wave it
+       through. Measured examples: a sage green #6b8f7a reads grey=26 (margin 53), and a
+       dusty mauve #9b7fa8 reads grey=48 (margin 30). Both would have shipped "The garment
+       fabric is grey" for a garment that is plainly not grey - actively repainting it,
+       which is the exact failure this clause exists to prevent, caused by the clause
+       itself. So the colour's own chroma must AGREE with the matched name's: a chromatic
+       colour may not take a neutral name, and a neutral one may not take a chromatic name.
+       Where they disagree, abstain.
+
+   Net effect on the taupe case #8a7f6d (grey=21, margin 55, chroma 29): abstains, because
+   a warm taupe is not grey even though RGB says it nearly is. That is the correct answer
+   and it is only reachable through gate (3). */
+const FABRIC_COLOR_MAX_DIST = 96;
+const FABRIC_COLOR_MIN_MARGIN = 12;
+/* max(r,g,b) - min(r,g,b). 25/255 (~10%) is the neutral band: #f8f8f5 (chroma 3) is an
+   off-white and takes "white"; #8a7f6d (chroma 29) is a taupe and takes nothing. */
+const FABRIC_NEUTRAL_CHROMA_MAX = 25;
+const FABRIC_NEUTRAL_NAMES = new Set(["white", "black", "grey", "silver", "charcoal", "beige", "cream"]);
+
+function colorNameFromHex(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
+  if (!m) return "";
+  const v = parseInt(m[1], 16);
+  const r = (v >> 16) & 0xff, g = (v >> 8) & 0xff, b = v & 0xff;
+
+  const ranked = FABRIC_COLOR_NAMES
+    .map(([name, nr, ng, nb]) => [name, Math.sqrt((r - nr) ** 2 + (g - ng) ** 2 + (b - nb) ** 2)])
+    .sort((a, z) => a[1] - z[1]);
+  const [best, bestD] = ranked[0];
+  const runnerUpD = ranked[1] ? ranked[1][1] : Infinity;
+
+  if (bestD > FABRIC_COLOR_MAX_DIST) return "";                          // (1)
+  if (runnerUpD - bestD < FABRIC_COLOR_MIN_MARGIN) return "";            // (2)
+  const chroma = Math.max(r, g, b) - Math.min(r, g, b);                  // (3)
+  if ((chroma <= FABRIC_NEUTRAL_CHROMA_MAX) !== FABRIC_NEUTRAL_NAMES.has(best)) return "";
+  return best;
+}
+
+function colorLockSentence(item) {
+  const name = colorNameFromHex(item && item.colorHex);
+  return name ? `The garment fabric is ${name}.` : "";
 }
 
 /* ── THE WIRE GUARD - last line of defence, and the one that generalises ──────

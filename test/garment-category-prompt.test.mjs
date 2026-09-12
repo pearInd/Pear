@@ -248,11 +248,19 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
      this branch (the button-down-rendered-open report). It is still the end of the ANCHOR,
      which is what this assertion is about, so the tail is pinned against the anchor rather
      than against the whole string - and the clause that legitimately follows it is named,
-     so a THIRD part appearing here would still fail. */
+     so a THIRD part appearing here would still fail.
+
+     UPDATED FOR THE LOWER-BODY ISOLATION LOCK. The anchor gained one sentence AFTER the
+     preserve clause ("Keep the subject's lower body, shoes, and background unmodified.")
+     - keepTop, restored; see PLAIN_TEE_ANCHOR's comment block in app.js for the report
+     and the measured budget cost. So the anchor tail moved, and the pin moves with it.
+     The SHAPE of the assertion is unchanged and still does its real job: the anchor's own
+     two clauses are present, and the only thing allowed to follow the anchor is the named
+     closure lock, so a third unnamed part appearing on this branch still fails here. */
   check("...and carries the same per-frame adaptation and preserve clauses as bottoms",
     /Dynamically adapt the garment drape to the subject's exact/.test(topsPrompt) &&
     /Strictly preserve the original top texture, pattern, and color\./.test(topsPrompt) &&
-    /pattern, and color\. Reproduce the reference's front closure exactly:[^.]*as shown\.$/.test(topsPrompt),
+    /Keep the subject's lower body, shoes, and background unmodified\. Reproduce the reference's front closure exactly:[^.]*as shown\.$/.test(topsPrompt),
     topsPrompt);
 
   /* ── ONE SHAPE, ONE DELIBERATE DIVERGENCE ───────────────────────────────────
@@ -270,16 +278,37 @@ console.log("\n── §3 THE TOPS PROMPT: the same split, whole-body contour �
     /pants\/shorts/.test(bottomsPrompt) && !/\btop\b/.test(bottomsPrompt),
     `tops=${topsPrompt}\n        bottoms=${bottomsPrompt}`);
 
-  /* ── THE ASYMMETRY ITSELF, asserted so it cannot drift by accident ───────────
-     Tops does NOT carry the opposite-layer lock. That is the one-branch-at-a-time-on-
-     evidence rule this file has followed throughout - no report has been filed of a top
-     try-on repainting the shopper's live trousers - and it is a live bet, not an
-     oversight. Two things therefore have to hold: tops stays implicitly scoped, and
-     app.js keeps the restore path in the words a future debugger will search for when
-     the mirror-image report finally does arrive. */
-  check("tops does not carry the opposite-layer lock - the evidence-led asymmetry",
-    !/unmodified/.test(topsPrompt) && !/lower body/.test(topsPrompt),
-    `if this fails the branches converged - update app.js's asymmetry note too: ${topsPrompt}`);
+  /* ── THE ASYMMETRY IS CLOSED - THE MIRROR-IMAGE REPORT ARRIVED ───────────────
+     THIS ASSERTION USED TO BE ITS OWN INVERSE, and the flip is the point, so the old
+     text is kept here rather than replaced:
+
+       "Tops does NOT carry the opposite-layer lock. That is the one-branch-at-a-time-
+        on-evidence rule this file has followed throughout - no report has been filed of
+        a top try-on repainting the shopper's live trousers - and it is a live bet, not
+        an oversight."
+
+     It was a live bet, it was correctly labelled as one, and it LOST. The report the old
+     comment named as hypothetical - "the mirror-image report finally does arrive" - was
+     filed: fitting a top repainted the shopper's green trousers, along with shoes and
+     background. So the bet is settled and the lock now ships on tops, sourced from the
+     per-branch restore path the assertion below insists app.js keeps on file. That is
+     the process working exactly as written, not a drift, which is why this check is
+     inverted rather than deleted.
+
+     STILL ASSERTED, because the wording is the fragile half. The lock names a body
+     REGION ("lower body"), never a garment noun: set() has no negative_prompt, so
+     "pants/shorts/trousers" here would ship as positive tokens a sampler steers toward
+     and hand trouser tokens to a shopper in a skirt - the tuxedo mechanism. The
+     "...and each names the region it replaces, and only that one" check above is what
+     enforces the garment-noun half of that, and it is load-bearing in a way that is
+     easy to miss: its `!/pants|shorts|lower-body/` guard bans the HYPHENATED spelling,
+     so writing this sentence as "lower-body garments" would fail it while "lower body"
+     passes. That is not an accident to tidy up - the hyphenated form is how a garment
+     phrase gets written, and the guard catching it is the intended tripwire. */
+  check("tops DOES carry the opposite-layer lock - the asymmetry closed on evidence",
+    /Keep the subject's lower body, shoes, and background unmodified\./.test(topsPrompt) &&
+    !/pants|shorts|trousers/.test(topsPrompt),
+    `the lock must ship, and must name a REGION not a garment noun: ${topsPrompt}`);
   check("the opposite-layer lock is recorded in app.js with a per-branch restore path",
     /IF SHIRT-REPLACEMENT\s*\n?\s*RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST/.test(SRC) &&
     /WHERE EACH HALF LIVES TODAY/.test(SRC),
@@ -331,8 +360,17 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that lengthens
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
+  /* THE PART LIST GAINED A FOURTH ENTRY: [P.LOW, colorLockSentence(item)], the sampled
+     main-fabric colour lock (the "white tee rendered black" report). P.LOW is asserted
+     literally here because it is the whole safety property of that clause - at priority
+     3 it sheds BEFORE fitSentence (P.MED, 2), which is the only reason it could be added
+     to branches left with 7-10 free characters by the lower-body isolation lock. Promote
+     it and it starts displacing an already-shipping feature; this line is what catches
+     that. Comments are permitted between the parts (the clause carries its rationale
+     inline, as everything on this list does), hence [\s\S]*? rather than \s* between
+     entries - the ORDER and the priorities are what is pinned, not the whitespace. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[\s*\n\s*\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],\s*\n\s*\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),\s*\n\s*\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[[\s\S]*?\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],[\s\S]*?\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),[\s\S]*?\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],[\s\S]*?\[P\.LOW, colorLockSentence\(item\)\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix.
      Whichever of the three the construction/category/angle axes select, it rides at
