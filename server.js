@@ -1397,13 +1397,31 @@ your own view field, not a restatement of it:
   occluded, or from a single weak cue -> false. Say false whenever a downstream
   system treating this image as the definitive rear reference would be a mistake.
 
+has_graphic - true when this side of the garment carries ANY applied decoration at all:
+a print, a photograph, a logo, an embroidered motif, an appliqué, a large woven-in
+pattern block, lettering, a team badge, a number. This is a SEPARATE question from
+text_ocr and is the one that matters for a side with no words on it:
+- A large photographic print with no legible lettering -> has_graphic TRUE, text_ocr "".
+  These two answers routinely disagree and that is correct; do not make one follow the
+  other.
+- Plain dyed fabric, with only construction details (seams, a yoke, darts, a collar
+  band, a hem, buttons, a zip) -> has_graphic FALSE. Construction is not decoration.
+- An all-over repeating textile pattern woven or dyed into the cloth (stripes, checks,
+  floral, camouflage) -> has_graphic TRUE. It is not plain fabric.
+- A small woven care/brand label sewn at the collar -> has_graphic FALSE. A label is not
+  a garment graphic.
+- Cannot see this side clearly enough to tell -> answer FALSE only if you can positively
+  see unbroken fabric; if it is occluded, folded or too low-resolution to judge, say true.
+  A garment wrongly called plain gets its artwork erased downstream, which is far worse
+  than a plain garment wrongly called decorated.
+
 primary_color_hex - the dominant colour of the garment's MAIN FABRIC as "#rrggbb":
 the body panel, not a print, trim, collar band or the background. On a multicolour
 or patterned garment give the colour covering the most area. If the garment is not
 legible enough to sample, answer "".
 
 Respond ONLY with JSON matching this schema:
-{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>","age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0,"text_ocr":"<garment lettering, verbatim, or empty>","is_true_back_view":true|false,"primary_color_hex":"#rrggbb"}`;
+{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>","age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0,"text_ocr":"<garment lettering, verbatim, or empty>","is_true_back_view":true|false,"has_graphic":true|false,"primary_color_hex":"#rrggbb"}`;
 
 /* Classify one image. Returns the full record - the caller decides what an
    `uncertain` verdict means (see resolveGarmentViews), rather than the prompt
@@ -1439,6 +1457,7 @@ async function classifyFrontBackDetailed(imageUrl) {
             age_group_confidence: { type: "NUMBER" },
             text_ocr:             { type: "STRING" },
             is_true_back_view:    { type: "BOOLEAN" },
+            has_graphic:          { type: "BOOLEAN" },
             primary_color_hex:    { type: "STRING" },
           },
           /* The three new fields are NOT `required`. A model that omits one must still
@@ -1496,6 +1515,18 @@ async function classifyFrontBackDetailed(imageUrl) {
        on the evidence it already had (§2.1: positive evidence only, and this is not a
        new way to CLAIM a back - only a way to reject one). */
     is_true_back_view: parsed?.is_true_back_view === true,
+    /* ── ABSENT MEANS "DECORATED", NOT "PLAIN" - the asymmetry is the whole point ──────
+       Every other optional field here abstains to null. This one abstains to TRUE, and
+       deliberately, because its two errors are not symmetric:
+         wrongly "plain"     -> the room selects PLAIN_BACK_ANCHOR, which instructs Decart
+                                that the rear is smooth unbroken fabric, and the garment's
+                                artwork is ERASED from the render.
+         wrongly "decorated" -> the room keeps the existing wording, which is exactly
+                                today's behaviour for every garment.
+       Only an explicit `false` from the model is licence to call a side plain. An older
+       server build, a malformed body or a rate-limited fallback all land on true and
+       change nothing. */
+    has_graphic: parsed?.has_graphic !== false,
     primary_color_hex: normalizeHexColor(parsed?.primary_color_hex),
   };
 }
@@ -1577,7 +1608,7 @@ const MISSING_COLUMN_RE = /column .* does not exist|Could not find the/i;
 async function getCachedClassificationDetailed(imageUrl) {
   if (!supabase) return null;
   const V11 = "classification, confidence, source, cue, age_group, age_group_confidence";
-  const V12_ONLY = ", text_ocr, is_true_back_view, primary_color_hex";
+  const V12_ONLY = ", text_ocr, is_true_back_view, primary_color_hex, has_graphic";
   let { data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY);
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("[garment_cache] v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation");
@@ -1588,15 +1619,15 @@ async function getCachedClassificationDetailed(imageUrl) {
         const classification = await getCachedClassification(imageUrl);
         return classification
           ? { classification, confidence: null, source: "legacy", cue: "", age_group: null, age_group_confidence: null,
-              text_ocr: null, is_true_back_view: null, primary_color_hex: null }
+              text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null }
           : null;
       }
       if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
       return data ? { ...data, age_group: null, age_group_confidence: null,
-                      text_ocr: null, is_true_back_view: null, primary_color_hex: null } : null;
+                      text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null } : null;
     }
     if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
-    return data ? { ...data, text_ocr: null, is_true_back_view: null, primary_color_hex: null } : null;
+    return data ? { ...data, text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null } : null;
   }
   if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
   return data || null;
@@ -1635,6 +1666,7 @@ async function saveClassification(imageUrl, classification, meta = {}) {
   const v12Fields = {
     text_ocr: typeof meta.textOcr === "string" ? meta.textOcr : null,
     is_true_back_view: typeof meta.isTrueBackView === "boolean" ? meta.isTrueBackView : null,
+    has_graphic: typeof meta.hasGraphic === "boolean" ? meta.hasGraphic : null,
     primary_color_hex: meta.primaryColorHex || null,
   };
 
@@ -2175,6 +2207,30 @@ function resolveAgeGroup({ images, records, front }) {
   return { age_group: "uncertain", age_group_confidence: 0 };
 }
 
+/* Is the resolved REAR panel blank? Extracted as a pure function because the inline
+   version shipped with ZERO test coverage and was wrong in a way no suite could see - it
+   read text_ocr (lettering) to answer a question about GRAPHICS, so a photographic rear
+   print with no words was declared plain and the room instructed Decart to render a blank
+   back. See supabase_setup_v12.sql's has_graphic note for the full report.
+
+   Returns true / false / null, and null is a real answer meaning "nobody looked" - the
+   room switches to its plain-back anchor ONLY on true.
+   @param {{back:string, back_source:string, backRecord:object|null}} o
+   @returns {boolean|null} */
+function resolveBackIsPlain({ back, back_source, backRecord }) {
+  if (!back) return null;
+  /* WE generated this rear, and SYNTH_BACK_PROMPT explicitly reconstructs unbroken fabric
+     and forbids carrying the front graphic over. Plain by construction, no verdict needed. */
+  if (back_source === "synthetic") return true;
+  /* Strictly `=== false`. has_graphic abstains to true upstream, so undefined (older
+     build, pre-v12 cache row, rate-limited fallback) must leave this null rather than
+     reading a missing column as "no graphic" - that asymmetry is the entire safety
+     property, because a wrong "plain" erases the garment's artwork from the render. */
+  if (backRecord && backRecord.has_graphic === false) return true;
+  if (backRecord && backRecord.has_graphic === true) return false;
+  return null;
+}
+
 /* POST /api/classify-images
    Request (all fields optional except `images`):
      { images: string[],            // the scraped gallery, DOM order
@@ -2255,6 +2311,9 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
              abstain-on-absent contract for pre-v12 rows. */
           text_ocr: cached.text_ocr ?? null,
           is_true_back_view: cached.is_true_back_view ?? null,
+          /* undefined, NOT false, on a pre-v12 row - back_is_plain requires an explicit
+             false and must never read a missing column as "no graphic". */
+          has_graphic: typeof cached.has_graphic === "boolean" ? cached.has_graphic : undefined,
           primary_color_hex: cached.primary_color_hex ?? null,
           cached: true,
         });
@@ -2272,6 +2331,7 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
           confidence: rec.confidence, source: rec.view === "uncertain" ? "uncertain" : "gemini", cue: rec.cue,
           ageGroup: rec.age_group, ageGroupConfidence: rec.age_group_confidence,
           textOcr: rec.text_ocr, isTrueBackView: rec.is_true_back_view, primaryColorHex: rec.primary_color_hex,
+          hasGraphic: rec.has_graphic,
         }
       );
       records.push({ ...rec, source: rec.view === "uncertain" ? "uncertain" : "gemini" });
@@ -2338,18 +2398,24 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
      Guessing "plain" on a garment with a real back print would suppress the one graphic
      the shopper turned around to see - the print-less-back bug, inverted. Abstention
      keeps today's wording (CLAUDE.md 2.5). */
-  let back_is_plain = null;
-  if (views.back) {
-    if (views.back_source === "synthetic") {
-      back_is_plain = true;
-    } else {
-      const backIdx = uniqueUrls.findIndex((u) => sameImage(u, views.back));
-      const backRec = backIdx !== -1 ? records[backIdx] : null;
-      if (backRec && typeof backRec.text_ocr === "string") {
-        back_is_plain = backRec.text_ocr.trim() === "";
-      }
-    }
-  }
+  /* ⚠ THIS USED TO READ text_ocr, AND THAT WAS A BUG THAT ERASED ARTWORK.
+     It computed `back_is_plain = backRec.text_ocr.trim() === ""`. text_ocr transcribes
+     LETTERING; it says nothing about whether the side carries a graphic. A rear panel
+     with a large PHOTOGRAPHIC print and no legible words transcribes to "" - so the back
+     was declared plain, the room selected PLAIN_BACK_ANCHOR ("The rear panel is smooth
+     unbroken fabric"), and Decart was instructed to render a blank back over a reference
+     that plainly had a mountain print on it. Reported live: the shopper turned 180 and
+     got a generic plain back.
+
+     The question is now asked directly. has_graphic is a separate verdict from the same
+     Gemini call, and the two are EXPECTED to disagree on exactly this case: a photo print
+     with no words is has_graphic=true, text_ocr="". Never infer one from the other. */
+  const _backIdx = views.back ? uniqueUrls.findIndex((u) => sameImage(u, views.back)) : -1;
+  const back_is_plain = resolveBackIsPlain({
+    back: views.back,
+    back_source: views.back_source,
+    backRecord: _backIdx !== -1 ? records[_backIdx] : null,
+  });
 
   const uncertainCount = records.filter((r) => r.view === "uncertain").length;
   console.log(

@@ -86,7 +86,34 @@
 ALTER TABLE garment_cache
   ADD COLUMN IF NOT EXISTS text_ocr          TEXT,
   ADD COLUMN IF NOT EXISTS is_true_back_view BOOLEAN,
-  ADD COLUMN IF NOT EXISTS primary_color_hex TEXT;
+  ADD COLUMN IF NOT EXISTS primary_color_hex TEXT,
+  ADD COLUMN IF NOT EXISTS has_graphic       BOOLEAN;
+
+-- ── has_graphic, ADDED AFTER A LIVE BUG. READ THIS BEFORE USING text_ocr FOR ANYTHING ──
+--
+-- The fitting room needs to know whether a garment's rear panel is BLANK, so it can stop
+-- telling Decart to "precisely lock the rear print, logos and back seams" on a garment
+-- that has none (those nouns are positive tokens with no negative_prompt to hang them on,
+-- so they instruct the model to invent rear graphics).
+--
+-- The first implementation answered that from text_ocr: back_is_plain = (text_ocr === "").
+-- THAT WAS WRONG AND IT ERASED ARTWORK. text_ocr transcribes LETTERING. A rear panel
+-- carrying a large PHOTOGRAPHIC print with no legible words transcribes to "" - so the
+-- back was declared plain, the room selected its plain-back anchor ("The rear panel is
+-- smooth unbroken fabric"), and the model was instructed to render a blank back over a
+-- reference that had a mountain photo on it. Reported live: the shopper turned 180 and
+-- got a generic plain back.
+--
+-- has_graphic asks the question directly: does this side carry ANY applied decoration -
+-- print, photo, logo, embroidery, appliqué, all-over pattern, lettering, badge, number.
+-- It is a SEPARATE verdict from text_ocr and the two are EXPECTED to disagree on exactly
+-- the case above. Never infer one from the other.
+--
+-- IT ABSTAINS TO "DECORATED", unlike every other nullable column here, because its errors
+-- are not symmetric: a garment wrongly called plain has its artwork erased from the
+-- render, while one wrongly called decorated simply keeps today's wording. Only an
+-- explicit FALSE is licence to call a side plain; NULL (pre-v12 row, older build,
+-- rate-limited fallback) leaves the room's existing behaviour untouched.
 
 -- '#rrggbb', lowercase, or NULL. normalizeHexColor() in server.js produces exactly
 -- this shape and returns null for anything it cannot parse, so a malformed value

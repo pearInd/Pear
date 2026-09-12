@@ -13,9 +13,9 @@ const start = src.indexOf("/* Resizer endpoints keep the REAL asset");
 const end = src.indexOf("/* POST /api/classify-images");
 const mod = await import("data:text/javascript," + encodeURIComponent(
   "const PRESENTATION_PARAMS = new Set(['width','height','w','h','size','quality','q','dpr','format','fm','crop','fit','scale','v','ver','version','t','cache','_']);\n" +
-  src.slice(start, end) + "\nexport { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON };"
+  src.slice(start, end) + "\nexport { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON, resolveBackIsPlain };"
 ));
-const { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON } = mod;
+const { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON, resolveBackIsPlain } = mod;
 
 let fails = 0;
 function eq(got, want, label) {
@@ -166,6 +166,65 @@ is(normalizeOcr("BE YOUR OWN, Healer -- WORLDWIDE!"), normalizeOcr("BE YOUR OWN 
    "punctuation and runs of whitespace are not evidence of a different print");
 is(normalizeOcr(null), "", "a missing transcription normalises to '' and therefore abstains");
 is(normalizeOcr("TEAM 23") === normalizeOcr("TEAM 32"), false, "genuinely different prints stay different");
+
+console.log("\n── §PLAIN-REAR: the question is GRAPHICS, never lettering ──");
+{
+  /* THE BUG THIS SECTION EXISTS FOR, and it shipped with zero coverage - which is why it
+     reached a live session. back_is_plain was computed as `text_ocr === ""`. text_ocr
+     transcribes LETTERING; it says nothing about graphics. A rear panel carrying a large
+     PHOTOGRAPHIC print and no legible words transcribes to "" - so the back was declared
+     plain, the fitting room selected PLAIN_BACK_ANCHOR ("The rear panel is smooth
+     unbroken fabric"), and Decart was instructed to render a blank back over a reference
+     that had a mountain photo on it. The shopper turned 180 and got a generic plain back.
+
+     has_graphic asks the question directly, and the two verdicts are EXPECTED to disagree
+     on exactly that case. The first check below is the regression itself. */
+  const photoRear = { has_graphic: true, text_ocr: "" };   // mountain print, no words
+  is(resolveBackIsPlain({ back: "b.jpg", back_source: "classifier", backRecord: photoRear }),
+     false,
+     "REGRESSION: a photographic rear print with NO lettering is not plain");
+
+  is(resolveBackIsPlain({ back: "b.jpg", back_source: "classifier",
+                          backRecord: { has_graphic: false, text_ocr: "" } }),
+     true, "a genuinely undecorated rear is plain");
+  /* Lettering with no other decoration is still a graphic - and note text_ocr is not
+     consulted at all any more; it is present here only to prove it does not leak back in. */
+  is(resolveBackIsPlain({ back: "b.jpg", back_source: "classifier",
+                          backRecord: { has_graphic: true, text_ocr: "TEAM 23" } }),
+     false, "rear lettering is a graphic too");
+
+  /* WE generated this rear, and the synthesis prompt reconstructs unbroken fabric and
+     forbids carrying the front graphic over. Plain by construction, no verdict needed -
+     and it must hold even when no record exists for a generated data: URL. */
+  is(resolveBackIsPlain({ back: "data:image/png;base64,xx", back_source: "synthetic", backRecord: null }),
+     true, "a generated rear is plain by construction");
+
+  /* ── ABSTENTION, AND WHY IT IS ASYMMETRIC HERE ──────────────────────────────────
+     Every other optional verdict in this file abstains to null and stays neutral. This
+     one must abstain AWAY FROM "plain", because the two errors are not equal: a wrong
+     "plain" erases the garment's artwork from the render, while a wrong "decorated" just
+     keeps today's wording. So only an explicit false is licence to call a side plain. */
+  is(resolveBackIsPlain({ back: "b.jpg", back_source: "classifier", backRecord: {} }),
+     null, "an older build that never answered abstains - it does not read as plain");
+  is(resolveBackIsPlain({ back: "b.jpg", back_source: "classifier", backRecord: null }),
+     null, "a pre-v12 cache row abstains too");
+  is(resolveBackIsPlain({ back: "", back_source: "none", backRecord: null }),
+     null, "no back at all is not a plain back");
+
+  /* The old implementation would have answered `true` for every one of these, because
+     each has an empty transcription. Asserted as a group so the specific mistake cannot
+     come back through a different route. */
+  const emptyOcrButDecorated = [
+    { has_graphic: true, text_ocr: "" },
+    { has_graphic: true, text_ocr: "   " },
+    { has_graphic: true },
+  ];
+  for (const r of emptyOcrButDecorated) {
+    is(resolveBackIsPlain({ back: "b.jpg", back_source: "classifier", backRecord: r }) === true,
+       false,
+       `empty/absent lettering never implies plain (${JSON.stringify(r)})`);
+  }
+}
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);
