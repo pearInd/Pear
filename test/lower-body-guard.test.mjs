@@ -185,12 +185,25 @@ console.log("\n── §4 THE PAINT TICK: mirror-corrected, band geometry from t
      on the wrong side right at the seam - the same failure class flagged and fixed
      elsewhere in this file (see prompt-only-flip.test.mjs for the image-reupload
      flicker this SAME "get the orientation contract right" discipline exists for). */
-  const translate = canvasCtx.calls.find((c) => c.op === "translate");
-  const scale = canvasCtx.calls.find((c) => c.op === "scale");
-  check("translates by the frame width before flipping (freezeFinalFrame()'s own technique)",
-    translate && translate.args[0] === 1000 && translate.args[1] === 0, JSON.stringify(translate));
-  check("...then applies a horizontal flip, never a vertical one",
-    scale && scale.args[0] === -1 && scale.args[1] === 1, JSON.stringify(scale));
+  /* ── ONE ABSOLUTE MATRIX, NOT translate()+scale() ────────────────────────────────
+     This used to assert a translate(w,0) followed by a scale(-1,1). Same resulting
+     matrix, but those two MULTIPLY into whatever the context already holds, so they are
+     only correct while the surrounding save/restore pair stays balanced - and this loop
+     runs every ~16ms on a PERSISTENT canvas, where one early return between the save and
+     the restore would compound the flip on every subsequent frame and oscillate the feed.
+     setTransform REPLACES the matrix, so each frame is independent of the last by
+     construction. Every flip in app.js is written this way now; a bare scale(-1,1) is a
+     smell wherever it reappears.
+     Checking the matrix directly is also a STRICTER assertion than the pair it replaces:
+     all six components are pinned at once, so a vertical flip, a skew or a stray offset
+     fails here rather than only the two components the old checks happened to read. */
+  const setT = canvasCtx.calls.find((c) => c.op === "setTransform");
+  check("flips with ONE absolute matrix - horizontal only, offset by the frame width",
+    setT && JSON.stringify(setT.args) === JSON.stringify([-1, 0, 0, 1, 1000, 0]),
+    JSON.stringify(setT && setT.args));
+  check("...and builds no relative flip alongside it",
+    !canvasCtx.calls.some((c) => c.op === "scale" || c.op === "translate"),
+    "a relative flip on top of an absolute one is a double transform");
 
   const draw = canvasCtx.calls.find((c) => c.op === "drawImage");
   check("drawImage source is the webcam element itself", draw && draw.args[0] === webcamEl);

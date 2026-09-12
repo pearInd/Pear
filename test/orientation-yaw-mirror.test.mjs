@@ -165,5 +165,75 @@ console.log("\n── §4 THE UN-MIRRORING LOCKSTEP ──");
     "captureHoldFrame, freezeFinalFrame and captureLiveFrame must all flip now");
 }
 
+console.log("\n── §5 MATRIX DISCIPLINE: every flip is absolute, every pair is balanced ──");
+{
+  /* THE FAILURE THIS FORECLOSES: an "endless mirror" - the feed flipping back and forth
+     on every tick. It happens when a RELATIVE flip (translate + scale(-1,1), which
+     multiplies into the current matrix) runs in a per-frame loop on a persistent canvas
+     and the save/restore pair around it is ever skipped. Each frame then inverts the
+     last and the sign oscillates.
+     Every flip in app.js is now written as an ABSOLUTE setTransform, which REPLACES the
+     matrix, so a frame cannot inherit anything from its predecessor even if a restore
+     were missed. That makes the oscillation unrepresentable rather than merely absent. */
+  const code = APP.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\r\n]*/g, " ");
+
+  check("no relative horizontal flip survives anywhere in app.js",
+    !/\.scale\(\s*-1/.test(code),
+    "translate+scale multiplies into the existing matrix - absolute setTransform does not");
+
+  /* Balanced pairs, counted on CODE ONLY. An earlier version of this check counted the
+     raw file and reported an imbalance that turned out to be the word "restore()" inside
+     a comment - a false positive that would have sent the next reader hunting a bug that
+     was not there. */
+  const saves = (code.match(/\.save\(\)/g) || []).length;
+  const restores = (code.match(/\.restore\(\)/g) || []).length;
+  check(`save/restore pairs balance across the file (${saves}/${restores})`,
+    saves === restores && saves > 0, `${saves} save() vs ${restores} restore()`);
+
+  /* The two per-frame loops that write to a canvas. Both must pair structurally - in a
+     finally - rather than on the happy path, or an exception mid-draw leaks a pushed
+     state into every subsequent frame. */
+  const guard = code.slice(code.indexOf("function startLowerBodyGuard"),
+                           code.indexOf("function stopLowerBodyGuard"));
+  check("the lower-body guard loop restores in a finally",
+    /finally \{ ctx\.restore\(\); \}/.test(guard), guard.slice(-500));
+  const rec = code.slice(code.indexOf("function startRecording"), code.indexOf("function stopRecording"));
+  check("the recorder loop restores in a finally",
+    /finally \{ ctx\.restore\(\); \}/.test(rec), rec.slice(-600));
+  /* beginRecorder() is not a drawing call and must sit OUTSIDE the transform scope -
+     having it inside was what made the original catch fire after the paired restore had
+     already run, popping a state that was never pushed. */
+  check("...and the recorder's non-drawing call sits outside the transform scope",
+    /\} finally \{ ctx\.restore\(\); \}\s*\n\s*beginRecorder\(\);/.test(rec),
+    "an unbalanced restore inside a per-frame loop is how a matrix bug starts");
+
+  /* The outgoing WebRTC canvas is the one surface whose pixels Decart conditions on, so
+     a stray matrix there is silent and total - it would flip every frame the model ever
+     sees. It resets to identity explicitly even though it applies no transform itself. */
+  const draw = code.slice(code.indexOf("const drawFrame = () =>"), code.indexOf("const tick = () =>"));
+  check("the outgoing canvas asserts identity every frame",
+    /ctx\.setTransform\(1, 0, 0, 1, 0, 0\);/.test(draw), draw);
+
+  /* ── EXACTLY ONE LAYER MIRRORS, AND THE SDK IS NOT IT ───────────────────────────
+     mirror:"auto" was previously relied upon to no-op because a canvas track carries no
+     facingMode - a statement about SDK internals this repo neither controls nor version
+     pins, re-decided per browser. It was survivable while the outgoing canvas pre-flipped
+     (two flips cancel: wrong, but STABLE). Now that the canvas ships reality, an "auto"
+     that fires flips the stream while CSS flips the display, and any SDK-side
+     re-evaluation mid-session reads as the feed toggling horizontally.
+     false is not a guess about SDK behaviour - it refuses the SDK an opinion. */
+  check("the SDK is told mirror:false explicitly, never auto and never omitted",
+    /mirror: false,/.test(code) && !/mirror: ?"auto"/.test(code),
+    "an SDK-side mirror decision competing with the CSS flip is the endless-mirror failure");
+  /* One options builder feeds the only connect() call, and SDK-internal reconnects reuse
+     the object the SDK already holds - so this single value governs the whole session
+     lifecycle. A second literal options object would break that guarantee silently. */
+  check("...from the ONE factored options builder every connect path shares",
+    (code.match(/mirror: false/g) || []).length === 1 &&
+    /function buildRealtimeConnectOpts\(gen\)/.test(code) &&
+    /client\.realtime\.connect\(realtimeInput, buildRealtimeConnectOpts\(gen\)\)/.test(code),
+    "a second inline options object would let one connect path disagree about the mirror");
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);

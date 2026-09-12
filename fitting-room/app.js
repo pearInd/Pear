@@ -3479,8 +3479,13 @@ async function ensureOnline() {
    canvas at EXACTLY `fps` and `width`×`height`, and give the SDK canvas.captureStream
    instead. captureStream(0) + manual requestFrame() gives precise, source-rate-
    independent pacing, so Decart processes (and bills) at our rate, not the camera's.
-   We also flip horizontally here so the SDK's mirror:"auto" no-ops on the canvas
-   track (it has no facingMode) and the edited feed stays a correct selfie view.
+   NO FLIP HAPPENS HERE ANY MORE. This used to mirror every outgoing frame so the
+   SDK's mirror:"auto" would no-op on a canvas track (which has no facingMode) and
+   the edited feed would arrive already selfie-oriented. Both halves of that are
+   gone: the flip moved to the CSS display layer so Decart is conditioned on an
+   un-mirrored world (see drawFrame below for the reversed-chest-text report that
+   forced it), and the SDK is now passed mirror:false explicitly rather than being
+   trusted to no-op. This canvas ships reality; exactly one layer mirrors.
 
    Returns { stream, dispose }. dispose() MUST run in teardown() - it clears the
    paint timer, stops the canvas track, and stops the cloned source track it owns.
@@ -3627,6 +3632,15 @@ function createThrottledInputStream(srcStream, {
     const scale = Math.max(width / vw, height / vh);
     const dw = vw * scale, dh = vh * scale;
     const dx = (width - dw) / 2, dy = (height - dh) / 2;
+    /* IDENTITY, ASSERTED RATHER THAN ASSUMED. This loop applies no transform of its own,
+       so the reset looks redundant - and it is, today, which is exactly why it is cheap
+       enough to keep. This canvas is the ONE surface whose contents become the payload
+       Decart conditions on, and the failure it guards is silent: a stray transform left
+       on this context does not throw, does not log, and does not look wrong locally - it
+       just means every frame the model ever sees is flipped, which is the bug the
+       un-mirroring refactor above exists to have fixed. One call per frame to make that
+       unrepresentable is a good trade. */
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(video, dx, dy, dw, dh);
   };
 
@@ -3713,7 +3727,27 @@ function buildRealtimeConnectOpts(gen) {
       width: LIVE_W,
       height: LIVE_H,
     },
-    mirror: "auto",
+    /* ── mirror: false, EXPLICITLY - never "auto", never omitted ────────────────────
+       THE MIRROR IS OWNED BY EXACTLY ONE LAYER NOW: CSS, via
+       `.camera-card.show-live #aiVideo { transform: scaleX(-1) }`. Everything else in the
+       pipeline carries reality - the outgoing canvas no longer pre-flips (see drawFrame),
+       and the capture surfaces bake their own flip at the point they produce a file.
+
+       WHY "auto" WAS A LIABILITY RATHER THAN A NO-OP. The old reasoning was that it
+       no-ops on a canvas track because that track has no facingMode - which is a
+       statement about SDK internals we neither control nor version-pin, decided per
+       browser. While the outgoing frames were pre-flipped it also did not matter much:
+       if "auto" had ever fired, the two flips would have cancelled and the feed would
+       have looked un-mirrored, which is wrong but STABLE. Now that the canvas ships
+       reality, an "auto" that fires would flip the stream while CSS flips the display,
+       and any SDK-side re-evaluation of that decision mid-session shows up as the feed
+       toggling horizontally - the "endless mirror" failure.
+
+       false removes the question. It is not a guess about what the SDK does; it is a
+       refusal to let the SDK have an opinion. If the shopper's view ever comes back
+       un-mirrored, the bug is in the CSS rule above, and there is now exactly one place
+       to look. */
+    mirror: false,
     onRemoteStream: (editedStream) => {
       if (gen !== sessionGen) return;    // stale callback from a torn-down session
       // DEBUG WRAPPER: flag a stream rendering with no garment on the wire. typeof-guarded,
@@ -12971,10 +13005,15 @@ function captureHoldFrame() {
   const cv = document.createElement("canvas");
   cv.width = w; cv.height = h;
   const c = cv.getContext("2d", { alpha: false });
+  /* Fresh canvas, so this context starts at identity and was never at risk of
+     accumulating - written in the absolute form anyway so that every flip in this file
+     reads the same way and a bare translate+scale stays a smell wherever it appears. */
   c.save();
-  if (mirror) { c.translate(w, 0); c.scale(-1, 1); }
-  try { c.drawImage(src, 0, 0, w, h); } catch (_) { c.restore(); return null; }
-  c.restore();
+  try {
+    c.setTransform(mirror ? -1 : 1, 0, 0, 1, mirror ? w : 0, 0);
+    c.drawImage(src, 0, 0, w, h);
+  } catch (_) { return null; }
+  finally { c.restore(); }
   return cv;
 }
 
@@ -14063,19 +14102,32 @@ function startLowerBodyGuard() {
     const bandY = Math.round(h * (1 - lowerBodyGuardFrac));
     ctx.clearRect(0, 0, w, h);
     ctx.save();
-    /* Selfie-mirror correction. #webcam's DECODED frame (what drawImage sees) is never
-       mirrored - only its CSS display is (scaleX(-1), style.css). #aiVideo is already
-       correctly oriented coming back from Decart (no CSS mirror on it at all - see the
-       base .camera-card rule). So a raw drawImage(webcam, ...) here would composite a
-       MIRROR-FLIPPED band under a correctly-oriented one, an obvious seam (buttons/
-       pockets/prints landing on the wrong side at the boundary). This translate+scale is
-       the exact technique freezeFinalFrame() already uses for its own webcam-sourced
-       fallback branch - same correction, same reason, applied here instead to only the
-       guarded band rather than the whole frame. */
-    ctx.translate(w, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(webcam, 0, bandY, w, h - bandY, 0, bandY, w, h - bandY);
-    ctx.restore();
+    try {
+      /* ABSOLUTE, EVERY FRAME. This used to be translate(w,0) + scale(-1,1), which
+         MULTIPLIES into the current matrix rather than replacing it - safe only while the
+         surrounding save/restore pair stays perfectly balanced. It is balanced (the
+         restore is in a finally now), but this loop runs every ~16ms on a PERSISTENT
+         canvas, so a single future edit returning early between the save and the restore
+         would compound the flip on every subsequent frame and the feed would oscillate -
+         exactly the "endless mirror" failure this pass went looking for. setTransform
+         makes each frame independent of the last by construction rather than by
+         inspection, which is the only form of the guarantee that survives editing. */
+      /* Selfie-mirror correction. #webcam's DECODED frame (what drawImage sees) is never
+         mirrored - only its CSS display is (scaleX(-1), style.css). So a raw
+         drawImage(webcam, ...) here would composite a MIRROR-FLIPPED band under the rest
+         of the frame: an obvious seam, with buttons/pockets/prints landing on the wrong
+         side at the boundary.
+         THE REFERENCE POINT IN THIS COMMENT USED TO BE WRONG. It read "#aiVideo is
+         already correctly oriented coming back from Decart (no CSS mirror on it at all)",
+         which stopped being true when the selfie flip moved off the outgoing WebRTC
+         canvas onto the display layer: #aiVideo's decoded frames are now un-mirrored and
+         its DISPLAY carries scaleX(-1). This guard is UNAFFECTED and needs no change,
+         because it samples #webcam - never flipped at source - and bakes its own flip,
+         landing on the same on-screen orientation as #aiVideo by a different route. Both
+         are selfie on screen; only the layer applying the flip differs. */
+      ctx.setTransform(-1, 0, 0, 1, w, 0);
+      ctx.drawImage(webcam, 0, bandY, w, h - bandY, 0, bandY, w, h - bandY);
+    } finally { ctx.restore(); }
     lowerBodyGuardRAF = requestAnimationFrame(paint);
   }
   lowerBodyGuardRAF = requestAnimationFrame(paint);
@@ -14122,10 +14174,18 @@ function freezeFinalFrame() {
   if (!cv) return null;
   cv.width = w; cv.height = h;
   const ctx = cv.getContext("2d", { alpha: false });
+  /* #resultCanvas is a PERSISTENT DOM canvas, unlike the throwaway ones the other capture
+     helpers create - so its context carries whatever matrix the previous call left. The
+     `cv.width = w` above already resets that as a side effect of resizing, but relying on
+     a resize to clear a transform is a coincidence, not a guarantee: the day the frame
+     size stops changing between calls, the reset silently stops happening. setTransform is
+     absolute and states the intent directly. */
   ctx.save();
-  if (mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
-  try { ctx.drawImage(src, 0, 0, w, h); } catch (_) { ctx.restore(); return null; }
-  ctx.restore();
+  try {
+    ctx.setTransform(mirror ? -1 : 1, 0, 0, 1, mirror ? w : 0, 0);
+    ctx.drawImage(src, 0, 0, w, h);
+  } catch (_) { return null; }
+  finally { ctx.restore(); }
   /* Bake the SAME lower-body guard into the snapshot the shopper actually keeps - the
      live view and the "masterpiece" they save/add-to-cart must never disagree about
      which pixels are real. Only when the primary source is the AI-EDITED stream
@@ -14143,14 +14203,16 @@ function freezeFinalFrame() {
     const srcBandY = Math.round(webcam.videoHeight * (1 - lowerBodyGuardFrac));
     const dstBandY = Math.round(h * (1 - lowerBodyGuardFrac));
     ctx.save();
-    ctx.translate(w, 0);
-    ctx.scale(-1, 1);
     try {
+      /* Absolute, for the same reason as the draw above: this is the second write to the
+         same persistent #resultCanvas context within one call, so it must not depend on
+         what the first one left behind. */
+      ctx.setTransform(-1, 0, 0, 1, w, 0);
       ctx.drawImage(webcam,
         0, srcBandY, webcam.videoWidth, webcam.videoHeight - srcBandY,
         0, dstBandY, w, h - dstBandY);
     } catch (_) { /* best-effort - a failed guard paint must not fail the whole snapshot */ }
-    ctx.restore();
+    finally { ctx.restore(); }
   }
   try { return cv.toDataURL("image/jpeg", 0.85); } catch (_) { return null; }
 }
@@ -14361,13 +14423,28 @@ function startRecording() {
            way out to Decart, because #aiVideo's decoded frames were already selfie-
            oriented; that flip moved to the display layer so the model could be
            conditioned on reality, and this is its other half. */
+        /* ── MATRIX DISCIPLINE, and the restore is in a finally for a reason ─────────
+           The first version of this block called ctx.restore() from a catch that also
+           covered beginRecorder(). If drawImage succeeded and beginRecorder() threw, that
+           catch fired AFTER the paired restore had already run, popping a state that was
+           never pushed. An extra restore on an empty stack is a documented no-op so it
+           could not corrupt anything today, but it is an unbalanced pair inside a loop
+           that runs every frame, which is precisely the shape that turns into a real
+           matrix bug the moment anything above it pushes a state. try/finally makes the
+           pairing structural instead of a property of which line threw.
+           beginRecorder() moved OUT of the guarded region - it is not a drawing call and
+           has no business inside the transform's scope. */
         try {
           ctx.save();
-          ctx.setTransform(-1, 0, 0, 1, w, 0);
-          ctx.drawImage(video, 0, 0, w, h);
-          ctx.restore();
+          try {
+            /* setTransform, not translate+scale: it REPLACES the matrix rather than
+               multiplying into it, so this frame cannot inherit anything from the last
+               one even if a restore were ever missed. Absolute by construction. */
+            ctx.setTransform(-1, 0, 0, 1, w, 0);
+            ctx.drawImage(video, 0, 0, w, h);
+          } finally { ctx.restore(); }
           beginRecorder();
-        } catch (_) { try { ctx.restore(); } catch (__) {} }
+        } catch (_) { /* a torn-down canvas mid-teardown - the next tick re-checks */ }
       }
     }
     recordRaf = requestAnimationFrame(paint);
@@ -14730,7 +14807,11 @@ async function renderMockDemo(item) {
   const cv = $("resultCanvas");
   cv.width = vw; cv.height = vh;
   const c = cv.getContext("2d");
-  c.save(); c.translate(vw, 0); c.scale(-1, 1); c.drawImage(webcam, 0, 0, vw, vh); c.restore();
+  /* Absolute, and on #resultCanvas again - the same persistent context freezeFinalFrame()
+     writes to, so this must not inherit a matrix from whichever of them ran last. */
+  c.save();
+  try { c.setTransform(-1, 0, 0, 1, vw, 0); c.drawImage(webcam, 0, 0, vw, vh); }
+  finally { c.restore(); }
   try {
     const img = await loadImage(item.img);
     const upper = item.garmentType !== "lower_body";
@@ -15881,7 +15962,14 @@ function captureLiveFrame() {
   const cnv = document.createElement("canvas");
   cnv.width = cw; cnv.height = ch;
   const ctx = cnv.getContext("2d");
-  if (mirror) { ctx.translate(cw, 0); ctx.scale(-1, 1); }
+  /* setTransform, replacing the translate()+scale() pair this used to build. Both produce
+     the identical matrix here, because `cnv` is created fresh on every call so the context
+     always starts at identity - this helper was never at risk of accumulating. It is
+     rewritten anyway so that the ONE form appears everywhere a flip is applied in this
+     file: an absolute matrix, never a relative multiply. A reader who finds a bare
+     translate+scale somewhere should be able to treat it as a smell rather than having to
+     work out per-site whether that particular canvas happens to be reused. */
+  if (mirror) ctx.setTransform(-1, 0, 0, 1, cw, 0);
   try { ctx.drawImage(src, 0, 0, cw, ch); } catch (_) { return null; }
   try { return cnv.toDataURL("image/jpeg", 0.7); } catch (_) { return null; }
 }
