@@ -201,6 +201,11 @@ const I18N = {
   // "fits neither" branch.
   resultLabelNoMatch:       { he: "לא נמצאה מידה מתאימה:", en: "No matching size found:" },
   sizeResultNoMatch:        { he: "אין התאמה", en: "No match" },
+  // Narrower than sizeResultNoMatch above: shown specifically when height/weight sit
+  // ABOVE the resolved adult chart's own bounds (not merely in the gap between charts) -
+  // see calculateSize()'s "fits neither" branch. There is no bigger size to suggest,
+  // so the copy says so plainly rather than implying the input might still be fixable.
+  sizeResultOverflow:       { he: "אין מידה מתאימה", en: "No size available" },
   // Appended to a bare child-chart size ("12" -> "12 (ילדים)") everywhere a size
   // value is displayed or logged - see formatSizeLabel(). Adult sizes are never
   // touched by this key; the number alone ("M"/"L") is unambiguous on its own.

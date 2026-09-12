@@ -976,10 +976,43 @@ const CHILD_SIZE_SCALE = CHILD_SIZE_CHART.map((r) => r.size);
 /* Ordered size scale - full range used by the override selector and delta math. */
 const SIZE_SCALE = ["XS", "S", "M", "L", "XL", "XXL", "3XL"];
 
+/* Adult PANTS numeric sizing (EU convention: 36-46 even sizes). A bottoms garment is
+   fitted on waist and hip, not chest - so this chart swaps ZARA_SIZE_CHART's
+   minChest/maxChest and minLegs/maxLegs columns for minHips/maxHips, and keeps
+   waist. calculateSize() only has a "waist" optional input today (no separate hip
+   measurement field), so the fine-tune pass below scores waist alone; minHips/
+   maxHips still ride on each row for a standards-comparable chart and for any
+   future hip input, they just contribute no penalty yet.
+   Ceiling matches ZARA_SIZE_CHART's XL row (195cm/100kg → here 195cm/102kg) so the
+   "genuinely out of catalog" overflow guard in calculateSize() means the same thing
+   on either chart - see isAdultPantsProduct() below for when this chart is chosen
+   over ZARA_SIZE_CHART. */
+const ADULT_PANTS_SIZE_CHART = [
+  { size: "36", minHeight: 155, maxHeight: 165, minWeight: 48, maxWeight: 58,  minWaist: 64, maxWaist: 70,  minHips: 88,  maxHips: 94  },
+  { size: "38", minHeight: 160, maxHeight: 170, minWeight: 55, maxWeight: 65,  minWaist: 68, maxWaist: 74,  minHips: 92,  maxHips: 98  },
+  { size: "40", minHeight: 165, maxHeight: 175, minWeight: 62, maxWeight: 73,  minWaist: 72, maxWaist: 79,  minHips: 96,  maxHips: 103 },
+  { size: "42", minHeight: 170, maxHeight: 180, minWeight: 70, maxWeight: 82,  minWaist: 77, maxWaist: 85,  minHips: 101, maxHips: 109 },
+  { size: "44", minHeight: 175, maxHeight: 186, minWeight: 78, maxWeight: 92,  minWaist: 83, maxWaist: 92,  minHips: 107, maxHips: 116 },
+  { size: "46", minHeight: 180, maxHeight: 195, minWeight: 87, maxWeight: 102, minWaist: 90, maxWaist: 100, minHips: 114, maxHips: 124 },
+];
+
+/* The EU adult pants ladder, derived from ADULT_PANTS_SIZE_CHART so the two can never
+   drift apart - same convention as CHILD_SIZE_SCALE above. → ["36","38","40","42","44","46"]
+   Defined HERE, immediately beside its chart, rather than beside isAdultPantsProduct()
+   below (which is where it's actually used) - some test harnesses extract a narrower
+   slice of this file that starts AFTER this point but still before that function, and an
+   eager `.map()` over a chart those harnesses never included would throw ReferenceError
+   at import time. isAdultPantsProduct() itself is a plain function body (deferred, not
+   eagerly evaluated), so it can safely read this from a slice that doesn't include the
+   chart, as long as the Set itself was already built here. */
+const ADULT_PANTS_NUMERIC_SIZES = new Set(ADULT_PANTS_SIZE_CHART.map((r) => r.size));
+
 /**
  * Height/weight penalty for one chart row - the scoring kernel behind
- * calculateSize()'s match pass, shared by both charts. Same ×2 per-cm/kg
- * weighting as the original adult matcher.
+ * calculateSize()'s match pass, shared by every chart (ZARA_SIZE_CHART,
+ * CHILD_SIZE_CHART, and ADULT_PANTS_SIZE_CHART all carry the same four
+ * min/maxHeight/min/maxWeight fields). Same ×2 per-cm/kg weighting as the
+ * original adult matcher.
  * @returns {number}
  */
 function coreHwPenalty(row, height, weight) {
@@ -1132,6 +1165,42 @@ function isAdultProduct(sizes, garmentAgeGroup) {
     return !list.every((s) => KIDS_NUMERIC_SIZES.has(s));
   }
   return garmentAgeGroup === "adult";
+}
+
+/**
+ * Whether the product's OWN size list is confidently the adult-pants numeric ladder -
+ * same "every token or abstain" confidence rule isKidsProduct()/isAdultProduct() use for
+ * their own charts, applied here for one more question: not just kids-vs-adult, but
+ * WHICH adult chart. A mixed list, a letter scale, or no list at all is NOT confidently
+ * pants-numeric, and stays on ZARA_SIZE_CHART - never a guess, matching this file's
+ * "an unconfident verdict must not outrank" rule (see CLAUDE.md §2.5).
+ * @param {string[]|string|null} sizes
+ * @returns {boolean}
+ */
+function isAdultPantsProduct(sizes) {
+  const list = parseSizeList(sizes);
+  return list.length > 0 && list.every((s) => ADULT_PANTS_NUMERIC_SIZES.has(s));
+}
+
+/**
+ * The chart-selection gate calculateSize() reads: true only when the product is
+ * confidently adult-pants-numeric AND (whenever a real item is already known) it is
+ * confidently a bottoms garment. The `item` check only ever narrows a numeric match
+ * that turns out to belong to a known non-bottoms item (e.g. an EU-numbered top run -
+ * see categoryFromSizeRun()'s own note that an EU run opening at 34/36 is genuinely
+ * ambiguous with tops) - it can never widen a list that isn't pants-numeric in the
+ * first place. `item` is usually unavailable here (calculateSize() runs on Screen 1,
+ * before activeItem exists - see resolvedGarmentSizes()'s comment), so the sizing
+ * evidence alone decides in the common case, exactly like isKidsProduct()/
+ * isAdultProduct() already do with no item at all.
+ * @param {string[]|string|null} sizes
+ * @param {object|null|undefined} item - activeItem, when it already exists
+ * @returns {boolean}
+ */
+function isAdultNumericPantsGarment(sizes, item) {
+  if (!isAdultPantsProduct(sizes)) return false;
+  if (item && typeof isBottomsGarment === "function" && !isBottomsGarment(item)) return false;
+  return true;
 }
 
 /**
@@ -1369,16 +1438,22 @@ function calculateSize() {
   // filtered, so it can never contribute a candidate below, even if the body
   // would technically fit a row there.
   const garmentAgeGroup = resolvedGarmentAgeGroup();
+  const garmentSizes = resolvedGarmentSizes();
+  // Which adult chart applies to THIS garment - see isAdultNumericPantsGarment()'s
+  // comment for why the product's own numeric size list is what decides, same
+  // precedence isKidsProduct()/isAdultProduct() already give that list below.
+  const useAdultPantsChart = isAdultNumericPantsGarment(garmentSizes, activeItem);
+  const adultChart = useAdultPantsChart ? ADULT_PANTS_SIZE_CHART : ZARA_SIZE_CHART;
   /* Computed BEFORE the garment constraint below, and kept: this is the shopper's own
      scale, which the mismatch guard needs precisely because the constrained result
      cannot express "an adult body looking at a kids-only product" (it collapses to
      null). See userBodyCategory()'s comment. */
   const bodyChildFits = CHILD_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
-  const bodyAdultFits = ZARA_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
+  const bodyAdultFits = adultChart.filter((row) => coreHwPenalty(row, height, weight) === 0);
   currentBodyCategory = bodyAdultFits.length ? "adult" : (bodyChildFits.length ? "child" : null);
 
-  const childFits = isAdultProduct(resolvedGarmentSizes(), garmentAgeGroup) ? [] : bodyChildFits;
-  const adultFits = isKidsProduct(resolvedGarmentSizes(), garmentAgeGroup) ? [] : bodyAdultFits;
+  const childFits = isAdultProduct(garmentSizes, garmentAgeGroup) ? [] : bodyChildFits;
+  const adultFits = isKidsProduct(garmentSizes, garmentAgeGroup) ? [] : bodyAdultFits;
 
   // Overlap zone (genuinely fits BOTH charts, e.g. ~170-172cm/54-60kg) defaults
   // to adult - same tie-break convention used elsewhere in this codebase
@@ -1396,10 +1471,29 @@ function calculateSize() {
     // Blocking, same severity as the sane-range validation error above -
     // Continue stays disabled until the visitor's measurements resolve to a
     // real chart match.
+    //
+    // A body ABOVE the resolved adult chart's own ceiling (currently 195cm/100kg on
+    // ZARA_SIZE_CHART, 195cm/102kg on ADULT_PANTS_SIZE_CHART) can never match any row
+    // in either chart - unlike a gap between the two charts, there is no bigger size
+    // to suggest. That case gets its own explicit "no size available" copy instead of
+    // the generic no-match text, so it doesn't read as a fixable input mistake.
+    // Column-wise max, NOT the chart's last row - the charts happen to be ordered
+    // smallest..largest today so the two coincide, but height's ceiling and weight's
+    // ceiling aren't guaranteed to live on the same row, so each bound is taken
+    // independently. Read off adultChart (whichever one this garment resolved to),
+    // so a numeric-pants product is judged against ITS OWN ceiling, not the letter
+    // chart's.
+    const maxAdultHeight = Math.max(...adultChart.map((row) => row.maxHeight));
+    const maxAdultWeight = Math.max(...adultChart.map((row) => row.maxWeight));
+    const overflowsMaxSize = height > maxAdultHeight || weight > maxAdultWeight;
+
     resultLabel.innerText = t("resultLabelNoMatch");
-    sizeResult.innerText = t("sizeResultNoMatch");
+    sizeResult.innerText = overflowsMaxSize ? t("sizeResultOverflow") : t("sizeResultNoMatch");
     resultBox.classList.add("show", "no-match-result");
     if (resultActions) resultActions.classList.add("is-ready");
+    // nextBtn/currentUserSize were already reset to disabled/null at the top of this
+    // function and neither is touched again below - Continue (and everything gated on
+    // currentUserSize, including goLive()'s token mint) stays locked on this path.
     updateProgress();
     return;
   }
@@ -1413,7 +1507,12 @@ function calculateSize() {
   let bestSize = candidates[0].size, minPenalty = Infinity;
   candidates.forEach((row) => {
     let pen = 0;   // height/weight are already an exact fit for every candidate here
-    if (currentSizeCategory === "adult") {
+    if (currentSizeCategory === "adult" && useAdultPantsChart) {
+      // Pants rows carry minWaist/maxWaist same as ZARA_SIZE_CHART, but chest/legs
+      // are swapped for minHips/maxHips (see ADULT_PANTS_SIZE_CHART's comment) -
+      // there is no "hips" optional input on the form yet, so only waist fine-tunes.
+      if (waist) { if (waist < row.minWaist) pen += (row.minWaist - waist) * 0.5; if (waist > row.maxWaist) pen += (waist - row.maxWaist) * 0.5; }
+    } else if (currentSizeCategory === "adult") {
       if (chest) { if (chest < row.minChest) pen += (row.minChest - chest) * 0.5; if (chest > row.maxChest) pen += (chest - row.maxChest) * 0.5; }
       if (waist) { if (waist < row.minWaist) pen += (row.minWaist - waist) * 0.5; if (waist > row.maxWaist) pen += (waist - row.maxWaist) * 0.5; }
       if (legs)  { if (legs  < row.minLegs)  pen += (row.minLegs  - legs)  * 0.5; if (legs  > row.maxLegs)  pen += (legs  - row.maxLegs)  * 0.5; }

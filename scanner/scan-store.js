@@ -4,8 +4,9 @@
    -----------------------------------------------------------------------------
    Standalone crawler (runs on Railway, independent of the main PEAR server).
    Crawls a storefront, finds every product page, collects garment images, and
-   classifies each one as front/back via Gemini - caching results in Supabase's
-   garment_cache table so repeat scans never re-classify the same image.
+   classifies each one as front/back AND kids/adult (age_group) via Gemini in a
+   single call - caching results in Supabase's garment_cache table so repeat
+   scans never re-classify the same image.
 
    No browser involved. Shopify stores (detected via a "Shopify"/"shopify"
    substring on the homepage) are scanned through the /products.json catalog
@@ -224,24 +225,37 @@ async function getCachedClassification(imageUrl) {
   return data ? data.classification : null;
 }
 
+const MISSING_COLUMN_RE = /column .* does not exist|Could not find the/i;
+
 /* Writes the verdict WITH its provenance (see archive/supabase_setup_v8.sql for what
-   each `source` value means and the diagnostic queries it unlocks). Degrades to the
-   V5 column set when that migration hasn't been applied yet, so this scanner is safe
-   to deploy before the SQL runs. */
+   each `source` value means) and the kids/adult verdict added in v11
+   (archive/supabase_setup_v11.sql). Degrades one migration tier at a time - v11
+   columns missing falls back to the v8 shape, v8 columns missing falls back to the
+   bare v5 shape - so this scanner is safe to deploy before either SQL has run. */
 async function saveClassification(imageUrl, classification, meta = {}) {
   const base = { image_url: imageUrl, classification };
-  const enriched = {
-    ...base,
-    canonical_url: canonicalImageUrl(imageUrl),   // one row per PHOTOGRAPH, not per URL
+  const canonical = { canonical_url: canonicalImageUrl(imageUrl) };   // one row per PHOTOGRAPH, not per URL
+  const v8Fields = {
     confidence: Number.isFinite(meta.confidence) ? meta.confidence : null,
     source: meta.source || "gemini",
     cue: meta.cue || null,
     product_url: meta.productUrl || null,
   };
-  let { error } = await supabase.from("garment_cache").upsert([enriched], { onConflict: "canonical_url" });
-  if (error && /column .* does not exist|Could not find the/i.test(error.message || "")) {
-    console.warn("  ⚠ garment_cache V8 columns absent - run archive/supabase_setup_v8.sql");
-    ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));
+  const v11Fields = {
+    age_group: meta.ageGroup || null,
+    age_group_confidence: Number.isFinite(meta.ageGroupConfidence) ? meta.ageGroupConfidence : null,
+  };
+
+  let { error } = await supabase.from("garment_cache")
+    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields }], { onConflict: "canonical_url" });
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+    console.warn("  ⚠ garment_cache v11 columns absent - run archive/supabase_setup_v11.sql for kids/adult classification");
+    ({ error } = await supabase.from("garment_cache")
+      .upsert([{ ...base, ...canonical, ...v8Fields }], { onConflict: "canonical_url" }));
+    if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+      console.warn("  ⚠ garment_cache V8 columns absent - run archive/supabase_setup_v8.sql");
+      ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));
+    }
   }
   if (error) console.warn(`  ⚠ garment_cache write failed: ${error.message}`);
 }
@@ -255,12 +269,13 @@ async function fetchImageAsBase64(imageUrl) {
   return buffer.toString("base64");
 }
 
-/* ── Strict front/back system prompt ────────────────────────────────────────────
-   MUST STAY IN LOCKSTEP with FRONT_BACK_SYSTEM_PROMPT in server.js. The scanner is
-   a standalone package (own package.json, deployed separately to Railway) so it
-   cannot import from the main server - but both write to the SAME garment_cache
-   table, so a drift between the two prompts means the crawl and the live widget
-   disagree about which photo is the back of the same product.
+/* ── Strict front/back + kids/adult system prompt ───────────────────────────────
+   MUST STAY IN LOCKSTEP with FRONT_BACK_SYSTEM_PROMPT in server.js (both the view
+   cues AND the age_group cues below). The scanner is a standalone package (own
+   package.json, deployed separately to Railway) so it cannot import from the main
+   server - but both write to the SAME garment_cache table, so a drift between the
+   two prompts means the crawl and the live widget disagree about which photo is
+   the back of the same product, or about whether a garment is kids'/adult.
 
    The prompt this replaces ended with "answer with exactly one word: front or
    back" and no guidance at all, so every ambiguous rear shot - angled, cropped,
@@ -304,10 +319,49 @@ Report confidence honestly:
 - 0.7-0.89 one decisive cue, partially occluded or low resolution
 - below 0.7 inference from weak cues only -> you must answer "uncertain"
 
-Respond ONLY with JSON matching this schema:
-{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>"}`;
+SEPARATELY, also classify whether this is a KIDS' garment or an ADULT garment -
+this is about the PRODUCT, not the photo's orientation, so judge it independently
+of your front/back answer above.
 
-/** @returns {Promise<{view:"front"|"back"|"uncertain", confidence:number, cue:string}>} */
+DECISIVE KIDS cues:
+- A child or infant is wearing the garment (judge by body/face proportions and
+  height relative to any visible surroundings, not by clothing style alone -
+  petite adult sizing exists and is NOT kids' clothing)
+- A visible size label/tag using child sizing (e.g. "2T", "4Y", "Age 8", "110cm",
+  "XS Kids", a EU/IL kids numeric size like 8-18 on a size chart)
+- Snap-crotch or grow-with-me adjustable waistband construction (bodysuits,
+  rompers) - these do not exist in adult sizing
+- Character licensing, cartoon prints, or a garment scaled small enough that
+  ordinary adult proportions (shoulder width, torso length, sleeve/inseam ratio)
+  are visibly impossible
+
+DECISIVE ADULT cues:
+- An adult is wearing the garment (adult body/face proportions)
+- A visible size label using adult sizing (S/M/L/XL/XXL, numeric waist/chest in
+  cm or inches typical of adult garments, EU 36-52 etc.)
+- Tailoring, cut, or proportions only found in adult clothing (structured
+  blazers, adult-length trousers with a standard rise, underwire, adult-scale
+  formalwear)
+
+TRICKY CASES - follow these exactly:
+- Flat-lay / packshot with NO model and NO visible size label: judge PURELY by
+  the garment's own scale and cut cues above. If the garment could plausibly be
+  either a petite adult's item or an older child's/teen's item with no other
+  cue to separate them, answer "uncertain" - do not guess from styling alone.
+- A youth/teen-cut garment that could span either chart (a typical concern
+  around EU kids size 16-18 / adult XS-S): answer "uncertain" rather than
+  picking one, unless a size label or a visibly child-proportioned wearer
+  settles it.
+- Do NOT infer age group from color, print style, or price positioning alone
+  ("cute" prints and pastel colors exist in adult fashion too).
+
+Report age_group confidence honestly using the SAME bands as view confidence
+above; below 0.7 you must answer "uncertain".
+
+Respond ONLY with JSON matching this schema:
+{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>","age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0}`;
+
+/** @returns {Promise<{view:"front"|"back"|"uncertain", confidence:number, cue:string, age_group:"kids"|"adult"|"uncertain", age_group_confidence:number}>} */
 async function classifyFrontBack(imageUrl) {
   const base64 = await fetchImageAsBase64(imageUrl);
   const resp = await fetch(GEMINI_URL, {
@@ -333,11 +387,13 @@ async function classifyFrontBack(imageUrl) {
         responseSchema: {
           type: "OBJECT",
           properties: {
-            view:       { type: "STRING", enum: ["front", "back", "uncertain"] },
-            confidence: { type: "NUMBER" },
-            cue:        { type: "STRING" },
+            view:                 { type: "STRING", enum: ["front", "back", "uncertain"] },
+            confidence:           { type: "NUMBER" },
+            cue:                  { type: "STRING" },
+            age_group:            { type: "STRING", enum: ["kids", "adult", "uncertain"] },
+            age_group_confidence: { type: "NUMBER" },
           },
-          required: ["view", "confidence"],
+          required: ["view", "confidence", "age_group", "age_group_confidence"],
         },
       },
     }),
@@ -355,11 +411,17 @@ async function classifyFrontBack(imageUrl) {
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { view: "uncertain", confidence: 0, cue: "unparseable response" };
+    return { view: "uncertain", confidence: 0, cue: "unparseable response", age_group: "uncertain", age_group_confidence: 0 };
   }
   const view = ["front", "back", "uncertain"].includes(parsed?.view) ? parsed.view : "uncertain";
   const confidence = Number.isFinite(parsed?.confidence) ? Math.max(0, Math.min(1, parsed.confidence)) : 0;
-  return { view, confidence, cue: typeof parsed?.cue === "string" ? parsed.cue.slice(0, 120) : "" };
+  const ageGroup = ["kids", "adult", "uncertain"].includes(parsed?.age_group) ? parsed.age_group : "uncertain";
+  const ageGroupConfidence = Number.isFinite(parsed?.age_group_confidence)
+    ? Math.max(0, Math.min(1, parsed.age_group_confidence)) : 0;
+  return {
+    view, confidence, cue: typeof parsed?.cue === "string" ? parsed.cue.slice(0, 120) : "",
+    age_group: ageGroup, age_group_confidence: ageGroupConfidence,
+  };
 }
 
 /* Gemini's free tier is 15 requests/minute - even the 8s inter-request delay
@@ -460,6 +522,8 @@ async function classifyAndTally(imageUrl, index, counters, total, productUrl) {
         source: rec.view === "uncertain" ? "uncertain" : "gemini",
         cue: rec.cue,
         productUrl,
+        ageGroup: rec.age_group,
+        ageGroupConfidence: rec.age_group_confidence,
       });
       await sleep(GEMINI_RATE_LIMIT_MS);
     }
