@@ -266,9 +266,16 @@ console.log("\n── §3b THE DISPLAY GATE: the second lock on the same door �
      the leftover inline rule. Clearing hands the element back to the stylesheet. */
   check("retiring the feed hands display AND opacity back to the stylesheet",
     /function resetAiFeedVisibility\(\) \{[\s\S]{0,220}ai\.style\.opacity = "";[\s\S]{0,60}ai\.style\.display = "";/.test(SRC));
+  /* COUNTED ON CODE ONLY. This used to count raw file text and broke the moment a comment
+     elsewhere referred to resetAiFeedVisibility() by name - a phantom fifth "call site"
+     that reads as a real regression and sends the next person looking for a call that does
+     not exist. Prose naming a function is not a call; strip comments before counting.
+     (The save/restore balance check in orientation-yaw-mirror learned the same lesson.) */
+  const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\r\n]*/g, " ");
+  const callSites = (CODE.match(/resetAiFeedVisibility\(\)/g) || []).length;
   check("...and every path that retires or re-uses the element calls it",
-    (SRC.match(/resetAiFeedVisibility\(\)/g) || []).length === 4,   // definition + 2 teardowns + clip replay
-    `${(SRC.match(/resetAiFeedVisibility\(\)/g) || []).length} sites - expected the definition, both teardowns and the clip player`);
+    callSites === 4,   // definition + 2 teardowns + clip replay
+    `${callSites} sites - expected the definition, both teardowns and the clip player`);
   check("...including the history-clip player, which is different content in the same element",
     /resetAiFeedVisibility\(\);\s*\/\/ a clip is different content/.test(SRC),
     "a clip inheriting a dead session's opacity:0 renders nothing at all");

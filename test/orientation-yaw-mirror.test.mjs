@@ -129,8 +129,27 @@ console.log("\n── §4 THE UN-MIRRORING LOCKSTEP ──");
   const draw = APP.slice(APP.indexOf("const drawFrame = () =>"), APP.indexOf("const tick = () =>"));
   check("the outgoing WebRTC canvas is NOT mirrored",
     !/setTransform\(-1/.test(draw) && /ctx\.drawImage\(video, dx, dy, dw, dh\);/.test(draw), draw);
+  /* translateZ(0) is composed into the SAME declaration now. It used to be assigned
+     inline from onRemoteStream as `aiVideo.style.transform = "translateZ(0)"` - and being
+     inline it outranked this rule, so the flip never applied and the live feed rendered
+     with no mirror at all. That is the bug this composition fixes: one declaration, no
+     race, and `transform` on #aiVideo written nowhere else in JS. */
   check("the live display carries the selfie flip instead",
-    /\.camera-card\.show-live #aiVideo \{ display: block; transform: scaleX\(-1\); \}/.test(CSS));
+    /\.camera-card\.show-live #aiVideo \{ display: block; transform: scaleX\(-1\) translateZ\(0\); \}/.test(CSS));
+  /* CODE ONLY. The removed assignments are QUOTED VERBATIM in onRemoteStream's comment,
+     because CLAUDE.md §6 keeps the record of what failed rather than deleting it - so an
+     absence check over raw source fails against its own documentation. This is the third
+     assertion in this repo to learn that (see the save/restore balance count here and the
+     resetAiFeedVisibility call-site count in first-frame-integrity): when a check asserts
+     an ABSENCE, it has to strip comments first, or the fix and its explanation cannot
+     coexist. */
+  const APP_CODE = APP.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\r\n]*/g, " ");
+  check("...and NOTHING assigns #aiVideo an inline transform, which would outrank it",
+    !/aiVideo\.style\.transform\s*=/.test(APP_CODE),
+    "an inline transform silently owns the element and the stylesheet's mirror is ignored");
+  check("...while resetAiFeedVisibility still clears any stray inline transform",
+    /function resetAiFeedVisibility\(\)[\s\S]{0,900}?ai\.style\.transform = "";/.test(APP),
+    "a leftover inline transform carries one surface's mirror convention into another");
   /* A recorded clip already has the flip baked into its pixels, so replay must NOT flip
      again. These two rules differing is the correct state, not an oversight. */
   /* !important, and the only rule in this file that has it. show-live and show-clip
@@ -182,9 +201,21 @@ console.log("\n── §4 THE UN-MIRRORING LOCKSTEP ──");
   check("...and the higher-specificity show-result rule sets display only, never transform",
     !!showResultRule && !/transform/.test(showResultRule[0]),
     showResultRule && showResultRule[0]);
-  check("freezeFinalFrame bakes the flip on BOTH source branches",
-    /function freezeFinalFrame\(\)[\s\S]{0,900}?src = ai;[^\n]*mirror = true;[\s\S]{0,300}?src = webcam;[^\n]*mirror = true;/.test(APP),
-    "an unflipped branch here ships a reversed saved result while the live view looked right");
+  /* ── THE POLICY INVERTED HERE, DELIBERATELY - see MIRROR_POLICY in app.js ──────────
+     These four checks used to assert that every capture BAKED a flip, back when the aim
+     was for captures to match the live selfie view. They now assert the opposite, and the
+     reason is a product decision rather than a correction:
+
+       live      MIRRORED     - motion matches the shopper's body while they move
+       captures  NOT MIRRORED - the garment's text reads correctly in what they keep
+
+     Those cannot both hold on one surface (garment and body are the same pixels), so the
+     convention is split per surface and the visible flip at the countdown transition is
+     the accepted cost. Asserted as an ABSENCE of any bake, because every video source in
+     this file is reality-oriented - so "un-mirrored capture" means baking identity. */
+  check("freezeFinalFrame bakes NO flip on either branch - captures keep readable text",
+    /function freezeFinalFrame\(\)[\s\S]{0,1600}?src = ai;(?![^\n]*mirror = true)[\s\S]{0,400}?src = webcam;(?![^\n]*mirror = true)/.test(APP),
+    "a baked flip here ships a reversed keepsake with backwards garment text");
   /* Overlays are drawn FROM #aiVideo and stacked OVER it, so they must share its
      transform or the held frame flips the instant a cover appears - a far more visible
      artifact than the one the cover exists to hide. */
@@ -198,20 +229,24 @@ console.log("\n── §4 THE UN-MIRRORING LOCKSTEP ──");
     "an overlay left on transform:none flips against the video underneath it");
   /* drawImage reads DECODED frames and ignores CSS, so anything baking pixels has to
      apply the flip itself or it ships reversed. */
-  check("the recorder bakes the selfie flip into the clip",
-    /ctx\.setTransform\(-1, 0, 0, 1, w, 0\);\s*\n\s*ctx\.drawImage\(video, 0, 0, w, h\);/.test(APP),
-    "without this the downloaded clip plays back reversed against the live view");
-  check("...and the frozen-hold branch does NOT double-flip it",
+  check("the recorder bakes NO flip - the saved clip keeps readable garment text",
+    /ctx\.setTransform\(1, 0, 0, 1, 0, 0\);\s*\n\s*ctx\.drawImage\(video, 0, 0, w, h\);/.test(APP),
+    "a baked flip makes the downloaded file show the garment's text backwards");
+  check("...and the frozen-hold branch matches it, so the clip's tail cannot disagree",
     /NO FLIP HERE[\s\S]{0,600}?ctx\.drawImage\(recordHoldSrc,/.test(APP),
-    "recordHoldSrc comes from captureHoldFrame, which already baked the flip in");
-  /* All three still-capture helpers: #aiVideo is no longer exempt from the flip. */
-  const aiExempt = (APP.match(/src = ai; w = ai\.videoWidth; h = ai\.videoHeight;(?! mirror = true)/g) || []).length;
-  check("no capture helper still treats #aiVideo as pre-oriented",
-    aiExempt === 0,
-    `${aiExempt} helper(s) still skip the flip for #aiVideo - their output would be reversed`);
-  check("...and all three set mirror on the #aiVideo branch",
-    (APP.match(/src = ai; w = ai\.videoWidth; h = ai\.videoHeight; mirror = true;/g) || []).length === 3,
-    "captureHoldFrame, freezeFinalFrame and captureLiveFrame must all flip now");
+    "recordHoldSrc comes from captureHoldFrame, which uses the same capture convention");
+  /* NOT ONE capture helper may bake a flip. Asserted as a count of zero rather than per
+     helper, so a fourth capture surface added later is caught by the same line. */
+  const flipped = (APP_CODE.match(/mirror = true/g) || []).length;
+  check("no capture helper bakes a flip - all three follow the capture convention",
+    flipped === 0,
+    `${flipped} helper(s) still flip; captures must stay un-mirrored (MIRROR_POLICY)`);
+  /* The policy is a decision with a cost, so it has to be written down where the next
+     person meets it - not inferred from four silent identity matrices. */
+  check("...and the split-convention decision is documented, not just implemented",
+    /MIRROR_POLICY/.test(APP) &&
+    /readable garment text {2}<=> {2}zero net flips/.test(APP),
+    "a per-surface mirror convention is indistinguishable from a bug without the rationale");
 }
 
 console.log("\n── §5 MATRIX DISCIPLINE: every flip is absolute, every pair is balanced ──");

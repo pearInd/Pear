@@ -403,8 +403,18 @@ console.log("\n── §10 freezeFinalFrame(): the KEPT snapshot gets the same p
   const ff = extract("function freezeFinalFrame()", "\n/* ── Live countdown overlay");
   check("bakes the guard only when the AI-edited stream was the primary source",
     /src === ai/.test(ff), ff.slice(0, 400));
+  /* `fromAiFeed`, not `src === ai`, since freezeFinalFrame() may now substitute the
+     buffered best front-facing frame for the live one ("it froze me side-on"). That
+     buffer holds AI-EDITED pixels too - just an earlier frame - so the guard must still
+     bake. The flag is captured BEFORE the substitution precisely so this stays true;
+     testing `src === ai` afterwards would silently skip the guard on exactly the frames
+     the buffer makes common. */
   check("gated on the same config flag as the live view - one on/off switch, not two",
-    /LOWER_BODY_GUARD_ENABLED && src === ai/.test(ff));
+    /LOWER_BODY_GUARD_ENABLED && fromAiFeed/.test(ff));
+  check("...and the AI-source flag is captured BEFORE any best-frame substitution",
+    /const fromAiFeed = \(src === ai\);/.test(ff) &&
+    ff.indexOf("const fromAiFeed") < ff.indexOf("src = _bestFrameCanvas"),
+    "capturing it after the swap would disable the guard whenever the buffer wins");
   check("does NOT apply when the fallback branch (raw webcam, no AI edit at all) was used",
     !/mirror && LOWER_BODY_GUARD_ENABLED/.test(ff),
     "the webcam-fallback branch has nothing for the guard to protect against");

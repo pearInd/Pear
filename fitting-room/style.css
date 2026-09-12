@@ -1259,7 +1259,22 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    Moving it to the display layer is visually identical for the shopper - one flip either
    way - but the model now sees reality. #aiVideo's DECODED frames are therefore
    un-mirrored, which is what every canvas that samples it now assumes. */
-.camera-card.show-live #aiVideo { display: block; transform: scaleX(-1); }
+/* ── THE LIVE MIRROR, AND THE ONE PLACE IT IS DECIDED ─────────────────────────
+   translateZ(0) is composed in HERE rather than assigned inline from onRemoteStream.
+   It used to be `aiVideo.style.transform = "translateZ(0)"`, which - being inline -
+   outranked this rule and silently owned the transform, so the flip below never
+   applied and the feed rendered with no mirror at all. Both intents now live in one
+   declaration where they cannot race: the flip is the selfie view, translateZ(0) is
+   the GPU-compositing hint, and `transform` on #aiVideo is written nowhere else.
+
+   THE TRADE THIS RULE SETTLES - read before changing it. The garment and the body
+   are the same pixels, so the flip count cannot differ between them:
+     scaleX(-1) here  -> motion feels natural (selfie), garment text reads MIRRORED
+     no flip here     -> garment text reads correctly, motion feels reversed
+   Decart renders the garment's text to match the orientation of the scene it is fed,
+   which is why both of those have been reported as bugs from opposite directions.
+   There is no arrangement that gives both; see MIRROR_POLICY in app.js. */
+.camera-card.show-live #aiVideo { display: block; transform: scaleX(-1) translateZ(0); }
 .camera-card.show-live #webcam { visibility: hidden; }
 
 /* ── Lower-body compositing guard (config.js LOWER_BODY_GUARD_ENABLED) ────────

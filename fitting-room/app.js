@@ -3766,12 +3766,28 @@ function buildRealtimeConnectOpts(gen) {
          scrim between the shopper and whatever Decart rendered first. See gateAiFeed(). */
       aiVideo.style.display = "block";
       gateAiFeed(aiVideo);
-      aiVideo.style.transform = "none";  // edited feed is already correctly oriented
-      // Force the video onto its own GPU compositing layer so the browser doesn't
-      // re-rasterize it in software on every frame repaint. translateZ(0) is the
-      // universal trigger; will-change is the spec-correct version.
+      /* ── NOTHING HERE WRITES style.transform ANY MORE. THIS WAS THE BUG. ────────────
+         Two inline writes used to live on these lines:
+             aiVideo.style.transform = "none";           // "already correctly oriented"
+             aiVideo.style.transform = "translateZ(0)";  // GPU compositing hint
+         INLINE STYLE BEATS EVERY CLASS RULE, so between them they owned #aiVideo's
+         transform outright and the stylesheet's `.camera-card.show-live #aiVideo
+         { transform: scaleX(-1) }` never applied - the second write silently discarded
+         the first, and the element rendered with no horizontal flip at all. That is why
+         the live feed reads un-mirrored (garment text correct, physical motion reversed)
+         no matter what the stylesheet says.
+
+         It is also why the un-mirroring refactor landed HALF-APPLIED: removing the
+         pre-mirror from the outgoing canvas took effect, but moving the flip to the
+         display layer did not, so the pipeline ended up at zero net flips instead of one.
+
+         The GPU hint was never the problem and is kept - it just moved into the
+         stylesheet, where it composes with the mirror in one declaration
+         (`transform: scaleX(-1) translateZ(0)`) instead of racing it. The mirror now
+         lives in exactly ONE place: style.css. Do not reintroduce a style.transform
+         write here; resetAiFeedVisibility() also clears any stray one for the same
+         reason. */
       aiVideo.style.willChange = "transform";
-      aiVideo.style.transform = "translateZ(0)";
       aiVideo.play().catch(() => {});
       // BILLING START: the 5s / 10-credit window begins at the FIRST DRESSED frame
       // Decart actually renders to #aiVideo here - NOT at connect and NOT merely at
@@ -4748,6 +4764,43 @@ const ORIENT_YAW_FRESH_MS        = 600;  // a yaw reading older than this cannot
    went missing. See the presence consumer in startPresenceWatcher(). */
 const PRESENCE_PROMPT_YAW_SUPPRESS_DEG = 25;
 
+/* ╔══════════════════════════════════════════════════════════════════════════════╗
+   ║  MIRROR_POLICY - the one place the mirror question is answered               ║
+   ╚══════════════════════════════════════════════════════════════════════════════╝
+   THE CONSTRAINT, WHICH IS GEOMETRY AND NOT A BUG: the garment and the body are the
+   same pixels, so they cannot carry different flip counts. Decart renders the garment's
+   chest text to match the orientation of the scene it is fed - established from two
+   reports pointing opposite ways: a pre-mirrored input produced reversed text
+   ("916tim9"), and a reality input produces correct text. Therefore
+
+       readable garment text  <=>  zero net flips  <=>  motion feels reversed
+       natural selfie motion  <=>  one net flip    <=>  garment text reads backwards
+
+   There is no arrangement that delivers both. Every "fix" that appears to is really a
+   choice of which one to give up, and both have now been filed as bugs.
+
+   THE DECISION, made deliberately and per surface:
+     LIVE (#aiVideo)          MIRRORED.  One CSS flip, scaleX(-1), in style.css and
+                              nowhere else. While the shopper is moving, motion that
+                              matches their body is what makes the try-on usable.
+     CAPTURES                 NOT MIRRORED. The frozen #resultCanvas, the saved clip and
+     (result / clip /         the gallery thumbnail all bake NO flip, so the garment's
+      thumbnail)              text reads correctly in the artefact the shopper keeps,
+                              screenshots and shows other people.
+
+   THE COST IS REAL, VISIBLE, AND ACCEPTED: the picture flips horizontally at the instant
+   the countdown ends, because the two surfaces genuinely use opposite conventions. Do
+   not "fix" that transition by re-mirroring a capture - that silently reverses a product
+   decision and re-opens the reversed-text report. If the flip at the transition becomes
+   the bigger complaint, the honest change is to move the LIVE feed to the capture
+   convention (drop the CSS flip), not to mirror the keepsakes.
+
+   WHERE THIS IS ENFORCED: style.css (.camera-card.show-live #aiVideo) for the live flip;
+   freezeFinalFrame(), the recordCanvas paint loop, captureHoldFrame() and
+   captureLiveFrame() for the captures - all four bake identity. logSurfaceOrientation()
+   prints the computed transform per surface at each transition, and
+   orientation-yaw-mirror.test.mjs pins every one of them. */
+
 /* Latest torso yaw MAGNITUDE and when it was measured, published by the shared pose loop
    (startPresenceWatcher) and read by the orientation watcher. Module scope because the
    two loops are deliberately separate - one MediaPipe inference per tick is the whole
@@ -4755,6 +4808,67 @@ const PRESENCE_PROMPT_YAW_SUPPRESS_DEG = 25;
    triggering a second one. null until the pose loop produces its first signature. */
 let _torsoYawAbs = null;
 let _torsoYawAt  = 0;
+
+/* ── THE BEST FRONT-FACING FRAME - "it froze me side-on" ──────────────────────────
+   ────────────────────────────────────────────────────────────────────────────────
+   REPORTED: the shopper turned sideways as the 5s window expired, so freezeFinalFrame()
+   captured whatever happened to be on screen at t=0 - a side profile - and that became
+   the frozen result AND the saved gallery "masterpiece" for the rest of the session.
+
+   Taking the LAST frame was never a decision, it was an artifact of where the capture
+   sits: at the end of the countdown, because that is when the session ends. But the
+   frame worth keeping is the one where the garment is most legible, which is the most
+   FRONT-FACING one, and that almost never coincides with the final tick - a shopper
+   naturally turns to inspect the garment as the window closes.
+
+   So the live window now keeps a rolling best. The pose loop already measures torso yaw
+   every ~240ms for the topology monitor and the orientation watcher; this is a third
+   consumer of that same reading and costs no extra inference.
+
+   TWO HONEST LIMITATIONS, neither of which makes it worse than taking the last frame:
+     · THE YAW IS MEASURED ON #webcam, THE PIXELS ARE COPIED FROM #aiVideo. Those are
+       separated by the Decart round trip, so the frame stored for a given yaw reading is
+       fractionally later than the pose that scored it. Over a normal turn that is
+       immaterial; during a fast spin the stored frame may be a few degrees off the
+       measured one. It is still chosen from candidates that were near-square-on, which
+       the final tick is not.
+     · IT ONLY EVER IMPROVES ON THE LAST FRAME. If no qualifying frame is ever seen - the
+       shopper stood side-on the whole time, or the pose detector never loaded - the
+       buffer stays empty and freezeFinalFrame() takes the final frame exactly as before.
+       There is no path where this produces a worse result than the old behaviour. */
+const BEST_FRAME_MAX_YAW_DEG   = 20;  // beyond this the pose is not "front-facing" at all
+const BEST_FRAME_IMPROVE_DEG   = 2;   // re-snapshot only on a meaningful improvement
+let _bestFrameCanvas = null;          // off-DOM, holds RAW decoded #aiVideo pixels (unflipped)
+let _bestFrameYaw    = Infinity;      // |yaw| of the pose that won the buffer
+
+/* Per session. Called at go-live, so a new window never inherits the previous shopper's
+   best frame - which would silently save someone else's try-on into this gallery entry. */
+function resetBestFrontFrame() {
+  _bestFrameYaw = Infinity;
+}
+
+/* Snapshot #aiVideo if this pose is the most front-facing one seen so far.
+   RAW pixels, no flip: freezeFinalFrame() applies the selfie flip uniformly to whatever
+   source it is handed, so storing an already-flipped frame here would double it. */
+function maybeCaptureBestFrontFrame(yawAbs) {
+  try {
+    if (!Number.isFinite(yawAbs) || yawAbs > BEST_FRAME_MAX_YAW_DEG) return;
+    if (yawAbs > _bestFrameYaw - BEST_FRAME_IMPROVE_DEG) return;   // not meaningfully better
+    /* Never bank an undressed frame: before the first dressed frame the feed is the
+       shopper in their own clothes, which is the one thing this result must not keep. */
+    if (typeof dressedFrameReady !== "undefined" && !dressedFrameReady) return;
+    const ai = typeof $ === "function" ? $("aiVideo") : null;
+    if (!ai || !ai.videoWidth) return;
+    if (!_bestFrameCanvas) _bestFrameCanvas = document.createElement("canvas");
+    if (_bestFrameCanvas.width !== ai.videoWidth)   _bestFrameCanvas.width = ai.videoWidth;
+    if (_bestFrameCanvas.height !== ai.videoHeight) _bestFrameCanvas.height = ai.videoHeight;
+    const bctx = _bestFrameCanvas.getContext("2d", { alpha: false });
+    bctx.setTransform(1, 0, 0, 1, 0, 0);            // identity - raw pixels, see above
+    bctx.drawImage(ai, 0, 0, _bestFrameCanvas.width, _bestFrameCanvas.height);
+    _bestFrameYaw = yawAbs;
+    if (ORIENT_DEBUG) console.log(`[PEAR] best-frame buffer updated at |yaw|=${yawAbs.toFixed(0)}°`);
+  } catch (_) { /* a capture hiccup must never disturb the live session */ }
+}
 /* Edge-on detection thresholds. Deliberately FAR looser than the orientation lock's,
    because the two protect different things and carry different costs when wrong. A wrong
    orientation flip swaps the garment reference and shows the wrong side of the shirt on a
@@ -5098,6 +5212,14 @@ function resetAiFeedVisibility() {
   ai.style.transition = "";
   ai.style.opacity = "";
   ai.style.display = "";
+  /* AND `transform`, for exactly the reason the display line above exists. An inline
+     transform outranks every class rule, so a leftover one would carry a session's mirror
+     decision into a history clip whose pixels have the opposite convention baked in -
+     the double-mirror this file has now chased twice. onRemoteStream no longer writes one
+     (see its note), so today this clears nothing; it stays because "nothing writes it" is
+     a property of one call site, while this is the single place inline visibility state is
+     undone and the guarantee belongs here. */
+  ai.style.transform = "";
 }
 
 /* Snapshot the live #aiVideo frame into the overlay and show it at full opacity with NO
@@ -12072,6 +12194,7 @@ function startBillingWindow(gen) {
   // so the user never sees a "ready" UI before there's real content behind it.
   stopScanTimer();
   $("scanOverlay").hidden = true;
+  resetBestFrontFrame();   // per-session: never inherit the previous shopper best frame
   card().classList.add("show-live");
   logSurfaceOrientation("go-live");
   /* THE ONLY PLACE THE FEED BECOMES VISIBLE, and it is deliberately the same statement
@@ -13045,18 +13168,16 @@ function beginFreezeHold() {
 function captureHoldFrame() {
   const ai = $("aiVideo"), webcam = $("webcam");
   /* ── mirror IS NOW TRUE ON BOTH BRANCHES, and the split is kept only to show that ──
-     #aiVideo used to be exempt from the selfie flip because drawFrame() mirrored frames
-     on their way OUT to Decart, so its decoded frames arrived already selfie-oriented.
-     That flip moved to the display layer so the model could be conditioned on reality
-     (see drawFrame), which makes EVERY video source in this file reality-oriented -
-     webcam and #aiVideo alike. drawImage reads DECODED frames and ignores CSS, so a
-     baked capture must apply the flip itself or it comes out reversed against the live
-     view it was captured from. */
+     This frame is repainted for the FROZEN TAIL of the recording, so it must follow the
+     CLIP's convention rather than the live feed's. Captures are deliberately un-mirrored
+     (MIRROR_POLICY), and every video source in this file is reality-oriented, so
+     un-mirrored means baking nothing at all. Flipping here would mirror the clip's frozen
+     tail against its own live body. */
   let src = null, mirror = false, w = 0, h = 0;
   if (ai && ai.videoWidth > 0 && ai.style.display !== "none") {
-    src = ai; w = ai.videoWidth; h = ai.videoHeight; mirror = true;   // selfie-flip, as for the webcam
+    src = ai; w = ai.videoWidth; h = ai.videoHeight;                  // reality in, reality kept
   } else if (webcam && webcam.videoWidth > 0) {
-    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight; mirror = true;
+    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight;      // same convention on the fallback
   }
   if (!src || !w || !h) return null;
   const cv = document.createElement("canvas");
@@ -13955,6 +14076,11 @@ function startPresenceWatcher() {
         if (sig && Number.isFinite(sig.yaw)) {
           _torsoYawAbs = Math.abs(sig.yaw);
           _torsoYawAt  = now;
+          /* THE THIRD CONSUMER of this one reading (after the topology monitor and the
+             orientation watcher's corroboration): bank the frame if this is the most
+             front-facing pose of the session so far, so the frozen result is the best
+             view of the garment rather than whichever instant the countdown ended on. */
+          maybeCaptureBestFrontFrame(_torsoYawAbs);
         }
         const step = bodyTopology.feed(sig, { canDispatch: !wireBusy() });
         if (step.state === "shift") await reconditionForTopology(step);
@@ -14252,16 +14378,54 @@ function stopLowerBodyGuard() {
 function freezeFinalFrame() {
   const ai = $("aiVideo");
   const webcam = $("webcam");
-  /* mirror is TRUE on both branches now - see captureHoldFrame's note. #aiVideo stopped
-     being "already correctly oriented" when the selfie flip moved off the outgoing WebRTC
-     canvas and onto the display layer, so a baked frame has to carry the flip itself. */
+  /* ── CAPTURES ARE NOT MIRRORED. THIS IS THE PRODUCT DECISION, NOT AN OVERSIGHT ──────
+     See MIRROR_POLICY. The live feed mirrors so motion feels natural; the KEPT surfaces -
+     this frozen result, the saved clip, the gallery thumbnail - deliberately do not, so
+     the garment's chest text reads the right way round in the thing the shopper keeps and
+     shows people. Every video source in this file is reality-oriented, so "not mirrored"
+     means baking NO flip at all and letting #resultCanvas display at transform:none.
+
+     THE COST IS ACCEPTED AND VISIBLE: the picture flips horizontally at the instant the
+     countdown ends, because live and result genuinely use opposite conventions. That was
+     chosen deliberately over the alternatives - a mirrored keepsake with backwards text,
+     or reversed-feeling motion for the whole session. Do not "fix" the flip at the
+     transition by re-mirroring here; that silently reverses the decision. */
   let src = null, mirror = false, w = 0, h = 0;
   if (ai && ai.videoWidth > 0 && ai.style.display !== "none") {
-    src = ai; w = ai.videoWidth; h = ai.videoHeight; mirror = true;   // selfie-flip, as for the webcam
+    src = ai; w = ai.videoWidth; h = ai.videoHeight;                 // reality in, reality kept
   } else if (webcam && webcam.videoWidth > 0) {
-    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight; mirror = true;  // selfie-mirror
+    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight;     // same convention on the fallback
   }
   if (!src || !w || !h) return null;
+
+  /* ── PREFER THE BEST FRONT-FACING FRAME OVER THE FINAL ONE ──────────────────────
+     "It froze me side-on": the shopper turns to inspect the garment as the window
+     closes, so the final tick is routinely the WORST view of it. The rolling buffer
+     (maybeCaptureBestFrontFrame) holds the most square-on dressed frame of the session.
+
+     SUBSTITUTED ONLY WHEN IT IS ACTUALLY BETTER, and only over the AI feed - the webcam
+     fallback above is raw camera with no garment in it, a different failure being handled,
+     and swapping a dressed frame into that path would silently change what that branch
+     means. Compared against the CURRENT yaw rather than used unconditionally: a shopper
+     who is square-on at t=0 should keep the freshest frame, not a slightly older one that
+     happens to score a degree better.
+     The buffer holds RAW decoded pixels, so `mirror` still applies exactly as it does to
+     a live #aiVideo frame and the flip is not doubled. */
+  /* Captured BEFORE the substitution below, because the guard-bake further down keys off
+     "is this the AI-edited feed" and must stay true when the pixels came from the buffer -
+     those are AI-edited frames too, just older ones. Testing `src === ai` after the swap
+     would silently skip the guard on exactly the frames this change makes common. */
+  const fromAiFeed = (src === ai);
+  if (fromAiFeed && _bestFrameCanvas && _bestFrameYaw < Infinity) {
+    const yawNow = (_torsoYawAbs !== null && Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS)
+      ? _torsoYawAbs : Infinity;
+    if (_bestFrameYaw + BEST_FRAME_IMPROVE_DEG < yawNow) {
+      console.log(`[PEAR] freezeFinalFrame() - using the buffered front-facing frame ` +
+        `(|yaw| ${_bestFrameYaw.toFixed(0)}° vs ${yawNow === Infinity ? "unknown" : yawNow.toFixed(0) + "°"} now)`);
+      src = _bestFrameCanvas; w = _bestFrameCanvas.width; h = _bestFrameCanvas.height;
+    }
+  }
+
   const cv = $("resultCanvas");
   if (!cv) return null;
   cv.width = w; cv.height = h;
@@ -14284,7 +14448,7 @@ function freezeFinalFrame() {
      (src === ai): the webcam-fallback branch above is ALREADY 100% raw camera with no
      AI edit anywhere in it, so there is nothing there for the guard to protect against,
      and re-drawing over it would be a no-op at best. */
-  if (LOWER_BODY_GUARD_ENABLED && src === ai && webcam && webcam.videoWidth > 0) {
+  if (LOWER_BODY_GUARD_ENABLED && fromAiFeed && webcam && webcam.videoWidth > 0) {
     // lowerBodyGuardFrac, not the static config constant - the snapshot must protect
     // the SAME band the live view was actually painting at the moment of capture,
     // calibrated or not, or the kept "masterpiece" could disagree with what the
@@ -14296,10 +14460,14 @@ function freezeFinalFrame() {
     const dstBandY = Math.round(h * (1 - lowerBodyGuardFrac));
     ctx.save();
     try {
-      /* Absolute, for the same reason as the draw above: this is the second write to the
-         same persistent #resultCanvas context within one call, so it must not depend on
-         what the first one left behind. */
-      ctx.setTransform(-1, 0, 0, 1, w, 0);
+      /* IDENTITY, matching the un-mirrored capture convention above. This band is drawn
+         from #webcam, which is reality-oriented like every other source here, and it is
+         composited into a snapshot that is deliberately NOT mirrored - so flipping it
+         would put the guarded lower body in the opposite orientation to the AI-edited
+         torso it sits under, producing a seam with the shopper's legs mirrored against
+         their own chest. Absolute, because this is the second write to the same
+         persistent #resultCanvas context within one call. */
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.drawImage(webcam,
         0, srcBandY, webcam.videoWidth, webcam.videoHeight - srcBandY,
         0, dstBandY, w, h - dstBandY);
@@ -14529,10 +14697,15 @@ function startRecording() {
         try {
           ctx.save();
           try {
-            /* setTransform, not translate+scale: it REPLACES the matrix rather than
-               multiplying into it, so this frame cannot inherit anything from the last
-               one even if a restore were ever missed. Absolute by construction. */
-            ctx.setTransform(-1, 0, 0, 1, w, 0);
+            /* IDENTITY - the saved clip is NOT mirrored, by decision. See MIRROR_POLICY:
+               the live feed mirrors for natural motion, but a downloaded file is something
+               the shopper keeps and shows people, so the garment's chest text has to read
+               the right way round in it. #aiVideo's decoded frames are reality, so that
+               means baking no flip at all.
+               setTransform rather than simply omitting a transform: it REPLACES the
+               matrix, so this frame cannot inherit anything from the previous one even if
+               a restore were ever missed. Absolute by construction. */
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.drawImage(video, 0, 0, w, h);
           } finally { ctx.restore(); }
           beginRecorder();
@@ -16036,14 +16209,16 @@ function clipExt(ts) {
 function captureLiveFrame() {
   const ai = $("aiVideo");
   const webcam = $("webcam");
-  /* mirror is TRUE on both branches now - see captureHoldFrame's note. This one feeds the
-     saved-fit gallery thumbnail, so getting it wrong ships a permanently reversed image
-     into the shopper's history rather than a transient on-screen artifact. */
+  /* mirror is FALSE on both branches - see MIRROR_POLICY. This one feeds the saved-fit
+     gallery thumbnail, which is the longest-lived surface of all: getting it wrong ships a
+     permanently reversed image into the shopper's history rather than a transient
+     on-screen artifact, so it follows the capture convention (readable text) and not the
+     live one (selfie motion). */
   let src = null, mirror = false, w = 0, h = 0;
   if (ai && ai.videoWidth > 0 && ai.style.display !== "none") {
-    src = ai; w = ai.videoWidth; h = ai.videoHeight; mirror = true;   // selfie-flip, as for the webcam
+    src = ai; w = ai.videoWidth; h = ai.videoHeight;                  // reality in, reality kept
   } else if (webcam && webcam.videoWidth > 0) {
-    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight; mirror = true;  // selfie-mirror
+    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight;      // same convention on the fallback
   }
   if (!src || !w || !h) return null;
 
