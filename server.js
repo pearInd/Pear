@@ -2109,18 +2109,28 @@ function validateBackCandidate(candidate, frontRecord, front) {
     return { valid: false, reason: BACK_INVALID_REASON.SAME_URL };
   }
 
-  /* Only applied to a CLASSIFIER claim. A dom_hint record is synthesised by the caller
-     with is_true_back_view absent - the storefront's markup named this photo the back
-     and the model was never asked, so an absent field here is "not asked", not "denied".
-     Vetoing on it would discard the highest-trust signal in the pipeline. */
-  if (record && record.source === "gemini" && record.is_true_back_view === false) {
-    return { valid: false, reason: BACK_INVALID_REASON.NOT_TRUE_BACK };
-  }
-
+  /* ── ORDER IS LOAD-BEARING: DUPLICATION EVIDENCE FIRST, HESITATION LAST ───────────
+     These checks return the FIRST reason that matches, and resolveGarmentViews() treats
+     the reasons very differently - a duplicate is discarded outright, while a merely
+     low-confidence candidate is salvaged when nothing better exists. So a candidate that
+     is BOTH a duplicate AND low-confidence must report DUPLICATION, or the salvage path
+     would resurrect the front photo as the back and put the chest print on the shopper's
+     spine. The confidence check therefore runs LAST, where reaching it proves no
+     duplication evidence was found. It used to run first, which masked exactly that. */
   const backText  = normalizeOcr(record?.text_ocr);
   const frontText = normalizeOcr(frontRecord?.text_ocr);
   if (backText && frontText && backText === frontText) {
     return { valid: false, reason: BACK_INVALID_REASON.OCR_MATCHES };
+  }
+
+  /* Only applied to a CLASSIFIER claim. A dom_hint record is synthesised by the caller
+     with is_true_back_view absent - the storefront's markup named this photo the back
+     and the model was never asked, so an absent field here is "not asked", not "denied".
+     Vetoing on it would discard the highest-trust signal in the pipeline.
+     Reaching this line means the candidate is NOT a known duplicate, so the rejection is
+     recoverable - see the salvage pass in resolveGarmentViews(). */
+  if (record && record.source === "gemini" && record.is_true_back_view === false) {
+    return { valid: false, reason: BACK_INVALID_REASON.NOT_TRUE_BACK };
   }
 
   return { valid: true, reason: BACK_INVALID_REASON.OK };
@@ -2170,11 +2180,43 @@ function resolveGarmentViews({ images, records, scrapedFront, scrapedBack }) {
     reject(scrapedBack, verdict.reason, "DOM");
   }
 
+  /* Candidates rejected ONLY for low confidence, kept for the salvage pass below. */
+  const weak = [];
   for (let i = 0; i < images.length; i++) {
     if (records[i]?.view !== "back") continue;
     const verdict = validateBackCandidate({ url: images[i], record: records[i] }, frontRecord, front);
     if (verdict.valid) return { front, back: images[i], back_source: "classifier", front_color_hex, front_text_ocr };
     reject(images[i], verdict.reason, "classifier");
+    if (verdict.reason === BACK_INVALID_REASON.NOT_TRUE_BACK) weak.push(images[i]);
+  }
+
+  /* ── SALVAGE: LOW CONFIDENCE IS NOT EVIDENCE OF DUPLICATION ──────────────────────
+     THE BUG THIS CLOSES, and it was introduced by the veto directly above it. The two
+     rejection reasons are not the same kind of thing:
+
+       SAME_URL / OCR_MATCHES  are EVIDENCE the candidate is the FRONT. Using it puts the
+                               chest print on the shopper's back, so discarding it is
+                               right even when it leaves no back at all.
+       NOT_TRUE_BACK           is only "the model would not stake the verdict on this".
+                               That is not evidence of duplication - it is hesitation.
+
+     Treating hesitation like duplication threw away the ONLY rear photo a product had,
+     which drops it to single-view: canCombineViews() goes false, the OrientationWatcher
+     never arms, and turning around leaves Decart inferring a rear from the front
+     reference frame by frame. That is the print-less-back bug this whole file exists to
+     prevent, reintroduced by a guard written to prevent a different one. Reported live:
+     a 180-degree turn rendering a generic plain back on a garment whose catalog rear
+     photo carries a large mountain print.
+
+     So a weak back is used only when there is NOTHING better - after the DOM hint, after
+     every confidently-valid candidate - and it is labelled `classifier_weak` rather than
+     `classifier`, so the provenance stays honest in the logs and in garment_cache. The
+     alternative on this path is not a better back; it is no back. */
+  if (weak.length) {
+    console.warn("[classify-images] no confident back; falling back to a LOW-CONFIDENCE rear photo " +
+      "rather than dropping to single-view (it was rejected for hesitation, not for duplicating the front): " +
+      String(weak[0]).slice(0, 120));
+    return { front, back: weak[0], back_source: "classifier_weak", front_color_hex, front_text_ocr };
   }
 
   return { front, back: "", back_source: "none", front_color_hex, front_text_ocr };

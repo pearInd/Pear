@@ -106,8 +106,8 @@ eq(resolveGarmentViews({
                g("back",  "gemini", { text_ocr: "TEAM 23", is_true_back_view: false })],
      scrapedFront: F, scrapedBack: "",
    }),
-   { front: F, back: "", back_source: "none", front_color_hex: null, front_text_ocr: LOGO },
-   "is_true_back_view:false alone rejects, even when the OCR differs");
+   { front: F, back: BK, back_source: "classifier_weak", front_color_hex: null, front_text_ocr: LOGO },
+   "REGRESSION: is_true_back_view:false alone is HESITATION, not duplication - salvaged, not dropped");
 
 /* ── ABSTENTION (CLAUDE.md §2.5) - a wrong veto costs a real rear view ─────────── */
 eq(resolveGarmentViews({
@@ -224,6 +224,68 @@ console.log("\n── §PLAIN-REAR: the question is GRAPHICS, never lettering �
        false,
        `empty/absent lettering never implies plain (${JSON.stringify(r)})`);
   }
+}
+
+console.log("\n── §SALVAGE: hesitation is not duplication ──");
+{
+  /* THE BUG THIS SECTION EXISTS FOR, and it was caused by the veto two sections up.
+     is_true_back_view:false means "the model would not stake the verdict on this photo".
+     That is NOT evidence the photo is the FRONT. Treating it as such threw away the only
+     rear photo a product had, dropping it to single-view: canCombineViews() goes false,
+     the OrientationWatcher never arms, and a 180-degree turn leaves Decart inferring a
+     rear from the front reference - the print-less-back bug, reintroduced by a guard
+     written to prevent a different one. Reported live on a garment whose catalog rear
+     carries a large mountain print. */
+  const weakBack = g("back", "gemini", { is_true_back_view: false, text_ocr: "TEAM 23" });
+
+  eq(resolveGarmentViews({
+       images: [F, BK],
+       records: [g("front", "gemini", { text_ocr: LOGO }), weakBack],
+       scrapedFront: F, scrapedBack: "",
+     }),
+     { front: F, back: BK, back_source: "classifier_weak", front_color_hex: null, front_text_ocr: LOGO },
+     "REGRESSION: a low-confidence rear is used rather than dropping to single-view");
+
+  /* ── THE ORDERING THAT MAKES THE SALVAGE SAFE ──────────────────────────────────
+     A candidate that is BOTH a duplicate AND low-confidence must report DUPLICATION, or
+     the salvage would resurrect the front photo as the back and put the chest print on
+     the shopper's spine. validateBackCandidate checks duplication evidence FIRST and
+     hesitation LAST precisely so that reaching NOT_TRUE_BACK proves no duplication
+     evidence was found. This check is what pins that order - it failed when the
+     confidence test ran first. */
+  const dupAndWeak = g("back", "gemini", { is_true_back_view: false, text_ocr: LOGO });
+  is(validateBackCandidate({ url: BK, record: dupAndWeak },
+                           g("front", "gemini", { text_ocr: LOGO }), F).reason,
+     BACK_INVALID_REASON.OCR_MATCHES,
+     "a duplicate that is ALSO low-confidence reports duplication, never hesitation");
+  eq(resolveGarmentViews({
+       images: [F, BK],
+       records: [g("front", "gemini", { text_ocr: LOGO }), dupAndWeak],
+       scrapedFront: F, scrapedBack: "",
+     }),
+     { front: F, back: "", back_source: "none", front_color_hex: null, front_text_ocr: LOGO },
+     "...so it is NOT salvaged - a duplicate stays discarded even with no back left");
+
+  /* A URL-spelling duplicate must not be salvaged either, by the same argument. */
+  eq(resolveGarmentViews({
+       images: [F, F + "?width=800"],
+       records: [g("front", "gemini"), g("back", "gemini", { is_true_back_view: false })],
+       scrapedFront: F, scrapedBack: "",
+     }),
+     { front: F, back: "", back_source: "none", front_color_hex: null, front_text_ocr: null },
+     "a same-photo duplicate is never salvaged, however hesitant the verdict");
+
+  /* The salvage is a LAST resort: a confidently valid candidate must still win, and the
+     provenance must stay honest so a weak back is distinguishable in the logs. */
+  eq(resolveGarmentViews({
+       images: [F, BK, BK + "?v=2"],
+       records: [g("front", "gemini"),
+                 g("back", "gemini", { is_true_back_view: false }),
+                 g("back", "gemini", { is_true_back_view: true })],
+       scrapedFront: F, scrapedBack: "",
+     }),
+     { front: F, back: BK + "?v=2", back_source: "classifier", front_color_hex: null, front_text_ocr: null },
+     "a confident back outranks a weak one, and keeps the plain `classifier` provenance");
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
