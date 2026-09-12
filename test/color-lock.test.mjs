@@ -57,10 +57,14 @@ const api = new Function(
    const FABRIC_COLOR_MIN_MARGIN = ${constBlock("FABRIC_COLOR_MIN_MARGIN")};
    const FABRIC_NEUTRAL_CHROMA_MAX = ${constBlock("FABRIC_NEUTRAL_CHROMA_MAX")};
    const FABRIC_NEUTRAL_NAMES = ${constBlock("FABRIC_NEUTRAL_NAMES")};
+   const IDENTITY_LOCK_MAX_CHARS = ${constBlock("IDENTITY_LOCK_MAX_CHARS")};
+   const PRINT_TEXT_MAX_CHARS = ${constBlock("PRINT_TEXT_MAX_CHARS")};
    ${functionSource("colorNameFromHex")}
-   ${functionSource("colorLockSentence")}
-   return { colorNameFromHex, colorLockSentence, FABRIC_COLOR_MAX_DIST,
-            FABRIC_COLOR_MIN_MARGIN, FABRIC_NEUTRAL_CHROMA_MAX };`
+   ${functionSource("garmentPrintText")}
+   ${functionSource("identityLockSentence")}
+   return { colorNameFromHex, garmentPrintText, identityLockSentence,
+            FABRIC_COLOR_MAX_DIST, FABRIC_COLOR_MIN_MARGIN, FABRIC_NEUTRAL_CHROMA_MAX,
+            IDENTITY_LOCK_MAX_CHARS, PRINT_TEXT_MAX_CHARS };`
 )();
 
 let fails = 0;
@@ -80,10 +84,58 @@ console.log("── §1 IT NAMES A COLOUR, NOT A HEX TRIPLET ──");
   is(api.colorNameFromHex("#000000"), "black", "pure black maps to black");
   is(api.colorNameFromHex("#1b2550"), "navy",  "navy is distinguished from blue");
   is(api.colorNameFromHex("#2a5cc8"), "blue",  "...and blue from navy");
+  /* "Fabric: white." and not "The garment fabric is white." - 14 chars against 27. Every
+     character here is spent at P.CORE on every dispatch and comes straight out of
+     fitSentence's headroom; the 13 saved are two size rungs on the plain-tee branch. */
   check("the sentence carries the NAME and never the hex",
-    api.colorLockSentence({ colorHex: "#ffffff" }) === "The garment fabric is white." &&
-    !/#/.test(api.colorLockSentence({ colorHex: "#ffffff" })),
-    api.colorLockSentence({ colorHex: "#ffffff" }));
+    api.identityLockSentence({ colorHex: "#ffffff" }, "front") === "Fabric: white." &&
+    !/#/.test(api.identityLockSentence({ colorHex: "#ffffff" }, "front")),
+    api.identityLockSentence({ colorHex: "#ffffff" }, "front"));
+}
+
+console.log("\n── §1b THE PRINT HALF - measured text, and FRONT ONLY ──");
+{
+  const LOGO = "BE YOUR OWN Healer WORLDWIDE";
+  const tee = { colorHex: "#ffffff", textOcr: LOGO };
+  is(api.identityLockSentence(tee, "front"), `Fabric: white. Print: "${LOGO}".`,
+    "the front carries both measured halves");
+  /* ── THE CORRECTNESS POINT OF THE WHOLE CLAUSE ──────────────────────────────────
+     text_ocr is transcribed from the FRONT photograph. Asserting "the print reads X"
+     while the BACK asset is on the wire tells the model to put the chest graphic on the
+     shopper's spine - which IS the print-less-back / double-print bug (23f5953), reached
+     through the prompt instead of through the reference image. The colour half is safe on
+     both angles because a garment is one colour from every side. */
+  is(api.identityLockSentence(tee, "back"), "Fabric: white.",
+    "REGRESSION: the BACK withholds the print half - front lettering on a rear reference is the double-print bug");
+  /* It also keeps the CORE from growing on the back branch, which is what lets
+     conditioning-trace still claim the angle axis is volume-flat. */
+  check("...so the back's identity lock is never LONGER than the front's",
+    api.identityLockSentence(tee, "back").length <= api.identityLockSentence(tee, "front").length,
+    "the angle axis must not grow the undroppable CORE");
+
+  is(api.garmentPrintText({ textOcr: "" }), "", "a genuinely plain garment asserts no print");
+  is(api.garmentPrintText({}), "", "an unclassified garment asserts no print");
+  is(api.garmentPrintText({ textOcr: '  BE  YOUR "OWN"  ' }), "BE YOUR OWN",
+    "quotes are stripped and whitespace collapsed - a nested quote would end the print string early");
+
+  /* NEVER TRUNCATED. Half a slogan asserted as the garment's text is a confident wrong
+     answer, which is the failure mode every gate in this file exists to avoid. A
+     transcription this long is also not a chest graphic - it is a care label or a size
+     chart that happened to be in frame. */
+  const essay = "A".repeat(api.PRINT_TEXT_MAX_CHARS + 1);
+  is(api.garmentPrintText({ textOcr: essay }), "",
+    "an over-long transcription abstains entirely rather than being cut");
+  is(api.identityLockSentence({ colorHex: "#ffffff", textOcr: essay }, "front"), "Fabric: white.",
+    "...and the colour half still ships - abstaining on one half is not abstaining on both");
+
+  /* THE HARD CEILING. P.CORE cannot shed, so if this clause overruns, fitPrompt() falls
+     through to clampPromptForWire()'s slice, which cuts the END - mid-word, through this
+     clause's own quoted text. The cap is what makes that unreachable. */
+  const longest = api.identityLockSentence(
+    { colorHex: "#ffffff", textOcr: "X".repeat(api.PRINT_TEXT_MAX_CHARS) }, "front");
+  check("the clause can never exceed its P.CORE budget",
+    longest.length <= api.IDENTITY_LOCK_MAX_CHARS,
+    `longest=${longest.length} cap=${api.IDENTITY_LOCK_MAX_CHARS} - over this, the wire guard slices mid-print`);
 }
 
 console.log("\n── §2 TOLERANT OF SPELLING, because the model's output drifts ──");
@@ -97,16 +149,16 @@ console.log("\n── §3 IT ABSTAINS RATHER THAN GUESSES - the load-bearing pro
 {
   /* A WRONG colour name is strictly worse than no colour name. These all have to yield
      "" so the branch ships exactly the text it shipped before this clause existed. */
-  is(api.colorLockSentence({ colorHex: "" }),        "", "unsampled colour -> no clause");
-  is(api.colorLockSentence({}),                      "", "absent field -> no clause");
-  is(api.colorLockSentence(null),                    "", "no item at all -> no clause");
-  is(api.colorLockSentence(undefined),               "", "undefined item -> no clause");
-  is(api.colorLockSentence({ colorHex: "not-a-hex" }), "", "unparseable -> no clause");
-  is(api.colorLockSentence({ colorHex: "#ff" }),     "", "truncated hex -> no clause");
+  is(api.identityLockSentence({ colorHex: "" }, "front"),        "", "unsampled colour -> no clause");
+  is(api.identityLockSentence({}, "front"),                      "", "absent field -> no clause");
+  is(api.identityLockSentence(null, "front"),                    "", "no item at all -> no clause");
+  is(api.identityLockSentence(undefined, "front"),               "", "undefined item -> no clause");
+  is(api.identityLockSentence({ colorHex: "not-a-hex" }, "front"), "", "unparseable -> no clause");
+  is(api.identityLockSentence({ colorHex: "#ff" }, "front"),     "", "truncated hex -> no clause");
   /* 3-digit shorthand is NOT accepted by the sentence builder's parser: normalizeHexColor
      on the SERVER expands it before it is ever stored, so a 3-digit value arriving here
      means something upstream bypassed that path. Abstaining is the safe reading. */
-  is(api.colorLockSentence({ colorHex: "#fff" }),    "", "3-digit shorthand -> no clause (server expands it first)");
+  is(api.identityLockSentence({ colorHex: "#fff" }, "front"),    "", "3-digit shorthand -> no clause (server expands it first)");
 
   /* ── THE THREE GATES, each with the measured case that put it there ─────────────
      EVERY HEX BELOW WAS CHOSEN BY COMPUTING ITS ACTUAL PALETTE DISTANCES, not by eye.
@@ -117,7 +169,7 @@ console.log("\n── §3 IT ABSTAINS RATHER THAN GUESSES - the load-bearing pro
 
   /* (2) MARGIN. Three names inside 9 units - olive=46, grey=49, brown=55 - so "nearest"
      is a coin toss rather than a verdict. */
-  is(api.colorLockSentence({ colorHex: "#7a6a55" }), "",
+  is(api.identityLockSentence({ colorHex: "#7a6a55" }, "front"), "",
     "a colour sitting BETWEEN names abstains (olive 46 / grey 49 / brown 55)");
 
   /* (3) NEUTRAL CONSISTENCY - the gate a distance metric cannot express, and the one
@@ -132,7 +184,7 @@ console.log("\n── §3 IT ABSTAINS RATHER THAN GUESSES - the load-bearing pro
     ["#8a7f6d", "a warm taupe (grey=21, margin 55)"],
   ];
   for (const [hex, why] of desaturatedButChromatic) {
-    is(api.colorLockSentence({ colorHex: hex }), "",
+    is(api.identityLockSentence({ colorHex: hex }, "front"), "",
       `${why} must NOT be named grey - chroma disagrees with the neutral name`);
   }
 
@@ -149,22 +201,39 @@ console.log("\n── §3 IT ABSTAINS RATHER THAN GUESSES - the load-bearing pro
     " - at ~441 (the cube diagonal) nothing would ever abstain");
 }
 
-console.log("\n── §4 IT RIDES AT P.LOW, BELOW THE FIT SENTENCE ──");
+console.log("\n── §4 IT RIDES AT P.CORE - PROMOTED, AND THAT REVERSES AN EARLIER CHOICE ──");
 {
   const resolver = functionSource("imageOnlyPrompt").replace(/\/\*[\s\S]*?\*\//g, "");
-  /* P.LOW (3) sheds before P.MED (2) in fitPrompt(), which is what makes this clause
-     additive rather than a displacement of the size feature restored on 2026-09-03.
-     Promoting it to P.MED or above silently trades that feature for this one on the
-     branches with 7-10 free characters, so the tier is asserted literally. */
-  check("the colour lock is tagged P.LOW",
-    /\[P\.LOW, colorLockSentence\(item\)\],/.test(resolver), resolver);
-  check("...and the fit sentence still rides ABOVE it, at P.MED",
+  /* ── WHY THIS SECTION IS THE OPPOSITE OF WHAT IT USED TO ASSERT ──────────────────
+     It previously required `[P.LOW, colorLockSentence(item)]` and that fitSentence rode
+     ABOVE it, on this reasoning, which was right at the time:
+
+       "P.LOW (3) sheds before P.MED (2) in fitPrompt(), which is what makes this clause
+        additive rather than a displacement of the size feature restored on 2026-09-03."
+
+     That holds for a colour HINT. It is wrong for an identity LOCK. A clause whose whole
+     job is to stop the model substituting a different garment cannot be the FIRST thing
+     dropped when the prompt runs long - a long prompt is exactly when the reference image
+     is losing the argument and the lock is most needed. So it moved to P.CORE, where
+     fitPrompt() cannot shed it at all, and the clause was widened to carry the measured
+     print alongside the measured colour.
+
+     THE PRICE IS REAL AND IS NOT HIDDEN: fitSentence now sheds on tops+front+closure at
+     every rung, and on three of five plain-tee rungs. trace:prompt's size ladder is the
+     record. Accepted deliberately - a garment rendered as the WRONG GARMENT is worse than
+     one rendered at the wrong tension. */
+  check("the identity lock is tagged P.CORE, where it cannot shed",
+    /\[P\.CORE, identityLockSentence\(item, angle\)\],/.test(resolver), resolver);
+  check("...and it rides AFTER the anchor, because a CORE overflow slices from the END",
+    resolver.indexOf("P.CORE, plainTee") < resolver.indexOf("P.CORE, identityLockSentence"),
+    "anchor first, or a long transcription would slice the anchor instead of itself");
+  check("...and the fit sentence now rides BELOW it, at P.MED",
     /\[P\.MED, fitSentence\(/.test(resolver) &&
-    resolver.indexOf("P.MED, fitSentence") < resolver.indexOf("P.LOW, colorLockSentence"),
+    resolver.indexOf("P.CORE, identityLockSentence") < resolver.indexOf("P.MED, fitSentence"),
     "fitPrompt() breaks priority ties by array position, so the order is part of the guarantee");
-  check("...and it is the LOWEST-priority part on the branch",
-    !/\[P\.TRIM,/.test(resolver),
-    "a P.TRIM part would shed before the colour lock and change what this suite proves");
+  check("...and nothing was left at P.LOW or P.TRIM on this branch",
+    !/\[P\.LOW,/.test(resolver) && !/\[P\.TRIM,/.test(resolver),
+    "a leftover lower tier would mean the promotion was partial");
 }
 
 console.log("\n── §5 THE VALUE IS PER-PRODUCT, NEVER BAKED INTO AN ANCHOR ──");

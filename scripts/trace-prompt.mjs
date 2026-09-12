@@ -202,7 +202,8 @@ const fitSentence = (garmentType, delta) => {
    bug this file's `branches` comment documents. A product whose colour could not be
    sampled ships the branch without it, so the ladder below is the WORST case of the
    two, which is the one worth budgeting against. */
-const colorSrc = functionSource("colorLockSentence");
+const colorSrc = functionSource("identityLockSentence");
+const printSrc = functionSource("garmentPrintText");
 const colorNameSrc = functionSource("colorNameFromHex");
 /* FABRIC_COLOR_NAMES, not COLOR_NAMES: app.js has a separate human-facing label palette
    under the latter name (backing colorName(), which always answers and falls back to
@@ -210,8 +211,14 @@ const colorNameSrc = functionSource("colorNameFromHex");
    does not use - and the two names collided at module scope until the fabric one was
    prefixed, which is a load-time SyntaxError the sandboxed suites cannot see. */
 const colorNamesBlock = constBlock("FABRIC_COLOR_NAMES");
-let colorLock = "";
-if (colorSrc && colorNameSrc && colorNamesBlock) {
+/* A REPRESENTATIVE product, chosen to be the realistic WORST case rather than a
+   convenient one: a sampled white fabric plus a 28-character chest slogan, which is the
+   garment from the report this lock was built for. Both halves present is the longest
+   this clause ever gets on the front branch, and the front branch is where it is
+   longest - so the ladder below budgets against the real ceiling. */
+const TRACE_ITEM = { colorHex: "#ffffff", textOcr: "BE YOUR OWN Healer WORLDWIDE" };
+let identityLockFront = "", identityLockBack = "";
+if (colorSrc && printSrc && colorNameSrc && colorNamesBlock) {
   try {
     /* Every gate constant colorNameFromHex() reads has to come along, or the eval throws
        a ReferenceError and this clause silently drops out of the trace - which is the
@@ -219,7 +226,8 @@ if (colorSrc && colorNameSrc && colorNamesBlock) {
        explicitly rather than regex-swept so a NEW gate constant fails loudly here
        instead of quietly disabling the row. */
     const deps = ["FABRIC_COLOR_MAX_DIST", "FABRIC_COLOR_MIN_MARGIN",
-                  "FABRIC_NEUTRAL_CHROMA_MAX", "FABRIC_NEUTRAL_NAMES"];
+                  "FABRIC_NEUTRAL_CHROMA_MAX", "FABRIC_NEUTRAL_NAMES",
+                  "IDENTITY_LOCK_MAX_CHARS", "PRINT_TEXT_MAX_CHARS"];
     const decls = deps.map((n) => {
       const b = constBlock(n);
       if (!b) throw new Error(`${n} not found (a colour gate constant was renamed?)`);
@@ -230,14 +238,16 @@ if (colorSrc && colorNameSrc && colorNamesBlock) {
        const FABRIC_COLOR_NAMES = ${colorNamesBlock};
        ${decls}
        ${colorNameSrc}
+       ${printSrc}
        ${colorSrc}
-       return colorLockSentence;`
+       return identityLockSentence;`
     )();
-    colorLock = mk({ colorHex: "#ffffff" }) || "";
-    if (!colorLock) unresolved.push("colorLockSentence (returned empty for #ffffff)");
-  } catch (e) { unresolved.push(`colorLockSentence (${e.message})`); }
+    identityLockFront = mk(TRACE_ITEM, "front") || "";
+    identityLockBack  = mk(TRACE_ITEM, "back") || "";
+    if (!identityLockFront) unresolved.push("identityLockSentence (returned empty for the trace item)");
+  } catch (e) { unresolved.push(`identityLockSentence (${e.message})`); }
 } else {
-  unresolved.push("colorLockSentence (not found)");
+  unresolved.push("identityLockSentence (not found)");
 }
 
 /* The size ladder, worst case first. -2 is the longest phrasing on both garment
@@ -302,13 +312,23 @@ const branches = [
 /* Render every branch across the whole size ladder. `rows` is the per-delta detail;
    `wire`/`base` keep the old single-string shape so the --json consumers and the
    before/after diff habit still work. */
+/* The identity lock is a SECOND P.CORE part on every single-garment branch, inserted
+   right after the anchor exactly as imageOnlyPrompt() orders it - order matters because
+   fitPrompt() breaks priority ties by array position, and because a CORE overflow is
+   hard-sliced from the END. The BACK branches get the back variant, which withholds the
+   print half (front lettering asserted over a back reference is the double-print bug).
+   The full-look path does not route through imageOnlyPrompt() and gets none. */
 for (const b of branches) {
+  if (b.fit) {
+    const lock = /\bback\b/.test(b.id) ? identityLockBack : identityLockFront;
+    if (lock) b.parts = [b.parts[0], [P.CORE, lock, "identityLock"], ...b.parts.slice(1)];
+  }
   b.base = norm(b.parts.map(([, t]) => t).filter(Boolean).join(" "));
   b.rows = (b.fit ? DELTAS : [0]).map((d) => {
     const parts = b.fit
       ? [...b.parts,
          [P.MED, fitSentence(b.fit, d), "fitSentence"],
-         [P.LOW, colorLock, "colorLock"]]
+         ]
       : b.parts;
     const r = fitPromptTrace(parts);
     return { delta: d, label: b.fit ? deltaLabel(d) : "n/a", ...r, len: r.wire.length };
@@ -350,7 +370,7 @@ const AUDIT = [
      is a real question rather than a formality. KEEP_OPPOSITE_LAYER is here too because
      app.js's restore notes claimed for several revisions that it was on the wire when it
      never was - the kind of false belief this audit exists to make unmaintainable. */
-  "colorLockSentence", "colorNameFromHex", "KEEP_OPPOSITE_LAYER",
+  "identityLockSentence", "garmentPrintText", "colorNameFromHex", "KEEP_OPPOSITE_LAYER",
 ];
 
 const code = src

@@ -1497,7 +1497,12 @@
            (server.js: primary_color_hex). "" on an older server build that does not
            send it, which the room treats identically to "could not sample" - the
            colour clause simply does not ship. Never defaulted to a colour. */
-        colorHex: (data && data.primary_color_hex) || ""
+        colorHex: (data && data.primary_color_hex) || "",
+        /* The FRONT photo's garment lettering, from the same classify call. The room
+           asserts this as the chest print in its P.CORE identity lock, and only on the
+           FRONT angle - see identityLockSentence() in app.js for why naming front
+           lettering while rendering the back is the original double-print bug. */
+        textOcr: (data && typeof data.front_text_ocr === "string") ? data.front_text_ocr : ""
       };
     });
   }
@@ -2069,6 +2074,10 @@
                    a value; a colour this pipeline guessed would be stated to Decart
                    with the same authority as a measured one. */
                 garment_color_hex: res.colorHex || undefined,
+                /* The garment's own lettering, transcribed from the FRONT photo. Sent as
+                   "" when the garment is genuinely plain (a real answer), omitted only
+                   when the server never answered - the room distinguishes the two. */
+                garment_text_ocr: typeof res.textOcr === "string" ? res.textOcr : undefined,
                 /* Re-sent alongside the verdict above, and OUTRANKING it in the room.
                    The Shopify product JSON is fetched at boot but can resolve after the
                    modal already opened, so this is the delivery for a size list that

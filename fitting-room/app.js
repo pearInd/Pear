@@ -2660,6 +2660,13 @@ window.addEventListener("message", (e) => {
   if (typeof e.data.garment_color_hex === "string" && e.data.garment_color_hex) {
     activeItem.colorHex = e.data.garment_color_hex;
   }
+  /* The garment's own lettering, from the FRONT photo (see identityLockSentence). "" is
+     assigned deliberately - it is the verdict "the classifier looked and this garment is
+     plain", which must be distinguishable from an absent field. `typeof` and not a
+     truthiness test, for exactly that reason. */
+  if (typeof e.data.garment_text_ocr === "string") {
+    activeItem.textOcr = e.data.garment_text_ocr;
+  }
   /* Unified COMBINED reference, stitched by the widget on the store page (see
      createGarmentComposite in pear-widget.js). When present it IS the model
      reference - referenceImageFor() uses it verbatim and skips stitching again, so
@@ -8416,21 +8423,42 @@ function imageOnlyPrompt(item, angle = "front") {
 
      image-first.test.mjs's "size-override modifier no longer reaches the wire" check is
      updated in the same commit - this clause is what it now asserts IS wired. */
+  /* ── THE GARMENT IDENTITY LOCK - P.CORE, and PROMOTED FROM P.LOW ON PURPOSE ──────
+     "Decart rendered a random t-shirt instead of the garment Gemini prepared."
+
+     Names the garment's MEASURED colour and its transcribed print - the two facts the
+     prompt could not state before, because they are per-product measurements rather than
+     anything an anchor could hold. Threaded server -> widget -> item, never baked into a
+     constant, so one product's identity cannot leak into another's prompt.
+
+     THE PROMOTION IS THE CHANGE, and it reverses a deliberate earlier decision, so the
+     earlier reasoning is worth stating: at P.LOW this clause sheds FIRST, which made it
+     purely additive and guaranteed it could never displace fitSentence. That was the
+     right call while it was a colour HINT. It is the wrong call for an identity LOCK -
+     a clause whose entire job is to stop the model substituting a different garment
+     cannot be the first thing dropped when the prompt gets long, because a long prompt is
+     exactly when the reference image is losing the argument. So it moves to P.CORE, where
+     fitPrompt() cannot shed it.
+
+     THE COST, measured (trace:prompt size ladder): on tops + front + closure the base is
+     552 of 650, so after fit(0)'s 88 chars only 9 remain - ANY lock larger than that
+     evicts fitSentence (P.MED) on that one branch. Accepted, and specified: a garment
+     rendered as the WRONG GARMENT is a worse failure than one rendered at the wrong
+     tension. Every other branch keeps both clauses.
+
+     A SECOND P.CORE PART, which conditioning-trace §4 previously pinned as impossible
+     ("exactly ONE anchor ships"). That assertion is updated in the same commit rather
+     than loosened: the invariant it protected - volume stays FLAT across the ANGLE axis,
+     because the angle SELECTS a frozen anchor rather than appending to one - is still
+     true and still asserted. This part is not an angle variant; it is per-product data,
+     it is length-capped at IDENTITY_LOCK_MAX_CHARS, and it is angle-AWARE only in that
+     the print half is withheld on the back (see identityLockSentence: asserting front
+     lettering over a back reference is the double-print bug through the prompt). */
   return fitPrompt([
     [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
+    [P.CORE, identityLockSentence(item, angle)],
     ...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
     [P.MED, fitSentence(bottoms ? "lower_body" : "upper_body")],
-    /* ── THE COLOUR LOCK - per-product, sampled, and the lowest-priority part here ──
-       Names the garment's measured main-fabric colour instead of leaving the anchor's
-       "preserve the original color" to point at a value it never states - the
-       black/yellow hallucination report. The value is threaded per product
-       (server primary_color_hex -> widget garment_color_hex -> item.colorHex); it is
-       never baked into an anchor, so one product's colour cannot leak into another's
-       prompt. P.LOW is load-bearing: it sheds BEFORE fitSentence, which is the only
-       reason it can be added to branches that have 7-10 free characters left. It
-       abstains entirely on an unsampled or ambiguous colour. Full rationale, including
-       why the OCR text is deliberately NOT here, above colorLockSentence(). */
-    [P.LOW, colorLockSentence(item)],
   ]);
 }
 
@@ -8852,9 +8880,99 @@ function colorNameFromHex(hex) {
   return best;
 }
 
-function colorLockSentence(item) {
+/* ── THE GARMENT IDENTITY LOCK - "Decart rendered a random t-shirt" ────────────────
+   ────────────────────────────────────────────────────────────────────────────────
+   Promoted from a P.LOW colour hint to a P.CORE identity lock, and widened to carry the
+   garment's transcribed lettering alongside its colour. Both values are MEASURED by the
+   same Gemini call that classifies front/back (server primary_color_hex / front_text_ocr
+   -> widget -> item.colorHex / item.textOcr), so this is per-product data threaded
+   through the payload and never text baked into an anchor.
+
+   WHY IT IS VALUES-ONLY, and not the 290-character "FIT LOCK" paragraph it was specified
+   as. The anchors already open with "Drape and fit the EXACT static <noun> from the
+   reference image" and close with "Strictly preserve the original <noun> texture,
+   pattern, and color". A lock that restates "fit the exact garment shown in the
+   reference, do not invent or substitute the design" spends ~230 characters repeating
+   instructions ALREADY ON THE WIRE, and text volume competing with the reference image is
+   the one mechanism every report in this file's history shares - it is how the tuxedo got
+   rendered. What the prompt genuinely could not say before is WHICH colour and WHICH
+   text, because those are per-product measurements. So this clause supplies exactly the
+   two values and nothing else; the imperative half is the anchor's job and already done.
+
+   ── THE BUDGET, WHICH IS THE HARD CONSTRAINT HERE ──
+   P.CORE cannot shed. Anything put here is spent on every dispatch, and if the CORE total
+   exceeds PROMPT_MAX_CHARS then fitPrompt() falls through to clampPromptForWire()'s hard
+   slice, which cuts at the END - mid-word, taking this clause's own quoted text with it
+   and asserting a garment print that reads half a slogan. So:
+
+     · The tightest REAL branch is tops + front + closure: 552 chars of anchor + closure
+       lock, 98 free. IDENTITY_LOCK_MAX_CHARS is therefore 96, and this function can never
+       return more than that - measured, not assumed (npm run trace:prompt prints it).
+     · The print half is included ONLY IF THE WHOLE TRANSCRIPTION FITS. It is never
+       truncated. Half a slogan asserted as the garment's text is worse than no text at
+       all - it is a confident wrong answer, the same failure mode colorNameFromHex()'s
+       three gates exist to avoid.
+     · IT COSTS THE FIT SENTENCE ON ONE BRANCH, and that is a deliberate, specified
+       trade: on tops + front + closure only 9 characters remain after fit(0)'s 88, so ANY
+       lock bigger than 9 chars evicts fitSentence (P.MED) there. The spec is explicit
+       that visual identity outranks tension under pressure, and a garment rendered as the
+       wrong garment is plainly worse than one rendered at the wrong tension. Every other
+       branch keeps both. See trace:prompt's size ladder for the per-rung truth.
+
+   ── FRONT-ONLY FOR THE PRINT HALF, and this is the correctness point, not a nicety ──
+   text_ocr is transcribed from the FRONT photograph. Asserting "the print reads X" while
+   the BACK asset is the reference tells the model to put the chest graphic on the
+   shopper's spine - which IS the print-less-back / double-print bug (23f5953), reached
+   through the prompt instead of through the reference image. The colour half is safe on
+   both angles because a garment is one colour from every side. So the angle SELECTS which
+   halves apply, in the same spirit as the frozen anchor pair. */
+const IDENTITY_LOCK_MAX_CHARS = 96;
+/* A transcription longer than this is not a chest graphic - it is a care label, a size
+   chart or a paragraph of marketing copy that happened to be in frame. Naming it as the
+   garment's print would be wrong even if it fit the budget. */
+const PRINT_TEXT_MAX_CHARS = 48;
+
+/* The garment's lettering, or "" to abstain. Abstains on absent (never transcribed),
+   empty (genuinely plain - nothing to assert), and over-long (see above). Quotes are
+   stripped because the value is about to be wrapped in them, and a nested quote would
+   read to the model as the end of the print text. */
+function garmentPrintText(item) {
+  const raw = item && item.textOcr;
+  if (typeof raw !== "string") return "";
+  const text = raw.replace(/["""'']/g, "").replace(/\s+/g, " ").trim();
+  if (!text || text.length > PRINT_TEXT_MAX_CHARS) return "";
+  return text;
+}
+
+function identityLockSentence(item, angle = "front") {
+  /* THE WRAPPERS ARE TERSE BECAUSE EVERY CHARACTER HERE IS SPENT AT P.CORE, on every
+     dispatch, and is taken straight out of fitSentence's headroom. "Fabric: white."
+     rather than "The fabric color is white." costs 14 instead of 27 and says the same
+     thing to a text encoder; the 18 characters that buys back are two whole size rungs
+     on the plain-tee branch (measured - see the trace ladder). "Fabric:" and not
+     "Color:" is deliberate: an unqualified colour label could be read as the
+     background's, which the anchor is simultaneously telling the model to preserve. */
+  const parts = [];
   const name = colorNameFromHex(item && item.colorHex);
-  return name ? `The garment fabric is ${name}.` : "";
+  if (name) parts.push(`Fabric: ${name}.`);
+  if (angle !== "back") {
+    const text = garmentPrintText(item);
+    if (text) parts.push(`Print: "${text}".`);
+  }
+  const out = parts.join(" ");
+  /* THE CEILING IS ENFORCED, not documented and hoped for. Dropping the whole clause is
+     the correct overflow behaviour: every part of it is an assertion about the garment,
+     and a partial assertion is a wrong one. Logged because a clause silently vanishing is
+     exactly the class of bug this file keeps a tracer for. */
+  if (out.length > IDENTITY_LOCK_MAX_CHARS) {
+    console.warn(`[PEAR] identityLockSentence() - ${out.length} chars exceeds the ` +
+      `${IDENTITY_LOCK_MAX_CHARS} budget; dropping it rather than shipping a truncated ` +
+      `garment assertion. Colour+print for this item cannot both be named.`);
+    return name && `Fabric: ${name}.`.length <= IDENTITY_LOCK_MAX_CHARS
+      ? `Fabric: ${name}.`   // keep the half that still fits, angle-safe
+      : "";
+  }
+  return out;
 }
 
 /* ── THE WIRE GUARD - last line of defence, and the one that generalises ──────

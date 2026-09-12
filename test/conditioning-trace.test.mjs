@@ -179,9 +179,38 @@ console.log("\n── §4 SELECTING, NOT APPENDING ──");
      P.HIGH by name to explain the shedding order, and a check that trips over the
      explanation would force whoever reads it to delete the documentation. */
   const resolverCode = resolver.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  check("exactly ONE anchor ships - volume stays flat across the angle axis",
+  /* ── NOW TWO P.CORE PARTS, AND THE INVARIANT IS UNCHANGED ────────────────────────
+     This used to assert `P.CORE count === 1`. The count was never the property; it was
+     a proxy for the property, and the property is what the label says: VOLUME STAYS FLAT
+     ACROSS THE ANGLE AXIS - a back render must not ship the front anchor PLUS a rear
+     clause, because that is the text-volume increase the tuxedo regression was traced to.
+     A count of 1 enforced that as long as the only CORE content was the anchor.
+
+     The second CORE part is identityLockSentence(), the per-product colour/print lock
+     (the "Decart rendered a random t-shirt" report). It is not an angle variant and it
+     does not grow with the angle - the BACK branch gets LESS of it, not more, because the
+     print half is withheld there. So the angle axis is still volume-flat, and in the one
+     direction that matters it now shrinks rather than grows.
+
+     ASSERTED PRECISELY rather than by a looser count, so the thing the old check caught
+     still fails: exactly TWO CORE parts, both named, in this order, with the anchor first.
+     A third CORE part, an anchor moved off CORE, or a clause concatenated onto either one
+     fails here. The angle-axis flatness itself is asserted separately below and by
+     image-first §1's byte-exact anchor pins. */
+  check("exactly TWO CORE parts - the frozen anchor, then the per-product identity lock",
     /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],/.test(resolverCode) &&
-    (resolverCode.match(/P\.CORE/g) || []).length === 1, resolverCode);
+    /\[P\.CORE, identityLockSentence\(item, angle\)\],/.test(resolverCode) &&
+    (resolverCode.match(/P\.CORE/g) || []).length === 2 &&
+    resolverCode.indexOf("P.CORE, plainTee") < resolverCode.indexOf("P.CORE, identityLockSentence"),
+    resolverCode);
+  /* The identity lock must stay ANGLE-AWARE, because that is what keeps the CORE from
+     growing on the back branch - and what stops front lettering being asserted over a
+     back reference (the double-print bug, reached through the prompt instead of the
+     reference image). A call that dropped the angle argument would silently re-open it. */
+  check("...and the identity lock is angle-aware, so the back never asserts front print",
+    /identityLockSentence\(item, angle\)/.test(resolverCode) &&
+    /angle !== "back"/.test(APP.slice(APP.indexOf("function identityLockSentence"))),
+    "the back branch must withhold the print half - see identityLockSentence");
   check("the one bought-back clause rides at P.HIGH, so it sheds before the anchor does",
     (resolverCode.match(/P\.HIGH/g) || []).length === 1 &&
     /\[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\]/.test(resolverCode), resolverCode);

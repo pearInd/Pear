@@ -2112,6 +2112,13 @@ function resolveGarmentViews({ images, records, scrapedFront, scrapedBack }) {
      angle/reference pair, in a smaller key: two independent reads of "which is the
      front" can disagree, and the colour would then be sampled from the wrong photo. */
   const front_color_hex = frontRecord?.primary_color_hex || null;
+  /* The FRONT photo's own transcription, surfaced for the fitting room's P.CORE identity
+     lock. Deliberately the FRONT record's and nobody else's: the room asserts this text
+     as the garment's chest print, so a transcription taken from the back panel (or from
+     an unrelated gallery image) would name lettering that is not on the side being
+     rendered. null when unsampled - see classifyFrontBackDetailed's null-vs-"" note. */
+  const front_text_ocr = (typeof frontRecord?.text_ocr === "string" && frontRecord.text_ocr)
+    ? frontRecord.text_ocr : null;
 
   const reject = (url, reason, source) =>
     console.warn(`[classify-images] ${source} back REJECTED (${reason}): ${String(url).slice(0, 120)}`);
@@ -2127,18 +2134,18 @@ function resolveGarmentViews({ images, records, scrapedFront, scrapedBack }) {
     const verdict = validateBackCandidate(
       { url: scrapedBack, record: domIdx !== -1 ? records[domIdx] : null }, frontRecord, front
     );
-    if (verdict.valid) return { front, back: scrapedBack, back_source: "dom", front_color_hex };
+    if (verdict.valid) return { front, back: scrapedBack, back_source: "dom", front_color_hex, front_text_ocr };
     reject(scrapedBack, verdict.reason, "DOM");
   }
 
   for (let i = 0; i < images.length; i++) {
     if (records[i]?.view !== "back") continue;
     const verdict = validateBackCandidate({ url: images[i], record: records[i] }, frontRecord, front);
-    if (verdict.valid) return { front, back: images[i], back_source: "classifier", front_color_hex };
+    if (verdict.valid) return { front, back: images[i], back_source: "classifier", front_color_hex, front_text_ocr };
     reject(images[i], verdict.reason, "classifier");
   }
 
-  return { front, back: "", back_source: "none", front_color_hex };
+  return { front, back: "", back_source: "none", front_color_hex, front_text_ocr };
 }
 
 /* Per-PRODUCT kids/adult verdict, resolved from the same per-image records
@@ -2338,6 +2345,10 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
        than kept internal because a colour pop between the front and rear asset is the
        failure it exists to prevent, and a caller that can read the value can log it. */
     primary_color_hex: views.front_color_hex,
+    /* The FRONT photo's garment lettering, for the room's P.CORE identity lock. "" is a
+       real answer ("looked, the garment is plain") and is sent as "" rather than omitted,
+       so the room can tell it apart from an older server build that sends nothing. */
+    front_text_ocr: views.front_text_ocr ?? "",
   });
 });
 
