@@ -38,7 +38,12 @@ const KEY_SOURCE =
   null;
 const API_KEY  = process.env.DECART_API_KEY || process.env.DESCARTES_API_KEY || "";
 const PORT     = Number(process.env.PORT) || 3000;
-const VTON_MODEL  = process.env.DECART_VTON_MODEL  || "lucy-vton-latest";
+// Bumped 2026-09-12 from the "lucy-vton-latest" alias to the explicit "lucy-vton-3.5"
+// version id (override via DECART_VTON_MODEL). Keep in lockstep with the hardcoded
+// model.name in fitting-room/app.js's buildRealtimeConnectOpts() - this value only
+// scopes the minted ek_ token (trySDK/tryREST below); the browser's actual
+// realtime.connect() call uses its own separate literal, unaffected by this env var.
+const VTON_MODEL  = process.env.DECART_VTON_MODEL  || "lucy-vton-3.5";
 const TOKEN_TTL   = Math.min(3600, Math.max(1, Number(process.env.DECART_TOKEN_TTL) || 600));
 const ALLOWED_ORIGINS = (process.env.DECART_ALLOWED_ORIGINS || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
@@ -1367,8 +1372,38 @@ TRICKY CASES - follow these exactly:
 Report age_group confidence honestly using the SAME bands as view confidence
 above; below 0.7 you must answer "uncertain".
 
+SEPARATELY AGAIN, transcribe the garment's own lettering and report its colour.
+These two are NOT part of the front/back decision - they exist so the caller can
+catch a gallery that ships the same side twice, and so a generated rear view can
+match the real fabric colour.
+
+text_ocr - every word PRINTED, EMBROIDERED or WOVEN ON THE GARMENT ITSELF, in the
+order it reads, separated by single spaces. This is the garment's graphic, not the
+photograph's furniture:
+- INCLUDE chest/back prints, slogans, team names, numbers, brand wordmarks knitted
+  or printed into the fabric, and lettering on a visible woven label.
+- EXCLUDE watermarks, price stickers, studio backdrops, retouching marks, and any
+  text belonging to the room or props rather than to the garment.
+- If the garment carries no legible lettering at all, answer "" (empty string).
+- Transcribe what you can SEE. Never complete a partially occluded word from what
+  you assume the brand is - a guessed word makes two different photos compare equal.
+
+is_true_back_view - true ONLY when this photograph shows the garment's REAR and you
+would stake the "back" verdict on it. It is a stricter, independent second opinion on
+your own view field, not a restatement of it:
+- view "front" or "uncertain" -> is_true_back_view MUST be false.
+- view "back" from a DECISIVE back cue above, clearly legible -> true.
+- view "back" inferred from a turned-away model with the garment itself mostly
+  occluded, or from a single weak cue -> false. Say false whenever a downstream
+  system treating this image as the definitive rear reference would be a mistake.
+
+primary_color_hex - the dominant colour of the garment's MAIN FABRIC as "#rrggbb":
+the body panel, not a print, trim, collar band or the background. On a multicolour
+or patterned garment give the colour covering the most area. If the garment is not
+legible enough to sample, answer "".
+
 Respond ONLY with JSON matching this schema:
-{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>","age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0}`;
+{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>","age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0,"text_ocr":"<garment lettering, verbatim, or empty>","is_true_back_view":true|false,"primary_color_hex":"#rrggbb"}`;
 
 /* Classify one image. Returns the full record - the caller decides what an
    `uncertain` verdict means (see resolveGarmentViews), rather than the prompt
@@ -1402,7 +1437,14 @@ async function classifyFrontBackDetailed(imageUrl) {
             cue:                  { type: "STRING" },
             age_group:            { type: "STRING", enum: ["kids", "adult", "uncertain"] },
             age_group_confidence: { type: "NUMBER" },
+            text_ocr:             { type: "STRING" },
+            is_true_back_view:    { type: "BOOLEAN" },
+            primary_color_hex:    { type: "STRING" },
           },
+          /* The three new fields are NOT `required`. A model that omits one must still
+             produce a usable front/back verdict: every consumer below treats a missing
+             value as "no evidence" and falls through to the behaviour that shipped
+             before they existed (see validateBackCandidate - absent OCR abstains). */
           required: ["view", "confidence", "age_group", "age_group_confidence"],
         },
       },
@@ -1427,7 +1469,11 @@ async function classifyFrontBackDetailed(imageUrl) {
     // uncertain rather than string-matching it (the old .includes("back") test read
     // "not the back" as a back).
     console.warn(`[classify] unparseable Gemini body for ${secureUrl}: ${text.slice(0, 120)}`);
-    return { view: "uncertain", confidence: 0, cue: "unparseable response", age_group: "uncertain", age_group_confidence: 0 };
+    return {
+      view: "uncertain", confidence: 0, cue: "unparseable response",
+      age_group: "uncertain", age_group_confidence: 0,
+      text_ocr: null, is_true_back_view: false, primary_color_hex: null,
+    };
   }
   const view = ["front", "back", "uncertain"].includes(parsed?.view) ? parsed.view : "uncertain";
   const confidence = Number.isFinite(parsed?.confidence) ? Math.max(0, Math.min(1, parsed.confidence)) : 0;
@@ -1437,7 +1483,33 @@ async function classifyFrontBackDetailed(imageUrl) {
   return {
     view, confidence, cue: typeof parsed?.cue === "string" ? parsed.cue.slice(0, 120) : "",
     age_group: ageGroup, age_group_confidence: ageGroupConfidence,
+    /* NULL, NOT "", WHEN THE FIELD IS ABSENT - the distinction is the whole safety
+       property of the duplicate check below. "" is a VERDICT ("I looked; this garment
+       carries no lettering"); null is "the model did not answer". Two garments that
+       both legitimately have no print would compare EQUAL on "" and invalidate a
+       perfectly good back panel, so validateBackCandidate() only ever compares two
+       NON-EMPTY transcriptions. Collapsing null to "" here would silently turn every
+       plain garment into a duplicate. */
+    text_ocr: typeof parsed?.text_ocr === "string" ? parsed.text_ocr.slice(0, 300) : null,
+    /* Never inferred from `view`. A model that omits the field has not confirmed a
+       rear view, so the default is false and the DOM/classifier claim stands or falls
+       on the evidence it already had (§2.1: positive evidence only, and this is not a
+       new way to CLAIM a back - only a way to reject one). */
+    is_true_back_view: parsed?.is_true_back_view === true,
+    primary_color_hex: normalizeHexColor(parsed?.primary_color_hex),
   };
+}
+
+/* "#RRGGBB" or null. Accepts the 3-digit shorthand and a missing "#", because those are
+   what the model actually returns when it drifts from the schema; anything else is not
+   coerced into a wrong colour - a null here means synthesizeBackView() simply omits the
+   colour instruction rather than being handed a made-up one. */
+function normalizeHexColor(raw) {
+  if (typeof raw !== "string") return null;
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(raw.trim());
+  if (!m) return null;
+  const hex = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
+  return `#${hex.toLowerCase()}`;
 }
 
 /* Back-compat wrapper: the front|back-only contract the scanner and the cache read
@@ -1484,27 +1556,47 @@ async function getCachedClassification(imageUrl) {
 const MISSING_COLUMN_RE = /column .* does not exist|Could not find the/i;
 
 /* Same row, but with the diagnostic columns added in supabase_setup_v8.sql
-   (confidence / source / cue) and the kids/adult verdict added in v11
-   (age_group / age_group_confidence). Degrades one migration tier at a time -
-   v11 columns missing falls back to v8 shape, v8 columns missing falls back to
-   the bare v5 shape - so this deploy is safe to ship BEFORE either SQL runs, and
-   an existing v8-only deployment doesn't lose confidence/source/cue just because
-   v11 hasn't run yet. */
+   (confidence / source / cue), the kids/adult verdict added in v11
+   (age_group / age_group_confidence), and the panel-validation evidence added in
+   v12 (text_ocr / is_true_back_view / primary_color_hex). Degrades one migration
+   tier at a time - v12 missing falls back to v11 shape, v11 missing falls back to
+   v8, v8 missing falls back to the bare v5 shape - so this deploy is safe to ship
+   BEFORE any of the SQL runs, and an existing v8-only deployment doesn't lose
+   confidence/source/cue just because v11 hasn't run yet.
+
+   WHY THE v12 COLUMNS HAVE TO BE CACHED AT ALL, rather than only living in the live
+   response: /api/classify-images is CACHE-FIRST. A cached record that carried no
+   text_ocr would make validateBackCandidate() abstain on every repeat visit - the
+   duplicate-front veto would work exactly once per photo, on the visit that happened
+   to classify it, and never again. That is the same shape as the pre-v8 bug where a
+   row said "front" without recording whether that was a verdict or a default.
+
+   A PRE-v12 ROW READS BACK AS null, NOT "", and that distinction is load-bearing -
+   see classifyFrontBackDetailed()'s note. null abstains; "" is a claim that the
+   garment has no lettering. */
 async function getCachedClassificationDetailed(imageUrl) {
   if (!supabase) return null;
-  let { data, error } = await garmentCacheQuery(
-    imageUrl, "classification, confidence, source, cue, age_group, age_group_confidence"
-  );
+  const V11 = "classification, confidence, source, cue, age_group, age_group_confidence";
+  const V12_ONLY = ", text_ocr, is_true_back_view, primary_color_hex";
+  let { data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY);
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-    ({ data, error } = await garmentCacheQuery(imageUrl, "classification, confidence, source, cue"));
+    console.warn("[garment_cache] v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation");
+    ({ data, error } = await garmentCacheQuery(imageUrl, V11));
     if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-      const classification = await getCachedClassification(imageUrl);
-      return classification
-        ? { classification, confidence: null, source: "legacy", cue: "", age_group: null, age_group_confidence: null }
-        : null;
+      ({ data, error } = await garmentCacheQuery(imageUrl, "classification, confidence, source, cue"));
+      if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+        const classification = await getCachedClassification(imageUrl);
+        return classification
+          ? { classification, confidence: null, source: "legacy", cue: "", age_group: null, age_group_confidence: null,
+              text_ocr: null, is_true_back_view: null, primary_color_hex: null }
+          : null;
+      }
+      if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
+      return data ? { ...data, age_group: null, age_group_confidence: null,
+                      text_ocr: null, is_true_back_view: null, primary_color_hex: null } : null;
     }
     if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
-    return data ? { ...data, age_group: null, age_group_confidence: null } : null;
+    return data ? { ...data, text_ocr: null, is_true_back_view: null, primary_color_hex: null } : null;
   }
   if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
   return data || null;
@@ -1537,16 +1629,29 @@ async function saveClassification(imageUrl, classification, meta = {}) {
     age_group: meta.ageGroup || null,
     age_group_confidence: Number.isFinite(meta.ageGroupConfidence) ? meta.ageGroupConfidence : null,
   };
+  /* `textOcr === undefined` (this call site never looked) and `textOcr === ""` (the model
+      looked and found no lettering) must NOT both become null, or a repeat visit cannot
+      tell "unclassified" from "genuinely plain" - see getCachedClassificationDetailed. */
+  const v12Fields = {
+    text_ocr: typeof meta.textOcr === "string" ? meta.textOcr : null,
+    is_true_back_view: typeof meta.isTrueBackView === "boolean" ? meta.isTrueBackView : null,
+    primary_color_hex: meta.primaryColorHex || null,
+  };
 
   let { error } = await supabase.from("garment_cache")
-    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields }], { onConflict: "canonical_url" });
+    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields }], { onConflict: "canonical_url" });
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-    console.warn("[garment_cache] v11 columns absent - run archive/supabase_setup_v11.sql for kids/adult classification");
+    console.warn("[garment_cache] v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation");
     ({ error } = await supabase.from("garment_cache")
-      .upsert([{ ...base, ...canonical, ...v8Fields }], { onConflict: "canonical_url" }));
+      .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields }], { onConflict: "canonical_url" }));
     if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-      console.warn("[garment_cache] v8 columns absent - run archive/supabase_setup_v8.sql for full diagnostics");
-      ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));
+      console.warn("[garment_cache] v11 columns absent - run archive/supabase_setup_v11.sql for kids/adult classification");
+      ({ error } = await supabase.from("garment_cache")
+        .upsert([{ ...base, ...canonical, ...v8Fields }], { onConflict: "canonical_url" }));
+      if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+        console.warn("[garment_cache] v8 columns absent - run archive/supabase_setup_v8.sql for full diagnostics");
+        ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));
+      }
     }
   }
   if (error) console.warn("[garment_cache] write failed:", error.message);
@@ -1631,21 +1736,46 @@ const SYNTH_BACK_ENABLED = process.env.PEAR_SYNTH_BACK !== "0";
 const synthBackCache = new Map();   // frontUrl → Promise<dataUrl|null>
 const SYNTH_CACHE_MAX = 100;
 
-const SYNTH_BACK_PROMPT =
+/* A FUNCTION, not a constant, since the colour lock below is per-product.
+   WHY THE HEX AT ALL: the prompt already said "that garment's fabric and colour", and a
+   generation still drifted - asked to REMOVE a large chest graphic and reconstruct the
+   panel underneath, the model has to invent that area, and it reconstructs toward the
+   mean of what it saw rather than the fabric. On a white tee with a dark print that
+   drifts grey or cream, and the rear asset then reads as a DIFFERENT GARMENT from the
+   front one the OrientationWatcher swaps away from - a visible colour pop mid-turn.
+   A sampled hex is a fixed target instead of a relative instruction.
+
+   OMITTED ENTIRELY when the colour could not be sampled (normalizeHexColor returned
+   null). A hex the model invented is worse than no hex: it would be stated with the
+   same authority as a measured one and lock the rear panel to a colour the front never
+   had. Absent the value, this is byte-identical to the prompt that shipped before. */
+function synthBackPrompt(primaryColorHex) {
+  return (
   "Generate the BACK view of the garment shown in this product photograph.\n\n" +
   "Reproduce the same garment, same cut, same fabric, same colour and the same lighting and " +
   "background style as the reference, photographed from directly behind at the same distance " +
   "and framing - a matching product shot of the reverse side.\n\n" +
   "Rules:\n" +
   "- Keep the silhouette, proportions, sleeve length, hem length and fabric texture identical.\n" +
+  "- Match the reference's neckline seam, shoulder cut and armhole placement exactly; the two " +
+  "views must read as the same physical garment photographed twice.\n" +
   "- Render the rear construction the garment would actually have: centre-back seam or yoke, " +
   "the rear neckline and the back of the collar, rear hemline, and back darts or vents where the cut implies them.\n" +
   "- Do NOT copy front-only features onto the back: no buttons, no front placket, no zipper, " +
   "no chest pocket, no front graphic, no front lettering.\n" +
+  "- Where the front carries a print, logo or lettering, the corresponding back area is SMOOTH, " +
+  "UNBROKEN fabric: reconstruct the weave continuously across it with no ghost, outline, " +
+  "shadow or mirrored remnant of the front graphic, and no seam where it used to be.\n" +
   "- If the front carries a print or logo, the back is PLAIN in that garment's fabric and colour " +
   "unless the cut clearly implies a back panel print. Never mirror the front graphic.\n" +
+  (primaryColorHex
+    ? `- The garment's main fabric is ${primaryColorHex}. Render the entire back panel in that exact ` +
+      "colour, uniform across the panel, with only lighting and fabric texture varying over it.\n"
+    : "") +
   "- No text, watermarks, captions or annotations anywhere in the image.\n" +
-  "- Output a single photorealistic image of the garment's back, nothing else.";
+  "- Output a single photorealistic image of the garment's back, nothing else."
+  );
+}
 
 /* ── Durable persistence for generated rear views ────────────────────────────────
    MEASURED IN PRODUCTION: a fresh synthesis takes ~27s (Gemini image generation is
@@ -1743,9 +1873,18 @@ async function saveDurableSynthBack(frontUrl, base64, mime) {
   }
 }
 
-async function synthesizeBackView(frontUrl) {
+/* @param {string} frontUrl
+   @param {{primaryColorHex?: string|null}} [opts]  colour sampled from the FRONT photo's
+     own classification record (see synthBackPrompt for why it is worth threading).
+   NOTE THE CACHE KEY IS STILL frontUrl ALONE, deliberately: the colour is DERIVED from
+   that same photograph, so it is not an independent input - the same front URL implies
+   the same sampled hex. Adding it to the key would fragment the durable Storage path
+   (which hashes the canonical front URL) and cost a fresh ~27s generation whenever the
+   model returned the hex in a different spelling. */
+async function synthesizeBackView(frontUrl, opts = {}) {
   if (!SYNTH_BACK_ENABLED || !GEMINI_API_KEY || !frontUrl) return null;
   if (synthBackCache.has(frontUrl)) return synthBackCache.get(frontUrl);
+  const primaryColorHex = normalizeHexColor(opts.primaryColorHex);
 
   const job = (async () => {
     // Durable hit first: this is the path that makes the SECOND-and-later request
@@ -1765,7 +1904,7 @@ async function synthesizeBackView(frontUrl) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: SYNTH_BACK_PROMPT }, { inline_data: { mime_type: mimeType, data: base64 } }] }],
+          contents: [{ parts: [{ text: synthBackPrompt(primaryColorHex) }, { inline_data: { mime_type: mimeType, data: base64 } }] }],
           generationConfig: { temperature: 0.2 },
         }),
       });
@@ -1875,28 +2014,131 @@ function sameImage(a, b) {
   return canonicalImageUrl(a) === canonicalImageUrl(b);
 }
 
+/* ── THE PIXEL-LEVEL DUPLICATE CHECK - "the back view shows the chest logo again" ──
+   ────────────────────────────────────────────────────────────────────────────────
+   THE BUG THIS CLOSES. sameImage() rejects a back candidate that is the front under a
+   different URL SPELLING, and that was the only duplicate test in the pipeline. It
+   cannot see the case actually reported: a gallery that ships TWO GENUINELY DIFFERENT
+   PHOTOGRAPHS OF THE SAME SIDE - a straight-on front packshot and a second front shot
+   at a slight angle, different crop, different file, different bytes. canonicalImageUrl()
+   correctly says those are two photos, so `!sameImage()` passes, and if the classifier
+   labels the angled one "back" (a turned shoulder and an occluded placket is exactly
+   the weak-cue case its own prompt warns about) the front is bound as the BACK
+   reference. The shopper then turns around and sees the chest graphic on their back -
+   the same visible symptom as the positional-guessing bug in §2.1, arrived at from a
+   completely different direction.
+
+   THE TWO SIGNALS, and why neither alone is enough:
+     · is_true_back_view - the model's own stricter second opinion. Catches the weak-cue
+       "back" directly, but a confidently-wrong model asserts it just as readily.
+     · text_ocr equality - evidence from the PIXELS, independent of any verdict. Two
+       photos that transcribe to the same garment lettering are the same side of the
+       same garment, whatever either verdict claims. This is the signal that caught the
+       reported case: both panels read "BE YOUR OWN Healer WORLDWIDE" because both were
+       the front.
+
+   WHY THIS DOES NOT WEAKEN §2.1. This function can only ever REJECT a back claim, never
+   create one. A back is still claimed exclusively on the positive evidence §2.1 lists
+   (data-pear-back → filename/alt → classifier verdict → generated rear); this runs
+   afterwards and can only veto. Rejecting falls through to the next source in
+   resolveGarmentViews(), and a total rejection lands on back_source "none" (front-only,
+   graceful) or "synthetic" - both strictly better than a front bound as the back.
+
+   WHY IT ABSTAINS SO AGGRESSIVELY (§2.5 - never block on ambiguity). Only NON-EMPTY,
+   both-present transcriptions are compared. A null (model didn't answer) or an empty
+   string (garment genuinely carries no lettering) abstains, because "two plain garments
+   have equally empty prints" is true of every unbranded tee in the catalog and would
+   veto every legitimate back panel on the site. A wrong veto costs a real rear view.
+
+   @param {{url:string, record:object|null|undefined}} candidate  the proposed back
+   @param {object|null|undefined} frontRecord  the record backing the resolved front
+   @returns {{valid:boolean, reason:string}} reason is a stable, greppable code */
+const BACK_INVALID_REASON = Object.freeze({
+  OK:             "ok",
+  SAME_URL:       "same_photo_as_front",       // sameImage() - the URL-spelling case
+  NOT_TRUE_BACK:  "not_a_true_back_view",      // is_true_back_view === false
+  OCR_MATCHES:    "front_text_repeated",       // text_ocr identical to the front's
+});
+
+/* Compare the WORDS, not the formatting. A transcription differing only in case,
+   punctuation or run of whitespace is the same graphic read twice; treating
+   "BE YOUR OWN Healer WORLDWIDE" and "be your own healer worldwide" as distinct would
+   let the duplicate through on nothing but the model's shift key. */
+function normalizeOcr(text) {
+  if (typeof text !== "string") return "";
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function validateBackCandidate(candidate, frontRecord, front) {
+  const { url, record } = candidate || {};
+  if (!url) return { valid: false, reason: BACK_INVALID_REASON.SAME_URL };
+
+  if (front && sameImage(url, front)) {
+    return { valid: false, reason: BACK_INVALID_REASON.SAME_URL };
+  }
+
+  /* Only applied to a CLASSIFIER claim. A dom_hint record is synthesised by the caller
+     with is_true_back_view absent - the storefront's markup named this photo the back
+     and the model was never asked, so an absent field here is "not asked", not "denied".
+     Vetoing on it would discard the highest-trust signal in the pipeline. */
+  if (record && record.source === "gemini" && record.is_true_back_view === false) {
+    return { valid: false, reason: BACK_INVALID_REASON.NOT_TRUE_BACK };
+  }
+
+  const backText  = normalizeOcr(record?.text_ocr);
+  const frontText = normalizeOcr(frontRecord?.text_ocr);
+  if (backText && frontText && backText === frontText) {
+    return { valid: false, reason: BACK_INVALID_REASON.OCR_MATCHES };
+  }
+
+  return { valid: true, reason: BACK_INVALID_REASON.OK };
+}
+
 function resolveGarmentViews({ images, records, scrapedFront, scrapedBack }) {
+  const frontIdx = images.findIndex((u, i) => records[i]?.view === "front");
   const front =
-    images.find((u, i) => records[i]?.view === "front") ||
+    (frontIdx !== -1 ? images[frontIdx] : null) ||
     scrapedFront ||
     images[0];
+
+  /* The record backing the RESOLVED front, which is not necessarily records[frontIdx]:
+     when no image classified as "front" the resolved front came from scrapedFront or
+     images[0], and the OCR comparison must read THAT photo's transcription or it is
+     comparing the back candidate against an unrelated image. */
+  const resolvedFrontIdx = images.findIndex((u) => sameImage(u, front));
+  const frontRecord = resolvedFrontIdx !== -1 ? records[resolvedFrontIdx] : null;
+  /* Surfaced so the caller can hand it to synthesizeBackView() without re-deriving which
+     record backs the front - the same TOCTOU-shaped mistake §2.8 documents on the
+     angle/reference pair, in a smaller key: two independent reads of "which is the
+     front" can disagree, and the colour would then be sampled from the wrong photo. */
+  const front_color_hex = frontRecord?.primary_color_hex || null;
+
+  const reject = (url, reason, source) =>
+    console.warn(`[classify-images] ${source} back REJECTED (${reason}): ${String(url).slice(0, 120)}`);
 
   /* A "back" that is really the front under a different URL spelling is WORSE than no
      back at all: it passes every downstream distinctness check and then reaches the
      model paired with "reproduce the BACK, do NOT render the front". Fall through to
-     the classifier (and then to generation) instead of trusting it. */
-  if (scrapedBack && !sameImage(scrapedBack, front)) {
-    return { front, back: scrapedBack, back_source: "dom" };
-  }
+     the classifier (and then to generation) instead of trusting it.
+     EXTENDED: `validateBackCandidate` now also vetoes a candidate whose PIXELS repeat
+     the front's graphic even when the URLs are genuinely distinct - see its header. */
   if (scrapedBack) {
-    console.warn("[classify-images] DOM back is the same photo as the front (different URL spelling) - ignoring it:",
-      String(scrapedBack).slice(0, 120));
+    const domIdx = images.findIndex((u) => sameImage(u, scrapedBack));
+    const verdict = validateBackCandidate(
+      { url: scrapedBack, record: domIdx !== -1 ? records[domIdx] : null }, frontRecord, front
+    );
+    if (verdict.valid) return { front, back: scrapedBack, back_source: "dom", front_color_hex };
+    reject(scrapedBack, verdict.reason, "DOM");
   }
 
-  const classified = images.find((u, i) => records[i]?.view === "back" && !sameImage(u, front));
-  if (classified) return { front, back: classified, back_source: "classifier" };
+  for (let i = 0; i < images.length; i++) {
+    if (records[i]?.view !== "back") continue;
+    const verdict = validateBackCandidate({ url: images[i], record: records[i] }, frontRecord, front);
+    if (verdict.valid) return { front, back: images[i], back_source: "classifier", front_color_hex };
+    reject(images[i], verdict.reason, "classifier");
+  }
 
-  return { front, back: "", back_source: "none" };
+  return { front, back: "", back_source: "none", front_color_hex };
 }
 
 /* Per-PRODUCT kids/adult verdict, resolved from the same per-image records
@@ -1981,7 +2223,11 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     // no age_group opinion - the DOM only ever names WHICH photo is the back, never
     // what kind of garment it is.
     if (scrapedBack && url === scrapedBack) {
-      records.push({ view: "back", confidence: 1, source: "dom_hint", cue: "storefront markup", age_group: "uncertain", age_group_confidence: 0 });
+      /* is_true_back_view is left ABSENT (not false) on purpose: the model was never
+         asked about this photo, and validateBackCandidate() only vetoes on an explicit
+         false from a `gemini` record. A false here would veto the highest-trust signal
+         in the pipeline - the storefront's own markup - on no evidence at all. */
+      records.push({ view: "back", confidence: 1, source: "dom_hint", cue: "storefront markup", age_group: "uncertain", age_group_confidence: 0, text_ocr: null, primary_color_hex: null });
       continue;
     }
     try {
@@ -1997,6 +2243,12 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
           // stays visible in logs/DB for anyone auditing coverage).
           age_group: cached.age_group ?? null,
           age_group_confidence: cached.age_group_confidence ?? null,
+          /* Carried through so the duplicate-front veto works on a CACHED gallery too,
+             not only on the one visit that classified it. `?? null` preserves the
+             abstain-on-absent contract for pre-v12 rows. */
+          text_ocr: cached.text_ocr ?? null,
+          is_true_back_view: cached.is_true_back_view ?? null,
+          primary_color_hex: cached.primary_color_hex ?? null,
           cached: true,
         });
         continue;
@@ -2012,6 +2264,7 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
         {
           confidence: rec.confidence, source: rec.view === "uncertain" ? "uncertain" : "gemini", cue: rec.cue,
           ageGroup: rec.age_group, ageGroupConfidence: rec.age_group_confidence,
+          textOcr: rec.text_ocr, isTrueBackView: rec.is_true_back_view, primaryColorHex: rec.primary_color_hex,
         }
       );
       records.push({ ...rec, source: rec.view === "uncertain" ? "uncertain" : "gemini" });
@@ -2020,7 +2273,7 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
       if (err?.rateLimited) rateLimited++;
       console.error(`[classify-images] ${err?.rateLimited ? "RATE LIMITED" : "failed"} for ${url}:`, err?.message || err);
       // NOT cached, and explicitly marked a fallback - this is a default, not a verdict.
-      records.push({ view: "uncertain", confidence: 0, source: "fallback", cue: err?.message || "error", age_group: "uncertain", age_group_confidence: 0 });
+      records.push({ view: "uncertain", confidence: 0, source: "fallback", cue: err?.message || "error", age_group: "uncertain", age_group_confidence: 0, text_ocr: null, is_true_back_view: false, primary_color_hex: null });
     }
   }
 
@@ -2046,8 +2299,13 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
   /* Single-image fallback: no rear photo anywhere in the gallery → generate one from
      the front so the shopper still gets a real rear reference when they turn around
      (see synthesizeBackView). Opt-in per request; never replaces a real back. */
+  /* REACHED BY REJECTION TOO, not only by absence. validateBackCandidate() vetoing a
+     duplicate leaves views.back empty, so a gallery that shipped the front twice now
+     lands HERE - a generated rear built by stripping the front's graphic - instead of
+     going live with the front bound as the back. That redirect is the point of the
+     veto: the shopper gets a plain back rather than the chest logo on their spine. */
   if (!views.back && wantSynth && views.front) {
-    const synth = await synthesizeBackView(views.front);
+    const synth = await synthesizeBackView(views.front, { primaryColorHex: views.front_color_hex });
     if (synth) { views.back = synth; views.back_source = "synthetic"; }
   }
 
@@ -2075,6 +2333,11 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     // anywhere downstream; this is plumbing only, consumed by callers that choose to.
     age_group: ageGroupResult.age_group,
     age_group_confidence: ageGroupResult.age_group_confidence,
+    /* The garment's sampled main-fabric colour, from the FRONT photo's record. Plumbing
+       only at this tier - synthesizeBackView() is its one consumer today. Exposed rather
+       than kept internal because a colour pop between the front and rear asset is the
+       failure it exists to prevent, and a caller that can read the value can log it. */
+    primary_color_hex: views.front_color_hex,
   });
 });
 
