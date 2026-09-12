@@ -117,7 +117,7 @@ const { value: PROMPT_MAX_CHARS, source: PROMPT_MAX_CHARS_SOURCE, kind: PROMPT_M
 /* ── resolve the anchors ──────────────────────────────────────────────────── */
 const NEEDED = [
   "STRICT_REFERENCE_LOCK", "PLAIN_TEE_ANCHOR", "FRONT_CLOSURE_LOCK",
-  "CATEGORY_ANCHOR", "BACK_CATEGORY_ANCHOR", "LOOK_ANCHOR",
+  "CATEGORY_ANCHOR", "BACK_CATEGORY_ANCHOR", "PLAIN_BACK_ANCHOR", "LOOK_ANCHOR",
   "VOLUME_PERSISTENCE", "CLOSED_BACK_HEM",
 ];
 
@@ -164,6 +164,12 @@ for (let pass = 0; pass < 2; pass++) {
    lock, and a single number cannot express that. */
 const A = scope.CATEGORY_ANCHOR ?? {};
 const B = scope.BACK_CATEGORY_ANCHOR ?? {};
+/* The plain-rear variant, selected when the server positively established a blank back
+   (generated rear, or a real rear photo the classifier transcribed as empty). Traced as
+   its own rows because it is a DIFFERENT string on the wire, and because the whole point
+   of the change is that it is SHORTER than the pair it replaces - a claim this table is
+   the only honest place to check. */
+const PB = scope.PLAIN_BACK_ANCHOR ?? {};
 const closure = scope.FRONT_CLOSURE_LOCK ?? "";
 
 const norm = (s) => String(s ?? "").replace(/\s+/g, " ").trim();
@@ -296,12 +302,16 @@ const branches = [
   { id: "top / front / structured + closure", fit: "upper_body",
     parts: [[P.CORE, A.top, "CATEGORY_ANCHOR.top"],
             [P.HIGH, closure, "FRONT_CLOSURE_LOCK"]] },
-  { id: "top / back",                         fit: "upper_body",
+  { id: "top / back (rear print)",             fit: "upper_body",
     parts: [[P.CORE, B.top, "BACK_CATEGORY_ANCHOR.top"]] },
+  { id: "top / back (PLAIN rear)",             fit: "upper_body",
+    parts: [[P.CORE, PB.top, "PLAIN_BACK_ANCHOR.top"]] },
   { id: "bottoms / front",                    fit: "lower_body",
     parts: [[P.CORE, A.bottom, "CATEGORY_ANCHOR.bottom"]] },
-  { id: "bottoms / back",                     fit: "lower_body",
+  { id: "bottoms / back (rear print)",         fit: "lower_body",
     parts: [[P.CORE, B.bottom, "BACK_CATEGORY_ANCHOR.bottom"]] },
+  { id: "bottoms / back (PLAIN rear)",         fit: "lower_body",
+    parts: [[P.CORE, PB.bottom, "PLAIN_BACK_ANCHOR.bottom"]] },
   { id: "full look",                          fit: null,
     parts: [[P.CORE, scope.LOOK_ANCHOR, "LOOK_ANCHOR"],
             [P.HIGH, scope.STRICT_REFERENCE_LOCK, "STRICT_REFERENCE_LOCK"],

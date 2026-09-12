@@ -2316,6 +2316,41 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     if (synth) { views.back = synth; views.back_source = "synthetic"; }
   }
 
+  /* ── IS THE RESOLVED BACK PLAIN? - "Decart drew scrambled graphics on my back" ─────
+     THE BUG THIS CLOSES lives in the fitting room's prompt, but only this endpoint has
+     the evidence to close it. BACK_CATEGORY_ANCHOR ends with "Precisely lock the rear
+     print, logos, and back seams" on EVERY back render. On a garment whose back is blank
+     that sentence asserts a print and logos that do not exist - and Decart's set() has no
+     negative_prompt, so "print" and "logos" ship as POSITIVE tokens the sampler steers
+     toward. The model is being instructed to invent rear graphics. That is the same
+     mechanism CATEGORY_ANCHOR.top records for the word "shirt" and that PLAIN_TEE_ANCHOR
+     fixed on the FRONT, reached from the back.
+
+     Answering it needs data the room does not have, so it is computed here and sent:
+       true  - POSITIVE evidence the rear is blank. Either the rear was GENERATED (the
+               synthesis prompt explicitly reconstructs unbroken fabric and forbids
+               carrying the front graphic over), or the classifier transcribed the real
+               rear photo and found no lettering at all.
+       false - the classifier read lettering on the back; it genuinely has a rear print.
+       null  - nobody looked (no back, a pre-v12 cache row, a rate-limited fallback).
+
+     null IS NOT false, and the room treats only `true` as licence to switch anchors.
+     Guessing "plain" on a garment with a real back print would suppress the one graphic
+     the shopper turned around to see - the print-less-back bug, inverted. Abstention
+     keeps today's wording (CLAUDE.md 2.5). */
+  let back_is_plain = null;
+  if (views.back) {
+    if (views.back_source === "synthetic") {
+      back_is_plain = true;
+    } else {
+      const backIdx = uniqueUrls.findIndex((u) => sameImage(u, views.back));
+      const backRec = backIdx !== -1 ? records[backIdx] : null;
+      if (backRec && typeof backRec.text_ocr === "string") {
+        back_is_plain = backRec.text_ocr.trim() === "";
+      }
+    }
+  }
+
   const uncertainCount = records.filter((r) => r.view === "uncertain").length;
   console.log(
     `[classify-images] ${uniqueUrls.length} image(s) · back_source=${views.back_source} · ` +
@@ -2349,6 +2384,11 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
        real answer ("looked, the garment is plain") and is sent as "" rather than omitted,
        so the room can tell it apart from an older server build that sends nothing. */
     front_text_ocr: views.front_text_ocr ?? "",
+    /* true = the rear is positively known blank (generated, or transcribed as empty);
+       false = it carries a real rear print; null = nobody looked. The room switches to
+       its plain-back anchor ONLY on true - see the computation above for why null must
+       not collapse to either side. */
+    back_is_plain,
   });
 });
 

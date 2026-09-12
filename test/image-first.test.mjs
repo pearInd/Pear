@@ -415,9 +415,20 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      clause turned out to be summoning button-downs onto plain tees. The property this
      check defends is unchanged: every axis picks a whole frozen string, so the number of
      anchors on the wire stays exactly one no matter how many axes there are. */
+  /* FOUR AXES NOW. Rear construction joined category, angle and front construction after
+     "it drew scrambled black graphics on my back": BACK_CATEGORY_ANCHOR's "Precisely lock
+     the rear print, logos, and back seams" asserts graphics that a blank rear does not
+     have, and with no negative_prompt those nouns are positive tokens the sampler steers
+     toward. PLAIN_BACK_ANCHOR is the same string with that one clause replaced by a
+     POSITIVE description of plainness - the identical shape PLAIN_TEE_ANCHOR used to stop
+     collars appearing on plain tees. The property this check defends is unchanged: every
+     axis picks a WHOLE FROZEN STRING, so exactly one anchor reaches the wire no matter how
+     many axes exist - and the new one is SHORTER than the branch it replaces (503 vs 515). */
   check("...and the resolver only SELECTS an anchor, never builds one",
-    /const anchors = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(SRC) &&
+    /const anchors = angle === "back"[\s\S]{0,120}?\(plainBack \? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR\)[\s\S]{0,40}?: CATEGORY_ANCHOR;/.test(SRC) &&
+    /const plainBack = angle === "back" && item && item\.backIsPlain === true;/.test(SRC) &&
     /const plainTee = !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(SRC) &&
+    !/PLAIN_BACK_ANCHOR\s*\+/.test(SRC) && !/\+\s*PLAIN_BACK_ANCHOR/.test(SRC) &&
     /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\]/.test(SRC) &&
     !/(BACK_)?CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC) &&
     !/anchors\.(top|bottom)\s*\+/.test(SRC) &&

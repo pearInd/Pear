@@ -2667,6 +2667,14 @@ window.addEventListener("message", (e) => {
   if (typeof e.data.garment_text_ocr === "string") {
     activeItem.textOcr = e.data.garment_text_ocr;
   }
+  /* ── IS THE REAR BLANK? - selects PLAIN_BACK_ANCHOR over BACK_CATEGORY_ANCHOR ──────
+     Only a real boolean is stored. An absent field leaves this undefined, and
+     imageOnlyPrompt() treats anything other than `true` as "not proven plain" and keeps
+     the existing wording. Assigning `false` on an absent field would be a verdict nobody
+     reached; assigning `true` would suppress a real rear print. */
+  if (typeof e.data.garment_back_is_plain === "boolean") {
+    activeItem.backIsPlain = e.data.garment_back_is_plain;
+  }
   /* Unified COMBINED reference, stitched by the widget on the store page (see
      createGarmentComposite in pear-widget.js). When present it IS the model
      reference - referenceImageFor() uses it verbatim and skips stitching again, so
@@ -8179,6 +8187,71 @@ const BACK_CATEGORY_ANCHOR = Object.freeze({
     " garment design. Strictly preserve original pattern and color.",
 });
 
+/* ── THE PLAIN-BACK ANCHOR - "it drew scrambled black graphics on my back" ─────────
+   ────────────────────────────────────────────────────────────────────────────────
+   REPORTED against a white tee whose front carries "BE YOUR OWN Healer WORLDWIDE" and
+   whose rear reference is 100% blank white fabric. Turning around produced scrambled
+   black graphics across the shopper's back. The reference was correct; the PROMPT asked
+   for it.
+
+   THE ROOT CAUSE IS ONE SENTENCE IN THE PAIR ABOVE: "Precisely lock the rear print,
+   logos, and back seams." It ships on EVERY back render, and on a blank back it asserts
+   a print and logos that do not exist. Decart's set() has no negative_prompt, so "print"
+   and "logos" reach the sampler as POSITIVE tokens to steer toward - the prompt is
+   instructing the model to invent rear graphics, and it obliges. Nothing about the
+   reference image was wrong and no amount of reference fidelity could have overridden a
+   direct instruction.
+
+   THIS IS THE SAME BUG PLAIN_TEE_ANCHOR ALREADY FIXED ON THE FRONT, and the fix is the
+   same shape. That anchor exists because CATEGORY_ANCHOR.top's word "shirt" kept
+   summoning collars and plackets onto plain tees, and its note records the resolution in
+   full: the fix was NOT a negation ("no buttons, no collar, no placket"), because those
+   nouns would ship in the positive prompt as tokens the sampler steers toward - "the
+   shape that produced the tuxedo". The fix was to DESCRIBE THE PLAINNESS POSITIVELY
+   ("Keep the reference's plain knit neckline and smooth unbroken front exactly as
+   shown") and to SELECT that anchor on positive evidence. This does exactly that, on the
+   back.
+
+   SO IT NAMES NO GRAPHIC NOUNS AT ALL. The obvious patch - and the one specified when
+   this was reported - is "the rear fabric is 100% PLAIN WHITE with ZERO text, zero
+   logos, and zero black chest graphics; strictly forbid carrying over front chest text".
+   Every one of those phrases puts a graphic noun on the wire: text, logos, black chest
+   graphics, front chest text. With no negative_prompt to attach them to, that wording is
+   a RICHER instruction to draw graphics than the sentence it replaces. It would make the
+   reported bug worse, and it is 290 characters against 135 free on this branch, so it
+   would also hard-slice. "Smooth unbroken fabric" cannot be sampled into a logo.
+
+   IT SHRINKS THE WIRE: 41 characters replacing 52, so the back anchor drops 412 -> 401.
+   Every fidelity fix in this file has to shrink it (plain-tee-fidelity §7.3) for the same
+   text-volume reason, and this one does.
+
+   SELECTED ON POSITIVE EVIDENCE ONLY, never assumed - the §2.1 discipline, applied to a
+   different question. `item.backIsPlain === true` means the server positively established
+   a blank rear: either it GENERATED the rear (synthesizeBackView explicitly reconstructs
+   unbroken fabric and forbids carrying the front graphic over), or the classifier
+   transcribed the real rear photo and found no lettering. Undefined or false keeps the
+   pair above byte-identical. Guessing "plain" on a garment with a genuine back print
+   would suppress the one graphic the shopper turned around to see - the print-less-back
+   bug, inverted - so abstention is the safe direction here too. */
+const PLAIN_BACK_ANCHOR = Object.freeze({
+  /* Byte-identical to BACK_CATEGORY_ANCHOR except for the one clause. Kept as a full
+     frozen literal rather than assembled from the pair above, because the angle/
+     construction axes in this file SELECT between frozen strings and never concatenate -
+     see BACK_CATEGORY_ANCHOR's own note on why appending re-opens the tuxedo. */
+  top:
+    "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
+    " the live subject's CURRENT back contour and volume in this frame. The rear panel is" +
+    " smooth unbroken fabric. Dynamically adapt the garment drape to the" +
+    " subject's exact silhouette, angle, depth, and back volume without stretching or" +
+    " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.",
+  bottom:
+    "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
+    " onto the live subject's CURRENT lower-body contour and volume in this frame." +
+    " The rear panel is smooth unbroken fabric. Dynamically adapt the fit to" +
+    " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
+    " garment design. Strictly preserve original pattern and color.",
+});
+
 /* The surviving halves of the old frozen string, split into individually priority-taggable
    parts. Every one of these is a reproduced regression and the wording is deliberately
    unchanged from the string it came out of - only the t-shirt ANCHOR was replaced.
@@ -8365,7 +8438,22 @@ function imageOnlyPrompt(item, angle = "front") {
      applyGarment() documents at length: the prompt and the reference image must be resolved
      against the SAME orientation reading. A prompt built from a fresh read while the image
      was resolved from the frozen one is the mixing bug that comment records. */
-  const anchors = angle === "back" ? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;
+  /* ── THE FOURTH FROZEN AXIS: rear construction ────────────────────────────────────
+     A back render on a garment PROVEN to have a blank rear selects PLAIN_BACK_ANCHOR,
+     which is byte-identical to BACK_CATEGORY_ANCHOR except that it does not claim a
+     "rear print, logos" the garment does not have. That claim is what drew scrambled
+     graphics on a blank back: with no negative_prompt, those nouns are positive tokens.
+     See PLAIN_BACK_ANCHOR for the report and for why the fix is a positive description
+     rather than the specified "ZERO text, zero logos" negation.
+
+     STILL A SELECTOR, so the volume-flatness this file guards stays intact: exactly one
+     anchor ships, nothing is concatenated, and the plain variant is SHORTER than the one
+     it replaces. `=== true` and not a truthy test - undefined (nobody looked) and false
+     (a real rear print) must both keep the existing wording. */
+  const plainBack = angle === "back" && item && item.backIsPlain === true;
+  const anchors = angle === "back"
+    ? (plainBack ? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR)
+    : CATEGORY_ANCHOR;
   const bottoms = isBottomsGarment(item);
   /* THE SECOND PART the restore notes describe, and the first one actually bought back.
      P.HIGH, not P.CORE: under budget pressure fitPrompt() sheds it before it will touch

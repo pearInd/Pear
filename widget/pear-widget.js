@@ -1502,7 +1502,12 @@
            asserts this as the chest print in its P.CORE identity lock, and only on the
            FRONT angle - see identityLockSentence() in app.js for why naming front
            lettering while rendering the back is the original double-print bug. */
-        textOcr: (data && typeof data.front_text_ocr === "string") ? data.front_text_ocr : ""
+        textOcr: (data && typeof data.front_text_ocr === "string") ? data.front_text_ocr : "",
+        /* true/false/null - is the resolved REAR blank? The room uses this to pick a
+           plain-back anchor instead of one that names "rear print, logos", which on a
+           blank back is an instruction to invent graphics. `null` when the server did
+           not answer (or is an older build) and must NOT be read as false. */
+        backIsPlain: (data && typeof data.back_is_plain === "boolean") ? data.back_is_plain : null
       };
     });
   }
@@ -2037,7 +2042,19 @@
           return createGarmentComposite(frontUrl, backUrl).then(function (built) {
             var composite = built && built.url;
             if (composite) {
-              console.log("[PEAR widget] COMBINED payload ready - handing the single composite to the try-on engine");
+              /* WORDING CORRECTED - the old line read "handing the single composite to
+                 the try-on engine", which is not what happens and cost real debugging
+                 time: a reviewer read this log, opened the two-panel image it refers to,
+                 and reasonably concluded Decart was being conditioned on it. It is not.
+                 The room gates the composite behind compositeActiveFor(), which requires
+                 COMPOSITE_MODE - and COMPOSITE_DEFAULT is false (see app.js: a split
+                 FRONT|BACK reference with no panel contract renders fragments of both,
+                 commit 23f5953). With the default in force this composite is used for
+                 the "Now fitting" thumbnail and as a ?composite=1 opt-in only; the actual
+                 reference is a SINGLE-VIEW asset the OrientationWatcher swaps. Say what
+                 is true, so the next person reads the right file. */
+              console.log("[PEAR widget] composite built and sent (thumbnail + ?composite=1 opt-in; " +
+                "the live reference stays single-view unless COMPOSITE_MODE is on)");
             }
             /* Only push a correction if this actually changes what the room is showing,
                and only into the SAME modal that triggered the call (the shopper may have
@@ -2078,6 +2095,9 @@
                    "" when the garment is genuinely plain (a real answer), omitted only
                    when the server never answered - the room distinguishes the two. */
                 garment_text_ocr: typeof res.textOcr === "string" ? res.textOcr : undefined,
+                /* Whether the rear is positively known blank. Omitted (not false-d) when
+                   unknown, so the room can abstain rather than assume. */
+                garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined,
                 /* Re-sent alongside the verdict above, and OUTRANKING it in the room.
                    The Shopify product JSON is fetched at boot but can resolve after the
                    modal already opened, so this is the delivery for a size list that

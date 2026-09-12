@@ -138,9 +138,18 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
      the other two: a property of the product that cannot change while the session runs,
      SELECTING between frozen literals. Colour, size and variant are none of those things,
      and the second half of this check is what keeps them out. */
+  /* THE AXIS COUNT WENT FROM THREE TO FOUR, and the new one passes this guard on the same
+     terms as the others. REAR CONSTRUCTION (does this garment's back carry a print?) joined
+     the set after a blank-backed tee rendered scrambled graphics - see PLAIN_BACK_ANCHOR.
+     It is admissible here for the reason the guard exists: `item.backIsPlain` is a property
+     of the PRODUCT, established once by the server from the classifier/synthesis evidence,
+     and it cannot change while the session runs. It is not the selected variant, not the
+     colour, not the size - it fills no hole and SELECTS between two frozen literals.
+     Colour, size and variant remain excluded by the second half of this check. */
   check("...and the resolver branches on the garment's fixed identity alone",
     /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\]/.test(APP) &&
-    /const anchors = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(APP) &&
+    /const anchors = angle === "back"[\s\S]{0,120}?\(plainBack \? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR\)[\s\S]{0,40}?: CATEGORY_ANCHOR;/.test(APP) &&
+    /const plainBack = angle === "back" && item && item\.backIsPlain === true;/.test(APP) &&
     /const bottoms = isBottomsGarment\(item\);/.test(APP) &&
     /const plainTee = !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(APP) &&
     /\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\)/.test(APP) &&

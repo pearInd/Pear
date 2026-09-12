@@ -168,8 +168,16 @@ console.log("\n── §3 THE ANGLE REACHES THE PROMPT ──");
 console.log("\n── §4 SELECTING, NOT APPENDING ──");
 {
   const resolver = lift("function imageOnlyPrompt(item, angle = \"front\")");
+  /* The angle still SELECTS, and it now selects between THREE frozen sets rather than two:
+     a blank rear takes PLAIN_BACK_ANCHOR instead of BACK_CATEGORY_ANCHOR, because the
+     latter's "Precisely lock the rear print, logos" is an instruction to invent graphics on
+     a garment that has none (no negative_prompt -> positive tokens). Still a selector,
+     still nothing concatenated, and the plain variant is SHORTER - so the angle axis stays
+     volume-flat in the only direction that matters. */
   check("the resolver picks a frozen anchor set by angle",
-    resolver.includes('const anchors = angle === "back" ? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;'), resolver);
+    /const anchors = angle === "back"[\s\S]{0,120}?\(plainBack \? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR\)[\s\S]{0,40}?: CATEGORY_ANCHOR;/.test(resolver) &&
+    /const plainBack = angle === "back" && item && item\.backIsPlain === true;/.test(resolver),
+    resolver);
   /* Exactly one CORE anchor still ships on every branch - that is the invariant, and it is
      what keeps the angle axis volume-flat. The tops+front branch additionally carries ONE
      bought-back P.HIGH clause (FRONT_CLOSURE_LOCK); P.HIGH matters because fitPrompt()
