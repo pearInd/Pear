@@ -1408,7 +1408,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    play back reversed against the live view it was captured from. The two rules differ
    because their sources differ: show-live plays un-mirrored decoded frames and needs the
    flip; show-clip plays already-flipped pixels and must not get a second one. */
-.camera-card.show-clip #aiVideo { display: block; transform: none; }
+.camera-card.show-clip #aiVideo { display: block; transform: none !important; }
 .camera-card.show-clip #webcam { visibility: hidden; }
 .camera-card.show-clip .camera-card__placeholder { display: none; }
 .camera-card.show-clip::before {

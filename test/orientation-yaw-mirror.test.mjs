@@ -133,9 +133,58 @@ console.log("\n── §4 THE UN-MIRRORING LOCKSTEP ──");
     /\.camera-card\.show-live #aiVideo \{ display: block; transform: scaleX\(-1\); \}/.test(CSS));
   /* A recorded clip already has the flip baked into its pixels, so replay must NOT flip
      again. These two rules differing is the correct state, not an oversight. */
+  /* !important, and the only rule in this file that has it. show-live and show-clip
+     disagree about the mirror deliberately, and they have EQUAL specificity - so if both
+     classes were ever set at once the replay's orientation would be decided by stylesheet
+     SOURCE ORDER, which no reader would think to check and no future reorder would
+     preserve. Belt and braces from both sides: playClipInMainPlayer() now removes
+     show-live explicitly, and this refuses to lose even if it did not. */
   check("clip replay stays un-flipped - the clip pixels already carry it",
-    /\.camera-card\.show-clip #aiVideo \{ display: block; transform: none; \}/.test(CSS),
+    /\.camera-card\.show-clip #aiVideo \{ display: block; transform: none !important; \}/.test(CSS),
     "mirroring a baked clip on replay plays it back reversed against the live view");
+  check("...and entering replay drops show-live rather than relying on rule order",
+    /card\(\)\.classList\.remove\("show-live"\);\s*\n\s*card\(\)\.classList\.add\("show-clip"\);/.test(APP),
+    "two equal-specificity rules disagreeing about the mirror must not both be live");
+  /* The self-check is the only instrument that can settle an orientation report, because
+     nothing in this directory can open a camera. It must stay purely diagnostic - a
+     self-correcting version would mask the drift it exists to surface. */
+  check("every surface transition logs its computed orientation",
+    (APP.match(/logSurfaceOrientation\("/g) || []).length >= 3 &&
+    /function logSurfaceOrientation\(where\)/.test(APP),
+    "go-live, post-countdown and clip-replay each need a reading to compare");
+
+  /* ── #resultCanvas: THE POST-COUNTDOWN SURFACE, CHECKED BY CASCADE ORDER ─────────
+     This is what the shopper actually sees from the moment the 5s window closes -
+     stopBilling() removes show-live and adds show-result, so the frozen #resultCanvas
+     replaces the live feed. It is therefore the surface a "the text went mirrored right
+     after the countdown" report is most likely describing, and its orientation is decided
+     by a CSS cascade rather than by anything greppable in app.js.
+
+     freezeFinalFrame() bakes the flip (mirror is true on both branches), so the CSS must
+     contribute NONE - one flip total, matching the live view's decoded+scaleX(-1).
+
+     Two rules set `transform` on #resultCanvas at EQUAL specificity (0,1,1): the base
+     group and the display:none rule after it. Equal specificity means SOURCE ORDER
+     decides, so the invariant is positional and a future tidy-up that reorders them
+     would silently double-mirror every saved result. Asserted as "the last transform
+     wins and it is none", which is exactly the property the cascade evaluates. */
+  const rcRules = [...CSS.matchAll(/^[^\n{]*#resultCanvas[^\n{]*\{[^}]*\}/gm)]
+    .map((m) => ({ text: m[0], at: m.index }))
+    .filter((r) => /transform\s*:/.test(r.text));
+  const lastTransformRule = rcRules[rcRules.length - 1];
+  check("#resultCanvas's LAST transform rule is none, so the baked flip is not doubled",
+    !!lastTransformRule && /transform:\s*none/.test(lastTransformRule.text),
+    `last transform rule for #resultCanvas: ${lastTransformRule && lastTransformRule.text}`);
+  /* A rule with HIGHER specificity could win regardless of order. show-result adds a
+     second class (0,2,1) and must therefore never set a transform - it governs display
+     only. If it ever gains one, the positional reasoning above stops applying. */
+  const showResultRule = /\.camera-card\.show-result #resultCanvas \{[^}]*\}/.exec(CSS);
+  check("...and the higher-specificity show-result rule sets display only, never transform",
+    !!showResultRule && !/transform/.test(showResultRule[0]),
+    showResultRule && showResultRule[0]);
+  check("freezeFinalFrame bakes the flip on BOTH source branches",
+    /function freezeFinalFrame\(\)[\s\S]{0,900}?src = ai;[^\n]*mirror = true;[\s\S]{0,300}?src = webcam;[^\n]*mirror = true;/.test(APP),
+    "an unflipped branch here ships a reversed saved result while the live view looked right");
   /* Overlays are drawn FROM #aiVideo and stacked OVER it, so they must share its
      transform or the held frame flips the instant a cover appears - a far more visible
      artifact than the one the cover exists to hide. */

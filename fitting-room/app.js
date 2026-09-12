@@ -4741,6 +4741,12 @@ const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (an
 const ORIENT_CORROBORATED_FRAMES = 4;    // agreeing votes needed WITH a corroborating yaw swing
 const ORIENT_YAW_TURN_DEG        = 45;   // |yaw| swing that counts as a real torso rotation
 const ORIENT_YAW_FRESH_MS        = 600;  // a yaw reading older than this cannot corroborate
+/* Above this, an unreadable torso is explained by the shopper TURNING rather than by their
+   having left - so the "step into the frame" prompt is withheld (the presence verdict
+   itself is unaffected). Deliberately well below ORIENT_YAW_TURN_DEG: this is not deciding
+   that a turn happened, only that the body is off-square enough to explain why landmarks
+   went missing. See the presence consumer in startPresenceWatcher(). */
+const PRESENCE_PROMPT_YAW_SUPPRESS_DEG = 25;
 
 /* Latest torso yaw MAGNITUDE and when it was measured, published by the shared pose loop
    (startPresenceWatcher) and read by the orientation watcher. Module scope because the
@@ -5037,6 +5043,55 @@ function revealAiFeed() {
    outcome at teardown is identical, and the state classes can govern again the way they
    were written to. This is the ONE place inline visibility is undone, so there is no
    second copy to forget. */
+/* ── ORIENTATION SELF-CHECK - one log line per surface transition ──────────────────
+   ────────────────────────────────────────────────────────────────────────────────
+   WHY THIS EXISTS. A mirror bug is invisible to every test in this repo: run.mjs reads
+   source, not pixels, and no suite can open a camera. So a report of "the replay is
+   mirrored but the live view is not" arrives as a description, and the only way to act
+   on it is to REASON about three CSS rules, two baked-in flips and a class the code
+   happens to remove somewhere else - which is exactly how a wrong conclusion gets
+   shipped. This prints the ground truth instead.
+
+   THE INVARIANT IT CHECKS. Every surface must end up selfie-oriented on screen, reached
+   by exactly ONE flip, applied in exactly one of two places:
+     · #aiVideo LIVE   - decoded frames are reality; the flip is CSS (scaleX(-1)).
+     · #aiVideo REPLAY - the clip's pixels were already flipped by the recorder; CSS must
+                         apply none.
+     · #resultCanvas   - freezeFinalFrame() baked the flip; CSS must apply none.
+   So the rule is simply: CSS flips the live feed and nothing else. A surface whose
+   computed transform disagrees with its pixel provenance is a double flip (or none at
+   all), and that is what the shopper sees as reversed text.
+
+   PURELY DIAGNOSTIC - it reads computed style and logs. It never corrects anything:
+   a self-healing orientation would hide the very drift this exists to surface, and the
+   correction would then be the thing nobody could find. */
+function logSurfaceOrientation(where) {
+  try {
+    const card_ = typeof card === "function" ? card() : null;
+    if (!card_ || typeof getComputedStyle !== "function") return;
+    const live  = card_.classList.contains("show-live");
+    const clip  = card_.classList.contains("show-clip");
+    const result = card_.classList.contains("show-result");
+    const el = result ? $("resultCanvas") : $("aiVideo");
+    if (!el) return;
+    const t = getComputedStyle(el).transform || "none";
+    /* matrix(-1, ...) is the flipped form; "none" or matrix(1, ...) is not. Parsing the
+       first component is enough - nothing in this file applies a skew or a rotation to
+       these elements, and a matrix that ever did would show up verbatim in the log. */
+    const flipped = /^matrix\(\s*-1/.test(t);
+    const surface = result ? "#resultCanvas" : clip ? "#aiVideo(clip)" : "#aiVideo(live)";
+    /* Only the LIVE feed should be CSS-flipped; the other two carry it in their pixels. */
+    const expected = live && !clip && !result;
+    const verdict = flipped === expected
+      ? "ok"
+      : `⚠ MISMATCH - expected css-flip=${expected}, got ${flipped}; this surface is ` +
+        (flipped ? "double-flipped" : "un-flipped") + " and its text will read reversed";
+    console.log(`[PEAR] orientation @${where}: ${surface}` +
+      ` classes[live=${live} clip=${clip} result=${result}]` +
+      ` css-transform=${t} → ${verdict}`);
+  } catch (_) { /* diagnostics must never break a session */ }
+}
+
 function resetAiFeedVisibility() {
   const ai = $("aiVideo");
   if (!ai) return;
@@ -12018,6 +12073,7 @@ function startBillingWindow(gen) {
   stopScanTimer();
   $("scanOverlay").hidden = true;
   card().classList.add("show-live");
+  logSurfaceOrientation("go-live");
   /* THE ONLY PLACE THE FEED BECOMES VISIBLE, and it is deliberately the same statement
      that flips the state class. Everything above this line has already been verified:
      the garment apply resolved, the frame is non-black, and it stayed that way for
@@ -12939,6 +12995,7 @@ function stopLive() {
   stopLowerBodyGuard();
   stopPresenceWatcher();
   if (frozen) card().classList.add("show-result");   // surface the frozen snapshot as the final result
+  logSurfaceOrientation("post-countdown-result");
   setLiveControls(false);              // reset the button back to "Go Live" so a new session can start
   $("captureBtn").disabled = !localStream;
 }
@@ -13834,7 +13891,42 @@ function startPresenceWatcher() {
             if (bodyTopology) bodyTopology.reset();
           } else if (!present && wasPresent && verdict === false) {
             wasPresent = false;
-            showPresenceOverlay();
+            /* ── DO NOT PROMPT A SHOPPER WHO IS SIMPLY TURNING ──────────────────────
+               REPORTED: "Please step into the frame" appears mid-rotation, over a
+               shopper who is plainly still in shot, while the try-on is working.
+
+               WHY IT FIRES. presenceFromPoseResult() asks whether the required torso
+               landmarks are visible above POSE_MIN_CONFIDENCE. Turn side-on and half of
+               them occlude behind the body, so the honest answer is "not present" - the
+               gate is not malfunctioning, it is being asked a question that a rotating
+               body cannot answer. Its own mental model is "has the shopper walked away",
+               and a turn is the one kind of absence that is not an absence.
+
+               THE PROMPT IS SUPPRESSED, THE VERDICT IS NOT. wasPresent still flips to
+               false, so the moment the torso is readable again the recovery branch above
+               runs in full - reconditionForPresence() and the topology reset both still
+               fire. All that is withheld is the overlay, which is pure UI: showing it
+               over a mid-turn frame tells the shopper to do something they are already
+               doing, and it covers the render at exactly the moment they turned in order
+               to look at it.
+
+               GATED ON A FRESH READING ONLY. A stale or absent yaw abstains to the old
+               behaviour and the prompt shows, because "no pose data at all" is genuinely
+               indistinguishable from "nobody there" - which is the case the overlay was
+               written for. 25 degrees is deliberately well below
+               ORIENT_YAW_TURN_DEG (45): this is not deciding a turn happened, only that
+               the body is off-square enough to explain unreadable landmarks. */
+            const yawFresh = _torsoYawAbs !== null &&
+                             Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS;
+            const turning = yawFresh && _torsoYawAbs > PRESENCE_PROMPT_YAW_SUPPRESS_DEG;
+            if (turning) {
+              if (ORIENT_DEBUG) {
+                console.log(`[PEAR] presence: unreadable at |yaw|=${_torsoYawAbs.toFixed(0)}°` +
+                  ` - a turn, not an absence; holding the prompt back`);
+              }
+            } else {
+              showPresenceOverlay();
+            }
           }
         }
       }
@@ -16243,7 +16335,19 @@ function playClipInMainPlayer(url, idx, ts) {
   ai.src = url;
   ai.loop = true; ai.muted = true; ai.playsInline = true;
   card().classList.remove("show-result");
+  /* ── show-live MUST BE OFF BEFORE show-clip GOES ON ────────────────────────────────
+     These two rules disagree about the mirror ON PURPOSE - live plays un-mirrored decoded
+     frames and needs transform:scaleX(-1); a clip plays pixels the recorder already
+     flipped and must NOT get a second flip. So if both classes are ever set at once, the
+     orientation of the replay is decided by stylesheet SOURCE ORDER, which is not a thing
+     any reader would think to check and not a thing a future reorder would preserve.
+     It happens to be correct today only because every path here runs after a teardown
+     that removed show-live. Removing it explicitly costs one line and makes the replay's
+     orientation depend on state rather than on the order two rules happen to appear in.
+     (.show-clip also carries !important for the same reason, from the other side.) */
+  card().classList.remove("show-live");
   card().classList.add("show-clip");   // CSS reveals #aiVideo without live billing semantics
+  logSurfaceOrientation("clip-replay");
   ai.play().catch(() => {});
 
   activeClipTs = (ts == null ? null : ts);   // glow the source tile in the tray
