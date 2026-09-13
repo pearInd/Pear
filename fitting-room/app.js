@@ -8672,19 +8672,43 @@ const CATEGORY_ANCHOR = Object.freeze({
 const BACK_CATEGORY_ANCHOR = Object.freeze({
   /* Same spine as the front anchors - bind the static garment, adapt to the current
      contour, preserve the original - with the region re-pointed at the back and ONE
-     clause added: the rear print/logo/seam lock. A back render's characteristic failure
-     is not a wrong drape, it is the front graphic reproduced on the reverse, and that is
-     the only thing this pair says which the front pair does not. */
+     clause added. That clause's WORDING was the bug below; its PURPOSE stands.
+
+     ── "IT DREW 'PEAK PEAK', BLANK WHITE BOXES AND GENERIC LINES ON MY BACK" ─────────
+     The clause used to read: "Precisely lock the rear print, logos, and back seams."
+     It was meant to stop a back render reproducing the front graphic. What it actually
+     did, once the printed-back path started shipping, is visible in the report item by
+     item - each hallucination maps onto one noun in that single sentence:
+         "logos"       -> "PEAK PEAK"         the garment's brand text, drawn repeatedly
+         "print"       -> blank white boxes   a print-shaped placeholder with nothing in it
+         "back seams"  -> generic lines       seam strokes the reference never had
+     Decart's set() has no negative_prompt, so every noun in this string is a POSITIVE
+     token the sampler steers toward. Telling the model to "lock the logos" does not
+     make it copy the reference's logos; it makes it produce logos. This is the tuxedo
+     mechanism again - CATEGORY_ANCHOR.top, PLAIN_TEE_ANCHOR and PLAIN_BACK_ANCHOR each
+     record a version of it - reached through the one back sentence nobody had touched.
+
+     It surfaced only now because this anchor only recently started shipping for this
+     garment: while the classifier mislabelled the rear photo the product got a synthetic
+     back and PLAIN_BACK_ANCHOR instead. Fixing that exposed this.
+
+     THE REPLACEMENT NAMES NO GRAPHIC AT ALL. It points at the reference image and says
+     to reproduce the rear panel as shown - which is the original intent, expressed as
+     grounding rather than as a list of things to draw. Whatever artwork is on the
+     reference (a photograph, lettering, nothing) is what "as shown" means, so the same
+     sentence is correct for every garment and asserts nothing the pixels do not.
+     plain-back-anchor.test.mjs now pins the ABSENCE of graphic nouns on this anchor
+     too, not only on the plain one. */
   top:
     "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
-    " the live subject's CURRENT back contour and volume in this frame. Precisely lock the" +
-    " rear print, logos, and back seams. Dynamically adapt the garment drape to the" +
+    " the live subject's CURRENT back contour and volume in this frame. Reproduce the rear" +
+    " panel exactly as shown in the reference. Dynamically adapt the garment drape to the" +
     " subject's exact silhouette, angle, depth, and back volume without stretching or" +
     " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.",
   bottom:
     "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
     " onto the live subject's CURRENT lower-body contour and volume in this frame." +
-    " Precisely lock the rear print, logos, and back seams. Dynamically adapt the fit to" +
+    " Reproduce the rear panel exactly as shown in the reference. Dynamically adapt the fit to" +
     " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
     " garment design. Strictly preserve original pattern and color.",
 });
@@ -9996,6 +10020,39 @@ async function applyGarment(item) {
   const refInfo   = {};                                          // ← filled in by referenceImageFor
   let   imageRef  = await referenceImageFor(item, activeImg, refInfo);   // Blob for combined, URL otherwise
   const usingComposite = refInfo.composite === true;             // what we ACTUALLY resolved
+
+  /* ── SAY WHAT IS ACTUALLY ON THE WIRE - "Decart is receiving two people" ────────────
+     REPORTED: on a turn the rear render hallucinated front text, blank boxes and lines,
+     and the reference reaching Decart was observed to be a SIDE-BY-SIDE image - the
+     front view on the left, the back view on the right, a separator between them.
+
+     That description matches OUR OWN createGarmentComposite() output exactly, which
+     makes WHERE it came from the entire question, and the logs could not answer it: the
+     swap log in maybeSwap() prints GARMENT_BACK - the gallery URL - not what
+     referenceImageFor() resolved. When the stitched composite is substituted here, no
+     line anywhere said so. So there are two very different bugs that look identical:
+       (a) OUR composite on the wire - only possible when COMPOSITE_MODE is on, which
+           COMPOSITE_DEFAULT=false forbids unless the URL carries ?composite=1. The fix
+           is to remove that flag; nothing else is wrong. A split FRONT|BACK reference
+           with no panel contract renders fragments of both (23f5953) - this is that.
+       (b) The MERCHANT's catalog photo is itself a front+back composite, classified as
+           the back and passed through verbatim as a single-view reference.
+     This line tells them apart in one read. A composite reported here is (a); a
+     single-view reference here while the render still shows two figures points at (b),
+     which the garment's own catalog photo has to answer. 
+     angleAtStart, NOT effectiveAngle(): this reports the angle the reference was RESOLVED
+     for. A fresh read here is the TOCTOU pattern CLAUDE.md 2.8 bans - the watcher can flip
+     during referenceImageFor()'s await, and a log naming a different side than the pixels
+     sent would be worse than no log. */
+  if (usingComposite) {
+    console.warn(`[PEAR] ⚠ REFERENCE ON THE WIRE IS THE STITCHED FRONT|BACK COMPOSITE ` +
+      `(angle=${angleAtStart}). This is only reachable with COMPOSITE_MODE on ` +
+      `(?composite=1) - COMPOSITE_DEFAULT is false because a two-panel reference with no ` +
+      `panel contract makes the model render fragments of BOTH sides. Remove the flag.`);
+  } else if (typeof console !== "undefined") {
+    console.log(`[PEAR] reference on the wire: SINGLE-VIEW ${angleAtStart} asset -`,
+      typeof abbrevImg === "function" ? abbrevImg(activeImg) : activeImg);
+  }
 
   /* ── LAST-DITCH REFERENCE RECOVERY - the prompt is image-first now ────────────
      This used to be tolerable: `...(imageRef ? { image: imageRef } : {})` quietly

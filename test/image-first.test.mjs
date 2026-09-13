@@ -153,16 +153,25 @@ const BOTTOMS_SPEC =
    still ships, and \u00a71 asserts the back pair is frozen, hole-free and inside the same
    ceiling as the front pair. What would re-open the tuxedo is APPENDING a clause, and that
    is asserted absent for the back anchors too. */
+/* THE REAR CLAUSE WAS REWORDED, AND THIS SPEC MOVES WITH IT - byte-exact, as before.
+   It used to read "Precisely lock the rear print, logos, and back seams." Reported: a
+   turn rendered "PEAK PEAK", blank white boxes and generic lines on the shopper's back,
+   one hallucination per noun in that sentence - "logos" drew the brand text repeatedly,
+   "print" drew an empty print-shaped box, "back seams" drew seam strokes. With no
+   negative_prompt those nouns are positive tokens, so the clause that was meant to LOCK
+   the rear artwork was instructing the model to INVENT it. The replacement names no
+   graphic and grounds on the reference instead; image-first's whole thesis (text volume
+   and named garment features compete with the pixels) is the reason it had to. */
 const BACK_TOPS_SPEC =
   "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
-  " the live subject's CURRENT back contour and volume in this frame. Precisely lock the" +
-  " rear print, logos, and back seams. Dynamically adapt the garment drape to the" +
+  " the live subject's CURRENT back contour and volume in this frame. Reproduce the rear" +
+  " panel exactly as shown in the reference. Dynamically adapt the garment drape to the" +
   " subject's exact silhouette, angle, depth, and back volume without stretching or" +
   " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.";
 const BACK_BOTTOMS_SPEC =
   "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
   " onto the live subject's CURRENT lower-body contour and volume in this frame." +
-  " Precisely lock the rear print, logos, and back seams. Dynamically adapt the fit to" +
+  " Reproduce the rear panel exactly as shown in the reference. Dynamically adapt the fit to" +
   " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
   " garment design. Strictly preserve original pattern and color.";
 

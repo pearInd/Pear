@@ -65,6 +65,23 @@ console.log("── §1 THE PLAIN VARIANT NAMES NO GRAPHIC NOUNS AT ALL ──")
   }
 }
 
+console.log("\n── §1b THE PRINTED-REAR ANCHOR NAMES NO GRAPHIC NOUNS EITHER ──");
+{
+  /* §1 guarded ONLY the plain variant, and that asymmetry is exactly how the printed one
+     kept a sentence that did the same damage. BACK_CATEGORY_ANCHOR read "Precisely lock
+     the rear print, logos, and back seams", and once the classifier fix routed real rear
+     photos onto it, a turn rendered "PEAK PEAK", blank white boxes and generic lines -
+     one hallucination per noun. A garment WITH rear artwork is not exempt from the
+     positive-token mechanism; it is the case where the model has the most to invent.
+     So the same absence is now asserted on both anchors. */
+  for (const [region, s] of Object.entries(PRINTED)) {
+    check(`${region}: printed-rear anchor names no print/logo/seam/graphic noun`,
+      !/\b(print|prints|logo|logos|seam|seams|graphic|graphics|lettering|typography)\b/i.test(s), s);
+    check(`${region}: printed-rear anchor grounds on the reference instead`,
+      /exactly as shown in the reference/i.test(s), s);
+  }
+}
+
 console.log("\n── §2 IT SHRINKS THE WIRE, like every fidelity fix in this file ──");
 {
   /* plain-tee-fidelity §7.3's rule, applied here: a fidelity fix that ADDS text is the
@@ -83,7 +100,7 @@ console.log("\n── §3 OTHERWISE BYTE-IDENTICAL - one clause swapped, nothing
      silently changes behaviour on an axis nobody reviewed. Normalising the one known
      difference must make them equal. */
   for (const region of Object.keys(PLAIN)) {
-    const a = PRINTED[region].replace("Precisely lock the rear print, logos, and back seams.", "§");
+    const a = PRINTED[region].replace("Reproduce the rear panel exactly as shown in the reference.", "§");
     const b = PLAIN[region].replace("The rear panel is smooth unbroken fabric.", "§");
     check(`${region}: identical apart from the swapped clause`, a === b,
       `printed=${a}\n        plain=${b}`);
