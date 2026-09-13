@@ -9753,13 +9753,45 @@ function describeBackViewReadiness(item) {
 if (typeof window !== "undefined") {
   window.__pearDebugBackView = () => {
     const r = describeBackViewReadiness(activeItem);
+    /* ── PROVENANCE, BECAUSE "READY" WAS LYING ABOUT THE ONE CASE THAT MATTERED ──────
+       backViewReadinessOf() answers "is there a DISTINCT back asset?", and a SYNTHESIZED
+       back is a distinct asset - so this used to report READY for a garment whose real
+       catalog rear photo had been lost. Reported live: a brown PEAK tee whose catalog
+       back carries a large mountain photograph rendered smooth brown fabric on a turn,
+       and this diagnostic - recommended as THE check for exactly that - gave an all-clear.
+
+       Why the render and the diagnostic disagreed: synthesizeBackView() is told "the back
+       is PLAIN in that garment's fabric and colour" and, with the sampled hex, to render
+       the panel "uniform", which is the brown-fabric-no-artwork output precisely. It only
+       runs when the server resolved NO real rear photo, which almost always means the
+       classifier mislabelled the real one. So a synthetic back on a product that HAS a
+       rear photo is not a success state; it is the failure, dressed as one.
+
+       `backSource` is the only field that distinguishes the two, so it is reported here,
+       and a synthetic back on a multi-photo gallery is flagged as the likely fault. The
+       reason enum itself is unchanged - a synthetic back IS renderable, and several
+       callers treat READY as "a rear swap will work", which stays true. */
+    const backSource = (activeItem && activeItem.backSource) || "unknown";
+    const galleryCount = (activeItem && Array.isArray(activeItem.pearImages)) ? activeItem.pearImages.length : 0;
+    const synthetic = backSource === "synthetic";
+    const suspicious = synthetic && galleryCount > 1;
     console.log("[PEAR] back-view readiness:", r.reason,
       r.half ? `(look half: ${r.half})` : "",
-      "\n  front:", abbrevImg(r.front) || "(none)",
-      "\n  back :", abbrevImg(r.back) || "(none)",
-      "\n  mode :", currentAngle,
-      r.ready ? "" : "\n  → the shopper will see the FRONT garment when they turn around");
-    return r;
+      "\n  front :", abbrevImg(r.front) || "(none)",
+      "\n  back  :", abbrevImg(r.back) || "(none)",
+      "\n  source:", backSource, galleryCount ? `(gallery had ${galleryCount} photos)` : "",
+      "\n  mode  :", currentAngle,
+      r.ready ? "" : "\n  → the shopper will see the FRONT garment when they turn around",
+      suspicious
+        ? "\n  ⚠ READY, BUT THE BACK IS GENERATED, NOT THE CATALOG PHOTO. This gallery had " +
+          galleryCount + " photos, so a real rear image probably exists and was classified as" +
+          " FRONT. The render will be plain fabric in the garment colour with NO rear artwork." +
+          " Check the classifier verdicts in the server log ([classify-images]), and clear the" +
+          " garment_cache rows for this product - a cached wrong verdict is never re-asked."
+        : synthetic
+          ? "\n  (generated rear - expected for a single-photo product)"
+          : "");
+    return { ...r, backSource, synthetic, suspicious };
   };
 }
 

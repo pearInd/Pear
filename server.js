@@ -1296,6 +1296,36 @@ function fetchImageAsBase64Cached(imageUrl) {
    Output is strict JSON via responseMimeType, so a chatty model can't break parsing
    (the old `answer.includes("back")` also matched "this is not the back", silently
    inverting the verdict). */
+/* ── CLASSIFIER_PROMPT_VERSION - the reason classifier fixes kept "not working" ──────
+   /api/classify-images is CACHE-FIRST: a photo is classified once, the verdict is written
+   to garment_cache, and every later visit reads the row instead of asking Gemini. That is
+   the right trade for cost and latency, but it has a consequence nobody had written down:
+   A CHANGE TO THIS PROMPT NEVER REACHES ANY PHOTO THAT WAS ALREADY CLASSIFIED. The old
+   verdict is served forever.
+
+   That is exactly how the brown-PEAK-tee report survived several rounds of fixes. The
+   classifier was told "front graphic or lettering read the right way round" is a
+   decisive FRONT cue - which a flat-lay photo of a garment's BACK satisfies, since the
+   camera faces the rear panel squarely. The rear photo was labelled front, no back was
+   resolved, the server synthesized a plain one, and the shopper got uniform brown fabric.
+   Correcting the cue fixed nothing for that product, because its wrong verdict was
+   already cached.
+
+   So every cached verdict now records the prompt version that produced it, and a row from
+   an older version is treated as a cache MISS and re-classified. BUMP THIS WHENEVER
+   FRONT_BACK_SYSTEM_PROMPT CHANGES IN A WAY THAT COULD CHANGE A VERDICT - that is the only
+   thing that makes a classifier fix apply to the existing catalog rather than only to
+   photos nobody has seen yet.
+
+   Re-classification is lazy (on the next visit to that product), so a bump spreads its
+   Gemini calls across real traffic instead of arriving as one burst, and each call is
+   already rate-spaced under the 60 RPM limit.
+     1 - original front/back + kids/adult
+     2 - text_ocr, is_true_back_view, primary_color_hex, has_graphic
+     3 - lettering orientation and print prominence removed as front/back cues;
+         neckline depth made decisive for flat-lays */
+const CLASSIFIER_PROMPT_VERSION = 3;
+
 const FRONT_BACK_SYSTEM_PROMPT = `You are a garment-orientation classifier for a virtual try-on pipeline. You decide which SIDE of a garment a product photograph shows.
 
 Judge the GARMENT, not the photo's role in the gallery. Never reason about whether an image "looks like the main product shot" - primary/secondary ordering is a merchandising choice and carries no information about orientation.
@@ -1306,22 +1336,38 @@ If a person is wearing the garment, their body orientation is the strongest sign
 
 DECISIVE FRONT cues (each appears only on the front):
 - Buttons, button placket, full-length zipper closure, snaps, tie closure
-- Chest pocket, breast logo, front graphic or lettering read the right way round
-- V-neck, scoop or crew neckline seen as an open curve (the neck opening faces you)
+- Chest pocket, or a breast logo placed high on one side of the chest
+- V-neck, scoop or crew neckline seen as an open curve that DIPS LOW (the neck opening faces you)
 - Front fly, coin pocket, belt loops seen with the fly
 - Bra cups, front cutouts, wrap-front overlap
 
 DECISIVE BACK cues (each appears only on the back):
 - Centre-back seam running vertically down the panel
 - Back yoke (a horizontal seam across the upper back)
-- Rear neckline as a shallow, closed curve with the collar standing away from you
+- Rear neckline as a SHALLOW, nearly straight curve sitting HIGH, close to the shoulder line
 - Sewn-in neck label / size tag visible on the inside of the rear collar
-- Back graphic, player name/number, spine lettering
+- Player name/number, or lettering running down the spine
 - Rear pockets on trousers, back darts, a back vent on a jacket or coat
 - Back zipper on a dress (short, upper-centre) or a rear keyhole/cutout
 
+NOT CUES - never decide front/back from any of these, however prominent:
+- PRINT SIZE, PROMINENCE OR PLACEMENT. The largest graphic on a garment is very often on
+  the BACK. A big central photo print, a wide logo or a block of lettering does not make
+  a panel the front; a small logo does not make it the back.
+- LETTERING READ THE RIGHT WAY ROUND. On a flat-lay, a packshot or a hanger shot the
+  camera faces the panel squarely, so a BACK print's lettering reads correctly too. Text
+  orientation only carries information when a person is wearing the garment.
+- Which photo "looks like the hero shot". Merchants frequently lead with the back when
+  the back carries the artwork.
+
 TRICKY CASES - follow these exactly:
 - Neck label visible = BACK. A sewn label sits at the rear collar; this cue outranks a partially visible neckline.
+- FLAT-LAY / PACKSHOT OF A T-SHIRT OR SWEATSHIRT: the NECKLINE is the decisive cue. Compare
+  how far the neck opening dips below the shoulder seams. The FRONT neckline dips
+  noticeably lower and rounder; the BACK neckline sits higher and flatter, close to the
+  shoulder line. Decide from that, and from a neck label if one is visible - NOT from the
+  print. If the neckline genuinely cannot be judged, answer "uncertain" rather than
+  letting the artwork decide.
 - Side or 3/4 profile: decide by which cues you can actually SEE. If decisive cues from one side are visible, answer that side. If neither is legible, answer "uncertain".
 - Flat-lay / packshot with no model: use the seam and closure cues above.
 - Close-up detail / fabric macro / accessory-only shot with no orientation cue: answer "uncertain".
@@ -1608,7 +1654,7 @@ const MISSING_COLUMN_RE = /column .* does not exist|Could not find the/i;
 async function getCachedClassificationDetailed(imageUrl) {
   if (!supabase) return null;
   const V11 = "classification, confidence, source, cue, age_group, age_group_confidence";
-  const V12_ONLY = ", text_ocr, is_true_back_view, primary_color_hex, has_graphic";
+  const V12_ONLY = ", text_ocr, is_true_back_view, primary_color_hex, has_graphic, classifier_version";
   let { data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY);
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("[garment_cache] v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation");
@@ -1667,6 +1713,8 @@ async function saveClassification(imageUrl, classification, meta = {}) {
     text_ocr: typeof meta.textOcr === "string" ? meta.textOcr : null,
     is_true_back_view: typeof meta.isTrueBackView === "boolean" ? meta.isTrueBackView : null,
     has_graphic: typeof meta.hasGraphic === "boolean" ? meta.hasGraphic : null,
+    /* Stamped on every write so a later prompt change can tell this verdict is stale. */
+    classifier_version: Number.isFinite(meta.classifierVersion) ? meta.classifierVersion : null,
     primary_color_hex: meta.primaryColorHex || null,
   };
 
@@ -2273,6 +2321,28 @@ function resolveBackIsPlain({ back, back_source, backRecord }) {
   return null;
 }
 
+/* Is a cached verdict from an OLDER classifier prompt, and so a cache miss? Extracted as a
+   pure function for the same reason resolveBackIsPlain() was: the inline version of the
+   previous piece of logic in this handler shipped with zero coverage and reached a live
+   session wrong. See CLASSIFIER_PROMPT_VERSION for the report this exists for.
+
+   THE THREE STATES OF classifier_version, and they are deliberately not collapsed:
+     undefined  the column does not exist (migration pending). NOT stale - treating every
+                cached row as stale would re-ask Gemini for the whole catalog on every
+                visit, against a 60 RPM limit, triggered by nothing but a pending
+                migration. Pre-migration behaviour is therefore unchanged.
+     null       the column exists but this row predates versioning. STALE - it was
+                produced by a prompt older than any stamped version.
+     number     stale only if older than the current version.
+   @returns {boolean} */
+function isStaleClassification(cached, currentVersion) {
+  if (!cached) return false;
+  const v = cached.classifier_version;
+  if (v === undefined) return false;
+  if (v === null) return true;
+  return Number.isFinite(v) ? v < currentVersion : true;
+}
+
 /* POST /api/classify-images
    Request (all fields optional except `images`):
      { images: string[],            // the scraped gallery, DOM order
@@ -2337,7 +2407,25 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     }
     try {
       const cached = await getCachedClassificationDetailed(url);
-      if (cached) {
+      /* ── A VERDICT FROM AN OLDER PROMPT IS A CACHE MISS ─────────────────────────────
+         See CLASSIFIER_PROMPT_VERSION. Without this, a prompt fix never reaches any photo
+         already in garment_cache - which is how a mislabelled rear photo survived several
+         rounds of classifier corrections.
+         Stale ONLY when the row carries an explicit older number. A missing version
+         (`undefined` - the column does not exist yet because the migration has not run)
+         is NOT treated as stale: re-classifying the entire catalog on every visit to every
+         product would be a Gemini storm against a 60 RPM limit, triggered by nothing more
+         than a pending migration. Pre-migration therefore behaves exactly as before, and
+         the clear-the-rows SQL in supabase_setup_v12.sql is the manual route until it
+         runs. A row written before versioning existed but after the column did carries
+         NULL, and that IS stale - it was produced by a prompt older than version 1 of this
+         scheme. */
+      const staleVersion = isStaleClassification(cached, CLASSIFIER_PROMPT_VERSION);
+      if (staleVersion) {
+        console.log(`[classify-images] cached verdict is from classifier v${cached.classifier_version ?? "?"}` +
+          ` (current v${CLASSIFIER_PROMPT_VERSION}) - re-classifying: ${String(url).slice(0, 120)}`);
+      }
+      if (cached && !staleVersion) {
         records.push({
           view: cached.classification,
           confidence: Number.isFinite(cached.confidence) ? cached.confidence : null,
@@ -2374,6 +2462,7 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
           ageGroup: rec.age_group, ageGroupConfidence: rec.age_group_confidence,
           textOcr: rec.text_ocr, isTrueBackView: rec.is_true_back_view, primaryColorHex: rec.primary_color_hex,
           hasGraphic: rec.has_graphic,
+          classifierVersion: CLASSIFIER_PROMPT_VERSION,
         }
       );
       records.push({ ...rec, source: rec.view === "uncertain" ? "uncertain" : "gemini" });

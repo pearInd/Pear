@@ -13,9 +13,9 @@ const start = src.indexOf("/* Resizer endpoints keep the REAL asset");
 const end = src.indexOf("/* POST /api/classify-images");
 const mod = await import("data:text/javascript," + encodeURIComponent(
   "const PRESENTATION_PARAMS = new Set(['width','height','w','h','size','quality','q','dpr','format','fm','crop','fit','scale','v','ver','version','t','cache','_']);\n" +
-  src.slice(start, end) + "\nexport { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON, resolveBackIsPlain };"
+  src.slice(start, end) + "\nexport { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON, resolveBackIsPlain, isStaleClassification };"
 ));
-const { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON, resolveBackIsPlain } = mod;
+const { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON, resolveBackIsPlain, isStaleClassification } = mod;
 
 let fails = 0;
 function eq(got, want, label) {
@@ -286,6 +286,69 @@ console.log("\n── §SALVAGE: hesitation is not duplication ──");
      }),
      { front: F, back: BK + "?v=2", back_source: "classifier", front_color_hex: null, front_text_ocr: null },
      "a confident back outranks a weak one, and keeps the plain `classifier` provenance");
+}
+
+console.log("\n── §CLASSIFIER: print prominence and lettering orientation are not front/back cues ──");
+{
+  /* THE BUG, reported three times before it was found. A brown PEAK tee whose catalog
+     rear photo carries a large mountain photograph rendered SMOOTH BROWN FABRIC WITH NO
+     ARTWORK on a 180-degree turn. That exact output is what synthesizeBackView() produces
+     ("the back is PLAIN in that garment's fabric and colour", rendered "uniform"), and it
+     only runs when NO real rear photo was resolved. So the real rear photo was never
+     labelled back.
+
+     Why: the classifier listed "front graphic or lettering read the right way round" as a
+     DECISIVE FRONT cue. A flat-lay photo of the BACK satisfies that - the camera faces
+     the rear panel squarely, so its lettering reads correctly too. Its counterweight,
+     "Back graphic ... spine lettering", was circular. These checks read the prompt text
+     itself, because that is where the defect lived. */
+  const SERVER = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  const start = SERVER.indexOf("DECISIVE FRONT cues");
+  const frontCues = SERVER.slice(start, SERVER.indexOf("DECISIVE BACK cues", start));
+
+  is(/read the right way round/i.test(frontCues), false,
+     "REGRESSION: lettering orientation is no longer a decisive FRONT cue");
+  is(/front graphic/i.test(frontCues), false,
+     "...and neither is an unqualified 'front graphic' - that is circular");
+  is(/NOT CUES/.test(SERVER) && /PRINT SIZE, PROMINENCE OR PLACEMENT/.test(SERVER), true,
+     "print size/prominence is explicitly named as NOT a cue");
+  is(/LETTERING READ THE RIGHT WAY ROUND\. On a flat-lay/.test(SERVER), true,
+     "...and so is lettering orientation, with the flat-lay reason stated");
+  /* The genuinely decisive flat-lay signal. */
+  is(/FLAT-LAY \/ PACKSHOT OF A T-SHIRT[\s\S]{0,120}NECKLINE is the decisive cue/.test(SERVER), true,
+     "neckline depth is made the decisive cue for a flat-lay tee");
+  /* Uncertain must beat letting the artwork decide - a wrong verdict here is what
+     produced a synthetic back in the first place. */
+  is(/cannot be judged, answer "uncertain" rather than\s*\n?\s*letting the artwork decide/.test(SERVER), true,
+     "an unjudgeable neckline abstains rather than deferring to the print");
+}
+
+console.log("\n── §CACHE: a verdict from an older prompt is a miss ──");
+{
+  /* Without this, a classifier fix never reaches a photo already in garment_cache - the
+     old verdict is served forever. That is how the PEAK tee's wrong verdict survived
+     several rounds of fixes. */
+  is(isStaleClassification({ classifier_version: 2 }, 3), true,
+     "REGRESSION: a verdict from an older prompt is re-asked");
+  is(isStaleClassification({ classifier_version: 3 }, 3), false,
+     "a verdict from the current prompt is served from cache");
+  is(isStaleClassification({ classifier_version: 4 }, 3), false,
+     "a newer version (rolled-back deploy) is not thrashed");
+  /* NULL: the column exists but the row predates versioning - produced by a prompt older
+     than any stamped version, so it is stale. */
+  is(isStaleClassification({ classifier_version: null }, 3), true,
+     "a row that predates versioning (NULL) is stale");
+  /* UNDEFINED: the column does not exist yet. Treating that as stale would re-ask Gemini
+     for the whole catalog on every visit against a 60 RPM limit, triggered by nothing but
+     a pending migration - so pre-migration behaviour must be unchanged. */
+  is(isStaleClassification({}, 3), false,
+     "a missing column (migration pending) is NOT stale - no Gemini storm");
+  is(isStaleClassification(null, 3), false, "no cached row is not a stale row");
+  const SERVER = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  is(/classifierVersion: CLASSIFIER_PROMPT_VERSION/.test(SERVER), true,
+     "every write stamps the current prompt version");
+  is(/isStaleClassification\(cached, CLASSIFIER_PROMPT_VERSION\)/.test(SERVER), true,
+     "the cache-hit path actually consults it");
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
