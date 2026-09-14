@@ -1737,28 +1737,70 @@ async function saveClassification(imageUrl, classification, meta = {}) {
   if (error) console.warn("[garment_cache] write failed:", error.message);
 }
 
-/* Per-product view lookup: the ONE front and ONE back this product is known to have,
-   deduplicated by canonical URL. This is the query the try-on pipeline actually wants
-   - "give me this garment's two views" - rather than reassembling them from whatever
-   URL spellings happened to be scraped on this particular page visit.
+/* Colourway view lookup: the ONE front and ONE back this colourway is known to have,
+   deduplicated by canonical URL - "give me this garment's two views" for a shopper whose
+   current page visit exposed no rear photo (a lazy gallery that never rendered slide 2).
 
    Picks the single most trustworthy row per side rather than the first one returned:
    a storefront's own markup outranks a model verdict, which outranks an ambiguous
    one, which outranks a rate-limit default. Ties break on confidence, then recency.
-   Returns {} when the product is unknown or the V8/V9 columns are absent.
+   Returns {} when the colourway is unknown or the V8/V9/V14 columns are absent.
    @returns {Promise<{front?: string, back?: string}>} */
 const SOURCE_TRUST = { dom_hint: 1, gemini: 2, synthetic: 3, uncertain: 4, fallback: 5 };
 
-async function getProductViews(productUrl) {
-  if (!supabase || !productUrl) return {};
-  const { data, error } = await supabase
+/* ── KEYED BY COLOURWAY, NOT BY PRODUCT - "the black tee came back with a navy back" ──
+   THIS USED TO BE A LOOKUP BY page_url AGAINST product_url, and it was wrong three ways:
+     · KEYED BY PRODUCT. Every colour of a product shared one key, so recovery could hand
+       a black tee the navy tee's rear photo - a different garment on the shopper's back.
+     · NEVER WRITTEN. Only the scanner set product_url; this endpoint never did, so a
+       product seen only through the widget could never be recovered.
+     · NEVER MATCHED. It compared the shopper's FULL page URL (?variant=, /collections/…
+       prefixes, locale paths) to the scanner's bare /products/<handle> by equality.
+   variant_key is the Shopify variant with its SIZE option removed (see
+   archive/supabase_setup_v14.sql for why not the raw variant id), sent by the widget
+   only when it could verify the variant belongs to the page's own product.
+
+   THE SILENT CACHE MISS, still closed here. A missing-column error used to return {}
+   with NO log, turning recovery off for every request indistinguishably from "nothing
+   cached". Observed 2026-09-14 on the project admin/admin.js points at: 42703 "column
+   garment_cache.product_url does not exist". Warned ONCE PER PROCESS - a missing column
+   stays missing until someone runs the SQL, and a warning per request would bury the
+   log it exists to inform. Any OTHER error still warns every time.
+
+   `client` is a parameter so the lookup can be exercised without a live database; every
+   production caller omits it. RLS cannot empty this read on a correctly configured server
+   (the service-role key bypasses it) - lib/supabase.js warns at startup when the
+   configured key is not a service-role key, which is the one way it could. */
+const _cacheSchemaWarned = new Set();
+function warnCacheSchemaOnce(tag, message) {
+  if (_cacheSchemaWarned.has(tag)) return;
+  _cacheSchemaWarned.add(tag);
+  console.warn(message);
+}
+
+/* A variant_key as the widget sends it, or "" for anything else. Shape only - the widget
+   verified membership in the page's product; this just refuses to put arbitrary client
+   input into a query filter. "<digits>:<option values>", no control characters. */
+const VARIANT_KEY_RE = /^\d{1,20}:[^\x00-\x1f]{0,200}$/;
+function sanitizeVariantKey(value) {
+  return typeof value === "string" && VARIANT_KEY_RE.test(value) ? value : "";
+}
+
+async function getVariantViews(variantKey, client = supabase) {
+  if (!client || !variantKey) return {};
+  const { data, error } = await client
     .from("garment_cache")
     .select("image_url, canonical_url, classification, confidence, source")
-    .eq("product_url", productUrl)
+    .eq("variant_key", variantKey)
     .limit(50);
   if (error) {
-    if (!/column .* does not exist|Could not find the/i.test(error.message || "")) {
-      console.warn("[garment_cache] product view query failed:", error.message);
+    if (MISSING_COLUMN_RE.test(error.message || "")) {
+      warnCacheSchemaOnce("variant-views", "[garment_cache] colourway view lookup DISABLED - " +
+        (error.message || "missing column") + ". Run archive/supabase_setup_v8.sql, v9.sql and v14.sql;" +
+        " until then back_source \"cache\" recovery never runs and a product with no back on the" +
+        " current page falls straight through to a generated rear.");
+    } else {
+      console.warn("[garment_cache] colourway view query failed:", error.message);
     }
     return {};
   }
@@ -1786,6 +1828,46 @@ async function getProductViews(productUrl) {
   // Never hand back a "back" that is the same photograph as the front.
   if (best.back && !(out.front && sameImage(best.back.url, out.front))) out.back = best.back.url;
   return out;
+}
+
+/* Which rear photo, if any, this request has EARNED the right to file under its colourway.
+
+   Only a back resolved on THIS visit from real evidence: "dom" (the storefront named it)
+   or "classifier" (a confident, validated Gemini verdict). Never "classifier_weak" (the
+   model would not stake the verdict), "cache" (already filed - re-tagging would let one
+   colourway's recovered row hop to another), "synthetic" (generated, not a catalog photo)
+   or "none". The consequence is the property that makes colourway recovery safe: it can
+   only ever REPLAY a back this same colourway was already rendered with, never introduce
+   one it was not.
+   @returns {string} the back URL to tag, or "" */
+function variantBackToTag(views, variantKey) {
+  if (!variantKey || !views || !views.back) return "";
+  return views.back_source === "dom" || views.back_source === "classifier" ? views.back : "";
+}
+
+/* File a rear photo under a colourway. An UPDATE of the photo's existing row, never an
+   insert: this endpoint does not create cache rows for photos it did not classify (a
+   DOM-named back that was never sent to Gemini has no row, and does not need one - its
+   markup is on the page every visit). A photo shared by two colourways keeps whichever
+   tagged it last; for the other that is a miss, not a wrong colour.
+   @returns {Promise<boolean>} true when the update was accepted */
+async function tagVariantBack(backUrl, variantKey, client = supabase) {
+  if (!client || !backUrl || !variantKey) return false;
+  const { error } = await client
+    .from("garment_cache")
+    .update({ variant_key: variantKey })
+    .eq("canonical_url", canonicalImageUrl(backUrl));
+  if (error) {
+    if (MISSING_COLUMN_RE.test(error.message || "")) {
+      warnCacheSchemaOnce("variant-tag", "[garment_cache] colourway tagging DISABLED - " +
+        (error.message || "missing column") + ". Run archive/supabase_setup_v9.sql and v14.sql;" +
+        " until then no rear photo is filed for back_source \"cache\" recovery.");
+    } else {
+      console.warn("[garment_cache] colourway tag failed:", error.message);
+    }
+    return false;
+  }
+  return true;
 }
 
 /* ── Generated rear view - the single-image fallback ────────────────────────────
@@ -2343,12 +2425,58 @@ function isStaleClassification(cached, currentVersion) {
   return Number.isFinite(v) ? v < currentVersion : true;
 }
 
+/* One entry per PHOTOGRAPH, not per URL spelling - first position, last spelling, the
+   order and choice the inline version made. Extracted for the same reason
+   resolveBackIsPlain() was: the inline key had no coverage and was wrong twice over.
+
+   IT KEYED ON `url.split('?')[0]`, which is both too loose and too strict:
+     · TOO LOOSE on a resizer. /_next/image?url=... and /cdn-cgi/image/... share ONE path
+       for every image on the site, so a whole gallery collapsed to a single entry and
+       its rear photo was never classified at all - no back, a generated plain rear, the
+       print-less-back symptom with nothing in the log to say a photo had been dropped.
+       Same for any store whose photo identity lives in the query (?id=).
+     · TOO STRICT on a CDN size suffix. shirt.jpg and shirt_800x.jpg kept two entries
+       and cost two Gemini calls for one photograph.
+   canonicalImageUrl() already answers "is this the same photo" for every other
+   comparison in this file; this now asks it too.
+   @param {string[]} images @returns {string[]} */
+function dedupeImageUrls(images) {
+  return [...new Map(images.map((url) => [canonicalImageUrl(url), url])).values()];
+}
+
+/* The storefront-markup back record for `url`, or null when the markup did not name it.
+
+   THE BUG THIS CLOSES. The inline test was `url === scrapedBack` - a raw compare, the
+   one CLAUDE.md 2.2 bans. data-pear-back arrives exactly as the merchant typed it; the
+   gallery list is built separately and deduplicated by photo, so the two spellings
+   routinely differ (cove-back.jpg vs cove-back_800x.jpg?v=123). When they did, the
+   highest-trust signal in the pipeline was silently demoted: the photo went to Gemini
+   like any other, and resolveGarmentViews() - which DOES match through sameImage() -
+   then found that Gemini record and ran the OCR veto and has_graphic against it. A
+   merchant who marked the rear photo precisely to get past a wrong verdict got the
+   wrong verdict anyway.
+
+   A dom_hint record carries no text_ocr and no is_true_back_view, which is what makes
+   validateBackCandidate() abstain and resolveBackIsPlain() return null for it. That is
+   the contract: the storefront named the photo and the model was never asked.
+   @returns {object|null} */
+function domHintBackRecord(url, scrapedBack) {
+  if (!scrapedBack || !sameImage(url, scrapedBack)) return null;
+  /* is_true_back_view is left ABSENT (not false) on purpose: the model was never
+     asked about this photo, and validateBackCandidate() only vetoes on an explicit
+     false from a `gemini` record. A false here would veto the highest-trust signal
+     in the pipeline - the storefront's own markup - on no evidence at all. */
+  return { view: "back", confidence: 1, source: "dom_hint", cue: "storefront markup", age_group: "uncertain", age_group_confidence: 0, text_ocr: null, primary_color_hex: null };
+}
+
 /* POST /api/classify-images
    Request (all fields optional except `images`):
      { images: string[],            // the scraped gallery, DOM order
        front_image_url?: string,    // the widget's own scraped front
        back_image_url?:  string,    // a rear photo the DOM positively identified
        synthesize_back?: boolean,   // generate a rear when none was found
+       variant_key?: string,        // "<product id>:<non-size options>" - the colourway,
+                                    // sent only when the widget verified it (v14)
        page_url?: string, store_key?: string }   // diagnostics only
    Response:
      { results: ("front"|"back")[],   // one per input URL, in order (legacy contract)
@@ -2383,10 +2511,9 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
   const scrapedFront = typeof req.body?.front_image_url === "string" ? req.body.front_image_url : "";
   const scrapedBack  = typeof req.body?.back_image_url === "string" ? req.body.back_image_url : "";
   const wantSynth    = req.body?.synthesize_back === true;
+  const variantKey   = sanitizeVariantKey(req.body?.variant_key);   // "" = recovery and tagging skipped
 
-  const uniqueUrls = [...new Map(
-      images.map(url => [url.split('?')[0], url])
-  ).values()];
+  const uniqueUrls = dedupeImageUrls(images);   // by photograph - see its header
 
   /* One record per URL. `view` drives resolution; `source` records HOW the value was
      arrived at, so a "front" that is really a throttled request is never mistaken for
@@ -2397,12 +2524,10 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     // A rear photo the storefront's own markup named needs no model call. It carries
     // no age_group opinion - the DOM only ever names WHICH photo is the back, never
     // what kind of garment it is.
-    if (scrapedBack && url === scrapedBack) {
-      /* is_true_back_view is left ABSENT (not false) on purpose: the model was never
-         asked about this photo, and validateBackCandidate() only vetoes on an explicit
-         false from a `gemini` record. A false here would veto the highest-trust signal
-         in the pipeline - the storefront's own markup - on no evidence at all. */
-      records.push({ view: "back", confidence: 1, source: "dom_hint", cue: "storefront markup", age_group: "uncertain", age_group_confidence: 0, text_ocr: null, primary_color_hex: null });
+    // sameImage(), never ===: the merchant's spelling and the gallery's differ routinely.
+    const domHint = domHintBackRecord(url, scrapedBack);
+    if (domHint) {
+      records.push(domHint);
       continue;
     }
     try {
@@ -2478,18 +2603,20 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
   const views = resolveGarmentViews({ images: uniqueUrls, records, scrapedFront, scrapedBack });
   const ageGroupResult = resolveAgeGroup({ images: uniqueUrls, records, front: views.front });
 
-  /* Nothing found on THIS page visit, but the cache may already know this product's
+  /* Nothing found on THIS page visit, but the cache may already know this COLOURWAY's
      rear photo from a previous visit or a scanner crawl - a lazy gallery that failed
-     to expose slide 2 today does not mean the back does not exist. Queried per product
-     and deduplicated by canonical URL (getProductViews), so it cannot resurrect one of
-     the duplicate rows that caused the conflict in the first place. Cheaper and more
-     accurate than generating a rear, so it is tried first. */
-  if (!views.back && req.body?.page_url) {
-    const known = await getProductViews(req.body.page_url);
+     to expose slide 2 today does not mean the back does not exist. Queried per
+     colourway (variant_key - never per product, which handed one colour another's back;
+     see getVariantViews) and deduplicated by canonical URL, so it cannot resurrect one
+     of the duplicate rows that caused the conflict in the first place. Cheaper and more
+     accurate than generating a rear, so it is tried first. No variant_key, no lookup:
+     the widget sends one only when it could verify it. */
+  if (!views.back && variantKey) {
+    const known = await getVariantViews(variantKey);
     if (known.back && !sameImage(known.back, views.front)) {
       views.back = known.back;
       views.back_source = "cache";
-      console.log("[classify-images] back recovered from garment_cache for this product:",
+      console.log(`[classify-images] back recovered from garment_cache for colourway ${variantKey}:`,
         String(known.back).slice(0, 120));
     }
   }
@@ -2506,6 +2633,13 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     const synth = await synthesizeBackView(views.front, { primaryColorHex: views.front_color_hex });
     if (synth) { views.back = synth; views.back_source = "synthetic"; }
   }
+
+  /* File this visit's real rear photo under its colourway, so a later visit whose gallery
+     does not expose it can recover it above. Awaited before responding: on a serverless
+     host a write left running after res.json() can be frozen mid-flight. See
+     variantBackToTag() for exactly which backs qualify and why. */
+  const backToTag = variantBackToTag(views, variantKey);
+  if (backToTag) await tagVariantBack(backToTag, variantKey);
 
   /* ── IS THE RESOLVED BACK PLAIN? - "Decart drew scrambled graphics on my back" ─────
      THE BUG THIS CLOSES lives in the fitting room's prompt, but only this endpoint has

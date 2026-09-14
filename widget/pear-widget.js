@@ -684,6 +684,43 @@
      form so the fitting room's "הוסף לסל" button can hand it back for a real
      /cart/add.js call. Prefer the id scoped to THIS button's own form (multi-
      product pages); fall back to a page-wide lookup for bare PDPs. */
+  /* The variant id in the add-to-cart button's OWN <form>, or "". Deliberately no
+     page-wide fallback - that fallback is right for the cart bridge on a bare PDP
+     (extractVariantId below) and wrong for cache keying, where the first input[name="id"]
+     on a collection grid belongs to some other product. Read at CALL time, so a colour
+     picked after the button was injected is the one reported. */
+  function formVariantId(atcBtn) {
+    var form = atcBtn && atcBtn.closest ? atcBtn.closest("form") : null;
+    var input = form && form.querySelector('input[name="id"], select[name="id"]');
+    return input && input.value ? String(input.value) : "";
+  }
+
+  /* The colourway key sent with /api/classify-images, or "" - and "" is the common, correct
+     answer. It keys garment_cache back recovery, so a wrong key files one garment's rear
+     photo under another's colourway. Sent only when ALL of these hold:
+       1. the variant id came from the button's own form, OR the garment is page-scoped
+          (findGarmentForButton's og:image/gallery branch) and the id is the page's;
+       2. product.js for THIS page has loaded - no product data, no key (a click before the
+          boot fetch lands just skips recovery for that one request);
+       3. the id is one of THIS page product's variants. This is the check that stops a
+          related-products quick-add form on a PDP - its own form, a different product -
+          from filing this page's gallery under its id.
+     Collection pages never qualify: their path has no /products/, so product.js is []. */
+  function scopedVariantKey(garment) {
+    if (!garment || !_shopifyVariants || !_shopifyVariants.length || !_shopifyProductId) return "";
+    var id = formVariantId(garment.atcBtn);
+    if (!id && garment.pageScoped) {
+      var pageInput = d.querySelector('input[name="id"], select[name="id"]');
+      id = pageInput && pageInput.value ? String(pageInput.value) : "";
+    }
+    if (!id) return "";
+    for (var i = 0; i < _shopifyVariants.length; i++) {
+      var v = _shopifyVariants[i];
+      if (v && String(v.id) === id) return variantKeyOf(_shopifyProductId, v, _shopifySizeOptionIndex);
+    }
+    return "";
+  }
+
   function extractVariantId(atcBtn) {
     var form = atcBtn && atcBtn.closest ? atcBtn.closest("form") : null;
     var input = (form && form.querySelector('input[name="id"], select[name="id"]')) ||
@@ -796,9 +833,14 @@
     var entries = found.map(function (img, idx) {
       return {
         img: img,
-        url: explicitAttr(img, "data-pear-front") ||
+        url: absolutize(explicitAttr(img, "data-pear-front")) ||
              ((idx === 0 && ogUrl) ? upgradeImageUrl(absolutize(ogUrl)) : bestImageUrl(img)),
-        back: explicitAttr(img, "data-pear-back")
+        /* absolutize(): the attribute is read exactly as the merchant typed it, and themes
+           write "//cdn…" and "/files/…" constantly. A relative back URL cannot match the
+           gallery's absolute copy of the same photo on the server, so the store's own
+           markup lost to the classifier, and the fitting room could not fetch it either.
+           absolutize("") stays "" - an absent attribute must never become the page URL. */
+        back: absolutize(explicitAttr(img, "data-pear-back"))
       };
     });
 
@@ -920,12 +962,45 @@
   // (see findVariantForSize()'s own comment below for the bug this closes).
   var _shopifyVariants = null;         // Shopify variant objects[] once resolved, [] when unavailable
   var _shopifySizeOptionIndex = -1;    // 0/1/2 (option1/2/3) for whichever option Shopify itself calls "Size", else -1
+  var _shopifyProductId = null;        // the PAGE product's id from product.js - variantKeyOf()'s prefix
+
+  /* Which option (0/1/2 = option1/2/3) the product NAMES "Size", else -1. Read off the
+     declared name rather than a position - themes put Size at option1, option2 or option3
+     depending on which other option (colour, material) the merchant listed first.
+     LOCKSTEP: scanner/scan-store.js sizeOptionIndexOf() - variantKeyOf() output must be
+     byte-identical on both sides or a scanner-filed back is never recovered. */
+  function sizeOptionIndexOf(options) {
+    var opts = options || [];
+    for (var j = 0; j < opts.length; j++) {
+      var name = String((opts[j] && (opts[j].name != null ? opts[j].name : opts[j])) || "").trim().toLowerCase();
+      if (name === "size" || name === "מידה") return j;
+    }
+    return -1;
+  }
+
+  /* The COLOURWAY a variant belongs to: "<product id>:<non-size option values>".
+     NOT the raw variant id. A Shopify variant is colour x size, and the black tee in M and
+     in L share every photo - keyed by variant id, an M visit could never recover what an L
+     visit filed, and every shared photo would be re-tagged by whichever size was viewed
+     last. Dropping the size option is what makes the key mean "this garment's look".
+     option1..3 rather than variant.options, because /products.json (the scanner's
+     source) carries only option1..3. LOCKSTEP: scanner/scan-store.js variantKeyOf(). */
+  function variantKeyOf(productId, variant, sizeOptionIndex) {
+    if (productId == null || productId === "" || !variant) return "";
+    var raw = [variant.option1, variant.option2, variant.option3];
+    var parts = [];
+    for (var i = 0; i < raw.length; i++) {
+      if (i === sizeOptionIndex || raw[i] == null) continue;
+      parts.push(String(raw[i]).trim().toLowerCase().replace(/\s+/g, " "));
+    }
+    return String(productId) + ":" + parts.join("/");
+  }
 
   function loadShopifyProductJSON() {
     if (_shopifyGallery) return Promise.resolve(_shopifyGallery);
     var path = w.location.pathname.split("?")[0].replace(/\/$/, "");
     if (path.indexOf("/products/") === -1) {
-      _shopifyGallery = []; _shopifyVariants = []; _shopifySizeOptionIndex = -1;
+      _shopifyGallery = []; _shopifyVariants = []; _shopifySizeOptionIndex = -1; _shopifyProductId = null;
       return Promise.resolve(_shopifyGallery);
     }
     return fetch(path + ".js", { credentials: "same-origin" })
@@ -940,15 +1015,8 @@
         _shopifyGallery = imgs;
 
         _shopifyVariants = (p && p.variants) || [];
-        // Read the option's declared NAME rather than assuming a position - different
-        // themes/merchants put Size at option1, option2 or option3 depending on
-        // whichever other option (colour, material) they listed first.
-        var opts = (p && p.options) || [];
-        _shopifySizeOptionIndex = -1;
-        for (var j = 0; j < opts.length; j++) {
-          var name = ((opts[j] && opts[j].name) || "").trim().toLowerCase();
-          if (name === "size" || name === "מידה") { _shopifySizeOptionIndex = j; break; }
-        }
+        _shopifyProductId = (p && p.id != null) ? String(p.id) : null;
+        _shopifySizeOptionIndex = sizeOptionIndexOf(p && p.options);
 
         console.log("[PEAR] Shopify product JSON:", imgs.length, "image(s),",
           _shopifyVariants.length, "variant(s) for", p && p.title,
@@ -957,7 +1025,7 @@
       })
       .catch(function (e) {
         console.log("[PEAR] Shopify product JSON unavailable (not a Shopify PDP?):", e && e.message);
-        _shopifyGallery = []; _shopifyVariants = []; _shopifySizeOptionIndex = -1;
+        _shopifyGallery = []; _shopifyVariants = []; _shopifySizeOptionIndex = -1; _shopifyProductId = null;
         return _shopifyGallery;
       });
   }
@@ -1469,6 +1537,7 @@
   function classifyImages(urls, hint) {
     var endpoint = PEAR_BASE + "/api/classify-images";
     var scrapedBack = (hint && hint.back) || "";
+    var variantKey = (hint && hint.variantKey) || "";
     return fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1477,6 +1546,8 @@
         front_image_url: (hint && hint.front) || urls[0] || "",
         back_image_url: scrapedBack,
         synthesize_back: !scrapedBack,
+        // Colourway for garment_cache back recovery - omitted unless verified (scopedVariantKey).
+        variant_key: variantKey || undefined,
         page_url: w.location ? w.location.href : "",
         store_key: STORE_KEY || undefined
       })
@@ -1828,20 +1899,78 @@
     return "";
   }
 
+  /* The merchant's explicit marker on a PRODUCT PAGE, absolutized, or "".
+
+     WHICH ELEMENTS COUNT, and why not simply the first [data-pear-back] on the page. The
+     header documents the marker as sitting on "the product <img> or its container", so it
+     is read only from elements this widget already treats as THIS product's image:
+       1. any gallery/product image rendering the primary photo (samePhoto, so the og:image
+          spelling and the gallery's ?width=800 spelling are one photo);
+       2. the page's main product image, as resolvePrimaryProductImage() would pick it -
+          which is where a data-pear-front sits when og:image names a different photo.
+     NOT a page-wide query, and NOT every THUMB_SELECTORS hit: those selectors are
+     effectively page-wide on Shopify (.swiper-slide img, img[src*="cdn.shopify.com/s/files"])
+     and would match a related-products carousel card, binding ANOTHER garment's rear photo
+     as this one's back. A marker outside these elements is not seen here - abstaining
+     leaves the pre-existing heuristics in charge, which is exactly today's behaviour. */
+  function productPageMarker(name, primaryUrl) {
+    var sel = d.querySelectorAll(PRODUCT_GALLERY_SELECTORS + ", " + PRODUCT_IMG_SELECTORS + ", " + THUMB_SELECTORS);
+    var i, el, v;
+    for (i = 0; i < sel.length; i++) {
+      el = sel[i];
+      if (el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
+      if (!el || el.tagName !== "IMG") continue;
+      var urls = imageUrlsFrom(el);
+      for (var u = 0; u < urls.length; u++) {
+        if (!samePhoto(urls[u], primaryUrl)) continue;
+        v = absolutize(explicitAttr(el, name));
+        if (v) return v;
+        break;
+      }
+    }
+    var main = [PRODUCT_GALLERY_SELECTORS, PRODUCT_IMG_SELECTORS];
+    for (i = 0; i < main.length; i++) {
+      el = d.querySelector(main[i]);
+      if (el && el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
+      if (!el || el.tagName !== "IMG") continue;
+      v = absolutize(explicitAttr(el, name));
+      if (v) return v;
+    }
+    return "";
+  }
+
   function findGarmentForButton(btn) {
     // Priority 1/2 - og:image, then known product-gallery containers.
     var primaryUrl = resolvePrimaryProductImage();
     if (primaryUrl) {
+      /* ── EXPLICIT MARKERS FIRST - "I set data-pear-back and it was ignored" ──────────
+         THE BUG THIS CLOSES. This branch took the front from og:image and the back from
+         findGalleryBack() and never read data-pear-front / data-pear-back, while the
+         ancestor walk-up and findProductImages() fallbacks below both did. This branch is
+         the one nearly every real product page takes, so the top entry in the header's
+         "highest-trust first" discovery order (CLAUDE.md 2.1) did nothing on the pages it
+         exists for - a merchant marking the rear photo to get past a wrong classifier
+         verdict was overruled by a filename guess. Both markers are resolved against the
+         og/gallery primary BEFORE either is applied, so the lookup is one reading of the
+         page; the front marker then replaces the primary for everything downstream. */
+      var markedFront = productPageMarker("data-pear-front", primaryUrl);
+      var markedBack  = productPageMarker("data-pear-back", primaryUrl);
+      if (markedFront) {
+        console.log("[PEAR] front image from data-pear-front (overrides og:image/gallery):", markedFront);
+        primaryUrl = markedFront;
+      }
+      if (markedBack) console.log("[PEAR] back image from data-pear-back (overrides gallery heuristics):", markedBack);
       var pgName = getGarmentName();
       var pgImages = collectGalleryImages(primaryUrl, d);
       console.log('[PEAR] final imgs array:', pgImages);
       return {
         url: primaryUrl,
-        back: findGalleryBack(primaryUrl, d),
+        back: markedBack || findGalleryBack(primaryUrl, d),
         images: pgImages,
         name: pgName,
         category: detectCategory(pgName),
         variantId: extractVariantId(btn),
+        atcBtn: btn,   // re-read at click time by scopedVariantKey() - see its comment
         /* This garment came from PAGE-WIDE signals (og:image / the single-product
            gallery), so the page's own Shopify product JSON describes the same product
            and its images can be merged in at click time. NOT set on the ancestor
@@ -1857,18 +1986,20 @@
     for (var depth = 0; depth < 10 && node; depth++) {
       var img = pickProductImageIn(node);
       if (img) {
-        var url = explicitAttr(img, "data-pear-front") || bestImageUrl(img);
+        var url = absolutize(explicitAttr(img, "data-pear-front")) || bestImageUrl(img);
         if (url && !isExcludedSrc(url)) {
           var name = cardNameFor(node, img);
           var cardImages = collectGalleryImages(url, node);
           console.log('[PEAR] final imgs array:', cardImages);
           return {
             url: url,
-            back: explicitAttr(img, "data-pear-back") || findGalleryBack(url, node),
+            // absolutize() for the same reason as findProductImages()' read - see there.
+            back: absolutize(explicitAttr(img, "data-pear-back")) || findGalleryBack(url, node),
             images: cardImages,
             name: name,
             category: detectCategory(name),
-            variantId: extractVariantId(btn)
+            variantId: extractVariantId(btn),
+            atcBtn: btn
           };
         }
       }
@@ -1884,7 +2015,8 @@
         url: primary.url, back: primary.back,
         images: fallbackImages,
         name: pname, category: detectCategory(pname),
-        variantId: extractVariantId(btn)
+        variantId: extractVariantId(btn),
+        atcBtn: btn
       };
     }
     return null;
@@ -2033,7 +2165,9 @@
 
            Sent by postMessage rather than the iframe URL because a composite data URL
            is far past any browser's URL length limit. */
-        classifyImages(imgs, { front: imgs[0], back: openBack }).then(function (res) {
+        var variantKey = scopedVariantKey(garment);
+        console.log("[PEAR] colourway key for back recovery:", variantKey || "(none - not verifiable for this button)");
+        classifyImages(imgs, { front: imgs[0], back: openBack, variantKey: variantKey }).then(function (res) {
           var results = res.results;
           console.log("[PEAR widget] classify-images results (" + results.length + "):", results);
           var sorted = sortByFrontBack(imgs, results);

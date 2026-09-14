@@ -2722,9 +2722,20 @@ window.addEventListener("message", (e) => {
   // instantly if activeItem.composite is already set.
   ensureActiveGarmentComposite(activeItem);
   renderPerspectiveSelector();
+  /* `back plain` rides beside `back source` because the two answer DIFFERENT questions and
+     only one of them was ever visible here. backSource says where the rear asset came from;
+     backIsPlain says which of the two back anchors imageOnlyPrompt() will select for it. A
+     "classifier" back carrying has_graphic:false reads as a perfectly healthy source on this
+     line AND ships PLAIN_BACK_ANCHOR ("The rear panel is smooth unbroken fabric") - so a
+     shopper reporting a smooth rear on a printed garment could not be told apart from a
+     correct render by any line in this console. Three states, printed distinctly: true and
+     false are verdicts, "not-asked" is undefined - see the assignment above for why an
+     absent field must never collapse into false. */
   console.log("[PEAR] PEAR_UPDATE_GARMENT applied - front:", abbrevImg(activeItem.img),
     "| back:", abbrevImg(activeItem.imgBack) || "(none)",
-    "| back source:", activeItem.backSource, "| mode:", currentAngle);
+    "| back source:", activeItem.backSource,
+    "| back plain:", typeof activeItem.backIsPlain === "boolean" ? activeItem.backIsPlain : "not-asked",
+    "| mode:", currentAngle);
 
   /* Race guard (FIX 4). The widget opens this room immediately on a DOM-order guess
      and only posts the classifier's real front/back 1-7s later, so the corrected back
@@ -10209,11 +10220,26 @@ if (typeof window !== "undefined") {
     const galleryCount = (activeItem && Array.isArray(activeItem.pearImages)) ? activeItem.pearImages.length : 0;
     const synthetic = backSource === "synthetic";
     const suspicious = synthetic && galleryCount > 1;
+    /* ── THE SECOND ROUTE TO A SMOOTH REAR, AND IT WAS INVISIBLE FROM HERE ───────────
+       The `suspicious` flag above catches a SYNTHETIC back on a multi-photo gallery. It
+       cannot catch the other way to render the same plain panel: a REAL rear photo
+       (source "classifier" / "cache" / "dom") whose has_graphic verdict came back false.
+       resolveBackIsPlain() then sends back_is_plain:true, imageOnlyPrompt() selects
+       PLAIN_BACK_ANCHOR, and Decart is told the rear panel is smooth unbroken fabric over
+       a reference that may plainly carry a print. Every field this diagnostic printed said
+       healthy: reason READY, a distinct back asset, a non-synthetic source, not suspicious.
+
+       backIsPlain is the ONLY field that separates those two renders, so it is reported.
+       Three states kept distinct for the reason its assignment records - true is a verdict,
+       false is a verdict, undefined is "nobody asked" and must not read as false. */
+    const plainBack = activeItem && typeof activeItem.backIsPlain === "boolean"
+      ? activeItem.backIsPlain : null;
     console.log("[PEAR] back-view readiness:", r.reason,
       r.half ? `(look half: ${r.half})` : "",
       "\n  front :", abbrevImg(r.front) || "(none)",
       "\n  back  :", abbrevImg(r.back) || "(none)",
       "\n  source:", backSource, galleryCount ? `(gallery had ${galleryCount} photos)` : "",
+      "\n  plain :", plainBack === null ? "not-asked (keeps the rear-print anchor)" : plainBack,
       "\n  mode  :", currentAngle,
       r.ready ? "" : "\n  → the shopper will see the FRONT garment when they turn around",
       suspicious
@@ -10224,8 +10250,17 @@ if (typeof window !== "undefined") {
           " garment_cache rows for this product - a cached wrong verdict is never re-asked."
         : synthetic
           ? "\n  (generated rear - expected for a single-photo product)"
-          : "");
-    return { ...r, backSource, synthetic, suspicious };
+          : "",
+      /* Scoped to a NON-synthetic back: a generated rear is plain by construction and the
+         branch above already explains it, so firing both would bury the one that matters. */
+      plainBack === true && !synthetic
+        ? "\n  \u26a0 PLAIN_BACK_ANCHOR IS ACTIVE OVER A REAL REAR PHOTO. The room is telling" +
+          " Decart the rear panel is smooth unbroken fabric, so ANY print on that photo is" +
+          " being suppressed. This is has_graphic:false reaching resolveBackIsPlain() - check" +
+          " the [classify-images] verdict for the back URL above, and clear this product's" +
+          " garment_cache row if it is stale (a cached wrong verdict is never re-asked)."
+        : "");
+    return { ...r, backSource, synthetic, suspicious, plainBack };
   };
 }
 

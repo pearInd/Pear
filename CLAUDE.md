@@ -214,6 +214,13 @@ same commit. Whichever is wrong is the one that wins.
 | Backdrop sampling | `pear-widget.js: sampleBackdrop` ↔ `app.js: sampleBackdrop` |
 | Garment title → category, incl. `FABRIC_AMBIGUOUS` | `pear-widget.js: detectCategory` ↔ `app.js: classifyGarmentTitle` |
 | Resizer detection | `RESIZER_RE` in both |
+| Colourway cache key (`garment_cache.variant_key`: product id + non-size options, size option named `size`/`מידה`) | `pear-widget.js: sizeOptionIndexOf` + `variantKeyOf` ↔ `scanner/scan-store.js: sizeOptionIndexOf` + `variantKeyOf`; shape accepted by `server.js: VARIANT_KEY_RE` / `sanitizeVariantKey` |
+
+The `variant_key` copies are matched by string equality in `server.js: getVariantViews`,
+so a one-character drift means a scanner-filed back is never recovered — silently.
+`test/garment-cache-access.test.mjs` runs both copies over one fixture; change the
+format in all three places and that test in the same commit. Never key it by the raw
+Shopify variant id (colour × size — see `archive/supabase_setup_v14.sql`).
 
 The widget's category verdict is **explicit** and therefore outranks the room's
 own classifier. A widget-side category bug cannot be fixed room-side.

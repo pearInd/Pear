@@ -272,8 +272,11 @@ console.log("\n── READY IS NOT PROOF THE CATALOG REAR PHOTO IS IN PLAY ─�
      The reason enum is deliberately unchanged (a synthetic back IS renderable, and callers
      read READY as "a swap will work"). Provenance is what distinguishes the two cases. */
   const APPSRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8");
+  /* 6000, not 4000: the helper grew a comment block when the plain-back verdict was added
+     below, which pushed the return statement past the old window and made this whole group
+     silently unmatchable. The slice has no end marker, so it is sized with headroom. */
   const dbg = APPSRC.slice(APPSRC.indexOf("window.__pearDebugBackView = () =>"),
-                           APPSRC.indexOf("window.__pearDebugBackView = () =>") + 4000);
+                           APPSRC.indexOf("window.__pearDebugBackView = () =>") + 6000);
   check("the diagnostic reports the back's provenance, not just READY",
     /const backSource = \(activeItem && activeItem\.backSource\)/.test(dbg) &&
     /source:", backSource/.test(dbg),
@@ -287,7 +290,25 @@ console.log("\n── READY IS NOT PROOF THE CATALOG REAR PHOTO IS IN PLAY ─�
   check("...but does not flag a generated back on a genuine single-photo product",
     /generated rear - expected for a single-photo product/.test(dbg));
   check("...and returns the provenance so a script can assert on it, not only log it",
-    /return \{ \.\.\.r, backSource, synthetic, suspicious \};/.test(dbg));
+    /return \{ \.\.\.r, backSource, synthetic, suspicious, plainBack \};/.test(dbg));
+
+  /* ── THE OTHER ROUTE TO A SMOOTH REAR ────────────────────────────────────────────
+     `suspicious` only covers a SYNTHETIC back. A real catalog rear photo whose
+     has_graphic verdict came back false reaches PLAIN_BACK_ANCHOR by a completely
+     different path, and every field this diagnostic printed before read healthy while
+     the room told Decart the rear was smooth unbroken fabric. backIsPlain is the only
+     field that separates the two renders, so it has to be reported and returned. */
+  check("...and reports the PLAIN_BACK_ANCHOR verdict, not only the asset's provenance",
+    /const plainBack = activeItem && typeof activeItem\.backIsPlain === "boolean"/.test(dbg) &&
+    /plain :", plainBack === null \? "not-asked/.test(dbg),
+    "a real rear photo classified has_graphic:false ships the plain anchor with a healthy source");
+  check("...and distinguishes 'nobody asked' from a real 'false' verdict",
+    /\? activeItem\.backIsPlain : null;/.test(dbg),
+    "undefined must not collapse into false - see the assignment in app.js");
+  check("...and warns when the plain anchor is active over a REAL rear photo",
+    /PLAIN_BACK_ANCHOR IS ACTIVE OVER A REAL REAR PHOTO/.test(dbg) &&
+    /plainBack === true && !synthetic/.test(dbg),
+    "a generated rear is plain by construction; the warning is for the catalog-photo case");
 }
 
 console.log(fails === 0 ? "\nback-view-diagnostic: OK" : `\nback-view-diagnostic: ${fails} FAILED`);

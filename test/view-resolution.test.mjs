@@ -13,9 +13,9 @@ const start = src.indexOf("/* Resizer endpoints keep the REAL asset");
 const end = src.indexOf("/* POST /api/classify-images");
 const mod = await import("data:text/javascript," + encodeURIComponent(
   "const PRESENTATION_PARAMS = new Set(['width','height','w','h','size','quality','q','dpr','format','fm','crop','fit','scale','v','ver','version','t','cache','_']);\n" +
-  src.slice(start, end) + "\nexport { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON, resolveBackIsPlain, isStaleClassification };"
+  src.slice(start, end) + "\nexport { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON, resolveBackIsPlain, isStaleClassification, dedupeImageUrls, domHintBackRecord, sameImage };"
 ));
-const { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON, resolveBackIsPlain, isStaleClassification } = mod;
+const { resolveGarmentViews, validateBackCandidate, normalizeOcr, BACK_INVALID_REASON, resolveBackIsPlain, isStaleClassification, dedupeImageUrls, domHintBackRecord, sameImage } = mod;
 
 let fails = 0;
 function eq(got, want, label) {
@@ -166,6 +166,75 @@ is(normalizeOcr("BE YOUR OWN, Healer -- WORLDWIDE!"), normalizeOcr("BE YOUR OWN 
    "punctuation and runs of whitespace are not evidence of a different print");
 is(normalizeOcr(null), "", "a missing transcription normalises to '' and therefore abstains");
 is(normalizeOcr("TEAM 23") === normalizeOcr("TEAM 32"), false, "genuinely different prints stay different");
+
+/* ── §DOM-HINT IDENTITY: data-pear-back must match by PHOTO, not by spelling ─────────
+   The handler used `url === scrapedBack`. data-pear-back arrives as the merchant typed
+   it and the gallery list is built separately, so on a real CDN the two differ - and a
+   miss sent the merchant-named rear photo to Gemini, whose verdict then ran the OCR veto
+   and has_graphic against it. Reported shape: a COVE tee whose back reads "COVE" like its
+   front. These tests replay the handler's per-URL loop with a Gemini verdict that WOULD
+   veto, so a match is proven by the veto never getting a record to read. */
+console.log("\n── §DOM-HINT IDENTITY: data-pear-back matches by photo, not by spelling ──");
+{
+  const FRONT     = "https://cdn.shopify.com/s/files/1/cove-front.jpg";
+  const GALLERY_B = "https://cdn.shopify.com/s/files/1/cove-back_800x.jpg?v=123";  // gallery spelling
+  const MARKED_B  = "https://cdn.shopify.com/s/files/1/cove-back.jpg";             // data-pear-back
+
+  is(!!domHintBackRecord(GALLERY_B, MARKED_B), true,
+     "REGRESSION: a size suffix + cache-buster on the gallery copy still matches data-pear-back");
+  is(domHintBackRecord(FRONT, MARKED_B), null, "a different photo is not the marked back");
+  is(domHintBackRecord(GALLERY_B, ""), null, "no markup, no hint - the photo goes to the classifier");
+
+  const hint = domHintBackRecord(GALLERY_B, MARKED_B);
+  is(hint.source, "dom_hint", "the hint is labelled dom_hint, so no gemini-only veto applies to it");
+  is(hint.text_ocr, null, "it carries no transcription - the OCR veto has nothing to compare");
+  is("is_true_back_view" in hint || "has_graphic" in hint, false,
+     "is_true_back_view and has_graphic are ABSENT, not false - the model was never asked");
+
+  /* Replay the handler loop: a hinted URL skips the model; every other URL gets the
+     verdict Gemini "returned". The back's verdict is built to trip BOTH failure modes. */
+  const gemini = {
+    [FRONT]:     { view: "front", source: "gemini", text_ocr: "COVE", has_graphic: true },
+    [GALLERY_B]: { view: "back",  source: "gemini", text_ocr: "COVE", has_graphic: false, is_true_back_view: true },
+  };
+  const HINT = domHintBackRecord(MARKED_B, MARKED_B);
+  const replay = (matches) => {
+    const images = dedupeImageUrls([FRONT, GALLERY_B]);
+    let modelCalls = 0;
+    const records = images.map((u) => {
+      if (matches(u)) return HINT;
+      modelCalls++;
+      return gemini[u];
+    });
+    const views = resolveGarmentViews({ images, records, scrapedFront: FRONT, scrapedBack: MARKED_B });
+    const backIdx = views.back ? images.findIndex((u) => sameImage(u, views.back)) : -1;
+    const plain = resolveBackIsPlain({ back: views.back, back_source: views.back_source,
+                                       backRecord: backIdx !== -1 ? records[backIdx] : null });
+    return { modelCalls, back_source: views.back_source, plain };
+  };
+
+  const fixed = replay((u) => !!domHintBackRecord(u, MARKED_B));
+  is(fixed.modelCalls, 1, "the marked back bypasses Gemini - only the front is classified");
+  is(fixed.back_source, "dom", "...so the OCR veto cannot reject it: the back is kept, source dom");
+  is(fixed.plain, null, "...and has_graphic is never read: back_is_plain stays null, rear-print anchor");
+
+  const raw = replay((u) => u === MARKED_B);   // the old `url === scrapedBack`
+  is(raw.modelCalls === 2 && raw.back_source !== "dom", true,
+     "CONTROL: the raw compare missed, classified the marked back, and let the veto drop it");
+}
+
+/* ── dedupeImageUrls() - one entry per photograph ───────────────────────────────── */
+eq(dedupeImageUrls([F, F.replace(".jpg", "_800x.jpg") + "?v=9", BK]),
+   [F.replace(".jpg", "_800x.jpg") + "?v=9", BK],
+   "size-suffix spellings of one photo collapse - first position, last spelling, as before");
+eq(dedupeImageUrls([
+     "https://shop.test/_next/image?url=%2Fp%2Fcove-front.jpg&w=800",
+     "https://shop.test/_next/image?url=%2Fp%2Fcove-back.jpg&w=800",
+   ]).length, 2,
+   "REGRESSION: two photos behind one resizer path stay TWO - split('?') made them one");
+eq(dedupeImageUrls(["https://shop.test/img.php?id=1", "https://shop.test/img.php?id=2"]).length, 2,
+   "identity query params keep photos distinct");
+eq(dedupeImageUrls([BK, F]), [BK, F], "order is preserved - positional meaning is not added or removed");
 
 console.log("\n── §PLAIN-REAR: the question is GRAPHICS, never lettering ──");
 {

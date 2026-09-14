@@ -227,6 +227,69 @@ async function getCachedClassification(imageUrl) {
 
 const MISSING_COLUMN_RE = /column .* does not exist|Could not find the/i;
 
+let _v14Warned = false;
+function warnV14Once() {
+  if (_v14Warned) return;
+  _v14Warned = true;
+  console.warn("  ⚠ garment_cache variant_key absent - run archive/supabase_setup_v14.sql; photos are cached without a colourway until then");
+}
+
+/* ── COLOURWAY KEY - LOCKSTEP with widget/pear-widget.js sizeOptionIndexOf/variantKeyOf ──
+   The fitting-room server recovers a rear photo by `variant_key`, and the widget computes
+   that key from product.js at click time. A scanner-filed photo is only ever recovered if
+   this side produces the byte-identical string, so both copies are tested against one
+   fixture in test/garment-cache-access.test.mjs. See archive/supabase_setup_v14.sql for
+   why the key drops the SIZE option instead of using the raw variant id. */
+function sizeOptionIndexOf(options) {
+  const opts = options || [];
+  for (let j = 0; j < opts.length; j++) {
+    const name = String((opts[j] && (opts[j].name != null ? opts[j].name : opts[j])) || "").trim().toLowerCase();
+    if (name === "size" || name === "מידה") return j;
+  }
+  return -1;
+}
+
+function variantKeyOf(productId, variant, sizeOptionIndex) {
+  if (productId == null || productId === "" || !variant) return "";
+  const raw = [variant.option1, variant.option2, variant.option3];
+  const parts = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (i === sizeOptionIndex || raw[i] == null) continue;
+    parts.push(String(raw[i]).trim().toLowerCase().replace(/\s+/g, " "));
+  }
+  return String(productId) + ":" + parts.join("/");
+}
+
+/* Which colourway a catalog photo belongs to, or "" when that cannot be known.
+     · ONE colourway across all variants (sizes only) - every photo is that look, the rear
+       photo included, so every photo is tagged.
+     · SEVERAL colourways - only a photo Shopify ASSIGNS (image.variant_ids) to variants that
+       all share one colourway. An unassigned photo on a multi-colour product could be any
+       colour's back, so it is left unattributed: a miss for recovery, never a wrong colour.
+   @returns {string} */
+function variantKeyForImage(product, image) {
+  if (!product || product.id == null) return "";
+  const variants = product.variants || [];
+  const sizeIdx = sizeOptionIndexOf(product.options);
+  const all = new Set(variants.map((v) => variantKeyOf(product.id, v, sizeIdx)).filter(Boolean));
+  if (all.size === 1) return [...all][0];
+  const ids = new Set(((image && image.variant_ids) || []).map(String));
+  if (!ids.size) return "";
+  const own = new Set(variants.filter((v) => ids.has(String(v.id))).map((v) => variantKeyOf(product.id, v, sizeIdx)));
+  return own.size === 1 ? [...own][0] : "";
+}
+
+/* File an ALREADY-CACHED photo under its colourway. classifyAndTally() skips the write for
+   a cache hit, so without this a catalog scanned before V14 would never gain a single key. */
+async function tagVariantKey(imageUrl, variantKey) {
+  if (!variantKey) return;
+  const { error } = await supabase.from("garment_cache")
+    .update({ variant_key: variantKey })
+    .eq("canonical_url", canonicalImageUrl(imageUrl));
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) warnV14Once();
+  else if (error) console.warn(`  ⚠ garment_cache colourway tag failed: ${error.message}`);
+}
+
 /* Writes the verdict WITH its provenance (see archive/supabase_setup_v8.sql for what
    each `source` value means) and the kids/adult verdict added in v11
    (archive/supabase_setup_v11.sql). Degrades one migration tier at a time - v11
@@ -234,6 +297,9 @@ const MISSING_COLUMN_RE = /column .* does not exist|Could not find the/i;
    bare v5 shape - so this scanner is safe to deploy before either SQL has run. */
 async function saveClassification(imageUrl, classification, meta = {}) {
   const base = { image_url: imageUrl, classification };
+  /* v14, and only when attributed. Never written as null: an unattributed re-scan must
+     not erase a colourway the fitting-room server already filed for this photo. */
+  const v14Fields = meta.variantKey ? { variant_key: meta.variantKey } : {};
   const canonical = { canonical_url: canonicalImageUrl(imageUrl) };   // one row per PHOTOGRAPH, not per URL
   const v8Fields = {
     confidence: Number.isFinite(meta.confidence) ? meta.confidence : null,
@@ -247,7 +313,16 @@ async function saveClassification(imageUrl, classification, meta = {}) {
   };
 
   let { error } = await supabase.from("garment_cache")
-    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields }], { onConflict: "canonical_url" });
+    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v14Fields }], { onConflict: "canonical_url" });
+  /* A database without V14 must lose ONLY variant_key. Falling into the tier chain below
+     instead would read the missing column as "v11 absent", then "v8 absent", and end up
+     writing the bare v5 row - discarding confidence, source and age_group for every image
+     of a scan run before V14 was applied. */
+  if (error && meta.variantKey && MISSING_COLUMN_RE.test(error.message || "") && /variant_key/.test(error.message || "")) {
+    warnV14Once();
+    ({ error } = await supabase.from("garment_cache")
+      .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields }], { onConflict: "canonical_url" }));
+  }
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("  ⚠ garment_cache v11 columns absent - run archive/supabase_setup_v11.sql for kids/adult classification");
     ({ error } = await supabase.from("garment_cache")
@@ -482,6 +557,7 @@ async function scanShopify(baseUrl) {
             // ZERO back images" is a one-query answer (D1 in supabase_setup_v8.sql)
             // instead of a regex over CDN filenames.
             productUrl: product.handle ? `${baseUrl}/products/${product.handle}` : null,
+            variantKey: variantKeyForImage(product, image),   // "" when not attributable
           });
         }
       }
@@ -497,10 +573,11 @@ async function scanShopify(baseUrl) {
 
 /* ── classification tally (shared by both crawl paths) ──────────────────── */
 
-async function classifyAndTally(imageUrl, index, counters, total, productUrl) {
+async function classifyAndTally(imageUrl, index, counters, total, productUrl, variantKey) {
   try {
     let classification = await getCachedClassification(imageUrl);
     let cached = !!classification;
+    if (cached && variantKey) await tagVariantKey(imageUrl, variantKey);
 
     if (!classification) {
       console.log(`Classifying image ${index + 1}/${total}...`);
@@ -522,6 +599,7 @@ async function classifyAndTally(imageUrl, index, counters, total, productUrl) {
         source: rec.view === "uncertain" ? "uncertain" : "gemini",
         cue: rec.cue,
         productUrl,
+        variantKey,
         ageGroup: rec.age_group,
         ageGroupConfidence: rec.age_group_confidence,
       });
@@ -587,6 +665,7 @@ async function main() {
      product grouping, so those rows keep product_url NULL and fall back to the
      CDN-id grouping in D1b. */
   const productUrlByImage = new Map();
+  const variantKeyByImage = new Map();   // image URL → colourway key (Shopify path only)
   const homeHtml = await fetchHtml(storeUrl);
   const isShopify = homeHtml.includes("Shopify") || homeHtml.includes("shopify");
 
@@ -609,6 +688,7 @@ async function main() {
       seen.add(abs);
       images.push(abs);
       if (item.productUrl) productUrlByImage.set(abs, item.productUrl);
+      if (item.variantKey) variantKeyByImage.set(abs, item.variantKey);
     }
     console.log(`Found ${productCount} products with ${images.length} images`);
   } else {
@@ -620,7 +700,8 @@ async function main() {
 
   console.log("Classifying...");
   for (let j = 0; j < images.length; j++) {
-    await classifyAndTally(images[j], j, counters, images.length, productUrlByImage.get(images[j]));
+    await classifyAndTally(images[j], j, counters, images.length, productUrlByImage.get(images[j]),
+      variantKeyByImage.get(images[j]));
   }
 
   console.log(

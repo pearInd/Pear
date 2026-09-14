@@ -251,6 +251,7 @@ const SUITES = [
   ["url-identity", "url-identity.test.mjs"],
   ["url-identity-widget", "url-identity-widget.test.mjs"],
   ["view-resolution", "view-resolution.test.mjs"],
+  ["garment-cache-access", "garment-cache-access.test.mjs"],
   ["composite", "composite.test.mjs"],
   ["widget-dom", "widget-dom.test.mjs"],
   ["widget-combined", "widget-combined.test.mjs"],
