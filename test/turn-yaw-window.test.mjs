@@ -511,7 +511,7 @@ if (orientPredictBack && orientFlipDecision) {
   check("the kill switch is a constant with a ?predict_back=0 override for A/B",
     /const ORIENT_PREDICTIVE_BACK = /.test(SRC) && /get\("predict_back"\) !== "0"/.test(SRC));
   check("the tick feeds the window the READING's timestamp, so dwell is measured on the pose clock",
-    /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null, yawFresh \? _torsoYawAt : Date\.now\(\)\)/.test(watcher));
+    /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null, yawFresh \? _torsoYawAt : Date\.now\(\), _poseTorsoLostAt\)/.test(watcher));
   check("a predictive dispatch clears the pre-turn front streak first, so it cannot count toward withdrawing itself",
     /else if \(predictBack\) \{[\s\S]*?lastVote = null; streak = 0; faceStreak = 0;[\s\S]*?await maybeSwap\("back", true\);/.test(watcher));
   check("...and the pose/re-anchor updates stand aside for it exactly as for a confirmed swap",
@@ -736,6 +736,203 @@ const MEASURED = { front: 0.76, back: -0.68, frontMirrored: 0.78, backMirrored: 
     check("a held profile check still never puts GARMENT_BACK on the wire with the shoulder vote in play",
       glance.everBack === false, JSON.stringify(glance));
   }
+}
+
+console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND THE SIDE-VIEW PASS ──");
+/* THE REPORT (build 129): turning away, the back graphic lands about a second late with the front's
+   "PEAK" under it; completing the 360, the front does not come back in time, or at all. §2 and §9
+   modelled the shoulder vote from the true angle on every tick, with the torso readable straight
+   through edge-on. The pose loop does not publish that: an unreadable torso publishes NOTHING, so
+   the shoulder order and the yaw keep their last readable value and count as fresh for
+   ORIENT_YAW_FRESH_MS. Across the band where MediaPipe loses the far shoulder (§3), the stale order
+   votes for the locked side, closing the window with its peak pinned at the last readable |yaw|,
+   and the loss is never inferred because the stale yaw is still "fresh". This section models THAT
+   coupling, through the real window and decision. See ORIENT_POSE_PASS. */
+{
+  const v0 = SRC.indexOf("function poseFacingVote(");
+  const poseFacingVote = v0 === -1 ? null : new Function("ORIENT_POSE_FACING", "ORIENT_POSE_FACING_MARGIN", "ORIENT_YAW_FRESH_MS",
+    SRC.slice(v0, SRC.indexOf("\n}\n", v0) + 2) + "\nreturn poseFacingVote;")(true, numOr("ORIENT_POSE_FACING_MARGIN"), FRESH_MS);
+  const POSE_F = numOr("ORIENT_POSE_FLIP_FRAMES");
+
+  if (makeTurnYawWindow) {
+    const mk = (steps) => { const w = makeTurnYawWindow(); let r; for (const s of steps) r = w.observe(...s); return { w, r }; };
+    const turned = mk([["front", "front", 5, 0], [null, "front", 40, 240], [null, "front", 70, 480], ["back", "front", 50, 720]]);
+    check("a readable turn past ORIENT_YAW_TURN_DEG that has fallen ORIENT_PREDICT_DESCENT_DEG has passed the side view",
+      turned.r.passed === true && turned.r.corroborates === false, JSON.stringify(turned.r));
+    const parked = mk([["front", "front", 5, 0], [null, "front", 70, 240], [null, "front", 72, 480], ["back", "front", 70, 720]]);
+    check("...but parked at edge-on it has not - no descent, whatever the shoulders misread",
+      parked.r.passed === false, JSON.stringify(parked.r));
+    const head = mk([["back", "back", 3, 0], ["front", "back", 8, 240], ["front", "back", 10, 480]]);
+    check("...and a head turned over the shoulder never raises the torso to a turn",
+      head.r.passed === false, JSON.stringify(head.r));
+    const gap = mk([["front", "front", 38, 0, 0], ["front", "front", 38, 0, 240], ["front", "front", 38, 0, 480], ["back", "front", 20, 720, 480]]);
+    check("THE GAP: stale agreeing votes pinned the readable peak at 38 - an unreadable torso since then plus the descent is the pass",
+      gap.r.passed === true && gap.w.lostInTurn === true && gap.r.corroborates === false, JSON.stringify({ r: gap.r, lost: gap.w.lostInTurn }));
+    const twist = mk([["front", "front", 35, 0, 0], [null, "front", 35, 0, 240], ["front", "front", 36, 480, 240], ["back", "front", 20, 720, 240]]);
+    check("...while a dropped frame during a twist is erased by the next readable agreeing reading",
+      twist.r.passed === false && twist.w.lostInTurn === false, JSON.stringify({ r: twist.r, lost: twist.w.lostInTurn }));
+    const lost90 = mk([["front", "front", 5, 0], [null, "front", 60, 240], [null, "front", null, 900, 900], ["back", "front", 60, 1000, 900]]);
+    check("...and the descent is measured from the READABLE peak, never from edgeLost's 90 (a compressed edge-on reads under 90)",
+      lost90.w.edgeLost === true && lost90.r.swing === 30 && lost90.r.passed === false, JSON.stringify({ r: lost90.r, lost: lost90.w.edgeLost }));
+  }
+
+  if (orientFlipDecision) {
+    const base = { acquiring: false, needsSwitch: true, held: 0, faceStreak: 0, yawCorroborates: false, turnPassed: true };
+    const toBack = orientFlipDecision({ ...base, lock: "front", lastVote: "back", streak: POSE_F, poseStreak: POSE_F });
+    const toFront = orientFlipDecision({ ...base, lock: "back", lastVote: "front", streak: POSE_F, poseStreak: POSE_F });
+    check("the pass corroborates the pose flip both ways on ORIENT_POSE_FLIP_FRAMES shoulder votes, and marks it early",
+      toBack.confirmed && toBack.poseFlip && toBack.early && toFront.confirmed && toFront.early, JSON.stringify({ toBack, toFront }));
+    const one = orientFlipDecision({ ...base, lock: "front", lastVote: "back", streak: 1, poseStreak: 1 });
+    check("...not on one shoulder vote", one.confirmed === false);
+    const skin = orientFlipDecision({ ...base, lock: "front", lastVote: "back", streak: CORR_F, poseStreak: 0 });
+    check("...and never for the corroborated bar or skin votes - that bar keeps the 45-degree swing",
+      skin.confirmed === false && skin.flipBar === LOCK_F, JSON.stringify(skin));
+    const face = orientFlipDecision({ ...base, lock: "back", lastVote: "front", streak: FACE_F, faceStreak: FACE_F, poseStreak: 0 });
+    check("...nor for the face return", face.confirmed === false && face.faceReturn === false, JSON.stringify(face));
+    const swung = orientFlipDecision({ ...base, yawCorroborates: true, lock: "front", lastVote: "back", streak: POSE_F, poseStreak: POSE_F });
+    const barred = orientFlipDecision({ ...base, lock: "front", lastVote: "back", streak: LOCK_F, poseStreak: LOCK_F });
+    check("a flip the 45-degree swing or the full bar would have confirmed anyway is not early",
+      swung.confirmed && !swung.early && barred.confirmed && !barred.early, JSON.stringify({ swung, barred }));
+  }
+
+  if (makeTurnYawWindow && orientFlipDecision && orientPredictBack && poseFacingVote) {
+    /* The tick, as createOrientationWatcher() runs it on a browser with no FaceDetector: the pose loop
+       every 240ms publishes the shoulder order and yaw from a readable torso and only RECORDS an
+       unreadable one; the watcher votes every ORIENT_SAMPLE_MS (skin abstains); maybeSwap() is awaited
+       and holds every swap to the cooldown except withdrawing a predictive/early BACK. `readableTo` is
+       the |yaw| past which the torso is unreadable; `noise` perturbs the shoulder order past 70 degrees,
+       where BlazePose's labels are weakest; `dropout` loses random frames at any angle. */
+    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700 }) {
+      let s = seed; const rand = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+      const facing = (deg) => { const m = ((deg % 360) + 360) % 360; return m > 180 ? 360 - m : m; };
+      const seg = script || [[0, 1000], [360, (360 / speed) * 1000], [360, 3000]];
+      const angleAt = (t) => { let from = 0, t0 = 0; for (const [to, dur] of seg) { if (t <= t0 + dur) return from + (to - from) * ((t - t0) / dur); from = to; t0 += dur; } return seg[seg.length - 1][0]; };
+      const total = seg.reduce((a, [, d]) => a + d, 0);
+      const win = makeTurnYawWindow();
+      let lock = "front", lastVote = null, streak = 0, streakSince = 0, poseStreak = 0, poseSide = null;
+      let lastSwapAt = -Infinity, lastSwapPredictive = false, busyUntil = 0;
+      let sep = null, sepAt = 0, yaw = null, yawAt = 0, lostAt = 0, nextPub = 0, landed = "front";
+      const sent = [], pending = []; let backOnFront = 0, frontOnBack = 0;
+      for (let t = 0; t <= total; t += 10) {
+        while (nextPub <= t) {
+          const phi = facing(angleAt(nextPub)), y = 90 - Math.abs(90 - phi);
+          if (y <= readableTo && !(dropout && rand() < dropout)) {
+            sep = 0.72 * Math.cos((phi * Math.PI) / 180) + (noise && y > 70 ? (rand() * 2 - 1) * noise : 0);
+            sepAt = nextPub; yaw = k * y; yawAt = nextPub;
+          } else lostAt = nextPub;
+          nextPub += 240;
+        }
+        while (pending.length && pending[0].at <= t) landed = pending.shift().side;
+        if (t % SAMPLE_MS !== 0) continue;
+        const phiNow = facing(angleAt(t));
+        if (landed === "back" && phiNow < 90) backOnFront += SAMPLE_MS;
+        if (landed === "front" && phiNow > 90) frontOnBack += SAMPLE_MS;
+        if (t < busyUntil) continue;
+        const vote = poseFacingVote({ sep, at: sepAt, now: t });
+        if (vote) {
+          if (vote === lastVote) streak++; else { lastVote = vote; streak = 1; streakSince = t; }
+          poseStreak = vote === poseSide ? poseStreak + 1 : 1; poseSide = vote;
+        }
+        const fresh = yaw !== null && t - yawAt <= FRESH_MS;
+        const tw = win.observe(vote, lock, fresh ? yaw : null, fresh ? yawAt : t, lostAt);
+        const d = orientFlipDecision({ acquiring: false, needsSwitch: !!lastVote && lastVote !== lock, streak,
+          held: lastVote ? t - streakSince : 0, yawCorroborates: tw.corroborates, lock, lastVote, faceStreak: 0, poseStreak,
+          turnPassed: pass && tw.passed });
+        const predict = !d.confirmed && orientPredictBack({ acquiring: false, lock, win, yawAbs: fresh ? yaw : null, now: t });
+        const swap = (side, predictive) => {
+          if (t - lastSwapAt < COOLDOWN && !(side === "front" && lastSwapPredictive)) return;
+          lock = side; lastSwapAt = t; lastSwapPredictive = predictive; busyUntil = t + swapMs;
+          pending.push({ at: t + swapMs, side }); sent.push({ side, body: Math.round(angleAt(t)) });
+        };
+        if (d.confirmed && d.early && lastVote === "back") swap("back", true);
+        else if (d.confirmed) swap(lastVote, false);
+        else if (predict) { lastVote = null; streak = 0; poseStreak = 0; poseSide = null; swap("back", true); }
+      }
+      const at = (side) => { const e = sent.find((x, i) => x.side === side && (side === "back" || i > 0)); return e ? e.body : null; };
+      return { sent, backAt: at("back"), frontAt: at("front"), backOnFront, frontOnBack, final: lock,
+               completed: sent.some((x) => x.side === "back") && lock === "front" && sent[sent.length - 1].side === "front" };
+    }
+
+    const grid = [];
+    for (const speed of [60, 90, 120, 150]) for (const k of [1, 0.75, 0.6]) for (const readableTo of [90, 70, 60, 50]) {
+      grid.push({ p: { speed, k, readableTo }, off: simulateGap({ speed, k, readableTo, pass: false }), on: simulateGap({ speed, k, readableTo, pass: true }) });
+    }
+    const brokeOff = grid.filter(({ off }) => !off.completed), brokeOn = grid.filter(({ on }) => !on.completed);
+    for (const { p, off, on } of brokeOff) {
+      console.log(`        ${p.speed}°/s k=${p.k} torso readable to ${p.readableTo}°: ` +
+        `build 129 ${off.sent.map((x) => `${x.side.toUpperCase()}@${x.body}°`).join(" -> ") || "NO SWAP"}  |  now ${on.sent.map((x) => `${x.side.toUpperCase()}@${x.body}°`).join(" -> ")}`);
+    }
+    check("THE BUG, modelled: with the stale shoulder order across the gap, some full 360s never swap or never come back to FRONT",
+      brokeOff.length > 0, `${brokeOff.length}/${grid.length}`);
+    check("THE FIX: with the side-view pass every modelled 360 sends BACK and ends on FRONT",
+      brokeOn.length === 0, brokeOn.map(({ p, on }) => JSON.stringify({ p, sent: on.sent })).join(" "));
+    const both = grid.filter(({ off }) => off.completed);
+    const later = both.filter(({ off, on }) => on.backAt > off.backAt || on.frontAt > off.frontAt);
+    const earlier = both.filter(({ off, on }) => on.backAt < off.backAt || on.frontAt < off.frontAt);
+    console.log(`        ${brokeOff.length}/${grid.length} profiles fixed; of the ${both.length} that already completed, ${earlier.length} dispatch earlier, ${later.length} later`);
+    check("...and no turn that already completed dispatches either side at a later body angle",
+      later.length === 0, later.map(({ p, off, on }) => JSON.stringify({ p, off: off.sent, on: on.sent })).join(" "));
+
+    /* MUST NOT REGRESS - motions that are not a turn. BACK must never go on the wire for them (a glance
+       past 120 is the documented residual cost of predictive BACK, so it may - but no longer than
+       before); from a BACK lock, a side check of the back must never put FRONT on. */
+    const motions = {
+      "held profile 1.2s": [[0, 1000], [90, 1000], [90, 1200], [0, 1000], [0, 2000]],
+      "profile 0.5s": [[0, 1000], [90, 1000], [90, 500], [0, 1000], [0, 2000]],
+      "glance to 100°": [[0, 1000], [100, 900], [0, 900], [0, 2500]],
+      "twist to 38°": [[0, 1000], [38, 500], [0, 500], [0, 2500]],
+      "three twists to 60°": [[0, 1000], [60, 400], [0, 400], [60, 400], [0, 400], [60, 400], [0, 400], [0, 2000]],
+    };
+    const backCheck = [[0, 1000], [180, 2000], [180, 1500], [270, 1000], [270, 600], [180, 1000], [180, 2000]];
+    const glance120 = [[0, 1000], [120, 900], [0, 900], [0, 2500]];
+    const badMotion = [], badBackCheck = [], glances = [];
+    for (const [dropout, noise] of [[0, 0], [0.15, 0], [0, 0.4], [0.15, 0.4], [0.3, 0.6]]) for (const readableTo of [90, 60]) for (const k of [1, 0.75]) {
+      let worstOff = 0, worstOn = 0;
+      for (let rep = 0; rep < 10; rep++) {
+        const o = { readableTo, k, dropout, noise, seed: 7 + rep * 101 };
+        for (const [name, script] of Object.entries(motions)) {
+          const r = simulateGap({ ...o, script });
+          if (r.sent.length) badMotion.push({ name, ...o, sent: r.sent });
+        }
+        const bc = simulateGap({ ...o, script: backCheck });
+        if (bc.sent.some((x, i) => i > 0 && x.side === "front")) badBackCheck.push({ ...o, sent: bc.sent });
+        worstOff = Math.max(worstOff, simulateGap({ ...o, script: glance120, pass: false }).backOnFront);
+        worstOn = Math.max(worstOn, simulateGap({ ...o, script: glance120 }).backOnFront);
+      }
+      glances.push({ readableTo, k, dropout, noise, worstOff, worstOn });
+    }
+    check("a held or brief profile check, a glance to 100 degrees and posing twists never put BACK on the wire - dropped frames and edge-on label noise included",
+      badMotion.length === 0, JSON.stringify(badMotion.slice(0, 3)));
+    check("facing away, checking the back from the side never puts FRONT on the wire",
+      badBackCheck.length === 0, JSON.stringify(badBackCheck.slice(0, 3)));
+    /* A glance to 120 degrees crosses edge-on into the back hemisphere, so BACK going on for it is
+       predictive BACK's documented residual cost, not a new one. What the pass must not do is make that
+       BACK STICK: sent as an ordinary confirmed flip it waits out ORIENT_COOLDOWN_MS on the chest
+       (modelled 1500-1750ms). Sent withdrawable it matches build 129 in every setting but the harshest
+       (30% dropped frames, +/-0.6 edge-on label noise), where two noisy back readings qualified on one
+       seed that predictive BACK did not fire on - one sample tick longer, stated rather than hidden. */
+    const worse = glances.filter((g) => g.worstOn > g.worstOff);
+    for (const g of worse) console.log(`        glance to 120°, torso readable to ${g.readableTo}° k=${g.k} dropout ${g.dropout} noise ±${g.noise}: BACK on the chest ${g.worstOff}ms -> ${g.worstOn}ms`);
+    check("an early BACK is withdrawable: a glance to 120 degrees never leaves BACK on the chest for the cooldown",
+      glances.every((g) => g.worstOn < COOLDOWN), JSON.stringify(glances.filter((g) => g.worstOn >= COOLDOWN)));
+    check("...and never more than one sample tick longer than build 129, whatever the noise",
+      worse.every((g) => g.worstOn - g.worstOff <= SAMPLE_MS), JSON.stringify(worse));
+  }
+
+  const w0 = SRC.indexOf("function createOrientationWatcher()");
+  const watcher = SRC.slice(w0, SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0));
+  const p0 = SRC.indexOf("function startPresenceWatcher");
+  const pose = SRC.slice(p0, SRC.indexOf("/* ── end body-presence gate ── */", p0));
+  check("the pose loop records an inference that could not read the torso, beside the shoulder-order publish",
+    /if \(facingSep !== null\) \{ _poseFacingSep = facingSep; _poseFacingAt = now; \}\s*\n\s*else _poseTorsoLostAt = now;/.test(pose));
+  check("the tick hands that time to the window, and the window's pass to the decision behind the ?pose_pass=0 kill switch",
+    /yawWindow\.observe\([^;]*, _poseTorsoLostAt\);/.test(watcher) &&
+    /turnPassed: ORIENT_POSE_PASS && turnYaw\.passed,/.test(watcher) &&
+    /const ORIENT_POSE_PASS = /.test(SRC) && /get\("pose_pass"\) !== "0"/.test(SRC));
+  check("an early BACK is sent as a withdrawable one, ahead of the unchanged confirmed-swap line",
+    /if \(dualView && confirmed && early && lastVote === "back"\) await maybeSwap\("back", true\);\s*\n\s*else if \(dualView && confirmed\) await maybeSwap\(lastVote\);/.test(watcher));
+  check("the debug line says whether the torso was lost in the turn and whether it passed the side view",
+    /torso lost \$\{yawWindow\.lostInTurn/.test(watcher) && /passed \$\{turnYaw\.passed/.test(watcher) && /POSE-FLIP\(pass\)/.test(watcher));
 }
 
 console.log(fails === 0 ? "\nturn-yaw-window: OK" : `\nturn-yaw-window: ${fails} FAILED`);

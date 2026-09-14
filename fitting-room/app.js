@@ -5787,6 +5787,43 @@ const ORIENT_FACE_RETURN_FRAMES  = 2;    // face DETECTIONS needed for a corrobo
    the shoulder order is a torso signal, and a head turned over the shoulder must not flip anything
    before ORIENT_LOCK_FRAMES. */
 const ORIENT_POSE_FLIP_FRAMES    = 2;    // shoulder-order votes needed for a corroborated flip, either way
+/* ── THE SIDE-VIEW PASS - "the back graphic comes a second late, and after the 360 the front never
+   comes back" (build 129) ─────────────────────────────────────────────────────────────────────
+   THE CAUSE IS THE GAP THE SHOULDER VOTE READS ACROSS. MediaPipe loses the far shoulder near
+   edge-on (see makeTurnYawWindow's EDGE-ON GAP), and the pose loop publishes a shoulder order and a
+   yaw only from a readable torso - so through that band both keep their LAST readable value, and
+   both count as fresh for ORIENT_YAW_FRESH_MS (600ms). A turn crosses the band faster than that.
+   Every tick in it the stale shoulder order votes for the side ALREADY locked, which closes the
+   window and pins its peak at the last readable |yaw|; the stale yaw is "fresh", so the edge-on
+   loss is never inferred either. The peak then sits under ORIENT_YAW_TURN_DEG + the 45-degree
+   swing the pose flip needs, predictive BACK never reaches ORIENT_EDGE_ON_DEG, and the flip waits
+   for ORIENT_LOCK_FRAMES - or, on a fast turn, never happens at all. turn-yaw-window §2/§9 modelled
+   the shoulder vote with the torso readable straight through edge-on, which is why it passed.
+   MODELLED (turn-yaw-window §10, the real window and decision, shoulder readings stale across an
+   unreadable band): 22 of 48 full-360 profiles (60-150 deg/s, depth 0.6-1, torso readable to 50-90
+   degrees) never swapped at all - the back never rendered. With the pass all 48 send BACK and come
+   back to FRONT; of the 26 that already did, 10 dispatch earlier and none later.
+   THE PASS. Yaw magnitude cannot tell "parked edge-on with a dropped frame" from "went through
+   edge-on during the gap" - treating any dropout as edge-on puts BACK on a held profile check. What
+   separates them is DESCENT: after a real pass |yaw| falls away from the peak; parked, it does not.
+   So a shoulder vote for the other side is also corroborated when the window saw a real turn - a
+   readable peak past ORIENT_YAW_TURN_DEG, or the torso reported unreadable since the reading that
+   last agreed with the lock - AND |yaw| has since fallen ORIENT_PREDICT_DESCENT_DEG from that
+   readable peak (never from an assumed 90). Two shoulder votes are still required
+   (ORIENT_POSE_FLIP_FRAMES), a head over the shoulder still moves no torso, and the FaceDetector and
+   skin engines never reach it (it only corroborates the pose flip).
+   A BACK confirmed on the pass alone goes out at the stage of the turn a predictive BACK does, so it
+   is withdrawable the same way (maybeSwap's `withdrawing`) - without that, a glance to 120 degrees
+   left BACK on the chest for the full ORIENT_COOLDOWN_MS. THE RESIDUAL COST, stated: under the
+   model's harshest noise (30% dropped frames, +/-0.6 edge-on label noise) one 120-degree glance sent
+   an early BACK that predictive BACK did not, on the chest 250ms longer than build 129's worst.
+   Held and brief profile checks, 100-degree glances, posing twists and a side check of the back put
+   nothing on the wire at any noise level.
+   Still a model: the band's width on a real webcam is what ?orient_debug=1 prints (`torso lost`,
+   `passed`). ?pose_pass=0 turns it off for an A/B. */
+const ORIENT_POSE_PASS = (() => {
+  try { return new URLSearchParams(location.search).get("pose_pass") !== "0"; } catch (_) { return true; }
+})();
 
 /* ── PREDICTIVE BACK - "the back artwork rendered over PEAK for a second" ─────────────
    REPORTED, from the exported clip: on FRONT -> BACK the back artwork appears over the front's
@@ -5910,6 +5947,10 @@ const ORIENT_POSE_FACING = (() => {
 })();
 let _poseFacingSep = null;   // latest signed shoulder order, + facing the lens, - facing away
 let _poseFacingAt  = 0;
+/* When the pose loop last ran an inference that could NOT read the torso. The two readings above keep
+   their last readable value through such a frame (so the watcher's freshness bar still applies); this
+   is how the turn window learns the torso went missing between two readings - see ORIENT_POSE_PASS. */
+let _poseTorsoLostAt = 0;
 
 /** @param {{landmarks?:Array}|null} result a PoseLandmarker result
  *  @returns {number|null} (L.x - R.x) / torso height for the primary subject, or null */
@@ -5993,34 +6034,42 @@ function poseFacingVote({ enabled = ORIENT_POSE_FACING, sep, at, now }) {
    `edgeAt` is when this turn reached the side view - the first reading at or past edgeOnDeg,
    or, for a torso lost to edge-on, when its last reading was taken - on the clock `at` is
    given in (the pose loop's reading time). orientPredictBack() measures dwell from it.
+   `passed` is the side-view pass (see ORIENT_POSE_PASS): open, a fresh reading, a real turn behind it -
+   the readable peak past turnDeg, or `lostAt` (the pose loop's last unreadable inference) later than
+   the reading that last agreed with the lock - and |yaw| fallen descentDeg from the readable peak.
    @param {number} [turnDeg] the swing that counts as a real torso rotation
    @param {number} [edgeLossDeg] a torso lost past this |yaw| mid-turn was lost to edge-on
    @param {number} [edgeOnDeg] a reading at or past this has reached the side view
+   @param {number} [descentDeg] the fall from the readable peak that shows the torso went through
    @returns {{ readonly peak: number|null, readonly edgeLost: boolean, readonly open: boolean,
-               readonly turning: boolean, readonly edgeAt: number|null,
-               observe(vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number):
-                 { usable: boolean, swing: number, corroborates: boolean } }} */
+               readonly turning: boolean, readonly edgeAt: number|null, readonly lostInTurn: boolean,
+               observe(vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number, lostAt?: number):
+                 { usable: boolean, swing: number, corroborates: boolean, passed: boolean } }} */
 function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE_PROMPT_YAW_SUPPRESS_DEG,
-                           edgeOnDeg = ORIENT_EDGE_ON_DEG) {
+                           edgeOnDeg = ORIENT_EDGE_ON_DEG, descentDeg = ORIENT_PREDICT_DESCENT_DEG) {
   let peak = null;        // highest fresh |yaw| since the last vote that agreed with the lock
   let lastFresh = null;   // the most recent fresh |yaw|, to read a gap against
   let lastFreshAt = 0;    // ...and when it was taken
   let edgeLost = false;   // the torso went unreadable mid-turn past edgeLossDeg
   let edgeAt = null;      // when this turn reached the side view
   let open = false;       // a vote has not agreed with the lock since this turn began
+  let agreedAt = 0;       // the reading time of the last vote that agreed with the lock
+  let lostInTurn = false; // the pose loop could not read the torso after that reading
   return {
     get peak() { return peak; },
     get edgeLost() { return edgeLost; },
     get edgeAt() { return edgeAt; },
     get open() { return open; },
+    get lostInTurn() { return lostInTurn; },
     get turning() { return open && (edgeLost || (peak !== null && peak >= turnDeg)); },
-    observe(vote, lock, yawAbs, at = Date.now()) {
+    observe(vote, lock, yawAbs, at = Date.now(), lostAt = 0) {
       const fresh = yawAbs !== null && Number.isFinite(yawAbs);
       if (vote && vote === lock) {
         peak = fresh ? yawAbs : null;
         edgeLost = false;
         edgeAt = null;
         open = false;
+        agreedAt = at;
       } else {
         open = true;
         if (fresh) {
@@ -6032,10 +6081,17 @@ function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE
         }
       }
       if (fresh) { lastFresh = yawAbs; lastFreshAt = at; }
+      /* Sticky until the next agreeing vote - which is what clears it - so a dropped frame during a
+         pose the shoulders keep voting for (a twist) is erased by the very next readable reading. */
+      lostInTurn = open && lostAt > agreedAt;
       const reference = edgeLost ? 90 : peak;
       const usable = fresh && reference !== null;
       const swing = usable ? Math.max(0, reference - yawAbs) : 0;
-      return { usable, swing, corroborates: swing >= turnDeg };
+      /* Measured from the READABLE peak, never from edgeLost's 90: a compressed edge-on reading is
+         already well under 90, so descent from 90 is what a parked profile with one dropped frame
+         would show. */
+      const passed = open && fresh && peak !== null && (peak >= turnDeg || lostInTurn) && peak - yawAbs >= descentDeg;
+      return { usable, swing, corroborates: swing >= turnDeg, passed };
     },
   };
 }
@@ -6046,8 +6102,11 @@ function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE
    ORIENT_CORROBORATED_FRAMES by a corroborated turn, OR ORIENT_LOCK_MS of agreement; and the
    face return (see ORIENT_FACE_RETURN_FRAMES) - toward FRONT only, only on FaceDetector
    detections, only with the turn corroborated.
-   @returns {{ flipBar: number, faceReturn: boolean, confirmed: boolean }} */
-function orientFlipDecision({ acquiring, needsSwitch, streak, held, yawCorroborates, lock, lastVote, faceStreak, poseStreak = 0 }) {
+   `turnPassed` (the window's side-view pass - see ORIENT_POSE_PASS) corroborates the pose flip ONLY:
+   the corroborated bar and the face return keep the 45-degree swing. `early` is a flip confirmed on
+   the pass alone, which the tick sends as withdrawable.
+   @returns {{ flipBar: number, faceReturn: boolean, poseFlip: boolean, early: boolean, confirmed: boolean }} */
+function orientFlipDecision({ acquiring, needsSwitch, streak, held, yawCorroborates, lock, lastVote, faceStreak, poseStreak = 0, turnPassed = false }) {
   const flipBar = yawCorroborates
     ? Math.min(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES)
     : ORIENT_LOCK_FRAMES;
@@ -6055,11 +6114,12 @@ function orientFlipDecision({ acquiring, needsSwitch, streak, held, yawCorrobora
     yawCorroborates && faceStreak >= ORIENT_FACE_RETURN_FRAMES;
   /* Either direction - see ORIENT_POSE_FLIP_FRAMES. */
   const poseFlip = !acquiring && !!lock && (lastVote === "front" || lastVote === "back") && lastVote !== lock &&
-    yawCorroborates && poseStreak >= ORIENT_POSE_FLIP_FRAMES;
+    (yawCorroborates || turnPassed) && poseStreak >= ORIENT_POSE_FLIP_FRAMES;
   const confirmed = needsSwitch && (acquiring
     ? streak >= ORIENT_ACQUIRE_FRAMES
     : (streak >= flipBar || held >= ORIENT_LOCK_MS || faceReturn || poseFlip));
-  return { flipBar, faceReturn, poseFlip, confirmed };
+  const early = confirmed && !acquiring && poseFlip && !yawCorroborates && !(streak >= flipBar || held >= ORIENT_LOCK_MS);
+  return { flipBar, faceReturn, poseFlip, early, confirmed };
 }
 
 /* Should BACK go on the wire NOW, ahead of any back vote? See ORIENT_PREDICTIVE_BACK for the
@@ -7523,7 +7583,7 @@ function createOrientationWatcher() {
        path, is covered exactly as it always was. */
     orientHoldPromote("swap");
     console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase(),
-      predictive ? "(PREDICTIVE - the torso passed the side view with no face; sent ahead of any back vote)"
+      predictive ? "(PREDICTIVE - sent while the torso is still passing the side view, ahead of the full back bar; a return to FRONT withdraws it)"
         : withdrawing ? "(WITHDRAWING a predictive BACK - the face came back)" : "",
       "| reference:", abbrevImg(next === "back" ? GARMENT_BACK : GARMENT_FRONT));
     renderPerspectiveSelector();
@@ -7775,7 +7835,7 @@ function createOrientationWatcher() {
       const yawFresh = _torsoYawAbs !== null && Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS;
       /* The reading's own timestamp, not the tick's: the side-view dwell orientPredictBack()
          measures is a property of the pose loop's clock, which runs independently of this one. */
-      const turnYaw = yawWindow.observe(vote, autoOrientation, yawFresh ? _torsoYawAbs : null, yawFresh ? _torsoYawAt : Date.now());
+      const turnYaw = yawWindow.observe(vote, autoOrientation, yawFresh ? _torsoYawAbs : null, yawFresh ? _torsoYawAt : Date.now(), _poseTorsoLostAt);
       const yawSwing = turnYaw.swing;
       const yawCorroborates = turnYaw.corroborates;
       /* Two DIFFERENT transitions, with deliberately different bars:
@@ -7804,8 +7864,9 @@ function createOrientationWatcher() {
          side to protect, so it already settles on two samples.
          The arithmetic lives in orientFlipDecision(), which adds exactly one path: the face
          return (ORIENT_FACE_RETURN_FRAMES) - FRONT only, detections only, corroborated only. */
-      const { flipBar, faceReturn, poseFlip, confirmed } = orientFlipDecision({
+      const { flipBar, faceReturn, poseFlip, early, confirmed } = orientFlipDecision({
         acquiring, needsSwitch, streak, held, yawCorroborates, lock: autoOrientation, lastVote, faceStreak, poseStreak,
+        turnPassed: ORIENT_POSE_PASS && turnYaw.passed,
       });
 
       if (ORIENT_DEBUG) {
@@ -7830,7 +7891,8 @@ function createOrientationWatcher() {
           ? ` (${streak}/${ORIENT_ACQUIRE_FRAMES}f)`
           : ` (${streak}/${flipBar}f${yawCorroborates ? "+yaw" : ""}, ${held}/${ORIENT_LOCK_MS}ms` +
             `, yawΔ${yawSwing.toFixed(0)}° from ${yawWindow.edgeLost ? "edge-on (torso lost)" : "peak " + (yawWindow.peak === null ? "n/a" : yawWindow.peak.toFixed(0) + "°")}` +
-            `, face ${faceStreak}/${ORIENT_FACE_RETURN_FRAMES}${faceReturn ? " FACE-RETURN" : ""}${poseFlip ? " POSE-FLIP" : ""})`;
+            `, face ${faceStreak}/${ORIENT_FACE_RETURN_FRAMES}${faceReturn ? " FACE-RETURN" : ""}${poseFlip ? (early ? " POSE-FLIP(pass)" : " POSE-FLIP") : ""}` +
+            `, torso lost ${yawWindow.lostInTurn ? "yes" : "no"}, passed ${turnYaw.passed ? (ORIENT_POSE_PASS ? "yes" : "yes (off: ?pose_pass=0)") : "no"})`;
         /* Pose is reported separately from the lock, because it IS separate - reading them
            on one line is what makes "locked FRONT, but edge-on right now" legible while
            tuning. ratio/score/width are the three numbers the thresholds are set from, so
@@ -8013,7 +8075,11 @@ function createOrientationWatcher() {
         maybeReanchorPrompt().catch(() => {});
       }
 
-      if (dualView && confirmed) await maybeSwap(lastVote);
+      /* A BACK confirmed on the side-view pass alone (see ORIENT_POSE_PASS) goes out at the stage of the
+         turn a predictive BACK does, so it is sent as one: a return to FRONT withdraws it inside the
+         cooldown instead of leaving it on the chest. Every other confirmed flip is sent as before. */
+      if (dualView && confirmed && early && lastVote === "back") await maybeSwap("back", true);
+      else if (dualView && confirmed) await maybeSwap(lastVote);
       else if (predictBack) {
         /* THE PRE-TURN STREAK MUST NOT OUTLIVE THE PREDICTION. lastVote is still the "front"
            the shopper was voting before they turned (abstentions never clear it), and faceStreak
@@ -15817,6 +15883,7 @@ function startPresenceWatcher() {
          reading as edge-on. */
       const facingSep = poseShoulderFacing(result);
       if (facingSep !== null) { _poseFacingSep = facingSep; _poseFacingAt = now; }
+      else _poseTorsoLostAt = now;   // the turn window reads the gap from this - see ORIENT_POSE_PASS
       if (sig && Number.isFinite(sig.yaw)) {
         _torsoYawAbs = Math.abs(sig.yaw);
         _torsoYawAt  = now;
