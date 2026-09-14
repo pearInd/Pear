@@ -1143,6 +1143,9 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .active-garment:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
 .active-garment[hidden] { display: none; }
+/* Positioning context for .ag-prep, which covers the whole tile rather than just the
+   thumbnail - see the asset-preparation block further down. */
+.active-garment { position: relative; }
 .active-garment__media {
   width: 60px; height: 60px; border-radius: 14px; overflow: hidden;
   border: 1px solid var(--glass-border); background: rgba(255,255,255,.4); flex-shrink: 0;
@@ -1212,6 +1215,107 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    progress") but drop the spin so the indicator doesn't fight that preference. */
 @media (prefers-reduced-motion: reduce) {
   .active-garment.is-pending .active-garment__media::before { animation: none; }
+}
+
+/* ══ Liquid Glass asset-preparation overlay ═══════════════════════════════════
+   THE BUG THIS CLOSES: the chip used to paint the UNVALIDATED handover photo at full
+   opacity behind a small spinner (.is-pending above) for the entire 2.5s-27s the
+   front/back verdict took to arrive, then visibly mutate when the correction landed.
+   Showing an asset we already know we do not trust is the problem; dimming it was
+   never going to be the fix. This replaces it outright for that window: the garment
+   media is hidden, a glass progress panel takes the tile, and the finished card is
+   revealed in ONE step once the real asset is bound.
+
+   .is-pending IS NOT RETIRED. It still owns the case this does not cover - a
+   background composite build on a chip whose photo is already validated - and the two
+   are mutually exclusive in practice because assetPrepActive() and thumbIsPending()
+   are driven from the same livePendingReason() predicate. Kept as-is deliberately.
+
+   VISIBILITY, NOT DISPLAY, for the hidden children: the tile must not resize or reflow
+   when the overlay lifts, or the "single-step transition" becomes a layout jump. The
+   glass panel therefore inherits the box the real content already reserved. */
+.active-garment.is-preparing > .active-garment__media,
+.active-garment.is-preparing > .active-garment__meta {
+  visibility: hidden;
+}
+/* The lift would read as the panel wobbling while a number climbs inside it. */
+.active-garment.is-preparing:hover { transform: none; box-shadow: var(--shadow-soft); }
+
+.ag-prep {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 16px;
+  border-radius: inherit;
+  overflow: hidden;                       /* clips the sheen sweep to the rounded tile */
+  border: 1px solid rgba(255, 255, 255, .3);
+  background: rgba(255, 255, 255, .25);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+          backdrop-filter: blur(20px) saturate(180%);
+  /* Specular pass: a bright top edge and a dimmer bottom one read as a lens with
+     thickness rather than a flat translucent rectangle, over a soft ambient drop. */
+  box-shadow:
+    inset 0  1px 0 rgba(255, 255, 255, .75),
+    inset 0 -1px 0 rgba(255, 255, 255, .22),
+    0 8px 32px rgba(0, 0, 0, .10),
+    0 1px  2px rgba(0, 0, 0, .04);
+  animation: ag-prep-in .28s var(--ease) both;
+}
+.ag-prep[hidden] { display: none; }
+
+/* Slow specular sweep. Purely decorative, hence aria-hidden in the markup. */
+.ag-prep__sheen {
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg,
+    transparent 30%, rgba(255, 255, 255, .55) 48%, transparent 66%);
+  transform: translateX(-100%);
+  animation: ag-prep-sheen 2.6s var(--ease) infinite;
+}
+
+.ag-prep__readout { flex-shrink: 0; }
+.ag-prep__pct {
+  font-family: "Urbanist", system-ui, sans-serif;
+  font-size: 1.5rem; font-weight: 800; line-height: 1;
+  color: var(--ink);
+  /* Tabular figures - without these the counter's width changes on nearly every
+     tick and the phase text beside it jitters for the whole run. */
+  font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1;
+}
+.ag-prep__sign { font-size: .78rem; font-weight: 700; font-style: normal; color: var(--muted); margin-left: 1px; }
+
+.ag-prep__copy { display: flex; flex-direction: column; gap: 7px; min-width: 0; flex: 1; }
+.ag-prep__phase {
+  font-size: .76rem; font-weight: 600; letter-spacing: .01em;
+  color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ag-prep__track {
+  height: 3px; border-radius: 3px; overflow: hidden;
+  background: rgba(10, 10, 11, .10);
+}
+.ag-prep__fill {
+  display: block; height: 100%; width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--pear-deep), var(--pear));
+  /* Eased in JS frame by frame, so this only has to smooth over the gap between
+     coarse milestone jumps - a long transition here would fight that easing. */
+  transition: width .18s linear;
+}
+
+@keyframes ag-prep-in   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes ag-prep-sheen { 0% { transform: translateX(-100%); } 55%, 100% { transform: translateX(100%); } }
+
+/* The panel still communicates progress through the number and the bar, so the
+   motion is the only thing dropped here - not the overlay itself. */
+@media (prefers-reduced-motion: reduce) {
+  .ag-prep { animation: none; }
+  .ag-prep__sheen { animation: none; opacity: 0; }
+  .ag-prep__fill { transition: none; }
+}
+
+@media (max-width: 380px) {
+  .ag-prep { gap: 10px; padding: 0 12px; }
+  .ag-prep__pct { font-size: 1.25rem; }
+  .ag-prep__phase { font-size: .7rem; }
 }
 
 /* Full-look duo chip */

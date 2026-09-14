@@ -42,13 +42,19 @@ function harness() {
   const sandbox = {
     ORIENT_DEBUG: false,
     console: { log() {}, warn: (...a) => events.push({ op: "warn", a }) },
+    /* Split, as of the "the live view freezes whenever I move" fix. Banking a frame and
+       putting it on screen are separate events here precisely so a test can assert that
+       one happened without the other - which is the whole behaviour under test. */
+    orientFadeCapture: () => { events.push({ op: "capture" }); return true; },
+    orientFadeShow:   () => events.push({ op: "show" }),
     orientFadeFreeze: () => events.push({ op: "freeze" }),
     orientFadeReveal: () => events.push({ op: "reveal" }),
     setTimeout: (fn, ms) => { const t = { fn, ms, live: true }; timers.push(t); return t; },
     clearTimeout: (t) => { if (t) t.live = false; },
   };
   const api = new Function(...Object.keys(sandbox),
-    holdSrc + "\nreturn { orientHoldBegin, orientHoldEnd, active: () => _orientHoldActive, MAX: ORIENT_TURN_HOLD_MAX_MS };"
+    holdSrc + "\nreturn { orientHoldBegin, orientHoldPromote, orientHoldEnd," +
+    " active: () => _orientHoldActive, shown: () => _orientHoldShown, MAX: ORIENT_TURN_HOLD_MAX_MS };"
   )(...Object.values(sandbox));
   return { api, events, fireTimers: () => timers.filter((t) => t.live).forEach((t) => { t.live = false; t.fn(); }), timers };
 }
@@ -57,17 +63,63 @@ console.log("\n── the hold captures ONE frame, at the start of the turn ─�
 {
   const { api, events } = harness();
   api.orientHoldBegin("turn-detected");
-  check("first disagreeing vote freezes the live frame",
-    events.filter((e) => e.op === "freeze").length === 1, JSON.stringify(events));
-  check("the hold is active", api.active() === true);
+  check("first disagreeing vote BANKS the live frame",
+    events.filter((e) => e.op === "capture").length === 1, JSON.stringify(events));
+  check("the hold window is open", api.active() === true);
+
+  /* ── AND THE FEED IS STILL LIVE ─────────────────────────────────────────────────
+     THE BUG THIS CLOSES: "the live view freezes whenever I move." Banking and showing
+     used to be one call, so any single disagreeing vote - a head-turn, a shrug, a
+     flickering light nudging the skin ratio - stopped the shopper's video for up to the
+     4s ceiling with no flip ever coming. Inside a 5s billed session that is most of the
+     session. The MP4 export was smooth the whole time, which is the tell: the recorder
+     samples #aiVideo UNDERNEATH the overlay, so the stream was never the problem.
+
+     The frame is still banked at this instant, and that part must not drift - it is the
+     last moment the render is reliably a good dressed one. Only the DISPLAY waits. */
+  check("...but the feed is NOT covered yet - banking is not showing",
+    api.shown() === false && !events.some((e) => e.op === "show"),
+    JSON.stringify(events.map((e) => e.op)));
 
   /* THE CRITICAL GUARD. maybeSwap() also calls orientHoldBegin(), ~2.5s later, when the
-     flip confirms. If that re-froze, it would replace the good dressed frame with a
-     mid-turn one - capturing exactly the reverted-to-real-shirt frame this hold exists to
+     flip confirms. If that re-captured, it would replace the good dressed frame with a
+     mid-turn one - banking exactly the reverted-to-real-shirt frame this hold exists to
      hide, and then displaying it. */
   api.orientHoldBegin("swap");
-  check("a second begin during the same turn does NOT re-freeze",
-    events.filter((e) => e.op === "freeze").length === 1, JSON.stringify(events.map((e) => e.op)));
+  check("a second begin during the same turn does NOT re-capture",
+    events.filter((e) => e.op === "capture").length === 1, JSON.stringify(events.map((e) => e.op)));
+}
+
+console.log("\n── promote: the feed is covered only when something warrants it ──");
+{
+  const { api, events } = harness();
+  api.orientHoldBegin("turn-detected");
+  api.orientHoldPromote("turn-corroborated");
+  check("a corroborated torso rotation covers the feed",
+    api.shown() === true && events.filter((e) => e.op === "show").length === 1,
+    JSON.stringify(events.map((e) => e.op)));
+
+  api.orientHoldPromote("swap");
+  check("...and promoting twice is a no-op, never a second cut",
+    events.filter((e) => e.op === "show").length === 1, JSON.stringify(events.map((e) => e.op)));
+}
+{
+  const { api, events } = harness();
+  /* Nothing banked, so there is nothing to put on screen. A promote that painted an
+     empty canvas over a live feed would be a black flash - strictly worse than the
+     freeze it replaces. */
+  api.orientHoldPromote("turn-corroborated");
+  check("promote without an open window shows nothing",
+    api.shown() === false && !events.some((e) => e.op === "show"));
+}
+{
+  /* THE HEAD-TURN, end to end: banked, never shown, released with the feed never
+     having stopped. This is the case the report was actually about. */
+  const { api, events } = harness();
+  api.orientHoldBegin("turn-detected");
+  api.orientHoldEnd("turn-abandoned");
+  check("a turn that never corroborates never freezes the feed at all",
+    !events.some((e) => e.op === "show"), JSON.stringify(events.map((e) => e.op)));
 }
 
 console.log("\n── release paths ──");
@@ -128,9 +180,24 @@ console.log("\n── wiring: the sampler raises the hold before confirmation, n
     /const frontBackTurn = dualView && !acquiring && needsSwitch && !confirmed;/.test(watcher),
     watcher.slice(watcher.indexOf("frontBackTurn ="), watcher.indexOf("frontBackTurn =") + 200));
   check("...raised on that axis alone now - see the profile-axis section below",
-    /if \(frontBackTurn\) orientHoldBegin\("turn-detected"\);/.test(watcher));
+    /if \(frontBackTurn\) \{[\s\S]*?orientHoldBegin\("turn-detected"\);/.test(watcher));
   check("released as soon as that evidence clears",
-    /if \(frontBackTurn\) orientHoldBegin\("turn-detected"\);[\s\S]*?else if \(_orientHoldActive\) orientHoldEnd\("turn-abandoned"\);/.test(watcher));
+    /if \(frontBackTurn\) \{[\s\S]*?else if \(_orientHoldActive\) orientHoldEnd\("turn-abandoned"\);/.test(watcher));
+
+  /* ── THE DISPLAY IS GATED SEPARATELY FROM THE BANKING ──────────────────────────
+     "the live view freezes whenever I move." Banking on the first disagreeing vote is
+     correct and is pinned above; SHOWING on it was not, and froze the feed for up to the
+     4s ceiling on a head-turn that was never going to flip anything. The capture must
+     stay on the early branch (a late snapshot banks the reverted frame) while the cover
+     waits for a corroborated torso rotation. */
+  check("the feed is covered only on a corroborated torso rotation",
+    /if \(frontBackTurn\) \{[\s\S]*?yawCorroborates\) orientHoldPromote\(/.test(watcher),
+    "a bare disagreeing vote must not stop the shopper's video");
+  check("...and abstains to the old cover-it-anyway behaviour when yaw is unusable",
+    /if \(!yawUsable\) orientHoldPromote\(/.test(watcher),
+    "no pose detector / occluded torso must not silently lose the cover");
+  check("...with yawUsable requiring BOTH a fresh reading and a streak baseline",
+    /const yawUsable = yawFresh && yawAtStreakStart !== null;/.test(watcher));
   /* ACQUIRING is the first reading of a DUAL-VIEW session's front/back lock: nothing is
      confirmed, nothing dressed has been rendered yet, and freezing there would stall the
      opening frames behind a still. Meaningless without a lock, so single-view items use
@@ -188,7 +255,14 @@ console.log("\n── wiring: the PROFILE hold is RETIRED - it was the 90-degree
     !/lastProfileScore > ORIENT_PROFILE_EXIT_SCORE/.test(code),
     "the exit threshold is hysteresis on the way OUT - as an entry trigger it fires far too early");
   check("the front/back hold is untouched - it covers a real asset swap",
-    /if \(frontBackTurn\) orientHoldBegin\("turn-detected"\);/.test(watcher));
+    /if \(frontBackTurn\) \{[\s\S]*?orientHoldBegin\("turn-detected"\);/.test(watcher));
+  /* A CONFIRMED swap promotes unconditionally. This is the half that keeps the display
+     split from being a regression: whatever the yaw signal did or did not say during the
+     turn, once the reference is actually being replaced the model IS between garments for
+     a datachannel round-trip, and that window must still be covered. */
+  check("...and a confirmed swap covers the feed regardless of what yaw said",
+    /orientHoldBegin\("swap"\);[\s\S]{0,600}orientHoldPromote\("swap"\);/.test(SRC),
+    "a swap confirmed on the ORIENT_LOCK_FRAMES path alone must not render uncovered");
   /* The mechanism is deliberately left intact: orientHoldBegin/End and the fade overlay
      are still what the front/back swap uses, and are what a restored profile hold would
      plug back into. Retiring a trigger must not delete the machinery behind it. */
@@ -319,20 +393,20 @@ console.log("\n── wiring: a torn-down watcher's in-flight maybeSwap() can't 
 console.log("\n── behaviour: the shared hold primitive treats a profile trigger exactly like a turn-detected one ──");
 {
   /* Runs the REAL orientHoldBegin/orientHoldEnd (same extraction as the top of this file)
-     to prove the new reason string exercises the identical freeze/reveal/ceiling machinery
-     - i.e. this isn't a parallel, half-wired freeze path that could drift from the one
-     already proven safe above. */
+     to prove the new reason string exercises the identical capture/reveal/ceiling
+     machinery - i.e. this isn't a parallel, half-wired freeze path that could drift from
+     the one already proven safe above. */
   const { api, events, fireTimers } = harness();
   api.orientHoldBegin("profile-turn-detected");
-  check("entering profile freezes the live frame, same as a front/back turn-detected",
-    events.filter((e) => e.op === "freeze").length === 1);
+  check("entering profile banks the live frame, same as a front/back turn-detected",
+    events.filter((e) => e.op === "capture").length === 1);
   check("the hold is active", api.active() === true);
 
-  // A front/back vote disagreeing WHILE already frozen for profile must not re-freeze -
-  // same "never re-freeze mid-turn" guard, now exercised across the two reasons.
+  // A front/back vote disagreeing WHILE already holding for profile must not re-capture -
+  // same "never re-capture mid-turn" guard, now exercised across the two reasons.
   api.orientHoldBegin("turn-detected");
-  check("a turn-detected begin while already frozen for profile does NOT re-freeze",
-    events.filter((e) => e.op === "freeze").length === 1);
+  check("a turn-detected begin while already holding for profile does NOT re-capture",
+    events.filter((e) => e.op === "capture").length === 1);
 
   api.orientHoldEnd("turn-abandoned");
   check("release reveals the live feed",

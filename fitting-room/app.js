@@ -2870,6 +2870,11 @@ function renderActiveGarment() {
        composite exists, so this can never fight with is-composite above. */
     chip.classList.toggle("is-pending", thumbIsPending(item));
   }
+  /* Same predicate, third consumer: the Liquid Glass prep overlay. Derived here rather
+     than driven from the widget message handler so EVERY path that can change what is
+     pending (a correction landing, the 35s give-up, an item swap, a colour swap) moves
+     the overlay too - there is no route that repaints the chip without settling it. */
+  if (typeof syncAssetPrep === "function") syncAssetPrep();
   syncCaptureButtonPendingState();
 }
 
@@ -4545,6 +4550,258 @@ function prewarmOrientationAssets() {
   }
 }
 
+/* ── Asset Readiness Progress - the model behind the Liquid Glass overlay ──────
+   ────────────────────────────────────────────────────────────────────────────
+   THE BUG THIS CLOSES: "it flashes a photo, then swaps it for a different one."
+
+   A widget handover opens this room with ?garment_url=imgs[0] - the first image in
+   DOM order, validated by nobody - and the real front/back verdict lands 2.5s warm /
+   ~27s cold as a PEAR_UPDATE_GARMENT correction. For that entire window the chip
+   painted that unvalidated photo at full opacity behind a small spinner. Two things
+   were wrong with that. It shows the shopper an asset we already know we do not
+   trust, and when the correction lands the thumbnail visibly mutates - which reads
+   as a glitch, not as a resolution.
+
+   The functional half of this was ALREADY correct and is untouched: livePendingReason()
+   refuses go-live while the verdict is outstanding, and preloadGarmentAssets() is
+   awaited before connectRealtime(), so Decart was never actually conditioned on the
+   intermediate asset. What was missing was any honest VISUAL account of that wait -
+   so this replaces the premature thumbnail with a progress surface that shows nothing
+   of the garment until the asset is final, and reveals the finished card in ONE step.
+
+   PROGRESS IS DERIVED, NOT ANIMATED THEATRE. The two phases have genuinely different
+   observability and are weighted accordingly:
+     · CLASSIFYING_ASSETS (0→PREP_CLASSIFY_CEIL) - an opaque round trip on the STORE
+       page. There is no milestone to read, so this creeps asymptotically toward the
+       ceiling against the same CLASSIFY_GATE_MAX_MS the gate itself times out on. It
+       approaches but never reaches the ceiling, so the bar cannot sit at a number that
+       implies a step finished when nothing has been confirmed.
+     · PRELOADING_BLOBS (PREP_CLASSIFY_CEIL→99) - fetch, decode and content-validate,
+       all of which we run ourselves. Stepped from REAL milestones via assetPrepStep().
+   100 is reserved: it is written only by assetPrepReady(), and only once there is a
+   validated asset behind it. Never let a timer reach 100 - a counter that hits 100
+   while work is outstanding is the same lie as the premature thumbnail.
+
+   MONOTONIC BY CONSTRUCTION. assetPrepTarget only ever moves up (Math.max below). A
+   late correction that re-opens classification must not rewind a bar the shopper has
+   already watched climb; it holds instead, which reads as "still working" rather than
+   as a fault. */
+const PREP_PHASE_IDLE       = "IDLE";
+const PREP_PHASE_CLASSIFY   = "CLASSIFYING_ASSETS";
+const PREP_PHASE_PRELOAD    = "PRELOADING_BLOBS";
+const PREP_PHASE_READY      = "READY";
+const PREP_CLASSIFY_CEIL    = 55;    // the whole opaque-round-trip band
+const PREP_PRELOAD_CEIL     = 99;    // 100 belongs to assetPrepReady() alone
+/* One frame past the counter's own ease so the number is visibly AT 100 before the
+   card appears. Below ~200ms the reveal lands while the digits are still climbing,
+   which reads as the transition interrupting itself rather than completing. */
+const PREP_REVEAL_HOLD_MS   = 260;
+/* Spinner debounce. When the prewarm already won the race every lookup in the preload
+   gate is a cache hit and the whole prep resolves inside a couple of frames - showing,
+   filling and retiring a progress panel in that window is a flash of chrome that reads
+   as a glitch in its own right, which is the same class of problem as the premature
+   thumbnail this overlay replaces. Below this threshold nothing is ever painted; the
+   card simply stays as it was. Elapsed time only grows, so once the overlay has earned
+   its place it cannot un-show itself mid-progress. */
+const PREP_SHOW_DELAY_MS    = 180;
+
+let assetPrepPhase   = PREP_PHASE_IDLE;
+let assetPrepTarget  = 0;    // where the real work says we are
+let assetPrepShown   = 0;    // where the eased on-screen counter has got to
+let assetPrepRAF     = null;
+let assetPrepStartAt = 0;
+let assetPrepRevealTimer = null;
+/* Sticky visibility latch - see PREP_SHOW_DELAY_MS. Latched TRUE only while real work
+   is still outstanding, which is what makes the debounce correct rather than merely
+   delayed: on a warm run the whole prep is already READY by the time the delay elapses,
+   so the latch never closes and nothing is ever painted. Once true it stays true until
+   the reveal completes, so the panel cannot vanish out from under a progress it is
+   halfway through showing. */
+let assetPrepVisible = false;
+/* Who is driving. The preload gate (assetPrepStep) reports REAL milestones and settles
+   itself from goLive(); syncAssetPrep() derives its phase from livePendingReason(),
+   which by then already reads "nothing pending" - so without this flag any incidental
+   repaint during the gate (a colour swatch, a toast, an i18n pass) would call
+   assetPrepReady() and slam the bar to 100 while the fetches were still running. The
+   gate keeps ownership until its own reveal completes. */
+let assetPrepGateOwned = false;
+
+/** Bilingual copy per phase. Keyed by the same constants the state machine uses. */
+const PREP_PHASE_COPY = {
+  [PREP_PHASE_CLASSIFY]: "מאמתים את תמונות הבגד · Verifying garment assets",
+  [PREP_PHASE_PRELOAD]:  "מכינים את קובצי התמונה · Preloading image data",
+  [PREP_PHASE_READY]:    "מוכן · Ready",
+};
+
+/** True while any asset this run needs is still unresolved. The overlay's only trigger. */
+function assetPrepActive() {
+  return assetPrepPhase === PREP_PHASE_CLASSIFY || assetPrepPhase === PREP_PHASE_PRELOAD;
+}
+
+/**
+ * Move the machine into `phase` and raise the floor to `pct`.
+ * Monotonic: a lower pct than the one already reached is ignored, never rewound.
+ * @param {string} phase one of the PREP_PHASE_* constants
+ * @param {number} [pct] progress floor to claim, 0-100
+ */
+function assetPrepSet(phase, pct) {
+  const was = assetPrepPhase;
+  assetPrepPhase = phase;
+  if (typeof pct === "number") assetPrepTarget = Math.max(assetPrepTarget, Math.min(100, pct));
+  if (was === PREP_PHASE_IDLE && phase !== PREP_PHASE_IDLE) {
+    assetPrepStartAt = Date.now();
+    assetPrepTarget = Math.max(assetPrepTarget, 2);   // immediate proof of life on first paint
+  }
+  if (was !== phase) {
+    console.log(`[PEAR] asset prep: ${was} → ${phase} (${Math.round(assetPrepTarget)}%)`);
+  }
+  assetPrepRender();
+  assetPrepTick();
+}
+
+/**
+ * Claim a real, completed preload milestone. `done`/`total` are counted in ASSETS
+ * (front, back and composite each count as one), so the bar tracks work actually
+ * finished rather than elapsed time.
+ * @param {number} done
+ * @param {number} total
+ */
+function assetPrepStep(done, total) {
+  assetPrepGateOwned = true;
+  const span = PREP_PRELOAD_CEIL - PREP_CLASSIFY_CEIL;
+  const frac = total > 0 ? Math.max(0, Math.min(1, done / total)) : 0;
+  assetPrepSet(PREP_PHASE_PRELOAD, PREP_CLASSIFY_CEIL + span * frac);
+}
+
+/** Every asset is fetched, decoded and validated. The ONLY writer of 100. */
+function assetPrepReady() {
+  if (assetPrepPhase === PREP_PHASE_IDLE) return;    // nothing was ever pending - no overlay to retire
+  assetPrepPhase = PREP_PHASE_READY;
+  assetPrepTarget = 100;
+  console.log("[PEAR] asset prep: READY (100%) - revealing the finalized card");
+  assetPrepRender();
+  /* The reveal is NOT scheduled here. It is armed from the tick loop the moment the
+     eased counter actually LANDS on 100 (assetPrepArmReveal) - a fixed timer started
+     here would fire while the digits were still climbing out of the 50s, since easing
+     a 45-point jump takes ~550ms against this hold's 260ms. The brief that this
+     implements says the card appears when the status hits 100%, and the only way to
+     honour that literally is to wait for the number itself rather than for a delay
+     chosen to approximate it. */
+  assetPrepTick();
+}
+
+/* Arm the single-step hand-off, once, after the counter has settled on 100. */
+function assetPrepArmReveal() {
+  if (assetPrepRevealTimer || assetPrepPhase !== PREP_PHASE_READY) return;
+  /* Zero hold when the panel was never painted (a warm prep that resolved inside the
+     debounce): there is nothing on screen to let the shopper read, so making them wait
+     for it would be inventing a delay the old code did not have. */
+  const hold = assetPrepVisible ? PREP_REVEAL_HOLD_MS : 0;
+  assetPrepRevealTimer = setTimeout(() => {
+    assetPrepRevealTimer = null;
+    assetPrepPhase = PREP_PHASE_IDLE;
+    assetPrepTarget = 0;
+    assetPrepShown = 0;
+    assetPrepVisible = false;
+    assetPrepGateOwned = false;
+    /* ORDER MATTERS, and this is the whole "single-step transition". The card beneath is
+       repainted with the FINAL asset BEFORE the overlay is torn down, so the intermediate
+       photo is never uncovered for even one frame - which is precisely the flash this
+       feature exists to remove. Reversing these two lines reintroduces it. */
+    if (typeof renderActiveGarment === "function") renderActiveGarment();
+    assetPrepRender();
+  }, hold);
+}
+
+/* The asymptotic creep for the phase we cannot measure. Approaches PREP_CLASSIFY_CEIL
+   on the CLASSIFY_GATE_MAX_MS timescale and never arrives, so the number keeps moving
+   (the shopper can see it is not wedged) without ever claiming a finished step. */
+function assetPrepCreep() {
+  if (assetPrepPhase !== PREP_PHASE_CLASSIFY) return;
+  const cap = (typeof CLASSIFY_GATE_MAX_MS === "number" && CLASSIFY_GATE_MAX_MS > 0)
+    ? CLASSIFY_GATE_MAX_MS : 30000;
+  const elapsed = Date.now() - assetPrepStartAt;
+  assetPrepTarget = Math.max(assetPrepTarget, PREP_CLASSIFY_CEIL * (1 - Math.exp(-3 * elapsed / cap)));
+}
+
+/* Ease the displayed number toward the target. rAF-driven so it is frame-synced and
+   stops dead when it has nothing to do; typeof-guarded because app.js's blocks are
+   also executed standalone in the test sandboxes, which have no window (CLAUDE.md §2.7). */
+function assetPrepTick() {
+  if (typeof requestAnimationFrame !== "function") {
+    /* No rAF - a non-browser host, or one of the standalone test sandboxes. There is
+       nothing to animate and nothing to paint, but the machine must still reach its
+       terminal state: syncAssetPrep() defers to an in-progress reveal, so a phase left
+       parked on READY here would wedge every later update. Snap and hand over. */
+    assetPrepShown = assetPrepTarget;
+    if (assetPrepPhase === PREP_PHASE_READY) assetPrepArmReveal();
+    return;
+  }
+  if (assetPrepRAF !== null) return;
+  const step = () => {
+    assetPrepRAF = null;
+    assetPrepCreep();
+    const delta = assetPrepTarget - assetPrepShown;
+    assetPrepShown += delta * 0.14;                               // ~critically damped at 60fps
+    if (Math.abs(delta) < 0.35) assetPrepShown = assetPrepTarget;  // snap, so it lands exactly on 100
+    assetPrepRender();
+    const settled = assetPrepShown === assetPrepTarget;
+    if (settled && assetPrepPhase === PREP_PHASE_READY) assetPrepArmReveal();
+    if (!settled || assetPrepPhase === PREP_PHASE_CLASSIFY) {
+      assetPrepRAF = requestAnimationFrame(step);
+    }
+  };
+  assetPrepRAF = requestAnimationFrame(step);
+}
+
+/** Paint the overlay. Pure DOM write - safe to call at any rate, no-ops with no document. */
+function assetPrepRender() {
+  if (typeof document === "undefined" || typeof $ !== "function") return;
+  const chip = $("activeGarment");
+  const wrap = $("agPrep");
+  if (!chip || !wrap) return;
+  if (!assetPrepVisible && assetPrepActive()
+      && (Date.now() - assetPrepStartAt) >= PREP_SHOW_DELAY_MS) {
+    assetPrepVisible = true;      // real work outstanding past the debounce - earn the panel
+  }
+  const on = assetPrepVisible && assetPrepPhase !== PREP_PHASE_IDLE;
+  /* .is-preparing is what actually hides the garment media (style.css). Toggling it on
+     the chip rather than on the media element keeps the meta column hidden in lockstep,
+     so a half-revealed card is not a reachable state. */
+  chip.classList.toggle("is-preparing", on);
+  wrap.hidden = !on;
+  if (!on) return;
+  const pct = Math.max(0, Math.min(100, Math.round(assetPrepShown)));
+  const num = $("agPrepPct");
+  const fill = $("agPrepFill");
+  const label = $("agPrepPhase");
+  if (num) num.firstChild ? (num.firstChild.nodeValue = String(pct)) : (num.textContent = String(pct));
+  if (fill) fill.style.width = pct + "%";
+  if (label) label.textContent = PREP_PHASE_COPY[assetPrepPhase] || "";
+  wrap.setAttribute("data-phase", assetPrepPhase);           // raw state, for the console/debug contract
+  wrap.setAttribute("aria-valuenow", String(pct));
+}
+
+/**
+ * Re-derive the phase from the SAME predicates the functional gate uses, so the overlay
+ * and livePendingReason() can never disagree about whether something is outstanding.
+ * Called from renderActiveGarment() and from the classify gate's release path.
+ */
+function syncAssetPrep() {
+  if (assetPrepPhase === PREP_PHASE_READY) return;   // mid-reveal - let the transition finish
+  if (assetPrepGateOwned) return;                   // the preload gate reports its own milestones
+  const pending = typeof livePendingReason === "function" ? livePendingReason() : null;
+  if (pending) {
+    /* A composite BUILD is local work, not the opaque store-page round trip, so it
+       belongs in the preload band. Anything else outstanding is still classification. */
+    const building = !!(activeItem && activeItem._compositeBuilding);
+    assetPrepSet(building ? PREP_PHASE_PRELOAD : PREP_PHASE_CLASSIFY,
+      building ? PREP_CLASSIFY_CEIL : undefined);
+  } else if (assetPrepPhase !== PREP_PHASE_IDLE) {
+    assetPrepReady();
+  }
+}
+
 /**
  * Mandatory Pre-load & Validation Gate - AWAITED, unlike prewarmOrientationAssets()
  * above (which is deliberately fire-and-forget for opportunistic early warming while
@@ -4554,6 +4811,21 @@ function prewarmOrientationAssets() {
  * a broken/missing BACK asset here - narrowing this run to front-only - instead of
  * discovering it mid-session on the shopper's first turn, which is what "blank back
  * view" looked like from the outside. Updates #scanSub with live progress per item/side.
+ *
+ * IT RUNS ON EVERY GO-LIVE NOW, not only the AI Auto ones. Its single call site used to
+ * sit inside `if (currentAngle === AUTO_ANGLE)`, which meant front-only runs - most of
+ * the catalog - had no validation floor at all and could reach connectRealtime() with
+ * their reference never fetched, decoded or content-validated. See the call site in
+ * goLive() for the full rationale. Nothing in here needed to change for that: the
+ * per-item loop already handles a garment with no distinct back (hasBack=false), and
+ * every lookup is a cache hit when prewarmOrientationAssets() already won the race.
+ *
+ * It also reports REAL milestones to the Liquid Glass prep overlay via assetPrepStep(),
+ * counted in assets actually touched rather than elapsed time - the preload half of the
+ * 0→100 counter. Those calls are typeof-guarded and take only numbers, because
+ * preload-composite.test.mjs executes this function standalone with no module scope
+ * (CLAUDE.md §2.7). This function deliberately stops at PREP_PRELOAD_CEIL; goLive()
+ * writes the 100 once it has seen the {ok, hasBack} verdict.
  * @returns {Promise<{ ok: boolean, hasBack: boolean }>}
  *   ok=false      → at least one item's FRONT is unusable - goLive() must abort entirely
  *                    (there is no reasonable fallback for a missing front).
@@ -4566,6 +4838,28 @@ async function preloadGarmentAssets() {
   const el = $("scanSub");
   const setText = (msg) => { if (el) el.textContent = msg; };
 
+  /* ── Progress milestones for the Liquid Glass overlay ──────────────────────
+     The denominator is counted in ASSETS THIS RUN WILL ACTUALLY TOUCH (front
+     always; back and, in composite mode, the stitched reference only when a real
+     distinct back exists) rather than a fixed guess, so the bar reaches its ceiling
+     exactly when the last validation returns - not early on a front-only garment and
+     not short on a full look. prepTick() fires on every completed ATTEMPT, pass or
+     fail: a failed asset is a resolved question, and stalling the bar on one would
+     misreport the degrade path (which still goes live, front-only) as a hang.
+     typeof-guarded like verifyGarmentAsset beside it - preload-composite.test.mjs
+     executes this function standalone with no module scope (CLAUDE.md §2.7), and the
+     numeric-only arguments keep the call safe to EVALUATE there as well as to skip. */
+  let prepDone = 0, prepTotal = 0;
+  for (const it of items) {
+    prepTotal += 1;
+    if (distinctBackOf(it, galleryOf(it))) prepTotal += compositeActiveFor(it) ? 2 : 1;
+  }
+  const prepTick = () => {
+    prepDone++;
+    if (typeof assetPrepStep === "function") assetPrepStep(prepDone, prepTotal);
+  };
+  if (typeof assetPrepStep === "function") assetPrepStep(0, prepTotal);
+
   let ok = true, hasBack = true;
   for (const item of items) {
     const g = galleryOf(item);
@@ -4576,6 +4870,7 @@ async function preloadGarmentAssets() {
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front […]`);
     const frontBlob = front ? await garmentBlobCached(front) : null;
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front [${frontBlob ? "OK" : "FAIL"}]`);
+    prepTick();
     if (!frontBlob) {
       console.error("[PEAR] CRITICAL: GARMENT_FRONT failed pre-load validation -", label, front);
       ok = false;
@@ -4595,6 +4890,7 @@ async function preloadGarmentAssets() {
       } catch (_) { /* fail open on probe error - the fetch itself already succeeded */ }
     }
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back [${backOk ? "OK" : "FAIL"}]`);
+    prepTick();
     if (!backOk) {
       console.warn("[PEAR] GARMENT_BACK failed pre-load validation - proceeding FRONT-ONLY -", label, back);
       hasBack = false;
@@ -4632,6 +4928,7 @@ async function preloadGarmentAssets() {
       }
       if (!composite) composite = await createGarmentComposite(front, back);
       setText(`מכינים תצוגה משולבת… · Preparing combined view… ${label} [${composite ? "OK" : "FAIL"}]`);
+      prepTick();
       if (!composite) {
         console.warn("[PEAR] COMPOSITE failed pre-load validation - proceeding FRONT-ONLY -", label);
         hasBack = false;   // same degrade path as a broken back blob - never go live on an unvalidated reference
@@ -5222,19 +5519,60 @@ function resetAiFeedVisibility() {
   ai.style.transform = "";
 }
 
-/* Snapshot the live #aiVideo frame into the overlay and show it at full opacity with NO
-   transition (an instant cut onto a frame identical to what's already showing is
-   invisible). Call BEFORE issuing the swap. */
-function orientFadeFreeze() {
+/* ── CAPTURE AND SHOW ARE SEPARATE STEPS, and the split is the whole fix for ────
+   "the live view freezes whenever I move."
+
+   These used to be one function. That forced a single instant to be both "the last
+   frame still worth holding" and "the moment the shopper's video stops", and those two
+   are not the same instant at all:
+     · The best frame to CAPTURE is the FIRST disagreeing vote - the earliest hint of a
+       turn, while the render is still a good dressed one. Wait any longer and the
+       snapshot is the reverted-to-real-shirt frame the hold exists to hide (which is
+       why orientHoldBegin has always refused to re-freeze).
+     · The right moment to SHOW it is as late as possible, because every millisecond it
+       is up is a millisecond of frozen video.
+   Fusing them meant paying the SHOW cost at CAPTURE time: a head-turn, a shrug, or a
+   shopper who turned back all froze the feed for up to the 4s ceiling while no swap was
+   ever coming. Inside a 5s billed session that is most of the session, and it is what
+   the recorder proves was never wrong with the stream - the MP4 is smooth because the
+   recorder samples #aiVideo underneath this overlay.
+
+   Split, the snapshot is still taken at the good instant and simply held off-screen at
+   opacity 0 until something actually warrants covering the feed. If nothing does, it is
+   discarded having never been seen. See the promote() call sites for what warrants it. */
+
+/* Snapshot the live #aiVideo frame into the overlay WITHOUT displaying it.
+   @returns {boolean} whether a frame was actually captured */
+function orientFadeCapture() {
   const ai = $("aiVideo");
   const c = orientFadeEl();
-  if (!ai || !c || !ai.videoWidth) return;
+  if (!ai || !c || !ai.videoWidth) return false;
   c.width = ai.videoWidth; c.height = ai.videoHeight;
   c.getContext("2d").drawImage(ai, 0, 0, c.width, c.height);
+  return true;
+}
+
+/* Put the already-captured frame on screen at full opacity with NO transition (an
+   instant cut onto a frame identical to what's already showing is invisible). */
+function orientFadeShow() {
+  const c = _orientFadeCanvas;
+  if (!c) return;
   c.style.transition = "none";
   c.style.opacity = "1";
   void c.offsetWidth;              // flush so the transition below re-arms
   c.style.transition = `opacity ${ORIENT_FADE_MS}ms ease-out`;
+}
+
+/* Capture AND show in one step - the original fused behaviour.
+   CURRENTLY UNREFERENCED, and deliberately so rather than by oversight: both live
+   callers now bank and promote separately (orientHoldBegin / orientHoldPromote). It is
+   kept as the restore seam for the split - if the two-stage display ever has to be
+   backed out, orientHoldBegin() calls this instead of orientFadeCapture() and the old
+   freeze-on-first-vote behaviour returns in one line. Do not wire it into a new call
+   site without reading the capture/show note above first: calling it late in a turn
+   banks the reverted-to-real-shirt frame the hold exists to hide. */
+function orientFadeFreeze() {
+  if (orientFadeCapture()) orientFadeShow();
 }
 
 /* Fade the frozen overlay back out, revealing the (by now updated) live feed underneath.
@@ -5388,28 +5726,64 @@ function redrapeCoverEnd(reason) {
    flapping that threshold exists to stop; this covers the same window without touching
    the confirmation bar. */
 const ORIENT_TURN_HOLD_MAX_MS = 4000;  // hard ceiling - a stuck still frame is worse than a live one
+/* THE WINDOW IS OPEN - a turn or swap is in progress. Semantics deliberately UNCHANGED:
+   redrapeCoverBegin() and reconditionForTopology() both read this to stay out of a
+   front/back swap's way, and neither cares whether anything is on screen. Splitting the
+   display out below must not quietly narrow the window those two are gating on. */
 let _orientHoldActive = false;
+/* ...and THIS is whether the captured frame is actually covering the feed. The new half.
+   Always implies _orientHoldActive; the reverse does not hold, which is the entire point. */
+let _orientHoldShown  = false;
 let _orientHoldTimer  = null;
 
-/* @param {"turn-detected"|"swap"} reason - which stage raised the hold, for the log only */
+/* Open the window and bank a good frame. Does NOT show it - see orientHoldPromote().
+   @param {"turn-detected"|"swap"} reason - which stage raised the hold, for the log only */
 function orientHoldBegin(reason) {
-  if (_orientHoldActive) return;        // NEVER re-freeze: a second snapshot this far into
-                                        // the turn would capture the degraded frame we are
+  if (_orientHoldActive) return;        // NEVER re-capture: a second snapshot this far into
+                                        // the turn would bank the degraded frame we are
                                         // holding precisely to hide.
   _orientHoldActive = true;
-  orientFadeFreeze();
+  orientFadeCapture();
+  /* The ceiling is armed HERE, not in promote(), and bounds the WINDOW rather than the
+     display. _orientHoldActive gates the two consumers named above, so a window left
+     open forever would keep body-topology reconditioning suppressed for the rest of the
+     session even if nothing was ever shown. Bounding the window bounds both. */
   if (_orientHoldTimer) clearTimeout(_orientHoldTimer);
   _orientHoldTimer = setTimeout(() => {
     console.warn("[PEAR] AI Auto - turn hold hit its", ORIENT_TURN_HOLD_MAX_MS + "ms ceiling; revealing the live feed");
     orientHoldEnd("timeout");
   }, ORIENT_TURN_HOLD_MAX_MS);
-  if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - holding last dressed frame (" + reason + ")");
+  if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - banked last dressed frame, not yet shown (" + reason + ")");
+}
+
+/**
+ * Actually cover the feed with the banked frame. Idempotent, and a no-op unless a
+ * window is open - there is nothing to show without a capture behind it.
+ *
+ * THE CALLER DECIDES, and only two things warrant it:
+ *   · a torso rotation corroborated by yaw - a REAL turn, so the revert is coming;
+ *   · a confirmed swap - the reference is being replaced, so the model is genuinely
+ *     between garments for a datachannel round-trip.
+ * A bare disagreeing vote is neither. That is what used to freeze the feed on a
+ * head-turn under a flickering light and hold it until the ceiling.
+ * @param {string} reason for the log only
+ */
+function orientHoldPromote(reason) {
+  if (!_orientHoldActive || _orientHoldShown) return;
+  _orientHoldShown = true;
+  orientFadeShow();
+  if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - covering the feed (" + reason + ")");
 }
 
 function orientHoldEnd(reason) {
   if (_orientHoldTimer) { clearTimeout(_orientHoldTimer); _orientHoldTimer = null; }
   if (!_orientHoldActive) return;
   _orientHoldActive = false;
+  _orientHoldShown = false;
+  /* UNCONDITIONAL, even when nothing was ever shown. Hiding an already-hidden overlay is
+     free, and "every exit path drives the cover down" is the guarantee that keeps a still
+     frame from outliving the window that banked it - it must not become conditional on a
+     flag some future edit forgets to set. */
   orientFadeReveal();
   if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - releasing hold (" + reason + ")");
 }
@@ -6007,6 +6381,13 @@ function createOrientationWatcher() {
        we are holding with a mid-turn one. Still called because a flip can also arrive
        without a preceding turn-detected tick (a swap forced by other state). */
     orientHoldBegin("swap");
+    /* UNCONDITIONAL, unlike the sampler's promote above. By here the flip is CONFIRMED:
+       the reference image is about to be replaced and the model is genuinely between
+       garments for a datachannel round-trip, which is the original window this cover was
+       built for. It promotes whatever the yaw signal did or did not say - so a swap on a
+       device with no pose detection, or one confirmed purely on the ORIENT_LOCK_FRAMES
+       path, is covered exactly as it always was. */
+    orientHoldPromote("swap");
     console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase(),
       "| reference:", abbrevImg(next === "back" ? GARMENT_BACK : GARMENT_FRONT));
     renderPerspectiveSelector();
@@ -6373,7 +6754,36 @@ function createOrientationWatcher() {
          never on the EXIT threshold. */
       const dualView = currentAngle === AUTO_ANGLE;
       const frontBackTurn = dualView && !acquiring && needsSwitch && !confirmed;
-      if (frontBackTurn) orientHoldBegin("turn-detected");
+      if (frontBackTurn) {
+        /* Bank the frame on the FIRST disagreeing vote, exactly as before - this is the
+           last instant the render is reliably a good dressed one. */
+        orientHoldBegin("turn-detected");
+        /* ── BUT ONLY COVER THE FEED ON EVIDENCE OF A REAL TORSO ROTATION ──────────
+           REPORTED: "the live view freezes whenever I move." It did, and for up to the
+           4s ceiling, because showing was fused to banking: any single disagreeing vote
+           - a head-turn, a shrug, a flickering light moving the skin ratio - stopped the
+           shopper's video even though no flip was coming. The MP4 export was smooth
+           throughout, which is the tell: the recorder samples #aiVideo UNDERNEATH this
+           overlay, so the stream was never the problem, only what was drawn over it.
+
+           yawCorroborates is the same 45-degree torso swing ORIENT_CORROBORATED_FRAMES
+           already trusts to shorten the flip bar - a genuinely 3D reading off MediaPipe's
+           shoulder landmarks, on a different instrument from the vote. A head-turn moves
+           the head, not the shoulders, and earns nothing here. Note this only gates the
+           DISPLAY: the flip bar, the hysteresis and the banked frame are all untouched.
+
+           ABSTAINS TOWARD THE OLD BEHAVIOUR, which is what keeps this from being a
+           regression on the devices that need the cover most. `yawUsable` is false with no
+           pose detector, an occluded torso, a phone that never loaded the WASM runtime, or
+           a streak too young to have a baseline - and in every one of those cases we
+           cannot tell a real turn from a head-turn, so we cover exactly as before. The
+           freeze is only skipped where yaw is present AND positively says no torso
+           rotation is happening. And a swap that confirms anyway still promotes at its own
+           call site below, so the reference-replacement window is never left uncovered. */
+        const yawUsable = yawFresh && yawAtStreakStart !== null;
+        if (!yawUsable) orientHoldPromote("no-yaw-signal");
+        else if (yawCorroborates) orientHoldPromote("turn-corroborated");
+      }
       /* The shopper turned back / straightened up before the flip confirmed: no swap is
          coming, so drop the hold now rather than sitting on a still until the ceiling. */
       else if (_orientHoldActive) orientHoldEnd("turn-abandoned");
@@ -13027,22 +13437,44 @@ async function goLive() {
        it here means that failure surfaces (or is gracefully absorbed into a
        front-only run) BEFORE any camera/Decart resource - and any billing - is
        spent, never as a mid-turn surprise. */
-    if (currentAngle === AUTO_ANGLE) {
-      $("scanOverlay").hidden = false;
-      const preload = await preloadGarmentAssets();
-      if (!preload.ok) {
-        $("scanOverlay").hidden = true;
-        showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
-        toast("⚠ טעינת תמונת הבגד נכשלה");
-        return;   // finally{} resets busy + the capture button; no billed session opened
-      }
-      if (!preload.hasBack) {
-        // Known-bad/missing back BEFORE go-live - don't arm AI Auto with an asset we
-        // already know is broken. Front-only is a fully supported, never-blocked mode.
-        currentAngle = "front";
-        toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
-      }
+    /* IT NOW RUNS ON EVERY PATH, NOT ONLY AI AUTO. This condition used to read
+       `if (currentAngle === AUTO_ANGLE)`, which left the one mode most of the catalog
+       actually uses - front-only - with no validation gate at all: it reached
+       connectRealtime() with its reference never fetched, decoded or content-validated.
+       prewarmOrientationAssets() usually got there first, but fire-and-forget has no
+       floor. Lose that race - a cold cache, a slow CDN, a shopper who clicks the instant
+       the button unblocks - and the FIRST time those bytes were touched was inside the
+       go-live apply, which then shipped a bare URL for Decart to fetch server-side
+       before it could condition on anything. That IS a session conditioned on an
+       unresolved reference; it was simply on the branch this gate was not covering.
+       Validating here costs nothing when the prewarm already won (every lookup is a
+       cache hit) and is the missing wait when it did not. */
+    const wantedAutoView = currentAngle === AUTO_ANGLE;
+    $("scanOverlay").hidden = false;
+    const preload = await preloadGarmentAssets();
+    if (!preload.ok) {
+      $("scanOverlay").hidden = true;
+      showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
+      toast("⚠ טעינת תמונת הבגד נכשלה");
+      return;   // finally{} resets busy + the capture button; no billed session opened
     }
+    if (!preload.hasBack) {
+      // Known-bad/missing back BEFORE go-live - don't arm AI Auto with an asset we
+      // already know is broken. Front-only is a fully supported, never-blocked mode.
+      currentAngle = "front";
+      /* The TOAST is scoped to wantedAutoView; the downgrade above is not. hasBack is
+         also false for a garment that simply never had a back photo, and now that this
+         gate runs for those too, an unscoped toast would announce that a back view is
+         unavailable to a shopper who was never offered one - a new false alarm created
+         purely by widening the gate. Only a run that genuinely intended AI Auto has
+         lost something worth reporting. */
+      if (wantedAutoView) toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
+    }
+    /* Every asset this run needs is now fetched, decoded and validated - so the prep
+       overlay can retire and hand over the finalized card in one step. Guarded: this
+       is the only caller that can settle the PRELOADING_BLOBS phase, since the preload
+       gate's own milestones deliberately stop at PREP_PRELOAD_CEIL. */
+    if (typeof assetPrepReady === "function") assetPrepReady();
 
     // LOADING state: overlay + a live elapsed-time counter (generic copy, no model/
     // vendor names - see startScanTimer). Runs until startBillingWindow() confirms

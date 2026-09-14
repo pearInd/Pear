@@ -79,6 +79,10 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
     logVtonState: () => {},
     renderPerspectiveSelector: () => {},
     orientHoldBegin: () => calls.push({ op: "holdBegin" }),
+    /* Banking the frame and putting it on screen are separate calls as of the
+       "the live view freezes whenever I move" fix - a confirmed swap does both, since
+       the reference really is being replaced under the shopper. */
+    orientHoldPromote: () => calls.push({ op: "holdPromote" }),
     orientHoldExtend: () => calls.push({ op: "holdExtend" }),
     orientHoldEnd: (r) => calls.push({ op: "holdEnd", r }),
     applyActive: async () => {

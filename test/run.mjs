@@ -220,6 +220,22 @@
                       appending a clause - which is the whole design, since the tuxedo
                       regression was beaten by cutting total text volume competing with the
                       reference image, and appending angleClause() here would re-open it.
+     asset-prep-gate  The Liquid Glass preparation overlay, and the widened go-live
+                      preload gate behind it. The active-garment chip used to paint the
+                      UNVALIDATED handover photo (?garment_url=imgs[0] - first in DOM
+                      order, validated by nobody) at full opacity for the whole 2.5s-27s
+                      the front/back verdict took, then visibly mutate when the
+                      correction landed, which reads as a glitch rather than as a
+                      resolution. Asserts the counter can never reach 100 while work is
+                      outstanding, that progress is monotonic (a late correction holds,
+                      never rewinds), that the final card is repainted BEFORE the overlay
+                      lifts - reverse those and the intermediate photo is uncovered for a
+                      frame, which is the exact flash this removes - and that a warm prep
+                      never paints the panel at all. Also pins the gate itself:
+                      preloadGarmentAssets() is awaited on EVERY path now, not only the
+                      AUTO_ANGLE one. Front-only runs - most of the catalog - previously
+                      reached connectRealtime() with their reference never fetched,
+                      decoded or content-validated at all.
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -243,6 +259,7 @@ const SUITES = [
   ["eager-composite", "eager-composite.test.mjs"],
   ["pending-flag", "pending-flag.test.mjs"],
   ["pending-gate", "pending-gate.test.mjs"],
+  ["asset-prep-gate", "asset-prep-gate.test.mjs"],
   ["image-bytes-cache", "image-bytes-cache.test.mjs"],
   ["angle-race", "angle-race.test.mjs"],
   ["preload-composite", "preload-composite.test.mjs"],
