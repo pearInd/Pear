@@ -5868,6 +5868,57 @@ const PRESENCE_PROMPT_YAW_SUPPRESS_DEG = 25;
 let _torsoYawAbs = null;
 let _torsoYawAt  = 0;
 
+/* ── THE FACE, FROM THE POSE MODEL - "the mountain stayed on my chest after a full turn" ──
+   ────────────────────────────────────────────────────────────────────────────────
+   REPORTED: after a full 360 the BACK graphic stays latched on the shopper's FRONT.
+   THE ROOT CAUSE IS THE BROWSER, not the lock. Every front/back decision rests on the vote, and
+   the vote's strong direction is a FaceDetector detection - but the Shape Detection API's
+   FaceDetector is NOT exposed by default: verified 2026-09-14, `typeof FaceDetector` is
+   "undefined" in Chrome 152 and Edge 152 on Windows, and "function" only under
+   --enable-experimental-web-platform-features. So in the room's real browsers the watcher runs
+   its skin-ratio fallback, where a FRONT vote needs skin to fill ~18.5% of a 96px head band
+   (the 0.10 threshold plus the ORIENT_CONFIDENCE_MIN ramp) - and a face at try-on distance,
+   with shoulders and hips in frame, is a small fraction of that. The return leg therefore
+   never produced a FRONT vote, the face-return fast path (which counts detections) never
+   fired, and once BACK was on the wire - by back votes, or by the yaw-driven predictive BACK -
+   nothing could take it off. turn-yaw-window.test.mjs §9 models exactly that latch.
+   THE FACE WAS ALREADY BEING MEASURED. startPresenceWatcher() runs MediaPipe PoseLandmarker on
+   #webcam every tick, and BlazePose returns nose and eye landmarks with a visibility score. Where
+   there is no FaceDetector, that is the face: poseFaceVisibility() publishes the WEAKEST of the
+   nose and both eyes (a profile loses the far eye and must not count), and poseFaceVote() turns a
+   fresh, clearly visible face into a FRONT vote that classify() counts as a detection - so the
+   lock, the face streak and the corroborated face return all work again.
+   FRONT ONLY, like FaceDetector's own trusted direction. A face NOT seen is never turned into a
+   back vote here - that is the weak direction, and the skin heuristic keeps it.
+   UNMEASURED, stated: BlazePose predicts every landmark on every subject, and nothing in this repo
+   has measured its face visibility on a back-facing shopper. ORIENT_POSE_FACE_VIS sits well above
+   MediaPipe's own 0.5 "visible" line, and the fast return still needs a corroborated torso turn,
+   so a hallucinated face on a shopper standing with their back to the lens flips nothing on its
+   own before ORIENT_LOCK_FRAMES. ?pose_face=0 turns it off for an A/B. */
+const ORIENT_POSE_FACE_VIS = 0.8;   // min(nose, eyes) visibility that counts as a face in view
+const ORIENT_POSE_FACE = (() => {
+  try { return new URLSearchParams(location.search).get("pose_face") !== "0"; } catch (_) { return true; }
+})();
+let _poseFaceVis = null;   // latest min(nose, left eye, right eye) visibility, from the pose loop
+let _poseFaceAt  = 0;
+
+/** @param {{landmarks?:Array}|null} result a PoseLandmarker result @returns {number|null} */
+function poseFaceVisibility(result) {
+  const sets = result && Array.isArray(result.landmarks) ? result.landmarks : null;
+  const subject = sets && sets.length ? primaryPoseIndex(sets) : -1;
+  const lm = subject >= 0 ? sets[subject] : null;
+  if (!Array.isArray(lm)) return null;
+  const pts = [POSE_LANDMARK.NOSE, POSE_LANDMARK.LEFT_EYE, POSE_LANDMARK.RIGHT_EYE].map((i) => lm[i]);
+  if (pts.some((p) => !p || !Number.isFinite(p.visibility))) return null;
+  return Math.min(...pts.map((p) => p.visibility));
+}
+
+/** @returns {"front"|null} a FRONT vote from a fresh, clearly visible pose-model face - never "back" */
+function poseFaceVote({ enabled = ORIENT_POSE_FACE, vis, at, now }) {
+  if (!enabled || vis === null || !Number.isFinite(vis) || now - at > ORIENT_YAW_FRESH_MS) return null;
+  return vis >= ORIENT_POSE_FACE_VIS ? "front" : null;
+}
+
 /* ── THE TURN'S YAW WINDOW - "after a full 360 the back stays on my front" ─────────
    ────────────────────────────────────────────────────────────────────────────────
    REPORTED: turn to the back and the rear asset lands; keep turning to face the camera
@@ -6907,7 +6958,9 @@ function createOrientationWatcher() {
      never come back down, permanently biasing every later comparison toward "narrow". */
   let baselineWidth = 0, baselineSamples = 0;
   console.log("[PEAR] AI Auto - orientation watcher armed (engine:",
-    faceDetector ? "FaceDetector)" : "skin-ratio heuristic)",
+    faceDetector ? "FaceDetector)" : ORIENT_POSE_FACE
+      ? "MediaPipe face landmarks + skin-ratio heuristic - no FaceDetector in this browser)"
+      : "skin-ratio heuristic - ?pose_face=0)",
     "| GARMENT_FRONT:", abbrevImg(GARMENT_FRONT), "| GARMENT_BACK:", GARMENT_BACK ? abbrevImg(GARMENT_BACK) : "(none)");
 
   /* The lock's state as the explicit enum, via the shared vtonState() resolver so
@@ -7207,7 +7260,13 @@ function createOrientationWatcher() {
         vote = skinRatioVote(px);
       }
     } else {
-      vote = skinRatioVote(px);
+      /* NO FaceDetector - the default in Chrome and Edge (see poseFaceVisibility()). The pose
+         model's face comes first: a clearly visible one is a FRONT vote with the standing of a
+         detection, which is what lets the lock and the face return leave BACK at all. Anything
+         less falls through to the skin heuristic exactly as before, which still owns BACK. */
+      const poseVote = poseFaceVote({ vis: _poseFaceVis, at: _poseFaceAt, now: Date.now() });
+      if (poseVote) { vote = poseVote; faceSeen = true; lastConfidence = _poseFaceVis; lastSkinRatio = null; }
+      else vote = skinRatioVote(px);
     }
 
     /* Ambiguity is defined by the VOTE being withheld, which is exactly what the dead band
@@ -7727,7 +7786,10 @@ function createOrientationWatcher() {
       if (ORIENT_DEBUG) {
         const confidence = faceDetector && !fdBroken
           ? `face:${vote ?? "none"}(${(lastConfidence * 100).toFixed(0)}%)`
-          : `skin:${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}(${(lastConfidence * 100).toFixed(0)}% conf)`;
+          : lastFaceSeen
+            ? `pose-face:${vote}(vis ${(lastConfidence * 100).toFixed(0)}%)`
+            : `skin:${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}(${(lastConfidence * 100).toFixed(0)}% conf)` +
+              ` pose-face vis ${_poseFaceVis === null ? "n/a" : (_poseFaceVis * 100).toFixed(0) + "%"}`;
         // Status reflects the LOCK, not the raw per-frame vote: "locked" covers both a
         // clean agreeing vote AND a disagreeing one that hasn't cleared the threshold
         // yet - i.e. exactly the case that used to flip the reference frame-by-frame.
@@ -14949,6 +15011,7 @@ function finalizeVideoClip() {
 /* BlazePose 33-point topology. Named rather than inlined because a bare `landmarks[23]`
    is unreviewable, and an off-by-one here silently gates trousers on an elbow. */
 const POSE_LANDMARK = Object.freeze({
+  NOSE: 0, LEFT_EYE: 2, RIGHT_EYE: 5,   // the face, for orientation where FaceDetector is absent - see poseFaceVisibility()
   LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12,
   LEFT_HIP: 23, RIGHT_HIP: 24,
   LEFT_KNEE: 25, RIGHT_KNEE: 26,
@@ -15724,6 +15787,11 @@ function startPresenceWatcher() {
          edge-on peak - and a single unreadable frame left the watcher with nothing fresh.
          The throttle exists to bound re-drape DISPATCHES, and still does. */
       const sig = bodyContourSignature(result);
+      /* ...and THE FACE, from the same inference, for the orientation vote where the browser has
+         no FaceDetector (see poseFaceVisibility()). Published only when a subject was read, so an
+         empty frame goes stale rather than reading as a hidden face. */
+      const faceVis = poseFaceVisibility(result);
+      if (faceVis !== null) { _poseFaceVis = faceVis; _poseFaceAt = now; }
       if (sig && Number.isFinite(sig.yaw)) {
         _torsoYawAbs = Math.abs(sig.yaw);
         _torsoYawAt  = now;

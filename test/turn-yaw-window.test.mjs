@@ -602,5 +602,80 @@ console.log("\n── §8 A LIVE LOG MUST SAY WHY THE PREDICTION DID OR DID NOT 
     /PEAR_BUILD/.test(trace) && /garmentBlobIfWarm/.test(trace) && /_orientTurnSince/.test(trace));
 }
 
+console.log("\n── §9 THE FRONT HAS TO COME BACK WHERE FaceDetector DOES NOT EXIST ──");
+/* REPORTED: after a full 360 the BACK graphic stays latched on the shopper's FRONT chest.
+   VERIFIED ON THIS MACHINE: `typeof FaceDetector` is "undefined" in Chrome 152 and Edge 152 by
+   default, and "function" only with --enable-experimental-web-platform-features. So the watcher
+   runs its skin-ratio fallback, and a FRONT vote needs skin to fill ~18.5% of a 96px head band
+   (0.10 threshold + the 0.85 confidence ramp) - a face at try-on distance is far smaller. The
+   face-return path counts FaceDetector detections only, so it is inert too. Once BACK is on the
+   wire - by back votes, or by the yaw-driven predictive BACK - nothing can bring FRONT back.
+   The pose loop already runs MediaPipe on #webcam every tick, and BlazePose returns nose and eye
+   landmarks with a visibility score. Where there is no FaceDetector, THAT is the face. */
+{
+  const L = SRC.match(/const POSE_LANDMARK = Object\.freeze\(\{[\s\S]*?\}\);/);
+  check("POSE_LANDMARK carries the documented BlazePose face indices (nose 0, eyes 2 and 5)",
+    !!L && /NOSE: 0/.test(L[0]) && /LEFT_EYE: 2/.test(L[0]) && /RIGHT_EYE: 5/.test(L[0]), L && L[0]);
+
+  const f0 = SRC.indexOf("function poseFaceVisibility(");
+  const v0 = SRC.indexOf("function poseFaceVote(");
+  if (f0 === -1 || v0 === -1) {
+    check("poseFaceVisibility() and poseFaceVote() exist", false, "not implemented");
+  } else {
+    const grab = (i) => SRC.slice(i, SRC.indexOf("\n}\n", i) + 2);
+    const api = new Function("POSE_LANDMARK", "primaryPoseIndex", "ORIENT_POSE_FACE", "ORIENT_POSE_FACE_VIS",
+      "ORIENT_YAW_FRESH_MS", grab(f0) + grab(v0) + "\nreturn { poseFaceVisibility, poseFaceVote };")(
+      { NOSE: 0, LEFT_EYE: 2, RIGHT_EYE: 5 }, (sets) => (sets.length ? sets.length - 1 : -1), true,
+      numOr("ORIENT_POSE_FACE_VIS"), FRESH_MS);
+    const person = (nose, le, re) => Array.from({ length: 33 }, (_, i) =>
+      ({ x: 0.5, y: 0.5, visibility: i === 0 ? nose : i === 2 ? le : i === 5 ? re : 0.9 }));
+    check("visibility is the WEAKEST of nose and both eyes - a profile loses the far eye and must not read as a face",
+      api.poseFaceVisibility({ landmarks: [person(0.99, 0.97, 0.4)] }) === 0.4);
+    check("...read from the primary subject, like every other pose consumer",
+      api.poseFaceVisibility({ landmarks: [person(0.1, 0.1, 0.1), person(0.95, 0.96, 0.97)] }) === 0.95);
+    check("...and null with nobody in frame", api.poseFaceVisibility({ landmarks: [] }) === null &&
+      api.poseFaceVisibility(null) === null);
+    const VIS = numOr("ORIENT_POSE_FACE_VIS");
+    check("ORIENT_POSE_FACE_VIS is a real bar, well above MediaPipe's own 0.5 'visible' line",
+      VIS >= 0.7 && VIS < 1, String(VIS));
+    check("a fresh, clearly visible face votes FRONT",
+      api.poseFaceVote({ vis: 0.95, at: 1000, now: 1100 }) === "front");
+    check("...a hidden or partial face abstains - it NEVER votes back (an absence is the weak direction)",
+      api.poseFaceVote({ vis: 0.2, at: 1000, now: 1100 }) === null &&
+      api.poseFaceVote({ vis: VIS - 0.01, at: 1000, now: 1100 }) === null);
+    check("...a stale reading abstains, and ?pose_face=0 turns it off",
+      api.poseFaceVote({ vis: 0.95, at: 0, now: FRESH_MS + 1 }) === null &&
+      api.poseFaceVote({ enabled: false, vis: 0.95, at: 1000, now: 1100 }) === null);
+  }
+
+  const w0 = SRC.indexOf("function createOrientationWatcher()");
+  const watcher = SRC.slice(w0, SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0));
+  check("with no FaceDetector, classify() takes the pose model's face BEFORE the skin heuristic",
+    /const poseVote = poseFaceVote\(\{ vis: _poseFaceVis, at: _poseFaceAt, now: Date\.now\(\) \}\);/.test(watcher) &&
+    /if \(poseVote\) \{[^}]*vote = poseVote;[^}]*faceSeen = true;/.test(watcher) &&
+    /else vote = skinRatioVote\(px\);/.test(watcher));
+  check("...so the face streak - and the fast face return - counts it like a detection",
+    /lastFaceSeen = faceSeen;/.test(watcher));
+  check("...and the watcher says which engine it armed", /MediaPipe face landmarks/.test(watcher));
+  const p0 = SRC.indexOf("function startPresenceWatcher");
+  const pose = SRC.slice(p0, SRC.indexOf("/* ── end body-presence gate ── */", p0));
+  check("the pose loop publishes the face visibility on every tick, beside the yaw",
+    /const faceVis = poseFaceVisibility\(result\);/.test(pose) && /_poseFaceVis = faceVis;/.test(pose) &&
+    pose.indexOf("_poseFaceVis = faceVis;") < pose.indexOf("now - lastTopologyAt >= BODY_TOPOLOGY_SAMPLE_MS"));
+
+  if (orientFlipDecision && orientPredictBack) {
+    /* The model's "front" vote IS the face channel, so faceDeg -1 is the skin-only engine at
+       try-on distance (no front vote ever), and 45 is BlazePose seeing both eyes. */
+    const skinOnly = simulate({ speed: 90, k: 1, faceDeg: -1, backDeg: 150, rule: "predictive", publishMs: 240 });
+    const poseFace = simulate({ speed: 90, k: 1, faceDeg: 45, backDeg: 150, rule: "predictive", publishMs: 240 });
+    console.log(`        full 360, skin-only engine: final=${skinOnly.finalLock}   |   with pose face: final=${poseFace.finalLock}, leak ${poseFace.leakMs}ms`);
+    check("THE BUG, modelled: with no face channel a full 360 ends LATCHED on BACK",
+      skinOnly.everBack === true && skinOnly.finalLock === "back", JSON.stringify(skinOnly));
+    check("THE FIX: with the pose model's face the same 360 ends on FRONT, inside ORIENT_FACE_RETURN_FRAMES",
+      poseFace.finalLock === "front" && poseFace.leakMs !== null && poseFace.leakMs <= (FACE_F - 1) * SAMPLE_MS,
+      JSON.stringify(poseFace));
+  }
+}
+
 console.log(fails === 0 ? "\nturn-yaw-window: OK" : `\nturn-yaw-window: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);
