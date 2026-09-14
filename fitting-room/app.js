@@ -957,11 +957,72 @@ const sessionElapsedMs = () => (billingStartedAt ? Date.now() - billingStartedAt
 /* =============================================================================
    SCREEN 1 - Size / measurement calculator
    ============================================================================= */
+/* FOX MEN'S TOPS STANDARD (updated 2026-09-14). The chest-cm bands below are FOX's own
+   published ladder: S 90-95, M 96-101, L 102-107, XL 108-113, XXL 114-119. FOX gives no
+   height/weight bands - the form's MANDATORY inputs are height+weight, chest is only an
+   optional fine-tune field - so those columns are derived, not copied from FOX.
+
+   HOW THEY WERE DERIVED. The chart already had a working, shipped chest<->BMI
+   relationship (this is what let a 185cm/82kg shopper land on the pre-FOX "L" row) - the
+   four old center points (chest 91/98/106/114 -> BMI 21.8/23.0/24.4/25.8) fit a line
+   BMI = 0.174*chest + 5.96 (R^2 > 0.999). That fitted line, not the waist-inch formula
+   ADULT_JEANS_WAIST_CHART uses (chest and waist scale differently at the same BMI - do
+   not reuse that formula here, it was tried and put a lean 90cm chest at BMI 26), maps
+   each new FOX chest band to a BMI band. Height ranges reuse the old chart's own ladder
+   (real "sold into" ranges, not re-derived) with a new XXL tier extending the existing
+   step pattern. Weight bounds are the corner of each row's box: BMI_min at minHeight,
+   BMI_max at maxHeight - so a row's weight band is exactly what its own chest band
+   implies at its own height extremes.
+     S:   BMI 21.6-22.5 over 160-172cm -> weight 55-67
+     M:   BMI 22.7-23.5 over 170-180cm -> weight 65-76
+     L:   BMI 23.7-24.6 over 178-186cm -> weight 75-85
+     XL:  BMI 24.8-25.6 over 184-195cm -> weight 84-97
+     XXL: BMI 25.8-26.7 over 190-205cm -> weight 93-112 (new tier - FOX's ladder had no
+          XXL row to restore; this is the first time this chart has had one)
+   Benchmark this must hold (see CLAUDE.md §1 Layer D): 185cm/82kg -> BMI 23.96, inside
+   L's 23.71-24.58 band, and neither S nor M's height band reaches 185cm - so L wins as
+   the first (and only) genuine match in chart order, same as before this update.
+
+   waist/legs columns have no FOX spec at all (FOX publishes chest only for tops) and are
+   not covered by any test assertion (test/numeric-pants-sizing.test.mjs and
+   test/adult-pants-sizing.test.mjs only check these are finite numbers) - waist keeps
+   the old chart's own chest-14cm offset (91->77, 98->84, 106->92, 114->101, i.e. a
+   near-constant 14cm gap), legs keeps the old chart's own ~0.575x-height ratio.
+
+   THE CONSTANT NAME IS UNCHANGED ON PURPOSE. "ZARA_SIZE_CHART" is a load-bearing extract
+   marker (CLAUDE.md §2.6) matched as a literal opening-line string by
+   test/numeric-pants-sizing.test.mjs, test/adult-pants-sizing.test.mjs and
+   test/kids-product-sizes.test.mjs. Renaming it to something FOX-flavored would steal
+   every one of those matches for no behavioral gain - the data is FOX's, the identifier
+   is legacy plumbing. */
 const ZARA_SIZE_CHART = [
-  { size: "S",  minHeight: 160, maxHeight: 172, minWeight: 55, maxWeight: 65,  minChest: 88,  maxChest: 94,  minWaist: 74, maxWaist: 80,  minLegs: 94,  maxLegs: 98  },
-  { size: "M",  minHeight: 170, maxHeight: 180, minWeight: 65, maxWeight: 76,  minChest: 94,  maxChest: 102, minWaist: 80, maxWaist: 88,  minLegs: 98,  maxLegs: 102 },
-  { size: "L",  minHeight: 178, maxHeight: 186, minWeight: 75, maxWeight: 87,  minChest: 102, maxChest: 110, minWaist: 88, maxWaist: 96,  minLegs: 102, maxLegs: 106 },
-  { size: "XL", minHeight: 184, maxHeight: 195, minWeight: 85, maxWeight: 100, minChest: 110, maxChest: 118, minWaist: 96, maxWaist: 106, minLegs: 106, maxLegs: 112 },
+  { size: "S",   minHeight: 160, maxHeight: 172, minWeight: 55, maxWeight: 67,  minChest: 90,  maxChest: 95,  minWaist: 76,  maxWaist: 81,  minLegs: 92,  maxLegs: 99  },
+  { size: "M",   minHeight: 170, maxHeight: 180, minWeight: 65, maxWeight: 76,  minChest: 96,  maxChest: 101, minWaist: 82,  maxWaist: 87,  minLegs: 98,  maxLegs: 104 },
+  { size: "L",   minHeight: 178, maxHeight: 186, minWeight: 75, maxWeight: 85,  minChest: 102, maxChest: 107, minWaist: 88,  maxWaist: 93,  minLegs: 102, maxLegs: 107 },
+  { size: "XL",  minHeight: 184, maxHeight: 195, minWeight: 84, maxWeight: 97,  minChest: 108, maxChest: 113, minWaist: 94,  maxWaist: 99,  minLegs: 106, maxLegs: 112 },
+  { size: "XXL", minHeight: 190, maxHeight: 205, minWeight: 93, maxWeight: 112, minChest: 114, maxChest: 119, minWaist: 100, maxWaist: 105, minLegs: 109, maxLegs: 118 },
+];
+
+/* FOX WOMEN'S TOPS STANDARD - data received 2026-09-14, NOT WIRED INTO calculateSize().
+   There is currently no gender selector anywhere in the fitting room: one unisex adult
+   chart (ZARA_SIZE_CHART, above) is used for every top regardless of who is measuring.
+   FOX's women's ladder is a EU dress-size token (XS 34 / S 36 / M 38 / L 40 / XL 42 /
+   XXL 44), not a chest-cm band, so it cannot simply replace ZARA_SIZE_CHART's rows - it
+   is a different chart for a different form factor, the same reason
+   ADULT_JEANS_WAIST_CHART is a second chart rather than an edit to ADULT_PANTS_SIZE_CHART
+   (see that chart's own comment). Kept here, deliberately unreferenced, as the restore
+   seam: wiring it up for real needs a gender input on Screen 1, a branch in
+   calculateSize()'s chart selection, and its own test coverage - out of scope for a
+   size-chart data update. Do not delete this as "dead code" (CLAUDE.md §0's dead-code
+   rule for prompts applies here too, for the same reason: retained restore seam, not an
+   oversight) and do not wire it up piecemeal without adding the gender input first. */
+const WOMEN_TOPS_EU_SIZE_CHART = [
+  { size: "XS",  euSize: 34 },
+  { size: "S",   euSize: 36 },
+  { size: "M",   euSize: 38 },
+  { size: "L",   euSize: 40 },
+  { size: "XL",  euSize: 42 },
+  { size: "XXL", euSize: 44 },
 ];
 
 /* Children's numeric sizing (EU/IL kids convention, sizes 8-18).
@@ -1050,60 +1111,78 @@ function _normApos(s) {
     .toLowerCase();
 }
 
-/* ── ADULT_JEANS_WAIST_CHART - the WAIST-INCH ladder (24-48) ─────────────────────
-   THE BUG THIS CLOSES: "the calculator says L for a pair of jeans." A 185cm/82kg
-   shopper on a product sold 28/30/32/34/36 was sized against ZARA_SIZE_CHART - the
-   adult LETTER chart, which bands on CHEST - and handed back "L", a value that does
-   not appear anywhere in that product's size picker and cannot be selected.
+/* ── ADULT_JEANS_WAIST_CHART - the FOX WAIST-CM ladder (28-38, updated 2026-09-14) ──
+   THE BUG THIS CLOSES (history - keep reading past the FOX update below): "the
+   calculator says L for a pair of jeans." A 185cm/82kg shopper on a product sold
+   28/30/32/34/36 was sized against ZARA_SIZE_CHART - the adult LETTER chart, which
+   bands on CHEST - and handed back "L", a value that does not appear anywhere in
+   that product's size picker and cannot be selected.
 
    WHY THIS IS A SECOND CHART AND NOT AN EDIT TO ADULT_PANTS_SIZE_CHART.
    ────────────────────────────────────────────────────────────────────
-   ADULT_PANTS_SIZE_CHART above is the EU ladder (36-46). This is the WAIST-INCH
-   ladder (24-48). They are two different measurement systems that happen to share
-   the tokens 36-46, and a store lists one or the other, never both. Collapsing them
-   into one chart would have to pick a single meaning for "38" - either a 97cm EU
-   hip size or a 38-inch waist - and would be wrong for every store on the other
-   convention. adult-pants-sizing.test.mjs pins the EU behaviour precisely because
-   it was itself a fix for a real report; this chart is additive and leaves every
-   one of those assertions untouched.
+   ADULT_PANTS_SIZE_CHART above is the EU ladder (36-46). This is the WAIST ladder.
+   They are two different measurement systems that happen to share the tokens 36-46,
+   and a store lists one or the other, never both. Collapsing them into one chart
+   would have to pick a single meaning for "38" - either a 97cm EU hip size or a
+   38-size waist - and would be wrong for every store on the other convention.
+   adult-pants-sizing.test.mjs pins the EU behaviour precisely because it was itself
+   a fix for a real report; this chart is additive and leaves every one of those
+   assertions untouched.
 
    WHICH CHART A PRODUCT GETS is decided in calculateSize() from the product's OWN
    size run, EU first (see pantsChartForSizes below) - never from a guess.
 
-   HOW THE BANDS WERE DERIVED. Waist circumference tracks BMI far more closely than
-   it tracks weight alone, which is the whole reason the reported case was wrong in
-   the first place: at 82kg the shopper reads as "large" on a weight-only view, and
-   as a lean 24.0 BMI - a 32in waist - once height is accounted for. Each row's
-   centre is BMI = (waist_in x 2.54 + 14) / 4, the standard male waist/BMI
-   regression, and the height/weight bands are that BMI band widened to the height
-   range the size is actually sold into. That is why the 32 row reaches 190cm while
-   the 30 row stops at 180: a 185cm body is simply not a 30 at any weight this chart
-   admits.
+   THE 2026-09-14 FOX UPDATE - ROW LIST REPLACED, METHOD KEPT. FOX's own men's waist
+   ladder is exactly 8 sizes - 28 (71-73cm), 30 (76-78cm), 31 (79-81cm), 32 (81-83cm),
+   33 (84-86cm), 34 (86-88cm), 36 (91-93cm), 38 (96-98cm) - narrower bands than the
+   old 24-48-even chart this replaces, and it does NOT cover 24, 26, 40, 42, 44, 46,
+   48. Those bodies now genuinely fall outside every row (the overflow/no-match guard
+   below handles that the same way it already handles any out-of-catalog body -
+   CLAUDE.md §2.5, never a guess) rather than getting an old chart's extrapolated
+   size. This was a deliberate scope call, not an oversight - see the PR description
+   for the decision to replace rather than merge/extend.
+
+   HOW THE BANDS WERE DERIVED (method unchanged from the original fix, only the input
+   waist values changed). Waist circumference tracks BMI far more closely than it
+   tracks weight alone, which is the whole reason the original reported case was
+   wrong in the first place: at 82kg the shopper reads as "large" on a weight-only
+   view, and as a lean 24.0 BMI once height is accounted for. Each row's centre is
+   BMI = (waist_cm + 14) / 4, the same male waist/BMI regression the original fix
+   used (waist_in * 2.54 IS waist_cm, so this chart plugs FOX's cm values in
+   directly - do not re-multiply by 2.54, that was only ever a units conversion for
+   an inch input). Height/weight bounds are the corner of each row's box: BMI at
+   minWaist paired with minHeight, BMI at maxWaist paired with maxHeight - so a row's
+   weight band is exactly what its own FOX waist band implies at its own height
+   extremes. Height ranges below 32 reuse the old chart's ladder for those same
+   numeric sizes (already a real "sold into" range, not re-derived); 31 and 33 are
+   new rows and interpolate their height range from the neighbours either side.
+   Benchmark this must hold (CLAUDE.md §1 Layer D): 185cm/82kg -> BMI 23.96, which
+   sits in row 32's 23.75-24.25 band (82cm waist center = BMI 24.0 almost exactly) -
+   row 31 also reaches height 185 but its weight band tops out at 81kg, so 32 is the
+   first genuine match in chart order, same "32" this benchmark got before the
+   FOX update.
 
    ROW ORDER IS LOAD-BEARING. calculateSize() keeps the FIRST genuinely-fitting row
    when no optional waist measurement narrows it (every candidate scores penalty 0,
-   and the first 0 wins), so rows run smallest-first and adjacent weight bands
-   overlap by ~2kg. A shopper on a boundary is offered the SMALLER size, matching
-   how denim is actually bought - jeans stretch out, they do not shrink in.
+   and the first 0 wins), so rows run smallest-first. A shopper on a boundary is
+   offered the SMALLER size, matching how denim is actually bought - jeans stretch
+   out, they do not shrink in.
 
    Columns mirror ADULT_PANTS_SIZE_CHART exactly (waist + hips, no chest/legs) so
    coreHwPenalty() and calculateSize()'s fine-tune pass work against it unmodified.
    minHips/maxHips ride along for a standards-comparable chart and for a future hip
-   input; there is no hips field on the form today, so they contribute no penalty. */
+   input; there is no hips field on the form today, so they contribute no penalty -
+   FOX did not publish a hip figure either, so these keep the old chart's own
+   waist+21cm offset, same as every prior row here. */
 const ADULT_JEANS_WAIST_CHART = [
-  { size: "24", minHeight: 150, maxHeight: 163, minWeight: 40,  maxWeight: 47,  minWaist: 58,  maxWaist: 64,  minHips: 80,  maxHips: 86  },
-  { size: "26", minHeight: 152, maxHeight: 168, minWeight: 46,  maxWeight: 53,  minWaist: 63,  maxWaist: 69,  minHips: 85,  maxHips: 91  },
-  { size: "28", minHeight: 155, maxHeight: 178, minWeight: 52,  maxWeight: 64,  minWaist: 68,  maxWaist: 74,  minHips: 89,  maxHips: 96  },
-  { size: "30", minHeight: 160, maxHeight: 180, minWeight: 62,  maxWeight: 73,  minWaist: 73,  maxWaist: 80,  minHips: 94,  maxHips: 102 },
-  { size: "32", minHeight: 165, maxHeight: 190, minWeight: 71,  maxWeight: 84,  minWaist: 79,  maxWaist: 86,  minHips: 99,  maxHips: 108 },
-  { size: "34", minHeight: 170, maxHeight: 195, minWeight: 82,  maxWeight: 96,  minWaist: 85,  maxWaist: 93,  minHips: 105, maxHips: 115 },
-  { size: "36", minHeight: 172, maxHeight: 198, minWeight: 94,  maxWeight: 109, minWaist: 92,  maxWaist: 100, minHips: 111, maxHips: 122 },
-  { size: "38", minHeight: 174, maxHeight: 200, minWeight: 107, maxWeight: 123, minWaist: 99,  maxWaist: 107, minHips: 118, maxHips: 129 },
-  { size: "40", minHeight: 174, maxHeight: 200, minWeight: 120, maxWeight: 138, minWaist: 106, maxWaist: 115, minHips: 125, maxHips: 137 },
-  { size: "42", minHeight: 174, maxHeight: 200, minWeight: 135, maxWeight: 154, minWaist: 114, maxWaist: 123, minHips: 132, maxHips: 145 },
-  { size: "44", minHeight: 174, maxHeight: 202, minWeight: 150, maxWeight: 170, minWaist: 122, maxWaist: 131, minHips: 139, maxHips: 153 },
-  { size: "46", minHeight: 174, maxHeight: 205, minWeight: 166, maxWeight: 188, minWaist: 130, maxWaist: 139, minHips: 147, maxHips: 161 },
-  { size: "48", minHeight: 174, maxHeight: 205, minWeight: 183, maxWeight: 205, minWaist: 138, maxWaist: 148, minHips: 155, maxHips: 170 },
+  { size: "28", minHeight: 155, maxHeight: 178, minWeight: 51, maxWeight: 69,  minWaist: 71, maxWaist: 73, minHips: 92,  maxHips: 94  },
+  { size: "30", minHeight: 160, maxHeight: 180, minWeight: 58, maxWeight: 75,  minWaist: 76, maxWaist: 78, minHips: 97,  maxHips: 99  },
+  { size: "31", minHeight: 163, maxHeight: 185, minWeight: 62, maxWeight: 81,  minWaist: 79, maxWaist: 81, minHips: 100, maxHips: 102 },
+  { size: "32", minHeight: 165, maxHeight: 190, minWeight: 65, maxWeight: 88,  minWaist: 81, maxWaist: 83, minHips: 102, maxHips: 104 },
+  { size: "33", minHeight: 168, maxHeight: 193, minWeight: 69, maxWeight: 93,  minWaist: 84, maxWaist: 86, minHips: 105, maxHips: 107 },
+  { size: "34", minHeight: 170, maxHeight: 195, minWeight: 72, maxWeight: 97,  minWaist: 86, maxWaist: 88, minHips: 107, maxHips: 109 },
+  { size: "36", minHeight: 172, maxHeight: 198, minWeight: 78, maxWeight: 105, minWaist: 91, maxWaist: 93, minHips: 112, maxHips: 114 },
+  { size: "38", minHeight: 174, maxHeight: 200, minWeight: 83, maxWeight: 112, minWaist: 96, maxWaist: 98, minHips: 117, maxHips: 119 },
 ];
 
 /* The waist-inch ladder, derived from the chart so the two can never drift apart -

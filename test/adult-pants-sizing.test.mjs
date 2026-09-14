@@ -207,28 +207,31 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
         "        a numeric guess",
     /^(XS|S|M|L|XL|XXL|3XL)$/.test(noList.api.getUserSize()), noList.api.getUserSize());
 
-  /* THE OVERFLOW GUARD, CHART-AWARE. ADULT_PANTS_SIZE_CHART's ceiling (195cm/102kg) is
-     slightly ABOVE ZARA_SIZE_CHART's (195cm/100kg) - a body at 195cm/101kg overflows
-     the letter chart but is still a genuine fit on the pants chart, which is exactly
-     what proves the guard reads the RESOLVED chart's own ceiling, not a hardcoded one. */
-  const overflowsLettersOnly = harness({ height: 195, weight: 101, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
+  /* THE OVERFLOW GUARD, CHART-AWARE. Updated 2026-09-14: the FOX top update added an
+     XXL row to ZARA_SIZE_CHART (190-205cm/93-112kg), which now reaches HIGHER than
+     ADULT_PANTS_SIZE_CHART's own ceiling (195cm/102kg) - the polarity is the opposite
+     of what it was before that update (the letter chart used to be the lower ceiling
+     of the two), but the thing being proven is the same: the guard reads the
+     RESOLVED chart's own ceiling, not a hardcoded one, so a body can overflow one
+     chart while genuinely fitting the other depending on which garment it's on. */
+  const overflowsLettersOnly = harness({ height: 198, weight: 105, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
   overflowsLettersOnly.api.calculateSize();
-  check("195cm/101kg on a PANTS product: within the pants chart's own ceiling (102kg)\n" +
-        "        - resolves to 46, not an overflow",
-    overflowsLettersOnly.api.getUserSize() === "46", overflowsLettersOnly.api.getUserSize());
-  check("...Continue is enabled",
-    overflowsLettersOnly.els["btn-next-screen"].disabled === false);
-
-  const overflowsLettersProduct = harness({ height: 195, weight: 101, pendingSizes: ["S", "M", "L", "XL"] });
-  overflowsLettersProduct.api.calculateSize();
-  check("THE SAME 195cm/101kg body on a LETTER product: overflows ZARA_SIZE_CHART's\n" +
-        "        own ceiling (100kg) - 'no size available', not a silent guess",
-    overflowsLettersProduct.els.sizeResult.innerText === "sizeResultOverflow",
-    overflowsLettersProduct.els.sizeResult.innerText);
+  check("198cm/105kg on a PANTS product: ABOVE the EU pants chart's own ceiling\n" +
+        "        (195cm/102kg) - overflow, not a silent guess",
+    overflowsLettersOnly.els.sizeResult.innerText === "sizeResultOverflow",
+    overflowsLettersOnly.els.sizeResult.innerText);
   check("...Continue stays LOCKED",
-    overflowsLettersProduct.els["btn-next-screen"].disabled === true);
+    overflowsLettersOnly.els["btn-next-screen"].disabled === true);
   check("...and no size is recommended",
-    overflowsLettersProduct.api.getUserSize() === null);
+    overflowsLettersOnly.api.getUserSize() === null);
+
+  const overflowsLettersProduct = harness({ height: 198, weight: 105, pendingSizes: ["S", "M", "L", "XL"] });
+  overflowsLettersProduct.api.calculateSize();
+  check("THE SAME 198cm/105kg body on a LETTER product: within ZARA_SIZE_CHART's own\n" +
+        "        (post-FOX, XXL-extended) ceiling - resolves to XXL, not an overflow",
+    overflowsLettersProduct.api.getUserSize() === "XXL", overflowsLettersProduct.api.getUserSize());
+  check("...Continue is enabled",
+    overflowsLettersProduct.els["btn-next-screen"].disabled === false);
 
   /* Genuinely out of BOTH charts. */
   const overflowsBoth = harness({ height: 205, weight: 115, pendingSizes: ["36", "38", "40", "42", "44", "46"] });

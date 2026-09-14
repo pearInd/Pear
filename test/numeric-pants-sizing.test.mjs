@@ -239,9 +239,11 @@ console.log("\n── §4 isPantsProduct(): four tiers, strongest evidence first
 console.log("\n── §5 pantsChartForSizes(): EU keeps first claim on its own ladder ──");
 {
   const { pantsChartForSizes, ADULT_PANTS_SIZE_CHART, ADULT_JEANS_WAIST_CHART, ADULT_JEANS_WAIST_SIZES } = pure;
-  check("the waist chart carries the inch ladder 24-48, one row per even size",
+  check("the waist chart is the FOX ladder (28-38, updated 2026-09-14) - replaced\n" +
+        "        wholesale, so 24/26/40/42/44/46/48 are deliberately gone (CLAUDE.md\n" +
+        "        §2.5 handles those bodies via the overflow/no-match guard, not a guess)",
     JSON.stringify(ADULT_JEANS_WAIST_CHART.map((r) => r.size)) ===
-    JSON.stringify(["24", "26", "28", "30", "32", "34", "36", "38", "40", "42", "44", "46", "48"]));
+    JSON.stringify(["28", "30", "31", "32", "33", "34", "36", "38"]));
   check("every waist row carries waist AND hip bands, matching ADULT_PANTS_SIZE_CHART's\n" +
         "        shape so coreHwPenalty() and the fine-tune pass work unmodified",
     ADULT_JEANS_WAIST_CHART.every((r) =>
@@ -341,12 +343,17 @@ console.log("\n── §6 calculateSize() END TO END: the reported case, and wha
   check("a numbered run on a KNOWN non-bottoms item stays on the letter chart",
     /^(XS|S|M|L|XL|XXL|3XL)$/.test(numberedTop.api.getUserSize() || ""), numberedTop.api.getUserSize());
 
-  /* The waist fine-tune still narrows between two genuinely-fitting rows, the same way
-     it does on the EU chart - 185/82 fits BOTH 32 (71-84kg) and 34 (82-96kg). */
-  const wide = harness({ height: 185, weight: 82, waist: 90, pendingSizes: JEANS_RUN });
+  /* The waist fine-tune still narrows among several genuinely-fitting rows, same as on
+     the EU chart - the FOX bands are tighter than the old chart's, so 185/82 now
+     genuinely fits FOUR rows on height/weight alone (32: 65-88kg, 33: 69-93kg,
+     34: 72-97kg, 36: 78-105kg all admit 82kg at 185cm) and waist is what picks among
+     them: 87cm sits inside 34's 86-88cm band and outside every other candidate's
+     (32 tops out at 83, 33 at 86, 36 opens at 91), so 34 wins even though it is
+     neither the first nor the last row that matched on height/weight. */
+  const wide = harness({ height: 185, weight: 82, waist: 87, pendingSizes: JEANS_RUN });
   wide.api.calculateSize();
-  check("a 90cm waist reading (above 32's 79-86 band, inside 34's 85-93) pulls the\n" +
-        "        recommendation up to the larger of two genuinely-fitting rows",
+  check("an 87cm waist reading (inside 34's 86-88cm band only) pulls the recommendation\n" +
+        "        to 34 out of the four rows that genuinely fit on height/weight alone",
     wide.api.getUserSize() === "34", wide.api.getUserSize());
 
   /* The chart-aware overflow guard must read the WAIST chart's own ceiling. */
