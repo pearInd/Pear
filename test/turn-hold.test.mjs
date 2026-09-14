@@ -310,7 +310,7 @@ console.log("\n── wiring: single-view items get the SAME protection, with th
      mutex lives inside maybeUpdateProfile (`applying`), not here, so dropping the await
      cannot produce overlapping applies. */
   check("maybeUpdateProfile's per-tick call is skipped only for a PENDING DUAL-VIEW swap",
-    /if \(!\(dualView && confirmed\)\) \{\s*\n(?:[^\n]*\n)*?\s*maybeUpdateProfile\(lastProfileScore\)\.catch\(\(\) => \{\}\);/.test(watcher));
+    /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{\s*\n(?:[^\n]*\n)*?\s*maybeUpdateProfile\(lastProfileScore\)\.catch\(\(\) => \{\}\);/.test(watcher));
   check("...and runs in the background, so a slow apply cannot stall the next sample",
     /maybeUpdateProfile\(lastProfileScore\)\.catch\(\(\) => \{\}\);/.test(watcher) &&
     !/await maybeUpdateProfile\(/.test(watcher));
@@ -371,7 +371,7 @@ console.log("\n── wiring: a torn-down watcher's in-flight maybeSwap() can't 
      reconnect path (see reconnect.test.mjs). Asserted structurally: a disposed check sits
      immediately after each of maybeSwap()'s three await points, before anything the await
      resolved to is used for anything. */
-  const swap = extract("async function maybeSwap(next)", "\n  }\n\n  /* The edge-on counterpart");
+  const swap = extract("async function maybeSwap(next, predictive = false)", "\n  }\n\n  /* The edge-on counterpart");
   check("guarded immediately after the back-Blob fetch (before the null check uses it)",
     /const backBlob = await garmentBlobCached\(GARMENT_BACK\);[\s\S]*?\n {6}if \(disposed\) return;\n {6}if \(!backBlob\)/.test(swap),
     swap.slice(swap.indexOf("const backBlob"), swap.indexOf("const backBlob") + 120));

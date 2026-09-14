@@ -64,6 +64,9 @@ const SAMPLE_MS  = numOr("ORIENT_SAMPLE_MS");
 const COOLDOWN   = numOr("ORIENT_COOLDOWN_MS");
 const FRESH_MS   = numOr("ORIENT_YAW_FRESH_MS");
 const HOLD_MAX   = numOr("ORIENT_TURN_HOLD_MAX_MS");
+const EDGE_DEG   = numOr("ORIENT_EDGE_ON_DEG");
+const DESCENT    = numOr("ORIENT_PREDICT_DESCENT_DEG");
+const DWELL_MS   = numOr("ORIENT_PREDICT_DWELL_MS");
 
 check("ORIENT_FACE_RETURN_FRAMES exists, and sits between acquisition and the corroborated bar",
   Number.isFinite(FACE_F) && FACE_F >= ACQ_F && FACE_F >= 2 && FACE_F < CORR_F,
@@ -71,19 +74,24 @@ check("ORIENT_FACE_RETURN_FRAMES exists, and sits between acquisition and the co
 
 const start = SRC.indexOf("function makeTurnYawWindow(");
 const end   = SRC.indexOf("/* ── THE BEST FRONT-FACING FRAME");
-let makeTurnYawWindow = null, orientFlipDecision = null;
+let makeTurnYawWindow = null, orientFlipDecision = null, orientPredictBack = null;
 if (start === -1 || end === -1 || end < start) {
   check("makeTurnYawWindow() exists in app.js", false, "the peak-since-agreement window is not implemented");
 } else {
   const api = new Function("ORIENT_YAW_TURN_DEG", "PRESENCE_PROMPT_YAW_SUPPRESS_DEG", "ORIENT_ACQUIRE_FRAMES",
     "ORIENT_LOCK_FRAMES", "ORIENT_CORROBORATED_FRAMES", "ORIENT_LOCK_MS", "ORIENT_FACE_RETURN_FRAMES",
+    "ORIENT_EDGE_ON_DEG", "ORIENT_PREDICT_DESCENT_DEG", "ORIENT_PREDICT_DWELL_MS", "ORIENT_PREDICTIVE_BACK",
     SRC.slice(start, end) +
-    "\nreturn { makeTurnYawWindow, orientFlipDecision: typeof orientFlipDecision === 'function' ? orientFlipDecision : null };")(
-    TURN_DEG, LOSS_DEG, ACQ_F, LOCK_F, CORR_F, LOCK_MS, FACE_F);
+    "\nreturn { makeTurnYawWindow," +
+    " orientFlipDecision: typeof orientFlipDecision === 'function' ? orientFlipDecision : null," +
+    " orientPredictBack: typeof orientPredictBack === 'function' ? orientPredictBack : null };")(
+    TURN_DEG, LOSS_DEG, ACQ_F, LOCK_F, CORR_F, LOCK_MS, FACE_F, EDGE_DEG, DESCENT, DWELL_MS, true);
   makeTurnYawWindow = api.makeTurnYawWindow;
   orientFlipDecision = api.orientFlipDecision;
+  orientPredictBack = api.orientPredictBack;
   check("orientFlipDecision() exists beside the window, so the flip bar is real code under test",
     typeof orientFlipDecision === "function");
+  check("orientPredictBack() exists beside them", typeof orientPredictBack === "function");
 }
 
 console.log("── §1 THE WINDOW AND THE FLIP DECISION ──");
@@ -184,8 +192,9 @@ function simulate({ speed, k, faceDeg, backDeg, occludeAbove = Infinity, rule, p
   };
   const total = seg.reduce((a, [, d]) => a + d, 0);
   let lock = "front", lastVote = null, streak = 0, streakSince = 0, faceStreak = 0, lastSwapAt = -Infinity, busyUntil = 0;
+  let lastSwapPredictive = false, predictiveUsed = false, backVisibleAt = null, wrongSideMs = 0, everBack = false;
   let reading = null, nextPublish = 0, baseline = null;
-  const win = rule === "new" ? makeTurnYawWindow() : null;
+  const win = rule !== "old" ? makeTurnYawWindow() : null;
   let firstBackVoteAt = null, facedFrontAt = null, frontLockedAt = null, backLockedAt = null;
   for (let t = 0; t <= total; t += SAMPLE_MS) {
     while (nextPublish <= t) {                  // the pose loop runs on its own clock, even mid-swap
@@ -193,10 +202,13 @@ function simulate({ speed, k, faceDeg, backDeg, occludeAbove = Infinity, rule, p
       if (y !== null) reading = { yaw: y, at: nextPublish };
       nextPublish += publishMs;
     }
-    if (t < busyUntil) continue;                // maybeSwap is awaited: the sampler is paused
     const phi = facing(angleAt(t));
+    if (backVisibleAt === null && phi >= 120) backVisibleAt = t;
+    if (lock === "back" && phi < 90) wrongSideMs += SAMPLE_MS;   // back reference on a front-facing body
+    if (t < busyUntil) continue;                // maybeSwap is awaited: the sampler is paused
     const vote = phi <= faceDeg ? "front" : phi >= backDeg ? "back" : null;
-    const yaw = reading && t - reading.at <= FRESH_MS ? reading.yaw : null;
+    const fresh = reading && t - reading.at <= FRESH_MS;
+    const yaw = fresh ? reading.yaw : null;
     if (lock === "front" && vote === "back" && firstBackVoteAt === null) firstBackVoteAt = t;
     if (backLockedAt !== null && facedFrontAt === null && vote === "front") facedFrontAt = t;
     if (vote) {
@@ -206,21 +218,30 @@ function simulate({ speed, k, faceDeg, backDeg, occludeAbove = Infinity, rule, p
     }
     const needsSwitch = !!lastVote && lastVote !== lock;
     const held = lastVote ? t - streakSince : 0;
-    let confirmed;
-    if (rule === "new") {
-      const c = win.observe(vote, lock, yaw).corroborates;
+    let confirmed, predict = false;
+    if (rule !== "old") {
+      const c = win.observe(vote, lock, yaw, fresh ? reading.at : t).corroborates;
       confirmed = orientFlipDecision({ acquiring: false, needsSwitch, streak, held, yawCorroborates: c, lock, lastVote, faceStreak }).confirmed;
+      predict = rule === "predictive" && !confirmed &&
+        orientPredictBack({ acquiring: false, lock, win, yawAbs: yaw, now: t });
     } else {
       const c = yaw !== null && baseline !== null && Math.abs(yaw - baseline) >= TURN_DEG;
       confirmed = needsSwitch && (streak >= (c ? Math.min(LOCK_F, CORR_F) : LOCK_F) || held >= LOCK_MS);
     }
-    if (confirmed && t - lastSwapAt >= COOLDOWN) {
-      lock = lastVote; lastSwapAt = t; busyUntil = t + swapMs;
+    /* Mirrors maybeSwap(): the cooldown holds every swap EXCEPT withdrawing a predictive BACK. */
+    const withdrawal = confirmed && lastVote === "front" && lastSwapPredictive;
+    if (confirmed && (t - lastSwapAt >= COOLDOWN || withdrawal)) {
+      lock = lastVote; lastSwapAt = t; busyUntil = t + swapMs; lastSwapPredictive = false;
       if (lock === "back" && backLockedAt === null) backLockedAt = t;
       if (lock === "front" && backLockedAt !== null && frontLockedAt === null) frontLockedAt = t;
+    } else if (predict && t - lastSwapAt >= COOLDOWN) {
+      lock = "back"; lastSwapAt = t; busyUntil = t + swapMs; lastSwapPredictive = true; predictiveUsed = true;
+      lastVote = null; streak = 0; faceStreak = 0;          // the pre-turn front streak must not count
+      if (backLockedAt === null) backLockedAt = t;
     }
+    if (lock === "back") everBack = true;
   }
-  return { backLockedAt, frontLockedAt, facedFrontAt,
+  return { backLockedAt, frontLockedAt, facedFrontAt, predictiveUsed, backVisibleAt, wrongSideMs, everBack, finalLock: lock,
            backConfirmMs: backLockedAt !== null && firstBackVoteAt !== null ? backLockedAt - firstBackVoteAt : null,
            leakMs: frontLockedAt !== null && facedFrontAt !== null ? frontLockedAt - facedFrontAt : null };
 }
@@ -362,7 +383,7 @@ console.log("\n── §5 THE WIRING ──");
   check("one window per watcher instance, so an item swap cannot inherit a pose",
     /const yawWindow = makeTurnYawWindow\(\);/.test(watcher));
   check("fed the vote, the lock BEFORE this tick's swap, and a fresh-only reading",
-    /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null\)/.test(watcher));
+    /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null,/.test(watcher));
   check("the streak-start baseline is gone - it cannot be measured after the peak it needs",
     !/yawAtStreakStart/.test(SRC));
   check("the tick confirms through orientFlipDecision(), fed the face streak",
@@ -389,6 +410,113 @@ console.log("\n── §5 THE WIRING ──");
   const recon = SRC.slice(SRC.indexOf("async function reconditionForTopology("), SRC.indexOf("/* ── end body-presence gate ── */"));
   check("...and the dispatcher re-checks the flag itself (belt and braces, like its wireBusy check)",
     /if \(orientTurnInProgress\(\)\) \{/.test(recon));
+}
+
+console.log("\n── §6 PREDICTIVE BACK: dispatch while the torso is still passing through ──");
+/* THE REPORT: on FRONT -> BACK the exported clip shows the back artwork rendered over the
+   front's "PEAK" for about a second before the back settles. The clip records #aiVideo - the
+   raw Decart output - so no cover can be in it. BACK used to be dispatched only after four
+   corroborated back votes, and a back vote needs the back of the head (~150 degrees): the back
+   was already facing the lens, Decart rendered the FRONT reference on it, and then blended from
+   that into the back. There is no client call that flushes Decart's temporal state, so the one
+   lever is WHEN the back reference arrives. */
+if (orientPredictBack && makeTurnYawWindow) {
+  const mk = (steps) => {
+    const w = makeTurnYawWindow();
+    for (const [vote, lock, yaw, at] of steps) w.observe(vote, lock, yaw, at);
+    return w;
+  };
+  const through = mk([["front", "front", 5, 0], [null, "front", 40, 240], [null, "front", 66, 480], [null, "front", 86, 720]]);
+  check("rising through edge-on is not yet a prediction - still-rising is also what a profile check looks like",
+    orientPredictBack({ acquiring: false, lock: "front", win: through, yawAbs: 86, now: 740 }) === false);
+  const passed = mk([["front", "front", 5, 0], [null, "front", 40, 240], [null, "front", 66, 480], [null, "front", 86, 720], [null, "front", 50, 960]]);
+  check("descending past edge-on inside the dwell, no face since the turn began: predict BACK",
+    orientPredictBack({ acquiring: false, lock: "front", win: passed, yawAbs: 50, now: 980 }) === true);
+  check("...never when the lock is already BACK, never while acquiring, never with the kill switch off",
+    orientPredictBack({ acquiring: false, lock: "back", win: passed, yawAbs: 50, now: 980 }) === false &&
+    orientPredictBack({ acquiring: true, lock: "front", win: passed, yawAbs: 50, now: 980 }) === false &&
+    orientPredictBack({ enabled: false, acquiring: false, lock: "front", win: passed, yawAbs: 50, now: 980 }) === false);
+  check("...never on a stale reading",
+    orientPredictBack({ acquiring: false, lock: "front", win: passed, yawAbs: null, now: 980 }) === false);
+  check("...and never once the torso has DWELT at edge-on past ORIENT_PREDICT_DWELL_MS - that is a pose being held",
+    orientPredictBack({ acquiring: false, lock: "front", win: passed, yawAbs: 50, now: 480 + DWELL_MS + 1 }) === false);
+  const shallow = mk([["front", "front", 5, 0], [null, "front", 30, 240], [null, "front", 44, 480], [null, "front", 20, 720]]);
+  check("a turn that never reached edge-on predicts nothing, however far it comes back",
+    orientPredictBack({ acquiring: false, lock: "front", win: shallow, yawAbs: 20, now: 740 }) === false);
+  const face = mk([["front", "front", 5, 0], [null, "front", 66, 240], [null, "front", 86, 480], ["front", "front", 50, 720]]);
+  check("a face in between closes the window - a shopper who looked back at the screen is not turning away",
+    orientPredictBack({ acquiring: false, lock: "front", win: face, yawAbs: 50, now: 740 }) === false);
+}
+
+if (orientPredictBack && orientFlipDecision) {
+  const profiles = [];
+  for (const speed of [90, 120]) for (const k of [1, 0.75]) for (const faceDeg of [30, 40]) for (const backDeg of [140, 155])
+    profiles.push({ speed, k, faceDeg, backDeg });
+  const rows = profiles.map((p) => ({
+    p,
+    vote: simulate({ ...p, rule: "new", publishMs: 240 }),
+    pred: simulate({ ...p, rule: "predictive", publishMs: 240 }),
+  }));
+  for (const { p, vote, pred } of rows) {
+    console.log(`        ${p.speed}°/s k=${p.k} face<=${p.faceDeg}° back>=${p.backDeg}°  BACK sent at ` +
+      `${vote.backLockedAt}ms -> ${pred.backLockedAt}ms${pred.predictiveUsed ? " (predictive)" : " (vote path)"}` +
+      ` | back faces the lens at ${pred.backVisibleAt}ms | return leak ${pred.leakMs}ms`);
+  }
+  const used = rows.filter(({ pred }) => pred.predictiveUsed);
+  check("the prediction engages on every profile of a continuous turn",
+    used.length === rows.length, `${used.length}/${rows.length}`);
+  check("...and sends BACK earlier than the vote path by at least its whole corroborated bar",
+    used.every(({ vote, pred }) => vote.backLockedAt - pred.backLockedAt >= (CORR_F - 1) * SAMPLE_MS),
+    used.map(({ vote, pred }) => vote.backLockedAt - pred.backLockedAt).join(","));
+  check("...while the torso is still rotating - before the turn has finished",
+    used.every(({ p, pred }) => pred.backLockedAt < 1000 + (180 / p.speed) * 1000));
+  check("the return leg is unchanged by it",
+    rows.every(({ pred }) => pred.leakMs !== null && pred.leakMs <= (FACE_F - 1) * SAMPLE_MS),
+    rows.map(({ pred }) => pred.leakMs).join(","));
+
+  /* THE CASE THE DWELL EXISTS FOR - checking the side view. Turn to edge-on, hold it, come back.
+     Yaw alone cannot tell this from a turn that kept going (it folds at 90), so the prediction
+     must not fire on it. */
+  const holds = [];
+  for (const k of [1, 0.75]) for (const faceDeg of [30, 40]) for (const holdMs of [1000, 1500]) {
+    holds.push({ k, faceDeg, holdMs, r: simulate({ speed: 90, k, faceDeg, backDeg: 150, rule: "predictive", publishMs: 240,
+      script: [[0, 1000], [90, 1000], [90, holdMs], [0, 1000], [0, 2000]] }) });
+  }
+  check("a held profile check (1s+ at edge-on) never puts GARMENT_BACK on the wire",
+    holds.every(({ r }) => !r.everBack), JSON.stringify(holds.map(({ k, faceDeg, holdMs, r }) => ({ k, faceDeg, holdMs, back: r.everBack }))));
+
+  /* THE RESIDUAL COST, stated rather than hidden: a glance to edge-on that reverses at once is
+     geometrically identical to a turn that kept going, until the face comes back. When it
+     predicts, the face return must take the BACK off within the swap cooldown - not after it. */
+  const glances = [];
+  for (const [peakDeg, legMs] of [[85, 750], [90, 900], [100, 900], [110, 1000]]) for (const faceDeg of [30, 40]) {
+    const r = simulate({ speed: 90, k: 1, faceDeg, backDeg: 150, rule: "predictive", publishMs: 240,
+      script: [[0, 1000], [peakDeg, legMs], [0, legMs], [0, 2500]] });
+    glances.push({ peakDeg, legMs, faceDeg, r });
+    console.log(`        glance to ${peakDeg}° and straight back (${legMs}ms legs, face<=${faceDeg}°): ` +
+      `predictive=${r.predictiveUsed} back-on-front=${r.wrongSideMs}ms final=${r.finalLock}`);
+  }
+  check("every glance that DID predict is withdrawn to FRONT, faster than ORIENT_COOLDOWN_MS would have allowed",
+    glances.every(({ r }) => !r.predictiveUsed || (r.finalLock === "front" && r.wrongSideMs < COOLDOWN)),
+    JSON.stringify(glances.map(({ peakDeg, faceDeg, r }) => ({ peakDeg, faceDeg, p: r.predictiveUsed, ms: r.wrongSideMs, f: r.finalLock }))));
+}
+
+{
+  const w0 = SRC.indexOf("function createOrientationWatcher()");
+  const w1 = SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0);
+  const watcher = w0 !== -1 && w1 !== -1 ? SRC.slice(w0, w1) : "";
+  check("the kill switch is a constant with a ?predict_back=0 override for A/B",
+    /const ORIENT_PREDICTIVE_BACK = /.test(SRC) && /get\("predict_back"\) !== "0"/.test(SRC));
+  check("the tick feeds the window the READING's timestamp, so dwell is measured on the pose clock",
+    /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null, yawFresh \? _torsoYawAt : Date\.now\(\)\)/.test(watcher));
+  check("a predictive dispatch clears the pre-turn front streak first, so it cannot count toward withdrawing itself",
+    /else if \(predictBack\) \{[\s\S]*?lastVote = null; streak = 0; faceStreak = 0;[\s\S]*?await maybeSwap\("back", true\);/.test(watcher));
+  check("...and the pose/re-anchor updates stand aside for it exactly as for a confirmed swap",
+    /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{/.test(watcher));
+  check("maybeSwap() lets a face return withdraw a predictive BACK inside the cooldown - and only that",
+    /async function maybeSwap\(next, predictive = false\)/.test(watcher) &&
+    /const withdrawing = next === "front" && lastSwapPredictive;/.test(watcher) &&
+    /if \(applying \|\| \(Date\.now\(\) - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing\)\) return;/.test(watcher));
 }
 
 console.log(fails === 0 ? "\nturn-yaw-window: OK" : `\nturn-yaw-window: ${fails} FAILED`);

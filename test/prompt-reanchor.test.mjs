@@ -234,7 +234,7 @@ console.log("\n── §7 wiring: called from the tick, clock shared with maybeU
      latency happened to be. The ORDER and the GATE are what this asserts, and both are
      unchanged; the mutex that makes it safe (`applying`) is inside the functions. */
   check("called from the tick, after maybeUpdateProfile, gated the same way (no pending dual-view swap)",
-    /if \(!\(dualView && confirmed\)\) \{[\s\S]*?maybeUpdateProfile\(lastProfileScore\)\.catch[\s\S]*?maybeReanchorPrompt\(\)\.catch\(\(\) => \{\}\);/.test(watcher));
+    /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{[\s\S]*?maybeUpdateProfile\(lastProfileScore\)\.catch[\s\S]*?maybeReanchorPrompt\(\)\.catch\(\(\) => \{\}\);/.test(watcher));
   check("...in the background, so a slow re-anchor cannot stall the next orientation sample",
     !/await maybeReanchorPrompt\(\);/.test(watcher));
   check("the call is NOT gated on pose - square-on sessions get it too",

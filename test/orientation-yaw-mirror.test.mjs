@@ -91,7 +91,7 @@ console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
      would be reading a signal that cannot carry that information - and would bypass the
      vote, which is the only thing that can. */
   const idx = APP.indexOf("const yawCorroborates");
-  const region = APP.slice(Math.max(0, idx - 1400), idx + 200);
+  const region = APP.slice(Math.max(0, idx - 2400), idx + 200);
   const w0 = APP.indexOf("function makeTurnYawWindow(");
   const windowSrc = APP.slice(w0, APP.indexOf("/* ── THE BEST FRONT-FACING FRAME", w0));
   /* The swing is measured DOWN from the turn's edge-on peak rather than from where the vote
@@ -101,7 +101,7 @@ console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
      already reads as turning. Either way it is a difference of published MAGNITUDES, taken
      against a real fresh reading. */
   check("corroboration is computed from a MAGNITUDE swing only",
-    /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null\)/.test(region) &&
+    /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null,/.test(region) &&
     /const reference = edgeLost \? 90 : peak;/.test(windowSrc) &&
     /const swing = usable \? Math\.max\(0, reference - yawAbs\) : 0;/.test(windowSrc), region.slice(-400));
   check("no branch derives front/back from yaw",
@@ -121,12 +121,12 @@ console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
      only on a vote that AGREES with the lock - i.e. when no turn is in progress. */
   check("the swing's reference is the turn's peak, restarted only by an agreeing vote",
     /if \(vote && vote === lock\) \{\s*\n\s*peak = fresh \? yawAbs : null;\s*\n\s*edgeLost = false;/.test(windowSrc) &&
-    /if \(fresh\) peak = peak === null \? yawAbs : Math\.max\(peak, yawAbs\);/.test(windowSrc),
+    /if \(fresh\) \{\s*\n\s*peak = peak === null \? yawAbs : Math\.max\(peak, yawAbs\);/.test(windowSrc),
     "a creeping reference never accumulates a swing on a slow turn");
   /* The edge-on inference may only ever come from a LOSS, mid-turn, past the loss angle - never
      from a reading, never while the vote agrees. Otherwise it is a second way to invent a turn. */
   check("edge-on is inferred only from a torso lost mid-turn past the loss angle",
-    /else if \(lastFresh !== null && lastFresh >= edgeLossDeg\) edgeLost = true;/.test(windowSrc) &&
+    /\} else if \(lastFresh !== null && lastFresh >= edgeLossDeg\) \{\s*\n\s*edgeLost = true;/.test(windowSrc) &&
     /edgeLossDeg = PRESENCE_PROMPT_YAW_SUPPRESS_DEG/.test(windowSrc));
   /* Per-watcher, like the streak it belongs to - an item swap must not inherit a pose. */
   check("the window is per-watcher state, not module scope",

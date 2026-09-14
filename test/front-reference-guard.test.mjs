@@ -48,7 +48,7 @@ function check(label, cond, detail) {
   if (!cond && detail !== undefined) console.log(`        ${detail}`);
 }
 
-const start = SRC.indexOf("  async function maybeSwap(next) {");
+const start = SRC.indexOf("  async function maybeSwap(next, predictive = false) {");
 const end   = SRC.indexOf("  /* The edge-on counterpart of maybeSwap");
 if (start === -1 || end === -1) { console.log("FAIL  could not extract maybeSwap()"); process.exit(1); }
 const swapSrc = SRC.slice(start, end);
@@ -62,7 +62,8 @@ const BACK  = "https://cdn.test/peak-back.jpg";
 function harness({ frontBlob = { size: 1, type: "image/jpeg" },
                    backBlob  = { size: 1, type: "image/jpeg" },
                    startOrientation = "back", flat = false, applyThrows = false,
-                   blobLooksFlat = async () => flat, wire } = {}) {
+                   blobLooksFlat = async () => flat, wire,
+                   lastSwapAgoMs = null, lastSwapWasPredictive = false } = {}) {
   const calls = [];
   const sandbox = {
     blobLooksFlat,
@@ -100,9 +101,11 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
     setTimeout: (fn) => { fn(); return 0; },
   };
   const body =
-    `let applying = false, lastSwapAt = 0, disposed = false, autoOrientation = ${JSON.stringify(startOrientation)};\n` +
+    `let applying = false, disposed = false, autoOrientation = ${JSON.stringify(startOrientation)};\n` +
+    `let lastSwapAt = ${lastSwapAgoMs === null ? 0 : `Date.now() - ${lastSwapAgoMs}`};\n` +
+    `let lastSwapPredictive = ${lastSwapWasPredictive};\n` +
     swapSrc +
-    `\nreturn { maybeSwap, state: () => ({ applying, autoOrientation }) };`;
+    `\nreturn { maybeSwap, state: () => ({ applying, autoOrientation, lastSwapPredictive }) };`;
   const api = new Function(...Object.keys(sandbox), body)(...Object.values(sandbox));
   return { ...api, calls };
 }
@@ -326,6 +329,37 @@ console.log("\n── §7 THE BACK LEG READS A SETTLED VERDICT, NOT A FRESH DECO
     /await blobLooksFlat\(backBlob\)/.test(preload) && /await blobLooksFlat\(backBlob\)/.test(swapSrc));
   check("...and neither site decodes the back itself any more",
     !/createImageBitmap\(backBlob\)/.test(preload) && !/createImageBitmap\(backBlob\)/.test(swapSrc));
+}
+
+console.log("\n── §8 A PREDICTIVE BACK IS WITHDRAWN AT ONCE, AND NOTHING ELSE SKIPS THE COOLDOWN ──");
+/* A predictive BACK goes on the wire before any back vote (see ORIENT_PREDICTIVE_BACK). When the
+   face comes back the shopper never finished the turn, and the back reference is on their front:
+   ORIENT_COOLDOWN_MS must not keep it there. Every OTHER swap still honours the cooldown - it is
+   the anti-flap defence, and a bypass that leaked beyond this one case would re-open flapping. */
+{
+  const pred = harness({ startOrientation: "front" });
+  await pred.maybeSwap("back", true);
+  check("a predictive BACK commits and is remembered as predictive",
+    pred.state().autoOrientation === "back" && pred.state().lastSwapPredictive === true &&
+    pred.calls.some((c) => c.op === "applyActive"));
+
+  const withdraw = harness({ startOrientation: "back", lastSwapAgoMs: 300, lastSwapWasPredictive: true });
+  await withdraw.maybeSwap("front");
+  check("300ms after a PREDICTIVE back, a face return dispatches FRONT inside the cooldown",
+    withdraw.state().autoOrientation === "front" && withdraw.calls.some((c) => c.op === "applyActive"),
+    JSON.stringify(withdraw.calls.map((c) => c.op)));
+  check("...and the swap that replaced it is an ordinary one again",
+    withdraw.state().lastSwapPredictive === false);
+
+  const confirmedBack = harness({ startOrientation: "back", lastSwapAgoMs: 300, lastSwapWasPredictive: false });
+  await confirmedBack.maybeSwap("front");
+  check("300ms after a VOTE-CONFIRMED back, the cooldown still holds the front",
+    confirmedBack.state().autoOrientation === "back" && !confirmedBack.calls.some((c) => c.op === "applyActive"));
+
+  const reBack = harness({ startOrientation: "front", lastSwapAgoMs: 300, lastSwapWasPredictive: true });
+  await reBack.maybeSwap("back", true);
+  check("...and the bypass never applies toward BACK - a second prediction waits like any swap",
+    reBack.state().autoOrientation === "front" && !reBack.calls.some((c) => c.op === "applyActive"));
 }
 
 console.log(fails === 0 ? "\nfront-reference-guard: OK" : `\nfront-reference-guard: ${fails} FAILED`);
