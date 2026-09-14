@@ -996,16 +996,25 @@ const ADULT_PANTS_SIZE_CHART = [
   { size: "46", minHeight: 180, maxHeight: 195, minWeight: 87, maxWeight: 102, minWaist: 90, maxWaist: 100, minHips: 114, maxHips: 124 },
 ];
 
-/* The EU adult pants ladder, derived from ADULT_PANTS_SIZE_CHART so the two can never
-   drift apart - same convention as CHILD_SIZE_SCALE above. → ["36","38","40","42","44","46"]
-   Defined HERE, immediately beside its chart, rather than beside isAdultPantsProduct()
-   below (which is where it's actually used) - some test harnesses extract a narrower
-   slice of this file that starts AFTER this point but still before that function, and an
-   eager `.map()` over a chart those harnesses never included would throw ReferenceError
-   at import time. isAdultPantsProduct() itself is a plain function body (deferred, not
-   eagerly evaluated), so it can safely read this from a slice that doesn't include the
-   chart, as long as the Set itself was already built here. */
-const ADULT_PANTS_NUMERIC_SIZES = new Set(ADULT_PANTS_SIZE_CHART.map((r) => r.size));
+/* THE "26-40" REPORT: isAdultPantsProduct() originally required every size token to be
+   an EXACT member of this chart's own six values (36/38/40/42/44/46 - the EU-only
+   convention above). A real storefront's numeric run almost never lands on exactly
+   those six numbers - a US/UK jeans run of 26-40, or an EU run with an odd size mixed
+   in, shares SOME values with the chart but fails `.every()` on the rest - so the whole
+   list was rejected as "not confidently pants-numeric" and the product fell all the way
+   back to ZARA_SIZE_CHART's LETTERS for both the recommendation and the profile/result
+   display, even though the size selector (which reads the product's own list directly,
+   see injectSizeSelector()) was correctly showing numeric buttons the whole time. That
+   selector-shows-numbers / profile-shows-"L" split is what shipped.
+   isAdultPantsProduct() (below) now recognizes any plausible ALL-NUMERIC adult-bottoms
+   run - not just this chart's own six values - using the SAME 24-48 waist window
+   categoryFromSizeRun() already trusts for exactly this judgment. This chart's six rows
+   remain the only VERIFIED height/weight bands available, so calculateSize() still
+   anchors the recommendation to whichever of these six rows genuinely fits the shopper's
+   body, then snaps that anchor to the CLOSEST size actually present in the product's own
+   list (see the "SNAP TO THE PRODUCT'S OWN LIST" comment in calculateSize()) - never a
+   fabricated cm/kg claim about a size number this chart has no data for, and never a
+   letter for a product that doesn't sell one. */
 
 /**
  * Height/weight penalty for one chart row - the scoring kernel behind
@@ -1168,18 +1177,38 @@ function isAdultProduct(sizes, garmentAgeGroup) {
 }
 
 /**
- * Whether the product's OWN size list is confidently the adult-pants numeric ladder -
+ * Whether the product's OWN size list is confidently ADULT NUMERIC BOTTOMS sizing -
  * same "every token or abstain" confidence rule isKidsProduct()/isAdultProduct() use for
  * their own charts, applied here for one more question: not just kids-vs-adult, but
- * WHICH adult chart. A mixed list, a letter scale, or no list at all is NOT confidently
- * pants-numeric, and stays on ZARA_SIZE_CHART - never a guess, matching this file's
- * "an unconfident verdict must not outrank" rule (see CLAUDE.md §2.5).
+ * WHICH adult chart. A letter scale, a kids numeric run, or no list at all is NOT
+ * confidently pants-numeric, and stays on ZARA_SIZE_CHART - never a guess, matching this
+ * file's "an unconfident verdict must not outrank" rule (see CLAUDE.md §2.5).
+ *
+ * Recognizes any plausible all-numeric adult-bottoms run within WAIST_RUN_FLOOR..
+ * WAIST_RUN_CEIL (24-48) - the SAME window categoryFromSizeRun() already trusts as "this
+ * is a waist measurement, not a kids number or a shirt neck size" - rather than requiring
+ * exact membership in ADULT_PANTS_SIZE_CHART's own six EU values (36/38/40/42/44/46).
+ * See the "THE 26-40 REPORT" comment above ADULT_PANTS_SIZE_CHART for why the narrower
+ * version of this rule shipped a real bug: a genuine jeans size run (e.g. US/UK 26-40)
+ * shares only some values with that six-row chart, so `.every()` against the chart's own
+ * values rejected the whole list and fell back to letters. This chart's rows are still
+ * the only VERIFIED height/weight data available, so a run that doesn't literally land
+ * on one of the six chart values still gets fitted via the nearest one, then snapped to
+ * a size the product actually sells - see calculateSize()'s "SNAP TO THE PRODUCT'S OWN
+ * LIST" step.
  * @param {string[]|string|null} sizes
  * @returns {boolean}
  */
 function isAdultPantsProduct(sizes) {
   const list = parseSizeList(sizes);
-  return list.length > 0 && list.every((s) => ADULT_PANTS_NUMERIC_SIZES.has(s));
+  if (!list.length) return false;
+  // A letter size proves the product ships in the alpha scale - never treat it as
+  // numeric-pants no matter what else the list contains (same precedent
+  // isKidsProduct()/isAdultProduct() use for ADULT_ALPHA_SIZES).
+  if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
+  if (!list.every((s) => /^\d{1,2}$/.test(s))) return false;
+  const nums = list.map(Number);
+  return nums.every((n) => n >= WAIST_RUN_FLOOR && n <= WAIST_RUN_CEIL);
 }
 
 /**
@@ -1258,7 +1287,13 @@ function resolvedGarmentSizes() {
 }
 
 /* The ONE mismatch predicate every surface reads - the go-live gate, the modal card,
-   and the size selector alike - so they can never disagree about what is blocked. */
+   and the size selector alike - so they can never disagree about what is blocked.
+   Reads currentBodyCategory as-is, whatever calculateSize() last computed - it does
+   NOT refresh it itself. That is deliberate: goLive() (the actual enforcement point)
+   re-runs calculateSize() immediately before calling this, so the value is always
+   fresh exactly when it matters, without this function needing DOM access. See
+   goLive()'s own comment for the two production bugs a STALE currentBodyCategory
+   shipped before that refresh existed, in two different directions. */
 function hasSizeCategoryMismatch() {
   return !isCompatibleSizeCategory(currentBodyCategory, resolvedGarmentSizes(), resolvedGarmentAgeGroup());
 }
@@ -1286,7 +1321,11 @@ function sizeCategoryMismatchReason() {
    there's nothing to click through in the first place - called from every point
    currentSizeCategory or the garment's resolved age group can change while the room
    is open: calculateSize() (covers the returning-user fast path too), enterRoom(),
-   setSizeOverride(), and the PEAR_UPDATE_GARMENT late-classification listener.
+   setSizeOverride(), setActiveItem() (a mid-session catalog swap - MISSING for a
+   long time, which meant a stale mismatch card / disabled captureBtn could survive
+   a swap to a now-compatible garment and fully block a shopper with no button left
+   to click through goLive()'s own re-check; see setActiveItem()'s own comment), and
+   the PEAR_UPDATE_GARMENT late-classification listener.
    goLive()'s own gate stays as the authoritative backstop regardless of whether this
    UI happened to run - this is only ever a courtesy, never the enforcement. */
 function updateSizeMismatchUI() {
@@ -1447,7 +1486,19 @@ function calculateSize() {
   /* Computed BEFORE the garment constraint below, and kept: this is the shopper's own
      scale, which the mismatch guard needs precisely because the constrained result
      cannot express "an adult body looking at a kids-only product" (it collapses to
-     null). See userBodyCategory()'s comment. */
+     null). See userBodyCategory()'s comment.
+
+     DELIBERATELY SIMPLE: judged against `adultChart` - the SINGLE chart THIS garment
+     resolved to - and nothing cleverer. Two earlier versions of this line tried to make
+     the CACHED value itself correct for every garment the shopper might view for the
+     rest of the session (checking both adult charts unconditionally, then only when
+     garmentSizes was empty) and each shipped a real, reproduced false block in a
+     different direction - see goLive()'s own big comment for both incidents and why the
+     fix belongs THERE instead: calculateSize() is re-run fresh, right before the
+     authoritative gate checks, so this simple per-garment answer is always being asked
+     about the garment that is ACTUALLY active, never a stale one. Do not reintroduce a
+     multi-chart union here - it solves nothing goLive()'s freshness doesn't already
+     solve, and both times it was tried, it broke a real shopper. */
   const bodyChildFits = CHILD_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
   const bodyAdultFits = adultChart.filter((row) => coreHwPenalty(row, height, weight) === 0);
   currentBodyCategory = bodyAdultFits.length ? "adult" : (bodyChildFits.length ? "child" : null);
@@ -1519,6 +1570,40 @@ function calculateSize() {
     }
     if (pen < minPenalty) { minPenalty = pen; bestSize = row.size; }
   });
+
+  // SNAP TO THE PRODUCT'S OWN LIST. isAdultPantsProduct() now recognizes numeric runs
+  // that don't literally match ADULT_PANTS_SIZE_CHART's own six EU rows (e.g. a real
+  // US/UK jeans run of 26-40 - see that chart's "THE 26-40 REPORT" comment). bestSize
+  // above is still only ever one of those six chart values, since it comes from a
+  // genuine height/weight fit against the one chart with VERIFIED bands. When the
+  // product doesn't actually sell that exact number, recommending it anyway would be a
+  // real SKU the shopper can't buy - so snap to whichever size the product's OWN list
+  // actually has that sits closest to it. Pure numeric distance, never a fabricated
+  // cm/kg claim about the sizes this chart has no data for, and always a size that
+  // exists on this specific product - never a letter, matching this file's "the
+  // product's own list wins" precedent (see isKidsProduct()'s comment).
+  //
+  // TIE-BREAK IS AN EXPLICIT "prefer smaller" RULE, NOT ARRAY ORDER. A bare
+  // `reduce((closest, n) => dist(n) < dist(closest) ? n : closest)` looks like it picks
+  // the closest value, but on an exact tie its strict `<` keeps whichever candidate the
+  // reduce happened to visit first - which for a no-initial-value reduce is
+  // ownNumericSizes[0], i.e. WHICHEVER SIZE THE STORE HAPPENED TO SCRAPE FIRST. Every
+  // list in this file's own tests is written in ascending order, so that accidentally
+  // read as "prefers the lower size" - but nothing about a store's DOM guarantees
+  // ascending order, and a differently-ordered size list would have silently flipped
+  // which of two equidistant sizes got recommended. The `n < closest` clause below
+  // makes "prefer the smaller size" a real, order-independent rule instead of an
+  // artifact of whatever order the product happened to list its sizes in.
+  if (currentSizeCategory === "adult" && useAdultPantsChart && garmentSizes.length) {
+    const ownNumericSizes = garmentSizes.map(Number).filter(Number.isFinite);
+    if (ownNumericSizes.length && !garmentSizes.includes(bestSize)) {
+      const target = Number(bestSize);
+      bestSize = String(ownNumericSizes.reduce((closest, n) => {
+        const dn = Math.abs(n - target), dc = Math.abs(closest - target);
+        return dn < dc || (dn === dc && n < closest) ? n : closest;
+      }));
+    }
+  }
 
   sizeResult.innerText = formatSizeLabel(bestSize);
   resultBox.classList.add("show");
@@ -2437,6 +2522,28 @@ function setActiveItem(item, opts = {}) {
   renderCompleteTheLook(item);
   highlightCatalog(item.id);
   renderPerspectiveSelector();       // rebuild angle tabs + source preview for the new selection
+
+  /* THE STALE-MISMATCH-CARD BLOCK: a mid-session catalog swap is exactly the kind of
+     "resolvedGarmentSizes()/resolvedGarmentAgeGroup() just changed while the room is
+     open" event updateSizeMismatchUI()'s own comment says it must be re-run for - the
+     comment lists calculateSize(), enterRoom(), setSizeOverride(), and the
+     PEAR_UPDATE_GARMENT listener, but never THIS function, even though a catalog-panel
+     swap (see the live call sites this reaches from) is the most direct way of
+     changing which garment is active. Missing it meant: shopper opens a kids-only
+     item (card shown, captureBtn disabled per hasSizeCategoryMismatch()), then swaps
+     to a genuinely compatible adult item via the catalog - the card stayed up and the
+     button stayed disabled, because nothing here ever re-ran the predicate. A disabled
+     button doesn't fire a click, so goLive()'s own fresh calculateSize() call (see its
+     comment) never even gets reached - the shopper is fully blocked with no path
+     through, on a garment they can legitimately try on. currentBodyCategory itself
+     doesn't need recomputing here (the shopper's body didn't change, only the
+     garment), so plain updateSizeMismatchUI() - which already reads
+     resolvedGarmentSizes()/resolvedGarmentAgeGroup() fresh off the new activeItem -
+     is sufficient; injectSizeSelector() rebuilds the ladder to match (and removes it
+     outright if the swap went the other way, into a mismatch). Same try/catch
+     wrapping as the PEAR_UPDATE_GARMENT listener's identical pair, for the same
+     reason: this must never be the thing that breaks a garment swap. */
+  try { injectSizeSelector(); updateSizeMismatchUI(); } catch {}
 
   if (!opts.silent) {
     toast(`עכשיו מודדים: <b>${item.name}</b>`);
@@ -9532,12 +9639,35 @@ function getAnatomicalAnchor() {
 }
 
 /**
- * Return the signed delta between activeTryOnSize and currentUserSize in the
- * SIZE_SCALE ladder. Positive = user chose larger; negative = user chose smaller.
- * Returns 0 when either size is absent or not in the scale.
+ * THE LADDER getSizeDelta()/setSizeOverride() actually measure a step against. Adult
+ * letter products use the fixed SIZE_SCALE (XS-3XL), same as always - but an adult
+ * numeric-pants product's real sizes (e.g. a 26-40 jeans run) almost never match
+ * SIZE_SCALE at all, so `SIZE_SCALE.indexOf("34")` was always -1 and getSizeDelta()
+ * silently returned 0 no matter which numeric size the shopper picked - the VTON
+ * prompt's fit modifier (getFitModifier(), LIVE on the wire - see CLAUDE.md §0) always
+ * read "true to size" for a pants override, even a deliberate size-down/up.
+ * Ascending, de-duplicated, built from the PRODUCT'S OWN size list (never a fixed
+ * chart) - matching this file's "the product's own list wins" precedent, and the same
+ * list calculateSize()'s "SNAP TO THE PRODUCT'S OWN LIST" step already recommends from.
+ * @returns {string[]}
+ */
+function activeSizeLadder() {
+  const sizes = resolvedGarmentSizes();
+  if (!isAdultNumericPantsGarment(sizes, activeItem)) return SIZE_SCALE;
+  return [...new Set(sizes.map(Number).filter(Number.isFinite))]
+    .sort((a, b) => a - b)
+    .map(String);
+}
+
+/**
+ * Return the signed delta between activeTryOnSize and currentUserSize on
+ * activeSizeLadder() (SIZE_SCALE for a letter product, the product's own ascending
+ * numeric list for an adult-pants one - see that function's comment). Positive = user
+ * chose larger; negative = user chose smaller. Returns 0 when either size is absent or
+ * not on the ladder.
  *
- * Child sizes return 0 unconditionally: the numeric kids ladder (8-18) is not in
- * SIZE_SCALE, and a step there spans a whole growth stage rather than the
+ * Child sizes return 0 unconditionally: the numeric kids ladder (8-18) is not on either
+ * ladder above, and a step there spans a whole growth stage rather than the
  * tight/oversized styling choice the adult delta encodes - so no fit modifier is
  * applied to the VTON prompt for child sizes. This is the SINGLE definition of
  * that rule; setSizeOverride() consumes it rather than re-deriving indices.
@@ -9546,8 +9676,9 @@ function getAnatomicalAnchor() {
 function getSizeDelta() {
   if (currentSizeCategory === "child") return 0;
   if (!currentUserSize || !activeTryOnSize) return 0;
-  const baseIdx = SIZE_SCALE.indexOf(currentUserSize);
-  const pickIdx = SIZE_SCALE.indexOf(activeTryOnSize);
+  const ladder = activeSizeLadder();
+  const baseIdx = ladder.indexOf(currentUserSize);
+  const pickIdx = ladder.indexOf(activeTryOnSize);
   if (baseIdx === -1 || pickIdx === -1) return 0;
   return pickIdx - baseIdx;
 }
@@ -10210,6 +10341,13 @@ function injectSizeSelector() {
   const scale = productSizes.length ? productSizes
     // Child results get the numeric kids ladder ONLY - no adult S/M/L/XL button is
     // rendered at all, so there is nothing for a child profile to cross over into.
+    //
+    // No adult-pants numeric branch needed here: isAdultNumericPantsGarment() (which
+    // decides currentSizeCategory via the pants chart) requires a NON-EMPTY product
+    // size list by construction (see isAdultPantsProduct()) - so whenever the pants
+    // chart was actually used, productSizes above is that same non-empty list and this
+    // branch is never reached for a pants product. It only fires for a letter/uncertain
+    // product with NO scraped size list at all, where SIZE_SCALE is the only sane default.
     : (currentSizeCategory === "child" ? CHILD_SIZE_SCALE : SIZE_SCALE);
 
   const current = activeTryOnSize || currentUserSize;
@@ -10246,7 +10384,9 @@ function injectSizeSelector() {
  * WebRTC session is currently live - push a new prompt payload immediately so
  * the garment resizes in real-time without restarting the connection.
  * @param {string} size - an entry from whichever scale the selector was built with:
- *                        SIZE_SCALE for adults, CHILD_SIZE_SCALE ('8'-'18') for children
+ *                        SIZE_SCALE for adults, the product's own numeric list for
+ *                        adult-pants products (see activeSizeLadder()), CHILD_SIZE_SCALE
+ *                        ('8'-'18') for children
  */
 function setSizeOverride(size) {
   activeTryOnSize = size;
@@ -10264,9 +10404,14 @@ function setSizeOverride(size) {
   // Toast wording derives from the ONE delta definition in getSizeDelta() rather
   // than re-deriving ladder indices here. `onLadder` mirrors exactly the conditions
   // under which that delta is meaningful, so a 0 from a child size takes the
-  // neutral branch instead of falsely reading as "perfect fit".
+  // neutral branch instead of falsely reading as "perfect fit". Reads
+  // activeSizeLadder() rather than hardcoding SIZE_SCALE, same reason getSizeDelta()
+  // does - a numeric pants size is never on SIZE_SCALE, so this used to be
+  // unconditionally false for every pants-product override, always showing the
+  // neutral toast even on a genuine size-up/down.
+  const ladder = activeSizeLadder();
   const onLadder = currentSizeCategory === "adult" &&
-    SIZE_SCALE.includes(currentUserSize) && SIZE_SCALE.includes(size);
+    ladder.includes(currentUserSize) && ladder.includes(size);
   const delta = getSizeDelta();
   if (!onLadder) {
     toast(`מידה שנבחרה: <b>${size}</b>`);
@@ -12117,6 +12262,26 @@ async function applyFallbackConditioning() {
  */
 async function goLive() {
   if (busy || isLive()) return;
+
+  /* THE STALE-currentBodyCategory RACE, CLOSED AT THE ENFORCEMENT POINT. calculateSize()
+     is the only writer of currentUserSize/currentSizeCategory/currentBodyCategory, but it
+     only runs on Screen 1 input and the returning-user fast path - NOT on a mid-session
+     catalog swap (setActiveItem() never calls it) and NOT on a late PEAR_UPDATE_GARMENT
+     size-list correction once Screen 1 is hidden (that listener's own comment: "the room
+     may already be open"). Two real, reproduced production failures came out of trusting
+     whatever those three values happened to hold: (1) a body whose adult-ness depends on
+     WHICH adult chart is relevant to the CURRENTLY active garment can read "child" under
+     one garment and "adult" under another with the SAME height/weight (ADULT_PANTS_-
+     SIZE_CHART and ZARA_SIZE_CHART cover different, only-partially-overlapping bands), so
+     a value computed for garment A and never refreshed can wrongly block - or wrongly
+     admit - garment B. calculateSize() is pure UI/state with no network call (its own doc
+     comment says so), and Screen 1's inputs are still real, hidden (not removed) DOM
+     elements on Screen 2 - CSS class toggling, never a DOM detach - so re-running it here
+     is cheap and safe, and makes this gate correct for whichever garment is ACTUALLY
+     active right now, regardless of what any earlier call left cached. This is the
+     "authoritative backstop" updateSizeMismatchUI()'s own comment already claims this
+     function is - now actually true even when nothing upstream remembered to refresh. */
+  calculateSize();
 
   // Two-view gate - runs BEFORE any token mint / WebRTC connect / billing. Graceful
   // by default; only opt-in requireBothViews items (or a garment with no front) are
@@ -15686,6 +15851,34 @@ function init() {
   updateProgress();
 
   const handoff = parseHandoff();
+  /* THE BUG THIS CLOSES: "185cm/82kg on a numeric jeans product still shows 'L'."
+     pear-widget.js scrapes the host product's REAL size list off the store page's own
+     DOM and appends it to the iframe URL SYNCHRONOUSLY, before this room ever opens
+     (see pear-widget.js's openModal() building `&garment_sizes=...` from
+     extractHostSizes() - no classifier round trip needed, it's just reading the
+     store's own size selector). parseHandoff() reads that URL param into `handoff.sizes`
+     right above - but until this line, NOTHING ever copied it into `pendingSizes`,
+     the ONLY place resolvedGarmentSizes() can find it before activeItem exists (see
+     that function's own comment). The one and only writer of pendingSizes was the
+     LATE, async PEAR_UPDATE_GARMENT postMessage correction - a real signal, but one
+     the widget's own classify+synthesize round trip can take seconds to send, and it
+     is not what the shopper's FIRST keystroke on Screen 1 has to work with.
+     Concretely, without this line: every #sizeForm input fires calculateSize() (see
+     this function's own listener wiring below) with resolvedGarmentSizes() === [],
+     so isAdultNumericPantsGarment([], null) is false no matter how the product is
+     actually sized, useAdultPantsChart is false, and calculateSize() scores the
+     shopper's height/weight against ZARA_SIZE_CHART's LETTERS - for every numeric
+     jeans/pants product, every time, with no exception. routeUser()'s returning-user
+     instant-skip fast path (a few lines below, via setupIdentityGate()) hits the exact
+     same empty list calling calculateSize() directly. By the time enterRoom() calls
+     parseHandoff() a SECOND time and finally builds a real activeItem.sizes, the wrong
+     letter is already sitting in currentUserSize - and setActiveItem() never re-runs
+     calculateSize() (see its own comment from the currentBodyCategory staleness fix),
+     so nothing downstream, including the room's own focus size badge, ever corrects it.
+     isAdultPantsProduct()'s widened numeric-run recognition and the snap-to-list logic
+     in calculateSize() were already correct; they simply never received real size
+     evidence to run on until now. */
+  if (handoff && handoff.sizes) pendingSizes = handoff.sizes;
   console.group("[PEAR] init() - fitting room startup");
   console.log("mode    :", handoff ? `focus (garment: ${handoff.name})` : "catalog (no garment in URL)");
   console.log("SDK URLs:", CONFIG.SDK_URLS);
