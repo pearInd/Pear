@@ -7910,6 +7910,9 @@ function createOrientationWatcher() {
       await applyActive();                       // one rtClient.set() - pre-cached Blob payload
       if (heldGate) heldGate.unhold("swap acknowledged");
       if (trace) trace.acknowledged();
+      /* Decart's render of the new reference is still to come - the freeze watchdog must not read that
+         wait as a stall and re-upload mid-turn. See FRAME_FREEZE_AFTER_SWAP_MS. typeof: runs sandboxed. */
+      if (typeof noteSwapAcknowledged === "function") noteSwapAcknowledged();
       await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));   // let the new frame actually land
       // Third instance of the superseded-instance guard (see the comment above the first
       // one). orientHoldEnd/toast are exactly the shared state a fresh watcher's own hold
@@ -14573,6 +14576,40 @@ const FRAME_FREEZE_RECOVER_COOLDOWN_MS = 2500;
    to the problem. */
 const FRAME_FREEZE_PING_MS = 600;
 
+/* ── A SWAP'S RENDER WAIT IS NOT A FREEZE - "the back graphic vanished mid-turn, plain brown shirt" ──────
+   REPORTED from a 360 (00:03, mid-rotation): GARMENT_BACK is on, then the shirt goes plain and untextured
+   for a beat in the middle of the turn, then the back graphic returns.
+   NOT THE ORIENTATION LOCK. autoOrientation is only ever set by maybeSwap() (and rolled back on a failed
+   dispatch); nothing in the vote, the window or the early trigger returns it to null mid-turn.
+   THIS WATCHDOG. A swap HOLDS Decart's input from dispatch to ACK, so the output stalls, and the watchdog
+   stands down for exactly that (inputGateHeld(), re-stamping its clock). The stall does not end at the
+   ACK: Decart has to take the new reference and render the first frame from it - 700-1000ms reported,
+   ~1s by this file's own figure (COND_TRACE_SETTLE_MS). Past FRAME_FREEZE_MS after the last held poll,
+   the watchdog read that as a frozen transport: a keep-alive ping, and - lastRecoverAt starting at 0 -
+   in the same tick a full RE-ANCHOR, invalidateWireState() + applyActive(), which re-uploads the back
+   reference with the input NOT held. That is the generic-garment window of a mid-session re-upload
+   (see the throttle's hold()), and with the early trigger sending BACK at 20 degrees it lands at 70-110.
+   On the real watchdog (first-frame-integrity §8) a 780-1100ms render wait after the ACK tripped it, the
+   exact figure depending on where the ACK fell against the 250ms poll.
+   THE FIX. The ACK of a swap starts a FRAME_FREEZE_AFTER_SWAP_MS window in which the freeze bar is that
+   long instead of FRAME_FREEZE_MS - the render wait is expected silence, like the hold before it. The bar
+   runs from the watchdog's last re-stamp (the last held poll, at most one FRAME_FREEZE_POLL_MS before the
+   ACK), so at least FRAME_FREEZE_AFTER_SWAP_MS - FRAME_FREEZE_POLL_MS of render wait is covered. A real
+   freeze right after a swap is still caught and re-anchored, at most FRAME_FREEZE_AFTER_SWAP_MS -
+   FRAME_FREEZE_MS later than one anywhere else; a freeze with no swap near it is untouched. Not live-verified:
+   whether Decart's output stalls for the whole render wait is what ?orient_debug=1's RENDER_APPLIED and
+   the "[PEAR] stream FROZEN" line say on a real turn. */
+const FRAME_FREEZE_AFTER_SWAP_MS = 2000;
+let _swapAckedAt = -Infinity;             // when the last orientation swap's set() was acknowledged
+
+/** A swap's reference was just acknowledged - maybeSwap() calls this. @param {number} [now] */
+function noteSwapAcknowledged(now = Date.now()) { _swapAckedAt = now; }
+
+/** @param {number} [now] @returns {number} the silence, in ms, that counts as a freeze right now */
+function freezeBarMs(now = Date.now()) {
+  return now - _swapAckedAt < FRAME_FREEZE_AFTER_SWAP_MS ? FRAME_FREEZE_AFTER_SWAP_MS : FRAME_FREEZE_MS;
+}
+
 let freezeWatcher = null;                  // { stop } while running, else null
 
 /**
@@ -14647,7 +14684,8 @@ function createFrameFreezeWatcher(video, gen) {
     }
 
     const gap = Date.now() - lastFrameAt;
-    if (gap < FRAME_FREEZE_MS) return;
+    /* Longer right after a swap's ACK - its render wait is expected silence, see FRAME_FREEZE_AFTER_SWAP_MS. */
+    if (gap < (typeof freezeBarMs === "function" ? freezeBarMs() : FRAME_FREEZE_MS)) return;
     if (frozenSince === null) {
       frozenSince = lastFrameAt;
       console.warn(`[PEAR] stream FROZEN - no decoded frame for ${gap}ms while live`,
