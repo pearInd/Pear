@@ -59,6 +59,7 @@ function run({
     },
     createImageBitmap: () => Promise.resolve({ close() {} }),
     bitmapLooksFlat: () => Promise.resolve(false),
+    blobLooksFlat: () => Promise.resolve(false),   // the back probe now goes through the settled-verdict helper
     _assetBlobCache: { delete() {} },
     compositeActiveFor: () => compositeActive,
     createGarmentComposite: (...args) => { calls.push(`createGarmentComposite:${args.join(",")}`); return Promise.resolve(builtComposite); },

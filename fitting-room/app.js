@@ -895,6 +895,19 @@ function verifyGarmentAsset(payload, source) {
  */
 function warnIfStreamStartedUndressed() {
   if (debugStreamCheckedThisGen) return;
+  /* ── NOT DECIDABLE WHILE THE INPUT GATE IS SHUT ───────────────────────────────────
+     THE FALSE ALARM THIS CLOSES: this line fired on essentially every session and was read
+     as proof of a race - "the first frame beats GARMENT_FRONT onto the wire". onRemoteStream
+     fires when the remote TRACK attaches during the handshake, which is before goLive() can
+     even send its first set() (that waits on waitConnected), so rtImageOnWire was false here
+     by construction. But createThrottledInputStream()'s atomic conditioning gate withholds
+     every camera FRAME until that set() is acknowledged: Decart had nothing to render yet,
+     undressed or otherwise. The race the warning describes is the one the gate closed.
+     So the question is deferred, not dropped - the one-shot latch is left unspent, and the
+     gate's own fail-open timeout asks it again at the moment raw frames genuinely start
+     flowing with no acknowledged garment, which is the real version of this failure. With
+     no throttle or the gate disabled, frames flow from the start and it warns as before. */
+  if (inputThrottle && inputThrottle.gateOpen === false) return;
   debugStreamCheckedThisGen = true;
   if (!rtImageOnWire) {
     console.warn("[PEAR][DEBUG] Decart stream started rendering WITHOUT a garment asset on the wire.",
@@ -4188,6 +4201,9 @@ function createThrottledInputStream(srcStream, {
         "release - the garment apply never reported success. Streaming raw frames now so the",
         "session is not stranded; the first rendered frames may not carry the garment.");
       gateOpen = true;
+      /* The moment the "started rendering without a garment" check becomes decidable - see
+         warnIfStreamStartedUndressed(), which stays silent while this gate is shut. */
+      if (typeof warnIfStreamStartedUndressed === "function") warnIfStreamStartedUndressed();
     }, gateMaxMs);
   }
 
@@ -4929,6 +4945,38 @@ async function bitmapLooksFlat(bitmap) {
   }
 }
 
+/* ── ONE PROBE PER BLOB - "there is a visible gap while it swaps sides" ────────────
+   The back asset's bytes were already in RAM on every turn, but maybeSwap()'s back leg
+   still ran createImageBitmap() over the FULL packshot plus a canvas readback before it
+   could issue the set() - on the same Blob object preloadGarmentAssets() had already
+   decoded and probed before connect. Tens of milliseconds of decode on the one path whose
+   whole point is to be instant, repeated on every turn to the back.
+
+   The verdict is a property of the BYTES, so it is settled once per Blob and every later
+   caller reads it. Keyed by Blob identity in a WeakMap: garmentBlobCached() hands back the
+   same object for a URL until it is evicted or refetched, and a refetch is a new object
+   that correctly earns its own probe. Nothing is pinned by this map.
+
+   A DECODE FAILURE IS NOT MEMOIZED. It fails open exactly as the two inline probes did,
+   but a transient hiccup must not become a permanent "fine" - the next flip probes again.
+   A Blob that tests flat is dropped from _assetBlobCache by its caller, so its verdict is
+   never read again either. Non-object inputs (test sandboxes pass strings) skip the memo. */
+const _flatVerdicts = new WeakMap();   // Blob → settled flat/not-flat verdict
+async function blobLooksFlat(blob) {
+  const memo = blob !== null && typeof blob === "object";
+  if (memo && _flatVerdicts.has(blob)) return _flatVerdicts.get(blob);
+  let probe;
+  try {
+    probe = await createImageBitmap(blob);
+  } catch (_) {
+    return false;
+  }
+  const flat = await bitmapLooksFlat(probe);
+  try { probe.close?.(); } catch (_) {}
+  if (memo) _flatVerdicts.set(blob, flat);
+  return flat;
+}
+
 /* ── Context-Aware Asset Switching - pre-cached per-orientation Blobs ─────────
    The instant-swap guarantee: rtClient.set({ image }) accepts a Blob directly, and a Blob
    ships the bytes over the already-open session - Decart never has to fetch a URL server-
@@ -5477,13 +5525,10 @@ async function preloadGarmentAssets() {
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back […]`);
     const backBlob = await garmentBlobCached(back);
     let backOk = !!backBlob;
-    if (backOk) {
-      try {
-        const probe = await createImageBitmap(backBlob);
-        if (await bitmapLooksFlat(probe)) { backOk = false; _assetBlobCache.delete(back); }
-        probe.close?.();
-      } catch (_) { /* fail open on probe error - the fetch itself already succeeded */ }
-    }
+    /* blobLooksFlat() fails open on a probe error, exactly as the inline probe here did, and
+       SETTLES the verdict on this Blob - so the first turn to the back reads it instead of
+       decoding the packshot again on the swap path. */
+    if (backOk && await blobLooksFlat(backBlob)) { backOk = false; _assetBlobCache.delete(back); }
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back [${backOk ? "OK" : "FAIL"}]`);
     prepTick();
     if (!backOk) {
@@ -5641,11 +5686,12 @@ const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (an
    ORIENT_CORROBORATED_FRAMES.
 
    THE NUMBERS. 45 degrees is a half-turn of the shoulder line - well past anything a
-   head-turn, a lean or a shrug produces, and reached early in a real rotation rather
-   than at its end. 4 frames is ~1s at ORIENT_SAMPLE_MS, still 4 agreeing votes rather
-   than a hair trigger. FRESH_MS is two topology samples: a yaw reading older than that
-   describes a body position the shopper has already left, and stale evidence must not
-   accelerate anything. */
+   head-turn, a lean or a shrug produces. It is measured DOWN from the turn's edge-on peak
+   (see makeTurnYawWindow - measuring it from the start of the new vote streak meant the
+   return leg could never reach it). 4 frames is ~1s at ORIENT_SAMPLE_MS, still 4 agreeing
+   votes rather than a hair trigger. FRESH_MS is two topology samples: a yaw reading older
+   than that describes a body position the shopper has already left, and stale evidence
+   must not accelerate anything. */
 const ORIENT_CORROBORATED_FRAMES = 4;    // agreeing votes needed WITH a corroborating yaw swing
 const ORIENT_YAW_TURN_DEG        = 45;   // |yaw| swing that counts as a real torso rotation
 const ORIENT_YAW_FRESH_MS        = 600;  // a yaw reading older than this cannot corroborate
@@ -5700,6 +5746,63 @@ const PRESENCE_PROMPT_YAW_SUPPRESS_DEG = 25;
    triggering a second one. null until the pose loop produces its first signature. */
 let _torsoYawAbs = null;
 let _torsoYawAt  = 0;
+
+/* ── THE TURN'S YAW WINDOW - "after a full 360 the back stays on my front" ─────────
+   ────────────────────────────────────────────────────────────────────────────────
+   REPORTED: turn to the back and the rear asset lands; keep turning to face the camera
+   and GARMENT_BACK stays rendered on the shopper's FRONT for a long beat before the front
+   returns. Filed next to "there is a visible gap while it swaps sides".
+
+   NOT A FETCH AND NOT A LATCH. Both Blobs are pinned in RAM before connect, and the return
+   leg's set() is never skipped (a back Blob and a front Blob are different objects, so
+   applyGarment()'s no-op test cannot match). The time was spent CONFIRMING the flip.
+
+   THE ROOT CAUSE. The corroborated path (ORIENT_CORROBORATED_FRAMES, ~1s) used to measure
+   its swing from the |yaw| captured when the NEW vote streak began. |yaw| folds at edge-on:
+   it climbs to ~90 and falls back to ~0 whether the shopper ends up facing the lens or
+   facing away. The edge-on peak - the one thing a head-turn cannot produce - happens in the
+   ABSTAIN window between the last vote for the old side and the first vote for the new
+   one, so a baseline taken at streak start is always taken AFTER it. On the return leg the
+   first "front" vote is FaceDetector re-acquiring a face, which a frontal detector does
+   inside ~30-40 degrees of square, leaving at most that much swing to measure - under
+   ORIENT_YAW_TURN_DEG. The return leg therefore always paid the full ORIENT_LOCK_FRAMES bar
+   (~2.5s) with the back reference on screen. turn-yaw-window.test.mjs replays the numbers.
+
+   THE WINDOW. The swing is now measured DOWN from the peak |yaw| seen since the last vote
+   that AGREED with the lock. An agreeing vote means no turn is in progress, so it restarts
+   the window at the current reading; every other tick (abstain, or a vote for the other
+   side) folds a fresh reading into the peak. A real turn passes through edge-on and comes
+   back down, so the swing is there by the first vote for the new side. A head-turn never
+   raises the torso's yaw, so ORIENT_LOCK_FRAMES remains the only bar for it. Holding
+   edge-on is not a turn either: the swing is peak minus NOW, which is ~0 while still side-on.
+
+   THE ONE CASE IT ACCELERATES THAT THE OLD BASELINE DID NOT: an edge-on excursion that
+   returns to the locked side while the vote MISREADS the other side on the way back. That
+   flip would still have happened on ORIENT_LOCK_FRAMES of the same misread; it now needs
+   ORIENT_CORROBORATED_FRAMES of it. A misread that systematic is a vote problem, not a
+   hysteresis one.
+
+   MAGNITUDE ONLY and it never picks a side - the result carries no direction. A stale or
+   missing reading is not usable and cannot corroborate; the peak banked before a gap (the
+   landmarks occlude near edge-on) still counts once a fresh reading returns.
+   @param {number} [turnDeg] the swing that counts as a real torso rotation
+   @returns {{ readonly peak: number|null,
+               observe(vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null):
+                 { usable: boolean, swing: number, corroborates: boolean } }} */
+function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG) {
+  let peak = null;   // highest fresh |yaw| since the last vote that agreed with the lock
+  return {
+    get peak() { return peak; },
+    observe(vote, lock, yawAbs) {
+      const fresh = yawAbs !== null && Number.isFinite(yawAbs);
+      if (vote && vote === lock) peak = fresh ? yawAbs : null;
+      else if (fresh) peak = peak === null ? yawAbs : Math.max(peak, yawAbs);
+      const usable = fresh && peak !== null;
+      const swing = usable ? Math.max(0, peak - yawAbs) : 0;
+      return { usable, swing, corroborates: swing >= turnDeg };
+    },
+  };
+}
 
 /* ── THE BEST FRONT-FACING FRAME - "it froze me side-on" ──────────────────────────
    ────────────────────────────────────────────────────────────────────────────────
@@ -6494,11 +6597,13 @@ function createOrientationWatcher() {
   logVtonState();
 
   let lastVote = null, streak = 0, streakSince = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
-  /* Torso yaw at the instant the current vote streak began, or null when no fresh reading
-     was available then. PER-WATCHER, like the streak it belongs to: a new watcher (item
-     swap, mode change) starts from a clean baseline rather than inheriting a pose from
-     whatever session preceded it - the same reason autoProfile is reset per instance. */
-  let yawAtStreakStart = null;
+  /* The turn's yaw window - the peak |yaw| since the last vote that agreed with the lock.
+     PER-WATCHER, like the streak it corroborates: a new watcher (item swap, mode change)
+     starts from a clean window rather than inheriting a pose from whatever session
+     preceded it - the same reason autoProfile is reset per instance. It replaced a
+     streak-start baseline that the return leg could never corroborate against; see
+     makeTurnYawWindow() for why. */
+  const yawWindow = makeTurnYawWindow();
   /* Edge-on axis - its own rolling buffer, exit streak and cooldown, sharing only the
      `applying` mutex so a pose update and an asset swap can never be in flight at once.
      profileBuf holds the last ORIENT_PROFILE_WINDOW per-frame scores; squareStreak counts
@@ -6905,13 +7010,11 @@ function createOrientationWatcher() {
       // reaches the live session as a real image with no garment texture in it,
       // which reads to the shopper as "the back view is blank". Reject it the same
       // way as a failed fetch, so we never commit to showing a solid-fill panel.
-      let backLooksFlat = false;
-      try {
-        const probe = await createImageBitmap(backBlob);
-        backLooksFlat = await bitmapLooksFlat(probe);
-        probe.close?.();
-      } catch (_) { /* probe failure - fail open, let the already-validated Blob through */ }
-      if (disposed) return;               // same guard, after the decode/probe awaits
+      // A settled verdict, not a fresh decode: preloadGarmentAssets() already probed this
+      // exact Blob before connect, and re-decoding the full packshot here put tens of ms of
+      // work in front of every turn's set(). Fails open on a probe error, as before.
+      const backLooksFlat = await blobLooksFlat(backBlob);
+      if (disposed) return;               // same guard, after the probe await
       if (backLooksFlat) {
         console.error("[PEAR] CRITICAL: GARMENT_BACK decoded but looks like a blank/solid-color placeholder (no garment texture); holding FRONT_MODE -", GARMENT_BACK);
         _assetBlobCache.delete(GARMENT_BACK);   // don't keep serving this bad asset from cache
@@ -7186,15 +7289,7 @@ function createOrientationWatcher() {
       const vote = await classify();
       if (vote) {
         if (vote === lastVote) streak++;
-        else {
-          lastVote = vote; streak = 1; streakSince = Date.now();
-          /* Snapshot the torso yaw at the moment this streak began, so the swing below is
-             measured across THIS candidate turn rather than against a session-old pose.
-             Captured on the reset branch only - re-reading it every tick would let the
-             baseline creep along with the shopper and the swing would never accumulate. */
-          yawAtStreakStart = (_torsoYawAt && Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS)
-            ? _torsoYawAbs : null;
-        }
+        else { lastVote = vote; streak = 1; streakSince = Date.now(); }
       }
       const held = lastVote ? Date.now() - streakSince : 0;
 
@@ -7203,15 +7298,21 @@ function createOrientationWatcher() {
          the full argument. Three things must all hold, and each rules out a specific way
          of being wrong:
            · a fresh reading exists          - stale yaw describes a pose already left;
-           · a baseline was captured         - without one there is no swing to measure;
+           · a peak was banked this turn     - without one there is no swing to measure;
            · the swing clears the threshold  - a head-turn moves the head, not the
                                                shoulders, and earns nothing here.
          Abstains to false on every missing piece, which lands on ORIENT_LOCK_FRAMES -
-         exactly the behaviour that shipped before this existed. */
+         exactly the behaviour that shipped before this existed.
+         The swing is measured DOWN from the peak since the last vote that agreed with the
+         lock, NOT from where this vote streak began - see makeTurnYawWindow() for why the
+         streak-start baseline could never corroborate the return leg of a 360.
+         Observed EVERY tick, abstentions included: the edge-on peak lives in exactly the
+         ticks where the vote abstains. `autoOrientation` is read before this tick's
+         maybeSwap(), so an agreeing vote is measured against the side actually on the wire. */
       const yawFresh = _torsoYawAbs !== null && Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS;
-      const yawSwing = (yawFresh && yawAtStreakStart !== null)
-        ? Math.abs(_torsoYawAbs - yawAtStreakStart) : 0;
-      const yawCorroborates = yawSwing >= ORIENT_YAW_TURN_DEG;
+      const turnYaw = yawWindow.observe(vote, autoOrientation, yawFresh ? _torsoYawAbs : null);
+      const yawSwing = turnYaw.swing;
+      const yawCorroborates = turnYaw.corroborates;
       /* Two DIFFERENT transitions, with deliberately different bars:
 
          ACQUIRING (autoOrientation === null, PENDING_MODE) - establishing the first
@@ -7261,7 +7362,7 @@ function createOrientationWatcher() {
         const progress = acquiring
           ? ` (${streak}/${ORIENT_ACQUIRE_FRAMES}f)`
           : ` (${streak}/${flipBar}f${yawCorroborates ? "+yaw" : ""}, ${held}/${ORIENT_LOCK_MS}ms` +
-            `, yawΔ${yawSwing.toFixed(0)}°)`;
+            `, yawΔ${yawSwing.toFixed(0)}° from peak ${yawWindow.peak === null ? "n/a" : yawWindow.peak.toFixed(0) + "°"})`;
         /* Pose is reported separately from the lock, because it IS separate - reading them
            on one line is what makes "locked FRONT, but edge-on right now" legible while
            tuning. ratio/score/width are the three numbers the thresholds are set from, so
@@ -7370,12 +7471,12 @@ function createOrientationWatcher() {
            ABSTAINS TOWARD THE OLD BEHAVIOUR, which is what keeps this from being a
            regression on the devices that need the cover most. `yawUsable` is false with no
            pose detector, an occluded torso, a phone that never loaded the WASM runtime, or
-           a streak too young to have a baseline - and in every one of those cases we
+           no peak banked yet this turn - and in every one of those cases we
            cannot tell a real turn from a head-turn, so we cover exactly as before. The
            freeze is only skipped where yaw is present AND positively says no torso
            rotation is happening. And a swap that confirms anyway still promotes at its own
            call site below, so the reference-replacement window is never left uncovered. */
-        const yawUsable = yawFresh && yawAtStreakStart !== null;
+        const yawUsable = turnYaw.usable;
         if (!yawUsable) orientHoldPromote("no-yaw-signal");
         else if (yawCorroborates) orientHoldPromote("turn-corroborated");
       }

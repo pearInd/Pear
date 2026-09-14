@@ -66,7 +66,7 @@ function extract(startMarker, endMarker) {
    that actually reached the output track. */
 const code = extract("function createThrottledInputStream(", "\n/**\n * Open the input gate");
 
-function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50 } = {}) {
+function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50, undressedCheck } = {}) {
   const state = { emitted: 0, drawn: 0, trackStopped: false, timers: new Set(), logs: [], warns: [] };
   const outTrack = {
     contentHint: "",
@@ -85,6 +85,7 @@ function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50 } = {}) {
     setTimeout: (fn, ms) => { const id = { fn, ms, isTimeout: true }; state.timers.add(id); return id; },
     clearTimeout: (id) => state.timers.delete(id),
     MediaStream: class { constructor(t) { this.t = t; } getTracks() { return this.t; } },
+    ...(undressedCheck ? { warnIfStreamStartedUndressed: undressedCheck } : {}),
     document: {
       createElement: () => ({
         muted: false, playsInline: false, autoplay: false, srcObject: null,
@@ -351,6 +352,56 @@ console.log("\n── §5 THE FRAME BUDGET ON THE WIRE ──");
   check("...and the loop still runs at the presence cadence, one inference per tick",
     /const tickMs = POSE_SAMPLE_MS \* 2;/.test(watcher) &&
     (watcher.match(/detectPoseFrame\(/g) || []).length === 1);
+}
+
+console.log("\n── §6 THE 'STARTED RENDERING WITHOUT A GARMENT' WARNING TELLS THE TRUTH ──");
+/* REPORTED AS A RACE: "[PEAR][DEBUG] Decart stream started rendering WITHOUT a garment
+   asset on the wire" on every session, read as proof that the first frame beats the
+   front reference. It was not a race - it was the warning asking too early. It ran from
+   onRemoteStream, which fires when the remote TRACK attaches during the handshake, before
+   go-live's first set() can have been sent - so rtImageOnWire was false by construction.
+   But the gate above withholds every camera frame until that set() is acknowledged, so
+   nothing had been rendered at all. The warning must stay silent while the gate is shut,
+   and must still fire for the one path that genuinely streams undressed: the gate's own
+   fail-open timeout. */
+{
+  const fnSrc = extract("function warnIfStreamStartedUndressed()", "\n/**\n * Console escape hatch");
+  const run = ({ throttle, onWire }) => {
+    const warns = [];
+    const api = new Function("inputThrottle", "rtImageOnWire", "console",
+      "let debugStreamCheckedThisGen = false, lastSentImageRef = null;\n" + fnSrc +
+      "\nreturn { check: warnIfStreamStartedUndressed, latched: () => debugStreamCheckedThisGen };")(
+      throttle, onWire, { warn: (...a) => warns.push(a.join(" ")), log() {} });
+    api.check();
+    return { warns, latched: api.latched() };
+  };
+  const shut = run({ throttle: { gateOpen: false }, onWire: false });
+  check("remote track attached while the gate is shut: no warning - nothing has rendered",
+    shut.warns.length === 0, shut.warns.join("\n        "));
+  check("...and the one-shot check is NOT spent, so a later, decidable moment can still ask",
+    shut.latched === false);
+  const openBare = run({ throttle: { gateOpen: true }, onWire: false });
+  check("frames flowing with nothing on the wire still warns - the real failure is kept",
+    openBare.warns.length === 1 && /WITHOUT a garment asset/.test(openBare.warns[0]));
+  const ungated = run({ throttle: null, onWire: false });
+  check("...and with no throttle at all (gate unavailable) it warns exactly as it always did",
+    ungated.warns.length === 1);
+  const dressed = run({ throttle: { gateOpen: true }, onWire: true });
+  check("frames flowing with the garment acknowledged: silent", dressed.warns.length === 0);
+
+  let asked = 0;
+  const h = makeThrottle({ gated: true, gateMaxMs: 6000, undressedCheck: () => { asked++; } });
+  await h.flush();
+  h.fireTimeouts();
+  check("the gate's fail-open timeout asks the question at the moment frames really start",
+    asked === 1, `asked=${asked}`);
+  const h2 = makeThrottle({ gated: true, undressedCheck: () => { asked++; } });
+  await h2.flush();
+  h2.throttle.release("garment acknowledged");
+  check("...but an ordinary release does not - the garment is on the wire by definition",
+    asked === 1, `asked=${asked}`);
+  check("the call inside the gate is typeof-guarded (CLAUDE.md 2.7 - this block runs sandboxed)",
+    /if \(typeof warnIfStreamStartedUndressed === "function"\) warnIfStreamStartedUndressed\(\);/.test(code));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

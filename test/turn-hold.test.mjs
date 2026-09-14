@@ -196,8 +196,10 @@ console.log("\n── wiring: the sampler raises the hold before confirmation, n
   check("...and abstains to the old cover-it-anyway behaviour when yaw is unusable",
     /if \(!yawUsable\) orientHoldPromote\(/.test(watcher),
     "no pose detector / occluded torso must not silently lose the cover");
-  check("...with yawUsable requiring BOTH a fresh reading and a streak baseline",
-    /const yawUsable = yawFresh && yawAtStreakStart !== null;/.test(watcher));
+  /* Fresh reading AND a peak banked this turn - see makeTurnYawWindow(). The window's own
+     `usable` is that conjunction, pinned in orientation-yaw-mirror.test.mjs §3. */
+  check("...with yawUsable requiring BOTH a fresh reading and a peak banked this turn",
+    /const yawUsable = turnYaw\.usable;/.test(watcher));
   /* ACQUIRING is the first reading of a DUAL-VIEW session's front/back lock: nothing is
      confirmed, nothing dressed has been rendered yet, and freezing there would stall the
      opening frames behind a still. Meaningless without a lock, so single-view items use
@@ -373,8 +375,11 @@ console.log("\n── wiring: a torn-down watcher's in-flight maybeSwap() can't 
   check("guarded immediately after the back-Blob fetch (before the null check uses it)",
     /const backBlob = await garmentBlobCached\(GARMENT_BACK\);[\s\S]*?\n {6}if \(disposed\) return;\n {6}if \(!backBlob\)/.test(swap),
     swap.slice(swap.indexOf("const backBlob"), swap.indexOf("const backBlob") + 120));
+  /* The probe is one await now - blobLooksFlat() reads the verdict preload already settled
+     on this Blob (front-reference-guard.test.mjs §7) - but it is still an await, so the
+     guard must still sit between it and the first use of its result. */
   check("guarded after the decode/flat-probe awaits (before the flat-image check uses the result)",
-    /probe\.close\?\.\(\);\s*\n\s*\} catch \(_\)[^\n]*\n {6}if \(disposed\) return;[^\n]*\n {6}if \(backLooksFlat\)/.test(swap));
+    /const backLooksFlat = await blobLooksFlat\(backBlob\);[^\n]*\n {6}if \(disposed\) return;[^\n]*\n {6}if \(backLooksFlat\)/.test(swap));
   check("guarded after the main apply + fade-hold awaits, before touching the hold/toast",
     /ORIENT_FADE_HOLD_MS\)\);[^\n]*\n[\s\S]*?\n {6}if \(disposed\) return;\n {6}orientHoldEnd\("swap-complete"\);/.test(swap));
   /* The catch grew a body - it now rolls the orientation lock back when a dispatch fails,

@@ -61,9 +61,11 @@ const BACK  = "https://cdn.test/peak-back.jpg";
    as parameters would make every assignment invisible from out here. */
 function harness({ frontBlob = { size: 1, type: "image/jpeg" },
                    backBlob  = { size: 1, type: "image/jpeg" },
-                   startOrientation = "back", flat = false, applyThrows = false } = {}) {
+                   startOrientation = "back", flat = false, applyThrows = false,
+                   blobLooksFlat = async () => flat } = {}) {
   const calls = [];
   const sandbox = {
+    blobLooksFlat,
     ORIENT_COOLDOWN_MS: 1500, AUTO_ANGLE: "auto", currentAngle: "auto",
     ORIENT_FADE_HOLD_MS: 0,
     GARMENT_FRONT: FRONT, GARMENT_BACK: BACK,
@@ -236,6 +238,65 @@ console.log("\n── §6 A FAILED DISPATCH MUST NOT LEAVE THE LOCK LYING ──
   await h.maybeSwap("back");
   check("a dispatch that succeeds still advances the lock",
     h.state().autoOrientation === "back" && h.calls.some((c) => c.op === "applyActive"));
+}
+
+console.log("\n── §7 THE BACK LEG READS A SETTLED VERDICT, NOT A FRESH DECODE ──");
+/* "There is a visible gap while it swaps sides." The bytes were already in RAM, but every
+   turn to the back still ran createImageBitmap() over the full packshot plus a canvas
+   readback before the set() could even be issued - work preloadGarmentAssets() had already
+   done on the SAME Blob before connect. The flatness verdict is a property of the bytes, so
+   it is settled once per Blob and every later flip reads it. */
+{
+  const h0 = SRC.indexOf("const _flatVerdicts = new WeakMap();");
+  const h1 = SRC.indexOf("\nasync function blobLooksFlat(", h0);
+  const h2 = SRC.indexOf("\n}\n", h1);
+  if (h0 === -1 || h1 === -1 || h2 === -1) {
+    check("blobLooksFlat() and its verdict memo exist in app.js", false, "not implemented");
+  } else {
+    let decodes = 0, failNextDecode = false, flatAnswer = false;
+    const probeSrc = SRC.slice(h0, h2 + 2);
+    const realProbe = new Function("createImageBitmap", "bitmapLooksFlat",
+      probeSrc + "\nreturn blobLooksFlat;")(
+      async () => { decodes++; if (failNextDecode) { failNextDecode = false; throw new Error("decode hiccup"); } return { close() {} }; },
+      async () => flatAnswer);
+
+    const back = { size: 1, type: "image/jpeg" };
+    await realProbe(back);                                     // what preloadGarmentAssets() does
+    const afterPreload = decodes;
+    const first = harness({ startOrientation: "front", backBlob: back, blobLooksFlat: realProbe });
+    await first.maybeSwap("back");
+    const second = harness({ startOrientation: "front", backBlob: back, blobLooksFlat: realProbe });
+    await second.maybeSwap("back");
+    check("a back flip after preload issues the swap without decoding the packshot again",
+      afterPreload === 1 && decodes === 1 &&
+      first.state().autoOrientation === "back" && second.state().autoOrientation === "back",
+      `decodes=${decodes}`);
+
+    const other = { size: 2, type: "image/jpeg" };
+    await realProbe(other);
+    check("...a different Blob (a refetch, another item) gets its own probe", decodes === 2);
+
+    const hiccup = { size: 3, type: "image/jpeg" };
+    failNextDecode = true;
+    const failedOpen = await realProbe(hiccup);
+    await realProbe(hiccup);
+    check("a decode failure fails OPEN and is not memoized - the next flip probes again",
+      failedOpen === false && decodes === 4, `decodes=${decodes}`);
+
+    flatAnswer = true;
+    const placeholder = { size: 4, type: "image/jpeg" };
+    const flatHarness = harness({ startOrientation: "front", backBlob: placeholder, blobLooksFlat: realProbe });
+    await flatHarness.maybeSwap("back");
+    check("a flat placeholder is still rejected through the memoized probe",
+      flatHarness.state().autoOrientation === "front" &&
+      !flatHarness.calls.some((c) => c.op === "applyActive"));
+  }
+  const preload = SRC.slice(SRC.indexOf("async function preloadGarmentAssets"),
+    SRC.indexOf("/* ── Context-Aware Asset Switching - OrientationWatcher"));
+  check("preload settles the verdict through the SAME probe the flip reads",
+    /await blobLooksFlat\(backBlob\)/.test(preload) && /await blobLooksFlat\(backBlob\)/.test(swapSrc));
+  check("...and neither site decodes the back itself any more",
+    !/createImageBitmap\(backBlob\)/.test(preload) && !/createImageBitmap\(backBlob\)/.test(swapSrc));
 }
 
 console.log(fails === 0 ? "\nfront-reference-guard: OK" : `\nfront-reference-guard: ${fails} FAILED`);

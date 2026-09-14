@@ -51,7 +51,7 @@ console.log("── §1 THE CONSTANTS ARE REAL BOUNDS, NOT DECORATION ──");
     corroborated >= 3, `${corroborated} frames = ${corroborated * sampleMs}ms of agreement`);
   /* 45 degrees is a half-turn of the shoulder line. Below ~25 a shrug or a lean could
      clear it; above 90 is unreachable, since bodyYawDegrees() is an asin() form capped
-     at +/-90 and the swing is measured from a baseline that is rarely zero. */
+     at +/-90 and the swing is measured down from an edge-on peak that is rarely a full 90. */
   check("the yaw threshold is above shrug/lean noise and inside the asin range",
     turnDeg >= 25 && turnDeg <= 90, `ORIENT_YAW_TURN_DEG=${turnDeg}`);
   /* Stale yaw describes a body position the shopper has already left. Freshness must
@@ -92,8 +92,15 @@ console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
      vote, which is the only thing that can. */
   const idx = APP.indexOf("const yawCorroborates");
   const region = APP.slice(Math.max(0, idx - 1400), idx + 200);
+  const w0 = APP.indexOf("function makeTurnYawWindow(");
+  const windowSrc = APP.slice(w0, APP.indexOf("/* ── THE BEST FRONT-FACING FRAME", w0));
+  /* The swing is now measured DOWN from the turn's edge-on peak rather than from where the
+     vote streak began - a streak-start baseline is always taken after that peak, so the
+     return leg of a 360 could never corroborate (turn-yaw-window.test.mjs). Still the
+     published MAGNITUDE only, still a difference of magnitudes. */
   check("corroboration is computed from a MAGNITUDE swing only",
-    /Math\.abs\(_torsoYawAbs - yawAtStreakStart\)/.test(region), region.slice(-400));
+    /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null\)/.test(region) &&
+    /const swing = usable \? Math\.max\(0, peak - yawAbs\) : 0;/.test(windowSrc), region.slice(-400));
   check("no branch derives front/back from yaw",
     !/_torsoYawAbs[^\n]*\?[^\n]*("front"|"back")/.test(APP) &&
     !/yaw[A-Za-z]*\s*[<>]=?[^\n]*\?\s*"(front|back)"/.test(APP),
@@ -103,17 +110,21 @@ console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
      any reading existed. */
   check("a missing or stale reading abstains rather than corroborating",
     /_torsoYawAbs !== null && Date\.now\(\) - _torsoYawAt <= ORIENT_YAW_FRESH_MS/.test(APP) &&
-    /yawFresh && yawAtStreakStart !== null/.test(APP),
-    "an absent baseline must not read as a zero swing that later clears the threshold");
-  /* The baseline is captured when the streak RESETS. Re-reading it every tick would let
-     it creep along with the shopper, so a slow turn would never accumulate a swing. */
-  check("the baseline is snapshotted at streak start, not re-read every tick",
-    /yawAtStreakStart = \(_torsoYawAt && Date\.now\(\) - _torsoYawAt <= ORIENT_YAW_FRESH_MS\)/.test(APP),
-    "a creeping baseline never accumulates a swing on a slow turn");
+    /const usable = fresh && peak !== null;/.test(windowSrc) &&
+    /const yawUsable = turnYaw\.usable;/.test(APP),
+    "an absent peak must not read as a zero swing that later clears the threshold");
+  /* The reference point must not creep along with the shopper, or a slow turn never
+     accumulates a swing. A running MAX cannot follow the body back down, and it restarts
+     only on a vote that AGREES with the lock - i.e. when no turn is in progress. */
+  check("the swing's reference is the turn's peak, restarted only by an agreeing vote",
+    /if \(vote && vote === lock\) peak = fresh \? yawAbs : null;/.test(windowSrc) &&
+    /else if \(fresh\) peak = peak === null \? yawAbs : Math\.max\(peak, yawAbs\);/.test(windowSrc),
+    "a creeping reference never accumulates a swing on a slow turn");
   /* Per-watcher, like the streak it belongs to - an item swap must not inherit a pose. */
-  check("the baseline is per-watcher state, not module scope",
-    /let yawAtStreakStart = null;/.test(APP) &&
-    APP.indexOf("let yawAtStreakStart") > APP.indexOf("function createOrientationWatcher"),
+  check("the window is per-watcher state, not module scope",
+    /const yawWindow = makeTurnYawWindow\(\);/.test(APP) &&
+    APP.indexOf("const yawWindow = makeTurnYawWindow();") > APP.indexOf("function createOrientationWatcher") &&
+    !/^let peak\b/m.test(APP),
     "module scope would carry a stale pose across item swaps");
   /* One MediaPipe inference per tick is the entire point of the shared sampler. */
   check("yaw is published from the EXISTING pose signature, not a second inference",
