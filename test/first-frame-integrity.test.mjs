@@ -67,7 +67,8 @@ function extract(startMarker, endMarker) {
 const code = extract("function createThrottledInputStream(", "\n/**\n * Open the input gate");
 
 function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50, undressedCheck } = {}) {
-  const state = { emitted: 0, drawn: 0, trackStopped: false, timers: new Set(), logs: [], warns: [] };
+  /* `now` is the throttle's clock (its `clock` option). Tests that never move it see no time pass. */
+  const state = { emitted: 0, drawn: 0, trackStopped: false, timers: new Set(), logs: [], warns: [], now: 0 };
   const outTrack = {
     contentHint: "",
     requestFrame() { state.emitted++; },
@@ -104,7 +105,7 @@ function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50, undressedCheck
   const fn = new Function(...Object.keys(sandbox),
     code + "\nreturn createThrottledInputStream;")(...Object.values(sandbox));
   const srcStream = { getVideoTracks: () => [{ applyConstraints: () => Promise.resolve() }], getTracks: () => [] };
-  const throttle = fn(srcStream, { fps, gated, gateMaxMs });
+  const throttle = fn(srcStream, { fps, gated, gateMaxMs, clock: () => state.now });
   /* The real one starts its interval from video.play().then(start) - a microtask. Flush it
      so the timer is registered before a test drives ticks. */
   const flush = () => new Promise((r) => setImmediate(r));
@@ -430,6 +431,38 @@ console.log("\n── §7 THE SAME GATE, HELD ACROSS AN ORIENTATION SWAP ──"
   h.tick(3);
   check("...and frames flow again at once", h.state.emitted === before + 3, `${h.state.emitted - before}`);
   check("unhold() on a gate that is not held is a no-op", h.throttle.unhold("again") === false);
+}
+{
+  /* THE FIRST FRAME ON THE NEW REFERENCE GOES AT THE ACK. Decart can only render the new reference
+     from a camera frame sent after it took it; reopening the gate used to send none, so that frame
+     waited up to a whole interval (100ms at 10fps) for the next tick on every swap. */
+  const h = makeThrottle({ gated: true, fps: 10 });
+  await h.flush();
+  h.throttle.release("go-live");
+  h.tick(1);                                   // a frame at t=0
+  h.throttle.hold("swap", 2000);
+  h.state.now = 450;                           // the upload and ACK took 450ms
+  const before = h.state.emitted;
+  h.throttle.unhold("swap acknowledged");
+  check("a frame reaches Decart AT the ACK, not on the next interval tick",
+    h.state.emitted === before + 1, `${h.state.emitted - before} frames at unhold`);
+  const intervals = [...h.state.timers].filter((t) => !t.isTimeout);
+  check("...and restarting the interval from it leaves exactly one interval at the same rate - the billing cap is unchanged",
+    intervals.length === 1 && intervals[0].ms === 100, JSON.stringify(intervals.map((t) => t.ms)));
+  h.tick(2);
+  check("...and frames keep flowing from it", h.state.emitted === before + 3, `${h.state.emitted - before}`);
+
+  const quick = makeThrottle({ gated: true, fps: 10 });
+  await quick.flush();
+  quick.throttle.release("go-live");
+  quick.state.now = 1000;
+  quick.tick(1);                               // a frame at t=1000
+  quick.throttle.hold("swap", 2000);
+  quick.state.now = 1040;                      // ACK 40ms later - under one frame period
+  const q0 = quick.state.emitted;
+  quick.throttle.unhold("swap acknowledged");
+  check("a hold shorter than one frame period sends nothing extra - frames never go closer than the rate allows",
+    quick.state.emitted === q0, `${quick.state.emitted - q0} extra`);
 }
 {
   const h = makeThrottle({ gated: false });

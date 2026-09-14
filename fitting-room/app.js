@@ -4154,6 +4154,7 @@ async function ensureOnline() {
 function createThrottledInputStream(srcStream, {
   fps = LIVE_INFERENCE_FPS, width = LIVE_W, height = LIVE_H,
   gated = INPUT_GATE_ENABLED, gateMaxMs = INPUT_GATE_MAX_MS,
+  clock = () => Date.now(),   // injectable so first-frame-integrity can drive time; see unhold()
 } = {}) {
   const srcTrack = srcStream.getVideoTracks()[0];
   // No video track (camera failed) - hand the stream back untouched; nothing to throttle.
@@ -4213,6 +4214,7 @@ function createThrottledInputStream(srcStream, {
   let gateOpen = !gated;
   let held = false;          // closed mid-session by hold() - see the returned API
   let gateTimer = null;
+  let lastFrameAt = -Infinity;   // when a frame last reached the output track - unhold() spaces against it
   if (gated) {
     gateTimer = setTimeout(() => {
       gateTimer = null;
@@ -4285,6 +4287,7 @@ function createThrottledInputStream(srcStream, {
     try {
       drawFrame();
       if (outTrack && typeof outTrack.requestFrame === "function") outTrack.requestFrame();
+      lastFrameAt = clock();
     } catch (_) {}
   };
 
@@ -4346,7 +4349,18 @@ function createThrottledInputStream(srcStream, {
       held = false;
       gateOpen = true;
       if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
-      console.log(`[PEAR] input gate unheld (${why}) - streaming to Decart on the new reference`);
+      /* THE FIRST FRAME ON THE NEW REFERENCE GOES AT THE ACK, NOT ON THE NEXT TICK. Decart can only
+         render the new reference from a camera frame it receives after taking it, and reopening the
+         gate sent none: the first one waited for the interval's next tick - up to a full frame
+         period (100ms at 10fps, ~50ms on average) added to every swap's render. Sent now, and the
+         interval restarted from it, so frames stay at least frameMs apart and the billing rate cap
+         is exact. A hold shorter than one period (the last frame went out under frameMs ago) waits
+         for the tick as before - sending now would break the cap. The hold itself stays: it is what
+         keeps Decart from rendering the blank shirt while the reference uploads (see hold()). */
+      const now = timer !== null && clock() - lastFrameAt >= frameMs;
+      if (now) { clearInterval(timer); timer = null; tick(); start(); }
+      console.log(`[PEAR] input gate unheld (${why}) - streaming to Decart on the new reference` +
+        (now ? " (first frame sent at the ACK)" : ""));
       return true;
     },
     dispose: () => {
@@ -4710,6 +4724,8 @@ async function connectRealtime({ force = false } = {}) {
         /* ── connect realtime ───────────────────────────────────────────────── */
         // FIX: model passed as a plain string, NOT via models.realtime()
         rtClient = await client.realtime.connect(realtimeInput, buildRealtimeConnectOpts(gen));
+        // set() sends pre-encoded references - see preEncodeReference(). typeof: this runs sandboxed in signaling-retry.
+        if (typeof withPreEncodedReferences === "function") rtClient = withPreEncodedReferences(rtClient);
         break;      // success - fall through to the post-connect code below
       } catch (e) {
         // Dispose THIS attempt's throttle/clone before either retrying (a fresh one is
@@ -5198,7 +5214,11 @@ function garmentBlobCached(url) {
         : await fetchWithFallback(url);
       if (!raw) { _assetBlobCache.delete(url); return null; }   // never cache a failure - allow a retry
       // These bytes go straight to rtClient.set({ image }) in AI Auto mode.
-      return await normalizeToSupportedImage(raw);
+      const blob = await normalizeToSupportedImage(raw);
+      /* Encoded NOW, while nothing is waiting on it, so a swap that sends this Blob later does no
+         encoding at all - see preEncodeReference(). Fire-and-forget; a failure costs nothing. */
+      if (blob && typeof preEncodeReference === "function") preEncodeReference(blob);
+      return blob;
     } catch (e) {
       console.warn("[PEAR] asset pre-cache failed:", e?.message || e);
       _assetBlobCache.delete(url);
@@ -5226,6 +5246,58 @@ function garmentBlobCached(url) {
  * @param {string} url
  * @returns {Blob|null}
  */
+/* ── PRE-ENCODED REFERENCES - no encoding when a swap fires ───────────────────────────────────────
+   @decartai/sdk's set() turns a Blob into base64 at send time with FileReader.readAsDataURL(), then
+   splits the data URL on its comma. That FileReader completion is a separate TASK, the one hop off
+   the current task between the swap decision and the WebSocket write; every other step (the cached
+   Blob lookup, the wire mutex, the SDK's own awaits) resolves as microtasks. A reading taken behind a
+   main-thread MediaPipe inference waits for that inference too.
+   So each garment Blob is encoded once, when it is fetched (garmentBlobCached), by the SAME
+   readAsDataURL, and kept beside it in a WeakMap - it goes when the Blob does. At send time
+   withPreEncodedReferences() hands the SDK that data: URL, which it accepts (it splits it without a
+   FileReader), so the bytes on the wire are identical and the payload is built within the task.
+   The rest of this file never sees it: every identity check (lastSentImageRef, garmentBlobIfWarm,
+   verifyGarmentAsset) still holds the Blob. A Blob not yet encoded is passed through as before.
+   NOT DONE, deliberately: writing a pre-serialized message to the SDK's WebSocket directly. The socket
+   and its ack matching are private to the SDK (set() resolves on set_image_ack through them), the
+   message carries the prompt, which changes with size and angle, and JSON.stringify of ~60KB is
+   sub-millisecond. The browser owns the socket options; there is no WebSocket API for TCP_NODELAY. */
+const _preEncodedRefs = new WeakMap();   // Blob -> Promise<string|null>, with .settled once done
+
+/** @param {Blob} blob  @returns {Promise<string|null>} the Blob as a base64 data: URL, encoded once */
+function preEncodeReference(blob) {
+  if (typeof Blob === "undefined" || typeof FileReader === "undefined" || !(blob instanceof Blob)) return Promise.resolve(null);
+  const cached = _preEncodedRefs.get(blob);
+  if (cached) return cached;
+  const job = new Promise((resolve) => {
+    try {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(typeof reader.result === "string" && /^data:[^,]*;base64,./.test(reader.result) ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    } catch (_) { resolve(null); }
+  });
+  job.then((s) => { job.settled = s; }, () => {});
+  _preEncodedRefs.set(blob, job);
+  return job;
+}
+
+/** Replace the realtime client's set() IN PLACE (its sessionId/subscribeToken are getters - a copy
+    would freeze them) with one that hands the SDK a pre-encoded data: URL for a Blob that has one.
+    @template T  @param {T} client  @returns {T} */
+function withPreEncodedReferences(client) {
+  if (!client || typeof client.set !== "function" || client.__pearPreEncoded) return client;
+  const rawSet = client.set;
+  client.set = (input) => {
+    const image = input && input.image;
+    const job = typeof Blob !== "undefined" && image instanceof Blob ? _preEncodedRefs.get(image) : null;
+    const dataUrl = job ? job.settled : null;
+    return rawSet(dataUrl ? { ...input, image: dataUrl } : input);
+  };
+  client.__pearPreEncoded = true;
+  return client;
+}
+
 function garmentBlobIfWarm(url) {
   if (!url) return null;
   const job = _assetBlobCache.get(url);
@@ -5834,34 +5906,63 @@ const ORIENT_POSE_FLIP_FRAMES    = 2;    // shoulder-order votes needed for a co
 const ORIENT_POSE_PASS = (() => {
   try { return new URLSearchParams(location.search).get("pose_pass") !== "0"; } catch (_) { return true; }
 })();
-/* ── THE EARLY TURN TRIGGER - OPT-IN, OFF BY DEFAULT (?early_turn=<deg>) ───────────────────────────
+/* ── THE EARLY TURN TRIGGER - ON BY DEFAULT at 20 degrees, gated at 60 deg/s ─────────────────────────────
    WHY IT EXISTS. Traced client side, a swap costs ~nothing: the Blobs are pinned in memory, the
-   catalog's rear pair is 43KB/38KB, and @decartai/sdk sends it as one set_image message on the
-   signaling WebSocket. What remains is Decart switching its render once it has the reference
-   (~1s by this file's own figure - COND_TRACE_SETTLE_MS). The only client lever against a server
-   cycle is sending sooner.
-   WHY IT IS OFF. At 15-45 degrees a posing twist and the start of a 360 are the same reading. Modelled
-   through the build-130 tick (turn-yaw-window §11, 24 full-360 profiles, 700-1000ms dispatch-to-render):
-   the wrong garment is on screen 2729ms on average by default, 313ms at ?early_turn=20 and 396ms at 25,
-   and no profile gets worse. The cost: a pose that crosses the threshold and comes back - a 38-degree
-   twist, a side view in the mirror, a held profile check, a twist while facing away - shows the other
-   side's graphic for 1.0-1.75s until the withdrawal lands, where the default shows nothing. A twist that
-   stays under the threshold sends nothing. That is a product trade, so it is a flag: try it on a real
-   turn beside the default, with the ?orient_debug=1 profile (DISPATCH_SENT / SERVER_CONFIRMED /
-   RENDER_APPLIED) to read the result. Still a model until a live session says otherwise.
-   BEHAVIOUR when set (see makeEarlyTurnTrigger): dual-view only; armed by settling square on the
-   locked side; fires the other side on the first fresh |yaw| past the threshold, BACK sent
-   withdrawable like a predictive BACK; withdrawn the moment the old side's votes return under the
-   threshold, before any vote has confirmed the turn. Omitted, 0 or unparseable is OFF and nothing
-   below is constructed. Clamped to [ORIENT_EARLY_TURN_MIN_DEG, ORIENT_EARLY_TURN_MAX_DEG]: under 10
-   is sway, and past 60 the default's own predictive BACK is already earlier. */
+   catalog's rear pair is 43KB/38KB, @decartai/sdk sends it as one set_image message on the signaling
+   WebSocket, and the reference is pre-encoded (preEncodeReference). What remains is Decart switching its
+   render once it has the reference (~1s by this file's own figure - COND_TRACE_SETTLE_MS). The only
+   client lever against a server cycle is sending sooner.
+   WHY IT IS ON, AND WHAT IT COSTS - a PRODUCT DECISION (2026-09-14), taken on these modelled numbers
+   (turn-yaw-window §11, the build-130 tick, 700-1000ms dispatch-to-render; not yet measured live):
+   at 15-45 degrees a posing twist and the start of a 360 are the same reading, so no setting removes the
+   trade - it only chooses it. With the trigger off, a full 360 shows the wrong garment 2.5s (700ms
+   latency) to 3.0s (1000ms); at 20 degrees gated at 60 deg/s, 0.8s to 1.25s. A slow sway or a held
+   weight shift never fires, jitter or not. A FAST pose - a quick twist, a reach, a look at the side view in the mirror, a held profile
+   check - starts exactly like a turn and shows the other side's graphic for ~0.75-1.75s until the
+   withdrawal lands. The choice offered was: 20 ungated (turns ~0.3s, slow weight shifts past 20 fire
+   too), 20 gated (this), or off. ?orient_debug=1 prints DISPATCH_SENT / SERVER_CONFIRMED /
+   RENDER_APPLIED and the trigger's live |yaw| speed to re-tune from a real turn.
+   OVERRIDES: ?early_turn=0 turns it off (the build-130 behaviour, exactly); ?early_turn=<deg> moves the
+   threshold, clamped to [ORIENT_EARLY_TURN_MIN_DEG, ORIENT_EARLY_TURN_MAX_DEG] - under 10 is sway, past
+   60 predictive BACK is already earlier; unparseable keeps the default.
+   MEASURED AND DECLINED (same model): 12 or 15 (a 14-degree sway fires at 12; an 18-degree weight shift
+   shows the back 1.75s at 15, for 0-125ms gained over 20 on a 360); an acceleration gate (sampled at
+   240ms, a 12-degree sway reads HIGHER alpha in the 8-12 degree band - 116-351 deg/s2 - than a 360's start
+   - 43-208 - and a 90 deg/s turn skips that band between two readings); evaluating the crossing on every
+   pose reading instead of the tick (BACK leaves ~60ms sooner and lands in the front hemisphere - more
+   wrong-garment time, 367 -> 667ms); firing on predicted time-to-edge-on (worse than a plain 20 even
+   with the latency known exactly). No undo beats Decart's own switch: a reach that returns inside 300ms
+   still shows the back for the whole render latency.
+   BEHAVIOUR (see makeEarlyTurnTrigger): dual-view only; armed by settling square on the locked side;
+   fires the other side on the first fresh |yaw| past the threshold while it rises at least the gate's
+   speed, BACK sent withdrawable like a predictive BACK; withdrawn the moment the old side's votes return
+   under the threshold, before any vote has confirmed the turn. Symmetric: armed facing away, it sends
+   FRONT the same way. */
+const ORIENT_EARLY_TURN_DEFAULT_DEG = 20;
+const ORIENT_EARLY_TURN_DEFAULT_SPEED = 60;
+/* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
+   rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;
+   unparseable keeps the default; capped at 1000.
+   MODELLED (turn-yaw-window §11, 1000ms render latency, with and without +/-4 degrees of yaw jitter): at 15
+   degrees ungated an 18-degree weight shift held fires (and, with jitter, a 14-degree sway); gated at 60
+   neither ever fires. The cost of the gate is turn benefit: a slow turn does not clear it either. A gate
+   high enough to stop fast poses (80) stops slow turns from benefiting at all, and jitter lets some fast
+   poses back through. The gate reads the pose loop's own yaw and reading time; no vote or engine changes. */
+const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("early_turn_speed"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_SPEED; }
+  const v = Number(raw);
+  if (raw === null || raw === "" || !Number.isFinite(v)) return ORIENT_EARLY_TURN_DEFAULT_SPEED;
+  return v <= 0 ? 0 : Math.min(v, 1000);
+})();
 const ORIENT_EARLY_TURN_MIN_DEG = 10;
 const ORIENT_EARLY_TURN_MAX_DEG = 60;
 const ORIENT_EARLY_TURN_DEG = (() => {
   let raw = null;
-  try { raw = new URLSearchParams(location.search).get("early_turn"); } catch (_) { return 0; }
+  try { raw = new URLSearchParams(location.search).get("early_turn"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_DEG; }
   const deg = Number(raw);
-  if (raw === null || raw === "" || !Number.isFinite(deg) || deg <= 0) return 0;
+  if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_DEFAULT_DEG;
+  if (deg <= 0) return 0;
   return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
 })();
 
@@ -6211,20 +6312,35 @@ function orientPredictBackReason({ enabled = ORIENT_PREDICTIVE_BACK, acquiring, 
    that came back - a twist, a look at the side view. Any vote for the early side confirms the turn
    and ends the watch. A lock that moved some other way (the swap never went out, or a vote-confirmed
    flip) ends it too.
+   THE SPEED GATE (`minSpeed`, ?early_turn_speed=<deg/s>): the crossing only fires while |yaw| is RISING at
+   least that fast, measured between consecutive pose readings (`at`, the reading's own time). A slow
+   drift past the threshold - a sway, a weight shift - keeps the trigger armed without firing; if the
+   motion then speeds up while still past the threshold, it fires then. Rising only: a fast return
+   from past the threshold is never read as a turn starting. Units are the pose model's |yaw| per
+   second, not true body degrees - MediaPipe compresses depth. See ORIENT_EARLY_TURN_MIN_SPEED.
    @param {number} deg  |yaw| threshold; 0 or less is off and never arms
+   @param {number} [minSpeed]  rising |yaw| deg/s a crossing needs; 0 or less is no gate
    @returns {{ readonly armed: "front"|"back"|null, readonly pending: {from: string, to: string}|null,
-               observe(o: { vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null }):
+               readonly speed: number,
+               observe(o: { vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number|null }):
                  { fire: "front"|"back"|null, withdraw: "front"|"back"|null } }} */
-function makeEarlyTurnTrigger(deg) {
+function makeEarlyTurnTrigger(deg, minSpeed = 0) {
   let armed = null;     // the lock this trigger was armed on
   let pending = null;   // { from, to } - an early swap that no vote has confirmed yet
+  let lastYaw = null, lastAt = null, speed = 0;   // rising |yaw| deg/s between the last two readings
   const none = { fire: null, withdraw: null };
   return {
     get armed() { return armed; },
     get pending() { return pending; },
-    observe({ vote, lock, yawAbs }) {
+    get speed() { return speed; },
+    observe({ vote, lock, yawAbs, at = null }) {
       if (!(deg > 0) || (lock !== "front" && lock !== "back")) { armed = null; pending = null; return none; }
       const fresh = yawAbs !== null && Number.isFinite(yawAbs);
+      /* One reading counted once: a tick that sees the same reading again leaves the speed alone. */
+      if (fresh && Number.isFinite(at)) {
+        if (lastAt !== null && at > lastAt) speed = (yawAbs - lastYaw) / ((at - lastAt) / 1000);
+        if (lastAt === null || at > lastAt) { lastYaw = yawAbs; lastAt = at; }
+      }
       if (pending) {
         /* Ended by the lock leaving the early side (the withdrawal landed, or the swap never went
            out) or by a vote for the early side (the turn is real). Otherwise the withdrawal is
@@ -6236,7 +6352,7 @@ function makeEarlyTurnTrigger(deg) {
       }
       if (armed !== lock) armed = null;
       if (vote === lock && fresh && yawAbs < deg) { armed = lock; return none; }
-      if (armed === lock && fresh && yawAbs >= deg) {
+      if (armed === lock && fresh && yawAbs >= deg && (!(minSpeed > 0) || speed >= minSpeed)) {
         const to = lock === "front" ? "back" : "front";
         armed = null; pending = { from: lock, to };
         return { fire: to, withdraw: null };
@@ -7249,11 +7365,12 @@ function createOrientationWatcher() {
      streak-start baseline that the return leg could never corroborate against; see
      makeTurnYawWindow() for why. */
   const yawWindow = makeTurnYawWindow();
-  /* The opt-in early turn trigger - null, and every use of it inert, unless ?early_turn=<deg> (see
+  /* The early turn trigger - on by default, null (and every use of it inert) with ?early_turn=0 (see
      ORIENT_EARLY_TURN_DEG). */
-  const earlyTurn = ORIENT_EARLY_TURN_DEG > 0 ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG) : null;
+  const earlyTurn = ORIENT_EARLY_TURN_DEG > 0 ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED) : null;
   if (earlyTurn) {
-    console.log(`[PEAR] AI Auto - EARLY TURN TRIGGER ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn) - experimental:`,
+    console.log(`[PEAR] AI Auto - EARLY TURN TRIGGER ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn)` +
+      (ORIENT_EARLY_TURN_MIN_SPEED > 0 ? `, only while |yaw| rises at ${ORIENT_EARLY_TURN_MIN_SPEED}°/s or faster (?early_turn_speed)` : "") + " - ?early_turn=0 turns it off:",
       "sends the other side as the torso starts to rotate, withdrawn if the pose comes back (dual-view items only)");
   }
   let faceStreak = 0;   // consecutive FaceDetector detections - see the tick and ORIENT_FACE_RETURN_FRAMES
@@ -8106,7 +8223,8 @@ function createOrientationWatcher() {
               yawAbs: yawFresh ? _torsoYawAbs : null, now: Date.now() })}`
           : "";
         const earlyState = earlyTurn
-          ? ` | early ${ORIENT_EARLY_TURN_DEG}°: ${earlyTurn.pending ? `${earlyTurn.pending.to.toUpperCase()} sent early, unconfirmed` : earlyTurn.armed ? `armed on ${earlyTurn.armed.toUpperCase()}` : "not armed"}`
+          ? ` | early ${ORIENT_EARLY_TURN_DEG}°: ${earlyTurn.pending ? `${earlyTurn.pending.to.toUpperCase()} sent early, unconfirmed` : earlyTurn.armed ? `armed on ${earlyTurn.armed.toUpperCase()}` : "not armed"}` +
+            ` (|yaw| rising ${earlyTurn.speed.toFixed(0)}°/s${ORIENT_EARLY_TURN_MIN_SPEED > 0 ? `, gate ${ORIENT_EARLY_TURN_MIN_SPEED}°/s` : ""})`
           : "";
         console.log(`[PEAR][ORIENT] state=${vtonState()} | ${pose} | confidence=${confidence} | ${status}` +
           (needsSwitch ? progress : "") + predict + earlyState);
@@ -8226,19 +8344,19 @@ function createOrientationWatcher() {
          coming, so drop the hold now rather than sitting on a still until the ceiling. */
       else if (_orientHoldActive) orientHoldEnd("turn-abandoned");
 
-      /* THE OPT-IN EARLY TURN TRIGGER (?early_turn=<deg>, see ORIENT_EARLY_TURN_DEG) - `earlyTurn` is null
-         by default and this block does nothing. Only when no vote-confirmed or predictive swap is due.
+      /* THE EARLY TURN TRIGGER (on by default, see ORIENT_EARLY_TURN_DEG) - `earlyTurn` is null with
+         ?early_turn=0 and this block does nothing. Only when no vote-confirmed or predictive swap is due.
          HANDLED HERE AND IT ENDS THE TICK, ahead of the pose/re-anchor updates below: they take the
          `applying` mutex in this very tick, and maybeSwap() would find it held and drop the dispatch -
          the reason predictive BACK stands aside from them too. */
       const earlyAct = earlyTurn && dualView && !acquiring && !confirmed && !predictBack
-        ? earlyTurn.observe({ vote, lock: autoOrientation, yawAbs: yawFresh ? _torsoYawAbs : null })
+        ? earlyTurn.observe({ vote, lock: autoOrientation, yawAbs: yawFresh ? _torsoYawAbs : null, at: yawFresh ? _torsoYawAt : null })
         : null;
       if (earlyAct && earlyAct.fire) {
         /* The pre-turn streak must not count against the early side - predictive BACK's reason. */
         lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;
         if (ORIENT_DEBUG) {
-          console.log(`[PEAR][ORIENT] early turn: |yaw| ${_torsoYawAbs.toFixed(0)}° crossed ?early_turn=${ORIENT_EARLY_TURN_DEG}° ` +
+          console.log(`[PEAR][ORIENT] early turn: |yaw| ${_torsoYawAbs.toFixed(0)}° crossed ?early_turn=${ORIENT_EARLY_TURN_DEG}° rising at ${earlyTurn.speed.toFixed(0)}°/s ` +
             `from a settled ${String(autoOrientation).toUpperCase()} - sending ${earlyAct.fire.toUpperCase()} ahead of any vote`);
         }
         await maybeSwap(earlyAct.fire, earlyAct.fire === "back");   // an early BACK is withdrawable like a predictive one
