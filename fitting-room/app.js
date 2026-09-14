@@ -5939,6 +5939,22 @@ const ORIENT_POSE_PASS = (() => {
    under the threshold, before any vote has confirmed the turn. Symmetric: armed facing away, it sends
    FRONT the same way. */
 const ORIENT_EARLY_TURN_DEFAULT_DEG = 20;
+/* ?early_turn_return=<deg> - THE RETURN LEG, BACK -> FRONT, fires later than the way out.
+   LIVE EVIDENCE (the first in this series): pear-tryon-...-FOX-20260914-225423.mp4, a v134-era 360 at ~140 deg/s,
+   read frame by frame. Out: "PEAK" holds to ~60 degrees, the side is plain (as a side is), the back graphic
+   arrives with the back (2.8s) and holds while facing away. Back: between 3.40s and 3.47s the body jumps
+   ~50 degrees and the shirt turns plain brown while the back and back-profile are still to the lens, until
+   the chest comes round (~4.2s). A reference replaced while the back was visible - FRONT, and only the early
+   trigger sends FRONT that close to facing away (20 degrees past it). The same clip timed Decart's output
+   stalls around the swaps at 234-333ms, so this session's swaps were far faster than the 700-1000ms the
+   default was first tuned for, and at that speed 20 degrees of lead lands FRONT on the back.
+   MODELLED per leg (turn-yaw-window §11, 90-140 deg/s, 250-1000ms dispatch-to-render): the return leg at
+   35 is the only setting that puts FRONT on a back-facing body for 0ms at every latency; its cost is the
+   back graphic staying on a turning-front chest ~100-190ms longer. Raising BOTH legs is worse overall and
+   leaves a plain gap anyway. The outbound leg keeps 20. ?early_turn_return=0 turns the early FRONT off
+   (the vote path carries the return); clamped like ?early_turn. Which path sent FRONT in that clip is
+   what one ?orient_debug=1 log of a turn would confirm. */
+const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 35;
 const ORIENT_EARLY_TURN_DEFAULT_SPEED = 60;
 /* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
    rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;
@@ -5957,6 +5973,14 @@ const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
 })();
 const ORIENT_EARLY_TURN_MIN_DEG = 10;
 const ORIENT_EARLY_TURN_MAX_DEG = 60;
+const ORIENT_EARLY_TURN_RETURN_DEG = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("early_turn_return"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG; }
+  const deg = Number(raw);
+  if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG;
+  if (deg <= 0) return 0;
+  return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
+})();
 const ORIENT_EARLY_TURN_DEG = (() => {
   let raw = null;
   try { raw = new URLSearchParams(location.search).get("early_turn"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_DEG; }
@@ -6318,13 +6342,18 @@ function orientPredictBackReason({ enabled = ORIENT_PREDICTIVE_BACK, acquiring, 
    motion then speeds up while still past the threshold, it fires then. Rising only: a fast return
    from past the threshold is never read as a turn starting. Units are the pose model's |yaw| per
    second, not true body degrees - MediaPipe compresses depth. See ORIENT_EARLY_TURN_MIN_SPEED.
-   @param {number} deg  |yaw| threshold; 0 or less is off and never arms
+   THE RETURN LEG HAS ITS OWN THRESHOLD (`returnDeg`, used while the lock is BACK). Sending FRONT early swaps
+   the back graphic out while the back is still turned to the lens, and FRONT on a back-facing body renders a
+   plain back - see ORIENT_EARLY_TURN_RETURN_DEG for the live clip that showed it and the numbers that set it.
+   @param {number} deg  |yaw| threshold from a FRONT lock (and from BACK unless returnDeg is given); 0 or less is off
    @param {number} [minSpeed]  rising |yaw| deg/s a crossing needs; 0 or less is no gate
+   @param {number} [returnDeg]  |yaw| threshold from a BACK lock; 0 or less never fires FRONT early
    @returns {{ readonly armed: "front"|"back"|null, readonly pending: {from: string, to: string}|null,
                readonly speed: number,
                observe(o: { vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number|null }):
                  { fire: "front"|"back"|null, withdraw: "front"|"back"|null } }} */
-function makeEarlyTurnTrigger(deg, minSpeed = 0) {
+function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg) {
+  const thresholdFor = (side) => (side === "back" ? returnDeg : deg);
   let armed = null;     // the lock this trigger was armed on
   let pending = null;   // { from, to } - an early swap that no vote has confirmed yet
   let lastYaw = null, lastAt = null, speed = 0;   // rising |yaw| deg/s between the last two readings
@@ -6347,12 +6376,14 @@ function makeEarlyTurnTrigger(deg, minSpeed = 0) {
            asked for on EVERY tick its condition holds, not once: maybeSwap() can refuse a tick
            (a swap still applying), and a withdrawal asked for once and refused would be lost. */
         if (lock !== pending.to || vote === pending.to) pending = null;
-        else if (vote === pending.from && fresh && yawAbs < deg) return { fire: null, withdraw: pending.from };
+        else if (vote === pending.from && fresh && yawAbs < thresholdFor(pending.from)) return { fire: null, withdraw: pending.from };
         else return none;
       }
       if (armed !== lock) armed = null;
-      if (vote === lock && fresh && yawAbs < deg) { armed = lock; return none; }
-      if (armed === lock && fresh && yawAbs >= deg && (!(minSpeed > 0) || speed >= minSpeed)) {
+      const threshold = thresholdFor(lock);
+      if (!(threshold > 0)) { armed = null; return none; }
+      if (vote === lock && fresh && yawAbs < threshold) { armed = lock; return none; }
+      if (armed === lock && fresh && yawAbs >= threshold && (!(minSpeed > 0) || speed >= minSpeed)) {
         const to = lock === "front" ? "back" : "front";
         armed = null; pending = { from: lock, to };
         return { fire: to, withdraw: null };
@@ -7367,9 +7398,11 @@ function createOrientationWatcher() {
   const yawWindow = makeTurnYawWindow();
   /* The early turn trigger - on by default, null (and every use of it inert) with ?early_turn=0 (see
      ORIENT_EARLY_TURN_DEG). */
-  const earlyTurn = ORIENT_EARLY_TURN_DEG > 0 ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED) : null;
+  const earlyTurn = ORIENT_EARLY_TURN_DEG > 0
+    ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG) : null;
   if (earlyTurn) {
-    console.log(`[PEAR] AI Auto - EARLY TURN TRIGGER ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn)` +
+    console.log(`[PEAR] AI Auto - EARLY TURN TRIGGER ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn), ` +
+      `${ORIENT_EARLY_TURN_RETURN_DEG > 0 ? ORIENT_EARLY_TURN_RETURN_DEG + "° on the return to FRONT (?early_turn_return)" : "no early FRONT on the return (?early_turn_return=0)"}` +
       (ORIENT_EARLY_TURN_MIN_SPEED > 0 ? `, only while |yaw| rises at ${ORIENT_EARLY_TURN_MIN_SPEED}°/s or faster (?early_turn_speed)` : "") + " - ?early_turn=0 turns it off:",
       "sends the other side as the torso starts to rotate, withdrawn if the pose comes back (dual-view items only)");
   }
@@ -8359,7 +8392,7 @@ function createOrientationWatcher() {
         /* The pre-turn streak must not count against the early side - predictive BACK's reason. */
         lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;
         if (ORIENT_DEBUG) {
-          console.log(`[PEAR][ORIENT] early turn: |yaw| ${_torsoYawAbs.toFixed(0)}° crossed ?early_turn=${ORIENT_EARLY_TURN_DEG}° rising at ${earlyTurn.speed.toFixed(0)}°/s ` +
+          console.log(`[PEAR][ORIENT] early turn: |yaw| ${_torsoYawAbs.toFixed(0)}° crossed ${autoOrientation === "back" ? "?early_turn_return=" + ORIENT_EARLY_TURN_RETURN_DEG : "?early_turn=" + ORIENT_EARLY_TURN_DEG}° rising at ${earlyTurn.speed.toFixed(0)}°/s ` +
             `from a settled ${String(autoOrientation).toUpperCase()} - sending ${earlyAct.fire.toUpperCase()} ahead of any vote`);
         }
         await maybeSwap(earlyAct.fire, earlyAct.fire === "back");   // an early BACK is withdrawable like a predictive one
