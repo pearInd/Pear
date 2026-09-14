@@ -74,7 +74,7 @@ check("ORIENT_FACE_RETURN_FRAMES exists, and sits between acquisition and the co
 
 const start = SRC.indexOf("function makeTurnYawWindow(");
 const end   = SRC.indexOf("/* ── THE BEST FRONT-FACING FRAME");
-let makeTurnYawWindow = null, orientFlipDecision = null, orientPredictBack = null;
+let makeTurnYawWindow = null, orientFlipDecision = null, orientPredictBack = null, makeEarlyTurnTrigger = null;
 if (start === -1 || end === -1 || end < start) {
   check("makeTurnYawWindow() exists in app.js", false, "the peak-since-agreement window is not implemented");
 } else {
@@ -84,11 +84,13 @@ if (start === -1 || end === -1 || end < start) {
     SRC.slice(start, end) +
     "\nreturn { makeTurnYawWindow," +
     " orientFlipDecision: typeof orientFlipDecision === 'function' ? orientFlipDecision : null," +
-    " orientPredictBack: typeof orientPredictBack === 'function' ? orientPredictBack : null };")(
+    " orientPredictBack: typeof orientPredictBack === 'function' ? orientPredictBack : null," +
+    " makeEarlyTurnTrigger: typeof makeEarlyTurnTrigger === 'function' ? makeEarlyTurnTrigger : null };")(
     TURN_DEG, LOSS_DEG, ACQ_F, LOCK_F, CORR_F, LOCK_MS, FACE_F, EDGE_DEG, DESCENT, DWELL_MS, true, numOr("ORIENT_POSE_FLIP_FRAMES"));
   makeTurnYawWindow = api.makeTurnYawWindow;
   orientFlipDecision = api.orientFlipDecision;
   orientPredictBack = api.orientPredictBack;
+  makeEarlyTurnTrigger = api.makeEarlyTurnTrigger;
   check("orientFlipDecision() exists beside the window, so the flip bar is real code under test",
     typeof orientFlipDecision === "function");
   check("orientPredictBack() exists beside them", typeof orientPredictBack === "function");
@@ -802,13 +804,14 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
        and holds every swap to the cooldown except withdrawing a predictive/early BACK. `readableTo` is
        the |yaw| past which the torso is unreadable; `noise` perturbs the shoulder order past 70 degrees,
        where BlazePose's labels are weakest; `dropout` loses random frames at any angle. */
-    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700 }) {
+    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700, earlyDeg = 0, measureFrom = 0 }) {
       let s = seed; const rand = () => ((s = (s * 16807) % 2147483647) / 2147483647);
       const facing = (deg) => { const m = ((deg % 360) + 360) % 360; return m > 180 ? 360 - m : m; };
       const seg = script || [[0, 1000], [360, (360 / speed) * 1000], [360, 3000]];
       const angleAt = (t) => { let from = 0, t0 = 0; for (const [to, dur] of seg) { if (t <= t0 + dur) return from + (to - from) * ((t - t0) / dur); from = to; t0 += dur; } return seg[seg.length - 1][0]; };
       const total = seg.reduce((a, [, d]) => a + d, 0);
       const win = makeTurnYawWindow();
+      const early = earlyDeg > 0 && makeEarlyTurnTrigger ? makeEarlyTurnTrigger(earlyDeg) : null;   // §11 - null by default
       let lock = "front", lastVote = null, streak = 0, streakSince = 0, poseStreak = 0, poseSide = null;
       let lastSwapAt = -Infinity, lastSwapPredictive = false, busyUntil = 0;
       let sep = null, sepAt = 0, yaw = null, yawAt = 0, lostAt = 0, nextPub = 0, landed = "front";
@@ -825,8 +828,8 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
         while (pending.length && pending[0].at <= t) landed = pending.shift().side;
         if (t % SAMPLE_MS !== 0) continue;
         const phiNow = facing(angleAt(t));
-        if (landed === "back" && phiNow < 90) backOnFront += SAMPLE_MS;
-        if (landed === "front" && phiNow > 90) frontOnBack += SAMPLE_MS;
+        if (t >= measureFrom && landed === "back" && phiNow < 90) backOnFront += SAMPLE_MS;
+        if (t >= measureFrom && landed === "front" && phiNow > 90) frontOnBack += SAMPLE_MS;
         if (t < busyUntil) continue;
         const vote = poseFacingVote({ sep, at: sepAt, now: t });
         if (vote) {
@@ -844,6 +847,10 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
           lock = side; lastSwapAt = t; lastSwapPredictive = predictive; busyUntil = t + swapMs;
           pending.push({ at: t + swapMs, side }); sent.push({ side, body: Math.round(angleAt(t)) });
         };
+        /* §11: the tick's early-turn block - only with ?early_turn, only when nothing confirmed or predictive is due. */
+        const ea = early && !d.confirmed && !predict ? early.observe({ vote, lock, yawAbs: fresh ? yaw : null }) : null;
+        if (ea && ea.fire) { lastVote = null; streak = 0; poseStreak = 0; poseSide = null; swap(ea.fire, ea.fire === "back"); continue; }
+        if (ea && ea.withdraw) { if (ea.withdraw === "back") lastSwapAt = -Infinity; swap(ea.withdraw, false); continue; }
         if (d.confirmed && d.early && lastVote === "back") swap("back", true);
         else if (d.confirmed) swap(lastVote, false);
         else if (predict) { lastVote = null; streak = 0; poseStreak = 0; poseSide = null; swap("back", true); }
@@ -917,6 +924,66 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       glances.every((g) => g.worstOn < COOLDOWN), JSON.stringify(glances.filter((g) => g.worstOn >= COOLDOWN)));
     check("...and never more than one sample tick longer than build 129, whatever the noise",
       worse.every((g) => g.worstOn - g.worstOff <= SAMPLE_MS), JSON.stringify(worse));
+
+    console.log("\n── §11 THE OPT-IN EARLY TURN TRIGGER (?early_turn=<deg>), through the same tick model ──");
+    /* What the flag buys and what it costs, printed rather than tuned. `latency` is dispatch-to-render;
+       the wrong-garment time is the back reference on a front-facing body plus the front reference on a
+       back-facing one. */
+    const EARLY = [20, 25];
+    const wrongMs = (r) => r.backOnFront + r.frontOnBack;
+    const turns = [];
+    for (const speed of [60, 90, 120]) for (const k of [1, 0.75]) for (const readableTo of [90, 60]) for (const swapMs of [700, 1000]) {
+      const base = simulateGap({ speed, k, readableTo, swapMs });
+      for (const earlyDeg of EARLY) turns.push({ speed, k, readableTo, swapMs, earlyDeg, base, on: simulateGap({ speed, k, readableTo, swapMs, earlyDeg }) });
+    }
+    const off0 = grid.every(({ p, on }) => JSON.stringify(simulateGap({ ...p, pass: true, earlyDeg: 0 }).sent) === JSON.stringify(on.sent));
+    check("flag omitted or 0: the tick model sends exactly what build 130 sends, profile for profile", off0);
+    const incomplete = turns.filter((x) => !x.on.completed);
+    check("with ?early_turn=20 or 25 every modelled full 360 still sends BACK and ends on FRONT",
+      incomplete.length === 0, JSON.stringify(incomplete.slice(0, 2).map((x) => ({ ...x, base: x.base.sent, on: x.on.sent }))));
+    const slower = turns.filter((x) => wrongMs(x.on) > wrongMs(x.base));
+    const mean = (deg, key) => {
+      const xs = turns.filter((x) => x.earlyDeg === deg);
+      return Math.round(xs.reduce((a, x) => a + wrongMs(x[key]), 0) / xs.length);
+    };
+    for (const deg of EARLY) console.log(`        full 360s, early_turn=${deg}: wrong garment on screen ${mean(deg, "base")}ms by default -> ${mean(deg, "on")}ms (mean of ${turns.length / EARLY.length} profiles)`);
+    check("...and none shows the wrong garment longer than the default does",
+      slower.length === 0, JSON.stringify(slower.slice(0, 2).map((x) => ({ p: [x.speed, x.k, x.readableTo, x.swapMs, x.earlyDeg], base: [x.base.sent, wrongMs(x.base)], on: [x.on.sent, wrongMs(x.on)] }))));
+
+    /* THE COST - motions that are not a turn. The default puts nothing on the wire for any of them. With the
+       flag, a motion that stays under the threshold must stay untouched, and one that crosses it and comes
+       back must be WITHDRAWN - end on the side it started - rather than wait out the vote bar. */
+    const poses = {
+      "twist to 15°": [[0, 1000], [15, 400], [0, 400], [0, 3500]],
+      "twist to 38°": [[0, 1000], [38, 500], [0, 500], [0, 3500]],
+      "side view in the mirror, 45° held 1s": [[0, 1000], [45, 600], [45, 1000], [0, 600], [0, 3500]],
+      "held profile check, 90° for 1.2s": [[0, 1000], [90, 1000], [90, 1200], [0, 1000], [0, 3000]],
+      "facing away, 30° twist to look back": [[0, 1000], [180, 2000], [180, 1500], [150, 500], [180, 500], [180, 3500]],
+      "facing away, 45° held": [[0, 1000], [180, 2000], [180, 1500], [135, 600], [135, 800], [180, 600], [180, 3500]],
+    };
+    const poseRows = [];
+    for (const [name, script] of Object.entries(poses)) for (const earlyDeg of EARLY) for (const swapMs of [700, 1000]) {
+      /* Facing away, the cost is counted from 4.5s - settled on BACK, just before the twist - so the turn to the back is not in it. */
+      const away = name.startsWith("facing away"), measureFrom = away ? 4500 : 0;
+      const base = simulateGap({ script, swapMs, measureFrom }), on = simulateGap({ script, swapMs, earlyDeg, measureFrom });
+      poseRows.push({ name, earlyDeg, swapMs, away, base, on, wrong: away ? on.frontOnBack : on.backOnFront });
+    }
+    for (const earlyDeg of EARLY) {
+      const rows = poseRows.filter((r) => r.earlyDeg === earlyDeg && r.swapMs === 1000);
+      console.log(`        early_turn=${earlyDeg}, 1000ms render latency: ` +
+        rows.map((r) => `${r.name}: ${r.on.sent.map((x) => x.side[0].toUpperCase() + "@" + x.body + "°").join(">") || "nothing sent"} (+${r.wrong}ms wrong)`).join(" | "));
+    }
+    check("the default sends nothing for any of these poses (the away poses keep only their own turn to the back), and shows no wrong garment",
+      poseRows.every((r) => r.base.sent.length === (r.away ? 1 : 0) && (r.away ? r.base.frontOnBack : r.base.backOnFront) === 0));
+    check("with the flag, a twist that stays under the threshold sends nothing",
+      poseRows.filter((r) => r.name === "twist to 15°").every((r) => r.on.sent.length === 0));
+    const stuck = poseRows.filter((r) => r.on.final !== (r.away ? "back" : "front"));
+    check("...and every pose that crosses it and comes back is withdrawn to the side it started on",
+      stuck.length === 0, JSON.stringify(stuck.map((r) => ({ name: r.name, deg: r.earlyDeg, sent: r.on.sent }))));
+    const worstPose = Math.max(...poseRows.map((r) => r.wrong));
+    console.log(`        worst pose cost with the flag: ${worstPose}ms of the other side's graphic (the default: 0)`);
+    check("...inside ORIENT_COOLDOWN_MS plus one render latency - the withdrawal skips the cooldown, it does not wait it out",
+      poseRows.every((r) => r.wrong <= COOLDOWN + r.swapMs), JSON.stringify(poseRows.filter((r) => r.wrong > COOLDOWN + r.swapMs).map((r) => [r.name, r.earlyDeg, r.swapMs, r.wrong])));
   }
 
   const w0 = SRC.indexOf("function createOrientationWatcher()");
@@ -933,6 +1000,113 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
     /if \(dualView && confirmed && early && lastVote === "back"\) await maybeSwap\("back", true\);\s*\n\s*else if \(dualView && confirmed\) await maybeSwap\(lastVote\);/.test(watcher));
   check("the debug line says whether the torso was lost in the turn and whether it passed the side view",
     /torso lost \$\{yawWindow\.lostInTurn/.test(watcher) && /passed \$\{turnYaw\.passed/.test(watcher) && /POSE-FLIP\(pass\)/.test(watcher));
+}
+
+console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units and wiring ──");
+{
+  if (makeEarlyTurnTrigger) {
+    const run = (deg, steps) => { const e = makeEarlyTurnTrigger(deg); return { e, out: steps.map((s) => e.observe(s)) }; };
+    const fired = (o) => o.fire, withdrew = (o) => o.withdraw;
+    const off = run(0, [{ vote: "front", lock: "front", yawAbs: 5 }, { vote: null, lock: "front", yawAbs: 40 }]);
+    check("deg 0 (the default) never arms, fires or withdraws", off.out.every((o) => !o.fire && !o.withdraw) && off.e.armed === null);
+    const unsettled = run(20, [{ vote: "front", lock: "front", yawAbs: 30 }, { vote: null, lock: "front", yawAbs: 45 }]);
+    check("it is not armed until a vote agrees with the lock UNDER the threshold - no settled pose, no early swap",
+      unsettled.out.every((o) => !o.fire) && unsettled.e.armed === null);
+    const turn = run(20, [
+      { vote: "front", lock: "front", yawAbs: 6 },     // settled square on FRONT - armed
+      { vote: "front", lock: "front", yawAbs: 24 },    // crosses 20 - fire BACK
+      { vote: "front", lock: "back", yawAbs: 45 },     // the BACK swap landed; still rotating
+      { vote: null, lock: "back", yawAbs: 88 },        // edge-on, against the NEW lock - must not fire back
+      { vote: "back", lock: "back", yawAbs: 55 },      // a BACK vote - the turn is real
+      { vote: "back", lock: "back", yawAbs: 8 },       // square facing away - re-armed on BACK
+      { vote: "back", lock: "back", yawAbs: 23 },      // and a crossing from there sends FRONT
+    ]);
+    check("a settled pose crossing the threshold fires the other side exactly once",
+      turn.out[1].fire === "back" && turn.out.slice(2, 6).every((o) => !o.fire && !o.withdraw), JSON.stringify(turn.out));
+    check("...the edge-on stretch against the new lock does not fire it back, a vote for the new side confirms it, and it re-arms square on that side",
+      turn.out[6].fire === "front" && turn.e.pending && turn.e.pending.from === "back", JSON.stringify({ out: turn.out, pending: turn.e.pending }));
+    const twist = run(20, [
+      { vote: "front", lock: "front", yawAbs: 5 }, { vote: "front", lock: "front", yawAbs: 30 },
+      { vote: "front", lock: "back", yawAbs: 36 }, { vote: "front", lock: "back", yawAbs: 12 },
+      { vote: "front", lock: "back", yawAbs: 6 },  { vote: "front", lock: "front", yawAbs: 4 },
+    ]);
+    check("a twist that comes back is withdrawn: the old side's vote under the threshold asks for it back...",
+      twist.out[1].fire === "back" && !withdrew(twist.out[2]) && twist.out[3].withdraw === "front", JSON.stringify(twist.out));
+    check("...on every tick until the lock is back, then the watch ends and it re-arms",
+      twist.out[4].withdraw === "front" && !twist.out[5].withdraw && twist.e.pending === null && twist.e.armed === "front",
+      JSON.stringify({ out: twist.out, pending: twist.e.pending, armed: twist.e.armed }));
+    const refused = run(20, [{ vote: "front", lock: "front", yawAbs: 5 }, { vote: "front", lock: "front", yawAbs: 25 },
+      { vote: "front", lock: "front", yawAbs: 30 }]);
+    check("a fire the swap refused (the lock never moved) ends the watch without a withdrawal or a second fire",
+      refused.out[1].fire === "back" && !fired(refused.out[2]) && !withdrew(refused.out[2]) && refused.e.pending === null);
+    const stale = run(20, [{ vote: "front", lock: "front", yawAbs: 5 }, { vote: null, lock: "front", yawAbs: null }, { vote: "front", lock: "front", yawAbs: null }]);
+    check("no fresh yaw, no early swap", stale.out.every((o) => !o.fire));
+  } else check("makeEarlyTurnTrigger() exists beside the window", false);
+
+  const c0 = SRC.indexOf("const ORIENT_EARLY_TURN_DEG = (() => {");
+  if (c0 === -1) check("ORIENT_EARLY_TURN_DEG reads ?early_turn", false, "not found");
+  else {
+    const iife = SRC.slice(c0, SRC.indexOf("})();", c0) + 5).replace("const ORIENT_EARLY_TURN_DEG = ", "return ");
+    const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_MIN_DEG", "ORIENT_EARLY_TURN_MAX_DEG", iife)(
+      { search }, numOr("ORIENT_EARLY_TURN_MIN_DEG"), numOr("ORIENT_EARLY_TURN_MAX_DEG"));
+    const got = ["", "?early_turn=", "?early_turn=0", "?early_turn=abc", "?early_turn=-5", "?early_turn=20", "?early_turn=25", "?early_turn=3", "?early_turn=90", "?orient_debug=1"].map((q) => [q, parse(q)]);
+    check("?early_turn: omitted, empty, 0, negative or unparseable is OFF (0); 20 and 25 are taken as given; out of range is clamped to [10, 60]",
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([0, 0, 0, 0, 0, 20, 25, 10, 60, 0]), JSON.stringify(got));
+  }
+
+  const r0 = SRC.indexOf("function makeRenderResumeDetector(");
+  if (r0 === -1) check("makeRenderResumeDetector() exists", false);
+  else {
+    const make = new Function("SWAP_RENDER_STALL_MIN_MS", "SWAP_RENDER_TRACE_MAX_MS",
+      SRC.slice(r0, SRC.indexOf("\n}\n", r0) + 2) + "\nreturn makeRenderResumeDetector;")(numOr("SWAP_RENDER_STALL_MIN_MS"), numOr("SWAP_RENDER_TRACE_MAX_MS"));
+    const feed = (held, frames, ackAt, maxMs) => {
+      const d = make({ held, ...(maxMs ? { maxMs } : {}) }); let hit = null;
+      for (const f of frames) { if (f === "ack") { d.ack(ackAt); continue; } hit = hit || d.frame(f); }
+      return hit;
+    };
+    const normal = [0, 100, 200, 300, 400, 500];
+    const heldHit = feed(true, [...normal, "ack", 600, 1050, 1150], 560);
+    check("RENDER_APPLIED on a held swap is the frame that ends the output stall after the ACK - not the tail frames before it",
+      heldHit && heldHit.at === 1050 && /stall/.test(heldHit.how), JSON.stringify(heldHit));
+    const stallBeforeAck = feed(true, [...normal, "ack", 900, 1000], 850);
+    check("...including a stall that began before the ACK arrived", stallBeforeAck && stallBeforeAck.at === 900, JSON.stringify(stallBeforeAck));
+    const unheld = feed(false, [...normal, "ack", 600], 550);
+    check("a swap that held nothing reports the first frame after the ACK, and says it is not proof",
+      unheld && unheld.at === 600 && /not proof/.test(unheld.how), JSON.stringify(unheld));
+    const never = feed(true, [...normal, "ack", 600, 700, 800, 900], 550, 300);
+    check("no stall within the window falls back to the first frame after the ACK, and says it may still be the old reference",
+      never && never.at === 600 && /old reference/.test(never.how), JSON.stringify(never));
+    check("frames before the ACK are never RENDER_APPLIED", feed(true, [...normal, 1000, 2000], 0) === null);
+  }
+
+  const w0 = SRC.indexOf("function createOrientationWatcher()");
+  const watcher = SRC.slice(w0, SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0));
+  check("the trigger is only built when ?early_turn is set - null, and every use inert, by default",
+    /const earlyTurn = ORIENT_EARLY_TURN_DEG > 0 \? makeEarlyTurnTrigger\(ORIENT_EARLY_TURN_DEG\) : null;/.test(watcher) &&
+    /const earlyAct = earlyTurn && dualView && !acquiring && !confirmed && !predictBack\s*\n\s*\? earlyTurn\.observe\(/.test(watcher));
+  const skipAt = watcher.indexOf("if (!(dualView && (confirmed || predictBack))) {");
+  const fireAt = watcher.indexOf('await maybeSwap(earlyAct.fire, earlyAct.fire === "back");');
+  const withdrawAt = watcher.indexOf("await maybeSwap(earlyAct.withdraw);");
+  check("the early block dispatches ahead of the pose/re-anchor updates and ends the tick (they would take the mutex and drop it)",
+    fireAt !== -1 && withdrawAt !== -1 && fireAt < skipAt && withdrawAt < skipAt &&
+    /await maybeSwap\(earlyAct\.fire, earlyAct\.fire === "back"\);[^\n]*\n\s*return;/.test(watcher) &&
+    /await maybeSwap\(earlyAct\.withdraw\);\s*\n\s*return;/.test(watcher));
+  check("...clears the pre-turn streak before an early fire, and only a BACK withdrawal resets the cooldown",
+    /if \(earlyAct && earlyAct\.fire\) \{[\s\S]*?lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;/.test(watcher) &&
+    /if \(earlyAct\.withdraw === "back"\) lastSwapAt = 0;/.test(watcher) && (watcher.match(/lastSwapAt = 0;/g) || []).length === 1);
+
+  const t0 = SRC.indexOf("function traceSwapTimeline(");
+  const trace = SRC.slice(t0, SRC.indexOf("\n}\n", t0));
+  check("the ?orient_debug=1 profile prints DISPATCH_SENT, SERVER_CONFIRMED and RENDER_APPLIED, then Client-to-ACK and ACK-to-Render",
+    /\[PEAR\]\[ORIENT\] DISPATCH_SENT/.test(trace) && /\[PEAR\]\[ORIENT\] SERVER_CONFIRMED/.test(trace) &&
+    /\[PEAR\]\[ORIENT\] RENDER_APPLIED/.test(trace) && /Client-to-ACK/.test(trace) && /ACK-to-Render/.test(trace) &&
+    /performance\.now\(\)/.test(trace) && /makeRenderResumeDetector\(\{ held \}\)/.test(trace));
+  const s0 = SRC.indexOf("function sendCondition(");
+  const send = SRC.slice(s0, SRC.indexOf("\n}\n", s0));
+  check("DISPATCH_SENT is marked by sendCondition() when a REFERENCE write takes the wire, and the hook is declared before it",
+    /if \(typeof _orientSendMark === "function" && \(label === "applyGarment" \|\| label === "applyLook"\)\) \{/.test(send) &&
+    send.indexOf("_orientSendMark") < send.indexOf("await send();") &&
+    SRC.indexOf("let _orientSendMark = null;") !== -1 && SRC.indexOf("let _orientSendMark = null;") < s0);
 }
 
 console.log(fails === 0 ? "\nturn-yaw-window: OK" : `\nturn-yaw-window: ${fails} FAILED`);

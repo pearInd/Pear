@@ -739,6 +739,9 @@ let wireEpoch = 0;
 
 /** @returns {boolean} true when a conditioning write is queued or in flight. */
 function wireBusy() { return wireWrites > 0; }
+/* Set by an open ?orient_debug=1 swap trace (traceSwapTimeline); sendCondition() calls it once, when the
+   reference write takes the wire - DISPATCH_SENT. Declared up here, ahead of sendCondition(). */
+let _orientSendMark = null;
 
 /**
  * Run ONE conditioning write with exclusive access to the wire.
@@ -765,6 +768,13 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
   const run = async () => {
     if (epoch !== wireEpoch) return false;   // the session this write was for is gone
     isSettingCondition = true;
+    /* DISPATCH_SENT for an open ?orient_debug=1 swap trace - only a write that carries the reference.
+       Null otherwise, so this costs one typeof check. See traceSwapTimeline. */
+    if (typeof _orientSendMark === "function" && (label === "applyGarment" || label === "applyLook")) {
+      const markSent = _orientSendMark;
+      _orientSendMark = null;
+      try { markSent(label); } catch (_) {}
+    }
     try {
       await send();
       return true;
@@ -5824,6 +5834,36 @@ const ORIENT_POSE_FLIP_FRAMES    = 2;    // shoulder-order votes needed for a co
 const ORIENT_POSE_PASS = (() => {
   try { return new URLSearchParams(location.search).get("pose_pass") !== "0"; } catch (_) { return true; }
 })();
+/* ── THE EARLY TURN TRIGGER - OPT-IN, OFF BY DEFAULT (?early_turn=<deg>) ───────────────────────────
+   WHY IT EXISTS. Traced client side, a swap costs ~nothing: the Blobs are pinned in memory, the
+   catalog's rear pair is 43KB/38KB, and @decartai/sdk sends it as one set_image message on the
+   signaling WebSocket. What remains is Decart switching its render once it has the reference
+   (~1s by this file's own figure - COND_TRACE_SETTLE_MS). The only client lever against a server
+   cycle is sending sooner.
+   WHY IT IS OFF. At 15-45 degrees a posing twist and the start of a 360 are the same reading. Modelled
+   through the build-130 tick (turn-yaw-window §11, 24 full-360 profiles, 700-1000ms dispatch-to-render):
+   the wrong garment is on screen 2729ms on average by default, 313ms at ?early_turn=20 and 396ms at 25,
+   and no profile gets worse. The cost: a pose that crosses the threshold and comes back - a 38-degree
+   twist, a side view in the mirror, a held profile check, a twist while facing away - shows the other
+   side's graphic for 1.0-1.75s until the withdrawal lands, where the default shows nothing. A twist that
+   stays under the threshold sends nothing. That is a product trade, so it is a flag: try it on a real
+   turn beside the default, with the ?orient_debug=1 profile (DISPATCH_SENT / SERVER_CONFIRMED /
+   RENDER_APPLIED) to read the result. Still a model until a live session says otherwise.
+   BEHAVIOUR when set (see makeEarlyTurnTrigger): dual-view only; armed by settling square on the
+   locked side; fires the other side on the first fresh |yaw| past the threshold, BACK sent
+   withdrawable like a predictive BACK; withdrawn the moment the old side's votes return under the
+   threshold, before any vote has confirmed the turn. Omitted, 0 or unparseable is OFF and nothing
+   below is constructed. Clamped to [ORIENT_EARLY_TURN_MIN_DEG, ORIENT_EARLY_TURN_MAX_DEG]: under 10
+   is sway, and past 60 the default's own predictive BACK is already earlier. */
+const ORIENT_EARLY_TURN_MIN_DEG = 10;
+const ORIENT_EARLY_TURN_MAX_DEG = 60;
+const ORIENT_EARLY_TURN_DEG = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("early_turn"); } catch (_) { return 0; }
+  const deg = Number(raw);
+  if (raw === null || raw === "" || !Number.isFinite(deg) || deg <= 0) return 0;
+  return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
+})();
 
 /* ── PREDICTIVE BACK - "the back artwork rendered over PEAK for a second" ─────────────
    REPORTED, from the exported clip: on FRONT -> BACK the back artwork appears over the front's
@@ -6158,6 +6198,52 @@ function orientPredictBackReason({ enabled = ORIENT_PREDICTIVE_BACK, acquiring, 
   const dwell = now - win.edgeAt;
   if (dwell > ORIENT_PREDICT_DWELL_MS) return `dwell ${dwell}ms > ${ORIENT_PREDICT_DWELL_MS}ms (a held pose)`;
   return "fire";
+}
+
+/* The opt-in early turn trigger (?early_turn=<deg> - see ORIENT_EARLY_TURN_DEG). Pure state, fed one
+   observation per sampler tick; the tick does the dispatching.
+   ARMED only by a vote that AGREES with the lock while |yaw| is under `deg` - the shopper settled
+   square on that side. FIRES once, on the first fresh |yaw| at or past `deg`, for the other side, and
+   disarms: without that, the abstain stretch through edge-on (|yaw| still past `deg`, against the NEW
+   lock) would fire straight back. Re-arms only on the new side, square again.
+   WITHDRAWS its own swap when the turn does not happen: while the early side is on the lock and no
+   vote has agreed with it yet, a vote for the side it left with |yaw| back under `deg` is a pose
+   that came back - a twist, a look at the side view. Any vote for the early side confirms the turn
+   and ends the watch. A lock that moved some other way (the swap never went out, or a vote-confirmed
+   flip) ends it too.
+   @param {number} deg  |yaw| threshold; 0 or less is off and never arms
+   @returns {{ readonly armed: "front"|"back"|null, readonly pending: {from: string, to: string}|null,
+               observe(o: { vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null }):
+                 { fire: "front"|"back"|null, withdraw: "front"|"back"|null } }} */
+function makeEarlyTurnTrigger(deg) {
+  let armed = null;     // the lock this trigger was armed on
+  let pending = null;   // { from, to } - an early swap that no vote has confirmed yet
+  const none = { fire: null, withdraw: null };
+  return {
+    get armed() { return armed; },
+    get pending() { return pending; },
+    observe({ vote, lock, yawAbs }) {
+      if (!(deg > 0) || (lock !== "front" && lock !== "back")) { armed = null; pending = null; return none; }
+      const fresh = yawAbs !== null && Number.isFinite(yawAbs);
+      if (pending) {
+        /* Ended by the lock leaving the early side (the withdrawal landed, or the swap never went
+           out) or by a vote for the early side (the turn is real). Otherwise the withdrawal is
+           asked for on EVERY tick its condition holds, not once: maybeSwap() can refuse a tick
+           (a swap still applying), and a withdrawal asked for once and refused would be lost. */
+        if (lock !== pending.to || vote === pending.to) pending = null;
+        else if (vote === pending.from && fresh && yawAbs < deg) return { fire: null, withdraw: pending.from };
+        else return none;
+      }
+      if (armed !== lock) armed = null;
+      if (vote === lock && fresh && yawAbs < deg) { armed = lock; return none; }
+      if (armed === lock && fresh && yawAbs >= deg) {
+        const to = lock === "front" ? "back" : "front";
+        armed = null; pending = { from: lock, to };
+        return { fire: to, withdraw: null };
+      }
+      return none;
+    },
+  };
 }
 
 /* ── THE BEST FRONT-FACING FRAME - "it froze me side-on" ──────────────────────────
@@ -6854,35 +6940,133 @@ const ORIENT_SWAP_INPUT_HOLD_MAX_MS = 2000;
    trigger actually buys is read off a real turn: decided -> dispatched (pre-flight),
    dispatched -> acked (upload), acked -> first presented Decart frame (switch + downlink).
    "First presented" is exactly that - a frame presented after the ack; whether it is already
-   the new render is what the yaw and a screen recording at that timestamp answer. */
+   the new render is what the yaw and a screen recording at that timestamp answer.
+
+   THE PROFILE - three stages on performance.now(), each printed as it happens:
+     [PEAR][ORIENT] DISPATCH_SENT     sendCondition() hands the reference write to the SDK, which
+                                      base64s the Blob into one set_image message on the signaling
+                                      WebSocket (the swap's start -> here is pre-flight + wire wait)
+     [PEAR][ORIENT] SERVER_CONFIRMED  set_image_ack is back - set() resolved; the toast follows
+     [PEAR][ORIENT] RENDER_APPLIED    the earliest output frame the new reference can have produced -
+                                      see makeRenderResumeDetector() for how that is decided
+   then the summary line with Client-to-ACK and ACK-to-Render. RENDER_APPLIED is a TIMING fact, not
+   a picture of the garment: while the body rotates, pixels cannot say which reference drew them, and
+   Decart may still blend from its previous frames after it. */
+const SWAP_RENDER_STALL_MIN_MS = 150;   // an output gap at least this long (and 2x the usual) is the hold's stall
+const SWAP_RENDER_TRACE_MAX_MS = 4000;  // stop looking for RENDER_APPLIED this long after the ACK
+
+/* RENDER_APPLIED from presented output frames alone. Fed every presented #aiVideo frame from the swap's
+   start, so the output's usual frame interval is known before the ACK. A swap normally HOLDS Decart's
+   input (the throttle's hold()): no camera frames from dispatch to ACK, so the output stalls, then
+   resumes on frames sent after the ACK. The first frame after the ACK that ends such a stall is the
+   earliest render the new reference can have produced. A swap that held nothing has no stall to find;
+   its first frame after the ACK is reported as exactly that - the earliest frame that COULD carry it.
+   @returns {{ ack(at: number): void, frame(now: number): {at: number, how: string}|null }} */
+function makeRenderResumeDetector({ held, stallMinMs = SWAP_RENDER_STALL_MIN_MS, maxMs = SWAP_RENDER_TRACE_MAX_MS }) {
+  const gaps = [];
+  let last = null, ackAt = null, firstAfter = null, afterAck = 0, done = false;
+  return {
+    ack(at) { ackAt = at; },
+    frame(now) {
+      if (done) return null;
+      const gap = last === null ? null : now - last;
+      last = now;
+      if (ackAt === null || now <= ackAt) {
+        if (gap !== null) { gaps.push(gap); if (gaps.length > 20) gaps.shift(); }
+        return null;
+      }
+      afterAck++;
+      if (firstAfter === null) firstAfter = now;
+      if (!held) {
+        done = true;
+        return { at: now, how: "first output frame presented after the ACK - this swap held no input, so it is the earliest frame that COULD carry the new reference, not proof that it does" };
+      }
+      const sorted = gaps.slice().sort((a, b) => a - b);
+      const usual = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+      if (gap !== null && gap >= Math.max(stallMinMs, usual * 2)) {
+        done = true;
+        return { at: now, how: `output resumed after a ${gap.toFixed(0)}ms stall (usual frame gap ${usual.toFixed(0)}ms, frame ${afterAck} after the ACK) - the first frame rendered from a camera frame sent after the ACK` };
+      }
+      if (now - ackAt > maxMs) {
+        done = true;
+        return { at: firstAfter, how: `no stall within ${maxMs}ms of the ACK - the first frame presented after it, which may still carry the old reference` };
+      }
+      return null;
+    },
+  };
+}
+
 function traceSwapTimeline(next, predictive, held, refUrl) {
   if (!ORIENT_DEBUG) return null;
   const t0 = Date.now();
+  const clock = () => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now());
+  const p0 = clock();
+  const ms = (v) => `${v.toFixed(1)}ms`;
   const yaw = () => (_torsoYawAbs === null ? "n/a" : `${_torsoYawAbs.toFixed(0)}°`);
   /* Two more facts the lead time depends on: how far into the turn the dispatch happened (the
      turn flag's own start), and how many bytes the upload has to carry - the dispatch -> ack gap
      is dominated by that size, and it is the one part of the delay the client controls. */
   const blob = typeof garmentBlobIfWarm === "function" ? garmentBlobIfWarm(refUrl) : null;
+  const refSize = blob ? `${Math.round(blob.size / 1024)}KB` : "size unknown";
   const intoTurn = _orientTurnSince ? `${t0 - _orientTurnSince}ms into the turn` : "no turn flagged";
-  const marks = [`build v=${PEAR_BUILD}`,
-    `dispatched t=0, ${intoTurn} (local |yaw| ${yaw()}, reference ${blob ? Math.round(blob.size / 1024) + "KB" : "size unknown"})`];
-  const print = (tail) => console.log(`[PEAR][ORIENT] swap timeline → ${next.toUpperCase()}` +
-    `${predictive ? " (predictive)" : ""}${held ? " [input held]" : ""}: ${marks.join(" · ")}` +
-    (tail ? ` · ${tail}` : ""));
+  const tag = `${next.toUpperCase()}${predictive ? " (predictive)" : ""}${held ? " [input held]" : ""}`;
+  const marks = [`build v=${PEAR_BUILD}`, `dispatched t=0, ${intoTurn} (local |yaw| ${yaw()}, reference ${refSize})`];
+  const print = (tail) => console.log(`[PEAR][ORIENT] swap timeline → ${tag}: ${marks.join(" · ")}` + (tail ? ` · ${tail}` : ""));
+  let sentAt = null, ackAt = null, finished = false;
+
+  const mark = (label) => {
+    sentAt = clock();
+    console.log(`[PEAR][ORIENT] DISPATCH_SENT → ${tag}: ${label} set() handed to the SDK for the signaling WebSocket, ` +
+      `+${ms(sentAt - p0)} after the swap began (pre-flight + wire wait) · local |yaw| ${yaw()} · reference ${refSize} · ` +
+      `${intoTurn} · build v=${PEAR_BUILD}`);
+  };
+  _orientSendMark = mark;
+  const dropMark = () => { if (_orientSendMark === mark) _orientSendMark = null; };
+
+  const finish = (hit, why) => {
+    if (finished) return;
+    finished = true;
+    dropMark();
+    if (hit) {
+      marks.push(`first Decart frame presented after the ack +${Math.round(hit.at - p0)}ms (local |yaw| ${yaw()})`);
+      console.log(`[PEAR][ORIENT] RENDER_APPLIED → ${tag}: +${ms(hit.at - ackAt)} after SERVER_CONFIRMED · ${hit.how} · local |yaw| ${yaw()}`);
+    }
+    const clientToAck = ackAt !== null && sentAt !== null ? ms(ackAt - sentAt) : "n/a";
+    const ackToRender = hit && ackAt !== null ? ms(hit.at - ackAt) : "n/a";
+    print(`Client-to-ACK ${clientToAck} · ACK-to-Render ${ackToRender}` +
+      (hit ? ` · swap start to render ${ms(hit.at - p0)}` : "") + (why ? ` · ${why}` : ""));
+  };
+
+  const ai = typeof $ === "function" ? $("aiVideo") : null;
+  const watchable = !!(ai && typeof ai.requestVideoFrameCallback === "function");
+  const detector = makeRenderResumeDetector({ held });
+  if (watchable) {
+    const onFrame = (now) => {
+      if (finished || clock() - p0 > SWAP_RENDER_TRACE_MAX_MS * 3) return;   // an abandoned swap stops watching
+      const hit = detector.frame(now);
+      if (hit) { finish(hit, ""); return; }
+      ai.requestVideoFrameCallback(onFrame);
+    };
+    ai.requestVideoFrameCallback(onFrame);
+  }
   return {
     acknowledged() {
+      ackAt = clock();
+      detector.ack(ackAt);
+      dropMark();   // unused means no reference write reached the wire for this swap - never let a later one take it
       marks.push(`set() acked +${Date.now() - t0}ms (local |yaw| ${yaw()})`);
-      const ai = typeof $ === "function" ? $("aiVideo") : null;
-      if (!ai || typeof ai.requestVideoFrameCallback !== "function") {
-        print("output frame time not measurable here (no requestVideoFrameCallback)");
-        return;
-      }
-      ai.requestVideoFrameCallback(() => {
-        marks.push(`first Decart frame presented after the ack +${Date.now() - t0}ms (local |yaw| ${yaw()})`);
-        print("");
-      });
+      console.log(`[PEAR][ORIENT] SERVER_CONFIRMED → ${tag}: set_image_ack received, ` +
+        `+${sentAt === null ? "n/a (no reference write was marked)" : ms(ackAt - sentAt)} after DISPATCH_SENT ` +
+        `(upload + Decart accepting the reference) · local |yaw| ${yaw()} · the view toast follows in ${ORIENT_FADE_HOLD_MS}ms`);
+      if (!watchable) { finish(null, "output frame time not measurable here (no requestVideoFrameCallback)"); return; }
+      setTimeout(() => finish(null, `no Decart output frame presented within ${SWAP_RENDER_TRACE_MAX_MS}ms of the ACK`),
+        SWAP_RENDER_TRACE_MAX_MS + 250);
     },
-    failed(e) { print(`set() FAILED +${Date.now() - t0}ms: ${e?.message || e}`); },
+    failed(e) {
+      console.log(`[PEAR][ORIENT] SERVER_CONFIRMED → ${tag}: set() FAILED ` +
+        `+${ms(clock() - (sentAt ?? p0))} after ${sentAt === null ? "the swap began" : "DISPATCH_SENT"}: ${e?.message || e}`);
+      finish(null, `set() FAILED +${Date.now() - t0}ms: ${e?.message || e}`);
+    },
   };
 }
 
@@ -7065,6 +7249,13 @@ function createOrientationWatcher() {
      streak-start baseline that the return leg could never corroborate against; see
      makeTurnYawWindow() for why. */
   const yawWindow = makeTurnYawWindow();
+  /* The opt-in early turn trigger - null, and every use of it inert, unless ?early_turn=<deg> (see
+     ORIENT_EARLY_TURN_DEG). */
+  const earlyTurn = ORIENT_EARLY_TURN_DEG > 0 ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG) : null;
+  if (earlyTurn) {
+    console.log(`[PEAR] AI Auto - EARLY TURN TRIGGER ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn) - experimental:`,
+      "sends the other side as the torso starts to rotate, withdrawn if the pose comes back (dual-view items only)");
+  }
   let faceStreak = 0;   // consecutive FaceDetector detections - see the tick and ORIENT_FACE_RETURN_FRAMES
   let poseStreak = 0, poseSide = null;   // consecutive shoulder-order votes for poseSide - see ORIENT_POSE_FLIP_FRAMES
   let lastSwapPredictive = false;   // the last committed swap was a predictive BACK - see maybeSwap()
@@ -7914,8 +8105,11 @@ function createOrientationWatcher() {
           ? ` | predict: ${orientPredictBackReason({ acquiring, lock: autoOrientation, win: yawWindow,
               yawAbs: yawFresh ? _torsoYawAbs : null, now: Date.now() })}`
           : "";
+        const earlyState = earlyTurn
+          ? ` | early ${ORIENT_EARLY_TURN_DEG}°: ${earlyTurn.pending ? `${earlyTurn.pending.to.toUpperCase()} sent early, unconfirmed` : earlyTurn.armed ? `armed on ${earlyTurn.armed.toUpperCase()}` : "not armed"}`
+          : "";
         console.log(`[PEAR][ORIENT] state=${vtonState()} | ${pose} | confidence=${confidence} | ${status}` +
-          (needsSwitch ? progress : "") + predict);
+          (needsSwitch ? progress : "") + predict + earlyState);
       }
 
       /* Raise the hold the INSTANT a turn looks like it is starting - one disagreeing
@@ -8031,6 +8225,38 @@ function createOrientationWatcher() {
       /* The shopper turned back / straightened up before the flip confirmed: no swap is
          coming, so drop the hold now rather than sitting on a still until the ceiling. */
       else if (_orientHoldActive) orientHoldEnd("turn-abandoned");
+
+      /* THE OPT-IN EARLY TURN TRIGGER (?early_turn=<deg>, see ORIENT_EARLY_TURN_DEG) - `earlyTurn` is null
+         by default and this block does nothing. Only when no vote-confirmed or predictive swap is due.
+         HANDLED HERE AND IT ENDS THE TICK, ahead of the pose/re-anchor updates below: they take the
+         `applying` mutex in this very tick, and maybeSwap() would find it held and drop the dispatch -
+         the reason predictive BACK stands aside from them too. */
+      const earlyAct = earlyTurn && dualView && !acquiring && !confirmed && !predictBack
+        ? earlyTurn.observe({ vote, lock: autoOrientation, yawAbs: yawFresh ? _torsoYawAbs : null })
+        : null;
+      if (earlyAct && earlyAct.fire) {
+        /* The pre-turn streak must not count against the early side - predictive BACK's reason. */
+        lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;
+        if (ORIENT_DEBUG) {
+          console.log(`[PEAR][ORIENT] early turn: |yaw| ${_torsoYawAbs.toFixed(0)}° crossed ?early_turn=${ORIENT_EARLY_TURN_DEG}° ` +
+            `from a settled ${String(autoOrientation).toUpperCase()} - sending ${earlyAct.fire.toUpperCase()} ahead of any vote`);
+        }
+        await maybeSwap(earlyAct.fire, earlyAct.fire === "back");   // an early BACK is withdrawable like a predictive one
+        return;
+      }
+      if (earlyAct && earlyAct.withdraw) {
+        if (ORIENT_DEBUG) {
+          console.log(`[PEAR][ORIENT] early turn WITHDRAWN: ${earlyAct.withdraw.toUpperCase()} votes came back under ` +
+            `${ORIENT_EARLY_TURN_DEG}° before any vote confirmed the turn - restoring ${earlyAct.withdraw.toUpperCase()}`);
+        }
+        /* The cooldown is anti-flap. Withdrawing an early swap no vote ever confirmed is the one flap that
+           must not wait for it - the FRONT direction already skips it (lastSwapPredictive); this gives
+           BACK the same. Bounded: the trigger has to re-arm square on this side, and its next fire still
+           meets the cooldown this withdrawal starts. */
+        if (earlyAct.withdraw === "back") lastSwapAt = 0;
+        await maybeSwap(earlyAct.withdraw);
+        return;
+      }
 
       /* The pose axis, updated every tick. Skipped when a DUAL-VIEW swap is confirmed and
          about to run: maybeSwap() re-applies the entire payload, which picks up whatever
