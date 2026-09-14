@@ -63,10 +63,19 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
                    backBlob  = { size: 1, type: "image/jpeg" },
                    startOrientation = "back", flat = false, applyThrows = false,
                    blobLooksFlat = async () => flat, wire,
-                   lastSwapAgoMs = null, lastSwapWasPredictive = false } = {}) {
+                   lastSwapAgoMs = null, lastSwapWasPredictive = false, gate = false } = {}) {
   const calls = [];
   const sandbox = {
     blobLooksFlat,
+    /* Only when a test asks for the swap input hold - every other section runs with the name
+       undefined, which is the sandbox shape maybeSwap() must tolerate (CLAUDE.md 2.7). */
+    ...(gate ? {
+      holdInputGate: (why, maxMs) => {
+        calls.push({ op: "hold", why, maxMs });
+        return { unhold: (w) => { calls.push({ op: "unhold", w }); return true; } };
+      },
+      ORIENT_SWAP_INPUT_HOLD_MAX_MS: 2000,
+    } : {}),
     /* Only when a test states what the wire holds - the other sections run exactly as they did,
        with neither name defined, which is the shape the acquire shortcut must tolerate. */
     ...(wire ? { lastSentImageRef: wire.onWire,
@@ -360,6 +369,32 @@ console.log("\n── §8 A PREDICTIVE BACK IS WITHDRAWN AT ONCE, AND NOTHING EL
   await reBack.maybeSwap("back", true);
   check("...and the bypass never applies toward BACK - a second prediction waits like any swap",
     reBack.state().autoOrientation === "front" && !reBack.calls.some((c) => c.op === "applyActive"));
+}
+
+console.log("\n── §9 A SWAP HOLDS DECART'S INPUT UNTIL ITS OWN SET() RESOLVES ──");
+/* The blank/untextured shirt during a turn is Decart rendering camera frames from its prior while
+   the reference is being replaced (first-frame-integrity.test.mjs §7). maybeSwap() owns that
+   window, so it takes the hold before the dispatch and gives it back when the dispatch settles -
+   on success AND on failure, or a failed swap would freeze the feed until the ceiling. */
+{
+  const ok = harness({ startOrientation: "front", gate: true });
+  await ok.maybeSwap("back", true);
+  const ops = ok.calls.map((c) => c.op);
+  check("the hold is taken BEFORE the set() and given back AFTER it",
+    ops.indexOf("hold") !== -1 && ops.indexOf("hold") < ops.indexOf("applyActive") &&
+    ops.indexOf("applyActive") < ops.indexOf("unhold"), ops.join(" > "));
+  check("...bounded by ORIENT_SWAP_INPUT_HOLD_MAX_MS",
+    ok.calls.find((c) => c.op === "hold").maxMs === 2000);
+
+  const failed = harness({ startOrientation: "front", gate: true, applyThrows: true });
+  await failed.maybeSwap("back");
+  check("a swap whose set() FAILS still gives the hold back - the old reference is on the wire, let frames flow",
+    failed.calls.some((c) => c.op === "unhold"), failed.calls.map((c) => c.op).join(" > "));
+
+  const flat = harness({ startOrientation: "front", gate: true, flat: true });
+  await flat.maybeSwap("back");
+  check("a swap abandoned before dispatch never takes the hold at all",
+    !flat.calls.some((c) => c.op === "hold"));
 }
 
 console.log(fails === 0 ? "\nfront-reference-guard: OK" : `\nfront-reference-guard: ${fails} FAILED`);

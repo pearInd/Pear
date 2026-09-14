@@ -519,5 +519,41 @@ if (orientPredictBack && orientFlipDecision) {
     /if \(applying \|\| \(Date\.now\(\) - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing\)\) return;/.test(watcher));
 }
 
+console.log("\n── §7 DETECTION IS LOCAL; THE SWAP TIMELINE IS MEASURED ──");
+/* REQUESTED: "move orientation off Decart's processed output onto the raw local webcam, to get
+   rid of the 300-600ms pipeline delay". It was never on the output. Pinned as an ABSENCE and a
+   presence, so a well-meant refactor cannot move detection behind the network after all: the
+   watcher samples localStream's own track, the pose loop reads #webcam, and neither touches
+   #aiVideo. */
+{
+  const w0 = SRC.indexOf("function createOrientationWatcher()");
+  const w1 = SRC.indexOf("\n  // Private sampler onto the SAME track", w0);
+  const watcherHead = SRC.slice(w0, w1 === -1 ? w0 + 400 : w1);
+  const sampler = SRC.slice(SRC.indexOf("  const video = document.createElement(\"video\");", w0),
+    SRC.indexOf("  const canvas = document.createElement(\"canvas\");", w0));
+  check("the orientation watcher samples the LOCAL camera track",
+    /const track = localStream && localStream\.getVideoTracks\(\)\[0\];/.test(watcherHead) &&
+    /video\.srcObject = new MediaStream\(\[track\]\);/.test(sampler));
+  const p0 = SRC.indexOf("function startPresenceWatcher");
+  const pose = SRC.slice(p0, SRC.indexOf("/* ── end body-presence gate ── */", p0));
+  check("the pose loop (yaw, topology, presence) runs on #webcam",
+    /const video = \$\("webcam"\);/.test(pose) && /detectPoseFrame\(detector, video\)/.test(pose));
+  const wEnd = SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0);
+  const code = (SRC.slice(w0, wEnd) + pose).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  check("...and neither ever reads Decart's output (#aiVideo)",
+    !/aiVideo/.test(code), (code.match(/[^\n]*aiVideo[^\n]*/) || [""])[0]);
+
+  const t0 = SRC.indexOf("function traceSwapTimeline(");
+  const trace = t0 === -1 ? "" : SRC.slice(t0, SRC.indexOf("\n}\n", t0));
+  check("the swap timeline exists, and costs nothing unless ?orient_debug=1",
+    /if \(!ORIENT_DEBUG\) return null;/.test(trace));
+  check("...it stamps dispatch, the ack and the first Decart frame presented after it, each with the LOCAL yaw",
+    /set\(\) acked/.test(trace) && /requestVideoFrameCallback/.test(trace) &&
+    /first Decart frame presented after the ack/.test(trace) && /local \|yaw\|/.test(trace));
+  check("...and maybeSwap() drives it around the one set() it times",
+    /const trace = typeof traceSwapTimeline === "function"/.test(SRC) &&
+    /await applyActive\(\);[^\n]*\n\s*if \(heldGate\) heldGate\.unhold\("swap acknowledged"\);\s*\n\s*if \(trace\) trace\.acknowledged\(\);/.test(SRC));
+}
+
 console.log(fails === 0 ? "\nturn-yaw-window: OK" : `\nturn-yaw-window: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

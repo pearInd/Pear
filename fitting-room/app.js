@@ -4192,6 +4192,7 @@ function createThrottledInputStream(srcStream, {
      path that forgets to call release() costs a late start rather than a dead session - and
      says so loudly, because reaching that timer is a bug in the caller, not a slow network. */
   let gateOpen = !gated;
+  let held = false;          // closed mid-session by hold() - see the returned API
   let gateTimer = null;
   if (gated) {
     gateTimer = setTimeout(() => {
@@ -4280,10 +4281,53 @@ function createThrottledInputStream(srcStream, {
        remember. Returns whether THIS call was the one that opened it, for the log line. */
     release: (why = "garment acknowledged") => {
       if (gateOpen) return false;
+      /* A HOLD IS RELEASED ONLY BY ITS HOLDER (unhold below). This generic release fires on
+         EVERY successful apply, and a re-drape or re-anchor that finishes mid-swap would
+         otherwise reopen the gate before the swap's own reference has landed - uncovering
+         exactly the frames the hold exists to withhold. */
+      if (held) return false;
       gateOpen = true;
       if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
       console.log(`[PEAR] input gate released (${why}) - streaming to Decart now;`,
         "its first frame is conditioned on the real reference");
+      return true;
+    },
+    /* ── THE SAME GATE, HELD ACROSS A MID-SESSION REFERENCE SWAP ─────────────────────
+       REPORTED from the exported clip: on FRONT -> BACK the shirt goes blank - untextured,
+       plain - for a beat before the back graphic appears. It is the go-live window above,
+       reopened mid-session: a full set({ image }) replaces the reference while frames keep
+       flowing, and Decart renders those frames from its own prior until the new reference
+       lands. The clip records Decart's raw output, so no display cover can hide it. The fix
+       is the one this gate already is: do not hand Decart those frames. Its output stays on
+       the last frame it conditioned correctly, for one upload round-trip, and resumes on
+       frames conditioned on the new reference.
+       ONLY FROM AN OPEN GATE - the go-live gate belongs to go-live, and a hold taken over it
+       would be released by the swap rather than by the first apply. BOUNDED by maxMs, loud
+       when it fires: a set() that never resolves costs a frozen beat, never a frozen session.
+       RELEASED BY THE HOLDER ONLY, via unhold(). */
+    get held() { return held; },
+    hold: (why = "reference swap", maxMs) => {
+      if (disposed || !gateOpen || held) return false;
+      held = true;
+      gateOpen = false;
+      if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
+      gateTimer = setTimeout(() => {
+        gateTimer = null;
+        if (disposed || !held) return;
+        held = false;
+        gateOpen = true;
+        console.warn(`[PEAR] input gate: hold (${why}) hit its ${maxMs}ms ceiling without the swap`,
+          "settling - streaming frames again so the session is not frozen");
+      }, maxMs);
+      console.log(`[PEAR] input gate held (${why}) - withholding camera frames until the new reference is acknowledged`);
+      return true;
+    },
+    unhold: (why = "reference acknowledged") => {
+      if (!held) return false;
+      held = false;
+      gateOpen = true;
+      if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
+      console.log(`[PEAR] input gate unheld (${why}) - streaming to Decart on the new reference`);
       return true;
     },
     dispose: () => {
@@ -4315,6 +4359,24 @@ function createThrottledInputStream(srcStream, {
  */
 function releaseInputGate(why) {
   if (inputThrottle && typeof inputThrottle.release === "function") inputThrottle.release(why);
+}
+
+/**
+ * Hold the CURRENT session's input gate across a reference swap. Returns the throttle that
+ * was held - the caller releases THAT instance with unhold(), never the module-level one, so a
+ * swap that outlives its session can only ever release the gate it actually took.
+ * @param {string} why  @param {number} maxMs ceiling
+ * @returns {{unhold: (why?: string) => boolean}|null} null when nothing was held
+ */
+function holdInputGate(why, maxMs) {
+  const gate = inputThrottle;
+  if (!gate || typeof gate.hold !== "function") return null;
+  return gate.hold(why, maxMs) ? gate : null;
+}
+
+/** @returns {boolean} true while a swap is deliberately withholding frames from Decart */
+function inputGateHeld() {
+  return !!(inputThrottle && inputThrottle.held);
 }
 
 /**
@@ -6618,6 +6680,50 @@ function orientTurnInProgress(now = Date.now()) {
 }
 /* ── end turn-in-progress flag ── */
 
+/* Ceiling on withholding camera frames from Decart across one orientation swap (see the
+   throttle's hold()). The normal release is the swap's own set() resolving; this bounds a set()
+   that never does. Clear of a worst-case healthy apply - APPLY_ATTEMPTS round-trips with
+   APPLY_RETRY_MS between them - and far under ORIENT_TURN_HOLD_MAX_MS, because the output is
+   frozen for as long as it is held and the session is only LIVE_DURATION_MS long. */
+const ORIENT_SWAP_INPUT_HOLD_MAX_MS = 2000;
+
+/* ── THE SWAP TIMELINE (?orient_debug=1) - measured, not assumed ────────────────────────
+   "Decart's pipeline delay is ~400ms, so dispatch ~400ms early" assumes the delay that matters.
+   Orientation is detected on the LOCAL camera - the watcher samples localStream's track and
+   the pose loop reads #webcam - so detection carries no network latency at all. What decides
+   whether the back renders on time is the gap between the dispatch and the first output frame
+   conditioned on the new reference: the reference upload and ack, then Decart's switch. The
+   output stream's own lag is common to every frame and to the reference alike.
+   This prints that gap for each swap, with the LOCAL torso |yaw| at every stage, so the lead a
+   trigger actually buys is read off a real turn: decided -> dispatched (pre-flight),
+   dispatched -> acked (upload), acked -> first presented Decart frame (switch + downlink).
+   "First presented" is exactly that - a frame presented after the ack; whether it is already
+   the new render is what the yaw and a screen recording at that timestamp answer. */
+function traceSwapTimeline(next, predictive, held) {
+  if (!ORIENT_DEBUG) return null;
+  const t0 = Date.now();
+  const yaw = () => (_torsoYawAbs === null ? "n/a" : `${_torsoYawAbs.toFixed(0)}°`);
+  const marks = [`dispatched t=0 (local |yaw| ${yaw()})`];
+  const print = (tail) => console.log(`[PEAR][ORIENT] swap timeline → ${next.toUpperCase()}` +
+    `${predictive ? " (predictive)" : ""}${held ? " [input held]" : ""}: ${marks.join(" · ")}` +
+    (tail ? ` · ${tail}` : ""));
+  return {
+    acknowledged() {
+      marks.push(`set() acked +${Date.now() - t0}ms (local |yaw| ${yaw()})`);
+      const ai = typeof $ === "function" ? $("aiVideo") : null;
+      if (!ai || typeof ai.requestVideoFrameCallback !== "function") {
+        print("output frame time not measurable here (no requestVideoFrameCallback)");
+        return;
+      }
+      ai.requestVideoFrameCallback(() => {
+        marks.push(`first Decart frame presented after the ack +${Date.now() - t0}ms (local |yaw| ${yaw()})`);
+        print("");
+      });
+    },
+    failed(e) { print(`set() FAILED +${Date.now() - t0}ms: ${e?.message || e}`); },
+  };
+}
+
 /* Open the window and bank a good frame. Does NOT show it - see orientHoldPromote().
    @param {"turn-detected"|"swap"} reason - which stage raised the hold, for the log only */
 function orientHoldBegin(reason) {
@@ -7305,8 +7411,21 @@ function createOrientationWatcher() {
         : withdrawing ? "(WITHDRAWING a predictive BACK - the face came back)" : "",
       "| reference:", abbrevImg(next === "back" ? GARMENT_BACK : GARMENT_FRONT));
     renderPerspectiveSelector();
+    /* HOLD DECART'S INPUT ACROSS THE REPLACEMENT - see the throttle's hold(). This is the
+       blank/untextured-shirt window: while set() uploads the new reference, frames still
+       flowing are rendered from Decart's own prior. Taken only here, after every pre-flight
+       above, so an abandoned swap never freezes anything; given back the moment THIS swap's
+       own set() settles, either way. The instance held is the one released, so a swap that
+       outlives its session cannot open a newer session's go-live gate. typeof-guarded - this
+       function runs standalone in front-reference-guard.test.mjs (CLAUDE.md 2.7). */
+    const heldGate = typeof holdInputGate === "function"
+      ? holdInputGate(`orientation swap → ${next.toUpperCase()}`, ORIENT_SWAP_INPUT_HOLD_MAX_MS) : null;
+    const trace = typeof traceSwapTimeline === "function"
+      ? traceSwapTimeline(next, predictive, !!heldGate) : null;
     try {
       await applyActive();                       // one rtClient.set() - pre-cached Blob payload
+      if (heldGate) heldGate.unhold("swap acknowledged");
+      if (trace) trace.acknowledged();
       await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));   // let the new frame actually land
       // Third instance of the superseded-instance guard (see the comment above the first
       // one). orientHoldEnd/toast are exactly the shared state a fresh watcher's own hold
@@ -7349,8 +7468,12 @@ function createOrientationWatcher() {
       } else {
         console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
       }
+      if (trace) trace.failed(e);
     } finally {
       applying = false;
+      /* Idempotent on the success path (already unheld above); the one that matters on a
+         failed set() - the previous reference is still on the wire, so frames must flow. */
+      if (heldGate) heldGate.unhold("swap settled");
     }
   }
 
@@ -13964,7 +14087,13 @@ function createFrameFreezeWatcher(video, gen) {
                          way out. Stamping the clock (rather than merely returning) is
                          what stops the whole outage from counting as one long freeze the
                          instant the tab or the transport comes back. */
+    /* · input held    - an orientation swap is deliberately withholding camera frames from
+                         Decart until its new reference is acknowledged (see the throttle's
+                         hold()), so no output frame is EXPECTED. Treating that as a stall
+                         would fire a full re-anchor that queues another upload behind the
+                         swap and lengthens the very freeze it thinks it is repairing. */
     if (!isLive() || connState === "reconnecting" ||
+        inputGateHeld() ||
         (typeof document !== "undefined" && document.hidden)) {
       lastFrameAt = Date.now();
       frozenSince = null;

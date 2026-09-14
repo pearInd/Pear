@@ -404,5 +404,52 @@ console.log("\n── §6 THE 'STARTED RENDERING WITHOUT A GARMENT' WARNING TELL
     /if \(typeof warnIfStreamStartedUndressed === "function"\) warnIfStreamStartedUndressed\(\);/.test(code));
 }
 
+console.log("\n── §7 THE SAME GATE, HELD ACROSS AN ORIENTATION SWAP ──");
+/* REPORTED from the exported clip: during FRONT -> BACK the shirt goes blank - untextured, plain
+   brown - for a beat before the back graphic appears. That is the window this gate was built for
+   at go-live, reopened mid-session: a full set({ image }) replaces the reference while camera
+   frames keep flowing, and Decart renders those frames from its own prior until the new
+   reference lands. The clip is Decart's raw output, so no display cover can hide it; the only
+   fix is not to hand Decart those frames. hold() closes the gate from the dispatch until the
+   swap's own set() resolves - its output simply stays on the last conditioned frame. */
+{
+  const h = makeThrottle({ gated: true });
+  await h.flush();
+  check("hold() refuses while the go-live gate has never opened - that gate belongs to go-live",
+    typeof h.throttle.hold === "function" && h.throttle.hold("swap", 2000) === false && h.throttle.held === false);
+  h.throttle.release("go-live");
+  h.tick(2);
+  const before = h.state.emitted;
+  check("once open, hold() closes it for the swap", h.throttle.hold("swap", 2000) === true && h.throttle.held === true);
+  h.tick(5);
+  check("...and no frame reaches Decart while it is held", h.state.emitted === before, `${h.state.emitted - before} leaked`);
+  check("...and applyActive()'s generic release() does NOT open a held gate - only the holder may",
+    h.throttle.release("applyActive") === false && h.throttle.held === true,
+    "a re-drape or re-anchor finishing mid-swap would otherwise uncover the churn window");
+  check("...the holder's unhold() does", h.throttle.unhold("swap acknowledged") === true && h.throttle.held === false);
+  h.tick(3);
+  check("...and frames flow again at once", h.state.emitted === before + 3, `${h.state.emitted - before}`);
+  check("unhold() on a gate that is not held is a no-op", h.throttle.unhold("again") === false);
+}
+{
+  const h = makeThrottle({ gated: false });
+  await h.flush();
+  h.throttle.hold("swap", 1500);
+  h.fireTimeouts();
+  h.tick(2);
+  check("a hold can never strand the session - it self-releases at its ceiling, loudly",
+    h.throttle.held === false && h.state.emitted === 2 && h.state.warns.some((w) => /held.*ceiling|ceiling/i.test(w)),
+    h.state.warns.join(" | "));
+}
+{
+  const watcher = SRC.slice(SRC.indexOf("function createFrameFreezeWatcher(video, gen)"),
+    SRC.indexOf("function startFrameFreezeWatch("));
+  check("the freeze watchdog stands down while a swap holds the input - a deliberate freeze is not a stall",
+    /if \(!isLive\(\) \|\| connState === "reconnecting" \|\|\s*\n\s*inputGateHeld\(\) \|\|/.test(watcher),
+    "otherwise an 800ms upload trips a full re-anchor that queues ANOTHER upload behind the swap");
+  check("inputGateHeld() reads the live throttle's own flag",
+    /function inputGateHeld\(\) \{\s*\n\s*return !!\(inputThrottle && inputThrottle\.held\);/.test(SRC));
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);
