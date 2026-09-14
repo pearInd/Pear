@@ -94,13 +94,16 @@ console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
   const region = APP.slice(Math.max(0, idx - 1400), idx + 200);
   const w0 = APP.indexOf("function makeTurnYawWindow(");
   const windowSrc = APP.slice(w0, APP.indexOf("/* ── THE BEST FRONT-FACING FRAME", w0));
-  /* The swing is now measured DOWN from the turn's edge-on peak rather than from where the
-     vote streak began - a streak-start baseline is always taken after that peak, so the
-     return leg of a 360 could never corroborate (turn-yaw-window.test.mjs). Still the
-     published MAGNITUDE only, still a difference of magnitudes. */
+  /* The swing is measured DOWN from the turn's edge-on peak rather than from where the vote
+     streak began - a streak-start baseline is always taken after that peak, so the return
+     leg of a 360 could never corroborate (turn-yaw-window.test.mjs). The reference is that
+     peak, or 90 - the asin ceiling - once the torso was lost mid-turn past the angle the file
+     already reads as turning. Either way it is a difference of published MAGNITUDES, taken
+     against a real fresh reading. */
   check("corroboration is computed from a MAGNITUDE swing only",
     /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null\)/.test(region) &&
-    /const swing = usable \? Math\.max\(0, peak - yawAbs\) : 0;/.test(windowSrc), region.slice(-400));
+    /const reference = edgeLost \? 90 : peak;/.test(windowSrc) &&
+    /const swing = usable \? Math\.max\(0, reference - yawAbs\) : 0;/.test(windowSrc), region.slice(-400));
   check("no branch derives front/back from yaw",
     !/_torsoYawAbs[^\n]*\?[^\n]*("front"|"back")/.test(APP) &&
     !/yaw[A-Za-z]*\s*[<>]=?[^\n]*\?\s*"(front|back)"/.test(APP),
@@ -110,16 +113,21 @@ console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
      any reading existed. */
   check("a missing or stale reading abstains rather than corroborating",
     /_torsoYawAbs !== null && Date\.now\(\) - _torsoYawAt <= ORIENT_YAW_FRESH_MS/.test(APP) &&
-    /const usable = fresh && peak !== null;/.test(windowSrc) &&
+    /const usable = fresh && reference !== null;/.test(windowSrc) &&
     /const yawUsable = turnYaw\.usable;/.test(APP),
     "an absent peak must not read as a zero swing that later clears the threshold");
   /* The reference point must not creep along with the shopper, or a slow turn never
      accumulates a swing. A running MAX cannot follow the body back down, and it restarts
      only on a vote that AGREES with the lock - i.e. when no turn is in progress. */
   check("the swing's reference is the turn's peak, restarted only by an agreeing vote",
-    /if \(vote && vote === lock\) peak = fresh \? yawAbs : null;/.test(windowSrc) &&
-    /else if \(fresh\) peak = peak === null \? yawAbs : Math\.max\(peak, yawAbs\);/.test(windowSrc),
+    /if \(vote && vote === lock\) \{\s*\n\s*peak = fresh \? yawAbs : null;\s*\n\s*edgeLost = false;/.test(windowSrc) &&
+    /if \(fresh\) peak = peak === null \? yawAbs : Math\.max\(peak, yawAbs\);/.test(windowSrc),
     "a creeping reference never accumulates a swing on a slow turn");
+  /* The edge-on inference may only ever come from a LOSS, mid-turn, past the loss angle - never
+     from a reading, never while the vote agrees. Otherwise it is a second way to invent a turn. */
+  check("edge-on is inferred only from a torso lost mid-turn past the loss angle",
+    /else if \(lastFresh !== null && lastFresh >= edgeLossDeg\) edgeLost = true;/.test(windowSrc) &&
+    /edgeLossDeg = PRESENCE_PROMPT_YAW_SUPPRESS_DEG/.test(windowSrc));
   /* Per-watcher, like the streak it belongs to - an item swap must not inherit a pose. */
   check("the window is per-watcher state, not module scope",
     /const yawWindow = makeTurnYawWindow\(\);/.test(APP) &&

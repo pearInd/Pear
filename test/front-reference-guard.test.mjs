@@ -62,10 +62,14 @@ const BACK  = "https://cdn.test/peak-back.jpg";
 function harness({ frontBlob = { size: 1, type: "image/jpeg" },
                    backBlob  = { size: 1, type: "image/jpeg" },
                    startOrientation = "back", flat = false, applyThrows = false,
-                   blobLooksFlat = async () => flat } = {}) {
+                   blobLooksFlat = async () => flat, wire } = {}) {
   const calls = [];
   const sandbox = {
     blobLooksFlat,
+    /* Only when a test states what the wire holds - the other sections run exactly as they did,
+       with neither name defined, which is the shape the acquire shortcut must tolerate. */
+    ...(wire ? { lastSentImageRef: wire.onWire,
+                 garmentBlobIfWarm: (url) => (url === BACK ? backBlob : url === FRONT ? frontBlob : null) } : {}),
     ORIENT_COOLDOWN_MS: 1500, AUTO_ANGLE: "auto", currentAngle: "auto",
     ORIENT_FADE_HOLD_MS: 0,
     GARMENT_FRONT: FRONT, GARMENT_BACK: BACK,
@@ -170,6 +174,31 @@ console.log("\n── §4 ACQUISITION is still a state record, not a swap ──
   check("...and without a fetch, even with no bytes resident",
     !h.calls.some((c) => c.op === "fetch"),
     "the reference is already on the wire from connect - re-resolving it buys nothing");
+}
+{
+  /* THE ONE PLACE THE LOCK ADVANCED WITHOUT A DISPATCH. "Already rendered" is true at
+     connect, and false after a mid-session watcher rebuild (a stop/start across an SDK
+     reconnect, a mode round-trip) resets the lock to PENDING while GARMENT_BACK is still
+     the reference on the wire. Recording FRONT there left the back on the shopper's front
+     until the next re-anchor happened to notice. The shortcut now checks the wire first. */
+  const back = { size: 9, type: "image/jpeg" };
+  const h = harness({ startOrientation: null, backBlob: back, wire: { onWire: back } });
+  await h.maybeSwap("front");
+  check("acquiring FRONT while GARMENT_BACK is on the wire DISPATCHES the front instead of recording it",
+    h.state().autoOrientation === "front" && h.calls.some((c) => c.op === "applyActive"),
+    JSON.stringify(h.calls.map((c) => c.op)));
+  check("...through the normal front leg, so its bytes are pre-flighted like any return",
+    h.calls.some((c) => c.op === "fetch" && c.url === FRONT));
+  const front = { size: 8, type: "image/jpeg" };
+  const ok = harness({ startOrientation: null, frontBlob: front, wire: { onWire: front } });
+  await ok.maybeSwap("front");
+  check("...while the front already on the wire stays a bookkeeping update",
+    ok.state().autoOrientation === "front" && !ok.calls.some((c) => c.op === "applyActive"));
+  const unknown = harness({ startOrientation: null, wire: { onWire: null } });
+  await unknown.maybeSwap("front");
+  check("...and an UNKNOWN wire (go-live's first apply still in flight) is not a reason to stack a second set()",
+    !unknown.calls.some((c) => c.op === "applyActive"),
+    "two concurrent set() calls at go-live is the hang the wire mutex exists for");
 }
 
 console.log("\n── §5 NO OUTPUT FRAME IS EVER USED AS AN INPUT REFERENCE ──");

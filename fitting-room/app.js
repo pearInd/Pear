@@ -5689,10 +5689,25 @@ const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (an
    head-turn, a lean or a shrug produces. It is measured DOWN from the turn's edge-on peak
    (see makeTurnYawWindow - measuring it from the start of the new vote streak meant the
    return leg could never reach it). 4 frames is ~1s at ORIENT_SAMPLE_MS, still 4 agreeing
-   votes rather than a hair trigger. FRESH_MS is two topology samples: a yaw reading older
-   than that describes a body position the shopper has already left, and stale evidence
-   must not accelerate anything. */
+   votes rather than a hair trigger. FRESH_MS is ~2.5 pose ticks (yaw is published on every
+   POSE_SAMPLE_MS * 2 tick - see startPresenceWatcher): a yaw reading older than that
+   describes a body position the shopper has already left, and stale evidence must not
+   accelerate anything.
+
+   THE FACE RETURN - the one direction that may confirm on fewer votes. This file already
+   records that the two vote directions are not equally reliable: a face DETECTED is strong
+   evidence (false positives on hair or a shoulder are rare), a face NOT detected is what
+   every dim room and motion blur also looks like. So a return to FRONT that has BOTH a
+   FaceDetector detection streak AND a torso turn corroborated by yaw - two different
+   instruments agreeing - confirms at ORIENT_FACE_RETURN_FRAMES. Neither alone does: a face
+   with no torso rotation is the shopper facing away and glancing over their shoulder at the
+   screen, which keeps the full ORIENT_LOCK_FRAMES bar. Geometry backs the pairing: the
+   corroborated swing needs the torso back within ~45 degrees of square, and a head cannot
+   turn far enough past that to put a frontal face in front of a body still facing away.
+   Two, not one: a single detection is the hair trigger the corroborated bar refuses. The
+   BACK flip keeps ORIENT_CORROBORATED_FRAMES - its evidence is an absence. */
 const ORIENT_CORROBORATED_FRAMES = 4;    // agreeing votes needed WITH a corroborating yaw swing
+const ORIENT_FACE_RETURN_FRAMES  = 2;    // face DETECTIONS needed for a corroborated return to FRONT
 const ORIENT_YAW_TURN_DEG        = 45;   // |yaw| swing that counts as a real torso rotation
 const ORIENT_YAW_FRESH_MS        = 600;  // a yaw reading older than this cannot corroborate
 /* Above this, an unreadable torso is explained by the shopper TURNING rather than by their
@@ -5783,25 +5798,82 @@ let _torsoYawAt  = 0;
    hysteresis one.
 
    MAGNITUDE ONLY and it never picks a side - the result carries no direction. A stale or
-   missing reading is not usable and cannot corroborate; the peak banked before a gap (the
-   landmarks occlude near edge-on) still counts once a fresh reading returns.
+   missing reading is not usable and cannot corroborate; the peak banked before a gap still
+   counts once a fresh reading returns.
+
+   ── THE EDGE-ON GAP - "it still falls back to 2.5s sometimes" ────────────────────────
+   MediaPipe loses the far shoulder near edge-on: torsoReadable() fails and no yaw is
+   published for exactly the band the peak lives in. With depth compressed, the last
+   readable reading can sit well under ORIENT_YAW_TURN_DEG, so the swing never clears the bar
+   and the flip waits the full ORIENT_LOCK_FRAMES.
+   The gap is not treated as "no information". A torso that goes unreadable while the window
+   is open and its last reading was already past edgeLossDeg was lost BECAUSE it rotated -
+   the same inference startPresenceWatcher() already makes at PRESENCE_PROMPT_YAW_SUPPRESS_DEG
+   to withhold "step into the frame" from a turning shopper. That loss is recorded as having
+   reached edge-on, and the swing is then measured from 90 - the ceiling of the asin form,
+   which is what an occluded shoulder line physically is. NOT extrapolated momentum: no
+   angle is invented across the gap, the swing is still computed from a real fresh reading on
+   the far side, and yaw still cannot say WHICH side that is - the vote does.
+   A torso lost while nearly square (a step toward the lens, a hand across the body) is under
+   edgeLossDeg and reads as nothing. An agreeing vote clears the evidence with the rest of the
+   window.
+
+   `open` / `turning` are what the mid-turn wire guard reads (see orientTurnMark): open from
+   the first vote that does not agree with the lock until one does, turning while open AND the
+   torso has visibly rotated - past ORIENT_YAW_TURN_DEG or lost to edge-on.
    @param {number} [turnDeg] the swing that counts as a real torso rotation
-   @returns {{ readonly peak: number|null,
+   @param {number} [edgeLossDeg] a torso lost past this |yaw| mid-turn was lost to edge-on
+   @returns {{ readonly peak: number|null, readonly edgeLost: boolean, readonly open: boolean,
+               readonly turning: boolean,
                observe(vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null):
                  { usable: boolean, swing: number, corroborates: boolean } }} */
-function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG) {
-  let peak = null;   // highest fresh |yaw| since the last vote that agreed with the lock
+function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE_PROMPT_YAW_SUPPRESS_DEG) {
+  let peak = null;        // highest fresh |yaw| since the last vote that agreed with the lock
+  let lastFresh = null;   // the most recent fresh |yaw|, to read a gap against
+  let edgeLost = false;   // the torso went unreadable mid-turn past edgeLossDeg
+  let open = false;       // a vote has not agreed with the lock since this turn began
   return {
     get peak() { return peak; },
+    get edgeLost() { return edgeLost; },
+    get open() { return open; },
+    get turning() { return open && (edgeLost || (peak !== null && peak >= turnDeg)); },
     observe(vote, lock, yawAbs) {
       const fresh = yawAbs !== null && Number.isFinite(yawAbs);
-      if (vote && vote === lock) peak = fresh ? yawAbs : null;
-      else if (fresh) peak = peak === null ? yawAbs : Math.max(peak, yawAbs);
-      const usable = fresh && peak !== null;
-      const swing = usable ? Math.max(0, peak - yawAbs) : 0;
+      if (vote && vote === lock) {
+        peak = fresh ? yawAbs : null;
+        edgeLost = false;
+        open = false;
+      } else {
+        open = true;
+        if (fresh) peak = peak === null ? yawAbs : Math.max(peak, yawAbs);
+        else if (lastFresh !== null && lastFresh >= edgeLossDeg) edgeLost = true;
+      }
+      if (fresh) lastFresh = yawAbs;
+      const reference = edgeLost ? 90 : peak;
+      const usable = fresh && reference !== null;
+      const swing = usable ? Math.max(0, reference - yawAbs) : 0;
       return { usable, swing, corroborates: swing >= turnDeg };
     },
   };
+}
+
+/* The flip decision the sampler acts on, lifted out of the tick so it is real code under test
+   rather than arithmetic buried in a closure. Every bar is the one documented beside its
+   constant: acquisition on ORIENT_ACQUIRE_FRAMES; a flip on ORIENT_LOCK_FRAMES, lowered to
+   ORIENT_CORROBORATED_FRAMES by a corroborated turn, OR ORIENT_LOCK_MS of agreement; and the
+   face return (see ORIENT_FACE_RETURN_FRAMES) - toward FRONT only, only on FaceDetector
+   detections, only with the turn corroborated.
+   @returns {{ flipBar: number, faceReturn: boolean, confirmed: boolean }} */
+function orientFlipDecision({ acquiring, needsSwitch, streak, held, yawCorroborates, lock, lastVote, faceStreak }) {
+  const flipBar = yawCorroborates
+    ? Math.min(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES)
+    : ORIENT_LOCK_FRAMES;
+  const faceReturn = !acquiring && lock === "back" && lastVote === "front" &&
+    yawCorroborates && faceStreak >= ORIENT_FACE_RETURN_FRAMES;
+  const confirmed = needsSwitch && (acquiring
+    ? streak >= ORIENT_ACQUIRE_FRAMES
+    : (streak >= flipBar || held >= ORIENT_LOCK_MS || faceReturn));
+  return { flipBar, faceReturn, confirmed };
 }
 
 /* ── THE BEST FRONT-FACING FRAME - "it froze me side-on" ──────────────────────────
@@ -6434,6 +6506,52 @@ let _orientHoldActive = false;
 let _orientHoldShown  = false;
 let _orientHoldTimer  = null;
 
+/* ── A TURN OWNS THE WIRE - "the swap sat on 'waiting for the wire' mid-turn" ────────
+   REPORTED: on a real turn the front/back swap logged "applyGarment: waiting for the wire -
+   1 write(s) ahead of it" and landed a round-trip late.
+   WHAT WAS AHEAD OF IT. reconditionForTopology() - a full image re-upload of the side ABOUT
+   TO BE REPLACED - fired on a 15-degree body change, which every turn crosses. Its only
+   orientation guard is _orientHoldActive, and that hold rises on the first vote for the
+   OTHER side; the stretch before it, where the shopper is rotating through edge-on and the
+   vote abstains, was open. A re-drape started there still held the wire when the flip was
+   confirmed, and the wire mutex cannot pre-empt an in-flight set() - two concurrent writes
+   is the go-live hang sendCondition() exists to prevent. So priority is won by PREVENTION:
+   nothing non-essential may START while a turn is in progress.
+   RAISED by the orientation sampler, dual-view sessions only (there is no swap to protect
+   on a single-view item), from the first tick with a pending switch or a turn the yaw
+   window can see - open AND rotated past ORIENT_YAW_TURN_DEG or lost to edge-on (see
+   makeTurnYawWindow) - until a vote agrees with the lock again. A three-quarter pose that
+   never clears that bar is not a turn and keeps its re-drape.
+   NOTHING IS LOST. The topology tracker reports a gated shift as "deferred" and does not
+   advance its baseline, so the movement is re-offered the moment this clears - and a full
+   360 ends near the pose the render was conditioned on, so usually nothing is left to send.
+   BOUNDED by ORIENT_TURN_HOLD_MAX_MS, the same ceiling the turn hold carries: a shopper
+   parked edge-on is re-draped rather than suppressed for the rest of the window.
+   Separate from _orientHoldActive on purpose: that flag's semantics are pinned as "a turn
+   or swap is in progress" for the cover, and it is released from the 250ms tick whenever no
+   disagreeing vote is pending - exactly the abstain stretch this one has to span. */
+let _orientTurnSince = 0;   // ms timestamp the current turn began, 0 = none
+
+/** @param {boolean} turning  @param {number} [now] */
+function orientTurnMark(turning, now = Date.now()) {
+  if (turning) {
+    if (!_orientTurnSince) {
+      _orientTurnSince = now;
+      console.log("[PEAR] AI Auto - turn in progress: body re-drapes deferred until it settles");
+    }
+  } else if (_orientTurnSince) {
+    const ms = now - _orientTurnSince;
+    _orientTurnSince = 0;
+    console.log(`[PEAR] AI Auto - turn settled after ${ms}ms: body re-drapes may dispatch again`);
+  }
+}
+
+/** @param {number} [now] @returns {boolean} true while a turn owns the wire, never past its ceiling */
+function orientTurnInProgress(now = Date.now()) {
+  return _orientTurnSince > 0 && now - _orientTurnSince <= ORIENT_TURN_HOLD_MAX_MS;
+}
+/* ── end turn-in-progress flag ── */
+
 /* Open the window and bank a good frame. Does NOT show it - see orientHoldPromote().
    @param {"turn-detected"|"swap"} reason - which stage raised the hold, for the log only */
 function orientHoldBegin(reason) {
@@ -6565,6 +6683,10 @@ function createOrientationWatcher() {
   let fdBroken = false;
   let lastSkinRatio = null;        // surfaced in the ORIENT_DEBUG log line only
   let lastConfidence = 0;          // 0..1, surfaced in the ORIENT_DEBUG log line only
+  /* Whether THIS tick's vote came from a FaceDetector detection rather than the skin
+     heuristic. Read by the face-return streak only (see ORIENT_FACE_RETURN_FRAMES): the two
+     "front" sources are not equally strong, and only a detection may shorten a flip. */
+  let lastFaceSeen = false;
   /* Per-tick edge-on SCORE (0..1), set by classify(). NOT a third vote value: it is
      reported alongside the front/back vote on a separate channel, so it can never enter
      the streak/lock arithmetic that decides which garment asset is on the wire. */
@@ -6604,6 +6726,7 @@ function createOrientationWatcher() {
      streak-start baseline that the return leg could never corroborate against; see
      makeTurnYawWindow() for why. */
   const yawWindow = makeTurnYawWindow();
+  let faceStreak = 0;   // consecutive FaceDetector detections - see the tick and ORIENT_FACE_RETURN_FRAMES
   /* Edge-on axis - its own rolling buffer, exit streak and cooldown, sharing only the
      `applying` mutex so a pose update and an asset swap can never be in flight at once.
      profileBuf holds the last ORIENT_PROFILE_WINDOW per-frame scores; squareStreak counts
@@ -6882,6 +7005,7 @@ function createOrientationWatcher() {
        and the sub-confidence band produce - the signal that used to be discarded. A face
        seen or a confident side both resolve it, so neither counts as ambiguous. */
     const skinAmbiguous = !faceSeen && vote === null;
+    lastFaceSeen = faceSeen;
     lastProfileScore = profileScore(faceSeen, faceMissed, skinAmbiguous, n);
 
     /* Learn the square-on baseline ONLY from frames the lock confidently resolved, and
@@ -6952,7 +7076,24 @@ function createOrientationWatcher() {
        shopper is facing the camera when the session opens - would otherwise spend a
        redundant rtClient.set() and cross-fade the view for zero visual change, right
        at go-live. Record the lock and return. */
-    if (autoOrientation === null && next === "front") {
+    /* ...UNLESS THE WIRE SAYS OTHERWISE. "Already rendered" is true at connect and false after
+       a mid-session watcher rebuild (a stop/start across an SDK reconnect, a mode round-trip)
+       resets the lock to PENDING while GARMENT_BACK is still the reference on the wire. That
+       was the one place the lock advanced to FRONT without a dispatch, leaving the back on
+       the shopper's front until a re-anchor happened to notice. Checked only POSITIVELY:
+       lastSentImageRef must BE this watcher's back Blob. An unknown wire (null - go-live's
+       first apply still in flight, or a re-drape mid-upload) keeps the shortcut, because
+       stacking a second set() on a first is the go-live hang the wire mutex exists for.
+       Synchronous and fetch-free (garmentBlobIfWarm), so the common path costs nothing.
+       typeof-guarded: this function runs standalone in front-reference-guard.test.mjs. */
+    const backOnWire = next === "front" && autoOrientation === null && !!GARMENT_BACK &&
+      typeof garmentBlobIfWarm === "function" && typeof lastSentImageRef !== "undefined" &&
+      lastSentImageRef !== null && lastSentImageRef === garmentBlobIfWarm(GARMENT_BACK);
+    if (backOnWire) {
+      console.warn("[PEAR] AI Auto - acquiring FRONT but GARMENT_BACK is what the wire holds;",
+        "dispatching the front reference instead of recording the lock");
+    }
+    if (autoOrientation === null && next === "front" && !backOnWire) {
       autoOrientation = "front";
       console.log("[PEAR] AI Auto - orientation ACQUIRED → FRONT (already rendered; no swap issued)");
       logVtonState();
@@ -7290,6 +7431,10 @@ function createOrientationWatcher() {
       if (vote) {
         if (vote === lastVote) streak++;
         else { lastVote = vote; streak = 1; streakSince = Date.now(); }
+        /* Consecutive FaceDetector DETECTIONS within the current front streak. An abstention
+           leaves it alone, like `streak`; a skin-heuristic "front" or any "back" vote breaks
+           it - only a detection is the strong direction ORIENT_FACE_RETURN_FRAMES trusts. */
+        faceStreak = vote === "front" && lastFaceSeen ? faceStreak + 1 : 0;
       }
       const held = lastVote ? Date.now() - streakSince : 0;
 
@@ -7336,13 +7481,12 @@ function createOrientationWatcher() {
          45-degree torso rotation measured on a different instrument - in exchange for
          reaching the decision in ~1s instead of ~2.5s. A flip can still only happen on a
          vote streak; yaw never picks a side. Acquiring is untouched: there is no locked
-         side to protect, so it already settles on two samples. */
-      const flipBar = yawCorroborates
-        ? Math.min(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES)
-        : ORIENT_LOCK_FRAMES;
-      const confirmed = needsSwitch && (acquiring
-        ? streak >= ORIENT_ACQUIRE_FRAMES
-        : (streak >= flipBar || held >= ORIENT_LOCK_MS));
+         side to protect, so it already settles on two samples.
+         The arithmetic lives in orientFlipDecision(), which adds exactly one path: the face
+         return (ORIENT_FACE_RETURN_FRAMES) - FRONT only, detections only, corroborated only. */
+      const { flipBar, faceReturn, confirmed } = orientFlipDecision({
+        acquiring, needsSwitch, streak, held, yawCorroborates, lock: autoOrientation, lastVote, faceStreak,
+      });
 
       if (ORIENT_DEBUG) {
         const confidence = faceDetector && !fdBroken
@@ -7362,7 +7506,8 @@ function createOrientationWatcher() {
         const progress = acquiring
           ? ` (${streak}/${ORIENT_ACQUIRE_FRAMES}f)`
           : ` (${streak}/${flipBar}f${yawCorroborates ? "+yaw" : ""}, ${held}/${ORIENT_LOCK_MS}ms` +
-            `, yawΔ${yawSwing.toFixed(0)}° from peak ${yawWindow.peak === null ? "n/a" : yawWindow.peak.toFixed(0) + "°"})`;
+            `, yawΔ${yawSwing.toFixed(0)}° from ${yawWindow.edgeLost ? "edge-on (torso lost)" : "peak " + (yawWindow.peak === null ? "n/a" : yawWindow.peak.toFixed(0) + "°")}` +
+            `, face ${faceStreak}/${ORIENT_FACE_RETURN_FRAMES}${faceReturn ? " FACE-RETURN" : ""})`;
         /* Pose is reported separately from the lock, because it IS separate - reading them
            on one line is what makes "locked FRONT, but edge-on right now" legible while
            tuning. ratio/score/width are the three numbers the thresholds are set from, so
@@ -7449,6 +7594,12 @@ function createOrientationWatcher() {
          profile transition dispatches again. Then raise it on ORIENT_PROFILE_ENTER_SCORE,
          never on the EXIT threshold. */
       const dualView = currentAngle === AUTO_ANGLE;
+      /* THE TURN OWNS THE WIRE from here until a vote agrees with the lock again - see
+         orientTurnMark(). Spans the abstain stretch through edge-on that the hold below does
+         not, which is where a body re-drape used to start and then hold the wire against the
+         swap. Includes a confirmed switch (needsSwitch), so it is still up while maybeSwap()
+         below is dispatching. */
+      orientTurnMark(dualView && !acquiring && (needsSwitch || yawWindow.turning));
       const frontBackTurn = dualView && !acquiring && needsSwitch && !confirmed;
       if (frontBackTurn) {
         /* Bank the frame on the FIRST disagreeing vote, exactly as before - this is the
@@ -7536,6 +7687,9 @@ function createOrientationWatcher() {
          have released it is gone, and the shopper is left staring at a frozen still with
          the live feed hidden underneath it forever. */
       orientHoldEnd("watcher-stopped");
+      /* Same reason: the sampler that would clear it is gone, and a flag left up would keep
+         deferring body re-drapes until its ceiling for a turn nobody is tracking. */
+      orientTurnMark(false);
       try { video.pause(); } catch (_) {}
       video.srcObject = null;                    // detach only - the track is the preview's
     },
@@ -15284,33 +15438,47 @@ function startPresenceWatcher() {
          mid-rotation and is deliberately silent - holding the last valid fit IS sending
          nothing - and "cooldown" is a shift the rate limit swallowed, which the tracker
          remembers so the movement is not lost. */
+      /* ── PUBLISH THE YAW FOR THE ORIENTATION WATCHER - EVERY TICK ──────────────────
+         Free: the expensive part (the MediaPipe inference) has already run, and the
+         signature is arithmetic on four landmarks. Publishing the yaw gives the watcher a
+         genuinely 3D turn signal - it decides front/back from a 96px skin-ratio heuristic
+         and a face detector, neither of which can see a torso rotating.
+         MAGNITUDE ONLY, and that is not a limitation to fix: bodyYawDegrees() is an
+         asin() form that caps at +/-90, so it cannot tell facing FROM facing AWAY. It
+         is deliberately never used to choose a side - only to corroborate that a real
+         turn is underway. See the watcher's corroboration note.
+         ON THIS TICK, NOT THE TOPOLOGY CADENCE BELOW. It used to sit inside that throttle,
+         which on a POSE_SAMPLE_MS * 2 loop meant a reading every ~480ms against a 600ms
+         ORIENT_YAW_FRESH_MS: two samples across a fast half-turn - too coarse to catch the
+         edge-on peak - and a single unreadable frame left the watcher with nothing fresh.
+         The throttle exists to bound re-drape DISPATCHES, and still does. */
+      const sig = bodyContourSignature(result);
+      if (sig && Number.isFinite(sig.yaw)) {
+        _torsoYawAbs = Math.abs(sig.yaw);
+        _torsoYawAt  = now;
+        /* THE THIRD CONSUMER of this one reading (after the topology monitor and the
+           orientation watcher's corroboration): bank the frame if this is the most
+           front-facing pose of the session so far, so the frozen result is the best
+           view of the garment rather than whichever instant the countdown ended on. */
+        maybeCaptureBestFrontFrame(_torsoYawAbs);
+      }
+
       if (bodyTopology && now - lastTopologyAt >= BODY_TOPOLOGY_SAMPLE_MS) {
         lastTopologyAt = now;
         /* THE GATE, evaluated here and passed IN. A shift found while the wire is busy
            must not advance the tracker's baseline, or the movement would be absorbed by a
-           dispatch that never happened - see feed()'s own note. */
-        const sig = bodyContourSignature(result);
-        /* ── PUBLISH THE YAW FOR THE ORIENTATION WATCHER ────────────────────────────
-           Free: this signature is already computed for the topology monitor, and the
-           expensive part (the MediaPipe inference) has already run. Publishing the yaw
-           costs one assignment and gives the watcher a genuinely 3D turn signal it has
-           never had - it decides front/back from a 96px skin-ratio heuristic and a face
-           detector, neither of which can see a torso rotating.
-           MAGNITUDE ONLY, and that is not a limitation to fix: bodyYawDegrees() is an
-           asin() form that caps at +/-90, so it cannot tell facing FROM facing AWAY. It
-           is deliberately never used to choose a side - only to corroborate that a real
-           turn is underway. See the watcher's corroboration note. */
-        if (sig && Number.isFinite(sig.yaw)) {
-          _torsoYawAbs = Math.abs(sig.yaw);
-          _torsoYawAt  = now;
-          /* THE THIRD CONSUMER of this one reading (after the topology monitor and the
-             orientation watcher's corroboration): bank the frame if this is the most
-             front-facing pose of the session so far, so the frozen result is the best
-             view of the garment rather than whichever instant the countdown ended on. */
-          maybeCaptureBestFrontFrame(_torsoYawAbs);
-        }
-        const step = bodyTopology.feed(sig, { canDispatch: !wireBusy() });
-        if (step.state === "shift") await reconditionForTopology(step);
+           dispatch that never happened - see feed()'s own note. A TURN IN PROGRESS closes
+           it too (see orientTurnMark): the swap that ends the turn re-uploads the reference
+           anyway, and a re-drape started mid-turn is what used to hold the wire against it.
+           Deferred, not dropped - the tracker re-offers the movement once the turn settles. */
+        const step = bodyTopology.feed(sig, { canDispatch: !wireBusy() && !orientTurnInProgress() });
+        /* NOT AWAITED - "the turn went blind". This loop runs under `inFlight`, so awaiting a
+           re-drape here stopped every inference, and every yaw reading, for a whole image
+           upload. A re-drape fires on a 15-degree change - the start of every turn - so the
+           blind spot landed on the rise to edge-on, the one stretch the watcher's peak is
+           read from. The dispatch owns its own in-flight flag, cover and error handling, and
+           the gate above sees wireBusy() while it runs, so nothing stacks behind it. */
+        if (step.state === "shift") reconditionForTopology(step).catch(() => {});
         else if (ORIENT_DEBUG && step.state !== "stable") {
           console.log(`[PEAR][TOPOLOGY] ${step.state}` +
             (step.heldMs ? ` (held ${step.heldMs}ms)` : "") +
@@ -15407,6 +15575,12 @@ async function reconditionForTopology(step) {
      missed re-drape rather than to a collision on the wire. */
   if (wireBusy()) {
     console.log("[PEAR] body-contour re-drape deferred: a conditioning write is in flight");
+    return;
+  }
+  /* Same belt and braces for the turn flag the gate passes in (see orientTurnMark): a turn
+     in progress means a front/back swap is coming, and it must find the wire free. */
+  if (orientTurnInProgress()) {
+    console.log("[PEAR] body-contour re-drape deferred: a turn is in progress and the swap owns the wire");
     return;
   }
   topologyReconditionInFlight = true;

@@ -543,8 +543,11 @@ console.log("\n── §7 THROTTLING: the wire is the floor, not the CPU ──"
   check("the signature is computed once and named, so both consumers read the same reading",
     /const sig = bodyContourSignature\(result\);/.test(watcher),
     "two calls would mean two readings of the same tick, and a second inference on a phone");
+  /* ...and from the orientation turn: a front/back swap is coming, and a re-drape started
+     mid-turn is what held the wire against it (turn-yaw-window.test.mjs §4). Same gate, same
+     deferral - the tracker re-offers the shift once the turn settles. */
   check("the watcher passes that gate from the live wire state",
-    /bodyTopology\.feed\(sig, \{ canDispatch: !wireBusy\(\) \}\)/.test(watcher),
+    /bodyTopology\.feed\(sig, \{ canDispatch: !wireBusy\(\) && !orientTurnInProgress\(\) \}\)/.test(watcher),
     "the gate is useless if the call site does not tell it what the wire is doing");
 
   /* THE LAST LINE OF DEFENCE, one level down: even with the gate above, the dispatcher
