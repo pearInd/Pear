@@ -555,5 +555,52 @@ console.log("\n── §7 DETECTION IS LOCAL; THE SWAP TIMELINE IS MEASURED ─�
     /await applyActive\(\);[^\n]*\n\s*if \(heldGate\) heldGate\.unhold\("swap acknowledged"\);\s*\n\s*if \(trace\) trace\.acknowledged\(\);/.test(SRC));
 }
 
+console.log("\n── §8 A LIVE LOG MUST SAY WHY THE PREDICTION DID OR DID NOT FIRE ──");
+/* REPORTED AGAIN: "PEAK on the back while turning, the back graphic a second late". That is
+   exactly what a turn looks like when the predictive BACK does NOT engage and the vote path
+   carries the flip - so the first question is whether it engaged. The debug tick line could not
+   answer it: its peak/descent detail printed only while a vote DISAGREED with the lock, and the
+   outbound abstain stretch - where orientPredictBack() is evaluated - has none. Nor could a log
+   be tied to a build. */
+{
+  const r0 = SRC.indexOf("function orientPredictBackReason(");
+  const end = SRC.indexOf("/* ── THE BEST FRONT-FACING FRAME");
+  let reasonFn = null;
+  if (r0 === -1 || end < r0) {
+    check("orientPredictBackReason() exists", false, "not implemented");
+  } else {
+    reasonFn = new Function("ORIENT_PREDICTIVE_BACK", "ORIENT_PREDICT_DESCENT_DEG", "ORIENT_PREDICT_DWELL_MS",
+      "ORIENT_EDGE_ON_DEG", SRC.slice(r0, SRC.indexOf("\n}\n", r0) + 2) + "\nreturn orientPredictBackReason;")(
+      true, DESCENT, DWELL_MS, EDGE_DEG);
+  }
+  if (reasonFn && makeTurnYawWindow) {
+    const mk = (steps) => { const w = makeTurnYawWindow(); for (const s of steps) w.observe(...s); return w; };
+    const base = { acquiring: false, lock: "front" };
+    check("reasons name each gate: kill switch, lock, window, edge, descent, dwell, fire",
+      /disabled/.test(reasonFn({ ...base, enabled: false, win: mk([]), yawAbs: 10, now: 0 })) &&
+      /lock/.test(reasonFn({ ...base, lock: "back", win: mk([]), yawAbs: 10, now: 0 })) &&
+      /closed/.test(reasonFn({ ...base, win: mk([["front", "front", 5, 0]]), yawAbs: 5, now: 0 })) &&
+      /edge/.test(reasonFn({ ...base, win: mk([["front", "front", 5, 0], [null, "front", 30, 240], [null, "front", 50, 480]]), yawAbs: 50, now: 500 })) &&
+      /descent/.test(reasonFn({ ...base, win: mk([["front", "front", 5, 0], [null, "front", 66, 240], [null, "front", 80, 480]]), yawAbs: 80, now: 500 })) &&
+      /dwell/.test(reasonFn({ ...base, win: mk([["front", "front", 5, 0], [null, "front", 66, 240], [null, "front", 86, 480], [null, "front", 50, 720]]), yawAbs: 50, now: 240 + DWELL_MS + 50 })) &&
+      reasonFn({ ...base, win: mk([["front", "front", 5, 0], [null, "front", 66, 240], [null, "front", 86, 480], [null, "front", 50, 720]]), yawAbs: 50, now: 740 }) === "fire");
+    const edge = reasonFn({ ...base, win: mk([["front", "front", 5, 0], [null, "front", 30, 240], [null, "front", 50, 480]]), yawAbs: 50, now: 500 });
+    check("...with the numbers the thresholds are tuned from, not just the gate's name",
+      /50/.test(edge) && new RegExp(String(EDGE_DEG)).test(edge), edge);
+  }
+  check("orientPredictBack() is exactly 'the reason is fire' - one gate, not two that can drift",
+    /function orientPredictBack\(args\) \{\s*\n\s*return orientPredictBackReason\(args\) === "fire";/.test(SRC));
+  const w0 = SRC.indexOf("function createOrientationWatcher()");
+  const watcher = SRC.slice(w0, SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0));
+  check("the debug tick line reports the prediction on every tick of an open turn from a FRONT lock",
+    /predict: \$\{orientPredictBackReason\(/.test(watcher));
+  check("every session logs the build it is running, so a log or a clip can be tied to the code",
+    /console\.log\("\[PEAR\] fitting-room build", PEAR_BUILD/.test(SRC) &&
+    /new URL\(import\.meta\.url\)\.searchParams\.get\("v"\)/.test(SRC));
+  const trace = SRC.slice(SRC.indexOf("function traceSwapTimeline("), SRC.indexOf("\n}\n", SRC.indexOf("function traceSwapTimeline(")));
+  check("the swap timeline names the build, the reference size it uploads, and how far into the turn it fired",
+    /PEAR_BUILD/.test(trace) && /garmentBlobIfWarm/.test(trace) && /_orientTurnSince/.test(trace));
+}
+
 console.log(fails === 0 ? "\nturn-yaw-window: OK" : `\nturn-yaw-window: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

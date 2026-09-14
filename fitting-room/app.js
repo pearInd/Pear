@@ -68,6 +68,15 @@ const {
   VIDEO_TARGET_BITRATE_KBPS,
 } = CONFIG;
 
+/* The build this session is running - the ?v= index.html loads app.js with. Logged once at load
+   so a console capture or a screen recording can be tied to the code that produced it; without
+   it, "the latest session" cannot be told apart from a stale cache or a deploy that has not
+   landed. */
+const PEAR_BUILD = (() => {
+  try { return new URL(import.meta.url).searchParams.get("v") || "dev"; } catch (_) { return "unknown"; }
+})();
+console.log("[PEAR] fitting-room build", PEAR_BUILD, "- app.js?v=" + PEAR_BUILD);
+
 const DEMO_FLAG = new URLSearchParams(location.search).get("demo") === "1";
 
 /* ── Public demo-widget one-time gate (opt-in, isolated from the main app) ───
@@ -5995,13 +6004,34 @@ function orientFlipDecision({ acquiring, needsSwitch, streak, held, yawCorrobora
    Yaw still never picks a side on its own: the absence of every front vote across a full pass
    through edge-on is what does, and a face returning withdraws it.
    @returns {boolean} */
-function orientPredictBack({ enabled = ORIENT_PREDICTIVE_BACK, acquiring, lock, win, yawAbs, now }) {
-  if (!enabled || acquiring || lock !== "front") return false;
-  if (!win || !win.open || !win.turning || win.edgeAt === null) return false;
-  if (yawAbs === null || !Number.isFinite(yawAbs)) return false;
+function orientPredictBack(args) {
+  return orientPredictBackReason(args) === "fire";
+}
+
+/* The same gate, answering WHY - "fire", or the first condition that held it back, with the
+   numbers the thresholds are tuned from. orientPredictBack() is defined as this returning
+   "fire", so the decision and its explanation cannot drift apart. It exists because a report of
+   "PEAK on the back, the back graphic a second late" is exactly what a turn looks like when the
+   prediction did NOT engage and the vote path carried the flip; the ORIENT_DEBUG tick line
+   prints this on every tick of an open turn from a FRONT lock, so one logged turn settles which.
+   @returns {string} */
+function orientPredictBackReason({ enabled = ORIENT_PREDICTIVE_BACK, acquiring, lock, win, yawAbs, now }) {
+  if (!enabled) return "disabled (?predict_back=0)";
+  if (acquiring || lock !== "front") return `no FRONT lock (${lock === null ? "acquiring" : lock})`;
+  if (!win || !win.open) return "window closed (a vote agrees with FRONT - face in view)";
+  if (!win.turning || win.edgeAt === null) {
+    const peak = win.peak === null ? "n/a" : `${win.peak.toFixed(0)}°`;
+    return `edge-on not reached (peak ${peak} < ${ORIENT_EDGE_ON_DEG}°, torso ${win.edgeLost ? "lost" : "tracked"})`;
+  }
+  if (yawAbs === null || !Number.isFinite(yawAbs)) return "no fresh yaw reading";
   const reference = win.edgeLost ? 90 : win.peak;
-  if (reference === null || yawAbs > reference - ORIENT_PREDICT_DESCENT_DEG) return false;
-  return now - win.edgeAt <= ORIENT_PREDICT_DWELL_MS;
+  const fell = reference - yawAbs;
+  if (fell < ORIENT_PREDICT_DESCENT_DEG) {
+    return `no descent yet (${yawAbs.toFixed(0)}° is ${fell.toFixed(0)}° below ${win.edgeLost ? "edge-on" : "peak " + reference.toFixed(0) + "°"}, need ${ORIENT_PREDICT_DESCENT_DEG}°)`;
+  }
+  const dwell = now - win.edgeAt;
+  if (dwell > ORIENT_PREDICT_DWELL_MS) return `dwell ${dwell}ms > ${ORIENT_PREDICT_DWELL_MS}ms (a held pose)`;
+  return "fire";
 }
 
 /* ── THE BEST FRONT-FACING FRAME - "it froze me side-on" ──────────────────────────
@@ -6699,11 +6729,17 @@ const ORIENT_SWAP_INPUT_HOLD_MAX_MS = 2000;
    dispatched -> acked (upload), acked -> first presented Decart frame (switch + downlink).
    "First presented" is exactly that - a frame presented after the ack; whether it is already
    the new render is what the yaw and a screen recording at that timestamp answer. */
-function traceSwapTimeline(next, predictive, held) {
+function traceSwapTimeline(next, predictive, held, refUrl) {
   if (!ORIENT_DEBUG) return null;
   const t0 = Date.now();
   const yaw = () => (_torsoYawAbs === null ? "n/a" : `${_torsoYawAbs.toFixed(0)}°`);
-  const marks = [`dispatched t=0 (local |yaw| ${yaw()})`];
+  /* Two more facts the lead time depends on: how far into the turn the dispatch happened (the
+     turn flag's own start), and how many bytes the upload has to carry - the dispatch -> ack gap
+     is dominated by that size, and it is the one part of the delay the client controls. */
+  const blob = typeof garmentBlobIfWarm === "function" ? garmentBlobIfWarm(refUrl) : null;
+  const intoTurn = _orientTurnSince ? `${t0 - _orientTurnSince}ms into the turn` : "no turn flagged";
+  const marks = [`build v=${PEAR_BUILD}`,
+    `dispatched t=0, ${intoTurn} (local |yaw| ${yaw()}, reference ${blob ? Math.round(blob.size / 1024) + "KB" : "size unknown"})`];
   const print = (tail) => console.log(`[PEAR][ORIENT] swap timeline → ${next.toUpperCase()}` +
     `${predictive ? " (predictive)" : ""}${held ? " [input held]" : ""}: ${marks.join(" · ")}` +
     (tail ? ` · ${tail}` : ""));
@@ -7421,7 +7457,7 @@ function createOrientationWatcher() {
     const heldGate = typeof holdInputGate === "function"
       ? holdInputGate(`orientation swap → ${next.toUpperCase()}`, ORIENT_SWAP_INPUT_HOLD_MAX_MS) : null;
     const trace = typeof traceSwapTimeline === "function"
-      ? traceSwapTimeline(next, predictive, !!heldGate) : null;
+      ? traceSwapTimeline(next, predictive, !!heldGate, next === "back" ? GARMENT_BACK : GARMENT_FRONT) : null;
     try {
       await applyActive();                       // one rtClient.set() - pre-cached Blob payload
       if (heldGate) heldGate.unhold("swap acknowledged");
@@ -7722,8 +7758,15 @@ function createOrientationWatcher() {
           ` | ratio=${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}` +
           ` | score=${lastProfileScore.toFixed(2)}(avg ${mean.toFixed(2)}/${ORIENT_PROFILE_ENTER_SCORE})` +
           ` | w=${lastNarrow === null ? "n/a" : lastNarrow.toFixed(2)}`;
+        /* The prediction's own verdict, on every tick of an open turn from a FRONT lock - the
+           abstain stretch where `progress` above prints nothing because no vote disagrees yet,
+           and exactly where orientPredictBack() is evaluated. See orientPredictBackReason(). */
+        const predict = currentAngle === AUTO_ANGLE && autoOrientation === "front" && yawWindow.open
+          ? ` | predict: ${orientPredictBackReason({ acquiring, lock: autoOrientation, win: yawWindow,
+              yawAbs: yawFresh ? _torsoYawAbs : null, now: Date.now() })}`
+          : "";
         console.log(`[PEAR][ORIENT] state=${vtonState()} | ${pose} | confidence=${confidence} | ${status}` +
-          (needsSwitch ? progress : ""));
+          (needsSwitch ? progress : "") + predict);
       }
 
       /* Raise the hold the INSTANT a turn looks like it is starting - one disagreeing
