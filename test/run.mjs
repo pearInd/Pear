@@ -293,6 +293,7 @@ const SUITES = [
   ["cart-size-variant", "cart-size-variant.test.mjs"],
   ["kids-product-sizes", "kids-product-sizes.test.mjs"],
   ["adult-pants-sizing", "adult-pants-sizing.test.mjs"],
+  ["numeric-pants-sizing", "numeric-pants-sizing.test.mjs"],
   ["mp4-export", "mp4-export.test.mjs"],
   ["conditioning-trace", "conditioning-trace.test.mjs"],
 ];

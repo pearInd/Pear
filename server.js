@@ -27,6 +27,11 @@ import { fileURLToPath } from "node:url";
 import { createDecartClient } from "@decartai/sdk";
 import { logTryOn } from "./lib/sheets.js";
 import { supabase } from "./lib/supabase.js";
+/* Shared with scripts/backfill-garment-categories.js - see lib/garment-category.js
+   on why the garment-category verdict is its own Gemini call rather than a sixth
+   field on classifyFrontBackDetailed() (short version: that one is stamped with
+   CLASSIFIER_PROMPT_VERSION, and widening it re-classifies the whole catalog). */
+import { classifyGarmentFull } from "./lib/garment-category.js";
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1655,7 +1660,17 @@ async function getCachedClassificationDetailed(imageUrl) {
   if (!supabase) return null;
   const V11 = "classification, confidence, source, cue, age_group, age_group_confidence";
   const V12_ONLY = ", text_ocr, is_true_back_view, primary_color_hex, has_graphic, classifier_version";
-  let { data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY);
+  const V13_ONLY = ", garment_category";
+  let { data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY + V13_ONLY);
+  /* V13 is its own tier rather than being folded into the V12 fallback: a deployment
+     that has run v12 but not yet v13 must keep its text_ocr/colour columns, exactly
+     the way the v11 tier below keeps confidence/source/cue. Collapsing the two would
+     silently drop the duplicate-panel veto on every such deployment. */
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+    console.warn("[garment_cache] v13 column absent - run archive/supabase_setup_v13.sql for garment categories");
+    ({ data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY));
+    if (!error) return data ? { ...data, garment_category: null } : null;
+  }
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("[garment_cache] v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation");
     ({ data, error } = await garmentCacheQuery(imageUrl, V11));
@@ -1665,15 +1680,18 @@ async function getCachedClassificationDetailed(imageUrl) {
         const classification = await getCachedClassification(imageUrl);
         return classification
           ? { classification, confidence: null, source: "legacy", cue: "", age_group: null, age_group_confidence: null,
-              text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null }
+              text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
+              garment_category: null }
           : null;
       }
       if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
       return data ? { ...data, age_group: null, age_group_confidence: null,
-                      text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null } : null;
+                      text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
+                      garment_category: null } : null;
     }
     if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
-    return data ? { ...data, text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null } : null;
+    return data ? { ...data, text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
+                    garment_category: null } : null;
   }
   if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
   return data || null;
@@ -1718,8 +1736,22 @@ async function saveClassification(imageUrl, classification, meta = {}) {
     primary_color_hex: meta.primaryColorHex || null,
   };
 
+  /* NULL vs a value matters here the way it does for text_ocr above: a call site that
+     never asked the category question (every classify-images request - the category is
+     a SEPARATE Gemini call, see lib/garment-category.js) must leave the column alone
+     rather than stamping "unknown" over a verdict the category endpoint already wrote.
+     undefined -> null -> the upsert clears it, which is why this is conditional. */
+  const v13Fields = typeof meta.garmentCategory === "string" && meta.garmentCategory
+    ? { garment_category: meta.garmentCategory }
+    : {};
+
   let { error } = await supabase.from("garment_cache")
-    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields }], { onConflict: "canonical_url" });
+    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields, ...v13Fields }], { onConflict: "canonical_url" });
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+    console.warn("[garment_cache] v13 column absent - run archive/supabase_setup_v13.sql for garment categories");
+    ({ error } = await supabase.from("garment_cache")
+      .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields }], { onConflict: "canonical_url" }));
+  }
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("[garment_cache] v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation");
     ({ error } = await supabase.from("garment_cache")
@@ -2609,6 +2641,141 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
    what /api/classify-images already does for front/back - but that call is measured at
    ~2.5s warm and ~27s cold, and this one sits on the path to go-live behind a 2.5s client
    timeout. A title is one short string, so this stays a fast text call. */
+/* GET /api/garment-category?image_url=... -> { garment_category, source, cached }
+
+   WHICH BODY REGION IS THIS GARMENT WORN ON, answered from the PHOTOGRAPH.
+
+   THE BUG THIS CLOSES: "the size calculator recommends L for a pair of jeans." The
+   fitting room decides between a WAIST chart and the chest-banded letter chart from
+   two free, synchronous signals - the product size run and the title (isPantsProduct()
+   in fitting-room/app.js). Both abstain on real storefronts more often than they
+   should: a size picker rendered in JavaScript scrapes to nothing, and a title like
+   "STRAIGHT BASIC" or "LOOSE" names a CUT and a FIT with no garment noun in it. When
+   the text says nothing, the photograph still does. This is tier 3.
+
+   NOT THE SAME QUESTION AS /api/classify-garment BESIDE IT. That one reads a TITLE,
+   so it is blind in exactly the case this exists for. This one reads the IMAGE.
+
+   CACHE-FIRST, and a NULL column is a cache MISS, not a verdict. A photo is classified
+   once, ever, across every shopper and every session. archive/supabase_setup_v13.sql
+   spells out why NULL must never be backfilled with a default: "unknown" is a real
+   verdict and is served from cache like any other, so backfilling it would freeze every
+   un-classified row as permanently un-askable.
+
+   NEVER 5xx ON A CLASSIFICATION IT CANNOT MAKE. An unconfigured key, a database that is
+   not wired up, an unreadable image - all answer 200 with garment_category "unknown"
+   and a `source` saying why, because the client treats this as an ENHANCEMENT and falls
+   back to the tiers it already has. Making a shopper wait on (or fail over) a size
+   recommendation is a worse bug than the one this closes - CLAUDE.md §2.5. */
+app.get("/api/garment-category", classifyLimiter, async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  const imageUrl = typeof req.query?.image_url === "string" ? req.query.image_url.trim() : "";
+  if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) {
+    return res.status(400).json({
+      error: "missing_image_url",
+      message: "image_url: an http(s) URL is required.",
+    });
+  }
+
+  /* Read the whole cached row, not just the category: if the photo is already known
+     we need its EXISTING front/back verdict to write the category back without
+     inventing one. garment_cache.classification is NOT NULL (archive/supabase_setup.sql),
+     and a fabricated "front" is precisely the default-that-reads-as-a-verdict this
+     table's v8 migration exists to make visible. */
+  let cached = null;
+  try {
+    cached = await getCachedClassificationDetailed(imageUrl);
+  } catch (e) {
+    console.warn("[garment-category] cache read failed:", e?.message || e);
+  }
+
+  if (cached && typeof cached.garment_category === "string" && cached.garment_category) {
+    console.log(`[garment-category] cache HIT ${cached.garment_category} for ${imageUrl.slice(0, 120)}`);
+    return res.json({ garment_category: cached.garment_category, source: "cache", cached: true });
+  }
+
+  if (!GEMINI_API_KEY) {
+    // Soft, not 503 - the client's size-run and title tiers are already a usable answer.
+    return res.json({ garment_category: "unknown", source: "unconfigured", cached: false });
+  }
+
+  let verdict;
+  try {
+    verdict = await classifyGarmentFull(imageUrl, GEMINI_API_KEY);
+  } catch (e) {
+    /* Only a 429 reaches here (lib/garment-category.js swallows every other failure).
+       It is NOT persisted and NOT reported as a verdict: writing "unknown" for a photo
+       nobody ever got to ask about would stop this endpoint re-asking it forever. */
+    if (e?.rateLimited) {
+      console.warn("[garment-category] rate limited - not caching:", imageUrl.slice(0, 120));
+      return res.json({ garment_category: "unknown", source: "rate_limited", cached: false });
+    }
+    console.warn("[garment-category] classification failed:", e?.message || e);
+    return res.json({ garment_category: "unknown", source: "error", cached: false });
+  }
+
+  /* PERSIST ONLY A REAL VERDICT. source !== "gemini" means an unreadable image or an
+     HTTP error, i.e. nobody looked - same rule as the rate-limit branch above. */
+  if (verdict.source === "gemini" && supabase) {
+    if (cached) {
+      /* Known photo: re-upsert its own row with its EXISTING front/back verdict and
+         provenance intact, adding only the category. Everything below is read back off
+         the row rather than re-derived, so this write cannot move a front/back verdict. */
+      await saveClassification(imageUrl, cached.classification, {
+        confidence: cached.confidence,
+        source: cached.source || "gemini",
+        cue: cached.cue,
+        ageGroup: cached.age_group,
+        ageGroupConfidence: cached.age_group_confidence,
+        textOcr: cached.text_ocr,
+        isTrueBackView: cached.is_true_back_view,
+        hasGraphic: cached.has_graphic,
+        primaryColorHex: cached.primary_color_hex,
+        classifierVersion: cached.classifier_version,
+        garmentCategory: verdict.garment_category,
+      });
+    } else {
+      /* UNKNOWN PHOTO. There is no row, and one cannot be inserted without a front/back
+         value. Rather than default it, ask - classifyFrontBackDetailed() is the same call
+         /api/classify-images would have made for this photo anyway, so the row this
+         creates is a genuine verdict with real provenance rather than a placeholder.
+         Costs a second Gemini call exactly once per never-before-seen photograph; every
+         later visit is the cache HIT above. A failure here does NOT fail the request:
+         the category is still returned, just uncached, and the next visit re-asks. */
+      try {
+        const detail = await classifyFrontBackDetailed(imageUrl);
+        await saveClassification(imageUrl, detail.view === "back" ? "back" : "front", {
+          confidence: detail.confidence,
+          source: detail.view === "uncertain" ? "uncertain" : "gemini",
+          cue: detail.cue,
+          ageGroup: detail.age_group,
+          ageGroupConfidence: detail.age_group_confidence,
+          textOcr: detail.text_ocr,
+          isTrueBackView: detail.is_true_back_view,
+          hasGraphic: detail.has_graphic,
+          primaryColorHex: detail.primary_color_hex,
+          classifierVersion: CLASSIFIER_PROMPT_VERSION,
+          garmentCategory: verdict.garment_category,
+        });
+      } catch (e) {
+        console.warn("[garment-category] could not create a cache row (category still served):",
+                     e?.message || e);
+      }
+    }
+  }
+
+  console.log(`[garment-category] ${verdict.garment_category} (conf ${verdict.confidence}` +
+              `${verdict.cue ? ", " + verdict.cue : ""}) for ${imageUrl.slice(0, 120)}`);
+  return res.json({
+    garment_category: verdict.garment_category,
+    source: verdict.source,
+    cached: false,
+  });
+});
+
 app.post("/api/classify-garment", classifyLimiter, async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
