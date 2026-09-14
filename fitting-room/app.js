@@ -5779,6 +5779,14 @@ const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (an
    BACK flip keeps ORIENT_CORROBORATED_FRAMES - its evidence is an absence. */
 const ORIENT_CORROBORATED_FRAMES = 4;    // agreeing votes needed WITH a corroborating yaw swing
 const ORIENT_FACE_RETURN_FRAMES  = 2;    // face DETECTIONS needed for a corroborated return to FRONT
+/* THE POSE FLIP - the face return's symmetric sibling. The pose model's shoulder order (see
+   poseShoulderFacing()) is not an absence in either direction: it reads FRONT and BACK with the same
+   standing, measured +0.76 / -0.68. So two consecutive shoulder votes for the other side, with the
+   turn corroborated by yaw, confirm the flip BOTH ways - which is what makes FRONT -> BACK -> FRONT
+   move on one bar instead of a fast return and a slow departure. Corroboration is still required:
+   the shoulder order is a torso signal, and a head turned over the shoulder must not flip anything
+   before ORIENT_LOCK_FRAMES. */
+const ORIENT_POSE_FLIP_FRAMES    = 2;    // shoulder-order votes needed for a corroborated flip, either way
 
 /* ── PREDICTIVE BACK - "the back artwork rendered over PEAK for a second" ─────────────
    REPORTED, from the exported clip: on FRONT -> BACK the back artwork appears over the front's
@@ -5868,55 +5876,59 @@ const PRESENCE_PROMPT_YAW_SUPPRESS_DEG = 25;
 let _torsoYawAbs = null;
 let _torsoYawAt  = 0;
 
-/* ── THE FACE, FROM THE POSE MODEL - "the mountain stayed on my chest after a full turn" ──
+/* ── WHICH WAY THE BODY FACES, FROM THE POSE MODEL - front AND back ──────────────────
    ────────────────────────────────────────────────────────────────────────────────
-   REPORTED: after a full 360 the BACK graphic stays latched on the shopper's FRONT.
-   THE ROOT CAUSE IS THE BROWSER, not the lock. Every front/back decision rests on the vote, and
-   the vote's strong direction is a FaceDetector detection - but the Shape Detection API's
-   FaceDetector is NOT exposed by default: verified 2026-09-14, `typeof FaceDetector` is
-   "undefined" in Chrome 152 and Edge 152 on Windows, and "function" only under
-   --enable-experimental-web-platform-features. So in the room's real browsers the watcher runs
-   its skin-ratio fallback, where a FRONT vote needs skin to fill ~18.5% of a 96px head band
-   (the 0.10 threshold plus the ORIENT_CONFIDENCE_MIN ramp) - and a face at try-on distance,
-   with shoulders and hips in frame, is a small fraction of that. The return leg therefore
-   never produced a FRONT vote, the face-return fast path (which counts detections) never
-   fired, and once BACK was on the wire - by back votes, or by the yaw-driven predictive BACK -
-   nothing could take it off. turn-yaw-window.test.mjs §9 models exactly that latch.
-   THE FACE WAS ALREADY BEING MEASURED. startPresenceWatcher() runs MediaPipe PoseLandmarker on
-   #webcam every tick, and BlazePose returns nose and eye landmarks with a visibility score. Where
-   there is no FaceDetector, that is the face: poseFaceVisibility() publishes the WEAKEST of the
-   nose and both eyes (a profile loses the far eye and must not count), and poseFaceVote() turns a
-   fresh, clearly visible face into a FRONT vote that classify() counts as a detection - so the
-   lock, the face streak and the corroborated face return all work again.
-   FRONT ONLY, like FaceDetector's own trusted direction. A face NOT seen is never turned into a
-   back vote here - that is the weak direction, and the skin heuristic keeps it.
-   UNMEASURED, stated: BlazePose predicts every landmark on every subject, and nothing in this repo
-   has measured its face visibility on a back-facing shopper. ORIENT_POSE_FACE_VIS sits well above
-   MediaPipe's own 0.5 "visible" line, and the fast return still needs a corroborated torso turn,
-   so a hallucinated face on a shopper standing with their back to the lens flips nothing on its
-   own before ORIENT_LOCK_FRAMES. ?pose_face=0 turns it off for an A/B. */
-const ORIENT_POSE_FACE_VIS = 0.8;   // min(nose, eyes) visibility that counts as a face in view
-const ORIENT_POSE_FACE = (() => {
-  try { return new URLSearchParams(location.search).get("pose_face") !== "0"; } catch (_) { return true; }
+   TWO REPORTS, ONE SIGNAL.
+   1. "After a full 360 the BACK graphic stays latched on my FRONT." Every front/back decision
+      rests on the vote, and the vote's strong direction was a FaceDetector detection - but the
+      Shape Detection API's FaceDetector is NOT exposed by default: verified 2026-09-14,
+      `typeof FaceDetector` is "undefined" in Chrome 152 and Edge 152, "function" only under
+      --enable-experimental-web-platform-features. The watcher ran its 96px skin-ratio fallback,
+      which almost never votes FRONT at try-on distance, so BACK latched.
+   2. Build 128 then took the FRONT vote from the pose model's FACE (min visibility of nose and
+      eyes) - FRONT came back, and "when I turn away, the back graphic never appears". MEASURED
+      2026-09-14 with the room's own model (pose_landmarker_lite, tasks-vision 0.10.14) on the
+      catalog's photos of one model facing the lens and facing away: nose and eye visibility are
+      1.00 BOTH ways. BlazePose predicts a face on the back of the head, so that vote said FRONT
+      while the shopper faced away; the lock never left FRONT and the predictive window never
+      opened. Face visibility cannot tell the sides apart - not as a FRONT vote, and not as a
+      "visibility below 0.2 means BACK" trigger either, which would simply never fire.
+   WHAT DOES TELL THEM APART, measured on the same photos: the image-space ORDER of the shoulders.
+   (L.x - R.x) / torso height = +0.76 facing the lens and -0.68 facing away; identical at 40% size;
+   and +0.78 / -0.63 with the image MIRRORED - BlazePose labels the shoulders by which way the
+   subject faces, so a mirrored camera does not invert it. Near 0 edge-on, where the shoulders
+   overlap and the vote abstains. torso height is the distance normaliser, and needs the same
+   four readable torso joints the topology monitor measures from.
+   SYMMETRIC, and that is the point: one instrument votes FRONT and BACK with the same standing,
+   so both legs of a 360 move on the same bar (ORIENT_POSE_FLIP_FRAMES). The skin heuristic still
+   runs when the shoulders abstain; FaceDetector, where a browser has it, is untouched.
+   STILL ONE MODEL ON ONE PAIR OF PHOTOS, stated: a live webcam at an angle is the check, and the
+   ORIENT_DEBUG line prints `sep` every tick for it. ?pose_facing=0 turns the vote off for an A/B. */
+const ORIENT_POSE_FACING_MARGIN = 0.25;   // |(L.x - R.x) / torso height| needed to vote a side
+const ORIENT_POSE_FACING = (() => {
+  try { return new URLSearchParams(location.search).get("pose_facing") !== "0"; } catch (_) { return true; }
 })();
-let _poseFaceVis = null;   // latest min(nose, left eye, right eye) visibility, from the pose loop
-let _poseFaceAt  = 0;
+let _poseFacingSep = null;   // latest signed shoulder order, + facing the lens, - facing away
+let _poseFacingAt  = 0;
 
-/** @param {{landmarks?:Array}|null} result a PoseLandmarker result @returns {number|null} */
-function poseFaceVisibility(result) {
+/** @param {{landmarks?:Array}|null} result a PoseLandmarker result
+ *  @returns {number|null} (L.x - R.x) / torso height for the primary subject, or null */
+function poseShoulderFacing(result) {
   const sets = result && Array.isArray(result.landmarks) ? result.landmarks : null;
   const subject = sets && sets.length ? primaryPoseIndex(sets) : -1;
   const lm = subject >= 0 ? sets[subject] : null;
-  if (!Array.isArray(lm)) return null;
-  const pts = [POSE_LANDMARK.NOSE, POSE_LANDMARK.LEFT_EYE, POSE_LANDMARK.RIGHT_EYE].map((i) => lm[i]);
-  if (pts.some((p) => !p || !Number.isFinite(p.visibility))) return null;
-  return Math.min(...pts.map((p) => p.visibility));
+  if (!Array.isArray(lm) || !torsoReadable(lm, BODY_TRACK_MIN_VISIBILITY)) return null;
+  const ls = lm[POSE_LANDMARK.LEFT_SHOULDER], rs = lm[POSE_LANDMARK.RIGHT_SHOULDER];
+  const lh = lm[POSE_LANDMARK.LEFT_HIP], rh = lm[POSE_LANDMARK.RIGHT_HIP];
+  const torsoH = Math.abs((lh.y + rh.y) / 2 - (ls.y + rs.y) / 2);
+  if (!(torsoH > 1e-3)) return null;
+  return (ls.x - rs.x) / torsoH;
 }
 
-/** @returns {"front"|null} a FRONT vote from a fresh, clearly visible pose-model face - never "back" */
-function poseFaceVote({ enabled = ORIENT_POSE_FACE, vis, at, now }) {
-  if (!enabled || vis === null || !Number.isFinite(vis) || now - at > ORIENT_YAW_FRESH_MS) return null;
-  return vis >= ORIENT_POSE_FACE_VIS ? "front" : null;
+/** @returns {"front"|"back"|null} a side from a fresh, clearly separated shoulder order */
+function poseFacingVote({ enabled = ORIENT_POSE_FACING, sep, at, now }) {
+  if (!enabled || sep === null || !Number.isFinite(sep) || now - at > ORIENT_YAW_FRESH_MS) return null;
+  return sep >= ORIENT_POSE_FACING_MARGIN ? "front" : sep <= -ORIENT_POSE_FACING_MARGIN ? "back" : null;
 }
 
 /* ── THE TURN'S YAW WINDOW - "after a full 360 the back stays on my front" ─────────
@@ -6035,16 +6047,19 @@ function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE
    face return (see ORIENT_FACE_RETURN_FRAMES) - toward FRONT only, only on FaceDetector
    detections, only with the turn corroborated.
    @returns {{ flipBar: number, faceReturn: boolean, confirmed: boolean }} */
-function orientFlipDecision({ acquiring, needsSwitch, streak, held, yawCorroborates, lock, lastVote, faceStreak }) {
+function orientFlipDecision({ acquiring, needsSwitch, streak, held, yawCorroborates, lock, lastVote, faceStreak, poseStreak = 0 }) {
   const flipBar = yawCorroborates
     ? Math.min(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES)
     : ORIENT_LOCK_FRAMES;
   const faceReturn = !acquiring && lock === "back" && lastVote === "front" &&
     yawCorroborates && faceStreak >= ORIENT_FACE_RETURN_FRAMES;
+  /* Either direction - see ORIENT_POSE_FLIP_FRAMES. */
+  const poseFlip = !acquiring && !!lock && (lastVote === "front" || lastVote === "back") && lastVote !== lock &&
+    yawCorroborates && poseStreak >= ORIENT_POSE_FLIP_FRAMES;
   const confirmed = needsSwitch && (acquiring
     ? streak >= ORIENT_ACQUIRE_FRAMES
-    : (streak >= flipBar || held >= ORIENT_LOCK_MS || faceReturn));
-  return { flipBar, faceReturn, confirmed };
+    : (streak >= flipBar || held >= ORIENT_LOCK_MS || faceReturn || poseFlip));
+  return { flipBar, faceReturn, poseFlip, confirmed };
 }
 
 /* Should BACK go on the wire NOW, ahead of any back vote? See ORIENT_PREDICTIVE_BACK for the
@@ -6946,6 +6961,9 @@ function createOrientationWatcher() {
      heuristic. Read by the face-return streak only (see ORIENT_FACE_RETURN_FRAMES): the two
      "front" sources are not equally strong, and only a detection may shorten a flip. */
   let lastFaceSeen = false;
+  /* ...and whether it came from the pose model's shoulder order - the symmetric front/back vote
+     (see poseShoulderFacing()). Read by the pose streak only. */
+  let lastPoseVoted = false;
   /* Per-tick edge-on SCORE (0..1), set by classify(). NOT a third vote value: it is
      reported alongside the front/back vote on a separate channel, so it can never enter
      the streak/lock arithmetic that decides which garment asset is on the wire. */
@@ -6958,9 +6976,9 @@ function createOrientationWatcher() {
      never come back down, permanently biasing every later comparison toward "narrow". */
   let baselineWidth = 0, baselineSamples = 0;
   console.log("[PEAR] AI Auto - orientation watcher armed (engine:",
-    faceDetector ? "FaceDetector)" : ORIENT_POSE_FACE
-      ? "MediaPipe face landmarks + skin-ratio heuristic - no FaceDetector in this browser)"
-      : "skin-ratio heuristic - ?pose_face=0)",
+    faceDetector ? "FaceDetector)" : ORIENT_POSE_FACING
+      ? "MediaPipe shoulder order + skin-ratio heuristic - no FaceDetector in this browser)"
+      : "skin-ratio heuristic - ?pose_facing=0)",
     "| GARMENT_FRONT:", abbrevImg(GARMENT_FRONT), "| GARMENT_BACK:", GARMENT_BACK ? abbrevImg(GARMENT_BACK) : "(none)");
 
   /* The lock's state as the explicit enum, via the shared vtonState() resolver so
@@ -6988,6 +7006,7 @@ function createOrientationWatcher() {
      makeTurnYawWindow() for why. */
   const yawWindow = makeTurnYawWindow();
   let faceStreak = 0;   // consecutive FaceDetector detections - see the tick and ORIENT_FACE_RETURN_FRAMES
+  let poseStreak = 0, poseSide = null;   // consecutive shoulder-order votes for poseSide - see ORIENT_POSE_FLIP_FRAMES
   let lastSwapPredictive = false;   // the last committed swap was a predictive BACK - see maybeSwap()
   /* Edge-on axis - its own rolling buffer, exit streak and cooldown, sharing only the
      `applying` mutex so a pose update and an asset swap can never be in flight at once.
@@ -7228,7 +7247,7 @@ function createOrientationWatcher() {
     const n = narrowness(width);
     lastNarrow = n;
 
-    let vote, faceSeen = false, faceMissed = false;
+    let vote, faceSeen = false, faceMissed = false, posed = false;
     if (faceDetector && !fdBroken) {
       try {
         const fs = Math.max(ORIENT_FACE_SIZE / vw, ORIENT_FACE_SIZE / vh);
@@ -7260,12 +7279,13 @@ function createOrientationWatcher() {
         vote = skinRatioVote(px);
       }
     } else {
-      /* NO FaceDetector - the default in Chrome and Edge (see poseFaceVisibility()). The pose
-         model's face comes first: a clearly visible one is a FRONT vote with the standing of a
-         detection, which is what lets the lock and the face return leave BACK at all. Anything
-         less falls through to the skin heuristic exactly as before, which still owns BACK. */
-      const poseVote = poseFaceVote({ vis: _poseFaceVis, at: _poseFaceAt, now: Date.now() });
-      if (poseVote) { vote = poseVote; faceSeen = true; lastConfidence = _poseFaceVis; lastSkinRatio = null; }
+      /* NO FaceDetector - the default in Chrome and Edge. The pose model's SHOULDER ORDER comes
+         first, in both directions (see poseShoulderFacing() for the measurement, and for why its
+         FACE visibility - build 128's vote - cannot tell the sides apart). It is not a face, so
+         faceSeen stays false: the face streak and the profile score keep meaning what they say.
+         When the shoulders abstain (edge-on, torso unreadable) the skin heuristic runs as before. */
+      const poseVote = poseFacingVote({ sep: _poseFacingSep, at: _poseFacingAt, now: Date.now() });
+      if (poseVote) { vote = poseVote; posed = true; lastConfidence = Math.min(1, Math.abs(_poseFacingSep)); lastSkinRatio = null; }
       else vote = skinRatioVote(px);
     }
 
@@ -7274,6 +7294,7 @@ function createOrientationWatcher() {
        seen or a confident side both resolve it, so neither counts as ambiguous. */
     const skinAmbiguous = !faceSeen && vote === null;
     lastFaceSeen = faceSeen;
+    lastPoseVoted = posed;
     lastProfileScore = profileScore(faceSeen, faceMissed, skinAmbiguous, n);
 
     /* Learn the square-on baseline ONLY from frames the lock confidently resolved, and
@@ -7728,6 +7749,10 @@ function createOrientationWatcher() {
            leaves it alone, like `streak`; a skin-heuristic "front" or any "back" vote breaks
            it - only a detection is the strong direction ORIENT_FACE_RETURN_FRAMES trusts. */
         faceStreak = vote === "front" && lastFaceSeen ? faceStreak + 1 : 0;
+        /* Consecutive shoulder-order votes for ONE side (see ORIENT_POSE_FLIP_FRAMES). A skin vote
+           breaks it, and so does a shoulder vote for the other side. */
+        if (lastPoseVoted) { poseStreak = vote === poseSide ? poseStreak + 1 : 1; poseSide = vote; }
+        else { poseStreak = 0; poseSide = null; }
       }
       const held = lastVote ? Date.now() - streakSince : 0;
 
@@ -7779,17 +7804,17 @@ function createOrientationWatcher() {
          side to protect, so it already settles on two samples.
          The arithmetic lives in orientFlipDecision(), which adds exactly one path: the face
          return (ORIENT_FACE_RETURN_FRAMES) - FRONT only, detections only, corroborated only. */
-      const { flipBar, faceReturn, confirmed } = orientFlipDecision({
-        acquiring, needsSwitch, streak, held, yawCorroborates, lock: autoOrientation, lastVote, faceStreak,
+      const { flipBar, faceReturn, poseFlip, confirmed } = orientFlipDecision({
+        acquiring, needsSwitch, streak, held, yawCorroborates, lock: autoOrientation, lastVote, faceStreak, poseStreak,
       });
 
       if (ORIENT_DEBUG) {
         const confidence = faceDetector && !fdBroken
           ? `face:${vote ?? "none"}(${(lastConfidence * 100).toFixed(0)}%)`
-          : lastFaceSeen
-            ? `pose-face:${vote}(vis ${(lastConfidence * 100).toFixed(0)}%)`
+          : lastPoseVoted
+            ? `shoulders:${vote}(sep ${_poseFacingSep.toFixed(2)}, ±${ORIENT_POSE_FACING_MARGIN} to vote, pose ${poseStreak}/${ORIENT_POSE_FLIP_FRAMES})`
             : `skin:${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}(${(lastConfidence * 100).toFixed(0)}% conf)` +
-              ` pose-face vis ${_poseFaceVis === null ? "n/a" : (_poseFaceVis * 100).toFixed(0) + "%"}`;
+              ` shoulders abstain (sep ${_poseFacingSep === null ? "n/a" : _poseFacingSep.toFixed(2)})`;
         // Status reflects the LOCK, not the raw per-frame vote: "locked" covers both a
         // clean agreeing vote AND a disagreeing one that hasn't cleared the threshold
         // yet - i.e. exactly the case that used to flip the reference frame-by-frame.
@@ -7805,7 +7830,7 @@ function createOrientationWatcher() {
           ? ` (${streak}/${ORIENT_ACQUIRE_FRAMES}f)`
           : ` (${streak}/${flipBar}f${yawCorroborates ? "+yaw" : ""}, ${held}/${ORIENT_LOCK_MS}ms` +
             `, yawΔ${yawSwing.toFixed(0)}° from ${yawWindow.edgeLost ? "edge-on (torso lost)" : "peak " + (yawWindow.peak === null ? "n/a" : yawWindow.peak.toFixed(0) + "°")}` +
-            `, face ${faceStreak}/${ORIENT_FACE_RETURN_FRAMES}${faceReturn ? " FACE-RETURN" : ""})`;
+            `, face ${faceStreak}/${ORIENT_FACE_RETURN_FRAMES}${faceReturn ? " FACE-RETURN" : ""}${poseFlip ? " POSE-FLIP" : ""})`;
         /* Pose is reported separately from the lock, because it IS separate - reading them
            on one line is what makes "locked FRONT, but edge-on right now" legible while
            tuning. ratio/score/width are the three numbers the thresholds are set from, so
@@ -7995,7 +8020,7 @@ function createOrientationWatcher() {
            may already sit past ORIENT_FACE_RETURN_FRAMES - against a BACK lock that is a
            ready-made face return, and the very next tick would withdraw the prediction on
            evidence that predates it. Cleared first, so only votes cast AFTER the dispatch count. */
-        lastVote = null; streak = 0; faceStreak = 0;
+        lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;
         if (ORIENT_DEBUG) {
           console.log(`[PEAR][ORIENT] predictive BACK: passed the side view ` +
             `(${yawWindow.edgeLost ? "torso lost at edge-on" : "peak " + yawWindow.peak.toFixed(0) + "°"}, ` +
@@ -15011,7 +15036,6 @@ function finalizeVideoClip() {
 /* BlazePose 33-point topology. Named rather than inlined because a bare `landmarks[23]`
    is unreviewable, and an off-by-one here silently gates trousers on an elbow. */
 const POSE_LANDMARK = Object.freeze({
-  NOSE: 0, LEFT_EYE: 2, RIGHT_EYE: 5,   // the face, for orientation where FaceDetector is absent - see poseFaceVisibility()
   LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12,
   LEFT_HIP: 23, RIGHT_HIP: 24,
   LEFT_KNEE: 25, RIGHT_KNEE: 26,
@@ -15787,11 +15811,12 @@ function startPresenceWatcher() {
          edge-on peak - and a single unreadable frame left the watcher with nothing fresh.
          The throttle exists to bound re-drape DISPATCHES, and still does. */
       const sig = bodyContourSignature(result);
-      /* ...and THE FACE, from the same inference, for the orientation vote where the browser has
-         no FaceDetector (see poseFaceVisibility()). Published only when a subject was read, so an
-         empty frame goes stale rather than reading as a hidden face. */
-      const faceVis = poseFaceVisibility(result);
-      if (faceVis !== null) { _poseFaceVis = faceVis; _poseFaceAt = now; }
+      /* ...and WHICH WAY THE BODY FACES, from the same inference: the signed shoulder order the
+         orientation vote reads where the browser has no FaceDetector (see poseShoulderFacing()).
+         Published only when the torso was readable, so an unreadable frame goes stale rather than
+         reading as edge-on. */
+      const facingSep = poseShoulderFacing(result);
+      if (facingSep !== null) { _poseFacingSep = facingSep; _poseFacingAt = now; }
       if (sig && Number.isFinite(sig.yaw)) {
         _torsoYawAbs = Math.abs(sig.yaw);
         _torsoYawAt  = now;

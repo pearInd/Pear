@@ -80,12 +80,12 @@ if (start === -1 || end === -1 || end < start) {
 } else {
   const api = new Function("ORIENT_YAW_TURN_DEG", "PRESENCE_PROMPT_YAW_SUPPRESS_DEG", "ORIENT_ACQUIRE_FRAMES",
     "ORIENT_LOCK_FRAMES", "ORIENT_CORROBORATED_FRAMES", "ORIENT_LOCK_MS", "ORIENT_FACE_RETURN_FRAMES",
-    "ORIENT_EDGE_ON_DEG", "ORIENT_PREDICT_DESCENT_DEG", "ORIENT_PREDICT_DWELL_MS", "ORIENT_PREDICTIVE_BACK",
+    "ORIENT_EDGE_ON_DEG", "ORIENT_PREDICT_DESCENT_DEG", "ORIENT_PREDICT_DWELL_MS", "ORIENT_PREDICTIVE_BACK", "ORIENT_POSE_FLIP_FRAMES",
     SRC.slice(start, end) +
     "\nreturn { makeTurnYawWindow," +
     " orientFlipDecision: typeof orientFlipDecision === 'function' ? orientFlipDecision : null," +
     " orientPredictBack: typeof orientPredictBack === 'function' ? orientPredictBack : null };")(
-    TURN_DEG, LOSS_DEG, ACQ_F, LOCK_F, CORR_F, LOCK_MS, FACE_F, EDGE_DEG, DESCENT, DWELL_MS, true);
+    TURN_DEG, LOSS_DEG, ACQ_F, LOCK_F, CORR_F, LOCK_MS, FACE_F, EDGE_DEG, DESCENT, DWELL_MS, true, numOr("ORIENT_POSE_FLIP_FRAMES"));
   makeTurnYawWindow = api.makeTurnYawWindow;
   orientFlipDecision = api.orientFlipDecision;
   orientPredictBack = api.orientPredictBack;
@@ -178,7 +178,7 @@ console.log("\n── §2 A MODELLED 360: how long GARMENT_BACK stays on a front
    reading every publishMs when the torso is readable; the watcher treats one older than
    ORIENT_YAW_FRESH_MS as absent, exactly as the tick does. Votes: a face inside faceDeg of
    square -> "front" (a FaceDetector detection); past backDeg -> "back"; otherwise abstain. */
-function simulate({ speed, k, faceDeg, backDeg, occludeAbove = Infinity, rule, publishMs, swapMs = 600, script }) {
+function simulate({ speed, k, faceDeg, backDeg, occludeAbove = Infinity, rule, publishMs, swapMs = 600, script, source = "face" }) {
   const facing = (deg) => { const m = ((deg % 360) + 360) % 360; return m > 180 ? 360 - m : m; };
   const yawOf = (phi) => { const y = 90 - Math.abs(90 - phi); return y > occludeAbove ? null : k * y; };
   const seg = script || [[0, 1000], [180, (180 / speed) * 1000], [180, 3000], [360, (180 / speed) * 1000], [360, 4000]];
@@ -191,7 +191,7 @@ function simulate({ speed, k, faceDeg, backDeg, occludeAbove = Infinity, rule, p
     return seg[seg.length - 1][0];
   };
   const total = seg.reduce((a, [, d]) => a + d, 0);
-  let lock = "front", lastVote = null, streak = 0, streakSince = 0, faceStreak = 0, lastSwapAt = -Infinity, busyUntil = 0;
+  let lock = "front", lastVote = null, streak = 0, streakSince = 0, faceStreak = 0, poseStreak = 0, lastSwapAt = -Infinity, busyUntil = 0;
   let lastSwapPredictive = false, predictiveUsed = false, backVisibleAt = null, wrongSideMs = 0, everBack = false;
   let reading = null, nextPublish = 0, baseline = null;
   const win = rule !== "old" ? makeTurnYawWindow() : null;
@@ -214,14 +214,17 @@ function simulate({ speed, k, faceDeg, backDeg, occludeAbove = Infinity, rule, p
     if (vote) {
       if (vote === lastVote) streak++;
       else { lastVote = vote; streak = 1; streakSince = t; if (rule === "old") baseline = yaw; }
-      faceStreak = vote === "front" ? faceStreak + 1 : 0;
+      /* source "face": the front vote is a detection. source "pose": BOTH votes are the pose model's
+         shoulder order, which counts toward the pose flip in either direction instead. */
+      faceStreak = source === "face" && vote === "front" ? faceStreak + 1 : 0;
+      poseStreak = source === "pose" ? (vote === lastVote && streak > 1 ? poseStreak + 1 : 1) : 0;
     }
     const needsSwitch = !!lastVote && lastVote !== lock;
     const held = lastVote ? t - streakSince : 0;
     let confirmed, predict = false;
     if (rule !== "old") {
       const c = win.observe(vote, lock, yaw, fresh ? reading.at : t).corroborates;
-      confirmed = orientFlipDecision({ acquiring: false, needsSwitch, streak, held, yawCorroborates: c, lock, lastVote, faceStreak }).confirmed;
+      confirmed = orientFlipDecision({ acquiring: false, needsSwitch, streak, held, yawCorroborates: c, lock, lastVote, faceStreak, poseStreak }).confirmed;
       predict = rule === "predictive" && !confirmed &&
         orientPredictBack({ acquiring: false, lock, win, yawAbs: yaw, now: t });
     } else {
@@ -236,7 +239,7 @@ function simulate({ speed, k, faceDeg, backDeg, occludeAbove = Infinity, rule, p
       if (lock === "front" && backLockedAt !== null && frontLockedAt === null) frontLockedAt = t;
     } else if (predict && t - lastSwapAt >= COOLDOWN) {
       lock = "back"; lastSwapAt = t; busyUntil = t + swapMs; lastSwapPredictive = true; predictiveUsed = true;
-      lastVote = null; streak = 0; faceStreak = 0;          // the pre-turn front streak must not count
+      lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0;   // the pre-turn front streak must not count
       if (backLockedAt === null) backLockedAt = t;
     }
     if (lock === "back") everBack = true;
@@ -602,78 +605,136 @@ console.log("\n── §8 A LIVE LOG MUST SAY WHY THE PREDICTION DID OR DID NOT 
     /PEAR_BUILD/.test(trace) && /garmentBlobIfWarm/.test(trace) && /_orientTurnSince/.test(trace));
 }
 
-console.log("\n── §9 THE FRONT HAS TO COME BACK WHERE FaceDetector DOES NOT EXIST ──");
-/* REPORTED: after a full 360 the BACK graphic stays latched on the shopper's FRONT chest.
-   VERIFIED ON THIS MACHINE: `typeof FaceDetector` is "undefined" in Chrome 152 and Edge 152 by
-   default, and "function" only with --enable-experimental-web-platform-features. So the watcher
-   runs its skin-ratio fallback, and a FRONT vote needs skin to fill ~18.5% of a 96px head band
-   (0.10 threshold + the 0.85 confidence ramp) - a face at try-on distance is far smaller. The
-   face-return path counts FaceDetector detections only, so it is inert too. Once BACK is on the
-   wire - by back votes, or by the yaw-driven predictive BACK - nothing can bring FRONT back.
-   The pose loop already runs MediaPipe on #webcam every tick, and BlazePose returns nose and eye
-   landmarks with a visibility score. Where there is no FaceDetector, THAT is the face. */
+console.log("\n── §9 BACK HAS TO COME ON WHERE FaceDetector DOES NOT EXIST - AND FRONT HAS TO COME BACK ──");
+/* THE HISTORY, because it is the point. FaceDetector is undefined by default in Chrome and Edge,
+   so the watcher ran a 96px skin-ratio fallback that almost never voted FRONT - after a 360 the
+   BACK graphic latched on the chest. Build 128 took the FRONT vote from the pose model's face
+   (min visibility of nose and eyes), and FRONT came back. Then BACK stopped triggering at all.
+   MEASURED (pose_landmarker_lite, tasks-vision 0.10.14, the catalog's own front/back photos of one
+   model): nose and eye visibility are 1.00 facing the lens AND 1.00 facing away. BlazePose predicts
+   a face on the back of the head, so the build-128 vote said FRONT while the shopper faced away -
+   the lock never left FRONT and the predictive window never opened. A "face visibility below 0.2
+   means BACK" trigger can therefore never fire either.
+   WHAT DOES SEPARATE THEM, measured on the same photos: the image-space ORDER of the shoulders,
+   normalised by torso height. (L.x - R.x) / torsoHeight = +0.76 facing the lens, -0.68 facing
+   away; unchanged at 40% size (+0.76 / -0.68); and unchanged when the image is MIRRORED
+   (+0.78 / -0.63) - BlazePose labels the shoulders by the way the subject faces, so a mirrored
+   camera cannot invert it. It is ~0 edge-on, where the vote must abstain anyway. */
+const MEASURED = { front: 0.76, back: -0.68, frontMirrored: 0.78, backMirrored: -0.63 };
 {
-  const L = SRC.match(/const POSE_LANDMARK = Object\.freeze\(\{[\s\S]*?\}\);/);
-  check("POSE_LANDMARK carries the documented BlazePose face indices (nose 0, eyes 2 and 5)",
-    !!L && /NOSE: 0/.test(L[0]) && /LEFT_EYE: 2/.test(L[0]) && /RIGHT_EYE: 5/.test(L[0]), L && L[0]);
+  check("POSE_LANDMARK no longer carries the face - nothing may vote on BlazePose face visibility again",
+    !/NOSE: 0/.test((SRC.match(/const POSE_LANDMARK = Object\.freeze\(\{[\s\S]*?\}\);/) || [""])[0]) &&
+    !/function poseFaceVote\(/.test(SRC) && !/_poseFaceVis/.test(SRC));
 
-  const f0 = SRC.indexOf("function poseFaceVisibility(");
-  const v0 = SRC.indexOf("function poseFaceVote(");
+  const f0 = SRC.indexOf("function poseShoulderFacing(");
+  const v0 = SRC.indexOf("function poseFacingVote(");
+  const MARGIN = numOr("ORIENT_POSE_FACING_MARGIN");
+  check("ORIENT_POSE_FACING_MARGIN sits well inside what was measured, and well clear of edge-on noise",
+    MARGIN >= 0.15 && MARGIN <= 0.4 &&
+    MARGIN < Math.min(MEASURED.front, -MEASURED.back, MEASURED.frontMirrored, -MEASURED.backMirrored) / 2,
+    String(MARGIN));
   if (f0 === -1 || v0 === -1) {
-    check("poseFaceVisibility() and poseFaceVote() exist", false, "not implemented");
+    check("poseShoulderFacing() and poseFacingVote() exist", false, "not implemented");
   } else {
     const grab = (i) => SRC.slice(i, SRC.indexOf("\n}\n", i) + 2);
-    const api = new Function("POSE_LANDMARK", "primaryPoseIndex", "ORIENT_POSE_FACE", "ORIENT_POSE_FACE_VIS",
-      "ORIENT_YAW_FRESH_MS", grab(f0) + grab(v0) + "\nreturn { poseFaceVisibility, poseFaceVote };")(
-      { NOSE: 0, LEFT_EYE: 2, RIGHT_EYE: 5 }, (sets) => (sets.length ? sets.length - 1 : -1), true,
-      numOr("ORIENT_POSE_FACE_VIS"), FRESH_MS);
-    const person = (nose, le, re) => Array.from({ length: 33 }, (_, i) =>
-      ({ x: 0.5, y: 0.5, visibility: i === 0 ? nose : i === 2 ? le : i === 5 ? re : 0.9 }));
-    check("visibility is the WEAKEST of nose and both eyes - a profile loses the far eye and must not read as a face",
-      api.poseFaceVisibility({ landmarks: [person(0.99, 0.97, 0.4)] }) === 0.4);
-    check("...read from the primary subject, like every other pose consumer",
-      api.poseFaceVisibility({ landmarks: [person(0.1, 0.1, 0.1), person(0.95, 0.96, 0.97)] }) === 0.95);
-    check("...and null with nobody in frame", api.poseFaceVisibility({ landmarks: [] }) === null &&
-      api.poseFaceVisibility(null) === null);
-    const VIS = numOr("ORIENT_POSE_FACE_VIS");
-    check("ORIENT_POSE_FACE_VIS is a real bar, well above MediaPipe's own 0.5 'visible' line",
-      VIS >= 0.7 && VIS < 1, String(VIS));
-    check("a fresh, clearly visible face votes FRONT",
-      api.poseFaceVote({ vis: 0.95, at: 1000, now: 1100 }) === "front");
-    check("...a hidden or partial face abstains - it NEVER votes back (an absence is the weak direction)",
-      api.poseFaceVote({ vis: 0.2, at: 1000, now: 1100 }) === null &&
-      api.poseFaceVote({ vis: VIS - 0.01, at: 1000, now: 1100 }) === null);
-    check("...a stale reading abstains, and ?pose_face=0 turns it off",
-      api.poseFaceVote({ vis: 0.95, at: 0, now: FRESH_MS + 1 }) === null &&
-      api.poseFaceVote({ enabled: false, vis: 0.95, at: 1000, now: 1100 }) === null);
+    const L = { LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12, LEFT_HIP: 23, RIGHT_HIP: 24 };
+    const api = new Function("POSE_LANDMARK", "primaryPoseIndex", "torsoReadable", "BODY_TRACK_MIN_VISIBILITY",
+      "ORIENT_POSE_FACING", "ORIENT_POSE_FACING_MARGIN", "ORIENT_YAW_FRESH_MS",
+      grab(f0) + grab(v0) + "\nreturn { poseShoulderFacing, poseFacingVote };")(
+      L, (sets) => (sets.length ? sets.length - 1 : -1),
+      (lm, min) => [11, 12, 23, 24].every((i) => lm[i] && lm[i].visibility >= min), 0.5,
+      true, MARGIN, FRESH_MS);
+    /* A skeleton whose shoulder order reproduces a measured value: torso 0.4 tall, shoulders
+       centred on x = 0.5 with (L.x - R.x) = sep * 0.4. */
+    const body = (sep, vis = 1) => {
+      const lm = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: vis }));
+      lm[11] = { x: 0.5 + (sep * 0.4) / 2, y: 0.3, visibility: vis };
+      lm[12] = { x: 0.5 - (sep * 0.4) / 2, y: 0.3, visibility: vis };
+      lm[23] = { x: 0.55, y: 0.7, visibility: vis }; lm[24] = { x: 0.45, y: 0.7, visibility: vis };
+      return lm;
+    };
+    const near = (a, b) => a !== null && Math.abs(a - b) < 1e-9;
+    check("the signed shoulder order is (L.x - R.x) over torso height: + facing the lens, - facing away",
+      near(api.poseShoulderFacing({ landmarks: [body(MEASURED.front)] }), MEASURED.front) &&
+      near(api.poseShoulderFacing({ landmarks: [body(MEASURED.back)] }), MEASURED.back));
+    check("...from the primary subject, and null with no readable torso",
+      near(api.poseShoulderFacing({ landmarks: [body(MEASURED.back), body(MEASURED.front)] }), MEASURED.front) &&
+      api.poseShoulderFacing({ landmarks: [body(MEASURED.front, 0.2)] }) === null &&
+      api.poseShoulderFacing({ landmarks: [] }) === null && api.poseShoulderFacing(null) === null);
+    const vote = (sep, at = 1000, now = 1100, enabled) => api.poseFacingVote({ enabled, sep, at, now });
+    check("every measured FRONT reading - as shot and mirrored - votes FRONT",
+      vote(MEASURED.front) === "front" && vote(MEASURED.frontMirrored) === "front");
+    check("every measured BACK reading - as shot and mirrored - votes BACK",
+      vote(MEASURED.back) === "back" && vote(MEASURED.backMirrored) === "back");
+    check("edge-on (shoulders overlapping) abstains in both directions",
+      vote(0) === null && vote(MARGIN * 0.9) === null && vote(-MARGIN * 0.9) === null);
+    check("...a stale reading abstains, and ?pose_facing=0 turns the vote off",
+      vote(MEASURED.back, 0, FRESH_MS + 1) === null && vote(MEASURED.back, 1000, 1100, false) === null);
   }
 
   const w0 = SRC.indexOf("function createOrientationWatcher()");
   const watcher = SRC.slice(w0, SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0));
-  check("with no FaceDetector, classify() takes the pose model's face BEFORE the skin heuristic",
-    /const poseVote = poseFaceVote\(\{ vis: _poseFaceVis, at: _poseFaceAt, now: Date\.now\(\) \}\);/.test(watcher) &&
-    /if \(poseVote\) \{[^}]*vote = poseVote;[^}]*faceSeen = true;/.test(watcher) &&
+  check("with no FaceDetector, classify() takes the shoulder order BEFORE the skin heuristic, in BOTH directions",
+    /const poseVote = poseFacingVote\(\{ sep: _poseFacingSep, at: _poseFacingAt, now: Date\.now\(\) \}\);/.test(watcher) &&
+    /if \(poseVote\) \{[^}]*vote = poseVote;[^}]*posed = true;/.test(watcher) &&
     /else vote = skinRatioVote\(px\);/.test(watcher));
-  check("...so the face streak - and the fast face return - counts it like a detection",
-    /lastFaceSeen = faceSeen;/.test(watcher));
-  check("...and the watcher says which engine it armed", /MediaPipe face landmarks/.test(watcher));
+  check("...and a shoulder vote is NOT dressed up as a face - faceSeen stays false for it",
+    !/if \(poseVote\) \{[^}]*faceSeen = true/.test(watcher));
+  check("the tick counts consecutive shoulder votes per side into poseStreak",
+    /lastPoseVoted = posed;/.test(watcher) &&
+    /if \(lastPoseVoted\) \{ poseStreak = vote === poseSide \? poseStreak \+ 1 : 1; poseSide = vote; \}/.test(watcher));
+  check("...and hands it to orientFlipDecision()", /orientFlipDecision\(\{[^}]*poseStreak[^}]*\}\)/.test(watcher));
+  check("the watcher names the engine it armed", /MediaPipe shoulder order/.test(watcher));
   const p0 = SRC.indexOf("function startPresenceWatcher");
   const pose = SRC.slice(p0, SRC.indexOf("/* ── end body-presence gate ── */", p0));
-  check("the pose loop publishes the face visibility on every tick, beside the yaw",
-    /const faceVis = poseFaceVisibility\(result\);/.test(pose) && /_poseFaceVis = faceVis;/.test(pose) &&
-    pose.indexOf("_poseFaceVis = faceVis;") < pose.indexOf("now - lastTopologyAt >= BODY_TOPOLOGY_SAMPLE_MS"));
+  check("the pose loop publishes the shoulder order on every tick, beside the yaw",
+    /const facingSep = poseShoulderFacing\(result\);/.test(pose) && /_poseFacingSep = facingSep;/.test(pose) &&
+    pose.indexOf("_poseFacingSep = facingSep;") < pose.indexOf("now - lastTopologyAt >= BODY_TOPOLOGY_SAMPLE_MS"));
+
+  if (orientFlipDecision) {
+    const POSE_F = numOr("ORIENT_POSE_FLIP_FRAMES");
+    check("ORIENT_POSE_FLIP_FRAMES is two - one reading is a hair trigger, and it is still under the corroborated bar",
+      POSE_F === 2 && POSE_F < CORR_F);
+    const base = { acquiring: false, needsSwitch: true, held: 0, faceStreak: 0, yawCorroborates: true };
+    const toBack = orientFlipDecision({ ...base, lock: "front", lastVote: "back", streak: POSE_F, poseStreak: POSE_F });
+    const toFront = orientFlipDecision({ ...base, lock: "back", lastVote: "front", streak: POSE_F, poseStreak: POSE_F });
+    check("the pose flip is SYMMETRIC: two shoulder votes after a corroborated turn confirm BACK...",
+      toBack.confirmed === true && toBack.poseFlip === true, JSON.stringify(toBack));
+    check("...and FRONT, on the same bar", toFront.confirmed === true && toFront.poseFlip === true, JSON.stringify(toFront));
+    const noTurn = orientFlipDecision({ ...base, yawCorroborates: false, lock: "front", lastVote: "back", streak: POSE_F + 1, poseStreak: POSE_F + 1 });
+    check("...but not without a corroborated torso turn (a head over the shoulder moves no shoulders)",
+      noTurn.confirmed === false, JSON.stringify(noTurn));
+    const skinVotes = orientFlipDecision({ ...base, lock: "front", lastVote: "back", streak: POSE_F, poseStreak: 0 });
+    check("...and skin votes do not ride the pose bar", skinVotes.confirmed === false, JSON.stringify(skinVotes));
+  }
 
   if (orientFlipDecision && orientPredictBack) {
-    /* The model's "front" vote IS the face channel, so faceDeg -1 is the skin-only engine at
-       try-on distance (no front vote ever), and 45 is BlazePose seeing both eyes. */
-    const skinOnly = simulate({ speed: 90, k: 1, faceDeg: -1, backDeg: 150, rule: "predictive", publishMs: 240 });
-    const poseFace = simulate({ speed: 90, k: 1, faceDeg: 45, backDeg: 150, rule: "predictive", publishMs: 240 });
-    console.log(`        full 360, skin-only engine: final=${skinOnly.finalLock}   |   with pose face: final=${poseFace.finalLock}, leak ${poseFace.leakMs}ms`);
-    check("THE BUG, modelled: with no face channel a full 360 ends LATCHED on BACK",
-      skinOnly.everBack === true && skinOnly.finalLock === "back", JSON.stringify(skinOnly));
-    check("THE FIX: with the pose model's face the same 360 ends on FRONT, inside ORIENT_FACE_RETURN_FRAMES",
-      poseFace.finalLock === "front" && poseFace.leakMs !== null && poseFace.leakMs <= (FACE_F - 1) * SAMPLE_MS,
-      JSON.stringify(poseFace));
+    /* The model's vote channel, by source. build 128: the face vote said FRONT at every angle.
+       Now: shoulder order votes FRONT within ~70 degrees of the lens and BACK within ~70 of away. */
+    const b128 = simulate({ speed: 90, k: 1, faceDeg: 181, backDeg: 999, rule: "predictive", publishMs: 240 });
+    const now = simulate({ speed: 90, k: 1, faceDeg: 70, backDeg: 110, rule: "predictive", publishMs: 240, source: "pose" });
+    const skin = simulate({ speed: 90, k: 1, faceDeg: -1, backDeg: 150, rule: "predictive", publishMs: 240 });
+    console.log(`        build 128 (pose face votes FRONT everywhere): everBack=${b128.everBack}`);
+    console.log(`        shoulder order: BACK at ${now.backLockedAt}ms (back faces the lens at ${now.backVisibleAt}ms), final=${now.finalLock}, return leak ${now.leakMs}ms`);
+    console.log(`        skin-only fallback: final=${skin.finalLock}`);
+    check("THE BACK BUG, modelled: a face vote that fires facing away never lets BACK on at all",
+      b128.everBack === false);
+    check("THE FIX: shoulder order locks BACK by the time the back faces the lens...",
+      now.backLockedAt !== null && now.backLockedAt <= now.backVisibleAt + SAMPLE_MS, JSON.stringify(now));
+    /* Measured against the face engine on the same turn, by the time BACK sits on a body that is facing
+       the lens (phi < 90). Shoulder votes for FRONT begin far earlier than a face is detectable, and the
+       flip then waits only for yaw corroboration - so FRONT returns at an earlier body angle, and
+       "ms after the first front vote" would be the wrong yardstick. */
+    const faceEngine = simulate({ speed: 90, k: 1, faceDeg: 35, backDeg: 150, rule: "predictive", publishMs: 240 });
+    check("...and the same 360 returns to FRONT, the back on a front-facing body no longer than with a face detector",
+      now.finalLock === "front" && now.wrongSideMs <= faceEngine.wrongSideMs,
+      JSON.stringify({ shoulders: now.wrongSideMs, faceDetector: faceEngine.wrongSideMs }));
+    check("(and the skin-only fallback still latches, which is why the pose vote exists)",
+      skin.finalLock === "back");
+    const glance = simulate({ speed: 90, k: 1, faceDeg: 70, backDeg: 110, rule: "predictive", publishMs: 240, source: "pose",
+      script: [[0, 1000], [90, 1000], [90, 1200], [0, 1000], [0, 2000]] });
+    check("a held profile check still never puts GARMENT_BACK on the wire with the shoulder vote in play",
+      glance.everBack === false, JSON.stringify(glance));
   }
 }
 
