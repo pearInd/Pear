@@ -19,7 +19,7 @@
          all, so a shipped CSS change was served from cache indefinitely while
          app.js?v= was being bumped every deploy. Kept in step with app.js's
          version so there is one number to reason about, not two. -->
-    <link rel="stylesheet" href="style.css?v=35">
+    <link rel="stylesheet" href="style.css?v=36">
 </head>
 <body>
 
@@ -178,16 +178,26 @@
                  (WOMEN_TOPS_EU_SIZE_CHART) - on a tops/ambiguous garment; body-fit
                  matching itself is unchanged either way. See currentUserGender's and
                  currentSizeIsWomensTops's own comments in app.js. -->
-            <div class="form-group">
+            <!-- LIQUID GLASS SWITCH (2026-09-15): the same radiogroup, restyled to the
+                 language switch's glass language and made draggable - tap either half,
+                 or press the pill and drag it across; setupGenderSwitch() in app.js.
+                 The state contract is untouched: .gender-tab / data-gender / role="radio"
+                 are what setGender() reads and writes, and a tap on the active option
+                 still clears it back to unset. Centred as a unit - label and switch. -->
+            <div class="form-group gender-group">
                 <span class="form-group__label" id="genderToggleLabel" data-i18n="labelGender">מגדר:</span>
-                <div class="gender-toggle" id="genderToggle" role="radiogroup" aria-labelledby="genderToggleLabel" data-active="">
-                    <button class="gender-tab" type="button" role="radio" aria-checked="false" data-gender="men">
-                        <span data-i18n="genderMen">גבר</span>
-                    </button>
-                    <button class="gender-tab" type="button" role="radio" aria-checked="false" data-gender="women">
-                        <span data-i18n="genderWomen">אישה</span>
-                    </button>
-                    <span class="gender-toggle__ind" aria-hidden="true"></span>
+                <div class="gender-switch-wrapper">
+                    <div class="gender-toggle liquid-glass-track" id="genderToggle" role="radiogroup" aria-labelledby="genderToggleLabel" data-active="">
+                        <span class="liquid-glass-pill" aria-hidden="true"></span>
+                        <button class="gender-tab gender-option" type="button" role="radio" aria-checked="false" data-gender="men">
+                            <svg class="gender-option__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="6.5" cy="9.5" r="4"/><path d="M9.4 6.6 14 2M10.2 2H14v3.8"/></svg>
+                            <span data-i18n="genderMen">גבר</span>
+                        </button>
+                        <button class="gender-tab gender-option" type="button" role="radio" aria-checked="false" data-gender="women">
+                            <svg class="gender-option__icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="6" r="4"/><path d="M8 10v5M5.6 12.6h4.8"/></svg>
+                            <span data-i18n="genderWomen">אישה</span>
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -809,7 +819,7 @@
   <span class="lang-switch__thumb" aria-hidden="true"></span>
 </button>
 
-<script type="module" src="app.js?v=140"></script>
+<script type="module" src="app.js?v=141"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
      header shrink. Pure enhancement - touches no app.js logic or state. -->
 <script src="mobile-ux.js" defer></script>

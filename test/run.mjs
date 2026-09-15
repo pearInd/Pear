@@ -245,6 +245,15 @@
                       AUTO_ANGLE one. Front-only runs - most of the catalog - previously
                       reached connectRealtime() with their reference never fetched,
                       decoded or content-validated at all.
+     gender-switch    The Liquid Glass Men/Women switch (setupGenderSwitch), run for real in
+                      jsdom. A gesture layer added on top of a control that already had a
+                      click handler fails through its STATE: a tap handled twice clears the
+                      choice it just made, and the click a browser may send after a drag
+                      does the same. Asserts one setGender() per tap, tap-to-clear kept
+                      (optional field), drag past half commits / short of half springs back
+                      / never clears, the trailing click swallowed but a real tap after it
+                      not, rubber band, pointercancel, RTL by measurement, and the markup /
+                      CSS contract (centred, glass, --spring snap, pan-y, reduced motion).
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
@@ -307,6 +316,7 @@ const SUITES = [
   ["mp4-export", "mp4-export.test.mjs"],
   ["conditioning-trace", "conditioning-trace.test.mjs"],
   ["stream-continuity", "stream-continuity.test.mjs"],
+  ["gender-switch", "gender-switch.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

@@ -2200,6 +2200,116 @@ function setGender(gender) {
   if (sizeFormEl && !sizeFormEl.hidden) calculateSize();
 }
 
+/* ── The gender switch's input layer: tap AND press-and-drag ─────────────────────
+   Liquid Glass physics for #genderToggle, the model the language switch uses
+   (setupLangToggle in i18n.js), on top of the radiogroup setGender() already owns.
+   ONE STATE PATH. Nothing here writes currentUserGender, the classes or aria-checked - a
+   gesture ends in setGender() or in nothing, so size calculation and every reader of the
+   gender stay exactly as they were.
+   A TAP IS STILL A CLICK. A press that moves less than GENDER_DRAG_SLOP_PX never captures the
+   pointer and lets the button's native click run setGender() - which keeps its tap-the-active-
+   option-to-clear behaviour (optional field, CLAUDE.md §2.5) and Enter/Space on a focused
+   option. Past the slop the gesture is a drag: the pointer is captured, the pill follows it 1:1
+   with rubber-band resistance past either end, and on release the half under the pill's centre
+   wins - past 50% commits, short of it springs back. A drag never CLEARS a choice (releasing
+   over the side already chosen is "no change"), and the click a browser may still dispatch
+   after a captured drag is swallowed so it cannot toggle that choice straight back off.
+   DIRECTION-AGNOSTIC BY MEASUREMENT: slots are read from each option's offsetLeft, which is
+   physical in both LTR and RTL, so no mirrored math - the Hebrew layout (men on the right)
+   drags correctly with no dir branch. The RESTING position stays CSS-owned (data-active +
+   [dir]); the inline transform exists only while a drag is live.
+   pointercancel - a vertical swipe taking the gesture for page scroll, which touch-action:
+   pan-y permits - re-settles without committing. */
+const GENDER_DRAG_SLOP_PX   = 6;      // below this a press is a tap, and the native click owns it
+const GENDER_RUBBER_BAND    = 0.28;   // share of the overshoot the pill follows past either end
+const GENDER_CLICK_SWALLOW_MS = 400;  // how long after a drag a stray click is ignored
+
+/** @param {HTMLElement|null} track  #genderToggle */
+function setupGenderSwitch(track) {
+  if (!track || track.dataset.switchWired) return;
+  track.dataset.switchWired = "1";
+  const pill = track.querySelector(".liquid-glass-pill");
+  let gesture = null;
+  let swallowClickUntil = 0;
+
+  track.addEventListener("click", (e) => {
+    if (Date.now() < swallowClickUntil) { swallowClickUntil = 0; return; }   // the tail of a drag, not a tap
+    const btn = e.target.closest(".gender-tab");
+    if (btn) setGender(btn.dataset.gender);
+  });
+  if (!pill) return;   // no pill in the markup - taps still work, there is just nothing to drag
+
+  const options = () => Array.from(track.querySelectorAll(".gender-tab"));
+  const nearestTo = (centre) => {
+    let best = null, bestD = Infinity;
+    for (const b of options()) {
+      const d = Math.abs(b.offsetLeft + b.offsetWidth / 2 - centre);
+      if (d < bestD) { best = b; bestD = d; }
+    }
+    return best;
+  };
+
+  track.addEventListener("pointerdown", (e) => {
+    swallowClickUntil = 0;   // a new press: any click trailing the last drag has already fired
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const opts = options();
+    if (opts.length < 2) return;
+    const lefts = opts.map((b) => b.offsetLeft);
+    const pillW = pill.offsetWidth;
+    const active = opts.find((b) => b.dataset.gender === currentUserGender);
+    /* With nothing chosen yet the pill appears under the finger, clamped into the track;
+       clientLeft converts the border-box rect into offsetLeft's padding-box frame. */
+    const r = track.getBoundingClientRect();
+    const underPointer = e.clientX - r.left - track.clientLeft - pillW / 2;
+    const min = Math.min(...lefts), max = Math.max(...lefts);
+    gesture = {
+      id: e.pointerId, x0: e.clientX, min, max, pillW,
+      anchor: pill.offsetLeft,   // where translate 0 sits - offsetLeft ignores transforms
+      start: active ? active.offsetLeft : Math.min(max, Math.max(min, underPointer)),
+      left: null, dragging: false,
+    };
+    gesture.left = gesture.start;
+  });
+
+  track.addEventListener("pointermove", (e) => {
+    const g = gesture;
+    if (!g || e.pointerId !== g.id) return;
+    const dx = e.clientX - g.x0;
+    if (!g.dragging) {
+      if (Math.abs(dx) < GENDER_DRAG_SLOP_PX) return;
+      g.dragging = true;
+      try { track.setPointerCapture(g.id); } catch (_) { /* no capture - the drag still tracks while over the track */ }
+      track.classList.add("is-dragging");
+    }
+    let left = g.start + dx;
+    if (left < g.min) left = g.min - (g.min - left) * GENDER_RUBBER_BAND;
+    else if (left > g.max) left = g.max + (left - g.max) * GENDER_RUBBER_BAND;
+    g.left = left;
+    pill.style.transform = `translate3d(${(left - g.anchor).toFixed(1)}px, 0, 0)`;
+    const over = nearestTo(left + g.pillW / 2);
+    if (over) track.dataset.preview = over.dataset.gender;
+  });
+
+  const endGesture = (e, commit) => {
+    const g = gesture;
+    if (!g || e.pointerId !== g.id) return;
+    gesture = null;
+    if (!g.dragging) return;   // a tap - the native click that follows runs setGender()
+    swallowClickUntil = Date.now() + GENDER_CLICK_SWALLOW_MS;
+    try { track.releasePointerCapture(g.id); } catch (_) { /* already released */ }
+    /* Re-arm the spring BEFORE dropping the inline transform, in the same frame, so the snap
+       animates from where the finger left the pill to the CSS resting slot. */
+    track.classList.remove("is-dragging");
+    delete track.dataset.preview;
+    pill.style.transform = "";
+    if (!commit) return;
+    const target = nearestTo(g.left + g.pillW / 2);
+    if (target && target.dataset.gender !== currentUserGender) setGender(target.dataset.gender);
+  };
+  track.addEventListener("pointerup", (e) => endGesture(e, true));
+  track.addEventListener("pointercancel", (e) => endGesture(e, false));
+}
+
 function updateProgress() {
   const fields = ["height", "weight", "chest", "waist", "legs"];
   const filled = fields.filter((f) => $(f) && $(f).value).length;
@@ -19643,13 +19753,10 @@ function init() {
   });
   $("btn-next-screen").addEventListener("click", onSizeFormContinue);
 
-  // Gender selector (Men/Women) - segmented toggle, same delegated-click pattern used
-  // for the TOP/BOTTOM outfit toggle (#gdTabs) elsewhere in this function.
-  const genderToggleEl = $("genderToggle");
-  if (genderToggleEl) genderToggleEl.addEventListener("click", (e) => {
-    const btn = e.target.closest(".gender-tab");
-    if (btn) setGender(btn.dataset.gender);
-  });
+  // Gender selector (Men/Women) - Liquid Glass switch: the delegated click (taps, keyboard)
+  // and the press-and-drag layer, wired together so a drag can swallow its trailing click.
+  // See setupGenderSwitch().
+  setupGenderSwitch($("genderToggle"));
 
   // Explicit open only - startCamera() is also called from flipCamera() and
   // reinitCameraForOrientation(), where the page shouldn't jump since the user is
