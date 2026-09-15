@@ -6179,7 +6179,7 @@ const ORIENT_POSE_FLIP_FRAMES    = 2;    // shoulder-order votes needed for a co
 const ORIENT_POSE_PASS = (() => {
   try { return new URLSearchParams(location.search).get("pose_pass") !== "0"; } catch (_) { return true; }
 })();
-/* ── THE EARLY TURN TRIGGER - ON BY DEFAULT at 20 degrees, gated at 60 deg/s ─────────────────────────────
+/* ── THE EARLY TURN TRIGGER - ON BY DEFAULT at 20 degrees, gated at 45 deg/s (60 until 2026-09-15) ────────
    WHY IT EXISTS. Traced client side, a swap costs ~nothing: the Blobs are pinned in memory, the
    catalog's rear pair is 43KB/38KB, @decartai/sdk sends it as one set_image message on the signaling
    WebSocket, and the reference is pre-encoded (preEncodeReference). What remains is Decart switching its
@@ -6228,7 +6228,7 @@ const ORIENT_EARLY_TURN_DEFAULT_DEG = 20;
    (the vote path carries the return); clamped like ?early_turn. Which path sent FRONT in that clip is
    what one ?orient_debug=1 log of a turn would confirm. */
 const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 35;
-const ORIENT_EARLY_TURN_DEFAULT_SPEED = 60;
+const ORIENT_EARLY_TURN_DEFAULT_SPEED = 45;
 /* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
    rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;
    unparseable keeps the default; capped at 1000.
@@ -6236,7 +6236,27 @@ const ORIENT_EARLY_TURN_DEFAULT_SPEED = 60;
    degrees ungated an 18-degree weight shift held fires (and, with jitter, a 14-degree sway); gated at 60
    neither ever fires. The cost of the gate is turn benefit: a slow turn does not clear it either. A gate
    high enough to stop fast poses (80) stops slow turns from benefiting at all, and jitter lets some fast
-   poses back through. The gate reads the pose loop's own yaw and reading time; no vote or engine changes. */
+   poses back through. The gate reads the pose loop's own yaw and reading time; no vote or engine changes.
+   ── LOWERED 60 -> 45 (2026-09-15), a PRODUCT DECISION on the numbers below ──────────────────────────────
+   REPORTED, from a live clip: on the way out the back graphic popped in only once the back was already
+   square to the lens; on the way back it seemed to leave early. Not yet confirmed with ?orient_debug=1.
+   WHAT THE MODEL SAYS WAS HAPPENING (turn-yaw-window §11). The gate is in the pose model's |yaw| units,
+   and MediaPipe compresses depth: at k=0.75 a real 60 deg/s turn RISES at ~45. Gated at 60 the early
+   trigger never fired on that turn - BACK came from the vote path at ~135-150 degrees of body rotation and
+   rendered after the back faced the lens: 783ms of plain back at 700ms latency, 1053ms at 1000ms.
+   At 45 that turn fires early: 0ms / 120ms. Full 360s (§11's grid): wrong garment 979 -> 563ms at 700ms,
+   1438 -> 938ms at 1000ms. Turns at 90-120 deg/s already cleared 60 and are unchanged.
+   THE COST, and why 45 and not lower. Every gate under 60 loses the guarantee that a held weight shift
+   never swaps: with +/-4 degrees of yaw jitter an 18-degree shift held 1.5s now fires ~1 time in 10
+   (~100ms of the back print, withdrawn), and a slow look to 30 degrees held 1s ~2 in 10 (~350ms). At 40
+   those were 2/10 (~175ms) and 5/10 (~800ms) for a better full-360 mean (354 / 729ms); 50 kept the
+   weight-shift miss and gave back the slow-turn fix. Standing still and swaying still never fire.
+   COUPLED, deliberately: ORIENT_TURN_START_SPEED follows this gate, so body re-drapes now also defer on a
+   torso rising at 45 deg/s - the wire has to be clear at exactly the speed the trigger can now fire at.
+   CONSIDERED AND DECLINED in the same pass: an outbound threshold of 15 (only fast turns gain, ~95-125ms;
+   a quick twist to 25 fires 10/10 instead of 5/10), and holding BACK on the return until ~30-35 degrees
+   from the lens (the back print on a front-facing chest 63-516ms longer, and no plain-back time removed -
+   past side-on a real shirt shows no back print). ?early_turn_speed=60 restores the old gate live. */
 const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
   let raw = null;
   try { raw = new URLSearchParams(location.search).get("early_turn_speed"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_SPEED; }

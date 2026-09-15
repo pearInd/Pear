@@ -1056,8 +1056,41 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       for (const [name, script] of Object.entries(fastPoses)) prodFast.push({ name, yawNoise, ...fires(script, { earlyDeg: PD, minSpeed: PS, returnDeg: PR, yawNoise }) });
     }
     for (const r of prodFast) console.log(`        default, ±${r.yawNoise}° jitter, ${r.name}: fires ${r.n}/10, every one withdrawn to FRONT: ${r.stuck === 0}`);
-    check("under the default, standing still, swaying and a held weight shift never swap - with or without yaw jitter",
-      prodSlow.every((r) => r.n === 0), JSON.stringify(prodSlow.filter((r) => r.n)));
+    /* THE GATE WENT 60 -> 45 (2026-09-15) - see ORIENT_EARLY_TURN_DEFAULT_SPEED. Gated at 60 the default never swapped
+       for any slow pose; every gate under 60 gives up part of that, and these checks pin exactly how much 45 gives up,
+       so a further drop has to restate the cost rather than slip past a loosened "never". */
+    const slowLook = { "slow look to 30°, held 1s": [[0, 1000], [30, 900], [30, 1000], [0, 900], [0, 3000]] };
+    for (const yawNoise of [0, 4]) for (const [name, script] of Object.entries(slowLook)) prodSlow.push({ name, yawNoise, ...fires(script, { earlyDeg: PD, minSpeed: PS, returnDeg: PR, yawNoise }) });
+    for (const r of prodSlow) console.log(`        default, ±${r.yawNoise}° jitter, ${r.name}: fires ${r.n}/10, every one withdrawn to FRONT: ${r.stuck === 0}`);
+    const slowRow = (name, yawNoise) => prodSlow.find((r) => r.name === name && r.yawNoise === yawNoise);
+    check("under the default, standing still and swaying never swap - with or without yaw jitter",
+      prodSlow.filter((r) => r.name === "stand still" || r.name.startsWith("sway")).every((r) => r.n === 0),
+      JSON.stringify(prodSlow.filter((r) => (r.name === "stand still" || r.name.startsWith("sway")) && r.n)));
+    check("...and without yaw jitter, neither a held weight shift nor a slow look to 30 degrees swaps",
+      prodSlow.filter((r) => r.yawNoise === 0).every((r) => r.n === 0), JSON.stringify(prodSlow.filter((r) => r.yawNoise === 0 && r.n)));
+    check("THE STATED COST OF 45: with ±4° jitter a held 18-degree weight shift swaps at most 1 time in 10, a slow look to 30 at most 2",
+      slowRow("weight shift to 18°, held 1.5s", 4).n <= 1 && slowRow("slow look to 30°, held 1s", 4).n <= 2,
+      JSON.stringify(prodSlow.filter((r) => r.yawNoise === 4)));
+    check("...and every slow pose that does swap is withdrawn to FRONT",
+      prodSlow.every((r) => r.stuck === 0), JSON.stringify(prodSlow.filter((r) => r.stuck)));
+
+    /* THE REASON FOR 45. The gate is in the pose model's |yaw| units, and depth compression (k=0.75) turns a real
+       60 deg/s turn into a ~45 rise - under the old gate the early trigger never fired on it, and BACK came from the
+       vote path after the back already faced the lens. */
+    const slowTurns = [];
+    for (const k of [1, 0.75]) for (const readableTo of [90, 60]) for (const swapMs of [700, 1000]) {
+      const script = [[0, 1000], [360, 6000], [360, 3000]];
+      const firstBack = (r) => { const e = r.sent.find((x) => x.side === "back"); return e ? e.body : null; };
+      const old = simulateGap({ script, k, readableTo, swapMs, earlyDeg: PD, minSpeed: 60, returnDeg: PR });
+      const now = simulateGap({ script, k, readableTo, swapMs, earlyDeg: PD, minSpeed: PS, returnDeg: PR });
+      slowTurns.push({ k, readableTo, swapMs, oldBack: firstBack(old), nowBack: firstBack(now), oldWrong: wrongMs(old), nowWrong: wrongMs(now), completed: now.completed });
+    }
+    for (const r of slowTurns) console.log(`        60°/s 360, k=${r.k} readable to ${r.readableTo}°, ${r.swapMs}ms: BACK sent at ${r.oldBack}° gated at 60 -> ${r.nowBack}° at ${PS} | wrong garment ${r.oldWrong} -> ${r.nowWrong}ms`);
+    check("a 60 deg/s turn whose compressed |yaw| rose under the old gate now sends BACK in the front half of the turn",
+      slowTurns.filter((r) => r.k === 0.75).every((r) => r.oldBack >= 90 && r.nowBack !== null && r.nowBack < 90),
+      JSON.stringify(slowTurns.filter((r) => r.k === 0.75)));
+    check("...and no 60 deg/s turn completes worse than under the old gate",
+      slowTurns.every((r) => r.completed && r.nowWrong <= r.oldWrong), JSON.stringify(slowTurns.filter((r) => !r.completed || r.nowWrong > r.oldWrong)));
     check("...and every fast pose it does fire on ends back on FRONT (the stated cost: the other side's graphic until the withdrawal lands)",
       prodFast.every((r) => r.stuck === 0), JSON.stringify(prodFast.filter((r) => r.stuck)));
 
@@ -1216,9 +1249,9 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     const iife = SRC.slice(sp0, SRC.indexOf("})();", sp0) + 5).replace("const ORIENT_EARLY_TURN_MIN_SPEED = ", "return ");
     const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_DEFAULT_SPEED", iife)({ search }, numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED"));
     const got = ["", "?early_turn_speed=", "?early_turn_speed=0", "?early_turn_speed=x", "?early_turn_speed=-1", "?early_turn_speed=60", "?early_turn_speed=5000"].map((q) => [q, parse(q)]);
-    check("GATED BY DEFAULT: ?early_turn_speed omitted, empty or unparseable is ORIENT_EARLY_TURN_DEFAULT_SPEED (60); 0 or negative removes the gate; capped at 1000",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED") === 60 &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([60, 60, 0, 60, 0, 60, 1000]), JSON.stringify(got));
+    check("GATED BY DEFAULT: ?early_turn_speed omitted, empty or unparseable is ORIENT_EARLY_TURN_DEFAULT_SPEED (45); 0 or negative removes the gate; capped at 1000; =60 restores the old gate",
+      numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED") === 45 &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([45, 45, 0, 45, 0, 60, 1000]), JSON.stringify(got));
   }
 
   /* PRE-ENCODED REFERENCES - the wrapper and the encoder, run against a fake SDK client and FileReader. */
@@ -1332,9 +1365,10 @@ console.log("\n── §12 A TURN THAT IS STARTING OWNS THE WIRE - the late BACK
      "return { makeBodyTopologyTracker, orientYawRise, orientTurnStarting, SPEED: ORIENT_TURN_START_SPEED," +
      " publish(abs, at) { _torsoYawRise = orientYawRise(_torsoYawAbs, _torsoYawAt, abs, at); _torsoYawAbs = abs; _torsoYawAt = at; }," +
      " reset() { _torsoYawAbs = null; _torsoYawAt = 0; _torsoYawRise = 0; }, setAngle(a) { currentAngle = a; } };"].join("\n")
-  )(15, 0.18, 900, 1200, 60, 60);
+  )(15, 0.18, 900, 1200, numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED"), numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED"));
 
-  check("the turn speed is the early trigger's own gate (60 deg/s by default)", g.SPEED === 60, String(g.SPEED));
+  check("the turn speed is the early trigger's own gate (45 deg/s by default)",
+    g.SPEED === numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED") && g.SPEED === 45, String(g.SPEED));
   check("rise is deg/s between two fresh readings", g.orientYawRise(10, 1000, 46, 1240) === 150);
   check("...and 0 with no previous reading, a stale one, or the same instant",
     g.orientYawRise(null, 0, 30, 1000) === 0 && g.orientYawRise(10, 0, 30, 5000) === 0 && g.orientYawRise(10, 1000, 30, 1000) === 0);
