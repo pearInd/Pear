@@ -38,6 +38,7 @@ const PW = readFileSync(new URL("../widget/pear-widget.js", import.meta.url), "u
 const SRV = readFileSync(new URL("../server.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const LIB = readFileSync(new URL("../lib/garment-category.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const SQL = readFileSync(new URL("../archive/supabase_setup_v13.sql", import.meta.url), "utf8");
+const SQL14 = readFileSync(new URL("../archive/supabase_setup_v14.sql", import.meta.url), "utf8");
 const BACKFILL = readFileSync(new URL("../scripts/backfill-garment-categories.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 let fails = 0;
@@ -82,7 +83,7 @@ const input = (v) => ({ value: v == null ? "" : String(v) });
    as a real parameter, so the `typeof isBottomsGarment === "function"` guards inside
    the slice see a real binding rather than silently no-op'ing. */
 function harness({ height, weight, chest, waist, legs,
-                   pendingSizes, pendingTitle, pendingAgeGroup,
+                   pendingSizes, pendingTitle, pendingAgeGroup, pendingSizeRunType, gender = null,
                    activeItem = null, garmentCategory = null, isBottomsGarment } = {}) {
   const els = {
     height: input(height), weight: input(weight), chest: input(chest), waist: input(waist), legs: input(legs),
@@ -104,9 +105,15 @@ function harness({ height, weight, chest, waist, legs,
   const t = (key) => key;   // identity - assertions check the KEY, not localized copy
 
   const fn = new Function(
-    "$", "t", "activeItem", "pendingSizes", "pendingAgeGroup", "pendingTitle", "localStream",
-    "__category", "isBottomsGarment",
-    "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null;\n" +
+    "$", "t", "activeItem", "pendingSizes", "pendingAgeGroup", "pendingTitle", "pendingSizeRunType", "localStream",
+    "__category", "isBottomsGarment", "__gender",
+    // currentUserGender: same shim-not-slice reason as the other three - it is
+    // declared well before "const ZARA_SIZE_CHART" (SIZING_SLICE's start marker) in
+    // app.js's top-of-file state block. See ADULT_PANTS_NUMERIC_SIZES's own comment
+    // in app.js for the general "some harnesses extract a narrower slice" rule.
+    // Seeded from __gender (rather than left null, like the other three) so this
+    // harness can actually drive the gender-routing branch under test.
+    "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null, currentUserGender = __gender;\n" +
     SIZING_SLICE +
     "\ncurrentGarmentCategory = __category;" +
     "\nreturn { calculateSize," +
@@ -114,11 +121,12 @@ function harness({ height, weight, chest, waist, legs,
     "  getSizeCategory: () => currentSizeCategory," +
     "  label: () => formatSizeLabel(currentUserSize)," +
     "  isNumericPants: () => currentSizeIsNumericPants," +
+    "  isWomensTops: () => currentSizeIsWomensTops," +
     "  _normApos, isWaistInchSizeRun, titleNamesPants, isPantsProduct, pantsChartForSizes," +
-    "  isAdultPantsProduct, ADULT_JEANS_WAIST_CHART, ADULT_PANTS_SIZE_CHART, ADULT_JEANS_WAIST_SIZES };",
+    "  isAdultPantsProduct, isAlphaSizeRun, ADULT_JEANS_WAIST_CHART, ADULT_PANTS_SIZE_CHART, ADULT_JEANS_WAIST_SIZES };",
   );
-  const api = fn($, t, activeItem, pendingSizes, pendingAgeGroup, pendingTitle, {},
-                 garmentCategory, isBottomsGarment);
+  const api = fn($, t, activeItem, pendingSizes, pendingAgeGroup, pendingTitle, pendingSizeRunType, {},
+                 garmentCategory, isBottomsGarment, gender);
   return { api, els };
 }
 
@@ -491,6 +499,201 @@ console.log("\n── §8 the vision tier: endpoint, classifier, migration, back
     /if \(verdict\.source !== "gemini"\)/.test(BACKFILL));
   check("...and it addresses rows by canonical_url (CLAUDE.md §2.2), not raw URL",
     /canonical_url\s*\n?\s*\? \{ column: "canonical_url"/.test(BACKFILL));
+}
+
+console.log("\n── §9 isAlphaSizeRun(): sports pants sold S/M/L must NOT get a waist number ──");
+{
+  const { isAlphaSizeRun } = pure;
+  check("a confident letter run is alpha, with no cache hint needed",
+    isAlphaSizeRun(["S", "M", "L", "XL"], undefined) === true);
+  check("a confident numeric run is NOT alpha",
+    isAlphaSizeRun(JEANS_RUN, undefined) === false);
+  check("an empty list with NO cached hint abstains (false) - never guess",
+    isAlphaSizeRun([], undefined) === false && isAlphaSizeRun(null, undefined) === false);
+  check("an empty list falls back to a cached 'alpha' verdict",
+    isAlphaSizeRun([], "alpha") === true);
+  check("an empty list with a cached 'numeric' verdict is NOT alpha (stays on the\n" +
+        "        numeric-chart default, unchanged)",
+    isAlphaSizeRun([], "numeric") === false);
+  check("THIS VISIT'S OWN scraped list always wins over a stale cached hint",
+    isAlphaSizeRun(["S", "M", "L"], "numeric") === true &&
+    isAlphaSizeRun(JEANS_RUN, "alpha") === false);
+  check("a mixed/unrecognised list is NON-EMPTY real evidence from THIS visit, so it\n" +
+        "        does NOT fall through to the cache even though it isn't confidently\n" +
+        "        alpha itself - only a genuinely EMPTY list consults the cache",
+    isAlphaSizeRun(["S", "32"], "alpha") === false && isAlphaSizeRun(["S", "32"], undefined) === false);
+
+  /* WHAT THE VETO DOES NOT (AND CANNOT) FIX: "Sweatpants" with NO size list scraped
+     and NO cached hint at all. isPantsProduct() correctly calls this pants from the
+     title alone (TIER 2), and with no positive alpha evidence anywhere the existing,
+     deliberate "no confidently-numeric run" default (pantsChartForSizes()'s own
+     §5 note: "a pants product with NO readable size list gets the waist chart, not a
+     chest-banded fallback") still applies unchanged - there is nothing here to tell
+     it otherwise. This is the exact gap archive/supabase_setup_v14.sql's cache
+     exists to close for a RETURNING visit to the SAME product; a first-ever,
+     never-cached visit with a fully JS-rendered picker is the one case this fix
+     cannot reach, same as CLAUDE.md §2.5's "abstain rather than guess" already
+     accepts elsewhere in this file. */
+  const sweatpantsNoEvidence = harness({ height: 179, weight: 80, pendingTitle: "Sweatpants" });
+  sweatpantsNoEvidence.api.calculateSize();
+  check("sweatpants with NO scraped sizes and NO cache hint: still the waist-chart\n" +
+        "        default (unchanged, documented limitation - see comment above)",
+    sweatpantsNoEvidence.api.isNumericPants() === true);
+
+  /* THE REPORTED BUG, END TO END: sweatpants sold S/M/L. isPantsProduct() correctly
+     calls this a lower-body garment from the title alone (TIER 2) - that part is not
+     the bug. The bug was pantsChartForSizes()'s "no confidently-numeric run" default
+     landing on ADULT_JEANS_WAIST_CHART instead of staying on the letter chart, once
+     the product's OWN size list positively said "S/M/L". */
+  const sportsPants = harness({ height: 179, weight: 80, pendingSizes: ["S", "M", "L"], pendingTitle: "Track Pants" });
+  sportsPants.api.calculateSize();
+  check("THE EXACT REPORT: sports pants scraped S/M/L, title also names pants - the\n" +
+        "        letter run is now POSITIVE evidence, not just an absence of numeric\n" +
+        "        evidence, so it wins even though isPantsProduct() is confidently true",
+    sportsPants.api.getUserSize() === "L", sportsPants.api.getUserSize());
+  check("...rendered as the plain letter, never decorated as a waist size",
+    sportsPants.api.label() === "L" && sportsPants.api.isNumericPants() === false);
+
+  /* THE CACHE FALLBACK: this visit's own picker scraped nothing (a JS-rendered
+     control that hasn't hydrated), but a PREVIOUS visit's scrape of the SAME product
+     was cached and echoed back as pendingSizeRunType - see archive/supabase_setup_v14.sql. */
+  const cachedAlpha = harness({ height: 179, weight: 80, pendingTitle: "Track Pants", pendingSizeRunType: "alpha" });
+  cachedAlpha.api.calculateSize();
+  check("no size list THIS visit, but a cached 'alpha' verdict from a previous visit\n" +
+        "        still keeps the product on the letter chart",
+    /^(XS|S|M|L|XL|XXL|3XL)$/.test(cachedAlpha.api.getUserSize() || ""), cachedAlpha.api.getUserSize());
+
+  /* WHAT MUST NOT MOVE: a genuinely numeric-run pants product, and one with no size
+     evidence and no cache hint at all, are both untouched by this veto. */
+  const stillJeans = harness({ height: 185, weight: 82, pendingSizes: JEANS_RUN });
+  stillJeans.api.calculateSize();
+  check("28-36 jeans still resolve to the waist chart - the veto never fires on a\n" +
+        "        confidently NUMERIC run",
+    stillJeans.api.getUserSize() === "32", stillJeans.api.getUserSize());
+
+  /* THE VETO REACHES EVERY TIER of isPantsProduct(), not just the title tier - a
+     product identified as pants via the TIER 4 catalog/handoff marker with its own
+     alpha size list must be caught exactly the same way. */
+  const byTypeAlpha = harness({ height: 179, weight: 80, pendingSizes: ["S", "M", "L"],
+    activeItem: { type: "pants", name: "Track Pants" } });
+  byTypeAlpha.api.calculateSize();
+  check("TIER 4 (handoff type marker) + a scraped alpha run: still the letter chart",
+    byTypeAlpha.api.getUserSize() === "L", byTypeAlpha.api.getUserSize());
+}
+
+console.log("\n── §10 the plumbing: widget scrape, cache write/read, and the room's use of it ──");
+{
+  check("the widget classifies numeric vs alphabetic size runs at scan time",
+    /function classifySizeRunType\(sizes\)/.test(PW));
+  check("...'every token or abstain', same confidence rule as the room's own",
+    /return "unknown";/.test(PW) && /return "numeric";/.test(PW) && /return "alpha";/.test(PW));
+  check("...sent on the OPEN url, synchronously, same as garment_sizes",
+    /"&garment_size_type=" \+ hostSizeRunType/.test(PW));
+  check("...and re-sent on the PEAR_UPDATE_GARMENT correction",
+    /garment_size_type: res\.sizeRunType/.test(PW));
+  check("...opportunistically cached server-side via the SAME classify-images call\n" +
+        "        that already fetches this product's gallery (no extra round trip)",
+    /size_run_type: hostSizeRunType !== "unknown" \? hostSizeRunType : undefined/.test(PW));
+
+  check("the room reads garment_size_type off the open URL, synchronously (Screen 1)",
+    /sizeRunType: q\.get\("garment_size_type"\) \|\| undefined/.test(APP));
+  check("...seeds pendingSizeRunType from it, SEED-not-overwrite like pendingSizes",
+    /if \(pendingSizeRunType === undefined && result\.sizeRunType !== undefined\)/.test(APP));
+  check("...and the PEAR_UPDATE_GARMENT listener accepts a later correction",
+    /e\.data\.garment_size_type === "numeric" \|\| e\.data\.garment_size_type === "alpha"/.test(APP));
+
+  check("server.js persists the client's verdict, but ONLY numeric/alpha - never\n" +
+        "        'unknown' (that would freeze a slow-hydrating picker on the wrong chart\n" +
+        "        forever, see archive/supabase_setup_v14.sql)",
+    /const v14Fields = meta\.sizeRunType === "numeric" \|\| meta\.sizeRunType === "alpha"/.test(SRV));
+  check("...read back by PRODUCT url, not by photo, because the size run belongs to\n" +
+        "        the product, not to whichever photo happens to be the reference image",
+    /async function getCachedSizeRunType\(productUrl\)/.test(SRV) &&
+    /\.eq\("product_url", productUrl\)/.test(SRV));
+  check("...the classify-images response prefers THIS visit's scrape over the cache",
+    /let sizeRunType = scrapedSizeRunType;/.test(SRV));
+
+  check("the v14 migration adds exactly the nullable column, with a CHECK constraint",
+    /ADD COLUMN IF NOT EXISTS size_run_type TEXT DEFAULT NULL;/.test(SQL14) &&
+    /size_run_type IN \('numeric', 'alpha'\)/.test(SQL14));
+  check("...and records why 'unknown' must never be written, unlike garment_category's",
+    /"unknown" IS NEVER WRITTEN HERE/.test(SQL14));
+}
+
+console.log("\n── §11 gender routing: WOMEN_TOPS_EU_SIZE_CHART decorates the letter, never\n" +
+            "        replaces the fit chart, and never touches a bottoms recommendation ──");
+{
+  /* THE CORE CASE: a woman shopper, an ordinary top, fitted exactly like everyone
+     else - only the DISPLAYED label gains the EU token. */
+  const womensTop = harness({ height: 170, weight: 68, gender: "women" });
+  womensTop.api.calculateSize();
+  check("170cm/68kg, gender=women, no product evidence → still the same letter\n" +
+        "        ZARA_SIZE_CHART would give a man (M)",
+    womensTop.api.getUserSize() === "M", womensTop.api.getUserSize());
+  check("...but the DISPLAYED label carries FOX's women's EU token alongside it",
+    womensTop.api.label() === "M (EU 38)", womensTop.api.label());
+  check("...and the flag formatSizeLabel() reads is set",
+    womensTop.api.isWomensTops() === true);
+
+  /* THE SAME BODY, NO GENDER PICKED - the pre-selector default, byte-for-byte. */
+  const noGender = harness({ height: 170, weight: 68 });
+  noGender.api.calculateSize();
+  check("the same body with NO gender selected gets the plain letter - an unmade\n" +
+        "        choice must not change the recommendation (CLAUDE.md §2.5)",
+    noGender.api.getUserSize() === "M" && noGender.api.label() === "M", noGender.api.label());
+  check("...and the flag is false", noGender.api.isWomensTops() === false);
+
+  /* THE SAME BODY, MEN EXPLICITLY PICKED - same as unset, the "Men's tops chart\n
+     (ZARA_SIZE_CHART)" being what already runs for everyone. */
+  const menPicked = harness({ height: 170, weight: 68, gender: "men" });
+  menPicked.api.calculateSize();
+  check("gender=men renders identically to no gender at all - ZARA_SIZE_CHART was\n" +
+        "        always the men's chart, nothing about it changes",
+    menPicked.api.label() === "M" && menPicked.api.isWomensTops() === false);
+
+  /* THE BOTTOMS EXCLUSION - the reason isConfidentlyPants gates this rather than
+     useNumericPantsChart. A letter-sized sweatpants pair (alpha-vetoed off the waist
+     chart, same product isAlphaSizeRun()'s own §9 covers) still fits on
+     ZARA_SIZE_CHART, but must NOT be decorated with a TOPS dress-size token - "M (EU
+     38)" would read as this app's OWN, differently-scaled pants EU convention
+     (ADULT_PANTS_SIZE_CHART, 36-46). */
+  const sweatpants = harness({ height: 170, weight: 68, gender: "women",
+    pendingTitle: "מכנס ריצה", pendingSizes: ["S", "M", "L"] });
+  sweatpants.api.calculateSize();
+  check("a letter-sized sweatpants pair (confidently pants by title) still resolves\n" +
+        "        the same letter on ZARA_SIZE_CHART...",
+    sweatpants.api.getUserSize() === "M", sweatpants.api.getUserSize());
+  check("...but a woman shopper is NOT shown a tops EU token on it - it would collide\n" +
+        "        with this app's own pants EU convention",
+    sweatpants.api.label() === "M" && sweatpants.api.isWomensTops() === false,
+    sweatpants.api.label());
+
+  /* THE EU-PANTS AND WAIST-INCH BRANCHES - already numeric, so formatSizeLabel()'s\n
+     numeric lock wins first, but the flag itself must also stay false. */
+  const euPants = harness({ height: 170, weight: 78, gender: "women", pendingSizes: ["36", "38", "40", "42"] });
+  euPants.api.calculateSize();
+  check("an EU-numeric pants product with a woman shopper stays on the bare numeric\n" +
+        "        token, not a tops EU token wearing the same digits",
+    euPants.api.isNumericPants() === true && euPants.api.isWomensTops() === false,
+    euPants.api.label());
+
+  /* THE CHILD EXCLUSION - WOMEN_TOPS_EU_SIZE_CHART has no child rows. */
+  const girlsBody = harness({ height: 140, weight: 30, gender: "women", pendingSizes: ["8", "10", "12", "14"] });
+  girlsBody.api.calculateSize();
+  check("a child-bodied shopper on a kids product keeps the kids suffix, gender or not",
+    girlsBody.api.getSizeCategory() === "child" &&
+    girlsBody.api.label() === "10 sizeLabelKidsSuffix" &&
+    girlsBody.api.isWomensTops() === false,
+    girlsBody.api.label());
+
+  /* THE FLAG MUST BE CLEARED ON THE EARLY-RETURN PATHS, same reason isNumericPants()\n
+     already gets this coverage above. */
+  const clearedGender = harness({ height: 170, weight: 68, gender: "women" });
+  clearedGender.api.calculateSize();
+  clearedGender.els.weight.value = "";
+  clearedGender.api.calculateSize();
+  check("clearing a measurement resets the women's-tops flag too (no stale decoration)",
+    clearedGender.api.isWomensTops() === false);
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

@@ -172,6 +172,25 @@
                  refreshAgeFieldVisibility) and never used for sizing (nothing called
                  pickSizeCategory), yet a stored value from an older build kept being
                  painted into the profile popover. See the "AGE - REMOVED" note in app.js. -->
+            <!-- Gender selector - OPTIONAL (no "required" marker: CLAUDE.md §2.5, never
+                 block on an unmade choice). Routes which TOKEN the recommended size is
+                 shown with - plain letter, or letter + FOX women's EU dress-size token
+                 (WOMEN_TOPS_EU_SIZE_CHART) - on a tops/ambiguous garment; body-fit
+                 matching itself is unchanged either way. See currentUserGender's and
+                 currentSizeIsWomensTops's own comments in app.js. -->
+            <div class="form-group">
+                <span class="form-group__label" id="genderToggleLabel" data-i18n="labelGender">מגדר:</span>
+                <div class="gender-toggle" id="genderToggle" role="radiogroup" aria-labelledby="genderToggleLabel" data-active="">
+                    <button class="gender-tab" type="button" role="radio" aria-checked="false" data-gender="men">
+                        <span data-i18n="genderMen">גבר</span>
+                    </button>
+                    <button class="gender-tab" type="button" role="radio" aria-checked="false" data-gender="women">
+                        <span data-i18n="genderWomen">אישה</span>
+                    </button>
+                    <span class="gender-toggle__ind" aria-hidden="true"></span>
+                </div>
+            </div>
+
             <div class="form-group">
                 <label for="height"><span class="required">*</span><span data-i18n="labelHeight">גובה (בס"מ):</span></label>
                 <input type="number" id="height" min="100" max="300" placeholder="לדוגמה: 175" data-i18n-placeholder="placeholderHeight">

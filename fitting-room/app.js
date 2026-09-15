@@ -583,6 +583,15 @@ const $ = (s) => document.getElementById(s);
 
 /* ── state ───────────────────────────────────────────────────────────────── */
 let currentUserSize = null;
+/* GENDER SELECTOR - optional, in-session only (no profile/URL persistence; a fresh
+   session starts unset, same as every other Screen 1 field before the shopper touches
+   it). "men" | "women" | null. Read by calculateSize() alongside height/weight/etc to
+   decide WHICH ADULT TOPS CHART LABEL is shown - see currentSizeIsWomensTops's own
+   comment for why this only ever changes a DISPLAYED label and never the fit math
+   itself. Never blocks: leaving it unset (null) reproduces the exact pre-gender-selector
+   behaviour (plain ZARA_SIZE_CHART letters for everyone), matching CLAUDE.md §2.5 -
+   an unmade choice must not stop a shopper from getting a recommendation. */
+let currentUserGender = null;
 let currentSizeCategory = null;  // "child" | "adult" - which chart produced currentUserSize.
                                  // Drives the override selector's scale and suppresses
                                  // the SIZE_SCALE fit-delta math for child sizes.
@@ -622,6 +631,22 @@ let pendingSizes = undefined;                // string[] | undefined (none arriv
    already computed and shown. parseHandoff() now seeds both, synchronously, on the
    very first call - see its "SEEDS THE PENDING PRODUCT SIGNALS" note. */
 let pendingTitle = undefined;                // string | undefined (none arrived yet)
+/* Numeric-vs-alphabetic verdict on the host product's OWN size run, same two-stage
+   handoff as pendingSizes above and read alongside it. NOT a replacement for
+   pendingSizes - isAlphaSizeRun() checks the scraped list ITSELF first, because that
+   is free, synchronous, positive evidence about THIS visit. This is the fallback for
+   when that list is empty (a JS-rendered picker that hasn't hydrated yet): a
+   PREVIOUS visit's scrape, cached server-side against this product's URL and echoed
+   back by /api/classify-images (see pear-widget.js: classifySizeRunType() and
+   server.js: getCachedSizeRunType() / archive/supabase_setup_v14.sql).
+
+   THE BUG THIS CLOSES: sweatpants sold S/M/L matched isPantsProduct() on the TITLE
+   tier ("sweatpants" names a bottoms garment) with no numeric evidence of its own,
+   and pantsChartForSizes()'s "no confidently-numeric run" default landed on
+   ADULT_JEANS_WAIST_CHART - the waist-inch ladder meant for 28/30/32 jeans whose
+   picker scrapes to nothing. A shopper was quoted a bare waist-inch number ("32")
+   for a product whose own picker only ever offers S/M/L. */
+let pendingSizeRunType = undefined;          // "numeric" | "alpha" | "unknown" | undefined
 let focusMode = false;
 
 /* Multi-Image Product Gallery Sync - which product angle the live engine is warping.
@@ -1043,19 +1068,25 @@ const ZARA_SIZE_CHART = [
   { size: "XXL", minHeight: 190, maxHeight: 205, minWeight: 93, maxWeight: 112, minChest: 114, maxChest: 119, minWaist: 100, maxWaist: 105, minLegs: 109, maxLegs: 118 },
 ];
 
-/* FOX WOMEN'S TOPS STANDARD - data received 2026-09-14, NOT WIRED INTO calculateSize().
-   There is currently no gender selector anywhere in the fitting room: one unisex adult
-   chart (ZARA_SIZE_CHART, above) is used for every top regardless of who is measuring.
+/* FOX WOMEN'S TOPS STANDARD - data received 2026-09-14.
+   WIRED 2026-09-15: a gender selector now exists on Screen 1 (#genderToggle in
+   index.html -> currentUserGender in app.js) and calculateSize() reads it, via
+   currentSizeIsWomensTops (see that flag's own comment) and formatSizeLabel().
+
    FOX's women's ladder is a EU dress-size token (XS 34 / S 36 / M 38 / L 40 / XL 42 /
-   XXL 44), not a chest-cm band, so it cannot simply replace ZARA_SIZE_CHART's rows - it
-   is a different chart for a different form factor, the same reason
+   XXL 44), not a chest-cm band, so it does NOT replace ZARA_SIZE_CHART's rows as the
+   fit-matching chart - it never grew height/weight columns and coreHwPenalty() cannot
+   score a row that has none. What actually happens: EVERY shopper, regardless of
+   gender, is still fitted against ZARA_SIZE_CHART's vetted height/weight/chest bands
+   (a garment fits the same body no matter which token is printed on the label) - this
+   chart is consulted AFTER that match, purely to relabel the resolved letter with its
+   EU dress-size token for a shopper who selected "women". Same reason
    ADULT_JEANS_WAIST_CHART is a second chart rather than an edit to ADULT_PANTS_SIZE_CHART
-   (see that chart's own comment). Kept here, deliberately unreferenced, as the restore
-   seam: wiring it up for real needs a gender input on Screen 1, a branch in
-   calculateSize()'s chart selection, and its own test coverage - out of scope for a
-   size-chart data update. Do not delete this as "dead code" (CLAUDE.md §0's dead-code
-   rule for prompts applies here too, for the same reason: retained restore seam, not an
-   oversight) and do not wire it up piecemeal without adding the gender input first. */
+   (see that chart's own comment): a different convention for the same body, not a
+   replacement. Letters here are intentionally identical to ZARA_SIZE_CHART's (minus
+   3XL, which FOX did not publish a women's token for - see currentSizeIsWomensTops's
+   euRow-miss fallback in formatSizeLabel(), which keeps the plain letter rather than
+   guessing one). */
 const WOMEN_TOPS_EU_SIZE_CHART = [
   { size: "XS",  euSize: 34 },
   { size: "S",   euSize: 36 },
@@ -1238,6 +1269,32 @@ const ADULT_JEANS_WAIST_SIZES = new Set(ADULT_JEANS_WAIST_CHART.map((r) => r.siz
    PREVIOUS garment's chart. */
 let currentSizeIsNumericPants = false;
 
+/* True while the recommended size should be shown with its FOX WOMEN'S TOPS EU
+   dress-size token (WOMEN_TOPS_EU_SIZE_CHART) alongside the letter - "M (EU 38)"
+   rather than plain "M". Read only by formatSizeLabel(), same convention as
+   currentSizeIsNumericPants above and reset alongside it every calculateSize() run.
+
+   DISPLAY ONLY - never the fit computation. WOMEN_TOPS_EU_SIZE_CHART (see its own
+   comment, above) carries no height/weight/chest bands of its own: FOX supplied only
+   the EU-dress-size token per letter, not a body chart, so it cannot replace
+   ZARA_SIZE_CHART as the thing coreHwPenalty() is scored against without fabricating
+   anthropometric data nobody supplied. A garment fits the same body regardless of
+   which chart's letter is printed on the label, so calculateSize() keeps matching
+   against ZARA_SIZE_CHART's vetted bands for every shopper - gender only changes
+   which TOKEN is shown for the letter it already landed on ("male users [get] the
+   Men's tops chart (ZARA_SIZE_CHART)" is simply what already happens for everyone;
+   this flag adds the EU token on top for a shopper who told us she's shopping women's).
+
+   Set true only when: the shopper picked "women" (currentUserGender), the garment is
+   NOT confidently lower-body (!isConfidentlyPants - isPantsProduct()'s own "worn on the
+   lower body" verdict, deliberately STRICTER than "did the fit land on a numeric pants
+   chart": a letter-sized sweatpants pair alpha-vetoed onto ZARA_SIZE_CHART for FIT still
+   answers true here, so it is never decorated with a TOPS EU token that would collide
+   with ADULT_PANTS_SIZE_CHART's own, differently-scaled EU numbers - see
+   calculateSize()'s own comment on isConfidentlyPants), and the body landed on the ADULT
+   chart (currentSizeCategory === "adult" - WOMEN_TOPS_EU_SIZE_CHART has no child rows,
+   same reason the kids suffix below is also adult-only). */
+let currentSizeIsWomensTops = false;
 
 /**
  * Height/weight penalty for one chart row - the scoring kernel behind
@@ -1412,6 +1469,40 @@ function isAdultProduct(sizes, garmentAgeGroup) {
 function isAdultPantsProduct(sizes) {
   const list = parseSizeList(sizes);
   return list.length > 0 && list.every((s) => ADULT_PANTS_NUMERIC_SIZES.has(s));
+}
+
+/**
+ * THE VETO that stops a letter-sized garment being pulled onto a numeric pants
+ * chart - the counterpart to isAdultPantsProduct()/isWaistInchSizeRun() above, which
+ * establish POSITIVE numeric evidence. This establishes positive ALPHA evidence, and
+ * outranks it: isPantsProduct() correctly calls a pair of sweatpants sold S/M/L a
+ * lower-body garment from its TITLE alone (no numeric evidence needed), and without
+ * this veto that verdict fed straight into pantsChartForSizes()'s "no confidently-
+ * numeric run" default - ADULT_JEANS_WAIST_CHART, the ladder written for 28/30/32
+ * jeans whose picker scrapes to nothing. A sports-pants shopper was quoted a bare
+ * waist-inch number for a product whose picker only ever offers S/M/L.
+ *
+ * TWO TIERS, SAME "every token or abstain" confidence rule as isAdultPantsProduct():
+ *   1. the product's OWN size run   free, synchronous, THIS visit's own scrape -
+ *                                    checked first because live evidence always
+ *                                    outranks a remembered one.
+ *   2. the cached size-run-type     a PREVIOUS visit's scrape of the SAME product,
+ *                                    consulted only when this visit's list is empty
+ *                                    (a JS-rendered picker that hasn't hydrated yet) -
+ *                                    see pendingSizeRunType's own comment for the
+ *                                    full round trip.
+ *
+ * NEVER GUESSES: an empty/mixed size list with no cached hint returns false, which
+ * simply leaves the existing numeric-chart default in place for products this can't
+ * yet speak to (CLAUDE.md §2.5).
+ * @param {string[]|string|null} sizes - the host product's OWN size list, THIS visit
+ * @param {"numeric"|"alpha"|"unknown"|undefined} sizeRunType - cached fallback
+ * @returns {boolean}
+ */
+function isAlphaSizeRun(sizes, sizeRunType) {
+  const list = parseSizeList(sizes);
+  if (list.length) return list.every((s) => ADULT_ALPHA_SIZES.has(s));
+  return sizeRunType === "alpha";
 }
 
 /**
@@ -1703,6 +1794,19 @@ function resolvedGarmentSizes() {
   return parseSizeList(activeItem?.sizes ?? pendingSizes);
 }
 
+/* Same two-stage handoff, for the cached numeric/alpha verdict isAlphaSizeRun() falls
+   back to when resolvedGarmentSizes() comes back empty. See pendingSizeRunType's own
+   comment for the full round trip (widget scrape -> classify-images cache -> here).
+   typeof-guarded per CLAUDE.md §2.7/resolvedGarmentTitle()'s own convention: several
+   test harnesses execute this region as a standalone slice with no pendingSizeRunType
+   binding in scope at all - a bare reference is a ReferenceError there, not a lint nit. */
+function resolvedSizeRunType() {
+  if (typeof activeItem !== "undefined" && activeItem && activeItem.sizeRunType != null) {
+    return activeItem.sizeRunType;
+  }
+  return typeof pendingSizeRunType !== "undefined" ? pendingSizeRunType : undefined;
+}
+
 /* The ONE mismatch predicate every surface reads - the go-live gate, the modal card,
    and the size selector alike - so they can never disagree about what is blocked. */
 function hasSizeCategoryMismatch() {
@@ -1796,7 +1900,17 @@ function formatSizeLabel(size) {
      product is NOT affected: it never resolves to a pants chart, so this flag is false
      there and the suffix still renders. */
   if (currentSizeIsNumericPants) return String(size).replace(/[^0-9]/g, "");
-  return currentSizeCategory === "child" ? `${size} ${t("sizeLabelKidsSuffix")}` : size;
+  if (currentSizeCategory === "child") return `${size} ${t("sizeLabelKidsSuffix")}`;
+  // WOMEN'S EU TOPS TOKEN - see currentSizeIsWomensTops's own comment. Looked up by
+  // the letter calculateSize() already resolved (WOMEN_TOPS_EU_SIZE_CHART shares
+  // ZARA_SIZE_CHART's exact letter tokens by construction), so a miss here can only
+  // mean a chart edit desynced the two lists - falling back to the plain letter
+  // rather than throwing, same "abstain, don't guess" rule as everywhere else.
+  if (currentSizeIsWomensTops) {
+    const euRow = WOMEN_TOPS_EU_SIZE_CHART.find((r) => r.size === size);
+    if (euRow) return `${size} (EU ${euRow.euSize})`;
+  }
+  return size;
 }
 
 /* Task 6 - conditional input flow: the optional fields stay hidden until ALL
@@ -1873,6 +1987,7 @@ function calculateSize() {
   // measurement can never leave a PREVIOUS garment chart description behind for
   // formatSizeLabel() to read.
   currentSizeIsNumericPants = false;
+  currentSizeIsWomensTops = false;
   updateProgress();
 
   if (!height || !weight) return;
@@ -1915,12 +2030,30 @@ function calculateSize() {
      not be pulled onto a waist ladder), but no item marker can put a letter-sized
      product onto one. activeItem is usually unavailable here anyway - calculateSize()
      runs on Screen 1, before it exists - so the sizing/title evidence decides in the
-     common case, exactly as the kids/adult guard already does with no item at all. */
+     common case, exactly as the kids/adult guard already does with no item at all.
+
+     ALPHA EVIDENCE VETOES THE WAIST CHART TOO, same as the item check above - see
+     isAlphaSizeRun()'s own comment for the bug this closes (sweatpants sold S/M/L,
+     confidently pants by title, quoted a waist-inch number that appears on no picker
+     anywhere). Checked ALONGSIDE itemContradictsPants rather than folded into
+     isPantsProduct() itself: isPantsProduct() answers "is this worn on the lower
+     body", which a letter-sized pair of sweatpants still genuinely is - the veto
+     belongs at the CHART-selection step, not at the body-region step. */
   const useAdultPantsChart = isAdultNumericPantsGarment(garmentSizes, activeItem);
   const itemContradictsPants =
     !!activeItem && typeof isBottomsGarment === "function" && !isBottomsGarment(activeItem);
-  const useWaistInchChart = !useAdultPantsChart && !itemContradictsPants &&
+  /* Named separately from useWaistInchChart below - per THAT flag's own comment,
+     isPantsProduct() answers "is this worn on the lower body" independently of which
+     literal CHART ends up handling the fit (a letter-sized sweatpants pair still
+     answers true here even though isAlphaSizeRun() vetoes it off the waist chart).
+     Read a second time below, by currentSizeIsWomensTops, for exactly that
+     independence: WOMEN_TOPS_EU_SIZE_CHART must never decorate a bottoms
+     recommendation just because it happens to share ZARA_SIZE_CHART's letters. */
+  const isConfidentlyPants =
     isPantsProduct(garmentSizes, resolvedGarmentTitle(), currentGarmentCategory, activeItem);
+  const useWaistInchChart = !useAdultPantsChart && !itemContradictsPants &&
+    !isAlphaSizeRun(garmentSizes, resolvedSizeRunType()) &&
+    isConfidentlyPants;
   /* Both numeric branches route through pantsChartForSizes() rather than naming a chart
      here, so the EU-before-waist precedence lives in exactly ONE place - see that
      function on why reversing those two lines re-sizes every EU store in the catalog. */
@@ -1947,6 +2080,21 @@ function calculateSize() {
   // "uncertain" case above - a confident garment already has the other
   // chart's array forced empty, so there's nothing left for it to tie with.
   currentSizeCategory = adultFits.length ? "adult" : (childFits.length ? "child" : null);
+
+  /* GENDER ROUTING - see currentSizeIsWomensTops's own comment for why this only ever
+     swaps the DISPLAYED token, never the fit chart itself. Gated on !isConfidentlyPants
+     rather than !useNumericPantsChart - deliberately the STRICTER of the two: a
+     letter-sized bottoms garment (a sweatpants pair sold S/M/L, alpha-vetoed off the
+     waist chart per isAlphaSizeRun()) still resolves onto ZARA_SIZE_CHART for FIT
+     purposes, but must not be decorated with a TOPS dress-size token - "M (EU 38)" on
+     a pair of sweatpants reads as an EU PANTS size (this app already has one, on
+     ADULT_PANTS_SIZE_CHART, numbered 36-46 - a colliding, wrong-scale range) even
+     though the FOX women's tops ladder means something else entirely. isConfidentlyPants
+     is the same "is this worn on the lower body" verdict isPantsProduct() already
+     gives independent of which chart the fit math landed on - see that const's own
+     comment. Gated on "adult" because the chart has no child rows. */
+  currentSizeIsWomensTops =
+    currentUserGender === "women" && !isConfidentlyPants && currentSizeCategory === "adult";
 
   if (!currentSizeCategory) {
     // Fits NEITHER chart - no closest-match guess. A real gap between the two
@@ -2016,6 +2164,40 @@ function calculateSize() {
   // currentSizeCategory ever gets checked against the room's mismatch UI before the
   // shopper lands in it. See updateSizeMismatchUI()'s own comment.
   updateSizeMismatchUI();
+}
+
+/**
+ * Gender selector (#genderToggle in index.html) - sets currentUserGender and repaints
+ * the segmented control, then recomputes the size if the form is already showing a
+ * result. Click-only (native <button> Enter/Space activation covers keyboard access,
+ * same as every other button in this form - no extra keydown handling needed).
+ *
+ * TOGGLES OFF ON A SECOND CLICK of the already-selected option, back to null/unset -
+ * the selector is optional (CLAUDE.md §2.5: never block), so a shopper who picked
+ * "women" by mistake can return to the pre-selector default rather than being stuck
+ * choosing between two answers, neither of which may be right for them.
+ * @param {"men"|"women"} gender
+ */
+function setGender(gender) {
+  currentUserGender = currentUserGender === gender ? null : gender;
+
+  const toggle = $("genderToggle");
+  if (toggle) {
+    toggle.dataset.active = currentUserGender || "";
+    toggle.querySelectorAll(".gender-tab").forEach((btn) => {
+      const isActive = btn.dataset.gender === currentUserGender;
+      btn.classList.toggle("is-active", isActive);
+      btn.setAttribute("aria-checked", String(isActive));
+    });
+  }
+
+  // Same "recompute only if the result is already showing" convention as the other
+  // late-arriving-signal handlers (sizeRunType's postMessage branch, the age-group
+  // vision hint) - calculateSize() itself is a no-op with no height/weight yet, but
+  // guarding avoids fighting Screen 1's own reveal sequencing before both mandatory
+  // fields exist.
+  const sizeFormEl = $("sizeForm");
+  if (sizeFormEl && !sizeFormEl.hidden) calculateSize();
 }
 
 function updateProgress() {
@@ -2190,6 +2372,13 @@ function parseHandoff() {
          in the module. Absent leaves it undefined, never "", so "no list arrived" stays
          distinguishable from "the product genuinely lists no sizes". */
       sizes: q.get("garment_sizes") || undefined,
+      /* Numeric-vs-alphabetic verdict on that same list (pear-widget.js:
+         classifySizeRunType()), read SYNCHRONOUSLY for the same reason `sizes` is -
+         isAlphaSizeRun() needs it on Screen 1, before any round trip lands, and only
+         ever as the fallback for when `sizes` itself scraped empty (see its own
+         comment). Absent (not "unknown") when the widget declined or is too old to
+         send it. */
+      sizeRunType: q.get("garment_size_type") || undefined,
       /* The product's own title, carried explicitly rather than left to `name` alone.
          ?garment_title= is the v2 spelling pear-widget.js now sends alongside the
          original ?garment_name=; both carry the same string, so either build of the
@@ -2215,9 +2404,11 @@ function parseHandoff() {
        Writing unconditionally here would let a late re-parse clobber that correction
        with the original URL, so each field is filled only while it is still undefined. */
     if (pendingSizes === undefined && result.sizes !== undefined) pendingSizes = result.sizes;
+    if (pendingSizeRunType === undefined && result.sizeRunType !== undefined) pendingSizeRunType = result.sizeRunType;
     if (pendingTitle === undefined && result.title !== undefined) pendingTitle = result.title;
     console.log("[PEAR] parseHandoff() - product signals for the size calculator:", {
       sizes: pendingSizes || "(none readable on the PDP)",
+      sizeRunType: pendingSizeRunType || "(none)",
       title: pendingTitle || "(none)",
     });
     // CHECK B instrumentation - the exact point imgBack is resolved, showing which of
@@ -3196,6 +3387,23 @@ window.addEventListener("message", (e) => {
       refineActiveItemCategory(activeItem).catch((e) =>
         console.warn("[PEAR] category re-resolve after late sizes failed:", e?.message || e));
     }
+  }
+
+  /* Numeric-vs-alphabetic verdict, handled alongside the sizes block above rather
+     than folded into it: THIS message's own sizeRunType can be MORE current than the
+     one parseHandoff() seeded at open (pear-widget.js re-reads the picker inside
+     classifyImages(), which can resolve after a JS-rendered control finally
+     hydrates), so it overwrites unconditionally - same convention as the age-group
+     branch below, where "uncertain" is itself a meaningful, later answer. Read by
+     isAlphaSizeRun() only as the fallback for an empty size list, so an "unknown"
+     landing here after a real scraped list already exists changes nothing that
+     matters (resolvedGarmentSizes() decides first in that case anyway). */
+  if (e.data.garment_size_type === "numeric" || e.data.garment_size_type === "alpha" ||
+      e.data.garment_size_type === "unknown") {
+    pendingSizeRunType = e.data.garment_size_type;
+    if (activeItem) activeItem.sizeRunType = pendingSizeRunType;
+    const sizeFormEl3 = $("sizeForm");
+    if (sizeFormEl3 && !sizeFormEl3.hidden) { try { calculateSize(); } catch {} }
   }
 
   /* A LATE TITLE is the correction half of the pendingTitle seed parseHandoff() lays
@@ -19414,6 +19622,14 @@ function init() {
     i.addEventListener("keydown", onMeasurementKeydown);   // Task 5 - Enter to proceed
   });
   $("btn-next-screen").addEventListener("click", onSizeFormContinue);
+
+  // Gender selector (Men/Women) - segmented toggle, same delegated-click pattern used
+  // for the TOP/BOTTOM outfit toggle (#gdTabs) elsewhere in this function.
+  const genderToggleEl = $("genderToggle");
+  if (genderToggleEl) genderToggleEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".gender-tab");
+    if (btn) setGender(btn.dataset.gender);
+  });
 
   // Explicit open only - startCamera() is also called from flipCamera() and
   // reinitCameraForOrientation(), where the page shouldn't jump since the user is

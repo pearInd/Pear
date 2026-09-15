@@ -97,6 +97,9 @@ const I18N = {
   measurementsRefreshNotice: { he: "עדכן את המידות שלך - עבר חודש מהפעם האחרונה", en: "Update your measurements - it's been a month since last time" },
   // labelAge / placeholderAge / profileLabelAge removed with the age field itself -
   // see the "AGE - REMOVED" note in app.js.
+  labelGender:               { he: "מגדר:", en: "Gender:" },
+  genderMen:                 { he: "גבר", en: "Men" },
+  genderWomen:               { he: "אישה", en: "Women" },
   labelHeight:               { he: 'גובה (בס"מ):', en: "Height (cm):" },
   placeholderHeight:         { he: "לדוגמה: 175", en: "e.g. 175" },
   labelWeight:               { he: 'משקל (בק"ג):', en: "Weight (kg):" },
