@@ -22,7 +22,7 @@ const WIDGET = readFileSync(new URL("../widget/pear-widget.js", import.meta.url)
 /* RESIZER_RE through the end of samePhoto() - self-contained (regexes + pure string/URL
    functions), no DOM access needed to reach canonicalPhoto/samePhoto themselves. */
 const wsrc = WIDGET.slice(WIDGET.indexOf("var RESIZER_RE"), WIDGET.indexOf("function abbrevUrl"));
-const api = new Function("w", wsrc + "\nreturn { canonicalPhoto, samePhoto };")({});
+const api = new Function("w", wsrc + "\nreturn { canonicalPhoto, samePhoto, upgradeImageUrl };")({});
 const { sameImage: samePhoto, canonicalImageUrl: canonicalPhoto } = { sameImage: api.samePhoto, canonicalImageUrl: api.canonicalPhoto };
 
 let fails = 0;
@@ -75,6 +75,33 @@ console.log("\n── THE REGRESSION: query-string-only identity, dropped whole 
     "same query-string identity, byte-identical, is still recognised as the same photo");
   t("https://s.com/img.php?id=42&asset=front&width=800", "https://s.com/img.php?id=42&asset=front&width=1400", true,
     "a presentation param differing alongside a real identity param is still the same photo");
+}
+
+console.log("\n── Salesforce Commerce Cloud Dynamic Imaging (adidas.co.il) - mirrors url-identity.test.mjs ──");
+const DIS = "https://www.adidas.co.il/dw/image/v2/BFNL_PRD/on/demandware.static/-/Sites-adidas-products/default/dw1a2b3c4d/zoom";
+t(`${DIS}/HA6542_01_laydown.jpg?sw=100&sh=100&sm=fit`, `${DIS}/HA6542_01_laydown.jpg?sw=2000&sh=2000&sm=fit`, true,
+  "thumbnail vs zoom slide of one photo (sw/sh/sm)");
+t(`${DIS}/HA6542_01_laydown.jpg?sw=600&sfrm=jpg&bgcolor=FFFFFF`, `${DIS}/HA6542_01_laydown.jpg`, true,
+  "output format / letterbox colour vs the original asset");
+t(`${DIS}/HA6542_01_laydown.jpg?sw=600`, `${DIS}/HA6542_02_laydown.jpg?sw=600`, false,
+  "front vs back laydown of one article stay DIFFERENT photos");
+{
+  /* upgradeImageUrl() is what actually ships: the thumbnail strip's ?sw=100 copy of the
+     back photo must reach the model as the original asset, not at 100px. */
+  const cases = [
+    [`${DIS}/HA6542_01_laydown.jpg?sw=100&sh=100&sm=fit`, `${DIS}/HA6542_01_laydown.jpg`,
+      "Dynamic Imaging sizing stripped - the original asset ships"],
+    [`${DIS}/HA6542_01_laydown.jpg?sw=600&q=80&sh=600`, `${DIS}/HA6542_01_laydown.jpg?q=80`,
+      "adjacent sizing params all go in one pass; other params survive"],
+    ["https://s.com/p/tee.jpg?sw=600", "https://s.com/p/tee.jpg?sw=600",
+      "an sw= OUTSIDE Dynamic Imaging is never rewritten (it may not be sizing there)"],
+  ];
+  for (const [input, want, label] of cases) {
+    const got = api.upgradeImageUrl(input);
+    if (got !== want) fails++;
+    console.log(`${got === want ? "PASS" : "FAIL"}  upgradeImageUrl: ${label}`);
+    if (got !== want) console.log(`        got  ${got}\n        want ${want}`);
+  }
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

@@ -265,7 +265,14 @@
     ".product__media img",
     ".woocommerce-product-gallery img",
     "[data-product-image]",
-    ".product-photo img"
+    ".product-photo img",
+    /* Salesforce Commerce Cloud / SFRA (adidas.co.il). Copied from the gallery templates
+       in the store's own shipped main.js - <div class="main_image"><img ... itemprop=
+       "image"> for each main slide, inside "main-image desktop" - not inferred. The page
+       matched NO selector here before, which is what sent findGarmentForButton()'s
+       walk-up to the wishlist heart beside "Add to Bag" (see isVectorSrc). The
+       underscore spelling only: "main-image" is generic enough to name a hero banner. */
+    ".main_image img"
   ].join(", ");
 
   /* Gallery-thumbnail selectors - every product photo we can hand the fitting room
@@ -290,7 +297,13 @@
     'li.product__media-item img',
     '[data-product-media-type-image] img',
     '.slick-slide img[src*="cdn.shopify"]',
-    'img[src*="cdn.shopify.com/s/files"]'
+    'img[src*="cdn.shopify.com/s/files"]',
+    // SFCC/SFRA (adidas.co.il, same source as PRODUCT_IMG_SELECTORS): every main slide
+    // and thumbnail lives under .primary-images; .main_image / .thumb_image also cover a
+    // theme that mounts the thumbnail strip outside it.
+    ".primary-images img",
+    ".main_image img",
+    ".thumb_image img"
   ].join(", ");
 
   /* Known single-product gallery containers - checked BEFORE the ancestor
@@ -301,7 +314,33 @@
     ".product-images img",
     ".product-single__photo",
     "[data-product-single-media-wrapper] img",
-    ".product__media img"
+    ".product__media img",
+    // SFCC/SFRA main slides - see PRODUCT_IMG_SELECTORS.
+    ".primary-images .main_image img",
+    ".main-image .main_image img"
+  ].join(", ");
+
+  /* Containers that hold OTHER products' photos on a product page: product tiles,
+     recently-viewed / wishlist carousels, other colourways' swatch photos, the mini-cart.
+     Verified against adidas.co.il's shipped main.js (SFCC/SFRA). A gallery scan whose
+     root is the whole page (or the generic .slick-slide/.swiper-slide selectors) sweeps
+     these in, and on a CDN whose filenames carry no numeric product id - SFCC's do not -
+     extractProductId() has no signal to reject them with: a recommended product's photo
+     then reaches the classifier as a candidate BACK view of this garment. See
+     inForeignProductScope(). */
+  var FOREIGN_PRODUCT_SCOPES = [
+    ".product-tile", ".js-product-tile", ".carousel-recently-viewed", ".highlight-section",
+    ".alternativeimage-list", ".colorthumbnail-section", ".minicart",
+    ".carousel-wishlist-items", ".wishlist-items-list"
+  ].join(", ");
+
+  /* Page chrome and UI controls - never a garment photo, however big. adidas.co.il puts
+     1200px mega-menu wallpapers inside <nav> (verified on the live page), which pass
+     every src- and size-based check. header/footer are handled separately in
+     isChromeImage() because a product heading block may legitimately be a <header>. */
+  var CHROME_SCOPES = [
+    "nav", "[role='navigation']", "[role='banner']", "[role='contentinfo']",
+    "[class*='wishlist']", "[class*='favorite']", "[class*='favourite']"
   ].join(", ");
 
   /* ── page metadata helpers ──────────────────────────────────────────────── */
@@ -379,10 +418,26 @@
 
   function isExcludedSrc(src) {
     var s = (src || "").toLowerCase();
+    if (isVectorSrc(s)) return true;
     for (var i = 0; i < EXCLUDE_SRC.length; i++) {
       if (s.indexOf(EXCLUDE_SRC[i]) !== -1) return true;
     }
     return false;
+  }
+
+  /* Vector graphics are UI, never a garment photo: icons, arrows, brand marks and - the
+     case that shipped - wishlist hearts. No storefront publishes a product photo as SVG,
+     and neither the classifier (Gemini) nor the try-on engine can read one.
+     THE BUG THIS CLOSES (adidas.co.il, Salesforce Commerce Cloud): no product selector
+     matched the page, so findGarmentForButton()'s walk-up stopped at the tightest
+     ancestor of "Add to Bag" holding any <img> - the wishlist row, whose only image was
+     heart-empty.svg. Nothing in EXCLUDE_SRC names a heart, so the heart shipped as the
+     garment: the fitting room opened on it, /api/classify-images could not classify it
+     (so garment_cache never got a row for the product), and try-on was blocked.
+     Tested on the PATH only - a raster photo whose query string mentions ".svg" is kept. */
+  function isVectorSrc(s) {
+    s = String(s || "");
+    return /^data:image\/svg/i.test(s) || /\.svgz?$/i.test(s.split(/[?#]/)[0]);
   }
 
   /* ── back-image discovery helpers ───────────────────────────────────────────
@@ -479,7 +534,11 @@
      thing collapses a real front/back pair into one "duplicate" entry. */
   var PRESENTATION_PARAMS = {
     width: 1, height: 1, w: 1, h: 1, size: 1, quality: 1, q: 1, dpr: 1, format: 1, fm: 1,
-    crop: 1, fit: 1, scale: 1, v: 1, ver: 1, version: 1, t: 1, cache: 1, _: 1
+    crop: 1, fit: 1, scale: 1, v: 1, ver: 1, version: 1, t: 1, cache: 1, _: 1,
+    // Salesforce Commerce Cloud Dynamic Imaging (.../dw/image/v2/...): box, scale mode,
+    // output format, letterbox colour. adidas.co.il serves every gallery photo through
+    // it; the thumbnail and the zoom slide of one photo differ ONLY in these.
+    sw: 1, sh: 1, sm: 1, sfrm: 1, bgcolor: 1
   };
 
   function upgradeImageUrl(url) {
@@ -497,6 +556,16 @@
     });
     // Resize query params (Shopify's newer CDN, Next/image-style loaders).
     out = out.replace(/([?&])(?:width|height|w|h|size)=\d+(&|$)/gi, "$1").replace(/[?&]+$/, "");
+    /* SFCC Dynamic Imaging: sw/sh are the rendered box and sm its scale mode; without them
+       the endpoint serves the original catalog asset. Otherwise the thumbnail strip's
+       ?sw=100 copy of the back photo reaches the model at 100px. Scoped to the DIS path
+       so another store's own sw= is never touched, and removed without consuming the
+       delimiter so adjacent params all go in one pass. */
+    if (/\/dw\/image\/v2\//i.test(out)) {
+      out = out.replace(/([?&])(?:sw|sh|sm)=[^&#]*/gi, "$1")
+               .replace(/([?&])&+/g, "$1")
+               .replace(/[?&]+(?=#|$)/, "");
+    }
     return out;
   }
 
@@ -683,7 +752,11 @@
      without numeric ids in their CDN paths aren't over-filtered. */
   function extractProductId(url) {
     if (!url) return "";
-    var path = url.split("?")[0];
+    /* SFCC paths carry a per-asset cache segment ("/dw1a2b3c4d/") - a hex hash, not an
+       id, that can hold a 6+ digit run by chance. Two photos of ONE product would then
+       "disagree" on an id neither has and the back photo would be rejected as another
+       product's. Removed before the scan. */
+    var path = url.split("?")[0].replace(/\/dw[0-9a-f]{8}(?=\/)/gi, "");
     var matches = path.match(/\d{6,}/g);
     if (!matches || !matches.length) return "";
     return matches.reduce(function (longest, m) { return m.length > longest.length ? m : longest; });
@@ -707,6 +780,157 @@
 
   function explicitAttr(img, name) {
     return readAttr(img, name) || readAttr(img.parentElement, name);
+  }
+
+  /* ── is this <img> a product photo at all? ─────────────────────────────────────
+     The heuristic paths (the largest-image fallbacks, the itemprop tier) used to accept
+     ANY <img> that had a URL - on a storefront the selectors do not know, that is
+     whatever sits nearest the cart button or is biggest on the page: a wishlist heart, a
+     payment badge, a mega-menu wallpaper. Three independent rejections below, each only
+     on evidence. The targeted selector lists are NOT gated by them - they name product
+     galleries, and some legitimately sit inside <button>s (thumbnail sliders). */
+
+  /* 1. Page chrome / UI controls: CHROME_SCOPES, an element the theme itself classes as
+        an icon or logo, or a site <header>/<footer>. header/footer count only outside
+        <main>/<article> - a product heading block may be a <header>. */
+  function isChromeImage(el) {
+    if (!el || !el.closest) return false;
+    if (/(?:^|\s)(?:icon|logo)(?:\s|$)/i.test(readAttr(el, "class"))) return true;
+    if (el.closest(CHROME_SCOPES)) return true;
+    var hf = el.closest("header, footer");
+    return !!hf && !hf.closest("main, article, [role='main']");
+  }
+
+  /* 2. Another product's photo: FOREIGN_PRODUCT_SCOPES nested INSIDE the scan root. A
+        scope that contains the root is this product's own card (the grid walk-up case,
+        where the root is the tile itself), so it never counts against it. */
+  function inForeignProductScope(el, root) {
+    var f = el && el.closest ? el.closest(FOREIGN_PRODUCT_SCOPES) : null;
+    return !!f && !(root && root.nodeType === 1 && f.contains(root));
+  }
+
+  /* 3. A glyph we can SEE is glyph-sized: the element is displaying exactly the URL we
+        would ship (no upgrade rewrote it) and the decoded bitmap is under 100px both
+        ways. A lazy slide is never judged - its decoded src is the 1x1 placeholder,
+        which says nothing about the photo in its data-src - and neither is a thumbnail
+        whose URL was upgraded to the full asset. A raw string compare ON PURPOSE, not
+        samePhoto(): a 100px thumbnail and its original ARE the same photo, but only the
+        exact URL on screen says anything about the size of what would ship. This is a
+        size question, never a front/back identity decision. */
+  function isKnownTinyImage(el, url) {
+    if (!el || !el.complete || !el.naturalWidth || !url) return false;
+    if (absolutize(el.currentSrc || el.src || "") !== url) return false;
+    return el.naturalWidth < 100 && el.naturalHeight < 100;
+  }
+
+  /* The gate every heuristic candidate passes: a usable URL and none of the above. */
+  function isProductPhotoCandidate(el, root) {
+    var u = bestImageUrl(el);
+    return !!u && !isChromeImage(el) && !inForeignProductScope(el, root) && !isKnownTinyImage(el, u);
+  }
+
+  /* ── schema.org Product markup - the platform-agnostic tier ─────────────────────
+     Every major commerce platform emits its product photos in one standard shape,
+     because Google Shopping requires it: JSON-LD (<script type="application/ld+json">,
+     @type Product, possibly under @graph / mainEntity) and microdata (itemprop="image",
+     which SFCC/SFRA puts on every gallery <img> - verified in adidas.co.il's own
+     templates). A selector list has to be re-learned per theme and never catches up;
+     this does not. Only Product-typed nodes are read: an Organization/WebSite node's
+     image IS the store logo - the failure this exists to prevent.
+
+     Trusted ONLY when the page describes exactly one product (counted by name/sku, so a
+     review app repeating the theme's Product block is still one). A collection page can
+     emit one Product per card, and a page-wide "product image" there would open every
+     card's try-on on the first card's photo - the per-button walk-up stays the resolver
+     for grids. Memoised per page URL + script text lengths: injection re-runs on every
+     DOM mutation burst, and re-parsing a large JSON-LD block per burst is pure waste. */
+  var PRODUCT_LD_TYPE_RE = /^(?:Product|ProductGroup|IndividualProduct|ProductModel)$/;
+  var _ldMemo = { key: null, urls: [] };
+  function jsonLdProductImages() {
+    var scripts = d.querySelectorAll('script[type="application/ld+json"]');
+    var key = (w.location && w.location.href) + "|" + scripts.length;
+    for (var k = 0; k < scripts.length; k++) key += ":" + (scripts[k].textContent || "").length;
+    if (key === _ldMemo.key) return _ldMemo.urls;
+    var urls = [], keys = [], ids = [], anon = 0;
+    function isArr(v) { return Object.prototype.toString.call(v) === "[object Array]"; }
+    function isProduct(n) {
+      var t = isArr(n["@type"]) ? n["@type"] : [n["@type"]];
+      for (var i = 0; i < t.length; i++) {
+        // "Product", "schema:Product" and "https://schema.org/Product" are all Product
+        if (typeof t[i] === "string" && PRODUCT_LD_TYPE_RE.test(t[i].replace(/^.*[\/:#]/, ""))) return true;
+      }
+      return false;
+    }
+    function addImage(v) {
+      if (!v) return;
+      if (isArr(v)) { for (var i = 0; i < v.length; i++) addImage(v[i]); return; }
+      if (typeof v === "object") { addImage(v.contentUrl || v.url); return; }
+      if (typeof v !== "string") return;
+      var u = absolutize(v);
+      if (!u || isPlaceholderSrc(u) || isExcludedSrc(u)) return;
+      u = upgradeImageUrl(u);
+      var key = canonicalPhoto(u);          // once per URL - a long image list stays linear
+      if (keys.indexOf(key) !== -1) return;
+      keys.push(key);
+      urls.push(u);
+    }
+    function walk(n, depth) {
+      if (!n || typeof n !== "object" || depth > 5) return;
+      if (isArr(n)) { for (var i = 0; i < n.length; i++) walk(n[i], depth + 1); return; }
+      if (isProduct(n)) {
+        var id = String(n.name || n.sku || n.productID || n["@id"] || "").trim().toLowerCase() || ("#" + anon++);
+        if (ids.indexOf(id) === -1) ids.push(id);
+        addImage(n.image);
+        return;   // not into offers/hasVariant - those carry other colourways' photos
+      }
+      if (n["@graph"]) walk(n["@graph"], depth + 1);
+      if (n.mainEntity) walk(n.mainEntity, depth + 1);
+    }
+    for (var s = 0; s < scripts.length; s++) {
+      var data = null;
+      try { data = JSON.parse(scripts[s].textContent || ""); } catch (_) { continue; }
+      walk(data, 0);
+    }
+    if (ids.length > 1) {
+      console.log("[PEAR] JSON-LD describes", ids.length, "products - not a single-product page; its images are not used");
+    }
+    _ldMemo = { key: key, urls: ids.length === 1 ? urls : [] };
+    return _ldMemo.urls;
+  }
+
+  /* samePhoto() plus one looser tier, used ONLY by the og:image cross-check: the same
+     filename under a different host/path (a store's own domain vs its CDN hostname -
+     Shopify serves one file under both). Loosening here can only KEEP an og:image the
+     check would otherwise drop, i.e. it errs toward the behaviour before the check
+     existed. Short names ("1.jpg", "image.jpg") are too generic to vouch for anything. */
+  function sameAsset(a, b) {
+    if (samePhoto(a, b)) return true;
+    var fa = fileNameOf(canonicalPhoto(a)), fb = fileNameOf(canonicalPhoto(b));
+    return !!fa && fa === fb && fa.replace(/\.[a-z0-9]+$/, "").length >= 6;
+  }
+
+  /* The page's og:image as a garment URL - absolute and upgraded - or "" when it cannot
+     be one. og:image describes the PAGE for social cards, and stores routinely leave it
+     on a site-wide default (a brand share image, a logo) on product pages. Refused when:
+       - isExcludedSrc(): a logo/icon/SVG. findProductImages() used to ship the raw
+         og:image as its first entry WITHOUT this check, so a logo og:image became the
+         garment on every page that reached that fallback.
+       - the page's own single-product JSON-LD lists photos and the og:image is none of
+         them. JSON-LD is the only contradicting source trusted here: a DOM gallery is
+         routinely incomplete (a lazy gallery may hold only the extra photos while the
+         main one lives in og:image - widget-dom fixture E), so "absent from the DOM" is
+         no evidence, and without JSON-LD the og:image is trusted exactly as before. */
+  function pageOgImage() {
+    var og = d.querySelector('meta[property="og:image"]');
+    var ogUrl = og && og.content ? absolutize(og.content) : "";
+    if (!ogUrl || isExcludedSrc(ogUrl)) return "";
+    ogUrl = upgradeImageUrl(ogUrl);
+    var ld = jsonLdProductImages();
+    if (!ld.length) return ogUrl;
+    for (var i = 0; i < ld.length; i++) if (sameAsset(ld[i], ogUrl)) return ogUrl;
+    console.log("[PEAR] og:image is not one of this product's JSON-LD photos - not using it:",
+      abbrevUrl(ogUrl), "| JSON-LD photos:", ld.length);
+    return "";
   }
 
   /* Shopify (and Shopify-alike) variant id - read off the store's own Add-to-Cart
@@ -737,6 +961,7 @@
       var el = sel[i];
       if (el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
       if (!el || el.tagName !== "IMG") continue;
+      if (inForeignProductScope(el, scope)) continue;   // a recommended product's "back" is not ours
       var urls = imageUrlsFrom(el);
       if (!urls.length) continue;
       var label = labelTextFor(el);
@@ -779,54 +1004,72 @@
 
     function push(img) {
       if (!img || seen.indexOf(img) !== -1) return;
-      if (isExcludedSrc(img.currentSrc || img.src)) return;
+      /* Judged by the photo it would SHIP (bestImageUrl already drops logo/icon/SVG
+         candidates), never by the pixel it is showing: a lazy <img> displays a
+         placeholder - often an SVG spacer, data:image/svg+xml - while its real photo
+         waits in data-src. Gating on the rendered src rejected that photo once SVGs
+         became excluded (widget-dom fixture M). */
+      if (!bestImageUrl(img)) return;
       seen.push(img);
       found.push(img);
     }
 
-    /* Priority 1 - the og:image, when a visible <img> carries the same URL. */
-    var og = d.querySelector('meta[property="og:image"]');
-    var ogUrl = og && og.content ? og.content : "";
-    if (ogUrl) {
+    /* Priority 1 - the og:image, when a visible <img> carries the same URL. pageOgImage()
+       has already refused an unusable or contradicted one; the raw content is kept for
+       the path comparison below exactly as before. */
+    var ogUrl = pageOgImage();
+    var ogMeta = ogUrl ? d.querySelector('meta[property="og:image"]') : null;
+    var ogRaw = ogMeta && ogMeta.content ? ogMeta.content : "";
+    if (ogRaw) {
       var imgs = d.querySelectorAll("img");
       for (var i = 0; i < imgs.length; i++) {
         var src = imgs[i].currentSrc || imgs[i].src || "";
         /* match on the path part - CDNs often vary query params / protocol */
-        if (src && (src === ogUrl || src.split("?")[0] === ogUrl.split("?")[0])) {
+        if (src && (src === ogRaw || src.split("?")[0] === ogRaw.split("?")[0])) {
           push(imgs[i]);
         }
       }
     }
 
-    /* Priority 2 - well-known product-image selectors. */
+    /* Priority 2 - well-known product-image selectors, minus another product's tile. */
     if (!found.length) {
       var sel = d.querySelectorAll(PRODUCT_IMG_SELECTORS);
       for (var j = 0; j < sel.length; j++) {
         var el = sel[j];
         /* [data-product-image] may be the container rather than the img */
         if (el.tagName !== "IMG") el = el.querySelector("img") || el;
-        if (el.tagName === "IMG") push(el);
+        if (el.tagName === "IMG" && !inForeignProductScope(el, d)) push(el);
       }
     }
 
-    /* Priority 3 - any big image that doesn't look like chrome/logo. */
+    /* Priority 3 - schema.org microdata: the page marking its own product photo. */
+    if (!found.length) {
+      var ip = d.querySelectorAll('img[itemprop="image"]');
+      for (var p = 0; p < ip.length; p++) {
+        if (isProductPhotoCandidate(ip[p], d)) push(ip[p]);
+      }
+    }
+
+    /* Priority 4 - any big image that is a product-photo candidate. Size was the whole
+       test before, and a mega-menu wallpaper is big too. */
     if (!found.length) {
       var all = d.querySelectorAll("img");
       for (var k = 0; k < all.length; k++) {
         var im = all[k];
-        if (im.naturalWidth > 200 && im.naturalHeight > 200) push(im);
+        if (im.naturalWidth > 200 && im.naturalHeight > 200 && isProductPhotoCandidate(im, d)) push(im);
       }
     }
 
-    /* og:image wins as the garment URL for the page's primary image; an explicit
-       data-pear-back (or data-pear-front override) is captured per image. Non-explicit
-       URLs go through imageUrlsFrom() so a lazy <img> resolves to its real, full-size
-       asset instead of a placeholder pixel or a 100px thumbnail. */
+    /* og:image wins as the garment URL for the page's primary image - only once
+       pageOgImage() has vetted it; an explicit data-pear-back (or data-pear-front
+       override) is captured per image. Non-explicit URLs go through imageUrlsFrom() so a
+       lazy <img> resolves to its real, full-size asset instead of a placeholder pixel or
+       a 100px thumbnail. */
     var entries = found.map(function (img, idx) {
       return {
         img: img,
         url: explicitAttr(img, "data-pear-front") ||
-             ((idx === 0 && ogUrl) ? upgradeImageUrl(absolutize(ogUrl)) : bestImageUrl(img)),
+             ((idx === 0 && ogUrl) ? ogUrl : bestImageUrl(img)),
         back: explicitAttr(img, "data-pear-back")
       };
     });
@@ -899,6 +1142,8 @@
       var el = imgs[i];
       if (el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
       if (!el || el.tagName !== "IMG") continue;
+      // Another product's tile/carousel inside this root - never this garment's photo.
+      if (inForeignProductScope(el, scope)) continue;
       /* Every URL this element carries, not just the rendered src - on a lazy gallery
          the off-screen slides (i.e. the back view) have only data-src/srcset. The
          first candidate is the best one; the rest are added too because a theme can
@@ -914,6 +1159,15 @@
        theme's own <noscript> copy of the gallery markup. */
     var ns = noscriptImageUrls(scope);
     for (var n = 0; n < ns.length; n++) { candidates.push(ns[n]); add(ns[n]); }
+    /* Structured-data supplement - page-scoped only (a card's root is not the page's
+       product) and only when the DOM gallery came up thin: JSON-LD lists the product's
+       photos whatever the gallery's lazy-loading does. A fallback rather than always
+       merged, so a gallery the DOM already resolved never gains a second spelling of a
+       photo it has - one photo under two URLs is what gets paired as front AND back. */
+    if (scope === d && urls.length < 2) {
+      var ld = jsonLdProductImages();
+      for (var l = 0; l < ld.length; l++) { candidates.push(ld[l]); add(ld[l]); }
+    }
 
     console.log('[PEAR] THUMB_SELECTORS matched', imgs.length, 'element(s) under root:', scope);
     console.log('[PEAR] all candidates before filter:', candidates);
@@ -1863,19 +2117,32 @@
      (its card) and read the garment from there; if none is found within a few
      levels, fall back to the page's primary product image. */
   function pickProductImageIn(root) {
-    var el = root.querySelector && root.querySelector(PRODUCT_IMG_SELECTORS);
-    if (el) {
+    if (!root || !root.querySelectorAll) return null;
+    /* 1. The theme's own product-image selectors - the first match that carries a URL
+          and is not another product's tile nested in this root. */
+    var sel = root.querySelectorAll(PRODUCT_IMG_SELECTORS);
+    for (var s = 0; s < sel.length; s++) {
+      var el = sel[s];
       if (el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
-      if (el && el.tagName === "IMG" && bestImageUrl(el)) return el;
+      if (el && el.tagName === "IMG" && bestImageUrl(el) && !inForeignProductScope(el, root)) return el;
     }
-    /* else the largest non-decorative <img> inside this container (collection cards
-       rarely use the PDP selectors above, so size is the reliable signal) */
-    var imgs = (root.querySelectorAll && root.querySelectorAll("img")) || [];
+    /* 2. schema.org microdata: itemprop="image" is the page marking its own product photo
+          (SFCC/SFRA tags every gallery <img>). Preferred over raw size. */
+    var ip = root.querySelectorAll('img[itemprop="image"]');
+    for (var p = 0; p < ip.length; p++) {
+      if (isProductPhotoCandidate(ip[p], root)) return ip[p];
+    }
+    /* 3. else the largest product-photo candidate inside this container (collection cards
+          rarely use the PDP selectors above, so size is the reliable signal). Having a URL
+          was the ONLY test here before, which is how the adidas.co.il wishlist heart won:
+          it was the sole <img> in the tightest ancestor of "Add to Bag". Now a candidate is
+          never chrome, never another product's tile, never a visibly glyph-sized image -
+          see isProductPhotoCandidate(). */
+    var imgs = root.querySelectorAll("img");
     var best = null, bestArea = -1;
     for (var i = 0; i < imgs.length; i++) {
       var im = imgs[i];
-      var src = bestImageUrl(im);
-      if (!src) continue;
+      if (!isProductPhotoCandidate(im, root)) continue;
       var area = (im.naturalWidth || im.width || 1) * (im.naturalHeight || im.height || 1);
       if (area > bestArea) { bestArea = area; best = im; }
     }
@@ -1899,29 +2166,41 @@
        1. og:image meta tag - the most reliable signal there is, but PAGE-WIDE
           (it describes the page, not any one card), so it's only trustworthy
           on a genuine single-product page.
+          Vetted by pageOgImage(): a logo/SVG og:image, or one the page's own
+          single-product JSON-LD contradicts, is skipped.
        2. Known single-product gallery containers (PRODUCT_GALLERY_SELECTORS) -
-          same page-wide caveat as above.
-     Returns "" when neither is present, so the caller falls back to the
+          same page-wide caveat as above. The first USABLE match: a URL-less first
+          element used to end the search.
+       3. schema.org JSON-LD Product.image - the platform-agnostic tier for a store
+          whose theme none of the selectors know (see jsonLdProductImages(); it
+          answers only on a single-product page, so grids are unaffected).
+     Returns "" when none is present, so the caller falls back to the
      per-button ancestor walk-up, which is the only signal actually scoped to
      ONE product and so remains the resolver for collection/grid pages. */
   function resolvePrimaryProductImage() {
-    var og = d.querySelector('meta[property="og:image"]');
-    var ogUrl = og && og.content ? absolutize(og.content) : "";
-    if (ogUrl && !isExcludedSrc(ogUrl)) return upgradeImageUrl(ogUrl);
+    var ogUrl = pageOgImage();
+    if (ogUrl) return ogUrl;
 
-    var el = d.querySelector(PRODUCT_GALLERY_SELECTORS);
-    if (el) {
+    var sel = d.querySelectorAll(PRODUCT_GALLERY_SELECTORS);
+    for (var i = 0; i < sel.length; i++) {
+      var el = sel[i];
       if (el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
-      if (el && el.tagName === "IMG") {
-        var src = bestImageUrl(el);
-        if (src) return src;
-      }
+      if (!el || el.tagName !== "IMG" || inForeignProductScope(el, d)) continue;
+      var src = bestImageUrl(el);
+      if (src) return src;
+    }
+
+    var ld = jsonLdProductImages();
+    if (ld.length) {
+      console.log("[PEAR] primary product image from JSON-LD:", abbrevUrl(ld[0]));
+      return ld[0];
     }
     return "";
   }
 
   function findGarmentForButton(btn) {
-    // Priority 1/2 - og:image, then known product-gallery containers.
+    // Priority 1/2/3 - og:image, known product-gallery containers, JSON-LD
+    // (see resolvePrimaryProductImage).
     var primaryUrl = resolvePrimaryProductImage();
     if (primaryUrl) {
       var pgName = getGarmentName();

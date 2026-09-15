@@ -9719,6 +9719,10 @@ function traceConditioning(item, imageRef, before) {
 const PRESENTATION_PARAMS = new Set([
   "width", "height", "w", "h", "size", "quality", "q", "dpr", "format", "fm",
   "crop", "fit", "scale", "v", "ver", "version", "t", "cache", "_",
+  // Salesforce Commerce Cloud Dynamic Imaging (.../dw/image/v2/...): box, scale mode,
+  // output format, letterbox colour - adidas.co.il's thumbnail and zoom slide of ONE
+  // photo differ only in these. Lockstep with pear-widget.js PRESENTATION_PARAMS.
+  "sw", "sh", "sm", "sfrm", "bgcolor",
 ]);
 
 /* Image-resizer endpoints (Next.js /_next/image, Cloudflare /cdn-cgi/image, imgproxy)

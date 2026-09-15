@@ -1766,6 +1766,23 @@ async function saveClassification(imageUrl, classification, meta = {}) {
 
   let { error } = await supabase.from("garment_cache")
     .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields, ...v13Fields, ...v14Fields }], { onConflict: "canonical_url" });
+  /* THE BUG THIS CLOSES (2026-09): production ran V9 (canonical_url) and V11
+     (age_group/age_group_confidence) WITHOUT V8 (confidence/source/cue/product_url)
+     ever having been migrated onto garment_cache - see the commit that added
+     scanner/backfill-age-group.js, which had to hand-confirm the live column list
+     via information_schema because v8Fields kept getting every UPDATE rejected.
+     Every tier below this one keeps v8Fields bundled with v11Fields and only drops
+     v8Fields as the SECOND-TO-LAST resort (mirroring the "columns arrived in strict
+     version order" assumption) - on a table missing ONLY v8, that bundling means
+     every tier down to the bare `base` upsert fails, and age_group is silently
+     dropped from EVERY live write forever, not just until the next migration. Try
+     the v8-less shape FIRST, since that is production's actual state, before
+     falling through the version-order ladder that assumes it isn't. */
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+    console.warn("[garment_cache] a column is absent - trying without v8 fields (confidence/source/cue/product_url)");
+    ({ error } = await supabase.from("garment_cache")
+      .upsert([{ ...base, ...canonical, ...v11Fields, ...v12Fields, ...v13Fields, ...v14Fields }], { onConflict: "canonical_url" }));
+  }
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("[garment_cache] v14 column absent - run archive/supabase_setup_v14.sql for size-run-type caching");
     ({ error } = await supabase.from("garment_cache")
@@ -2132,6 +2149,10 @@ async function synthesizeBackView(frontUrl, opts = {}) {
 const PRESENTATION_PARAMS = new Set([
   "width", "height", "w", "h", "size", "quality", "q", "dpr", "format", "fm",
   "crop", "fit", "scale", "v", "ver", "version", "t", "cache", "_",
+  // Salesforce Commerce Cloud Dynamic Imaging (.../dw/image/v2/...): box, scale mode,
+  // output format, letterbox colour - adidas.co.il's thumbnail and zoom slide of ONE
+  // photo differ only in these. Lockstep with pear-widget.js PRESENTATION_PARAMS.
+  "sw", "sh", "sm", "sfrm", "bgcolor",
 ]);
 
 /* Resizer endpoints keep the REAL asset in a `url=` param; their own path is the same

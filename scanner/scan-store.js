@@ -12,8 +12,10 @@
    substring on the homepage) are scanned through the /products.json catalog
    API - every product and its full image list, paginated, no page-by-page
    scraping needed. Everything else falls back to fetching each product page
-   as plain HTML and pulling image URLs out with regex (<img src>, <img
-   data-src> for lazy-loaded images, <meta property="og:image" content>). This
+   as plain HTML and pulling image URLs out with regex (schema.org JSON-LD
+   Product.image, <meta property="og:image" content>, and <img src> /
+   data-src / data-lazy outside the page's <header>/<nav>/<footer> - see
+   findProductImages()). This
    works on any host with no Chrome/Chromium install (Railway's Nix-based
    Chromium install proved unreliable) - the tradeoff on the HTML-scrape path
    is that images injected purely by client-side JavaScript after page load
@@ -70,7 +72,15 @@ const FETCH_USER_AGENT = "Mozilla/5.0 (compatible; PEAR-StoreScanner/1.0)";
 
 function isExcludedSrc(src) {
   const s = (src || "").toLowerCase();
-  return EXCLUDE_IMG_SRC.some((needle) => s.includes(needle));
+  return isVectorSrc(s) || EXCLUDE_IMG_SRC.some((needle) => s.includes(needle));
+}
+
+/* SVG is UI - icons, arrows, wishlist hearts - never a garment photo, and Gemini cannot
+   classify one. Path only, so a raster whose query string mentions ".svg" is kept.
+   Mirrors isVectorSrc() in widget/pear-widget.js. */
+function isVectorSrc(url) {
+  const s = String(url || "");
+  return /^data:image\/svg/i.test(s) || /\.svgz?$/i.test(s.split(/[?#]/)[0]);
 }
 
 function isProductLink(href) {
@@ -119,23 +129,25 @@ function findProductLinks(html, baseUrl) {
   return links;
 }
 
-/* Every garment image referenced in a product page's raw HTML:
-     - <img src="...">
-     - <img data-src="..."> (lazy-loaded images - most themes swap this into
-       src via JS on scroll, so the real image only lives here pre-render)
-     - <meta property="og:image" content="...">
-   De-duplicated and filtered against EXCLUDE_IMG_SRC. Note: without rendering
-   the page there's no way to read naturalWidth/naturalHeight, so - unlike a
-   browser-driven crawl - this can't filter by rendered image size; it relies
-   entirely on the src/filename exclusion list to skip decorative chrome. */
+/* Every garment image a product page's raw HTML references, best-first:
+     1. schema.org JSON-LD Product.image - the product's own photo list, emitted by
+        every major platform for Google Shopping. Used only when the page describes
+        exactly ONE product (see jsonLdProductImages()).
+     2. <meta property="og:image" content="...">
+     3. <img> tags OUTSIDE the site chrome (<header>/<nav>/<footer> blocks are cut from
+        the HTML first - stripChrome()), reading data-src / data-lazy (Slick's lazy
+        attribute) / src - lazy themes swap those into src via JS, so pre-render the
+        real image only lives there.
+   SVGs are dropped (isExcludedSrc -> isVectorSrc), and one photo under several URL
+   spellings (?sw=100 thumbnail vs ?sw=600 slide) is kept once, by canonical identity.
+   THE BUG THIS CLOSES: the sweep took EVERY <img> on the page - mega-menu wallpapers,
+   payment badges, wishlist hearts, social icons - filtered only by a filename
+   substring list, and each one went to Gemini and was cached into garment_cache as a
+   "front"/"back" row. Same line the widget draws in the browser (pear-widget.js
+   isChromeImage / isVectorSrc / jsonLdProductImages). Without rendering the page there
+   is still no naturalWidth/naturalHeight to filter on. */
 function findProductImages(html, baseUrl) {
-  const urls = [];
-
-  const imgTags = html.match(/<img\b[^>]*>/gi) || [];
-  for (const tag of imgTags) {
-    const src = extractAttr(tag, "data-src") || extractAttr(tag, "src");
-    if (src) urls.push(src);
-  }
+  const urls = [...jsonLdProductImages(html)];
 
   const metaTags = html.match(/<meta\b[^>]*>/gi) || [];
   for (const tag of metaTags) {
@@ -143,6 +155,12 @@ function findProductImages(html, baseUrl) {
       const content = extractAttr(tag, "content");
       if (content) urls.push(content);
     }
+  }
+
+  const imgTags = stripChrome(html).match(/<img\b[^>]*>/gi) || [];
+  for (const tag of imgTags) {
+    const src = extractAttr(tag, "data-src") || extractAttr(tag, "data-lazy") || extractAttr(tag, "src");
+    if (src) urls.push(src);
   }
 
   const seen = new Set();
@@ -156,11 +174,65 @@ function findProductImages(html, baseUrl) {
     }
     if (!/^https?:\/\//i.test(abs)) continue;
     if (isExcludedSrc(abs)) continue;
-    if (seen.has(abs)) continue;
-    seen.add(abs);
+    const key = canonicalImageUrl(abs) || abs;
+    if (seen.has(key)) continue;
+    seen.add(key);
     images.push(abs);
   }
   return images;
+}
+
+/* The page with its site chrome cut out - HTML comments and <header>, <nav>, <footer>
+   blocks - so the <img> sweep only sees the content area: a product photo never lives
+   in the site header, navigation or footer (adidas.co.il ships 1200px mega-menu
+   wallpapers inside <nav>). Non-greedy per block, so no nested quantifier to backtrack
+   on. A <header> inside <article> goes too - the price of having no DOM; JSON-LD and
+   og:image still cover that page's main photo. */
+function stripChrome(html) {
+  let out = String(html || "").replace(/<!--[\s\S]*?-->/g, " ");
+  for (const tag of ["header", "nav", "footer"]) {
+    out = out.replace(new RegExp("<" + tag + "\\b[\\s\\S]*?<\\/" + tag + ">", "gi"), " ");
+  }
+  return out;
+}
+
+/* schema.org JSON-LD Product.image out of raw HTML. Only Product-typed nodes (an
+   Organization/WebSite node's image is the store LOGO), never descending into a
+   product's offers/variants (other colourways' photos), and [] unless the page
+   describes exactly ONE product - counted by name/sku, so a review app repeating the
+   theme's Product block is still one, while a listing page's per-card Products are
+   not. Mirrors jsonLdProductImages() in widget/pear-widget.js. */
+const PRODUCT_LD_TYPE_RE = /^(?:Product|ProductGroup|IndividualProduct|ProductModel)$/;
+function jsonLdProductImages(html) {
+  const blocks = String(html || "")
+    .match(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
+  const ids = new Set();
+  const images = [];
+  let anon = 0;
+  const isProduct = (n) => [].concat(n["@type"]).some(
+    (t) => typeof t === "string" && PRODUCT_LD_TYPE_RE.test(t.replace(/^.*[/:#]/, "")));
+  const addImage = (v) => {
+    if (!v) return;
+    if (Array.isArray(v)) { v.forEach(addImage); return; }
+    if (typeof v === "object") { addImage(v.contentUrl || v.url); return; }
+    if (typeof v === "string") images.push(v);
+  };
+  const walk = (n, depth) => {
+    if (!n || typeof n !== "object" || depth > 5) return;
+    if (Array.isArray(n)) { n.forEach((c) => walk(c, depth + 1)); return; }
+    if (isProduct(n)) {
+      ids.add(String(n.name || n.sku || n.productID || n["@id"] || "").trim().toLowerCase() || ("#" + anon++));
+      addImage(n.image);
+      return;
+    }
+    if (n["@graph"]) walk(n["@graph"], depth + 1);
+    if (n.mainEntity) walk(n.mainEntity, depth + 1);
+  };
+  for (const block of blocks) {
+    const json = block.replace(/^<script\b[^>]*>/i, "").replace(/<\/script>$/i, "");
+    try { walk(JSON.parse(json), 0); } catch { /* malformed block - skip it */ }
+  }
+  return ids.size === 1 ? images : [];
 }
 
 /* ── Supabase cache ──────────────────────────────────────────────────────── */
@@ -173,6 +245,10 @@ const RESIZER_RE = /\/(?:_next\/image|cdn-cgi\/image|_vercel\/image|imgproxy|thu
 const PRESENTATION_PARAMS = new Set([
   "width", "height", "w", "h", "size", "quality", "q", "dpr", "format", "fm",
   "crop", "fit", "scale", "v", "ver", "version", "t", "cache", "_",
+  // Salesforce Commerce Cloud Dynamic Imaging (.../dw/image/v2/...): box, scale mode,
+  // output format, letterbox colour - adidas.co.il's thumbnail and zoom slide of ONE
+  // photo differ only in these. Lockstep with pear-widget.js PRESENTATION_PARAMS.
+  "sw", "sh", "sm", "sfrm", "bgcolor",
 ]);
 
 function canonicalImageUrl(url, depth = 0) {
@@ -248,6 +324,21 @@ async function saveClassification(imageUrl, classification, meta = {}) {
 
   let { error } = await supabase.from("garment_cache")
     .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields }], { onConflict: "canonical_url" });
+  /* THE BUG THIS CLOSES (2026-09): production ran V9 (canonical_url) and V11
+     (age_group/age_group_confidence) WITHOUT V8 (confidence/source/cue/product_url)
+     ever having been migrated onto garment_cache - see the commit that added
+     scanner/backfill-age-group.js, which had to hand-confirm the live column list
+     via information_schema because v8Fields kept getting every UPDATE rejected.
+     The old ladder dropped v11Fields FIRST and only tried dropping v8Fields as the
+     last resort before the bare `base` row - on a table missing ONLY v8, that order
+     means every tier fails and age_group is silently dropped from every scan write,
+     not just until the next migration runs. Try the v8-less shape first, since
+     that is production's actual state. */
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+    console.warn("  ⚠ garment_cache a column is absent - trying without v8 fields (confidence/source/cue/product_url)");
+    ({ error } = await supabase.from("garment_cache")
+      .upsert([{ ...base, ...canonical, ...v11Fields }], { onConflict: "canonical_url" }));
+  }
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("  ⚠ garment_cache v11 columns absent - run archive/supabase_setup_v11.sql for kids/adult classification");
     ({ error } = await supabase.from("garment_cache")

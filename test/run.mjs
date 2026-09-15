@@ -248,7 +248,15 @@
      widget-dom       The REAL widget file, executed in jsdom against realistic
                       Shopify / WooCommerce / noscript / image-resizer markup.
                       Asserts the gallery is actually discovered on a lazy-loaded
-                      gallery, which is the bug that started all of this.
+                      gallery, which is the bug that started all of this. Also
+                      stores the selectors do not know: adidas.co.il (Salesforce
+                      Commerce Cloud), where the walk-up shipped the wishlist heart
+                      as the garment, and schema.org JSON-LD-only pages.
+     scanner-extraction
+                      The store scanner's HTML-scrape path (non-Shopify stores): no
+                      SVG, no header/nav/footer image, one entry per photo, JSON-LD
+                      Product photos first - every <img> on the page used to be
+                      classified and cached into garment_cache.
 
    No network, no API keys, no camera - everything here is deterministic and runs
    in about a second. What it CANNOT cover is called out in the summary.
@@ -263,6 +271,7 @@ const SUITES = [
   ["composite", "composite.test.mjs"],
   ["widget-dom", "widget-dom.test.mjs"],
   ["widget-combined", "widget-combined.test.mjs"],
+  ["scanner-extraction", "scanner-extraction.test.mjs"],
   ["thumbnail", "thumbnail.test.mjs"],
   ["composite-handoff", "composite-handoff.test.mjs"],
   ["eager-composite", "eager-composite.test.mjs"],
