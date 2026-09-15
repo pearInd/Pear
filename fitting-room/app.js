@@ -4878,6 +4878,56 @@ function teardown() {
   setConn("idle");
 }
 
+/* ── A NEW TRY-ON INHERITS NOTHING THE LAST ONE LEFT RUNNING ─────────────────────
+   REPORTED: "the second Try On on the same page glitches" - the first garment's session
+   contaminating the next.
+   THE ROOT CAUSE, found by diffing teardown() against the path a session NORMALLY ends on.
+   Every manual exit (Stop, tab hidden, a failed go-live) runs teardown(), which retires
+   everything. But a window that simply runs out does not: it ends in beginFreezeHold() ->
+   stopBilling() -> finalizeVideoClip(), and that chain skipped exactly two of teardown()'s
+   steps.
+     · THE LIVE-CAMERA BRIDGE (startStreamContinuity). Its start is idempotent - `if
+       (_continuity) return` - so the next session did not build one, it REUSED the old one,
+       whose stall clock still held the previous session's last Decart frame. The moment
+       the new render was revealed, "silent for <seconds>" read as a stall and cross-faded
+       the raw camera - the shopper's own clothes - in over the new garment.
+     · THE ORIENTATION WATCHER. Its 250ms sampler kept classifying the camera between
+       sessions, and a retry of the SAME garment reused it (syncOrientationWatcher() only
+       rebuilds on an item change) with the old session's vote streaks, yaw window, swap
+       cooldown and early-turn trigger state.
+   Both are now retired where that chain ends (stopBilling / finalizeVideoClip). This
+   function is the BACKSTOP at the top of goLive(), for any exit path added later that
+   also forgets: nothing it touches can legitimately exist before a session connects
+   (the watcher needs isLive(), the bridge starts at the first rendered frame), so
+   whatever it finds is a leftover by definition, and it logs which.
+   DELIBERATELY NOT TOUCHED: localStream and #webcam (restarting the camera flickers the
+   preview and can re-prompt for permission - teardown() keeps it for exactly this reuse),
+   and everything connectRealtime() already resets for the new session (sessionGen, the
+   billing guard, the condition wire, lastSentImageRef). The new garment's references are
+   fetched, validated, pinned and pre-encoded by goLive()'s preload gate and the fresh
+   watcher, not here. */
+function resetTryOnSession() {
+  const retired = [];
+  if (orientWatcher) {
+    try { orientWatcher.stop(); } catch (_) {}
+    orientWatcher = null;
+    orientWatcherItem = null;
+    retired.push("orientation watcher");
+  }
+  if (typeof _continuity !== "undefined" && _continuity) {
+    stopStreamContinuity();
+    retired.push("live-camera bridge");
+  }
+  /* The pose loop's published readings. Each is freshness-gated where it is read, so an
+     old one is normally inert - but "normally" is the gap this function exists to close. */
+  orientTurnMark(false);
+  _torsoYawAbs = null; _torsoYawAt = 0; _torsoYawRise = 0;
+  _poseFacingSep = null; _poseFacingAt = 0; _poseTorsoLostAt = 0;
+  if (retired.length) {
+    console.warn(`[PEAR] try-on reset: the previous session left ${retired.join(" + ")} running - retired before this one starts`);
+  }
+}
+
 /**
  * Full exit teardown - runs the normal teardown() above (Decart/WebRTC session)
  * AND additionally releases the raw camera (localStream), which teardown() leaves
@@ -15364,6 +15414,7 @@ async function goLive() {
   if (sizeReason) { toast(sizeReason); return; }
 
   busy = true;                         // Task 10 - claim the flow before ANY await
+  resetTryOnSession();                 // retire anything a previous session left running - before the first await
   $("captureBtn").disabled = true;
   $("camError").hidden = true;
   exitClipReplay();                    // clear any history clip before a real session takes #aiVideo
@@ -15760,6 +15811,12 @@ function stopBilling() {
      inert and not running, and a 500ms timer spinning through the tail for no reason is
      the kind of thing that reads as a leak the next time someone profiles this. */
   stopFrameFreezeWatch();
+  /* The live-camera bridge gets no exemption either, and it was the one that leaked: it only
+     bridges a LIVE session (its tick reads isLive(), which is false from here), the frozen
+     tail's recorder branch never blends it, and - being idempotent - a bridge left running
+     here was REUSED by the next session with this session's stall clock, flashing the raw
+     camera over the next garment the moment it was revealed. See resetTryOnSession(). */
+  if (typeof stopStreamContinuity === "function") stopStreamContinuity();
   if (inputThrottle) { try { inputThrottle.dispose(); } catch (_) {} inputThrottle = null; }
   if (realtimeInput) { try { realtimeInput.getTracks().forEach((t) => t.stop()); } catch (_) {} realtimeInput = null; }
   const ai = $("aiVideo");
@@ -15778,6 +15835,11 @@ function finalizeVideoClip() {
   stopRecording();                      // stopPaintLoop + mediaRecorder.stop() → finalizeRecording
   recordHold = false;
   recordHoldSrc = null;
+  /* The tail is over, so the watcher stopBilling() kept for it has nothing left to release.
+     Retire it the way teardown() does - left running, its sampler classified the camera
+     between sessions and a retry of the same garment reused its stale state (see
+     resetTryOnSession()). stop() also ends any hold and the turn mark it owned. */
+  if (orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; orientWatcherItem = null; }
   setLiveControls(false);
   $("captureBtn").disabled = !localStream;
   toast("⏱ הסרטון בן " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות מוכן ✓");

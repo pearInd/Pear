@@ -155,7 +155,8 @@ console.log("\n── §5 WIRING ──");
   check("started at the reveal, right where .show-live goes on",
     /card\(\)\.classList\.add\("show-live"\);\s*\n(?:\s*\/\*[\s\S]*?\*\/\s*\n)?\s*if \(typeof startStreamContinuity === "function"\) startStreamContinuity\(\);/.test(billing));
   const td = extract("function teardown()", "\n}\n");
-  check("retired in teardown(), the path every exit reaches", /stopStreamContinuity\(\)/.test(td));
+  /* Not "the path every exit reaches" any more - that was the premise §6 found false. */
+  check("retired in teardown(), the manual-exit path", /stopStreamContinuity\(\)/.test(td));
 
   const layer = extract("function startStreamContinuity()", "function stopStreamContinuity()");
   check("the tick reads live AND revealed, so a result or clip on the stage is never covered",
@@ -194,6 +195,71 @@ console.log("\n── §5 WIRING ──");
 
   check("both restore seams are URL-only and default OFF",
     /get\("swap_hold"\) === "1"/.test(SRC) && /get\("still_covers"\) === "1"/.test(SRC));
+}
+
+console.log("\n── §6 A SECOND TRY-ON INHERITS NOTHING - the window that simply runs out ──");
+/* REPORTED: "the second Try On on the same page glitches". A window that runs out ends in
+   beginFreezeHold() -> stopBilling() -> finalizeVideoClip(), not teardown() - and that chain
+   skipped the bridge and the orientation watcher. startStreamContinuity() is idempotent, so
+   the next session REUSED this bridge with the old stall clock. See resetTryOnSession(). */
+{
+  /* THE FAILURE, on the real model: session one's output ends at 5s, the page idles (steps
+     keep running, not live), session two is revealed at 20s with its first output frames a
+     beat behind the reveal. */
+  const s1 = cadence(0, 5000, 100), s2 = cadence(20200, 21500, 100);
+  const liveAt = (t) => t < 5000 || t >= 20000;
+  const reused = run([...s1, ...s2], 21500, { live: liveAt });
+  const reveal = reused.events.find((e) => e.t >= 20000);
+  check("a bridge REUSED from the previous session reads the idle gap as a stall at the reveal - the camera over the new garment",
+    !!reveal && reveal.type === "stall" && reveal.gapMs > 10000 && reused.samples.some((x) => x.t >= 20000 && x.t < 20600 && x.alpha > 0.5),
+    JSON.stringify(reveal));
+  const fresh = run(s2, 21500, { live: (t) => t >= 20000, start: 20000 });
+  check("...while a bridge built fresh for that session never shows the camera at all",
+    fresh.events.length === 0 && fresh.samples.every((x) => x.alpha === 0), JSON.stringify(fresh.events));
+
+  /* THE WIRING - each exit of the run-out chain, and the backstop at the next entry. */
+  const billingStop = extract("function stopBilling()", "\n}\n");
+  check("stopBilling() retires the bridge - the window that runs out no longer leaves it running",
+    /stopStreamContinuity\(\)/.test(billingStop));
+  const finalize = extract("function finalizeVideoClip()", "\n}\n");
+  check("finalizeVideoClip() retires the orientation watcher once the frozen tail it was kept for is over",
+    /orientWatcher\.stop\(\)/.test(finalize) && /orientWatcher = null;/.test(finalize) && /orientWatcherItem = null;/.test(finalize));
+  const live = extract("async function goLive()", "function stopLive()");
+  const resetIdx = live.indexOf("resetTryOnSession();"), awaitIdx = live.indexOf("await ");
+  check("goLive() runs resetTryOnSession() after claiming `busy` and before its first await",
+    resetIdx > live.indexOf("busy = true;") && resetIdx !== -1 && resetIdx < awaitIdx);
+
+  /* THE BACKSTOP, executed: whatever it finds is retired, the pose readings are cleared, and
+     it says so once - and it is silent when the previous session exited cleanly. */
+  const resetSrc = extract("function resetTryOnSession()", "\n}\n") + "\n}\n";
+  const logs = [];
+  const sandbox = new Function("console", `
+    let orientWatcher = null, orientWatcherItem = null, _continuity = null, turnMarked = null, watcherStopped = 0, bridgeStopped = 0;
+    let _torsoYawAbs = 0, _torsoYawAt = 0, _torsoYawRise = 0, _poseFacingSep = 0, _poseFacingAt = 0, _poseTorsoLostAt = 0;
+    function stopStreamContinuity() { if (_continuity) { _continuity = null; bridgeStopped++; } }
+    function orientTurnMark(turning) { turnMarked = turning; }
+    ${resetSrc}
+    return {
+      leave() {
+        orientWatcher = { stop() { watcherStopped++; } }; orientWatcherItem = { id: "A" }; _continuity = { stop() {} };
+        _torsoYawAbs = 72; _torsoYawAt = 123; _torsoYawRise = 140; _poseFacingSep = -0.6; _poseFacingAt = 123; _poseTorsoLostAt = 99;
+      },
+      reset: () => resetTryOnSession(),
+      get state() { return { orientWatcher, orientWatcherItem, _continuity, turnMarked, watcherStopped, bridgeStopped,
+        pose: [_torsoYawAbs, _torsoYawAt, _torsoYawRise, _poseFacingSep, _poseFacingAt, _poseTorsoLostAt] }; },
+    };`)({ warn: (m) => logs.push(m), log() {}, error() {} });
+  sandbox.leave();
+  sandbox.reset();
+  const st = sandbox.state;
+  check("resetTryOnSession() stops a leftover watcher and bridge and drops both handles",
+    st.watcherStopped === 1 && st.bridgeStopped === 1 && st.orientWatcher === null && st.orientWatcherItem === null && st._continuity === null,
+    JSON.stringify(st));
+  check("...clears the turn mark and every pose reading the previous session published",
+    st.turnMarked === false && JSON.stringify(st.pose) === JSON.stringify([null, 0, 0, null, 0, 0]), JSON.stringify(st.pose));
+  check("...and logs one findable [PEAR] line naming what it retired",
+    logs.length === 1 && /^\[PEAR\] try-on reset:.*orientation watcher.*live-camera bridge/.test(logs[0]), JSON.stringify(logs));
+  sandbox.reset();
+  check("after a clean exit it retires nothing and stays silent", logs.length === 1 && sandbox.state.watcherStopped === 1);
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
