@@ -107,6 +107,48 @@ function extractAttr(tag, attr) {
   return m ? m[1] : "";
 }
 
+/* Highest-resolution entry out of a srcset. Lockstep with largestFromSrcset() in
+   widget/pear-widget.js (CLAUDE.md §3) - same parse, same tie-breaking.
+
+   THE GAP THIS CLOSES: the <img> sweep below read only data-src/data-lazy/src. On a
+   lazy gallery - which is every storefront where the back photo lives on an off-screen
+   slide - `src` is a 1x1 placeholder and the real URLs are in `srcset`, so the crawler
+   walked away with the front photo (or nothing) and garment_cache was never populated
+   for that product.
+
+   Candidates are separated on WHITESPACE, not on commas: a URL may legally CONTAIN
+   commas, and Cloudinary-style CDNs (assets.adidas.com) always do -
+   "/images/w_1880,f_auto,q_auto/<hash>/tee.jpg". Splitting on "," tears each candidate
+   into fragments and yields truncated or relative junk that 404s. */
+function largestFromSrcset(value) {
+  if (!value) return "";
+  const s = String(value), n = s.length;
+  let i = 0, bestUrl = "", bestWeight = -1;
+  while (i < n) {
+    while (i < n && /[\s,]/.test(s[i])) i++;           // separators from the previous candidate
+    if (i >= n) break;
+    const start = i;
+    while (i < n && !/\s/.test(s[i])) i++;             // the URL - commas inside it are KEPT
+    let url = s.slice(start, i), descriptor = "";
+    if (/,$/.test(url)) {
+      url = url.replace(/,+$/, "");                    // trailing comma = no descriptor
+    } else {
+      while (i < n && /\s/.test(s[i])) i++;
+      const dStart = i;
+      while (i < n && s[i] !== ",") i++;
+      descriptor = s.slice(dStart, i).trim();
+      i++;                                             // consume the separating comma
+    }
+    if (!url) continue;
+    const d = descriptor.split(/\s+/)[0] || "";
+    let weight = 0;
+    if (/^[\d.]+w$/i.test(d))      weight = parseFloat(d);
+    else if (/^[\d.]+x$/i.test(d)) weight = parseFloat(d) * 1000;
+    if (weight > bestWeight) { bestWeight = weight; bestUrl = url; }
+  }
+  return bestUrl;
+}
+
 /* Every <a> tag's href that matches a product-page pattern, de-duplicated and
    normalized to absolute URLs. */
 function findProductLinks(html, baseUrl) {
@@ -159,7 +201,14 @@ function findProductImages(html, baseUrl) {
 
   const imgTags = stripChrome(html).match(/<img\b[^>]*>/gi) || [];
   for (const tag of imgTags) {
-    const src = extractAttr(tag, "data-src") || extractAttr(tag, "data-lazy") || extractAttr(tag, "src");
+    /* Explicit full-size lazy attributes first, then srcset (the real URLs on a lazy
+       gallery), and the rendered src LAST - it is the most likely to be a placeholder
+       or a thumbnail. Mirrors imageUrlsFrom()'s ordering in pear-widget.js. */
+    const src = extractAttr(tag, "data-src")
+             || extractAttr(tag, "data-lazy")
+             || largestFromSrcset(extractAttr(tag, "srcset"))
+             || largestFromSrcset(extractAttr(tag, "data-srcset"))
+             || extractAttr(tag, "src");
     if (src) urls.push(src);
   }
 
@@ -242,6 +291,27 @@ function jsonLdProductImages(html) {
    is what let one photograph occupy several rows under different URL spellings, which
    then disagreed about front vs back. */
 const RESIZER_RE = /\/(?:_next\/image|cdn-cgi\/image|_vercel\/image|imgproxy|thumbor|resize)\b|[?&]url=/i;
+
+/* ── CDN transforms encoded as a PATH SEGMENT ──────────────────────────────────
+   Cloudinary-style CDNs put the rendered size in the PATH, not the query string.
+   assets.adidas.com serves every gallery photo that way:
+      /images/w_280,h_280,f_auto,q_auto:sensitive/<hash>/tee.jpg   ← thumbnail
+      /images/w_1880,f_auto,q_auto/<hash>/tee.jpg                  ← zoom slide
+   Those are ONE photograph, but PRESENTATION_PARAMS only strips QUERY params, so a
+   crawl wrote the same photo to garment_cache several times under different
+   canonical_urls - the duplicate-row problem this cache key exists to prevent, and the
+   way one photo ends up classified BOTH front and back.
+
+   Deliberately NARROW: a segment is dropped only when every comma-separated token is
+   "<short alphabetic key>_<value>" and at least one key is a known sizing/format key,
+   and never the LAST segment, which is the filename ("w_940.jpg" is a file, not a
+   transform). Lockstep with upgradeImageUrl() in pear-widget.js and canonicalImageUrl()
+   in fitting-room/app.js and server.js (CLAUDE.md §3).
+
+   Defined INSIDE canonicalImageUrl so the block stays self-contained when a test
+   slices it out of this file and runs it standalone (CLAUDE.md §2.6), and so all four
+   copies of this logic stay structurally identical. */
+
 const PRESENTATION_PARAMS = new Set([
   "width", "height", "w", "h", "size", "quality", "q", "dpr", "format", "fm",
   "crop", "fit", "scale", "v", "ver", "version", "t", "cache", "_",
@@ -252,6 +322,27 @@ const PRESENTATION_PARAMS = new Set([
 ]);
 
 function canonicalImageUrl(url, depth = 0) {
+  const CDN_TRANSFORM_KEY_RE = /^(?:w|h|c|q|f|dpr|ar|g|e|b|o|fl|bo|co|cs|r)$/;
+  const isCdnTransformSegment = (seg) => {
+    if (!seg || !seg.includes("_")) return false;
+    const tokens = seg.split(",");
+    let sizing = false;
+    for (const token of tokens) {
+      const m = /^([a-z]{1,3})_([a-z0-9:.%*+-]+)$/i.exec(token);
+      if (!m) return false;
+      const key = m[1].toLowerCase();
+      if (!CDN_TRANSFORM_KEY_RE.test(key)) return false;
+      if (/^(?:w|h|c|dpr)$/.test(key)) sizing = true;
+    }
+    return sizing || tokens.length > 1;
+  };
+  /* Accepts a full URL or a bare pathname; query/hash are split off untouched so a
+     transform-looking token in a query string is never mistaken for a path segment. */
+  const stripCdnTransformPath = (u2) => {
+    const m = /^([^?#]*)([\s\S]*)$/.exec(String(u2 || ""));
+    const parts = m[1].split("/");
+    return parts.filter((seg, i) => !(i < parts.length - 1 && isCdnTransformSegment(seg))).join("/") + m[2];
+  };
   if (!url || typeof url !== "string") return "";
   if (/^(data:|blob:)/i.test(url)) return url;
   if (RESIZER_RE.test(url) && depth < 3) {
@@ -272,7 +363,7 @@ function canonicalImageUrl(url, depth = 0) {
   for (const key of [...u.searchParams.keys()]) {
     if (PRESENTATION_PARAMS.has(key.toLowerCase())) u.searchParams.delete(key);
   }
-  u.pathname = u.pathname
+  u.pathname = stripCdnTransformPath(u.pathname)
     .replace(/_(?:pico|icon|thumb|small|compact|medium|large|grande|master|\d{1,4}x(?:\d{1,4})?)(?:_crop_[a-z]+)?(?=\.(?:jpe?g|png|webp|gif)$)/i, "")
     .replace(/-(\d{2,3})x(\d{2,3})(?=\.(?:jpe?g|png|webp|gif)$)/i, (m, a, b) =>
       (parseInt(a, 10) <= 600 && parseInt(b, 10) <= 600) ? "" : m);

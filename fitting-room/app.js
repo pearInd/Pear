@@ -5396,8 +5396,15 @@ function waitConnected(timeout) {
  * http/https string - which fails for CDNs (suitsupply, magnific, etc.) that don't
  * send CORS headers.  Routing through our same-origin proxy avoids that entirely.
  * Returns null on any error so the caller can fall back to the raw URL or prompt-only.
+ *
+ * `statusOut` (optional) is filled in with the proxy's HTTP status and whether that
+ * status is a PERMANENT verdict about this URL. The proxy now passes a definitive
+ * upstream client error through verbatim (404/410/403/...) instead of flattening
+ * everything to 502, so the caller can tell "this asset does not exist" - where every
+ * retry is guaranteed to fail and only adds latency in front of the shopper - apart
+ * from "the gateway had a bad moment", which is worth another round.
  */
-async function fetchGarmentBlob(imgUrl) {
+async function fetchGarmentBlob(imgUrl, statusOut) {
   console.log('[PEAR] fetchGarmentBlob url:', imgUrl);
   if (!imgUrl) { console.log('[PEAR] fetchGarmentBlob result:', 'NULL'); return null; }
   const proxyUrl = `/api/img-proxy?url=${encodeURIComponent(imgUrl)}`;
@@ -5406,6 +5413,12 @@ async function fetchGarmentBlob(imgUrl) {
     const resp = await fetch(proxyUrl);
     console.log("[PEAR] fetchGarmentBlob() - response", resp.status, resp.ok ? "OK" : "FAILED", "for", imgUrl);
     if (!resp.ok) {
+      if (statusOut) {
+        statusOut.status = resp.status;
+        // 404/410 - the asset is not there. 400/401/403/451 - it will not be served to
+        // us. Neither changes on a retry. 5xx and 429 stay retryable.
+        statusOut.permanent = [400, 401, 403, 404, 410, 451].indexOf(resp.status) !== -1;
+      }
       console.warn("[PEAR] img-proxy returned", resp.status, "for", imgUrl);
       console.log('[PEAR] fetchGarmentBlob result:', 'NULL');
       return null;
@@ -5425,13 +5438,22 @@ async function fetchGarmentBlob(imgUrl) {
    back to fetching the raw CDN URL directly from the browser. Some CDNs allow an
    anonymous cross-origin GET even without img-proxy's SSRF/CORS handling, so this
    recovers cases the proxy alone gives up on - specifically the "back image never
-   arrives" failure mode this backs (see prewarmOrientationAssets/maybeSwap). */
+   arrives" failure mode this backs (see prewarmOrientationAssets/maybeSwap).
+
+   A PERMANENT proxy verdict (404/410 - no such asset; 403/451 - never served to us)
+   ends the loop after ONE direct-CDN attempt instead of running all three rounds with
+   backoff. When a mangled URL made every round fail identically, that spent ~1.2s of
+   pure backoff in front of the shopper before the "could not load the garment image"
+   toast - three identical failures dressed up as resilience. The direct round still
+   runs once even then, because it is genuinely independent for a 403: the browser
+   sends the store page's own Referer and cookies, which the proxy never has. */
 async function fetchWithFallback(url, attempts = 3) {
   if (!url) return null;
   for (let i = 1; i <= attempts; i++) {
     // Route 1 - our own /api/img-proxy (CORS-clean, SSRF-guarded, content-type checked).
+    const proxyStatus = { status: 0, permanent: false };
     try {
-      const blob = await fetchGarmentBlob(url);
+      const blob = await fetchGarmentBlob(url, proxyStatus);
       if (blob) return blob;
     } catch (e) {
       console.warn(`[PEAR] fetchWithFallback attempt ${i}/${attempts} - proxy threw:`, e?.message || e);
@@ -5447,6 +5469,14 @@ async function fetchWithFallback(url, attempts = 3) {
       }
     } catch (e) {
       console.warn(`[PEAR] fetchWithFallback attempt ${i}/${attempts} - direct CDN threw:`, e?.message || e);
+    }
+    if (proxyStatus.permanent) {
+      console.warn(
+        `[PEAR] fetchWithFallback - proxy reported HTTP ${proxyStatus.status} (permanent) for`,
+        typeof abbrevImg === "function" ? abbrevImg(url) : url,
+        "- not retrying; the URL itself is wrong or the asset is gone"
+      );
+      break;
     }
     // Linear backoff between rounds - a cold serverless proxy or a transient CDN
     // blip usually clears within a second; there is no point hammering it faster.
@@ -10089,7 +10119,55 @@ const PRESENTATION_PARAMS = new Set([
    equal - collapsing a gallery to one entry and destroying the back reference. */
 const RESIZER_RE = /\/(?:_next\/image|cdn-cgi\/image|_vercel\/image|imgproxy|thumbor|resize)\b|[?&]url=/i;
 
+/* ── CDN transforms encoded as a PATH SEGMENT ──────────────────────────────────
+   Cloudinary-style CDNs put the rendered size in the PATH, not the query string.
+   assets.adidas.com serves every gallery photo that way:
+      /images/w_280,h_280,f_auto,q_auto:sensitive/<hash>/tee.jpg   ← thumbnail
+      /images/w_1880,f_auto,q_auto/<hash>/tee.jpg                  ← zoom slide
+   Those are ONE photograph, but PRESENTATION_PARAMS only strips QUERY params, so the
+   two spellings canonicalised differently and passed every "is the back really a
+   different image" test - the exact §2.2 failure this file's canonicaliser exists to
+   prevent, which binds the FRONT photo as the back reference and reproduces the chest
+   print on the back. It also split one photo across several garment_cache rows that
+   could then disagree about front vs back.
+
+   Deliberately NARROW: a segment is dropped only when every comma-separated token is
+   "<short alphabetic key>_<value>" and at least one key is a known sizing/format key,
+   and never the LAST segment, which is the filename ("w_940.jpg" is a file, not a
+   transform). So "w_940,f_auto,q_auto" and "w_1880" go, while "en_us" (key "en" is not
+   a transform), "abc123_9366" (key contains digits) and "dw1a2b3c4d" (no underscore)
+   all stay. Lockstep with upgradeImageUrl() in pear-widget.js and canonicalImageUrl()
+   in server.js and scanner/scan-store.js (CLAUDE.md §3).
+
+   Defined INSIDE canonicalImageUrl on purpose: back-view-readiness.test.mjs and
+   back-view-diagnostic.test.mjs slice this file from the literal "function
+   canonicalImageUrl" and run the block standalone (CLAUDE.md §2.6), so a module-scope
+   helper above it is not in their sandbox and the extracted copy dies on a
+   ReferenceError. Keeping it nested keeps the extracted block self-contained - and
+   keeps all four copies of this logic structurally identical. */
+
 function canonicalImageUrl(url, depth = 0) {
+  const CDN_TRANSFORM_KEY_RE = /^(?:w|h|c|q|f|dpr|ar|g|e|b|o|fl|bo|co|cs|r)$/;
+  const isCdnTransformSegment = (seg) => {
+    if (!seg || !seg.includes("_")) return false;
+    const tokens = seg.split(",");
+    let sizing = false;
+    for (const token of tokens) {
+      const m = /^([a-z]{1,3})_([a-z0-9:.%*+-]+)$/i.exec(token);
+      if (!m) return false;
+      const key = m[1].toLowerCase();
+      if (!CDN_TRANSFORM_KEY_RE.test(key)) return false;
+      if (/^(?:w|h|c|dpr)$/.test(key)) sizing = true;
+    }
+    return sizing || tokens.length > 1;
+  };
+  /* Accepts a full URL or a bare pathname; query/hash are split off untouched so a
+     transform-looking token in a query string is never mistaken for a path segment. */
+  const stripCdnTransformPath = (u2) => {
+    const m = /^([^?#]*)([\s\S]*)$/.exec(String(u2 || ""));
+    const parts = m[1].split("/");
+    return parts.filter((seg, i) => !(i < parts.length - 1 && isCdnTransformSegment(seg))).join("/") + m[2];
+  };
   if (!url || typeof url !== "string") return "";
   if (/^(data:|blob:)/i.test(url)) return url;
   if (RESIZER_RE.test(url) && depth < 3) {
@@ -10119,7 +10197,7 @@ function canonicalImageUrl(url, depth = 0) {
   // CDN size suffix baked into the filename (Shopify _800x.jpg / _small.jpg /
   // _100x100_crop_center.jpg, WooCommerce -300x300.jpg at thumbnail scale). Mirrors
   // upgradeImageUrl() in pear-widget.js - keep the two in lockstep.
-  u.pathname = u.pathname
+  u.pathname = stripCdnTransformPath(u.pathname)
     .replace(/_(?:pico|icon|thumb|small|compact|medium|large|grande|master|\d{1,4}x(?:\d{1,4})?)(?:_crop_[a-z]+)?(?=\.(?:jpe?g|png|webp|gif)$)/i, "")
     .replace(/-(\d{2,3})x(\d{2,3})(?=\.(?:jpe?g|png|webp|gif)$)/i, (m, a, b) =>
       (parseInt(a, 10) <= 600 && parseInt(b, 10) <= 600) ? "" : m);

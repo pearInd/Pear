@@ -485,19 +485,55 @@
   }
 
   /* Pick the highest-resolution entry out of a srcset ("url 400w, url 1200w" or
-     "url 1x, url 2x"). A bare, descriptor-less single URL is returned as-is. */
+     "url 1x, url 2x"). A bare, descriptor-less single URL is returned as-is.
+
+     THE BUG THIS CLOSES: this used to `value.split(",")`, which is NOT how a srcset is
+     parsed and tears apart every CDN that puts a comma INSIDE the URL. adidas
+     (assets.adidas.com) encodes its transform as ONE comma-joined path segment -
+     "/images/w_1880,f_auto,q_auto/<hash>/tee.jpg" - so the comma split produced:
+        "https://assets.adidas.com/images/w_940"  → absolute but truncated → HTTP 404
+        "f_auto"                                  → junk
+        "q_auto/<hash>/tee.jpg 940w"              → RELATIVE, so absolutize() resolved
+                                                    it against the STORE page → HTTP 404
+     and whichever fragment happened to carry the "940w"/"1880w" descriptor won on
+     weight. Those are the DevTools 404s on "w_940" / "w_1880"; the same mangled URL
+     sent through /api/img-proxy came back 502, because the proxy reported the upstream
+     404 as a gateway error. Cloudinary, imgix and Contentful all build transform URLs
+     with commas the same way, so this was never adidas-specific - it silently broke
+     the gallery scrape on every one of them.
+
+     The HTML spec separates candidates on WHITESPACE, not on commas: a candidate is an
+     unbroken non-whitespace run (the URL - commas and all), optionally followed by a
+     descriptor, and the comma that ends a candidate comes AFTER the descriptor, or is
+     left trailing on the URL when there is none. That is what this implements, so
+     "a.jpg,b.jpg" (no space) stays one URL exactly as a browser would read it. */
   function largestFromSrcset(value) {
     if (!value) return "";
-    var parts = value.split(",");
+    var s = String(value), n = s.length, i = 0;
     var bestUrl = "", bestWeight = -1;
-    for (var i = 0; i < parts.length; i++) {
-      var bits = parts[i].trim().split(/\s+/);
-      if (!bits[0]) continue;
-      var d = bits[1] || "";
+    while (i < n) {
+      // Leading whitespace, plus the comma(s) that closed the previous candidate.
+      while (i < n && /[\s,]/.test(s.charAt(i))) i++;
+      if (i >= n) break;
+      // The URL: everything up to the next whitespace. Commas inside it are KEPT.
+      var start = i;
+      while (i < n && !/\s/.test(s.charAt(i))) i++;
+      var url = s.slice(start, i), descriptor = "";
+      if (/,$/.test(url)) {
+        url = url.replace(/,+$/, "");          // trailing comma ends a descriptor-less candidate
+      } else {
+        while (i < n && /\s/.test(s.charAt(i))) i++;
+        var dStart = i;
+        while (i < n && s.charAt(i) !== ",") i++;
+        descriptor = s.slice(dStart, i).trim();
+        i++;                                   // consume the separating comma
+      }
+      if (!url) continue;
+      var d = descriptor.split(/\s+/)[0] || "";
       var weight = 0;
-      if (/w$/i.test(d))      weight = parseFloat(d);
-      else if (/x$/i.test(d)) weight = parseFloat(d) * 1000;   // 2x ranks above any plain width
-      if (weight > bestWeight) { bestWeight = weight; bestUrl = bits[0]; }
+      if (/^[\d.]+w$/i.test(d))      weight = parseFloat(d);
+      else if (/^[\d.]+x$/i.test(d)) weight = parseFloat(d) * 1000;  // 2x ranks above any plain width
+      if (weight > bestWeight) { bestWeight = weight; bestUrl = url; }
     }
     return bestUrl;
   }
@@ -526,6 +562,35 @@
   var RESIZER_RE = /\/(?:_next\/image|cdn-cgi\/image|_vercel\/image|imgproxy|thumbor|resize)\b|[?&]url=/i;
   function isResizerUrl(u) { return RESIZER_RE.test(u || ""); }
 
+  /* ── CDN transforms encoded as a PATH SEGMENT ────────────────────────────────
+     Cloudinary-style CDNs put the rendered size in the PATH, not the query string.
+     assets.adidas.com serves every gallery photo that way:
+        /images/w_280,h_280,f_auto,q_auto:sensitive/<hash>/tee.jpg   ← thumbnail
+        /images/w_1880,f_auto,q_auto/<hash>/tee.jpg                  ← zoom slide
+     Those are ONE photograph. PRESENTATION_PARAMS below only strips QUERY params, so
+     the two spellings canonicalised DIFFERENTLY and sailed through every "is the back
+     really a different image" test - the §2.2 failure that binds the FRONT photo as
+     the back reference and duplicates the chest print onto the back view. It also
+     split one photo across several garment_cache rows that could then disagree about
+     front vs back.
+
+     Dropping the segment is also a real resolution upgrade: the CDN serves the full
+     master asset when no transform is present (verified against assets.adidas.com -
+     976KB original vs 86KB at w_1880), the same trick the SFCC sw/sh/sm strip relies on.
+
+     Deliberately NARROW, because a wrong match here would collapse two DIFFERENT
+     photos into one, which is worse than the bug it fixes. A segment is dropped only
+     when every comma-separated token is "<short alphabetic key>_<value>" and at least
+     one key is a known sizing/format key - and never the LAST segment, which is the
+     filename ("w_940.jpg" is a file, not a transform):
+        w_940,f_auto,q_auto → dropped     en_us       → kept (key "en" is not a transform)
+        w_1880              → dropped     abc123_9366 → kept (key contains digits)
+        f_auto              → kept (format alone is not a size)
+        dw1a2b3c4d          → kept (no underscore at all)
+     Lockstep with canonicalImageUrl() in fitting-room/app.js, server.js and
+     scanner/scan-store.js (CLAUDE.md §3) - the same rules, defined inside the function
+     that uses them in all four copies so a sliced-out block stays self-contained. */
+
   /* Query-string params known to be presentation/cache concerns, never asset identity.
      Mirrors PRESENTATION_PARAMS in fitting-room/app.js's canonicalImageUrl() - keep the
      two in lockstep. canonicalPhoto() below strips ONLY these; every other param is kept,
@@ -542,6 +607,30 @@
   };
 
   function upgradeImageUrl(url) {
+    var CDN_TRANSFORM_KEY_RE = /^(?:w|h|c|q|f|dpr|ar|g|e|b|o|fl|bo|co|cs|r)$/;
+    function isCdnTransformSegment(seg) {
+      if (!seg || seg.indexOf("_") === -1) return false;
+      var tokens = seg.split(","), sizing = false;
+      for (var i = 0; i < tokens.length; i++) {
+        var m = /^([a-z]{1,3})_([a-z0-9:.%*+-]+)$/i.exec(tokens[i]);
+        if (!m) return false;
+        var key = m[1].toLowerCase();
+        if (!CDN_TRANSFORM_KEY_RE.test(key)) return false;
+        if (/^(?:w|h|c|dpr)$/.test(key)) sizing = true;
+      }
+      return sizing || tokens.length > 1;
+    }
+    /* Accepts a full URL or a bare pathname; query/hash are split off untouched so a
+       transform-looking token in a query string is never mistaken for a path segment. */
+    function stripCdnTransformPath(u2) {
+      var m = /^([^?#]*)([\s\S]*)$/.exec(String(u2 || ""));
+      var parts = m[1].split("/"), kept = [];
+      for (var i = 0; i < parts.length; i++) {
+        if (i < parts.length - 1 && isCdnTransformSegment(parts[i])) continue;
+        kept.push(parts[i]);
+      }
+      return kept.join("/") + m[2];
+    }
     if (!url || /^data:/i.test(url)) return url;
     if (isResizerUrl(url)) return url;
     var out = url;
@@ -566,6 +655,9 @@
                .replace(/([?&])&+/g, "$1")
                .replace(/[?&]+(?=#|$)/, "");
     }
+    /* Cloudinary-style transform baked into the PATH (assets.adidas.com and friends) -
+       dropping it yields the master asset, so it upgrades and canonicalises in one go. */
+    out = stripCdnTransformPath(out);
     return out;
   }
 

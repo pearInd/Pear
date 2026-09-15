@@ -1061,6 +1061,35 @@ app.post("/api/admin/check-auth", authLimiter, (req, res) => {
 const imgCache = new Map();
 const IMG_CACHE_MAX = 50;
 
+/* Entry count alone was not a safe cap. Stripping a Cloudinary path transform (see
+   stripCdnTransformPath) makes the proxy fetch the MASTER asset, and a master is
+   routinely ~1MB where the w_1880 rendition was 86KB - so 50 entries went from a few
+   MB to ~50MB of Buffers pinned for the life of a warm Lambda container. Cap the bytes
+   too, and evict oldest-first until both caps hold. */
+const IMG_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+let imgCacheBytes = 0;
+
+/* Single entry point for cache writes so the byte counter can never drift out of sync
+   with the Map. A body larger than the whole budget is served but never cached. */
+function imgCacheSet(key, entry) {
+  if (imgCache.has(key)) imgCacheBytes -= imgCache.get(key).buffer.length;
+  if (entry.buffer.length > IMG_CACHE_MAX_BYTES) { imgCache.delete(key); return; }
+  imgCache.set(key, entry);
+  imgCacheBytes += entry.buffer.length;
+  while (imgCache.size > IMG_CACHE_MAX || imgCacheBytes > IMG_CACHE_MAX_BYTES) {
+    const oldest = imgCache.keys().next();
+    if (oldest.done) break;
+    imgCacheBytes -= imgCache.get(oldest.value).buffer.length;
+    imgCache.delete(oldest.value);
+  }
+}
+
+/* How long the proxy waits on a CDN before giving up (see its use in /api/img-proxy).
+   12s is well inside the platform's function budget and far longer than any healthy
+   image fetch - assets.adidas.com answers in well under a second. Overridable only so
+   cdn-url-integrity.test.mjs can prove the deadline fires without a 12s suite. */
+const PROXY_TIMEOUT_MS = Number(process.env.PEAR_PROXY_TIMEOUT_MS) || 12000;
+
 /* ── Image-proxy SSRF guard ────────────────────────────────────────────────────
    The proxy fetches an arbitrary caller-supplied URL server-side. We block
    private/internal network ranges (where SSRF is dangerous), but allow any
@@ -1161,6 +1190,12 @@ app.get("/api/img-proxy", proxyLimiter, async (req, res) => {
        301 to a signed/regional URL can never be mistaken for a failure. */
     const upstream = await fetch(parsed.href, {
       redirect: "follow",
+      /* Hard deadline. There was NO timeout here: a CDN that accepted the connection
+         and then stalled held this request open until the platform killed the whole
+         function, which the shopper saw as the room hanging and then failing with no
+         reason given. AbortSignal.timeout() needs no timer to clear, so it cannot leak
+         one on any return path. */
+      signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 PEAR-VTON-Proxy/1.0",
@@ -1178,9 +1213,26 @@ app.get("/api/img-proxy", proxyLimiter, async (req, res) => {
       },
     });
     if (!upstream.ok) {
-      console.warn(`[img-proxy] upstream HTTP ${upstream.status} for ${parsed.href}`);
-      return res.status(502).json({
-        error: "upstream_error",
+      /* THE BUG THIS CLOSES: every upstream status was reported as 502, so a URL that
+         simply DOES NOT EXIST upstream (HTTP 404) surfaced in DevTools as
+         "502 Bad Gateway on /api/img-proxy" - which reads as "our proxy is broken" and
+         sent the whole investigation at the proxy and at CDN bot-protection, when the
+         actual fault was a mangled URL built upstream of it (see largestFromSrcset in
+         pear-widget.js). It also made the client burn all three fetchWithFallback
+         rounds re-requesting a URL that can never resolve.
+
+         So: pass a definitive client-error status straight through - it is a verdict
+         about the ASSET, not a gateway failure, and it is retry-pointless. Keep 502 for
+         upstream 5xx and anything else, which genuinely is a gateway-side problem and
+         IS worth another round. 429 stays retryable as 503. */
+      const passthrough = new Set([400, 401, 403, 404, 410, 451]);
+      const status = passthrough.has(upstream.status) ? upstream.status
+                   : upstream.status === 429          ? 503
+                   : 502;
+      console.warn(`[img-proxy] upstream HTTP ${upstream.status} for ${parsed.href} - replying ${status}`);
+      return res.status(status).json({
+        error: passthrough.has(upstream.status) ? "upstream_not_available" : "upstream_error",
+        upstreamStatus: upstream.status,
         message: `Upstream returned HTTP ${upstream.status} for ${parsed.href}`,
       });
     }
@@ -1214,9 +1266,8 @@ app.get("/api/img-proxy", proxyLimiter, async (req, res) => {
     }
     console.log(`[img-proxy] ✓ ${contentType} · ${buffer.length.toLocaleString()} bytes · ${parsed.href}`);
 
-    // Populate in-process cache (oldest-first eviction at cap).
-    if (imgCache.size >= IMG_CACHE_MAX) imgCache.delete(imgCache.keys().next().value);
-    imgCache.set(cacheKey, { buffer, contentType });
+    // Populate in-process cache (oldest-first eviction at BOTH the entry and byte cap).
+    imgCacheSet(cacheKey, { buffer, contentType });
 
     res
       .set("Content-Type", contentType)
@@ -1224,6 +1275,15 @@ app.get("/api/img-proxy", proxyLimiter, async (req, res) => {
       .set("Access-Control-Allow-Origin", "*")
       .send(buffer);
   } catch (err) {
+    /* A timeout is OUR deadline expiring, not a malformed upstream reply - 504 says so,
+       and it is the one failure here that is always worth retrying. */
+    if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+      console.warn(`[img-proxy] timeout after ${PROXY_TIMEOUT_MS}ms for ${parsed.href}`);
+      return res.status(504).json({
+        error: "upstream_timeout",
+        message: `Upstream did not respond within ${PROXY_TIMEOUT_MS}ms for ${parsed.href}`,
+      });
+    }
     console.error("[img-proxy] fetch failed:", err?.message || err);
     res.status(502).json({ error: "proxy_fetch_failed", message: err?.message || String(err) });
   }
@@ -2160,7 +2220,51 @@ const PRESENTATION_PARAMS = new Set([
    product photo compare equal. Recurse into the wrapped URL. */
 const RESIZER_RE = /\/(?:_next\/image|cdn-cgi\/image|_vercel\/image|imgproxy|thumbor|resize)\b|[?&]url=/i;
 
+/* ── CDN transforms encoded as a PATH SEGMENT ──────────────────────────────────
+   Cloudinary-style CDNs put the rendered size in the PATH, not the query string.
+   assets.adidas.com serves every gallery photo that way:
+      /images/w_280,h_280,f_auto,q_auto:sensitive/<hash>/tee.jpg   ← thumbnail
+      /images/w_1880,f_auto,q_auto/<hash>/tee.jpg                  ← zoom slide
+   Those are ONE photograph, but PRESENTATION_PARAMS only strips QUERY params, so the
+   two spellings canonicalised differently - one photo then occupied several
+   garment_cache rows under different canonical_urls, which is exactly how the cache
+   ended up claiming a single photo was BOTH the front and the back, and downstream it
+   let the FRONT photo bind as the back reference.
+
+   Deliberately NARROW: a segment is dropped only when every comma-separated token is
+   "<short alphabetic key>_<value>" and at least one key is a known sizing/format key,
+   and never the LAST segment, which is the filename ("w_940.jpg" is a file, not a
+   transform). So "w_940,f_auto,q_auto" and "w_1880" go, while "en_us" (key "en" is not
+   a transform), "abc123_9366" (key contains digits) and "dw1a2b3c4d" (no underscore)
+   all stay. Lockstep with upgradeImageUrl() in pear-widget.js and canonicalImageUrl()
+   in fitting-room/app.js and scanner/scan-store.js (CLAUDE.md §3).
+
+   Defined INSIDE canonicalImageUrl so the block stays self-contained when a test
+   slices it out of this file and runs it standalone (CLAUDE.md §2.6), and so all four
+   copies of this logic stay structurally identical. */
+
 function canonicalImageUrl(url, depth = 0) {
+  const CDN_TRANSFORM_KEY_RE = /^(?:w|h|c|q|f|dpr|ar|g|e|b|o|fl|bo|co|cs|r)$/;
+  const isCdnTransformSegment = (seg) => {
+    if (!seg || !seg.includes("_")) return false;
+    const tokens = seg.split(",");
+    let sizing = false;
+    for (const token of tokens) {
+      const m = /^([a-z]{1,3})_([a-z0-9:.%*+-]+)$/i.exec(token);
+      if (!m) return false;
+      const key = m[1].toLowerCase();
+      if (!CDN_TRANSFORM_KEY_RE.test(key)) return false;
+      if (/^(?:w|h|c|dpr)$/.test(key)) sizing = true;
+    }
+    return sizing || tokens.length > 1;
+  };
+  /* Accepts a full URL or a bare pathname; query/hash are split off untouched so a
+     transform-looking token in a query string is never mistaken for a path segment. */
+  const stripCdnTransformPath = (u2) => {
+    const m = /^([^?#]*)([\s\S]*)$/.exec(String(u2 || ""));
+    const parts = m[1].split("/");
+    return parts.filter((seg, i) => !(i < parts.length - 1 && isCdnTransformSegment(seg))).join("/") + m[2];
+  };
   if (!url || typeof url !== "string") return "";
   if (/^(data:|blob:)/i.test(url)) return url;
   if (RESIZER_RE.test(url) && depth < 3) {
@@ -2189,7 +2293,7 @@ function canonicalImageUrl(url, depth = 0) {
   for (const key of [...u.searchParams.keys()]) {
     if (PRESENTATION_PARAMS.has(key.toLowerCase())) u.searchParams.delete(key);
   }
-  u.pathname = u.pathname
+  u.pathname = stripCdnTransformPath(u.pathname)
     .replace(/_(?:pico|icon|thumb|small|compact|medium|large|grande|master|\d{1,4}x(?:\d{1,4})?)(?:_crop_[a-z]+)?(?=\.(?:jpe?g|png|webp|gif)$)/i, "")
     .replace(/-(\d{2,3})x(\d{2,3})(?=\.(?:jpe?g|png|webp|gif)$)/i, (m, a, b) =>
       (parseInt(a, 10) <= 600 && parseInt(b, 10) <= 600) ? "" : m);

@@ -174,11 +174,18 @@ Several tests slice a block out of `app.js` by matching its **opening line as a
 literal string**, taking the **first occurrence in the file**, and executing it
 in a sandbox. Affected blocks: `setActiveItem`'s slot write
 (`outfit-slot-isolation`), the presence gate (`body-presence-gate`),
-`applyGarment` (`prompt-only-flip`, `side-profile`).
+`applyGarment` (`prompt-only-flip`, `side-profile`). `canonicalImageUrl` is one too
+(`back-view-readiness`, `back-view-diagnostic` slice from that literal; `url-identity`
+and `cdn-url-integrity` slice `server.js`/`scan-store.js` the same way).
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.
 - If you must move a marked block, update the matching `.test.mjs` in the same commit.
+- A marked block must be **self-contained**. Adding a module-scope helper *above* the
+  marker and calling it from inside is the same failure as moving the block: the
+  sandbox never sees the helper and the extracted copy dies on a `ReferenceError`
+  while the real file is fine. That is why `stripCdnTransformPath` is defined *inside*
+  each canonicaliser rather than next to it.
 
 ### 2.7 Sandbox-safe globals
 `applyGarment` and friends run standalone with no `window`. Every browser global
@@ -224,9 +231,21 @@ same commit. Whichever is wrong is the one that wins.
 | Backdrop sampling | `pear-widget.js: sampleBackdrop` ↔ `app.js: sampleBackdrop` |
 | Garment title → category, incl. `FABRIC_AMBIGUOUS` | `pear-widget.js: detectCategory` ↔ `app.js: classifyGarmentTitle` |
 | Resizer detection | `RESIZER_RE` in both |
+| CDN transform in the **path** (`/images/w_1880,f_auto,q_auto/…`) | `pear-widget.js: upgradeImageUrl` ↔ `app.js` ↔ `server.js` ↔ `scan-store.js: canonicalImageUrl` — **four** copies |
+| `srcset` parsing (split on whitespace, never on `,`) | `pear-widget.js: largestFromSrcset` ↔ `scan-store.js: largestFromSrcset` |
 
 The widget's category verdict is **explicit** and therefore outranks the room's
 own classifier. A widget-side category bug cannot be fixed room-side.
+
+**`canonicalImageUrl` has FOUR copies, not two** — `app.js`, `server.js`,
+`scanner/scan-store.js` and (as `canonicalPhoto`) `pear-widget.js`. They are the
+cache key for `garment_cache` as well as the front/back identity test, so a copy
+that drifts writes duplicate rows that then disagree about front vs back.
+`archive/supabase_setup_v9.sql: pear_canonical_url()` is a **fifth, historical**
+copy: it is a one-time backfill script, it already predates the SFCC
+`sw/sh/sm/sfrm/bgcolor` params and the path-transform strip, and it is not on any
+runtime path (the key is computed in JS and passed to Supabase). Do not treat it as
+live — but if you ever re-run that backfill, port the current rules first.
 
 ---
 

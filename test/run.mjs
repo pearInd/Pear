@@ -326,6 +326,7 @@ const SUITES = [
   ["conditioning-trace", "conditioning-trace.test.mjs"],
   ["stream-continuity", "stream-continuity.test.mjs"],
   ["gender-switch", "gender-switch.test.mjs"],
+  ["cdn-url-integrity", "cdn-url-integrity.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────
@@ -345,9 +346,16 @@ const SUITES = [
    `new Function` parses script syntax, so every run would have failed on the import line
    and the check would have been reverted as broken. Runs FIRST and bails, since a file
    that cannot parse makes every downstream result meaningless. */
+/* server.js and scanner/scan-store.js are sandboxed in fragments by the suites below
+   exactly like app.js is - url-identity, scanner-extraction and cdn-url-integrity all
+   slice them - so they had the identical hole and were simply never listed here. A
+   syntax error in either leaves every suite green while the API 500s on boot and the
+   crawler dies on start. They parse as ESM ("type": "module"), same as the other two. */
 const PARSE_TARGETS = [
   ["fitting-room/app.js", "../fitting-room/app.js"],
   ["widget/pear-widget.js", "../widget/pear-widget.js"],
+  ["server.js", "../server.js"],
+  ["scanner/scan-store.js", "../scanner/scan-store.js"],
 ];
 process.stdout.write(`\n─── parse preflight ${"─".repeat(45)}\n`);
 let parseFailed = false;
