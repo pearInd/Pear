@@ -536,7 +536,7 @@ console.log("\n── §6 init(): pendingSizes seeded from the SYNCHRONOUS URL h
     const t = (key) => key;
     const code = extract(APP, "const ZARA_SIZE_CHART", "\nfunction onMeasurementKeydown");
     const fn = new Function("$", "t", "activeItem", "pendingSizes", "pendingAgeGroup", "localStream",
-      "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null;\n" +
+      "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null, currentUserGender = null;\n" +
       code +
       "\nreturn { calculateSize, getUserSize: () => currentUserSize };"
     );
@@ -670,7 +670,7 @@ console.log("\n── §7 THE STALE-currentBodyCategory RACE: closed at goLive()
     const t = (key) => key;
     const code = extract(APP, "const ZARA_SIZE_CHART", "\nfunction onMeasurementKeydown");
     const fn = new Function("$", "t", "localStream",
-      "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null;\n" +
+      "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null, currentUserGender = null;\n" +
       "let activeItem = null, pendingSizes = undefined, pendingAgeGroup = undefined;\n" +
       code +
       "\nreturn { calculateSize, isCompatibleSizeCategory, hasSizeCategoryMismatch, " +
