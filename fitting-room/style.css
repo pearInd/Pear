@@ -331,36 +331,98 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .form-group input::placeholder { color: var(--muted-2); }
 .form-group__label { font-size: .85rem; font-weight: 600; color: var(--text); }
 
-/* ── Gender selector - segmented pill, same architecture as .gd-tabs (the outfit
-   TOP/BOTTOM toggle) but in this screen's pear-green palette rather than that
-   modal's royal blue, and starting with NEITHER option selected (optional field -
-   CLAUDE.md §2.5) instead of defaulting one active. ──────────────────────────── */
-.gender-toggle {
-  position: relative; display: grid; grid-template-columns: 1fr 1fr;
-  width: min(260px, 100%); padding: 4px; border-radius: var(--pill);
-  background: var(--pear-soft); border: 1px solid var(--glass-line);
-  box-shadow: inset 0 1px 3px rgba(6, 14, 32, .06);
+/* ── Gender selector - Liquid Glass segmented switch ──────────────────────────
+   Restyled 2026-09-15 from a dark filled pill to the LANGUAGE SWITCH'S glass language
+   (.lang-switch): frosted white track, white specular pill, ink for the chosen option and
+   muted for the other. That is the design standard this form already lives in - on this
+   light surface, white-on-dark text would disappear. Still starts with NEITHER option
+   selected (optional field - CLAUDE.md §2.5), so the pill is hidden until a choice.
+   Drag physics live in setupGenderSwitch() (app.js), the same model as the language switch:
+   tap either half, or press and drag; release snaps on --spring.
+   The resting position stays CSS-owned (data-active + dir), so a language flip mirrors the
+   pill with no JS. JS only writes an inline transform WHILE a drag is live, then removes it. */
+.gender-group { justify-items: center; text-align: center; }
+.gender-switch-wrapper {
+  display: flex; justify-content: center; align-items: center;
+  width: 100%; margin: 0 auto;   /* #sizeForm's 28px grid gap already spaces the groups */
 }
-.gender-tab {
-  position: relative; z-index: 1; padding: 10px 14px; border-radius: var(--pill);
-  font-size: .88rem; font-weight: 700; color: var(--text);
-  background: transparent; border: none; cursor: pointer; font-family: inherit;
-  transition: color .25s var(--ease);
+.gender-toggle.liquid-glass-track {
+  --gs-pad: 4px;
+  position: relative; isolation: isolate;
+  display: grid; grid-template-columns: 1fr 1fr;
+  width: min(290px, 100%); padding: var(--gs-pad);
+  border-radius: var(--pill);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .46) 0%, rgba(255, 255, 255, .2) 100%);
+  -webkit-backdrop-filter: blur(20px) saturate(190%); backdrop-filter: blur(20px) saturate(190%);
+  border: 1px solid rgba(255, 255, 255, .62);   /* specular rim */
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, .75),   /* top-edge light catch */
+    inset 0 -1px 2px rgba(0, 0, 0, .05),
+    0 0 0 1px rgba(0, 0, 0, .06),               /* hairline so the rim reads on a light card */
+    0 8px 32px rgba(0, 0, 0, .08);
+  touch-action: pan-y;   /* a horizontal drag is the switch's; a vertical swipe still scrolls the form */
+  -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
 }
-.gender-tab.is-active { color: #fff; }
-.gender-toggle__ind {
-  position: absolute; z-index: 0; top: 4px; bottom: 4px; inset-inline-start: 4px;
-  width: calc(50% - 4px); border-radius: var(--pill);
-  background: linear-gradient(90deg, var(--pear-deep), var(--pear));
-  box-shadow: 0 6px 16px rgba(10, 10, 11, .25);
-  opacity: 0; transition: transform .32s var(--ease), opacity .2s var(--ease);
+/* Specular sheen across the upper half of the glass - static, so it costs nothing per frame. */
+.gender-toggle.liquid-glass-track::before {
+  content: ""; position: absolute; inset: 1px; z-index: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .38) 0%, rgba(255, 255, 255, 0) 58%);
 }
-/* Neither selected (data-active="") keeps the indicator hidden - see .gender-tab's
-   own "toggles off on a second click" note in setGender() (app.js). */
-.gender-toggle[data-active="men"] .gender-toggle__ind,
-.gender-toggle[data-active="women"] .gender-toggle__ind { opacity: 1; }
-.gender-toggle[data-active="women"] .gender-toggle__ind { transform: translateX(100%); }
-[dir="rtl"] .gender-toggle[data-active="women"] .gender-toggle__ind { transform: translateX(-100%); }
+
+/* The sliding glass pill. Width equals one grid column: 50% of the padding box minus one pad.
+   NO backdrop-filter of its own: the track already has one, which makes it the backdrop root -
+   a blur on the pill would only ever sample the track's own tint, never the page behind it. */
+.liquid-glass-pill {
+  position: absolute; z-index: 1; top: var(--gs-pad); bottom: var(--gs-pad); inset-inline-start: var(--gs-pad);
+  width: calc(50% - var(--gs-pad));
+  border-radius: var(--pill);
+  background: linear-gradient(135deg, rgba(255, 255, 255, .97) 0%, rgba(255, 255, 255, .74) 100%);
+  border: 1px solid rgba(255, 255, 255, .9);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, .13), 0 1px 3px rgba(0, 0, 0, .08),
+    inset 0 1px 0 rgba(255, 255, 255, 1), inset 0 -1px 1px rgba(0, 0, 0, .04);
+  opacity: 0; transform: translate3d(0, 0, 0) scale(.9);
+  transition: transform .55s var(--spring), opacity .22s var(--ease);
+  will-change: transform;
+  pointer-events: none;   /* the track owns every pointer - see setupGenderSwitch() */
+}
+.liquid-glass-track[data-active="men"] .liquid-glass-pill,
+.liquid-glass-track[data-active="women"] .liquid-glass-pill { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+.liquid-glass-track[data-active="women"] .liquid-glass-pill { transform: translate3d(100%, 0, 0) scale(1); }
+[dir="rtl"] .liquid-glass-track[data-active="women"] .liquid-glass-pill { transform: translate3d(-100%, 0, 0) scale(1); }
+/* Live drag: the pill tracks the pointer 1:1 (inline transform) with no spring lag, and is
+   shown even with nothing chosen yet - the spring only plays on the release snap. */
+.liquid-glass-track.is-dragging .liquid-glass-pill { transition: opacity .22s var(--ease); opacity: 1; }
+
+.gender-option {
+  position: relative; z-index: 2;   /* above the pill */
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 11px 16px; border: 0; border-radius: var(--pill);
+  background: transparent; cursor: pointer; font-family: inherit;
+  font-size: .9rem; font-weight: 700; line-height: 1; color: var(--muted);
+  touch-action: pan-y;
+  transition: color .3s var(--ease), text-shadow .3s var(--ease);
+}
+.gender-option:hover { color: var(--text); }
+.gender-option.is-active,
+.liquid-glass-track[data-preview="men"] .gender-option[data-gender="men"],
+.liquid-glass-track[data-preview="women"] .gender-option[data-gender="women"] {
+  color: var(--ink); text-shadow: 0 1px 0 rgba(255, 255, 255, .85);
+}
+/* While a drag is live the label under the pill leads, not the one the state still names. */
+.liquid-glass-track[data-preview="men"] .gender-option[data-gender="women"],
+.liquid-glass-track[data-preview="women"] .gender-option[data-gender="men"] { color: var(--muted); text-shadow: none; }
+.gender-option:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--pear-ring); }
+.gender-option__icon {
+  width: 14px; height: 14px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+  opacity: .65; transition: opacity .3s var(--ease), transform .5s var(--spring);
+}
+.gender-option.is-active .gender-option__icon { opacity: 1; transform: scale(1.08); }
+
+@media (prefers-reduced-motion: reduce) {
+  .liquid-glass-pill, .gender-option, .gender-option__icon { transition: none; }
+}
 
 .section-divider {
   display: flex; align-items: center; gap: 14px;

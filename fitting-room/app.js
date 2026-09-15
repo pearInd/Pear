@@ -1457,18 +1457,40 @@ function isAdultProduct(sizes, garmentAgeGroup) {
 }
 
 /**
- * Whether the product's OWN size list is confidently the adult-pants numeric ladder -
- * same "every token or abstain" confidence rule isKidsProduct()/isAdultProduct() use for
- * their own charts, applied here for one more question: not just kids-vs-adult, but
- * WHICH adult chart. A mixed list, a letter scale, or no list at all is NOT confidently
- * pants-numeric, and stays on ZARA_SIZE_CHART - never a guess, matching this file's
- * "an unconfident verdict must not outrank" rule (see CLAUDE.md §2.5).
+ * Whether the product's OWN size list is confidently the EU pants ladder
+ * (ADULT_PANTS_SIZE_CHART's own six values: 36/38/40/42/44/46) - same "every token or
+ * abstain" confidence rule isKidsProduct()/isAdultProduct() use for their own charts.
+ * A letter scale, a kids numeric run, anything outside those six values, or no list at
+ * all is NOT confidently EU-numeric, and defers to pantsChartForSizes()'s waist-inch
+ * branch (or ZARA_SIZE_CHART, if the run isn't pants-numeric at all) - never a guess,
+ * matching this file's "an unconfident verdict must not outrank" rule (CLAUDE.md §2.5).
+ *
+ * NARROWED BACK TO EXACT EU MEMBERSHIP - it was briefly widened to accept ANY plausible
+ * all-numeric adult-bottoms run (24-48), which is what "THE 26-40 REPORT" below used to
+ * describe. That widening shipped its own real bug once ADULT_JEANS_WAIST_CHART
+ * (pantsChartForSizes()'s other branch) existed: a genuine US/UK waist-inch run like
+ * 28-36 also sits inside 24-48, so the widened check claimed it for the EU chart too -
+ * and pantsChartForSizes()'s own EU-first precedence then handed a real FOX waist-inch
+ * product a chest-banded EU size (a 185cm/82kg shopper got EU "36" off a snap-to-list
+ * guess instead of the FOX chart's genuine "32"). isWaistInchSizeRun() below already
+ * covers the SAME 24-48 window this function used to - narrowing this one back to exact
+ * EU membership is what lets pantsChartForSizes()'s "EU claims its own run, waist-inch
+ * takes everything else" precedence actually mean something. THE 26-40 REPORT ITSELF
+ * STAYS FIXED: that run no longer falls back to letters, it now resolves through
+ * isWaistInchSizeRun() to the waist-inch chart instead of being force-fit to EU - see
+ * test/numeric-pants-sizing.test.mjs for the current, chart-precise coverage of that
+ * exact scenario.
  * @param {string[]|string|null} sizes
  * @returns {boolean}
  */
 function isAdultPantsProduct(sizes) {
   const list = parseSizeList(sizes);
-  return list.length > 0 && list.every((s) => ADULT_PANTS_NUMERIC_SIZES.has(s));
+  if (!list.length) return false;
+  // A letter size proves the product ships in the alpha scale - never treat it as
+  // numeric-pants no matter what else the list contains (same precedent
+  // isKidsProduct()/isAdultProduct() use for ADULT_ALPHA_SIZES).
+  if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
+  return list.every((s) => ADULT_PANTS_NUMERIC_SIZES.has(s));
 }
 
 /**
@@ -1808,7 +1830,13 @@ function resolvedSizeRunType() {
 }
 
 /* The ONE mismatch predicate every surface reads - the go-live gate, the modal card,
-   and the size selector alike - so they can never disagree about what is blocked. */
+   and the size selector alike - so they can never disagree about what is blocked.
+   Reads currentBodyCategory as-is, whatever calculateSize() last computed - it does
+   NOT refresh it itself. That is deliberate: goLive() (the actual enforcement point)
+   re-runs calculateSize() immediately before calling this, so the value is always
+   fresh exactly when it matters, without this function needing DOM access. See
+   goLive()'s own comment for the two production bugs a STALE currentBodyCategory
+   shipped before that refresh existed, in two different directions. */
 function hasSizeCategoryMismatch() {
   return !isCompatibleSizeCategory(currentBodyCategory, resolvedGarmentSizes(), resolvedGarmentAgeGroup());
 }
@@ -1836,7 +1864,11 @@ function sizeCategoryMismatchReason() {
    there's nothing to click through in the first place - called from every point
    currentSizeCategory or the garment's resolved age group can change while the room
    is open: calculateSize() (covers the returning-user fast path too), enterRoom(),
-   setSizeOverride(), and the PEAR_UPDATE_GARMENT late-classification listener.
+   setSizeOverride(), setActiveItem() (a mid-session catalog swap - MISSING for a
+   long time, which meant a stale mismatch card / disabled captureBtn could survive
+   a swap to a now-compatible garment and fully block a shopper with no button left
+   to click through goLive()'s own re-check; see setActiveItem()'s own comment), and
+   the PEAR_UPDATE_GARMENT late-classification listener.
    goLive()'s own gate stays as the authoritative backstop regardless of whether this
    UI happened to run - this is only ever a courtesy, never the enforcement. */
 function updateSizeMismatchUI() {
@@ -2064,7 +2096,19 @@ function calculateSize() {
   /* Computed BEFORE the garment constraint below, and kept: this is the shopper's own
      scale, which the mismatch guard needs precisely because the constrained result
      cannot express "an adult body looking at a kids-only product" (it collapses to
-     null). See userBodyCategory()'s comment. */
+     null). See userBodyCategory()'s comment.
+
+     DELIBERATELY SIMPLE: judged against `adultChart` - the SINGLE chart THIS garment
+     resolved to - and nothing cleverer. Two earlier versions of this line tried to make
+     the CACHED value itself correct for every garment the shopper might view for the
+     rest of the session (checking both adult charts unconditionally, then only when
+     garmentSizes was empty) and each shipped a real, reproduced false block in a
+     different direction - see goLive()'s own big comment for both incidents and why the
+     fix belongs THERE instead: calculateSize() is re-run fresh, right before the
+     authoritative gate checks, so this simple per-garment answer is always being asked
+     about the garment that is ACTUALLY active, never a stale one. Do not reintroduce a
+     multi-chart union here - it solves nothing goLive()'s freshness doesn't already
+     solve, and both times it was tried, it broke a real shopper. */
   const bodyChildFits = CHILD_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
   const bodyAdultFits = adultChart.filter((row) => coreHwPenalty(row, height, weight) === 0);
   currentBodyCategory = bodyAdultFits.length ? "adult" : (bodyChildFits.length ? "child" : null);
@@ -2152,6 +2196,40 @@ function calculateSize() {
     if (pen < minPenalty) { minPenalty = pen; bestSize = row.size; }
   });
 
+  // SNAP TO THE PRODUCT'S OWN LIST. isAdultPantsProduct() now recognizes numeric runs
+  // that don't literally match ADULT_PANTS_SIZE_CHART's own six EU rows (e.g. a real
+  // US/UK jeans run of 26-40 - see that chart's "THE 26-40 REPORT" comment). bestSize
+  // above is still only ever one of those six chart values, since it comes from a
+  // genuine height/weight fit against the one chart with VERIFIED bands. When the
+  // product doesn't actually sell that exact number, recommending it anyway would be a
+  // real SKU the shopper can't buy - so snap to whichever size the product's OWN list
+  // actually has that sits closest to it. Pure numeric distance, never a fabricated
+  // cm/kg claim about the sizes this chart has no data for, and always a size that
+  // exists on this specific product - never a letter, matching this file's "the
+  // product's own list wins" precedent (see isKidsProduct()'s comment).
+  //
+  // TIE-BREAK IS AN EXPLICIT "prefer smaller" RULE, NOT ARRAY ORDER. A bare
+  // `reduce((closest, n) => dist(n) < dist(closest) ? n : closest)` looks like it picks
+  // the closest value, but on an exact tie its strict `<` keeps whichever candidate the
+  // reduce happened to visit first - which for a no-initial-value reduce is
+  // ownNumericSizes[0], i.e. WHICHEVER SIZE THE STORE HAPPENED TO SCRAPE FIRST. Every
+  // list in this file's own tests is written in ascending order, so that accidentally
+  // read as "prefers the lower size" - but nothing about a store's DOM guarantees
+  // ascending order, and a differently-ordered size list would have silently flipped
+  // which of two equidistant sizes got recommended. The `n < closest` clause below
+  // makes "prefer the smaller size" a real, order-independent rule instead of an
+  // artifact of whatever order the product happened to list its sizes in.
+  if (currentSizeCategory === "adult" && useAdultPantsChart && garmentSizes.length) {
+    const ownNumericSizes = garmentSizes.map(Number).filter(Number.isFinite);
+    if (ownNumericSizes.length && !garmentSizes.includes(bestSize)) {
+      const target = Number(bestSize);
+      bestSize = String(ownNumericSizes.reduce((closest, n) => {
+        const dn = Math.abs(n - target), dc = Math.abs(closest - target);
+        return dn < dc || (dn === dc && n < closest) ? n : closest;
+      }));
+    }
+  }
+
   sizeResult.innerText = formatSizeLabel(bestSize);
   resultBox.classList.add("show");
   if (resultActions) resultActions.classList.add("is-ready");
@@ -2198,6 +2276,116 @@ function setGender(gender) {
   // fields exist.
   const sizeFormEl = $("sizeForm");
   if (sizeFormEl && !sizeFormEl.hidden) calculateSize();
+}
+
+/* ── The gender switch's input layer: tap AND press-and-drag ─────────────────────
+   Liquid Glass physics for #genderToggle, the model the language switch uses
+   (setupLangToggle in i18n.js), on top of the radiogroup setGender() already owns.
+   ONE STATE PATH. Nothing here writes currentUserGender, the classes or aria-checked - a
+   gesture ends in setGender() or in nothing, so size calculation and every reader of the
+   gender stay exactly as they were.
+   A TAP IS STILL A CLICK. A press that moves less than GENDER_DRAG_SLOP_PX never captures the
+   pointer and lets the button's native click run setGender() - which keeps its tap-the-active-
+   option-to-clear behaviour (optional field, CLAUDE.md §2.5) and Enter/Space on a focused
+   option. Past the slop the gesture is a drag: the pointer is captured, the pill follows it 1:1
+   with rubber-band resistance past either end, and on release the half under the pill's centre
+   wins - past 50% commits, short of it springs back. A drag never CLEARS a choice (releasing
+   over the side already chosen is "no change"), and the click a browser may still dispatch
+   after a captured drag is swallowed so it cannot toggle that choice straight back off.
+   DIRECTION-AGNOSTIC BY MEASUREMENT: slots are read from each option's offsetLeft, which is
+   physical in both LTR and RTL, so no mirrored math - the Hebrew layout (men on the right)
+   drags correctly with no dir branch. The RESTING position stays CSS-owned (data-active +
+   [dir]); the inline transform exists only while a drag is live.
+   pointercancel - a vertical swipe taking the gesture for page scroll, which touch-action:
+   pan-y permits - re-settles without committing. */
+const GENDER_DRAG_SLOP_PX   = 6;      // below this a press is a tap, and the native click owns it
+const GENDER_RUBBER_BAND    = 0.28;   // share of the overshoot the pill follows past either end
+const GENDER_CLICK_SWALLOW_MS = 400;  // how long after a drag a stray click is ignored
+
+/** @param {HTMLElement|null} track  #genderToggle */
+function setupGenderSwitch(track) {
+  if (!track || track.dataset.switchWired) return;
+  track.dataset.switchWired = "1";
+  const pill = track.querySelector(".liquid-glass-pill");
+  let gesture = null;
+  let swallowClickUntil = 0;
+
+  track.addEventListener("click", (e) => {
+    if (Date.now() < swallowClickUntil) { swallowClickUntil = 0; return; }   // the tail of a drag, not a tap
+    const btn = e.target.closest(".gender-tab");
+    if (btn) setGender(btn.dataset.gender);
+  });
+  if (!pill) return;   // no pill in the markup - taps still work, there is just nothing to drag
+
+  const options = () => Array.from(track.querySelectorAll(".gender-tab"));
+  const nearestTo = (centre) => {
+    let best = null, bestD = Infinity;
+    for (const b of options()) {
+      const d = Math.abs(b.offsetLeft + b.offsetWidth / 2 - centre);
+      if (d < bestD) { best = b; bestD = d; }
+    }
+    return best;
+  };
+
+  track.addEventListener("pointerdown", (e) => {
+    swallowClickUntil = 0;   // a new press: any click trailing the last drag has already fired
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const opts = options();
+    if (opts.length < 2) return;
+    const lefts = opts.map((b) => b.offsetLeft);
+    const pillW = pill.offsetWidth;
+    const active = opts.find((b) => b.dataset.gender === currentUserGender);
+    /* With nothing chosen yet the pill appears under the finger, clamped into the track;
+       clientLeft converts the border-box rect into offsetLeft's padding-box frame. */
+    const r = track.getBoundingClientRect();
+    const underPointer = e.clientX - r.left - track.clientLeft - pillW / 2;
+    const min = Math.min(...lefts), max = Math.max(...lefts);
+    gesture = {
+      id: e.pointerId, x0: e.clientX, min, max, pillW,
+      anchor: pill.offsetLeft,   // where translate 0 sits - offsetLeft ignores transforms
+      start: active ? active.offsetLeft : Math.min(max, Math.max(min, underPointer)),
+      left: null, dragging: false,
+    };
+    gesture.left = gesture.start;
+  });
+
+  track.addEventListener("pointermove", (e) => {
+    const g = gesture;
+    if (!g || e.pointerId !== g.id) return;
+    const dx = e.clientX - g.x0;
+    if (!g.dragging) {
+      if (Math.abs(dx) < GENDER_DRAG_SLOP_PX) return;
+      g.dragging = true;
+      try { track.setPointerCapture(g.id); } catch (_) { /* no capture - the drag still tracks while over the track */ }
+      track.classList.add("is-dragging");
+    }
+    let left = g.start + dx;
+    if (left < g.min) left = g.min - (g.min - left) * GENDER_RUBBER_BAND;
+    else if (left > g.max) left = g.max + (left - g.max) * GENDER_RUBBER_BAND;
+    g.left = left;
+    pill.style.transform = `translate3d(${(left - g.anchor).toFixed(1)}px, 0, 0)`;
+    const over = nearestTo(left + g.pillW / 2);
+    if (over) track.dataset.preview = over.dataset.gender;
+  });
+
+  const endGesture = (e, commit) => {
+    const g = gesture;
+    if (!g || e.pointerId !== g.id) return;
+    gesture = null;
+    if (!g.dragging) return;   // a tap - the native click that follows runs setGender()
+    swallowClickUntil = Date.now() + GENDER_CLICK_SWALLOW_MS;
+    try { track.releasePointerCapture(g.id); } catch (_) { /* already released */ }
+    /* Re-arm the spring BEFORE dropping the inline transform, in the same frame, so the snap
+       animates from where the finger left the pill to the CSS resting slot. */
+    track.classList.remove("is-dragging");
+    delete track.dataset.preview;
+    pill.style.transform = "";
+    if (!commit) return;
+    const target = nearestTo(g.left + g.pillW / 2);
+    if (target && target.dataset.gender !== currentUserGender) setGender(target.dataset.gender);
+  };
+  track.addEventListener("pointerup", (e) => endGesture(e, true));
+  track.addEventListener("pointercancel", (e) => endGesture(e, false));
 }
 
 function updateProgress() {
@@ -3249,6 +3437,28 @@ function setActiveItem(item, opts = {}) {
   renderCompleteTheLook(item);
   highlightCatalog(item.id);
   renderPerspectiveSelector();       // rebuild angle tabs + source preview for the new selection
+
+  /* THE STALE-MISMATCH-CARD BLOCK: a mid-session catalog swap is exactly the kind of
+     "resolvedGarmentSizes()/resolvedGarmentAgeGroup() just changed while the room is
+     open" event updateSizeMismatchUI()'s own comment says it must be re-run for - the
+     comment lists calculateSize(), enterRoom(), setSizeOverride(), and the
+     PEAR_UPDATE_GARMENT listener, but never THIS function, even though a catalog-panel
+     swap (see the live call sites this reaches from) is the most direct way of
+     changing which garment is active. Missing it meant: shopper opens a kids-only
+     item (card shown, captureBtn disabled per hasSizeCategoryMismatch()), then swaps
+     to a genuinely compatible adult item via the catalog - the card stayed up and the
+     button stayed disabled, because nothing here ever re-ran the predicate. A disabled
+     button doesn't fire a click, so goLive()'s own fresh calculateSize() call (see its
+     comment) never even gets reached - the shopper is fully blocked with no path
+     through, on a garment they can legitimately try on. currentBodyCategory itself
+     doesn't need recomputing here (the shopper's body didn't change, only the
+     garment), so plain updateSizeMismatchUI() - which already reads
+     resolvedGarmentSizes()/resolvedGarmentAgeGroup() fresh off the new activeItem -
+     is sufficient; injectSizeSelector() rebuilds the ladder to match (and removes it
+     outright if the swap went the other way, into a mismatch). Same try/catch
+     wrapping as the PEAR_UPDATE_GARMENT listener's identical pair, for the same
+     reason: this must never be the thing that breaks a garment swap. */
+  try { injectSizeSelector(); updateSizeMismatchUI(); } catch {}
 
   if (!opts.silent) {
     toast(`עכשיו מודדים: <b>${item.name}</b>`);
@@ -6179,7 +6389,51 @@ const ORIENT_POSE_FLIP_FRAMES    = 2;    // shoulder-order votes needed for a co
 const ORIENT_POSE_PASS = (() => {
   try { return new URLSearchParams(location.search).get("pose_pass") !== "0"; } catch (_) { return true; }
 })();
-/* ── THE EARLY TURN TRIGGER - ON BY DEFAULT at 20 degrees, gated at 45 deg/s (60 until 2026-09-15) ────────
+/* ── THE FOLD HANDSHAKE - the swap goes out at the SIDE VIEW, not as the turn starts (2026-09-15) ─────────────
+   REPORTED, with two clips (pear-tryon-...-FOX-20260915-164257 and -165625, v142): "the front print unmounts too early
+   while the front is still partly visible, leaving a plain T-shirt before the back locks on - and the same on the way
+   back". Asked for: keep FRONT until past 90 degrees, keep BACK until the chest comes round, never a plain shirt.
+   READ FRAME BY FRAME (decoded with per-frame media times; the export repaints a ~10fps render at 30fps):
+     · 164257 OUT: PEAK on the chest at 1.738s with the body ~15 degrees round; the very next Decart frame, 1.773s,
+       is the same body with a plain chest. Plain through the three-quarter and the side until the back print shows
+       at ~2.2s, ~100 degrees. RETURN: back print at 3.304s (~150 degrees), plain at 3.338s with the back still to
+       the lens, PEAK back at ~3.74s (~70 degrees). About 400ms of plain shirt on each leg.
+     · 165625 OUT: PEAK gone at ~2.15s, body ~35 degrees round; back print at ~2.55s.
+     · NOT A STALL, NOT A COVER, NOT A CLEARED REFERENCE. Decart's output kept its ~100ms cadence straight through
+       every gap (no repeated frame, so LIVE CONTINUITY never engaged), nothing of ours is drawn over it, and no path
+       sends image:null. Each gap is the NEW reference rendered on the OLD side: a back photo has no chest print to
+       draw, a front photo has no back print. It begins on the frame the swap lands.
+   WHAT THAT MEASURES. The swap appears on screen with the body at about the angle it was SENT at - Decart's output
+   trails the camera by about as long as a swap takes, so the two cancel. This trigger was tuned (below) against a
+   modelled 700-1000ms dispatch-to-render: under that premise a 20-degree send lands near the side view. In these clips
+   it landed at 20, and every degree of lead was plain shirt.
+   WHAT THE REQUEST CANNOT MEAN HERE, and was not built. Decart holds ONE reference: GARMENT_BACK cannot "arrive" and be
+   verified while GARMENT_FRONT keeps rendering - the swap IS its arrival - and two views cannot be blended across the
+   profile: a stitched FRONT|BACK reference is the double-logo bug (COMPOSITE_DEFAULT), two live sessions would double
+   the bill and ghost. |yaw| folds at 90 and is depth-compressed, so "110" and "70" are not readings either. The one
+   thing the client controls is WHEN the single swap goes out - so it goes out where a real shirt shows neither print.
+   THE FOLD, both legs (makeEarlyTurnTrigger): ORIENT_EARLY_TURN_DEFAULT_DEG and _RETURN_DEG at 50, a depth-compressed
+   reading near the real side view; the slow path at the same 50; and ORIENT_EARLY_TURN_LOSS_DEG, because MediaPipe
+   loses the far shoulder right there and many turns never publish a reading that high - a torso lost while |yaw| was
+   still rising past 20 is the fold too. The 45 deg/s gate, the withdrawal, the cooldown rules and every other path
+   are unchanged.
+   MODELLED (turn-yaw-window §13: the real window, decision, predictive BACK and trigger; 216 full 360s at 45-180
+   deg/s, k 0.6-1, torso readable to 50-90; on-screen latency 0/100/250ms - the clips - and 700 for the old premise):
+     plain shirt while the side being left still faces the lens   663/539/361ms (v142)  ->  337/244/146ms
+     plain shirt on either side of the fold, per 360               1074/995/917ms        ->  519/500/581ms  (700ms: 1267 -> 1217)
+     median landing, out / back (90 = the side view)               50-76 / 72-104        ->  80-105 / 70-95
+   THE COST, stated: the plain that remains sits just past the side view instead of before it (the back panel comes
+   round plain for a beat before its print lands: at 0-250ms, 63-170ms on the way out, 120-266ms on the way back, where
+   v142 showed 116-137 / 295-419ms of it on top of its early gap); one modelled 180 deg/s,
+   k 0.6 turn gives the fold no reading at all and never swaps (6 of 216 vs 5); and a small pose that rises past 20
+   fast and drops a frame reads as the fold - a quick reach, a look back over the shoulder, a slow look to 30 swap up
+   to 10 times in 60 under 15-30% dropped frames, withdrawn. In exchange a twist to 38 swaps 4/60 instead of 46/60 and
+   a mirror check at 45 11/60 instead of 58/60. A held profile check still swaps - it IS the side view.
+   OVERRIDES: ?early_turn=20&early_turn_return=35&early_turn_slow=35&early_turn_loss=0 is v142 exactly.
+   STILL A MODEL: one ?orient_debug=1 360 prints `fold handshake:` with the path that fired and the swap timeline -
+   the live check on where the swap lands.
+   ── WHAT FOLLOWS IS THE 20-DEGREE DEFAULT THIS REPLACED (v134-v142), kept as the record of why it was taken ──
+   THE EARLY TURN TRIGGER - ON BY DEFAULT at 20 degrees, gated at 45 deg/s (60 until 2026-09-15).
    WHY IT EXISTS. Traced client side, a swap costs ~nothing: the Blobs are pinned in memory, the
    catalog's rear pair is 43KB/38KB, @decartai/sdk sends it as one set_image message on the signaling
    WebSocket, and the reference is pre-encoded (preEncodeReference). What remains is Decart switching its
@@ -6211,8 +6465,11 @@ const ORIENT_POSE_PASS = (() => {
    speed, BACK sent withdrawable like a predictive BACK; withdrawn the moment the old side's votes return
    under the threshold, before any vote has confirmed the turn. Symmetric: armed facing away, it sends
    FRONT the same way. */
-const ORIENT_EARLY_TURN_DEFAULT_DEG = 20;
-/* ?early_turn_return=<deg> - THE RETURN LEG, BACK -> FRONT, fires later than the way out.
+const ORIENT_EARLY_TURN_DEFAULT_DEG = 50;   // 20 until the fold handshake - see its comment above
+/* ?early_turn_return=<deg> - THE RETURN LEG, BACK -> FRONT. SUPERSEDED as a default by the fold handshake (above): both legs now
+   send at the side view, 50. What follows is why the return leg was first split from the outbound one - still true of any
+   threshold short of the fold, which is the point the handshake takes to its end.
+   (v136-v142: the return leg fired later than the way out.)
    LIVE EVIDENCE (the first in this series): pear-tryon-...-FOX-20260914-225423.mp4, a v134-era 360 at ~140 deg/s,
    read frame by frame. Out: "PEAK" holds to ~60 degrees, the side is plain (as a side is), the back graphic
    arrives with the back (2.8s) and holds while facing away. Back: between 3.40s and 3.47s the body jumps
@@ -6227,7 +6484,7 @@ const ORIENT_EARLY_TURN_DEFAULT_DEG = 20;
    leaves a plain gap anyway. The outbound leg keeps 20. ?early_turn_return=0 turns the early FRONT off
    (the vote path carries the return); clamped like ?early_turn. Which path sent FRONT in that clip is
    what one ?orient_debug=1 log of a turn would confirm. */
-const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 35;
+const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 50;   // 35 until the fold handshake - see ORIENT_EARLY_TURN_DEFAULT_DEG
 const ORIENT_EARLY_TURN_DEFAULT_SPEED = 45;
 /* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
    rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;
@@ -6264,8 +6521,39 @@ const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
   if (raw === null || raw === "" || !Number.isFinite(v)) return ORIENT_EARLY_TURN_DEFAULT_SPEED;
   return v <= 0 ? 0 : Math.min(v, 1000);
 })();
+/* ── THE SLOW PATH - "a slow, deliberate 360 gets the back graphic only once the back is square" ─────
+   (Since the fold handshake it sits AT the fold, 50, with the fast path - it adds the slow rise there and never sends
+   earlier. The numbers below were taken at 35, on the 20-degree default.)
+   REPORTED after the gate came down to 45 (6899d9f): a slow turn still misses the early trigger. It is
+   the gate doing it, and lowering it further is not the answer - the gate is what keeps ordinary posing
+   off the wire, and a pose and the start of a turn are the same reading at 20-30 degrees.
+   WHAT SEPARATES THEM IS WHERE THEY STOP. A weight shift or a look to the side settles by ~30 degrees; a
+   turn keeps going. So the slow path sits ABOVE that, at ORIENT_EARLY_TURN_SLOW_DEG, and asks for a RISE
+   of ORIENT_EARLY_TURN_SLOW_RISE_DEG across ORIENT_EARLY_TURN_SLOW_WINDOW_MS rather than a speed between
+   two readings - a longer baseline averages out the jitter that makes a two-reading speed unusable at
+   these rates, and a pose that has settled reads a rise of ~0.
+   MODELLED (turn-yaw-window §11, 700ms dispatch-to-render, +/-4 degrees of yaw jitter, 10 seeds):
+   a 30 deg/s turn sends BACK at 45-53 degrees instead of 128-143 (wrong garment 3875 -> 1250ms), 45 deg/s
+   2125 -> 625ms, 60 deg/s 750 -> 125ms; 90 and 120 deg/s are unchanged. Every pose is unchanged too -
+   sway 0/10, an 18-degree weight shift 1/10, 25 degrees held 5/10, a slow look to 30 held 6/10, exactly
+   as the gate alone. The request's own shape (22 degrees held 150ms at any speed) fires on ALL of those
+   10/10, because "held" is what a pose does; it is the rise, not the dwell, that says turn.
+   ?early_turn_slow=<deg> moves it, 0 turns the slow path off. */
+const ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG = 50;   // 35 until the fold handshake - see ORIENT_EARLY_TURN_DEFAULT_DEG
+const ORIENT_EARLY_TURN_SLOW_RISE_DEG = 10;
+const ORIENT_EARLY_TURN_SLOW_WINDOW_MS = [450, 960];   // [min, max] age of the reading the rise is measured from
+/* Declared ABOVE the ?early_turn_* parsers that clamp to them. They used to sit below the slow-path parser,
+   so ?early_turn_slow=<deg> read them in their temporal dead zone and app.js threw a ReferenceError at load. */
 const ORIENT_EARLY_TURN_MIN_DEG = 10;
 const ORIENT_EARLY_TURN_MAX_DEG = 60;
+const ORIENT_EARLY_TURN_SLOW_DEG = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("early_turn_slow"); } catch (_) { return ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG; }
+  const deg = Number(raw);
+  if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG;
+  if (deg <= 0) return 0;
+  return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
+})();
 const ORIENT_EARLY_TURN_RETURN_DEG = (() => {
   let raw = null;
   try { raw = new URLSearchParams(location.search).get("early_turn_return"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG; }
@@ -6279,6 +6567,23 @@ const ORIENT_EARLY_TURN_DEG = (() => {
   try { raw = new URLSearchParams(location.search).get("early_turn"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_DEG; }
   const deg = Number(raw);
   if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_DEFAULT_DEG;
+  if (deg <= 0) return 0;
+  return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
+})();
+/* ?early_turn_loss=<deg> - THE FOLD BY LOSS (see makeEarlyTurnTrigger's lossDeg). MediaPipe loses the far
+   shoulder at the side view, so on many turns no |yaw| reading ever reaches ORIENT_EARLY_TURN_DEFAULT_DEG: the
+   torso simply goes unreadable. A torso lost while |yaw| was still rising past this is read as the fold and swaps
+   there. MODELLED (the §13 grid at 100ms): with no loss path the fold never swaps 12 of 216 full 360s and shows
+   1348ms of plain per 360 (worse than v142's 995); at 20, 6 and ~500ms. 25 - PRESENCE_PROMPT_YAW_SUPPRESS_DEG, the
+   file's other "lost to edge-on" bar - ~100ms more plain and 2 more turns lost; 30 ~250ms more and 3 lost. 20's cost
+   is a small pose that rises past 20 fast AND drops a frame near its top - see THE COST above. 0 turns the path off;
+   clamped like ?early_turn. */
+const ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG = 20;
+const ORIENT_EARLY_TURN_LOSS_DEG = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("early_turn_loss"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG; }
+  const deg = Number(raw);
+  if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG;
   if (deg <= 0) return 0;
   return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
 })();
@@ -6684,27 +6989,49 @@ function orientPredictBackReason({ enabled = ORIENT_PREDICTIVE_BACK, acquiring, 
    @param {number} deg  |yaw| threshold from a FRONT lock (and from BACK unless returnDeg is given); 0 or less is off
    @param {number} [minSpeed]  rising |yaw| deg/s a crossing needs; 0 or less is no gate
    @param {number} [returnDeg]  |yaw| threshold from a BACK lock; 0 or less never fires FRONT early
+   @param {number} [slowDeg]  the slow path's |yaw| threshold (see ORIENT_EARLY_TURN_SLOW_DEG); 0 or less is off
+   @param {number} [slowRise]  |yaw| the slow path must have gained across its window
+   @param {number[]} [slowWindow]  [min, max] age in ms of the reading that rise is measured from
+   THE FOLD BY LOSS (`lossDeg`, ?early_turn_loss - the fold handshake, see ORIENT_EARLY_TURN_DEFAULT_DEG). With the
+   threshold at the side view, many turns never publish a reading that high: MediaPipe loses the far shoulder right
+   there and the pose loop records the inference as unreadable (`lostAt`, _poseTorsoLostAt) instead. So, while armed,
+   a torso lost AFTER the last readable reading - that reading at or past `lossDeg` and still rising (the speed gate,
+   or the slow path's rise) - fires too. Evaluated AHEAD of the arming test on purpose: through that gap the shoulder
+   order stays fresh for ORIENT_YAW_FRESH_MS and keeps voting for the locked side, and an agreeing vote under the
+   threshold would otherwise swallow the tick. A pose that settled (no rise) or a dropped frame while square (under
+   `lossDeg`) fires nothing, and any fire is withdrawn exactly like the other two paths.
+   @param {number} [lossDeg]  |yaw| the last readable reading needs for a torso loss to count as the fold; 0 or less is off
    @returns {{ readonly armed: "front"|"back"|null, readonly pending: {from: string, to: string}|null,
                readonly speed: number,
-               observe(o: { vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number|null }):
-                 { fire: "front"|"back"|null, withdraw: "front"|"back"|null } }} */
-function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg) {
+               observe(o: { vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number|null, lostAt?: number }):
+                 { fire: "front"|"back"|null, withdraw: "front"|"back"|null, via?: "fast"|"slow"|"lost" } }} */
+function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg, slowDeg = 0, slowRise = 10, slowWindow = [450, 960], lossDeg = 0) {
   const thresholdFor = (side) => (side === "back" ? returnDeg : deg);
+  /* THE SLOW PATH's own window of readings - see ORIENT_EARLY_TURN_SLOW_DEG. Bounded; readings are the
+     pose loop's, ~240ms apart, so eight covers well past the window below. */
+  const hist = [];
+  /* How far |yaw| climbed to reading (y, t) from the one the slow window reaches back to; 0 without one. */
+  const riseTo = (y, t) => {
+    if (!Number.isFinite(t)) return 0;
+    const from = hist.find((h) => t - h.at >= slowWindow[0] && t - h.at <= slowWindow[1]);
+    return from ? y - from.y : 0;
+  };
+  const LOSS_MIN_RISE = 10;   // deg/s the last two readings must still climb for a slow-path rise to count toward a loss
   let armed = null;     // the lock this trigger was armed on
-  let pending = null;   // { from, to } - an early swap that no vote has confirmed yet
+  let pending = null;   // { from, to, via, at } - an early swap that no vote has confirmed yet
   let lastYaw = null, lastAt = null, speed = 0;   // rising |yaw| deg/s between the last two readings
   const none = { fire: null, withdraw: null };
   return {
     get armed() { return armed; },
     get pending() { return pending; },
     get speed() { return speed; },
-    observe({ vote, lock, yawAbs, at = null }) {
+    observe({ vote, lock, yawAbs, at = null, lostAt = 0 }) {
       if (!(deg > 0) || (lock !== "front" && lock !== "back")) { armed = null; pending = null; return none; }
       const fresh = yawAbs !== null && Number.isFinite(yawAbs);
       /* One reading counted once: a tick that sees the same reading again leaves the speed alone. */
       if (fresh && Number.isFinite(at)) {
         if (lastAt !== null && at > lastAt) speed = (yawAbs - lastYaw) / ((at - lastAt) / 1000);
-        if (lastAt === null || at > lastAt) { lastYaw = yawAbs; lastAt = at; }
+        if (lastAt === null || at > lastAt) { lastYaw = yawAbs; lastAt = at; hist.push({ y: yawAbs, at }); if (hist.length > 8) hist.shift(); }
       }
       if (pending) {
         /* Ended by the lock leaving the early side (the withdrawal landed, or the swap never went
@@ -6712,17 +7039,39 @@ function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg) {
            asked for on EVERY tick its condition holds, not once: maybeSwap() can refuse a tick
            (a swap still applying), and a withdrawal asked for once and refused would be lost. */
         if (lock !== pending.to || vote === pending.to) pending = null;
+        /* A fold-by-loss fire went out on NO new reading, so the last one - under the threshold, which is why the
+           loss path was needed - and its shoulder vote for the side being left both stay fresh for
+           ORIENT_YAW_FRESH_MS. Read as "the pose came back" they withdraw the swap on the very next tick, and
+           the side the shopper is turning away from goes straight back on. Only a reading taken after the fire
+           can say the pose came back. The other two paths fire ON a reading past the threshold, so a reading
+           under it is necessarily newer - this changes nothing for them. */
+        else if (pending.via === "lost" && !(Number.isFinite(at) && at > pending.at)) return none;
         else if (vote === pending.from && fresh && yawAbs < thresholdFor(pending.from)) return { fire: null, withdraw: pending.from };
         else return none;
       }
       if (armed !== lock) armed = null;
       const threshold = thresholdFor(lock);
       if (!(threshold > 0)) { armed = null; return none; }
-      if (vote === lock && fresh && yawAbs < threshold) { armed = lock; return none; }
-      if (armed === lock && fresh && yawAbs >= threshold && (!(minSpeed > 0) || speed >= minSpeed)) {
+      /* THE FOLD BY LOSS - see lossDeg above. Ahead of the arming test, which a stale agreeing vote would pass.
+         "Still rising" is the gate's speed, or the slow path's rise AND the last two readings still climbing: the slow
+         window reaches back ~1s, so on its own it also reads a twist that rose and has been HELD for most of a second.
+         MODELLED (turn-yaw-window §13): the last-pair clause costs no full 360 anything, and cuts the fires on a twist to
+         30 held 0.7s, a slow look to 30 and a 45-degree mirror check by about a third under dropped frames. */
+      const lost = lossDeg > 0 && lastAt !== null && Number.isFinite(lostAt) && lostAt > lastAt && lastYaw >= lossDeg &&
+        ((minSpeed > 0 ? speed >= minSpeed : speed > 0) || (riseTo(lastYaw, lastAt) >= slowRise && speed >= LOSS_MIN_RISE));
+      if (!lost && vote === lock && fresh && yawAbs < threshold) { armed = lock; return none; }
+      /* THE FAST PATH: past the threshold, rising at the gate's speed between two readings. */
+      const fast = yawAbs >= threshold && (!(minSpeed > 0) || speed >= minSpeed);
+      /* THE SLOW PATH: a deliberate slow turn never clears the gate between two readings, but it keeps
+         RISING - measured across ORIENT_EARLY_TURN_SLOW_WINDOW_MS, which averages the jitter a
+         two-reading speed cannot. Above ORIENT_EARLY_TURN_SLOW_DEG, where poses have stopped. */
+      const rise = slowDeg > 0 && fresh ? riseTo(yawAbs, at) : 0;
+      const slow = slowDeg > 0 && yawAbs >= Math.max(threshold, slowDeg) && rise >= slowRise;
+      const via = fresh && fast ? "fast" : fresh && slow ? "slow" : lost ? "lost" : null;
+      if (armed === lock && via) {
         const to = lock === "front" ? "back" : "front";
-        armed = null; pending = { from: lock, to };
-        return { fire: to, withdraw: null };
+        armed = null; pending = { from: lock, to, via, at: lastAt };
+        return { fire: to, withdraw: null, via };
       }
       return none;
     },
@@ -7978,12 +8327,15 @@ function createOrientationWatcher() {
   /* The early turn trigger - on by default, null (and every use of it inert) with ?early_turn=0 (see
      ORIENT_EARLY_TURN_DEG). */
   const earlyTurn = ORIENT_EARLY_TURN_DEG > 0
-    ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG) : null;
+    ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,
+        ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS, ORIENT_EARLY_TURN_LOSS_DEG) : null;
   if (earlyTurn) {
-    console.log(`[PEAR] AI Auto - EARLY TURN TRIGGER ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn), ` +
+    console.log(`[PEAR] AI Auto - FOLD HANDSHAKE (early turn trigger) ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn), ` +
       `${ORIENT_EARLY_TURN_RETURN_DEG > 0 ? ORIENT_EARLY_TURN_RETURN_DEG + "° on the return to FRONT (?early_turn_return)" : "no early FRONT on the return (?early_turn_return=0)"}` +
+      `${ORIENT_EARLY_TURN_SLOW_DEG > 0 ? `, or ${ORIENT_EARLY_TURN_SLOW_DEG}° with |yaw| still rising ${ORIENT_EARLY_TURN_SLOW_RISE_DEG}° across ${ORIENT_EARLY_TURN_SLOW_WINDOW_MS[0]}-${ORIENT_EARLY_TURN_SLOW_WINDOW_MS[1]}ms for a slow turn (?early_turn_slow)` : ""}` +
+      `${ORIENT_EARLY_TURN_LOSS_DEG > 0 ? `, or the torso lost at the side view after rising past ${ORIENT_EARLY_TURN_LOSS_DEG}° (?early_turn_loss)` : ""}` +
       (ORIENT_EARLY_TURN_MIN_SPEED > 0 ? `, only while |yaw| rises at ${ORIENT_EARLY_TURN_MIN_SPEED}°/s or faster (?early_turn_speed)` : "") + " - ?early_turn=0 turns it off:",
-      "sends the other side as the torso starts to rotate, withdrawn if the pose comes back (dual-view items only)");
+      "keeps the side on screen until the torso reaches the side view, then sends the other one; withdrawn if the pose comes back (dual-view items only)");
   }
   let faceStreak = 0;   // consecutive FaceDetector detections - see the tick and ORIENT_FACE_RETURN_FRAMES
   let poseStreak = 0, poseSide = null;   // consecutive shoulder-order votes for poseSide - see ORIENT_POSE_FLIP_FRAMES
@@ -8979,14 +9331,20 @@ function createOrientationWatcher() {
          `applying` mutex in this very tick, and maybeSwap() would find it held and drop the dispatch -
          the reason predictive BACK stands aside from them too. */
       const earlyAct = earlyTurn && dualView && !acquiring && !confirmed && !predictBack
-        ? earlyTurn.observe({ vote, lock: autoOrientation, yawAbs: yawFresh ? _torsoYawAbs : null, at: yawFresh ? _torsoYawAt : null })
+        ? earlyTurn.observe({ vote, lock: autoOrientation, yawAbs: yawFresh ? _torsoYawAbs : null, at: yawFresh ? _torsoYawAt : null,
+            lostAt: _poseTorsoLostAt })
         : null;
       if (earlyAct && earlyAct.fire) {
         /* The pre-turn streak must not count against the early side - predictive BACK's reason. */
         lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;
         if (ORIENT_DEBUG) {
-          console.log(`[PEAR][ORIENT] early turn: |yaw| ${_torsoYawAbs.toFixed(0)}° crossed ${autoOrientation === "back" ? "?early_turn_return=" + ORIENT_EARLY_TURN_RETURN_DEG : "?early_turn=" + ORIENT_EARLY_TURN_DEG}° rising at ${earlyTurn.speed.toFixed(0)}°/s ` +
-            `from a settled ${String(autoOrientation).toUpperCase()} - sending ${earlyAct.fire.toUpperCase()} ahead of any vote`);
+          const yawTxt = _torsoYawAbs === null ? "n/a" : `${_torsoYawAbs.toFixed(0)}°`;
+          const how = earlyAct.via === "lost"
+            ? `torso lost at the side view after |yaw| ${yawTxt} rising at ${earlyTurn.speed.toFixed(0)}°/s (?early_turn_loss=${ORIENT_EARLY_TURN_LOSS_DEG})`
+            : `|yaw| ${yawTxt} crossed ${autoOrientation === "back" ? "?early_turn_return=" + ORIENT_EARLY_TURN_RETURN_DEG : "?early_turn=" + ORIENT_EARLY_TURN_DEG}° ` +
+              `${earlyAct.via === "slow" ? "on the slow path" : `rising at ${earlyTurn.speed.toFixed(0)}°/s`}`;
+          console.log(`[PEAR][ORIENT] fold handshake: ${how} from a settled ${String(autoOrientation).toUpperCase()} - ` +
+            `sending ${earlyAct.fire.toUpperCase()} at the side view, ahead of any vote`);
         }
         await maybeSwap(earlyAct.fire, earlyAct.fire === "back");   // an early BACK is withdrawable like a predictive one
         return;
@@ -12984,12 +13342,35 @@ function getAnatomicalAnchor() {
 }
 
 /**
- * Return the signed delta between activeTryOnSize and currentUserSize in the
- * SIZE_SCALE ladder. Positive = user chose larger; negative = user chose smaller.
- * Returns 0 when either size is absent or not in the scale.
+ * THE LADDER getSizeDelta()/setSizeOverride() actually measure a step against. Adult
+ * letter products use the fixed SIZE_SCALE (XS-3XL), same as always - but an adult
+ * numeric-pants product's real sizes (e.g. a 26-40 jeans run) almost never match
+ * SIZE_SCALE at all, so `SIZE_SCALE.indexOf("34")` was always -1 and getSizeDelta()
+ * silently returned 0 no matter which numeric size the shopper picked - the VTON
+ * prompt's fit modifier (getFitModifier(), LIVE on the wire - see CLAUDE.md §0) always
+ * read "true to size" for a pants override, even a deliberate size-down/up.
+ * Ascending, de-duplicated, built from the PRODUCT'S OWN size list (never a fixed
+ * chart) - matching this file's "the product's own list wins" precedent, and the same
+ * list calculateSize()'s "SNAP TO THE PRODUCT'S OWN LIST" step already recommends from.
+ * @returns {string[]}
+ */
+function activeSizeLadder() {
+  const sizes = resolvedGarmentSizes();
+  if (!isAdultNumericPantsGarment(sizes, activeItem)) return SIZE_SCALE;
+  return [...new Set(sizes.map(Number).filter(Number.isFinite))]
+    .sort((a, b) => a - b)
+    .map(String);
+}
+
+/**
+ * Return the signed delta between activeTryOnSize and currentUserSize on
+ * activeSizeLadder() (SIZE_SCALE for a letter product, the product's own ascending
+ * numeric list for an adult-pants one - see that function's comment). Positive = user
+ * chose larger; negative = user chose smaller. Returns 0 when either size is absent or
+ * not on the ladder.
  *
- * Child sizes return 0 unconditionally: the numeric kids ladder (8-18) is not in
- * SIZE_SCALE, and a step there spans a whole growth stage rather than the
+ * Child sizes return 0 unconditionally: the numeric kids ladder (8-18) is not on either
+ * ladder above, and a step there spans a whole growth stage rather than the
  * tight/oversized styling choice the adult delta encodes - so no fit modifier is
  * applied to the VTON prompt for child sizes. This is the SINGLE definition of
  * that rule; setSizeOverride() consumes it rather than re-deriving indices.
@@ -12998,8 +13379,9 @@ function getAnatomicalAnchor() {
 function getSizeDelta() {
   if (currentSizeCategory === "child") return 0;
   if (!currentUserSize || !activeTryOnSize) return 0;
-  const baseIdx = SIZE_SCALE.indexOf(currentUserSize);
-  const pickIdx = SIZE_SCALE.indexOf(activeTryOnSize);
+  const ladder = activeSizeLadder();
+  const baseIdx = ladder.indexOf(currentUserSize);
+  const pickIdx = ladder.indexOf(activeTryOnSize);
   if (baseIdx === -1 || pickIdx === -1) return 0;
   return pickIdx - baseIdx;
 }
@@ -13672,6 +14054,13 @@ function injectSizeSelector() {
     : currentSizeIsNumericPants ? pantsChartForSizes(productSizes).map((r) => r.size)
     // Child results get the numeric kids ladder ONLY - no adult S/M/L/XL button is
     // rendered at all, so there is nothing for a child profile to cross over into.
+    //
+    // No adult-pants numeric branch needed here: isAdultNumericPantsGarment() (which
+    // decides currentSizeCategory via the pants chart) requires a NON-EMPTY product
+    // size list by construction (see isAdultPantsProduct()) - so whenever the pants
+    // chart was actually used, productSizes above is that same non-empty list and this
+    // branch is never reached for a pants product. It only fires for a letter/uncertain
+    // product with NO scraped size list at all, where SIZE_SCALE is the only sane default.
     : (currentSizeCategory === "child" ? CHILD_SIZE_SCALE : SIZE_SCALE);
 
   const current = activeTryOnSize || currentUserSize;
@@ -13708,7 +14097,9 @@ function injectSizeSelector() {
  * WebRTC session is currently live - push a new prompt payload immediately so
  * the garment resizes in real-time without restarting the connection.
  * @param {string} size - an entry from whichever scale the selector was built with:
- *                        SIZE_SCALE for adults, CHILD_SIZE_SCALE ('8'-'18') for children
+ *                        SIZE_SCALE for adults, the product's own numeric list for
+ *                        adult-pants products (see activeSizeLadder()), CHILD_SIZE_SCALE
+ *                        ('8'-'18') for children
  */
 function setSizeOverride(size) {
   activeTryOnSize = size;
@@ -13726,9 +14117,14 @@ function setSizeOverride(size) {
   // Toast wording derives from the ONE delta definition in getSizeDelta() rather
   // than re-deriving ladder indices here. `onLadder` mirrors exactly the conditions
   // under which that delta is meaningful, so a 0 from a child size takes the
-  // neutral branch instead of falsely reading as "perfect fit".
+  // neutral branch instead of falsely reading as "perfect fit". Reads
+  // activeSizeLadder() rather than hardcoding SIZE_SCALE, same reason getSizeDelta()
+  // does - a numeric pants size is never on SIZE_SCALE, so this used to be
+  // unconditionally false for every pants-product override, always showing the
+  // neutral toast even on a genuine size-up/down.
+  const ladder = activeSizeLadder();
   const onLadder = currentSizeCategory === "adult" &&
-    SIZE_SCALE.includes(currentUserSize) && SIZE_SCALE.includes(size);
+    ladder.includes(currentUserSize) && ladder.includes(size);
   const delta = getSizeDelta();
   if (!onLadder) {
     toast(`מידה שנבחרה: <b>${size}</b>`);
@@ -15625,6 +16021,26 @@ async function applyFallbackConditioning() {
  */
 async function goLive() {
   if (busy || isLive()) return;
+
+  /* THE STALE-currentBodyCategory RACE, CLOSED AT THE ENFORCEMENT POINT. calculateSize()
+     is the only writer of currentUserSize/currentSizeCategory/currentBodyCategory, but it
+     only runs on Screen 1 input and the returning-user fast path - NOT on a mid-session
+     catalog swap (setActiveItem() never calls it) and NOT on a late PEAR_UPDATE_GARMENT
+     size-list correction once Screen 1 is hidden (that listener's own comment: "the room
+     may already be open"). Two real, reproduced production failures came out of trusting
+     whatever those three values happened to hold: (1) a body whose adult-ness depends on
+     WHICH adult chart is relevant to the CURRENTLY active garment can read "child" under
+     one garment and "adult" under another with the SAME height/weight (ADULT_PANTS_-
+     SIZE_CHART and ZARA_SIZE_CHART cover different, only-partially-overlapping bands), so
+     a value computed for garment A and never refreshed can wrongly block - or wrongly
+     admit - garment B. calculateSize() is pure UI/state with no network call (its own doc
+     comment says so), and Screen 1's inputs are still real, hidden (not removed) DOM
+     elements on Screen 2 - CSS class toggling, never a DOM detach - so re-running it here
+     is cheap and safe, and makes this gate correct for whichever garment is ACTUALLY
+     active right now, regardless of what any earlier call left cached. This is the
+     "authoritative backstop" updateSizeMismatchUI()'s own comment already claims this
+     function is - now actually true even when nothing upstream remembered to refresh. */
+  calculateSize();
 
   // Two-view gate - runs BEFORE any token mint / WebRTC connect / billing. Graceful
   // by default; only opt-in requireBothViews items (or a garment with no front) are
@@ -19570,6 +19986,34 @@ function init() {
   updateProgress();
 
   const handoff = parseHandoff();
+  /* THE BUG THIS CLOSES: "185cm/82kg on a numeric jeans product still shows 'L'."
+     pear-widget.js scrapes the host product's REAL size list off the store page's own
+     DOM and appends it to the iframe URL SYNCHRONOUSLY, before this room ever opens
+     (see pear-widget.js's openModal() building `&garment_sizes=...` from
+     extractHostSizes() - no classifier round trip needed, it's just reading the
+     store's own size selector). parseHandoff() reads that URL param into `handoff.sizes`
+     right above - but until this line, NOTHING ever copied it into `pendingSizes`,
+     the ONLY place resolvedGarmentSizes() can find it before activeItem exists (see
+     that function's own comment). The one and only writer of pendingSizes was the
+     LATE, async PEAR_UPDATE_GARMENT postMessage correction - a real signal, but one
+     the widget's own classify+synthesize round trip can take seconds to send, and it
+     is not what the shopper's FIRST keystroke on Screen 1 has to work with.
+     Concretely, without this line: every #sizeForm input fires calculateSize() (see
+     this function's own listener wiring below) with resolvedGarmentSizes() === [],
+     so isAdultNumericPantsGarment([], null) is false no matter how the product is
+     actually sized, useAdultPantsChart is false, and calculateSize() scores the
+     shopper's height/weight against ZARA_SIZE_CHART's LETTERS - for every numeric
+     jeans/pants product, every time, with no exception. routeUser()'s returning-user
+     instant-skip fast path (a few lines below, via setupIdentityGate()) hits the exact
+     same empty list calling calculateSize() directly. By the time enterRoom() calls
+     parseHandoff() a SECOND time and finally builds a real activeItem.sizes, the wrong
+     letter is already sitting in currentUserSize - and setActiveItem() never re-runs
+     calculateSize() (see its own comment from the currentBodyCategory staleness fix),
+     so nothing downstream, including the room's own focus size badge, ever corrects it.
+     isAdultPantsProduct()'s widened numeric-run recognition and the snap-to-list logic
+     in calculateSize() were already correct; they simply never received real size
+     evidence to run on until now. */
+  if (handoff && handoff.sizes) pendingSizes = handoff.sizes;
   console.group("[PEAR] init() - fitting room startup");
   console.log("mode    :", handoff ? `focus (garment: ${handoff.name})` : "catalog (no garment in URL)");
   console.log("SDK URLs:", CONFIG.SDK_URLS);
@@ -19647,13 +20091,10 @@ function init() {
   });
   $("btn-next-screen").addEventListener("click", onSizeFormContinue);
 
-  // Gender selector (Men/Women) - segmented toggle, same delegated-click pattern used
-  // for the TOP/BOTTOM outfit toggle (#gdTabs) elsewhere in this function.
-  const genderToggleEl = $("genderToggle");
-  if (genderToggleEl) genderToggleEl.addEventListener("click", (e) => {
-    const btn = e.target.closest(".gender-tab");
-    if (btn) setGender(btn.dataset.gender);
-  });
+  // Gender selector (Men/Women) - Liquid Glass switch: the delegated click (taps, keyboard)
+  // and the press-and-drag layer, wired together so a drag can swallow its trailing click.
+  // See setupGenderSwitch().
+  setupGenderSwitch($("genderToggle"));
 
   // Explicit open only - startCamera() is also called from flipCamera() and
   // reinitCameraForOrientation(), where the page shouldn't jump since the user is

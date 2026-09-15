@@ -124,6 +124,22 @@ console.log("\n── §2 WIRING: every point the mismatch inputs can change re-
         "        verdict arrives (the room may already be open by then)",
     /updateSizeMismatchUI\(\);/.test(listener));
 
+  /* THE BUG THIS CLOSES: setActiveItem() - the mid-session catalog-panel swap, reachable
+     while the room is already open - was the one point this file's own header comment
+     ("from every point that check's inputs can change") demonstrably lied about: it
+     changes activeItem, which is exactly what resolvedGarmentSizes()/
+     resolvedGarmentAgeGroup() read, and it never re-ran the check. A shopper who opened
+     a kids-only item (card shown, captureBtn disabled) and then swapped to a genuinely
+     compatible adult item via the catalog was left with the stale card up and the
+     button still disabled - a dead end, since a disabled button never fires the click
+     that would reach goLive()'s own fresh recompute. Found in the adult-numeric-pants
+     sizing audit (2026-09-12) while re-tracing every caller of hasSizeCategoryMismatch()/
+     updateSizeMismatchUI(), independent of that audit's actual pants-vs-letters scope. */
+  const swap = extract("function setActiveItem(item, opts = {}) {", "\nwindow.pearGetActiveGarment");
+  check("setActiveItem() (mid-session catalog swap) re-checks the card too, so a stale\n" +
+        "        mismatch can't survive a swap into a now-compatible garment",
+    /updateSizeMismatchUI\(\);/.test(swap), swap.slice(-500));
+
   const wiring = extract('$("captureBtn").addEventListener("click", onLiveToggle);', "\n\n");
   check("the card's CTA button is wired to the SAME screen the 'Edit Measurements'\n" +
         "        button already sends shoppers to (backToCalculator)",
