@@ -63,7 +63,7 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
                    backBlob  = { size: 1, type: "image/jpeg" },
                    startOrientation = "back", flat = false, applyThrows = false,
                    blobLooksFlat = async () => flat, wire,
-                   lastSwapAgoMs = null, lastSwapWasPredictive = false, gate = false } = {}) {
+                   lastSwapAgoMs = null, lastSwapWasPredictive = false, gate = false, holdOptIn = gate } = {}) {
   const calls = [];
   const sandbox = {
     blobLooksFlat,
@@ -76,6 +76,9 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
       },
       ORIENT_SWAP_INPUT_HOLD_MAX_MS: 2000,
     } : {}),
+    /* ?swap_hold=1 - the hold is opt-in since LIVE CONTINUITY (see §9). holdOptIn defaults to
+       `gate` so the sections that exercise the hold still get it. */
+    ...(holdOptIn ? { swapHoldsInput: () => true } : {}),
     /* Only when a test states what the wire holds - the other sections run exactly as they did,
        with neither name defined, which is the shape the acquire shortcut must tolerate. */
     ...(wire ? { lastSentImageRef: wire.onWire,
@@ -371,11 +374,25 @@ console.log("\n── §8 A PREDICTIVE BACK IS WITHDRAWN AT ONCE, AND NOTHING EL
     reBack.state().autoOrientation === "front" && !reBack.calls.some((c) => c.op === "applyActive"));
 }
 
-console.log("\n── §9 A SWAP HOLDS DECART'S INPUT UNTIL ITS OWN SET() RESOLVES ──");
-/* The blank/untextured shirt during a turn is Decart rendering camera frames from its prior while
-   the reference is being replaced (first-frame-integrity.test.mjs §7). maybeSwap() owns that
-   window, so it takes the hold before the dispatch and gives it back when the dispatch settles -
-   on success AND on failure, or a failed swap would freeze the feed until the ceiling. */
+console.log("\n── §9 DECART'S INPUT KEEPS FLOWING THROUGH A SWAP - THE HOLD IS OPT-IN (?swap_hold=1) ──");
+/* INVERTED with LIVE CONTINUITY. The three v136 clips (PEAR-fit-1789417907145/-925378/-953496)
+   show Decart's output repeating one frame pixel-identical for 2.1s / 1.4s / 0.7s at each turn,
+   ending in a jump cut - no camera frames, no render. That was this hold. The shopper chose a
+   moving view over a frozen correct one, so by default a swap withholds nothing; the cost is
+   that the untextured-shirt beat the hold was added for can show for ~one upload round-trip. */
+{
+  const flowing = harness({ startOrientation: "front", gate: true, holdOptIn: false });
+  await flowing.maybeSwap("back", true);
+  check("by default a swap takes NO input hold - Decart keeps rendering the moving body",
+    !flowing.calls.some((c) => c.op === "hold") && flowing.calls.some((c) => c.op === "applyActive"),
+    flowing.calls.map((c) => c.op).join(" > "));
+  check("...and the swap still lands and releases its lock window",
+    flowing.state().autoOrientation === "back" && flowing.calls.some((c) => c.op === "holdEnd"),
+    flowing.calls.map((c) => c.op).join(" > "));
+}
+/* THE RESTORE SEAM, pinned as it was: with ?swap_hold=1 the hold is taken before the dispatch
+   and given back when it settles - on success AND on failure, or a failed swap would freeze the
+   feed until the ceiling. */
 {
   const ok = harness({ startOrientation: "front", gate: true });
   await ok.maybeSwap("back", true);

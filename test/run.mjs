@@ -201,6 +201,15 @@
                       negotiated container, that the filename suffix follows it, and that
                       a SAVED gallery clip remembers its own container instead of reading
                       the live session's recorderMime, which clearRecording() nulls.
+     stream-continuity
+                      "The whole app and camera freeze for 1-2s on every swap." The v136
+                      clips show the page never stalled (recorder samples ~33ms apart) while
+                      Decart's output repeated one frame for up to 2.1s at each turn. The
+                      swap's input hold and the snapshot covers are now opt-in; this pins what
+                      replaced them - the live camera cross-faded in over a silent output and
+                      back out on resumed frames, never flapping on normal 10fps cadence,
+                      never over a result or clip, geometry in lockstep with #aiVideo, and
+                      blended into the recording at the same opacity.
      conditioning-trace
                       Two reports that meet in applyGarment()'s dispatch. THE TRACE, for
                       "I picked a specific garment and got a generic one": the prompt names
@@ -297,6 +306,7 @@ const SUITES = [
   ["numeric-pants-sizing", "numeric-pants-sizing.test.mjs"],
   ["mp4-export", "mp4-export.test.mjs"],
   ["conditioning-trace", "conditioning-trace.test.mjs"],
+  ["stream-continuity", "stream-continuity.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

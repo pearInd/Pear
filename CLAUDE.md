@@ -199,6 +199,16 @@ threads them into `imageOnlyPrompt(item, angle)` and `referenceImageFor()`.
 Never re-read `effectiveAngle()` downstream — the watcher can flip mid-await and
 the prompt and image will describe different orientations.
 
+### 2.9 Never put a still frame over a live session
+The shopper watches `#aiVideo` as a mirror. Three freezes shipped as "fixes" and were reported
+as the bug ("the whole view freezes for 1-2s on every swap", v136 clips): the swap's input hold
+(Decart gets no frames → its output repeats one frame), and the snapshot covers pinned over the
+feed on turns and re-drapes. All are **off by default**, restorable only by URL
+(`?swap_hold=1`, `?still_covers=1`). A Decart output stall is bridged by LIVE CONTINUITY - the
+live camera cross-faded in over the silent output and back out - and the recorder blends the
+same layer so the clip matches the screen. The recorder's timestamps were never the problem;
+a frozen clip means frozen *content*. Never pause, gate or hold `#webcam`/`localStream`.
+
 ---
 
 ## 3. Cross-file lockstep

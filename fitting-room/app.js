@@ -163,10 +163,18 @@ function showDemoGateLockedMessage() {
    LIVE_FPS is the LOCAL camera-capture rate (kept higher for a smooth preview);
    LIVE_INFERENCE_FPS is what the throttler downsamples to before the SDK sees it -
    it trims per-frame upload/encode work but does NOT change the per-second credit
-   bill, which is governed solely by LIVE_DURATION_MS. */
+   bill, which is governed solely by LIVE_DURATION_MS.
+
+   LIVE_FPS WAS 15, and 15 is not a mirror. Raised to 60 (an ideal the camera meets or
+   falls short of - a 30fps webcam delivers 30, and no `min` is set, so a camera in a dim
+   room may still lower its own rate to expose longer) for the shopper-facing surfaces
+   that show the camera directly: the pre-live preview and the LIVE CONTINUITY layer that
+   bridges a Decart output stall. It changes nothing on the wire: createThrottledInputStream()
+   repaints at exactly LIVE_INFERENCE_FPS whatever the camera delivers, and it no longer
+   asks the shared camera for a lower rate (see its applyConstraints note). */
 const LIVE_DURATION_MS    = 5000;   // BILLED Decart window = 5s → hard-capped session; 2 credits/s × 5s = 10 credits
 const VIDEO_LENGTH_MS     = 5000;   // == LIVE_DURATION_MS → frozen-hold tail is zero; the 5s clip is all real live motion
-const LIVE_FPS            = 15;     // local getUserMedia capture rate (smooth preview; throttled to LIVE_INFERENCE_FPS)
+const LIVE_FPS            = 60;     // local getUserMedia capture rate (mirror-smooth preview; throttled to LIVE_INFERENCE_FPS)
 const LIVE_INFERENCE_FPS  = 10;     // frames/s handed to Decart - trims per-frame upload/encode; credits are per-SECOND, not per-frame
                                     //   ENFORCED client-side by createThrottledInputStream() - the SDK's own fps cap is a no-op on Chromium.
 
@@ -4127,7 +4135,7 @@ async function ensureOnline() {
    it's where "minimal frame/token usage" is actually enforced, not a place that
    needed new code - it already does exactly that:
      • fps capped to LIVE_INFERENCE_FPS (10) - the camera can capture faster (LIVE_FPS
-       =15 for a smooth local preview), but only 10 frames/sec ever leave the browser.
+       =60 for a smooth local preview), but only 10 frames/sec ever leave the browser.
      • resolution capped to LIVE_W×LIVE_H (512×288) - every frame is downscaled before
        it's sent, regardless of the camera's native resolution.
      • captureStream(0) + a single requestFrame() per tick - the output track emits
@@ -4162,9 +4170,14 @@ function createThrottledInputStream(srcStream, {
 
   // Best-effort native constraint first - some devices honour it and trim work
   // upstream. The canvas throttle below is the guarantee regardless of the result.
+  /* NO frameRate HERE ANY MORE. It used to ask this track for `max: fps` (10). This track
+     is a CLONE of the preview camera's, and a browser that applies a clone's constraints to
+     the shared capture source (rather than decimating per track) would drag the shopper's
+     own preview - and the continuity layer drawn from it - down to 10fps with it. The rate
+     that reaches Decart never depended on this line: the setInterval + requestFrame() below
+     emits exactly `fps` frames a second whatever the camera delivers. */
   try {
     srcTrack.applyConstraints({
-      frameRate: { ideal: fps, max: fps },
       width:  { ideal: width },
       height: { ideal: height },
     }).catch(() => {});
@@ -4820,6 +4833,8 @@ function teardown() {
   // rather than the only one - deliberately, since it is the timer most likely to be
   // running at the exact moment a session ends.
   stopFrameFreezeWatch();
+  // The live-camera bridge belongs to the live session - every exit path retires it here.
+  if (typeof stopStreamContinuity === "function") stopStreamContinuity();
 
   // Feature 2 - flush the recorder while the edited tracks are still live, so the
   // download clip is finalized before disconnect ends the stream.
@@ -6637,6 +6652,230 @@ function syncOrientationWatcher() {
   else if (!want && orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; orientWatcherItem = null; }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+   LIVE CONTINUITY - the view never holds a still while the session is live
+   ══════════════════════════════════════════════════════════════════════════════
+   REPORTED, with three clips (PEAR-fit-1789417907145/-925378/-953496, v136): "the whole app
+   and the camera freeze for 1-2 seconds on every garment or orientation swap - it has to
+   feel like a mirror".
+
+   WHAT THE CLIPS SHOW, measured rather than eyeballed (per-sample MP4 timestamps, and a
+   pixel diff of every decoded frame):
+     · THE PAGE DID NOT FREEZE. Each clip is 150 frames in 5s at ~33ms (longest 69ms). The
+       recorder's paint loop is a requestAnimationFrame loop on the main thread; a 1-2s
+       main-thread block would be a 1-2s sample. There is none - so no amount of moving work
+       off the main thread (and queueMicrotask never yields to rendering at all) touches this.
+     · DECART'S OUTPUT DID. One frame repeated pixel-identical for 2.1s / 1.4s / 0.7s, each at
+       a turn, each ending in a jump cut. Two local causes did that, both now off by default:
+       the swap's input hold (maybeSwap(), ?swap_hold=1) and the snapshot covers pinned over
+       the feed (orientHoldPromote / redrapeCoverBegin, ?still_covers=1).
+     · A smaller, separate hitch: a ~50-69ms sample every 240ms - the pose loop's cadence
+       (POSE_SAMPLE_MS x 2), i.e. detectForVideo() on the main thread. One late frame, not a
+       freeze; moving BlazePose into a worker is its fix, and not part of this change.
+
+   WHAT THIS LAYER ADDS. Even with nothing held locally, Decart can still stop presenting
+   frames - a slow reference upload, a network stall, an SDK reconnect. Rather than show the
+   shopper a still for that, the LOCAL CAMERA is cross-faded in over #aiVideo once the output
+   has presented nothing for LIVE_STALL_REVEAL_MS, and cross-faded back out once Decart has
+   presented LIVE_RESUME_FRAMES frames in a row again. The camera is never paused, never
+   gated, and not part of any conditioning path - it is the one source that is always live.
+
+   THE TRADE, STATED: during a bridged stall the shopper sees their own clothes, not the
+   garment, for the length of the stall. That is what a mirror shows when the render is
+   late; a still of the garment was the alternative and was reported as unusable.
+
+   GEOMETRY IS BY CONSTRUCTION, NOT BY CSS LUCK. The canvas has #aiVideo's aspect and is
+   filled with the SAME centre cover-crop createThrottledInputStream() sends Decart, and it
+   carries #aiVideo's own CSS (object-fit:cover, the scaleX(-1) selfie flip) - so the body
+   lands where the render puts it. The frames are reality-oriented like #aiVideo's, so the
+   recorder blends this canvas in with no flip of its own (see startRecording).
+   LATENCY IS NOT ALIGNED, and cannot be: the camera is ~a render round-trip AHEAD of the
+   output, so the fade reads as a short catch-up. LIVE_CONTINUITY_FADE_MS keeps it short.
+
+   IT CANNOT FLAP ON NORMAL CADENCE. The output runs at ~LIVE_INFERENCE_FPS (a 100ms frame
+   period, gaps up to ~200ms measured in the clips); the bar is 350ms, and the way back
+   needs consecutive frames, so one straggler cannot flip the view twice.
+   NEEDS requestVideoFrameCallback to time the output. Without it the layer stays off and
+   says so once - the page then behaves exactly as it does with no stall bridging. */
+const LIVE_STALL_REVEAL_MS    = 350;   // Decart output silent this long → bring the live camera in
+const LIVE_CONTINUITY_FADE_MS = 220;   // cross-fade duration, both directions
+const LIVE_RESUME_FRAMES      = 2;     // consecutive output frames (each within the bar) before fading back
+const LIVE_CONTINUITY_MAX_W   = 960;   // canvas width cap - a bridge, not a capture surface
+
+/* Restore seams for the two freezes this replaced. Read once at load; both default OFF. */
+const SWAP_HOLDS_INPUT = (() => {
+  try { return new URLSearchParams(location.search).get("swap_hold") === "1"; } catch (_) { return false; }
+})();
+const STILL_COVERS = (() => {
+  try { return new URLSearchParams(location.search).get("still_covers") === "1"; } catch (_) { return false; }
+})();
+/** @returns {boolean} true only with ?swap_hold=1 - a turn's swap withholds camera frames from Decart */
+function swapHoldsInput() { return SWAP_HOLDS_INPUT; }
+/** @returns {boolean} true only with ?still_covers=1 - turns and re-drapes pin a snapshot over the feed */
+function stillCoversEnabled() { return STILL_COVERS; }
+
+/**
+ * The stall/resume state machine and the fade, with no DOM - driven by timestamps so it can
+ * be tested. frame(now) on every presented Decart frame; step(now, live) once per display
+ * frame, which returns the camera layer's opacity and at most one event to log.
+ * @returns {{frame:(now:number)=>void, step:(now:number, live:boolean)=>{alpha:number, event:object|null}, stats:object}}
+ */
+function makeStreamContinuity({ stallMs = LIVE_STALL_REVEAL_MS, fadeMs = LIVE_CONTINUITY_FADE_MS,
+                                resumeFrames = LIVE_RESUME_FRAMES } = {}) {
+  let lastFrameAt = null, stalled = false, stallFrom = 0, resumeRun = 0;
+  let alpha = 0, lastStepAt = null, pending = null;
+  const stats = { stalls: 0, longestGapMs: 0, cameraMs: 0 };
+  return {
+    stats,
+    frame(now) {
+      if (lastFrameAt !== null) {
+        const gap = now - lastFrameAt;
+        stats.longestGapMs = Math.max(stats.longestGapMs, gap);
+        if (stalled) {
+          /* The first frame after a stall arrives late by definition and counts as one; the
+             rest must each follow within the bar. A second long gap starts the count over. */
+          resumeRun = gap <= stallMs ? resumeRun + 1 : 1;
+          if (resumeRun >= resumeFrames) {
+            stalled = false;
+            pending = { type: "resume", stalledMs: Math.round(now - stallFrom) };
+          }
+        }
+      }
+      lastFrameAt = now;
+    },
+    step(now, live) {
+      const dt = lastStepAt === null ? 0 : now - lastStepAt;
+      lastStepAt = now;
+      if (!live) {
+        /* Not live (or not revealed): no layer, no fade - the stage is changing state under
+           it (result, clip, teardown), and a camera fading over that would be a new artifact. */
+        alpha = 0; stalled = false; resumeRun = 0; pending = null;
+        return { alpha, event: null };
+      }
+      /* A backgrounded tab stops both rAF and rVFC. The gap on return is the tab's, not
+         Decart's - give the output a fresh bar instead of flashing the camera on refocus. */
+      if (dt > 1000 && lastFrameAt !== null) lastFrameAt = Math.max(lastFrameAt, now);
+      if (!stalled && lastFrameAt !== null && now - lastFrameAt > stallMs) {
+        stalled = true; stallFrom = lastFrameAt; resumeRun = 0; stats.stalls++;
+        pending = { type: "stall", gapMs: Math.round(now - lastFrameAt) };
+      }
+      const target = stalled ? 1 : 0;
+      if (alpha !== target) {
+        const d = fadeMs > 0 ? dt / fadeMs : 1;
+        alpha = target > alpha ? Math.min(1, alpha + d) : Math.max(0, alpha - d);
+      }
+      if (alpha > 0) stats.cameraMs += dt;
+      const event = pending; pending = null;
+      return { alpha, event };
+    },
+  };
+}
+
+let _continuityCanvas = null;
+let _continuity = null;          // { stop } while a live session runs
+let liveContinuityAlpha = 0;     // the camera layer's current opacity - the recorder blends at exactly this
+
+function continuityEl() {
+  if (_continuityCanvas) return _continuityCanvas;
+  const cardEl = $("cameraCard");
+  if (!cardEl) return null;
+  if (!document.getElementById("pear-continuity-styles")) {
+    const s = document.createElement("style");
+    s.id = "pear-continuity-styles";
+    /* #aiVideo's live geometry and transform, verbatim (.camera-card #aiVideo and
+       .camera-card.show-live #aiVideo in style.css) - this layer must line up with it pixel
+       for pixel, the same rule #orientFadeCanvas follows. No CSS transition: the opacity is
+       written per frame so the recorder's blend and the display cannot drift apart. */
+    s.textContent =
+      "#liveContinuityCanvas{position:absolute;inset:0;width:100%;height:100%;" +
+      "object-fit:cover;transform:scaleX(-1) translateZ(0);z-index:6;pointer-events:none;opacity:0;}";
+    document.head.appendChild(s);
+  }
+  const c = document.createElement("canvas");
+  c.id = "liveContinuityCanvas";
+  c.setAttribute("aria-hidden", "true");
+  cardEl.appendChild(c);
+  _continuityCanvas = c;
+  return c;
+}
+
+/* The camera, cover-cropped to #aiVideo's aspect - the same centre crop drawFrame() sends. */
+function drawContinuityFrame(c, cam, ai) {
+  const vw = cam.videoWidth, vh = cam.videoHeight;
+  if (!vw || !vh) return false;
+  const aw = ai.videoWidth || LIVE_W, ah = ai.videoHeight || LIVE_H;
+  const W = Math.min(LIVE_CONTINUITY_MAX_W, aw), H = Math.round(W * ah / aw);
+  if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+  const g = c.getContext("2d", { alpha: false });
+  const scale = Math.max(W / vw, H / vh);
+  const dw = vw * scale, dh = vh * scale;
+  g.setTransform(1, 0, 0, 1, 0, 0);   // reality in, like every other video surface here
+  g.drawImage(cam, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  return true;
+}
+
+/* Started where the feed is revealed (startBillingWindow), stopped by teardown(). Idempotent. */
+function startStreamContinuity() {
+  if (_continuity) return;
+  const ai = $("aiVideo"), cam = $("webcam"), cardEl = $("cameraCard");
+  if (!ai || !cam || !cardEl || typeof requestAnimationFrame !== "function") return;
+  if (typeof ai.requestVideoFrameCallback !== "function") {
+    console.log("[PEAR] stream continuity: off - this browser has no requestVideoFrameCallback,",
+      "so a Decart output stall cannot be timed; the live camera will not bridge one");
+    return;
+  }
+  const c = continuityEl();
+  if (!c) return;
+  const model = makeStreamContinuity();
+  const t0 = performance.now();
+  let stopped = false, raf = 0, aiFrames = 0, camFrames = 0, shownAlpha = -1;
+  const onAi = (now) => { if (stopped) return; aiFrames++; model.frame(now); ai.requestVideoFrameCallback(onAi); };
+  ai.requestVideoFrameCallback(onAi);
+  const camTimed = typeof cam.requestVideoFrameCallback === "function";
+  const onCam = () => { if (stopped) return; camFrames++; cam.requestVideoFrameCallback(onCam); };
+  if (camTimed) cam.requestVideoFrameCallback(onCam);
+
+  const tick = (now) => {
+    if (stopped) return;
+    const live = isLive() && cardEl.classList.contains("show-live");
+    const { alpha, event } = model.step(now, live);
+    if (event && event.type === "stall") {
+      console.log(`[PEAR] stream continuity: Decart output silent for ${event.gapMs}ms - cross-fading the live camera in so the view keeps moving`);
+    } else if (event && event.type === "resume") {
+      console.log(`[PEAR] stream continuity: Decart output back after ${event.stalledMs}ms - cross-fading to the render`);
+    }
+    /* Draw BEFORE the opacity rises, so the first visible camera frame is a current one. */
+    const drawn = alpha > 0 ? drawContinuityFrame(c, cam, ai) : true;
+    const a = drawn ? alpha : 0;
+    if (a !== shownAlpha) { c.style.opacity = String(a); shownAlpha = a; }
+    liveContinuityAlpha = a;
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+
+  _continuity = {
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      if (raf) cancelAnimationFrame(raf);
+      liveContinuityAlpha = 0;
+      c.style.opacity = "0";
+      const secs = Math.max(0.001, (performance.now() - t0) / 1000);
+      console.log(`[PEAR] stream continuity: session - local camera ${camTimed ? (camFrames / secs).toFixed(0) + " fps" : "fps n/a"},` +
+        ` Decart output ${(aiFrames / secs).toFixed(0)} fps, longest output gap ${Math.round(model.stats.longestGapMs)}ms,` +
+        ` ${model.stats.stalls} stall(s) bridged with the live camera (${Math.round(model.stats.cameraMs)}ms on screen)`);
+    },
+  };
+}
+
+function stopStreamContinuity() {
+  if (!_continuity) return;
+  const cont = _continuity;
+  _continuity = null;
+  cont.stop();
+}
+/* ── end live continuity ── */
+
 /* ── Orientation-swap cross-fade ──────────────────────────────────────────────
    A confirmed flip re-issues rtClient.set() with a new reference, but the live #aiVideo
    stream needs a few remote-rendered frames to catch up - cutting straight to that reads
@@ -6958,6 +7197,11 @@ function redrapeCoverEl() {
    which case the caller must not wait for a fade it is not showing). */
 function redrapeCoverBegin() {
   if (_redrapeHoldActive) return false;
+  /* Off by default, for the reason orientHoldPromote() gives: a still over a body that is
+     moving is the freeze the shopper reported. Returning false also drops the caller's
+     ORIENT_FADE_HOLD_MS grace, which only ever existed to delay this cover's reveal.
+     ?still_covers=1 restores it. */
+  if (!(typeof stillCoversEnabled === "function" && stillCoversEnabled())) return false;
   const ai = $("aiVideo");
   const c = redrapeCoverEl();
   /* No decoded frame yet - there is nothing good to hold, and freezing a blank canvas over
@@ -7224,7 +7468,9 @@ function orientHoldBegin(reason) {
                                         // the turn would bank the degraded frame we are
                                         // holding precisely to hide.
   _orientHoldActive = true;
-  orientFadeCapture();
+  /* Banked only when a still may be shown at all - see orientHoldPromote(). The WINDOW
+     above opens either way: reconditionForTopology() and redrapeCoverBegin() gate on it. */
+  if (typeof stillCoversEnabled === "function" && stillCoversEnabled()) orientFadeCapture();
   /* The ceiling is armed HERE, not in promote(), and bounds the WINDOW rather than the
      display. _orientHoldActive gates the two consumers named above, so a window left
      open forever would keep body-topology reconditioning suppressed for the rest of the
@@ -7251,6 +7497,18 @@ function orientHoldBegin(reason) {
  */
 function orientHoldPromote(reason) {
   if (!_orientHoldActive || _orientHoldShown) return;
+  /* ── NO STILL OVER THE LIVE FEED, BY DEFAULT ─────────────────────────────────────
+     REPORTED: "the whole view freezes for 1-2 seconds on every turn - it has to feel like a
+     mirror". This cover IS a freeze by construction: an opaque snapshot pinned over #aiVideo
+     from a corroborated turn until the swap lands (ceiling ORIENT_TURN_HOLD_MAX_MS), and the
+     recorder cannot see it, so the live view froze longer than any clip shows. Nothing is
+     drawn over the feed now; what bridges a Decart output stall is the live camera - see
+     LIVE CONTINUITY. ?still_covers=1 restores the snapshot cover for an A/B. typeof-guarded:
+     this block runs standalone in turn-hold.test.mjs. */
+  if (!(typeof stillCoversEnabled === "function" && stillCoversEnabled())) {
+    if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - not covering the feed with a still (" + reason + "); the live view keeps moving");
+    return;
+  }
   _orientHoldShown = true;
   orientFadeShow();
   if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - covering the feed (" + reason + ")");
@@ -7934,8 +8192,22 @@ function createOrientationWatcher() {
        above, so an abandoned swap never freezes anything; given back the moment THIS swap's
        own set() settles, either way. The instance held is the one released, so a swap that
        outlives its session cannot open a newer session's go-live gate. typeof-guarded - this
-       function runs standalone in front-reference-guard.test.mjs (CLAUDE.md 2.7). */
-    const heldGate = typeof holdInputGate === "function"
+       function runs standalone in front-reference-guard.test.mjs (CLAUDE.md 2.7).
+
+       ── OFF BY DEFAULT NOW - "the whole view freezes for 1-2 seconds on every turn" ────────
+       THE CLIPS (PEAR-fit-1789417907145/-925378/-953496, v136, read frame by frame): the
+       recorder's own frames stay evenly spaced at ~33ms throughout (longest 69ms), so the page
+       never stalled - but Decart's output repeats ONE frame, pixel-identical, for 2.1s, 1.4s
+       and 0.7s, each at a turn, each ending in a jump cut to a body 50+ degrees further round.
+       A pixel-identical repeat is not a slow render; it is no render - Decart had no camera
+       frame to render from. That is this hold: it withholds input from the dispatch to the
+       ACK, and a turn that sends two swaps back to back (a predictive BACK and its withdrawal)
+       stacks two of them.
+       THE TRADE, STATED: with input flowing, Decart may render the untextured shirt this hold
+       was added for, for about one upload round-trip (the ACK has measured 234-333ms with
+       pre-encoded references) - on a body that keeps moving. The shopper asked for the moving
+       mirror over the frozen correct frame. ?swap_hold=1 restores the hold for an A/B. */
+    const heldGate = typeof holdInputGate === "function" && typeof swapHoldsInput === "function" && swapHoldsInput()
       ? holdInputGate(`orientation swap → ${next.toUpperCase()}`, ORIENT_SWAP_INPUT_HOLD_MAX_MS) : null;
     const trace = typeof traceSwapTimeline === "function"
       ? traceSwapTimeline(next, predictive, !!heldGate, next === "back" ? GARMENT_BACK : GARMENT_FRONT) : null;
@@ -14353,6 +14625,9 @@ function startBillingWindow(gen) {
   $("scanOverlay").hidden = true;
   resetBestFrontFrame();   // per-session: never inherit the previous shopper best frame
   card().classList.add("show-live");
+  /* From the reveal on, a Decart output stall is bridged with the live camera, never a
+     still - see LIVE CONTINUITY. typeof-guarded (CLAUDE.md 2.7). */
+  if (typeof startStreamContinuity === "function") startStreamContinuity();
   logSurfaceOrientation("go-live");
   /* THE ONLY PLACE THE FEED BECOMES VISIBLE, and it is deliberately the same statement
      that flips the state class. Everything above this line has already been verified:
@@ -16954,6 +17229,19 @@ function startRecording() {
                a restore were ever missed. Absolute by construction. */
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.drawImage(video, 0, 0, w, h);
+            /* ── THE CLIP RECORDS WHAT THE SHOPPER SAW ─────────────────────────────────
+               While LIVE CONTINUITY bridges a Decart stall, #aiVideo is one repeated frame
+               and the screen shows the live camera over it. Drawing only #aiVideo baked
+               that stall into the MP4 as a freeze - the recorder's timestamps were always
+               even (~33ms in the v136 clips); the CONTENT was frozen. Blended at the
+               layer's own opacity, the clip moves wherever the view did. The canvas is
+               reality-oriented, like #aiVideo's frames, so no flip; the save/restore above
+               resets globalAlpha. */
+            if (typeof liveContinuityAlpha === "number" && liveContinuityAlpha > 0 &&
+                _continuityCanvas && _continuityCanvas.width) {
+              ctx.globalAlpha = liveContinuityAlpha;
+              ctx.drawImage(_continuityCanvas, 0, 0, w, h);
+            }
           } finally { ctx.restore(); }
           beginRecorder();
         } catch (_) { /* a torn-down canvas mid-teardown - the next tick re-checks */ }
