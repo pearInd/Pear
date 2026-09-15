@@ -144,8 +144,10 @@ const I18N = {
   swatchesAria:              { he: "צבע · Colour", en: "Colour" },
   liveCountdownLabel:        { he: "שניות", en: "seconds" },
   /* Shown by the body-presence gate while it waits for the shopper to step into frame -
-     see awaitBodyPresence() in app.js. */
-  presencePrompt:            { he: "נא להתייצב מול המצלמה", en: "Please step into the frame" },
+     see awaitBodyPresence() in app.js. Worded as "step BACK", not "step in": the gate's
+     commonest miss is a shopper too close for the required landmarks (hips/knees
+     cropped), and the overlay's step-back animation acts out the same instruction. */
+  presencePrompt:            { he: "נא להתרחק כדי להציג גוף מלא", en: "Please step back to fit full body" },
   /* Progressive loading-state guidance (#scanStepText) - cycled by
      startScanTimer()/updateScanTimer() in app.js while #scanOverlay is up,
      one step at a time, so the shopper always knows what's happening and how

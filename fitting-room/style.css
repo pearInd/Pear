@@ -1402,9 +1402,10 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    only the layer that applies the flip differs. */
 /* ── Body-presence prompt ─────────────────────────────────────────────────────
    Shown while the presence gate waits for the shopper to step into frame. Visibility is
-   owned entirely by the `hidden` attribute from app.js - there is no class-based gate
-   here, because unlike the lower-body guard this element has exactly one reason to be
-   on screen and one place that decides it. */
+   owned by app.js alone - showPresenceOverlay() / hidePresenceOverlay(). The only class
+   here, .is-leaving, is the exit fade those two drive; it is not a second gate. `hidden`
+   (display:none) is still the resting state, and it is also what stops every keyframe
+   below from ticking at all once the shopper is confirmed. */
 #presenceOverlay {
   position: absolute;
   inset: 0;
@@ -1413,6 +1414,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   align-items: center;
   justify-content: center;
   gap: 18px;
+  padding-inline: 16px;
   z-index: 6;                 /* above the video, below the scan overlay and any modal */
   /* Never intercepts clicks: the shopper must still be able to hit Stop, change a
      swatch, or press go-live again while this is up. */
@@ -1423,38 +1425,261 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   animation: presenceFadeIn 220ms ease-out both;
 }
 #presenceOverlay[hidden] { display: none; }
+/* The gate confirmed. The fade starts in the same tick gate.feed() returned true;
+   `hidden` lands PRESENCE_OVERLAY_FADE_MS (app.js) later. Keep the two durations equal. */
+#presenceOverlay.is-leaving { animation: presenceFadeOut 180ms cubic-bezier(0.4, 0, 0.2, 1) both; }
 
-/* A soft human-shaped guide, drawn in pure CSS - no asset to load, on a path whose
-   entire purpose is not waiting for downloads. */
-.presence-overlay__frame {
-  width: min(38%, 150px);
-  aspect-ratio: 3 / 5;
-  border: 2px dashed rgba(255, 255, 255, 0.72);
-  border-radius: 44% 44% 30% 30% / 32% 32% 12% 12%;
-  animation: presencePulse 2.1s ease-in-out infinite;
+/* ── Step-back guide ──────────────────────────────────────────────────────────
+   Replaces a static dashed pill that said "stand here" without saying how. The gate's
+   commonest miss is a shopper who is too CLOSE - hips and knees cropped off the bottom -
+   so the loop acts the fix out. One 3.5s cycle, markup in index.html:
+
+     0-40%   STEP BACK   the figure starts too big for the frame (1.35, ghosted to 0.7,
+                         legs spilling out of the bottom) and walks back into it (0.85),
+                         bobbing once per step
+     40-55%  LOCK        the dashed frame turns mint and pulses: full body in frame
+     55-75%  DRESS       a tee, its sleeves, then shorts draw on (stroke-dashoffset)
+     75-90%  CHECK FIT   the arms open 15deg outward
+     90-100% RESET       the figure fades; the jump back to 1.35 happens while invisible
+
+   WHAT RUNS WHERE. The step-back, bob, lock pulse, arm swing and every fade are transform
+   and opacity on HTML wrappers - compositor-only, no main-thread work per frame. That is
+   why the moving parts are separate <div>s rather than <g>s: a CSS transform on an SVG
+   child is main-thread paint in most engines. Two things are paint by nature and are
+   kept deliberately small: the marching dash on the frame and the garment line draw
+   (only moving during 55-75%). Both repaint a layer no bigger than this ~170x260 box.
+
+   NO backdrop-filter ON THE PILL. #presenceOverlay already has one and runs an opacity
+   animation, which makes it the backdrop root for everything inside it: a nested blur
+   would sample the overlay's own tint, never the camera, and cost a GPU pass for nothing.
+   The "glass" is gradient + inner highlight over the overlay's existing blur.
+
+   Stroke widths are in viewBox units, and the box renders at ~1 unit per CSS pixel at its
+   250px cap, so 3px is 3px at rest and scales with the figure as it steps back. */
+.presence-guide {
+  position: relative;
+  z-index: 0;                     /* its own stack, so the caption can sit above a figure
+                                     that overflows the frame at the start of a loop */
+  flex: none;
+  height: min(250px, 56%);
+  aspect-ratio: 170 / 260;
+  max-width: 100%;
+}
+.presence-guide > *,
+.pg-figure > *,
+.pg-zoom > *,
+.pg-walk > *,
+.pg-arm > * {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.presence-guide svg { display: block; overflow: visible; }
+
+.pg-glass {
+  border-radius: 999px;
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.05) 48%, rgba(255, 255, 255, 0.02) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -24px 40px rgba(0, 0, 0, 0.14),
+    0 14px 40px rgba(0, 0, 0, 0.28);
 }
 
+/* The success glow is a STATIC box-shadow whose layer only changes opacity/scale, which
+   is the composited way to "animate a glow" - animating box-shadow or drop-shadow itself
+   would re-rasterise a blur every frame. ::after is the one-shot expanding lock ring. */
+.pg-glow {
+  border-radius: 999px;
+  opacity: 0;
+  box-shadow:
+    0 0 0 1.5px rgba(98, 243, 207, 0.85),
+    0 0 26px 3px rgba(98, 243, 207, 0.42),
+    inset 0 0 24px rgba(98, 243, 207, 0.2);
+  will-change: transform, opacity;
+  animation: pgLockGlow 3.5s linear infinite;
+}
+.pg-glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid rgba(98, 243, 207, 0.9);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: pgLockRing 3.5s linear infinite;
+}
+
+.pg-frame rect {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.78);
+  stroke-width: 2px;
+  stroke-dasharray: 6 6;
+  animation: pgFrame 3.5s linear infinite;
+}
+
+.pg-figure {
+  opacity: 0;
+  will-change: opacity;
+  animation: pgFigure 3.5s linear infinite;
+}
+.pg-zoom {
+  /* 53% puts the fitted (0.85) figure dead centre in the pill */
+  transform-origin: 50% 53%;
+  will-change: transform, opacity;
+  animation: pgStepBack 3.5s linear infinite;
+}
+.pg-walk {
+  will-change: transform, opacity;
+  animation: pgWalk 3.5s linear infinite;
+}
+
+.pg-lines {
+  will-change: opacity;
+  animation: pgLinesDim 3.5s linear infinite;
+}
+.pg-lines circle,
+.pg-lines path,
+.pg-lines rect {
+  fill: transparent;
+  stroke: #ffffff;
+  stroke-width: 3px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* pathLength=100 on every garment path, dash 100 / gap 110: offset 105 sits the whole
+   path inside the gap (nothing drawn - not even a round-cap dot), offset 0 draws all of it. */
+.pg-dress path {
+  fill: none;
+  stroke: #62f3cf;
+  stroke-width: 2.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 100 110;
+  stroke-dashoffset: 105;
+}
+.pg-dress path.pg-dress__glow { stroke: rgba(98, 243, 207, 0.3); stroke-width: 7px; }
+.pg-dress__tee    { animation: pgDressTee 3.5s linear infinite; }
+.pg-dress__sleeve { animation: pgDressSleeve 3.5s linear infinite; }
+.pg-dress__shorts { animation: pgDressShorts 3.5s linear infinite; }
+
+/* Pivots are the shoulder points in the shared 170x260 viewBox: (54,79) and (116,79). */
+.pg-arm { will-change: transform, opacity; }
+.pg-arm--l { transform-origin: 31.765% 30.385%; animation: pgArmL 3.5s linear infinite; }
+.pg-arm--r { transform-origin: 68.235% 30.385%; animation: pgArmR 3.5s linear infinite; }
+
 .presence-overlay__text {
+  position: relative;
+  z-index: 1;
   margin: 0;
-  padding: 0 18px;
+  max-width: 24em;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
   text-align: center;
-  font-size: clamp(0.95rem, 2.4vw, 1.15rem);
-  font-weight: 600;
-  line-height: 1.5;
   color: #fff;
   text-shadow: 0 1px 10px rgba(0, 0, 0, 0.55);
 }
-
-@keyframes presenceFadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes presencePulse {
-  0%, 100% { opacity: 0.55; transform: scale(1); }
-  50%      { opacity: 1;    transform: scale(1.03); }
+.presence-overlay__primary {
+  font-size: clamp(1rem, 2.6vw, 1.2rem);
+  font-weight: 650;
+  line-height: 1.4;
 }
-/* The pulse is decoration, and decoration is the first thing to drop for anyone who has
-   asked the OS not to animate - the message itself is unaffected. */
+.presence-overlay__secondary {
+  font-size: clamp(0.78rem, 2vw, 0.9rem);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  opacity: 0.8;
+}
+.presence-overlay__secondary[hidden] { display: none; }
+
+@keyframes presenceFadeIn  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes presenceFadeOut { from { opacity: 1; } to { opacity: 0; } }
+
+/* One timeline, one duration: every keyframe set below shares the 3.5s cycle and starts
+   together (they all start when #presenceOverlay leaves display:none), so percentages
+   line up across layers. The eased segments use cubic-bezier(0.4, 0, 0.2, 1); the
+   animation itself is linear so a per-keyframe easing is never applied twice. */
+@keyframes pgFigure {
+  0%   { opacity: 0; }
+  5%   { opacity: 0.7; }
+  40%  { opacity: 1; }
+  90%  { opacity: 1; animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  100% { opacity: 0; }
+}
+@keyframes pgStepBack {
+  0%        { transform: translate3d(0, 11%, 0) scale3d(1.35, 1.35, 1); animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  40%, 100% { transform: translate3d(0, 0, 0) scale3d(0.85, 0.85, 1); }
+}
+/* three steps back: up on each stride, down on each footfall */
+@keyframes pgWalk {
+  0%, 13.333%, 26.667%, 40%, 100% { transform: translate3d(0, 0, 0); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+  6.667%, 20%, 33.333%            { transform: translate3d(0, -2.2%, 0); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+}
+@keyframes pgFrame {
+  0%   { stroke-dashoffset: 0;   stroke: rgba(255, 255, 255, 0.78); }
+  40%  { stroke: rgba(255, 255, 255, 0.78); }
+  46%  { stroke: rgba(98, 243, 207, 1); }
+  90%  { stroke: rgba(98, 243, 207, 0.9); }
+  100% { stroke-dashoffset: -24; stroke: rgba(255, 255, 255, 0.78); }
+}
+@keyframes pgLockGlow {
+  0%, 40%  { opacity: 0;   transform: translate3d(0, 0, 0) scale3d(0.97, 0.97, 1); animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  46%      { opacity: 1;   transform: translate3d(0, 0, 0) scale3d(1.025, 1.025, 1); animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  55%, 90% { opacity: 0.5; transform: translate3d(0, 0, 0) scale3d(1, 1, 1); }
+  100%     { opacity: 0;   transform: translate3d(0, 0, 0) scale3d(1, 1, 1); }
+}
+@keyframes pgLockRing {
+  0%, 40%   { opacity: 0;   transform: translate3d(0, 0, 0) scale3d(1, 1, 1); }
+  42%       { opacity: 0.9; transform: translate3d(0, 0, 0) scale3d(1, 1, 1); animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  56%, 100% { opacity: 0;   transform: translate3d(0, 0, 0) scale3d(1.12, 1.12, 1); }
+}
+@keyframes pgLinesDim {
+  0%, 55%   { opacity: 1; animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  70%, 100% { opacity: 0.5; }
+}
+@keyframes pgDressTee {
+  0%, 55%   { stroke-dashoffset: 105; animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  67%, 100% { stroke-dashoffset: 0; }
+}
+@keyframes pgDressSleeve {
+  0%, 60%   { stroke-dashoffset: 105; animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  70%, 100% { stroke-dashoffset: 0; }
+}
+@keyframes pgDressShorts {
+  0%, 63%   { stroke-dashoffset: 105; animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  75%, 100% { stroke-dashoffset: 0; }
+}
+/* open outward with a small settle - positive is clockwise, which swings a hand hanging
+   below its shoulder away from the body on the viewer's left */
+@keyframes pgArmL {
+  0%, 75%   { transform: translate3d(0, 0, 0) rotate(0deg);  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  83%       { transform: translate3d(0, 0, 0) rotate(16.5deg); animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  88%, 100% { transform: translate3d(0, 0, 0) rotate(15deg); }
+}
+@keyframes pgArmR {
+  0%, 75%   { transform: translate3d(0, 0, 0) rotate(0deg);   animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  83%       { transform: translate3d(0, 0, 0) rotate(-16.5deg); animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  88%, 100% { transform: translate3d(0, 0, 0) rotate(-15deg); }
+}
+
+/* Reduced motion drops the loop, not the message: a single still of the END state - the
+   figure fitted inside a locked frame, dressed - which is the instruction in one picture. */
 @media (prefers-reduced-motion: reduce) {
-  #presenceOverlay { animation: none; }
-  .presence-overlay__frame { animation: none; opacity: 0.8; }
+  #presenceOverlay,
+  #presenceOverlay.is-leaving,
+  .pg-glow, .pg-glow::after, .pg-frame rect, .pg-figure, .pg-zoom, .pg-walk,
+  .pg-lines, .pg-dress path, .pg-arm { animation: none; }
+  #presenceOverlay.is-leaving { opacity: 0; }
+  .pg-figure { opacity: 1; }
+  .pg-zoom { transform: scale(0.85); }
+  .pg-glow { opacity: 0.5; }
+  .pg-frame rect { stroke: rgba(98, 243, 207, 0.9); }
+  .pg-lines { opacity: 0.5; }
+  .pg-dress path { stroke-dashoffset: 0; }
 }
 
 .camera-card #lowerBodyGuard {

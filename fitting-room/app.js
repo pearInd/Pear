@@ -16442,13 +16442,42 @@ async function awaitBodyPresence(isBottoms) {
   }
 }
 
+/* ── The overlay leaves on the verdict, not after it ─────────────────────────────
+   The overlay carries a looping step-back guide (index.html / style.css "Step-back
+   guide"), and it used to vanish with a hard `hidden` flip. It now fades - but the fade
+   STARTS in the same tick the gate confirms (hide is called synchronously from the
+   gate.feed() branch), so the shopper sees it begin to clear the instant they are
+   judged in frame. `hidden` follows PRESENCE_OVERLAY_FADE_MS later; that display:none is
+   also what stops the guide's keyframes from running at all, so a confirmed shopper pays
+   nothing for an animation they can no longer see.
+
+   A SHOW DURING THE FADE WINS. The session watcher can re-show this within milliseconds
+   of a hide (shopper steps in, drifts straight back out), so show() cancels the pending
+   hide outright. Without that, the timer would fire after the re-show and blank the
+   overlay the watcher had just decided the shopper needs.
+
+   This element is never a still frame over the live feed (§2.9) - it is a translucent
+   guide with pointer-events: none, and it is only ever up while a presence verdict is
+   negative. The fade keeps it no longer than 180ms past a positive one. */
+const PRESENCE_OVERLAY_FADE_MS = 180;   // = #presenceOverlay.is-leaving in style.css
+let presenceOverlayHideTimer = null;
+
 function showPresenceOverlay() {
   const el = $("presenceOverlay");
-  if (el) el.hidden = false;
+  if (!el) return;
+  if (presenceOverlayHideTimer) { clearTimeout(presenceOverlayHideTimer); presenceOverlayHideTimer = null; }
+  el.classList.remove("is-leaving");
+  el.hidden = false;
 }
 function hidePresenceOverlay() {
   const el = $("presenceOverlay");
-  if (el) el.hidden = true;
+  if (!el || el.hidden || presenceOverlayHideTimer) return;
+  el.classList.add("is-leaving");
+  presenceOverlayHideTimer = setTimeout(() => {
+    presenceOverlayHideTimer = null;
+    el.hidden = true;
+    el.classList.remove("is-leaving");
+  }, PRESENCE_OVERLAY_FADE_MS);
 }
 
 /* ── Late entry: re-condition, never re-bill ──────────────────────────────────
