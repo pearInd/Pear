@@ -405,7 +405,7 @@ console.log("\n── §5 THE WIRING ──");
   const p1 = SRC.indexOf("/* ── end body-presence gate ── */", p0);
   const pose = SRC.slice(p0, p1);
   check("the topology gate refuses a dispatch mid-turn, so the shift is DEFERRED and re-offered",
-    /bodyTopology\.feed\(sig, \{ canDispatch: !wireBusy\(\) && !orientTurnInProgress\(\) \}\)/.test(pose));
+    /bodyTopology\.feed\(sig, \{ canDispatch: !wireBusy\(\) && !orientTurnInProgress\(\) && !turnStarting \}\)/.test(pose));
   check("the pose loop no longer waits on a re-drape - it keeps publishing yaw through the upload",
     /if \(step\.state === "shift"\) reconditionForTopology\(step\)\.catch\(/.test(pose) &&
     !/await reconditionForTopology\(/.test(pose));
@@ -1311,6 +1311,100 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     /if \(typeof _orientSendMark === "function" && \(label === "applyGarment" \|\| label === "applyLook"\)\) \{/.test(send) &&
     send.indexOf("_orientSendMark") < send.indexOf("await send();") &&
     SRC.indexOf("let _orientSendMark = null;") !== -1 && SRC.indexOf("let _orientSendMark = null;") < s0);
+}
+
+console.log("\n── §12 A TURN THAT IS STARTING OWNS THE WIRE - the late BACK on the way out ──");
+/* pear-tryon-...-FOX-20260915-072153.mp4 (v137): on the way OUT the back panel is to the lens and plain
+   for ~230ms (2.82-3.02s) before COVE lands; the return leg is on time. A body re-drape dispatches on the
+   first topology evaluation past 15 degrees, and the "turn owns the wire" flag only rises at a disagreeing
+   vote or 45 - so between them a re-drape can take the wire just before the early trigger sends BACK at
+   20, and the swap waits a round-trip behind it. Replayed here on the REAL tracker, old gate and new. */
+{
+  const fnSrc = (name) => { const a = SRC.indexOf(`function ${name}(`); return SRC.slice(a, SRC.indexOf("\n}\n", a) + 2); };
+  const constLine = (name) => (SRC.match(new RegExp(`const ${name}\\s*=[^\\n]*`)) || [""])[0];
+  const g = new Function(
+    "BODY_ROTATION_DELTA_DEG", "BODY_VOLUME_DELTA", "BODY_RECONDITION_COOLDOWN_MS", "BODY_TRACK_HOLD_MS",
+    "ORIENT_EARLY_TURN_MIN_SPEED", "ORIENT_EARLY_TURN_DEFAULT_SPEED",
+    [constLine("ORIENT_YAW_FRESH_MS"), constLine("ORIENT_TURN_START_SPEED"),
+     "let _torsoYawAbs = null, _torsoYawAt = 0, _torsoYawRise = 0, currentAngle = 'auto'; const AUTO_ANGLE = 'auto';",
+     fnSrc("relativeDelta"), fnSrc("topologyDelta"), fnSrc("topologyShift"), fnSrc("makeBodyTopologyTracker"),
+     fnSrc("orientYawRise"), fnSrc("orientTurnStarting"),
+     "return { makeBodyTopologyTracker, orientYawRise, orientTurnStarting, SPEED: ORIENT_TURN_START_SPEED," +
+     " publish(abs, at) { _torsoYawRise = orientYawRise(_torsoYawAbs, _torsoYawAt, abs, at); _torsoYawAbs = abs; _torsoYawAt = at; }," +
+     " reset() { _torsoYawAbs = null; _torsoYawAt = 0; _torsoYawRise = 0; }, setAngle(a) { currentAngle = a; } };"].join("\n")
+  )(15, 0.18, 900, 1200, 60, 60);
+
+  check("the turn speed is the early trigger's own gate (60 deg/s by default)", g.SPEED === 60, String(g.SPEED));
+  check("rise is deg/s between two fresh readings", g.orientYawRise(10, 1000, 46, 1240) === 150);
+  check("...and 0 with no previous reading, a stale one, or the same instant",
+    g.orientYawRise(null, 0, 30, 1000) === 0 && g.orientYawRise(10, 0, 30, 5000) === 0 && g.orientYawRise(10, 1000, 30, 1000) === 0);
+  g.reset(); g.publish(0, 1000); g.publish(36, 1240);
+  check("a torso rising at turn speed in AI Auto is a turn starting", g.orientTurnStarting(1300) === true);
+  check("...but not once the reading is stale", g.orientTurnStarting(1240 + 601) === false);
+  g.setAngle("front");
+  check("...and never outside AI Auto - a single-view item has no swap to protect", g.orientTurnStarting(1300) === false);
+  g.setAngle("auto");
+  g.reset(); g.publish(10, 1000); g.publish(14, 1240);
+  check("a slow sway (17 deg/s) is not a turn starting", g.orientTurnStarting(1300) === false);
+  g.reset(); g.publish(40, 1000); g.publish(10, 1240);
+  check("a fast return toward square (falling |yaw|) is not a turn starting", g.orientTurnStarting(1300) === false);
+
+  /* The race. Pose ticks every 240ms publish |yaw| and evaluate the tracker on the topology cadence
+     (350ms); the orientation tick every 250ms fires BACK on the first fresh |yaw| >= 20 rising at the
+     gate, and raises the old turn flag at 45 or once BACK is out. A write holds the wire UPLOAD_MS. */
+  const UPLOAD_MS = 300;
+  const simulate = ({ newGate, turnAt, degPerSec = 150, peak = 90, orientPhase = 0 }) => {
+    g.reset();
+    let t = 0; const tracker = g.makeBodyTopologyTracker({ now: () => t });
+    let lastTopologyAt = 0, wireFreeAt = 0, turnFlag = false, firedAt = null, dispatchedAt = null, redrapes = 0;
+    let prevYaw = null, prevAt = 0, lastRise = 0;   // the trigger's own speed, independent of the gate under test
+    const yawAt = (ms) => Math.min(peak, Math.max(0, (ms - turnAt) * degPerSec / 1000));
+    for (t = 0; t <= turnAt + 2000; t += 10) {
+      if (t % 240 === 0) {
+        const yaw = yawAt(t); g.publish(yaw, t);
+        lastRise = g.orientYawRise(prevYaw, prevAt, yaw, t); prevYaw = yaw; prevAt = t;
+        if (t - lastTopologyAt >= 350) {
+          lastTopologyAt = t;
+          const busy = t < wireFreeAt;
+          const starting = newGate && g.orientTurnStarting(t);
+          const step = tracker.feed({ yaw, pitch: 0, depth: 0.3, aspect: 1 }, { canDispatch: !busy && !turnFlag && !starting });
+          if (step.state === "shift") { redrapes++; wireFreeAt = Math.max(wireFreeAt, t) + UPLOAD_MS; }
+        }
+      }
+      if ((t + orientPhase) % 250 === 0 && firedAt === null) {
+        const yaw = yawAt(Math.floor(t / 240) * 240);       // the watcher reads the latest published reading
+        const rise = t - prevAt <= 600 ? lastRise : 0;
+        if (yaw >= 45) turnFlag = true;
+        if (yaw >= 20 && rise >= g.SPEED) { firedAt = t; turnFlag = true; dispatchedAt = Math.max(t, wireFreeAt); wireFreeAt = dispatchedAt + UPLOAD_MS; }
+      }
+    }
+    return { waitMs: firedAt === null ? null : dispatchedAt - firedAt, redrapes };
+  };
+  const sweep = (newGate) => {
+    const out = [];
+    for (let turnAt = 1000; turnAt < 1480; turnAt += 20) for (const orientPhase of [0, 80, 160]) out.push(simulate({ newGate, turnAt, orientPhase }));
+    return out;
+  };
+  const before = sweep(false), after = sweep(true);
+  const waited = (runs) => runs.filter((r) => r.waitMs > 0);
+  check(`OLD GATE reproduces the hole: BACK waited behind a re-drape in ${waited(before).length}/${before.length} turn phasings, up to ${Math.max(0, ...before.map((r) => r.waitMs || 0))}ms`,
+    waited(before).length > 0 && before.every((r) => r.waitMs !== null));
+  check("NEW GATE: BACK never waits behind a re-drape, in any phasing",
+    after.every((r) => r.waitMs === 0), JSON.stringify(waited(after).slice(0, 3)));
+
+  /* NOTHING IS LOST for a shopper who is not turning. */
+  const sway = simulate({ newGate: true, turnAt: 1000, degPerSec: 20, peak: 18 });
+  check("a slow sway past 15 still re-drapes under the new gate", sway.redrapes >= 1 && sway.waitMs === null, JSON.stringify(sway));
+  const twist = simulate({ newGate: true, turnAt: 1000, degPerSec: 150, peak: 18 });
+  check("a fast twist that stops short of the trigger is deferred while rising, then re-drapes once it holds",
+    twist.redrapes >= 1 && twist.waitMs === null, JSON.stringify(twist));
+
+  const p0 = SRC.indexOf("function startPresenceWatcher");
+  const pose = SRC.slice(p0, SRC.indexOf("/* ── end body-presence gate ── */", p0));
+  check("the pose tick publishes the rise from the SAME reading, before the publish overwrites the previous one",
+    /_torsoYawRise = orientYawRise\(_torsoYawAbs, _torsoYawAt, Math\.abs\(sig\.yaw\), now\);[^\n]*\n\s*_torsoYawAbs = Math\.abs\(sig\.yaw\);/.test(pose));
+  check("...and the re-drape gate is evaluated on that tick, not the orientation tick's",
+    /const turnStarting = orientTurnStarting\(now\);\s*\n\s*const step = bodyTopology\.feed\(/.test(pose));
 }
 
 console.log(fails === 0 ? "\nturn-yaw-window: OK" : `\nturn-yaw-window: ${fails} FAILED`);

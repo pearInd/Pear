@@ -6092,6 +6092,49 @@ const PRESENCE_PROMPT_YAW_SUPPRESS_DEG = 25;
    triggering a second one. null until the pose loop produces its first signature. */
 let _torsoYawAbs = null;
 let _torsoYawAt  = 0;
+/* How fast |yaw| rose between the last two readings, deg/s (negative while falling). Published
+   beside _torsoYawAbs on every pose reading - see orientTurnStarting(). */
+let _torsoYawRise = 0;
+
+/* ── A TURN THAT IS STARTING OWNS THE WIRE TOO - "the back came out plain, then COVE popped in" ──
+   LIVE EVIDENCE: pear-tryon-...-FOX-20260915-072153.mp4 (v137), read frame by frame. OUT: the chest
+   logo holds through the front three-quarter, the side is plain (as a side is), and then the BACK PANEL
+   is turned to the lens and plain for 7 frames, 2.82s-3.02s (~230ms), before COVE appears at 3.05s.
+   BACK: COVE wraps round the back to ~70 degrees off square (4.15s), cuts at 4.18s near edge-on, the
+   side is plain, the chest logo is there as the chest comes round (4.78s). The return leg is on time;
+   the gap is BACK landing late on the way OUT. No reference was ever cleared or the lock reset - the
+   side on the wire was simply still FRONT.
+   A HOLE IN THE "TURN OWNS THE WIRE" GATE, found by reading it against that clip. A body re-drape - a
+   full image re-upload of the side about to be replaced - dispatches on the first topology evaluation
+   past BODY_ROTATION_DELTA_DEG (15), with no stability requirement, and its only turn guard is
+   orientTurnInProgress(), raised by a disagreeing vote or a yaw window past ORIENT_YAW_TURN_DEG (45).
+   The early turn trigger fires BACK at 20. From 15 to the flag there is nothing, so a re-drape that wins
+   that race holds the wire and the swap waits a whole upload round-trip behind it ("applyGarment:
+   waiting for the wire"). The early trigger came after the flag, which predates it.
+   THE GATE NOW ALSO READS THE START OF A TURN: an AI Auto torso whose |yaw| is RISING at the early
+   trigger's own turn speed (ORIENT_EARLY_TURN_MIN_SPEED, the default when ?early_turn_speed=0 removes
+   that gate). Read on the pose tick that evaluates the re-drape, from the same inference, so it cannot
+   lose a race against the orientation tick. NOTHING IS LOST: a deferred shift keeps its baseline and is
+   re-offered on the next evaluation (makeBodyTopologyTracker). COST: a fast posing twist delays its
+   re-drape by an evaluation or two; a slow sway or a held twist re-drapes exactly as before.
+   NOT PROVEN FOR THAT CLIP: the other way to land BACK ~230ms late is a dispatch-to-render latency longer
+   than the 20-degree lead now that the swap withholds no input. One ?orient_debug=1 360 tells them
+   apart - a "waiting for the wire" line and a long "pre-flight + wire wait" on DISPATCH_SENT is this. */
+const ORIENT_TURN_START_SPEED = ORIENT_EARLY_TURN_MIN_SPEED > 0 ? ORIENT_EARLY_TURN_MIN_SPEED : ORIENT_EARLY_TURN_DEFAULT_SPEED;
+
+/** deg/s |yaw| moved from the previous reading to this one; 0 without a fresh previous reading.
+ * @param {number|null} prevAbs @param {number} prevAt @param {number} abs @param {number} at */
+function orientYawRise(prevAbs, prevAt, abs, at) {
+  if (prevAbs === null || !Number.isFinite(prevAbs) || !(at > prevAt) || at - prevAt > ORIENT_YAW_FRESH_MS) return 0;
+  return (abs - prevAbs) / ((at - prevAt) / 1000);
+}
+
+/** @param {number} [now] @returns {boolean} true while an AI Auto torso is rotating at turn speed */
+function orientTurnStarting(now = Date.now()) {
+  if (typeof currentAngle === "undefined" || typeof AUTO_ANGLE === "undefined" || currentAngle !== AUTO_ANGLE) return false;
+  if (_torsoYawAbs === null || now - _torsoYawAt > ORIENT_YAW_FRESH_MS) return false;
+  return _torsoYawRise >= ORIENT_TURN_START_SPEED;
+}
 
 /* ── WHICH WAY THE BODY FACES, FROM THE POSE MODEL - front AND back ──────────────────
    ────────────────────────────────────────────────────────────────────────────────
@@ -16575,6 +16618,7 @@ function startPresenceWatcher() {
       if (facingSep !== null) { _poseFacingSep = facingSep; _poseFacingAt = now; }
       else _poseTorsoLostAt = now;   // the turn window reads the gap from this - see ORIENT_POSE_PASS
       if (sig && Number.isFinite(sig.yaw)) {
+        _torsoYawRise = orientYawRise(_torsoYawAbs, _torsoYawAt, Math.abs(sig.yaw), now);   // before the publish overwrites the previous reading
         _torsoYawAbs = Math.abs(sig.yaw);
         _torsoYawAt  = now;
         /* THE THIRD CONSUMER of this one reading (after the topology monitor and the
@@ -16592,7 +16636,10 @@ function startPresenceWatcher() {
            it too (see orientTurnMark): the swap that ends the turn re-uploads the reference
            anyway, and a re-drape started mid-turn is what used to hold the wire against it.
            Deferred, not dropped - the tracker re-offers the movement once the turn settles. */
-        const step = bodyTopology.feed(sig, { canDispatch: !wireBusy() && !orientTurnInProgress() });
+        /* A turn that is only STARTING owns the wire as well - the early trigger is about to send the other
+           side, and a re-drape started here makes it wait. See orientTurnStarting(). */
+        const turnStarting = orientTurnStarting(now);
+        const step = bodyTopology.feed(sig, { canDispatch: !wireBusy() && !orientTurnInProgress() && !turnStarting });
         /* NOT AWAITED - "the turn went blind". This loop runs under `inFlight`, so awaiting a
            re-drape here stopped every inference, and every yaw reading, for a whole image
            upload. A re-drape fires on a 15-degree change - the start of every turn - so the
@@ -16603,7 +16650,8 @@ function startPresenceWatcher() {
         else if (ORIENT_DEBUG && step.state !== "stable") {
           console.log(`[PEAR][TOPOLOGY] ${step.state}` +
             (step.heldMs ? ` (held ${step.heldMs}ms)` : "") +
-            (step.reason ? ` | ${step.reason} held back` : ""));
+            (step.reason ? ` | ${step.reason} held back` : "") +
+            (step.state === "deferred" && turnStarting ? ` - a turn is starting (|yaw| rising ${_torsoYawRise.toFixed(0)} deg/s), the swap gets the wire` : ""));
         }
       }
     } finally {
