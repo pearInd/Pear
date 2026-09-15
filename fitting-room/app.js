@@ -68,6 +68,15 @@ const {
   VIDEO_TARGET_BITRATE_KBPS,
 } = CONFIG;
 
+/* The build this session is running - the ?v= index.html loads app.js with. Logged once at load
+   so a console capture or a screen recording can be tied to the code that produced it; without
+   it, "the latest session" cannot be told apart from a stale cache or a deploy that has not
+   landed. */
+const PEAR_BUILD = (() => {
+  try { return new URL(import.meta.url).searchParams.get("v") || "dev"; } catch (_) { return "unknown"; }
+})();
+console.log("[PEAR] fitting-room build", PEAR_BUILD, "- app.js?v=" + PEAR_BUILD);
+
 const DEMO_FLAG = new URLSearchParams(location.search).get("demo") === "1";
 
 /* ── Public demo-widget one-time gate (opt-in, isolated from the main app) ───
@@ -593,6 +602,18 @@ let pendingAgeGroupConfidence = undefined;
    classifier verdict beside it is only the fallback for products we never got a list
    for. Arrives on the deep-link URL at open, and/or on a PEAR_UPDATE_GARMENT message. */
 let pendingSizes = undefined;                // string[] | undefined (none arrived yet)
+/* The host product's TITLE, same two-stage handoff as pendingSizes above.
+
+   THE BUG THIS CLOSES: pendingSizes was only ever written by the PEAR_UPDATE_GARMENT
+   message listener - nothing seeded it from the deep-link URL, even though the widget
+   has been sending ?garment_sizes= since the kids-tee fix. So on Screen 1, where
+   activeItem does not exist yet, resolvedGarmentSizes() read undefined and
+   calculateSize() had NO product evidence at all: every garment was fitted against the
+   letter chart until the widget's correction happened to land, which for a returning
+   shopper (routeUser()'s instant-skip fast path) is after the recommendation was
+   already computed and shown. parseHandoff() now seeds both, synchronously, on the
+   very first call - see its "SEEDS THE PENDING PRODUCT SIGNALS" note. */
+let pendingTitle = undefined;                // string | undefined (none arrived yet)
 let focusMode = false;
 
 /* Multi-Image Product Gallery Sync - which product angle the live engine is warping.
@@ -718,6 +739,9 @@ let wireEpoch = 0;
 
 /** @returns {boolean} true when a conditioning write is queued or in flight. */
 function wireBusy() { return wireWrites > 0; }
+/* Set by an open ?orient_debug=1 swap trace (traceSwapTimeline); sendCondition() calls it once, when the
+   reference write takes the wire - DISPATCH_SENT. Declared up here, ahead of sendCondition(). */
+let _orientSendMark = null;
 
 /**
  * Run ONE conditioning write with exclusive access to the wire.
@@ -744,6 +768,13 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
   const run = async () => {
     if (epoch !== wireEpoch) return false;   // the session this write was for is gone
     isSettingCondition = true;
+    /* DISPATCH_SENT for an open ?orient_debug=1 swap trace - only a write that carries the reference.
+       Null otherwise, so this costs one typeof check. See traceSwapTimeline. */
+    if (typeof _orientSendMark === "function" && (label === "applyGarment" || label === "applyLook")) {
+      const markSent = _orientSendMark;
+      _orientSendMark = null;
+      try { markSent(label); } catch (_) {}
+    }
     try {
       await send();
       return true;
@@ -883,6 +914,19 @@ function verifyGarmentAsset(payload, source) {
  */
 function warnIfStreamStartedUndressed() {
   if (debugStreamCheckedThisGen) return;
+  /* ── NOT DECIDABLE WHILE THE INPUT GATE IS SHUT ───────────────────────────────────
+     THE FALSE ALARM THIS CLOSES: this line fired on essentially every session and was read
+     as proof of a race - "the first frame beats GARMENT_FRONT onto the wire". onRemoteStream
+     fires when the remote TRACK attaches during the handshake, which is before goLive() can
+     even send its first set() (that waits on waitConnected), so rtImageOnWire was false here
+     by construction. But createThrottledInputStream()'s atomic conditioning gate withholds
+     every camera FRAME until that set() is acknowledged: Decart had nothing to render yet,
+     undressed or otherwise. The race the warning describes is the one the gate closed.
+     So the question is deferred, not dropped - the one-shot latch is left unspent, and the
+     gate's own fail-open timeout asks it again at the moment raw frames genuinely start
+     flowing with no acknowledged garment, which is the real version of this failure. With
+     no throttle or the gate disabled, frames flow from the start and it warns as before. */
+  if (inputThrottle && inputThrottle.gateOpen === false) return;
   debugStreamCheckedThisGen = true;
   if (!rtImageOnWire) {
     console.warn("[PEAR][DEBUG] Decart stream started rendering WITHOUT a garment asset on the wire.",
@@ -945,11 +989,72 @@ const sessionElapsedMs = () => (billingStartedAt ? Date.now() - billingStartedAt
 /* =============================================================================
    SCREEN 1 - Size / measurement calculator
    ============================================================================= */
+/* FOX MEN'S TOPS STANDARD (updated 2026-09-14). The chest-cm bands below are FOX's own
+   published ladder: S 90-95, M 96-101, L 102-107, XL 108-113, XXL 114-119. FOX gives no
+   height/weight bands - the form's MANDATORY inputs are height+weight, chest is only an
+   optional fine-tune field - so those columns are derived, not copied from FOX.
+
+   HOW THEY WERE DERIVED. The chart already had a working, shipped chest<->BMI
+   relationship (this is what let a 185cm/82kg shopper land on the pre-FOX "L" row) - the
+   four old center points (chest 91/98/106/114 -> BMI 21.8/23.0/24.4/25.8) fit a line
+   BMI = 0.174*chest + 5.96 (R^2 > 0.999). That fitted line, not the waist-inch formula
+   ADULT_JEANS_WAIST_CHART uses (chest and waist scale differently at the same BMI - do
+   not reuse that formula here, it was tried and put a lean 90cm chest at BMI 26), maps
+   each new FOX chest band to a BMI band. Height ranges reuse the old chart's own ladder
+   (real "sold into" ranges, not re-derived) with a new XXL tier extending the existing
+   step pattern. Weight bounds are the corner of each row's box: BMI_min at minHeight,
+   BMI_max at maxHeight - so a row's weight band is exactly what its own chest band
+   implies at its own height extremes.
+     S:   BMI 21.6-22.5 over 160-172cm -> weight 55-67
+     M:   BMI 22.7-23.5 over 170-180cm -> weight 65-76
+     L:   BMI 23.7-24.6 over 178-186cm -> weight 75-85
+     XL:  BMI 24.8-25.6 over 184-195cm -> weight 84-97
+     XXL: BMI 25.8-26.7 over 190-205cm -> weight 93-112 (new tier - FOX's ladder had no
+          XXL row to restore; this is the first time this chart has had one)
+   Benchmark this must hold (see CLAUDE.md §1 Layer D): 185cm/82kg -> BMI 23.96, inside
+   L's 23.71-24.58 band, and neither S nor M's height band reaches 185cm - so L wins as
+   the first (and only) genuine match in chart order, same as before this update.
+
+   waist/legs columns have no FOX spec at all (FOX publishes chest only for tops) and are
+   not covered by any test assertion (test/numeric-pants-sizing.test.mjs and
+   test/adult-pants-sizing.test.mjs only check these are finite numbers) - waist keeps
+   the old chart's own chest-14cm offset (91->77, 98->84, 106->92, 114->101, i.e. a
+   near-constant 14cm gap), legs keeps the old chart's own ~0.575x-height ratio.
+
+   THE CONSTANT NAME IS UNCHANGED ON PURPOSE. "ZARA_SIZE_CHART" is a load-bearing extract
+   marker (CLAUDE.md §2.6) matched as a literal opening-line string by
+   test/numeric-pants-sizing.test.mjs, test/adult-pants-sizing.test.mjs and
+   test/kids-product-sizes.test.mjs. Renaming it to something FOX-flavored would steal
+   every one of those matches for no behavioral gain - the data is FOX's, the identifier
+   is legacy plumbing. */
 const ZARA_SIZE_CHART = [
-  { size: "S",  minHeight: 160, maxHeight: 172, minWeight: 55, maxWeight: 65,  minChest: 88,  maxChest: 94,  minWaist: 74, maxWaist: 80,  minLegs: 94,  maxLegs: 98  },
-  { size: "M",  minHeight: 170, maxHeight: 180, minWeight: 65, maxWeight: 76,  minChest: 94,  maxChest: 102, minWaist: 80, maxWaist: 88,  minLegs: 98,  maxLegs: 102 },
-  { size: "L",  minHeight: 178, maxHeight: 186, minWeight: 75, maxWeight: 87,  minChest: 102, maxChest: 110, minWaist: 88, maxWaist: 96,  minLegs: 102, maxLegs: 106 },
-  { size: "XL", minHeight: 184, maxHeight: 195, minWeight: 85, maxWeight: 100, minChest: 110, maxChest: 118, minWaist: 96, maxWaist: 106, minLegs: 106, maxLegs: 112 },
+  { size: "S",   minHeight: 160, maxHeight: 172, minWeight: 55, maxWeight: 67,  minChest: 90,  maxChest: 95,  minWaist: 76,  maxWaist: 81,  minLegs: 92,  maxLegs: 99  },
+  { size: "M",   minHeight: 170, maxHeight: 180, minWeight: 65, maxWeight: 76,  minChest: 96,  maxChest: 101, minWaist: 82,  maxWaist: 87,  minLegs: 98,  maxLegs: 104 },
+  { size: "L",   minHeight: 178, maxHeight: 186, minWeight: 75, maxWeight: 85,  minChest: 102, maxChest: 107, minWaist: 88,  maxWaist: 93,  minLegs: 102, maxLegs: 107 },
+  { size: "XL",  minHeight: 184, maxHeight: 195, minWeight: 84, maxWeight: 97,  minChest: 108, maxChest: 113, minWaist: 94,  maxWaist: 99,  minLegs: 106, maxLegs: 112 },
+  { size: "XXL", minHeight: 190, maxHeight: 205, minWeight: 93, maxWeight: 112, minChest: 114, maxChest: 119, minWaist: 100, maxWaist: 105, minLegs: 109, maxLegs: 118 },
+];
+
+/* FOX WOMEN'S TOPS STANDARD - data received 2026-09-14, NOT WIRED INTO calculateSize().
+   There is currently no gender selector anywhere in the fitting room: one unisex adult
+   chart (ZARA_SIZE_CHART, above) is used for every top regardless of who is measuring.
+   FOX's women's ladder is a EU dress-size token (XS 34 / S 36 / M 38 / L 40 / XL 42 /
+   XXL 44), not a chest-cm band, so it cannot simply replace ZARA_SIZE_CHART's rows - it
+   is a different chart for a different form factor, the same reason
+   ADULT_JEANS_WAIST_CHART is a second chart rather than an edit to ADULT_PANTS_SIZE_CHART
+   (see that chart's own comment). Kept here, deliberately unreferenced, as the restore
+   seam: wiring it up for real needs a gender input on Screen 1, a branch in
+   calculateSize()'s chart selection, and its own test coverage - out of scope for a
+   size-chart data update. Do not delete this as "dead code" (CLAUDE.md §0's dead-code
+   rule for prompts applies here too, for the same reason: retained restore seam, not an
+   oversight) and do not wire it up piecemeal without adding the gender input first. */
+const WOMEN_TOPS_EU_SIZE_CHART = [
+  { size: "XS",  euSize: 34 },
+  { size: "S",   euSize: 36 },
+  { size: "M",   euSize: 38 },
+  { size: "L",   euSize: 40 },
+  { size: "XL",  euSize: 42 },
+  { size: "XXL", euSize: 44 },
 ];
 
 /* Children's numeric sizing (EU/IL kids convention, sizes 8-18).
@@ -996,25 +1101,134 @@ const ADULT_PANTS_SIZE_CHART = [
   { size: "46", minHeight: 180, maxHeight: 195, minWeight: 87, maxWeight: 102, minWaist: 90, maxWaist: 100, minHips: 114, maxHips: 124 },
 ];
 
-/* THE "26-40" REPORT: isAdultPantsProduct() originally required every size token to be
-   an EXACT member of this chart's own six values (36/38/40/42/44/46 - the EU-only
-   convention above). A real storefront's numeric run almost never lands on exactly
-   those six numbers - a US/UK jeans run of 26-40, or an EU run with an odd size mixed
-   in, shares SOME values with the chart but fails `.every()` on the rest - so the whole
-   list was rejected as "not confidently pants-numeric" and the product fell all the way
-   back to ZARA_SIZE_CHART's LETTERS for both the recommendation and the profile/result
-   display, even though the size selector (which reads the product's own list directly,
-   see injectSizeSelector()) was correctly showing numeric buttons the whole time. That
-   selector-shows-numbers / profile-shows-"L" split is what shipped.
-   isAdultPantsProduct() (below) now recognizes any plausible ALL-NUMERIC adult-bottoms
-   run - not just this chart's own six values - using the SAME 24-48 waist window
-   categoryFromSizeRun() already trusts for exactly this judgment. This chart's six rows
-   remain the only VERIFIED height/weight bands available, so calculateSize() still
-   anchors the recommendation to whichever of these six rows genuinely fits the shopper's
-   body, then snaps that anchor to the CLOSEST size actually present in the product's own
-   list (see the "SNAP TO THE PRODUCT'S OWN LIST" comment in calculateSize()) - never a
-   fabricated cm/kg claim about a size number this chart has no data for, and never a
-   letter for a product that doesn't sell one. */
+/* The EU adult pants ladder, derived from ADULT_PANTS_SIZE_CHART so the two can never
+   drift apart - same convention as CHILD_SIZE_SCALE above. → ["36","38","40","42","44","46"]
+   Defined HERE, immediately beside its chart, rather than beside isAdultPantsProduct()
+   below (which is where it's actually used) - some test harnesses extract a narrower
+   slice of this file that starts AFTER this point but still before that function, and an
+   eager `.map()` over a chart those harnesses never included would throw ReferenceError
+   at import time. isAdultPantsProduct() itself is a plain function body (deferred, not
+   eagerly evaluated), so it can safely read this from a slice that doesn't include the
+   chart, as long as the Set itself was already built here. */
+const ADULT_PANTS_NUMERIC_SIZES = new Set(ADULT_PANTS_SIZE_CHART.map((r) => r.size));
+/* ── APOSTROPHE NORMALISATION - one Hebrew word, four codepoints ─────────────────
+   THE BUG THIS CLOSES: a jeans product titled "ג'ינס סקיני" was fitted against the
+   adult LETTER chart, because the keyword lists in this file spell the geresh two
+   ways (U+0027 ASCII apostrophe, U+05F3 Hebrew geresh) and the storefront's CMS had
+   typed a third - U+2019 RIGHT SINGLE QUOTATION MARK, which is what every "smart
+   quotes" editor substitutes automatically as you type. The word is identical to a
+   reader and unequal to `String.prototype.includes`, so every pants tier abstained
+   and the shopper was offered "L" on a product whose picker only shows numbers.
+
+   Adding the two curly variants to each list was the obvious fix and the wrong one:
+   the geresh appears in ג'ינס, ז'קט, קפוצ'ון, דגמ"ח and more, so it multiplies every
+   list by four and a later contributor adding one word has to remember all four
+   spellings. Normalising the HAYSTACK once, at the door, means each list keeps ONE
+   spelling of each word.
+
+   U+05F4 / U+201C-D (the double geresh/gershayim, as in דגמ"ח) are folded too, for
+   exactly the same reason and by the same editors.
+
+   Kept in lockstep with normApos() in widget/pear-widget.js - see CLAUDE.md §3.
+   Whichever copy is wrong is the one that wins, because the widget's category
+   verdict is explicit and therefore outranks this file's own classifier.
+ * @param {unknown} s
+ * @returns {string} the same text with every apostrophe/quote variant folded to
+ *   ASCII ' and ", lower-cased. Never throws; non-strings become "".
+ */
+function _normApos(s) {
+  return String(s == null ? "" : s)
+    .replace(/[ʼ׳‘’′]/g, "'")
+    .replace(/[״“”″]/g, '"')
+    .toLowerCase();
+}
+
+/* ── ADULT_JEANS_WAIST_CHART - the FOX WAIST-CM ladder (28-38, updated 2026-09-14) ──
+   THE BUG THIS CLOSES (history - keep reading past the FOX update below): "the
+   calculator says L for a pair of jeans." A 185cm/82kg shopper on a product sold
+   28/30/32/34/36 was sized against ZARA_SIZE_CHART - the adult LETTER chart, which
+   bands on CHEST - and handed back "L", a value that does not appear anywhere in
+   that product's size picker and cannot be selected.
+
+   WHY THIS IS A SECOND CHART AND NOT AN EDIT TO ADULT_PANTS_SIZE_CHART.
+   ────────────────────────────────────────────────────────────────────
+   ADULT_PANTS_SIZE_CHART above is the EU ladder (36-46). This is the WAIST ladder.
+   They are two different measurement systems that happen to share the tokens 36-46,
+   and a store lists one or the other, never both. Collapsing them into one chart
+   would have to pick a single meaning for "38" - either a 97cm EU hip size or a
+   38-size waist - and would be wrong for every store on the other convention.
+   adult-pants-sizing.test.mjs pins the EU behaviour precisely because it was itself
+   a fix for a real report; this chart is additive and leaves every one of those
+   assertions untouched.
+
+   WHICH CHART A PRODUCT GETS is decided in calculateSize() from the product's OWN
+   size run, EU first (see pantsChartForSizes below) - never from a guess.
+
+   THE 2026-09-14 FOX UPDATE - ROW LIST REPLACED, METHOD KEPT. FOX's own men's waist
+   ladder is exactly 8 sizes - 28 (71-73cm), 30 (76-78cm), 31 (79-81cm), 32 (81-83cm),
+   33 (84-86cm), 34 (86-88cm), 36 (91-93cm), 38 (96-98cm) - narrower bands than the
+   old 24-48-even chart this replaces, and it does NOT cover 24, 26, 40, 42, 44, 46,
+   48. Those bodies now genuinely fall outside every row (the overflow/no-match guard
+   below handles that the same way it already handles any out-of-catalog body -
+   CLAUDE.md §2.5, never a guess) rather than getting an old chart's extrapolated
+   size. This was a deliberate scope call, not an oversight - see the PR description
+   for the decision to replace rather than merge/extend.
+
+   HOW THE BANDS WERE DERIVED (method unchanged from the original fix, only the input
+   waist values changed). Waist circumference tracks BMI far more closely than it
+   tracks weight alone, which is the whole reason the original reported case was
+   wrong in the first place: at 82kg the shopper reads as "large" on a weight-only
+   view, and as a lean 24.0 BMI once height is accounted for. Each row's centre is
+   BMI = (waist_cm + 14) / 4, the same male waist/BMI regression the original fix
+   used (waist_in * 2.54 IS waist_cm, so this chart plugs FOX's cm values in
+   directly - do not re-multiply by 2.54, that was only ever a units conversion for
+   an inch input). Height/weight bounds are the corner of each row's box: BMI at
+   minWaist paired with minHeight, BMI at maxWaist paired with maxHeight - so a row's
+   weight band is exactly what its own FOX waist band implies at its own height
+   extremes. Height ranges below 32 reuse the old chart's ladder for those same
+   numeric sizes (already a real "sold into" range, not re-derived); 31 and 33 are
+   new rows and interpolate their height range from the neighbours either side.
+   Benchmark this must hold (CLAUDE.md §1 Layer D): 185cm/82kg -> BMI 23.96, which
+   sits in row 32's 23.75-24.25 band (82cm waist center = BMI 24.0 almost exactly) -
+   row 31 also reaches height 185 but its weight band tops out at 81kg, so 32 is the
+   first genuine match in chart order, same "32" this benchmark got before the
+   FOX update.
+
+   ROW ORDER IS LOAD-BEARING. calculateSize() keeps the FIRST genuinely-fitting row
+   when no optional waist measurement narrows it (every candidate scores penalty 0,
+   and the first 0 wins), so rows run smallest-first. A shopper on a boundary is
+   offered the SMALLER size, matching how denim is actually bought - jeans stretch
+   out, they do not shrink in.
+
+   Columns mirror ADULT_PANTS_SIZE_CHART exactly (waist + hips, no chest/legs) so
+   coreHwPenalty() and calculateSize()'s fine-tune pass work against it unmodified.
+   minHips/maxHips ride along for a standards-comparable chart and for a future hip
+   input; there is no hips field on the form today, so they contribute no penalty -
+   FOX did not publish a hip figure either, so these keep the old chart's own
+   waist+21cm offset, same as every prior row here. */
+const ADULT_JEANS_WAIST_CHART = [
+  { size: "28", minHeight: 155, maxHeight: 178, minWeight: 51, maxWeight: 69,  minWaist: 71, maxWaist: 73, minHips: 92,  maxHips: 94  },
+  { size: "30", minHeight: 160, maxHeight: 180, minWeight: 58, maxWeight: 75,  minWaist: 76, maxWaist: 78, minHips: 97,  maxHips: 99  },
+  { size: "31", minHeight: 163, maxHeight: 185, minWeight: 62, maxWeight: 81,  minWaist: 79, maxWaist: 81, minHips: 100, maxHips: 102 },
+  { size: "32", minHeight: 165, maxHeight: 190, minWeight: 65, maxWeight: 88,  minWaist: 81, maxWaist: 83, minHips: 102, maxHips: 104 },
+  { size: "33", minHeight: 168, maxHeight: 193, minWeight: 69, maxWeight: 93,  minWaist: 84, maxWaist: 86, minHips: 105, maxHips: 107 },
+  { size: "34", minHeight: 170, maxHeight: 195, minWeight: 72, maxWeight: 97,  minWaist: 86, maxWaist: 88, minHips: 107, maxHips: 109 },
+  { size: "36", minHeight: 172, maxHeight: 198, minWeight: 78, maxWeight: 105, minWaist: 91, maxWaist: 93, minHips: 112, maxHips: 114 },
+  { size: "38", minHeight: 174, maxHeight: 200, minWeight: 83, maxWeight: 112, minWaist: 96, maxWaist: 98, minHips: 117, maxHips: 119 },
+];
+
+/* The waist-inch ladder, derived from the chart so the two can never drift apart -
+   same convention as CHILD_SIZE_SCALE / ADULT_PANTS_NUMERIC_SIZES above, and defined
+   HERE beside its chart for the same load-order reason those record. */
+const ADULT_JEANS_WAIST_SIZES = new Set(ADULT_JEANS_WAIST_CHART.map((r) => r.size));
+
+/* True while the resolved chart is one of the two NUMERIC pants ladders. Read only by
+   formatSizeLabel(), which must never decorate a numeric pants size: the kids suffix
+   would render "32 (ילדים)" into a picker whose only option is the bare token "32",
+   and nothing downstream could match it back to a variant. Set on every calculateSize()
+   run - including the early-return paths, which reset it - so it can never describe a
+   PREVIOUS garment's chart. */
+let currentSizeIsNumericPants = false;
 
 /**
  * Height/weight penalty for one chart row - the scoring kernel behind
@@ -1177,25 +1391,29 @@ function isAdultProduct(sizes, garmentAgeGroup) {
 }
 
 /**
- * Whether the product's OWN size list is confidently ADULT NUMERIC BOTTOMS sizing -
- * same "every token or abstain" confidence rule isKidsProduct()/isAdultProduct() use for
- * their own charts, applied here for one more question: not just kids-vs-adult, but
- * WHICH adult chart. A letter scale, a kids numeric run, or no list at all is NOT
- * confidently pants-numeric, and stays on ZARA_SIZE_CHART - never a guess, matching this
- * file's "an unconfident verdict must not outrank" rule (see CLAUDE.md §2.5).
+ * Whether the product's OWN size list is confidently the EU pants ladder
+ * (ADULT_PANTS_SIZE_CHART's own six values: 36/38/40/42/44/46) - same "every token or
+ * abstain" confidence rule isKidsProduct()/isAdultProduct() use for their own charts.
+ * A letter scale, a kids numeric run, anything outside those six values, or no list at
+ * all is NOT confidently EU-numeric, and defers to pantsChartForSizes()'s waist-inch
+ * branch (or ZARA_SIZE_CHART, if the run isn't pants-numeric at all) - never a guess,
+ * matching this file's "an unconfident verdict must not outrank" rule (CLAUDE.md §2.5).
  *
- * Recognizes any plausible all-numeric adult-bottoms run within WAIST_RUN_FLOOR..
- * WAIST_RUN_CEIL (24-48) - the SAME window categoryFromSizeRun() already trusts as "this
- * is a waist measurement, not a kids number or a shirt neck size" - rather than requiring
- * exact membership in ADULT_PANTS_SIZE_CHART's own six EU values (36/38/40/42/44/46).
- * See the "THE 26-40 REPORT" comment above ADULT_PANTS_SIZE_CHART for why the narrower
- * version of this rule shipped a real bug: a genuine jeans size run (e.g. US/UK 26-40)
- * shares only some values with that six-row chart, so `.every()` against the chart's own
- * values rejected the whole list and fell back to letters. This chart's rows are still
- * the only VERIFIED height/weight data available, so a run that doesn't literally land
- * on one of the six chart values still gets fitted via the nearest one, then snapped to
- * a size the product actually sells - see calculateSize()'s "SNAP TO THE PRODUCT'S OWN
- * LIST" step.
+ * NARROWED BACK TO EXACT EU MEMBERSHIP - it was briefly widened to accept ANY plausible
+ * all-numeric adult-bottoms run (24-48), which is what "THE 26-40 REPORT" below used to
+ * describe. That widening shipped its own real bug once ADULT_JEANS_WAIST_CHART
+ * (pantsChartForSizes()'s other branch) existed: a genuine US/UK waist-inch run like
+ * 28-36 also sits inside 24-48, so the widened check claimed it for the EU chart too -
+ * and pantsChartForSizes()'s own EU-first precedence then handed a real FOX waist-inch
+ * product a chest-banded EU size (a 185cm/82kg shopper got EU "36" off a snap-to-list
+ * guess instead of the FOX chart's genuine "32"). isWaistInchSizeRun() below already
+ * covers the SAME 24-48 window this function used to - narrowing this one back to exact
+ * EU membership is what lets pantsChartForSizes()'s "EU claims its own run, waist-inch
+ * takes everything else" precedence actually mean something. THE 26-40 REPORT ITSELF
+ * STAYS FIXED: that run no longer falls back to letters, it now resolves through
+ * isWaistInchSizeRun() to the waist-inch chart instead of being force-fit to EU - see
+ * test/numeric-pants-sizing.test.mjs for the current, chart-precise coverage of that
+ * exact scenario.
  * @param {string[]|string|null} sizes
  * @returns {boolean}
  */
@@ -1206,9 +1424,7 @@ function isAdultPantsProduct(sizes) {
   // numeric-pants no matter what else the list contains (same precedent
   // isKidsProduct()/isAdultProduct() use for ADULT_ALPHA_SIZES).
   if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
-  if (!list.every((s) => /^\d{1,2}$/.test(s))) return false;
-  const nums = list.map(Number);
-  return nums.every((n) => n >= WAIST_RUN_FLOOR && n <= WAIST_RUN_CEIL);
+  return list.every((s) => ADULT_PANTS_NUMERIC_SIZES.has(s));
 }
 
 /**
@@ -1231,6 +1447,220 @@ function isAdultNumericPantsGarment(sizes, item) {
   if (item && typeof isBottomsGarment === "function" && !isBottomsGarment(item)) return false;
   return true;
 }
+/* ── TIER 1 of isPantsProduct(): the size run as a WAIST measurement ─────────────
+   A run of plain integers in 24-48 is a waist in inches. Nothing else in apparel is
+   numbered that way: a kids run is 2-18, a shirt NECK run is 14-18, and both fall
+   below the floor; a shoe run and an EU dress run overshoot or carry letters.
+
+   SEPARATE FROM categoryFromSizeRun() ABOVE, DELIBERATELY, and they are not
+   interchangeable. That one answers "can this run PROVE a bottom?" for the prompt
+   pipeline and therefore also demands the run OPEN at 32 or lower, because an EU
+   women's top run opening at 34/36 is genuinely ambiguous with tops. This one
+   answers the narrower question "which adult CHART does this run belong to?", and
+   it is reached only after the EU ladder has already claimed its own runs
+   (pantsChartForSizes below), so the ambiguous 34/36-opening case has been taken
+   off the table before this ever sees it. Folding the two together would either
+   re-open that ambiguity or reject legitimate large-waist runs (34/36/38).
+
+   ABSTAINS RATHER THAN GUESSES, on the same "every token or nothing" rule
+   isKidsProduct()/isAdultPantsProduct() use: any adult letter, any non-integer
+   token (one-size, "36R", a store's own labels) or any token outside the ladder
+   and the whole run yields nothing, which simply leaves the letter chart in place.
+   @param {string[]|string|null|undefined} sizes
+   @returns {boolean} */
+const WAIST_INCH_FLOOR = 24, WAIST_INCH_CEIL = 48;
+function isWaistInchSizeRun(sizes) {
+  const list = parseSizeList(sizes);
+  if (!list.length) return false;
+  if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
+  if (!list.every((s) => /^\d{1,2}$/.test(s))) return false;
+  return list.every((s) => {
+    const n = Number(s);
+    return n >= WAIST_INCH_FLOOR && n <= WAIST_INCH_CEIL;
+  });
+}
+
+/* ── TIER 2 vocabulary: the garment noun, in both languages ──────────────────────
+   Kept in step with GARMENT_CATEGORY_KEYWORDS.bottom and BOTTOMS_TOKENS further down
+   this file - three separate mechanisms over one vocabulary, which is the convention
+   this file already records for the other two ("a word added to only one of them is a
+   miss on whichever path the item happens to take").
+
+   IT IS A SEPARATE COPY ON PURPOSE, not an oversight. GARMENT_CATEGORY_KEYWORDS lives
+   in the garment-category region ~700 lines below, and several test harnesses execute
+   THIS region as a standalone slice that stops before it (see CLAUDE.md §2.6/§2.7).
+   A reference across that boundary is a ReferenceError at import time, not a lint nit.
+
+   Hebrew entries are STEMS (Hebrew inflects by suffix - מכנס covers מכנסי/מכנסיים);
+   English entries are word-bounded, because English compounds the other way and a
+   stem match on "short" swallows "short sleeve" and turns every tee into shorts.
+
+   ALREADY APOSTROPHE-NORMALISED: every entry here is matched only against _normApos()
+   output, so each Hebrew word carries ONE spelling of its geresh (ASCII U+0027) and
+   the U+05F3/U+2018/U+2019 variants fold onto it at the door. */
+const PANTS_TITLE_STEMS_HE = [
+  "מכנס", "ג'ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "טייצ", "לגינ", "סווטפנט",
+];
+const PANTS_TITLE_WORDS_EN = [
+  "pants", "pant", "jeans", "jean", "denim", "trouser", "trousers", "shorts", "skirt", "skirts",
+  "leggings", "chino", "chinos", "jogger", "joggers", "sweatpant", "sweatpants", "slacks",
+  "culottes", "bermuda", "bermudas", "capri", "capris", "palazzo", "bottoms",
+];
+/* "ג'ינס"/"denim" name a lower-body garment AND a material, so "ז'קט ג'ינס" (a denim
+   JACKET) matches the pants list on the fabric alone - and a denim jacket fitted on a
+   waist ladder is not a near miss, it is the wrong chart entirely. Mirrors
+   FABRIC_AMBIGUOUS / classifyGarmentTitle()'s strip-and-rescan pass below. */
+const PANTS_FABRIC_WORDS = ["ג'ינס", "jeans", "jean", "denim"];
+const PANTS_TOP_STEMS_HE = [
+  "חולצ", "טישרט", "טי-שירט", "סווטשירט", "סוודר", "גופי", "ז'קט", "מעיל", "קפוצ'ון",
+  "בלייזר", "קרדיגן", "טופ", "שמלה",
+];
+const PANTS_TOP_WORDS_EN = [
+  "shirt", "tshirt", "t-shirt", "tee", "top", "tops", "hoodie", "jacket", "blazer", "sweater",
+  "sweatshirt", "cardigan", "blouse", "polo", "tank", "pullover", "coat", "dress",
+];
+const _stemHit = (text, stems) => stems.some((s) => text.includes(s));
+/* Word-boundary match, mirroring hasEnglishWord() in the garment-category region (see
+   PANTS_TITLE_STEMS_HE on why that is a separate copy rather than a shared reference).
+   String.raw so the two backslashes of a \\b are unmistakable in review - this pair
+   has been silently collapsed to a backspace escape by a shell heredoc once already, and
+   /\bjeans\b/ quietly becoming /\u0008jeans\u0008/ matches NOTHING while still compiling. */
+const _RE_WORD_BOUND = String.raw`\b`;
+const _wordHit = (text, words) =>
+  words.some((w) => new RegExp(_RE_WORD_BOUND + w + _RE_WORD_BOUND, "i").test(text));
+
+/* TIER 2 proper. True only when the title names a lower-body garment AND that evidence
+   survives the fabric strip.
+   @param {string|null|undefined} title
+   @returns {boolean} */
+function titleNamesPants(title) {
+  const text = _normApos(title);
+  if (!text.trim()) return false;
+  const bottom = _stemHit(text, PANTS_TITLE_STEMS_HE) || _wordHit(text, PANTS_TITLE_WORDS_EN);
+  if (!bottom) return false;
+  const top = _stemHit(text, PANTS_TOP_STEMS_HE) || _wordHit(text, PANTS_TOP_WORDS_EN);
+  if (!top) return true;
+  /* Both sides matched. Strip the fabric words and re-test: if the lower-body evidence
+     was ONLY the fabric ("ז'קט ג'ינס" → "ז'קט "), the top noun stands alone and this is
+     NOT pants. If real lower-body evidence survives ("מכנס ג'ינס" → "מכנס "), it is. */
+  const stripped = PANTS_FABRIC_WORDS.reduce((s, w) => s.split(w).join(" "), text);
+  const reBottom = _stemHit(stripped, PANTS_TITLE_STEMS_HE) || _wordHit(stripped, PANTS_TITLE_WORDS_EN);
+  const reTop = _stemHit(stripped, PANTS_TOP_STEMS_HE) || _wordHit(stripped, PANTS_TOP_WORDS_EN);
+  return reBottom && !reTop;
+}
+
+/* The Gemini Vision verdict cached in garment_cache.garment_category (see
+   archive/supabase_setup_v13.sql and GET /api/garment-category in server.js), fetched
+   once per product by fetchGarmentCategory() below. null = never asked OR the model
+   declined; either way tier 3 abstains and the tiers below it decide. Module-level
+   rather than threaded through, for the same two-stage reason pendingSizes is: the
+   round trip can land while the shopper is still on Screen 1 filling in the form. */
+let currentGarmentCategory = null;
+
+/* The product's own title, wherever it currently lives - activeItem once Screen 2
+   exists, pendingTitle before that. Same two-stage pattern (and the same reason) as
+   resolvedGarmentSizes()/resolvedGarmentAgeGroup() above.
+   typeof-guarded per CLAUDE.md §2.7: this region is executed as a standalone slice by
+   several harnesses, where neither binding exists. */
+function resolvedGarmentTitle() {
+  const fromItem = (typeof activeItem !== "undefined" && activeItem)
+    ? (activeItem.name ?? activeItem.title) : null;
+  if (typeof fromItem === "string" && fromItem.trim()) return fromItem;
+  if (typeof pendingTitle !== "undefined" && typeof pendingTitle === "string") return pendingTitle;
+  return "";
+}
+
+/* Explicit lower-body type markers for tier 4. Deliberately the same vocabulary as
+   EXPLICIT_BOTTOM_TYPES further down (another §2.6 slice-boundary copy - see
+   PANTS_TITLE_STEMS_HE's note). "dress" is absent for the reason that set records: a
+   dress covers both regions and has no correct answer on a waist-vs-chest question. */
+const PANTS_EXPLICIT_TYPES = new Set([
+  "pants", "bottoms", "bottom", "shorts", "skirt", "lower_body", "jeans", "trousers",
+]);
+
+/**
+ * IS THIS PRODUCT WORN ON THE LOWER BODY? - the gate that routes a shopper onto a
+ * WAIST chart instead of the chest-banded letter chart.
+ *
+ * THE BUG THIS CLOSES: a 185cm/82kg shopper on a pair of jeans sold 28/30/32/34/36 was
+ * recommended "L" - a value that appears nowhere in that product's size picker, because
+ * ZARA_SIZE_CHART bands on CHEST and the product is sold by WAIST.
+ *
+ * FOUR TIERS, STRONGEST EVIDENCE FIRST, each consulted only when every tier above it
+ * abstained. The ordering is the same principle isKidsProduct() established and had to
+ * learn the hard way: a DETERMINISTIC signal the storefront actually rendered outranks a
+ * PROBABILISTIC one a model produced, because the model is explicitly instructed to
+ * abstain on the flat-lay packshots this catalog is full of.
+ *
+ *   1. the product's own size run   free, synchronous and unambiguous - 24-48 integers
+ *                                   can only be a waist (isWaistInchSizeRun), and the EU
+ *                                   ladder is claimed here too (isAdultPantsProduct).
+ *   2. the title                    free and synchronous, and the tier that answers a
+ *                                   store whose size picker is rendered in JS and
+ *                                   scrapes to nothing. Fabric ambiguity resolved
+ *                                   (titleNamesPants) so a denim JACKET is not pants.
+ *   3. the cached Gemini verdict    a network round trip, already cached per photo - the
+ *                                   tier that answers "STRAIGHT BASIC" and "LOOSE",
+ *                                   titles that name a CUT and a FIT with no garment
+ *                                   noun for tier 2 to find.
+ *   4. the catalog/handoff type     last, NOT first: the widget forwards "unknown" for a
+ *                                   product it could not classify, and an older widget
+ *                                   forwards nothing at all. Treating a marker that weak
+ *                                   as a verdict is the documented shape of the bug in
+ *                                   parseHandoff()'s "HARDCODED DEFAULT" note.
+ *
+ * NEVER BLOCKS, NEVER GUESSES. Every tier abstains rather than defaulting, and false
+ * simply leaves ZARA_SIZE_CHART in place - the behaviour that shipped before this
+ * existed. Per CLAUDE.md §2.5 a wrong confident answer here costs a paying shopper a
+ * size they cannot select; an abstention costs nothing.
+ *
+ * @param {string[]|string|null|undefined} sizes - the host product's OWN size list
+ * @param {string|null|undefined} title - the product title (tier 2)
+ * @param {string|null|undefined} cachedCategory - garment_cache.garment_category (tier 3)
+ * @param {object|null|undefined} item - activeItem, when one already exists (tier 4)
+ * @returns {boolean}
+ */
+function isPantsProduct(sizes, title, cachedCategory, item) {
+  // TIER 1 - the size run.
+  if (isWaistInchSizeRun(sizes)) return true;
+  if (isAdultPantsProduct(sizes)) return true;
+
+  // TIER 2 - the title.
+  if (titleNamesPants(title)) return true;
+
+  // TIER 3 - the cached Gemini Vision verdict. Only an explicit "pants" counts:
+  // "unknown" is the model declining, and null is nobody ever having asked.
+  if (String(cachedCategory == null ? "" : cachedCategory).toLowerCase().trim() === "pants") return true;
+
+  // TIER 4 - the catalog/handoff type marker.
+  const type = String(item?.garmentType ?? item?.type ?? item?.category ?? "").toLowerCase().trim();
+  if (PANTS_EXPLICIT_TYPES.has(type)) return true;
+  if (type && typeof isBottomsGarment === "function" && isBottomsGarment(item)) return true;
+
+  return false;
+}
+
+/**
+ * WHICH adult chart a confidently-pants product is fitted against.
+ *
+ * EU IS TESTED FIRST AND THAT ORDER IS LOAD-BEARING. The two ladders share the tokens
+ * 36-46, so ["36","38","40","42","44","46"] is a valid reading on either convention. It
+ * has meant EU since ADULT_PANTS_SIZE_CHART shipped, adult-pants-sizing.test.mjs pins
+ * that, and a store on one convention never lists the other - so the EU ladder keeps
+ * first claim on its own run and the waist-inch chart takes everything else. Reversing
+ * these two lines silently re-sizes every EU store in the catalog.
+ *
+ * @param {string[]|string|null|undefined} sizes
+ * @returns {Array<object>} ADULT_PANTS_SIZE_CHART (EU) or ADULT_JEANS_WAIST_CHART
+ *   (waist inches). Never null: callers reach this only once isPantsProduct() has
+ *   confirmed a lower-body garment, and a pants product whose size list scraped to
+ *   nothing still belongs on a waist ladder rather than back on a chest-banded chart.
+ */
+function pantsChartForSizes(sizes) {
+  if (isAdultPantsProduct(sizes)) return ADULT_PANTS_SIZE_CHART;
+  return ADULT_JEANS_WAIST_CHART;
+}
+
 
 /**
  * The shopper's OWN scale, derived with NO garment constraint applied.
@@ -1381,6 +1811,14 @@ function updateSizeMismatchUI() {
  */
 function formatSizeLabel(size) {
   if (!size) return size;
+  /* NUMERIC PANTS LOCK. A waist/EU size must reach every surface as the BARE token the
+     store itself renders ("32"), because that string is matched back to a Shopify
+     variant by findVariantForSize() in pear-widget.js. The kids suffix below would make
+     it "32 (ילדים)", which matches no variant and adds the wrong garment to the cart -
+     the same class of failure cart-size-variant.test.mjs exists for. A kids-numeric
+     product is NOT affected: it never resolves to a pants chart, so this flag is false
+     there and the suffix still renders. */
+  if (currentSizeIsNumericPants) return String(size).replace(/[^0-9]/g, "");
   return currentSizeCategory === "child" ? `${size} ${t("sizeLabelKidsSuffix")}` : size;
 }
 
@@ -1454,6 +1892,10 @@ function calculateSize() {
   // below (missing input / out of range) therefore leave the category null.
   currentSizeCategory = null;
   currentBodyCategory = null;   // ...and the garment-independent one with it
+  // Reset here, BEFORE the two early returns below, so a missing/out-of-range
+  // measurement can never leave a PREVIOUS garment chart description behind for
+  // formatSizeLabel() to read.
+  currentSizeIsNumericPants = false;
   updateProgress();
 
   if (!height || !weight) return;
@@ -1478,11 +1920,37 @@ function calculateSize() {
   // would technically fit a row there.
   const garmentAgeGroup = resolvedGarmentAgeGroup();
   const garmentSizes = resolvedGarmentSizes();
-  // Which adult chart applies to THIS garment - see isAdultNumericPantsGarment()'s
-  // comment for why the product's own numeric size list is what decides, same
-  // precedence isKidsProduct()/isAdultProduct() already give that list below.
+  /* WHICH ADULT CHART APPLIES TO THIS GARMENT. Three of them now, resolved
+     strongest-evidence-first:
+
+       EU numeric   isAdultNumericPantsGarment() - the product's own size list IS the EU
+                    ladder (36-46). Unchanged and tested FIRST, so every store already on
+                    that convention keeps the behaviour adult-pants-sizing.test.mjs pins.
+       waist inch   isPantsProduct() - a confidently lower-body garment by any of its four
+                    tiers. THE FIX for "the calculator recommends L for a pair of jeans":
+                    185cm/82kg now resolves to "32" instead of a letter that appears
+                    nowhere in that product's own size picker.
+       letters      everything else - including every garment we are NOT confident about,
+                    which is the whole point (CLAUDE.md §2.5: never block, never guess).
+
+     THE ITEM NARROWS, IT NEVER WIDENS, mirroring isAdultNumericPantsGarment()'s own
+     rule: a known non-bottoms item vetoes the waist chart (an EU-numbered TOP run must
+     not be pulled onto a waist ladder), but no item marker can put a letter-sized
+     product onto one. activeItem is usually unavailable here anyway - calculateSize()
+     runs on Screen 1, before it exists - so the sizing/title evidence decides in the
+     common case, exactly as the kids/adult guard already does with no item at all. */
   const useAdultPantsChart = isAdultNumericPantsGarment(garmentSizes, activeItem);
-  const adultChart = useAdultPantsChart ? ADULT_PANTS_SIZE_CHART : ZARA_SIZE_CHART;
+  const itemContradictsPants =
+    !!activeItem && typeof isBottomsGarment === "function" && !isBottomsGarment(activeItem);
+  const useWaistInchChart = !useAdultPantsChart && !itemContradictsPants &&
+    isPantsProduct(garmentSizes, resolvedGarmentTitle(), currentGarmentCategory, activeItem);
+  /* Both numeric branches route through pantsChartForSizes() rather than naming a chart
+     here, so the EU-before-waist precedence lives in exactly ONE place - see that
+     function on why reversing those two lines re-sizes every EU store in the catalog. */
+  const useNumericPantsChart = useAdultPantsChart || useWaistInchChart;
+  const adultChart = useNumericPantsChart ? pantsChartForSizes(garmentSizes) : ZARA_SIZE_CHART;
+  /* Read by formatSizeLabel(), which must never decorate a numeric pants size. */
+  currentSizeIsNumericPants = useNumericPantsChart;
   /* Computed BEFORE the garment constraint below, and kept: this is the shopper's own
      scale, which the mismatch guard needs precisely because the constrained result
      cannot express "an adult body looking at a kids-only product" (it collapses to
@@ -1558,7 +2026,7 @@ function calculateSize() {
   let bestSize = candidates[0].size, minPenalty = Infinity;
   candidates.forEach((row) => {
     let pen = 0;   // height/weight are already an exact fit for every candidate here
-    if (currentSizeCategory === "adult" && useAdultPantsChart) {
+    if (currentSizeCategory === "adult" && useNumericPantsChart) {
       // Pants rows carry minWaist/maxWaist same as ZARA_SIZE_CHART, but chest/legs
       // are swapped for minHips/maxHips (see ADULT_PANTS_SIZE_CHART's comment) -
       // there is no "hips" optional input on the form yet, so only waist fine-tunes.
@@ -1725,6 +2193,12 @@ function parseHandoff() {
     const wTypeRaw = (q.get("garment_type") || "").toLowerCase().trim();
     const wType    = wTypeRaw === "unknown" ? "" : wTypeRaw;
     const wName    = q.get("garment_name") || q.get("name") || "";
+    /* ?garment_title= is the v2 spelling; ?garment_name= is what every shipped widget
+       sends today. Either is accepted, so a store still running an older widget bundle
+       reaches the title tier of isPantsProduct() rather than falling to the letter
+       chart - the same "both spellings work" contract front_image_url/garment_url
+       already have just above. */
+    const wTitle   = q.get("garment_title") || wName;
     const isPants  = EXPLICIT_BOTTOM_TYPES.has(wType) ||
                      (!EXPLICIT_TOP_TYPES.has(wType) && classifyGarmentTitle(wName) === "bottom");
     // Multi-image gallery: the widget forwards ALL product photos as a comma-joined
@@ -1785,8 +2259,36 @@ function parseHandoff() {
          in the module. Absent leaves it undefined, never "", so "no list arrived" stays
          distinguishable from "the product genuinely lists no sizes". */
       sizes: q.get("garment_sizes") || undefined,
+      /* The product's own title, carried explicitly rather than left to `name` alone.
+         ?garment_title= is the v2 spelling pear-widget.js now sends alongside the
+         original ?garment_name=; both carry the same string, so either build of the
+         widget works. Read here, SYNCHRONOUSLY, because isPantsProduct()'s tier 2 runs
+         on Screen 1 - a title that only arrived with the PEAR_UPDATE_GARMENT correction
+         would reach the size calculator after it had already recommended a letter. */
+      title: wTitle || undefined,
       angle: readAngle(),
     };
+
+    /* ── SEEDS THE PENDING PRODUCT SIGNALS, BEFORE THE FIRST RENDER ────────────────
+       calculateSize() runs on Screen 1, where activeItem does not exist yet, so its
+       only view of the product is pendingSizes/pendingTitle. Both are read off the URL
+       the widget already builds, so there is nothing to wait for - and waiting is
+       exactly the bug: a returning shopper with a saved profile is routed straight
+       through routeUser()'s instant-skip fast path, which calls calculateSize() and
+       then goToFitting() without ever showing Screen 1. Any signal that arrives later
+       (the PEAR_UPDATE_GARMENT round trip) lands after the recommendation was computed.
+
+       SEEDS, NEVER OVERWRITES. parseHandoff() is called several times per session (init,
+       enterRoom, the go-live tracking payload) and the message listener's values are a
+       CORRECTION - the widget has classified the product by then and may know better.
+       Writing unconditionally here would let a late re-parse clobber that correction
+       with the original URL, so each field is filled only while it is still undefined. */
+    if (pendingSizes === undefined && result.sizes !== undefined) pendingSizes = result.sizes;
+    if (pendingTitle === undefined && result.title !== undefined) pendingTitle = result.title;
+    console.log("[PEAR] parseHandoff() - product signals for the size calculator:", {
+      sizes: pendingSizes || "(none readable on the PDP)",
+      title: pendingTitle || "(none)",
+    });
     // CHECK B instrumentation - the exact point imgBack is resolved, showing which of
     // the three sources won, so a blank back can be traced to its origin immediately.
     console.log("[PEAR] parseHandoff() - back-image resolution:", {
@@ -1917,12 +2419,28 @@ const hasEnglishWord = (text, words) =>
    is a modifier of it. Stripping the fabric words and re-testing resolves the collision
    in the direction that is right by grammar rather than by list order; anything still
    ambiguous afterwards is genuinely ambiguous and abstains properly. */
-const FABRIC_AMBIGUOUS = ["ג'ינס", "ג׳ינס", "jeans", "denim"];
+/* Already apostrophe-normalised - matched only against _normApos() output (see
+   classifyGarmentTitle() below), so the U+05F3 geresh spelling that used to sit
+   beside the ASCII one is gone rather than dead. Kept in lockstep with
+   FABRIC_AMBIGUOUS in widget/pear-widget.js - same simplification, same reason. */
+const FABRIC_AMBIGUOUS = ["ג'ינס", "jeans", "denim"];
 
 function classifyGarmentTitle(...texts) {
   const raw = texts.filter((t) => typeof t === "string" && t.trim()).join(" ");
   if (!raw) return null;
-  const text = raw.toLowerCase();
+  /* APOSTROPHE FOLDING, so the lists below need ONE spelling of each geresh word.
+     A CMS with smart quotes turned on types U+2019 where this file spells U+0027 or
+     U+05F3, and "ג'ינס" then compares unequal to itself - see _normApos()'s own note
+     for the report. The two variants already spelled out in the lists are kept rather
+     than pruned: they are what still matches when the fallback below is taken.
+
+     typeof-guarded per CLAUDE.md §2.7. _normApos() lives in the Screen 1 region and
+     several harnesses execute THIS region as a standalone slice that starts after it
+     (garment-category-detection.test.mjs), where an unguarded reference is a
+     ReferenceError at import time. The identity fallback degrades to exactly the
+     pre-existing behaviour: U+0027 and U+05F3 still match off the lists, only the two
+     curly variants go unrecognised. */
+  const text = typeof _normApos === "function" ? _normApos(raw) : raw.toLowerCase();
   const scan = (t) => ({
     bottom: hasHebrewStem(t, GARMENT_CATEGORY_KEYWORDS.bottom.he) ||
             hasEnglishWord(t, GARMENT_CATEGORY_KEYWORDS.bottom.en),
@@ -2065,6 +2583,93 @@ async function classifyGarmentViaLLM(title) {
   }
   _categoryLLMCache.set(key, verdict);
   return verdict;
+}
+
+/* ── TIER 3 of isPantsProduct(): the cached Gemini VISION verdict ────────────────
+   The tiers above it read the storefront's own text - the size run and the title. Both
+   abstain on a real catalog more often than they should: a store that renders its size
+   picker in JavaScript scrapes to nothing, and a title like "STRAIGHT BASIC" or "LOOSE"
+   names a CUT and a FIT with no garment noun in it at all. When the text says nothing,
+   the PHOTOGRAPH still does, and Gemini Vision can read it.
+
+   NOT THE SAME CALL AS classifyGarmentViaLLM() ABOVE, and the difference is the whole
+   reason this exists: that one classifies a TITLE and is therefore just as blind as
+   tier 2 on a product whose title carries no noun. This one classifies the IMAGE.
+
+   CACHE-FIRST ON THE SERVER (GET /api/garment-category, garment_cache.garment_category -
+   see archive/supabase_setup_v13.sql). A photo is classified once, ever, across every
+   shopper and every session; the client-side memo below only stops one page view from
+   asking twice while the first request is still in flight.
+
+   NEVER THROWS, NEVER REJECTS, NEVER BLOCKS. Every failure - unconfigured key, HTTP
+   error, malformed body, a hang - leaves currentGarmentCategory null, tier 3 abstains,
+   and the calculator falls through to the evidence it already had. A size calculator
+   that waits on a network round trip before showing a recommendation is a worse bug
+   than the one this closes (CLAUDE.md §2.5).
+ * @param {string} imageUrl - the garment's primary photo
+ * @returns {Promise<string|null>} "pants" | "top" | "dress" | null
+ */
+const _garmentCategoryCache = new Map();
+const GARMENT_CATEGORY_TIMEOUT_MS = 6000;
+
+async function fetchGarmentCategory(imageUrl) {
+  const url = String(imageUrl || "").trim();
+  /* A data: URL is a custom upload the shopper cropped in the browser - it was never
+     scraped off a storefront, so there is no cached row for it and nothing to look up.
+     Also: never log one (CLAUDE.md §6). */
+  if (!url || /^data:/i.test(url)) return null;
+  if (_garmentCategoryCache.has(url)) return _garmentCategoryCache.get(url);
+
+  let verdict = null;
+  try {
+    const resp = await Promise.race([
+      fetch(`${location.origin}/api/garment-category?image_url=${encodeURIComponent(url)}`),
+      new Promise((resolve) => setTimeout(() => resolve(null), GARMENT_CATEGORY_TIMEOUT_MS)),
+    ]);
+    if (resp && resp.ok) {
+      const data = await resp.json();
+      const cat = String(data?.garment_category || "").toLowerCase().trim();
+      /* "unknown" is a real verdict and is deliberately NOT stored as one here: tier 3
+         asks only "is this pants?", and an explicit non-answer must abstain exactly the
+         way a missing row does. Storing it would read as evidence in a later log. */
+      if (cat === "pants" || cat === "top" || cat === "dress") verdict = cat;
+      console.log("[PEAR] garment category for", abbrevImg(url), "→", cat || "(none)",
+                  data?.source ? `(${data.source})` : "");
+    }
+  } catch (e) {
+    console.warn("[PEAR] fetchGarmentCategory() - unavailable, the text tiers stand:", e?.message || e);
+  }
+  _garmentCategoryCache.set(url, verdict);
+  return verdict;
+}
+
+/**
+ * Fetch the vision verdict for the handoff garment and re-run the calculator if it
+ * changed the answer.
+ *
+ * FIRE-AND-FORGET BY CONSTRUCTION. It is started at init() and nothing awaits it: the
+ * measurement form is usable, and a recommendation is already computed from the text
+ * tiers, before this resolves. When the verdict lands and it actually moves the garment
+ * onto a waist chart, calculateSize() is re-run so the shopper sees the corrected size -
+ * the same late-correction pattern PEAR_UPDATE_GARMENT already uses for a late size list.
+ * When it changes nothing (the common case: the size run already answered), the re-run is
+ * skipped entirely rather than repainting the same number.
+ */
+async function applyGarmentCategoryHint(imageUrl) {
+  const before = currentGarmentCategory;
+  const verdict = await fetchGarmentCategory(imageUrl);
+  if (!verdict || verdict === before) return;
+  currentGarmentCategory = verdict;
+  /* Only "pants" can move a garment onto a different chart - "top"/"dress" leave the
+     letter chart exactly where it already was, so there is nothing to repaint. */
+  if (verdict !== "pants") return;
+  try {
+    const sizeFormEl = $("sizeForm");
+    if (sizeFormEl && !sizeFormEl.hidden) calculateSize();
+    injectSizeSelector();
+  } catch (e) {
+    console.warn("[PEAR] applyGarmentCategoryHint() - recalc failed:", e?.message || e);
+  }
 }
 
 /**
@@ -2684,6 +3289,20 @@ window.addEventListener("message", (e) => {
     }
   }
 
+  /* A LATE TITLE is the correction half of the pendingTitle seed parseHandoff() lays
+     down from the URL. The widget re-reads the PDP heading after its own gallery and
+     classify work settles, so this is the more accurate of the two - unlike the sizes
+     above it overwrites unconditionally. Re-runs the calculator for the same reason the
+     size branch does: a shopper still on Screen 1 must see the corrected chart, not the
+     one that was resolved from a truncated or placeholder heading. */
+  const incomingTitle = e.data.garment_title || e.data.garment_name;
+  if (typeof incomingTitle === "string" && incomingTitle.trim()) {
+    pendingTitle = incomingTitle;
+    if (activeItem && !activeItem.title) activeItem.title = incomingTitle;
+    const sizeFormEl2 = $("sizeForm");
+    if (sizeFormEl2 && !sizeFormEl2.hidden) { try { calculateSize(); } catch {} }
+  }
+
   if (typeof e.data.garment_age_group === "string") {
     pendingAgeGroup = e.data.garment_age_group;
     pendingAgeGroupConfidence = Number.isFinite(e.data.garment_age_group_confidence)
@@ -2704,6 +3323,26 @@ window.addEventListener("message", (e) => {
     // initial one, so re-check regardless of which screen is currently showing.
     try { updateSizeMismatchUI(); } catch {}
   }
+
+  /* ── THE VERDICT LANDED - release the classification gate ─────────────────────────
+     RELEASED HERE, ABOVE THE `!front` GUARD BELOW, and the position is the whole point.
+     The widget sends a BARE ready signal ({ garment_classify_done: true }, no garment
+     fields) whenever the classifier agreed with the DOM-order guess - which on a
+     well-marked-up store is the COMMON path, and is precisely the case where nothing
+     needs re-anchoring. That message carries no garment_url, so the guard below returns
+     immediately; releasing after it would leave the gate sitting until its 30s timeout
+     on exactly the products that were never at risk.
+
+     RELEASING IS NOT RE-ANCHORING. This touches no reference and dispatches nothing -
+     the unchanged path still returns below without altering activeItem, so a mid-session
+     image churn cannot be introduced here (re-uploading a reference mid-session renders
+     a generic garment; the conditioning gate is one-shot).
+
+     typeof-GUARDED, per §2.7. composite-handoff.test.mjs slices this handler out and
+     executes it in a sandbox with no module scope, so a bare call is a ReferenceError
+     that fails the suite for a reason unrelated to what it tests - the same treatment
+     verifyGarmentAsset() gets at its call sites. */
+  if (typeof resolveClassifyGate === "function") resolveClassifyGate("classifier verdict received");
 
   const front = e.data.garment_url;
   const back = e.data.garment_back;
@@ -2766,6 +3405,21 @@ window.addEventListener("message", (e) => {
      that reads as a verdict. Same null-vs-empty discipline as text_ocr server-side. */
   if (typeof e.data.garment_color_hex === "string" && e.data.garment_color_hex) {
     activeItem.colorHex = e.data.garment_color_hex;
+  }
+  /* The garment's own lettering, from the FRONT photo (see identityLockSentence). "" is
+     assigned deliberately - it is the verdict "the classifier looked and this garment is
+     plain", which must be distinguishable from an absent field. `typeof` and not a
+     truthiness test, for exactly that reason. */
+  if (typeof e.data.garment_text_ocr === "string") {
+    activeItem.textOcr = e.data.garment_text_ocr;
+  }
+  /* ── IS THE REAR BLANK? - selects PLAIN_BACK_ANCHOR over BACK_CATEGORY_ANCHOR ──────
+     Only a real boolean is stored. An absent field leaves this undefined, and
+     imageOnlyPrompt() treats anything other than `true` as "not proven plain" and keeps
+     the existing wording. Assigning `false` on an absent field would be a verdict nobody
+     reached; assigning `true` would suppress a real rear print. */
+  if (typeof e.data.garment_back_is_plain === "boolean") {
+    activeItem.backIsPlain = e.data.garment_back_is_plain;
   }
   /* Unified COMBINED reference, stitched by the widget on the store page (see
      createGarmentComposite in pear-widget.js). When present it IS the model
@@ -2942,6 +3596,11 @@ function renderActiveGarment() {
        composite exists, so this can never fight with is-composite above. */
     chip.classList.toggle("is-pending", thumbIsPending(item));
   }
+  /* Same predicate, third consumer: the Liquid Glass prep overlay. Derived here rather
+     than driven from the widget message handler so EVERY path that can change what is
+     pending (a correction landing, the 35s give-up, an item swap, a colour swap) moves
+     the overlay too - there is no route that repaints the chip without settling it. */
+  if (typeof syncAssetPrep === "function") syncAssetPrep();
   syncCaptureButtonPendingState();
 }
 
@@ -3551,8 +4210,13 @@ async function ensureOnline() {
    canvas at EXACTLY `fps` and `width`×`height`, and give the SDK canvas.captureStream
    instead. captureStream(0) + manual requestFrame() gives precise, source-rate-
    independent pacing, so Decart processes (and bills) at our rate, not the camera's.
-   We also flip horizontally here so the SDK's mirror:"auto" no-ops on the canvas
-   track (it has no facingMode) and the edited feed stays a correct selfie view.
+   NO FLIP HAPPENS HERE ANY MORE. This used to mirror every outgoing frame so the
+   SDK's mirror:"auto" would no-op on a canvas track (which has no facingMode) and
+   the edited feed would arrive already selfie-oriented. Both halves of that are
+   gone: the flip moved to the CSS display layer so Decart is conditioned on an
+   un-mirrored world (see drawFrame below for the reversed-chest-text report that
+   forced it), and the SDK is now passed mirror:false explicitly rather than being
+   trusted to no-op. This canvas ships reality; exactly one layer mirrors.
 
    Returns { stream, dispose }. dispose() MUST run in teardown() - it clears the
    paint timer, stops the canvas track, and stops the cloned source track it owns.
@@ -3589,6 +4253,7 @@ async function ensureOnline() {
 function createThrottledInputStream(srcStream, {
   fps = LIVE_INFERENCE_FPS, width = LIVE_W, height = LIVE_H,
   gated = INPUT_GATE_ENABLED, gateMaxMs = INPUT_GATE_MAX_MS,
+  clock = () => Date.now(),   // injectable so first-frame-integrity can drive time; see unhold()
 } = {}) {
   const srcTrack = srcStream.getVideoTracks()[0];
   // No video track (camera failed) - hand the stream back untouched; nothing to throttle.
@@ -3646,7 +4311,9 @@ function createThrottledInputStream(srcStream, {
      path that forgets to call release() costs a late start rather than a dead session - and
      says so loudly, because reaching that timer is a bug in the caller, not a slow network. */
   let gateOpen = !gated;
+  let held = false;          // closed mid-session by hold() - see the returned API
   let gateTimer = null;
+  let lastFrameAt = -Infinity;   // when a frame last reached the output track - unhold() spaces against it
   if (gated) {
     gateTimer = setTimeout(() => {
       gateTimer = null;
@@ -3655,21 +4322,63 @@ function createThrottledInputStream(srcStream, {
         "release - the garment apply never reported success. Streaming raw frames now so the",
         "session is not stranded; the first rendered frames may not carry the garment.");
       gateOpen = true;
+      /* The moment the "started rendering without a garment" check becomes decidable - see
+         warnIfStreamStartedUndressed(), which stays silent while this gate is shut. */
+      if (typeof warnIfStreamStartedUndressed === "function") warnIfStreamStartedUndressed();
     }, gateMaxMs);
   }
 
-  // Cover-fit + horizontal mirror: fill width×height (preserve aspect, center-crop)
-  // and flip X so the canvas track already carries the selfie orientation.
+  /* ── COVER-FIT, AND DELIBERATELY NOT MIRRORED ────────────────────────────────────
+     THE BUG THIS CLOSES: "the front chest text came back reversed" - PEAK rendering as
+     916tim9 after a turn.
+
+     THIS LINE USED TO READ `ctx.setTransform(-1, 0, 0, 1, width, 0)`, flipping every
+     frame before it left the browser, so that the SDK's mirror:"auto" would no-op on a
+     canvas track (which has no facingMode) and the edited feed would arrive already in
+     selfie orientation. The display cost nothing and the shopper saw what they expected,
+     so it looked free. It was not.
+
+     WHAT IT COST: Decart was conditioned on a MIRRORED WORLD. Every piece of real text
+     in frame - the room, the shopper's own shirt - reached the model reversed, while the
+     garment reference image it has to copy from is not reversed. Asked to paint
+     un-mirrored reference lettering into a scene whose every other glyph runs backwards,
+     the model's own prior for "text in this scene" is mirrored text, and it renders the
+     chest graphic to match the scene rather than the reference. No prompt clause can
+     reach that - you cannot instruct a model out of the geometry of its input.
+
+     SO THE FLIP MOVED TO THE DISPLAY LAYER, where it belongs: `.camera-card.show-live
+     #aiVideo { transform: scaleX(-1) }`. The shopper sees exactly the same selfie view as
+     before - this is not a visible change - but Decart now conditions on reality.
+
+     EVERY SURFACE THAT CONSUMES #aiVideo MOVED WITH IT, and they must stay in lockstep:
+       · #orientFadeCanvas / #redrapeCoverCanvas - overlays drawn FROM #aiVideo and
+         stacked over it, so they carry the same CSS transform or they stop aligning.
+       · recordCanvas, captureHoldFrame, the #resultCanvas snapshot, the thumbnail -
+         these BAKE pixels, so they apply the selfie flip themselves. Their `mirror` flag
+         used to be false for #aiVideo and true for #webcam; now every video source in
+         this file is reality-oriented and the flag is uniformly true.
+       · .camera-card.show-clip #aiVideo stays transform:none ON PURPOSE - a recorded
+         clip already has the flip baked in by the recorder, and mirroring it again on
+         replay would un-mirror it.
+       · The lower-body guard and the orientation watcher's 96px sampler read #webcam,
+         which was never flipped at source and is unaffected.
+     If you re-add a flip here, all of the above have to come back with it. */
   const drawFrame = () => {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (!vw || !vh) return;
     const scale = Math.max(width / vw, height / vh);
     const dw = vw * scale, dh = vh * scale;
     const dx = (width - dw) / 2, dy = (height - dh) / 2;
-    ctx.save();
-    ctx.setTransform(-1, 0, 0, 1, width, 0);   // mirror horizontally
+    /* IDENTITY, ASSERTED RATHER THAN ASSUMED. This loop applies no transform of its own,
+       so the reset looks redundant - and it is, today, which is exactly why it is cheap
+       enough to keep. This canvas is the ONE surface whose contents become the payload
+       Decart conditions on, and the failure it guards is silent: a stray transform left
+       on this context does not throw, does not log, and does not look wrong locally - it
+       just means every frame the model ever sees is flipped, which is the bug the
+       un-mirroring refactor above exists to have fixed. One call per frame to make that
+       unrepresentable is a good trade. */
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(video, dx, dy, dw, dh);
-    ctx.restore();
   };
 
   const tick = () => {
@@ -3677,6 +4386,7 @@ function createThrottledInputStream(srcStream, {
     try {
       drawFrame();
       if (outTrack && typeof outTrack.requestFrame === "function") outTrack.requestFrame();
+      lastFrameAt = clock();
     } catch (_) {}
   };
 
@@ -3692,10 +4402,64 @@ function createThrottledInputStream(srcStream, {
        remember. Returns whether THIS call was the one that opened it, for the log line. */
     release: (why = "garment acknowledged") => {
       if (gateOpen) return false;
+      /* A HOLD IS RELEASED ONLY BY ITS HOLDER (unhold below). This generic release fires on
+         EVERY successful apply, and a re-drape or re-anchor that finishes mid-swap would
+         otherwise reopen the gate before the swap's own reference has landed - uncovering
+         exactly the frames the hold exists to withhold. */
+      if (held) return false;
       gateOpen = true;
       if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
       console.log(`[PEAR] input gate released (${why}) - streaming to Decart now;`,
         "its first frame is conditioned on the real reference");
+      return true;
+    },
+    /* ── THE SAME GATE, HELD ACROSS A MID-SESSION REFERENCE SWAP ─────────────────────
+       REPORTED from the exported clip: on FRONT -> BACK the shirt goes blank - untextured,
+       plain - for a beat before the back graphic appears. It is the go-live window above,
+       reopened mid-session: a full set({ image }) replaces the reference while frames keep
+       flowing, and Decart renders those frames from its own prior until the new reference
+       lands. The clip records Decart's raw output, so no display cover can hide it. The fix
+       is the one this gate already is: do not hand Decart those frames. Its output stays on
+       the last frame it conditioned correctly, for one upload round-trip, and resumes on
+       frames conditioned on the new reference.
+       ONLY FROM AN OPEN GATE - the go-live gate belongs to go-live, and a hold taken over it
+       would be released by the swap rather than by the first apply. BOUNDED by maxMs, loud
+       when it fires: a set() that never resolves costs a frozen beat, never a frozen session.
+       RELEASED BY THE HOLDER ONLY, via unhold(). */
+    get held() { return held; },
+    hold: (why = "reference swap", maxMs) => {
+      if (disposed || !gateOpen || held) return false;
+      held = true;
+      gateOpen = false;
+      if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
+      gateTimer = setTimeout(() => {
+        gateTimer = null;
+        if (disposed || !held) return;
+        held = false;
+        gateOpen = true;
+        console.warn(`[PEAR] input gate: hold (${why}) hit its ${maxMs}ms ceiling without the swap`,
+          "settling - streaming frames again so the session is not frozen");
+      }, maxMs);
+      console.log(`[PEAR] input gate held (${why}) - withholding camera frames until the new reference is acknowledged`);
+      return true;
+    },
+    unhold: (why = "reference acknowledged") => {
+      if (!held) return false;
+      held = false;
+      gateOpen = true;
+      if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
+      /* THE FIRST FRAME ON THE NEW REFERENCE GOES AT THE ACK, NOT ON THE NEXT TICK. Decart can only
+         render the new reference from a camera frame it receives after taking it, and reopening the
+         gate sent none: the first one waited for the interval's next tick - up to a full frame
+         period (100ms at 10fps, ~50ms on average) added to every swap's render. Sent now, and the
+         interval restarted from it, so frames stay at least frameMs apart and the billing rate cap
+         is exact. A hold shorter than one period (the last frame went out under frameMs ago) waits
+         for the tick as before - sending now would break the cap. The hold itself stays: it is what
+         keeps Decart from rendering the blank shirt while the reference uploads (see hold()). */
+      const now = timer !== null && clock() - lastFrameAt >= frameMs;
+      if (now) { clearInterval(timer); timer = null; tick(); start(); }
+      console.log(`[PEAR] input gate unheld (${why}) - streaming to Decart on the new reference` +
+        (now ? " (first frame sent at the ACK)" : ""));
       return true;
     },
     dispose: () => {
@@ -3730,6 +4494,24 @@ function releaseInputGate(why) {
 }
 
 /**
+ * Hold the CURRENT session's input gate across a reference swap. Returns the throttle that
+ * was held - the caller releases THAT instance with unhold(), never the module-level one, so a
+ * swap that outlives its session can only ever release the gate it actually took.
+ * @param {string} why  @param {number} maxMs ceiling
+ * @returns {{unhold: (why?: string) => boolean}|null} null when nothing was held
+ */
+function holdInputGate(why, maxMs) {
+  const gate = inputThrottle;
+  if (!gate || typeof gate.hold !== "function") return null;
+  return gate.hold(why, maxMs) ? gate : null;
+}
+
+/** @returns {boolean} true while a swap is deliberately withholding frames from Decart */
+function inputGateHeld() {
+  return !!(inputThrottle && inputThrottle.held);
+}
+
+/**
  * Mint an ephemeral ek_ token and open ONE Decart Lucy VTON realtime session
  * over WebRTC. Any stale/dropped client is disconnected first so no orphaned
  * server-side session keeps billing. SECURITY: the permanent dct_ key never
@@ -3755,7 +4537,27 @@ function buildRealtimeConnectOpts(gen) {
       width: LIVE_W,
       height: LIVE_H,
     },
-    mirror: "auto",
+    /* ── mirror: false, EXPLICITLY - never "auto", never omitted ────────────────────
+       THE MIRROR IS OWNED BY EXACTLY ONE LAYER NOW: CSS, via
+       `.camera-card.show-live #aiVideo { transform: scaleX(-1) }`. Everything else in the
+       pipeline carries reality - the outgoing canvas no longer pre-flips (see drawFrame),
+       and the capture surfaces bake their own flip at the point they produce a file.
+
+       WHY "auto" WAS A LIABILITY RATHER THAN A NO-OP. The old reasoning was that it
+       no-ops on a canvas track because that track has no facingMode - which is a
+       statement about SDK internals we neither control nor version-pin, decided per
+       browser. While the outgoing frames were pre-flipped it also did not matter much:
+       if "auto" had ever fired, the two flips would have cancelled and the feed would
+       have looked un-mirrored, which is wrong but STABLE. Now that the canvas ships
+       reality, an "auto" that fires would flip the stream while CSS flips the display,
+       and any SDK-side re-evaluation of that decision mid-session shows up as the feed
+       toggling horizontally - the "endless mirror" failure.
+
+       false removes the question. It is not a guess about what the SDK does; it is a
+       refusal to let the SDK have an opinion. If the shopper's view ever comes back
+       un-mirrored, the bug is in the CSS rule above, and there is now exactly one place
+       to look. */
+    mirror: false,
     onRemoteStream: (editedStream) => {
       if (gen !== sessionGen) return;    // stale callback from a torn-down session
       // DEBUG WRAPPER: flag a stream rendering with no garment on the wire. typeof-guarded,
@@ -3774,12 +4576,28 @@ function buildRealtimeConnectOpts(gen) {
          scrim between the shopper and whatever Decart rendered first. See gateAiFeed(). */
       aiVideo.style.display = "block";
       gateAiFeed(aiVideo);
-      aiVideo.style.transform = "none";  // edited feed is already correctly oriented
-      // Force the video onto its own GPU compositing layer so the browser doesn't
-      // re-rasterize it in software on every frame repaint. translateZ(0) is the
-      // universal trigger; will-change is the spec-correct version.
+      /* ── NOTHING HERE WRITES style.transform ANY MORE. THIS WAS THE BUG. ────────────
+         Two inline writes used to live on these lines:
+             aiVideo.style.transform = "none";           // "already correctly oriented"
+             aiVideo.style.transform = "translateZ(0)";  // GPU compositing hint
+         INLINE STYLE BEATS EVERY CLASS RULE, so between them they owned #aiVideo's
+         transform outright and the stylesheet's `.camera-card.show-live #aiVideo
+         { transform: scaleX(-1) }` never applied - the second write silently discarded
+         the first, and the element rendered with no horizontal flip at all. That is why
+         the live feed reads un-mirrored (garment text correct, physical motion reversed)
+         no matter what the stylesheet says.
+
+         It is also why the un-mirroring refactor landed HALF-APPLIED: removing the
+         pre-mirror from the outgoing canvas took effect, but moving the flip to the
+         display layer did not, so the pipeline ended up at zero net flips instead of one.
+
+         The GPU hint was never the problem and is kept - it just moved into the
+         stylesheet, where it composes with the mirror in one declaration
+         (`transform: scaleX(-1) translateZ(0)`) instead of racing it. The mirror now
+         lives in exactly ONE place: style.css. Do not reintroduce a style.transform
+         write here; resetAiFeedVisibility() also clears any stray one for the same
+         reason. */
       aiVideo.style.willChange = "transform";
-      aiVideo.style.transform = "translateZ(0)";
       aiVideo.play().catch(() => {});
       // BILLING START: the 5s / 10-credit window begins at the FIRST DRESSED frame
       // Decart actually renders to #aiVideo here - NOT at connect and NOT merely at
@@ -4005,6 +4823,8 @@ async function connectRealtime({ force = false } = {}) {
         /* ── connect realtime ───────────────────────────────────────────────── */
         // FIX: model passed as a plain string, NOT via models.realtime()
         rtClient = await client.realtime.connect(realtimeInput, buildRealtimeConnectOpts(gen));
+        // set() sends pre-encoded references - see preEncodeReference(). typeof: this runs sandboxed in signaling-retry.
+        if (typeof withPreEncodedReferences === "function") rtClient = withPreEncodedReferences(rtClient);
         break;      // success - fall through to the post-connect code below
       } catch (e) {
         // Dispose THIS attempt's throttle/clone before either retrying (a fresh one is
@@ -4321,6 +5141,38 @@ async function bitmapLooksFlat(bitmap) {
   }
 }
 
+/* ── ONE PROBE PER BLOB - "there is a visible gap while it swaps sides" ────────────
+   The back asset's bytes were already in RAM on every turn, but maybeSwap()'s back leg
+   still ran createImageBitmap() over the FULL packshot plus a canvas readback before it
+   could issue the set() - on the same Blob object preloadGarmentAssets() had already
+   decoded and probed before connect. Tens of milliseconds of decode on the one path whose
+   whole point is to be instant, repeated on every turn to the back.
+
+   The verdict is a property of the BYTES, so it is settled once per Blob and every later
+   caller reads it. Keyed by Blob identity in a WeakMap: garmentBlobCached() hands back the
+   same object for a URL until it is evicted or refetched, and a refetch is a new object
+   that correctly earns its own probe. Nothing is pinned by this map.
+
+   A DECODE FAILURE IS NOT MEMOIZED. It fails open exactly as the two inline probes did,
+   but a transient hiccup must not become a permanent "fine" - the next flip probes again.
+   A Blob that tests flat is dropped from _assetBlobCache by its caller, so its verdict is
+   never read again either. Non-object inputs (test sandboxes pass strings) skip the memo. */
+const _flatVerdicts = new WeakMap();   // Blob → settled flat/not-flat verdict
+async function blobLooksFlat(blob) {
+  const memo = blob !== null && typeof blob === "object";
+  if (memo && _flatVerdicts.has(blob)) return _flatVerdicts.get(blob);
+  let probe;
+  try {
+    probe = await createImageBitmap(blob);
+  } catch (_) {
+    return false;
+  }
+  const flat = await bitmapLooksFlat(probe);
+  try { probe.close?.(); } catch (_) {}
+  if (memo) _flatVerdicts.set(blob, flat);
+  return flat;
+}
+
 /* ── Context-Aware Asset Switching - pre-cached per-orientation Blobs ─────────
    The instant-swap guarantee: rtClient.set({ image }) accepts a Blob directly, and a Blob
    ships the bytes over the already-open session - Decart never has to fetch a URL server-
@@ -4372,12 +5224,63 @@ function lruTouch(map, key) {
   return v;
 }
 
+/* ── PINNED KEYS - "I turned all the way round and came back in a Real Madrid shirt" ──
+   ────────────────────────────────────────────────────────────────────────────────
+   THE BUG THIS CLOSES, and it is the mechanical half of a report the return leg in
+   maybeSwap() already describes in full: after a 360° turn the front garment comes back
+   corrupted, re-proportioned, or replaced by something the shopper never picked.
+
+   THE CHAIN. _assetBlobCache is an LRU of 10 shared across front views, back views,
+   composites, look stitches and every colour variant touched this session. The ACTIVE
+   item's front entry is the oldest of its pair by construction - it is fetched at
+   go-live, where the back is fetched at the first turn - so eviction reaches it FIRST.
+   Turn away, touch a couple of variants, turn back, and the front bytes are gone.
+   referenceImageFor() then falls back to a URL, which means DECART has to fetch it
+   before it can condition on anything (garmentImageRef() measures that at up to 20-25s),
+   and until it lands the model has no reference and renders from its own prior. A prior
+   asked for "a t-shirt" produces a generic jersey with invented sponsor text - which is
+   exactly the reported "front chest graphics corrupted / repositioned after rotation".
+
+   maybeSwap()'s return leg already REFUSES to flip when this happens (abandon, do not
+   degrade), so the shopper no longer watches the wrong garment appear. But refusing to
+   flip means being stuck facing away from a garment whose bytes we simply let fall out
+   of a cache we control. This removes the cause rather than handling the symptom: the
+   ACTIVE item's own two assets are never candidates for eviction, so the return leg
+   always has bytes and the flip always completes.
+
+   THE CAP STAYS ADVISORY WHEN EVERYTHING IS PINNED. At most two keys are ever pinned
+   against a cap of ten, so the loop below cannot starve in practice - but if a future
+   change ever pins more than `max`, growing past the cap is strictly better than
+   evicting the one asset the live session is conditioned on. Bounded either way: the
+   pin set holds at most the active item's front and back. */
+const _pinnedBlobKeys = new Set();
+
+/**
+ * Pin the ACTIVE garment's assets so the shared LRU cannot evict them mid-session.
+ * Replaces the previous pin set wholesale - an item swap must not leave the old item's
+ * bytes pinned forever, which would turn this into a leak instead of a guard.
+ * @param {...(string|undefined|null)} urls
+ */
+function pinActiveGarmentBlobs(...urls) {
+  _pinnedBlobKeys.clear();
+  for (const u of urls) if (typeof u === "string" && u) _pinnedBlobKeys.add(u);
+  if (typeof console !== "undefined") {
+    console.log("[PEAR] blob LRU - pinned the active garment's assets:",
+      [..._pinnedBlobKeys].map((u) => (typeof abbrevImg === "function" ? abbrevImg(u) : u)).join(" | ") || "(none)");
+  }
+}
+
 /** Insert as most-recently-used, then evict the oldest entries beyond `max`. */
 function lruSet(map, key, value, max = BLOB_CACHE_MAX) {
   map.delete(key);                 // a re-set must count as fresh, not stay in place
   map.set(key, value);
   while (map.size > max) {
-    const oldest = map.keys().next().value;
+    /* Oldest UNPINNED entry, not simply the oldest. Scanning in insertion order keeps
+       the LRU semantics for everything else; pinned keys are skipped rather than
+       reordered, so they never mask a genuinely stale entry behind them. */
+    let oldest;
+    for (const k of map.keys()) { if (!_pinnedBlobKeys.has(k)) { oldest = k; break; } }
+    if (oldest === undefined) break;   // every entry is pinned - see the note above
     const evicted = map.get(oldest);
     map.delete(oldest);            // last reference dropped → Blob becomes GC-eligible
     // Defensive only: these caches never hold URL strings (see the note above),
@@ -4410,7 +5313,11 @@ function garmentBlobCached(url) {
         : await fetchWithFallback(url);
       if (!raw) { _assetBlobCache.delete(url); return null; }   // never cache a failure - allow a retry
       // These bytes go straight to rtClient.set({ image }) in AI Auto mode.
-      return await normalizeToSupportedImage(raw);
+      const blob = await normalizeToSupportedImage(raw);
+      /* Encoded NOW, while nothing is waiting on it, so a swap that sends this Blob later does no
+         encoding at all - see preEncodeReference(). Fire-and-forget; a failure costs nothing. */
+      if (blob && typeof preEncodeReference === "function") preEncodeReference(blob);
+      return blob;
     } catch (e) {
       console.warn("[PEAR] asset pre-cache failed:", e?.message || e);
       _assetBlobCache.delete(url);
@@ -4438,6 +5345,58 @@ function garmentBlobCached(url) {
  * @param {string} url
  * @returns {Blob|null}
  */
+/* ── PRE-ENCODED REFERENCES - no encoding when a swap fires ───────────────────────────────────────
+   @decartai/sdk's set() turns a Blob into base64 at send time with FileReader.readAsDataURL(), then
+   splits the data URL on its comma. That FileReader completion is a separate TASK, the one hop off
+   the current task between the swap decision and the WebSocket write; every other step (the cached
+   Blob lookup, the wire mutex, the SDK's own awaits) resolves as microtasks. A reading taken behind a
+   main-thread MediaPipe inference waits for that inference too.
+   So each garment Blob is encoded once, when it is fetched (garmentBlobCached), by the SAME
+   readAsDataURL, and kept beside it in a WeakMap - it goes when the Blob does. At send time
+   withPreEncodedReferences() hands the SDK that data: URL, which it accepts (it splits it without a
+   FileReader), so the bytes on the wire are identical and the payload is built within the task.
+   The rest of this file never sees it: every identity check (lastSentImageRef, garmentBlobIfWarm,
+   verifyGarmentAsset) still holds the Blob. A Blob not yet encoded is passed through as before.
+   NOT DONE, deliberately: writing a pre-serialized message to the SDK's WebSocket directly. The socket
+   and its ack matching are private to the SDK (set() resolves on set_image_ack through them), the
+   message carries the prompt, which changes with size and angle, and JSON.stringify of ~60KB is
+   sub-millisecond. The browser owns the socket options; there is no WebSocket API for TCP_NODELAY. */
+const _preEncodedRefs = new WeakMap();   // Blob -> Promise<string|null>, with .settled once done
+
+/** @param {Blob} blob  @returns {Promise<string|null>} the Blob as a base64 data: URL, encoded once */
+function preEncodeReference(blob) {
+  if (typeof Blob === "undefined" || typeof FileReader === "undefined" || !(blob instanceof Blob)) return Promise.resolve(null);
+  const cached = _preEncodedRefs.get(blob);
+  if (cached) return cached;
+  const job = new Promise((resolve) => {
+    try {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(typeof reader.result === "string" && /^data:[^,]*;base64,./.test(reader.result) ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    } catch (_) { resolve(null); }
+  });
+  job.then((s) => { job.settled = s; }, () => {});
+  _preEncodedRefs.set(blob, job);
+  return job;
+}
+
+/** Replace the realtime client's set() IN PLACE (its sessionId/subscribeToken are getters - a copy
+    would freeze them) with one that hands the SDK a pre-encoded data: URL for a Blob that has one.
+    @template T  @param {T} client  @returns {T} */
+function withPreEncodedReferences(client) {
+  if (!client || typeof client.set !== "function" || client.__pearPreEncoded) return client;
+  const rawSet = client.set;
+  client.set = (input) => {
+    const image = input && input.image;
+    const job = typeof Blob !== "undefined" && image instanceof Blob ? _preEncodedRefs.get(image) : null;
+    const dataUrl = job ? job.settled : null;
+    return rawSet(dataUrl ? { ...input, image: dataUrl } : input);
+  };
+  client.__pearPreEncoded = true;
+  return client;
+}
+
 function garmentBlobIfWarm(url) {
   if (!url) return null;
   const job = _assetBlobCache.get(url);
@@ -4486,6 +5445,258 @@ function prewarmOrientationAssets() {
   }
 }
 
+/* ── Asset Readiness Progress - the model behind the Liquid Glass overlay ──────
+   ────────────────────────────────────────────────────────────────────────────
+   THE BUG THIS CLOSES: "it flashes a photo, then swaps it for a different one."
+
+   A widget handover opens this room with ?garment_url=imgs[0] - the first image in
+   DOM order, validated by nobody - and the real front/back verdict lands 2.5s warm /
+   ~27s cold as a PEAR_UPDATE_GARMENT correction. For that entire window the chip
+   painted that unvalidated photo at full opacity behind a small spinner. Two things
+   were wrong with that. It shows the shopper an asset we already know we do not
+   trust, and when the correction lands the thumbnail visibly mutates - which reads
+   as a glitch, not as a resolution.
+
+   The functional half of this was ALREADY correct and is untouched: livePendingReason()
+   refuses go-live while the verdict is outstanding, and preloadGarmentAssets() is
+   awaited before connectRealtime(), so Decart was never actually conditioned on the
+   intermediate asset. What was missing was any honest VISUAL account of that wait -
+   so this replaces the premature thumbnail with a progress surface that shows nothing
+   of the garment until the asset is final, and reveals the finished card in ONE step.
+
+   PROGRESS IS DERIVED, NOT ANIMATED THEATRE. The two phases have genuinely different
+   observability and are weighted accordingly:
+     · CLASSIFYING_ASSETS (0→PREP_CLASSIFY_CEIL) - an opaque round trip on the STORE
+       page. There is no milestone to read, so this creeps asymptotically toward the
+       ceiling against the same CLASSIFY_GATE_MAX_MS the gate itself times out on. It
+       approaches but never reaches the ceiling, so the bar cannot sit at a number that
+       implies a step finished when nothing has been confirmed.
+     · PRELOADING_BLOBS (PREP_CLASSIFY_CEIL→99) - fetch, decode and content-validate,
+       all of which we run ourselves. Stepped from REAL milestones via assetPrepStep().
+   100 is reserved: it is written only by assetPrepReady(), and only once there is a
+   validated asset behind it. Never let a timer reach 100 - a counter that hits 100
+   while work is outstanding is the same lie as the premature thumbnail.
+
+   MONOTONIC BY CONSTRUCTION. assetPrepTarget only ever moves up (Math.max below). A
+   late correction that re-opens classification must not rewind a bar the shopper has
+   already watched climb; it holds instead, which reads as "still working" rather than
+   as a fault. */
+const PREP_PHASE_IDLE       = "IDLE";
+const PREP_PHASE_CLASSIFY   = "CLASSIFYING_ASSETS";
+const PREP_PHASE_PRELOAD    = "PRELOADING_BLOBS";
+const PREP_PHASE_READY      = "READY";
+const PREP_CLASSIFY_CEIL    = 55;    // the whole opaque-round-trip band
+const PREP_PRELOAD_CEIL     = 99;    // 100 belongs to assetPrepReady() alone
+/* One frame past the counter's own ease so the number is visibly AT 100 before the
+   card appears. Below ~200ms the reveal lands while the digits are still climbing,
+   which reads as the transition interrupting itself rather than completing. */
+const PREP_REVEAL_HOLD_MS   = 260;
+/* Spinner debounce. When the prewarm already won the race every lookup in the preload
+   gate is a cache hit and the whole prep resolves inside a couple of frames - showing,
+   filling and retiring a progress panel in that window is a flash of chrome that reads
+   as a glitch in its own right, which is the same class of problem as the premature
+   thumbnail this overlay replaces. Below this threshold nothing is ever painted; the
+   card simply stays as it was. Elapsed time only grows, so once the overlay has earned
+   its place it cannot un-show itself mid-progress. */
+const PREP_SHOW_DELAY_MS    = 180;
+
+let assetPrepPhase   = PREP_PHASE_IDLE;
+let assetPrepTarget  = 0;    // where the real work says we are
+let assetPrepShown   = 0;    // where the eased on-screen counter has got to
+let assetPrepRAF     = null;
+let assetPrepStartAt = 0;
+let assetPrepRevealTimer = null;
+/* Sticky visibility latch - see PREP_SHOW_DELAY_MS. Latched TRUE only while real work
+   is still outstanding, which is what makes the debounce correct rather than merely
+   delayed: on a warm run the whole prep is already READY by the time the delay elapses,
+   so the latch never closes and nothing is ever painted. Once true it stays true until
+   the reveal completes, so the panel cannot vanish out from under a progress it is
+   halfway through showing. */
+let assetPrepVisible = false;
+/* Who is driving. The preload gate (assetPrepStep) reports REAL milestones and settles
+   itself from goLive(); syncAssetPrep() derives its phase from livePendingReason(),
+   which by then already reads "nothing pending" - so without this flag any incidental
+   repaint during the gate (a colour swatch, a toast, an i18n pass) would call
+   assetPrepReady() and slam the bar to 100 while the fetches were still running. The
+   gate keeps ownership until its own reveal completes. */
+let assetPrepGateOwned = false;
+
+/** Bilingual copy per phase. Keyed by the same constants the state machine uses. */
+const PREP_PHASE_COPY = {
+  [PREP_PHASE_CLASSIFY]: "מאמתים את תמונות הבגד · Verifying garment assets",
+  [PREP_PHASE_PRELOAD]:  "מכינים את קובצי התמונה · Preloading image data",
+  [PREP_PHASE_READY]:    "מוכן · Ready",
+};
+
+/** True while any asset this run needs is still unresolved. The overlay's only trigger. */
+function assetPrepActive() {
+  return assetPrepPhase === PREP_PHASE_CLASSIFY || assetPrepPhase === PREP_PHASE_PRELOAD;
+}
+
+/**
+ * Move the machine into `phase` and raise the floor to `pct`.
+ * Monotonic: a lower pct than the one already reached is ignored, never rewound.
+ * @param {string} phase one of the PREP_PHASE_* constants
+ * @param {number} [pct] progress floor to claim, 0-100
+ */
+function assetPrepSet(phase, pct) {
+  const was = assetPrepPhase;
+  assetPrepPhase = phase;
+  if (typeof pct === "number") assetPrepTarget = Math.max(assetPrepTarget, Math.min(100, pct));
+  if (was === PREP_PHASE_IDLE && phase !== PREP_PHASE_IDLE) {
+    assetPrepStartAt = Date.now();
+    assetPrepTarget = Math.max(assetPrepTarget, 2);   // immediate proof of life on first paint
+  }
+  if (was !== phase) {
+    console.log(`[PEAR] asset prep: ${was} → ${phase} (${Math.round(assetPrepTarget)}%)`);
+  }
+  assetPrepRender();
+  assetPrepTick();
+}
+
+/**
+ * Claim a real, completed preload milestone. `done`/`total` are counted in ASSETS
+ * (front, back and composite each count as one), so the bar tracks work actually
+ * finished rather than elapsed time.
+ * @param {number} done
+ * @param {number} total
+ */
+function assetPrepStep(done, total) {
+  assetPrepGateOwned = true;
+  const span = PREP_PRELOAD_CEIL - PREP_CLASSIFY_CEIL;
+  const frac = total > 0 ? Math.max(0, Math.min(1, done / total)) : 0;
+  assetPrepSet(PREP_PHASE_PRELOAD, PREP_CLASSIFY_CEIL + span * frac);
+}
+
+/** Every asset is fetched, decoded and validated. The ONLY writer of 100. */
+function assetPrepReady() {
+  if (assetPrepPhase === PREP_PHASE_IDLE) return;    // nothing was ever pending - no overlay to retire
+  assetPrepPhase = PREP_PHASE_READY;
+  assetPrepTarget = 100;
+  console.log("[PEAR] asset prep: READY (100%) - revealing the finalized card");
+  assetPrepRender();
+  /* The reveal is NOT scheduled here. It is armed from the tick loop the moment the
+     eased counter actually LANDS on 100 (assetPrepArmReveal) - a fixed timer started
+     here would fire while the digits were still climbing out of the 50s, since easing
+     a 45-point jump takes ~550ms against this hold's 260ms. The brief that this
+     implements says the card appears when the status hits 100%, and the only way to
+     honour that literally is to wait for the number itself rather than for a delay
+     chosen to approximate it. */
+  assetPrepTick();
+}
+
+/* Arm the single-step hand-off, once, after the counter has settled on 100. */
+function assetPrepArmReveal() {
+  if (assetPrepRevealTimer || assetPrepPhase !== PREP_PHASE_READY) return;
+  /* Zero hold when the panel was never painted (a warm prep that resolved inside the
+     debounce): there is nothing on screen to let the shopper read, so making them wait
+     for it would be inventing a delay the old code did not have. */
+  const hold = assetPrepVisible ? PREP_REVEAL_HOLD_MS : 0;
+  assetPrepRevealTimer = setTimeout(() => {
+    assetPrepRevealTimer = null;
+    assetPrepPhase = PREP_PHASE_IDLE;
+    assetPrepTarget = 0;
+    assetPrepShown = 0;
+    assetPrepVisible = false;
+    assetPrepGateOwned = false;
+    /* ORDER MATTERS, and this is the whole "single-step transition". The card beneath is
+       repainted with the FINAL asset BEFORE the overlay is torn down, so the intermediate
+       photo is never uncovered for even one frame - which is precisely the flash this
+       feature exists to remove. Reversing these two lines reintroduces it. */
+    if (typeof renderActiveGarment === "function") renderActiveGarment();
+    assetPrepRender();
+  }, hold);
+}
+
+/* The asymptotic creep for the phase we cannot measure. Approaches PREP_CLASSIFY_CEIL
+   on the CLASSIFY_GATE_MAX_MS timescale and never arrives, so the number keeps moving
+   (the shopper can see it is not wedged) without ever claiming a finished step. */
+function assetPrepCreep() {
+  if (assetPrepPhase !== PREP_PHASE_CLASSIFY) return;
+  const cap = (typeof CLASSIFY_GATE_MAX_MS === "number" && CLASSIFY_GATE_MAX_MS > 0)
+    ? CLASSIFY_GATE_MAX_MS : 30000;
+  const elapsed = Date.now() - assetPrepStartAt;
+  assetPrepTarget = Math.max(assetPrepTarget, PREP_CLASSIFY_CEIL * (1 - Math.exp(-3 * elapsed / cap)));
+}
+
+/* Ease the displayed number toward the target. rAF-driven so it is frame-synced and
+   stops dead when it has nothing to do; typeof-guarded because app.js's blocks are
+   also executed standalone in the test sandboxes, which have no window (CLAUDE.md §2.7). */
+function assetPrepTick() {
+  if (typeof requestAnimationFrame !== "function") {
+    /* No rAF - a non-browser host, or one of the standalone test sandboxes. There is
+       nothing to animate and nothing to paint, but the machine must still reach its
+       terminal state: syncAssetPrep() defers to an in-progress reveal, so a phase left
+       parked on READY here would wedge every later update. Snap and hand over. */
+    assetPrepShown = assetPrepTarget;
+    if (assetPrepPhase === PREP_PHASE_READY) assetPrepArmReveal();
+    return;
+  }
+  if (assetPrepRAF !== null) return;
+  const step = () => {
+    assetPrepRAF = null;
+    assetPrepCreep();
+    const delta = assetPrepTarget - assetPrepShown;
+    assetPrepShown += delta * 0.14;                               // ~critically damped at 60fps
+    if (Math.abs(delta) < 0.35) assetPrepShown = assetPrepTarget;  // snap, so it lands exactly on 100
+    assetPrepRender();
+    const settled = assetPrepShown === assetPrepTarget;
+    if (settled && assetPrepPhase === PREP_PHASE_READY) assetPrepArmReveal();
+    if (!settled || assetPrepPhase === PREP_PHASE_CLASSIFY) {
+      assetPrepRAF = requestAnimationFrame(step);
+    }
+  };
+  assetPrepRAF = requestAnimationFrame(step);
+}
+
+/** Paint the overlay. Pure DOM write - safe to call at any rate, no-ops with no document. */
+function assetPrepRender() {
+  if (typeof document === "undefined" || typeof $ !== "function") return;
+  const chip = $("activeGarment");
+  const wrap = $("agPrep");
+  if (!chip || !wrap) return;
+  if (!assetPrepVisible && assetPrepActive()
+      && (Date.now() - assetPrepStartAt) >= PREP_SHOW_DELAY_MS) {
+    assetPrepVisible = true;      // real work outstanding past the debounce - earn the panel
+  }
+  const on = assetPrepVisible && assetPrepPhase !== PREP_PHASE_IDLE;
+  /* .is-preparing is what actually hides the garment media (style.css). Toggling it on
+     the chip rather than on the media element keeps the meta column hidden in lockstep,
+     so a half-revealed card is not a reachable state. */
+  chip.classList.toggle("is-preparing", on);
+  wrap.hidden = !on;
+  if (!on) return;
+  const pct = Math.max(0, Math.min(100, Math.round(assetPrepShown)));
+  const num = $("agPrepPct");
+  const fill = $("agPrepFill");
+  const label = $("agPrepPhase");
+  if (num) num.firstChild ? (num.firstChild.nodeValue = String(pct)) : (num.textContent = String(pct));
+  if (fill) fill.style.width = pct + "%";
+  if (label) label.textContent = PREP_PHASE_COPY[assetPrepPhase] || "";
+  wrap.setAttribute("data-phase", assetPrepPhase);           // raw state, for the console/debug contract
+  wrap.setAttribute("aria-valuenow", String(pct));
+}
+
+/**
+ * Re-derive the phase from the SAME predicates the functional gate uses, so the overlay
+ * and livePendingReason() can never disagree about whether something is outstanding.
+ * Called from renderActiveGarment() and from the classify gate's release path.
+ */
+function syncAssetPrep() {
+  if (assetPrepPhase === PREP_PHASE_READY) return;   // mid-reveal - let the transition finish
+  if (assetPrepGateOwned) return;                   // the preload gate reports its own milestones
+  const pending = typeof livePendingReason === "function" ? livePendingReason() : null;
+  if (pending) {
+    /* A composite BUILD is local work, not the opaque store-page round trip, so it
+       belongs in the preload band. Anything else outstanding is still classification. */
+    const building = !!(activeItem && activeItem._compositeBuilding);
+    assetPrepSet(building ? PREP_PHASE_PRELOAD : PREP_PHASE_CLASSIFY,
+      building ? PREP_CLASSIFY_CEIL : undefined);
+  } else if (assetPrepPhase !== PREP_PHASE_IDLE) {
+    assetPrepReady();
+  }
+}
+
 /**
  * Mandatory Pre-load & Validation Gate - AWAITED, unlike prewarmOrientationAssets()
  * above (which is deliberately fire-and-forget for opportunistic early warming while
@@ -4495,6 +5706,21 @@ function prewarmOrientationAssets() {
  * a broken/missing BACK asset here - narrowing this run to front-only - instead of
  * discovering it mid-session on the shopper's first turn, which is what "blank back
  * view" looked like from the outside. Updates #scanSub with live progress per item/side.
+ *
+ * IT RUNS ON EVERY GO-LIVE NOW, not only the AI Auto ones. Its single call site used to
+ * sit inside `if (currentAngle === AUTO_ANGLE)`, which meant front-only runs - most of
+ * the catalog - had no validation floor at all and could reach connectRealtime() with
+ * their reference never fetched, decoded or content-validated. See the call site in
+ * goLive() for the full rationale. Nothing in here needed to change for that: the
+ * per-item loop already handles a garment with no distinct back (hasBack=false), and
+ * every lookup is a cache hit when prewarmOrientationAssets() already won the race.
+ *
+ * It also reports REAL milestones to the Liquid Glass prep overlay via assetPrepStep(),
+ * counted in assets actually touched rather than elapsed time - the preload half of the
+ * 0→100 counter. Those calls are typeof-guarded and take only numbers, because
+ * preload-composite.test.mjs executes this function standalone with no module scope
+ * (CLAUDE.md §2.7). This function deliberately stops at PREP_PRELOAD_CEIL; goLive()
+ * writes the 100 once it has seen the {ok, hasBack} verdict.
  * @returns {Promise<{ ok: boolean, hasBack: boolean }>}
  *   ok=false      → at least one item's FRONT is unusable - goLive() must abort entirely
  *                    (there is no reasonable fallback for a missing front).
@@ -4507,6 +5733,28 @@ async function preloadGarmentAssets() {
   const el = $("scanSub");
   const setText = (msg) => { if (el) el.textContent = msg; };
 
+  /* ── Progress milestones for the Liquid Glass overlay ──────────────────────
+     The denominator is counted in ASSETS THIS RUN WILL ACTUALLY TOUCH (front
+     always; back and, in composite mode, the stitched reference only when a real
+     distinct back exists) rather than a fixed guess, so the bar reaches its ceiling
+     exactly when the last validation returns - not early on a front-only garment and
+     not short on a full look. prepTick() fires on every completed ATTEMPT, pass or
+     fail: a failed asset is a resolved question, and stalling the bar on one would
+     misreport the degrade path (which still goes live, front-only) as a hang.
+     typeof-guarded like verifyGarmentAsset beside it - preload-composite.test.mjs
+     executes this function standalone with no module scope (CLAUDE.md §2.7), and the
+     numeric-only arguments keep the call safe to EVALUATE there as well as to skip. */
+  let prepDone = 0, prepTotal = 0;
+  for (const it of items) {
+    prepTotal += 1;
+    if (distinctBackOf(it, galleryOf(it))) prepTotal += compositeActiveFor(it) ? 2 : 1;
+  }
+  const prepTick = () => {
+    prepDone++;
+    if (typeof assetPrepStep === "function") assetPrepStep(prepDone, prepTotal);
+  };
+  if (typeof assetPrepStep === "function") assetPrepStep(0, prepTotal);
+
   let ok = true, hasBack = true;
   for (const item of items) {
     const g = galleryOf(item);
@@ -4517,6 +5765,7 @@ async function preloadGarmentAssets() {
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front […]`);
     const frontBlob = front ? await garmentBlobCached(front) : null;
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front [${frontBlob ? "OK" : "FAIL"}]`);
+    prepTick();
     if (!frontBlob) {
       console.error("[PEAR] CRITICAL: GARMENT_FRONT failed pre-load validation -", label, front);
       ok = false;
@@ -4528,14 +5777,12 @@ async function preloadGarmentAssets() {
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back […]`);
     const backBlob = await garmentBlobCached(back);
     let backOk = !!backBlob;
-    if (backOk) {
-      try {
-        const probe = await createImageBitmap(backBlob);
-        if (await bitmapLooksFlat(probe)) { backOk = false; _assetBlobCache.delete(back); }
-        probe.close?.();
-      } catch (_) { /* fail open on probe error - the fetch itself already succeeded */ }
-    }
+    /* blobLooksFlat() fails open on a probe error, exactly as the inline probe here did, and
+       SETTLES the verdict on this Blob - so the first turn to the back reads it instead of
+       decoding the packshot again on the swap path. */
+    if (backOk && await blobLooksFlat(backBlob)) { backOk = false; _assetBlobCache.delete(back); }
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back [${backOk ? "OK" : "FAIL"}]`);
+    prepTick();
     if (!backOk) {
       console.warn("[PEAR] GARMENT_BACK failed pre-load validation - proceeding FRONT-ONLY -", label, back);
       hasBack = false;
@@ -4573,6 +5820,7 @@ async function preloadGarmentAssets() {
       }
       if (!composite) composite = await createGarmentComposite(front, back);
       setText(`מכינים תצוגה משולבת… · Preparing combined view… ${label} [${composite ? "OK" : "FAIL"}]`);
+      prepTick();
       if (!composite) {
         console.warn("[PEAR] COMPOSITE failed pre-load validation - proceeding FRONT-ONLY -", label);
         hasBack = false;   // same degrade path as a broken back blob - never go live on an unvalidated reference
@@ -4652,6 +5900,627 @@ const ORIENT_LOCK_MS        = 2500;  // OR this much sustained agreement - which
 const ORIENT_ACQUIRE_FRAMES = 2;
 const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
 const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
+
+/* ── YAW CORROBORATION - the same 2.5s, seen from three sides ──────────────────────
+   ────────────────────────────────────────────────────────────────────────────────
+   THREE REPORTS, ONE CAUSE. "The real shirt bleeds through when I turn", "the back
+   graphic pops in late", and "the feed freezes during a turn" are the same
+   ORIENT_LOCK_FRAMES x ORIENT_SAMPLE_MS = 2.5 seconds of confirmation latency wearing
+   different faces. Hold ON and you get the freeze; hold OFF and the model re-renders a
+   half-turned shopper in their own shirt; swap late and the graphic arrives after the
+   turn. Each "fix" in isolation just moves the symptom to one of the other two.
+
+   The only lever that shrinks all three at once is CONFIRMING FASTER - and the reason
+   that was never done is the one written above ORIENT_LOCK_FRAMES: lowering it swaps the
+   reference on a head-turn and reintroduces flapping, which is worse than any of the
+   three.
+
+   SO CONFIRM FASTER ON MORE EVIDENCE, NOT ON A LOWER BAR. The shared pose loop already
+   computes bodyYawDegrees() every BODY_TOPOLOGY_SAMPLE_MS for the topology monitor, and
+   nothing in the orientation path has ever consumed it. It is a genuinely 3D measurement
+   off MediaPipe's torso landmarks - a different instrument entirely from the 96px
+   skin-ratio canvas and the face detector that produce the vote.
+
+   TWO INDEPENDENT SIGNALS, BOTH REQUIRED. The vote decides WHICH side; the yaw swing
+   only attests THAT a real torso rotation happened. Neither can stand in for the other:
+     · Yaw cannot pick a side. bodyYawDegrees() is asin(out-of-plane / length), capped at
+       +/-90, so a shopper facing the camera and one facing away read the same. It is
+       never consulted for direction - only to shorten a decision the vote already made.
+     · The vote cannot see a torso turn. That is exactly why a head-turn under a flickering
+       light could ever have raced it, which is what ORIENT_LOCK_FRAMES defends against -
+       and a head-turn moves the head, not the shoulders, so it produces almost no torso
+       yaw and earns no corroboration. The defence is intact where it was needed.
+
+   ORIENT_LOCK_FRAMES IS UNTOUCHED and remains the bar whenever yaw is unavailable, stale
+   or small: no pose detector, an occluded torso, a phone that never loaded the WASM
+   runtime, or simply a shopper who has not actually turned. Corroboration can only ever
+   ADD a faster path alongside it; it can never raise the bar and never lower it below
+   ORIENT_CORROBORATED_FRAMES.
+
+   THE NUMBERS. 45 degrees is a half-turn of the shoulder line - well past anything a
+   head-turn, a lean or a shrug produces. It is measured DOWN from the turn's edge-on peak
+   (see makeTurnYawWindow - measuring it from the start of the new vote streak meant the
+   return leg could never reach it). 4 frames is ~1s at ORIENT_SAMPLE_MS, still 4 agreeing
+   votes rather than a hair trigger. FRESH_MS is ~2.5 pose ticks (yaw is published on every
+   POSE_SAMPLE_MS * 2 tick - see startPresenceWatcher): a yaw reading older than that
+   describes a body position the shopper has already left, and stale evidence must not
+   accelerate anything.
+
+   THE FACE RETURN - the one direction that may confirm on fewer votes. This file already
+   records that the two vote directions are not equally reliable: a face DETECTED is strong
+   evidence (false positives on hair or a shoulder are rare), a face NOT detected is what
+   every dim room and motion blur also looks like. So a return to FRONT that has BOTH a
+   FaceDetector detection streak AND a torso turn corroborated by yaw - two different
+   instruments agreeing - confirms at ORIENT_FACE_RETURN_FRAMES. Neither alone does: a face
+   with no torso rotation is the shopper facing away and glancing over their shoulder at the
+   screen, which keeps the full ORIENT_LOCK_FRAMES bar. Geometry backs the pairing: the
+   corroborated swing needs the torso back within ~45 degrees of square, and a head cannot
+   turn far enough past that to put a frontal face in front of a body still facing away.
+   Two, not one: a single detection is the hair trigger the corroborated bar refuses. The
+   BACK flip keeps ORIENT_CORROBORATED_FRAMES - its evidence is an absence. */
+const ORIENT_CORROBORATED_FRAMES = 4;    // agreeing votes needed WITH a corroborating yaw swing
+const ORIENT_FACE_RETURN_FRAMES  = 2;    // face DETECTIONS needed for a corroborated return to FRONT
+/* THE POSE FLIP - the face return's symmetric sibling. The pose model's shoulder order (see
+   poseShoulderFacing()) is not an absence in either direction: it reads FRONT and BACK with the same
+   standing, measured +0.76 / -0.68. So two consecutive shoulder votes for the other side, with the
+   turn corroborated by yaw, confirm the flip BOTH ways - which is what makes FRONT -> BACK -> FRONT
+   move on one bar instead of a fast return and a slow departure. Corroboration is still required:
+   the shoulder order is a torso signal, and a head turned over the shoulder must not flip anything
+   before ORIENT_LOCK_FRAMES. */
+const ORIENT_POSE_FLIP_FRAMES    = 2;    // shoulder-order votes needed for a corroborated flip, either way
+/* ── THE SIDE-VIEW PASS - "the back graphic comes a second late, and after the 360 the front never
+   comes back" (build 129) ─────────────────────────────────────────────────────────────────────
+   THE CAUSE IS THE GAP THE SHOULDER VOTE READS ACROSS. MediaPipe loses the far shoulder near
+   edge-on (see makeTurnYawWindow's EDGE-ON GAP), and the pose loop publishes a shoulder order and a
+   yaw only from a readable torso - so through that band both keep their LAST readable value, and
+   both count as fresh for ORIENT_YAW_FRESH_MS (600ms). A turn crosses the band faster than that.
+   Every tick in it the stale shoulder order votes for the side ALREADY locked, which closes the
+   window and pins its peak at the last readable |yaw|; the stale yaw is "fresh", so the edge-on
+   loss is never inferred either. The peak then sits under ORIENT_YAW_TURN_DEG + the 45-degree
+   swing the pose flip needs, predictive BACK never reaches ORIENT_EDGE_ON_DEG, and the flip waits
+   for ORIENT_LOCK_FRAMES - or, on a fast turn, never happens at all. turn-yaw-window §2/§9 modelled
+   the shoulder vote with the torso readable straight through edge-on, which is why it passed.
+   MODELLED (turn-yaw-window §10, the real window and decision, shoulder readings stale across an
+   unreadable band): 22 of 48 full-360 profiles (60-150 deg/s, depth 0.6-1, torso readable to 50-90
+   degrees) never swapped at all - the back never rendered. With the pass all 48 send BACK and come
+   back to FRONT; of the 26 that already did, 10 dispatch earlier and none later.
+   THE PASS. Yaw magnitude cannot tell "parked edge-on with a dropped frame" from "went through
+   edge-on during the gap" - treating any dropout as edge-on puts BACK on a held profile check. What
+   separates them is DESCENT: after a real pass |yaw| falls away from the peak; parked, it does not.
+   So a shoulder vote for the other side is also corroborated when the window saw a real turn - a
+   readable peak past ORIENT_YAW_TURN_DEG, or the torso reported unreadable since the reading that
+   last agreed with the lock - AND |yaw| has since fallen ORIENT_PREDICT_DESCENT_DEG from that
+   readable peak (never from an assumed 90). Two shoulder votes are still required
+   (ORIENT_POSE_FLIP_FRAMES), a head over the shoulder still moves no torso, and the FaceDetector and
+   skin engines never reach it (it only corroborates the pose flip).
+   A BACK confirmed on the pass alone goes out at the stage of the turn a predictive BACK does, so it
+   is withdrawable the same way (maybeSwap's `withdrawing`) - without that, a glance to 120 degrees
+   left BACK on the chest for the full ORIENT_COOLDOWN_MS. THE RESIDUAL COST, stated: under the
+   model's harshest noise (30% dropped frames, +/-0.6 edge-on label noise) one 120-degree glance sent
+   an early BACK that predictive BACK did not, on the chest 250ms longer than build 129's worst.
+   Held and brief profile checks, 100-degree glances, posing twists and a side check of the back put
+   nothing on the wire at any noise level.
+   Still a model: the band's width on a real webcam is what ?orient_debug=1 prints (`torso lost`,
+   `passed`). ?pose_pass=0 turns it off for an A/B. */
+const ORIENT_POSE_PASS = (() => {
+  try { return new URLSearchParams(location.search).get("pose_pass") !== "0"; } catch (_) { return true; }
+})();
+/* ── THE EARLY TURN TRIGGER - ON BY DEFAULT at 20 degrees, gated at 60 deg/s ─────────────────────────────
+   WHY IT EXISTS. Traced client side, a swap costs ~nothing: the Blobs are pinned in memory, the
+   catalog's rear pair is 43KB/38KB, @decartai/sdk sends it as one set_image message on the signaling
+   WebSocket, and the reference is pre-encoded (preEncodeReference). What remains is Decart switching its
+   render once it has the reference (~1s by this file's own figure - COND_TRACE_SETTLE_MS). The only
+   client lever against a server cycle is sending sooner.
+   WHY IT IS ON, AND WHAT IT COSTS - a PRODUCT DECISION (2026-09-14), taken on these modelled numbers
+   (turn-yaw-window §11, the build-130 tick, 700-1000ms dispatch-to-render; not yet measured live):
+   at 15-45 degrees a posing twist and the start of a 360 are the same reading, so no setting removes the
+   trade - it only chooses it. With the trigger off, a full 360 shows the wrong garment 2.5s (700ms
+   latency) to 3.0s (1000ms); at 20 degrees gated at 60 deg/s, 0.8s to 1.25s. A slow sway or a held
+   weight shift never fires, jitter or not. A FAST pose - a quick twist, a reach, a look at the side view in the mirror, a held profile
+   check - starts exactly like a turn and shows the other side's graphic for ~0.75-1.75s until the
+   withdrawal lands. The choice offered was: 20 ungated (turns ~0.3s, slow weight shifts past 20 fire
+   too), 20 gated (this), or off. ?orient_debug=1 prints DISPATCH_SENT / SERVER_CONFIRMED /
+   RENDER_APPLIED and the trigger's live |yaw| speed to re-tune from a real turn.
+   OVERRIDES: ?early_turn=0 turns it off (the build-130 behaviour, exactly); ?early_turn=<deg> moves the
+   threshold, clamped to [ORIENT_EARLY_TURN_MIN_DEG, ORIENT_EARLY_TURN_MAX_DEG] - under 10 is sway, past
+   60 predictive BACK is already earlier; unparseable keeps the default.
+   MEASURED AND DECLINED (same model): 12 or 15 (a 14-degree sway fires at 12; an 18-degree weight shift
+   shows the back 1.75s at 15, for 0-125ms gained over 20 on a 360); an acceleration gate (sampled at
+   240ms, a 12-degree sway reads HIGHER alpha in the 8-12 degree band - 116-351 deg/s2 - than a 360's start
+   - 43-208 - and a 90 deg/s turn skips that band between two readings); evaluating the crossing on every
+   pose reading instead of the tick (BACK leaves ~60ms sooner and lands in the front hemisphere - more
+   wrong-garment time, 367 -> 667ms); firing on predicted time-to-edge-on (worse than a plain 20 even
+   with the latency known exactly). No undo beats Decart's own switch: a reach that returns inside 300ms
+   still shows the back for the whole render latency.
+   BEHAVIOUR (see makeEarlyTurnTrigger): dual-view only; armed by settling square on the locked side;
+   fires the other side on the first fresh |yaw| past the threshold while it rises at least the gate's
+   speed, BACK sent withdrawable like a predictive BACK; withdrawn the moment the old side's votes return
+   under the threshold, before any vote has confirmed the turn. Symmetric: armed facing away, it sends
+   FRONT the same way. */
+const ORIENT_EARLY_TURN_DEFAULT_DEG = 20;
+const ORIENT_EARLY_TURN_DEFAULT_SPEED = 60;
+/* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
+   rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;
+   unparseable keeps the default; capped at 1000.
+   MODELLED (turn-yaw-window §11, 1000ms render latency, with and without +/-4 degrees of yaw jitter): at 15
+   degrees ungated an 18-degree weight shift held fires (and, with jitter, a 14-degree sway); gated at 60
+   neither ever fires. The cost of the gate is turn benefit: a slow turn does not clear it either. A gate
+   high enough to stop fast poses (80) stops slow turns from benefiting at all, and jitter lets some fast
+   poses back through. The gate reads the pose loop's own yaw and reading time; no vote or engine changes. */
+const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("early_turn_speed"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_SPEED; }
+  const v = Number(raw);
+  if (raw === null || raw === "" || !Number.isFinite(v)) return ORIENT_EARLY_TURN_DEFAULT_SPEED;
+  return v <= 0 ? 0 : Math.min(v, 1000);
+})();
+const ORIENT_EARLY_TURN_MIN_DEG = 10;
+const ORIENT_EARLY_TURN_MAX_DEG = 60;
+const ORIENT_EARLY_TURN_DEG = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("early_turn"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_DEG; }
+  const deg = Number(raw);
+  if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_DEFAULT_DEG;
+  if (deg <= 0) return 0;
+  return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
+})();
+
+/* ── PREDICTIVE BACK - "the back artwork rendered over PEAK for a second" ─────────────
+   REPORTED, from the exported clip: on FRONT -> BACK the back artwork appears over the front's
+   "PEAK" text for about a second before the back settles.
+   THE CLIP IS DECART'S OWN OUTPUT. The recorder paints #aiVideo directly (startRecording), so
+   no cover of ours is in it. What it shows is timing: BACK was dispatched only after
+   ORIENT_CORROBORATED_FRAMES back votes, and a back vote needs the back of the head (~150
+   degrees) - the back was already facing the lens, Decart was still rendering the FRONT
+   reference onto it, and a switch then takes Decart the better part of a second (see
+   COND_TRACE_SETTLE_MS), blending from the one render into the other.
+   THERE IS NO LATENT FLUSH TO CALL. @decartai/sdk@0.1.5's realtime surface is set({ prompt,
+   enhance, image }) and setPrompt(); image:null clears the reference, which renders the
+   model's generic prior - strictly worse. So the lever is WHEN the back reference arrives: while
+   the torso is still passing through the side view, where neither print is on show.
+   WHY NOT AT 45 DEGREES. The face detector loses a frontal face around there, but 45 is the
+   FRONT hemisphere: the chest and its print are still in view, so a back reference sent then is
+   the same ghost on the other side of the shirt - and it would fire on every look at a profile.
+   |yaw| folds at 90 and cannot say which side of edge-on the shopper is on, so the earliest
+   honest evidence is having PASSED it: the window reached ORIENT_EDGE_ON_DEG (or lost the torso
+   there), |yaw| has since fallen ORIENT_PREDICT_DESCENT_DEG, no vote has agreed with FRONT since
+   the turn began (so no face), and all of it inside ORIENT_PREDICT_DWELL_MS. The dwell is what
+   separates a turn passing through from a profile being HELD - lingering at the side view and
+   coming back is the one motion yaw cannot tell from finishing the turn.
+   THE RESIDUAL COST, stated: a glance to the side that reverses at once looks exactly like a
+   turn until the face returns. When that predicts, maybeSwap() lets the face return withdraw it
+   inside ORIENT_COOLDOWN_MS (see `withdrawing`), on the fast face-return bar.
+   UNMEASURED THRESHOLDS. 60 is set so a depth-compressed reading still reaches it near a real
+   90; the ORIENT_DEBUG tick line prints the peak, the descent and the dwell to tune them from
+   a real turn. ?predict_back=0 turns the whole path off for an A/B. */
+const ORIENT_EDGE_ON_DEG         = 60;   // a |yaw| reading at or past this counts as reaching the side view
+const ORIENT_PREDICT_DESCENT_DEG = 15;   // fall from that peak that shows the torso kept rotating
+const ORIENT_PREDICT_DWELL_MS    = 900;  // longer than this at the side view is a pose being held
+const ORIENT_PREDICTIVE_BACK = (() => {
+  try { return new URLSearchParams(location.search).get("predict_back") !== "0"; } catch (_) { return true; }
+})();
+const ORIENT_YAW_TURN_DEG        = 45;   // |yaw| swing that counts as a real torso rotation
+const ORIENT_YAW_FRESH_MS        = 600;  // a yaw reading older than this cannot corroborate
+/* Above this, an unreadable torso is explained by the shopper TURNING rather than by their
+   having left - so the "step into the frame" prompt is withheld (the presence verdict
+   itself is unaffected). Deliberately well below ORIENT_YAW_TURN_DEG: this is not deciding
+   that a turn happened, only that the body is off-square enough to explain why landmarks
+   went missing. See the presence consumer in startPresenceWatcher(). */
+const PRESENCE_PROMPT_YAW_SUPPRESS_DEG = 25;
+
+/* ╔══════════════════════════════════════════════════════════════════════════════╗
+   ║  MIRROR_POLICY - the one place the mirror question is answered               ║
+   ╚══════════════════════════════════════════════════════════════════════════════╝
+   THE CONSTRAINT, WHICH IS GEOMETRY AND NOT A BUG: the garment and the body are the
+   same pixels, so they cannot carry different flip counts. Decart renders the garment's
+   chest text to match the orientation of the scene it is fed - established from two
+   reports pointing opposite ways: a pre-mirrored input produced reversed text
+   ("916tim9"), and a reality input produces correct text. Therefore
+
+       readable garment text  <=>  zero net flips  <=>  motion feels reversed
+       natural selfie motion  <=>  one net flip    <=>  garment text reads backwards
+
+   There is no arrangement that delivers both. Every "fix" that appears to is really a
+   choice of which one to give up, and both have now been filed as bugs.
+
+   THE DECISION, made deliberately and per surface:
+     LIVE (#aiVideo)          MIRRORED.  One CSS flip, scaleX(-1), in style.css and
+                              nowhere else. While the shopper is moving, motion that
+                              matches their body is what makes the try-on usable.
+     CAPTURES                 NOT MIRRORED. The frozen #resultCanvas, the saved clip and
+     (result / clip /         the gallery thumbnail all bake NO flip, so the garment's
+      thumbnail)              text reads correctly in the artefact the shopper keeps,
+                              screenshots and shows other people.
+
+   THE COST IS REAL, VISIBLE, AND ACCEPTED: the picture flips horizontally at the instant
+   the countdown ends, because the two surfaces genuinely use opposite conventions. Do
+   not "fix" that transition by re-mirroring a capture - that silently reverses a product
+   decision and re-opens the reversed-text report. If the flip at the transition becomes
+   the bigger complaint, the honest change is to move the LIVE feed to the capture
+   convention (drop the CSS flip), not to mirror the keepsakes.
+
+   WHERE THIS IS ENFORCED: style.css (.camera-card.show-live #aiVideo) for the live flip;
+   freezeFinalFrame(), the recordCanvas paint loop, captureHoldFrame() and
+   captureLiveFrame() for the captures - all four bake identity. logSurfaceOrientation()
+   prints the computed transform per surface at each transition, and
+   orientation-yaw-mirror.test.mjs pins every one of them. */
+
+/* Latest torso yaw MAGNITUDE and when it was measured, published by the shared pose loop
+   (startPresenceWatcher) and read by the orientation watcher. Module scope because the
+   two loops are deliberately separate - one MediaPipe inference per tick is the whole
+   point of the shared sampler, so the watcher reads the existing reading rather than
+   triggering a second one. null until the pose loop produces its first signature. */
+let _torsoYawAbs = null;
+let _torsoYawAt  = 0;
+
+/* ── WHICH WAY THE BODY FACES, FROM THE POSE MODEL - front AND back ──────────────────
+   ────────────────────────────────────────────────────────────────────────────────
+   TWO REPORTS, ONE SIGNAL.
+   1. "After a full 360 the BACK graphic stays latched on my FRONT." Every front/back decision
+      rests on the vote, and the vote's strong direction was a FaceDetector detection - but the
+      Shape Detection API's FaceDetector is NOT exposed by default: verified 2026-09-14,
+      `typeof FaceDetector` is "undefined" in Chrome 152 and Edge 152, "function" only under
+      --enable-experimental-web-platform-features. The watcher ran its 96px skin-ratio fallback,
+      which almost never votes FRONT at try-on distance, so BACK latched.
+   2. Build 128 then took the FRONT vote from the pose model's FACE (min visibility of nose and
+      eyes) - FRONT came back, and "when I turn away, the back graphic never appears". MEASURED
+      2026-09-14 with the room's own model (pose_landmarker_lite, tasks-vision 0.10.14) on the
+      catalog's photos of one model facing the lens and facing away: nose and eye visibility are
+      1.00 BOTH ways. BlazePose predicts a face on the back of the head, so that vote said FRONT
+      while the shopper faced away; the lock never left FRONT and the predictive window never
+      opened. Face visibility cannot tell the sides apart - not as a FRONT vote, and not as a
+      "visibility below 0.2 means BACK" trigger either, which would simply never fire.
+   WHAT DOES TELL THEM APART, measured on the same photos: the image-space ORDER of the shoulders.
+   (L.x - R.x) / torso height = +0.76 facing the lens and -0.68 facing away; identical at 40% size;
+   and +0.78 / -0.63 with the image MIRRORED - BlazePose labels the shoulders by which way the
+   subject faces, so a mirrored camera does not invert it. Near 0 edge-on, where the shoulders
+   overlap and the vote abstains. torso height is the distance normaliser, and needs the same
+   four readable torso joints the topology monitor measures from.
+   SYMMETRIC, and that is the point: one instrument votes FRONT and BACK with the same standing,
+   so both legs of a 360 move on the same bar (ORIENT_POSE_FLIP_FRAMES). The skin heuristic still
+   runs when the shoulders abstain; FaceDetector, where a browser has it, is untouched.
+   STILL ONE MODEL ON ONE PAIR OF PHOTOS, stated: a live webcam at an angle is the check, and the
+   ORIENT_DEBUG line prints `sep` every tick for it. ?pose_facing=0 turns the vote off for an A/B. */
+const ORIENT_POSE_FACING_MARGIN = 0.25;   // |(L.x - R.x) / torso height| needed to vote a side
+const ORIENT_POSE_FACING = (() => {
+  try { return new URLSearchParams(location.search).get("pose_facing") !== "0"; } catch (_) { return true; }
+})();
+let _poseFacingSep = null;   // latest signed shoulder order, + facing the lens, - facing away
+let _poseFacingAt  = 0;
+/* When the pose loop last ran an inference that could NOT read the torso. The two readings above keep
+   their last readable value through such a frame (so the watcher's freshness bar still applies); this
+   is how the turn window learns the torso went missing between two readings - see ORIENT_POSE_PASS. */
+let _poseTorsoLostAt = 0;
+
+/** @param {{landmarks?:Array}|null} result a PoseLandmarker result
+ *  @returns {number|null} (L.x - R.x) / torso height for the primary subject, or null */
+function poseShoulderFacing(result) {
+  const sets = result && Array.isArray(result.landmarks) ? result.landmarks : null;
+  const subject = sets && sets.length ? primaryPoseIndex(sets) : -1;
+  const lm = subject >= 0 ? sets[subject] : null;
+  if (!Array.isArray(lm) || !torsoReadable(lm, BODY_TRACK_MIN_VISIBILITY)) return null;
+  const ls = lm[POSE_LANDMARK.LEFT_SHOULDER], rs = lm[POSE_LANDMARK.RIGHT_SHOULDER];
+  const lh = lm[POSE_LANDMARK.LEFT_HIP], rh = lm[POSE_LANDMARK.RIGHT_HIP];
+  const torsoH = Math.abs((lh.y + rh.y) / 2 - (ls.y + rs.y) / 2);
+  if (!(torsoH > 1e-3)) return null;
+  return (ls.x - rs.x) / torsoH;
+}
+
+/** @returns {"front"|"back"|null} a side from a fresh, clearly separated shoulder order */
+function poseFacingVote({ enabled = ORIENT_POSE_FACING, sep, at, now }) {
+  if (!enabled || sep === null || !Number.isFinite(sep) || now - at > ORIENT_YAW_FRESH_MS) return null;
+  return sep >= ORIENT_POSE_FACING_MARGIN ? "front" : sep <= -ORIENT_POSE_FACING_MARGIN ? "back" : null;
+}
+
+/* ── THE TURN'S YAW WINDOW - "after a full 360 the back stays on my front" ─────────
+   ────────────────────────────────────────────────────────────────────────────────
+   REPORTED: turn to the back and the rear asset lands; keep turning to face the camera
+   and GARMENT_BACK stays rendered on the shopper's FRONT for a long beat before the front
+   returns. Filed next to "there is a visible gap while it swaps sides".
+
+   NOT A FETCH AND NOT A LATCH. Both Blobs are pinned in RAM before connect, and the return
+   leg's set() is never skipped (a back Blob and a front Blob are different objects, so
+   applyGarment()'s no-op test cannot match). The time was spent CONFIRMING the flip.
+
+   THE ROOT CAUSE. The corroborated path (ORIENT_CORROBORATED_FRAMES, ~1s) used to measure
+   its swing from the |yaw| captured when the NEW vote streak began. |yaw| folds at edge-on:
+   it climbs to ~90 and falls back to ~0 whether the shopper ends up facing the lens or
+   facing away. The edge-on peak - the one thing a head-turn cannot produce - happens in the
+   ABSTAIN window between the last vote for the old side and the first vote for the new
+   one, so a baseline taken at streak start is always taken AFTER it. On the return leg the
+   first "front" vote is FaceDetector re-acquiring a face, which a frontal detector does
+   inside ~30-40 degrees of square, leaving at most that much swing to measure - under
+   ORIENT_YAW_TURN_DEG. The return leg therefore always paid the full ORIENT_LOCK_FRAMES bar
+   (~2.5s) with the back reference on screen. turn-yaw-window.test.mjs replays the numbers.
+
+   THE WINDOW. The swing is now measured DOWN from the peak |yaw| seen since the last vote
+   that AGREED with the lock. An agreeing vote means no turn is in progress, so it restarts
+   the window at the current reading; every other tick (abstain, or a vote for the other
+   side) folds a fresh reading into the peak. A real turn passes through edge-on and comes
+   back down, so the swing is there by the first vote for the new side. A head-turn never
+   raises the torso's yaw, so ORIENT_LOCK_FRAMES remains the only bar for it. Holding
+   edge-on is not a turn either: the swing is peak minus NOW, which is ~0 while still side-on.
+
+   THE ONE CASE IT ACCELERATES THAT THE OLD BASELINE DID NOT: an edge-on excursion that
+   returns to the locked side while the vote MISREADS the other side on the way back. That
+   flip would still have happened on ORIENT_LOCK_FRAMES of the same misread; it now needs
+   ORIENT_CORROBORATED_FRAMES of it. A misread that systematic is a vote problem, not a
+   hysteresis one.
+
+   MAGNITUDE ONLY and it never picks a side - the result carries no direction. A stale or
+   missing reading is not usable and cannot corroborate; the peak banked before a gap still
+   counts once a fresh reading returns.
+
+   ── THE EDGE-ON GAP - "it still falls back to 2.5s sometimes" ────────────────────────
+   MediaPipe loses the far shoulder near edge-on: torsoReadable() fails and no yaw is
+   published for exactly the band the peak lives in. With depth compressed, the last
+   readable reading can sit well under ORIENT_YAW_TURN_DEG, so the swing never clears the bar
+   and the flip waits the full ORIENT_LOCK_FRAMES.
+   The gap is not treated as "no information". A torso that goes unreadable while the window
+   is open and its last reading was already past edgeLossDeg was lost BECAUSE it rotated -
+   the same inference startPresenceWatcher() already makes at PRESENCE_PROMPT_YAW_SUPPRESS_DEG
+   to withhold "step into the frame" from a turning shopper. That loss is recorded as having
+   reached edge-on, and the swing is then measured from 90 - the ceiling of the asin form,
+   which is what an occluded shoulder line physically is. NOT extrapolated momentum: no
+   angle is invented across the gap, the swing is still computed from a real fresh reading on
+   the far side, and yaw still cannot say WHICH side that is - the vote does.
+   A torso lost while nearly square (a step toward the lens, a hand across the body) is under
+   edgeLossDeg and reads as nothing. An agreeing vote clears the evidence with the rest of the
+   window.
+
+   `open` / `turning` are what the mid-turn wire guard reads (see orientTurnMark): open from
+   the first vote that does not agree with the lock until one does, turning while open AND the
+   torso has visibly rotated - past ORIENT_YAW_TURN_DEG or lost to edge-on.
+   `edgeAt` is when this turn reached the side view - the first reading at or past edgeOnDeg,
+   or, for a torso lost to edge-on, when its last reading was taken - on the clock `at` is
+   given in (the pose loop's reading time). orientPredictBack() measures dwell from it.
+   `passed` is the side-view pass (see ORIENT_POSE_PASS): open, a fresh reading, a real turn behind it -
+   the readable peak past turnDeg, or `lostAt` (the pose loop's last unreadable inference) later than
+   the reading that last agreed with the lock - and |yaw| fallen descentDeg from the readable peak.
+   @param {number} [turnDeg] the swing that counts as a real torso rotation
+   @param {number} [edgeLossDeg] a torso lost past this |yaw| mid-turn was lost to edge-on
+   @param {number} [edgeOnDeg] a reading at or past this has reached the side view
+   @param {number} [descentDeg] the fall from the readable peak that shows the torso went through
+   @returns {{ readonly peak: number|null, readonly edgeLost: boolean, readonly open: boolean,
+               readonly turning: boolean, readonly edgeAt: number|null, readonly lostInTurn: boolean,
+               observe(vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number, lostAt?: number):
+                 { usable: boolean, swing: number, corroborates: boolean, passed: boolean } }} */
+function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE_PROMPT_YAW_SUPPRESS_DEG,
+                           edgeOnDeg = ORIENT_EDGE_ON_DEG, descentDeg = ORIENT_PREDICT_DESCENT_DEG) {
+  let peak = null;        // highest fresh |yaw| since the last vote that agreed with the lock
+  let lastFresh = null;   // the most recent fresh |yaw|, to read a gap against
+  let lastFreshAt = 0;    // ...and when it was taken
+  let edgeLost = false;   // the torso went unreadable mid-turn past edgeLossDeg
+  let edgeAt = null;      // when this turn reached the side view
+  let open = false;       // a vote has not agreed with the lock since this turn began
+  let agreedAt = 0;       // the reading time of the last vote that agreed with the lock
+  let lostInTurn = false; // the pose loop could not read the torso after that reading
+  return {
+    get peak() { return peak; },
+    get edgeLost() { return edgeLost; },
+    get edgeAt() { return edgeAt; },
+    get open() { return open; },
+    get lostInTurn() { return lostInTurn; },
+    get turning() { return open && (edgeLost || (peak !== null && peak >= turnDeg)); },
+    observe(vote, lock, yawAbs, at = Date.now(), lostAt = 0) {
+      const fresh = yawAbs !== null && Number.isFinite(yawAbs);
+      if (vote && vote === lock) {
+        peak = fresh ? yawAbs : null;
+        edgeLost = false;
+        edgeAt = null;
+        open = false;
+        agreedAt = at;
+      } else {
+        open = true;
+        if (fresh) {
+          peak = peak === null ? yawAbs : Math.max(peak, yawAbs);
+          if (edgeAt === null && yawAbs >= edgeOnDeg) edgeAt = at;
+        } else if (lastFresh !== null && lastFresh >= edgeLossDeg) {
+          edgeLost = true;
+          if (edgeAt === null) edgeAt = lastFreshAt;
+        }
+      }
+      if (fresh) { lastFresh = yawAbs; lastFreshAt = at; }
+      /* Sticky until the next agreeing vote - which is what clears it - so a dropped frame during a
+         pose the shoulders keep voting for (a twist) is erased by the very next readable reading. */
+      lostInTurn = open && lostAt > agreedAt;
+      const reference = edgeLost ? 90 : peak;
+      const usable = fresh && reference !== null;
+      const swing = usable ? Math.max(0, reference - yawAbs) : 0;
+      /* Measured from the READABLE peak, never from edgeLost's 90: a compressed edge-on reading is
+         already well under 90, so descent from 90 is what a parked profile with one dropped frame
+         would show. */
+      const passed = open && fresh && peak !== null && (peak >= turnDeg || lostInTurn) && peak - yawAbs >= descentDeg;
+      return { usable, swing, corroborates: swing >= turnDeg, passed };
+    },
+  };
+}
+
+/* The flip decision the sampler acts on, lifted out of the tick so it is real code under test
+   rather than arithmetic buried in a closure. Every bar is the one documented beside its
+   constant: acquisition on ORIENT_ACQUIRE_FRAMES; a flip on ORIENT_LOCK_FRAMES, lowered to
+   ORIENT_CORROBORATED_FRAMES by a corroborated turn, OR ORIENT_LOCK_MS of agreement; and the
+   face return (see ORIENT_FACE_RETURN_FRAMES) - toward FRONT only, only on FaceDetector
+   detections, only with the turn corroborated.
+   `turnPassed` (the window's side-view pass - see ORIENT_POSE_PASS) corroborates the pose flip ONLY:
+   the corroborated bar and the face return keep the 45-degree swing. `early` is a flip confirmed on
+   the pass alone, which the tick sends as withdrawable.
+   @returns {{ flipBar: number, faceReturn: boolean, poseFlip: boolean, early: boolean, confirmed: boolean }} */
+function orientFlipDecision({ acquiring, needsSwitch, streak, held, yawCorroborates, lock, lastVote, faceStreak, poseStreak = 0, turnPassed = false }) {
+  const flipBar = yawCorroborates
+    ? Math.min(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES)
+    : ORIENT_LOCK_FRAMES;
+  const faceReturn = !acquiring && lock === "back" && lastVote === "front" &&
+    yawCorroborates && faceStreak >= ORIENT_FACE_RETURN_FRAMES;
+  /* Either direction - see ORIENT_POSE_FLIP_FRAMES. */
+  const poseFlip = !acquiring && !!lock && (lastVote === "front" || lastVote === "back") && lastVote !== lock &&
+    (yawCorroborates || turnPassed) && poseStreak >= ORIENT_POSE_FLIP_FRAMES;
+  const confirmed = needsSwitch && (acquiring
+    ? streak >= ORIENT_ACQUIRE_FRAMES
+    : (streak >= flipBar || held >= ORIENT_LOCK_MS || faceReturn || poseFlip));
+  const early = confirmed && !acquiring && poseFlip && !yawCorroborates && !(streak >= flipBar || held >= ORIENT_LOCK_MS);
+  return { flipBar, faceReturn, poseFlip, early, confirmed };
+}
+
+/* Should BACK go on the wire NOW, ahead of any back vote? See ORIENT_PREDICTIVE_BACK for the
+   report and the argument. Only from a FRONT lock; only while the window is open (no vote has
+   agreed with FRONT since the turn began, so no face) and turning; only once the torso has
+   passed the side view - reached it, then fallen ORIENT_PREDICT_DESCENT_DEG on a fresh reading -
+   and only if that took no longer than ORIENT_PREDICT_DWELL_MS, which a held profile does.
+   Yaw still never picks a side on its own: the absence of every front vote across a full pass
+   through edge-on is what does, and a face returning withdraws it.
+   @returns {boolean} */
+function orientPredictBack(args) {
+  return orientPredictBackReason(args) === "fire";
+}
+
+/* The same gate, answering WHY - "fire", or the first condition that held it back, with the
+   numbers the thresholds are tuned from. orientPredictBack() is defined as this returning
+   "fire", so the decision and its explanation cannot drift apart. It exists because a report of
+   "PEAK on the back, the back graphic a second late" is exactly what a turn looks like when the
+   prediction did NOT engage and the vote path carried the flip; the ORIENT_DEBUG tick line
+   prints this on every tick of an open turn from a FRONT lock, so one logged turn settles which.
+   @returns {string} */
+function orientPredictBackReason({ enabled = ORIENT_PREDICTIVE_BACK, acquiring, lock, win, yawAbs, now }) {
+  if (!enabled) return "disabled (?predict_back=0)";
+  if (acquiring || lock !== "front") return `no FRONT lock (${lock === null ? "acquiring" : lock})`;
+  if (!win || !win.open) return "window closed (a vote agrees with FRONT - face in view)";
+  if (!win.turning || win.edgeAt === null) {
+    const peak = win.peak === null ? "n/a" : `${win.peak.toFixed(0)}°`;
+    return `edge-on not reached (peak ${peak} < ${ORIENT_EDGE_ON_DEG}°, torso ${win.edgeLost ? "lost" : "tracked"})`;
+  }
+  if (yawAbs === null || !Number.isFinite(yawAbs)) return "no fresh yaw reading";
+  const reference = win.edgeLost ? 90 : win.peak;
+  const fell = reference - yawAbs;
+  if (fell < ORIENT_PREDICT_DESCENT_DEG) {
+    return `no descent yet (${yawAbs.toFixed(0)}° is ${fell.toFixed(0)}° below ${win.edgeLost ? "edge-on" : "peak " + reference.toFixed(0) + "°"}, need ${ORIENT_PREDICT_DESCENT_DEG}°)`;
+  }
+  const dwell = now - win.edgeAt;
+  if (dwell > ORIENT_PREDICT_DWELL_MS) return `dwell ${dwell}ms > ${ORIENT_PREDICT_DWELL_MS}ms (a held pose)`;
+  return "fire";
+}
+
+/* The opt-in early turn trigger (?early_turn=<deg> - see ORIENT_EARLY_TURN_DEG). Pure state, fed one
+   observation per sampler tick; the tick does the dispatching.
+   ARMED only by a vote that AGREES with the lock while |yaw| is under `deg` - the shopper settled
+   square on that side. FIRES once, on the first fresh |yaw| at or past `deg`, for the other side, and
+   disarms: without that, the abstain stretch through edge-on (|yaw| still past `deg`, against the NEW
+   lock) would fire straight back. Re-arms only on the new side, square again.
+   WITHDRAWS its own swap when the turn does not happen: while the early side is on the lock and no
+   vote has agreed with it yet, a vote for the side it left with |yaw| back under `deg` is a pose
+   that came back - a twist, a look at the side view. Any vote for the early side confirms the turn
+   and ends the watch. A lock that moved some other way (the swap never went out, or a vote-confirmed
+   flip) ends it too.
+   THE SPEED GATE (`minSpeed`, ?early_turn_speed=<deg/s>): the crossing only fires while |yaw| is RISING at
+   least that fast, measured between consecutive pose readings (`at`, the reading's own time). A slow
+   drift past the threshold - a sway, a weight shift - keeps the trigger armed without firing; if the
+   motion then speeds up while still past the threshold, it fires then. Rising only: a fast return
+   from past the threshold is never read as a turn starting. Units are the pose model's |yaw| per
+   second, not true body degrees - MediaPipe compresses depth. See ORIENT_EARLY_TURN_MIN_SPEED.
+   @param {number} deg  |yaw| threshold; 0 or less is off and never arms
+   @param {number} [minSpeed]  rising |yaw| deg/s a crossing needs; 0 or less is no gate
+   @returns {{ readonly armed: "front"|"back"|null, readonly pending: {from: string, to: string}|null,
+               readonly speed: number,
+               observe(o: { vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number|null }):
+                 { fire: "front"|"back"|null, withdraw: "front"|"back"|null } }} */
+function makeEarlyTurnTrigger(deg, minSpeed = 0) {
+  let armed = null;     // the lock this trigger was armed on
+  let pending = null;   // { from, to } - an early swap that no vote has confirmed yet
+  let lastYaw = null, lastAt = null, speed = 0;   // rising |yaw| deg/s between the last two readings
+  const none = { fire: null, withdraw: null };
+  return {
+    get armed() { return armed; },
+    get pending() { return pending; },
+    get speed() { return speed; },
+    observe({ vote, lock, yawAbs, at = null }) {
+      if (!(deg > 0) || (lock !== "front" && lock !== "back")) { armed = null; pending = null; return none; }
+      const fresh = yawAbs !== null && Number.isFinite(yawAbs);
+      /* One reading counted once: a tick that sees the same reading again leaves the speed alone. */
+      if (fresh && Number.isFinite(at)) {
+        if (lastAt !== null && at > lastAt) speed = (yawAbs - lastYaw) / ((at - lastAt) / 1000);
+        if (lastAt === null || at > lastAt) { lastYaw = yawAbs; lastAt = at; }
+      }
+      if (pending) {
+        /* Ended by the lock leaving the early side (the withdrawal landed, or the swap never went
+           out) or by a vote for the early side (the turn is real). Otherwise the withdrawal is
+           asked for on EVERY tick its condition holds, not once: maybeSwap() can refuse a tick
+           (a swap still applying), and a withdrawal asked for once and refused would be lost. */
+        if (lock !== pending.to || vote === pending.to) pending = null;
+        else if (vote === pending.from && fresh && yawAbs < deg) return { fire: null, withdraw: pending.from };
+        else return none;
+      }
+      if (armed !== lock) armed = null;
+      if (vote === lock && fresh && yawAbs < deg) { armed = lock; return none; }
+      if (armed === lock && fresh && yawAbs >= deg && (!(minSpeed > 0) || speed >= minSpeed)) {
+        const to = lock === "front" ? "back" : "front";
+        armed = null; pending = { from: lock, to };
+        return { fire: to, withdraw: null };
+      }
+      return none;
+    },
+  };
+}
+
+/* ── THE BEST FRONT-FACING FRAME - "it froze me side-on" ──────────────────────────
+   ────────────────────────────────────────────────────────────────────────────────
+   REPORTED: the shopper turned sideways as the 5s window expired, so freezeFinalFrame()
+   captured whatever happened to be on screen at t=0 - a side profile - and that became
+   the frozen result AND the saved gallery "masterpiece" for the rest of the session.
+
+   Taking the LAST frame was never a decision, it was an artifact of where the capture
+   sits: at the end of the countdown, because that is when the session ends. But the
+   frame worth keeping is the one where the garment is most legible, which is the most
+   FRONT-FACING one, and that almost never coincides with the final tick - a shopper
+   naturally turns to inspect the garment as the window closes.
+
+   So the live window now keeps a rolling best. The pose loop already measures torso yaw
+   every ~240ms for the topology monitor and the orientation watcher; this is a third
+   consumer of that same reading and costs no extra inference.
+
+   TWO HONEST LIMITATIONS, neither of which makes it worse than taking the last frame:
+     · THE YAW IS MEASURED ON #webcam, THE PIXELS ARE COPIED FROM #aiVideo. Those are
+       separated by the Decart round trip, so the frame stored for a given yaw reading is
+       fractionally later than the pose that scored it. Over a normal turn that is
+       immaterial; during a fast spin the stored frame may be a few degrees off the
+       measured one. It is still chosen from candidates that were near-square-on, which
+       the final tick is not.
+     · IT ONLY EVER IMPROVES ON THE LAST FRAME. If no qualifying frame is ever seen - the
+       shopper stood side-on the whole time, or the pose detector never loaded - the
+       buffer stays empty and freezeFinalFrame() takes the final frame exactly as before.
+       There is no path where this produces a worse result than the old behaviour. */
+const BEST_FRAME_MAX_YAW_DEG   = 20;  // beyond this the pose is not "front-facing" at all
+const BEST_FRAME_IMPROVE_DEG   = 2;   // re-snapshot only on a meaningful improvement
+let _bestFrameCanvas = null;          // off-DOM, holds RAW decoded #aiVideo pixels (unflipped)
+let _bestFrameYaw    = Infinity;      // |yaw| of the pose that won the buffer
+
+/* Per session. Called at go-live, so a new window never inherits the previous shopper's
+   best frame - which would silently save someone else's try-on into this gallery entry. */
+function resetBestFrontFrame() {
+  _bestFrameYaw = Infinity;
+}
+
+/* Snapshot #aiVideo if this pose is the most front-facing one seen so far.
+   RAW pixels, no flip: freezeFinalFrame() applies the selfie flip uniformly to whatever
+   source it is handed, so storing an already-flipped frame here would double it. */
+function maybeCaptureBestFrontFrame(yawAbs) {
+  try {
+    if (!Number.isFinite(yawAbs) || yawAbs > BEST_FRAME_MAX_YAW_DEG) return;
+    if (yawAbs > _bestFrameYaw - BEST_FRAME_IMPROVE_DEG) return;   // not meaningfully better
+    /* Never bank an undressed frame: before the first dressed frame the feed is the
+       shopper in their own clothes, which is the one thing this result must not keep. */
+    if (typeof dressedFrameReady !== "undefined" && !dressedFrameReady) return;
+    const ai = typeof $ === "function" ? $("aiVideo") : null;
+    if (!ai || !ai.videoWidth) return;
+    if (!_bestFrameCanvas) _bestFrameCanvas = document.createElement("canvas");
+    if (_bestFrameCanvas.width !== ai.videoWidth)   _bestFrameCanvas.width = ai.videoWidth;
+    if (_bestFrameCanvas.height !== ai.videoHeight) _bestFrameCanvas.height = ai.videoHeight;
+    const bctx = _bestFrameCanvas.getContext("2d", { alpha: false });
+    bctx.setTransform(1, 0, 0, 1, 0, 0);            // identity - raw pixels, see above
+    bctx.drawImage(ai, 0, 0, _bestFrameCanvas.width, _bestFrameCanvas.height);
+    _bestFrameYaw = yawAbs;
+    if (ORIENT_DEBUG) console.log(`[PEAR] best-frame buffer updated at |yaw|=${yawAbs.toFixed(0)}°`);
+  } catch (_) { /* a capture hiccup must never disturb the live session */ }
+}
 /* Edge-on detection thresholds. Deliberately FAR looser than the orientation lock's,
    because the two protect different things and carry different costs when wrong. A wrong
    orientation flip swaps the garment reference and shows the wrong side of the shirt on a
@@ -4858,11 +6727,17 @@ function orientFadeEl() {
     const s = document.createElement("style");
     s.id = "pear-orient-fade-styles";
     s.textContent =
-      // transform:none (NOT the generic .camera-card mirroring rule) - #aiVideo itself is
-      // set to transform:none once live ("the edited feed is already correctly oriented",
-      // see onRemoteStream), and this overlay must line up pixel-for-pixel with THAT frame.
+      /* scaleX(-1), MATCHING #aiVideo - and it used to be transform:none, back when the
+         selfie flip was applied to the outgoing WebRTC canvas and #aiVideo's decoded
+         frames were therefore already mirrored. That flip moved to the display layer (see
+         drawFrame in this file and .camera-card.show-live #aiVideo in style.css), so the
+         frame this overlay copies out of #aiVideo is now un-mirrored. This canvas is
+         stacked directly over #aiVideo and must line up with it PIXEL FOR PIXEL - it holds
+         the same image - so it carries the same transform. If they ever disagree the held
+         frame flips the instant the hold begins, which is a far more visible artifact than
+         the one the hold exists to hide. */
       "#orientFadeCanvas{position:absolute;inset:0;width:100%;height:100%;" +
-      "object-fit:cover;transform:none;z-index:6;pointer-events:none;" +
+      "object-fit:cover;transform:scaleX(-1);z-index:6;pointer-events:none;" +
       `opacity:0;transition:opacity ${ORIENT_FADE_MS}ms ease-out;}`;
     document.head.appendChild(s);
   }
@@ -4934,27 +6809,125 @@ function revealAiFeed() {
    outcome at teardown is identical, and the state classes can govern again the way they
    were written to. This is the ONE place inline visibility is undone, so there is no
    second copy to forget. */
+/* ── ORIENTATION SELF-CHECK - one log line per surface transition ──────────────────
+   ────────────────────────────────────────────────────────────────────────────────
+   WHY THIS EXISTS. A mirror bug is invisible to every test in this repo: run.mjs reads
+   source, not pixels, and no suite can open a camera. So a report of "the replay is
+   mirrored but the live view is not" arrives as a description, and the only way to act
+   on it is to REASON about three CSS rules, two baked-in flips and a class the code
+   happens to remove somewhere else - which is exactly how a wrong conclusion gets
+   shipped. This prints the ground truth instead.
+
+   THE INVARIANT IT CHECKS. Every surface must end up selfie-oriented on screen, reached
+   by exactly ONE flip, applied in exactly one of two places:
+     · #aiVideo LIVE   - decoded frames are reality; the flip is CSS (scaleX(-1)).
+     · #aiVideo REPLAY - the clip's pixels were already flipped by the recorder; CSS must
+                         apply none.
+     · #resultCanvas   - freezeFinalFrame() baked the flip; CSS must apply none.
+   So the rule is simply: CSS flips the live feed and nothing else. A surface whose
+   computed transform disagrees with its pixel provenance is a double flip (or none at
+   all), and that is what the shopper sees as reversed text.
+
+   PURELY DIAGNOSTIC - it reads computed style and logs. It never corrects anything:
+   a self-healing orientation would hide the very drift this exists to surface, and the
+   correction would then be the thing nobody could find. */
+function logSurfaceOrientation(where) {
+  try {
+    const card_ = typeof card === "function" ? card() : null;
+    if (!card_ || typeof getComputedStyle !== "function") return;
+    const live  = card_.classList.contains("show-live");
+    const clip  = card_.classList.contains("show-clip");
+    const result = card_.classList.contains("show-result");
+    const el = result ? $("resultCanvas") : $("aiVideo");
+    if (!el) return;
+    const t = getComputedStyle(el).transform || "none";
+    /* matrix(-1, ...) is the flipped form; "none" or matrix(1, ...) is not. Parsing the
+       first component is enough - nothing in this file applies a skew or a rotation to
+       these elements, and a matrix that ever did would show up verbatim in the log. */
+    const flipped = /^matrix\(\s*-1/.test(t);
+    const surface = result ? "#resultCanvas" : clip ? "#aiVideo(clip)" : "#aiVideo(live)";
+    /* Only the LIVE feed should be CSS-flipped; the other two carry it in their pixels. */
+    const expected = live && !clip && !result;
+    const verdict = flipped === expected
+      ? "ok"
+      : `⚠ MISMATCH - expected css-flip=${expected}, got ${flipped}; this surface is ` +
+        (flipped ? "double-flipped" : "un-flipped") + " and its text will read reversed";
+    console.log(`[PEAR] orientation @${where}: ${surface}` +
+      ` classes[live=${live} clip=${clip} result=${result}]` +
+      ` css-transform=${t} → ${verdict}`);
+  } catch (_) { /* diagnostics must never break a session */ }
+}
+
 function resetAiFeedVisibility() {
   const ai = $("aiVideo");
   if (!ai) return;
   ai.style.transition = "";
   ai.style.opacity = "";
   ai.style.display = "";
+  /* AND `transform`, for exactly the reason the display line above exists. An inline
+     transform outranks every class rule, so a leftover one would carry a session's mirror
+     decision into a history clip whose pixels have the opposite convention baked in -
+     the double-mirror this file has now chased twice. onRemoteStream no longer writes one
+     (see its note), so today this clears nothing; it stays because "nothing writes it" is
+     a property of one call site, while this is the single place inline visibility state is
+     undone and the guarantee belongs here. */
+  ai.style.transform = "";
 }
 
-/* Snapshot the live #aiVideo frame into the overlay and show it at full opacity with NO
-   transition (an instant cut onto a frame identical to what's already showing is
-   invisible). Call BEFORE issuing the swap. */
-function orientFadeFreeze() {
+/* ── CAPTURE AND SHOW ARE SEPARATE STEPS, and the split is the whole fix for ────
+   "the live view freezes whenever I move."
+
+   These used to be one function. That forced a single instant to be both "the last
+   frame still worth holding" and "the moment the shopper's video stops", and those two
+   are not the same instant at all:
+     · The best frame to CAPTURE is the FIRST disagreeing vote - the earliest hint of a
+       turn, while the render is still a good dressed one. Wait any longer and the
+       snapshot is the reverted-to-real-shirt frame the hold exists to hide (which is
+       why orientHoldBegin has always refused to re-freeze).
+     · The right moment to SHOW it is as late as possible, because every millisecond it
+       is up is a millisecond of frozen video.
+   Fusing them meant paying the SHOW cost at CAPTURE time: a head-turn, a shrug, or a
+   shopper who turned back all froze the feed for up to the 4s ceiling while no swap was
+   ever coming. Inside a 5s billed session that is most of the session, and it is what
+   the recorder proves was never wrong with the stream - the MP4 is smooth because the
+   recorder samples #aiVideo underneath this overlay.
+
+   Split, the snapshot is still taken at the good instant and simply held off-screen at
+   opacity 0 until something actually warrants covering the feed. If nothing does, it is
+   discarded having never been seen. See the promote() call sites for what warrants it. */
+
+/* Snapshot the live #aiVideo frame into the overlay WITHOUT displaying it.
+   @returns {boolean} whether a frame was actually captured */
+function orientFadeCapture() {
   const ai = $("aiVideo");
   const c = orientFadeEl();
-  if (!ai || !c || !ai.videoWidth) return;
+  if (!ai || !c || !ai.videoWidth) return false;
   c.width = ai.videoWidth; c.height = ai.videoHeight;
   c.getContext("2d").drawImage(ai, 0, 0, c.width, c.height);
+  return true;
+}
+
+/* Put the already-captured frame on screen at full opacity with NO transition (an
+   instant cut onto a frame identical to what's already showing is invisible). */
+function orientFadeShow() {
+  const c = _orientFadeCanvas;
+  if (!c) return;
   c.style.transition = "none";
   c.style.opacity = "1";
   void c.offsetWidth;              // flush so the transition below re-arms
   c.style.transition = `opacity ${ORIENT_FADE_MS}ms ease-out`;
+}
+
+/* Capture AND show in one step - the original fused behaviour.
+   CURRENTLY UNREFERENCED, and deliberately so rather than by oversight: both live
+   callers now bank and promote separately (orientHoldBegin / orientHoldPromote). It is
+   kept as the restore seam for the split - if the two-stage display ever has to be
+   backed out, orientHoldBegin() calls this instead of orientFadeCapture() and the old
+   freeze-on-first-vote behaviour returns in one line. Do not wire it into a new call
+   site without reading the capture/show note above first: calling it late in a turn
+   banks the reverted-to-real-shirt frame the hold exists to hide. */
+function orientFadeFreeze() {
+  if (orientFadeCapture()) orientFadeShow();
 }
 
 /* Fade the frozen overlay back out, revealing the (by now updated) live feed underneath.
@@ -5030,8 +7003,13 @@ function redrapeCoverEl() {
        of the two, but they carry the same snapshot, so which one wins the stack is
        cosmetically irrelevant and the ordering is fixed only so it is not accidental. */
     s.textContent =
+      /* scaleX(-1), for the identical reason #orientFadeCanvas carries it: this canvas
+         holds a frame copied out of #aiVideo and is stacked over #aiVideo, so it must
+         share #aiVideo's display transform or the cover flips the moment it appears.
+         Both overlays moved together when the selfie flip left the outgoing WebRTC canvas
+         - see drawFrame. They hold the same snapshot, so they must never disagree. */
       "#redrapeCoverCanvas{position:absolute;inset:0;width:100%;height:100%;" +
-      "object-fit:cover;transform:none;z-index:7;pointer-events:none;" +
+      "object-fit:cover;transform:scaleX(-1);z-index:7;pointer-events:none;" +
       `opacity:0;transition:opacity ${ORIENT_FADE_MS}ms ease-out;}`;
     document.head.appendChild(s);
   }
@@ -5103,28 +7081,258 @@ function redrapeCoverEnd(reason) {
    flapping that threshold exists to stop; this covers the same window without touching
    the confirmation bar. */
 const ORIENT_TURN_HOLD_MAX_MS = 4000;  // hard ceiling - a stuck still frame is worse than a live one
+/* THE WINDOW IS OPEN - a turn or swap is in progress. Semantics deliberately UNCHANGED:
+   redrapeCoverBegin() and reconditionForTopology() both read this to stay out of a
+   front/back swap's way, and neither cares whether anything is on screen. Splitting the
+   display out below must not quietly narrow the window those two are gating on. */
 let _orientHoldActive = false;
+/* ...and THIS is whether the captured frame is actually covering the feed. The new half.
+   Always implies _orientHoldActive; the reverse does not hold, which is the entire point. */
+let _orientHoldShown  = false;
 let _orientHoldTimer  = null;
 
-/* @param {"turn-detected"|"swap"} reason - which stage raised the hold, for the log only */
+/* ── A TURN OWNS THE WIRE - "the swap sat on 'waiting for the wire' mid-turn" ────────
+   REPORTED: on a real turn the front/back swap logged "applyGarment: waiting for the wire -
+   1 write(s) ahead of it" and landed a round-trip late.
+   WHAT WAS AHEAD OF IT. reconditionForTopology() - a full image re-upload of the side ABOUT
+   TO BE REPLACED - fired on a 15-degree body change, which every turn crosses. Its only
+   orientation guard is _orientHoldActive, and that hold rises on the first vote for the
+   OTHER side; the stretch before it, where the shopper is rotating through edge-on and the
+   vote abstains, was open. A re-drape started there still held the wire when the flip was
+   confirmed, and the wire mutex cannot pre-empt an in-flight set() - two concurrent writes
+   is the go-live hang sendCondition() exists to prevent. So priority is won by PREVENTION:
+   nothing non-essential may START while a turn is in progress.
+   RAISED by the orientation sampler, dual-view sessions only (there is no swap to protect
+   on a single-view item), from the first tick with a pending switch or a turn the yaw
+   window can see - open AND rotated past ORIENT_YAW_TURN_DEG or lost to edge-on (see
+   makeTurnYawWindow) - until a vote agrees with the lock again. A three-quarter pose that
+   never clears that bar is not a turn and keeps its re-drape.
+   NOTHING IS LOST. The topology tracker reports a gated shift as "deferred" and does not
+   advance its baseline, so the movement is re-offered the moment this clears - and a full
+   360 ends near the pose the render was conditioned on, so usually nothing is left to send.
+   BOUNDED by ORIENT_TURN_HOLD_MAX_MS, the same ceiling the turn hold carries: a shopper
+   parked edge-on is re-draped rather than suppressed for the rest of the window.
+   Separate from _orientHoldActive on purpose: that flag's semantics are pinned as "a turn
+   or swap is in progress" for the cover, and it is released from the 250ms tick whenever no
+   disagreeing vote is pending - exactly the abstain stretch this one has to span. */
+let _orientTurnSince = 0;   // ms timestamp the current turn began, 0 = none
+
+/** @param {boolean} turning  @param {number} [now] */
+function orientTurnMark(turning, now = Date.now()) {
+  if (turning) {
+    if (!_orientTurnSince) {
+      _orientTurnSince = now;
+      console.log("[PEAR] AI Auto - turn in progress: body re-drapes deferred until it settles");
+    }
+  } else if (_orientTurnSince) {
+    const ms = now - _orientTurnSince;
+    _orientTurnSince = 0;
+    console.log(`[PEAR] AI Auto - turn settled after ${ms}ms: body re-drapes may dispatch again`);
+  }
+}
+
+/** @param {number} [now] @returns {boolean} true while a turn owns the wire, never past its ceiling */
+function orientTurnInProgress(now = Date.now()) {
+  return _orientTurnSince > 0 && now - _orientTurnSince <= ORIENT_TURN_HOLD_MAX_MS;
+}
+/* ── end turn-in-progress flag ── */
+
+/* Ceiling on withholding camera frames from Decart across one orientation swap (see the
+   throttle's hold()). The normal release is the swap's own set() resolving; this bounds a set()
+   that never does. Clear of a worst-case healthy apply - APPLY_ATTEMPTS round-trips with
+   APPLY_RETRY_MS between them - and far under ORIENT_TURN_HOLD_MAX_MS, because the output is
+   frozen for as long as it is held and the session is only LIVE_DURATION_MS long. */
+const ORIENT_SWAP_INPUT_HOLD_MAX_MS = 2000;
+
+/* ── THE SWAP TIMELINE (?orient_debug=1) - measured, not assumed ────────────────────────
+   "Decart's pipeline delay is ~400ms, so dispatch ~400ms early" assumes the delay that matters.
+   Orientation is detected on the LOCAL camera - the watcher samples localStream's track and
+   the pose loop reads #webcam - so detection carries no network latency at all. What decides
+   whether the back renders on time is the gap between the dispatch and the first output frame
+   conditioned on the new reference: the reference upload and ack, then Decart's switch. The
+   output stream's own lag is common to every frame and to the reference alike.
+   This prints that gap for each swap, with the LOCAL torso |yaw| at every stage, so the lead a
+   trigger actually buys is read off a real turn: decided -> dispatched (pre-flight),
+   dispatched -> acked (upload), acked -> first presented Decart frame (switch + downlink).
+   "First presented" is exactly that - a frame presented after the ack; whether it is already
+   the new render is what the yaw and a screen recording at that timestamp answer.
+
+   THE PROFILE - three stages on performance.now(), each printed as it happens:
+     [PEAR][ORIENT] DISPATCH_SENT     sendCondition() hands the reference write to the SDK, which
+                                      base64s the Blob into one set_image message on the signaling
+                                      WebSocket (the swap's start -> here is pre-flight + wire wait)
+     [PEAR][ORIENT] SERVER_CONFIRMED  set_image_ack is back - set() resolved; the toast follows
+     [PEAR][ORIENT] RENDER_APPLIED    the earliest output frame the new reference can have produced -
+                                      see makeRenderResumeDetector() for how that is decided
+   then the summary line with Client-to-ACK and ACK-to-Render. RENDER_APPLIED is a TIMING fact, not
+   a picture of the garment: while the body rotates, pixels cannot say which reference drew them, and
+   Decart may still blend from its previous frames after it. */
+const SWAP_RENDER_STALL_MIN_MS = 150;   // an output gap at least this long (and 2x the usual) is the hold's stall
+const SWAP_RENDER_TRACE_MAX_MS = 4000;  // stop looking for RENDER_APPLIED this long after the ACK
+
+/* RENDER_APPLIED from presented output frames alone. Fed every presented #aiVideo frame from the swap's
+   start, so the output's usual frame interval is known before the ACK. A swap normally HOLDS Decart's
+   input (the throttle's hold()): no camera frames from dispatch to ACK, so the output stalls, then
+   resumes on frames sent after the ACK. The first frame after the ACK that ends such a stall is the
+   earliest render the new reference can have produced. A swap that held nothing has no stall to find;
+   its first frame after the ACK is reported as exactly that - the earliest frame that COULD carry it.
+   @returns {{ ack(at: number): void, frame(now: number): {at: number, how: string}|null }} */
+function makeRenderResumeDetector({ held, stallMinMs = SWAP_RENDER_STALL_MIN_MS, maxMs = SWAP_RENDER_TRACE_MAX_MS }) {
+  const gaps = [];
+  let last = null, ackAt = null, firstAfter = null, afterAck = 0, done = false;
+  return {
+    ack(at) { ackAt = at; },
+    frame(now) {
+      if (done) return null;
+      const gap = last === null ? null : now - last;
+      last = now;
+      if (ackAt === null || now <= ackAt) {
+        if (gap !== null) { gaps.push(gap); if (gaps.length > 20) gaps.shift(); }
+        return null;
+      }
+      afterAck++;
+      if (firstAfter === null) firstAfter = now;
+      if (!held) {
+        done = true;
+        return { at: now, how: "first output frame presented after the ACK - this swap held no input, so it is the earliest frame that COULD carry the new reference, not proof that it does" };
+      }
+      const sorted = gaps.slice().sort((a, b) => a - b);
+      const usual = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+      if (gap !== null && gap >= Math.max(stallMinMs, usual * 2)) {
+        done = true;
+        return { at: now, how: `output resumed after a ${gap.toFixed(0)}ms stall (usual frame gap ${usual.toFixed(0)}ms, frame ${afterAck} after the ACK) - the first frame rendered from a camera frame sent after the ACK` };
+      }
+      if (now - ackAt > maxMs) {
+        done = true;
+        return { at: firstAfter, how: `no stall within ${maxMs}ms of the ACK - the first frame presented after it, which may still carry the old reference` };
+      }
+      return null;
+    },
+  };
+}
+
+function traceSwapTimeline(next, predictive, held, refUrl) {
+  if (!ORIENT_DEBUG) return null;
+  const t0 = Date.now();
+  const clock = () => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now());
+  const p0 = clock();
+  const ms = (v) => `${v.toFixed(1)}ms`;
+  const yaw = () => (_torsoYawAbs === null ? "n/a" : `${_torsoYawAbs.toFixed(0)}°`);
+  /* Two more facts the lead time depends on: how far into the turn the dispatch happened (the
+     turn flag's own start), and how many bytes the upload has to carry - the dispatch -> ack gap
+     is dominated by that size, and it is the one part of the delay the client controls. */
+  const blob = typeof garmentBlobIfWarm === "function" ? garmentBlobIfWarm(refUrl) : null;
+  const refSize = blob ? `${Math.round(blob.size / 1024)}KB` : "size unknown";
+  const intoTurn = _orientTurnSince ? `${t0 - _orientTurnSince}ms into the turn` : "no turn flagged";
+  const tag = `${next.toUpperCase()}${predictive ? " (predictive)" : ""}${held ? " [input held]" : ""}`;
+  const marks = [`build v=${PEAR_BUILD}`, `dispatched t=0, ${intoTurn} (local |yaw| ${yaw()}, reference ${refSize})`];
+  const print = (tail) => console.log(`[PEAR][ORIENT] swap timeline → ${tag}: ${marks.join(" · ")}` + (tail ? ` · ${tail}` : ""));
+  let sentAt = null, ackAt = null, finished = false;
+
+  const mark = (label) => {
+    sentAt = clock();
+    console.log(`[PEAR][ORIENT] DISPATCH_SENT → ${tag}: ${label} set() handed to the SDK for the signaling WebSocket, ` +
+      `+${ms(sentAt - p0)} after the swap began (pre-flight + wire wait) · local |yaw| ${yaw()} · reference ${refSize} · ` +
+      `${intoTurn} · build v=${PEAR_BUILD}`);
+  };
+  _orientSendMark = mark;
+  const dropMark = () => { if (_orientSendMark === mark) _orientSendMark = null; };
+
+  const finish = (hit, why) => {
+    if (finished) return;
+    finished = true;
+    dropMark();
+    if (hit) {
+      marks.push(`first Decart frame presented after the ack +${Math.round(hit.at - p0)}ms (local |yaw| ${yaw()})`);
+      console.log(`[PEAR][ORIENT] RENDER_APPLIED → ${tag}: +${ms(hit.at - ackAt)} after SERVER_CONFIRMED · ${hit.how} · local |yaw| ${yaw()}`);
+    }
+    const clientToAck = ackAt !== null && sentAt !== null ? ms(ackAt - sentAt) : "n/a";
+    const ackToRender = hit && ackAt !== null ? ms(hit.at - ackAt) : "n/a";
+    print(`Client-to-ACK ${clientToAck} · ACK-to-Render ${ackToRender}` +
+      (hit ? ` · swap start to render ${ms(hit.at - p0)}` : "") + (why ? ` · ${why}` : ""));
+  };
+
+  const ai = typeof $ === "function" ? $("aiVideo") : null;
+  const watchable = !!(ai && typeof ai.requestVideoFrameCallback === "function");
+  const detector = makeRenderResumeDetector({ held });
+  if (watchable) {
+    const onFrame = (now) => {
+      if (finished || clock() - p0 > SWAP_RENDER_TRACE_MAX_MS * 3) return;   // an abandoned swap stops watching
+      const hit = detector.frame(now);
+      if (hit) { finish(hit, ""); return; }
+      ai.requestVideoFrameCallback(onFrame);
+    };
+    ai.requestVideoFrameCallback(onFrame);
+  }
+  return {
+    acknowledged() {
+      ackAt = clock();
+      detector.ack(ackAt);
+      dropMark();   // unused means no reference write reached the wire for this swap - never let a later one take it
+      marks.push(`set() acked +${Date.now() - t0}ms (local |yaw| ${yaw()})`);
+      console.log(`[PEAR][ORIENT] SERVER_CONFIRMED → ${tag}: set_image_ack received, ` +
+        `+${sentAt === null ? "n/a (no reference write was marked)" : ms(ackAt - sentAt)} after DISPATCH_SENT ` +
+        `(upload + Decart accepting the reference) · local |yaw| ${yaw()} · the view toast follows in ${ORIENT_FADE_HOLD_MS}ms`);
+      if (!watchable) { finish(null, "output frame time not measurable here (no requestVideoFrameCallback)"); return; }
+      setTimeout(() => finish(null, `no Decart output frame presented within ${SWAP_RENDER_TRACE_MAX_MS}ms of the ACK`),
+        SWAP_RENDER_TRACE_MAX_MS + 250);
+    },
+    failed(e) {
+      console.log(`[PEAR][ORIENT] SERVER_CONFIRMED → ${tag}: set() FAILED ` +
+        `+${ms(clock() - (sentAt ?? p0))} after ${sentAt === null ? "the swap began" : "DISPATCH_SENT"}: ${e?.message || e}`);
+      finish(null, `set() FAILED +${Date.now() - t0}ms: ${e?.message || e}`);
+    },
+  };
+}
+
+/* Open the window and bank a good frame. Does NOT show it - see orientHoldPromote().
+   @param {"turn-detected"|"swap"} reason - which stage raised the hold, for the log only */
 function orientHoldBegin(reason) {
-  if (_orientHoldActive) return;        // NEVER re-freeze: a second snapshot this far into
-                                        // the turn would capture the degraded frame we are
+  if (_orientHoldActive) return;        // NEVER re-capture: a second snapshot this far into
+                                        // the turn would bank the degraded frame we are
                                         // holding precisely to hide.
   _orientHoldActive = true;
-  orientFadeFreeze();
+  orientFadeCapture();
+  /* The ceiling is armed HERE, not in promote(), and bounds the WINDOW rather than the
+     display. _orientHoldActive gates the two consumers named above, so a window left
+     open forever would keep body-topology reconditioning suppressed for the rest of the
+     session even if nothing was ever shown. Bounding the window bounds both. */
   if (_orientHoldTimer) clearTimeout(_orientHoldTimer);
   _orientHoldTimer = setTimeout(() => {
     console.warn("[PEAR] AI Auto - turn hold hit its", ORIENT_TURN_HOLD_MAX_MS + "ms ceiling; revealing the live feed");
     orientHoldEnd("timeout");
   }, ORIENT_TURN_HOLD_MAX_MS);
-  if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - holding last dressed frame (" + reason + ")");
+  if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - banked last dressed frame, not yet shown (" + reason + ")");
+}
+
+/**
+ * Actually cover the feed with the banked frame. Idempotent, and a no-op unless a
+ * window is open - there is nothing to show without a capture behind it.
+ *
+ * THE CALLER DECIDES, and only two things warrant it:
+ *   · a torso rotation corroborated by yaw - a REAL turn, so the revert is coming;
+ *   · a confirmed swap - the reference is being replaced, so the model is genuinely
+ *     between garments for a datachannel round-trip.
+ * A bare disagreeing vote is neither. That is what used to freeze the feed on a
+ * head-turn under a flickering light and hold it until the ceiling.
+ * @param {string} reason for the log only
+ */
+function orientHoldPromote(reason) {
+  if (!_orientHoldActive || _orientHoldShown) return;
+  _orientHoldShown = true;
+  orientFadeShow();
+  if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - covering the feed (" + reason + ")");
 }
 
 function orientHoldEnd(reason) {
   if (_orientHoldTimer) { clearTimeout(_orientHoldTimer); _orientHoldTimer = null; }
   if (!_orientHoldActive) return;
   _orientHoldActive = false;
+  _orientHoldShown = false;
+  /* UNCONDITIONAL, even when nothing was ever shown. Hiding an already-hidden overlay is
+     free, and "every exit path drives the cover down" is the guarantee that keeps a still
+     frame from outliving the window that banked it - it must not become conditional on a
+     flag some future edit forgets to set. */
   orientFadeReveal();
   if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - releasing hold (" + reason + ")");
 }
@@ -5152,6 +7360,14 @@ function createOrientationWatcher() {
      photo must not qualify here: binding the front photo as GARMENT_BACK is what put
      the chest print on the back (see canonicalImageUrl's comment). */
   const GARMENT_BACK  = distinctBackOf(activeItem, gInit);
+  /* ── PIN BOTH ASSETS FOR AS LONG AS THIS WATCHER OWNS THE SESSION ─────────────────
+     These two URLs are the only images this watcher will ever put on the wire, and the
+     return leg below depends on their bytes still being resident when the shopper turns
+     back. They are pinned HERE rather than at fetch time because this is the one place
+     that knows which pair is ACTIVE - and because pinning is a replace, not an add, an
+     item swap rebuilds the watcher and re-pins the new pair, releasing the old one.
+     See _pinnedBlobKeys for the eviction chain this closes. */
+  pinActiveGarmentBlobs(GARMENT_FRONT, GARMENT_BACK);
   /* Fresh instance, fresh reading - a stale EDGE-ON from whatever item/session this
      watcher's predecessor last saw must never carry into this one. profileActive() trusts
      `!!orientWatcher` as proof the CURRENT watcher produced `autoProfile`'s current value;
@@ -5200,6 +7416,13 @@ function createOrientationWatcher() {
   let fdBroken = false;
   let lastSkinRatio = null;        // surfaced in the ORIENT_DEBUG log line only
   let lastConfidence = 0;          // 0..1, surfaced in the ORIENT_DEBUG log line only
+  /* Whether THIS tick's vote came from a FaceDetector detection rather than the skin
+     heuristic. Read by the face-return streak only (see ORIENT_FACE_RETURN_FRAMES): the two
+     "front" sources are not equally strong, and only a detection may shorten a flip. */
+  let lastFaceSeen = false;
+  /* ...and whether it came from the pose model's shoulder order - the symmetric front/back vote
+     (see poseShoulderFacing()). Read by the pose streak only. */
+  let lastPoseVoted = false;
   /* Per-tick edge-on SCORE (0..1), set by classify(). NOT a third vote value: it is
      reported alongside the front/back vote on a separate channel, so it can never enter
      the streak/lock arithmetic that decides which garment asset is on the wire. */
@@ -5212,7 +7435,9 @@ function createOrientationWatcher() {
      never come back down, permanently biasing every later comparison toward "narrow". */
   let baselineWidth = 0, baselineSamples = 0;
   console.log("[PEAR] AI Auto - orientation watcher armed (engine:",
-    faceDetector ? "FaceDetector)" : "skin-ratio heuristic)",
+    faceDetector ? "FaceDetector)" : ORIENT_POSE_FACING
+      ? "MediaPipe shoulder order + skin-ratio heuristic - no FaceDetector in this browser)"
+      : "skin-ratio heuristic - ?pose_facing=0)",
     "| GARMENT_FRONT:", abbrevImg(GARMENT_FRONT), "| GARMENT_BACK:", GARMENT_BACK ? abbrevImg(GARMENT_BACK) : "(none)");
 
   /* The lock's state as the explicit enum, via the shared vtonState() resolver so
@@ -5232,6 +7457,24 @@ function createOrientationWatcher() {
   logVtonState();
 
   let lastVote = null, streak = 0, streakSince = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
+  /* The turn's yaw window - the peak |yaw| since the last vote that agreed with the lock.
+     PER-WATCHER, like the streak it corroborates: a new watcher (item swap, mode change)
+     starts from a clean window rather than inheriting a pose from whatever session
+     preceded it - the same reason autoProfile is reset per instance. It replaced a
+     streak-start baseline that the return leg could never corroborate against; see
+     makeTurnYawWindow() for why. */
+  const yawWindow = makeTurnYawWindow();
+  /* The early turn trigger - on by default, null (and every use of it inert) with ?early_turn=0 (see
+     ORIENT_EARLY_TURN_DEG). */
+  const earlyTurn = ORIENT_EARLY_TURN_DEG > 0 ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED) : null;
+  if (earlyTurn) {
+    console.log(`[PEAR] AI Auto - EARLY TURN TRIGGER ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn)` +
+      (ORIENT_EARLY_TURN_MIN_SPEED > 0 ? `, only while |yaw| rises at ${ORIENT_EARLY_TURN_MIN_SPEED}°/s or faster (?early_turn_speed)` : "") + " - ?early_turn=0 turns it off:",
+      "sends the other side as the torso starts to rotate, withdrawn if the pose comes back (dual-view items only)");
+  }
+  let faceStreak = 0;   // consecutive FaceDetector detections - see the tick and ORIENT_FACE_RETURN_FRAMES
+  let poseStreak = 0, poseSide = null;   // consecutive shoulder-order votes for poseSide - see ORIENT_POSE_FLIP_FRAMES
+  let lastSwapPredictive = false;   // the last committed swap was a predictive BACK - see maybeSwap()
   /* Edge-on axis - its own rolling buffer, exit streak and cooldown, sharing only the
      `applying` mutex so a pose update and an asset swap can never be in flight at once.
      profileBuf holds the last ORIENT_PROFILE_WINDOW per-frame scores; squareStreak counts
@@ -5471,7 +7714,7 @@ function createOrientationWatcher() {
     const n = narrowness(width);
     lastNarrow = n;
 
-    let vote, faceSeen = false, faceMissed = false;
+    let vote, faceSeen = false, faceMissed = false, posed = false;
     if (faceDetector && !fdBroken) {
       try {
         const fs = Math.max(ORIENT_FACE_SIZE / vw, ORIENT_FACE_SIZE / vh);
@@ -5503,13 +7746,22 @@ function createOrientationWatcher() {
         vote = skinRatioVote(px);
       }
     } else {
-      vote = skinRatioVote(px);
+      /* NO FaceDetector - the default in Chrome and Edge. The pose model's SHOULDER ORDER comes
+         first, in both directions (see poseShoulderFacing() for the measurement, and for why its
+         FACE visibility - build 128's vote - cannot tell the sides apart). It is not a face, so
+         faceSeen stays false: the face streak and the profile score keep meaning what they say.
+         When the shoulders abstain (edge-on, torso unreadable) the skin heuristic runs as before. */
+      const poseVote = poseFacingVote({ sep: _poseFacingSep, at: _poseFacingAt, now: Date.now() });
+      if (poseVote) { vote = poseVote; posed = true; lastConfidence = Math.min(1, Math.abs(_poseFacingSep)); lastSkinRatio = null; }
+      else vote = skinRatioVote(px);
     }
 
     /* Ambiguity is defined by the VOTE being withheld, which is exactly what the dead band
        and the sub-confidence band produce - the signal that used to be discarded. A face
        seen or a confident side both resolve it, so neither counts as ambiguous. */
     const skinAmbiguous = !faceSeen && vote === null;
+    lastFaceSeen = faceSeen;
+    lastPoseVoted = posed;
     lastProfileScore = profileScore(faceSeen, faceMissed, skinAmbiguous, n);
 
     /* Learn the square-on baseline ONLY from frames the lock confidently resolved, and
@@ -5570,8 +7822,13 @@ function createOrientationWatcher() {
      GARMENT_FRONT/GARMENT_BACK captured above - never a value re-derived elsewhere.
      The sampler keeps voting during the swap, so a turn completed mid-flight is
      re-confirmed and applied by a later tick - no queue needed. */
-  async function maybeSwap(next) {
-    if (applying || Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS) return;
+  async function maybeSwap(next, predictive = false) {
+    /* The cooldown is anti-flap, and withdrawing a PREDICTIVE BACK is the one flap that must not
+       wait for it: the face came back, so the shopper never finished the turn and the back
+       reference is sitting on their front. Only that direction and only that kind of swap -
+       see ORIENT_PREDICTIVE_BACK. */
+    const withdrawing = next === "front" && lastSwapPredictive;
+    if (applying || (Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing)) return;
     if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) return;
 
     /* ACQUIRING the side that is ALREADY on the wire is a state record, not a swap.
@@ -5580,7 +7837,24 @@ function createOrientationWatcher() {
        shopper is facing the camera when the session opens - would otherwise spend a
        redundant rtClient.set() and cross-fade the view for zero visual change, right
        at go-live. Record the lock and return. */
-    if (autoOrientation === null && next === "front") {
+    /* ...UNLESS THE WIRE SAYS OTHERWISE. "Already rendered" is true at connect and false after
+       a mid-session watcher rebuild (a stop/start across an SDK reconnect, a mode round-trip)
+       resets the lock to PENDING while GARMENT_BACK is still the reference on the wire. That
+       was the one place the lock advanced to FRONT without a dispatch, leaving the back on
+       the shopper's front until a re-anchor happened to notice. Checked only POSITIVELY:
+       lastSentImageRef must BE this watcher's back Blob. An unknown wire (null - go-live's
+       first apply still in flight, or a re-drape mid-upload) keeps the shortcut, because
+       stacking a second set() on a first is the go-live hang the wire mutex exists for.
+       Synchronous and fetch-free (garmentBlobIfWarm), so the common path costs nothing.
+       typeof-guarded: this function runs standalone in front-reference-guard.test.mjs. */
+    const backOnWire = next === "front" && autoOrientation === null && !!GARMENT_BACK &&
+      typeof garmentBlobIfWarm === "function" && typeof lastSentImageRef !== "undefined" &&
+      lastSentImageRef !== null && lastSentImageRef === garmentBlobIfWarm(GARMENT_BACK);
+    if (backOnWire) {
+      console.warn("[PEAR] AI Auto - acquiring FRONT but GARMENT_BACK is what the wire holds;",
+        "dispatching the front reference instead of recording the lock");
+    }
+    if (autoOrientation === null && next === "front" && !backOnWire) {
       autoOrientation = "front";
       console.log("[PEAR] AI Auto - orientation ACQUIRED → FRONT (already rendered; no swap issued)");
       logVtonState();
@@ -5638,13 +7912,11 @@ function createOrientationWatcher() {
       // reaches the live session as a real image with no garment texture in it,
       // which reads to the shopper as "the back view is blank". Reject it the same
       // way as a failed fetch, so we never commit to showing a solid-fill panel.
-      let backLooksFlat = false;
-      try {
-        const probe = await createImageBitmap(backBlob);
-        backLooksFlat = await bitmapLooksFlat(probe);
-        probe.close?.();
-      } catch (_) { /* probe failure - fail open, let the already-validated Blob through */ }
-      if (disposed) return;               // same guard, after the decode/probe awaits
+      // A settled verdict, not a fresh decode: preloadGarmentAssets() already probed this
+      // exact Blob before connect, and re-decoding the full packshot here put tens of ms of
+      // work in front of every turn's set(). Fails open on a probe error, as before.
+      const backLooksFlat = await blobLooksFlat(backBlob);
+      if (disposed) return;               // same guard, after the probe await
       if (backLooksFlat) {
         console.error("[PEAR] CRITICAL: GARMENT_BACK decoded but looks like a blank/solid-color placeholder (no garment texture); holding FRONT_MODE -", GARMENT_BACK);
         _assetBlobCache.delete(GARMENT_BACK);   // don't keep serving this bad asset from cache
@@ -5697,6 +7969,7 @@ function createOrientationWatcher() {
 
     applying = true;
     lastSwapAt = Date.now();
+    lastSwapPredictive = predictive;
     /* THE LOCK IS A CLAIM ABOUT WHAT IS ON THE WIRE, so it is advanced here but ROLLED BACK
        if the dispatch below fails - see the catch. Kept as an advance-then-revert rather
        than a commit-after-success because renderPerspectiveSelector() and the prompt
@@ -5709,11 +7982,36 @@ function createOrientationWatcher() {
        we are holding with a mid-turn one. Still called because a flip can also arrive
        without a preceding turn-detected tick (a swap forced by other state). */
     orientHoldBegin("swap");
+    /* UNCONDITIONAL, unlike the sampler's promote above. By here the flip is CONFIRMED:
+       the reference image is about to be replaced and the model is genuinely between
+       garments for a datachannel round-trip, which is the original window this cover was
+       built for. It promotes whatever the yaw signal did or did not say - so a swap on a
+       device with no pose detection, or one confirmed purely on the ORIENT_LOCK_FRAMES
+       path, is covered exactly as it always was. */
+    orientHoldPromote("swap");
     console.log("[PEAR] AI Auto - orientation flip →", next.toUpperCase(),
+      predictive ? "(PREDICTIVE - sent while the torso is still passing the side view, ahead of the full back bar; a return to FRONT withdraws it)"
+        : withdrawing ? "(WITHDRAWING a predictive BACK - the face came back)" : "",
       "| reference:", abbrevImg(next === "back" ? GARMENT_BACK : GARMENT_FRONT));
     renderPerspectiveSelector();
+    /* HOLD DECART'S INPUT ACROSS THE REPLACEMENT - see the throttle's hold(). This is the
+       blank/untextured-shirt window: while set() uploads the new reference, frames still
+       flowing are rendered from Decart's own prior. Taken only here, after every pre-flight
+       above, so an abandoned swap never freezes anything; given back the moment THIS swap's
+       own set() settles, either way. The instance held is the one released, so a swap that
+       outlives its session cannot open a newer session's go-live gate. typeof-guarded - this
+       function runs standalone in front-reference-guard.test.mjs (CLAUDE.md 2.7). */
+    const heldGate = typeof holdInputGate === "function"
+      ? holdInputGate(`orientation swap → ${next.toUpperCase()}`, ORIENT_SWAP_INPUT_HOLD_MAX_MS) : null;
+    const trace = typeof traceSwapTimeline === "function"
+      ? traceSwapTimeline(next, predictive, !!heldGate, next === "back" ? GARMENT_BACK : GARMENT_FRONT) : null;
     try {
       await applyActive();                       // one rtClient.set() - pre-cached Blob payload
+      if (heldGate) heldGate.unhold("swap acknowledged");
+      if (trace) trace.acknowledged();
+      /* Decart's render of the new reference is still to come - the freeze watchdog must not read that
+         wait as a stall and re-upload mid-turn. See FRAME_FREEZE_AFTER_SWAP_MS. typeof: runs sandboxed. */
+      if (typeof noteSwapAcknowledged === "function") noteSwapAcknowledged();
       await new Promise((r) => setTimeout(r, ORIENT_FADE_HOLD_MS));   // let the new frame actually land
       // Third instance of the superseded-instance guard (see the comment above the first
       // one). orientHoldEnd/toast are exactly the shared state a fresh watcher's own hold
@@ -5756,8 +8054,12 @@ function createOrientationWatcher() {
       } else {
         console.warn("[PEAR] AI Auto swap apply:", e?.message || e);
       }
+      if (trace) trace.failed(e);
     } finally {
       applying = false;
+      /* Idempotent on the success path (already unheld above); the one that matters on a
+         failed set() - the previous reference is still on the wire, so frames must flow. */
+      if (heldGate) heldGate.unhold("swap settled");
     }
   }
 
@@ -5913,8 +8215,39 @@ function createOrientationWatcher() {
       if (vote) {
         if (vote === lastVote) streak++;
         else { lastVote = vote; streak = 1; streakSince = Date.now(); }
+        /* Consecutive FaceDetector DETECTIONS within the current front streak. An abstention
+           leaves it alone, like `streak`; a skin-heuristic "front" or any "back" vote breaks
+           it - only a detection is the strong direction ORIENT_FACE_RETURN_FRAMES trusts. */
+        faceStreak = vote === "front" && lastFaceSeen ? faceStreak + 1 : 0;
+        /* Consecutive shoulder-order votes for ONE side (see ORIENT_POSE_FLIP_FRAMES). A skin vote
+           breaks it, and so does a shoulder vote for the other side. */
+        if (lastPoseVoted) { poseStreak = vote === poseSide ? poseStreak + 1 : 1; poseSide = vote; }
+        else { poseStreak = 0; poseSide = null; }
       }
       const held = lastVote ? Date.now() - streakSince : 0;
+
+      /* ── DID THE TORSO ACTUALLY ROTATE? ────────────────────────────────────────────
+         Independent, 3D corroboration for the vote - see ORIENT_CORROBORATED_FRAMES for
+         the full argument. Three things must all hold, and each rules out a specific way
+         of being wrong:
+           · a fresh reading exists          - stale yaw describes a pose already left;
+           · a peak was banked this turn     - without one there is no swing to measure;
+           · the swing clears the threshold  - a head-turn moves the head, not the
+                                               shoulders, and earns nothing here.
+         Abstains to false on every missing piece, which lands on ORIENT_LOCK_FRAMES -
+         exactly the behaviour that shipped before this existed.
+         The swing is measured DOWN from the peak since the last vote that agreed with the
+         lock, NOT from where this vote streak began - see makeTurnYawWindow() for why the
+         streak-start baseline could never corroborate the return leg of a 360.
+         Observed EVERY tick, abstentions included: the edge-on peak lives in exactly the
+         ticks where the vote abstains. `autoOrientation` is read before this tick's
+         maybeSwap(), so an agreeing vote is measured against the side actually on the wire. */
+      const yawFresh = _torsoYawAbs !== null && Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS;
+      /* The reading's own timestamp, not the tick's: the side-view dwell orientPredictBack()
+         measures is a property of the pose loop's clock, which runs independently of this one. */
+      const turnYaw = yawWindow.observe(vote, autoOrientation, yawFresh ? _torsoYawAbs : null, yawFresh ? _torsoYawAt : Date.now(), _poseTorsoLostAt);
+      const yawSwing = turnYaw.swing;
+      const yawCorroborates = turnYaw.corroborates;
       /* Two DIFFERENT transitions, with deliberately different bars:
 
          ACQUIRING (autoOrientation === null, PENDING_MODE) - establishing the first
@@ -5931,14 +8264,28 @@ function createOrientationWatcher() {
          confirmed, and that transition must be recorded rather than silently skipped. */
       const acquiring = autoOrientation === null;
       const needsSwitch = !!lastVote && (acquiring || lastVote !== autoOrientation);
-      const confirmed = needsSwitch && (acquiring
-        ? streak >= ORIENT_ACQUIRE_FRAMES
-        : (streak >= ORIENT_LOCK_FRAMES || held >= ORIENT_LOCK_MS));
+      /* THE FLIP BAR IS THE MINIMUM OF TWO PATHS, NEVER A LOWERED SINGLE ONE.
+         ORIENT_LOCK_FRAMES / ORIENT_LOCK_MS are byte-for-byte the bar they always were and
+         still carry every flip on their own. The corroborated path is an ADDITIONAL route
+         that requires MORE total evidence than the original - 4 agreeing votes AND a
+         45-degree torso rotation measured on a different instrument - in exchange for
+         reaching the decision in ~1s instead of ~2.5s. A flip can still only happen on a
+         vote streak; yaw never picks a side. Acquiring is untouched: there is no locked
+         side to protect, so it already settles on two samples.
+         The arithmetic lives in orientFlipDecision(), which adds exactly one path: the face
+         return (ORIENT_FACE_RETURN_FRAMES) - FRONT only, detections only, corroborated only. */
+      const { flipBar, faceReturn, poseFlip, early, confirmed } = orientFlipDecision({
+        acquiring, needsSwitch, streak, held, yawCorroborates, lock: autoOrientation, lastVote, faceStreak, poseStreak,
+        turnPassed: ORIENT_POSE_PASS && turnYaw.passed,
+      });
 
       if (ORIENT_DEBUG) {
         const confidence = faceDetector && !fdBroken
           ? `face:${vote ?? "none"}(${(lastConfidence * 100).toFixed(0)}%)`
-          : `skin:${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}(${(lastConfidence * 100).toFixed(0)}% conf)`;
+          : lastPoseVoted
+            ? `shoulders:${vote}(sep ${_poseFacingSep.toFixed(2)}, ±${ORIENT_POSE_FACING_MARGIN} to vote, pose ${poseStreak}/${ORIENT_POSE_FLIP_FRAMES})`
+            : `skin:${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}(${(lastConfidence * 100).toFixed(0)}% conf)` +
+              ` shoulders abstain (sep ${_poseFacingSep === null ? "n/a" : _poseFacingSep.toFixed(2)})`;
         // Status reflects the LOCK, not the raw per-frame vote: "locked" covers both a
         // clean agreeing vote AND a disagreeing one that hasn't cleared the threshold
         // yet - i.e. exactly the case that used to flip the reference frame-by-frame.
@@ -5946,9 +8293,16 @@ function createOrientationWatcher() {
           : needsSwitch ? (acquiring ? "waiting-to-acquire" : "waiting-to-switch") : "locked";
         // Progress is reported against whichever threshold actually applies, so the
         // debug line never shows a pending state counting toward a bar it isn't using.
+        /* The flip bar is reported as the bar ACTUALLY IN FORCE this tick, plus the yaw
+           swing that set it - otherwise a corroborated flip looks like the hysteresis
+           silently failing, which is precisely the thing a tuner must be able to tell
+           apart from a real regression. */
         const progress = acquiring
           ? ` (${streak}/${ORIENT_ACQUIRE_FRAMES}f)`
-          : ` (${streak}/${ORIENT_LOCK_FRAMES}f, ${held}/${ORIENT_LOCK_MS}ms)`;
+          : ` (${streak}/${flipBar}f${yawCorroborates ? "+yaw" : ""}, ${held}/${ORIENT_LOCK_MS}ms` +
+            `, yawΔ${yawSwing.toFixed(0)}° from ${yawWindow.edgeLost ? "edge-on (torso lost)" : "peak " + (yawWindow.peak === null ? "n/a" : yawWindow.peak.toFixed(0) + "°")}` +
+            `, face ${faceStreak}/${ORIENT_FACE_RETURN_FRAMES}${faceReturn ? " FACE-RETURN" : ""}${poseFlip ? (early ? " POSE-FLIP(pass)" : " POSE-FLIP") : ""}` +
+            `, torso lost ${yawWindow.lostInTurn ? "yes" : "no"}, passed ${turnYaw.passed ? (ORIENT_POSE_PASS ? "yes" : "yes (off: ?pose_pass=0)") : "no"})`;
         /* Pose is reported separately from the lock, because it IS separate - reading them
            on one line is what makes "locked FRONT, but edge-on right now" legible while
            tuning. ratio/score/width are the three numbers the thresholds are set from, so
@@ -5963,8 +8317,19 @@ function createOrientationWatcher() {
           ` | ratio=${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}` +
           ` | score=${lastProfileScore.toFixed(2)}(avg ${mean.toFixed(2)}/${ORIENT_PROFILE_ENTER_SCORE})` +
           ` | w=${lastNarrow === null ? "n/a" : lastNarrow.toFixed(2)}`;
+        /* The prediction's own verdict, on every tick of an open turn from a FRONT lock - the
+           abstain stretch where `progress` above prints nothing because no vote disagrees yet,
+           and exactly where orientPredictBack() is evaluated. See orientPredictBackReason(). */
+        const predict = currentAngle === AUTO_ANGLE && autoOrientation === "front" && yawWindow.open
+          ? ` | predict: ${orientPredictBackReason({ acquiring, lock: autoOrientation, win: yawWindow,
+              yawAbs: yawFresh ? _torsoYawAbs : null, now: Date.now() })}`
+          : "";
+        const earlyState = earlyTurn
+          ? ` | early ${ORIENT_EARLY_TURN_DEG}°: ${earlyTurn.pending ? `${earlyTurn.pending.to.toUpperCase()} sent early, unconfirmed` : earlyTurn.armed ? `armed on ${earlyTurn.armed.toUpperCase()}` : "not armed"}` +
+            ` (|yaw| rising ${earlyTurn.speed.toFixed(0)}°/s${ORIENT_EARLY_TURN_MIN_SPEED > 0 ? `, gate ${ORIENT_EARLY_TURN_MIN_SPEED}°/s` : ""})`
+          : "";
         console.log(`[PEAR][ORIENT] state=${vtonState()} | ${pose} | confidence=${confidence} | ${status}` +
-          (needsSwitch ? progress : ""));
+          (needsSwitch ? progress : "") + predict + earlyState);
       }
 
       /* Raise the hold the INSTANT a turn looks like it is starting - one disagreeing
@@ -6035,11 +8400,83 @@ function createOrientationWatcher() {
          profile transition dispatches again. Then raise it on ORIENT_PROFILE_ENTER_SCORE,
          never on the EXIT threshold. */
       const dualView = currentAngle === AUTO_ANGLE;
+      /* PREDICTIVE BACK - see ORIENT_PREDICTIVE_BACK. Evaluated only when no vote-confirmed
+         switch is due this tick; dispatched at the bottom of the tick, beside it. */
+      const predictBack = dualView && !confirmed && orientPredictBack({
+        acquiring, lock: autoOrientation, win: yawWindow, yawAbs: yawFresh ? _torsoYawAbs : null, now: Date.now(),
+      });
+      /* THE TURN OWNS THE WIRE from here until a vote agrees with the lock again - see
+         orientTurnMark(). Spans the abstain stretch through edge-on that the hold below does
+         not, which is where a body re-drape used to start and then hold the wire against the
+         swap. Includes a confirmed switch (needsSwitch), so it is still up while maybeSwap()
+         below is dispatching. */
+      orientTurnMark(dualView && !acquiring && (needsSwitch || yawWindow.turning));
       const frontBackTurn = dualView && !acquiring && needsSwitch && !confirmed;
-      if (frontBackTurn) orientHoldBegin("turn-detected");
+      if (frontBackTurn) {
+        /* Bank the frame on the FIRST disagreeing vote, exactly as before - this is the
+           last instant the render is reliably a good dressed one. */
+        orientHoldBegin("turn-detected");
+        /* ── BUT ONLY COVER THE FEED ON EVIDENCE OF A REAL TORSO ROTATION ──────────
+           REPORTED: "the live view freezes whenever I move." It did, and for up to the
+           4s ceiling, because showing was fused to banking: any single disagreeing vote
+           - a head-turn, a shrug, a flickering light moving the skin ratio - stopped the
+           shopper's video even though no flip was coming. The MP4 export was smooth
+           throughout, which is the tell: the recorder samples #aiVideo UNDERNEATH this
+           overlay, so the stream was never the problem, only what was drawn over it.
+
+           yawCorroborates is the same 45-degree torso swing ORIENT_CORROBORATED_FRAMES
+           already trusts to shorten the flip bar - a genuinely 3D reading off MediaPipe's
+           shoulder landmarks, on a different instrument from the vote. A head-turn moves
+           the head, not the shoulders, and earns nothing here. Note this only gates the
+           DISPLAY: the flip bar, the hysteresis and the banked frame are all untouched.
+
+           ABSTAINS TOWARD THE OLD BEHAVIOUR, which is what keeps this from being a
+           regression on the devices that need the cover most. `yawUsable` is false with no
+           pose detector, an occluded torso, a phone that never loaded the WASM runtime, or
+           no peak banked yet this turn - and in every one of those cases we
+           cannot tell a real turn from a head-turn, so we cover exactly as before. The
+           freeze is only skipped where yaw is present AND positively says no torso
+           rotation is happening. And a swap that confirms anyway still promotes at its own
+           call site below, so the reference-replacement window is never left uncovered. */
+        const yawUsable = turnYaw.usable;
+        if (!yawUsable) orientHoldPromote("no-yaw-signal");
+        else if (yawCorroborates) orientHoldPromote("turn-corroborated");
+      }
       /* The shopper turned back / straightened up before the flip confirmed: no swap is
          coming, so drop the hold now rather than sitting on a still until the ceiling. */
       else if (_orientHoldActive) orientHoldEnd("turn-abandoned");
+
+      /* THE EARLY TURN TRIGGER (on by default, see ORIENT_EARLY_TURN_DEG) - `earlyTurn` is null with
+         ?early_turn=0 and this block does nothing. Only when no vote-confirmed or predictive swap is due.
+         HANDLED HERE AND IT ENDS THE TICK, ahead of the pose/re-anchor updates below: they take the
+         `applying` mutex in this very tick, and maybeSwap() would find it held and drop the dispatch -
+         the reason predictive BACK stands aside from them too. */
+      const earlyAct = earlyTurn && dualView && !acquiring && !confirmed && !predictBack
+        ? earlyTurn.observe({ vote, lock: autoOrientation, yawAbs: yawFresh ? _torsoYawAbs : null, at: yawFresh ? _torsoYawAt : null })
+        : null;
+      if (earlyAct && earlyAct.fire) {
+        /* The pre-turn streak must not count against the early side - predictive BACK's reason. */
+        lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;
+        if (ORIENT_DEBUG) {
+          console.log(`[PEAR][ORIENT] early turn: |yaw| ${_torsoYawAbs.toFixed(0)}° crossed ?early_turn=${ORIENT_EARLY_TURN_DEG}° rising at ${earlyTurn.speed.toFixed(0)}°/s ` +
+            `from a settled ${String(autoOrientation).toUpperCase()} - sending ${earlyAct.fire.toUpperCase()} ahead of any vote`);
+        }
+        await maybeSwap(earlyAct.fire, earlyAct.fire === "back");   // an early BACK is withdrawable like a predictive one
+        return;
+      }
+      if (earlyAct && earlyAct.withdraw) {
+        if (ORIENT_DEBUG) {
+          console.log(`[PEAR][ORIENT] early turn WITHDRAWN: ${earlyAct.withdraw.toUpperCase()} votes came back under ` +
+            `${ORIENT_EARLY_TURN_DEG}° before any vote confirmed the turn - restoring ${earlyAct.withdraw.toUpperCase()}`);
+        }
+        /* The cooldown is anti-flap. Withdrawing an early swap no vote ever confirmed is the one flap that
+           must not wait for it - the FRONT direction already skips it (lastSwapPredictive); this gives
+           BACK the same. Bounded: the trigger has to re-arm square on this side, and its next fire still
+           meets the cooldown this withdrawal starts. */
+        if (earlyAct.withdraw === "back") lastSwapAt = 0;
+        await maybeSwap(earlyAct.withdraw);
+        return;
+      }
 
       /* The pose axis, updated every tick. Skipped when a DUAL-VIEW swap is confirmed and
          about to run: maybeSwap() re-applies the entire payload, which picks up whatever
@@ -6067,8 +8504,11 @@ function createOrientationWatcher() {
          `applying` flag before doing anything, so two overlapping ticks still cannot
          produce two concurrent applies. What is lost is only the tick's knowledge of when
          they finished, which nothing below uses. maybeSwap() stays awaited - it owns the
-         hold's lifecycle and the tick must not run ahead of it. */
-      if (!(dualView && confirmed)) {
+         hold's lifecycle and the tick must not run ahead of it.
+         A PREDICTIVE swap stands in exactly the same place: the re-anchor would otherwise take
+         the `applying` mutex first in this very tick, and maybeSwap() would find it held and
+         drop the prediction. */
+      if (!(dualView && (confirmed || predictBack))) {
         maybeUpdateProfile(lastProfileScore).catch(() => {});
         /* Same redundancy argument as maybeUpdateProfile()'s skip above: a pending
            dual-view swap is about to re-apply the whole payload anyway. Called AFTER
@@ -6081,7 +8521,25 @@ function createOrientationWatcher() {
         maybeReanchorPrompt().catch(() => {});
       }
 
-      if (dualView && confirmed) await maybeSwap(lastVote);
+      /* A BACK confirmed on the side-view pass alone (see ORIENT_POSE_PASS) goes out at the stage of the
+         turn a predictive BACK does, so it is sent as one: a return to FRONT withdraws it inside the
+         cooldown instead of leaving it on the chest. Every other confirmed flip is sent as before. */
+      if (dualView && confirmed && early && lastVote === "back") await maybeSwap("back", true);
+      else if (dualView && confirmed) await maybeSwap(lastVote);
+      else if (predictBack) {
+        /* THE PRE-TURN STREAK MUST NOT OUTLIVE THE PREDICTION. lastVote is still the "front"
+           the shopper was voting before they turned (abstentions never clear it), and faceStreak
+           may already sit past ORIENT_FACE_RETURN_FRAMES - against a BACK lock that is a
+           ready-made face return, and the very next tick would withdraw the prediction on
+           evidence that predates it. Cleared first, so only votes cast AFTER the dispatch count. */
+        lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;
+        if (ORIENT_DEBUG) {
+          console.log(`[PEAR][ORIENT] predictive BACK: passed the side view ` +
+            `(${yawWindow.edgeLost ? "torso lost at edge-on" : "peak " + yawWindow.peak.toFixed(0) + "°"}, ` +
+            `now ${_torsoYawAbs.toFixed(0)}°, ${Date.now() - yawWindow.edgeAt}ms since edge-on, no face since the turn began)`);
+        }
+        await maybeSwap("back", true);
+      }
     } catch (_) {} finally { sampling = false; }
   }, ORIENT_SAMPLE_MS);
 
@@ -6093,6 +8551,9 @@ function createOrientationWatcher() {
          have released it is gone, and the shopper is left staring at a frozen still with
          the live feed hidden underneath it forever. */
       orientHoldEnd("watcher-stopped");
+      /* Same reason: the sampler that would clear it is gone, and a flag left up would keep
+         deferring body re-drapes until its ceiling for a turn nobody is tracking. */
+      orientTurnMark(false);
       try { video.pause(); } catch (_) {}
       video.srcObject = null;                    // detach only - the track is the preview's
     },
@@ -7044,7 +9505,80 @@ function itemPendingReason(item) {
     return "מכינים תצוגה משולבת, רק רגע · Preparing the combined view";
   return null;
 }
+/* ── THE CLASSIFICATION GATE - "I faced forward and it printed the BACK graphic" ────
+   ────────────────────────────────────────────────────────────────────────────────
+   THE BUG THIS CLOSES, and it is NOT what it looks like. Reported as a front/back panel
+   inversion: on the PEAK tee, whose front carries a small text logo and whose back
+   carries a large mountain photo, the first two seconds of the session rendered the
+   MOUNTAIN on the shopper's chest while they faced forward.
+
+   Nothing is inverted. activeImageOf() maps effectiveAngle() straight onto galleryOf()'s
+   front/back keys, and at t=0 autoOrientation is null so effectiveAngle() resolves
+   "front". The front slot simply held the wrong photograph.
+
+   THE CHAIN. pear-widget.js opens this room IMMEDIATELY with ?garment_url=imgs[0] - the
+   first image in DOM ORDER, scraped off the PDP and validated by nobody - and only THEN
+   calls /api/classify-images. Merchants routinely lead a gallery with the most striking
+   photo, which on this product is the back. So the room binds the back photo as the
+   front reference, goes live on it if the shopper is quick, and Decart faithfully
+   renders the mountain print on their chest. The classifier's verdict arrives 2.5s warm
+   / ~27s cold as a PEAR_UPDATE_GARMENT correction and fixes activeItem.img - which is
+   exactly why the report is timestamped 00:00-00:02 and not for the whole clip.
+
+   So the fix is not a prompt clause and not a panel contract (there are no panels on the
+   wire - see COMPOSITE_DEFAULT). It is to refuse to go live on a reference that has not
+   been validated yet, which is what this gate does.
+
+   IT RELEASES ON A TIMEOUT, DELIBERATELY (CLAUDE.md §2.5 - never block on ambiguity).
+   A gate that waits forever on a failed or throttled classify call is a wrong block, and
+   a wrong block stops a paying shopper. The widget always sends a completion signal now,
+   including when the classifier agreed with the DOM guess and nothing changed; the timer
+   is the backstop for the case where that message never arrives at all (an older widget
+   build, a a torn-down iframe, a request that died). On release the session proceeds on
+   the unvalidated guess - today's behaviour, and strictly better than a dead button.
+
+   PAIRED WITH THE WIDGET, and both halves must ship together: ?classify_pending=1 is
+   only sent when a classify call is actually in flight, and the room only ever arms this
+   gate from that parameter. An older widget sends neither, so the gate never arms and
+   behaviour is unchanged. */
+const CLASSIFY_GATE_MAX_MS = 30000;   // > the ~27s measured cold synthesis, < a lost session
+let classifyPending = (() => {
+  try { return new URLSearchParams(location.search).get("classify_pending") === "1"; }
+  catch (_) { return false; }
+})();
+let classifyGateTimer = null;
+
+/** Release the gate. Idempotent - the correction and the timeout race, and either wins. */
+function resolveClassifyGate(why) {
+  if (classifyGateTimer) { clearTimeout(classifyGateTimer); classifyGateTimer = null; }
+  if (!classifyPending) return;
+  classifyPending = false;
+  console.log(`[PEAR] classification gate RELEASED (${why}) - try-on is now unblocked`);
+  /* One repaint so the capture button drops its pending/spinner state immediately,
+     rather than at whatever the next unrelated render happens to be. */
+  if (typeof renderActiveGarment === "function") renderActiveGarment();
+  if (typeof syncCaptureButtonPendingState === "function") syncCaptureButtonPendingState();
+}
+
+if (classifyPending) {
+  console.log("[PEAR] classification gate ARMED - the front/back pair is not validated yet; " +
+    "try-on is blocked until /api/classify-images answers");
+  classifyGateTimer = setTimeout(() => {
+    console.warn("[PEAR] classification gate TIMED OUT after", CLASSIFY_GATE_MAX_MS,
+      "ms - no verdict arrived; proceeding on the unvalidated DOM-order guess rather than " +
+      "stranding the shopper (CLAUDE.md 2.5)");
+    resolveClassifyGate("timeout");
+  }, CLASSIFY_GATE_MAX_MS);
+}
+
 function livePendingReason() {
+  /* THE CLASSIFICATION GATE COMES FIRST, before any per-item reason: until the verdict
+     lands nobody knows WHICH photo is the front, so there is no point asking whether
+     that photo's back view is ready. typeof-guarded because the extract-based suites
+     (pending-gate.test.mjs) run this function standalone with no module scope - §2.7. */
+  if (typeof classifyPending !== "undefined" && classifyPending) {
+    return "מאמתים את תמונות הבגד, רק רגע · Checking the garment photos";
+  }
   const look = resolveLook();
   if (look) return itemPendingReason(look.top) || itemPendingReason(look.bottom);
   return itemPendingReason(activeItem);
@@ -8262,19 +10796,108 @@ const CATEGORY_ANCHOR = Object.freeze({
 const BACK_CATEGORY_ANCHOR = Object.freeze({
   /* Same spine as the front anchors - bind the static garment, adapt to the current
      contour, preserve the original - with the region re-pointed at the back and ONE
-     clause added: the rear print/logo/seam lock. A back render's characteristic failure
-     is not a wrong drape, it is the front graphic reproduced on the reverse, and that is
-     the only thing this pair says which the front pair does not. */
+     clause added. That clause's WORDING was the bug below; its PURPOSE stands.
+
+     ── "IT DREW 'PEAK PEAK', BLANK WHITE BOXES AND GENERIC LINES ON MY BACK" ─────────
+     The clause used to read: "Precisely lock the rear print, logos, and back seams."
+     It was meant to stop a back render reproducing the front graphic. What it actually
+     did, once the printed-back path started shipping, is visible in the report item by
+     item - each hallucination maps onto one noun in that single sentence:
+         "logos"       -> "PEAK PEAK"         the garment's brand text, drawn repeatedly
+         "print"       -> blank white boxes   a print-shaped placeholder with nothing in it
+         "back seams"  -> generic lines       seam strokes the reference never had
+     Decart's set() has no negative_prompt, so every noun in this string is a POSITIVE
+     token the sampler steers toward. Telling the model to "lock the logos" does not
+     make it copy the reference's logos; it makes it produce logos. This is the tuxedo
+     mechanism again - CATEGORY_ANCHOR.top, PLAIN_TEE_ANCHOR and PLAIN_BACK_ANCHOR each
+     record a version of it - reached through the one back sentence nobody had touched.
+
+     It surfaced only now because this anchor only recently started shipping for this
+     garment: while the classifier mislabelled the rear photo the product got a synthetic
+     back and PLAIN_BACK_ANCHOR instead. Fixing that exposed this.
+
+     THE REPLACEMENT NAMES NO GRAPHIC AT ALL. It points at the reference image and says
+     to reproduce the rear panel as shown - which is the original intent, expressed as
+     grounding rather than as a list of things to draw. Whatever artwork is on the
+     reference (a photograph, lettering, nothing) is what "as shown" means, so the same
+     sentence is correct for every garment and asserts nothing the pixels do not.
+     plain-back-anchor.test.mjs now pins the ABSENCE of graphic nouns on this anchor
+     too, not only on the plain one. */
   top:
     "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
-    " the live subject's CURRENT back contour and volume in this frame. Precisely lock the" +
-    " rear print, logos, and back seams. Dynamically adapt the garment drape to the" +
+    " the live subject's CURRENT back contour and volume in this frame. Reproduce the rear" +
+    " panel exactly as shown in the reference. Dynamically adapt the garment drape to the" +
     " subject's exact silhouette, angle, depth, and back volume without stretching or" +
     " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.",
   bottom:
     "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
     " onto the live subject's CURRENT lower-body contour and volume in this frame." +
-    " Precisely lock the rear print, logos, and back seams. Dynamically adapt the fit to" +
+    " Reproduce the rear panel exactly as shown in the reference. Dynamically adapt the fit to" +
+    " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
+    " garment design. Strictly preserve original pattern and color.",
+});
+
+/* ── THE PLAIN-BACK ANCHOR - "it drew scrambled black graphics on my back" ─────────
+   ────────────────────────────────────────────────────────────────────────────────
+   REPORTED against a white tee whose front carries "BE YOUR OWN Healer WORLDWIDE" and
+   whose rear reference is 100% blank white fabric. Turning around produced scrambled
+   black graphics across the shopper's back. The reference was correct; the PROMPT asked
+   for it.
+
+   THE ROOT CAUSE IS ONE SENTENCE IN THE PAIR ABOVE: "Precisely lock the rear print,
+   logos, and back seams." It ships on EVERY back render, and on a blank back it asserts
+   a print and logos that do not exist. Decart's set() has no negative_prompt, so "print"
+   and "logos" reach the sampler as POSITIVE tokens to steer toward - the prompt is
+   instructing the model to invent rear graphics, and it obliges. Nothing about the
+   reference image was wrong and no amount of reference fidelity could have overridden a
+   direct instruction.
+
+   THIS IS THE SAME BUG PLAIN_TEE_ANCHOR ALREADY FIXED ON THE FRONT, and the fix is the
+   same shape. That anchor exists because CATEGORY_ANCHOR.top's word "shirt" kept
+   summoning collars and plackets onto plain tees, and its note records the resolution in
+   full: the fix was NOT a negation ("no buttons, no collar, no placket"), because those
+   nouns would ship in the positive prompt as tokens the sampler steers toward - "the
+   shape that produced the tuxedo". The fix was to DESCRIBE THE PLAINNESS POSITIVELY
+   ("Keep the reference's plain knit neckline and smooth unbroken front exactly as
+   shown") and to SELECT that anchor on positive evidence. This does exactly that, on the
+   back.
+
+   SO IT NAMES NO GRAPHIC NOUNS AT ALL. The obvious patch - and the one specified when
+   this was reported - is "the rear fabric is 100% PLAIN WHITE with ZERO text, zero
+   logos, and zero black chest graphics; strictly forbid carrying over front chest text".
+   Every one of those phrases puts a graphic noun on the wire: text, logos, black chest
+   graphics, front chest text. With no negative_prompt to attach them to, that wording is
+   a RICHER instruction to draw graphics than the sentence it replaces. It would make the
+   reported bug worse, and it is 290 characters against 135 free on this branch, so it
+   would also hard-slice. "Smooth unbroken fabric" cannot be sampled into a logo.
+
+   IT SHRINKS THE WIRE: 41 characters replacing 52, so the back anchor drops 412 -> 401.
+   Every fidelity fix in this file has to shrink it (plain-tee-fidelity §7.3) for the same
+   text-volume reason, and this one does.
+
+   SELECTED ON POSITIVE EVIDENCE ONLY, never assumed - the §2.1 discipline, applied to a
+   different question. `item.backIsPlain === true` means the server positively established
+   a blank rear: either it GENERATED the rear (synthesizeBackView explicitly reconstructs
+   unbroken fabric and forbids carrying the front graphic over), or the classifier
+   transcribed the real rear photo and found no lettering. Undefined or false keeps the
+   pair above byte-identical. Guessing "plain" on a garment with a genuine back print
+   would suppress the one graphic the shopper turned around to see - the print-less-back
+   bug, inverted - so abstention is the safe direction here too. */
+const PLAIN_BACK_ANCHOR = Object.freeze({
+  /* Byte-identical to BACK_CATEGORY_ANCHOR except for the one clause. Kept as a full
+     frozen literal rather than assembled from the pair above, because the angle/
+     construction axes in this file SELECT between frozen strings and never concatenate -
+     see BACK_CATEGORY_ANCHOR's own note on why appending re-opens the tuxedo. */
+  top:
+    "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
+    " the live subject's CURRENT back contour and volume in this frame. The rear panel is" +
+    " smooth unbroken fabric. Dynamically adapt the garment drape to the" +
+    " subject's exact silhouette, angle, depth, and back volume without stretching or" +
+    " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.",
+  bottom:
+    "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
+    " onto the live subject's CURRENT lower-body contour and volume in this frame." +
+    " The rear panel is smooth unbroken fabric. Dynamically adapt the fit to" +
     " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
     " garment design. Strictly preserve original pattern and color.",
 });
@@ -8465,7 +11088,22 @@ function imageOnlyPrompt(item, angle = "front") {
      applyGarment() documents at length: the prompt and the reference image must be resolved
      against the SAME orientation reading. A prompt built from a fresh read while the image
      was resolved from the frozen one is the mixing bug that comment records. */
-  const anchors = angle === "back" ? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;
+  /* ── THE FOURTH FROZEN AXIS: rear construction ────────────────────────────────────
+     A back render on a garment PROVEN to have a blank rear selects PLAIN_BACK_ANCHOR,
+     which is byte-identical to BACK_CATEGORY_ANCHOR except that it does not claim a
+     "rear print, logos" the garment does not have. That claim is what drew scrambled
+     graphics on a blank back: with no negative_prompt, those nouns are positive tokens.
+     See PLAIN_BACK_ANCHOR for the report and for why the fix is a positive description
+     rather than the specified "ZERO text, zero logos" negation.
+
+     STILL A SELECTOR, so the volume-flatness this file guards stays intact: exactly one
+     anchor ships, nothing is concatenated, and the plain variant is SHORTER than the one
+     it replaces. `=== true` and not a truthy test - undefined (nobody looked) and false
+     (a real rear print) must both keep the existing wording. */
+  const plainBack = angle === "back" && item && item.backIsPlain === true;
+  const anchors = angle === "back"
+    ? (plainBack ? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR)
+    : CATEGORY_ANCHOR;
   const bottoms = isBottomsGarment(item);
   /* THE SECOND PART the restore notes describe, and the first one actually bought back.
      P.HIGH, not P.CORE: under budget pressure fitPrompt() sheds it before it will touch
@@ -8523,21 +11161,42 @@ function imageOnlyPrompt(item, angle = "front") {
 
      image-first.test.mjs's "size-override modifier no longer reaches the wire" check is
      updated in the same commit - this clause is what it now asserts IS wired. */
+  /* ── THE GARMENT IDENTITY LOCK - P.CORE, and PROMOTED FROM P.LOW ON PURPOSE ──────
+     "Decart rendered a random t-shirt instead of the garment Gemini prepared."
+
+     Names the garment's MEASURED colour and its transcribed print - the two facts the
+     prompt could not state before, because they are per-product measurements rather than
+     anything an anchor could hold. Threaded server -> widget -> item, never baked into a
+     constant, so one product's identity cannot leak into another's prompt.
+
+     THE PROMOTION IS THE CHANGE, and it reverses a deliberate earlier decision, so the
+     earlier reasoning is worth stating: at P.LOW this clause sheds FIRST, which made it
+     purely additive and guaranteed it could never displace fitSentence. That was the
+     right call while it was a colour HINT. It is the wrong call for an identity LOCK -
+     a clause whose entire job is to stop the model substituting a different garment
+     cannot be the first thing dropped when the prompt gets long, because a long prompt is
+     exactly when the reference image is losing the argument. So it moves to P.CORE, where
+     fitPrompt() cannot shed it.
+
+     THE COST, measured (trace:prompt size ladder): on tops + front + closure the base is
+     552 of 650, so after fit(0)'s 88 chars only 9 remain - ANY lock larger than that
+     evicts fitSentence (P.MED) on that one branch. Accepted, and specified: a garment
+     rendered as the WRONG GARMENT is a worse failure than one rendered at the wrong
+     tension. Every other branch keeps both clauses.
+
+     A SECOND P.CORE PART, which conditioning-trace §4 previously pinned as impossible
+     ("exactly ONE anchor ships"). That assertion is updated in the same commit rather
+     than loosened: the invariant it protected - volume stays FLAT across the ANGLE axis,
+     because the angle SELECTS a frozen anchor rather than appending to one - is still
+     true and still asserted. This part is not an angle variant; it is per-product data,
+     it is length-capped at IDENTITY_LOCK_MAX_CHARS, and it is angle-AWARE only in that
+     the print half is withheld on the back (see identityLockSentence: asserting front
+     lettering over a back reference is the double-print bug through the prompt). */
   return fitPrompt([
     [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
+    [P.CORE, identityLockSentence(item, angle)],
     ...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
     [P.MED, fitSentence(bottoms ? "lower_body" : "upper_body")],
-    /* ── THE COLOUR LOCK - per-product, sampled, and the lowest-priority part here ──
-       Names the garment's measured main-fabric colour instead of leaving the anchor's
-       "preserve the original color" to point at a value it never states - the
-       black/yellow hallucination report. The value is threaded per product
-       (server primary_color_hex -> widget garment_color_hex -> item.colorHex); it is
-       never baked into an anchor, so one product's colour cannot leak into another's
-       prompt. P.LOW is load-bearing: it sheds BEFORE fitSentence, which is the only
-       reason it can be added to branches that have 7-10 free characters left. It
-       abstains entirely on an unsampled or ambiguous colour. Full rationale, including
-       why the OCR text is deliberately NOT here, above colorLockSentence(). */
-    [P.LOW, colorLockSentence(item)],
   ]);
 }
 
@@ -8959,9 +11618,99 @@ function colorNameFromHex(hex) {
   return best;
 }
 
-function colorLockSentence(item) {
+/* ── THE GARMENT IDENTITY LOCK - "Decart rendered a random t-shirt" ────────────────
+   ────────────────────────────────────────────────────────────────────────────────
+   Promoted from a P.LOW colour hint to a P.CORE identity lock, and widened to carry the
+   garment's transcribed lettering alongside its colour. Both values are MEASURED by the
+   same Gemini call that classifies front/back (server primary_color_hex / front_text_ocr
+   -> widget -> item.colorHex / item.textOcr), so this is per-product data threaded
+   through the payload and never text baked into an anchor.
+
+   WHY IT IS VALUES-ONLY, and not the 290-character "FIT LOCK" paragraph it was specified
+   as. The anchors already open with "Drape and fit the EXACT static <noun> from the
+   reference image" and close with "Strictly preserve the original <noun> texture,
+   pattern, and color". A lock that restates "fit the exact garment shown in the
+   reference, do not invent or substitute the design" spends ~230 characters repeating
+   instructions ALREADY ON THE WIRE, and text volume competing with the reference image is
+   the one mechanism every report in this file's history shares - it is how the tuxedo got
+   rendered. What the prompt genuinely could not say before is WHICH colour and WHICH
+   text, because those are per-product measurements. So this clause supplies exactly the
+   two values and nothing else; the imperative half is the anchor's job and already done.
+
+   ── THE BUDGET, WHICH IS THE HARD CONSTRAINT HERE ──
+   P.CORE cannot shed. Anything put here is spent on every dispatch, and if the CORE total
+   exceeds PROMPT_MAX_CHARS then fitPrompt() falls through to clampPromptForWire()'s hard
+   slice, which cuts at the END - mid-word, taking this clause's own quoted text with it
+   and asserting a garment print that reads half a slogan. So:
+
+     · The tightest REAL branch is tops + front + closure: 552 chars of anchor + closure
+       lock, 98 free. IDENTITY_LOCK_MAX_CHARS is therefore 96, and this function can never
+       return more than that - measured, not assumed (npm run trace:prompt prints it).
+     · The print half is included ONLY IF THE WHOLE TRANSCRIPTION FITS. It is never
+       truncated. Half a slogan asserted as the garment's text is worse than no text at
+       all - it is a confident wrong answer, the same failure mode colorNameFromHex()'s
+       three gates exist to avoid.
+     · IT COSTS THE FIT SENTENCE ON ONE BRANCH, and that is a deliberate, specified
+       trade: on tops + front + closure only 9 characters remain after fit(0)'s 88, so ANY
+       lock bigger than 9 chars evicts fitSentence (P.MED) there. The spec is explicit
+       that visual identity outranks tension under pressure, and a garment rendered as the
+       wrong garment is plainly worse than one rendered at the wrong tension. Every other
+       branch keeps both. See trace:prompt's size ladder for the per-rung truth.
+
+   ── FRONT-ONLY FOR THE PRINT HALF, and this is the correctness point, not a nicety ──
+   text_ocr is transcribed from the FRONT photograph. Asserting "the print reads X" while
+   the BACK asset is the reference tells the model to put the chest graphic on the
+   shopper's spine - which IS the print-less-back / double-print bug (23f5953), reached
+   through the prompt instead of through the reference image. The colour half is safe on
+   both angles because a garment is one colour from every side. So the angle SELECTS which
+   halves apply, in the same spirit as the frozen anchor pair. */
+const IDENTITY_LOCK_MAX_CHARS = 96;
+/* A transcription longer than this is not a chest graphic - it is a care label, a size
+   chart or a paragraph of marketing copy that happened to be in frame. Naming it as the
+   garment's print would be wrong even if it fit the budget. */
+const PRINT_TEXT_MAX_CHARS = 48;
+
+/* The garment's lettering, or "" to abstain. Abstains on absent (never transcribed),
+   empty (genuinely plain - nothing to assert), and over-long (see above). Quotes are
+   stripped because the value is about to be wrapped in them, and a nested quote would
+   read to the model as the end of the print text. */
+function garmentPrintText(item) {
+  const raw = item && item.textOcr;
+  if (typeof raw !== "string") return "";
+  const text = raw.replace(/["""'']/g, "").replace(/\s+/g, " ").trim();
+  if (!text || text.length > PRINT_TEXT_MAX_CHARS) return "";
+  return text;
+}
+
+function identityLockSentence(item, angle = "front") {
+  /* THE WRAPPERS ARE TERSE BECAUSE EVERY CHARACTER HERE IS SPENT AT P.CORE, on every
+     dispatch, and is taken straight out of fitSentence's headroom. "Fabric: white."
+     rather than "The fabric color is white." costs 14 instead of 27 and says the same
+     thing to a text encoder; the 18 characters that buys back are two whole size rungs
+     on the plain-tee branch (measured - see the trace ladder). "Fabric:" and not
+     "Color:" is deliberate: an unqualified colour label could be read as the
+     background's, which the anchor is simultaneously telling the model to preserve. */
+  const parts = [];
   const name = colorNameFromHex(item && item.colorHex);
-  return name ? `The garment fabric is ${name}.` : "";
+  if (name) parts.push(`Fabric: ${name}.`);
+  if (angle !== "back") {
+    const text = garmentPrintText(item);
+    if (text) parts.push(`Print: "${text}".`);
+  }
+  const out = parts.join(" ");
+  /* THE CEILING IS ENFORCED, not documented and hoped for. Dropping the whole clause is
+     the correct overflow behaviour: every part of it is an assertion about the garment,
+     and a partial assertion is a wrong one. Logged because a clause silently vanishing is
+     exactly the class of bug this file keeps a tracer for. */
+  if (out.length > IDENTITY_LOCK_MAX_CHARS) {
+    console.warn(`[PEAR] identityLockSentence() - ${out.length} chars exceeds the ` +
+      `${IDENTITY_LOCK_MAX_CHARS} budget; dropping it rather than shipping a truncated ` +
+      `garment assertion. Colour+print for this item cannot both be named.`);
+    return name && `Fabric: ${name}.`.length <= IDENTITY_LOCK_MAX_CHARS
+      ? `Fabric: ${name}.`   // keep the half that still fits, angle-safe
+      : "";
+  }
+  return out;
 }
 
 /* ── THE WIRE GUARD - last line of defence, and the one that generalises ──────
@@ -9152,13 +11901,45 @@ function describeBackViewReadiness(item) {
 if (typeof window !== "undefined") {
   window.__pearDebugBackView = () => {
     const r = describeBackViewReadiness(activeItem);
+    /* ── PROVENANCE, BECAUSE "READY" WAS LYING ABOUT THE ONE CASE THAT MATTERED ──────
+       backViewReadinessOf() answers "is there a DISTINCT back asset?", and a SYNTHESIZED
+       back is a distinct asset - so this used to report READY for a garment whose real
+       catalog rear photo had been lost. Reported live: a brown PEAK tee whose catalog
+       back carries a large mountain photograph rendered smooth brown fabric on a turn,
+       and this diagnostic - recommended as THE check for exactly that - gave an all-clear.
+
+       Why the render and the diagnostic disagreed: synthesizeBackView() is told "the back
+       is PLAIN in that garment's fabric and colour" and, with the sampled hex, to render
+       the panel "uniform", which is the brown-fabric-no-artwork output precisely. It only
+       runs when the server resolved NO real rear photo, which almost always means the
+       classifier mislabelled the real one. So a synthetic back on a product that HAS a
+       rear photo is not a success state; it is the failure, dressed as one.
+
+       `backSource` is the only field that distinguishes the two, so it is reported here,
+       and a synthetic back on a multi-photo gallery is flagged as the likely fault. The
+       reason enum itself is unchanged - a synthetic back IS renderable, and several
+       callers treat READY as "a rear swap will work", which stays true. */
+    const backSource = (activeItem && activeItem.backSource) || "unknown";
+    const galleryCount = (activeItem && Array.isArray(activeItem.pearImages)) ? activeItem.pearImages.length : 0;
+    const synthetic = backSource === "synthetic";
+    const suspicious = synthetic && galleryCount > 1;
     console.log("[PEAR] back-view readiness:", r.reason,
       r.half ? `(look half: ${r.half})` : "",
-      "\n  front:", abbrevImg(r.front) || "(none)",
-      "\n  back :", abbrevImg(r.back) || "(none)",
-      "\n  mode :", currentAngle,
-      r.ready ? "" : "\n  → the shopper will see the FRONT garment when they turn around");
-    return r;
+      "\n  front :", abbrevImg(r.front) || "(none)",
+      "\n  back  :", abbrevImg(r.back) || "(none)",
+      "\n  source:", backSource, galleryCount ? `(gallery had ${galleryCount} photos)` : "",
+      "\n  mode  :", currentAngle,
+      r.ready ? "" : "\n  → the shopper will see the FRONT garment when they turn around",
+      suspicious
+        ? "\n  ⚠ READY, BUT THE BACK IS GENERATED, NOT THE CATALOG PHOTO. This gallery had " +
+          galleryCount + " photos, so a real rear image probably exists and was classified as" +
+          " FRONT. The render will be plain fabric in the garment colour with NO rear artwork." +
+          " Check the classifier verdicts in the server log ([classify-images]), and clear the" +
+          " garment_cache rows for this product - a cached wrong verdict is never re-asked."
+        : synthetic
+          ? "\n  (generated rear - expected for a single-photo product)"
+          : "");
+    return { ...r, backSource, synthetic, suspicious };
   };
 }
 
@@ -9363,6 +12144,39 @@ async function applyGarment(item) {
   const refInfo   = {};                                          // ← filled in by referenceImageFor
   let   imageRef  = await referenceImageFor(item, activeImg, refInfo);   // Blob for combined, URL otherwise
   const usingComposite = refInfo.composite === true;             // what we ACTUALLY resolved
+
+  /* ── SAY WHAT IS ACTUALLY ON THE WIRE - "Decart is receiving two people" ────────────
+     REPORTED: on a turn the rear render hallucinated front text, blank boxes and lines,
+     and the reference reaching Decart was observed to be a SIDE-BY-SIDE image - the
+     front view on the left, the back view on the right, a separator between them.
+
+     That description matches OUR OWN createGarmentComposite() output exactly, which
+     makes WHERE it came from the entire question, and the logs could not answer it: the
+     swap log in maybeSwap() prints GARMENT_BACK - the gallery URL - not what
+     referenceImageFor() resolved. When the stitched composite is substituted here, no
+     line anywhere said so. So there are two very different bugs that look identical:
+       (a) OUR composite on the wire - only possible when COMPOSITE_MODE is on, which
+           COMPOSITE_DEFAULT=false forbids unless the URL carries ?composite=1. The fix
+           is to remove that flag; nothing else is wrong. A split FRONT|BACK reference
+           with no panel contract renders fragments of both (23f5953) - this is that.
+       (b) The MERCHANT's catalog photo is itself a front+back composite, classified as
+           the back and passed through verbatim as a single-view reference.
+     This line tells them apart in one read. A composite reported here is (a); a
+     single-view reference here while the render still shows two figures points at (b),
+     which the garment's own catalog photo has to answer. 
+     angleAtStart, NOT effectiveAngle(): this reports the angle the reference was RESOLVED
+     for. A fresh read here is the TOCTOU pattern CLAUDE.md 2.8 bans - the watcher can flip
+     during referenceImageFor()'s await, and a log naming a different side than the pixels
+     sent would be worse than no log. */
+  if (usingComposite) {
+    console.warn(`[PEAR] ⚠ REFERENCE ON THE WIRE IS THE STITCHED FRONT|BACK COMPOSITE ` +
+      `(angle=${angleAtStart}). This is only reachable with COMPOSITE_MODE on ` +
+      `(?composite=1) - COMPOSITE_DEFAULT is false because a two-panel reference with no ` +
+      `panel contract makes the model render fragments of BOTH sides. Remove the flag.`);
+  } else if (typeof console !== "undefined") {
+    console.log(`[PEAR] reference on the wire: SINGLE-VIEW ${angleAtStart} asset -`,
+      typeof abbrevImg === "function" ? abbrevImg(activeImg) : activeImg);
+  }
 
   /* ── LAST-DITCH REFERENCE RECOVERY - the prompt is image-first now ────────────
      This used to be tolerable: `...(imageRef ? { image: imageRef } : {})` quietly
@@ -10338,7 +13152,17 @@ function injectSizeSelector() {
      The generic scales below remain the fallback for catalog/demo items and for any
      storefront we couldn't read a size list from. */
   const productSizes = parseSizeList(activeItem?.sizes ?? pendingSizes);
+  /* THE LADDER MUST BE ABLE TO SHOW THE RECOMMENDATION. When the store gives us its own
+     size list that list IS the ladder, and nothing below applies. When it does not - a
+     picker rendered in JavaScript, which is the case isPantsProduct()'s title and vision
+     tiers exist for - the fallback has to match whichever CHART produced currentUserSize,
+     or the recommended size is not among the buttons at all: a jeans product resolved by
+     title alone would recommend "32" and then render S/M/L/XL, with no ★ on anything and
+     nothing for the shopper to press. Routed through pantsChartForSizes() so the
+     EU-before-waist precedence is not spelled out a second time; productSizes is empty on
+     this branch by construction, so it yields the waist ladder. */
   const scale = productSizes.length ? productSizes
+    : currentSizeIsNumericPants ? pantsChartForSizes(productSizes).map((r) => r.size)
     // Child results get the numeric kids ladder ONLY - no adult S/M/L/XL button is
     // rendered at all, so there is nothing for a child profile to cross over into.
     //
@@ -11631,7 +14455,9 @@ function startBillingWindow(gen) {
   // so the user never sees a "ready" UI before there's real content behind it.
   stopScanTimer();
   $("scanOverlay").hidden = true;
+  resetBestFrontFrame();   // per-session: never inherit the previous shopper best frame
   card().classList.add("show-live");
+  logSurfaceOrientation("go-live");
   /* THE ONLY PLACE THE FEED BECOMES VISIBLE, and it is deliberately the same statement
      that flips the state class. Everything above this line has already been verified:
      the garment apply resolved, the frame is non-black, and it stayed that way for
@@ -11887,6 +14713,40 @@ const FRAME_FREEZE_RECOVER_COOLDOWN_MS = 2500;
    to the problem. */
 const FRAME_FREEZE_PING_MS = 600;
 
+/* ── A SWAP'S RENDER WAIT IS NOT A FREEZE - "the back graphic vanished mid-turn, plain brown shirt" ──────
+   REPORTED from a 360 (00:03, mid-rotation): GARMENT_BACK is on, then the shirt goes plain and untextured
+   for a beat in the middle of the turn, then the back graphic returns.
+   NOT THE ORIENTATION LOCK. autoOrientation is only ever set by maybeSwap() (and rolled back on a failed
+   dispatch); nothing in the vote, the window or the early trigger returns it to null mid-turn.
+   THIS WATCHDOG. A swap HOLDS Decart's input from dispatch to ACK, so the output stalls, and the watchdog
+   stands down for exactly that (inputGateHeld(), re-stamping its clock). The stall does not end at the
+   ACK: Decart has to take the new reference and render the first frame from it - 700-1000ms reported,
+   ~1s by this file's own figure (COND_TRACE_SETTLE_MS). Past FRAME_FREEZE_MS after the last held poll,
+   the watchdog read that as a frozen transport: a keep-alive ping, and - lastRecoverAt starting at 0 -
+   in the same tick a full RE-ANCHOR, invalidateWireState() + applyActive(), which re-uploads the back
+   reference with the input NOT held. That is the generic-garment window of a mid-session re-upload
+   (see the throttle's hold()), and with the early trigger sending BACK at 20 degrees it lands at 70-110.
+   On the real watchdog (first-frame-integrity §8) a 780-1100ms render wait after the ACK tripped it, the
+   exact figure depending on where the ACK fell against the 250ms poll.
+   THE FIX. The ACK of a swap starts a FRAME_FREEZE_AFTER_SWAP_MS window in which the freeze bar is that
+   long instead of FRAME_FREEZE_MS - the render wait is expected silence, like the hold before it. The bar
+   runs from the watchdog's last re-stamp (the last held poll, at most one FRAME_FREEZE_POLL_MS before the
+   ACK), so at least FRAME_FREEZE_AFTER_SWAP_MS - FRAME_FREEZE_POLL_MS of render wait is covered. A real
+   freeze right after a swap is still caught and re-anchored, at most FRAME_FREEZE_AFTER_SWAP_MS -
+   FRAME_FREEZE_MS later than one anywhere else; a freeze with no swap near it is untouched. Not live-verified:
+   whether Decart's output stalls for the whole render wait is what ?orient_debug=1's RENDER_APPLIED and
+   the "[PEAR] stream FROZEN" line say on a real turn. */
+const FRAME_FREEZE_AFTER_SWAP_MS = 2000;
+let _swapAckedAt = -Infinity;             // when the last orientation swap's set() was acknowledged
+
+/** A swap's reference was just acknowledged - maybeSwap() calls this. @param {number} [now] */
+function noteSwapAcknowledged(now = Date.now()) { _swapAckedAt = now; }
+
+/** @param {number} [now] @returns {number} the silence, in ms, that counts as a freeze right now */
+function freezeBarMs(now = Date.now()) {
+  return now - _swapAckedAt < FRAME_FREEZE_AFTER_SWAP_MS ? FRAME_FREEZE_AFTER_SWAP_MS : FRAME_FREEZE_MS;
+}
+
 let freezeWatcher = null;                  // { stop } while running, else null
 
 /**
@@ -11941,7 +14801,13 @@ function createFrameFreezeWatcher(video, gen) {
                          way out. Stamping the clock (rather than merely returning) is
                          what stops the whole outage from counting as one long freeze the
                          instant the tab or the transport comes back. */
+    /* · input held    - an orientation swap is deliberately withholding camera frames from
+                         Decart until its new reference is acknowledged (see the throttle's
+                         hold()), so no output frame is EXPECTED. Treating that as a stall
+                         would fire a full re-anchor that queues another upload behind the
+                         swap and lengthens the very freeze it thinks it is repairing. */
     if (!isLive() || connState === "reconnecting" ||
+        inputGateHeld() ||
         (typeof document !== "undefined" && document.hidden)) {
       lastFrameAt = Date.now();
       frozenSince = null;
@@ -11955,7 +14821,8 @@ function createFrameFreezeWatcher(video, gen) {
     }
 
     const gap = Date.now() - lastFrameAt;
-    if (gap < FRAME_FREEZE_MS) return;
+    /* Longer right after a swap's ACK - its render wait is expected silence, see FRAME_FREEZE_AFTER_SWAP_MS. */
+    if (gap < (typeof freezeBarMs === "function" ? freezeBarMs() : FRAME_FREEZE_MS)) return;
     if (frozenSince === null) {
       frozenSince = lastFrameAt;
       console.warn(`[PEAR] stream FROZEN - no decoded frame for ${gap}ms while live`,
@@ -12393,22 +15260,44 @@ async function goLive() {
        it here means that failure surfaces (or is gracefully absorbed into a
        front-only run) BEFORE any camera/Decart resource - and any billing - is
        spent, never as a mid-turn surprise. */
-    if (currentAngle === AUTO_ANGLE) {
-      $("scanOverlay").hidden = false;
-      const preload = await preloadGarmentAssets();
-      if (!preload.ok) {
-        $("scanOverlay").hidden = true;
-        showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
-        toast("⚠ טעינת תמונת הבגד נכשלה");
-        return;   // finally{} resets busy + the capture button; no billed session opened
-      }
-      if (!preload.hasBack) {
-        // Known-bad/missing back BEFORE go-live - don't arm AI Auto with an asset we
-        // already know is broken. Front-only is a fully supported, never-blocked mode.
-        currentAngle = "front";
-        toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
-      }
+    /* IT NOW RUNS ON EVERY PATH, NOT ONLY AI AUTO. This condition used to read
+       `if (currentAngle === AUTO_ANGLE)`, which left the one mode most of the catalog
+       actually uses - front-only - with no validation gate at all: it reached
+       connectRealtime() with its reference never fetched, decoded or content-validated.
+       prewarmOrientationAssets() usually got there first, but fire-and-forget has no
+       floor. Lose that race - a cold cache, a slow CDN, a shopper who clicks the instant
+       the button unblocks - and the FIRST time those bytes were touched was inside the
+       go-live apply, which then shipped a bare URL for Decart to fetch server-side
+       before it could condition on anything. That IS a session conditioned on an
+       unresolved reference; it was simply on the branch this gate was not covering.
+       Validating here costs nothing when the prewarm already won (every lookup is a
+       cache hit) and is the missing wait when it did not. */
+    const wantedAutoView = currentAngle === AUTO_ANGLE;
+    $("scanOverlay").hidden = false;
+    const preload = await preloadGarmentAssets();
+    if (!preload.ok) {
+      $("scanOverlay").hidden = true;
+      showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
+      toast("⚠ טעינת תמונת הבגד נכשלה");
+      return;   // finally{} resets busy + the capture button; no billed session opened
     }
+    if (!preload.hasBack) {
+      // Known-bad/missing back BEFORE go-live - don't arm AI Auto with an asset we
+      // already know is broken. Front-only is a fully supported, never-blocked mode.
+      currentAngle = "front";
+      /* The TOAST is scoped to wantedAutoView; the downgrade above is not. hasBack is
+         also false for a garment that simply never had a back photo, and now that this
+         gate runs for those too, an unscoped toast would announce that a back view is
+         unavailable to a shopper who was never offered one - a new false alarm created
+         purely by widening the gate. Only a run that genuinely intended AI Auto has
+         lost something worth reporting. */
+      if (wantedAutoView) toast("תצוגת הגב אינה זמינה - מוצג רק חזית · Back view unavailable - front only");
+    }
+    /* Every asset this run needs is now fetched, decoded and validated - so the prep
+       overlay can retire and hand over the finalized card in one step. Guarded: this
+       is the only caller that can settle the PRELOADING_BLOBS phase, since the preload
+       gate's own milestones deliberately stop at PREP_PRELOAD_CEIL. */
+    if (typeof assetPrepReady === "function") assetPrepReady();
 
     // LOADING state: overlay + a live elapsed-time counter (generic copy, no model/
     // vendor names - see startScanTimer). Runs until startBillingWindow() confirms
@@ -12573,6 +15462,7 @@ function stopLive() {
   stopLowerBodyGuard();
   stopPresenceWatcher();
   if (frozen) card().classList.add("show-result");   // surface the frozen snapshot as the final result
+  logSurfaceOrientation("post-countdown-result");
   setLiveControls(false);              // reset the button back to "Go Live" so a new session can start
   $("captureBtn").disabled = !localStream;
 }
@@ -12621,20 +15511,31 @@ function beginFreezeHold() {
    Returns null if nothing is paintable. */
 function captureHoldFrame() {
   const ai = $("aiVideo"), webcam = $("webcam");
+  /* ── mirror IS NOW TRUE ON BOTH BRANCHES, and the split is kept only to show that ──
+     This frame is repainted for the FROZEN TAIL of the recording, so it must follow the
+     CLIP's convention rather than the live feed's. Captures are deliberately un-mirrored
+     (MIRROR_POLICY), and every video source in this file is reality-oriented, so
+     un-mirrored means baking nothing at all. Flipping here would mirror the clip's frozen
+     tail against its own live body. */
   let src = null, mirror = false, w = 0, h = 0;
   if (ai && ai.videoWidth > 0 && ai.style.display !== "none") {
-    src = ai; w = ai.videoWidth; h = ai.videoHeight;
+    src = ai; w = ai.videoWidth; h = ai.videoHeight;                  // reality in, reality kept
   } else if (webcam && webcam.videoWidth > 0) {
-    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight; mirror = true;
+    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight;      // same convention on the fallback
   }
   if (!src || !w || !h) return null;
   const cv = document.createElement("canvas");
   cv.width = w; cv.height = h;
   const c = cv.getContext("2d", { alpha: false });
+  /* Fresh canvas, so this context starts at identity and was never at risk of
+     accumulating - written in the absolute form anyway so that every flip in this file
+     reads the same way and a bare translate+scale stays a smell wherever it appears. */
   c.save();
-  if (mirror) { c.translate(w, 0); c.scale(-1, 1); }
-  try { c.drawImage(src, 0, 0, w, h); } catch (_) { c.restore(); return null; }
-  c.restore();
+  try {
+    c.setTransform(mirror ? -1 : 1, 0, 0, 1, mirror ? w : 0, 0);
+    c.drawImage(src, 0, 0, w, h);
+  } catch (_) { return null; }
+  finally { c.restore(); }
   return cv;
 }
 
@@ -12791,10 +15692,15 @@ function poseFrameQualifies(landmarks, category, minConfidence = POSE_MIN_CONFID
  * which is the exact failure mode this gate must never have.
  * @returns {boolean|null}
  */
+
 function presenceFromPoseResult(result, category) {
   if (!result || !Array.isArray(result.landmarks)) return null;
   if (!result.landmarks.length) return false;
-  return result.landmarks.some((set) => poseFrameQualifies(set, category, POSE_MIN_CONFIDENCE));
+  /* THE PRIMARY SUBJECT ONLY - never `.some()` across everyone in frame. A bystander
+     qualifying is not the shopper being present, and it is the same person
+     bodyContourSignature() measures, by construction. */
+  const i = primaryPoseIndex(result.landmarks);
+  return i >= 0 && poseFrameQualifies(result.landmarks[i], category, POSE_MIN_CONFIDENCE);
 }
 
 /**
@@ -12889,6 +15795,55 @@ function torsoReadable(landmarks, minVisibility = BODY_TRACK_MIN_VISIBILITY) {
     return !!lm && Number.isFinite(lm.x) && Number.isFinite(lm.y) &&
       Number(lm.visibility ?? 0) >= minVisibility;
   });
+}
+
+/* ── THE PRIMARY SUBJECT - "someone walked behind me and the garment glitched" ──────
+   ────────────────────────────────────────────────────────────────────────────────
+   WHO IS THE SHOPPER, when the room contains more than one person? Two functions used
+   to answer that question differently and neither answered it deliberately:
+   presenceFromPoseResult() took `.some()` over every detected pose (ANY person satisfies
+   the gate), while bodyContourSignature() reads `landmarks[0]` (whoever the detector
+   happened to list first). Two readings of "the subject" that can disagree is the same
+   shape as the TOCTOU rule §2.8 exists for, in a smaller key: the presence gate can be
+   held open by a bystander while the topology monitor measures somebody else, and the
+   re-conditioning dispatch that follows re-drapes the garment for a body that is not the
+   shopper's.
+
+   IT IS LATENT TODAY, and that is worth stating plainly rather than overselling the fix:
+   the detector is configured `numPoses: 1`, so both functions currently see the same
+   single pose and cannot disagree. What they cannot do is CHOOSE it - MediaPipe returns
+   whichever person it scored highest, which on a crowded shop floor need not be the
+   shopper standing centred in front of the camera.
+
+   WHAT THIS DOES AND DOES NOT FIX. It makes subject selection explicit and shared, so
+   the gate and the topology monitor are guaranteed to be talking about the same person,
+   and so the person chosen is the one framed for a try-on rather than the one the
+   detector liked best. It does NOT and cannot fix Decart's own segmentation: the mask is
+   computed server-side from the video frames, and nothing in this file can tell it which
+   body to cut around. A bystander physically in frame is still in the frames Decart
+   receives. Framing guidance is the only lever this side of the wire.
+
+   LARGEST TORSO WINS, not nearest-to-centre. Both were considered; torso area is the more
+   robust proxy for "standing closest to the camera, which is where the shopper is",
+   and it degrades gracefully - a partially cropped bystander at the frame edge scores
+   small, while centre-distance would rank a distant person walking through the middle
+   above a shopper standing slightly off-axis. Falls back to index 0 when no torso is
+   measurable, which is exactly today's behaviour. */
+function primaryPoseIndex(landmarkSets) {
+  if (!Array.isArray(landmarkSets) || !landmarkSets.length) return -1;
+  if (landmarkSets.length === 1) return 0;
+  let best = 0, bestArea = -1;
+  for (let i = 0; i < landmarkSets.length; i++) {
+    const set = landmarkSets[i];
+    if (!Array.isArray(set)) continue;
+    const pts = TORSO_LANDMARKS.map((idx) => set[idx]);
+    if (pts.some((p) => !p)) continue;
+    const xs = pts.map((p) => Number(p.x)), ys = pts.map((p) => Number(p.y));
+    if (xs.some((n) => !Number.isFinite(n)) || ys.some((n) => !Number.isFinite(n))) continue;
+    const area = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+    if (area > bestArea) { bestArea = area; best = i; }
+  }
+  return best;
 }
 
 /**
@@ -12994,10 +15949,22 @@ function bodyProfileBox(landmarks) {
  * @returns {{yaw:number, pitch:number, depth:number, aspect:number}|null}
  */
 function bodyContourSignature(result, minVisibility = BODY_TRACK_MIN_VISIBILITY) {
-  const image = result && Array.isArray(result.landmarks) ? result.landmarks[0] : null;
+  /* THE SAME SUBJECT THE PRESENCE GATE PICKED, resolved through the same helper rather
+     than by taking index 0. Two independent answers to "which of these people is the
+     shopper" can disagree, and a topology reading taken from a different body than the
+     one that opened the gate re-drapes the garment for the wrong torso. */
+  const sets = result && Array.isArray(result.landmarks) ? result.landmarks : null;
+  const subject = sets ? primaryPoseIndex(sets) : -1;
+  const image = subject >= 0 ? sets[subject] : null;
   if (!torsoReadable(image, minVisibility)) return null;
-  const world = result && Array.isArray(result.worldLandmarks) && result.worldLandmarks[0]
-    ? result.worldLandmarks[0] : image;
+  /* THE SAME INDEX, not 0. PoseLandmarker returns worldLandmarks PARALLEL to landmarks -
+     entry i of one is entry i of the other - so taking index 0 here while `image` came
+     from the primary-subject index would pair one person's metric skeleton with another
+     person's image coordinates. Every angle below is computed from `world` and the
+     bounding box from `image`; mixing subjects between them yields a yaw that belongs to
+     nobody. Falls back to `image` exactly as before when world data is unavailable. */
+  const world = result && Array.isArray(result.worldLandmarks) && result.worldLandmarks[subject]
+    ? result.worldLandmarks[subject] : image;
   const yaw = bodyYawDegrees(world), pitch = bodyPitchDegrees(world);
   const depth = bodyDepthRatio(world), box = bodyProfileBox(image);
   if (yaw === null || pitch === null || depth === null || !box) return null;
@@ -13389,7 +16356,42 @@ function startPresenceWatcher() {
             if (bodyTopology) bodyTopology.reset();
           } else if (!present && wasPresent && verdict === false) {
             wasPresent = false;
-            showPresenceOverlay();
+            /* ── DO NOT PROMPT A SHOPPER WHO IS SIMPLY TURNING ──────────────────────
+               REPORTED: "Please step into the frame" appears mid-rotation, over a
+               shopper who is plainly still in shot, while the try-on is working.
+
+               WHY IT FIRES. presenceFromPoseResult() asks whether the required torso
+               landmarks are visible above POSE_MIN_CONFIDENCE. Turn side-on and half of
+               them occlude behind the body, so the honest answer is "not present" - the
+               gate is not malfunctioning, it is being asked a question that a rotating
+               body cannot answer. Its own mental model is "has the shopper walked away",
+               and a turn is the one kind of absence that is not an absence.
+
+               THE PROMPT IS SUPPRESSED, THE VERDICT IS NOT. wasPresent still flips to
+               false, so the moment the torso is readable again the recovery branch above
+               runs in full - reconditionForPresence() and the topology reset both still
+               fire. All that is withheld is the overlay, which is pure UI: showing it
+               over a mid-turn frame tells the shopper to do something they are already
+               doing, and it covers the render at exactly the moment they turned in order
+               to look at it.
+
+               GATED ON A FRESH READING ONLY. A stale or absent yaw abstains to the old
+               behaviour and the prompt shows, because "no pose data at all" is genuinely
+               indistinguishable from "nobody there" - which is the case the overlay was
+               written for. 25 degrees is deliberately well below
+               ORIENT_YAW_TURN_DEG (45): this is not deciding a turn happened, only that
+               the body is off-square enough to explain unreadable landmarks. */
+            const yawFresh = _torsoYawAbs !== null &&
+                             Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS;
+            const turning = yawFresh && _torsoYawAbs > PRESENCE_PROMPT_YAW_SUPPRESS_DEG;
+            if (turning) {
+              if (ORIENT_DEBUG) {
+                console.log(`[PEAR] presence: unreadable at |yaw|=${_torsoYawAbs.toFixed(0)}°` +
+                  ` - a turn, not an absence; holding the prompt back`);
+              }
+            } else {
+              showPresenceOverlay();
+            }
           }
         }
       }
@@ -13399,13 +16401,54 @@ function startPresenceWatcher() {
          mid-rotation and is deliberately silent - holding the last valid fit IS sending
          nothing - and "cooldown" is a shift the rate limit swallowed, which the tracker
          remembers so the movement is not lost. */
+      /* ── PUBLISH THE YAW FOR THE ORIENTATION WATCHER - EVERY TICK ──────────────────
+         Free: the expensive part (the MediaPipe inference) has already run, and the
+         signature is arithmetic on four landmarks. Publishing the yaw gives the watcher a
+         genuinely 3D turn signal - it decides front/back from a 96px skin-ratio heuristic
+         and a face detector, neither of which can see a torso rotating.
+         MAGNITUDE ONLY, and that is not a limitation to fix: bodyYawDegrees() is an
+         asin() form that caps at +/-90, so it cannot tell facing FROM facing AWAY. It
+         is deliberately never used to choose a side - only to corroborate that a real
+         turn is underway. See the watcher's corroboration note.
+         ON THIS TICK, NOT THE TOPOLOGY CADENCE BELOW. It used to sit inside that throttle,
+         which on a POSE_SAMPLE_MS * 2 loop meant a reading every ~480ms against a 600ms
+         ORIENT_YAW_FRESH_MS: two samples across a fast half-turn - too coarse to catch the
+         edge-on peak - and a single unreadable frame left the watcher with nothing fresh.
+         The throttle exists to bound re-drape DISPATCHES, and still does. */
+      const sig = bodyContourSignature(result);
+      /* ...and WHICH WAY THE BODY FACES, from the same inference: the signed shoulder order the
+         orientation vote reads where the browser has no FaceDetector (see poseShoulderFacing()).
+         Published only when the torso was readable, so an unreadable frame goes stale rather than
+         reading as edge-on. */
+      const facingSep = poseShoulderFacing(result);
+      if (facingSep !== null) { _poseFacingSep = facingSep; _poseFacingAt = now; }
+      else _poseTorsoLostAt = now;   // the turn window reads the gap from this - see ORIENT_POSE_PASS
+      if (sig && Number.isFinite(sig.yaw)) {
+        _torsoYawAbs = Math.abs(sig.yaw);
+        _torsoYawAt  = now;
+        /* THE THIRD CONSUMER of this one reading (after the topology monitor and the
+           orientation watcher's corroboration): bank the frame if this is the most
+           front-facing pose of the session so far, so the frozen result is the best
+           view of the garment rather than whichever instant the countdown ended on. */
+        maybeCaptureBestFrontFrame(_torsoYawAbs);
+      }
+
       if (bodyTopology && now - lastTopologyAt >= BODY_TOPOLOGY_SAMPLE_MS) {
         lastTopologyAt = now;
         /* THE GATE, evaluated here and passed IN. A shift found while the wire is busy
            must not advance the tracker's baseline, or the movement would be absorbed by a
-           dispatch that never happened - see feed()'s own note. */
-        const step = bodyTopology.feed(bodyContourSignature(result), { canDispatch: !wireBusy() });
-        if (step.state === "shift") await reconditionForTopology(step);
+           dispatch that never happened - see feed()'s own note. A TURN IN PROGRESS closes
+           it too (see orientTurnMark): the swap that ends the turn re-uploads the reference
+           anyway, and a re-drape started mid-turn is what used to hold the wire against it.
+           Deferred, not dropped - the tracker re-offers the movement once the turn settles. */
+        const step = bodyTopology.feed(sig, { canDispatch: !wireBusy() && !orientTurnInProgress() });
+        /* NOT AWAITED - "the turn went blind". This loop runs under `inFlight`, so awaiting a
+           re-drape here stopped every inference, and every yaw reading, for a whole image
+           upload. A re-drape fires on a 15-degree change - the start of every turn - so the
+           blind spot landed on the rise to edge-on, the one stretch the watcher's peak is
+           read from. The dispatch owns its own in-flight flag, cover and error handling, and
+           the gate above sees wireBusy() while it runs, so nothing stacks behind it. */
+        if (step.state === "shift") reconditionForTopology(step).catch(() => {});
         else if (ORIENT_DEBUG && step.state !== "stable") {
           console.log(`[PEAR][TOPOLOGY] ${step.state}` +
             (step.heldMs ? ` (held ${step.heldMs}ms)` : "") +
@@ -13502,6 +16545,12 @@ async function reconditionForTopology(step) {
      missed re-drape rather than to a collision on the wire. */
   if (wireBusy()) {
     console.log("[PEAR] body-contour re-drape deferred: a conditioning write is in flight");
+    return;
+  }
+  /* Same belt and braces for the turn flag the gate passes in (see orientTurnMark): a turn
+     in progress means a front/back swap is coming, and it must find the wire free. */
+  if (orientTurnInProgress()) {
+    console.log("[PEAR] body-contour re-drape deferred: a turn is in progress and the swap owns the wire");
     return;
   }
   topologyReconditionInFlight = true;
@@ -13642,19 +16691,32 @@ function startLowerBodyGuard() {
     const bandY = Math.round(h * (1 - lowerBodyGuardFrac));
     ctx.clearRect(0, 0, w, h);
     ctx.save();
-    /* Selfie-mirror correction. #webcam's DECODED frame (what drawImage sees) is never
-       mirrored - only its CSS display is (scaleX(-1), style.css). #aiVideo is already
-       correctly oriented coming back from Decart (no CSS mirror on it at all - see the
-       base .camera-card rule). So a raw drawImage(webcam, ...) here would composite a
-       MIRROR-FLIPPED band under a correctly-oriented one, an obvious seam (buttons/
-       pockets/prints landing on the wrong side at the boundary). This translate+scale is
-       the exact technique freezeFinalFrame() already uses for its own webcam-sourced
-       fallback branch - same correction, same reason, applied here instead to only the
-       guarded band rather than the whole frame. */
-    ctx.translate(w, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(webcam, 0, bandY, w, h - bandY, 0, bandY, w, h - bandY);
-    ctx.restore();
+    try {
+      /* ABSOLUTE, EVERY FRAME. This used to be translate(w,0) + scale(-1,1), which
+         MULTIPLIES into the current matrix rather than replacing it - safe only while the
+         surrounding save/restore pair stays perfectly balanced. It is balanced (the
+         restore is in a finally now), but this loop runs every ~16ms on a PERSISTENT
+         canvas, so a single future edit returning early between the save and the restore
+         would compound the flip on every subsequent frame and the feed would oscillate -
+         exactly the "endless mirror" failure this pass went looking for. setTransform
+         makes each frame independent of the last by construction rather than by
+         inspection, which is the only form of the guarantee that survives editing. */
+      /* Selfie-mirror correction. #webcam's DECODED frame (what drawImage sees) is never
+         mirrored - only its CSS display is (scaleX(-1), style.css). So a raw
+         drawImage(webcam, ...) here would composite a MIRROR-FLIPPED band under the rest
+         of the frame: an obvious seam, with buttons/pockets/prints landing on the wrong
+         side at the boundary.
+         THE REFERENCE POINT IN THIS COMMENT USED TO BE WRONG. It read "#aiVideo is
+         already correctly oriented coming back from Decart (no CSS mirror on it at all)",
+         which stopped being true when the selfie flip moved off the outgoing WebRTC
+         canvas onto the display layer: #aiVideo's decoded frames are now un-mirrored and
+         its DISPLAY carries scaleX(-1). This guard is UNAFFECTED and needs no change,
+         because it samples #webcam - never flipped at source - and bakes its own flip,
+         landing on the same on-screen orientation as #aiVideo by a different route. Both
+         are selfie on screen; only the layer applying the flip differs. */
+      ctx.setTransform(-1, 0, 0, 1, w, 0);
+      ctx.drawImage(webcam, 0, bandY, w, h - bandY, 0, bandY, w, h - bandY);
+    } finally { ctx.restore(); }
     lowerBodyGuardRAF = requestAnimationFrame(paint);
   }
   lowerBodyGuardRAF = requestAnimationFrame(paint);
@@ -13687,28 +16749,77 @@ function stopLowerBodyGuard() {
 function freezeFinalFrame() {
   const ai = $("aiVideo");
   const webcam = $("webcam");
+  /* ── CAPTURES ARE NOT MIRRORED. THIS IS THE PRODUCT DECISION, NOT AN OVERSIGHT ──────
+     See MIRROR_POLICY. The live feed mirrors so motion feels natural; the KEPT surfaces -
+     this frozen result, the saved clip, the gallery thumbnail - deliberately do not, so
+     the garment's chest text reads the right way round in the thing the shopper keeps and
+     shows people. Every video source in this file is reality-oriented, so "not mirrored"
+     means baking NO flip at all and letting #resultCanvas display at transform:none.
+
+     THE COST IS ACCEPTED AND VISIBLE: the picture flips horizontally at the instant the
+     countdown ends, because live and result genuinely use opposite conventions. That was
+     chosen deliberately over the alternatives - a mirrored keepsake with backwards text,
+     or reversed-feeling motion for the whole session. Do not "fix" the flip at the
+     transition by re-mirroring here; that silently reverses the decision. */
   let src = null, mirror = false, w = 0, h = 0;
   if (ai && ai.videoWidth > 0 && ai.style.display !== "none") {
-    src = ai; w = ai.videoWidth; h = ai.videoHeight;            // already correctly oriented
+    src = ai; w = ai.videoWidth; h = ai.videoHeight;                 // reality in, reality kept
   } else if (webcam && webcam.videoWidth > 0) {
-    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight; mirror = true;  // selfie-mirror
+    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight;     // same convention on the fallback
   }
   if (!src || !w || !h) return null;
+
+  /* ── PREFER THE BEST FRONT-FACING FRAME OVER THE FINAL ONE ──────────────────────
+     "It froze me side-on": the shopper turns to inspect the garment as the window
+     closes, so the final tick is routinely the WORST view of it. The rolling buffer
+     (maybeCaptureBestFrontFrame) holds the most square-on dressed frame of the session.
+
+     SUBSTITUTED ONLY WHEN IT IS ACTUALLY BETTER, and only over the AI feed - the webcam
+     fallback above is raw camera with no garment in it, a different failure being handled,
+     and swapping a dressed frame into that path would silently change what that branch
+     means. Compared against the CURRENT yaw rather than used unconditionally: a shopper
+     who is square-on at t=0 should keep the freshest frame, not a slightly older one that
+     happens to score a degree better.
+     The buffer holds RAW decoded pixels, so `mirror` still applies exactly as it does to
+     a live #aiVideo frame and the flip is not doubled. */
+  /* Captured BEFORE the substitution below, because the guard-bake further down keys off
+     "is this the AI-edited feed" and must stay true when the pixels came from the buffer -
+     those are AI-edited frames too, just older ones. Testing `src === ai` after the swap
+     would silently skip the guard on exactly the frames this change makes common. */
+  const fromAiFeed = (src === ai);
+  if (fromAiFeed && _bestFrameCanvas && _bestFrameYaw < Infinity) {
+    const yawNow = (_torsoYawAbs !== null && Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS)
+      ? _torsoYawAbs : Infinity;
+    if (_bestFrameYaw + BEST_FRAME_IMPROVE_DEG < yawNow) {
+      console.log(`[PEAR] freezeFinalFrame() - using the buffered front-facing frame ` +
+        `(|yaw| ${_bestFrameYaw.toFixed(0)}° vs ${yawNow === Infinity ? "unknown" : yawNow.toFixed(0) + "°"} now)`);
+      src = _bestFrameCanvas; w = _bestFrameCanvas.width; h = _bestFrameCanvas.height;
+    }
+  }
+
   const cv = $("resultCanvas");
   if (!cv) return null;
   cv.width = w; cv.height = h;
   const ctx = cv.getContext("2d", { alpha: false });
+  /* #resultCanvas is a PERSISTENT DOM canvas, unlike the throwaway ones the other capture
+     helpers create - so its context carries whatever matrix the previous call left. The
+     `cv.width = w` above already resets that as a side effect of resizing, but relying on
+     a resize to clear a transform is a coincidence, not a guarantee: the day the frame
+     size stops changing between calls, the reset silently stops happening. setTransform is
+     absolute and states the intent directly. */
   ctx.save();
-  if (mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
-  try { ctx.drawImage(src, 0, 0, w, h); } catch (_) { ctx.restore(); return null; }
-  ctx.restore();
+  try {
+    ctx.setTransform(mirror ? -1 : 1, 0, 0, 1, mirror ? w : 0, 0);
+    ctx.drawImage(src, 0, 0, w, h);
+  } catch (_) { return null; }
+  finally { ctx.restore(); }
   /* Bake the SAME lower-body guard into the snapshot the shopper actually keeps - the
      live view and the "masterpiece" they save/add-to-cart must never disagree about
      which pixels are real. Only when the primary source is the AI-EDITED stream
      (src === ai): the webcam-fallback branch above is ALREADY 100% raw camera with no
      AI edit anywhere in it, so there is nothing there for the guard to protect against,
      and re-drawing over it would be a no-op at best. */
-  if (LOWER_BODY_GUARD_ENABLED && src === ai && webcam && webcam.videoWidth > 0) {
+  if (LOWER_BODY_GUARD_ENABLED && fromAiFeed && webcam && webcam.videoWidth > 0) {
     // lowerBodyGuardFrac, not the static config constant - the snapshot must protect
     // the SAME band the live view was actually painting at the moment of capture,
     // calibrated or not, or the kept "masterpiece" could disagree with what the
@@ -13719,14 +16830,20 @@ function freezeFinalFrame() {
     const srcBandY = Math.round(webcam.videoHeight * (1 - lowerBodyGuardFrac));
     const dstBandY = Math.round(h * (1 - lowerBodyGuardFrac));
     ctx.save();
-    ctx.translate(w, 0);
-    ctx.scale(-1, 1);
     try {
+      /* IDENTITY, matching the un-mirrored capture convention above. This band is drawn
+         from #webcam, which is reality-oriented like every other source here, and it is
+         composited into a snapshot that is deliberately NOT mirrored - so flipping it
+         would put the guarded lower body in the opposite orientation to the AI-edited
+         torso it sits under, producing a seam with the shopper's legs mirrored against
+         their own chest. Absolute, because this is the second write to the same
+         persistent #resultCanvas context within one call. */
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.drawImage(webcam,
         0, srcBandY, webcam.videoWidth, webcam.videoHeight - srcBandY,
         0, dstBandY, w, h - dstBandY);
     } catch (_) { /* best-effort - a failed guard paint must not fail the whole snapshot */ }
-    ctx.restore();
+    finally { ctx.restore(); }
   }
   try { return cv.toDataURL("image/jpeg", 0.85); } catch (_) { return null; }
 }
@@ -13917,6 +17034,10 @@ function startRecording() {
       // the captured final frame so canvas.captureStream keeps emitting and the clip
       // grows to VIDEO_LENGTH_MS. beginRecorder() is idempotent - it covers the case
       // where the first real frame only arrived right at the billing cap.
+      /* NO FLIP HERE. recordHoldSrc comes from captureHoldFrame(), which already bakes
+         the selfie flip in - flipping again would mirror the frozen tail of the clip
+         against the live portion that precedes it. The two branches differ on purpose:
+         one draws an already-oriented canvas, the other draws raw decoded video. */
       try { ctx.drawImage(recordHoldSrc, 0, 0, recordCanvas.width, recordCanvas.height); beginRecorder(); } catch (_) {}
     } else {
       const w = video.videoWidth, h = video.videoHeight;
@@ -13924,7 +17045,42 @@ function startRecording() {
         if (recordCanvas.width !== w || recordCanvas.height !== h) {
           recordCanvas.width = w; recordCanvas.height = h;
         }
-        try { ctx.drawImage(video, 0, 0, w, h); beginRecorder(); } catch (_) {}
+        /* ── THE SELFIE FLIP, BAKED IN ──────────────────────────────────────────────
+           `video` is #aiVideo, and drawImage reads its DECODED frame, which ignores CSS
+           - so the scaleX(-1) that makes the live view a selfie does not reach the clip.
+           It has to be applied here or the downloaded file plays back reversed against
+           what the shopper watched while recording it.
+           This flip is NEW. It was unnecessary while drawFrame() mirrored frames on the
+           way out to Decart, because #aiVideo's decoded frames were already selfie-
+           oriented; that flip moved to the display layer so the model could be
+           conditioned on reality, and this is its other half. */
+        /* ── MATRIX DISCIPLINE, and the restore is in a finally for a reason ─────────
+           The first version of this block called ctx.restore() from a catch that also
+           covered beginRecorder(). If drawImage succeeded and beginRecorder() threw, that
+           catch fired AFTER the paired restore had already run, popping a state that was
+           never pushed. An extra restore on an empty stack is a documented no-op so it
+           could not corrupt anything today, but it is an unbalanced pair inside a loop
+           that runs every frame, which is precisely the shape that turns into a real
+           matrix bug the moment anything above it pushes a state. try/finally makes the
+           pairing structural instead of a property of which line threw.
+           beginRecorder() moved OUT of the guarded region - it is not a drawing call and
+           has no business inside the transform's scope. */
+        try {
+          ctx.save();
+          try {
+            /* IDENTITY - the saved clip is NOT mirrored, by decision. See MIRROR_POLICY:
+               the live feed mirrors for natural motion, but a downloaded file is something
+               the shopper keeps and shows people, so the garment's chest text has to read
+               the right way round in it. #aiVideo's decoded frames are reality, so that
+               means baking no flip at all.
+               setTransform rather than simply omitting a transform: it REPLACES the
+               matrix, so this frame cannot inherit anything from the previous one even if
+               a restore were ever missed. Absolute by construction. */
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.drawImage(video, 0, 0, w, h);
+          } finally { ctx.restore(); }
+          beginRecorder();
+        } catch (_) { /* a torn-down canvas mid-teardown - the next tick re-checks */ }
       }
     }
     recordRaf = requestAnimationFrame(paint);
@@ -14287,7 +17443,11 @@ async function renderMockDemo(item) {
   const cv = $("resultCanvas");
   cv.width = vw; cv.height = vh;
   const c = cv.getContext("2d");
-  c.save(); c.translate(vw, 0); c.scale(-1, 1); c.drawImage(webcam, 0, 0, vw, vh); c.restore();
+  /* Absolute, and on #resultCanvas again - the same persistent context freezeFinalFrame()
+     writes to, so this must not inherit a matrix from whichever of them ran last. */
+  c.save();
+  try { c.setTransform(-1, 0, 0, 1, vw, 0); c.drawImage(webcam, 0, 0, vw, vh); }
+  finally { c.restore(); }
   try {
     const img = await loadImage(item.img);
     const upper = item.garmentType !== "lower_body";
@@ -15420,11 +18580,16 @@ function clipExt(ts) {
 function captureLiveFrame() {
   const ai = $("aiVideo");
   const webcam = $("webcam");
+  /* mirror is FALSE on both branches - see MIRROR_POLICY. This one feeds the saved-fit
+     gallery thumbnail, which is the longest-lived surface of all: getting it wrong ships a
+     permanently reversed image into the shopper's history rather than a transient
+     on-screen artifact, so it follows the capture convention (readable text) and not the
+     live one (selfie motion). */
   let src = null, mirror = false, w = 0, h = 0;
   if (ai && ai.videoWidth > 0 && ai.style.display !== "none") {
-    src = ai; w = ai.videoWidth; h = ai.videoHeight;            // already correctly oriented
+    src = ai; w = ai.videoWidth; h = ai.videoHeight;                  // reality in, reality kept
   } else if (webcam && webcam.videoWidth > 0) {
-    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight; mirror = true;  // selfie-mirror
+    src = webcam; w = webcam.videoWidth; h = webcam.videoHeight;      // same convention on the fallback
   }
   if (!src || !w || !h) return null;
 
@@ -15435,7 +18600,14 @@ function captureLiveFrame() {
   const cnv = document.createElement("canvas");
   cnv.width = cw; cnv.height = ch;
   const ctx = cnv.getContext("2d");
-  if (mirror) { ctx.translate(cw, 0); ctx.scale(-1, 1); }
+  /* setTransform, replacing the translate()+scale() pair this used to build. Both produce
+     the identical matrix here, because `cnv` is created fresh on every call so the context
+     always starts at identity - this helper was never at risk of accumulating. It is
+     rewritten anyway so that the ONE form appears everywhere a flip is applied in this
+     file: an absolute matrix, never a relative multiply. A reader who finds a bare
+     translate+scale somewhere should be able to treat it as a smell rather than having to
+     work out per-site whether that particular canvas happens to be reused. */
+  if (mirror) ctx.setTransform(-1, 0, 0, 1, cw, 0);
   try { ctx.drawImage(src, 0, 0, cw, ch); } catch (_) { return null; }
   try { return cnv.toDataURL("image/jpeg", 0.7); } catch (_) { return null; }
 }
@@ -15709,7 +18881,19 @@ function playClipInMainPlayer(url, idx, ts) {
   ai.src = url;
   ai.loop = true; ai.muted = true; ai.playsInline = true;
   card().classList.remove("show-result");
+  /* ── show-live MUST BE OFF BEFORE show-clip GOES ON ────────────────────────────────
+     These two rules disagree about the mirror ON PURPOSE - live plays un-mirrored decoded
+     frames and needs transform:scaleX(-1); a clip plays pixels the recorder already
+     flipped and must NOT get a second flip. So if both classes are ever set at once, the
+     orientation of the replay is decided by stylesheet SOURCE ORDER, which is not a thing
+     any reader would think to check and not a thing a future reorder would preserve.
+     It happens to be correct today only because every path here runs after a teardown
+     that removed show-live. Removing it explicitly costs one line and makes the replay's
+     orientation depend on state rather than on the order two rules happen to appear in.
+     (.show-clip also carries !important for the same reason, from the other side.) */
+  card().classList.remove("show-live");
   card().classList.add("show-clip");   // CSS reveals #aiVideo without live billing semantics
+  logSurfaceOrientation("clip-replay");
   ai.play().catch(() => {});
 
   activeClipTs = (ts == null ? null : ts);   // glow the source tile in the tray
@@ -15892,6 +19076,14 @@ function init() {
   if (handoff) {
     const hint = $("focusCalcHint");
     if (hint) { hint.hidden = false; hint.innerHTML = `נבחר הפריט <strong>${handoff.name}</strong> - מלא מידות כדי להמשיך למדידה הוירטואלית.`; }
+    /* TIER 3 of the pants gate, started here and DELIBERATELY NOT AWAITED - init() must
+       not hold the measurement form behind a network round trip. The text tiers have
+       already produced a recommendation by the time this resolves; applyGarmentCategoryHint()
+       re-runs the calculator only if the verdict actually moves the garment onto a waist
+       chart. Started at init rather than at setActiveItem so the answer is usually in
+       hand before the shopper finishes typing their height. */
+    applyGarmentCategoryHint(handoff.img).catch((e) =>
+      console.warn("[PEAR] garment-category hint failed (text tiers stand):", e?.message || e));
   }
 
   // Identity gate - ALWAYS Step 0 for the main app / a real merchant embed

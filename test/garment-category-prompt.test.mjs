@@ -360,17 +360,28 @@ console.log("\n── §5 THE BUDGET: Decart's ceiling, not ours ──");
      normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that lengthens
      an anchor is clamped here rather than over-running into clampPromptForWire()'s hard
      slice - which cuts at the END, taking the "do NOT invent" sentence with it. */
-  /* THE PART LIST GAINED A FOURTH ENTRY: [P.LOW, colorLockSentence(item)], the sampled
-     main-fabric colour lock (the "white tee rendered black" report). P.LOW is asserted
-     literally here because it is the whole safety property of that clause - at priority
-     3 it sheds BEFORE fitSentence (P.MED, 2), which is the only reason it could be added
-     to branches left with 7-10 free characters by the lower-body isolation lock. Promote
-     it and it starts displacing an already-shipping feature; this line is what catches
-     that. Comments are permitted between the parts (the clause carries its rationale
-     inline, as everything on this list does), hence [\s\S]*? rather than \s* between
-     entries - the ORDER and the priorities are what is pinned, not the whitespace. */
+  /* THE PART LIST AND ITS PRIORITIES, pinned in order. It has changed twice:
+       · gained [P.MED, fitSentence(...)] with the 2026-09-03 size restore;
+       · gained the per-product colour clause, first at P.LOW, now PROMOTED to a second
+         P.CORE part and widened into identityLockSentence(item, angle) - the colour AND
+         transcribed print lock, after "Decart rendered a random t-shirt".
+
+     THE PROMOTION REVERSED AN EARLIER DELIBERATE CHOICE, so it is asserted literally
+     rather than loosely. At P.LOW the clause shed FIRST, which made it purely additive
+     and unable to displace fitSentence - correct for a colour HINT. It is wrong for an
+     identity LOCK: a clause whose job is to stop the model substituting a different
+     garment cannot be the first thing dropped when the prompt runs long, because a long
+     prompt is precisely when the reference image is losing. At P.CORE it cannot shed.
+     The measured price is fitSentence shedding on the tops+closure branch and on three
+     plain-tee rungs (trace:prompt's size ladder is the record).
+
+     ORDER MATTERS AND IS PINNED: fitPrompt() breaks priority ties by array position, and
+     a CORE overflow is hard-sliced from the END - so the anchor must precede the identity
+     lock, or a long transcription would slice the anchor instead of itself. Comments are
+     permitted between entries (each clause carries its rationale inline), hence [\s\S]*?
+     rather than \s* - the ORDER and the PRIORITIES are pinned, not the whitespace. */
   check("both branches are assembled through fitPrompt(), not returned raw",
-    /return fitPrompt\(\[[\s\S]*?\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],[\s\S]*?\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),[\s\S]*?\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],[\s\S]*?\[P\.LOW, colorLockSentence\(item\)\],\s*\n\s*\]\);/.test(SRC),
+    /return fitPrompt\(\[[\s\S]*?\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\],[\s\S]*?\[P\.CORE, identityLockSentence\(item, angle\)\],[\s\S]*?\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\),[\s\S]*?\[P\.MED, fitSentence\(bottoms \? "lower_body" : "upper_body"\)\],\s*\n\s*\]\);/.test(SRC),
     "a raw return skips the budget clamp and the whitespace normaliser");
   /* The category anchor is the one clause that must NEVER shed - it is the entire fix.
      Whichever of the three the construction/category/angle axes select, it rides at

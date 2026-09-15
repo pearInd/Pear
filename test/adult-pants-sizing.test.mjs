@@ -42,9 +42,9 @@ console.log("── §1 ADULT_PANTS_SIZE_CHART / isAdultPantsProduct(): the char
 {
   const catCode = extract(APP, "const ZARA_SIZE_CHART", "function calculateSize()");
   const cat = await import("data:text/javascript," + encodeURIComponent(
-    catCode + "\nexport { ADULT_PANTS_SIZE_CHART, isAdultPantsProduct, isAdultProduct, isKidsProduct, coreHwPenalty };"
+    catCode + "\nexport { ADULT_PANTS_SIZE_CHART, isAdultPantsProduct, isWaistInchSizeRun, isAdultProduct, isKidsProduct, coreHwPenalty };"
   ));
-  const { ADULT_PANTS_SIZE_CHART, isAdultPantsProduct, isAdultProduct, isKidsProduct, coreHwPenalty } = cat;
+  const { ADULT_PANTS_SIZE_CHART, isAdultPantsProduct, isWaistInchSizeRun, isAdultProduct, isKidsProduct, coreHwPenalty } = cat;
 
   check("the chart carries the EU ladder 36-46, one row per even size",
     JSON.stringify(ADULT_PANTS_SIZE_CHART.map((r) => r.size)) ===
@@ -75,32 +75,47 @@ console.log("── §1 ADULT_PANTS_SIZE_CHART / isAdultPantsProduct(): the char
   check("no size list at all - never guess pants-numeric",
     isAdultPantsProduct([]) === false && isAdultPantsProduct(null) === false && isAdultPantsProduct(undefined) === false);
 
-  check("THE 26-40 REPORT, FIXED: a realistic US/UK jeans run that shares only SOME\n" +
-        "        values with the EU chart's own six (36/38/40/42/44/46) is now\n" +
-        "        confidently pants-numeric - the narrower exact-membership rule silently\n" +
-        "        rejected this and fell back to letters, which is the bug this fixes",
-    isAdultPantsProduct(["26", "28", "30", "32", "34", "36", "38", "40"]) === true);
+  check("THE 26-40 REPORT, RESOLVED A DIFFERENT WAY: a realistic US/UK jeans run that\n" +
+        "        shares only SOME values with the EU chart's own six (36/38/40/42/44/46)\n" +
+        "        is correctly NOT EU-numeric - ADULT_JEANS_WAIST_CHART (a genuine second\n" +
+        "        chart, added after this test was first written) now owns runs like this\n" +
+        "        one instead of EU force-fitting them via snap-to-list; see\n" +
+        "        isWaistInchSizeRun() below and test/numeric-pants-sizing.test.mjs for the\n" +
+        "        chart-precise end-to-end coverage. The original bug this closed - this\n" +
+        "        run falling all the way back to LETTERS - stays fixed either way",
+    isAdultPantsProduct(["26", "28", "30", "32", "34", "36", "38", "40"]) === false &&
+    isWaistInchSizeRun(["26", "28", "30", "32", "34", "36", "38", "40"]) === true);
 
   check("a numeric run entirely below the EU chart's values (e.g. a waist-inch run) is\n" +
-        "        ALSO now confidently pants-numeric, as long as it sits in a plausible\n" +
-        "        adult waist range - same 24-48 window categoryFromSizeRun() already trusts",
-    isAdultPantsProduct(["30", "32", "34"]) === true);
+        "        NOT EU-numeric either, for the same reason - it belongs to the waist-inch\n" +
+        "        chart, not a snap-fit onto the EU one",
+    isAdultPantsProduct(["30", "32", "34"]) === false &&
+    isWaistInchSizeRun(["30", "32", "34"]) === true);
 
-  check("...but a run below the waist floor (24) is NOT - indistinguishable from a kids\n" +
-        "        numeric ladder or a shirt neck size, so it correctly abstains",
-    isAdultPantsProduct(["14", "16", "18"]) === false);
+  check("...but a run below the waist floor (24) is NOT a waist-inch run either -\n" +
+        "        indistinguishable from a kids numeric ladder or a shirt neck size, so it\n" +
+        "        correctly abstains on BOTH numeric-pants checks",
+    isAdultPantsProduct(["14", "16", "18"]) === false &&
+    isWaistInchSizeRun(["14", "16", "18"]) === false);
 
   check("...and a run above the ceiling (48) is NOT either - outside any plausible\n" +
         "        adult waist measurement",
-    isAdultPantsProduct(["50", "52", "54"]) === false);
+    isAdultPantsProduct(["50", "52", "54"]) === false &&
+    isWaistInchSizeRun(["50", "52", "54"]) === false);
 
   check("a 3-digit token (never a plausible waist size) is rejected, not coerced",
     isAdultPantsProduct(["100", "36", "38"]) === false);
 
-  check("BOUNDARY: the floor (24) and ceiling (48) are themselves INCLUSIVE",
-    isAdultPantsProduct(["24"]) === true && isAdultPantsProduct(["48"]) === true);
-  check("BOUNDARY: one below the floor (23) or one above the ceiling (49) is NOT",
-    isAdultPantsProduct(["23"]) === false && isAdultPantsProduct(["49"]) === false);
+  check("BOUNDARY, ON THE WAIST-INCH CHECK NOW (isAdultPantsProduct is EU-exact-\n" +
+        "        membership only, so 24/48 were never its boundary to begin with): the\n" +
+        "        floor (24) and ceiling (48) are themselves INCLUSIVE for a waist run",
+    isWaistInchSizeRun(["24"]) === true && isWaistInchSizeRun(["48"]) === true);
+  check("BOUNDARY: one below the floor (23) or one above the ceiling (49) is NOT a\n" +
+        "        waist-inch run either",
+    isWaistInchSizeRun(["23"]) === false && isWaistInchSizeRun(["49"]) === false);
+  check("...and neither boundary is ever EU-numeric - 24 and 48 are not among the\n" +
+        "        chart's own six values",
+    isAdultPantsProduct(["24"]) === false && isAdultPantsProduct(["48"]) === false);
 
   check("isAdultProduct() still calls an EU pants list adult (not kids) - unaffected\n" +
         "        by the new chart, since pants numerics were already outside\n" +
@@ -232,28 +247,31 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
         "        a numeric guess",
     /^(XS|S|M|L|XL|XXL|3XL)$/.test(noList.api.getUserSize()), noList.api.getUserSize());
 
-  /* THE OVERFLOW GUARD, CHART-AWARE. ADULT_PANTS_SIZE_CHART's ceiling (195cm/102kg) is
-     slightly ABOVE ZARA_SIZE_CHART's (195cm/100kg) - a body at 195cm/101kg overflows
-     the letter chart but is still a genuine fit on the pants chart, which is exactly
-     what proves the guard reads the RESOLVED chart's own ceiling, not a hardcoded one. */
-  const overflowsLettersOnly = harness({ height: 195, weight: 101, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
+  /* THE OVERFLOW GUARD, CHART-AWARE. Updated 2026-09-14: the FOX top update added an
+     XXL row to ZARA_SIZE_CHART (190-205cm/93-112kg), which now reaches HIGHER than
+     ADULT_PANTS_SIZE_CHART's own ceiling (195cm/102kg) - the polarity is the opposite
+     of what it was before that update (the letter chart used to be the lower ceiling
+     of the two), but the thing being proven is the same: the guard reads the
+     RESOLVED chart's own ceiling, not a hardcoded one, so a body can overflow one
+     chart while genuinely fitting the other depending on which garment it's on. */
+  const overflowsLettersOnly = harness({ height: 198, weight: 105, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
   overflowsLettersOnly.api.calculateSize();
-  check("195cm/101kg on a PANTS product: within the pants chart's own ceiling (102kg)\n" +
-        "        - resolves to 46, not an overflow",
-    overflowsLettersOnly.api.getUserSize() === "46", overflowsLettersOnly.api.getUserSize());
-  check("...Continue is enabled",
-    overflowsLettersOnly.els["btn-next-screen"].disabled === false);
-
-  const overflowsLettersProduct = harness({ height: 195, weight: 101, pendingSizes: ["S", "M", "L", "XL"] });
-  overflowsLettersProduct.api.calculateSize();
-  check("THE SAME 195cm/101kg body on a LETTER product: overflows ZARA_SIZE_CHART's\n" +
-        "        own ceiling (100kg) - 'no size available', not a silent guess",
-    overflowsLettersProduct.els.sizeResult.innerText === "sizeResultOverflow",
-    overflowsLettersProduct.els.sizeResult.innerText);
+  check("198cm/105kg on a PANTS product: ABOVE the EU pants chart's own ceiling\n" +
+        "        (195cm/102kg) - overflow, not a silent guess",
+    overflowsLettersOnly.els.sizeResult.innerText === "sizeResultOverflow",
+    overflowsLettersOnly.els.sizeResult.innerText);
   check("...Continue stays LOCKED",
-    overflowsLettersProduct.els["btn-next-screen"].disabled === true);
+    overflowsLettersOnly.els["btn-next-screen"].disabled === true);
   check("...and no size is recommended",
-    overflowsLettersProduct.api.getUserSize() === null);
+    overflowsLettersOnly.api.getUserSize() === null);
+
+  const overflowsLettersProduct = harness({ height: 198, weight: 105, pendingSizes: ["S", "M", "L", "XL"] });
+  overflowsLettersProduct.api.calculateSize();
+  check("THE SAME 198cm/105kg body on a LETTER product: within ZARA_SIZE_CHART's own\n" +
+        "        (post-FOX, XXL-extended) ceiling - resolves to XXL, not an overflow",
+    overflowsLettersProduct.api.getUserSize() === "XXL", overflowsLettersProduct.api.getUserSize());
+  check("...Continue is enabled",
+    overflowsLettersProduct.els["btn-next-screen"].disabled === false);
 
   /* Genuinely out of BOTH charts. */
   const overflowsBoth = harness({ height: 205, weight: 115, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
@@ -272,16 +290,24 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
         "        GENERIC no-match copy, not the overflow copy",
     genuineGap.els.sizeResult.innerText === "sizeResultNoMatch", genuineGap.els.sizeResult.innerText);
 
-  /* THE 26-40 REPORT, END TO END: a real jeans run that doesn't literally carry any of
-     ADULT_PANTS_SIZE_CHART's own six EU values above 40. The 170cm/78kg body below
-     genuinely fits EU 42 (170-180cm/70-82kg, per §1's coreHwPenalty check) - a size this
-     product does not sell - so the SNAP TO THE PRODUCT'S OWN LIST step must move the
-     recommendation to 40, the closest size actually on the shelf, never inventing 42 and
-     never falling back to a letter. */
-  const snapDown = harness({ height: 170, weight: 78, waist: 79, pendingSizes: ["26", "28", "30", "32", "34", "36", "38", "40"] });
+  /* SNAP TO THE PRODUCT'S OWN LIST, EU chart, end to end. NOTE: this used to run against
+     a "26-40" style list, back when isAdultPantsProduct() was widened to treat ANY
+     24-48 numeric run as EU-pants. Now that ADULT_JEANS_WAIST_CHART exists and owns runs
+     like that (see §1's "THE 26-40 REPORT, RESOLVED A DIFFERENT WAY" and
+     pantsChartForSizes()'s own comment), a "26-40" list is no longer EU at all - it's a
+     waist-inch product, and calculateSize() correctly stops applying this EU-specific
+     snap step to it (isAdultPantsProduct(["26",...,"40"]) is now false, so
+     useAdultPantsChart - the gate this snap step reads - is false too). This section is
+     rewritten with a genuinely EU-shaped list instead, so it still exercises the real
+     snap mechanism rather than a scenario the chart-selection layer no longer routes
+     here. The 170cm/78kg body below genuinely fits EU 42 (170-180cm/70-82kg, per §1's
+     coreHwPenalty check) - a size this specific product does not stock - so the snap
+     step must move the recommendation to 40, the closest EU size actually on the shelf,
+     never inventing 42 and never falling back to a letter. */
+  const snapDown = harness({ height: 170, weight: 78, waist: 79, pendingSizes: ["36", "38", "40"] });
   snapDown.api.calculateSize();
-  check("THE FIX: a body whose genuine chart fit (42) isn't in the product's own list\n" +
-        "        snaps to 40 - the closest size this product actually sells",
+  check("THE FIX: a body whose genuine EU chart fit (42) isn't in the product's own\n" +
+        "        list snaps to 40 - the closest EU size this product actually sells",
     snapDown.api.getUserSize() === "40", snapDown.api.getUserSize());
   check("...displayed cleanly as a plain number, no letter, no fabricated size",
     snapDown.els.sizeResult.innerText === "40", snapDown.els.sizeResult.innerText);
@@ -289,10 +315,10 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
         "        never a block",
     snapDown.api.getSizeCategory() === "adult" && snapDown.els["btn-next-screen"].disabled === false);
 
-  /* The mirror case: the genuine chart fit (36 for a smaller body) IS already in a
-     product's own list that also includes plenty of sizes below it - no snap needed,
-     and snapping must never move a recommendation that was already correct. */
-  const noSnapNeeded = harness({ height: 162, weight: 60, pendingSizes: ["26", "28", "30", "32", "34", "36", "38", "40"] });
+  /* The mirror case: the genuine chart fit (38 for a smaller body) IS already in a
+     product's own EU list - no snap needed, and snapping must never move a
+     recommendation that was already correct. */
+  const noSnapNeeded = harness({ height: 162, weight: 60, pendingSizes: ["36", "38", "40"] });
   noSnapNeeded.api.calculateSize();
   check("a genuine chart fit that IS already in the product's own list is left alone\n" +
         "        (162cm/60kg fits EU 38: 160-170cm/55-65kg, and 38 is in this list)",
@@ -514,16 +540,27 @@ console.log("\n── §6 init(): pendingSizes seeded from the SYNCHRONOUS URL h
     return { api, els };
   }
 
+  /* THIS SCENARIO'S EXPECTED VALUE CHANGED FROM "40" TO "32" - not a re-litigation of
+     the fix, but a NARROWER, MORE ACCURATE downstream fix. When this test was first
+     written, "26-40" was treated as EU-numeric (isAdultPantsProduct() was widened to
+     accept it) and snapped to the nearest EU chart value (44 -> 40). Since then,
+     ADULT_JEANS_WAIST_CHART shipped as a genuine second chart with real FOX waist-inch
+     data, isAdultPantsProduct() was narrowed back to exact EU membership (see §1's "THE
+     26-40 REPORT, RESOLVED A DIFFERENT WAY"), and a "26-40" run now correctly resolves
+     through isWaistInchSizeRun()/pantsChartForSizes() to that chart instead - where
+     185cm/82kg genuinely fits row 32 (165-190cm/65-88kg) with no snapping needed at all,
+     because it's a REAL chart row, not an approximation. "32" is also what
+     test/numeric-pants-sizing.test.mjs independently pins for this exact body. The
+     headline claim this section exists to prove - a number, never "L" - is unchanged. */
   const jeans = endToEnd({ handoffSizes: "26,28,30,32,34,36,38,40", height: 185, weight: 82 });
   check("THE FIX, END TO END: 185cm/82kg on a real jeans handoff recommends a NUMBER,\n" +
         "        never a letter like 'L'",
     /^\d+$/.test(jeans.api.getUserSize()), jeans.api.getUserSize());
-  check("...specifically 40: the genuine EU-chart anchor for this body is 44\n" +
-        "        (175-186cm/78-92kg is the only row both height AND weight clear),\n" +
-        "        snapped to 40 - the closest size this specific product actually sells",
-    jeans.api.getUserSize() === "40", jeans.api.getUserSize());
+  check("...specifically 32: a genuine, non-approximated fit on the waist-inch chart's\n" +
+        "        own row 32 (165-190cm/65-88kg) - the chart this run actually belongs to",
+    jeans.api.getUserSize() === "32", jeans.api.getUserSize());
   check("...and the exact DOM text the shopper reads matches",
-    jeans.els.sizeResult.innerText === "40", jeans.els.sizeResult.innerText);
+    jeans.els.sizeResult.innerText === "32", jeans.els.sizeResult.innerText);
 
   // Run it again, and once more with a different body/product pair, precisely because
   // the request asked this be verified "flawlessly multiple times" rather than once -
@@ -531,17 +568,23 @@ console.log("\n── §6 init(): pendingSizes seeded from the SYNCHRONOUS URL h
   const jeansRepeat = endToEnd({ handoffSizes: "26,28,30,32,34,36,38,40", height: 185, weight: 82 });
   check("REPEATED RUN (fresh parse + execution): identical result, no hidden state\n" +
         "        leaking between calls",
-    jeansRepeat.api.getUserSize() === "40", jeansRepeat.api.getUserSize());
+    jeansRepeat.api.getUserSize() === "32", jeansRepeat.api.getUserSize());
 
   const secondBody = endToEnd({ handoffSizes: "36,38,40,42,44,46", height: 172, weight: 78 });
-  check("A DIFFERENT body/product pair (172cm/78kg, EU run): still numeric, still\n" +
-        "        correct (fits EU 42: 170-180cm/70-82kg, already sold by this product)",
+  check("A DIFFERENT body/product pair (172cm/78kg, a genuinely EU-shaped run - all six\n" +
+        "        of the chart's own values): still numeric, still correct (fits EU 42:\n" +
+        "        170-180cm/70-82kg, already sold by this product)",
     secondBody.api.getUserSize() === "42", secondBody.api.getUserSize());
 
+  /* This one's own rationale changed too, for the same reason as `jeans` above: "28-36"
+     is a waist-inch run, not an EU one to snap down from 46. Worked out on
+     ADULT_JEANS_WAIST_CHART directly: 195cm/100kg clears BOTH the height and weight
+     bands of row 36 (172-198cm/78-105kg) and row 38 (174-200cm/83-112kg) with zero
+     penalty and no waist measurement to break the tie, so the first of the two in chart
+     order wins - "36", which this product happens to sell anyway. */
   const thirdBody = endToEnd({ handoffSizes: "28,30,32,34,36", height: 195, weight: 100 });
-  check("A THIRD body/product pair (195cm/100kg, a smaller-run product): still numeric,\n" +
-        "        genuine anchor is EU 46 (180-195cm/87-102kg), snapped down to 36 - the\n" +
-        "        largest size this specific product actually sells",
+  check("A THIRD body/product pair (195cm/100kg, a waist-inch run): still numeric,\n" +
+        "        resolves to the waist-inch chart's own row 36 (172-198cm/78-105kg)",
     thirdBody.api.getUserSize() === "36", thirdBody.api.getUserSize());
 }
 

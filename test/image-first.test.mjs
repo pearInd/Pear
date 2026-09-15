@@ -153,16 +153,25 @@ const BOTTOMS_SPEC =
    still ships, and \u00a71 asserts the back pair is frozen, hole-free and inside the same
    ceiling as the front pair. What would re-open the tuxedo is APPENDING a clause, and that
    is asserted absent for the back anchors too. */
+/* THE REAR CLAUSE WAS REWORDED, AND THIS SPEC MOVES WITH IT - byte-exact, as before.
+   It used to read "Precisely lock the rear print, logos, and back seams." Reported: a
+   turn rendered "PEAK PEAK", blank white boxes and generic lines on the shopper's back,
+   one hallucination per noun in that sentence - "logos" drew the brand text repeatedly,
+   "print" drew an empty print-shaped box, "back seams" drew seam strokes. With no
+   negative_prompt those nouns are positive tokens, so the clause that was meant to LOCK
+   the rear artwork was instructing the model to INVENT it. The replacement names no
+   graphic and grounds on the reference instead; image-first's whole thesis (text volume
+   and named garment features compete with the pixels) is the reason it had to. */
 const BACK_TOPS_SPEC =
   "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
-  " the live subject's CURRENT back contour and volume in this frame. Precisely lock the" +
-  " rear print, logos, and back seams. Dynamically adapt the garment drape to the" +
+  " the live subject's CURRENT back contour and volume in this frame. Reproduce the rear" +
+  " panel exactly as shown in the reference. Dynamically adapt the garment drape to the" +
   " subject's exact silhouette, angle, depth, and back volume without stretching or" +
   " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.";
 const BACK_BOTTOMS_SPEC =
   "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
   " onto the live subject's CURRENT lower-body contour and volume in this frame." +
-  " Precisely lock the rear print, logos, and back seams. Dynamically adapt the fit to" +
+  " Reproduce the rear panel exactly as shown in the reference. Dynamically adapt the fit to" +
   " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
   " garment design. Strictly preserve original pattern and color.";
 
@@ -415,9 +424,20 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      clause turned out to be summoning button-downs onto plain tees. The property this
      check defends is unchanged: every axis picks a whole frozen string, so the number of
      anchors on the wire stays exactly one no matter how many axes there are. */
+  /* FOUR AXES NOW. Rear construction joined category, angle and front construction after
+     "it drew scrambled black graphics on my back": BACK_CATEGORY_ANCHOR's "Precisely lock
+     the rear print, logos, and back seams" asserts graphics that a blank rear does not
+     have, and with no negative_prompt those nouns are positive tokens the sampler steers
+     toward. PLAIN_BACK_ANCHOR is the same string with that one clause replaced by a
+     POSITIVE description of plainness - the identical shape PLAIN_TEE_ANCHOR used to stop
+     collars appearing on plain tees. The property this check defends is unchanged: every
+     axis picks a WHOLE FROZEN STRING, so exactly one anchor reaches the wire no matter how
+     many axes exist - and the new one is SHORTER than the branch it replaces (503 vs 515). */
   check("...and the resolver only SELECTS an anchor, never builds one",
-    /const anchors = angle === "back" \? BACK_CATEGORY_ANCHOR : CATEGORY_ANCHOR;/.test(SRC) &&
+    /const anchors = angle === "back"[\s\S]{0,120}?\(plainBack \? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR\)[\s\S]{0,40}?: CATEGORY_ANCHOR;/.test(SRC) &&
+    /const plainBack = angle === "back" && item && item\.backIsPlain === true;/.test(SRC) &&
     /const plainTee = !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(SRC) &&
+    !/PLAIN_BACK_ANCHOR\s*\+/.test(SRC) && !/\+\s*PLAIN_BACK_ANCHOR/.test(SRC) &&
     /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\]/.test(SRC) &&
     !/(BACK_)?CATEGORY_ANCHOR\.(top|bottom)\s*\+/.test(SRC) &&
     !/anchors\.(top|bottom)\s*\+/.test(SRC) &&

@@ -531,7 +531,7 @@ console.log("\n── §5 THE WATCHER: edge-on is a separate channel from the fr
      this asserts and it is unchanged; the `applying` mutex inside maybeUpdateProfile is
      what makes dropping the await safe. */
   check("the tick skips the pose update only for a PENDING DUAL-VIEW swap (no redundant second set())",
-    /if \(!\(dualView && confirmed\)\) \{\s*\n(?:[^\n]*\n)*?\s*maybeUpdateProfile\(lastProfileScore\)\.catch\(\(\) => \{\}\);/.test(tick),
+    /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{\s*\n(?:[^\n]*\n)*?\s*maybeUpdateProfile\(lastProfileScore\)\.catch\(\(\) => \{\}\);/.test(tick),
     tick.slice(-400));
 }
 

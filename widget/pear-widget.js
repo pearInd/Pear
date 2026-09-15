@@ -317,7 +317,33 @@
      (smarter) classifier, and a denim jacket would be fitted as trousers. Mirrors
      classifyGarmentTitle()'s FABRIC_AMBIGUOUS pass in fitting-room/app.js - keep the two
      in step, since whichever one is wrong is the one that wins. */
-  var FABRIC_AMBIGUOUS = ["ג'ינס", "ג׳ינס", "jeans", "denim"];
+  /* ── APOSTROPHE NORMALISATION - one Hebrew word, four codepoints ───────────────
+     THE BUG THIS CLOSES: a jeans product whose CMS has smart quotes turned on ships
+     "ג’ינס" with a U+2019 RIGHT SINGLE QUOTATION MARK, not the U+0027 apostrophe or
+     the U+05F3 geresh spelled in the lists below. The word is identical to a reader
+     and unequal to indexOf, so detectCategory() abstained, forwarded "unknown", and
+     the fitting room fitted a pair of jeans against the adult LETTER chart.
+
+     Normalising the HAYSTACK once means each list below keeps ONE spelling of each
+     word instead of four - the geresh appears in ג'ינס, ז'קט, קפוצ'ון and more, so
+     spelling out every variant multiplies every list and a later contributor adding
+     one word has to remember all of them.
+
+     KEPT IN LOCKSTEP WITH _normApos() IN fitting-room/app.js - see CLAUDE.md §3, and
+     note which way that lockstep cuts: this widget's category verdict is EXPLICIT and
+     therefore OUTRANKS the room's own classifier, so a miss HERE cannot be fixed
+     room-side. */
+  function normApos(s) {
+    return String(s == null ? "" : s)
+      .replace(/[\u02BC\u05F3\u2018\u2019\u2032]/g, "'")
+      .replace(/[\u05F4\u201C\u201D\u2033]/g, '"')
+      .toLowerCase();
+  }
+
+  /* Already apostrophe-normalised - these are only ever matched against normApos()
+     output, so the U+05F3 spelling that used to sit beside the ASCII one is gone
+     rather than dead. */
+  var FABRIC_AMBIGUOUS = ["ג'ינס", "jeans", "denim"];
 
   function matchCategory(haystack) {
     for (var cat in CATEGORY_KEYWORDS) {
@@ -328,7 +354,10 @@
   }
 
   function detectCategory(name) {
-    var haystack = ((name || "") + " " + (d.title || "")).toLowerCase();
+    /* normApos() rather than toLowerCase() - it lower-cases too, and folds every
+       apostrophe/geresh variant onto ASCII so the keyword lists need one spelling of
+       each word. See normApos() above for the report this closes. */
+    var haystack = normApos((name || "") + " " + (d.title || ""));
     var hit = matchCategory(haystack);
     /* Only re-test when the hit came from the pants list AND a fabric word is present -
        so "מכנס ג'ינס" (real lower-body evidence) is untouched, while "ז'קט ג'ינס" falls
@@ -1497,7 +1526,17 @@
            (server.js: primary_color_hex). "" on an older server build that does not
            send it, which the room treats identically to "could not sample" - the
            colour clause simply does not ship. Never defaulted to a colour. */
-        colorHex: (data && data.primary_color_hex) || ""
+        colorHex: (data && data.primary_color_hex) || "",
+        /* The FRONT photo's garment lettering, from the same classify call. The room
+           asserts this as the chest print in its P.CORE identity lock, and only on the
+           FRONT angle - see identityLockSentence() in app.js for why naming front
+           lettering while rendering the back is the original double-print bug. */
+        textOcr: (data && typeof data.front_text_ocr === "string") ? data.front_text_ocr : "",
+        /* true/false/null - is the resolved REAR blank? The room uses this to pick a
+           plain-back anchor instead of one that names "rear print, logos", which on a
+           blank back is an instruction to invent graphics. `null` when the server did
+           not answer (or is an older build) and must NOT be read as false. */
+        backIsPlain: (data && typeof data.back_is_plain === "boolean") ? data.back_is_plain : null
       };
     });
   }
@@ -1606,6 +1645,18 @@
       "garment_url=" + encodeURIComponent(garment.url) +
       "&garment_type=" + encodeURIComponent(garment.type) +
       "&garment_name=" + encodeURIComponent(garment.name) +
+      /* v2 alias for the same string. parseHandoff() prefers ?garment_title= and falls
+         back to ?garment_name=, so both builds of the widget work either way - the same
+         both-spellings contract front_image_url/garment_url already have below.
+
+         IT IS THE SIZE CALCULATOR THAT NEEDS THIS, not the focus bar. isPantsProduct()
+         in the fitting room reads the title to decide whether the shopper is sized
+         against a WAIST chart or the chest-banded letter chart, and that runs on
+         Screen 1 - so the title has to travel on the URL at open, not arrive later with
+         the PEAR_UPDATE_GARMENT correction. A jeans product whose size picker is
+         rendered in JavaScript (nothing for extractHostSizes() to scrape) has its title
+         as the only evidence there is. */
+      "&garment_title=" + encodeURIComponent(garment.name) +
       (backParam ? "&garment_url_back=" + encodeURIComponent(backParam) : "") +
       /* Explicit v2 aliases - same values, named the way the API/product schema names
          them. parseHandoff() accepts either spelling, so an older fitting-room build
@@ -1616,6 +1667,17 @@
          automatic front/back pairing. Sent only when there's more than one distinct image. */
       (garment.images && garment.images.length > 1
         ? "&garment_images=" + garment.images.map(encodeURIComponent).join(",") : "") +
+      /* ── THE CLASSIFICATION GATE ──────────────────────────────────────────────────
+         garment_url above is imgs[0] - the first gallery photo in DOM ORDER, scraped
+         off the PDP and validated by NOBODY. Merchants routinely lead with the most
+         striking photo, which is often the BACK. The room binds whatever arrives here
+         as the front reference, so on such a product it goes live rendering the back
+         graphic on the shopper's chest until the classifier's correction lands
+         (reported on the PEAK tee at 00:00-00:02).
+         This tells the room a verdict is coming so it can block try-on until then. Sent
+         ONLY when a classify call is genuinely about to run - a single-image product
+         with nothing to resolve must not arm a gate that will only ever time out. */
+      (garment.classifyPending ? "&classify_pending=1" : "") +
       (garment.variantId ? "&garment_variant_id=" + encodeURIComponent(garment.variantId) : "") +
       /* The product's REAL size list - the fitting room's PRIMARY kids/adult signal
          (see extractHostSizes / isKidsProduct there). Sent at open so the guard and the
@@ -1986,7 +2048,12 @@
           "| DOM-identified back:", openBack || "(none - server will resolve/synthesize)");
         var openedIframe = openModal({
           url: imgs[0], type: garment.category, name: garment.name,
-          back: openBack, images: imgs, variantId: garment.variantId
+          back: openBack, images: imgs, variantId: garment.variantId,
+          /* A classify call runs immediately below, so the room must treat imgs[0] as a
+             GUESS and block try-on until the verdict lands. Mirrors the condition that
+             actually gates the call, rather than being hardcoded true: if this ever
+             stops matching, the room waits for a message nobody sends. */
+          classifyPending: imgs.length > 0
         });
 
         /* ── COMBINED pipeline ────────────────────────────────────────────────────
@@ -2032,13 +2099,46 @@
           return createGarmentComposite(frontUrl, backUrl).then(function (built) {
             var composite = built && built.url;
             if (composite) {
-              console.log("[PEAR widget] COMBINED payload ready - handing the single composite to the try-on engine");
+              /* WORDING CORRECTED - the old line read "handing the single composite to
+                 the try-on engine", which is not what happens and cost real debugging
+                 time: a reviewer read this log, opened the two-panel image it refers to,
+                 and reasonably concluded Decart was being conditioned on it. It is not.
+                 The room gates the composite behind compositeActiveFor(), which requires
+                 COMPOSITE_MODE - and COMPOSITE_DEFAULT is false (see app.js: a split
+                 FRONT|BACK reference with no panel contract renders fragments of both,
+                 commit 23f5953). With the default in force this composite is used for
+                 the "Now fitting" thumbnail and as a ?composite=1 opt-in only; the actual
+                 reference is a SINGLE-VIEW asset the OrientationWatcher swaps. Say what
+                 is true, so the next person reads the right file. */
+              console.log("[PEAR widget] composite built and sent (thumbnail + ?composite=1 opt-in; " +
+                "the live reference stays single-view unless COMPOSITE_MODE is on)");
             }
             /* Only push a correction if this actually changes what the room is showing,
                and only into the SAME modal that triggered the call (the shopper may have
                closed it, or opened a different product, in the meantime). */
             if (activeIframe !== openedIframe) return;
-            if (!composite && frontUrl === imgs[0] && backUrl === openBack) return;
+            /* ── THE VERDICT MUST ALWAYS BE ANNOUNCED, EVEN WHEN IT CHANGES NOTHING ──
+               This early-return exists so a verdict that AGREES with the DOM-order guess
+               does not churn the room's reference for no reason - re-anchoring
+               mid-session renders a generic garment, so the optimisation is correct and
+               stays. What it must NOT do any more is stay silent: the room now blocks
+               try-on until it hears a verdict (?classify_pending=1), and on a
+               well-marked-up store "the classifier agreed" is the COMMON path - so
+               returning here without a word left the gate to sit until its 30s timeout
+               on exactly the products that were never at risk.
+               A bare ready signal carries no garment fields, so the room releases the
+               gate and returns without touching activeItem. Nothing is re-anchored. */
+            if (!composite && frontUrl === imgs[0] && backUrl === openBack) {
+              console.log("[PEAR widget] classifier agreed with the DOM-order guess - " +
+                "sending a bare ready signal (no re-anchor)");
+              try {
+                openedIframe.contentWindow.postMessage(
+                  { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true }, PEAR_BASE);
+              } catch (e) {
+                console.warn("[PEAR widget] ready signal failed to post:", e && e.message);
+              }
+              return;
+            }
             try {
               openedIframe.contentWindow.postMessage({
                 type: "PEAR_UPDATE_GARMENT",
@@ -2069,16 +2169,45 @@
                    a value; a colour this pipeline guessed would be stated to Decart
                    with the same authority as a measured one. */
                 garment_color_hex: res.colorHex || undefined,
+                /* The garment's own lettering, transcribed from the FRONT photo. Sent as
+                   "" when the garment is genuinely plain (a real answer), omitted only
+                   when the server never answered - the room distinguishes the two. */
+                garment_text_ocr: typeof res.textOcr === "string" ? res.textOcr : undefined,
+                /* Whether the rear is positively known blank. Omitted (not false-d) when
+                   unknown, so the room can abstain rather than assume. */
+                garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined,
                 /* Re-sent alongside the verdict above, and OUTRANKING it in the room.
                    The Shopify product JSON is fetched at boot but can resolve after the
                    modal already opened, so this is the delivery for a size list that
                    wasn't readable yet at open time. */
-                garment_sizes: extractHostSizes()
+                garment_sizes: extractHostSizes(),
+                /* Re-sent with the correction, not only on the open URL. The PDP heading
+                   can still be a skeleton placeholder at open on a JS-rendered store, so
+                   this is the more accurate reading of the two and the room overwrites
+                   pendingTitle with it - see its "A LATE TITLE" note. */
+                garment_title: getGarmentName()
               }, PEAR_BASE);
             } catch (_) {}
           });
         }).catch(function (err) {
           console.warn("[PEAR widget] combined pipeline failed, using DOM order as-is:", err && err.message);
+          /* ── TELL THE ROOM ANYWAY, OR THE GATE WAITS OUT ITS FULL TIMEOUT ──────────
+             The room blocks try-on until it hears a verdict (?classify_pending=1). A
+             failed classify is still an answer to "is one coming?" - it is just a
+             negative one - and staying silent here would make every classify failure
+             cost the shopper a 30s dead button before the backstop timer released it.
+             The room proceeds on the unvalidated DOM-order guess, which is exactly the
+             behaviour that shipped before the gate existed (CLAUDE.md 2.5: never block
+             on ambiguity; a wrong block stops a paying shopper).
+             Still guarded on the SAME modal - the shopper may have closed it or opened
+             a different product while the request was in flight. */
+          if (activeIframe !== openedIframe) return;
+          try {
+            openedIframe.contentWindow.postMessage(
+              { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true }, PEAR_BASE);
+          } catch (e) {
+            console.warn("[PEAR widget] ready signal failed to post after error:", e && e.message);
+          }
         });
       });
     }

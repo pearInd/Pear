@@ -86,7 +86,88 @@
 ALTER TABLE garment_cache
   ADD COLUMN IF NOT EXISTS text_ocr          TEXT,
   ADD COLUMN IF NOT EXISTS is_true_back_view BOOLEAN,
-  ADD COLUMN IF NOT EXISTS primary_color_hex TEXT;
+  ADD COLUMN IF NOT EXISTS primary_color_hex TEXT,
+  ADD COLUMN IF NOT EXISTS has_graphic       BOOLEAN,
+  ADD COLUMN IF NOT EXISTS classifier_version INTEGER;
+
+-- ── classifier_version: WHY A PROMPT FIX USED TO CHANGE NOTHING ──────────────────────
+--
+-- /api/classify-images is CACHE-FIRST. A photo is classified once and every later visit
+-- reads this table instead of asking Gemini. So a correction to the classifier prompt
+-- never reached any photo that had already been classified - its old verdict was served
+-- forever.
+--
+-- That is how a mislabelled rear photo survived several rounds of fixes. The prompt told
+-- the model that "front graphic or lettering read the right way round" was a decisive
+-- FRONT cue. A flat-lay photo of a garment's BACK satisfies that - the camera faces the
+-- rear panel squarely, so its lettering reads correctly too. The real rear photo was
+-- labelled front, no back was resolved, the server generated a plain one, and the shopper
+-- turned around to smooth fabric in the garment colour with no artwork. Fixing the cue did
+-- nothing for that product, because its wrong verdict was already in this table.
+--
+-- Every write now stamps CLASSIFIER_PROMPT_VERSION (server.js). A row carrying an OLDER
+-- number, or NULL, is treated as a cache miss and re-classified on the next visit.
+-- Existing rows get NULL when this column is added, so running this migration triggers a
+-- ONE-TIME lazy refresh of the catalog: spread across real traffic (a product is
+-- re-asked only when someone opens it) and rate-spaced per call.
+
+-- ════════════════════════════════════════════════════════════════════════════════════
+-- ⚠ BEFORE THIS MIGRATION RUNS: CLEAR THE ROWS FOR A SPECIFIC BROKEN PRODUCT BY HAND
+-- ════════════════════════════════════════════════════════════════════════════════════
+-- Until classifier_version exists, the server cannot tell a stale verdict from a current
+-- one and deliberately treats every cached row as current (re-asking the whole catalog on
+-- every visit would exhaust the Gemini rate limit on a merely pending migration). So a
+-- product that was classified wrongly stays wrong until its rows are removed. Deleting
+-- them forces a fresh classification against the corrected prompt on the next visit -
+-- harmless, since the table is a cache and the source photos are untouched.
+--
+-- Find the product's rows first (substitute the PDP URL):
+--
+--   SELECT image_url, classification, confidence, source, cue
+--     FROM garment_cache
+--    WHERE product_url = 'https://<store>/products/<handle>';
+--
+-- A rear photo showing classification = 'front' is the fault. Then clear them:
+--
+--   DELETE FROM garment_cache
+--    WHERE product_url = 'https://<store>/products/<handle>';
+--
+-- If product_url was never populated for this product, match the photos directly:
+--
+--   DELETE FROM garment_cache
+--    WHERE image_url ILIKE '%<distinctive part of the photo filename>%';
+--
+-- A generated rear is ALSO persisted in Supabase Storage (bucket garment-synth-backs,
+-- keyed by a hash of the front photo) and is served from there before any classification
+-- runs. Once the real rear photo is correctly classified the server stops asking for a
+-- synthetic one, so the stale generated file is simply never requested again - but if you
+-- want it gone, delete that object from the bucket as well.
+
+-- ── has_graphic, ADDED AFTER A LIVE BUG. READ THIS BEFORE USING text_ocr FOR ANYTHING ──
+--
+-- The fitting room needs to know whether a garment's rear panel is BLANK, so it can stop
+-- telling Decart to "precisely lock the rear print, logos and back seams" on a garment
+-- that has none (those nouns are positive tokens with no negative_prompt to hang them on,
+-- so they instruct the model to invent rear graphics).
+--
+-- The first implementation answered that from text_ocr: back_is_plain = (text_ocr === "").
+-- THAT WAS WRONG AND IT ERASED ARTWORK. text_ocr transcribes LETTERING. A rear panel
+-- carrying a large PHOTOGRAPHIC print with no legible words transcribes to "" - so the
+-- back was declared plain, the room selected its plain-back anchor ("The rear panel is
+-- smooth unbroken fabric"), and the model was instructed to render a blank back over a
+-- reference that had a mountain photo on it. Reported live: the shopper turned 180 and
+-- got a generic plain back.
+--
+-- has_graphic asks the question directly: does this side carry ANY applied decoration -
+-- print, photo, logo, embroidery, appliqué, all-over pattern, lettering, badge, number.
+-- It is a SEPARATE verdict from text_ocr and the two are EXPECTED to disagree on exactly
+-- the case above. Never infer one from the other.
+--
+-- IT ABSTAINS TO "DECORATED", unlike every other nullable column here, because its errors
+-- are not symmetric: a garment wrongly called plain has its artwork erased from the
+-- render, while one wrongly called decorated simply keeps today's wording. Only an
+-- explicit FALSE is licence to call a side plain; NULL (pre-v12 row, older build,
+-- rate-limited fallback) leaves the room's existing behaviour untouched.
 
 -- '#rrggbb', lowercase, or NULL. normalizeHexColor() in server.js produces exactly
 -- this shape and returns null for anything it cannot parse, so a malformed value

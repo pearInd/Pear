@@ -19,7 +19,7 @@
          all, so a shipped CSS change was served from cache indefinitely while
          app.js?v= was being bumped every deploy. Kept in step with app.js's
          version so there is one number to reason about, not two. -->
-    <link rel="stylesheet" href="style.css?v=31">
+    <link rel="stylesheet" href="style.css?v=34">
 </head>
 <body>
 
@@ -389,6 +389,24 @@
                 <strong class="active-garment__name" id="activeGarmentName">-</strong>
                 <span class="active-garment__type" id="activeGarmentType"></span>
             </div>
+
+            <!-- Liquid Glass asset-preparation overlay. Covers the whole chip (not just
+                 the thumbnail) while the front/back pair is still being verified and
+                 preloaded, so the shopper is never shown an asset we have not validated
+                 - see the "Asset Readiness Progress" block in app.js for why that photo
+                 used to be visible and what replaced it. Driven entirely from
+                 assetPrepRender(); `hidden` here is the resting state. The counter's
+                 leading text node is what app.js rewrites, so the "%" sign below must
+                 stay a separate child element or it gets overwritten with it. -->
+            <div class="ag-prep" id="agPrep" hidden role="progressbar"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <span class="ag-prep__sheen" aria-hidden="true"></span>
+                <span class="ag-prep__readout"><span class="ag-prep__pct" id="agPrepPct">0<i class="ag-prep__sign">%</i></span></span>
+                <span class="ag-prep__copy">
+                    <span class="ag-prep__phase" id="agPrepPhase" aria-live="polite">מאמתים את תמונות הבגד · Verifying garment assets</span>
+                    <span class="ag-prep__track"><i class="ag-prep__fill" id="agPrepFill"></i></span>
+                </span>
+            </div>
         </div>
 
         <!-- ░░ Camera stage ░░ -->
@@ -716,7 +734,7 @@
   <span class="lang-switch__thumb" aria-hidden="true"></span>
 </button>
 
-<script type="module" src="app.js?v=111"></script>
+<script type="module" src="app.js?v=135"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
      header shrink. Pure enhancement - touches no app.js logic or state. -->
 <script src="mobile-ux.js" defer></script>

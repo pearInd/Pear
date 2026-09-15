@@ -27,6 +27,11 @@ import { fileURLToPath } from "node:url";
 import { createDecartClient } from "@decartai/sdk";
 import { logTryOn } from "./lib/sheets.js";
 import { supabase } from "./lib/supabase.js";
+/* Shared with scripts/backfill-garment-categories.js - see lib/garment-category.js
+   on why the garment-category verdict is its own Gemini call rather than a sixth
+   field on classifyFrontBackDetailed() (short version: that one is stamped with
+   CLASSIFIER_PROMPT_VERSION, and widening it re-classifies the whole catalog). */
+import { classifyGarmentFull } from "./lib/garment-category.js";
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1296,6 +1301,36 @@ function fetchImageAsBase64Cached(imageUrl) {
    Output is strict JSON via responseMimeType, so a chatty model can't break parsing
    (the old `answer.includes("back")` also matched "this is not the back", silently
    inverting the verdict). */
+/* ── CLASSIFIER_PROMPT_VERSION - the reason classifier fixes kept "not working" ──────
+   /api/classify-images is CACHE-FIRST: a photo is classified once, the verdict is written
+   to garment_cache, and every later visit reads the row instead of asking Gemini. That is
+   the right trade for cost and latency, but it has a consequence nobody had written down:
+   A CHANGE TO THIS PROMPT NEVER REACHES ANY PHOTO THAT WAS ALREADY CLASSIFIED. The old
+   verdict is served forever.
+
+   That is exactly how the brown-PEAK-tee report survived several rounds of fixes. The
+   classifier was told "front graphic or lettering read the right way round" is a
+   decisive FRONT cue - which a flat-lay photo of a garment's BACK satisfies, since the
+   camera faces the rear panel squarely. The rear photo was labelled front, no back was
+   resolved, the server synthesized a plain one, and the shopper got uniform brown fabric.
+   Correcting the cue fixed nothing for that product, because its wrong verdict was
+   already cached.
+
+   So every cached verdict now records the prompt version that produced it, and a row from
+   an older version is treated as a cache MISS and re-classified. BUMP THIS WHENEVER
+   FRONT_BACK_SYSTEM_PROMPT CHANGES IN A WAY THAT COULD CHANGE A VERDICT - that is the only
+   thing that makes a classifier fix apply to the existing catalog rather than only to
+   photos nobody has seen yet.
+
+   Re-classification is lazy (on the next visit to that product), so a bump spreads its
+   Gemini calls across real traffic instead of arriving as one burst, and each call is
+   already rate-spaced under the 60 RPM limit.
+     1 - original front/back + kids/adult
+     2 - text_ocr, is_true_back_view, primary_color_hex, has_graphic
+     3 - lettering orientation and print prominence removed as front/back cues;
+         neckline depth made decisive for flat-lays */
+const CLASSIFIER_PROMPT_VERSION = 3;
+
 const FRONT_BACK_SYSTEM_PROMPT = `You are a garment-orientation classifier for a virtual try-on pipeline. You decide which SIDE of a garment a product photograph shows.
 
 Judge the GARMENT, not the photo's role in the gallery. Never reason about whether an image "looks like the main product shot" - primary/secondary ordering is a merchandising choice and carries no information about orientation.
@@ -1306,22 +1341,38 @@ If a person is wearing the garment, their body orientation is the strongest sign
 
 DECISIVE FRONT cues (each appears only on the front):
 - Buttons, button placket, full-length zipper closure, snaps, tie closure
-- Chest pocket, breast logo, front graphic or lettering read the right way round
-- V-neck, scoop or crew neckline seen as an open curve (the neck opening faces you)
+- Chest pocket, or a breast logo placed high on one side of the chest
+- V-neck, scoop or crew neckline seen as an open curve that DIPS LOW (the neck opening faces you)
 - Front fly, coin pocket, belt loops seen with the fly
 - Bra cups, front cutouts, wrap-front overlap
 
 DECISIVE BACK cues (each appears only on the back):
 - Centre-back seam running vertically down the panel
 - Back yoke (a horizontal seam across the upper back)
-- Rear neckline as a shallow, closed curve with the collar standing away from you
+- Rear neckline as a SHALLOW, nearly straight curve sitting HIGH, close to the shoulder line
 - Sewn-in neck label / size tag visible on the inside of the rear collar
-- Back graphic, player name/number, spine lettering
+- Player name/number, or lettering running down the spine
 - Rear pockets on trousers, back darts, a back vent on a jacket or coat
 - Back zipper on a dress (short, upper-centre) or a rear keyhole/cutout
 
+NOT CUES - never decide front/back from any of these, however prominent:
+- PRINT SIZE, PROMINENCE OR PLACEMENT. The largest graphic on a garment is very often on
+  the BACK. A big central photo print, a wide logo or a block of lettering does not make
+  a panel the front; a small logo does not make it the back.
+- LETTERING READ THE RIGHT WAY ROUND. On a flat-lay, a packshot or a hanger shot the
+  camera faces the panel squarely, so a BACK print's lettering reads correctly too. Text
+  orientation only carries information when a person is wearing the garment.
+- Which photo "looks like the hero shot". Merchants frequently lead with the back when
+  the back carries the artwork.
+
 TRICKY CASES - follow these exactly:
 - Neck label visible = BACK. A sewn label sits at the rear collar; this cue outranks a partially visible neckline.
+- FLAT-LAY / PACKSHOT OF A T-SHIRT OR SWEATSHIRT: the NECKLINE is the decisive cue. Compare
+  how far the neck opening dips below the shoulder seams. The FRONT neckline dips
+  noticeably lower and rounder; the BACK neckline sits higher and flatter, close to the
+  shoulder line. Decide from that, and from a neck label if one is visible - NOT from the
+  print. If the neckline genuinely cannot be judged, answer "uncertain" rather than
+  letting the artwork decide.
 - Side or 3/4 profile: decide by which cues you can actually SEE. If decisive cues from one side are visible, answer that side. If neither is legible, answer "uncertain".
 - Flat-lay / packshot with no model: use the seam and closure cues above.
 - Close-up detail / fabric macro / accessory-only shot with no orientation cue: answer "uncertain".
@@ -1397,13 +1448,31 @@ your own view field, not a restatement of it:
   occluded, or from a single weak cue -> false. Say false whenever a downstream
   system treating this image as the definitive rear reference would be a mistake.
 
+has_graphic - true when this side of the garment carries ANY applied decoration at all:
+a print, a photograph, a logo, an embroidered motif, an appliqué, a large woven-in
+pattern block, lettering, a team badge, a number. This is a SEPARATE question from
+text_ocr and is the one that matters for a side with no words on it:
+- A large photographic print with no legible lettering -> has_graphic TRUE, text_ocr "".
+  These two answers routinely disagree and that is correct; do not make one follow the
+  other.
+- Plain dyed fabric, with only construction details (seams, a yoke, darts, a collar
+  band, a hem, buttons, a zip) -> has_graphic FALSE. Construction is not decoration.
+- An all-over repeating textile pattern woven or dyed into the cloth (stripes, checks,
+  floral, camouflage) -> has_graphic TRUE. It is not plain fabric.
+- A small woven care/brand label sewn at the collar -> has_graphic FALSE. A label is not
+  a garment graphic.
+- Cannot see this side clearly enough to tell -> answer FALSE only if you can positively
+  see unbroken fabric; if it is occluded, folded or too low-resolution to judge, say true.
+  A garment wrongly called plain gets its artwork erased downstream, which is far worse
+  than a plain garment wrongly called decorated.
+
 primary_color_hex - the dominant colour of the garment's MAIN FABRIC as "#rrggbb":
 the body panel, not a print, trim, collar band or the background. On a multicolour
 or patterned garment give the colour covering the most area. If the garment is not
 legible enough to sample, answer "".
 
 Respond ONLY with JSON matching this schema:
-{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>","age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0,"text_ocr":"<garment lettering, verbatim, or empty>","is_true_back_view":true|false,"primary_color_hex":"#rrggbb"}`;
+{"view":"front"|"back"|"uncertain","confidence":0.0-1.0,"cue":"<the single cue that decided it, max 12 words>","age_group":"kids"|"adult"|"uncertain","age_group_confidence":0.0-1.0,"text_ocr":"<garment lettering, verbatim, or empty>","is_true_back_view":true|false,"has_graphic":true|false,"primary_color_hex":"#rrggbb"}`;
 
 /* Classify one image. Returns the full record - the caller decides what an
    `uncertain` verdict means (see resolveGarmentViews), rather than the prompt
@@ -1439,6 +1508,7 @@ async function classifyFrontBackDetailed(imageUrl) {
             age_group_confidence: { type: "NUMBER" },
             text_ocr:             { type: "STRING" },
             is_true_back_view:    { type: "BOOLEAN" },
+            has_graphic:          { type: "BOOLEAN" },
             primary_color_hex:    { type: "STRING" },
           },
           /* The three new fields are NOT `required`. A model that omits one must still
@@ -1496,6 +1566,18 @@ async function classifyFrontBackDetailed(imageUrl) {
        on the evidence it already had (§2.1: positive evidence only, and this is not a
        new way to CLAIM a back - only a way to reject one). */
     is_true_back_view: parsed?.is_true_back_view === true,
+    /* ── ABSENT MEANS "DECORATED", NOT "PLAIN" - the asymmetry is the whole point ──────
+       Every other optional field here abstains to null. This one abstains to TRUE, and
+       deliberately, because its two errors are not symmetric:
+         wrongly "plain"     -> the room selects PLAIN_BACK_ANCHOR, which instructs Decart
+                                that the rear is smooth unbroken fabric, and the garment's
+                                artwork is ERASED from the render.
+         wrongly "decorated" -> the room keeps the existing wording, which is exactly
+                                today's behaviour for every garment.
+       Only an explicit `false` from the model is licence to call a side plain. An older
+       server build, a malformed body or a rate-limited fallback all land on true and
+       change nothing. */
+    has_graphic: parsed?.has_graphic !== false,
     primary_color_hex: normalizeHexColor(parsed?.primary_color_hex),
   };
 }
@@ -1577,8 +1659,18 @@ const MISSING_COLUMN_RE = /column .* does not exist|Could not find the/i;
 async function getCachedClassificationDetailed(imageUrl) {
   if (!supabase) return null;
   const V11 = "classification, confidence, source, cue, age_group, age_group_confidence";
-  const V12_ONLY = ", text_ocr, is_true_back_view, primary_color_hex";
-  let { data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY);
+  const V12_ONLY = ", text_ocr, is_true_back_view, primary_color_hex, has_graphic, classifier_version";
+  const V13_ONLY = ", garment_category";
+  let { data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY + V13_ONLY);
+  /* V13 is its own tier rather than being folded into the V12 fallback: a deployment
+     that has run v12 but not yet v13 must keep its text_ocr/colour columns, exactly
+     the way the v11 tier below keeps confidence/source/cue. Collapsing the two would
+     silently drop the duplicate-panel veto on every such deployment. */
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+    console.warn("[garment_cache] v13 column absent - run archive/supabase_setup_v13.sql for garment categories");
+    ({ data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY));
+    if (!error) return data ? { ...data, garment_category: null } : null;
+  }
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("[garment_cache] v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation");
     ({ data, error } = await garmentCacheQuery(imageUrl, V11));
@@ -1588,15 +1680,18 @@ async function getCachedClassificationDetailed(imageUrl) {
         const classification = await getCachedClassification(imageUrl);
         return classification
           ? { classification, confidence: null, source: "legacy", cue: "", age_group: null, age_group_confidence: null,
-              text_ocr: null, is_true_back_view: null, primary_color_hex: null }
+              text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
+              garment_category: null }
           : null;
       }
       if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
       return data ? { ...data, age_group: null, age_group_confidence: null,
-                      text_ocr: null, is_true_back_view: null, primary_color_hex: null } : null;
+                      text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
+                      garment_category: null } : null;
     }
     if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
-    return data ? { ...data, text_ocr: null, is_true_back_view: null, primary_color_hex: null } : null;
+    return data ? { ...data, text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
+                    garment_category: null } : null;
   }
   if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
   return data || null;
@@ -1635,11 +1730,28 @@ async function saveClassification(imageUrl, classification, meta = {}) {
   const v12Fields = {
     text_ocr: typeof meta.textOcr === "string" ? meta.textOcr : null,
     is_true_back_view: typeof meta.isTrueBackView === "boolean" ? meta.isTrueBackView : null,
+    has_graphic: typeof meta.hasGraphic === "boolean" ? meta.hasGraphic : null,
+    /* Stamped on every write so a later prompt change can tell this verdict is stale. */
+    classifier_version: Number.isFinite(meta.classifierVersion) ? meta.classifierVersion : null,
     primary_color_hex: meta.primaryColorHex || null,
   };
 
+  /* NULL vs a value matters here the way it does for text_ocr above: a call site that
+     never asked the category question (every classify-images request - the category is
+     a SEPARATE Gemini call, see lib/garment-category.js) must leave the column alone
+     rather than stamping "unknown" over a verdict the category endpoint already wrote.
+     undefined -> null -> the upsert clears it, which is why this is conditional. */
+  const v13Fields = typeof meta.garmentCategory === "string" && meta.garmentCategory
+    ? { garment_category: meta.garmentCategory }
+    : {};
+
   let { error } = await supabase.from("garment_cache")
-    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields }], { onConflict: "canonical_url" });
+    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields, ...v13Fields }], { onConflict: "canonical_url" });
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+    console.warn("[garment_cache] v13 column absent - run archive/supabase_setup_v13.sql for garment categories");
+    ({ error } = await supabase.from("garment_cache")
+      .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields }], { onConflict: "canonical_url" }));
+  }
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("[garment_cache] v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation");
     ({ error } = await supabase.from("garment_cache")
@@ -2077,18 +2189,28 @@ function validateBackCandidate(candidate, frontRecord, front) {
     return { valid: false, reason: BACK_INVALID_REASON.SAME_URL };
   }
 
-  /* Only applied to a CLASSIFIER claim. A dom_hint record is synthesised by the caller
-     with is_true_back_view absent - the storefront's markup named this photo the back
-     and the model was never asked, so an absent field here is "not asked", not "denied".
-     Vetoing on it would discard the highest-trust signal in the pipeline. */
-  if (record && record.source === "gemini" && record.is_true_back_view === false) {
-    return { valid: false, reason: BACK_INVALID_REASON.NOT_TRUE_BACK };
-  }
-
+  /* ── ORDER IS LOAD-BEARING: DUPLICATION EVIDENCE FIRST, HESITATION LAST ───────────
+     These checks return the FIRST reason that matches, and resolveGarmentViews() treats
+     the reasons very differently - a duplicate is discarded outright, while a merely
+     low-confidence candidate is salvaged when nothing better exists. So a candidate that
+     is BOTH a duplicate AND low-confidence must report DUPLICATION, or the salvage path
+     would resurrect the front photo as the back and put the chest print on the shopper's
+     spine. The confidence check therefore runs LAST, where reaching it proves no
+     duplication evidence was found. It used to run first, which masked exactly that. */
   const backText  = normalizeOcr(record?.text_ocr);
   const frontText = normalizeOcr(frontRecord?.text_ocr);
   if (backText && frontText && backText === frontText) {
     return { valid: false, reason: BACK_INVALID_REASON.OCR_MATCHES };
+  }
+
+  /* Only applied to a CLASSIFIER claim. A dom_hint record is synthesised by the caller
+     with is_true_back_view absent - the storefront's markup named this photo the back
+     and the model was never asked, so an absent field here is "not asked", not "denied".
+     Vetoing on it would discard the highest-trust signal in the pipeline.
+     Reaching this line means the candidate is NOT a known duplicate, so the rejection is
+     recoverable - see the salvage pass in resolveGarmentViews(). */
+  if (record && record.source === "gemini" && record.is_true_back_view === false) {
+    return { valid: false, reason: BACK_INVALID_REASON.NOT_TRUE_BACK };
   }
 
   return { valid: true, reason: BACK_INVALID_REASON.OK };
@@ -2112,6 +2234,13 @@ function resolveGarmentViews({ images, records, scrapedFront, scrapedBack }) {
      angle/reference pair, in a smaller key: two independent reads of "which is the
      front" can disagree, and the colour would then be sampled from the wrong photo. */
   const front_color_hex = frontRecord?.primary_color_hex || null;
+  /* The FRONT photo's own transcription, surfaced for the fitting room's P.CORE identity
+     lock. Deliberately the FRONT record's and nobody else's: the room asserts this text
+     as the garment's chest print, so a transcription taken from the back panel (or from
+     an unrelated gallery image) would name lettering that is not on the side being
+     rendered. null when unsampled - see classifyFrontBackDetailed's null-vs-"" note. */
+  const front_text_ocr = (typeof frontRecord?.text_ocr === "string" && frontRecord.text_ocr)
+    ? frontRecord.text_ocr : null;
 
   const reject = (url, reason, source) =>
     console.warn(`[classify-images] ${source} back REJECTED (${reason}): ${String(url).slice(0, 120)}`);
@@ -2127,18 +2256,50 @@ function resolveGarmentViews({ images, records, scrapedFront, scrapedBack }) {
     const verdict = validateBackCandidate(
       { url: scrapedBack, record: domIdx !== -1 ? records[domIdx] : null }, frontRecord, front
     );
-    if (verdict.valid) return { front, back: scrapedBack, back_source: "dom", front_color_hex };
+    if (verdict.valid) return { front, back: scrapedBack, back_source: "dom", front_color_hex, front_text_ocr };
     reject(scrapedBack, verdict.reason, "DOM");
   }
 
+  /* Candidates rejected ONLY for low confidence, kept for the salvage pass below. */
+  const weak = [];
   for (let i = 0; i < images.length; i++) {
     if (records[i]?.view !== "back") continue;
     const verdict = validateBackCandidate({ url: images[i], record: records[i] }, frontRecord, front);
-    if (verdict.valid) return { front, back: images[i], back_source: "classifier", front_color_hex };
+    if (verdict.valid) return { front, back: images[i], back_source: "classifier", front_color_hex, front_text_ocr };
     reject(images[i], verdict.reason, "classifier");
+    if (verdict.reason === BACK_INVALID_REASON.NOT_TRUE_BACK) weak.push(images[i]);
   }
 
-  return { front, back: "", back_source: "none", front_color_hex };
+  /* ── SALVAGE: LOW CONFIDENCE IS NOT EVIDENCE OF DUPLICATION ──────────────────────
+     THE BUG THIS CLOSES, and it was introduced by the veto directly above it. The two
+     rejection reasons are not the same kind of thing:
+
+       SAME_URL / OCR_MATCHES  are EVIDENCE the candidate is the FRONT. Using it puts the
+                               chest print on the shopper's back, so discarding it is
+                               right even when it leaves no back at all.
+       NOT_TRUE_BACK           is only "the model would not stake the verdict on this".
+                               That is not evidence of duplication - it is hesitation.
+
+     Treating hesitation like duplication threw away the ONLY rear photo a product had,
+     which drops it to single-view: canCombineViews() goes false, the OrientationWatcher
+     never arms, and turning around leaves Decart inferring a rear from the front
+     reference frame by frame. That is the print-less-back bug this whole file exists to
+     prevent, reintroduced by a guard written to prevent a different one. Reported live:
+     a 180-degree turn rendering a generic plain back on a garment whose catalog rear
+     photo carries a large mountain print.
+
+     So a weak back is used only when there is NOTHING better - after the DOM hint, after
+     every confidently-valid candidate - and it is labelled `classifier_weak` rather than
+     `classifier`, so the provenance stays honest in the logs and in garment_cache. The
+     alternative on this path is not a better back; it is no back. */
+  if (weak.length) {
+    console.warn("[classify-images] no confident back; falling back to a LOW-CONFIDENCE rear photo " +
+      "rather than dropping to single-view (it was rejected for hesitation, not for duplicating the front): " +
+      String(weak[0]).slice(0, 120));
+    return { front, back: weak[0], back_source: "classifier_weak", front_color_hex, front_text_ocr };
+  }
+
+  return { front, back: "", back_source: "none", front_color_hex, front_text_ocr };
 }
 
 /* Per-PRODUCT kids/adult verdict, resolved from the same per-image records
@@ -2166,6 +2327,52 @@ function resolveAgeGroup({ images, records, front }) {
   if (best) return { age_group: best.age_group, age_group_confidence: best.age_group_confidence ?? null };
 
   return { age_group: "uncertain", age_group_confidence: 0 };
+}
+
+/* Is the resolved REAR panel blank? Extracted as a pure function because the inline
+   version shipped with ZERO test coverage and was wrong in a way no suite could see - it
+   read text_ocr (lettering) to answer a question about GRAPHICS, so a photographic rear
+   print with no words was declared plain and the room instructed Decart to render a blank
+   back. See supabase_setup_v12.sql's has_graphic note for the full report.
+
+   Returns true / false / null, and null is a real answer meaning "nobody looked" - the
+   room switches to its plain-back anchor ONLY on true.
+   @param {{back:string, back_source:string, backRecord:object|null}} o
+   @returns {boolean|null} */
+function resolveBackIsPlain({ back, back_source, backRecord }) {
+  if (!back) return null;
+  /* WE generated this rear, and SYNTH_BACK_PROMPT explicitly reconstructs unbroken fabric
+     and forbids carrying the front graphic over. Plain by construction, no verdict needed. */
+  if (back_source === "synthetic") return true;
+  /* Strictly `=== false`. has_graphic abstains to true upstream, so undefined (older
+     build, pre-v12 cache row, rate-limited fallback) must leave this null rather than
+     reading a missing column as "no graphic" - that asymmetry is the entire safety
+     property, because a wrong "plain" erases the garment's artwork from the render. */
+  if (backRecord && backRecord.has_graphic === false) return true;
+  if (backRecord && backRecord.has_graphic === true) return false;
+  return null;
+}
+
+/* Is a cached verdict from an OLDER classifier prompt, and so a cache miss? Extracted as a
+   pure function for the same reason resolveBackIsPlain() was: the inline version of the
+   previous piece of logic in this handler shipped with zero coverage and reached a live
+   session wrong. See CLASSIFIER_PROMPT_VERSION for the report this exists for.
+
+   THE THREE STATES OF classifier_version, and they are deliberately not collapsed:
+     undefined  the column does not exist (migration pending). NOT stale - treating every
+                cached row as stale would re-ask Gemini for the whole catalog on every
+                visit, against a 60 RPM limit, triggered by nothing but a pending
+                migration. Pre-migration behaviour is therefore unchanged.
+     null       the column exists but this row predates versioning. STALE - it was
+                produced by a prompt older than any stamped version.
+     number     stale only if older than the current version.
+   @returns {boolean} */
+function isStaleClassification(cached, currentVersion) {
+  if (!cached) return false;
+  const v = cached.classifier_version;
+  if (v === undefined) return false;
+  if (v === null) return true;
+  return Number.isFinite(v) ? v < currentVersion : true;
 }
 
 /* POST /api/classify-images
@@ -2232,7 +2439,25 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     }
     try {
       const cached = await getCachedClassificationDetailed(url);
-      if (cached) {
+      /* ── A VERDICT FROM AN OLDER PROMPT IS A CACHE MISS ─────────────────────────────
+         See CLASSIFIER_PROMPT_VERSION. Without this, a prompt fix never reaches any photo
+         already in garment_cache - which is how a mislabelled rear photo survived several
+         rounds of classifier corrections.
+         Stale ONLY when the row carries an explicit older number. A missing version
+         (`undefined` - the column does not exist yet because the migration has not run)
+         is NOT treated as stale: re-classifying the entire catalog on every visit to every
+         product would be a Gemini storm against a 60 RPM limit, triggered by nothing more
+         than a pending migration. Pre-migration therefore behaves exactly as before, and
+         the clear-the-rows SQL in supabase_setup_v12.sql is the manual route until it
+         runs. A row written before versioning existed but after the column did carries
+         NULL, and that IS stale - it was produced by a prompt older than version 1 of this
+         scheme. */
+      const staleVersion = isStaleClassification(cached, CLASSIFIER_PROMPT_VERSION);
+      if (staleVersion) {
+        console.log(`[classify-images] cached verdict is from classifier v${cached.classifier_version ?? "?"}` +
+          ` (current v${CLASSIFIER_PROMPT_VERSION}) - re-classifying: ${String(url).slice(0, 120)}`);
+      }
+      if (cached && !staleVersion) {
         records.push({
           view: cached.classification,
           confidence: Number.isFinite(cached.confidence) ? cached.confidence : null,
@@ -2248,6 +2473,9 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
              abstain-on-absent contract for pre-v12 rows. */
           text_ocr: cached.text_ocr ?? null,
           is_true_back_view: cached.is_true_back_view ?? null,
+          /* undefined, NOT false, on a pre-v12 row - back_is_plain requires an explicit
+             false and must never read a missing column as "no graphic". */
+          has_graphic: typeof cached.has_graphic === "boolean" ? cached.has_graphic : undefined,
           primary_color_hex: cached.primary_color_hex ?? null,
           cached: true,
         });
@@ -2265,6 +2493,8 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
           confidence: rec.confidence, source: rec.view === "uncertain" ? "uncertain" : "gemini", cue: rec.cue,
           ageGroup: rec.age_group, ageGroupConfidence: rec.age_group_confidence,
           textOcr: rec.text_ocr, isTrueBackView: rec.is_true_back_view, primaryColorHex: rec.primary_color_hex,
+          hasGraphic: rec.has_graphic,
+          classifierVersion: CLASSIFIER_PROMPT_VERSION,
         }
       );
       records.push({ ...rec, source: rec.view === "uncertain" ? "uncertain" : "gemini" });
@@ -2309,6 +2539,47 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     if (synth) { views.back = synth; views.back_source = "synthetic"; }
   }
 
+  /* ── IS THE RESOLVED BACK PLAIN? - "Decart drew scrambled graphics on my back" ─────
+     THE BUG THIS CLOSES lives in the fitting room's prompt, but only this endpoint has
+     the evidence to close it. BACK_CATEGORY_ANCHOR ends with "Precisely lock the rear
+     print, logos, and back seams" on EVERY back render. On a garment whose back is blank
+     that sentence asserts a print and logos that do not exist - and Decart's set() has no
+     negative_prompt, so "print" and "logos" ship as POSITIVE tokens the sampler steers
+     toward. The model is being instructed to invent rear graphics. That is the same
+     mechanism CATEGORY_ANCHOR.top records for the word "shirt" and that PLAIN_TEE_ANCHOR
+     fixed on the FRONT, reached from the back.
+
+     Answering it needs data the room does not have, so it is computed here and sent:
+       true  - POSITIVE evidence the rear is blank. Either the rear was GENERATED (the
+               synthesis prompt explicitly reconstructs unbroken fabric and forbids
+               carrying the front graphic over), or the classifier transcribed the real
+               rear photo and found no lettering at all.
+       false - the classifier read lettering on the back; it genuinely has a rear print.
+       null  - nobody looked (no back, a pre-v12 cache row, a rate-limited fallback).
+
+     null IS NOT false, and the room treats only `true` as licence to switch anchors.
+     Guessing "plain" on a garment with a real back print would suppress the one graphic
+     the shopper turned around to see - the print-less-back bug, inverted. Abstention
+     keeps today's wording (CLAUDE.md 2.5). */
+  /* ⚠ THIS USED TO READ text_ocr, AND THAT WAS A BUG THAT ERASED ARTWORK.
+     It computed `back_is_plain = backRec.text_ocr.trim() === ""`. text_ocr transcribes
+     LETTERING; it says nothing about whether the side carries a graphic. A rear panel
+     with a large PHOTOGRAPHIC print and no legible words transcribes to "" - so the back
+     was declared plain, the room selected PLAIN_BACK_ANCHOR ("The rear panel is smooth
+     unbroken fabric"), and Decart was instructed to render a blank back over a reference
+     that plainly had a mountain print on it. Reported live: the shopper turned 180 and
+     got a generic plain back.
+
+     The question is now asked directly. has_graphic is a separate verdict from the same
+     Gemini call, and the two are EXPECTED to disagree on exactly this case: a photo print
+     with no words is has_graphic=true, text_ocr="". Never infer one from the other. */
+  const _backIdx = views.back ? uniqueUrls.findIndex((u) => sameImage(u, views.back)) : -1;
+  const back_is_plain = resolveBackIsPlain({
+    back: views.back,
+    back_source: views.back_source,
+    backRecord: _backIdx !== -1 ? records[_backIdx] : null,
+  });
+
   const uncertainCount = records.filter((r) => r.view === "uncertain").length;
   console.log(
     `[classify-images] ${uniqueUrls.length} image(s) · back_source=${views.back_source} · ` +
@@ -2338,6 +2609,15 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
        than kept internal because a colour pop between the front and rear asset is the
        failure it exists to prevent, and a caller that can read the value can log it. */
     primary_color_hex: views.front_color_hex,
+    /* The FRONT photo's garment lettering, for the room's P.CORE identity lock. "" is a
+       real answer ("looked, the garment is plain") and is sent as "" rather than omitted,
+       so the room can tell it apart from an older server build that sends nothing. */
+    front_text_ocr: views.front_text_ocr ?? "",
+    /* true = the rear is positively known blank (generated, or transcribed as empty);
+       false = it carries a real rear print; null = nobody looked. The room switches to
+       its plain-back anchor ONLY on true - see the computation above for why null must
+       not collapse to either side. */
+    back_is_plain,
   });
 });
 
@@ -2361,6 +2641,141 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
    what /api/classify-images already does for front/back - but that call is measured at
    ~2.5s warm and ~27s cold, and this one sits on the path to go-live behind a 2.5s client
    timeout. A title is one short string, so this stays a fast text call. */
+/* GET /api/garment-category?image_url=... -> { garment_category, source, cached }
+
+   WHICH BODY REGION IS THIS GARMENT WORN ON, answered from the PHOTOGRAPH.
+
+   THE BUG THIS CLOSES: "the size calculator recommends L for a pair of jeans." The
+   fitting room decides between a WAIST chart and the chest-banded letter chart from
+   two free, synchronous signals - the product size run and the title (isPantsProduct()
+   in fitting-room/app.js). Both abstain on real storefronts more often than they
+   should: a size picker rendered in JavaScript scrapes to nothing, and a title like
+   "STRAIGHT BASIC" or "LOOSE" names a CUT and a FIT with no garment noun in it. When
+   the text says nothing, the photograph still does. This is tier 3.
+
+   NOT THE SAME QUESTION AS /api/classify-garment BESIDE IT. That one reads a TITLE,
+   so it is blind in exactly the case this exists for. This one reads the IMAGE.
+
+   CACHE-FIRST, and a NULL column is a cache MISS, not a verdict. A photo is classified
+   once, ever, across every shopper and every session. archive/supabase_setup_v13.sql
+   spells out why NULL must never be backfilled with a default: "unknown" is a real
+   verdict and is served from cache like any other, so backfilling it would freeze every
+   un-classified row as permanently un-askable.
+
+   NEVER 5xx ON A CLASSIFICATION IT CANNOT MAKE. An unconfigured key, a database that is
+   not wired up, an unreadable image - all answer 200 with garment_category "unknown"
+   and a `source` saying why, because the client treats this as an ENHANCEMENT and falls
+   back to the tiers it already has. Making a shopper wait on (or fail over) a size
+   recommendation is a worse bug than the one this closes - CLAUDE.md §2.5. */
+app.get("/api/garment-category", classifyLimiter, async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  const imageUrl = typeof req.query?.image_url === "string" ? req.query.image_url.trim() : "";
+  if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) {
+    return res.status(400).json({
+      error: "missing_image_url",
+      message: "image_url: an http(s) URL is required.",
+    });
+  }
+
+  /* Read the whole cached row, not just the category: if the photo is already known
+     we need its EXISTING front/back verdict to write the category back without
+     inventing one. garment_cache.classification is NOT NULL (archive/supabase_setup.sql),
+     and a fabricated "front" is precisely the default-that-reads-as-a-verdict this
+     table's v8 migration exists to make visible. */
+  let cached = null;
+  try {
+    cached = await getCachedClassificationDetailed(imageUrl);
+  } catch (e) {
+    console.warn("[garment-category] cache read failed:", e?.message || e);
+  }
+
+  if (cached && typeof cached.garment_category === "string" && cached.garment_category) {
+    console.log(`[garment-category] cache HIT ${cached.garment_category} for ${imageUrl.slice(0, 120)}`);
+    return res.json({ garment_category: cached.garment_category, source: "cache", cached: true });
+  }
+
+  if (!GEMINI_API_KEY) {
+    // Soft, not 503 - the client's size-run and title tiers are already a usable answer.
+    return res.json({ garment_category: "unknown", source: "unconfigured", cached: false });
+  }
+
+  let verdict;
+  try {
+    verdict = await classifyGarmentFull(imageUrl, GEMINI_API_KEY);
+  } catch (e) {
+    /* Only a 429 reaches here (lib/garment-category.js swallows every other failure).
+       It is NOT persisted and NOT reported as a verdict: writing "unknown" for a photo
+       nobody ever got to ask about would stop this endpoint re-asking it forever. */
+    if (e?.rateLimited) {
+      console.warn("[garment-category] rate limited - not caching:", imageUrl.slice(0, 120));
+      return res.json({ garment_category: "unknown", source: "rate_limited", cached: false });
+    }
+    console.warn("[garment-category] classification failed:", e?.message || e);
+    return res.json({ garment_category: "unknown", source: "error", cached: false });
+  }
+
+  /* PERSIST ONLY A REAL VERDICT. source !== "gemini" means an unreadable image or an
+     HTTP error, i.e. nobody looked - same rule as the rate-limit branch above. */
+  if (verdict.source === "gemini" && supabase) {
+    if (cached) {
+      /* Known photo: re-upsert its own row with its EXISTING front/back verdict and
+         provenance intact, adding only the category. Everything below is read back off
+         the row rather than re-derived, so this write cannot move a front/back verdict. */
+      await saveClassification(imageUrl, cached.classification, {
+        confidence: cached.confidence,
+        source: cached.source || "gemini",
+        cue: cached.cue,
+        ageGroup: cached.age_group,
+        ageGroupConfidence: cached.age_group_confidence,
+        textOcr: cached.text_ocr,
+        isTrueBackView: cached.is_true_back_view,
+        hasGraphic: cached.has_graphic,
+        primaryColorHex: cached.primary_color_hex,
+        classifierVersion: cached.classifier_version,
+        garmentCategory: verdict.garment_category,
+      });
+    } else {
+      /* UNKNOWN PHOTO. There is no row, and one cannot be inserted without a front/back
+         value. Rather than default it, ask - classifyFrontBackDetailed() is the same call
+         /api/classify-images would have made for this photo anyway, so the row this
+         creates is a genuine verdict with real provenance rather than a placeholder.
+         Costs a second Gemini call exactly once per never-before-seen photograph; every
+         later visit is the cache HIT above. A failure here does NOT fail the request:
+         the category is still returned, just uncached, and the next visit re-asks. */
+      try {
+        const detail = await classifyFrontBackDetailed(imageUrl);
+        await saveClassification(imageUrl, detail.view === "back" ? "back" : "front", {
+          confidence: detail.confidence,
+          source: detail.view === "uncertain" ? "uncertain" : "gemini",
+          cue: detail.cue,
+          ageGroup: detail.age_group,
+          ageGroupConfidence: detail.age_group_confidence,
+          textOcr: detail.text_ocr,
+          isTrueBackView: detail.is_true_back_view,
+          hasGraphic: detail.has_graphic,
+          primaryColorHex: detail.primary_color_hex,
+          classifierVersion: CLASSIFIER_PROMPT_VERSION,
+          garmentCategory: verdict.garment_category,
+        });
+      } catch (e) {
+        console.warn("[garment-category] could not create a cache row (category still served):",
+                     e?.message || e);
+      }
+    }
+  }
+
+  console.log(`[garment-category] ${verdict.garment_category} (conf ${verdict.confidence}` +
+              `${verdict.cue ? ", " + verdict.cue : ""}) for ${imageUrl.slice(0, 120)}`);
+  return res.json({
+    garment_category: verdict.garment_category,
+    source: verdict.source,
+    cached: false,
+  });
+});
+
 app.post("/api/classify-garment", classifyLimiter, async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");

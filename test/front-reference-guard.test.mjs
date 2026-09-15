@@ -48,7 +48,7 @@ function check(label, cond, detail) {
   if (!cond && detail !== undefined) console.log(`        ${detail}`);
 }
 
-const start = SRC.indexOf("  async function maybeSwap(next) {");
+const start = SRC.indexOf("  async function maybeSwap(next, predictive = false) {");
 const end   = SRC.indexOf("  /* The edge-on counterpart of maybeSwap");
 if (start === -1 || end === -1) { console.log("FAIL  could not extract maybeSwap()"); process.exit(1); }
 const swapSrc = SRC.slice(start, end);
@@ -61,9 +61,25 @@ const BACK  = "https://cdn.test/peak-back.jpg";
    as parameters would make every assignment invisible from out here. */
 function harness({ frontBlob = { size: 1, type: "image/jpeg" },
                    backBlob  = { size: 1, type: "image/jpeg" },
-                   startOrientation = "back", flat = false, applyThrows = false } = {}) {
+                   startOrientation = "back", flat = false, applyThrows = false,
+                   blobLooksFlat = async () => flat, wire,
+                   lastSwapAgoMs = null, lastSwapWasPredictive = false, gate = false } = {}) {
   const calls = [];
   const sandbox = {
+    blobLooksFlat,
+    /* Only when a test asks for the swap input hold - every other section runs with the name
+       undefined, which is the sandbox shape maybeSwap() must tolerate (CLAUDE.md 2.7). */
+    ...(gate ? {
+      holdInputGate: (why, maxMs) => {
+        calls.push({ op: "hold", why, maxMs });
+        return { unhold: (w) => { calls.push({ op: "unhold", w }); return true; } };
+      },
+      ORIENT_SWAP_INPUT_HOLD_MAX_MS: 2000,
+    } : {}),
+    /* Only when a test states what the wire holds - the other sections run exactly as they did,
+       with neither name defined, which is the shape the acquire shortcut must tolerate. */
+    ...(wire ? { lastSentImageRef: wire.onWire,
+                 garmentBlobIfWarm: (url) => (url === BACK ? backBlob : url === FRONT ? frontBlob : null) } : {}),
     ORIENT_COOLDOWN_MS: 1500, AUTO_ANGLE: "auto", currentAngle: "auto",
     ORIENT_FADE_HOLD_MS: 0,
     GARMENT_FRONT: FRONT, GARMENT_BACK: BACK,
@@ -79,6 +95,10 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
     logVtonState: () => {},
     renderPerspectiveSelector: () => {},
     orientHoldBegin: () => calls.push({ op: "holdBegin" }),
+    /* Banking the frame and putting it on screen are separate calls as of the
+       "the live view freezes whenever I move" fix - a confirmed swap does both, since
+       the reference really is being replaced under the shopper. */
+    orientHoldPromote: () => calls.push({ op: "holdPromote" }),
     orientHoldExtend: () => calls.push({ op: "holdExtend" }),
     orientHoldEnd: (r) => calls.push({ op: "holdEnd", r }),
     applyActive: async () => {
@@ -90,9 +110,11 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
     setTimeout: (fn) => { fn(); return 0; },
   };
   const body =
-    `let applying = false, lastSwapAt = 0, disposed = false, autoOrientation = ${JSON.stringify(startOrientation)};\n` +
+    `let applying = false, disposed = false, autoOrientation = ${JSON.stringify(startOrientation)};\n` +
+    `let lastSwapAt = ${lastSwapAgoMs === null ? 0 : `Date.now() - ${lastSwapAgoMs}`};\n` +
+    `let lastSwapPredictive = ${lastSwapWasPredictive};\n` +
     swapSrc +
-    `\nreturn { maybeSwap, state: () => ({ applying, autoOrientation }) };`;
+    `\nreturn { maybeSwap, state: () => ({ applying, autoOrientation, lastSwapPredictive }) };`;
   const api = new Function(...Object.keys(sandbox), body)(...Object.values(sandbox));
   return { ...api, calls };
 }
@@ -165,6 +187,31 @@ console.log("\n── §4 ACQUISITION is still a state record, not a swap ──
     !h.calls.some((c) => c.op === "fetch"),
     "the reference is already on the wire from connect - re-resolving it buys nothing");
 }
+{
+  /* THE ONE PLACE THE LOCK ADVANCED WITHOUT A DISPATCH. "Already rendered" is true at
+     connect, and false after a mid-session watcher rebuild (a stop/start across an SDK
+     reconnect, a mode round-trip) resets the lock to PENDING while GARMENT_BACK is still
+     the reference on the wire. Recording FRONT there left the back on the shopper's front
+     until the next re-anchor happened to notice. The shortcut now checks the wire first. */
+  const back = { size: 9, type: "image/jpeg" };
+  const h = harness({ startOrientation: null, backBlob: back, wire: { onWire: back } });
+  await h.maybeSwap("front");
+  check("acquiring FRONT while GARMENT_BACK is on the wire DISPATCHES the front instead of recording it",
+    h.state().autoOrientation === "front" && h.calls.some((c) => c.op === "applyActive"),
+    JSON.stringify(h.calls.map((c) => c.op)));
+  check("...through the normal front leg, so its bytes are pre-flighted like any return",
+    h.calls.some((c) => c.op === "fetch" && c.url === FRONT));
+  const front = { size: 8, type: "image/jpeg" };
+  const ok = harness({ startOrientation: null, frontBlob: front, wire: { onWire: front } });
+  await ok.maybeSwap("front");
+  check("...while the front already on the wire stays a bookkeeping update",
+    ok.state().autoOrientation === "front" && !ok.calls.some((c) => c.op === "applyActive"));
+  const unknown = harness({ startOrientation: null, wire: { onWire: null } });
+  await unknown.maybeSwap("front");
+  check("...and an UNKNOWN wire (go-live's first apply still in flight) is not a reason to stack a second set()",
+    !unknown.calls.some((c) => c.op === "applyActive"),
+    "two concurrent set() calls at go-live is the hang the wire mutex exists for");
+}
 
 console.log("\n── §5 NO OUTPUT FRAME IS EVER USED AS AN INPUT REFERENCE ──");
 {
@@ -232,6 +279,122 @@ console.log("\n── §6 A FAILED DISPATCH MUST NOT LEAVE THE LOCK LYING ──
   await h.maybeSwap("back");
   check("a dispatch that succeeds still advances the lock",
     h.state().autoOrientation === "back" && h.calls.some((c) => c.op === "applyActive"));
+}
+
+console.log("\n── §7 THE BACK LEG READS A SETTLED VERDICT, NOT A FRESH DECODE ──");
+/* "There is a visible gap while it swaps sides." The bytes were already in RAM, but every
+   turn to the back still ran createImageBitmap() over the full packshot plus a canvas
+   readback before the set() could even be issued - work preloadGarmentAssets() had already
+   done on the SAME Blob before connect. The flatness verdict is a property of the bytes, so
+   it is settled once per Blob and every later flip reads it. */
+{
+  const h0 = SRC.indexOf("const _flatVerdicts = new WeakMap();");
+  const h1 = SRC.indexOf("\nasync function blobLooksFlat(", h0);
+  const h2 = SRC.indexOf("\n}\n", h1);
+  if (h0 === -1 || h1 === -1 || h2 === -1) {
+    check("blobLooksFlat() and its verdict memo exist in app.js", false, "not implemented");
+  } else {
+    let decodes = 0, failNextDecode = false, flatAnswer = false;
+    const probeSrc = SRC.slice(h0, h2 + 2);
+    const realProbe = new Function("createImageBitmap", "bitmapLooksFlat",
+      probeSrc + "\nreturn blobLooksFlat;")(
+      async () => { decodes++; if (failNextDecode) { failNextDecode = false; throw new Error("decode hiccup"); } return { close() {} }; },
+      async () => flatAnswer);
+
+    const back = { size: 1, type: "image/jpeg" };
+    await realProbe(back);                                     // what preloadGarmentAssets() does
+    const afterPreload = decodes;
+    const first = harness({ startOrientation: "front", backBlob: back, blobLooksFlat: realProbe });
+    await first.maybeSwap("back");
+    const second = harness({ startOrientation: "front", backBlob: back, blobLooksFlat: realProbe });
+    await second.maybeSwap("back");
+    check("a back flip after preload issues the swap without decoding the packshot again",
+      afterPreload === 1 && decodes === 1 &&
+      first.state().autoOrientation === "back" && second.state().autoOrientation === "back",
+      `decodes=${decodes}`);
+
+    const other = { size: 2, type: "image/jpeg" };
+    await realProbe(other);
+    check("...a different Blob (a refetch, another item) gets its own probe", decodes === 2);
+
+    const hiccup = { size: 3, type: "image/jpeg" };
+    failNextDecode = true;
+    const failedOpen = await realProbe(hiccup);
+    await realProbe(hiccup);
+    check("a decode failure fails OPEN and is not memoized - the next flip probes again",
+      failedOpen === false && decodes === 4, `decodes=${decodes}`);
+
+    flatAnswer = true;
+    const placeholder = { size: 4, type: "image/jpeg" };
+    const flatHarness = harness({ startOrientation: "front", backBlob: placeholder, blobLooksFlat: realProbe });
+    await flatHarness.maybeSwap("back");
+    check("a flat placeholder is still rejected through the memoized probe",
+      flatHarness.state().autoOrientation === "front" &&
+      !flatHarness.calls.some((c) => c.op === "applyActive"));
+  }
+  const preload = SRC.slice(SRC.indexOf("async function preloadGarmentAssets"),
+    SRC.indexOf("/* ── Context-Aware Asset Switching - OrientationWatcher"));
+  check("preload settles the verdict through the SAME probe the flip reads",
+    /await blobLooksFlat\(backBlob\)/.test(preload) && /await blobLooksFlat\(backBlob\)/.test(swapSrc));
+  check("...and neither site decodes the back itself any more",
+    !/createImageBitmap\(backBlob\)/.test(preload) && !/createImageBitmap\(backBlob\)/.test(swapSrc));
+}
+
+console.log("\n── §8 A PREDICTIVE BACK IS WITHDRAWN AT ONCE, AND NOTHING ELSE SKIPS THE COOLDOWN ──");
+/* A predictive BACK goes on the wire before any back vote (see ORIENT_PREDICTIVE_BACK). When the
+   face comes back the shopper never finished the turn, and the back reference is on their front:
+   ORIENT_COOLDOWN_MS must not keep it there. Every OTHER swap still honours the cooldown - it is
+   the anti-flap defence, and a bypass that leaked beyond this one case would re-open flapping. */
+{
+  const pred = harness({ startOrientation: "front" });
+  await pred.maybeSwap("back", true);
+  check("a predictive BACK commits and is remembered as predictive",
+    pred.state().autoOrientation === "back" && pred.state().lastSwapPredictive === true &&
+    pred.calls.some((c) => c.op === "applyActive"));
+
+  const withdraw = harness({ startOrientation: "back", lastSwapAgoMs: 300, lastSwapWasPredictive: true });
+  await withdraw.maybeSwap("front");
+  check("300ms after a PREDICTIVE back, a face return dispatches FRONT inside the cooldown",
+    withdraw.state().autoOrientation === "front" && withdraw.calls.some((c) => c.op === "applyActive"),
+    JSON.stringify(withdraw.calls.map((c) => c.op)));
+  check("...and the swap that replaced it is an ordinary one again",
+    withdraw.state().lastSwapPredictive === false);
+
+  const confirmedBack = harness({ startOrientation: "back", lastSwapAgoMs: 300, lastSwapWasPredictive: false });
+  await confirmedBack.maybeSwap("front");
+  check("300ms after a VOTE-CONFIRMED back, the cooldown still holds the front",
+    confirmedBack.state().autoOrientation === "back" && !confirmedBack.calls.some((c) => c.op === "applyActive"));
+
+  const reBack = harness({ startOrientation: "front", lastSwapAgoMs: 300, lastSwapWasPredictive: true });
+  await reBack.maybeSwap("back", true);
+  check("...and the bypass never applies toward BACK - a second prediction waits like any swap",
+    reBack.state().autoOrientation === "front" && !reBack.calls.some((c) => c.op === "applyActive"));
+}
+
+console.log("\n── §9 A SWAP HOLDS DECART'S INPUT UNTIL ITS OWN SET() RESOLVES ──");
+/* The blank/untextured shirt during a turn is Decart rendering camera frames from its prior while
+   the reference is being replaced (first-frame-integrity.test.mjs §7). maybeSwap() owns that
+   window, so it takes the hold before the dispatch and gives it back when the dispatch settles -
+   on success AND on failure, or a failed swap would freeze the feed until the ceiling. */
+{
+  const ok = harness({ startOrientation: "front", gate: true });
+  await ok.maybeSwap("back", true);
+  const ops = ok.calls.map((c) => c.op);
+  check("the hold is taken BEFORE the set() and given back AFTER it",
+    ops.indexOf("hold") !== -1 && ops.indexOf("hold") < ops.indexOf("applyActive") &&
+    ops.indexOf("applyActive") < ops.indexOf("unhold"), ops.join(" > "));
+  check("...bounded by ORIENT_SWAP_INPUT_HOLD_MAX_MS",
+    ok.calls.find((c) => c.op === "hold").maxMs === 2000);
+
+  const failed = harness({ startOrientation: "front", gate: true, applyThrows: true });
+  await failed.maybeSwap("back");
+  check("a swap whose set() FAILS still gives the hold back - the old reference is on the wire, let frames flow",
+    failed.calls.some((c) => c.op === "unhold"), failed.calls.map((c) => c.op).join(" > "));
+
+  const flat = harness({ startOrientation: "front", gate: true, flat: true });
+  await flat.maybeSwap("back");
+  check("a swap abandoned before dispatch never takes the hold at all",
+    !flat.calls.some((c) => c.op === "hold"));
 }
 
 console.log(fails === 0 ? "\nfront-reference-guard: OK" : `\nfront-reference-guard: ${fails} FAILED`);

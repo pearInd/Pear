@@ -66,8 +66,9 @@ function extract(startMarker, endMarker) {
    that actually reached the output track. */
 const code = extract("function createThrottledInputStream(", "\n/**\n * Open the input gate");
 
-function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50 } = {}) {
-  const state = { emitted: 0, drawn: 0, trackStopped: false, timers: new Set(), logs: [], warns: [] };
+function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50, undressedCheck } = {}) {
+  /* `now` is the throttle's clock (its `clock` option). Tests that never move it see no time pass. */
+  const state = { emitted: 0, drawn: 0, trackStopped: false, timers: new Set(), logs: [], warns: [], now: 0 };
   const outTrack = {
     contentHint: "",
     requestFrame() { state.emitted++; },
@@ -85,6 +86,7 @@ function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50 } = {}) {
     setTimeout: (fn, ms) => { const id = { fn, ms, isTimeout: true }; state.timers.add(id); return id; },
     clearTimeout: (id) => state.timers.delete(id),
     MediaStream: class { constructor(t) { this.t = t; } getTracks() { return this.t; } },
+    ...(undressedCheck ? { warnIfStreamStartedUndressed: undressedCheck } : {}),
     document: {
       createElement: () => ({
         muted: false, playsInline: false, autoplay: false, srcObject: null,
@@ -103,7 +105,7 @@ function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50 } = {}) {
   const fn = new Function(...Object.keys(sandbox),
     code + "\nreturn createThrottledInputStream;")(...Object.values(sandbox));
   const srcStream = { getVideoTracks: () => [{ applyConstraints: () => Promise.resolve() }], getTracks: () => [] };
-  const throttle = fn(srcStream, { fps, gated, gateMaxMs });
+  const throttle = fn(srcStream, { fps, gated, gateMaxMs, clock: () => state.now });
   /* The real one starts its interval from video.play().then(start) - a microtask. Flush it
      so the timer is registered before a test drives ticks. */
   const flush = () => new Promise((r) => setImmediate(r));
@@ -266,9 +268,16 @@ console.log("\n── §3b THE DISPLAY GATE: the second lock on the same door �
      the leftover inline rule. Clearing hands the element back to the stylesheet. */
   check("retiring the feed hands display AND opacity back to the stylesheet",
     /function resetAiFeedVisibility\(\) \{[\s\S]{0,220}ai\.style\.opacity = "";[\s\S]{0,60}ai\.style\.display = "";/.test(SRC));
+  /* COUNTED ON CODE ONLY. This used to count raw file text and broke the moment a comment
+     elsewhere referred to resetAiFeedVisibility() by name - a phantom fifth "call site"
+     that reads as a real regression and sends the next person looking for a call that does
+     not exist. Prose naming a function is not a call; strip comments before counting.
+     (The save/restore balance check in orientation-yaw-mirror learned the same lesson.) */
+  const CODE = SRC.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/[^\r\n]*/g, " ");
+  const callSites = (CODE.match(/resetAiFeedVisibility\(\)/g) || []).length;
   check("...and every path that retires or re-uses the element calls it",
-    (SRC.match(/resetAiFeedVisibility\(\)/g) || []).length === 4,   // definition + 2 teardowns + clip replay
-    `${(SRC.match(/resetAiFeedVisibility\(\)/g) || []).length} sites - expected the definition, both teardowns and the clip player`);
+    callSites === 4,   // definition + 2 teardowns + clip replay
+    `${callSites} sites - expected the definition, both teardowns and the clip player`);
   check("...including the history-clip player, which is different content in the same element",
     /resetAiFeedVisibility\(\);\s*\/\/ a clip is different content/.test(SRC),
     "a clip inheriting a dead session's opacity:0 renders nothing at all");
@@ -344,6 +353,220 @@ console.log("\n── §5 THE FRAME BUDGET ON THE WIRE ──");
   check("...and the loop still runs at the presence cadence, one inference per tick",
     /const tickMs = POSE_SAMPLE_MS \* 2;/.test(watcher) &&
     (watcher.match(/detectPoseFrame\(/g) || []).length === 1);
+}
+
+console.log("\n── §6 THE 'STARTED RENDERING WITHOUT A GARMENT' WARNING TELLS THE TRUTH ──");
+/* REPORTED AS A RACE: "[PEAR][DEBUG] Decart stream started rendering WITHOUT a garment
+   asset on the wire" on every session, read as proof that the first frame beats the
+   front reference. It was not a race - it was the warning asking too early. It ran from
+   onRemoteStream, which fires when the remote TRACK attaches during the handshake, before
+   go-live's first set() can have been sent - so rtImageOnWire was false by construction.
+   But the gate above withholds every camera frame until that set() is acknowledged, so
+   nothing had been rendered at all. The warning must stay silent while the gate is shut,
+   and must still fire for the one path that genuinely streams undressed: the gate's own
+   fail-open timeout. */
+{
+  const fnSrc = extract("function warnIfStreamStartedUndressed()", "\n/**\n * Console escape hatch");
+  const run = ({ throttle, onWire }) => {
+    const warns = [];
+    const api = new Function("inputThrottle", "rtImageOnWire", "console",
+      "let debugStreamCheckedThisGen = false, lastSentImageRef = null;\n" + fnSrc +
+      "\nreturn { check: warnIfStreamStartedUndressed, latched: () => debugStreamCheckedThisGen };")(
+      throttle, onWire, { warn: (...a) => warns.push(a.join(" ")), log() {} });
+    api.check();
+    return { warns, latched: api.latched() };
+  };
+  const shut = run({ throttle: { gateOpen: false }, onWire: false });
+  check("remote track attached while the gate is shut: no warning - nothing has rendered",
+    shut.warns.length === 0, shut.warns.join("\n        "));
+  check("...and the one-shot check is NOT spent, so a later, decidable moment can still ask",
+    shut.latched === false);
+  const openBare = run({ throttle: { gateOpen: true }, onWire: false });
+  check("frames flowing with nothing on the wire still warns - the real failure is kept",
+    openBare.warns.length === 1 && /WITHOUT a garment asset/.test(openBare.warns[0]));
+  const ungated = run({ throttle: null, onWire: false });
+  check("...and with no throttle at all (gate unavailable) it warns exactly as it always did",
+    ungated.warns.length === 1);
+  const dressed = run({ throttle: { gateOpen: true }, onWire: true });
+  check("frames flowing with the garment acknowledged: silent", dressed.warns.length === 0);
+
+  let asked = 0;
+  const h = makeThrottle({ gated: true, gateMaxMs: 6000, undressedCheck: () => { asked++; } });
+  await h.flush();
+  h.fireTimeouts();
+  check("the gate's fail-open timeout asks the question at the moment frames really start",
+    asked === 1, `asked=${asked}`);
+  const h2 = makeThrottle({ gated: true, undressedCheck: () => { asked++; } });
+  await h2.flush();
+  h2.throttle.release("garment acknowledged");
+  check("...but an ordinary release does not - the garment is on the wire by definition",
+    asked === 1, `asked=${asked}`);
+  check("the call inside the gate is typeof-guarded (CLAUDE.md 2.7 - this block runs sandboxed)",
+    /if \(typeof warnIfStreamStartedUndressed === "function"\) warnIfStreamStartedUndressed\(\);/.test(code));
+}
+
+console.log("\n── §7 THE SAME GATE, HELD ACROSS AN ORIENTATION SWAP ──");
+/* REPORTED from the exported clip: during FRONT -> BACK the shirt goes blank - untextured, plain
+   brown - for a beat before the back graphic appears. That is the window this gate was built for
+   at go-live, reopened mid-session: a full set({ image }) replaces the reference while camera
+   frames keep flowing, and Decart renders those frames from its own prior until the new
+   reference lands. The clip is Decart's raw output, so no display cover can hide it; the only
+   fix is not to hand Decart those frames. hold() closes the gate from the dispatch until the
+   swap's own set() resolves - its output simply stays on the last conditioned frame. */
+{
+  const h = makeThrottle({ gated: true });
+  await h.flush();
+  check("hold() refuses while the go-live gate has never opened - that gate belongs to go-live",
+    typeof h.throttle.hold === "function" && h.throttle.hold("swap", 2000) === false && h.throttle.held === false);
+  h.throttle.release("go-live");
+  h.tick(2);
+  const before = h.state.emitted;
+  check("once open, hold() closes it for the swap", h.throttle.hold("swap", 2000) === true && h.throttle.held === true);
+  h.tick(5);
+  check("...and no frame reaches Decart while it is held", h.state.emitted === before, `${h.state.emitted - before} leaked`);
+  check("...and applyActive()'s generic release() does NOT open a held gate - only the holder may",
+    h.throttle.release("applyActive") === false && h.throttle.held === true,
+    "a re-drape or re-anchor finishing mid-swap would otherwise uncover the churn window");
+  check("...the holder's unhold() does", h.throttle.unhold("swap acknowledged") === true && h.throttle.held === false);
+  h.tick(3);
+  check("...and frames flow again at once", h.state.emitted === before + 3, `${h.state.emitted - before}`);
+  check("unhold() on a gate that is not held is a no-op", h.throttle.unhold("again") === false);
+}
+{
+  /* THE FIRST FRAME ON THE NEW REFERENCE GOES AT THE ACK. Decart can only render the new reference
+     from a camera frame sent after it took it; reopening the gate used to send none, so that frame
+     waited up to a whole interval (100ms at 10fps) for the next tick on every swap. */
+  const h = makeThrottle({ gated: true, fps: 10 });
+  await h.flush();
+  h.throttle.release("go-live");
+  h.tick(1);                                   // a frame at t=0
+  h.throttle.hold("swap", 2000);
+  h.state.now = 450;                           // the upload and ACK took 450ms
+  const before = h.state.emitted;
+  h.throttle.unhold("swap acknowledged");
+  check("a frame reaches Decart AT the ACK, not on the next interval tick",
+    h.state.emitted === before + 1, `${h.state.emitted - before} frames at unhold`);
+  const intervals = [...h.state.timers].filter((t) => !t.isTimeout);
+  check("...and restarting the interval from it leaves exactly one interval at the same rate - the billing cap is unchanged",
+    intervals.length === 1 && intervals[0].ms === 100, JSON.stringify(intervals.map((t) => t.ms)));
+  h.tick(2);
+  check("...and frames keep flowing from it", h.state.emitted === before + 3, `${h.state.emitted - before}`);
+
+  const quick = makeThrottle({ gated: true, fps: 10 });
+  await quick.flush();
+  quick.throttle.release("go-live");
+  quick.state.now = 1000;
+  quick.tick(1);                               // a frame at t=1000
+  quick.throttle.hold("swap", 2000);
+  quick.state.now = 1040;                      // ACK 40ms later - under one frame period
+  const q0 = quick.state.emitted;
+  quick.throttle.unhold("swap acknowledged");
+  check("a hold shorter than one frame period sends nothing extra - frames never go closer than the rate allows",
+    quick.state.emitted === q0, `${quick.state.emitted - q0} extra`);
+}
+{
+  const h = makeThrottle({ gated: false });
+  await h.flush();
+  h.throttle.hold("swap", 1500);
+  h.fireTimeouts();
+  h.tick(2);
+  check("a hold can never strand the session - it self-releases at its ceiling, loudly",
+    h.throttle.held === false && h.state.emitted === 2 && h.state.warns.some((w) => /held.*ceiling|ceiling/i.test(w)),
+    h.state.warns.join(" | "));
+}
+{
+  const watcher = SRC.slice(SRC.indexOf("function createFrameFreezeWatcher(video, gen)"),
+    SRC.indexOf("function startFrameFreezeWatch("));
+  check("the freeze watchdog stands down while a swap holds the input - a deliberate freeze is not a stall",
+    /if \(!isLive\(\) \|\| connState === "reconnecting" \|\|\s*\n\s*inputGateHeld\(\) \|\|/.test(watcher),
+    "otherwise an 800ms upload trips a full re-anchor that queues ANOTHER upload behind the swap");
+  check("inputGateHeld() reads the live throttle's own flag",
+    /function inputGateHeld\(\) \{\s*\n\s*return !!\(inputThrottle && inputThrottle\.held\);/.test(SRC));
+}
+
+console.log("\n── §8 A SWAP'S RENDER WAIT IS NOT A FREEZE - no mid-turn re-upload ──");
+/* REPORTED from a 360 (00:03): the back graphic on, then a plain untextured shirt mid-rotation, then the
+   back again. The watchdog stood down only while the swap HELD the input; after the ACK, Decart still has
+   to render its first frame from the new reference. Past FRAME_FREEZE_MS that read as a frozen transport,
+   and the first freeze of a session re-anchors at once - invalidateWireState() + applyActive(), a full
+   re-upload with the input not held: the generic-garment window, mid-turn. This runs the REAL watchdog
+   on a controlled clock through a swap: output frames every 100ms, dispatch (input held) at 1000ms, the
+   ACK at 1300ms, then silence for `renderMs` before Decart's first frame on the new reference. */
+{
+  const num = (name) => Number(new RegExp(`^const ${name}\\s*=\\s*(\\d+)`, "m").exec(SRC)[1]);
+  const watcherSrc = extract("function createFrameFreezeWatcher(video, gen)", "function startFrameFreezeWatch(");
+  const gateSrc = extract("let _swapAckedAt = -Infinity;", "let freezeWatcher = null;");
+  function runSwap({ renderMs, markAck = true, framesStopForGood = false, noSwap = false, freezeAt = null, ack = 1300 }) {
+    /* On an epoch-like base, as Date.now() is live: the watchdog's lastRecoverAt starts at 0, and a clock
+       starting at 0 would hold its first re-anchor behind the recover cooldown - which it never is live. */
+    const BASE = 1_700_000_000_000;
+    const clock = { now: BASE };
+    const calls = [];
+    const state = { held: false, rvfc: null, poll: null };
+    const video = { paused: false, readyState: 4, currentTime: 0, play: async () => {},
+      requestVideoFrameCallback(cb) { state.rvfc = cb; } };
+    const sandbox = {
+      Date: { now: () => clock.now },
+      FRAME_FREEZE_MS: num("FRAME_FREEZE_MS"), FRAME_FREEZE_POLL_MS: num("FRAME_FREEZE_POLL_MS"),
+      FRAME_FREEZE_RECOVER_COOLDOWN_MS: num("FRAME_FREEZE_RECOVER_COOLDOWN_MS"), FRAME_FREEZE_PING_MS: num("FRAME_FREEZE_PING_MS"),
+      FRAME_FREEZE_AFTER_SWAP_MS: num("FRAME_FREEZE_AFTER_SWAP_MS"),
+      sessionGen: 1, isLive: () => true, connState: "live", inputGateHeld: () => state.held, document: { hidden: false },
+      rtClient: {}, resolveLook: () => null, buildLookPrompt: () => "look", imageOnlyPrompt: () => "prompt", activeItem: {},
+      clampPromptForWire: (p) => p, isGarmentApplied: true, lastAckedImageRef: "back-ref", abbrevImg: (x) => x,
+      sendCondition: async (label) => { calls.push({ op: label, at: clock.now - BASE }); return true; },
+      invalidateWireState: () => calls.push({ op: "invalidateWireState", at: clock.now - BASE }),
+      applyActive: async () => { calls.push({ op: "applyActive (RE-UPLOAD)", at: clock.now - BASE }); },
+      console: { log() {}, warn: (...a) => { if (/FROZEN/.test(a.join(" "))) calls.push({ op: "FROZEN", at: clock.now - BASE }); } },
+      setInterval: (fn) => { state.poll = fn; return 1; }, clearInterval() {},
+    };
+    const api = new Function(...Object.keys(sandbox),
+      gateSrc + "\n" + watcherSrc + "\nreturn { createFrameFreezeWatcher, noteSwapAcknowledged, freezeBarMs };")(...Object.values(sandbox));
+    const w = api.createFrameFreezeWatcher(video, 1);
+    const ACK = ack, DISPATCH = 1000, TAIL = 1200;
+    const frameDue = (t) => {
+      if (freezeAt !== null) return t < freezeAt;
+      if (noSwap) return true;
+      if (t < TAIL) return true;                              // frames from camera input sent before the hold
+      if (framesStopForGood) return false;
+      return t >= ACK + renderMs;                             // Decart's first frame on the new reference, then steady
+    };
+    return (async () => {
+      for (let t = 0; t <= 6000; t += 10) {
+        clock.now = BASE + t;
+        if (!noSwap && t === DISPATCH) state.held = true;
+        if (!noSwap && t === ACK) { state.held = false; if (markAck) api.noteSwapAcknowledged(); }
+        if (t % 100 === 0 && frameDue(t) && state.rvfc) { const cb = state.rvfc; state.rvfc = null; cb(); }
+        if (t % 250 === 0 && state.poll) { state.poll(); for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); }
+      }
+      w.stop();
+      return calls;
+    })();
+  }
+  const reuploads = (calls) => calls.filter((c) => c.op.startsWith("applyActive")).length;
+
+  /* Whether a given render wait trips it depends on where the ACK falls against the 250ms poll: the freeze
+     clock was last re-stamped by the last HELD poll, up to one poll before the ACK. Both ends, reported range. */
+  const bug = [];
+  for (const [ack, renderMs] of [[1240, 780], [1240, 850], [1300, 1100]]) bug.push({ ack, renderMs, calls: await runSwap({ ack, renderMs, markAck: false }) });
+  check("THE BUG, reproduced on the real watchdog: a 780-1100ms render wait after the ACK is read as a freeze and RE-UPLOADS the reference",
+    bug.every((b) => reuploads(b.calls) === 1 && b.calls.some((c) => c.op === "invalidateWireState")),
+    JSON.stringify(bug.map((b) => ({ ack: b.ack, renderMs: b.renderMs, ops: b.calls.map((c) => c.op + "@" + c.at) }))));
+  const fixed = [];
+  for (const ack of [1240, 1300]) for (const renderMs of [500, 900, 1100, 1400, 1700]) fixed.push({ ack, renderMs, calls: await runSwap({ ack, renderMs }) });
+  check("THE FIX: after a swap's ACK, a render wait of up to FRAME_FREEZE_AFTER_SWAP_MS less one poll sends nothing - no ping, no re-upload",
+    fixed.every((f) => f.calls.length === 0), JSON.stringify(fixed.filter((f) => f.calls.length).map((f) => ({ ack: f.ack, renderMs: f.renderMs, ops: f.calls.map((c) => c.op + "@" + c.at) }))));
+  const dead = await runSwap({ renderMs: 0, framesStopForGood: true });
+  const firstFrozen = dead.find((c) => c.op === "FROZEN");
+  check("...while a transport that really dies after a swap is still caught and re-anchored, within the longer bar",
+    reuploads(dead) >= 1 && firstFrozen && firstFrozen.at >= 1300 + num("FRAME_FREEZE_AFTER_SWAP_MS") - 250 &&
+    firstFrozen.at <= 1300 + num("FRAME_FREEZE_AFTER_SWAP_MS") + 250, JSON.stringify(dead.slice(0, 4)));
+  const plain = await runSwap({ noSwap: true, freezeAt: 3000 });
+  const plainFrozen = plain.find((c) => c.op === "FROZEN");
+  check("...and a freeze with no swap anywhere near it is caught at FRAME_FREEZE_MS, exactly as before",
+    plainFrozen && plainFrozen.at >= 3000 + num("FRAME_FREEZE_MS") - 100 && plainFrozen.at <= 3000 + num("FRAME_FREEZE_MS") + 250 && reuploads(plain) >= 1,
+    JSON.stringify(plain.slice(0, 4)));
+  check("maybeSwap() opens the window at the ACK, right after the trace's acknowledgement",
+    /if \(trace\) trace\.acknowledged\(\);\s*\n(?:\s*\/\*[\s\S]*?\*\/\s*\n)?\s*if \(typeof noteSwapAcknowledged === "function"\) noteSwapAcknowledged\(\);/.test(SRC));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

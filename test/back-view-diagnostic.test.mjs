@@ -261,5 +261,34 @@ console.log("\n── §6 canonicalImageUrl() itself, on the two proof points �
     canonicalImageUrl("https://cdn.shopify.com/files/handbag-900x900.jpg"));
 }
 
+console.log("\n── READY IS NOT PROOF THE CATALOG REAR PHOTO IS IN PLAY ──");
+{
+  /* THE FALSE ALL-CLEAR. backViewReadinessOf() answers "is there a DISTINCT back asset",
+     and a SYNTHESIZED back is a distinct asset - so __pearDebugBackView() reported READY
+     for a garment whose real rear photo had been lost. It was recommended as THE check for
+     "the back renders plain", and gave an all-clear on exactly that failure: a brown PEAK
+     tee whose catalog rear carries a mountain photograph rendered uniform brown fabric,
+     because the server generated a plain rear after the classifier mislabelled the real one.
+     The reason enum is deliberately unchanged (a synthetic back IS renderable, and callers
+     read READY as "a swap will work"). Provenance is what distinguishes the two cases. */
+  const APPSRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8");
+  const dbg = APPSRC.slice(APPSRC.indexOf("window.__pearDebugBackView = () =>"),
+                           APPSRC.indexOf("window.__pearDebugBackView = () =>") + 4000);
+  check("the diagnostic reports the back's provenance, not just READY",
+    /const backSource = \(activeItem && activeItem\.backSource\)/.test(dbg) &&
+    /source:", backSource/.test(dbg),
+    "READY alone cannot tell a catalog rear photo from a generated one");
+  check("...and flags a generated back on a multi-photo gallery as the likely fault",
+    /const suspicious = synthetic && galleryCount > 1;/.test(dbg) &&
+    /READY, BUT THE BACK IS GENERATED, NOT THE CATALOG PHOTO/.test(dbg),
+    "a synthetic back when a real rear photo exists is the failure dressed as success");
+  /* A single-photo product SHOULD get a generated rear; that must not be flagged, or the
+     warning becomes noise and stops being read. */
+  check("...but does not flag a generated back on a genuine single-photo product",
+    /generated rear - expected for a single-photo product/.test(dbg));
+  check("...and returns the provenance so a script can assert on it, not only log it",
+    /return \{ \.\.\.r, backSource, synthetic, suspicious \};/.test(dbg));
+}
+
 console.log(fails === 0 ? "\nback-view-diagnostic: OK" : `\nback-view-diagnostic: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

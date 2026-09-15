@@ -39,6 +39,12 @@
          signaling channel, and the gate that lets a shift be DEFERRED without being
          forgotten. Added after the monitor's first revision produced
          "rtClient.set לא הגיב" at go-live; apply-timeout.test.mjs owns the recovery.
+     §8  the SUBJECT - which of the people in frame this monitor is measuring. The
+         presence gate and this tracker used to answer that independently (.some() over
+         everyone vs. landmarks[0]), so a bystander could hold the gate open while the
+         tracker measured someone else and the resulting dispatch re-draped the garment
+         for the wrong torso. primaryPoseIndex() is the single shared answer. Latent
+         while the detector runs numPoses:1; this section is what keeps raising it safe.
 
    Sibling suites: body-presence-gate.test.mjs owns the go-live gate and the presence half
    of the same loop; side-profile.test.mjs owns the orientation watcher's own edge-on
@@ -83,7 +89,7 @@ const sandbox = {
 const api = new Function(...Object.keys(sandbox),
   code + "\nreturn { TORSO_LANDMARKS, torsoReadable, planarAngleDeg, bodyYawDegrees," +
   " bodyPitchDegrees, bodyDepthRatio, bodyProfileBox, bodyContourSignature," +
-  " relativeDelta, topologyDelta, topologyShift, makeBodyTopologyTracker };"
+  " relativeDelta, topologyDelta, topologyShift, makeBodyTopologyTracker, primaryPoseIndex };"
 )(...Object.values(sandbox));
 
 /* ── Skeleton fixtures ────────────────────────────────────────────────────────
@@ -527,8 +533,21 @@ console.log("\n── §7 THROTTLING: the wire is the floor, not the CPU ──"
   check("...and the SAME movement still fires once the wire frees up",
     retried.state === "shift" && retried.reason === "rotation",
     "a deferred shift that advanced the baseline would leave the body mis-fitted for good");
+  /* THE SIGNATURE IS HOISTED INTO `sig` NOW, rather than being computed inline in the
+     feed() call. It gained a second consumer: the orientation watcher's yaw corroboration
+     reads _torsoYawAbs, which is published from this same signature (see
+     ORIENT_CORROBORATED_FRAMES). That is the entire point of the shared sampler - one
+     MediaPipe inference per tick, several consumers - so the value has to be named to be
+     used twice. Both halves are pinned separately below: that `sig` really is the
+     signature, and that the gate is still passed from the live wire state. */
+  check("the signature is computed once and named, so both consumers read the same reading",
+    /const sig = bodyContourSignature\(result\);/.test(watcher),
+    "two calls would mean two readings of the same tick, and a second inference on a phone");
+  /* ...and from the orientation turn: a front/back swap is coming, and a re-drape started
+     mid-turn is what held the wire against it (turn-yaw-window.test.mjs §4). Same gate, same
+     deferral - the tracker re-offers the shift once the turn settles. */
   check("the watcher passes that gate from the live wire state",
-    /bodyTopology\.feed\(bodyContourSignature\(result\), \{ canDispatch: !wireBusy\(\) \}\)/.test(watcher),
+    /bodyTopology\.feed\(sig, \{ canDispatch: !wireBusy\(\) && !orientTurnInProgress\(\) \}\)/.test(watcher),
     "the gate is useless if the call site does not tell it what the wire is doing");
 
   /* THE LAST LINE OF DEFENCE, one level down: even with the gate above, the dispatcher
@@ -537,6 +556,66 @@ console.log("\n── §7 THROTTLING: the wire is the floor, not the CPU ──"
   check("...and the dispatcher itself declines a busy wire regardless",
     /if \(wireBusy\(\)\) \{/.test(recondition),
     "a defence that depends on every caller remembering is not a defence");
+}
+
+console.log("\n── §8 THE PRIMARY SUBJECT: one answer, shared by the gate and the tracker ──");
+{
+  /* WHY THIS SECTION EXISTS. Two functions used to answer "which of these people is the
+     shopper" independently: presenceFromPoseResult() took .some() over EVERY detected
+     pose, while bodyContourSignature() read landmarks[0]. Two readings of the same thing
+     that can disagree is the shape §2.8 exists for - the presence gate could be held open
+     by a bystander while the topology monitor measured somebody else, and the
+     re-conditioning dispatch that follows would re-drape the garment for the wrong torso.
+     primaryPoseIndex() is now the single answer both of them consume.
+
+     LATENT TODAY, and the test is here for when it stops being: the detector runs
+     numPoses:1, so both functions currently see one pose and cannot disagree. Raising
+     numPoses is a one-line config change, and this section is what keeps it safe. */
+  const near = skeleton({ scale: 1.0 });     // shopper: large torso, close to the camera
+  const far  = skeleton({ scale: 0.45 });    // bystander: small torso, further away
+
+  check("the LARGEST torso wins, whichever order the detector lists them in",
+    api.primaryPoseIndex([near, far]) === 0 && api.primaryPoseIndex([far, near]) === 1,
+    `got ${api.primaryPoseIndex([near, far])} and ${api.primaryPoseIndex([far, near])}`);
+
+  check("a single pose is index 0 without measuring anything",
+    api.primaryPoseIndex([near]) === 0 && api.primaryPoseIndex([far]) === 0);
+
+  /* Degenerate input must not throw and must not invent a subject - the detector can
+     return an empty list between frames, and every caller treats -1 as "nobody". */
+  check("an empty or absent list reports no subject rather than throwing",
+    api.primaryPoseIndex([]) === -1 && api.primaryPoseIndex(null) === -1 &&
+    api.primaryPoseIndex(undefined) === -1);
+
+  /* Falls back to index 0 when no torso is measurable, which is exactly the behaviour
+     that shipped before this helper existed - an unreadable frame must not change which
+     subject is chosen, only whether the gate opens (torsoReadable decides that). */
+  const unreadable = Array.from({ length: 33 }, () => null);
+  check("an unmeasurable set falls back to index 0, not to -1",
+    api.primaryPoseIndex([unreadable, unreadable]) === 0);
+
+  /* THE COUPLING THAT MATTERS: the signature must be computed from the SAME subject the
+     gate picked. Measuring the bystander is what re-drapes the garment for a body that
+     does not belong to the shopper. */
+  const sigNear = api.bodyContourSignature({ landmarks: [near, far] });
+  const sigFar  = api.bodyContourSignature({ landmarks: [far, near] });
+  check("bodyContourSignature measures the primary subject, not list position",
+    sigNear && sigFar && Math.abs(sigNear.aspect - sigFar.aspect) < 1e-9,
+    `near-first=${JSON.stringify(sigNear)}\n        far-first=${JSON.stringify(sigFar)}`);
+
+  /* worldLandmarks are PARALLEL to landmarks, so they must be indexed with the SAME
+     subject index. Taking [0] there while the image landmarks came from the primary
+     index pairs one person's metric skeleton with another person's image coordinates -
+     a yaw that belongs to nobody. The TURNED world set below sits at the NON-primary
+     position, so a hardcoded [0] would read its 60-degree yaw and fail this. */
+  const turnedWorld = skeleton({ yawDeg: 60 });
+  const sig = api.bodyContourSignature({
+    landmarks: [far, near],
+    worldLandmarks: [turnedWorld, skeleton({ yawDeg: 0 })],
+  });
+  check("worldLandmarks are indexed by the same subject, not hardcoded to 0",
+    sig && Math.abs(sig.yaw) < 1,
+    `yaw=${sig && sig.yaw} - a hardcoded worldLandmarks[0] would report ~60 here`);
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
