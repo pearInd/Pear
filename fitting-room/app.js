@@ -6374,6 +6374,33 @@ const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
   if (raw === null || raw === "" || !Number.isFinite(v)) return ORIENT_EARLY_TURN_DEFAULT_SPEED;
   return v <= 0 ? 0 : Math.min(v, 1000);
 })();
+/* ── THE SLOW PATH - "a slow, deliberate 360 gets the back graphic only once the back is square" ─────
+   REPORTED after the gate came down to 45 (6899d9f): a slow turn still misses the early trigger. It is
+   the gate doing it, and lowering it further is not the answer - the gate is what keeps ordinary posing
+   off the wire, and a pose and the start of a turn are the same reading at 20-30 degrees.
+   WHAT SEPARATES THEM IS WHERE THEY STOP. A weight shift or a look to the side settles by ~30 degrees; a
+   turn keeps going. So the slow path sits ABOVE that, at ORIENT_EARLY_TURN_SLOW_DEG, and asks for a RISE
+   of ORIENT_EARLY_TURN_SLOW_RISE_DEG across ORIENT_EARLY_TURN_SLOW_WINDOW_MS rather than a speed between
+   two readings - a longer baseline averages out the jitter that makes a two-reading speed unusable at
+   these rates, and a pose that has settled reads a rise of ~0.
+   MODELLED (turn-yaw-window §11, 700ms dispatch-to-render, +/-4 degrees of yaw jitter, 10 seeds):
+   a 30 deg/s turn sends BACK at 45-53 degrees instead of 128-143 (wrong garment 3875 -> 1250ms), 45 deg/s
+   2125 -> 625ms, 60 deg/s 750 -> 125ms; 90 and 120 deg/s are unchanged. Every pose is unchanged too -
+   sway 0/10, an 18-degree weight shift 1/10, 25 degrees held 5/10, a slow look to 30 held 6/10, exactly
+   as the gate alone. The request's own shape (22 degrees held 150ms at any speed) fires on ALL of those
+   10/10, because "held" is what a pose does; it is the rise, not the dwell, that says turn.
+   ?early_turn_slow=<deg> moves it, 0 turns the slow path off. */
+const ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG = 35;
+const ORIENT_EARLY_TURN_SLOW_RISE_DEG = 10;
+const ORIENT_EARLY_TURN_SLOW_WINDOW_MS = [450, 960];   // [min, max] age of the reading the rise is measured from
+const ORIENT_EARLY_TURN_SLOW_DEG = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("early_turn_slow"); } catch (_) { return ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG; }
+  const deg = Number(raw);
+  if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG;
+  if (deg <= 0) return 0;
+  return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
+})();
 const ORIENT_EARLY_TURN_MIN_DEG = 10;
 const ORIENT_EARLY_TURN_MAX_DEG = 60;
 const ORIENT_EARLY_TURN_RETURN_DEG = (() => {
@@ -6794,12 +6821,18 @@ function orientPredictBackReason({ enabled = ORIENT_PREDICTIVE_BACK, acquiring, 
    @param {number} deg  |yaw| threshold from a FRONT lock (and from BACK unless returnDeg is given); 0 or less is off
    @param {number} [minSpeed]  rising |yaw| deg/s a crossing needs; 0 or less is no gate
    @param {number} [returnDeg]  |yaw| threshold from a BACK lock; 0 or less never fires FRONT early
+   @param {number} [slowDeg]  the slow path's |yaw| threshold (see ORIENT_EARLY_TURN_SLOW_DEG); 0 or less is off
+   @param {number} [slowRise]  |yaw| the slow path must have gained across its window
+   @param {number[]} [slowWindow]  [min, max] age in ms of the reading that rise is measured from
    @returns {{ readonly armed: "front"|"back"|null, readonly pending: {from: string, to: string}|null,
                readonly speed: number,
                observe(o: { vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number|null }):
                  { fire: "front"|"back"|null, withdraw: "front"|"back"|null } }} */
-function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg) {
+function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg, slowDeg = 0, slowRise = 10, slowWindow = [450, 960]) {
   const thresholdFor = (side) => (side === "back" ? returnDeg : deg);
+  /* THE SLOW PATH's own window of readings - see ORIENT_EARLY_TURN_SLOW_DEG. Bounded; readings are the
+     pose loop's, ~240ms apart, so eight covers well past the window below. */
+  const hist = [];
   let armed = null;     // the lock this trigger was armed on
   let pending = null;   // { from, to } - an early swap that no vote has confirmed yet
   let lastYaw = null, lastAt = null, speed = 0;   // rising |yaw| deg/s between the last two readings
@@ -6814,7 +6847,7 @@ function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg) {
       /* One reading counted once: a tick that sees the same reading again leaves the speed alone. */
       if (fresh && Number.isFinite(at)) {
         if (lastAt !== null && at > lastAt) speed = (yawAbs - lastYaw) / ((at - lastAt) / 1000);
-        if (lastAt === null || at > lastAt) { lastYaw = yawAbs; lastAt = at; }
+        if (lastAt === null || at > lastAt) { lastYaw = yawAbs; lastAt = at; hist.push({ y: yawAbs, at }); if (hist.length > 8) hist.shift(); }
       }
       if (pending) {
         /* Ended by the lock leaving the early side (the withdrawal landed, or the swap never went
@@ -6829,7 +6862,18 @@ function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg) {
       const threshold = thresholdFor(lock);
       if (!(threshold > 0)) { armed = null; return none; }
       if (vote === lock && fresh && yawAbs < threshold) { armed = lock; return none; }
-      if (armed === lock && fresh && yawAbs >= threshold && (!(minSpeed > 0) || speed >= minSpeed)) {
+      /* THE FAST PATH: past the threshold, rising at the gate's speed between two readings. */
+      const fast = yawAbs >= threshold && (!(minSpeed > 0) || speed >= minSpeed);
+      /* THE SLOW PATH: a deliberate slow turn never clears the gate between two readings, but it keeps
+         RISING - measured across ORIENT_EARLY_TURN_SLOW_WINDOW_MS, which averages the jitter a
+         two-reading speed cannot. Above ORIENT_EARLY_TURN_SLOW_DEG, where poses have stopped. */
+      let rise = 0;
+      if (slowDeg > 0 && fresh && Number.isFinite(at)) {
+        const from = hist.find((h) => at - h.at >= slowWindow[0] && at - h.at <= slowWindow[1]);
+        if (from) rise = yawAbs - from.y;
+      }
+      const slow = slowDeg > 0 && yawAbs >= Math.max(threshold, slowDeg) && rise >= slowRise;
+      if (armed === lock && fresh && (fast || slow)) {
         const to = lock === "front" ? "back" : "front";
         armed = null; pending = { from: lock, to };
         return { fire: to, withdraw: null };
@@ -8088,10 +8132,12 @@ function createOrientationWatcher() {
   /* The early turn trigger - on by default, null (and every use of it inert) with ?early_turn=0 (see
      ORIENT_EARLY_TURN_DEG). */
   const earlyTurn = ORIENT_EARLY_TURN_DEG > 0
-    ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG) : null;
+    ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,
+        ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS) : null;
   if (earlyTurn) {
     console.log(`[PEAR] AI Auto - EARLY TURN TRIGGER ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn), ` +
       `${ORIENT_EARLY_TURN_RETURN_DEG > 0 ? ORIENT_EARLY_TURN_RETURN_DEG + "° on the return to FRONT (?early_turn_return)" : "no early FRONT on the return (?early_turn_return=0)"}` +
+      `${ORIENT_EARLY_TURN_SLOW_DEG > 0 ? `, or ${ORIENT_EARLY_TURN_SLOW_DEG}° with |yaw| still rising ${ORIENT_EARLY_TURN_SLOW_RISE_DEG}° across ${ORIENT_EARLY_TURN_SLOW_WINDOW_MS[0]}-${ORIENT_EARLY_TURN_SLOW_WINDOW_MS[1]}ms for a slow turn (?early_turn_slow)` : ""}` +
       (ORIENT_EARLY_TURN_MIN_SPEED > 0 ? `, only while |yaw| rises at ${ORIENT_EARLY_TURN_MIN_SPEED}°/s or faster (?early_turn_speed)` : "") + " - ?early_turn=0 turns it off:",
       "sends the other side as the torso starts to rotate, withdrawn if the pose comes back (dual-view items only)");
   }

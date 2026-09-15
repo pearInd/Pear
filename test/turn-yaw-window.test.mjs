@@ -804,14 +804,14 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
        and holds every swap to the cooldown except withdrawing a predictive/early BACK. `readableTo` is
        the |yaw| past which the torso is unreadable; `noise` perturbs the shoulder order past 70 degrees,
        where BlazePose's labels are weakest; `dropout` loses random frames at any angle. */
-    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700, earlyDeg = 0, measureFrom = 0, minSpeed = 0, yawNoise = 0, returnDeg = null }) {
+    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700, earlyDeg = 0, measureFrom = 0, minSpeed = 0, yawNoise = 0, returnDeg = null, slowDeg = 0 }) {
       let s = seed; const rand = () => ((s = (s * 16807) % 2147483647) / 2147483647);
       const facing = (deg) => { const m = ((deg % 360) + 360) % 360; return m > 180 ? 360 - m : m; };
       const seg = script || [[0, 1000], [360, (360 / speed) * 1000], [360, 3000]];
       const angleAt = (t) => { let from = 0, t0 = 0; for (const [to, dur] of seg) { if (t <= t0 + dur) return from + (to - from) * ((t - t0) / dur); from = to; t0 += dur; } return seg[seg.length - 1][0]; };
       const total = seg.reduce((a, [, d]) => a + d, 0);
       const win = makeTurnYawWindow();
-      const early = earlyDeg > 0 && makeEarlyTurnTrigger ? makeEarlyTurnTrigger(earlyDeg, minSpeed, returnDeg === null ? earlyDeg : returnDeg) : null;   // §11 - null by default
+      const early = earlyDeg > 0 && makeEarlyTurnTrigger ? makeEarlyTurnTrigger(earlyDeg, minSpeed, returnDeg === null ? earlyDeg : returnDeg, slowDeg, numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG"), [450, 960]) : null;   // §11 - null by default
       let lock = "front", lastVote = null, streak = 0, streakSince = 0, poseStreak = 0, poseSide = null;
       let lastSwapAt = -Infinity, lastSwapPredictive = false, busyUntil = 0;
       let sep = null, sepAt = 0, yaw = null, yawAt = 0, lostAt = 0, nextPub = 0, landed = "front";
@@ -1039,11 +1039,11 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       JSON.stringify(gatedTurns.filter((x) => !x.on.completed || wrongMs(x.on) > wrongMs(x.base)).map((x) => [x.speed, x.k, x.readableTo, x.on.sent])));
 
     console.log("\n── §11 THE PRODUCTION DEFAULT - ?early_turn=" + numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") + " gated at " + numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED") + " deg/s, a product decision on these numbers ──");
-    const PD = numOr("ORIENT_EARLY_TURN_DEFAULT_DEG"), PS = numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED"), PR = numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG");
+    const PD = numOr("ORIENT_EARLY_TURN_DEFAULT_DEG"), PS = numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED"), PR = numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG"), PSL = numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG");
     const prodTurns = [];
     for (const speed of [60, 90, 120]) for (const k of [1, 0.75]) for (const readableTo of [90, 60]) for (const swapMs of [700, 1000]) {
       const off = simulateGap({ speed, k, readableTo, swapMs });
-      prodTurns.push({ speed, k, readableTo, swapMs, off, on: simulateGap({ speed, k, readableTo, swapMs, earlyDeg: PD, minSpeed: PS, returnDeg: PR }) });
+      prodTurns.push({ speed, k, readableTo, swapMs, off, on: simulateGap({ speed, k, readableTo, swapMs, earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: PSL }) });
     }
     const pMean = (key, lat) => { const xs = prodTurns.filter((x) => x.swapMs === lat); return Math.round(xs.reduce((a, x) => a + wrongMs(x[key]), 0) / xs.length); };
     for (const lat of [700, 1000]) console.log(`        full 360s at ${lat}ms render latency: wrong garment ${pMean("off", lat)}ms with the trigger off -> ${pMean("on", lat)}ms by default`);
@@ -1052,15 +1052,15 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       JSON.stringify(prodTurns.filter((x) => !x.on.completed || wrongMs(x.on) > wrongMs(x.off)).map((x) => [x.speed, x.k, x.readableTo, x.swapMs, x.on.sent])));
     const prodSlow = [], prodFast = [];
     for (const yawNoise of [0, 4]) {
-      for (const [name, script] of Object.entries(slowPoses)) prodSlow.push({ name, yawNoise, ...fires(script, { earlyDeg: PD, minSpeed: PS, returnDeg: PR, yawNoise }) });
-      for (const [name, script] of Object.entries(fastPoses)) prodFast.push({ name, yawNoise, ...fires(script, { earlyDeg: PD, minSpeed: PS, returnDeg: PR, yawNoise }) });
+      for (const [name, script] of Object.entries(slowPoses)) prodSlow.push({ name, yawNoise, ...fires(script, { earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: PSL, yawNoise }) });
+      for (const [name, script] of Object.entries(fastPoses)) prodFast.push({ name, yawNoise, ...fires(script, { earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: PSL, yawNoise }) });
     }
     for (const r of prodFast) console.log(`        default, ±${r.yawNoise}° jitter, ${r.name}: fires ${r.n}/10, every one withdrawn to FRONT: ${r.stuck === 0}`);
     /* THE GATE WENT 60 -> 45 (2026-09-15) - see ORIENT_EARLY_TURN_DEFAULT_SPEED. Gated at 60 the default never swapped
        for any slow pose; every gate under 60 gives up part of that, and these checks pin exactly how much 45 gives up,
        so a further drop has to restate the cost rather than slip past a loosened "never". */
     const slowLook = { "slow look to 30°, held 1s": [[0, 1000], [30, 900], [30, 1000], [0, 900], [0, 3000]] };
-    for (const yawNoise of [0, 4]) for (const [name, script] of Object.entries(slowLook)) prodSlow.push({ name, yawNoise, ...fires(script, { earlyDeg: PD, minSpeed: PS, returnDeg: PR, yawNoise }) });
+    for (const yawNoise of [0, 4]) for (const [name, script] of Object.entries(slowLook)) prodSlow.push({ name, yawNoise, ...fires(script, { earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: PSL, yawNoise }) });
     for (const r of prodSlow) console.log(`        default, ±${r.yawNoise}° jitter, ${r.name}: fires ${r.n}/10, every one withdrawn to FRONT: ${r.stuck === 0}`);
     const slowRow = (name, yawNoise) => prodSlow.find((r) => r.name === name && r.yawNoise === yawNoise);
     check("under the default, standing still and swaying never swap - with or without yaw jitter",
@@ -1082,7 +1082,7 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       const script = [[0, 1000], [360, 6000], [360, 3000]];
       const firstBack = (r) => { const e = r.sent.find((x) => x.side === "back"); return e ? e.body : null; };
       const old = simulateGap({ script, k, readableTo, swapMs, earlyDeg: PD, minSpeed: 60, returnDeg: PR });
-      const now = simulateGap({ script, k, readableTo, swapMs, earlyDeg: PD, minSpeed: PS, returnDeg: PR });
+      const now = simulateGap({ script, k, readableTo, swapMs, earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: PSL });
       slowTurns.push({ k, readableTo, swapMs, oldBack: firstBack(old), nowBack: firstBack(now), oldWrong: wrongMs(old), nowWrong: wrongMs(now), completed: now.completed });
     }
     for (const r of slowTurns) console.log(`        60°/s 360, k=${r.k} readable to ${r.readableTo}°, ${r.swapMs}ms: BACK sent at ${r.oldBack}° gated at 60 -> ${r.nowBack}° at ${PS} | wrong garment ${r.oldWrong} -> ${r.nowWrong}ms`);
@@ -1102,7 +1102,7 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       const script = [[0, 1000], [360, (360 / speed) * 1000], [360, 3000]];
       legRuns.push({ swapMs, speed, k, readableTo,
         v134: simulateGap({ script, k, readableTo, swapMs, earlyDeg: PD, minSpeed: PS }),
-        now: simulateGap({ script, k, readableTo, swapMs, earlyDeg: PD, minSpeed: PS, returnDeg: PR }),
+        now: simulateGap({ script, k, readableTo, swapMs, earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: PSL }),
         off: simulateGap({ script, k, readableTo, swapMs }) });
     }
     const plainV134 = legRuns.filter((r) => r.v134.returnPlainMs > 0);
@@ -1119,6 +1119,50 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
     check("...and every one still completes, none showing more wrong garment than with the trigger off",
       legRuns.every((r) => r.now.completed && wrongMs(r.now) <= wrongMs(r.off)),
       JSON.stringify(legRuns.filter((r) => !r.now.completed || wrongMs(r.now) > wrongMs(r.off)).map((r) => [r.swapMs, r.speed, r.k, r.readableTo, wrongMs(r.now), wrongMs(r.off)])));
+
+
+    /* THE SLOW PATH, through the same tick (see ORIENT_EARLY_TURN_SLOW_DEG). A slow deliberate turn never
+       clears the speed gate between two readings, so before it the early trigger sat out and BACK came from
+       the vote path once the back was already square. */
+    const slowRuns = [];
+    for (const speed of [30, 45, 60, 90, 120]) for (const k of [1, 0.75]) for (const readableTo of [90, 60]) {
+      const script = [[0, 1000], [360, (360 / speed) * 1000], [360, 3000]];
+      const o = { script, k, readableTo, swapMs: 700, earlyDeg: PD, minSpeed: PS, returnDeg: PR };
+      const gateOnly = simulateGap({ ...o, slowDeg: 0 }), withSlow = simulateGap({ ...o, slowDeg: PSL });
+      const backAt = (r) => { const b = r.sent.find((x) => x.side === "back"); return b ? b.body : null; };
+      slowRuns.push({ speed, k, readableTo, gateOnly, withSlow, gBack: backAt(gateOnly), sBack: backAt(withSlow) });
+    }
+    for (const speed of [30, 45, 60, 90, 120]) {
+      const xs = slowRuns.filter((r) => r.speed === speed);
+      const mean = (key) => Math.round(xs.reduce((a, r) => a + wrongMs(r[key]), 0) / xs.length);
+      console.log(`        ${String(speed).padStart(3)} deg/s turn: BACK sent at ${xs.map((r) => (r.gBack === null ? "never" : r.gBack + "°")).join("/")} with the gate alone -> ${xs.map((r) => (r.sBack === null ? "never" : r.sBack + "°")).join("/")} with the slow path | wrong garment ${mean("gateOnly")} -> ${mean("withSlow")}ms`);
+    }
+    const slowPathTurns = slowRuns.filter((r) => r.speed <= 45);
+    check("THE SLOW TURN, modelled: with the gate alone a 30-45 deg/s turn sends BACK only once the back is round (past 90 degrees)",
+      slowPathTurns.some((r) => r.gBack === null || r.gBack > 90), JSON.stringify(slowPathTurns.map((r) => [r.speed, r.k, r.readableTo, r.gBack])));
+    check("THE FIX: with the slow path every modelled turn sends BACK in the FRONT half, and never later than the gate alone did",
+      slowRuns.every((r) => r.sBack !== null && r.sBack <= 90 && (r.gBack === null || r.sBack <= r.gBack)),
+      JSON.stringify(slowRuns.filter((r) => r.sBack === null || r.sBack > 90 || (r.gBack !== null && r.sBack > r.gBack)).map((r) => [r.speed, r.k, r.readableTo, r.gBack, r.sBack])));
+    check("...and no turn shows the wrong garment longer than it did",
+      slowRuns.every((r) => wrongMs(r.withSlow) <= wrongMs(r.gateOnly)),
+      JSON.stringify(slowRuns.filter((r) => wrongMs(r.withSlow) > wrongMs(r.gateOnly)).map((r) => [r.speed, r.k, r.readableTo, wrongMs(r.gateOnly), wrongMs(r.withSlow)])));
+
+    /* AND THE POSES ARE UNTOUCHED - the whole point of putting the slow path ABOVE where a pose settles.
+       The request's own shape (a dwell at 22 degrees, any speed) fires on every one of these 10/10. */
+    const poseSame = [];
+    for (const [name, script] of Object.entries({ ...slowPoses, ...fastPoses,
+      "weight shift to 25°, held 1s": [[0, 1000], [25, 500], [25, 1000], [0, 500], [0, 3000]],
+      "slow look to 30°, held 1s": [[0, 1000], [30, 700], [30, 1000], [0, 700], [0, 3000]] })) {
+      for (const yawNoise of [0, 4]) {
+        const gateOnly = fires(script, { earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: 0, yawNoise });
+        const withSlow = fires(script, { earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: PSL, yawNoise });
+        poseSame.push({ name, yawNoise, gateOnly, withSlow });
+      }
+    }
+    for (const r of poseSame.filter((r) => r.yawNoise === 4)) console.log(`        ±4° jitter, ${r.name}: ${r.gateOnly.n}/10 with the gate alone -> ${r.withSlow.n}/10 with the slow path`);
+    check("the slow path adds no pose it did not already fire on - every one identical, with and without yaw jitter",
+      poseSame.every((r) => r.withSlow.n === r.gateOnly.n && r.withSlow.stuck === 0),
+      JSON.stringify(poseSame.filter((r) => r.withSlow.n !== r.gateOnly.n || r.withSlow.stuck).map((r) => [r.name, r.yawNoise, r.gateOnly.n, r.withSlow.n])));
 
   }
 
@@ -1219,6 +1263,37 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     check("...and returnDeg 0 never sends FRONT early (the vote path carries the return)", noRet.every((o) => !o.fire), JSON.stringify(noRet));
     const same = run(20, [{ vote: "back", lock: "back", yawAbs: 5 }, { vote: null, lock: "back", yawAbs: 22 }]);
     check("...and with no returnDeg given the trigger is symmetric, as before", same.out[1].fire === "front", JSON.stringify(same.out));
+
+    /* THE SLOW PATH (?early_turn_slow): above it, a |yaw| still RISING across the window fires even though the
+       between-reading speed never clears the gate. Readings 240ms apart, as the pose loop publishes them. */
+    const SLOW = numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG"), RISE = numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG");
+    const slowRun = (yaws, slowOn = true) => {
+      const e = makeEarlyTurnTrigger(20, 45, 35, slowOn ? SLOW : 0, RISE, [450, 960]);
+      return yaws.map((y, i) => e.observe({ vote: i === 0 ? "front" : null, lock: "front", yawAbs: y, at: i * 240 }));
+    };
+    // a 30 deg/s turn under depth compression: ~7 degrees per 240ms reading - the gate (45/s) never sees it
+    const slowTurn = slowRun([4, 11, 18, 25, 32, 39]);
+    check("SLOW PATH: a steady slow rise fires once it is past the slow threshold, though the speed gate never clears",
+      slowTurn.slice(0, 4).every((o) => !o.fire) && slowTurn.some((o) => o.fire === "back"),
+      JSON.stringify(slowTurn.map((o) => o.fire)));
+    const plateau = slowRun([4, 12, 20, 28, 36, 37, 37, 38, 37]);
+    const firedAt = plateau.findIndex((o) => o.fire);
+    check("...a pose that RISES to the same angle and then settles fires only while it was still rising, never from the plateau",
+      firedAt === -1 || firedAt <= 5, JSON.stringify(plateau.map((o) => o.fire)));
+    const settled = (() => {
+      const e = makeEarlyTurnTrigger(20, 45, 35, SLOW, RISE, [450, 960]);
+      const out = [];
+      out.push(e.observe({ vote: "front", lock: "front", yawAbs: 5, at: 0 }));
+      for (let i = 1; i <= 8; i++) out.push(e.observe({ vote: null, lock: "front", yawAbs: 38 + (i % 2), at: i * 240 }));
+      return out;
+    })();
+    check("...and a body already parked past the slow threshold never fires from it - the rise is what says turn",
+      settled.slice(2).every((o) => !o.fire), JSON.stringify(settled.map((o) => o.fire)));
+    const under = slowRun([2, 9, 16, 23, 30, 33]);
+    check("...nothing fires below the slow threshold, however steady the rise",
+      under.every((o) => !o.fire), JSON.stringify(under.map((o) => o.fire)));
+    check("...and slowDeg 0 turns the slow path off entirely (?early_turn_slow=0)",
+      slowRun([4, 11, 18, 25, 32, 39, 46], false).every((o) => !o.fire));
   } else check("makeEarlyTurnTrigger() exists beside the window", false);
 
   const c0 = SRC.indexOf("const ORIENT_EARLY_TURN_DEG = (() => {");
@@ -1231,6 +1306,19 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     check("ON BY DEFAULT: ?early_turn omitted, empty or unparseable is ORIENT_EARLY_TURN_DEFAULT_DEG (20); 0 or negative turns it OFF; a value is clamped to [10, 60]",
       numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") === 20 &&
       JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([20, 20, 0, 20, 0, 20, 25, 10, 60, 20]), JSON.stringify(got));
+  }
+  const sl0 = SRC.indexOf("const ORIENT_EARLY_TURN_SLOW_DEG = (() => {");
+  if (sl0 === -1) check("ORIENT_EARLY_TURN_SLOW_DEG reads ?early_turn_slow", false, "not found");
+  else {
+    const iife = SRC.slice(sl0, SRC.indexOf("})();", sl0) + 5).replace("const ORIENT_EARLY_TURN_SLOW_DEG = ", "return ");
+    const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_MIN_DEG", "ORIENT_EARLY_TURN_MAX_DEG", "ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG", iife)(
+      { search }, numOr("ORIENT_EARLY_TURN_MIN_DEG"), numOr("ORIENT_EARLY_TURN_MAX_DEG"), numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG"));
+    const got = ["", "?early_turn_slow=", "?early_turn_slow=0", "?early_turn_slow=x", "?early_turn_slow=45", "?early_turn_slow=5", "?early_turn_slow=90"].map((q) => [q, parse(q)]);
+    check("?early_turn_slow: default ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG (35), 0 turns the slow path off, clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG") === 35 &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([35, 35, 0, 35, 45, 10, 60]), JSON.stringify(got));
+    check("...and it sits above where a pose settles, and above the outbound threshold it widens",
+      numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG") > numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") && numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG") >= 8);
   }
   const rt0 = SRC.indexOf("const ORIENT_EARLY_TURN_RETURN_DEG = (() => {");
   if (rt0 === -1) check("ORIENT_EARLY_TURN_RETURN_DEG reads ?early_turn_return", false, "not found");
@@ -1319,7 +1407,7 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
   const w0 = SRC.indexOf("function createOrientationWatcher()");
   const watcher = SRC.slice(w0, SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0));
   check("the trigger is built from the parsed setting - and ?early_turn=0 makes it null, with every use inert",
-    /const earlyTurn = ORIENT_EARLY_TURN_DEG > 0\s*\n\s*\? makeEarlyTurnTrigger\(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG\) : null;/.test(watcher) &&
+    /const earlyTurn = ORIENT_EARLY_TURN_DEG > 0\s*\n\s*\? makeEarlyTurnTrigger\(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,\s*\n\s*ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS\) : null;/.test(watcher) &&
     /const earlyAct = earlyTurn && dualView && !acquiring && !confirmed && !predictBack\s*\n\s*\? earlyTurn\.observe\(/.test(watcher));
   const skipAt = watcher.indexOf("if (!(dualView && (confirmed || predictBack))) {");
   const fireAt = watcher.indexOf('await maybeSwap(earlyAct.fire, earlyAct.fire === "back");');
