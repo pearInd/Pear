@@ -233,9 +233,21 @@ same commit. Whichever is wrong is the one that wins.
 | Resizer detection | `RESIZER_RE` in both |
 | CDN transform in the **path** (`/images/w_1880,f_auto,q_auto/…`) | `pear-widget.js: upgradeImageUrl` ↔ `app.js` ↔ `server.js` ↔ `scan-store.js: canonicalImageUrl` — **four** copies |
 | `srcset` parsing (split on whitespace, never on `,`) | `pear-widget.js: largestFromSrcset` ↔ `scan-store.js: largestFromSrcset` |
+| Decorative-image keyword list | `pear-widget.js: EXCLUDE_SRC` ↔ `scan-store.js: EXCLUDE_IMG_SRC` |
+| Trust-tiered exclusion + name corroboration | `isExcludedSrc` / `nameEchoesProduct` in `pear-widget.js` ↔ `scan-store.js` |
 
 The widget's category verdict is **explicit** and therefore outranks the room's
 own classifier. A widget-side category bug cannot be fixed room-side.
+
+**`isExcludedSrc` is trust-tiered — a keyword is the weakest signal, not a veto.**
+SVG is refused at every tier (Gemini cannot classify a vector). An image the store
+*declared* as the product — JSON-LD `Product.image`, its own product API, the theme's
+gallery selectors, `itemprop="image"` — skips the keyword list entirely; pass
+`{ declared: true }`. Everything else passes `{ name: productNameHint() }`, where a
+token the product's own name explains **and** whose filename echoes that name is
+forgiven. A bare one-argument call is the old blanket behaviour and is correct only for
+genuinely untrusted URLs. Never widen `EXCLUDE_SRC` to "fix" a false positive — that is
+what refused adidas's "Icon" line and every `logo-tee.jpg` in the industry.
 
 **`canonicalImageUrl` has FOUR copies, not two** — `app.js`, `server.js`,
 `scanner/scan-store.js` and (as `canonicalPhoto`) `pear-widget.js`. They are the

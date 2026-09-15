@@ -327,6 +327,7 @@ const SUITES = [
   ["stream-continuity", "stream-continuity.test.mjs"],
   ["gender-switch", "gender-switch.test.mjs"],
   ["cdn-url-integrity", "cdn-url-integrity.test.mjs"],
+  ["product-image-trust", "product-image-trust.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

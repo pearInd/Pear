@@ -65,14 +65,69 @@ const GEMINI_URL =
 const GEMINI_RATE_LIMIT_MS = 8000; // delay between sequential Gemini calls - free tier is 15 req/min
 
 const PRODUCT_LINK_PATTERNS = ["/products/", "/product/", "/item/", "/p/", "/shop/"];
-const EXCLUDE_IMG_SRC = ["logo", "icon", "sprite", "placeholder", "banner", "avatar"];
+/* src substrings that mark an image as decorative, never a garment. WEAK evidence - see
+   isExcludedSrc() for the three tiers that decide when this list gets a vote. Lockstep
+   with EXCLUDE_SRC in widget/pear-widget.js (CLAUDE.md §3): the two had silently drifted
+   ("banner"/"avatar" here, "blank"/"pixel" there), so the crawler and the widget
+   disagreed about the SAME photo. Unified. */
+const EXCLUDE_IMG_SRC = ["logo", "icon", "sprite", "placeholder", "blank", "pixel", "banner", "avatar"];
 const FETCH_USER_AGENT = "Mozilla/5.0 (compatible; PEAR-StoreScanner/1.0)";
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
-function isExcludedSrc(src) {
-  const s = (src || "").toLowerCase();
-  return isVectorSrc(s) || EXCLUDE_IMG_SRC.some((needle) => s.includes(needle));
+/* Is this URL decorative rather than a garment photo?
+
+   THE BUG THIS CLOSES: a blanket substring test applied identically to every source,
+   including images the STORE ITSELF declared as the product. adidas ships an "Icon"
+   apparel line, so a PDP whose JSON-LD Product.image listed only `icon-8-tee.jpg` and
+   `icon-8-tee-back.jpg` returned ZERO images from findProductImages() - garment_cache
+   never got a row for that product and try-on was blocked.
+
+   Three tiers, strongest first (lockstep with isExcludedSrc() in pear-widget.js, §3):
+     1. SVG - refused ALWAYS, ctx or no ctx. Gemini cannot classify a vector, so this is
+        a capability limit, not a heuristic; `declared` must never reach past it.
+     2. ctx.declared - the store named this image AS the product (JSON-LD Product.image,
+        a corroborated og:image). Its filename does not outrank that, so the keyword
+        list is skipped.
+     3. everything else - the <img> sweep. The keyword list applies, with one escape: a
+        token that also appears in the PRODUCT'S OWN NAME, on a file that independently
+        echoes that name, is explained by the product rather than by chrome. BOTH halves
+        are required: "Icon 8 Tee" contains "icon", so a bare name test would also have
+        let `cart-icon.png` through on that page. See nameEchoesProduct().
+
+   Tier 3 can only ever RELAX, never block something that used to pass, so no page that
+   worked before can stop working because of it (CLAUDE.md §2.5). A one-argument call is
+   exactly the old behaviour. */
+function isExcludedSrc(src, ctx) {
+  const s = String(src || "").toLowerCase();   // coerced like isVectorSrc - a non-string must not throw
+  if (isVectorSrc(s)) return true;                        // tier 1 - never bypassed
+  if (ctx && ctx.declared) return false;                  // tier 2 - the store's own verdict
+  const name = ctx && ctx.name ? String(ctx.name).toLowerCase() : "";
+  return EXCLUDE_IMG_SRC.some(
+    (needle) => s.includes(needle) &&
+                !(name && name.includes(needle) && nameEchoesProduct(s, name))
+  );
+}
+
+/* Does this file NAME itself after the product? True when the last path segment carries
+   a word from the product's name that is not itself a blacklist token - the independent
+   corroboration tier 3 needs before it forgives a keyword.
+     "Icon 8 Tee" + .../icon-8-tee.jpg → "tee" echoes   → forgiven
+     "Icon 8 Tee" + .../cart-icon.png  → nothing echoes → still chrome
+   Last path segment only, or a store hosted at tee-shop.com would "echo" on every image.
+   Words under 3 characters are ignored ("8" would match the 8 in a CDN transform like
+   w_1880), as are words that themselves contain a blacklist token - otherwise "iconic"
+   would forgive "icon" on its own and this is a bare substring test again.
+   Lockstep with nameEchoesProduct() in widget/pear-widget.js (CLAUDE.md §3). */
+function nameEchoesProduct(url, name) {
+  let file = String(url).split(/[?#]/)[0];
+  file = file.slice(file.lastIndexOf("/") + 1);
+  if (!file) return false;
+  return name.split(/[^0-9a-z֐-׿]+/).some(
+    (word) => word && word.length >= 3 &&
+              !EXCLUDE_IMG_SRC.some((needle) => word.includes(needle)) &&
+              file.includes(word)
+  );
 }
 
 /* SVG is UI - icons, arrows, wishlist hearts - never a garment photo, and Gemini cannot
@@ -189,13 +244,26 @@ function findProductLinks(html, baseUrl) {
    isChromeImage / isVectorSrc / jsonLdProductImages). Without rendering the page there
    is still no naturalWidth/naturalHeight to filter on. */
 function findProductImages(html, baseUrl) {
-  const urls = [...jsonLdProductImages(html)];
+  /* Candidates carry the TIER they came from, not just a URL (see isExcludedSrc): a
+     photo the store declared is trusted past the keyword list, one merely swept out of
+     the DOM is not. Flattening the two is what refused adidas's "Icon" line. */
+  const ld = jsonLdProduct(html);
+  const productName = ld.names.join(" ") + " " + textOfFirst(html, "title") + " " + textOfFirst(html, "h1");
+  const candidates = ld.images.map((raw) => ({ raw, declared: true }));
 
   const metaTags = html.match(/<meta\b[^>]*>/gi) || [];
   for (const tag of metaTags) {
     if (/property\s*=\s*["']og:image["']/i.test(tag)) {
       const content = extractAttr(tag, "content");
-      if (content) urls.push(content);
+      /* og:image is PAGE-level and stores routinely leave it on a site-wide share image
+         (a logo) - promoting it to "declared" on its own would re-open exactly the bug
+         pageOgImage() exists for in the widget. It earns the tier only when the page's
+         own single-product JSON-LD lists it too. */
+      if (content) {
+        const key = canonicalImageUrl(absOrEmpty(content, baseUrl));
+        const corroborated = !!key && ld.images.some((u) => canonicalImageUrl(absOrEmpty(u, baseUrl)) === key);
+        candidates.push({ raw: content, declared: corroborated });
+      }
     }
   }
 
@@ -204,17 +272,24 @@ function findProductImages(html, baseUrl) {
     /* Explicit full-size lazy attributes first, then srcset (the real URLs on a lazy
        gallery), and the rendered src LAST - it is the most likely to be a placeholder
        or a thumbnail. Mirrors imageUrlsFrom()'s ordering in pear-widget.js. */
-    const src = extractAttr(tag, "data-src")
-             || extractAttr(tag, "data-lazy")
-             || largestFromSrcset(extractAttr(tag, "srcset"))
-             || largestFromSrcset(extractAttr(tag, "data-srcset"))
-             || extractAttr(tag, "src");
-    if (src) urls.push(src);
+    const lazy = extractAttr(tag, "data-src")
+              || extractAttr(tag, "data-lazy")
+              || largestFromSrcset(extractAttr(tag, "srcset"))
+              || largestFromSrcset(extractAttr(tag, "data-srcset"));
+    const src = lazy || extractAttr(tag, "src");
+    if (!src) continue;
+    /* A glyph we can SEE is glyph-sized. Judged ONLY when the tag declares both
+       dimensions AND we are shipping the very URL it rendered - a lazy <img width="80">
+       whose data-src is the 2000px asset says nothing about what would ship. Mirrors
+       isKnownTinyImage() in pear-widget.js, including its 100px threshold and its
+       refusal to guess when the size is unknown (CLAUDE.md §2.5). */
+    if (!lazy && isDeclaredTinyTag(tag)) continue;
+    candidates.push({ raw: src, declared: false });
   }
 
   const seen = new Set();
   const images = [];
-  for (const raw of urls) {
+  for (const { raw, declared } of candidates) {
     let abs;
     try {
       abs = new URL(raw, baseUrl).href;
@@ -222,13 +297,33 @@ function findProductImages(html, baseUrl) {
       continue;
     }
     if (!/^https?:\/\//i.test(abs)) continue;
-    if (isExcludedSrc(abs)) continue;
+    if (isExcludedSrc(abs, { declared, name: productName })) continue;
     const key = canonicalImageUrl(abs) || abs;
     if (seen.has(key)) continue;
     seen.add(key);
     images.push(abs);
   }
   return images;
+}
+
+/* Absolute form of a URL, or "" when it cannot be one - so a comparison never throws. */
+function absOrEmpty(raw, baseUrl) {
+  try { return new URL(raw, baseUrl).href; } catch { return ""; }
+}
+
+/* The text of the first <tag>…</tag>, markup stripped. Used only to build the product
+   NAME haystack, so a rough read is enough - it can never reject anything by itself. */
+function textOfFirst(html, tag) {
+  const m = new RegExp("<" + tag + "\\b[^>]*>([\\s\\S]*?)<\\/" + tag + ">", "i").exec(String(html || ""));
+  return m ? m[1].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() : "";
+}
+
+/* True when an <img> tag declares BOTH dimensions and both are glyph-sized. Absent or
+   unparseable attributes abstain - never a rejection. */
+function isDeclaredTinyTag(tag) {
+  const w = parseInt(extractAttr(tag, "width"), 10);
+  const h = parseInt(extractAttr(tag, "height"), 10);
+  return w > 0 && h > 0 && w < 100 && h < 100;
 }
 
 /* The page with its site chrome cut out - HTML comments and <header>, <nav>, <footer>
@@ -252,11 +347,17 @@ function stripChrome(html) {
    theme's Product block is still one, while a listing page's per-card Products are
    not. Mirrors jsonLdProductImages() in widget/pear-widget.js. */
 const PRODUCT_LD_TYPE_RE = /^(?:Product|ProductGroup|IndividualProduct|ProductModel)$/;
-function jsonLdProductImages(html) {
+
+/* The Product node's images AND its declared name. The name is read here rather than
+   re-parsed elsewhere because it is the same walk: it feeds isExcludedSrc's tier-3
+   escape, where a keyword that appears in the product's own name ("Icon 8 Tee") is
+   explained by the product rather than by chrome. */
+function jsonLdProduct(html) {
   const blocks = String(html || "")
     .match(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
   const ids = new Set();
   const images = [];
+  const names = [];
   let anon = 0;
   const isProduct = (n) => [].concat(n["@type"]).some(
     (t) => typeof t === "string" && PRODUCT_LD_TYPE_RE.test(t.replace(/^.*[/:#]/, "")));
@@ -271,6 +372,7 @@ function jsonLdProductImages(html) {
     if (Array.isArray(n)) { n.forEach((c) => walk(c, depth + 1)); return; }
     if (isProduct(n)) {
       ids.add(String(n.name || n.sku || n.productID || n["@id"] || "").trim().toLowerCase() || ("#" + anon++));
+      if (typeof n.name === "string") names.push(n.name);
       addImage(n.image);
       return;
     }
@@ -281,7 +383,13 @@ function jsonLdProductImages(html) {
     const json = block.replace(/^<script\b[^>]*>/i, "").replace(/<\/script>$/i, "");
     try { walk(JSON.parse(json), 0); } catch { /* malformed block - skip it */ }
   }
-  return ids.size === 1 ? images : [];
+  return ids.size === 1 ? { images, names } : { images: [], names: [] };
+}
+
+/* Images only - the long-standing shape, kept because callers and scanner-extraction
+   .test.mjs use it directly. */
+function jsonLdProductImages(html) {
+  return jsonLdProduct(html).images;
 }
 
 /* ── Supabase cache ──────────────────────────────────────────────────────── */

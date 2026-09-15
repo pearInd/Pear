@@ -253,8 +253,16 @@
      treats it as absent, so the room classifies the title itself. */
   var DEFAULT_CATEGORY = "unknown";
 
-  /* src substrings that mark an image as decorative, never a garment */
-  var EXCLUDE_SRC = ["logo", "icon", "sprite", "placeholder", "blank", "pixel"];
+  /* src substrings that mark an image as decorative, never a garment. WEAK evidence -
+     see isExcludedSrc() for the three tiers that decide when this list gets a vote.
+     Lockstep with EXCLUDE_IMG_SRC in scanner/scan-store.js (CLAUDE.md §3): the two had
+     silently drifted ("blank"/"pixel" here, "banner"/"avatar" there), so the crawler and
+     the widget disagreed about the SAME photo - the crawler wrote no garment_cache row
+     for a product the widget was happy to open, and vice versa. Unified here. */
+  var EXCLUDE_SRC = ["logo", "icon", "sprite", "placeholder", "blank", "pixel", "banner", "avatar"];
+
+  /* Tier 2, shared so every "the store declared this" call site reads the same. */
+  var DECLARED = { declared: true };
 
   /* Upper bound on the gallery forwarded to /api/classify-images - see the cap note
      in collectGalleryImages() for why an unbounded list is a latency problem. */
@@ -416,11 +424,80 @@
     return DEFAULT_CATEGORY;
   }
 
-  function isExcludedSrc(src) {
-    var s = (src || "").toLowerCase();
-    if (isVectorSrc(s)) return true;
+  /* Is this URL decorative rather than a garment photo?
+
+     THE BUG THIS CLOSES: this was a blanket substring test over EXCLUDE_SRC, applied
+     identically to every source - including images the STORE ITSELF declared as the
+     product. adidas ships an "Icon" apparel line, so `icon-8-tee.jpg` was refused; so
+     were `iconic-oversized-hoodie.jpg` and `adicolor-logo-tee.jpg` ("Logo Tee" is an
+     industry staple, not chrome). On a PDP whose JSON-LD declared only such photos the
+     widget ended up with NOTHING - the same dead end as the wishlist-heart bug the list
+     was written for, reached from the opposite direction.
+
+     A filename substring is the weakest signal here, so it only decides when nothing
+     better is available. Three tiers, strongest first:
+
+       1. SVG - refused ALWAYS, at every tier, ctx or no ctx. Not a heuristic: Gemini
+          cannot classify a vector and the try-on engine cannot read one, so this is a
+          capability limit. `ctx.declared` must never reach past it.
+       2. ctx.declared - the store named this image AS the product: JSON-LD
+          Product.image, its own product API (Shopify /products/x.js), the theme's
+          product-gallery selectors, itemprop="image". A substring in the filename does
+          not outrank the store's own declaration, so the keyword list is skipped.
+       3. everything else - generic DOM sweeps, the ancestor walk-up, thumbnails, an
+          uncorroborated og:image. The keyword list applies, with one escape: a token
+          that also appears in the PRODUCT'S OWN NAME, on a file that independently
+          echoes that name, is explained by the product rather than by chrome.
+
+          BOTH halves are required, and the second is the one that matters. "Icon 8 Tee"
+          contains "icon", so a bare name test would have let `cart-icon.png` through on
+          that page too - the wishlist-heart failure again, wearing the fix as a
+          disguise. So the FILENAME must also carry a word from the product's name that
+          is not itself the blacklisted token: `icon-8-tee.jpg` carries "tee",
+          `cart-icon.png` carries nothing. See nameEchoesProduct().
+
+     Note what tier 3 does NOT do: it never blocks something the name fails to explain
+     that would otherwise have passed. It can only ever RELAX, so no page that worked
+     before can stop working because of it (CLAUDE.md §2.5 - never block on ambiguity).
+
+     A one-argument call is exactly the old behaviour, which is what every heuristic
+     caller still wants. Lockstep with isExcludedSrc() in scanner/scan-store.js (§3). */
+  function isExcludedSrc(src, ctx) {
+    var s = String(src || "").toLowerCase();   // coerced like isVectorSrc - a non-string must not throw
+    if (isVectorSrc(s)) return true;                       // tier 1 - never bypassed
+    if (ctx && ctx.declared) return false;                 // tier 2 - the store's own verdict
+    var name = ctx && ctx.name ? String(ctx.name).toLowerCase() : "";
     for (var i = 0; i < EXCLUDE_SRC.length; i++) {
-      if (s.indexOf(EXCLUDE_SRC[i]) !== -1) return true;
+      if (s.indexOf(EXCLUDE_SRC[i]) === -1) continue;
+      if (name && name.indexOf(EXCLUDE_SRC[i]) !== -1 && nameEchoesProduct(s, name)) continue;
+      return true;
+    }
+    return false;
+  }
+
+  /* Does this file NAME itself after the product? True when the last path segment
+     carries a word from the product's name that is not itself a blacklist token - the
+     independent corroboration tier 3 needs before it forgives a keyword.
+       "Icon 8 Tee"  + .../icon-8-tee.jpg  → "tee" echoes      → forgiven
+       "Icon 8 Tee"  + .../cart-icon.png   → nothing echoes    → still chrome
+     Matched on the LAST path segment only: a store hosted at tee-shop.com would
+     otherwise "echo" on every image it serves. Words shorter than 3 characters are
+     ignored - "8" would match the 8 in a CDN transform like w_1880 - and so are words
+     that themselves contain a blacklist token, or "iconic" would forgive "icon" on its
+     own and we would be back to a bare substring test. */
+  function nameEchoesProduct(url, name) {
+    var file = String(url).split(/[?#]/)[0];
+    file = file.slice(file.lastIndexOf("/") + 1);
+    if (!file) return false;
+    var words = name.split(/[^0-9a-z֐-׿]+/);
+    for (var i = 0; i < words.length; i++) {
+      var word = words[i];
+      if (!word || word.length < 3) continue;
+      var tainted = false;
+      for (var j = 0; j < EXCLUDE_SRC.length; j++) {
+        if (word.indexOf(EXCLUDE_SRC[j]) !== -1) { tainted = true; break; }
+      }
+      if (!tainted && file.indexOf(word) !== -1) return true;
     }
     return false;
   }
@@ -663,11 +740,17 @@
 
   /* Every URL an <img>/<source>/<a> element could be hiding, best-first, absolute
      and resolution-upgraded. */
-  function imageUrlsFrom(el) {
+  /* `ctx` is the TRUST TIER this element was found at, forwarded to isExcludedSrc():
+     `{ declared: true }` when the store named it as the product (gallery selectors,
+     itemprop="image", JSON-LD, its own product API), and otherwise the page's product
+     name so a keyword the product itself explains does not reject its photo. Omitted =
+     tier 3 with the name filled in, which is what every heuristic caller wants. */
+  function imageUrlsFrom(el, ctx) {
     var out = [];
+    var scope = ctx || { name: productNameHint() };
     function push(u) {
       u = absolutize(u);
-      if (!u || isPlaceholderSrc(u) || isExcludedSrc(u)) return;
+      if (!u || isPlaceholderSrc(u) || isExcludedSrc(u, scope)) return;
       u = upgradeImageUrl(u);
       if (out.indexOf(u) === -1) out.push(u);
     }
@@ -690,9 +773,21 @@
   }
 
   /* The single best URL for an element (first candidate), "" when it has none. */
-  function bestImageUrl(el) {
-    var urls = imageUrlsFrom(el);
+  function bestImageUrl(el, ctx) {
+    var urls = imageUrlsFrom(el, ctx);
     return urls.length ? urls[0] : "";
+  }
+
+  /* The product's own name, for isExcludedSrc()'s tier-3 corroboration. Memoised per
+     page URL - imageUrlsFrom() runs over every <img> in a sweep and the name cannot
+     change without a navigation, which updates the key. Deliberately NOT read from
+     JSON-LD: those images are already tier 2 (declared), and reaching into the JSON-LD
+     reader from here would re-enter isExcludedSrc through its own addImage(). */
+  var _nameMemo = { key: null, name: "" };
+  function productNameHint() {
+    var key = (w.location && w.location.href) || "";
+    if (key !== _nameMemo.key) _nameMemo = { key: key, name: getGarmentName() };
+    return _nameMemo.name;
   }
 
   /* <noscript> gallery fallbacks. Lazy-loading themes ship the REAL <img> markup
@@ -710,7 +805,7 @@
       var m;
       while ((m = re.exec(html)) !== null) {
         var u = absolutize(largestFromSrcset(m[1]) || m[1]);
-        if (!u || isPlaceholderSrc(u) || isExcludedSrc(u)) continue;
+        if (!u || isPlaceholderSrc(u) || isExcludedSrc(u, { name: productNameHint() })) continue;
         u = upgradeImageUrl(u);
         if (out.indexOf(u) === -1) out.push(u);
       }
@@ -916,8 +1011,8 @@
   }
 
   /* The gate every heuristic candidate passes: a usable URL and none of the above. */
-  function isProductPhotoCandidate(el, root) {
-    var u = bestImageUrl(el);
+  function isProductPhotoCandidate(el, root, ctx) {
+    var u = bestImageUrl(el, ctx);
     return !!u && !isChromeImage(el) && !inForeignProductScope(el, root) && !isKnownTinyImage(el, u);
   }
 
@@ -959,7 +1054,8 @@
       if (typeof v === "object") { addImage(v.contentUrl || v.url); return; }
       if (typeof v !== "string") return;
       var u = absolutize(v);
-      if (!u || isPlaceholderSrc(u) || isExcludedSrc(u)) return;
+      /* JSON-LD Product.image IS the store naming its product photo - tier 2. */
+      if (!u || isPlaceholderSrc(u) || isExcludedSrc(u, { declared: true })) return;
       u = upgradeImageUrl(u);
       var key = canonicalPhoto(u);          // once per URL - a long image list stays linear
       if (keys.indexOf(key) !== -1) return;
@@ -1012,16 +1108,27 @@
          routinely incomplete (a lazy gallery may hold only the extra photos while the
          main one lives in og:image - widget-dom fixture E), so "absent from the DOM" is
          no evidence, and without JSON-LD the og:image is trusted exactly as before. */
+  /* The keyword vetting and the JSON-LD cross-check were independent before, and in that
+     order: a "Logo Tee" whose og:image the page's own Product node LISTS was still
+     refused for containing "logo", because the keyword test ran first and never learned
+     that the store had already vouched for the photo. Corroboration is resolved first
+     now, and only a corroborated og:image is promoted past the keyword list. An
+     uncorroborated one is vetted exactly as before, which is what keeps the "a logo
+     og:image became the garment" refusal intact (widget-dom I1/J2). */
   function pageOgImage() {
     var og = d.querySelector('meta[property="og:image"]');
     var ogUrl = og && og.content ? absolutize(og.content) : "";
-    if (!ogUrl || isExcludedSrc(ogUrl)) return "";
-    ogUrl = upgradeImageUrl(ogUrl);
+    if (!ogUrl) return "";
+    var upgraded = upgradeImageUrl(ogUrl);
     var ld = jsonLdProductImages();
-    if (!ld.length) return ogUrl;
-    for (var i = 0; i < ld.length; i++) if (sameAsset(ld[i], ogUrl)) return ogUrl;
+    var corroborated = false;
+    for (var i = 0; i < ld.length; i++) {
+      if (sameAsset(ld[i], upgraded)) { corroborated = true; break; }
+    }
+    if (isExcludedSrc(ogUrl, corroborated ? DECLARED : { name: productNameHint() })) return "";
+    if (!ld.length || corroborated) return upgraded;
     console.log("[PEAR] og:image is not one of this product's JSON-LD photos - not using it:",
-      abbrevUrl(ogUrl), "| JSON-LD photos:", ld.length);
+      abbrevUrl(upgraded), "| JSON-LD photos:", ld.length);
     return "";
   }
 
@@ -1094,16 +1201,18 @@
     var found = [];
     var seen = [];
 
-    function push(img) {
+    var tiers = [];                     // parallel to found[] - the tier each was found at
+    function push(img, ctx) {
       if (!img || seen.indexOf(img) !== -1) return;
       /* Judged by the photo it would SHIP (bestImageUrl already drops logo/icon/SVG
          candidates), never by the pixel it is showing: a lazy <img> displays a
          placeholder - often an SVG spacer, data:image/svg+xml - while its real photo
          waits in data-src. Gating on the rendered src rejected that photo once SVGs
          became excluded (widget-dom fixture M). */
-      if (!bestImageUrl(img)) return;
+      if (!bestImageUrl(img, ctx)) return;
       seen.push(img);
       found.push(img);
+      tiers.push(ctx);                  // the same tier must be used when the URL is re-read
     }
 
     /* Priority 1 - the og:image, when a visible <img> carries the same URL. pageOgImage()
@@ -1130,7 +1239,7 @@
         var el = sel[j];
         /* [data-product-image] may be the container rather than the img */
         if (el.tagName !== "IMG") el = el.querySelector("img") || el;
-        if (el.tagName === "IMG" && !inForeignProductScope(el, d)) push(el);
+        if (el.tagName === "IMG" && !inForeignProductScope(el, d)) push(el, DECLARED);
       }
     }
 
@@ -1138,7 +1247,7 @@
     if (!found.length) {
       var ip = d.querySelectorAll('img[itemprop="image"]');
       for (var p = 0; p < ip.length; p++) {
-        if (isProductPhotoCandidate(ip[p], d)) push(ip[p]);
+        if (isProductPhotoCandidate(ip[p], d, DECLARED)) push(ip[p], DECLARED);
       }
     }
 
@@ -1161,7 +1270,7 @@
       return {
         img: img,
         url: explicitAttr(img, "data-pear-front") ||
-             ((idx === 0 && ogUrl) ? ogUrl : bestImageUrl(img)),
+             ((idx === 0 && ogUrl) ? ogUrl : bestImageUrl(img, tiers[idx])),
         back: explicitAttr(img, "data-pear-back")
       };
     });
@@ -1205,8 +1314,8 @@
     console.log('[PEAR] primary URL:', primaryUrl);
     console.log('[PEAR] shopifyId:', shopifyId);
     var rejected = [];
-    function add(u, isPrimary) {
-      if (!u || isExcludedSrc(u)) return;
+    function add(u, isPrimary, ctx) {
+      if (!u || isExcludedSrc(u, ctx || { name: productNameHint() })) return;
       /* Canonical identity, not the bare path: "shirt.jpg", "shirt_800x.jpg" and
          "shirt_100x100_crop_center.jpg" are ONE photo with three paths, and letting
          two of them through as separate gallery entries is what allowed a front/back
@@ -1228,7 +1337,14 @@
     }
     add(primaryUrl, true);
     var scope = root || d;
-    var imgs = scope.querySelectorAll(THUMB_SELECTORS);
+    /* THE GAP THIS CLOSES: only THUMB_SELECTORS were queried, so on a storefront whose
+       gallery IS its main slides - Salesforce Commerce Cloud/SFRA ships every photo as
+       <div class="main_image"><img itemprop="image">, which is how adidas.co.il builds a
+       PDP - the gallery collapsed to the primary image alone and the back view could
+       only ever come from findGalleryBack()'s narrower search. The main-image selectors
+       name product photos just as much as the thumbnail ones do, so both are swept, and
+       a main-image match is a DECLARED photo (the theme said so) rather than a guess. */
+    var imgs = scope.querySelectorAll(THUMB_SELECTORS + ", " + PRODUCT_IMG_SELECTORS);
     var candidates = [];
     for (var i = 0; i < imgs.length; i++) {
       var el = imgs[i];
@@ -1241,10 +1357,11 @@
          first candidate is the best one; the rest are added too because a theme can
          put the full-size asset in one attribute and the only *distinct* photo in
          another, and de-duplication upstream makes extra candidates harmless. */
-      var urlsFor = imageUrlsFrom(el);
+      var tier = (el.matches && el.matches(PRODUCT_IMG_SELECTORS)) ? DECLARED : null;
+      var urlsFor = imageUrlsFrom(el, tier);
       for (var u = 0; u < urlsFor.length; u++) {
         candidates.push(urlsFor[u]);
-        add(urlsFor[u]);
+        add(urlsFor[u], false, tier);
       }
     }
     /* Last resort for galleries that render NOTHING until interacted with: the
@@ -1258,10 +1375,10 @@
        photo it has - one photo under two URLs is what gets paired as front AND back. */
     if (scope === d && urls.length < 2) {
       var ld = jsonLdProductImages();
-      for (var l = 0; l < ld.length; l++) { candidates.push(ld[l]); add(ld[l]); }
+      for (var l = 0; l < ld.length; l++) { candidates.push(ld[l]); add(ld[l], false, DECLARED); }
     }
 
-    console.log('[PEAR] THUMB_SELECTORS matched', imgs.length, 'element(s) under root:', scope);
+    console.log('[PEAR] gallery selectors matched', imgs.length, 'element(s) under root:', scope);
     console.log('[PEAR] all candidates before filter:', candidates);
     console.log('[PEAR] rejected by id filter:', rejected);
     console.log('[PEAR] candidates after filter:', urls);
@@ -1310,7 +1427,8 @@
         var list = (p && p.images) || [];
         for (var i = 0; i < list.length; i++) {
           var u = absolutize(typeof list[i] === "string" ? list[i] : (list[i] && list[i].src));
-          if (u && !isExcludedSrc(u)) imgs.push(upgradeImageUrl(u));
+          /* The store's OWN product API listed these - the strongest declaration there is. */
+          if (u && !isExcludedSrc(u, { declared: true })) imgs.push(upgradeImageUrl(u));
         }
         _shopifyGallery = imgs;
 
@@ -2155,9 +2273,19 @@
     ".single_add_to_cart_button",
     "#AddToCart",
     ".add-to-cart",
-    '[data-button-action="add-to-cart"]'
+    '[data-button-action="add-to-cart"]',
+    /* "Bag"/"basket" storefronts. adidas.co.il - the store this widget's SFCC handling
+       was written for - labels its button "Add to Bag", and so do Nike and ASOS; M&S and
+       much of UK retail say "Add to basket". NO tier here matched any of them, so those
+       PDPs fell through to injectFallbackButton() (an <h1> button, or a floating one)
+       instead of a button beside the real control. */
+    ".add-to-bag",
+    ".add-to-basket"
   ].join(", ");
-  var ATC_TEXTS = ["add to cart", "הוסף לסל", "הוסף לעגלה", "buy now", "קנה עכשיו"];
+  var ATC_TEXTS = [
+    "add to cart", "add to bag", "add to basket",
+    "הוסף לסל", "הוסף לעגלה", "buy now", "קנה עכשיו"
+  ];
 
   function findAllAddToCartButtons() {
     var out = [];
@@ -2216,13 +2344,13 @@
     for (var s = 0; s < sel.length; s++) {
       var el = sel[s];
       if (el.tagName !== "IMG") el = el.querySelector && el.querySelector("img");
-      if (el && el.tagName === "IMG" && bestImageUrl(el) && !inForeignProductScope(el, root)) return el;
+      if (el && el.tagName === "IMG" && bestImageUrl(el, DECLARED) && !inForeignProductScope(el, root)) return el;
     }
     /* 2. schema.org microdata: itemprop="image" is the page marking its own product photo
           (SFCC/SFRA tags every gallery <img>). Preferred over raw size. */
     var ip = root.querySelectorAll('img[itemprop="image"]');
     for (var p = 0; p < ip.length; p++) {
-      if (isProductPhotoCandidate(ip[p], root)) return ip[p];
+      if (isProductPhotoCandidate(ip[p], root, DECLARED)) return ip[p];
     }
     /* 3. else the largest product-photo candidate inside this container (collection cards
           rarely use the PDP selectors above, so size is the reliable signal). Having a URL
@@ -2321,7 +2449,7 @@
       var img = pickProductImageIn(node);
       if (img) {
         var url = explicitAttr(img, "data-pear-front") || bestImageUrl(img);
-        if (url && !isExcludedSrc(url)) {
+        if (url && !isExcludedSrc(url, { name: productNameHint() })) {
           var name = cardNameFor(node, img);
           var cardImages = collectGalleryImages(url, node);
           console.log('[PEAR] final imgs array:', cardImages);
