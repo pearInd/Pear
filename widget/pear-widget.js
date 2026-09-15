@@ -1083,6 +1083,36 @@
     try { return sizesFromDOM(); } catch (e) { return []; }
   }
 
+  /* ── NUMERIC vs ALPHABETIC size run, read at scan time ──────────────────────────
+     THE BUG THIS EXISTS FOR: a pair of sweatpants sold S/M/L matched the fitting
+     room's isPantsProduct() on its TITLE alone ("sweatpants" is a bottoms noun), and
+     with no numeric evidence of its own that title match fell through to the waist
+     chart's default (pantsChartForSizes() treats "no confidently-numeric run" as "use
+     the jeans waist ladder") - the same numeric routing meant for 28/30/32 jeans was
+     applied to a garment whose picker only ever offers letters. The shopper was
+     quoted a bare waist-inch number ("32") for a product with no such size.
+
+     This is computed HERE, from the same size list extractHostSizes() already
+     scraped, and sent alongside it so the fitting room has POSITIVE evidence the run
+     is alphabetic rather than having to fall through a numeric-chart default.
+     "every token or abstain" mirrors isPlausibleSizeToken()'s own confidence rule -
+     a mixed or unrecognised run yields "unknown" rather than a guess in either
+     direction.
+     @param {string[]} sizes
+     @returns {"numeric"|"alpha"|"unknown"} */
+  function classifySizeRunType(sizes) {
+    var list = (sizes || []).map(function (s) { return String(s == null ? "" : s).trim(); }).filter(Boolean);
+    if (!list.length) return "unknown";
+    var allNumeric = true, allAlpha = true;
+    for (var i = 0; i < list.length; i++) {
+      if (!/^\d{1,2}$/.test(list[i])) allNumeric = false;
+      if (!/^(?:XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL)$/i.test(list[i])) allAlpha = false;
+    }
+    if (allNumeric) return "numeric";
+    if (allAlpha) return "alpha";
+    return "unknown";
+  }
+
   function optionValueAt(variant, idx) {
     if (idx === 0) return variant && variant.option1;
     if (idx === 1) return variant && variant.option2;
@@ -1498,6 +1528,7 @@
   function classifyImages(urls, hint) {
     var endpoint = PEAR_BASE + "/api/classify-images";
     var scrapedBack = (hint && hint.back) || "";
+    var hostSizeRunType = classifySizeRunType(extractHostSizes());
     return fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1507,7 +1538,13 @@
         back_image_url: scrapedBack,
         synthesize_back: !scrapedBack,
         page_url: w.location ? w.location.href : "",
-        store_key: STORE_KEY || undefined
+        store_key: STORE_KEY || undefined,
+        /* THIS PAGE's own scrape, sent so the server can CACHE it against page_url
+           (garment_cache.size_run_type - see archive/supabase_setup_v14.sql) for a
+           future visit where the size picker fails to scrape (a JS-rendered control
+           not yet hydrated). Omitted on "unknown" - never cache a guess, only a
+           confidently-read run. */
+        size_run_type: hostSizeRunType !== "unknown" ? hostSizeRunType : undefined
       })
     }).then(function (r) {
       if (!r.ok) throw new Error("classify-images HTTP " + r.status);
@@ -1522,6 +1559,13 @@
         // an older server build that doesn't send it yet, same as an unresolved one.
         ageGroup: (data && data.age_group) || "uncertain",
         ageGroupConfidence: (data && data.age_group_confidence) || 0,
+        /* Numeric-vs-alphabetic verdict for THIS product. THIS page's own scrape wins
+           when it read one (see hostSizeRunType above) - the server only ever echoes
+           that back or falls to a cache learned on a PREVIOUS visit, so preferring the
+           live read here is never wrong and skips a needless round trip through the
+           echo. "unknown" when neither this scrape nor the cache has an answer. */
+        sizeRunType: hostSizeRunType !== "unknown" ? hostSizeRunType
+          : ((data && data.size_run_type) || "unknown"),
         /* Main-fabric colour sampled from the FRONT photo by the same classify call
            (server.js: primary_color_hex). "" on an older server build that does not
            send it, which the room treats identically to "could not sample" - the
@@ -1639,7 +1683,9 @@
        no length limit); the query string carries http(s) URLs only. */
     var backParam = (garment.back && !/^data:/i.test(garment.back)) ? garment.back : "";
     var hostSizes = extractHostSizes();
-    console.log("[PEAR widget] host product sizes:", hostSizes.length ? hostSizes.join("/") : "(none readable)");
+    var hostSizeRunType = classifySizeRunType(hostSizes);
+    console.log("[PEAR widget] host product sizes:", hostSizes.length ? hostSizes.join("/") : "(none readable)",
+      "| run type:", hostSizeRunType);
 
     var params =
       "garment_url=" + encodeURIComponent(garment.url) +
@@ -1684,6 +1730,11 @@
          size selector are correct on the very first paint, not only after the classify
          round trip lands. */
       (hostSizes && hostSizes.length ? "&garment_sizes=" + hostSizes.map(encodeURIComponent).join(",") : "") +
+      /* Numeric-vs-alphabetic verdict on that same list, sent at open for the same
+         reason garment_sizes is: calculateSize() runs on Screen 1, before the classify
+         round trip lands. Omitted on "unknown" - an absent param reads as "no run-type
+         evidence" the same way an absent garment_sizes does, never as a claim. */
+      (hostSizeRunType !== "unknown" ? "&garment_size_type=" + hostSizeRunType : "") +
       (COMPOSITE_PARAM ? "&composite=" + COMPOSITE_PARAM : "") +
       (REQUIRE_BOTH_VIEWS ? "&require_both_views=1" : "") +
       (DEMO_GATE ? "&demo_gate=1" : "") +
@@ -2161,6 +2212,13 @@
                 // "this correction predates the field existing".
                 garment_age_group: res.ageGroup,
                 garment_age_group_confidence: res.ageGroupConfidence,
+                /* Numeric-vs-alphabetic size-run verdict for this product (this page's
+                   own scrape, or a cache hit from a previous visit - see classifyImages()).
+                   Sent as "unknown" explicitly, not omitted, mirroring garment_age_group
+                   above: the room tells "checked, no answer" apart from "correction
+                   predates this field". Re-sent alongside garment_sizes for the same
+                   reason - a size list that scrapes in late still needs its run type. */
+                garment_size_type: res.sizeRunType,
                 /* Sampled main-fabric colour for THIS product. Sent so the room can
                    name the colour in the prompt instead of relying on the anchor's
                    generic "preserve the original color" - the black/yellow

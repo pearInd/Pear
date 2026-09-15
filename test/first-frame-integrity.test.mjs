@@ -339,9 +339,19 @@ console.log("\n── §5 THE FRAME BUDGET ON THE WIRE ──");
   check("the frame sent to Decart is capped at 512 on its longest edge",
     w === 512 && h === 288,
     `${w}x${h} - a square 512x512 would be ${((512 * 512) / (w * h) - 1) * 100}% more pixels per frame`);
+  /* LIVE_FPS went 15 -> 60 with LIVE CONTINUITY ("it has to feel like a mirror"): the preview
+     and the stall bridge show the camera directly, and 15fps is visibly not a mirror. What
+     must NOT move is the wire rate, and the throttle must not ask the shared camera for it -
+     a clone's frameRate constraint can drag the preview down with it. */
   check("...and the rate is capped below the local capture rate",
-    /const LIVE_FPS\s+= 15;/.test(SRC) && /const LIVE_INFERENCE_FPS\s+= 10;/.test(SRC),
-    "the preview stays smooth locally; only 10 frames/s ever leave the browser");
+    /const LIVE_FPS\s+= 60;/.test(SRC) && /const LIVE_INFERENCE_FPS\s+= 10;/.test(SRC),
+    "the preview is mirror-smooth locally; only 10 frames/s ever leave the browser");
+  const throttleSrc = extract("function createThrottledInputStream", "function releaseInputGate");
+  check("...and the throttle's clone never constrains the shared camera's frame rate",
+    /srcTrack\.applyConstraints\(\{\s*\n\s*width:/.test(throttleSrc) &&
+      !/frameRate/.test(throttleSrc.slice(throttleSrc.indexOf("srcTrack.applyConstraints"),
+                                          throttleSrc.indexOf("}).catch", throttleSrc.indexOf("srcTrack.applyConstraints")))),
+    "the canvas + requestFrame() pacing is the rate guarantee; the clone constraint only risks the preview");
 
   /* THE POSE LOOP SHARES THIS THREAD. detectForVideo() is a WASM/GPU pass on the main
      thread - the same one servicing the datachannel - so the cheapest available saving is

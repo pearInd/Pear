@@ -547,7 +547,7 @@ console.log("\n── §7 THROTTLING: the wire is the floor, not the CPU ──"
      mid-turn is what held the wire against it (turn-yaw-window.test.mjs §4). Same gate, same
      deferral - the tracker re-offers the shift once the turn settles. */
   check("the watcher passes that gate from the live wire state",
-    /bodyTopology\.feed\(sig, \{ canDispatch: !wireBusy\(\) && !orientTurnInProgress\(\) \}\)/.test(watcher),
+    /bodyTopology\.feed\(sig, \{ canDispatch: !wireBusy\(\) && !orientTurnInProgress\(\) && !turnStarting \}\)/.test(watcher),
     "the gate is useless if the call site does not tell it what the wire is doing");
 
   /* THE LAST LINE OF DEFENCE, one level down: even with the gate above, the dispatcher

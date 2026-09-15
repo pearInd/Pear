@@ -200,7 +200,12 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
 
     const code = extract(APP, "const ZARA_SIZE_CHART", "\nfunction onMeasurementKeydown");
     const fn = new Function("$", "t", "activeItem", "pendingSizes", "pendingAgeGroup", "localStream",
-      "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null;\n" +
+      // currentUserGender lives with the rest of the top-of-file state (declared
+      // well before "const ZARA_SIZE_CHART", this slice's start marker), same
+      // reason currentUserSize/currentSizeCategory/currentBodyCategory are shadowed
+      // here rather than read off app.js's own declaration - see ADULT_PANTS_NUMERIC_SIZES's
+      // own comment in app.js for the general "some harnesses extract a narrower slice" rule.
+      "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null, currentUserGender = null;\n" +
       code +
       "\nreturn { calculateSize, isCompatibleSizeCategory, getUserSize: () => currentUserSize, " +
       "getSizeCategory: () => currentSizeCategory, getBodyCategory: () => currentBodyCategory };"

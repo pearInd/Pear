@@ -97,6 +97,9 @@ const I18N = {
   measurementsRefreshNotice: { he: "עדכן את המידות שלך - עבר חודש מהפעם האחרונה", en: "Update your measurements - it's been a month since last time" },
   // labelAge / placeholderAge / profileLabelAge removed with the age field itself -
   // see the "AGE - REMOVED" note in app.js.
+  labelGender:               { he: "מגדר:", en: "Gender:" },
+  genderMen:                 { he: "גבר", en: "Men" },
+  genderWomen:               { he: "אישה", en: "Women" },
   labelHeight:               { he: 'גובה (בס"מ):', en: "Height (cm):" },
   placeholderHeight:         { he: "לדוגמה: 175", en: "e.g. 175" },
   labelWeight:               { he: 'משקל (בק"ג):', en: "Weight (kg):" },
@@ -144,8 +147,10 @@ const I18N = {
   swatchesAria:              { he: "צבע · Colour", en: "Colour" },
   liveCountdownLabel:        { he: "שניות", en: "seconds" },
   /* Shown by the body-presence gate while it waits for the shopper to step into frame -
-     see awaitBodyPresence() in app.js. */
-  presencePrompt:            { he: "נא להתייצב מול המצלמה", en: "Please step into the frame" },
+     see awaitBodyPresence() in app.js. Worded as "step BACK", not "step in": the gate's
+     commonest miss is a shopper too close for the required landmarks (hips/knees
+     cropped), and the overlay's step-back animation acts out the same instruction. */
+  presencePrompt:            { he: "נא להתרחק כדי להציג גוף מלא", en: "Please step back to fit full body" },
   /* Progressive loading-state guidance (#scanStepText) - cycled by
      startScanTimer()/updateScanTimer() in app.js while #scanOverlay is up,
      one step at a time, so the shopper always knows what's happening and how

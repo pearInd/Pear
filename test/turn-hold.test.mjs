@@ -36,11 +36,15 @@ function extract(startMarker, endMarker) {
 const holdSrc = extract("const ORIENT_TURN_HOLD_MAX_MS", "function createOrientationWatcher");
 check("extracted the turn-hold pair", /function orientHoldBegin/.test(holdSrc) && /function orientHoldEnd/.test(holdSrc));
 
-function harness() {
+function harness({ stillCovers = true } = {}) {
   const events = [];
   let timers = [];
   const sandbox = {
     ORIENT_DEBUG: false,
+    /* ?still_covers=1. The snapshot cover is OFF by default since LIVE CONTINUITY; the sections
+       below pin the machinery a restore plugs back into, so they run with it on. The default is
+       pinned in its own section. */
+    stillCoversEnabled: () => stillCovers,
     console: { log() {}, warn: (...a) => events.push({ op: "warn", a }) },
     /* Split, as of the "the live view freezes whenever I move" fix. Banking a frame and
        putting it on screen are separate events here precisely so a test can assert that
@@ -88,6 +92,35 @@ console.log("\n── the hold captures ONE frame, at the start of the turn ─�
   api.orientHoldBegin("swap");
   check("a second begin during the same turn does NOT re-capture",
     events.filter((e) => e.op === "capture").length === 1, JSON.stringify(events.map((e) => e.op)));
+}
+
+console.log("\n── DEFAULT: no still is ever banked or shown - the window still opens ──");
+{
+  /* "The whole view freezes for 1-2 seconds on every turn - it has to feel like a mirror."
+     The cover was an opaque snapshot over #aiVideo from a corroborated turn until the swap
+     landed, invisible to the recorder, so live froze longer than any clip showed. Off unless
+     ?still_covers=1. The WINDOW must still open and close exactly as before, because re-drapes
+     and the redrape cover gate on _orientHoldActive to keep the wire free for the swap. */
+  const { api, events, fireTimers } = harness({ stillCovers: false });
+  api.orientHoldBegin("turn-detected");
+  check("a turn opens the window (re-drapes still stand aside for the swap)", api.active() === true);
+  check("...but banks no frame", !events.some((e) => e.op === "capture"), JSON.stringify(events.map((e) => e.op)));
+  api.orientHoldPromote("turn-corroborated");
+  api.orientHoldPromote("swap");
+  check("...and a corroborated turn or a confirmed swap covers NOTHING",
+    api.shown() === false && !events.some((e) => e.op === "show" || e.op === "freeze"),
+    JSON.stringify(events.map((e) => e.op)));
+  fireTimers();
+  check("...and the ceiling still closes the window", api.active() === false);
+}
+{
+  const src = SRC.slice(SRC.indexOf("function redrapeCoverBegin()"), SRC.indexOf("function redrapeCoverEnd("));
+  check("the re-drape cover is off by default too, before it touches the canvas",
+    /if \(!\(typeof stillCoversEnabled === "function" && stillCoversEnabled\(\)\)\) return false;/.test(src) &&
+      src.indexOf("stillCoversEnabled()") < src.indexOf("drawImage"),
+    src.slice(0, 400));
+  check("both covers are opt-in with ?still_covers=1, read once",
+    /get\("still_covers"\) === "1"/.test(SRC));
 }
 
 console.log("\n── promote: the feed is covered only when something warrants it ──");

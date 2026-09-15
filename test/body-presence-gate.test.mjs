@@ -32,7 +32,8 @@
      §4  it sits before the token mint, after the camera - the credit-saving position;
      §5  late entry re-conditions WITHOUT re-billing, and cannot re-arm the 5s clock;
      §6  the prompt carries the temporal-persistence directive, per category, in budget;
-     §7  the overlay is bilingual and is torn down on every exit path. */
+     §7  the overlay is bilingual and is torn down on every exit path - its exit fade
+         starts in the same tick as the verdict, and a re-show during that fade wins. */
 import { readFileSync } from "node:fs";
 import { CONFIG } from "../fitting-room/config.js";
 
@@ -356,8 +357,11 @@ console.log("\n── §7 THE OVERLAY: bilingual, and never left on screen ─�
 {
   check("the overlay element exists in the markup",
     /id="presenceOverlay"/.test(HTML), "the gate needs something to say why it is waiting");
+  /* Copy changed 2026-09-15 from "step into the frame" to "step back": the gate's
+     commonest miss is a shopper too close for the required landmarks, and the overlay's
+     step-back guide animation acts out the same instruction. */
   check("...carrying the spec'd Hebrew and English copy",
-    HTML.includes("נא להתייצב מול המצלמה") && /Please step into the frame/i.test(HTML),
+    HTML.includes("נא להתרחק כדי להציג גוף מלא") && /Please step back to fit full body/i.test(HTML),
     "every user-facing string in this app is bilingual");
   check("...and is hidden by default, so it cannot flash on load",
     /id="presenceOverlay"[^>]*hidden/.test(HTML));
@@ -366,6 +370,44 @@ console.log("\n── §7 THE OVERLAY: bilingual, and never left on screen ─�
   check("it is hidden again on every go-live exit path, not just the happy one",
     (SRC.match(/hidePresenceOverlay\(\)/g) || []).length >= 2,
     "an overlay stuck over a working session is worse than the bug it explains");
+
+  /* The exit is a fade driven by a timer, which opens a race the old hard `hidden` flip
+     did not have: the session watcher can re-show within milliseconds of a hide, and a
+     stale timer firing afterwards would blank the overlay the shopper was just told to
+     read. Executed against the real show/hide from the extracted block. */
+  const pending = [];
+  const el = {
+    hidden: true,
+    _c: new Set(),
+    classList: { add(c) { el._c.add(c); }, remove(c) { el._c.delete(c); }, contains(c) { return el._c.has(c); } },
+  };
+  const ui = new Function("POSE_MIN_CONFIDENCE", "POSE_CONSECUTIVE_FRAMES", "POSE_GATE_TIMEOUT_MS",
+    "POSE_SAMPLE_MS", "console", "$", "setTimeout", "clearTimeout",
+    code + "\nreturn { showPresenceOverlay, hidePresenceOverlay };")(
+    CONFIG.POSE_MIN_CONFIDENCE, CONFIG.POSE_CONSECUTIVE_FRAMES, CONFIG.POSE_GATE_TIMEOUT_MS,
+    CONFIG.POSE_SAMPLE_MS, { warn() {}, log() {}, error() {} },
+    (id) => (id === "presenceOverlay" ? el : null),
+    (fn) => { pending.push(fn); return pending.length; },
+    (id) => { if (id) pending[id - 1] = null; });
+  const flush = () => { pending.splice(0).forEach((fn) => fn && fn()); };
+
+  ui.showPresenceOverlay();
+  ui.hidePresenceOverlay();
+  check("hide starts the fade in the SAME tick as the verdict",
+    el.classList.contains("is-leaving") && el.hidden === false,
+    "the fade must begin the instant the gate confirms, not after a delay");
+  flush();
+  check("...and the overlay is display:none once the fade has run",
+    el.hidden === true && !el.classList.contains("is-leaving"),
+    "left un-hidden, the guide's keyframes keep running over a confirmed shopper");
+
+  ui.showPresenceOverlay();
+  ui.hidePresenceOverlay();
+  ui.showPresenceOverlay();
+  flush();
+  check("a re-show DURING the fade wins - the stale hide timer cannot blank it",
+    el.hidden === false && !el.classList.contains("is-leaving"),
+    `hidden=${el.hidden} leaving=${el.classList.contains("is-leaving")}`);
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

@@ -19,7 +19,7 @@
          all, so a shipped CSS change was served from cache indefinitely while
          app.js?v= was being bumped every deploy. Kept in step with app.js's
          version so there is one number to reason about, not two. -->
-    <link rel="stylesheet" href="style.css?v=34">
+    <link rel="stylesheet" href="style.css?v=35">
 </head>
 <body>
 
@@ -172,6 +172,25 @@
                  refreshAgeFieldVisibility) and never used for sizing (nothing called
                  pickSizeCategory), yet a stored value from an older build kept being
                  painted into the profile popover. See the "AGE - REMOVED" note in app.js. -->
+            <!-- Gender selector - OPTIONAL (no "required" marker: CLAUDE.md §2.5, never
+                 block on an unmade choice). Routes which TOKEN the recommended size is
+                 shown with - plain letter, or letter + FOX women's EU dress-size token
+                 (WOMEN_TOPS_EU_SIZE_CHART) - on a tops/ambiguous garment; body-fit
+                 matching itself is unchanged either way. See currentUserGender's and
+                 currentSizeIsWomensTops's own comments in app.js. -->
+            <div class="form-group">
+                <span class="form-group__label" id="genderToggleLabel" data-i18n="labelGender">מגדר:</span>
+                <div class="gender-toggle" id="genderToggle" role="radiogroup" aria-labelledby="genderToggleLabel" data-active="">
+                    <button class="gender-tab" type="button" role="radio" aria-checked="false" data-gender="men">
+                        <span data-i18n="genderMen">גבר</span>
+                    </button>
+                    <button class="gender-tab" type="button" role="radio" aria-checked="false" data-gender="women">
+                        <span data-i18n="genderWomen">אישה</span>
+                    </button>
+                    <span class="gender-toggle__ind" aria-hidden="true"></span>
+                </div>
+            </div>
+
             <div class="form-group">
                 <label for="height"><span class="required">*</span><span data-i18n="labelHeight">גובה (בס"מ):</span></label>
                 <input type="number" id="height" min="100" max="300" placeholder="לדוגמה: 175" data-i18n-placeholder="placeholderHeight">
@@ -463,12 +482,68 @@
                  on every exit path from it. Decart conditions on the frame it is handed and
                  the session is capped at 5s, so opening one while nobody is in shot spends
                  the whole billed window on a garment fitted to an empty room - this is the
-                 message that explains the wait instead of leaving the button feeling dead. -->
+                 message that explains the wait instead of leaving the button feeling dead.
+
+                 STEP-BACK GUIDE. The old static dashed pill said "stand here" but never said
+                 HOW - and the gate's commonest miss is a shopper too CLOSE (hips/knees cropped
+                 off the bottom), not one who is absent. This shows the fix as motion: an
+                 outlined figure too big for the frame steps back until it fits, the frame
+                 locks green, a tee + shorts draw on, the arms open to check the fit. 3.5s loop,
+                 style.css "Step-back guide". Every SVG shares one 170x260 viewBox so the layers
+                 register exactly; each MOVING part is its own HTML wrapper, because a transform
+                 on an SVG child is main-thread paint in most engines while one on an HTML
+                 element is composited. The figure is drawn at (25,30) in a 120x200 space. -->
             <div class="presence-overlay" id="presenceOverlay" hidden aria-live="polite">
-                <div class="presence-overlay__frame" aria-hidden="true"></div>
+                <div class="presence-guide" aria-hidden="true">
+                    <div class="pg-glass"></div>
+                    <div class="pg-glow"></div>
+                    <svg class="pg-frame" viewBox="0 0 170 260" focusable="false">
+                        <!-- pathLength 696 = 58 whole 12-unit dash periods, so the 6/6 dash tiles
+                             the pill seamlessly where the path closes -->
+                        <rect x="1.5" y="1.5" width="167" height="257" rx="83.5" pathLength="696"/>
+                    </svg>
+                    <div class="pg-figure">
+                        <div class="pg-zoom">
+                            <div class="pg-walk">
+                                <svg class="pg-lines" viewBox="0 0 170 260" focusable="false">
+                                    <g transform="translate(25 30)">
+                                        <circle cx="60" cy="19" r="13"/>
+                                        <path d="M49 43H71Q78 43 78 50V116L77 186Q77 191 72 191H69Q64 191 64 186V127Q60 117 56 127V186Q56 191 51 191H48Q43 191 43 186L42 116V50Q42 43 49 43Z"/>
+                                    </g>
+                                </svg>
+                                <svg class="pg-dress" viewBox="0 0 170 260" focusable="false">
+                                    <g transform="translate(25 30)">
+                                        <path class="pg-dress__glow pg-dress__tee" pathLength="100" d="M38 108V43L50 35.5Q60 41 70 35.5L82 43V108Z"/>
+                                        <path class="pg-dress__tee" pathLength="100" d="M38 108V43L50 35.5Q60 41 70 35.5L82 43V108Z"/>
+                                        <path class="pg-dress__glow pg-dress__shorts" pathLength="100" d="M38 108L36 147H58.5L60 130L61.5 147H84L82 108"/>
+                                        <path class="pg-dress__shorts" pathLength="100" d="M38 108L36 147H58.5L60 130L61.5 147H84L82 108"/>
+                                    </g>
+                                </svg>
+                                <div class="pg-arm pg-arm--l">
+                                    <svg class="pg-lines" viewBox="0 0 170 260" focusable="false">
+                                        <rect x="49" y="74" width="10" height="66" rx="5"/>
+                                    </svg>
+                                    <svg class="pg-dress" viewBox="0 0 170 260" focusable="false">
+                                        <path class="pg-dress__glow pg-dress__sleeve" pathLength="100" d="M63 73C60 63 45 64 45 78V104H61"/>
+                                        <path class="pg-dress__sleeve" pathLength="100" d="M63 73C60 63 45 64 45 78V104H61"/>
+                                    </svg>
+                                </div>
+                                <div class="pg-arm pg-arm--r">
+                                    <svg class="pg-lines" viewBox="0 0 170 260" focusable="false">
+                                        <rect x="111" y="74" width="10" height="66" rx="5"/>
+                                    </svg>
+                                    <svg class="pg-dress" viewBox="0 0 170 260" focusable="false">
+                                        <path class="pg-dress__glow pg-dress__sleeve" pathLength="100" d="M107 73C110 63 125 64 125 78V104H109"/>
+                                        <path class="pg-dress__sleeve" pathLength="100" d="M107 73C110 63 125 64 125 78V104H109"/>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <p class="presence-overlay__text">
-                    <span data-i18n="presencePrompt">נא להתייצב מול המצלמה</span>
-                    <span data-i18n-hide-on-en> · Please step into the frame</span>
+                    <span class="presence-overlay__primary" data-i18n="presencePrompt">נא להתרחק כדי להציג גוף מלא</span>
+                    <span class="presence-overlay__secondary" data-i18n-hide-on-en lang="en" dir="ltr">Please step back to fit full body</span>
                 </p>
             </div>
 
@@ -734,7 +809,7 @@
   <span class="lang-switch__thumb" aria-hidden="true"></span>
 </button>
 
-<script type="module" src="app.js?v=135"></script>
+<script type="module" src="app.js?v=140"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
      header shrink. Pure enhancement - touches no app.js logic or state. -->
 <script src="mobile-ux.js" defer></script>

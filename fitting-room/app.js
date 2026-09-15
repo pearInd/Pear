@@ -163,10 +163,18 @@ function showDemoGateLockedMessage() {
    LIVE_FPS is the LOCAL camera-capture rate (kept higher for a smooth preview);
    LIVE_INFERENCE_FPS is what the throttler downsamples to before the SDK sees it -
    it trims per-frame upload/encode work but does NOT change the per-second credit
-   bill, which is governed solely by LIVE_DURATION_MS. */
+   bill, which is governed solely by LIVE_DURATION_MS.
+
+   LIVE_FPS WAS 15, and 15 is not a mirror. Raised to 60 (an ideal the camera meets or
+   falls short of - a 30fps webcam delivers 30, and no `min` is set, so a camera in a dim
+   room may still lower its own rate to expose longer) for the shopper-facing surfaces
+   that show the camera directly: the pre-live preview and the LIVE CONTINUITY layer that
+   bridges a Decart output stall. It changes nothing on the wire: createThrottledInputStream()
+   repaints at exactly LIVE_INFERENCE_FPS whatever the camera delivers, and it no longer
+   asks the shared camera for a lower rate (see its applyConstraints note). */
 const LIVE_DURATION_MS    = 5000;   // BILLED Decart window = 5s → hard-capped session; 2 credits/s × 5s = 10 credits
 const VIDEO_LENGTH_MS     = 5000;   // == LIVE_DURATION_MS → frozen-hold tail is zero; the 5s clip is all real live motion
-const LIVE_FPS            = 15;     // local getUserMedia capture rate (smooth preview; throttled to LIVE_INFERENCE_FPS)
+const LIVE_FPS            = 60;     // local getUserMedia capture rate (mirror-smooth preview; throttled to LIVE_INFERENCE_FPS)
 const LIVE_INFERENCE_FPS  = 10;     // frames/s handed to Decart - trims per-frame upload/encode; credits are per-SECOND, not per-frame
                                     //   ENFORCED client-side by createThrottledInputStream() - the SDK's own fps cap is a no-op on Chromium.
 
@@ -575,6 +583,15 @@ const $ = (s) => document.getElementById(s);
 
 /* ── state ───────────────────────────────────────────────────────────────── */
 let currentUserSize = null;
+/* GENDER SELECTOR - optional, in-session only (no profile/URL persistence; a fresh
+   session starts unset, same as every other Screen 1 field before the shopper touches
+   it). "men" | "women" | null. Read by calculateSize() alongside height/weight/etc to
+   decide WHICH ADULT TOPS CHART LABEL is shown - see currentSizeIsWomensTops's own
+   comment for why this only ever changes a DISPLAYED label and never the fit math
+   itself. Never blocks: leaving it unset (null) reproduces the exact pre-gender-selector
+   behaviour (plain ZARA_SIZE_CHART letters for everyone), matching CLAUDE.md §2.5 -
+   an unmade choice must not stop a shopper from getting a recommendation. */
+let currentUserGender = null;
 let currentSizeCategory = null;  // "child" | "adult" - which chart produced currentUserSize.
                                  // Drives the override selector's scale and suppresses
                                  // the SIZE_SCALE fit-delta math for child sizes.
@@ -614,6 +631,22 @@ let pendingSizes = undefined;                // string[] | undefined (none arriv
    already computed and shown. parseHandoff() now seeds both, synchronously, on the
    very first call - see its "SEEDS THE PENDING PRODUCT SIGNALS" note. */
 let pendingTitle = undefined;                // string | undefined (none arrived yet)
+/* Numeric-vs-alphabetic verdict on the host product's OWN size run, same two-stage
+   handoff as pendingSizes above and read alongside it. NOT a replacement for
+   pendingSizes - isAlphaSizeRun() checks the scraped list ITSELF first, because that
+   is free, synchronous, positive evidence about THIS visit. This is the fallback for
+   when that list is empty (a JS-rendered picker that hasn't hydrated yet): a
+   PREVIOUS visit's scrape, cached server-side against this product's URL and echoed
+   back by /api/classify-images (see pear-widget.js: classifySizeRunType() and
+   server.js: getCachedSizeRunType() / archive/supabase_setup_v14.sql).
+
+   THE BUG THIS CLOSES: sweatpants sold S/M/L matched isPantsProduct() on the TITLE
+   tier ("sweatpants" names a bottoms garment) with no numeric evidence of its own,
+   and pantsChartForSizes()'s "no confidently-numeric run" default landed on
+   ADULT_JEANS_WAIST_CHART - the waist-inch ladder meant for 28/30/32 jeans whose
+   picker scrapes to nothing. A shopper was quoted a bare waist-inch number ("32")
+   for a product whose own picker only ever offers S/M/L. */
+let pendingSizeRunType = undefined;          // "numeric" | "alpha" | "unknown" | undefined
 let focusMode = false;
 
 /* Multi-Image Product Gallery Sync - which product angle the live engine is warping.
@@ -1035,19 +1068,25 @@ const ZARA_SIZE_CHART = [
   { size: "XXL", minHeight: 190, maxHeight: 205, minWeight: 93, maxWeight: 112, minChest: 114, maxChest: 119, minWaist: 100, maxWaist: 105, minLegs: 109, maxLegs: 118 },
 ];
 
-/* FOX WOMEN'S TOPS STANDARD - data received 2026-09-14, NOT WIRED INTO calculateSize().
-   There is currently no gender selector anywhere in the fitting room: one unisex adult
-   chart (ZARA_SIZE_CHART, above) is used for every top regardless of who is measuring.
+/* FOX WOMEN'S TOPS STANDARD - data received 2026-09-14.
+   WIRED 2026-09-15: a gender selector now exists on Screen 1 (#genderToggle in
+   index.html -> currentUserGender in app.js) and calculateSize() reads it, via
+   currentSizeIsWomensTops (see that flag's own comment) and formatSizeLabel().
+
    FOX's women's ladder is a EU dress-size token (XS 34 / S 36 / M 38 / L 40 / XL 42 /
-   XXL 44), not a chest-cm band, so it cannot simply replace ZARA_SIZE_CHART's rows - it
-   is a different chart for a different form factor, the same reason
+   XXL 44), not a chest-cm band, so it does NOT replace ZARA_SIZE_CHART's rows as the
+   fit-matching chart - it never grew height/weight columns and coreHwPenalty() cannot
+   score a row that has none. What actually happens: EVERY shopper, regardless of
+   gender, is still fitted against ZARA_SIZE_CHART's vetted height/weight/chest bands
+   (a garment fits the same body no matter which token is printed on the label) - this
+   chart is consulted AFTER that match, purely to relabel the resolved letter with its
+   EU dress-size token for a shopper who selected "women". Same reason
    ADULT_JEANS_WAIST_CHART is a second chart rather than an edit to ADULT_PANTS_SIZE_CHART
-   (see that chart's own comment). Kept here, deliberately unreferenced, as the restore
-   seam: wiring it up for real needs a gender input on Screen 1, a branch in
-   calculateSize()'s chart selection, and its own test coverage - out of scope for a
-   size-chart data update. Do not delete this as "dead code" (CLAUDE.md §0's dead-code
-   rule for prompts applies here too, for the same reason: retained restore seam, not an
-   oversight) and do not wire it up piecemeal without adding the gender input first. */
+   (see that chart's own comment): a different convention for the same body, not a
+   replacement. Letters here are intentionally identical to ZARA_SIZE_CHART's (minus
+   3XL, which FOX did not publish a women's token for - see currentSizeIsWomensTops's
+   euRow-miss fallback in formatSizeLabel(), which keeps the plain letter rather than
+   guessing one). */
 const WOMEN_TOPS_EU_SIZE_CHART = [
   { size: "XS",  euSize: 34 },
   { size: "S",   euSize: 36 },
@@ -1229,6 +1268,33 @@ const ADULT_JEANS_WAIST_SIZES = new Set(ADULT_JEANS_WAIST_CHART.map((r) => r.siz
    run - including the early-return paths, which reset it - so it can never describe a
    PREVIOUS garment's chart. */
 let currentSizeIsNumericPants = false;
+
+/* True while the recommended size should be shown with its FOX WOMEN'S TOPS EU
+   dress-size token (WOMEN_TOPS_EU_SIZE_CHART) alongside the letter - "M (EU 38)"
+   rather than plain "M". Read only by formatSizeLabel(), same convention as
+   currentSizeIsNumericPants above and reset alongside it every calculateSize() run.
+
+   DISPLAY ONLY - never the fit computation. WOMEN_TOPS_EU_SIZE_CHART (see its own
+   comment, above) carries no height/weight/chest bands of its own: FOX supplied only
+   the EU-dress-size token per letter, not a body chart, so it cannot replace
+   ZARA_SIZE_CHART as the thing coreHwPenalty() is scored against without fabricating
+   anthropometric data nobody supplied. A garment fits the same body regardless of
+   which chart's letter is printed on the label, so calculateSize() keeps matching
+   against ZARA_SIZE_CHART's vetted bands for every shopper - gender only changes
+   which TOKEN is shown for the letter it already landed on ("male users [get] the
+   Men's tops chart (ZARA_SIZE_CHART)" is simply what already happens for everyone;
+   this flag adds the EU token on top for a shopper who told us she's shopping women's).
+
+   Set true only when: the shopper picked "women" (currentUserGender), the garment is
+   NOT confidently lower-body (!isConfidentlyPants - isPantsProduct()'s own "worn on the
+   lower body" verdict, deliberately STRICTER than "did the fit land on a numeric pants
+   chart": a letter-sized sweatpants pair alpha-vetoed onto ZARA_SIZE_CHART for FIT still
+   answers true here, so it is never decorated with a TOPS EU token that would collide
+   with ADULT_PANTS_SIZE_CHART's own, differently-scaled EU numbers - see
+   calculateSize()'s own comment on isConfidentlyPants), and the body landed on the ADULT
+   chart (currentSizeCategory === "adult" - WOMEN_TOPS_EU_SIZE_CHART has no child rows,
+   same reason the kids suffix below is also adult-only). */
+let currentSizeIsWomensTops = false;
 
 /**
  * Height/weight penalty for one chart row - the scoring kernel behind
@@ -1425,6 +1491,40 @@ function isAdultPantsProduct(sizes) {
   // isKidsProduct()/isAdultProduct() use for ADULT_ALPHA_SIZES).
   if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
   return list.every((s) => ADULT_PANTS_NUMERIC_SIZES.has(s));
+}
+
+/**
+ * THE VETO that stops a letter-sized garment being pulled onto a numeric pants
+ * chart - the counterpart to isAdultPantsProduct()/isWaistInchSizeRun() above, which
+ * establish POSITIVE numeric evidence. This establishes positive ALPHA evidence, and
+ * outranks it: isPantsProduct() correctly calls a pair of sweatpants sold S/M/L a
+ * lower-body garment from its TITLE alone (no numeric evidence needed), and without
+ * this veto that verdict fed straight into pantsChartForSizes()'s "no confidently-
+ * numeric run" default - ADULT_JEANS_WAIST_CHART, the ladder written for 28/30/32
+ * jeans whose picker scrapes to nothing. A sports-pants shopper was quoted a bare
+ * waist-inch number for a product whose picker only ever offers S/M/L.
+ *
+ * TWO TIERS, SAME "every token or abstain" confidence rule as isAdultPantsProduct():
+ *   1. the product's OWN size run   free, synchronous, THIS visit's own scrape -
+ *                                    checked first because live evidence always
+ *                                    outranks a remembered one.
+ *   2. the cached size-run-type     a PREVIOUS visit's scrape of the SAME product,
+ *                                    consulted only when this visit's list is empty
+ *                                    (a JS-rendered picker that hasn't hydrated yet) -
+ *                                    see pendingSizeRunType's own comment for the
+ *                                    full round trip.
+ *
+ * NEVER GUESSES: an empty/mixed size list with no cached hint returns false, which
+ * simply leaves the existing numeric-chart default in place for products this can't
+ * yet speak to (CLAUDE.md §2.5).
+ * @param {string[]|string|null} sizes - the host product's OWN size list, THIS visit
+ * @param {"numeric"|"alpha"|"unknown"|undefined} sizeRunType - cached fallback
+ * @returns {boolean}
+ */
+function isAlphaSizeRun(sizes, sizeRunType) {
+  const list = parseSizeList(sizes);
+  if (list.length) return list.every((s) => ADULT_ALPHA_SIZES.has(s));
+  return sizeRunType === "alpha";
 }
 
 /**
@@ -1716,6 +1816,19 @@ function resolvedGarmentSizes() {
   return parseSizeList(activeItem?.sizes ?? pendingSizes);
 }
 
+/* Same two-stage handoff, for the cached numeric/alpha verdict isAlphaSizeRun() falls
+   back to when resolvedGarmentSizes() comes back empty. See pendingSizeRunType's own
+   comment for the full round trip (widget scrape -> classify-images cache -> here).
+   typeof-guarded per CLAUDE.md §2.7/resolvedGarmentTitle()'s own convention: several
+   test harnesses execute this region as a standalone slice with no pendingSizeRunType
+   binding in scope at all - a bare reference is a ReferenceError there, not a lint nit. */
+function resolvedSizeRunType() {
+  if (typeof activeItem !== "undefined" && activeItem && activeItem.sizeRunType != null) {
+    return activeItem.sizeRunType;
+  }
+  return typeof pendingSizeRunType !== "undefined" ? pendingSizeRunType : undefined;
+}
+
 /* The ONE mismatch predicate every surface reads - the go-live gate, the modal card,
    and the size selector alike - so they can never disagree about what is blocked.
    Reads currentBodyCategory as-is, whatever calculateSize() last computed - it does
@@ -1819,7 +1932,17 @@ function formatSizeLabel(size) {
      product is NOT affected: it never resolves to a pants chart, so this flag is false
      there and the suffix still renders. */
   if (currentSizeIsNumericPants) return String(size).replace(/[^0-9]/g, "");
-  return currentSizeCategory === "child" ? `${size} ${t("sizeLabelKidsSuffix")}` : size;
+  if (currentSizeCategory === "child") return `${size} ${t("sizeLabelKidsSuffix")}`;
+  // WOMEN'S EU TOPS TOKEN - see currentSizeIsWomensTops's own comment. Looked up by
+  // the letter calculateSize() already resolved (WOMEN_TOPS_EU_SIZE_CHART shares
+  // ZARA_SIZE_CHART's exact letter tokens by construction), so a miss here can only
+  // mean a chart edit desynced the two lists - falling back to the plain letter
+  // rather than throwing, same "abstain, don't guess" rule as everywhere else.
+  if (currentSizeIsWomensTops) {
+    const euRow = WOMEN_TOPS_EU_SIZE_CHART.find((r) => r.size === size);
+    if (euRow) return `${size} (EU ${euRow.euSize})`;
+  }
+  return size;
 }
 
 /* Task 6 - conditional input flow: the optional fields stay hidden until ALL
@@ -1896,6 +2019,7 @@ function calculateSize() {
   // measurement can never leave a PREVIOUS garment chart description behind for
   // formatSizeLabel() to read.
   currentSizeIsNumericPants = false;
+  currentSizeIsWomensTops = false;
   updateProgress();
 
   if (!height || !weight) return;
@@ -1938,12 +2062,30 @@ function calculateSize() {
      not be pulled onto a waist ladder), but no item marker can put a letter-sized
      product onto one. activeItem is usually unavailable here anyway - calculateSize()
      runs on Screen 1, before it exists - so the sizing/title evidence decides in the
-     common case, exactly as the kids/adult guard already does with no item at all. */
+     common case, exactly as the kids/adult guard already does with no item at all.
+
+     ALPHA EVIDENCE VETOES THE WAIST CHART TOO, same as the item check above - see
+     isAlphaSizeRun()'s own comment for the bug this closes (sweatpants sold S/M/L,
+     confidently pants by title, quoted a waist-inch number that appears on no picker
+     anywhere). Checked ALONGSIDE itemContradictsPants rather than folded into
+     isPantsProduct() itself: isPantsProduct() answers "is this worn on the lower
+     body", which a letter-sized pair of sweatpants still genuinely is - the veto
+     belongs at the CHART-selection step, not at the body-region step. */
   const useAdultPantsChart = isAdultNumericPantsGarment(garmentSizes, activeItem);
   const itemContradictsPants =
     !!activeItem && typeof isBottomsGarment === "function" && !isBottomsGarment(activeItem);
-  const useWaistInchChart = !useAdultPantsChart && !itemContradictsPants &&
+  /* Named separately from useWaistInchChart below - per THAT flag's own comment,
+     isPantsProduct() answers "is this worn on the lower body" independently of which
+     literal CHART ends up handling the fit (a letter-sized sweatpants pair still
+     answers true here even though isAlphaSizeRun() vetoes it off the waist chart).
+     Read a second time below, by currentSizeIsWomensTops, for exactly that
+     independence: WOMEN_TOPS_EU_SIZE_CHART must never decorate a bottoms
+     recommendation just because it happens to share ZARA_SIZE_CHART's letters. */
+  const isConfidentlyPants =
     isPantsProduct(garmentSizes, resolvedGarmentTitle(), currentGarmentCategory, activeItem);
+  const useWaistInchChart = !useAdultPantsChart && !itemContradictsPants &&
+    !isAlphaSizeRun(garmentSizes, resolvedSizeRunType()) &&
+    isConfidentlyPants;
   /* Both numeric branches route through pantsChartForSizes() rather than naming a chart
      here, so the EU-before-waist precedence lives in exactly ONE place - see that
      function on why reversing those two lines re-sizes every EU store in the catalog. */
@@ -1982,6 +2124,21 @@ function calculateSize() {
   // "uncertain" case above - a confident garment already has the other
   // chart's array forced empty, so there's nothing left for it to tie with.
   currentSizeCategory = adultFits.length ? "adult" : (childFits.length ? "child" : null);
+
+  /* GENDER ROUTING - see currentSizeIsWomensTops's own comment for why this only ever
+     swaps the DISPLAYED token, never the fit chart itself. Gated on !isConfidentlyPants
+     rather than !useNumericPantsChart - deliberately the STRICTER of the two: a
+     letter-sized bottoms garment (a sweatpants pair sold S/M/L, alpha-vetoed off the
+     waist chart per isAlphaSizeRun()) still resolves onto ZARA_SIZE_CHART for FIT
+     purposes, but must not be decorated with a TOPS dress-size token - "M (EU 38)" on
+     a pair of sweatpants reads as an EU PANTS size (this app already has one, on
+     ADULT_PANTS_SIZE_CHART, numbered 36-46 - a colliding, wrong-scale range) even
+     though the FOX women's tops ladder means something else entirely. isConfidentlyPants
+     is the same "is this worn on the lower body" verdict isPantsProduct() already
+     gives independent of which chart the fit math landed on - see that const's own
+     comment. Gated on "adult" because the chart has no child rows. */
+  currentSizeIsWomensTops =
+    currentUserGender === "women" && !isConfidentlyPants && currentSizeCategory === "adult";
 
   if (!currentSizeCategory) {
     // Fits NEITHER chart - no closest-match guess. A real gap between the two
@@ -2085,6 +2242,40 @@ function calculateSize() {
   // currentSizeCategory ever gets checked against the room's mismatch UI before the
   // shopper lands in it. See updateSizeMismatchUI()'s own comment.
   updateSizeMismatchUI();
+}
+
+/**
+ * Gender selector (#genderToggle in index.html) - sets currentUserGender and repaints
+ * the segmented control, then recomputes the size if the form is already showing a
+ * result. Click-only (native <button> Enter/Space activation covers keyboard access,
+ * same as every other button in this form - no extra keydown handling needed).
+ *
+ * TOGGLES OFF ON A SECOND CLICK of the already-selected option, back to null/unset -
+ * the selector is optional (CLAUDE.md §2.5: never block), so a shopper who picked
+ * "women" by mistake can return to the pre-selector default rather than being stuck
+ * choosing between two answers, neither of which may be right for them.
+ * @param {"men"|"women"} gender
+ */
+function setGender(gender) {
+  currentUserGender = currentUserGender === gender ? null : gender;
+
+  const toggle = $("genderToggle");
+  if (toggle) {
+    toggle.dataset.active = currentUserGender || "";
+    toggle.querySelectorAll(".gender-tab").forEach((btn) => {
+      const isActive = btn.dataset.gender === currentUserGender;
+      btn.classList.toggle("is-active", isActive);
+      btn.setAttribute("aria-checked", String(isActive));
+    });
+  }
+
+  // Same "recompute only if the result is already showing" convention as the other
+  // late-arriving-signal handlers (sizeRunType's postMessage branch, the age-group
+  // vision hint) - calculateSize() itself is a no-op with no height/weight yet, but
+  // guarding avoids fighting Screen 1's own reveal sequencing before both mandatory
+  // fields exist.
+  const sizeFormEl = $("sizeForm");
+  if (sizeFormEl && !sizeFormEl.hidden) calculateSize();
 }
 
 function updateProgress() {
@@ -2259,6 +2450,13 @@ function parseHandoff() {
          in the module. Absent leaves it undefined, never "", so "no list arrived" stays
          distinguishable from "the product genuinely lists no sizes". */
       sizes: q.get("garment_sizes") || undefined,
+      /* Numeric-vs-alphabetic verdict on that same list (pear-widget.js:
+         classifySizeRunType()), read SYNCHRONOUSLY for the same reason `sizes` is -
+         isAlphaSizeRun() needs it on Screen 1, before any round trip lands, and only
+         ever as the fallback for when `sizes` itself scraped empty (see its own
+         comment). Absent (not "unknown") when the widget declined or is too old to
+         send it. */
+      sizeRunType: q.get("garment_size_type") || undefined,
       /* The product's own title, carried explicitly rather than left to `name` alone.
          ?garment_title= is the v2 spelling pear-widget.js now sends alongside the
          original ?garment_name=; both carry the same string, so either build of the
@@ -2284,9 +2482,11 @@ function parseHandoff() {
        Writing unconditionally here would let a late re-parse clobber that correction
        with the original URL, so each field is filled only while it is still undefined. */
     if (pendingSizes === undefined && result.sizes !== undefined) pendingSizes = result.sizes;
+    if (pendingSizeRunType === undefined && result.sizeRunType !== undefined) pendingSizeRunType = result.sizeRunType;
     if (pendingTitle === undefined && result.title !== undefined) pendingTitle = result.title;
     console.log("[PEAR] parseHandoff() - product signals for the size calculator:", {
       sizes: pendingSizes || "(none readable on the PDP)",
+      sizeRunType: pendingSizeRunType || "(none)",
       title: pendingTitle || "(none)",
     });
     // CHECK B instrumentation - the exact point imgBack is resolved, showing which of
@@ -3289,6 +3489,23 @@ window.addEventListener("message", (e) => {
     }
   }
 
+  /* Numeric-vs-alphabetic verdict, handled alongside the sizes block above rather
+     than folded into it: THIS message's own sizeRunType can be MORE current than the
+     one parseHandoff() seeded at open (pear-widget.js re-reads the picker inside
+     classifyImages(), which can resolve after a JS-rendered control finally
+     hydrates), so it overwrites unconditionally - same convention as the age-group
+     branch below, where "uncertain" is itself a meaningful, later answer. Read by
+     isAlphaSizeRun() only as the fallback for an empty size list, so an "unknown"
+     landing here after a real scraped list already exists changes nothing that
+     matters (resolvedGarmentSizes() decides first in that case anyway). */
+  if (e.data.garment_size_type === "numeric" || e.data.garment_size_type === "alpha" ||
+      e.data.garment_size_type === "unknown") {
+    pendingSizeRunType = e.data.garment_size_type;
+    if (activeItem) activeItem.sizeRunType = pendingSizeRunType;
+    const sizeFormEl3 = $("sizeForm");
+    if (sizeFormEl3 && !sizeFormEl3.hidden) { try { calculateSize(); } catch {} }
+  }
+
   /* A LATE TITLE is the correction half of the pendingTitle seed parseHandoff() lays
      down from the URL. The widget re-reads the PDP heading after its own gallery and
      classify work settles, so this is the more accurate of the two - unlike the sizes
@@ -4226,7 +4443,7 @@ async function ensureOnline() {
    it's where "minimal frame/token usage" is actually enforced, not a place that
    needed new code - it already does exactly that:
      • fps capped to LIVE_INFERENCE_FPS (10) - the camera can capture faster (LIVE_FPS
-       =15 for a smooth local preview), but only 10 frames/sec ever leave the browser.
+       =60 for a smooth local preview), but only 10 frames/sec ever leave the browser.
      • resolution capped to LIVE_W×LIVE_H (512×288) - every frame is downscaled before
        it's sent, regardless of the camera's native resolution.
      • captureStream(0) + a single requestFrame() per tick - the output track emits
@@ -4261,9 +4478,14 @@ function createThrottledInputStream(srcStream, {
 
   // Best-effort native constraint first - some devices honour it and trim work
   // upstream. The canvas throttle below is the guarantee regardless of the result.
+  /* NO frameRate HERE ANY MORE. It used to ask this track for `max: fps` (10). This track
+     is a CLONE of the preview camera's, and a browser that applies a clone's constraints to
+     the shared capture source (rather than decimating per track) would drag the shopper's
+     own preview - and the continuity layer drawn from it - down to 10fps with it. The rate
+     that reaches Decart never depended on this line: the setInterval + requestFrame() below
+     emits exactly `fps` frames a second whatever the camera delivers. */
   try {
     srcTrack.applyConstraints({
-      frameRate: { ideal: fps, max: fps },
       width:  { ideal: width },
       height: { ideal: height },
     }).catch(() => {});
@@ -4919,6 +5141,8 @@ function teardown() {
   // rather than the only one - deliberately, since it is the timer most likely to be
   // running at the exact moment a session ends.
   stopFrameFreezeWatch();
+  // The live-camera bridge belongs to the live session - every exit path retires it here.
+  if (typeof stopStreamContinuity === "function") stopStreamContinuity();
 
   // Feature 2 - flush the recorder while the edited tracks are still live, so the
   // download clip is finalized before disconnect ends the stream.
@@ -4960,6 +5184,56 @@ function teardown() {
   connState = "idle";
   connecting = false;
   setConn("idle");
+}
+
+/* ── A NEW TRY-ON INHERITS NOTHING THE LAST ONE LEFT RUNNING ─────────────────────
+   REPORTED: "the second Try On on the same page glitches" - the first garment's session
+   contaminating the next.
+   THE ROOT CAUSE, found by diffing teardown() against the path a session NORMALLY ends on.
+   Every manual exit (Stop, tab hidden, a failed go-live) runs teardown(), which retires
+   everything. But a window that simply runs out does not: it ends in beginFreezeHold() ->
+   stopBilling() -> finalizeVideoClip(), and that chain skipped exactly two of teardown()'s
+   steps.
+     · THE LIVE-CAMERA BRIDGE (startStreamContinuity). Its start is idempotent - `if
+       (_continuity) return` - so the next session did not build one, it REUSED the old one,
+       whose stall clock still held the previous session's last Decart frame. The moment
+       the new render was revealed, "silent for <seconds>" read as a stall and cross-faded
+       the raw camera - the shopper's own clothes - in over the new garment.
+     · THE ORIENTATION WATCHER. Its 250ms sampler kept classifying the camera between
+       sessions, and a retry of the SAME garment reused it (syncOrientationWatcher() only
+       rebuilds on an item change) with the old session's vote streaks, yaw window, swap
+       cooldown and early-turn trigger state.
+   Both are now retired where that chain ends (stopBilling / finalizeVideoClip). This
+   function is the BACKSTOP at the top of goLive(), for any exit path added later that
+   also forgets: nothing it touches can legitimately exist before a session connects
+   (the watcher needs isLive(), the bridge starts at the first rendered frame), so
+   whatever it finds is a leftover by definition, and it logs which.
+   DELIBERATELY NOT TOUCHED: localStream and #webcam (restarting the camera flickers the
+   preview and can re-prompt for permission - teardown() keeps it for exactly this reuse),
+   and everything connectRealtime() already resets for the new session (sessionGen, the
+   billing guard, the condition wire, lastSentImageRef). The new garment's references are
+   fetched, validated, pinned and pre-encoded by goLive()'s preload gate and the fresh
+   watcher, not here. */
+function resetTryOnSession() {
+  const retired = [];
+  if (orientWatcher) {
+    try { orientWatcher.stop(); } catch (_) {}
+    orientWatcher = null;
+    orientWatcherItem = null;
+    retired.push("orientation watcher");
+  }
+  if (typeof _continuity !== "undefined" && _continuity) {
+    stopStreamContinuity();
+    retired.push("live-camera bridge");
+  }
+  /* The pose loop's published readings. Each is freshness-gated where it is read, so an
+     old one is normally inert - but "normally" is the gap this function exists to close. */
+  orientTurnMark(false);
+  _torsoYawAbs = null; _torsoYawAt = 0; _torsoYawRise = 0;
+  _poseFacingSep = null; _poseFacingAt = 0; _poseTorsoLostAt = 0;
+  if (retired.length) {
+    console.warn(`[PEAR] try-on reset: the previous session left ${retired.join(" + ")} running - retired before this one starts`);
+  }
 }
 
 /**
@@ -6005,7 +6279,7 @@ const ORIENT_POSE_FLIP_FRAMES    = 2;    // shoulder-order votes needed for a co
 const ORIENT_POSE_PASS = (() => {
   try { return new URLSearchParams(location.search).get("pose_pass") !== "0"; } catch (_) { return true; }
 })();
-/* ── THE EARLY TURN TRIGGER - ON BY DEFAULT at 20 degrees, gated at 60 deg/s ─────────────────────────────
+/* ── THE EARLY TURN TRIGGER - ON BY DEFAULT at 20 degrees, gated at 45 deg/s (60 until 2026-09-15) ────────
    WHY IT EXISTS. Traced client side, a swap costs ~nothing: the Blobs are pinned in memory, the
    catalog's rear pair is 43KB/38KB, @decartai/sdk sends it as one set_image message on the signaling
    WebSocket, and the reference is pre-encoded (preEncodeReference). What remains is Decart switching its
@@ -6038,7 +6312,23 @@ const ORIENT_POSE_PASS = (() => {
    under the threshold, before any vote has confirmed the turn. Symmetric: armed facing away, it sends
    FRONT the same way. */
 const ORIENT_EARLY_TURN_DEFAULT_DEG = 20;
-const ORIENT_EARLY_TURN_DEFAULT_SPEED = 60;
+/* ?early_turn_return=<deg> - THE RETURN LEG, BACK -> FRONT, fires later than the way out.
+   LIVE EVIDENCE (the first in this series): pear-tryon-...-FOX-20260914-225423.mp4, a v134-era 360 at ~140 deg/s,
+   read frame by frame. Out: "PEAK" holds to ~60 degrees, the side is plain (as a side is), the back graphic
+   arrives with the back (2.8s) and holds while facing away. Back: between 3.40s and 3.47s the body jumps
+   ~50 degrees and the shirt turns plain brown while the back and back-profile are still to the lens, until
+   the chest comes round (~4.2s). A reference replaced while the back was visible - FRONT, and only the early
+   trigger sends FRONT that close to facing away (20 degrees past it). The same clip timed Decart's output
+   stalls around the swaps at 234-333ms, so this session's swaps were far faster than the 700-1000ms the
+   default was first tuned for, and at that speed 20 degrees of lead lands FRONT on the back.
+   MODELLED per leg (turn-yaw-window §11, 90-140 deg/s, 250-1000ms dispatch-to-render): the return leg at
+   35 is the only setting that puts FRONT on a back-facing body for 0ms at every latency; its cost is the
+   back graphic staying on a turning-front chest ~100-190ms longer. Raising BOTH legs is worse overall and
+   leaves a plain gap anyway. The outbound leg keeps 20. ?early_turn_return=0 turns the early FRONT off
+   (the vote path carries the return); clamped like ?early_turn. Which path sent FRONT in that clip is
+   what one ?orient_debug=1 log of a turn would confirm. */
+const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 35;
+const ORIENT_EARLY_TURN_DEFAULT_SPEED = 45;
 /* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
    rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;
    unparseable keeps the default; capped at 1000.
@@ -6046,7 +6336,27 @@ const ORIENT_EARLY_TURN_DEFAULT_SPEED = 60;
    degrees ungated an 18-degree weight shift held fires (and, with jitter, a 14-degree sway); gated at 60
    neither ever fires. The cost of the gate is turn benefit: a slow turn does not clear it either. A gate
    high enough to stop fast poses (80) stops slow turns from benefiting at all, and jitter lets some fast
-   poses back through. The gate reads the pose loop's own yaw and reading time; no vote or engine changes. */
+   poses back through. The gate reads the pose loop's own yaw and reading time; no vote or engine changes.
+   ── LOWERED 60 -> 45 (2026-09-15), a PRODUCT DECISION on the numbers below ──────────────────────────────
+   REPORTED, from a live clip: on the way out the back graphic popped in only once the back was already
+   square to the lens; on the way back it seemed to leave early. Not yet confirmed with ?orient_debug=1.
+   WHAT THE MODEL SAYS WAS HAPPENING (turn-yaw-window §11). The gate is in the pose model's |yaw| units,
+   and MediaPipe compresses depth: at k=0.75 a real 60 deg/s turn RISES at ~45. Gated at 60 the early
+   trigger never fired on that turn - BACK came from the vote path at ~135-150 degrees of body rotation and
+   rendered after the back faced the lens: 783ms of plain back at 700ms latency, 1053ms at 1000ms.
+   At 45 that turn fires early: 0ms / 120ms. Full 360s (§11's grid): wrong garment 979 -> 563ms at 700ms,
+   1438 -> 938ms at 1000ms. Turns at 90-120 deg/s already cleared 60 and are unchanged.
+   THE COST, and why 45 and not lower. Every gate under 60 loses the guarantee that a held weight shift
+   never swaps: with +/-4 degrees of yaw jitter an 18-degree shift held 1.5s now fires ~1 time in 10
+   (~100ms of the back print, withdrawn), and a slow look to 30 degrees held 1s ~2 in 10 (~350ms). At 40
+   those were 2/10 (~175ms) and 5/10 (~800ms) for a better full-360 mean (354 / 729ms); 50 kept the
+   weight-shift miss and gave back the slow-turn fix. Standing still and swaying still never fire.
+   COUPLED, deliberately: ORIENT_TURN_START_SPEED follows this gate, so body re-drapes now also defer on a
+   torso rising at 45 deg/s - the wire has to be clear at exactly the speed the trigger can now fire at.
+   CONSIDERED AND DECLINED in the same pass: an outbound threshold of 15 (only fast turns gain, ~95-125ms;
+   a quick twist to 25 fires 10/10 instead of 5/10), and holding BACK on the return until ~30-35 degrees
+   from the lens (the back print on a front-facing chest 63-516ms longer, and no plain-back time removed -
+   past side-on a real shirt shows no back print). ?early_turn_speed=60 restores the old gate live. */
 const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
   let raw = null;
   try { raw = new URLSearchParams(location.search).get("early_turn_speed"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_SPEED; }
@@ -6056,6 +6366,14 @@ const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
 })();
 const ORIENT_EARLY_TURN_MIN_DEG = 10;
 const ORIENT_EARLY_TURN_MAX_DEG = 60;
+const ORIENT_EARLY_TURN_RETURN_DEG = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("early_turn_return"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG; }
+  const deg = Number(raw);
+  if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG;
+  if (deg <= 0) return 0;
+  return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
+})();
 const ORIENT_EARLY_TURN_DEG = (() => {
   let raw = null;
   try { raw = new URLSearchParams(location.search).get("early_turn"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_DEG; }
@@ -6152,6 +6470,49 @@ const PRESENCE_PROMPT_YAW_SUPPRESS_DEG = 25;
    triggering a second one. null until the pose loop produces its first signature. */
 let _torsoYawAbs = null;
 let _torsoYawAt  = 0;
+/* How fast |yaw| rose between the last two readings, deg/s (negative while falling). Published
+   beside _torsoYawAbs on every pose reading - see orientTurnStarting(). */
+let _torsoYawRise = 0;
+
+/* ── A TURN THAT IS STARTING OWNS THE WIRE TOO - "the back came out plain, then COVE popped in" ──
+   LIVE EVIDENCE: pear-tryon-...-FOX-20260915-072153.mp4 (v137), read frame by frame. OUT: the chest
+   logo holds through the front three-quarter, the side is plain (as a side is), and then the BACK PANEL
+   is turned to the lens and plain for 7 frames, 2.82s-3.02s (~230ms), before COVE appears at 3.05s.
+   BACK: COVE wraps round the back to ~70 degrees off square (4.15s), cuts at 4.18s near edge-on, the
+   side is plain, the chest logo is there as the chest comes round (4.78s). The return leg is on time;
+   the gap is BACK landing late on the way OUT. No reference was ever cleared or the lock reset - the
+   side on the wire was simply still FRONT.
+   A HOLE IN THE "TURN OWNS THE WIRE" GATE, found by reading it against that clip. A body re-drape - a
+   full image re-upload of the side about to be replaced - dispatches on the first topology evaluation
+   past BODY_ROTATION_DELTA_DEG (15), with no stability requirement, and its only turn guard is
+   orientTurnInProgress(), raised by a disagreeing vote or a yaw window past ORIENT_YAW_TURN_DEG (45).
+   The early turn trigger fires BACK at 20. From 15 to the flag there is nothing, so a re-drape that wins
+   that race holds the wire and the swap waits a whole upload round-trip behind it ("applyGarment:
+   waiting for the wire"). The early trigger came after the flag, which predates it.
+   THE GATE NOW ALSO READS THE START OF A TURN: an AI Auto torso whose |yaw| is RISING at the early
+   trigger's own turn speed (ORIENT_EARLY_TURN_MIN_SPEED, the default when ?early_turn_speed=0 removes
+   that gate). Read on the pose tick that evaluates the re-drape, from the same inference, so it cannot
+   lose a race against the orientation tick. NOTHING IS LOST: a deferred shift keeps its baseline and is
+   re-offered on the next evaluation (makeBodyTopologyTracker). COST: a fast posing twist delays its
+   re-drape by an evaluation or two; a slow sway or a held twist re-drapes exactly as before.
+   NOT PROVEN FOR THAT CLIP: the other way to land BACK ~230ms late is a dispatch-to-render latency longer
+   than the 20-degree lead now that the swap withholds no input. One ?orient_debug=1 360 tells them
+   apart - a "waiting for the wire" line and a long "pre-flight + wire wait" on DISPATCH_SENT is this. */
+const ORIENT_TURN_START_SPEED = ORIENT_EARLY_TURN_MIN_SPEED > 0 ? ORIENT_EARLY_TURN_MIN_SPEED : ORIENT_EARLY_TURN_DEFAULT_SPEED;
+
+/** deg/s |yaw| moved from the previous reading to this one; 0 without a fresh previous reading.
+ * @param {number|null} prevAbs @param {number} prevAt @param {number} abs @param {number} at */
+function orientYawRise(prevAbs, prevAt, abs, at) {
+  if (prevAbs === null || !Number.isFinite(prevAbs) || !(at > prevAt) || at - prevAt > ORIENT_YAW_FRESH_MS) return 0;
+  return (abs - prevAbs) / ((at - prevAt) / 1000);
+}
+
+/** @param {number} [now] @returns {boolean} true while an AI Auto torso is rotating at turn speed */
+function orientTurnStarting(now = Date.now()) {
+  if (typeof currentAngle === "undefined" || typeof AUTO_ANGLE === "undefined" || currentAngle !== AUTO_ANGLE) return false;
+  if (_torsoYawAbs === null || now - _torsoYawAt > ORIENT_YAW_FRESH_MS) return false;
+  return _torsoYawRise >= ORIENT_TURN_START_SPEED;
+}
 
 /* ── WHICH WAY THE BODY FACES, FROM THE POSE MODEL - front AND back ──────────────────
    ────────────────────────────────────────────────────────────────────────────────
@@ -6417,13 +6778,18 @@ function orientPredictBackReason({ enabled = ORIENT_PREDICTIVE_BACK, acquiring, 
    motion then speeds up while still past the threshold, it fires then. Rising only: a fast return
    from past the threshold is never read as a turn starting. Units are the pose model's |yaw| per
    second, not true body degrees - MediaPipe compresses depth. See ORIENT_EARLY_TURN_MIN_SPEED.
-   @param {number} deg  |yaw| threshold; 0 or less is off and never arms
+   THE RETURN LEG HAS ITS OWN THRESHOLD (`returnDeg`, used while the lock is BACK). Sending FRONT early swaps
+   the back graphic out while the back is still turned to the lens, and FRONT on a back-facing body renders a
+   plain back - see ORIENT_EARLY_TURN_RETURN_DEG for the live clip that showed it and the numbers that set it.
+   @param {number} deg  |yaw| threshold from a FRONT lock (and from BACK unless returnDeg is given); 0 or less is off
    @param {number} [minSpeed]  rising |yaw| deg/s a crossing needs; 0 or less is no gate
+   @param {number} [returnDeg]  |yaw| threshold from a BACK lock; 0 or less never fires FRONT early
    @returns {{ readonly armed: "front"|"back"|null, readonly pending: {from: string, to: string}|null,
                readonly speed: number,
                observe(o: { vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number|null }):
                  { fire: "front"|"back"|null, withdraw: "front"|"back"|null } }} */
-function makeEarlyTurnTrigger(deg, minSpeed = 0) {
+function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg) {
+  const thresholdFor = (side) => (side === "back" ? returnDeg : deg);
   let armed = null;     // the lock this trigger was armed on
   let pending = null;   // { from, to } - an early swap that no vote has confirmed yet
   let lastYaw = null, lastAt = null, speed = 0;   // rising |yaw| deg/s between the last two readings
@@ -6446,12 +6812,14 @@ function makeEarlyTurnTrigger(deg, minSpeed = 0) {
            asked for on EVERY tick its condition holds, not once: maybeSwap() can refuse a tick
            (a swap still applying), and a withdrawal asked for once and refused would be lost. */
         if (lock !== pending.to || vote === pending.to) pending = null;
-        else if (vote === pending.from && fresh && yawAbs < deg) return { fire: null, withdraw: pending.from };
+        else if (vote === pending.from && fresh && yawAbs < thresholdFor(pending.from)) return { fire: null, withdraw: pending.from };
         else return none;
       }
       if (armed !== lock) armed = null;
-      if (vote === lock && fresh && yawAbs < deg) { armed = lock; return none; }
-      if (armed === lock && fresh && yawAbs >= deg && (!(minSpeed > 0) || speed >= minSpeed)) {
+      const threshold = thresholdFor(lock);
+      if (!(threshold > 0)) { armed = null; return none; }
+      if (vote === lock && fresh && yawAbs < threshold) { armed = lock; return none; }
+      if (armed === lock && fresh && yawAbs >= threshold && (!(minSpeed > 0) || speed >= minSpeed)) {
         const to = lock === "front" ? "back" : "front";
         armed = null; pending = { from: lock, to };
         return { fire: to, withdraw: null };
@@ -6704,6 +7072,230 @@ function syncOrientationWatcher() {
   if (want && !orientWatcher) { orientWatcher = createOrientationWatcher(); orientWatcherItem = activeItem; }
   else if (!want && orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; orientWatcherItem = null; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   LIVE CONTINUITY - the view never holds a still while the session is live
+   ══════════════════════════════════════════════════════════════════════════════
+   REPORTED, with three clips (PEAR-fit-1789417907145/-925378/-953496, v136): "the whole app
+   and the camera freeze for 1-2 seconds on every garment or orientation swap - it has to
+   feel like a mirror".
+
+   WHAT THE CLIPS SHOW, measured rather than eyeballed (per-sample MP4 timestamps, and a
+   pixel diff of every decoded frame):
+     · THE PAGE DID NOT FREEZE. Each clip is 150 frames in 5s at ~33ms (longest 69ms). The
+       recorder's paint loop is a requestAnimationFrame loop on the main thread; a 1-2s
+       main-thread block would be a 1-2s sample. There is none - so no amount of moving work
+       off the main thread (and queueMicrotask never yields to rendering at all) touches this.
+     · DECART'S OUTPUT DID. One frame repeated pixel-identical for 2.1s / 1.4s / 0.7s, each at
+       a turn, each ending in a jump cut. Two local causes did that, both now off by default:
+       the swap's input hold (maybeSwap(), ?swap_hold=1) and the snapshot covers pinned over
+       the feed (orientHoldPromote / redrapeCoverBegin, ?still_covers=1).
+     · A smaller, separate hitch: a ~50-69ms sample every 240ms - the pose loop's cadence
+       (POSE_SAMPLE_MS x 2), i.e. detectForVideo() on the main thread. One late frame, not a
+       freeze; moving BlazePose into a worker is its fix, and not part of this change.
+
+   WHAT THIS LAYER ADDS. Even with nothing held locally, Decart can still stop presenting
+   frames - a slow reference upload, a network stall, an SDK reconnect. Rather than show the
+   shopper a still for that, the LOCAL CAMERA is cross-faded in over #aiVideo once the output
+   has presented nothing for LIVE_STALL_REVEAL_MS, and cross-faded back out once Decart has
+   presented LIVE_RESUME_FRAMES frames in a row again. The camera is never paused, never
+   gated, and not part of any conditioning path - it is the one source that is always live.
+
+   THE TRADE, STATED: during a bridged stall the shopper sees their own clothes, not the
+   garment, for the length of the stall. That is what a mirror shows when the render is
+   late; a still of the garment was the alternative and was reported as unusable.
+
+   GEOMETRY IS BY CONSTRUCTION, NOT BY CSS LUCK. The canvas has #aiVideo's aspect and is
+   filled with the SAME centre cover-crop createThrottledInputStream() sends Decart, and it
+   carries #aiVideo's own CSS (object-fit:cover, the scaleX(-1) selfie flip) - so the body
+   lands where the render puts it. The frames are reality-oriented like #aiVideo's, so the
+   recorder blends this canvas in with no flip of its own (see startRecording).
+   LATENCY IS NOT ALIGNED, and cannot be: the camera is ~a render round-trip AHEAD of the
+   output, so the fade reads as a short catch-up. LIVE_CONTINUITY_FADE_MS keeps it short.
+
+   IT CANNOT FLAP ON NORMAL CADENCE. The output runs at ~LIVE_INFERENCE_FPS (a 100ms frame
+   period, gaps up to ~200ms measured in the clips); the bar is 350ms, and the way back
+   needs consecutive frames, so one straggler cannot flip the view twice.
+   NEEDS requestVideoFrameCallback to time the output. Without it the layer stays off and
+   says so once - the page then behaves exactly as it does with no stall bridging. */
+const LIVE_STALL_REVEAL_MS    = 350;   // Decart output silent this long → bring the live camera in
+const LIVE_CONTINUITY_FADE_MS = 220;   // cross-fade duration, both directions
+const LIVE_RESUME_FRAMES      = 2;     // consecutive output frames (each within the bar) before fading back
+const LIVE_CONTINUITY_MAX_W   = 960;   // canvas width cap - a bridge, not a capture surface
+
+/* Restore seams for the two freezes this replaced. Read once at load; both default OFF. */
+const SWAP_HOLDS_INPUT = (() => {
+  try { return new URLSearchParams(location.search).get("swap_hold") === "1"; } catch (_) { return false; }
+})();
+const STILL_COVERS = (() => {
+  try { return new URLSearchParams(location.search).get("still_covers") === "1"; } catch (_) { return false; }
+})();
+/** @returns {boolean} true only with ?swap_hold=1 - a turn's swap withholds camera frames from Decart */
+function swapHoldsInput() { return SWAP_HOLDS_INPUT; }
+/** @returns {boolean} true only with ?still_covers=1 - turns and re-drapes pin a snapshot over the feed */
+function stillCoversEnabled() { return STILL_COVERS; }
+
+/**
+ * The stall/resume state machine and the fade, with no DOM - driven by timestamps so it can
+ * be tested. frame(now) on every presented Decart frame; step(now, live) once per display
+ * frame, which returns the camera layer's opacity and at most one event to log.
+ * @returns {{frame:(now:number)=>void, step:(now:number, live:boolean)=>{alpha:number, event:object|null}, stats:object}}
+ */
+function makeStreamContinuity({ stallMs = LIVE_STALL_REVEAL_MS, fadeMs = LIVE_CONTINUITY_FADE_MS,
+                                resumeFrames = LIVE_RESUME_FRAMES } = {}) {
+  let lastFrameAt = null, stalled = false, stallFrom = 0, resumeRun = 0;
+  let alpha = 0, lastStepAt = null, pending = null;
+  const stats = { stalls: 0, longestGapMs: 0, cameraMs: 0 };
+  return {
+    stats,
+    frame(now) {
+      if (lastFrameAt !== null) {
+        const gap = now - lastFrameAt;
+        stats.longestGapMs = Math.max(stats.longestGapMs, gap);
+        if (stalled) {
+          /* The first frame after a stall arrives late by definition and counts as one; the
+             rest must each follow within the bar. A second long gap starts the count over. */
+          resumeRun = gap <= stallMs ? resumeRun + 1 : 1;
+          if (resumeRun >= resumeFrames) {
+            stalled = false;
+            pending = { type: "resume", stalledMs: Math.round(now - stallFrom) };
+          }
+        }
+      }
+      lastFrameAt = now;
+    },
+    step(now, live) {
+      const dt = lastStepAt === null ? 0 : now - lastStepAt;
+      lastStepAt = now;
+      if (!live) {
+        /* Not live (or not revealed): no layer, no fade - the stage is changing state under
+           it (result, clip, teardown), and a camera fading over that would be a new artifact. */
+        alpha = 0; stalled = false; resumeRun = 0; pending = null;
+        return { alpha, event: null };
+      }
+      /* A backgrounded tab stops both rAF and rVFC. The gap on return is the tab's, not
+         Decart's - give the output a fresh bar instead of flashing the camera on refocus. */
+      if (dt > 1000 && lastFrameAt !== null) lastFrameAt = Math.max(lastFrameAt, now);
+      if (!stalled && lastFrameAt !== null && now - lastFrameAt > stallMs) {
+        stalled = true; stallFrom = lastFrameAt; resumeRun = 0; stats.stalls++;
+        pending = { type: "stall", gapMs: Math.round(now - lastFrameAt) };
+      }
+      const target = stalled ? 1 : 0;
+      if (alpha !== target) {
+        const d = fadeMs > 0 ? dt / fadeMs : 1;
+        alpha = target > alpha ? Math.min(1, alpha + d) : Math.max(0, alpha - d);
+      }
+      if (alpha > 0) stats.cameraMs += dt;
+      const event = pending; pending = null;
+      return { alpha, event };
+    },
+  };
+}
+
+let _continuityCanvas = null;
+let _continuity = null;          // { stop } while a live session runs
+let liveContinuityAlpha = 0;     // the camera layer's current opacity - the recorder blends at exactly this
+
+function continuityEl() {
+  if (_continuityCanvas) return _continuityCanvas;
+  const cardEl = $("cameraCard");
+  if (!cardEl) return null;
+  if (!document.getElementById("pear-continuity-styles")) {
+    const s = document.createElement("style");
+    s.id = "pear-continuity-styles";
+    /* #aiVideo's live geometry and transform, verbatim (.camera-card #aiVideo and
+       .camera-card.show-live #aiVideo in style.css) - this layer must line up with it pixel
+       for pixel, the same rule #orientFadeCanvas follows. No CSS transition: the opacity is
+       written per frame so the recorder's blend and the display cannot drift apart. */
+    s.textContent =
+      "#liveContinuityCanvas{position:absolute;inset:0;width:100%;height:100%;" +
+      "object-fit:cover;transform:scaleX(-1) translateZ(0);z-index:6;pointer-events:none;opacity:0;}";
+    document.head.appendChild(s);
+  }
+  const c = document.createElement("canvas");
+  c.id = "liveContinuityCanvas";
+  c.setAttribute("aria-hidden", "true");
+  cardEl.appendChild(c);
+  _continuityCanvas = c;
+  return c;
+}
+
+/* The camera, cover-cropped to #aiVideo's aspect - the same centre crop drawFrame() sends. */
+function drawContinuityFrame(c, cam, ai) {
+  const vw = cam.videoWidth, vh = cam.videoHeight;
+  if (!vw || !vh) return false;
+  const aw = ai.videoWidth || LIVE_W, ah = ai.videoHeight || LIVE_H;
+  const W = Math.min(LIVE_CONTINUITY_MAX_W, aw), H = Math.round(W * ah / aw);
+  if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+  const g = c.getContext("2d", { alpha: false });
+  const scale = Math.max(W / vw, H / vh);
+  const dw = vw * scale, dh = vh * scale;
+  g.setTransform(1, 0, 0, 1, 0, 0);   // reality in, like every other video surface here
+  g.drawImage(cam, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  return true;
+}
+
+/* Started where the feed is revealed (startBillingWindow), stopped by teardown(). Idempotent. */
+function startStreamContinuity() {
+  if (_continuity) return;
+  const ai = $("aiVideo"), cam = $("webcam"), cardEl = $("cameraCard");
+  if (!ai || !cam || !cardEl || typeof requestAnimationFrame !== "function") return;
+  if (typeof ai.requestVideoFrameCallback !== "function") {
+    console.log("[PEAR] stream continuity: off - this browser has no requestVideoFrameCallback,",
+      "so a Decart output stall cannot be timed; the live camera will not bridge one");
+    return;
+  }
+  const c = continuityEl();
+  if (!c) return;
+  const model = makeStreamContinuity();
+  const t0 = performance.now();
+  let stopped = false, raf = 0, aiFrames = 0, camFrames = 0, shownAlpha = -1;
+  const onAi = (now) => { if (stopped) return; aiFrames++; model.frame(now); ai.requestVideoFrameCallback(onAi); };
+  ai.requestVideoFrameCallback(onAi);
+  const camTimed = typeof cam.requestVideoFrameCallback === "function";
+  const onCam = () => { if (stopped) return; camFrames++; cam.requestVideoFrameCallback(onCam); };
+  if (camTimed) cam.requestVideoFrameCallback(onCam);
+
+  const tick = (now) => {
+    if (stopped) return;
+    const live = isLive() && cardEl.classList.contains("show-live");
+    const { alpha, event } = model.step(now, live);
+    if (event && event.type === "stall") {
+      console.log(`[PEAR] stream continuity: Decart output silent for ${event.gapMs}ms - cross-fading the live camera in so the view keeps moving`);
+    } else if (event && event.type === "resume") {
+      console.log(`[PEAR] stream continuity: Decart output back after ${event.stalledMs}ms - cross-fading to the render`);
+    }
+    /* Draw BEFORE the opacity rises, so the first visible camera frame is a current one. */
+    const drawn = alpha > 0 ? drawContinuityFrame(c, cam, ai) : true;
+    const a = drawn ? alpha : 0;
+    if (a !== shownAlpha) { c.style.opacity = String(a); shownAlpha = a; }
+    liveContinuityAlpha = a;
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+
+  _continuity = {
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      if (raf) cancelAnimationFrame(raf);
+      liveContinuityAlpha = 0;
+      c.style.opacity = "0";
+      const secs = Math.max(0.001, (performance.now() - t0) / 1000);
+      console.log(`[PEAR] stream continuity: session - local camera ${camTimed ? (camFrames / secs).toFixed(0) + " fps" : "fps n/a"},` +
+        ` Decart output ${(aiFrames / secs).toFixed(0)} fps, longest output gap ${Math.round(model.stats.longestGapMs)}ms,` +
+        ` ${model.stats.stalls} stall(s) bridged with the live camera (${Math.round(model.stats.cameraMs)}ms on screen)`);
+    },
+  };
+}
+
+function stopStreamContinuity() {
+  if (!_continuity) return;
+  const cont = _continuity;
+  _continuity = null;
+  cont.stop();
+}
+/* ── end live continuity ── */
 
 /* ── Orientation-swap cross-fade ──────────────────────────────────────────────
    A confirmed flip re-issues rtClient.set() with a new reference, but the live #aiVideo
@@ -7026,6 +7618,11 @@ function redrapeCoverEl() {
    which case the caller must not wait for a fade it is not showing). */
 function redrapeCoverBegin() {
   if (_redrapeHoldActive) return false;
+  /* Off by default, for the reason orientHoldPromote() gives: a still over a body that is
+     moving is the freeze the shopper reported. Returning false also drops the caller's
+     ORIENT_FADE_HOLD_MS grace, which only ever existed to delay this cover's reveal.
+     ?still_covers=1 restores it. */
+  if (!(typeof stillCoversEnabled === "function" && stillCoversEnabled())) return false;
   const ai = $("aiVideo");
   const c = redrapeCoverEl();
   /* No decoded frame yet - there is nothing good to hold, and freezing a blank canvas over
@@ -7292,7 +7889,9 @@ function orientHoldBegin(reason) {
                                         // the turn would bank the degraded frame we are
                                         // holding precisely to hide.
   _orientHoldActive = true;
-  orientFadeCapture();
+  /* Banked only when a still may be shown at all - see orientHoldPromote(). The WINDOW
+     above opens either way: reconditionForTopology() and redrapeCoverBegin() gate on it. */
+  if (typeof stillCoversEnabled === "function" && stillCoversEnabled()) orientFadeCapture();
   /* The ceiling is armed HERE, not in promote(), and bounds the WINDOW rather than the
      display. _orientHoldActive gates the two consumers named above, so a window left
      open forever would keep body-topology reconditioning suppressed for the rest of the
@@ -7319,6 +7918,18 @@ function orientHoldBegin(reason) {
  */
 function orientHoldPromote(reason) {
   if (!_orientHoldActive || _orientHoldShown) return;
+  /* ── NO STILL OVER THE LIVE FEED, BY DEFAULT ─────────────────────────────────────
+     REPORTED: "the whole view freezes for 1-2 seconds on every turn - it has to feel like a
+     mirror". This cover IS a freeze by construction: an opaque snapshot pinned over #aiVideo
+     from a corroborated turn until the swap lands (ceiling ORIENT_TURN_HOLD_MAX_MS), and the
+     recorder cannot see it, so the live view froze longer than any clip shows. Nothing is
+     drawn over the feed now; what bridges a Decart output stall is the live camera - see
+     LIVE CONTINUITY. ?still_covers=1 restores the snapshot cover for an A/B. typeof-guarded:
+     this block runs standalone in turn-hold.test.mjs. */
+  if (!(typeof stillCoversEnabled === "function" && stillCoversEnabled())) {
+    if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - not covering the feed with a still (" + reason + "); the live view keeps moving");
+    return;
+  }
   _orientHoldShown = true;
   orientFadeShow();
   if (ORIENT_DEBUG) console.log("[PEAR] AI Auto - covering the feed (" + reason + ")");
@@ -7466,9 +8077,11 @@ function createOrientationWatcher() {
   const yawWindow = makeTurnYawWindow();
   /* The early turn trigger - on by default, null (and every use of it inert) with ?early_turn=0 (see
      ORIENT_EARLY_TURN_DEG). */
-  const earlyTurn = ORIENT_EARLY_TURN_DEG > 0 ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED) : null;
+  const earlyTurn = ORIENT_EARLY_TURN_DEG > 0
+    ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG) : null;
   if (earlyTurn) {
-    console.log(`[PEAR] AI Auto - EARLY TURN TRIGGER ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn)` +
+    console.log(`[PEAR] AI Auto - EARLY TURN TRIGGER ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn), ` +
+      `${ORIENT_EARLY_TURN_RETURN_DEG > 0 ? ORIENT_EARLY_TURN_RETURN_DEG + "° on the return to FRONT (?early_turn_return)" : "no early FRONT on the return (?early_turn_return=0)"}` +
       (ORIENT_EARLY_TURN_MIN_SPEED > 0 ? `, only while |yaw| rises at ${ORIENT_EARLY_TURN_MIN_SPEED}°/s or faster (?early_turn_speed)` : "") + " - ?early_turn=0 turns it off:",
       "sends the other side as the torso starts to rotate, withdrawn if the pose comes back (dual-view items only)");
   }
@@ -8000,8 +8613,22 @@ function createOrientationWatcher() {
        above, so an abandoned swap never freezes anything; given back the moment THIS swap's
        own set() settles, either way. The instance held is the one released, so a swap that
        outlives its session cannot open a newer session's go-live gate. typeof-guarded - this
-       function runs standalone in front-reference-guard.test.mjs (CLAUDE.md 2.7). */
-    const heldGate = typeof holdInputGate === "function"
+       function runs standalone in front-reference-guard.test.mjs (CLAUDE.md 2.7).
+
+       ── OFF BY DEFAULT NOW - "the whole view freezes for 1-2 seconds on every turn" ────────
+       THE CLIPS (PEAR-fit-1789417907145/-925378/-953496, v136, read frame by frame): the
+       recorder's own frames stay evenly spaced at ~33ms throughout (longest 69ms), so the page
+       never stalled - but Decart's output repeats ONE frame, pixel-identical, for 2.1s, 1.4s
+       and 0.7s, each at a turn, each ending in a jump cut to a body 50+ degrees further round.
+       A pixel-identical repeat is not a slow render; it is no render - Decart had no camera
+       frame to render from. That is this hold: it withholds input from the dispatch to the
+       ACK, and a turn that sends two swaps back to back (a predictive BACK and its withdrawal)
+       stacks two of them.
+       THE TRADE, STATED: with input flowing, Decart may render the untextured shirt this hold
+       was added for, for about one upload round-trip (the ACK has measured 234-333ms with
+       pre-encoded references) - on a body that keeps moving. The shopper asked for the moving
+       mirror over the frozen correct frame. ?swap_hold=1 restores the hold for an A/B. */
+    const heldGate = typeof holdInputGate === "function" && typeof swapHoldsInput === "function" && swapHoldsInput()
       ? holdInputGate(`orientation swap → ${next.toUpperCase()}`, ORIENT_SWAP_INPUT_HOLD_MAX_MS) : null;
     const trace = typeof traceSwapTimeline === "function"
       ? traceSwapTimeline(next, predictive, !!heldGate, next === "back" ? GARMENT_BACK : GARMENT_FRONT) : null;
@@ -8458,7 +9085,7 @@ function createOrientationWatcher() {
         /* The pre-turn streak must not count against the early side - predictive BACK's reason. */
         lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;
         if (ORIENT_DEBUG) {
-          console.log(`[PEAR][ORIENT] early turn: |yaw| ${_torsoYawAbs.toFixed(0)}° crossed ?early_turn=${ORIENT_EARLY_TURN_DEG}° rising at ${earlyTurn.speed.toFixed(0)}°/s ` +
+          console.log(`[PEAR][ORIENT] early turn: |yaw| ${_torsoYawAbs.toFixed(0)}° crossed ${autoOrientation === "back" ? "?early_turn_return=" + ORIENT_EARLY_TURN_RETURN_DEG : "?early_turn=" + ORIENT_EARLY_TURN_DEG}° rising at ${earlyTurn.speed.toFixed(0)}°/s ` +
             `from a settled ${String(autoOrientation).toUpperCase()} - sending ${earlyAct.fire.toUpperCase()} ahead of any vote`);
         }
         await maybeSwap(earlyAct.fire, earlyAct.fire === "back");   // an early BACK is withdrawable like a predictive one
@@ -14457,6 +15084,9 @@ function startBillingWindow(gen) {
   $("scanOverlay").hidden = true;
   resetBestFrontFrame();   // per-session: never inherit the previous shopper best frame
   card().classList.add("show-live");
+  /* From the reveal on, a Decart output stall is bridged with the live camera, never a
+     still - see LIVE CONTINUITY. typeof-guarded (CLAUDE.md 2.7). */
+  if (typeof startStreamContinuity === "function") startStreamContinuity();
   logSurfaceOrientation("go-live");
   /* THE ONLY PLACE THE FEED BECOMES VISIBLE, and it is deliberately the same statement
      that flips the state class. Everything above this line has already been verified:
@@ -15170,6 +15800,7 @@ async function goLive() {
   if (sizeReason) { toast(sizeReason); return; }
 
   busy = true;                         // Task 10 - claim the flow before ANY await
+  resetTryOnSession();                 // retire anything a previous session left running - before the first await
   $("captureBtn").disabled = true;
   $("camError").hidden = true;
   exitClipReplay();                    // clear any history clip before a real session takes #aiVideo
@@ -15566,6 +16197,12 @@ function stopBilling() {
      inert and not running, and a 500ms timer spinning through the tail for no reason is
      the kind of thing that reads as a leak the next time someone profiles this. */
   stopFrameFreezeWatch();
+  /* The live-camera bridge gets no exemption either, and it was the one that leaked: it only
+     bridges a LIVE session (its tick reads isLive(), which is false from here), the frozen
+     tail's recorder branch never blends it, and - being idempotent - a bridge left running
+     here was REUSED by the next session with this session's stall clock, flashing the raw
+     camera over the next garment the moment it was revealed. See resetTryOnSession(). */
+  if (typeof stopStreamContinuity === "function") stopStreamContinuity();
   if (inputThrottle) { try { inputThrottle.dispose(); } catch (_) {} inputThrottle = null; }
   if (realtimeInput) { try { realtimeInput.getTracks().forEach((t) => t.stop()); } catch (_) {} realtimeInput = null; }
   const ai = $("aiVideo");
@@ -15584,6 +16221,11 @@ function finalizeVideoClip() {
   stopRecording();                      // stopPaintLoop + mediaRecorder.stop() → finalizeRecording
   recordHold = false;
   recordHoldSrc = null;
+  /* The tail is over, so the watcher stopBilling() kept for it has nothing left to release.
+     Retire it the way teardown() does - left running, its sampler classified the camera
+     between sessions and a retry of the same garment reused its stale state (see
+     resetTryOnSession()). stop() also ends any hold and the turn mark it owned. */
+  if (orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; orientWatcherItem = null; }
   setLiveControls(false);
   $("captureBtn").disabled = !localStream;
   toast("⏱ הסרטון בן " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות מוכן ✓");
@@ -16248,13 +16890,42 @@ async function awaitBodyPresence(isBottoms) {
   }
 }
 
+/* ── The overlay leaves on the verdict, not after it ─────────────────────────────
+   The overlay carries a looping step-back guide (index.html / style.css "Step-back
+   guide"), and it used to vanish with a hard `hidden` flip. It now fades - but the fade
+   STARTS in the same tick the gate confirms (hide is called synchronously from the
+   gate.feed() branch), so the shopper sees it begin to clear the instant they are
+   judged in frame. `hidden` follows PRESENCE_OVERLAY_FADE_MS later; that display:none is
+   also what stops the guide's keyframes from running at all, so a confirmed shopper pays
+   nothing for an animation they can no longer see.
+
+   A SHOW DURING THE FADE WINS. The session watcher can re-show this within milliseconds
+   of a hide (shopper steps in, drifts straight back out), so show() cancels the pending
+   hide outright. Without that, the timer would fire after the re-show and blank the
+   overlay the watcher had just decided the shopper needs.
+
+   This element is never a still frame over the live feed (§2.9) - it is a translucent
+   guide with pointer-events: none, and it is only ever up while a presence verdict is
+   negative. The fade keeps it no longer than 180ms past a positive one. */
+const PRESENCE_OVERLAY_FADE_MS = 180;   // = #presenceOverlay.is-leaving in style.css
+let presenceOverlayHideTimer = null;
+
 function showPresenceOverlay() {
   const el = $("presenceOverlay");
-  if (el) el.hidden = false;
+  if (!el) return;
+  if (presenceOverlayHideTimer) { clearTimeout(presenceOverlayHideTimer); presenceOverlayHideTimer = null; }
+  el.classList.remove("is-leaving");
+  el.hidden = false;
 }
 function hidePresenceOverlay() {
   const el = $("presenceOverlay");
-  if (el) el.hidden = true;
+  if (!el || el.hidden || presenceOverlayHideTimer) return;
+  el.classList.add("is-leaving");
+  presenceOverlayHideTimer = setTimeout(() => {
+    presenceOverlayHideTimer = null;
+    el.hidden = true;
+    el.classList.remove("is-leaving");
+  }, PRESENCE_OVERLAY_FADE_MS);
 }
 
 /* ── Late entry: re-condition, never re-bill ──────────────────────────────────
@@ -16424,6 +17095,7 @@ function startPresenceWatcher() {
       if (facingSep !== null) { _poseFacingSep = facingSep; _poseFacingAt = now; }
       else _poseTorsoLostAt = now;   // the turn window reads the gap from this - see ORIENT_POSE_PASS
       if (sig && Number.isFinite(sig.yaw)) {
+        _torsoYawRise = orientYawRise(_torsoYawAbs, _torsoYawAt, Math.abs(sig.yaw), now);   // before the publish overwrites the previous reading
         _torsoYawAbs = Math.abs(sig.yaw);
         _torsoYawAt  = now;
         /* THE THIRD CONSUMER of this one reading (after the topology monitor and the
@@ -16441,7 +17113,10 @@ function startPresenceWatcher() {
            it too (see orientTurnMark): the swap that ends the turn re-uploads the reference
            anyway, and a re-drape started mid-turn is what used to hold the wire against it.
            Deferred, not dropped - the tracker re-offers the movement once the turn settles. */
-        const step = bodyTopology.feed(sig, { canDispatch: !wireBusy() && !orientTurnInProgress() });
+        /* A turn that is only STARTING owns the wire as well - the early trigger is about to send the other
+           side, and a re-drape started here makes it wait. See orientTurnStarting(). */
+        const turnStarting = orientTurnStarting(now);
+        const step = bodyTopology.feed(sig, { canDispatch: !wireBusy() && !orientTurnInProgress() && !turnStarting });
         /* NOT AWAITED - "the turn went blind". This loop runs under `inFlight`, so awaiting a
            re-drape here stopped every inference, and every yaw reading, for a whole image
            upload. A re-drape fires on a 15-degree change - the start of every turn - so the
@@ -16452,7 +17127,8 @@ function startPresenceWatcher() {
         else if (ORIENT_DEBUG && step.state !== "stable") {
           console.log(`[PEAR][TOPOLOGY] ${step.state}` +
             (step.heldMs ? ` (held ${step.heldMs}ms)` : "") +
-            (step.reason ? ` | ${step.reason} held back` : ""));
+            (step.reason ? ` | ${step.reason} held back` : "") +
+            (step.state === "deferred" && turnStarting ? ` - a turn is starting (|yaw| rising ${_torsoYawRise.toFixed(0)} deg/s), the swap gets the wire` : ""));
         }
       }
     } finally {
@@ -17078,6 +17754,19 @@ function startRecording() {
                a restore were ever missed. Absolute by construction. */
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.drawImage(video, 0, 0, w, h);
+            /* ── THE CLIP RECORDS WHAT THE SHOPPER SAW ─────────────────────────────────
+               While LIVE CONTINUITY bridges a Decart stall, #aiVideo is one repeated frame
+               and the screen shows the live camera over it. Drawing only #aiVideo baked
+               that stall into the MP4 as a freeze - the recorder's timestamps were always
+               even (~33ms in the v136 clips); the CONTENT was frozen. Blended at the
+               layer's own opacity, the clip moves wherever the view did. The canvas is
+               reality-oriented, like #aiVideo's frames, so no flip; the save/restore above
+               resets globalAlpha. */
+            if (typeof liveContinuityAlpha === "number" && liveContinuityAlpha > 0 &&
+                _continuityCanvas && _continuityCanvas.width) {
+              ctx.globalAlpha = liveContinuityAlpha;
+              ctx.drawImage(_continuityCanvas, 0, 0, w, h);
+            }
           } finally { ctx.restore(); }
           beginRecorder();
         } catch (_) { /* a torn-down canvas mid-teardown - the next tick re-checks */ }
@@ -19139,6 +19828,14 @@ function init() {
     i.addEventListener("keydown", onMeasurementKeydown);   // Task 5 - Enter to proceed
   });
   $("btn-next-screen").addEventListener("click", onSizeFormContinue);
+
+  // Gender selector (Men/Women) - segmented toggle, same delegated-click pattern used
+  // for the TOP/BOTTOM outfit toggle (#gdTabs) elsewhere in this function.
+  const genderToggleEl = $("genderToggle");
+  if (genderToggleEl) genderToggleEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".gender-tab");
+    if (btn) setGender(btn.dataset.gender);
+  });
 
   // Explicit open only - startCamera() is also called from flipCamera() and
   // reinitCameraForOrientation(), where the page shouldn't jump since the user is

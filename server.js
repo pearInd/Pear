@@ -1661,7 +1661,16 @@ async function getCachedClassificationDetailed(imageUrl) {
   const V11 = "classification, confidence, source, cue, age_group, age_group_confidence";
   const V12_ONLY = ", text_ocr, is_true_back_view, primary_color_hex, has_graphic, classifier_version";
   const V13_ONLY = ", garment_category";
-  let { data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY + V13_ONLY);
+  const V14_ONLY = ", size_run_type";
+  let { data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY + V13_ONLY + V14_ONLY);
+  /* V14 is its own tier for the same reason V13 is below it: a deployment that has run
+     v13 but not yet v14 must keep its garment_category column rather than losing it
+     just because size_run_type doesn't exist yet. */
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+    console.warn("[garment_cache] v14 column absent - run archive/supabase_setup_v14.sql for size-run-type caching");
+    ({ data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY + V13_ONLY));
+    if (!error) return data ? { ...data, size_run_type: null } : null;
+  }
   /* V13 is its own tier rather than being folded into the V12 fallback: a deployment
      that has run v12 but not yet v13 must keep its text_ocr/colour columns, exactly
      the way the v11 tier below keeps confidence/source/cue. Collapsing the two would
@@ -1669,7 +1678,7 @@ async function getCachedClassificationDetailed(imageUrl) {
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("[garment_cache] v13 column absent - run archive/supabase_setup_v13.sql for garment categories");
     ({ data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY));
-    if (!error) return data ? { ...data, garment_category: null } : null;
+    if (!error) return data ? { ...data, garment_category: null, size_run_type: null } : null;
   }
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("[garment_cache] v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation");
@@ -1681,17 +1690,17 @@ async function getCachedClassificationDetailed(imageUrl) {
         return classification
           ? { classification, confidence: null, source: "legacy", cue: "", age_group: null, age_group_confidence: null,
               text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
-              garment_category: null }
+              garment_category: null, size_run_type: null }
           : null;
       }
       if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
       return data ? { ...data, age_group: null, age_group_confidence: null,
                       text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
-                      garment_category: null } : null;
+                      garment_category: null, size_run_type: null } : null;
     }
     if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
     return data ? { ...data, text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
-                    garment_category: null } : null;
+                    garment_category: null, size_run_type: null } : null;
   }
   if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
   return data || null;
@@ -1745,8 +1754,23 @@ async function saveClassification(imageUrl, classification, meta = {}) {
     ? { garment_category: meta.garmentCategory }
     : {};
 
+  /* Same NULL-vs-value conditional as v13Fields above, and for the same reason: most
+     saveClassification() calls never looked at sizes at all (they are the front/back
+     classifier's own writes), and an unconditional write would stamp NULL over a
+     size_run_type a previous visit's scrape already recorded. Only "numeric"/"alpha"
+     are ever written - "unknown" is the widget declining, not a verdict, and must
+     leave a prior real answer standing (see archive/supabase_setup_v14.sql). */
+  const v14Fields = meta.sizeRunType === "numeric" || meta.sizeRunType === "alpha"
+    ? { size_run_type: meta.sizeRunType }
+    : {};
+
   let { error } = await supabase.from("garment_cache")
-    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields, ...v13Fields }], { onConflict: "canonical_url" });
+    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields, ...v13Fields, ...v14Fields }], { onConflict: "canonical_url" });
+  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
+    console.warn("[garment_cache] v14 column absent - run archive/supabase_setup_v14.sql for size-run-type caching");
+    ({ error } = await supabase.from("garment_cache")
+      .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields, ...v13Fields }], { onConflict: "canonical_url" }));
+  }
   if (error && MISSING_COLUMN_RE.test(error.message || "")) {
     console.warn("[garment_cache] v13 column absent - run archive/supabase_setup_v13.sql for garment categories");
     ({ error } = await supabase.from("garment_cache")
@@ -1818,6 +1842,37 @@ async function getProductViews(productUrl) {
   // Never hand back a "back" that is the same photograph as the front.
   if (best.back && !(out.front && sameImage(best.back.url, out.front))) out.back = best.back.url;
   return out;
+}
+
+/* Per-product size-run-type lookup - "has ANY photo of this product ever recorded a
+   confident numeric/alpha size run?" Queried by product_url rather than a single
+   image_url, unlike garment_category, because the fact belongs to the PRODUCT (its
+   size list), not to any one photograph - a later visit's reference image can be a
+   different photo of the same product and must still get the same answer.
+
+   THE ROUTE THIS IS FOR: a JS-rendered size picker that scrapes to nothing on THIS
+   visit but scraped cleanly (and got cached, see saveClassification's v14Fields) on
+   a previous one. Returns null on no match, no rows, or the V14 column not existing
+   yet - null is a cache MISS here exactly as it is for garment_category, and the
+   fitting room's own size-run/title tiers stand in that case, never a guess.
+   @param {string} productUrl
+   @returns {Promise<"numeric"|"alpha"|null>} */
+async function getCachedSizeRunType(productUrl) {
+  if (!supabase || !productUrl) return null;
+  const { data, error } = await supabase
+    .from("garment_cache")
+    .select("size_run_type")
+    .eq("product_url", productUrl)
+    .not("size_run_type", "is", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    if (!MISSING_COLUMN_RE.test(error.message || "")) {
+      console.warn("[garment_cache] size-run-type lookup failed:", error.message);
+    }
+    return null;
+  }
+  return data?.size_run_type || null;
 }
 
 /* ── Generated rear view - the single-image fallback ────────────────────────────
@@ -2415,6 +2470,15 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
   const scrapedFront = typeof req.body?.front_image_url === "string" ? req.body.front_image_url : "";
   const scrapedBack  = typeof req.body?.back_image_url === "string" ? req.body.back_image_url : "";
   const wantSynth    = req.body?.synthesize_back === true;
+  const productUrl   = typeof req.body?.page_url === "string" ? req.body.page_url : "";
+  /* THIS visit's own size-run verdict (see pear-widget.js classifySizeRunType()), to
+     persist against product_url for a future visit whose picker fails to scrape - see
+     getCachedSizeRunType()/archive/supabase_setup_v14.sql. Only "numeric"/"alpha" are
+     trusted; anything else (including "unknown") is the widget declining, not a
+     verdict, and must not overwrite a real answer a previous visit already recorded. */
+  const scrapedSizeRunType =
+    req.body?.size_run_type === "numeric" || req.body?.size_run_type === "alpha"
+      ? req.body.size_run_type : null;
 
   const uniqueUrls = [...new Map(
       images.map(url => [url.split('?')[0], url])
@@ -2495,6 +2559,13 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
           textOcr: rec.text_ocr, isTrueBackView: rec.is_true_back_view, primaryColorHex: rec.primary_color_hex,
           hasGraphic: rec.has_graphic,
           classifierVersion: CLASSIFIER_PROMPT_VERSION,
+          /* Rides along on this row's write rather than a separate upsert - this call
+             already satisfies garment_cache.classification's NOT NULL constraint, which
+             a size_run_type-only write to a brand-new row cannot (see
+             getCachedSizeRunType()'s comment). Harmless to repeat per photo: every row
+             for this product gets the same value, and reads go through product_url. */
+          productUrl: productUrl || undefined,
+          sizeRunType: scrapedSizeRunType || undefined,
         }
       );
       records.push({ ...rec, source: rec.view === "uncertain" ? "uncertain" : "gemini" });
@@ -2509,6 +2580,21 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
 
   const views = resolveGarmentViews({ images: uniqueUrls, records, scrapedFront, scrapedBack });
   const ageGroupResult = resolveAgeGroup({ images: uniqueUrls, records, front: views.front });
+
+  /* THIS visit's own scrape wins when it read one; only consult the cache (a previous
+     visit's scrape, learned on the same product_url) when it did not - never let a
+     stale cached verdict override live evidence the page just gave us. Cheap and
+     synchronous-enough: one indexed lookup, only reached when the client sent nothing. */
+  let sizeRunType = scrapedSizeRunType;
+  let sizeRunTypeSource = scrapedSizeRunType ? "scrape" : "none";
+  if (!sizeRunType && productUrl) {
+    try {
+      const cachedType = await getCachedSizeRunType(productUrl);
+      if (cachedType) { sizeRunType = cachedType; sizeRunTypeSource = "cache"; }
+    } catch (e) {
+      console.warn("[classify-images] size-run-type cache lookup failed:", e?.message || e);
+    }
+  }
 
   /* Nothing found on THIS page visit, but the cache may already know this product's
      rear photo from a previous visit or a scanner crawl - a lazy gallery that failed
@@ -2604,6 +2690,13 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     // anywhere downstream; this is plumbing only, consumed by callers that choose to.
     age_group: ageGroupResult.age_group,
     age_group_confidence: ageGroupResult.age_group_confidence,
+    /* Numeric-vs-alphabetic size-run verdict for this product - THIS visit's own
+       scrape when it read one, else a cache hit from a previous visit's scrape (see
+       getCachedSizeRunType()), else null when neither has an answer. The client
+       (pear-widget.js) already prefers its own live scrape over this echo when both
+       exist; this only matters on the visit that scraped nothing. */
+    size_run_type: sizeRunType || null,
+    size_run_type_source: sizeRunTypeSource,
     /* The garment's sampled main-fabric colour, from the FRONT photo's record. Plumbing
        only at this tier - synthesizeBackView() is its one consumer today. Exposed rather
        than kept internal because a colour pop between the front and rear asset is the
