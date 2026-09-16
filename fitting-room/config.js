@@ -165,6 +165,15 @@ export const CONFIG = Object.freeze({
      frame on a canvas. If the two are near-identical at 64x36, the pipeline is passing the
      camera through untouched - which is the reported defect, measured rather than inferred.
 
+     AND ITS TWIN, added after the very next session (FOX-...-20260916-142132.mp4): 0.00-3.19s
+     of a floral patterned TANK TOP, then the real garment in one frame at 3.254s. An invented
+     garment is NOT a passthrough - the delta is large and the probe opens the gate at once -
+     but the cause is identical: no pixels to condition on. That is directly observable as
+     rtImageOnWire, so the gate holds on "no reference on the wire" as well, and the same
+     bounded re-dispatch runs (it re-fetches the Blob, so a transient fetch failure at go-live
+     recovers). Neither wait can cost the shopper their 5 seconds: this gate defers
+     startBillingWindow(), so the billed window starts when the feed does.
+
      IT CAN ONLY EVER SAY "DEFINITELY PASSTHROUGH". #aiVideo lags the input by roughly a
      second, so on a shopper who is moving at all the two frames disagree for ordinary
      reasons and the gate opens. Only a near-perfect match ACROSS that latency gap - which

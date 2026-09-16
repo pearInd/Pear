@@ -778,6 +778,10 @@ let wireEpoch = 0;
 
 /** @returns {boolean} true when a conditioning write is queued or in flight. */
 function wireBusy() { return wireWrites > 0; }
+/* Has a PIXEL reference actually reached the wire this session? Deliberately a function rather than
+   a direct read of rtImageOnWire: the reveal gate that consumes it runs standalone in
+   cold-start-passthrough.test.mjs, where the flag has to be able to flip between frames (see §7). */
+function referenceOnWire() { return !!rtImageOnWire; }
 /* Set by an open ?orient_debug=1 swap trace (traceSwapTimeline); sendCondition() calls it once, when the
    reference write takes the wire - DISPATCH_SENT. Declared up here, ahead of sendCondition(). */
 let _orientSendMark = null;
@@ -15836,7 +15840,7 @@ function armFirstFrameBilling(video, gen) {
      a re-dispatch that lands while a write is genuinely on the wire is skipped and offered
      again on the next frame rather than racing it. Two concurrent writes are worse than a
      late one - see wireInFlight's declaration for what the SDK does with ambiguous acks. */
-  const redispatchColdStart = (myGen, delta) => {
+  const redispatchColdStart = (myGen, delta, why) => {
     if (redispatches >= COLD_START_REDISPATCH_MAX) return;
     const now = Date.now();
     if (now - lastRedispatchAt < COLD_START_REDISPATCH_MS) return;
@@ -15844,10 +15848,14 @@ function armFirstFrameBilling(video, gen) {
     if (wireBusy()) return;            // a write IS on the wire - let it land, re-offer next frame
     lastRedispatchAt = now;
     redispatches++;
-    console.warn(`[PEAR] output still matches the camera input (Δluma ${delta.toFixed(2)} <` +
-      ` ${PASSTHROUGH_MAX_DELTA}) ${now - armedAt}ms after the first frame -` +
-      ` re-dispatching the garment (${redispatches}/${COLD_START_REDISPATCH_MAX}).`,
-      "The reference was acknowledged; the render did not follow it.");
+    console.warn(why === "no-reference"
+      ? `[PEAR] no garment reference ever reached the wire (rtImageOnWire false) ${now - armedAt}ms` +
+        ` after the first frame - re-dispatching the garment (${redispatches}/${COLD_START_REDISPATCH_MAX}).` +
+        " That apply went out PROMPT-ONLY: Decart has no pixels to condition on and renders its own garment."
+      : `[PEAR] output still matches the camera input (Δluma ${Number.isFinite(delta) ? delta.toFixed(2) : "n/a"} <` +
+        ` ${PASSTHROUGH_MAX_DELTA}) ${now - armedAt}ms after the first frame -` +
+        ` re-dispatching the garment (${redispatches}/${COLD_START_REDISPATCH_MAX}).` +
+        " The reference was acknowledged; the render did not follow it.");
     /* ALL THREE, mirroring reconditionForTopology() exactly - which is not a stylistic
        choice but the empirical one: the 2026-08-24 report's own evidence is that the 00:04
        topology re-drape is what finally lands the garment, and this is what that path does.
@@ -15907,7 +15915,11 @@ function armFirstFrameBilling(video, gen) {
   //      "settled" from "mid-transition, coincidentally not black this tick". Any frame
   //      that fails (1) or (2) resets the run to zero - this must be an UNBROKEN streak,
   //      not merely N good frames somewhere in the window.
-  //  (4) NOT A PASSTHROUGH - the gate the unconditioned-render reports were filed against,
+  //  (4) CONDITIONED AT ALL - the gate the unconditioned-render reports were filed against,
+  //      in its two observable forms: the output is still the camera (the probe), or no pixel
+  //      reference ever reached the wire (referenceOnWire - a prompt-only apply, where Decart
+  //      invents a garment instead of forwarding the camera). Both mean the same thing to the
+  //      shopper: what is on screen is not what they picked.
   //      and the one the three above structurally could not be. Gate (1) proves the
   //      reference was ACKNOWLEDGED, not that the render switched to it; (2) and (3) are
   //      luma checks, and a frame of the shopper in their own clothes (or in none) is
@@ -15929,8 +15941,26 @@ function armFirstFrameBilling(video, gen) {
     const probe = (isGarmentApplied && dressed)
       ? outputPassthroughDelta(video)
       : { ready: false, delta: Infinity, passthrough: false };
-    const stillRaw = probe.ready && probe.passthrough && !passthroughGateExpired();
-    if (stillRaw) redispatchColdStart(gen, probe.delta);
+    /* ── AND THE OTHER WAY A RENDER IS UNCONDITIONED, which the probe cannot see ──────
+       REPORTED 2026-09-16, the session after the passthrough gate shipped (FOX-...-142132.mp4):
+       0.00-3.19s of a floral patterned TANK TOP - a garment in no catalog and nothing like the
+       brown PEAK tee that was selected - and then, in one frame at 3.254s, the real reference
+       lands and the shirt becomes the right garment. A hallucinated garment is NOT a passthrough:
+       the output differs wildly from the camera, so the delta is large and the gate above opens on
+       it immediately. What it has in common with the passthrough case is the cause - Decart had no
+       pixels to condition on - and THAT is directly observable: rtImageOnWire, which applyGarment()
+       already maintains and which warnIfStreamStartedUndressed() already warns about in exactly
+       these words ("will render its generic/default output"). Until now the only remedy it offered
+       was a console command for a human to run.
+       So the reveal waits on it too, and the same bounded re-dispatch runs - which re-fetches the
+       Blob (garmentBlobCached retries the proxy AND the raw CDN), so a transient fetch failure at
+       go-live recovers instead of costing the whole window. Nothing here can cost the shopper their
+       5 seconds: startBillingWindow() is what this gate defers, so the billed window starts when
+       the feed does, and PASSTHROUGH_GATE_MAX_MS still caps the wait at 2.6s. */
+    const noReference = !referenceOnWire();
+    const unconditioned = (probe.ready && probe.passthrough) || noReference;
+    const stillRaw = unconditioned && !passthroughGateExpired();
+    if (stillRaw) redispatchColdStart(gen, probe.delta, noReference ? "no-reference" : "passthrough");
     const qualifies = isGarmentApplied && dressed && !stillRaw;
     if (!qualifies) {
       stableSinceMs = null;
@@ -15954,6 +15984,7 @@ function armFirstFrameBilling(video, gen) {
              that shows it: near zero means the output IS the camera. */
           `| Δin=${probe.ready ? probe.delta.toFixed(2) : "n/a"}`,
           `| passthrough=${probe.ready ? probe.passthrough : "n/a"}`,
+          `| referenceOnWire=${referenceOnWire()}`,
           `| redispatches=${redispatches}`);
       }
     }

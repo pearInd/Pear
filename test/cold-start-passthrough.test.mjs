@@ -215,8 +215,11 @@ console.log("\n── §3 THE GATE AND THE RE-DISPATCH, inside the REAL armFirst
   function harness({ verdicts, garmentApplied = true, dressed = true, live = true,
                      maxRedispatch = CONFIG.COLD_START_REDISPATCH_MAX,
                      gateMaxMs = CONFIG.PASSTHROUGH_GATE_MAX_MS,
-                     redispatchMs = 0, wireBusyVal = false, clock } = {}) {
+                     redispatchMs = 0, wireBusyVal = false, clock, refOnWire = true } = {}) {
     let i = 0;
+    /* Mutable so §7 can land a reference between frames, which is what a successful re-dispatch
+       does in the real thing. */
+    const ref = { on: refOnWire };
     const applies = [];
     const cleared = [];
     let fired = false;
@@ -236,6 +239,7 @@ console.log("\n── §3 THE GATE AND THE RE-DISPATCH, inside the REAL armFirst
       MODEL_READY_STABLE_FRAMES: 1, MODEL_READY_STABLE_MS: 0,
       isLive: () => live,
       wireBusy: () => wireBusyVal,
+      referenceOnWire: () => ref.on,
       applyActive: () => { applies.push(Date.now()); return Promise.resolve(); },
       lastSentImageRef: "REF", rtImageOnWire: true, lastSentPrompt: "PROMPT",
       startBillingWindow: () => { fired = true; },
@@ -254,6 +258,7 @@ console.log("\n── §3 THE GATE AND THE RE-DISPATCH, inside the REAL armFirst
     return {
       tick: () => { const cb = frameCb; frameCb = null; if (cb) cb(); },
       applies, cleared, fired: () => fired, wire: api.wire,
+      landReference: () => { ref.on = true; },
     };
   }
 
@@ -361,7 +366,7 @@ console.log("\n── §4 THE GATE CANNOT HANG THE SESSION ──");
     COLD_START_REDISPATCH_MS: CONFIG.COLD_START_REDISPATCH_MS,
     COLD_START_REDISPATCH_MAX: CONFIG.COLD_START_REDISPATCH_MAX,
     MODEL_READY_STABLE_FRAMES: 1, MODEL_READY_STABLE_MS: 0,
-    isLive: () => true, wireBusy: () => false,
+    isLive: () => true, wireBusy: () => false, referenceOnWire: () => true,
     applyActive: () => Promise.resolve(),
     lastSentImageRef: "REF", rtImageOnWire: true, lastSentPrompt: "P",
     startBillingWindow: () => { fired = true; },
@@ -408,9 +413,16 @@ console.log("\n── §5 THE RE-UPLOAD RULE IS BENT KNOWINGLY, AND ONLY HERE �
 
   /* AND NOTHING IS ON SCREEN WHILE IT RUNS: the reveal is startBillingWindow's job and
      the gate is what defers it, so a dropout during these re-sends is invisible. */
+  /* RESTATED, not loosened, when the gate gained its second reason (§7): the guard now reads
+     "unconditioned by EITHER measure, and the ceiling has not expired". What this check is for is
+     unchanged - the re-dispatch is reachable only from inside frameReady, which stops being called
+     once fire() has run, so it can never re-upload over a revealed render. */
   check("the re-dispatch can only run BEFORE the reveal, never after",
-    /if \(stillRaw\) redispatchColdStart\(gen, probe\.delta\);/.test(arm) &&
-    /const stillRaw = probe\.ready && probe\.passthrough && !passthroughGateExpired\(\);/.test(arm),
+    /const unconditioned = \(probe\.ready && probe\.passthrough\) \|\| noReference;/.test(arm) &&
+    /const stillRaw = unconditioned && !passthroughGateExpired\(\);/.test(arm) &&
+    /if \(stillRaw\) redispatchColdStart\(gen, probe\.delta, noReference \? "no-reference" : "passthrough"\);/.test(arm) &&
+    arm.indexOf("redispatchColdStart(gen,") > arm.indexOf("const frameReady = () => {") &&
+    arm.indexOf("redispatchColdStart(gen,") < arm.indexOf("fire();"),
     "it is inside frameReady, which stops being called once fire() has run");
 }
 
@@ -428,6 +440,89 @@ console.log("\n── §6 THE CONFIG RECORDS THE MISDIAGNOSIS ──");
   check("the topology re-drape is documented as refinement, never the first drape",
     /ongoing motion-refinement loop/.test(CFG),
     "the report's 00:04 recovery must not be load-bearing for the cold start");
+}
+
+console.log("\n── §7 THE OTHER UNCONDITIONED RENDER: no reference on the wire at all ──");
+{
+  /* REPORTED the session after this gate shipped (FOX-...-20260916-142132.mp4): 0.00-3.19s of a
+     floral patterned TANK TOP - in no catalog, nothing like the brown PEAK tee that was selected -
+     then the real garment in ONE frame at 3.254s. An invented garment is not a passthrough: the
+     delta is large, so the probe alone opens the gate on it immediately. The shared cause is
+     observable directly - rtImageOnWire, the flag warnIfStreamStartedUndressed() already warns on. */
+  const code = extract("function armFirstFrameBilling(video, gen) {",
+                       "/* ═══════════════════════════════════════════════════════════════════════════\n   FRAME-FREEZE WATCHDOG");
+  const mk = ({ refOnWire, verdicts, redispatchMs = 0 }) => {
+    let fired = false, frameCb = null;
+    const applies = [];
+    const ref = { on: refOnWire };
+    let i = 0;
+    const sandbox = {
+      video: { videoWidth: 1000, videoHeight: 1800, requestVideoFrameCallback: (cb) => { frameCb = cb; } },
+      gen: 1, sessionGen: 1, billingStarted: false, isGarmentApplied: true, dressedFrameReady: false,
+      sampleVideoLuma: () => ({ ready: true, avgLuma: 120, blackFrac: 0 }),
+      CAMERA_BLACK_AVG_LUMA: 8, CAMERA_BLACK_PIXEL_FRAC: 0.9,
+      outputPassthroughDelta: () => verdicts[Math.min(i++, verdicts.length - 1)],
+      PASSTHROUGH_GATE_MAX_MS: CONFIG.PASSTHROUGH_GATE_MAX_MS,
+      PASSTHROUGH_MAX_DELTA: CONFIG.PASSTHROUGH_MAX_DELTA,
+      COLD_START_REDISPATCH_MS: redispatchMs, COLD_START_REDISPATCH_MAX: CONFIG.COLD_START_REDISPATCH_MAX,
+      MODEL_READY_STABLE_FRAMES: 1, MODEL_READY_STABLE_MS: 0,
+      isLive: () => true, wireBusy: () => false, referenceOnWire: () => ref.on,
+      applyActive: () => { applies.push(1); return Promise.resolve(); },
+      lastSentImageRef: "REF", rtImageOnWire: true, lastSentPrompt: "P",
+      startBillingWindow: () => { fired = true; },
+      watchPostFireLuma: () => {}, requestAnimationFrame: (cb) => { frameCb = cb; return 1; },
+      console: { log() {}, warn() {} }, window: {}, Date,
+    };
+    const api = new Function(...Object.keys(sandbox),
+      code + "\nreturn { arm: () => armFirstFrameBilling(video, gen) };")(...Object.values(sandbox));
+    api.arm();
+    return { tick: () => { const cb = frameCb; frameCb = null; if (cb) cb(); },
+             fired: () => fired, applies, land: () => { ref.on = true; } };
+  };
+  /* A RENDERED frame - the probe is certain this is NOT a passthrough - with no reference behind it. */
+  const invented = { ready: true, delta: 47, passthrough: false };
+
+  {
+    const h = mk({ refOnWire: false, verdicts: [invented] });
+    h.tick(); h.tick();
+    check("an invented garment does NOT reveal the feed while no reference is on the wire",
+      h.fired() === false,
+      "the probe says 'definitely not a passthrough' here - only rtImageOnWire can see this one");
+    check("...and it re-dispatches the garment, which re-fetches the Blob",
+      h.applies.length > 0, `${h.applies.length} applies`);
+  }
+  {
+    const h = mk({ refOnWire: false, verdicts: [invented] });
+    h.tick();
+    check("...and keeps holding until a reference actually lands", h.fired() === false);
+    h.land();
+    h.tick(); h.tick();
+    check("the moment one does, the feed is revealed",
+      h.fired() === true, "a landed reference plus a rendered frame is the whole bar");
+  }
+  {
+    /* The ceiling covers this reason too - a reference that can never be fetched must not hang
+       the session any more than a render that never switches. */
+    let now = 2_000_000;
+    const clock = { now: () => now };
+    const realDate = Date;
+    globalThis.Date = clock;   // the extracted code reads Date.now() only
+    const h = mk({ refOnWire: false, verdicts: [invented] });
+    h.tick();
+    const heldBefore = h.fired() === false;
+    now += CONFIG.PASSTHROUGH_GATE_MAX_MS + 1;
+    h.tick();
+    const revealedAfter = h.fired() === true;
+    globalThis.Date = realDate;
+    check("past PASSTHROUGH_GATE_MAX_MS it reveals anyway, reference or no reference",
+      heldBefore && revealedAfter,
+      "an honest bad render beats a session the shopper cannot act on - same trade as the probe half");
+  }
+  check("the wire flag is read through referenceOnWire(), beside wireBusy()",
+    /function referenceOnWire\(\) \{ return !!rtImageOnWire; \}/.test(APP) &&
+    /const noReference = !referenceOnWire\(\);/.test(APP));
+  check("...and the re-dispatch says WHICH of the two reasons fired, in words the console can be searched for",
+    /no garment reference ever reached the wire/.test(APP) && /PROMPT-ONLY/.test(APP));
 }
 
 console.log(fails === 0 ? "\nALL CHECKS PASSED" : `\n${fails} CHECK(S) FAILED`);
