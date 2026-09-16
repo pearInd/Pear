@@ -137,6 +137,22 @@
                       race to the first frame), and that every path out of "shut" ends at a
                       timer - the anti-strand guarantee, restated now that the settle, not the
                       ceiling, owns the opening on the acknowledged path.
+     cold-start-passthrough
+                      "It rendered me shirtless for three seconds, then put a shirt I never
+                      picked on me." The ack proves the server RECEIVED the reference, never
+                      that the render switched to it - so all three reveal gates can pass on a
+                      frame that is still the camera forwarded untouched, which is what two
+                      recordings show (a black t-shirt in 2026-08, a bare torso in 2026-09).
+                      The fourth gate measures the one thing that differs - Decart's OUTPUT
+                      against the INPUT the throttle is sending it, two 64x36 luma grids - and
+                      holds the reveal while they are the same picture, re-dispatching the
+                      garment while they are. Executes the probe against stub surfaces with
+                      known pixels (identical, differing, noisy, and all four fail-open paths)
+                      and drives the REAL armFirstFrameBilling with scripted verdicts: the
+                      reported frame is held, a rendered frame reveals, the re-dispatch clears
+                      all three wire fields, stops at its cap, never stacks on an in-flight
+                      write, never fires into a dead session, and a fake clock past the ceiling
+                      proves the gate can never hang a session.
      turn-hold        The last dressed frame is held from the FIRST sign of a turn, not
                       from the confirmed flip 2.5s later - the uncovered window is where
                       the shopper's real shirt came back. Plus every release path,
@@ -323,6 +339,7 @@ const SUITES = [
   ["body-topology", "body-topology.test.mjs"],
   ["first-frame-integrity", "first-frame-integrity.test.mjs"],
   ["input-gate-lifecycle", "input-gate-lifecycle.test.mjs"],
+  ["cold-start-passthrough", "cold-start-passthrough.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],
   ["signaling-retry", "signaling-retry.test.mjs"],
