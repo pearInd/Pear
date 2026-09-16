@@ -135,5 +135,42 @@ console.log("\n── §4 SELECTED ON POSITIVE EVIDENCE ONLY (the §2.1 discipli
     "a template hole or a concatenation re-opens what the selector prevents");
 }
 
+console.log("\n── §5 THE VERDICT IS TRACEABLE - it is the only thing that changes what a BACK dispatch asserts ──");
+{
+  /* REPORTED 2026-09-16: "the back print rendered for a split second then vanished into a plain
+     brown shirt", filed as the prompt builder dropping a descriptor mid-turn. It cannot: the angle
+     SELECTS one frozen anchor, and the back string is 521/650 with every size rung fitting, so it
+     sheds nothing. This verdict is the one mechanism that CAN change it - and it arrives from the
+     widget's post-open correction, which lands after go-live. It was never logged anywhere, so the
+     report could only be answered from pixels. These pin the trace, not the behaviour. */
+  const fn = (() => {
+    const i = APP.indexOf("function describeRearConstruction(item) {");
+    return i === -1 ? "" : APP.slice(i, APP.indexOf("\n}", i));
+  })();
+  check("describeRearConstruction() reports the verdict in words, including 'nobody looked'",
+    /item\.backIsPlain === true/.test(fn) && /item\.backIsPlain === false/.test(fn) &&
+    /not established/.test(fn) && /smooth unbroken fabric/.test(fn),
+    "undefined and false are different facts and must read differently");
+  check("...and it says out loud what a wrong 'plain' verdict costs",
+    /suppresses it/.test(fn), "the next reader must not have to infer the consequence");
+  /* typeof-guarded at that call site, because the listener body is extracted and run standalone
+     by composite-handoff.test.mjs (CLAUDE.md 2.7) - the guard is part of what is pinned here. */
+  check("the verdict is logged where it LANDS - the widget's post-open correction",
+    /PEAR_UPDATE_GARMENT applied[\s\S]{0,600}?rear:", typeof describeRearConstruction === "function"\s*\n?\s*\? describeRearConstruction\(activeItem\)/.test(APP),
+    "it can arrive mid-session; a silent change to what the wire asserts is what made this unanswerable");
+  check("...and where the BACK lock is reported, but only on that lock",
+    /autoOrientation === "back" && typeof describeRearConstruction === "function"/.test(APP),
+    "logVtonState fires on lock changes, not on the ~625ms re-anchor cadence - this must not spam");
+  /* The trace must stay a trace: the builders are what trace:prompt executes, and a console
+     line inside one of them would pollute that output as well as every dispatch. */
+  const resolverSrc = (() => {
+    const i = APP.indexOf("function imageOnlyPrompt");
+    return APP.slice(i, APP.indexOf("\n}", i));
+  })();
+  check("...and nothing was added to the prompt builder itself",
+    !/console\./.test(resolverSrc) && !/describeRearConstruction/.test(resolverSrc),
+    "imageOnlyPrompt is executed by trace:prompt and on every dispatch - it stays silent");
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);

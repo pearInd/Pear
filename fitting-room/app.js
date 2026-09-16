@@ -3787,7 +3787,12 @@ window.addEventListener("message", (e) => {
   renderPerspectiveSelector();
   console.log("[PEAR] PEAR_UPDATE_GARMENT applied - front:", abbrevImg(activeItem.img),
     "| back:", abbrevImg(activeItem.imgBack) || "(none)",
-    "| back source:", activeItem.backSource, "| mode:", currentAngle);
+    "| back source:", activeItem.backSource, "| mode:", currentAngle,
+    /* The one verdict in this message that silently changes what a BACK dispatch asserts, and
+       it can land after go-live - see describeRearConstruction(). typeof-guarded: this listener
+       body runs standalone in composite-handoff.test.mjs (CLAUDE.md 2.7). */
+    "| rear:", typeof describeRearConstruction === "function"
+      ? describeRearConstruction(activeItem) : "(not resolvable here)");
 
   /* Race guard (FIX 4). The widget opens this room immediately on a DOM-order guess
      and only posts the classifier's real front/back 1-7s later, so the corrected back
@@ -8585,7 +8590,11 @@ function createOrientationWatcher() {
     const state = vtonState();
     const asset = autoOrientation === "back" ? "GARMENT_BACK" : "GARMENT_FRONT";
     console.log(`[VTON Pipeline] Current Active State: ${state} | Applied Asset: ${asset}` +
-      (state === PENDING_MODE ? " (provisional - awaiting first orientation sample)" : ""));
+      (state === PENDING_MODE ? " (provisional - awaiting first orientation sample)" : "") +
+      /* On the BACK lock only, and only here (a lock change, not a dispatch), so this cannot
+         spam the ~625ms re-anchor cadence. See describeRearConstruction(). */
+      (autoOrientation === "back" && typeof describeRearConstruction === "function"
+        ? ` | rear: ${describeRearConstruction(activeItem)}` : ""));
   }
   /* Initial state is PENDING, not FRONT: both assets are already fetched, decoded and
      validated (preloadGarmentAssets() gates go-live on it), so the watcher can apply
@@ -12922,6 +12931,36 @@ function garmentPrintText(item) {
   const text = raw.replace(/["""'']/g, "").replace(/\s+/g, " ").trim();
   if (!text || text.length > PRINT_TEXT_MAX_CHARS) return "";
   return text;
+}
+
+/* ── THE REAR VERDICT, IN WORDS - the one way a BACK prompt stops asserting a print ──────
+   REPORTED 2026-09-16: "during the turn to the back the mountain print rendered for a split
+   second and then vanished, degrading into a plain brown shirt", filed as the prompt builder
+   dropping a graphic descriptor mid-turn. It cannot do that: `angle` SELECTS one frozen anchor
+   and nothing is ever assembled or stripped per frame (see imageOnlyPrompt's frozen-axis note),
+   and the back anchor is 521/650 chars with every size rung fitting, so it cannot shed either.
+
+   THERE IS EXACTLY ONE MECHANISM that changes what a BACK dispatch asserts about the rear, and
+   it is this verdict: `item.backIsPlain === true` selects PLAIN_BACK_ANCHOR, which says "The
+   rear panel is smooth unbroken fabric" in place of "Reproduce the rear panel exactly as shown
+   in the reference". On a garment whose rear IS blank that is the fix for invented graphics
+   (see PLAIN_BACK_ANCHOR). On a garment with a real rear print it would suppress the one
+   graphic the shopper turned around to see - which is exactly the reported shape.
+
+   IT ARRIVES SILENTLY AND CAN ARRIVE MID-SESSION. The widget opens the room on a DOM-order
+   guess and posts PEAR_UPDATE_GARMENT when the classifier resolves, seconds later, which is
+   after go-live. Until now the verdict was never logged anywhere: not when it landed, not when
+   it changed what the wire says. So the next report of this shape can be answered from one
+   console line instead of inferred from pixels. Pure diagnostics - nothing here selects
+   anything. */
+function describeRearConstruction(item) {
+  if (!item) return "no item";
+  if (item.backIsPlain === true) {
+    return 'PLAIN asserted (backIsPlain=true → "the rear panel is smooth unbroken fabric") -' +
+      " if this garment HAS a rear print, this is what suppresses it";
+  }
+  if (item.backIsPlain === false) return 'rear print asserted (backIsPlain=false → "reproduce the rear panel exactly as shown")';
+  return 'rear print asserted (backIsPlain not established → "reproduce the rear panel exactly as shown")';
 }
 
 function identityLockSentence(item, angle = "front") {
