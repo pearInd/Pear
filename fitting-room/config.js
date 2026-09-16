@@ -19,6 +19,7 @@
  * @property {number}   PROMPT_MAX_CHARS        Hard cap on any assembled prompt (Decart rejects >226 tokens).
  * @property {boolean}  INPUT_GATE_ENABLED      Withhold camera frames from Decart until the garment reference is acknowledged, so its first rendered frame can never be a generic default.
  * @property {number}   INPUT_GATE_MAX_MS       Self-release ceiling for that gate (ms) - a caller that never reports success costs a late start, never a dead session.
+ * @property {number}   INPUT_GATE_SETTLE_MS    Extra hold after set() resolves, covering the transport gap between the reference (WebSocket) and the frames (WebRTC media). 0 disables.
  * @property {number}   COLD_START_ACK_MS       Ack window for the FIRST apply of a session (ms) before the automatic reconnect; later applies use APPLY_TIMEOUT_MS.
  * @property {boolean}  BODY_TOPOLOGY_ENABLED   Re-drape the garment on the live body contour whenever it changes, instead of holding the go-live silhouette.
  * @property {number}   BODY_TOPOLOGY_SAMPLE_MS Cadence of the live pose loop that feeds both the presence watcher and the topology monitor (ms).
@@ -79,6 +80,45 @@ export const CONFIG = Object.freeze({
      all-or-nothing teardown) so the self-release always gets a chance to save the session
      before that fires. Reaching it is a bug in the caller and logs as one. */
   INPUT_GATE_MAX_MS: 6000,
+  /* ── THE SETTLE - the half of the window the gate above does NOT close (2026-09-16) ──
+     THE GATE ABOVE closes the span from "session open" to "rtClient.set() resolved". That
+     is not the same span as "Decart is conditioned on this reference", and the difference
+     is a TRANSPORT one: @decartai/sdk@0.1.5 sends the reference as one message on the
+     SIGNALING WEBSOCKET, while camera frames travel the WebRTC MEDIA path. Two transports,
+     no ordering guarantee between them, and set() resolves when the SDK has sent - not
+     when the server has ingested and swapped the reference in.
+
+     WHY THE GATE CANNOT SIMPLY WAIT FOR THE REAL ANSWER: there is no acknowledgement to
+     wait for. Verified against the installed SDK rather than assumed - RealTimeClient
+     exposes connectionChange / queuePosition / error / generationTick / generationEnded /
+     diagnostic / stats, and set() is Promise<void>. No "reference applied" event exists,
+     so set() resolving is the strongest signal available and the gate already rides it.
+     A fixed settle is therefore the only lever left on this window.
+
+     ── 800ms IS A PRODUCT DECISION, NOT A MEASUREMENT, AND THAT IS THE POINT TO READ ──
+     It was specified (2026-09-16) before ?cond_trace=1 had been run on a live session, so
+     unlike every other number in this file it is NOT backed by a modelled or frame-by-frame
+     figure. What IS measured and consistent with it: this file's own COND_TRACE_SETTLE_MS
+     (1600ms) exists because "Decart takes ~1s to warm up and switch", so a sub-second hold
+     is the right order of magnitude for the server-side half of that.
+
+     WHAT IT COSTS, stated plainly: 800ms is added to EVERY cold start, unconditionally and
+     whether or not the window it covers was actually open on that session. It buys nothing
+     on a session where the reference already beat the first frame - it simply delays
+     go-live. The shopper does not see a freeze (the feed is still at opacity 0 behind the
+     reveal gate, so this is latency, not a frozen mirror - see §2.9), but it IS the first
+     second of the experience.
+
+     SCOPE: only the go-live gate. release() is a one-shot that a mid-session swap can never
+     reach (hold()/unhold() own that path, and release() refuses while held), so this cannot
+     put a hold on a turn - which is exactly the freeze §2.9 keeps off by default.
+
+     HOW TO REPLACE THIS GUESS WITH A NUMBER: run one cold session with ?cond_trace=1 and
+     read the verdict. "REFERENCE DID NOT REACH THE RENDER" with a settle of 0 and
+     "reference reached the render" at 800 brackets the true value; tune from there, or set
+     it to 0 if the window was never open. ?gate_settle=<ms> overrides it live for that A/B
+     without a deploy. */
+  INPUT_GATE_SETTLE_MS: 800,
   /* THE COLD-START LEASH, and it is deliberately far shorter than APPLY_TIMEOUT_MS.
      REPORTED: the first attempt often hangs and the shopper has to close and reopen the
      widget. APPLY_TIMEOUT_MS (10s) is the right bound for "this session is dead", but as

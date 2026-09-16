@@ -46,6 +46,7 @@ const {
   POSE_TASKS_MODULE,
   INPUT_GATE_ENABLED,
   INPUT_GATE_MAX_MS,
+  INPUT_GATE_SETTLE_MS,
   COLD_START_ACK_MS,
   BODY_TOPOLOGY_ENABLED,
   BODY_TOPOLOGY_SAMPLE_MS,
@@ -4580,6 +4581,7 @@ async function ensureOnline() {
 function createThrottledInputStream(srcStream, {
   fps = LIVE_INFERENCE_FPS, width = LIVE_W, height = LIVE_H,
   gated = INPUT_GATE_ENABLED, gateMaxMs = INPUT_GATE_MAX_MS,
+  settleMs = INPUT_GATE_SETTLE_MS,
   clock = () => Date.now(),   // injectable so first-frame-integrity can drive time; see unhold()
 } = {}) {
   const srcTrack = srcStream.getVideoTracks()[0];
@@ -4646,6 +4648,27 @@ function createThrottledInputStream(srcStream, {
   let held = false;          // closed mid-session by hold() - see the returned API
   let gateTimer = null;
   let lastFrameAt = -Infinity;   // when a frame last reached the output track - unhold() spaces against it
+  /* ── THE SETTLE - see CONFIG.INPUT_GATE_SETTLE_MS for the full rationale ──────────
+     The gate above opens on set() RESOLVING, which means "the SDK sent the reference on the
+     signaling WebSocket" - not "Decart is conditioned on it". Frames travel the WebRTC media
+     path, so the two race with no ordering guarantee, and the SDK exposes no ack to wait for
+     (verified against @decartai/sdk@0.1.5: set() is Promise<void> and no event reports a
+     reference being applied). This holds frames a further settleMs after the acknowledgement
+     so the server has the reference in hand before the first frame it must render arrives.
+
+     RESOLVED INSIDE THIS FUNCTION, not from a module-scope helper, because several suites
+     extract this block by its opening line and run it standalone - a helper defined above the
+     marker is invisible to that sandbox and dies on a ReferenceError while the real file is
+     fine (CLAUDE.md §2.6). The try/catch is the same reason `location` cannot be assumed
+     (§2.7). Clamped: a negative or unparseable value keeps the configured default, and 0
+     restores the pre-settle behaviour exactly. */
+  let settleTimer = null;
+  let settleHoldMs = Number.isFinite(settleMs) && settleMs > 0 ? settleMs : 0;
+  try {
+    const raw = new URLSearchParams(location.search).get("gate_settle");
+    const v = Number(raw);
+    if (raw !== null && raw !== "" && Number.isFinite(v)) settleHoldMs = v <= 0 ? 0 : Math.min(v, 5000);
+  } catch (_) { /* no location (sandbox / worker) - the configured default stands */ }
   if (gated) {
     gateTimer = setTimeout(() => {
       gateTimer = null;
@@ -4739,10 +4762,29 @@ function createThrottledInputStream(srcStream, {
          otherwise reopen the gate before the swap's own reference has landed - uncovering
          exactly the frames the hold exists to withhold. */
       if (held) return false;
-      gateOpen = true;
+      /* IDEMPOTENT ACROSS THE SETTLE TOO. release() fires on every successful apply and the
+         ~8 re-anchors that follow, so without this a re-anchor landing inside the settle
+         window would push the opening further out on every call and starve the session. The
+         FIRST acknowledgement starts the clock; later ones are no-ops, exactly as they were
+         when the open was instantaneous. */
+      if (settleTimer) return false;
+      const open = () => {
+        settleTimer = null;
+        if (disposed || gateOpen || held) return;
+        gateOpen = true;
+        console.log(`[PEAR] input gate released (${why}) - streaming to Decart now;`,
+          "its first frame is conditioned on the real reference");
+      };
+      /* THE CEILING HAS DONE ITS JOB HERE. It exists for a caller that never reports success
+         (see its warn), and one just did - so it is retired in favour of the settle timer,
+         which now owns the opening. Both are plain timeouts, so the anti-strand guarantee is
+         unchanged in kind: something always opens this gate. */
       if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
-      console.log(`[PEAR] input gate released (${why}) - streaming to Decart now;`,
-        "its first frame is conditioned on the real reference");
+      if (settleHoldMs <= 0) { open(); return true; }
+      console.log(`[PEAR] input gate: garment acknowledged (${why}) - holding frames a further`,
+        `${settleHoldMs}ms so the reference settles server-side before the first frame it must`,
+        "render arrives (WebSocket/WebRTC transport gap; ?gate_settle=0 disables)");
+      settleTimer = setTimeout(open, settleHoldMs);
       return true;
     },
     /* ── THE SAME GATE, HELD ACROSS A MID-SESSION REFERENCE SWAP ─────────────────────
@@ -4798,6 +4840,9 @@ function createThrottledInputStream(srcStream, {
       if (disposed) return;
       disposed = true;
       if (gateTimer) { clearTimeout(gateTimer); gateTimer = null; }
+      // The settle owns the opening once release() has run - it must die with the throttle
+      // too, or it fires into a session that no longer exists (see §3's dispose assertion).
+      if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
       if (timer) { clearInterval(timer); timer = null; }
       try { outTrack && outTrack.stop(); } catch (_) {}
       try { video.pause(); } catch (_) {}
@@ -6495,7 +6540,43 @@ const ORIENT_POSE_PASS = (() => {
    speed, BACK sent withdrawable like a predictive BACK; withdrawn the moment the old side's votes return
    under the threshold, before any vote has confirmed the turn. Symmetric: armed facing away, it sends
    FRONT the same way. */
-const ORIENT_EARLY_TURN_DEFAULT_DEG = 50;   // 20 until the fold handshake - see its comment above
+/* ── THE MIDDLE GROUND - 50 -> 35 outbound, 45 on the return (2026-09-16) ────────────────────
+   DIRECTED as a product decision, and the honest label matters: this is the FIRST threshold in
+   this block that was NOT set from a measurement. The fold handshake's 50 came from two clips
+   read frame by frame plus 216 modelled 360s; v142's 20/35 came from §11's grid. 35/45 came
+   from a judgement that the handshake over-corrected - which the numbers below may well
+   support, but nobody has yet replayed a ?orient_debug=1 360 against it.
+
+   THE REPORT IT ANSWERS: on a turn the back panel comes round PLAIN for a beat before its print
+   lands, and the graphic pops in late. That is the fold handshake's own stated cost, written
+   into its comment above ("the plain that remains sits just past the side view instead of
+   before it", 63-170ms out / 120-266ms back at 0-250ms latency). Sending earlier moves the
+   swap back toward the side view, where a real shirt shows neither print.
+
+   WHAT IT RISKS, and this is the half to read before tuning it again. The handshake exists
+   because the swap lands on screen at ABOUT THE ANGLE IT WAS SENT AT - Decart's output trails
+   the camera by roughly one swap, so the two cancel. At 35 the swap therefore lands near 35,
+   which is still the FRONT hemisphere: the chest is in view, and a back reference rendered on a
+   visible chest draws no chest print. That IS the 2026-09-15 report ("the front print unmounts
+   too early while the front is still partly visible, leaving a plain T-shirt"), bought back in
+   part. The trade is deliberate: less plain time late on the turn, some plain time early.
+
+   THE RETURN LEG KEEPS A 10-DEGREE HYSTERESIS (45, not 35) and it is not symmetry for its own
+   sake. The return is the leg with a MEASURED failure: at 20 a live clip caught FRONT landing
+   on a back-facing body (see ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG below), and §11 found 35 the
+   lowest setting that never does so at any latency. Dropping the return to the outbound's 35
+   would sit exactly on that floor with no margin, so it keeps a margin. Asymmetric legs are
+   also the v136-v142 design this partially restores, not a new idea.
+
+   TO RESTORE THE FOLD HANDSHAKE EXACTLY, no deploy needed:
+     ?early_turn=50&early_turn_return=50&early_turn_slow=50
+   TO GO BACK TO v142:  ?early_turn=20&early_turn_return=35&early_turn_slow=35&early_turn_loss=0
+   ONE ?orient_debug=1 360 prints `fold handshake:` with the path that fired and the swap
+   timeline - if DISPATCH_SENT -> RENDER_APPLIED is well under the 700-1000ms these were tuned
+   against, 35 is right and 50 was overshooting; if it is at or above it, 50 was correct and
+   this change is re-opening the plain-front report. That log is what settles it.
+   ── the fold handshake's own record follows, unchanged, and is still the reason 50 was set ── */
+const ORIENT_EARLY_TURN_DEFAULT_DEG = 35;   // 20 until the fold handshake (50); 35 since the middle ground - see above
 /* ?early_turn_return=<deg> - THE RETURN LEG, BACK -> FRONT. SUPERSEDED as a default by the fold handshake (above): both legs now
    send at the side view, 50. What follows is why the return leg was first split from the outbound one - still true of any
    threshold short of the fold, which is the point the handshake takes to its end.
@@ -6514,7 +6595,11 @@ const ORIENT_EARLY_TURN_DEFAULT_DEG = 50;   // 20 until the fold handshake - see
    leaves a plain gap anyway. The outbound leg keeps 20. ?early_turn_return=0 turns the early FRONT off
    (the vote path carries the return); clamped like ?early_turn. Which path sent FRONT in that clip is
    what one ?orient_debug=1 log of a turn would confirm. */
-const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 50;   // 35 until the fold handshake - see ORIENT_EARLY_TURN_DEFAULT_DEG
+/* 45 SINCE THE MIDDLE GROUND (2026-09-16): the outbound leg went to 35 and this one keeps a
+   10-degree margin over it. Everything above is why the return must never be the LOWER of the
+   two - it is the leg that was caught putting FRONT on a back-facing body at 20, and 35 is the
+   measured floor rather than a comfortable setting. See ORIENT_EARLY_TURN_DEFAULT_DEG. */
+const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 45;   // 35 in v142, 50 at the fold handshake, 45 since the middle ground
 const ORIENT_EARLY_TURN_DEFAULT_SPEED = 45;
 /* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
    rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;
@@ -6569,7 +6654,11 @@ const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
    as the gate alone. The request's own shape (22 degrees held 150ms at any speed) fires on ALL of those
    10/10, because "held" is what a pose does; it is the rise, not the dwell, that says turn.
    ?early_turn_slow=<deg> moves it, 0 turns the slow path off. */
-const ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG = 50;   // 35 until the fold handshake - see ORIENT_EARLY_TURN_DEFAULT_DEG
+/* 35 SINCE THE MIDDLE GROUND (2026-09-16), tracking the outbound leg as it always has: the slow
+   path's job is to add the SLOW rise at the same angle the fast path fires at, never earlier.
+   Its own floor logic is unchanged - a weight shift or a look to the side settles by ~30, so 35
+   still sits above where a pose stops. See ORIENT_EARLY_TURN_DEFAULT_DEG. */
+const ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG = 35;   // 35 in v142, 50 at the fold handshake, 35 since the middle ground
 const ORIENT_EARLY_TURN_SLOW_RISE_DEG = 10;
 const ORIENT_EARLY_TURN_SLOW_WINDOW_MS = [450, 960];   // [min, max] age of the reading the rise is measured from
 /* Declared ABOVE the ?early_turn_* parsers that clamp to them. They used to sit below the slow-path parser,

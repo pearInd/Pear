@@ -122,6 +122,21 @@
                       prefetch that keeps the gated window short (every item now, not only
                       dual-view ones - and warm bytes ONLY, never a fetch moved onto the
                       go-live path), and the frame budget on the wire.
+     input-gate-lifecycle
+                      The same gate, timed against the rest of the cold start rather than
+                      against its own API. "Frame 00:01 flashes a white shirt" was diagnosed
+                      as the 6000ms ceiling auto-releasing before the reference landed; it is
+                      not, and this pins why, so the next person to propose that fix reads the
+                      reason instead of re-deriving it. The cold-start leash (2.5s) is strictly
+                      inside the ceiling (6s), so a first apply is always decided before the
+                      ceiling can fire, and a timed-out apply DISPOSES its gate rather than
+                      racing it - connectRealtime() disposes before it mints, so the recovery
+                      starts behind a fresh gate with a full ceiling. Also pins the one console
+                      signature that separates the two real causes of a white first frame (the
+                      ceiling's "auto-released after" warning vs the reference simply losing the
+                      race to the first frame), and that every path out of "shut" ends at a
+                      timer - the anti-strand guarantee, restated now that the settle, not the
+                      ceiling, owns the opening on the acknowledged path.
      turn-hold        The last dressed frame is held from the FIRST sign of a turn, not
                       from the confirmed flip 2.5s later - the uncovered window is where
                       the shopper's real shirt came back. Plus every release path,
@@ -307,6 +322,7 @@ const SUITES = [
   ["model-agnostic", "model-agnostic.test.mjs"],
   ["body-topology", "body-topology.test.mjs"],
   ["first-frame-integrity", "first-frame-integrity.test.mjs"],
+  ["input-gate-lifecycle", "input-gate-lifecycle.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],
   ["signaling-retry", "signaling-retry.test.mjs"],

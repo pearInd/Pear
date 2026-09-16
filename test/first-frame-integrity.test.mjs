@@ -66,7 +66,12 @@ function extract(startMarker, endMarker) {
    that actually reached the output track. */
 const code = extract("function createThrottledInputStream(", "\n/**\n * Open the input gate");
 
-function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50, undressedCheck } = {}) {
+/* settleMs defaults to 0 here - the pre-settle behaviour, which is still a supported config
+   (?gate_settle=0) and is what the frame-flow baselines below are written against. §1c drives the
+   REAL CONFIG value. The sandbox must supply INPUT_GATE_SETTLE_MS because the extracted block
+   resolves it as a default parameter: a global the sandbox does not define is a ReferenceError in
+   the extracted copy while the real file is fine, which is CLAUDE.md §2.6's standing trap. */
+function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50, settleMs = 0, undressedCheck } = {}) {
   /* `now` is the throttle's clock (its `clock` option). Tests that never move it see no time pass. */
   const state = { emitted: 0, drawn: 0, trackStopped: false, timers: new Set(), logs: [], warns: [], now: 0 };
   const outTrack = {
@@ -76,7 +81,7 @@ function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50, undressedCheck
   };
   const sandbox = {
     LIVE_INFERENCE_FPS: 10, LIVE_W: 512, LIVE_H: 288,
-    INPUT_GATE_ENABLED: gated, INPUT_GATE_MAX_MS: gateMaxMs,
+    INPUT_GATE_ENABLED: gated, INPUT_GATE_MAX_MS: gateMaxMs, INPUT_GATE_SETTLE_MS: settleMs,
     console: {
       log: (...a) => state.logs.push(a.join(" ")),
       warn: (...a) => state.warns.push(a.join(" ")),
@@ -105,7 +110,7 @@ function makeThrottle({ gated = true, gateMaxMs = 5000, fps = 50, undressedCheck
   const fn = new Function(...Object.keys(sandbox),
     code + "\nreturn createThrottledInputStream;")(...Object.values(sandbox));
   const srcStream = { getVideoTracks: () => [{ applyConstraints: () => Promise.resolve() }], getTracks: () => [] };
-  const throttle = fn(srcStream, { fps, gated, gateMaxMs, clock: () => state.now });
+  const throttle = fn(srcStream, { fps, gated, gateMaxMs, settleMs, clock: () => state.now });
   /* The real one starts its interval from video.play().then(start) - a microtask. Flush it
      so the timer is registered before a test drives ticks. */
   const flush = () => new Promise((r) => setImmediate(r));
@@ -153,6 +158,71 @@ console.log("── §1 THE GATE WITHHOLDS FRAMES, NEVER THE TRACK ──");
     h.state.emitted === 4, `${h.state.emitted}`);
   check("...and the config flag is what drives it",
     /gated = INPUT_GATE_ENABLED/.test(SRC) && CONFIG.INPUT_GATE_ENABLED === true);
+}
+
+console.log("\n── §1c THE SETTLE: the transport gap the acknowledgement does NOT close ──");
+{
+  /* WHY THIS EXISTS. The gate above opens on rtClient.set() RESOLVING, which means the SDK has
+     SENT the reference on the signaling WebSocket - not that Decart has ingested it. Frames go out
+     over the WebRTC media path, so the two race with no ordering guarantee between them, and
+     @decartai/sdk@0.1.5 exposes no acknowledgement to wait for instead (set() is Promise<void>;
+     its events are connectionChange / queuePosition / error / generationTick / generationEnded /
+     diagnostic / stats - none of them reports a reference being applied). So the only lever left
+     on that window is to keep holding frames for a bounded moment after the send settles.
+     THE 800ms ITSELF IS A PRODUCT DECISION, NOT A MEASUREMENT - see CONFIG.INPUT_GATE_SETTLE_MS,
+     which says so plainly and records how to replace it with one (?cond_trace=1). */
+  const h = makeThrottle({ gated: true, settleMs: 800 });
+  await h.flush();
+  h.tick(4);
+  check("frames are withheld before the acknowledgement, as ever", h.state.emitted === 0);
+  check("release() reports that it accepted the acknowledgement", h.throttle.release("applyActive") === true);
+  h.tick(6);
+  check("...but frames STAY withheld through the settle - this is the whole point",
+    h.state.emitted === 0, `${h.state.emitted} frames reached Decart before the reference could settle`);
+  check("...and the gate still reads as shut while it settles, so nothing downstream thinks it is live",
+    h.throttle.gateOpen === false);
+  /* IDEMPOTENT ACROSS THE WINDOW. release() fires on every successful apply and on the ~8
+     re-anchors that follow it; if each one restarted the settle, a busy session would never
+     stream. The FIRST acknowledgement owns the clock. */
+  check("a second release inside the settle is a no-op, not a restart",
+    h.throttle.release("re-anchor") === false);
+  h.fireTimeouts();
+  h.tick(3);
+  check("once the settle elapses, frames flow exactly as before",
+    h.state.emitted === 3, `${h.state.emitted}`);
+  check("...and it says so once, naming the settle as what held them",
+    h.state.logs.filter((l) => /input gate released/.test(l)).length === 1 &&
+    h.state.logs.some((l) => /holding frames a further 800ms/.test(l)),
+    h.state.logs.join("\n        "));
+}
+{
+  /* 0 RESTORES THE PRE-SETTLE BEHAVIOUR EXACTLY. A hold that cannot be turned off is not a
+     bounded experiment, and ?gate_settle=0 is how the A/B that sizes it is run at all. */
+  const h = makeThrottle({ gated: true, settleMs: 0 });
+  await h.flush();
+  h.throttle.release("applyActive");
+  h.tick(3);
+  check("settle 0 opens the gate synchronously, as it did before the settle existed",
+    h.state.emitted === 3, `${h.state.emitted}`);
+}
+{
+  /* THE SETTLE OWNS THE OPENING ONCE RELEASE HAS RUN, so it must die with the throttle too - a
+     timer outliving its session opens a gate belonging to a client that no longer exists. */
+  const h = makeThrottle({ gated: true, settleMs: 800 });
+  await h.flush();
+  h.throttle.release("applyActive");
+  h.throttle.dispose();
+  check("disposing during the settle clears its timer with everything else",
+    h.state.timers.size === 0, `${h.state.timers.size} timer(s) survived dispose()`);
+  check("the configured default is a real, non-zero hold, and is bounded well under the ceiling",
+    CONFIG.INPUT_GATE_SETTLE_MS > 0 && CONFIG.INPUT_GATE_SETTLE_MS < CONFIG.INPUT_GATE_MAX_MS,
+    `settle ${CONFIG.INPUT_GATE_SETTLE_MS}ms vs ceiling ${CONFIG.INPUT_GATE_MAX_MS}ms`);
+  /* SCOPED TO GO-LIVE. release() is the one-shot the cold start uses; a mid-session swap runs
+     hold()/unhold(), which the settle must not touch - holding frames on a TURN is the freeze
+     CLAUDE.md §2.9 keeps off by default (?swap_hold=1). */
+  check("the settle rides release() only - hold()/unhold() are untouched, so a turn cannot freeze on it",
+    /settleTimer = setTimeout\(open, settleHoldMs\)/.test(SRC) &&
+    !/unhold[\s\S]{0,400}settleHoldMs/.test(SRC));
 }
 
 console.log("\n── §2 IT OPENS ON 'A GARMENT IS ON THE WIRE', FROM ONE PLACE ──");

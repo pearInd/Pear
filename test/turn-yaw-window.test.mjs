@@ -1225,8 +1225,18 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
     const clipLats = [0, 100, 250];
     check("THE CLIP'S GAP, modelled: under v142, at the clips' latencies, BACK lands inside the front's print-visible half (median under 80 degrees) and the side being left loses its print for 300ms+ per 360",
       clipLats.every((lat) => foldLat[lat].vLand.out < 80 && foldLat[lat].vEarly >= 300), JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].vLand, foldLat[lat].vEarly])));
-    check("THE FIX: at the fold that time falls by at least 40% at every clip latency",
-      clipLats.every((lat) => foldLat[lat].pEarly <= 0.6 * foldLat[lat].vEarly), JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].vEarly, foldLat[lat].pEarly])));
+    /* ── THE BAR CAME DOWN WITH THE THRESHOLD, AND THAT IS THE TRADE, NOT A LOOSENED TEST ──────
+       The fold handshake's 50 cut this by 40%+ (337/244/146ms against v142's 663/539/361). The
+       middle ground's 35 cuts it by 23/27/31% (508/390/248ms) - it deliberately sits between the
+       two, which is what "middle ground" names. Early plain is the half 35 gives BACK; what it
+       buys is on the other side of the fold: outLate falls 92 -> 42ms at 100ms latency and
+       170 -> 90ms at 250ms, which is the reported "back graphic pops in late".
+       THE BAR IS 20%, NOT "whatever 35 happens to score": at v142's 20 the ratio is ~1.0, so this
+       still fails outright if the threshold is walked down another rung, and the companion check
+       below keeps total plain falling. Raising the threshold back toward 50 only makes it pass
+       harder. See ORIENT_EARLY_TURN_DEFAULT_DEG's comment for the full ledger. */
+    check("THE FIX, at the middle ground: early plain still falls by at least 20% at every clip latency (the fold handshake's 50 reached 40%+ - that margin is what 35 traded for less late pop-in)",
+      clipLats.every((lat) => foldLat[lat].pEarly <= 0.8 * foldLat[lat].vEarly), JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].vEarly, foldLat[lat].pEarly])));
     check("...both swaps land within 25 degrees of the side view (median, both legs, every clip latency)",
       clipLats.every((lat) => Math.abs(foldLat[lat].pLand.out - 90) <= 25 && Math.abs(foldLat[lat].pLand.ret - 90) <= 25), JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].pLand])));
     check("...and plain shirt on EITHER side of the fold falls too - at every clip latency, and at the 700ms this file used to assume",
@@ -1265,14 +1275,46 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       foldPoseRows.every((r) => r.p.stuck === 0), JSON.stringify(foldPoseRows.filter((r) => r.p.stuck)));
     check("standing still and swaying never swap at the fold, dropped frames and jitter included",
       foldPoseRows.filter((r) => r.name === "stand still" || r.name.startsWith("sway")).every((r) => r.p.fired === 0));
-    const reachesSide = (r) => r.name.startsWith("held profile check") || r.name.startsWith("look to 60");
-    check("every pose that stops short of the side view and v142 swapped on at least a third of the time, the fold swaps on at most half as often",
+    /* ── WHICH POSES MAY FIRE IS A FUNCTION OF THE THRESHOLD, NOT A FIXED LIST OF NAMES ──────
+       This carve-out used to name "held profile check" and "look to 60" literally, because at the
+       fold handshake's 50 those were the only two scripted poses that reached it. That made the
+       assertion a statement about 50 rather than about the trigger, so moving the threshold broke
+       it for the wrong reason - the poses had not changed, the bar had.
+
+       A pose whose PEAK excursion reaches the threshold is one the trigger is DEFINED to fire on:
+       that is what the threshold means, and suppressing it would require a different mechanism
+       (the speed gate and the withdrawal, both asserted elsewhere). So the predicate is now
+       derived from the pose's own script and the live constant, and it re-derives itself when the
+       constant moves. Measured from back-square on the facing-away poses, which is the excursion
+       the return leg actually sees, and against the RETURN threshold for those.
+
+       WHAT THE MIDDLE GROUND (35) BOUGHT INTO THIS, stated because the numbers are not small: a
+       45-degree mirror check now sits ABOVE the outbound threshold and therefore fires - 44/60
+       with ~763ms of the wrong side, against 11/60 and ~92ms at the handshake's 50. It is still
+       held to "no more often than v142, and less wrong time than v142" below, which is the floor
+       that matters, but 50 was materially better here and the constant's comment says so. */
+    const peakOf = (r) => {
+      const angles = foldPoses[r.name].map((s) => s[0]);
+      if (!r.away) return Math.max(...angles);
+      /* A facing-away script still OPENS square to the camera and turns to 180 first, so the raw
+         minimum is that opening 0 and would read as a 180-degree excursion. The pose being
+         measured is only what happens once the body has settled on its back - which is also where
+         poseRun starts counting (measureFrom 4500) - so the excursion is taken from the first 180
+         onward, and read DOWN from 180 because that is back-square for the return leg. */
+      const settled = angles.slice(angles.indexOf(180));
+      return 180 - Math.min(...settled);
+    };
+    const reachesSide = (r) => peakOf(r) >= numOr(r.away ? "ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG" : "ORIENT_EARLY_TURN_DEFAULT_DEG");
+    check("every pose that stops SHORT of the trigger's own threshold and v142 swapped on at least a third of the time, the trigger swaps on at most half as often",
       foldPoseRows.filter((r) => !reachesSide(r) && r.v.fired * 3 >= r.v.n).every((r) => r.p.fired * 2 <= r.v.fired),
       JSON.stringify(foldPoseRows.filter((r) => !reachesSide(r) && r.v.fired * 3 >= r.v.n && r.p.fired * 2 > r.v.fired).map((r) => [r.name, r.v.fired, r.p.fired])));
-    /* A look to 60 degrees and a held profile check REACH the side view - by the fold's own definition they may swap there. */
+    /* A pose that REACHES the threshold may swap there by definition - but it must never be worse
+       than the setting this replaced on either axis, which is what stops a lower threshold from
+       being walked in one rung at a time without anyone restating the cost. */
     const sideRows = foldPoseRows.filter(reachesSide);
-    check("...while a look to 60 degrees and a held profile check - which reach the side view - still may, and show the other side for less time than v142 did",
-      sideRows.length === 2 && sideRows.every((r) => r.p.fired <= r.v.fired && r.p.wrong < r.v.wrong), JSON.stringify(sideRows.map((r) => [r.name, r.v, r.p])));
+    check("...while a pose that does reach it still may swap, and shows the other side no more often and for less time than v142 did",
+      sideRows.length >= 2 && sideRows.every((r) => r.p.fired <= r.v.fired && r.p.wrong < r.v.wrong),
+      JSON.stringify(sideRows.map((r) => [r.name, peakOf(r), r.v, r.p])));
     /* THE COST, stated: a small pose that rises past lossDeg fast and drops a frame near its top is read as the fold. v142 swapped
        on these rarely or never. Bounded here so a lower lossDeg (or a looser rise) has to restate it rather than slip past. */
     const smallPoses = foldPoseRows.filter((r) => ["weight shift to 18°, held 1.5s", "reach, 22° for 300ms", "facing away, 30° twist to look back",
@@ -1473,9 +1515,9 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_MIN_DEG", "ORIENT_EARLY_TURN_MAX_DEG", "ORIENT_EARLY_TURN_DEFAULT_DEG", iife)(
       { search }, numOr("ORIENT_EARLY_TURN_MIN_DEG"), numOr("ORIENT_EARLY_TURN_MAX_DEG"), numOr("ORIENT_EARLY_TURN_DEFAULT_DEG"));
     const got = ["", "?early_turn=", "?early_turn=0", "?early_turn=abc", "?early_turn=-5", "?early_turn=20", "?early_turn=25", "?early_turn=3", "?early_turn=90", "?orient_debug=1"].map((q) => [q, parse(q)]);
-    check("ON BY DEFAULT AT THE FOLD: ?early_turn omitted, empty or unparseable is ORIENT_EARLY_TURN_DEFAULT_DEG (50, 20 until the fold handshake); 0 or negative turns it OFF; a value is clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") === 50 &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([50, 50, 0, 50, 0, 20, 25, 10, 60, 50]), JSON.stringify(got));
+    check("ON BY DEFAULT AT THE MIDDLE GROUND: ?early_turn omitted, empty or unparseable is ORIENT_EARLY_TURN_DEFAULT_DEG (35; 20 in v142, 50 at the fold handshake); 0 or negative turns it OFF; a value is clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") === 35 &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([35, 35, 0, 35, 0, 20, 25, 10, 60, 35]), JSON.stringify(got));
   }
   const sl0 = SRC.indexOf("const ORIENT_EARLY_TURN_SLOW_DEG = (() => {");
   if (sl0 === -1) check("ORIENT_EARLY_TURN_SLOW_DEG reads ?early_turn_slow", false, "not found");
@@ -1484,9 +1526,9 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_MIN_DEG", "ORIENT_EARLY_TURN_MAX_DEG", "ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG", iife)(
       { search }, numOr("ORIENT_EARLY_TURN_MIN_DEG"), numOr("ORIENT_EARLY_TURN_MAX_DEG"), numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG"));
     const got = ["", "?early_turn_slow=", "?early_turn_slow=0", "?early_turn_slow=x", "?early_turn_slow=45", "?early_turn_slow=5", "?early_turn_slow=90"].map((q) => [q, parse(q)]);
-    check("?early_turn_slow: default ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG (50, 35 until the fold handshake), 0 turns the slow path off, clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG") === 50 &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([50, 50, 0, 50, 45, 10, 60]), JSON.stringify(got));
+    check("?early_turn_slow: default ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG (35; 35 in v142, 50 at the fold handshake), 0 turns the slow path off, clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG") === 35 &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([35, 35, 0, 35, 45, 10, 60]), JSON.stringify(got));
     check("...and it is never below the outbound threshold - at the fold it only adds the slow rise there, it never sends earlier",
       numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") && numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG") >= 8);
   }
@@ -1497,9 +1539,15 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_MIN_DEG", "ORIENT_EARLY_TURN_MAX_DEG", "ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG", iife)(
       { search }, numOr("ORIENT_EARLY_TURN_MIN_DEG"), numOr("ORIENT_EARLY_TURN_MAX_DEG"), numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG"));
     const got = ["", "?early_turn_return=", "?early_turn_return=0", "?early_turn_return=x", "?early_turn_return=20", "?early_turn_return=5", "?early_turn_return=90"].map((q) => [q, parse(q)]);
-    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (50 - the same fold as the way out; 35 until the fold handshake), 0 turns the early FRONT off, clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 50 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([50, 50, 0, 50, 20, 10, 60]), JSON.stringify(got));
+    /* THE RETURN IS NEVER THE LOWER OF THE TWO, and that is the invariant rather than any
+       particular pair. v136-v142 ran 20/35, the fold handshake 50/50, the middle ground 35/45 -
+       all satisfy it. It exists because the return leg is the one with a MEASURED failure: at 20
+       a live clip caught FRONT landing on a back-facing body, and §11 found 35 the lowest setting
+       that never does so at any latency. A return BELOW the outbound leg would send FRONT while
+       the shopper is still more turned away than the outbound leg thought was worth swapping at. */
+    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (45 - a 10 degree hysteresis over the outbound 35; 35 in v142, 50 at the fold handshake), 0 turns the early FRONT off, clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 45 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([45, 45, 0, 45, 20, 10, 60]), JSON.stringify(got));
   }
   const ls0 = SRC.indexOf("const ORIENT_EARLY_TURN_LOSS_DEG = (() => {");
   if (ls0 === -1) check("ORIENT_EARLY_TURN_LOSS_DEG reads ?early_turn_loss", false, "not found");
