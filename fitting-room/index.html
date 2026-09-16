@@ -217,6 +217,15 @@
                 <div class="result-box" id="resultBox">
                     <div id="resultLabel">המידה המומלצת עבורך:</div>
                     <div class="size-display" id="sizeResult">-</div>
+                    <!-- Out-of-stock notice + the in-stock alternatives. Written by
+                         renderStockNotice() in app.js, which owns [hidden] and the
+                         .has-stock-notice class on the box above; NO data-i18n here
+                         because the sentence interpolates live size tokens, so it is
+                         built with tf() at paint time and repainted on every
+                         calculateSize() (including the one applyLanguage() triggers).
+                         role="status" so a screen reader announces the size going
+                         out of stock without stealing focus from the form. -->
+                    <p class="stock-notice" id="stockNotice" role="status" aria-live="polite" hidden></p>
                 </div>
 
                 <button id="btn-next-screen" type="button" class="btn-primary" disabled data-i18n="btnNextScreen">המשך לחדר המדידה הוירטואלי →</button>

@@ -1505,23 +1505,32 @@
 
   /* DOM tier - the universal fallback for every non-Shopify stack. Returns [] unless a
      single control yields 2+ values that are ALL plausible size tokens, so a stray
-     <select> of colours or quantities can never masquerade as a size list. */
-  function sizesFromDOM() {
+     <select> of colours or quantities can never masquerade as a size list.
+
+     WHY THIS IS SPLIT IN TWO. The stock reader below has to answer "is THIS size
+     buyable" and that is a property of the NODE, not of the string - so the walk that
+     picks the winning control now yields {value,node} pairs (sizeOptionNodes) and
+     sizesFromDOM() is the thin projection back down to strings. There is exactly ONE
+     definition of "which control on this page is the size picker"; a second copy of
+     that walk written for stock would be free to drift and start reading a DIFFERENT
+     control than the one the size list came from, which is the one way this could
+     report a size as sold out that the shopper is looking at in stock. */
+  function sizeOptionNodes() {
     var nodes = d.querySelectorAll(SIZE_CONTROL_SELECTORS);
     for (var i = 0; i < nodes.length; i++) {
       var el = nodes[i], raw = [];
       var opts = el.querySelectorAll ? el.querySelectorAll("option") : [];
-      for (var j = 0; j < opts.length; j++) raw.push(opts[j].textContent);
+      for (var j = 0; j < opts.length; j++) raw.push({ v: opts[j].textContent, node: opts[j] });
       if (!raw.length) {
         var btns = el.querySelectorAll
           ? el.querySelectorAll("button,label,li,a,[data-value]") : [];
         for (var k = 0; k < btns.length; k++) {
-          raw.push(readAttr(btns[k], "data-value") || btns[k].textContent);
+          raw.push({ v: readAttr(btns[k], "data-value") || btns[k].textContent, node: btns[k] });
         }
       }
       var out = [], seen = {}, rejected = false;
       for (var m = 0; m < raw.length; m++) {
-        var v = String(raw[m] == null ? "" : raw[m]).trim();
+        var v = String(raw[m].v == null ? "" : raw[m].v).trim();
         if (!v) continue;                        // blank rows carry no signal either way
         if (!isPlausibleSizeToken(v)) {
           // A leading placeholder ("Choose a size", "בחר מידה") is normal and ignored;
@@ -1533,7 +1542,7 @@
         var key = v.toLowerCase();
         if (seen[key]) continue;
         seen[key] = 1;
-        out.push(v);
+        out.push({ value: v, node: raw[m].node });
       }
       if (rejected) continue;                    // try the next candidate control
       if (out.length >= 2) return out;
@@ -1541,10 +1550,183 @@
     return [];
   }
 
+  function sizesFromDOM() {
+    var pairs = sizeOptionNodes();
+    var out = [];
+    for (var i = 0; i < pairs.length; i++) out.push(pairs[i].value);
+    return out;
+  }
+
   function extractHostSizes() {
     var fromVariants = sizesFromVariants(_shopifyVariants, _shopifySizeOptionIndex);
     if (fromVariants.length) return fromVariants;
     try { return sizesFromDOM(); } catch (e) { return []; }
+  }
+
+  /* ══ STOCK - which of those sizes the shopper cannot actually buy ════════════════
+     WHAT THIS IS FOR: the room recommends a size off the body measurements alone, so
+     it will happily hand a shopper "L" on a product whose L sold out three days ago.
+     They go live, like it, press Add to Cart and only then find out. This reads the
+     answer the PDP is already showing them.
+
+     IT REPORTS SOLD-OUT, NEVER IN-STOCK, AND THAT DIRECTION IS THE WHOLE SAFETY
+     ARGUMENT (CLAUDE.md §2.5 - never block on ambiguity; a wrong block stops a paying
+     shopper). Every failure mode here - a theme we cannot read, a control that never
+     hydrated, a thrown selector, a store with no stock markup at all - converges on the
+     SAME empty list, and an empty list means "nothing is known to be sold out", i.e.
+     the exact behaviour that shipped before this existed. Had this returned the
+     IN-STOCK set instead, all of those same failures would have converged on "" and
+     every size on the page would have been struck through on a store that was fully
+     stocked. There is no reading of this list that can take a size away from someone
+     who can buy it; the worst case is that it stays silent.
+
+     Two tiers, strongest first, exactly mirroring extractHostSizes() above. */
+
+  /* Tier 1 - the store's own variant JSON. `available` is Shopify's own computed
+     answer (inventory policy, tracking and quantity already folded in), so this needs
+     no heuristics at all and is the only tier that can be called authoritative.
+
+     A SIZE IS SOLD OUT ONLY WHEN EVERY VARIANT CARRYING IT IS UNAVAILABLE. On a
+     Size × Colour product, L-in-red being gone says nothing about L-in-blue, and the
+     shopper can still buy an L. Requiring all of them to be unavailable is what keeps
+     a multi-option product from reporting most of its ladder sold out.
+
+     ABSTAINS WHOLESALE on a payload with no `available` field anywhere (a non-Shopify
+     shape that happened to be parsed, or an older API): every size would otherwise
+     read as available===undefined -> falsy -> "sold out", turning a missing field into
+     a claim that the whole product is gone. Pure - no DOM, no globals - so the suite
+     can exercise it directly.
+     @returns {string[]} the sold-out values, in catalog order */
+  function soldOutFromVariants(variants, sizeOptionIndex) {
+    if (sizeOptionIndex < 0 || !variants || !variants.length) return [];
+    var sawAvailabilityField = false;
+    for (var a = 0; a < variants.length; a++) {
+      if (variants[a] && typeof variants[a].available === "boolean") { sawAvailabilityField = true; break; }
+    }
+    if (!sawAvailabilityField) return [];
+
+    var order = [], anyAvailable = {};
+    for (var i = 0; i < variants.length; i++) {
+      var raw = optionValueAt(variants[i], sizeOptionIndex);
+      var v = String(raw == null ? "" : raw).trim();
+      if (!v) continue;
+      var key = v.toLowerCase();
+      if (!(key in anyAvailable)) { order.push(v); anyAvailable[key] = false; }
+      if (variants[i] && variants[i].available === true) anyAvailable[key] = true;
+    }
+    var out = [];
+    for (var j = 0; j < order.length; j++) {
+      if (!anyAvailable[order[j].toLowerCase()]) out.push(order[j]);
+    }
+    return out;
+  }
+
+  /* The class/text half of the DOM tier, kept pure and separate from the node poking
+     so the suite can pin the vocabulary without a DOM. Deliberately NARROW: matched as
+     whole dash/underscore/space-delimited words, so "size-disabled-hint" or a product
+     genuinely called "Unavailable Hoodie" cannot trip it from a substring.
+
+     "disabled" IS on the list. As a CLASS it is ambiguous (some themes use it for "not
+     selectable yet"), but a mis-read here costs a strike-through and an alternative
+     suggestion on a size that was in fact buyable - the shopper can still press it
+     (the room never disables a size button, see injectSizeSelector in app.js) - while
+     missing it costs them the purchase they were about to make. */
+  var OOS_WORD_RE = /(?:^|[-_\s])(?:sold[-_\s]?out|soldout|out[-_\s]?of[-_\s]?stock|outofstock|oos|unavailable|no[-_\s]?stock|nostock|disabled|is-disabled|inactive)(?:$|[-_\s])/i;
+  var OOS_TEXT_RE = /(?:sold\s*out|out\s*of\s*stock|unavailable|not\s*available|אזל|אזלה|לא\s*במלאי|חסר\s*במלאי|נגמר\s*המלאי)/i;
+  function oosTokenSignal(className, text) {
+    if (OOS_WORD_RE.test(" " + String(className == null ? "" : className) + " ")) return true;
+    /* The size token itself is <=5 chars (isPlausibleSizeToken), so anything long
+       enough to carry one of these phrases is extra copy the theme added - almost
+       always a visually-hidden "Sold out" span inside the swatch. */
+    return OOS_TEXT_RE.test(String(text == null ? "" : text));
+  }
+
+  /* Shopify's stock swatch pattern is <input type="radio" disabled><label for=...>L</label>
+     - the string is on the LABEL and the disabled state is on the INPUT, so reading
+     only the node the value came from misses it on a large share of real stores. */
+  function stockStateNode(node) {
+    if (!node) return null;
+    try {
+      if (node.tagName !== "LABEL") return null;
+      var id = readAttr(node, "for");
+      if (id && d.getElementById) {
+        var target = d.getElementById(id);
+        if (target) return target;
+      }
+      return node.querySelector ? node.querySelector("input") : null;
+    } catch (e) { return null; }
+  }
+
+  function nodeSaysOutOfStock(node) {
+    if (!node) return false;
+    try {
+      if (node.disabled === true) return true;
+      if (readAttr(node, "aria-disabled") === "true") return true;
+      /* hasAttribute, NOT readAttr - and this is the bug this line is written against.
+         readAttr() returns "" for a MISSING attribute, never null (see its own
+         definition above), so a `readAttr(node,"disabled") != null` presence test is
+         true for every element on the page: the first jsdom run of this tier reported
+         S/M/L/XL as sold out on a fully stocked product, i.e. the one direction this
+         whole feature is built never to fail in. Every OTHER check here compares
+         readAttr's result against a specific VALUE ("true"/"false"/"0"), where the ""
+         default is correctly inert; presence is the only question that has to be asked
+         a different way. Covers <label disabled>/<li disabled>, where there is no
+         .disabled IDL property for the check above to have caught. */
+      if (node.hasAttribute && node.hasAttribute("disabled")) return true;
+      var avail = readAttr(node, "data-available");
+      if (avail === "false" || avail === "0") return true;
+      var stocked = readAttr(node, "data-in-stock") || readAttr(node, "data-instock");
+      if (stocked === "false" || stocked === "0") return true;
+      var qty = readAttr(node, "data-stock") || readAttr(node, "data-inventory") ||
+                readAttr(node, "data-quantity");
+      if (qty === "0") return true;
+      /* SVG elements carry className as an SVGAnimatedString, not a string. */
+      var cls = node.className;
+      if (cls && typeof cls === "object" && "baseVal" in cls) cls = cls.baseVal;
+      if (oosTokenSignal(cls, node.textContent)) return true;
+      /* The line-through the task asks about. Computed, not inline, because themes set
+         it from a stylesheet - and read off the node AND its first element child, since
+         a swatch usually strikes an inner <span> rather than the label itself. */
+      if (w.getComputedStyle) {
+        var probes = [node, node.firstElementChild];
+        for (var i = 0; i < probes.length; i++) {
+          if (!probes[i]) continue;
+          var cs = w.getComputedStyle(probes[i]);
+          var deco = (cs && (cs.textDecorationLine || cs.textDecoration)) || "";
+          if (String(deco).indexOf("line-through") !== -1) return true;
+        }
+      }
+    } catch (e) { return false; }
+    return false;
+  }
+
+  /* Tier 2 - the universal fallback, read off the SAME control sizesFromDOM() chose
+     (see sizeOptionNodes' comment on why that is one walk and not two). */
+  function soldOutFromDOM() {
+    var pairs = sizeOptionNodes(), out = [];
+    for (var i = 0; i < pairs.length; i++) {
+      if (nodeSaysOutOfStock(pairs[i].node) || nodeSaysOutOfStock(stockStateNode(pairs[i].node))) {
+        out.push(pairs[i].value);
+      }
+    }
+    return out;
+  }
+
+  /* Tier order mirrors extractHostSizes() EXACTLY, and it has to: the room pairs this
+     list against that one by token, so a stock verdict read off the DOM while the size
+     list came from the variant JSON could be keyed on values that are spelled
+     differently ("L" vs "Large") and would silently match nothing. Whichever tier
+     answered for the sizes answers for their stock. */
+  function extractSoldOutSizes() {
+    try {
+      if (sizesFromVariants(_shopifyVariants, _shopifySizeOptionIndex).length) {
+        return soldOutFromVariants(_shopifyVariants, _shopifySizeOptionIndex);
+      }
+      return soldOutFromDOM();
+    } catch (e) {
+      console.log("[PEAR widget] stock scrape failed, treating every size as available:", e && e.message);
+      return [];
+    }
   }
 
   /* ── NUMERIC vs ALPHABETIC size run, read at scan time ──────────────────────────
@@ -2148,8 +2330,10 @@
     var backParam = (garment.back && !/^data:/i.test(garment.back)) ? garment.back : "";
     var hostSizes = extractHostSizes();
     var hostSizeRunType = classifySizeRunType(hostSizes);
+    var hostSoldOut = extractSoldOutSizes();
     console.log("[PEAR widget] host product sizes:", hostSizes.length ? hostSizes.join("/") : "(none readable)",
-      "| run type:", hostSizeRunType);
+      "| run type:", hostSizeRunType,
+      "| sold out:", hostSoldOut.length ? hostSoldOut.join("/") : "(none detected)");
 
     var params =
       "garment_url=" + encodeURIComponent(garment.url) +
@@ -2194,6 +2378,14 @@
          size selector are correct on the very first paint, not only after the classify
          round trip lands. */
       (hostSizes && hostSizes.length ? "&garment_sizes=" + hostSizes.map(encodeURIComponent).join(",") : "") +
+      /* Which of those sizes the PDP is already showing as gone. Sent at open for the
+         same reason garment_sizes is - calculateSize() paints its recommendation on
+         Screen 1, before any round trip lands, and a recommendation that appears first
+         and is corrected to "sold out" a second later is worse than either answer on
+         its own. OMITTED when nothing is sold out, so an absent param reads as "no
+         stock evidence" rather than as a claim; both render identically (every size
+         available), which is what makes the omission safe. */
+      (hostSoldOut && hostSoldOut.length ? "&garment_soldout=" + hostSoldOut.map(encodeURIComponent).join(",") : "") +
       /* Numeric-vs-alphabetic verdict on that same list, sent at open for the same
          reason garment_sizes is: calculateSize() runs on Screen 1, before the classify
          round trip lands. Omitted on "unknown" - an absent param reads as "no run-type
@@ -2738,6 +2930,15 @@
                    modal already opened, so this is the delivery for a size list that
                    wasn't readable yet at open time. */
                 garment_sizes: extractHostSizes(),
+                /* Stock for that same list, re-read HERE rather than reused from the
+                   open URL. The Shopify product JSON is fetched at boot and routinely
+                   resolves after the modal opened, so at open time the DOM tier may
+                   have been the only thing readable (or nothing was) - this is the
+                   delivery for the authoritative variant-level answer. Sent as an ARRAY
+                   always, including the empty one: unlike the URL param, an empty array
+                   here is a real message ("re-checked, nothing is sold out") that must
+                   be able to CLEAR a stale strike-through from the open-time scrape. */
+                garment_soldout: extractSoldOutSizes(),
                 /* Re-sent with the correction, not only on the open URL. The PDP heading
                    can still be a skeleton placeholder at open on a JS-rendered store, so
                    this is the more accurate reading of the two and the room overwrites

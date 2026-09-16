@@ -29,7 +29,7 @@
    TOKEN_ENDPOINT, fetched the instant the user goes live (see mintEphemeralToken).
    We destructure the derived constants so existing call sites read naturally.   */
 import { CONFIG } from "./config.js";
-import { t, setupLangToggle } from "./i18n.js";
+import { t, tf, setupLangToggle } from "./i18n.js";
 const {
   CONNECT_TIMEOUT_MS,
   APPLY_TIMEOUT_MS,
@@ -655,6 +655,34 @@ let pendingTitle = undefined;                // string | undefined (none arrived
    picker scrapes to nothing. A shopper was quoted a bare waist-inch number ("32")
    for a product whose own picker only ever offers S/M/L. */
 let pendingSizeRunType = undefined;          // "numeric" | "alpha" | "unknown" | undefined
+/* Which of the host product's sizes the PDP is already showing as gone, same two-stage
+   handoff as pendingSizes above (?garment_soldout= at open, then the PEAR_UPDATE_GARMENT
+   correction). Read by isSizeSoldOut() / stockFallbacksFor().
+
+   THE REPORT THIS CLOSES: the recommendation is computed from the BODY alone, so a
+   shopper whose measurements resolve to L is shown "L" on a product whose L sold out
+   days ago. They go live, like it, press "הוסף לסל" - and only the storefront's own cart
+   call tells them. Everything before that point is the room confidently recommending
+   something it cannot sell.
+
+   ONLY EVER A SOLD-OUT LIST, NEVER AN IN-STOCK ONE - the fail-open direction, and the
+   reason this is safe to act on. Every way the widget's scrape can fail (unreadable
+   theme, unhydrated picker, a store with no stock markup, a thrown selector) produces
+   the SAME empty list, and empty means "nothing known to be gone" - the pre-existing
+   behaviour, byte for byte. An in-stock list would have turned each of those failures
+   into "everything is sold out" on a fully stocked product (CLAUDE.md §2.5). */
+let pendingSoldOutSizes = undefined;         // string[] | string | undefined (none arrived yet)
+/* WHICH PRODUCT THAT LIST BELONGS TO - the front-image URL parseHandoff() read it
+   beside. pendingSizes has no such stamp and does not need one (a size list is evidence
+   about kids-vs-adult, and a stale one at worst picks the wrong chart), but a stale
+   SOLD-OUT list is a false claim about a specific SKU: the shopper opens the room on
+   product A, taps a Complete-the-Look card for product B, and B's perfectly stocked L
+   gets struck through because A's L was gone. The whole safety argument for this
+   feature is that it can only ever fail silent, so the one way it could fail LOUD gets
+   an explicit gate. Compared with sameImage(), never ===, per CLAUDE.md §2.2 - the same
+   photo arrives under ?width= / _800x spellings and a raw compare would drop the stock
+   verdict on the very product it was read from. */
+let pendingSoldOutForImg = undefined;        // string | undefined
 let focusMode = false;
 
 /* Multi-Image Product Gallery Sync - which product angle the live engine is warping.
@@ -1828,6 +1856,178 @@ function resolvedGarmentSizes() {
   return parseSizeList(activeItem?.sizes ?? pendingSizes);
 }
 
+/* ══ STOCK - the sizes the shopper cannot actually buy ══════════════════════════════
+   Populated by pear-widget.js: extractSoldOutSizes() (see pendingSoldOutSizes' own
+   comment for the report this closes and for why the list is one-directional).
+
+   Same two-stage handoff and the same typeof guards as resolvedSizeRunType() directly
+   below, for the same CLAUDE.md §2.7 reason: this region is executed as a standalone
+   slice by several harnesses with no module scope around it, so a bare reference to
+   either binding is a ReferenceError there rather than a lint nit.
+
+   NORMALISED THROUGH parseSizeList(), NEVER COMPARED RAW. It trims and upper-cases, so
+   a PDP that renders "l" or " L " still matches the ladder's "L" - the same discipline
+   CLAUDE.md §2.2 imposes on image URLs, for the same reason: two spellings of one size
+   that fail to compare equal would silently report a sold-out size as available. */
+function resolvedSoldOutSizes() {
+  const item = typeof activeItem !== "undefined" ? activeItem : null;
+  if (item && item.soldOutSizes != null) return parseSizeList(item.soldOutSizes);
+
+  const pending = typeof pendingSoldOutSizes !== "undefined" ? pendingSoldOutSizes : undefined;
+  if (pending === undefined) return [];
+  /* The URL's list describes the product the widget opened the room ON. Honour it while
+     that is still the active garment (or before any garment exists at all - Screen 1,
+     where it is the only stock evidence there is and the reason it travels on the URL
+     rather than waiting for the correction). The moment a DIFFERENT product is active,
+     abstain: no stock data is the documented safe state, a wrong strike-through is not.
+     See pendingSoldOutForImg's own comment. */
+  if (item) {
+    const stampedFor = typeof pendingSoldOutForImg !== "undefined" ? pendingSoldOutForImg : undefined;
+    const same = stampedFor && item.img && typeof sameImage === "function" &&
+      sameImage(item.img, stampedFor);
+    if (!same) return [];
+  }
+  return parseSizeList(pending);
+}
+
+/** @param {string|null|undefined} size @returns {boolean} true only for a size POSITIVELY known gone. */
+function isSizeSoldOut(size) {
+  if (!size) return false;
+  const token = parseSizeList([size])[0];
+  return !!token && resolvedSoldOutSizes().includes(token);
+}
+
+/* THE LADDER THE FALLBACKS WALK, smallest to largest. Deliberately NOT activeSizeLadder():
+   that one answers "how far apart are two sizes" for the fit modifier and returns the
+   abstract SIZE_SCALE (XS-3XL) for every letter product, whether or not the store sells
+   those sizes. Recommending a neighbour off THAT ladder would hand the shopper an "XL"
+   on a product that stops at L - the same "a real SKU the shopper can't buy" failure
+   calculateSize()'s own "SNAP TO THE PRODUCT'S OWN LIST" step exists to prevent. So the
+   product's own scraped list wins whenever there is one, and the abstract scale is only
+   the fallback for a picker we never read.
+
+   ORDERED, NOT TRUSTED AS-SCRAPED. "one size down" is meaningless on an unordered list,
+   and DOM order is whatever the theme happened to emit - the same trap calculateSize()
+   records in its "TIE-BREAK IS AN EXPLICIT rule, NOT ARRAY ORDER" note. An all-numeric
+   run sorts numerically; a run whose every token is on a known letter scale sorts by
+   that scale's index; ANY other list (mixed, or store-specific labels) keeps catalog
+   order rather than being sorted by a rule that does not apply to it. */
+function purchasableLadder() {
+  const own = resolvedGarmentSizes();
+  if (!own.length) {
+    return currentSizeCategory === "child" ? [...CHILD_SIZE_SCALE]
+      : currentSizeIsNumericPants ? pantsChartForSizes(own).map((r) => r.size)
+      : [...SIZE_SCALE];
+  }
+  const unique = [...new Set(own)];
+  if (unique.every((s) => /^\d{1,2}$/.test(s))) {
+    return unique.sort((a, b) => Number(a) - Number(b));
+  }
+  const scale = unique.every((s) => SIZE_SCALE.includes(s)) ? SIZE_SCALE
+    : unique.every((s) => CHILD_SIZE_SCALE.includes(s)) ? CHILD_SIZE_SCALE
+    : null;
+  if (scale) return unique.sort((a, b) => scale.indexOf(a) - scale.indexOf(b));
+  return unique;   // unrecognised run - catalog order is the only ordering evidence there is
+}
+
+/**
+ * The two alternatives offered when the recommended size is gone: the nearest size
+ * BELOW it that is actually purchasable, and the nearest one ABOVE.
+ *
+ * NEAREST-AVAILABLE, NOT STRICTLY-ONE-STEP. The obvious reading of "suggest one size
+ * down and one size up" is ladder[i-1] / ladder[i+1] - but a size selling out rarely
+ * happens alone, and on a product where both L and M are gone that reading offers the
+ * shopper nothing at all while an S sits in stock one rung further down. Walking
+ * outward to the first AVAILABLE rung in each direction is strictly more useful and
+ * stays truthful: every rung below the recommendation really is the tighter fit and
+ * every rung above really is the looser one, which is exactly what the copy claims.
+ * The distance itself is never stated, so a two-step fallback cannot misdescribe
+ * itself.
+ *
+ * ABSTAINS RATHER THAN GUESSES. An empty return (either side, or both) means "there is
+ * no honest alternative in that direction" and the caller drops that half of the
+ * sentence - it never falls back to naming a size that is also sold out, or one that
+ * is not on the product's list at all, which is the entire point of the requirement
+ * that the alternatives exist in stock before they are shown.
+ * @param {string} size - the recommended size, as calculateSize() resolved it
+ * @returns {{down: string|null, up: string|null}}
+ */
+function stockFallbacksFor(size) {
+  const none = { down: null, up: null };
+  const token = parseSizeList([size])[0];
+  if (!token) return none;
+  const ladder = purchasableLadder();
+  const idx = ladder.indexOf(token);
+  // Off-ladder (a chart letter on a product that never listed its sizes, a store label
+  // we could not order): nothing here knows which direction is "down", so it abstains.
+  if (idx === -1) return none;
+
+  let down = null, up = null;
+  for (let i = idx - 1; i >= 0; i--) { if (!isSizeSoldOut(ladder[i])) { down = ladder[i]; break; } }
+  for (let i = idx + 1; i < ladder.length; i++) { if (!isSizeSoldOut(ladder[i])) { up = ladder[i]; break; } }
+  return { down, up };
+}
+
+/**
+ * Paint (or clear) the out-of-stock sentence under the recommendation on Screen 1.
+ *
+ * CASE A IS THE SILENT ONE, AND THAT IS THE DEFAULT. The notice is hidden and emptied
+ * on every call that is not positively a sold-out recommendation - a null size, a size
+ * with no stock evidence against it, a missing element. Anything this cannot answer
+ * confidently therefore renders exactly what shipped before stock existed: the size,
+ * on its own, with nothing added (CLAUDE.md §2.5).
+ *
+ * WRITES textContent, NEVER innerHTML. The size tokens interpolated into this sentence
+ * come from a scrape of a third-party storefront's DOM - `readAttr(node,"data-value")`
+ * on a merchant's page - so they are untrusted strings that happen to be short. They
+ * pass isPlausibleSizeToken() in the widget, which would not admit markup today, but
+ * that is a filter on the far side of a postMessage boundary and not a guarantee this
+ * function gets to rely on. textContent makes the question moot permanently.
+ *
+ * @param {string|null} size - the recommended size, or null to clear the notice
+ */
+function renderStockNotice(size) {
+  const el = $("stockNotice");
+  if (!el) return;                       // Screen 1 markup absent (embed/test harness)
+
+  const box = $("resultBox");
+  /* .result-actions ALSO gets the flag, and it is not decoration. That tray reveals
+     itself by animating max-height from 0 to a FIXED 420px with overflow:hidden - a
+     ceiling sized for label + size display + Continue button. This sentence is four to
+     six lines of Hebrew on a 320px phone, which spends most of the remaining headroom,
+     and anything past the ceiling is silently CLIPPED rather than scrolled. The class
+     gives that one case its own taller ceiling (see .result-actions.is-ready
+     .has-stock-notice in style.css) instead of leaving it to chance; the default case
+     is untouched, so the existing reveal animation is unchanged for every shopper whose
+     size is in stock. Flagged from here rather than with :has() so the behaviour does
+     not depend on selector support. */
+  const tray = $("resultActions");
+  const clear = () => {
+    el.hidden = true;
+    el.textContent = "";
+    if (box) box.classList.remove("has-stock-notice");
+    if (tray) tray.classList.remove("has-stock-notice");
+  };
+
+  if (!size || !isSizeSoldOut(size)) return clear();
+
+  const { down, up } = stockFallbacksFor(size);
+  const label = formatSizeLabel(size);
+  const key = down && up ? "stockSoldOutBoth"
+    : down ? "stockSoldOutDown"
+    : up ? "stockSoldOutUp"
+    : "stockSoldOutNone";
+  const text = tf(key, { size: label, down, up });
+  if (!text) return clear();             // dictionary miss - say nothing rather than "{size}"
+
+  el.textContent = text;
+  el.hidden = false;
+  if (box) box.classList.add("has-stock-notice");
+  if (tray) tray.classList.add("has-stock-notice");
+  console.log("[PEAR] recommended size", label, "is out of stock - offering",
+    down || "(nothing smaller)", "/", up || "(nothing larger)");
+}
+
 /* Same two-stage handoff, for the cached numeric/alpha verdict isAlphaSizeRun() falls
    back to when resolvedGarmentSizes() comes back empty. See pendingSizeRunType's own
    comment for the full round trip (widget scrape -> classify-images cache -> here).
@@ -2019,6 +2219,11 @@ function calculateSize() {
   const resultActions = $("resultActions");
 
   resultBox.classList.remove("show", "error-result", "no-match-result");
+  // Cleared HERE, before both early returns below, for the same reason
+  // currentSizeIsNumericPants is: an invalid or unmatched measurement must never leave
+  // the PREVIOUS garment's "your size is sold out" sentence sitting under a result box
+  // that no longer shows that size.
+  renderStockNotice(null);
   if (resultActions) resultActions.classList.remove("is-ready");   // collapse the tray
   resultLabel.innerText = t("resultLabelDefault");
   nextBtn.disabled = true;
@@ -2245,6 +2450,14 @@ function calculateSize() {
   sizeResult.innerText = formatSizeLabel(bestSize);
   resultBox.classList.add("show");
   if (resultActions) resultActions.classList.add("is-ready");
+  /* STOCK IS PRESENTATION ONLY - it never moves the recommendation. bestSize is still
+     the size that actually fits this body, and it is still what currentUserSize (and
+     therefore the ★ on the ladder, getSizeDelta(), and the fit sentence that reaches
+     Decart) is set to below. Silently re-recommending M because L is gone would tell a
+     shopper their size is M, which is false and outlives the visit - the honest answer
+     is "L is your size, L is gone, here is what else would work". Case A/B of the
+     requirement is a difference in what is SAID, not in what was computed. */
+  renderStockNotice(bestSize);
   currentUserSize = bestSize;
   nextBtn.disabled = false;
   updateProgress();
@@ -2572,6 +2785,16 @@ function parseHandoff() {
          in the module. Absent leaves it undefined, never "", so "no list arrived" stays
          distinguishable from "the product genuinely lists no sizes". */
       sizes: q.get("garment_sizes") || undefined,
+      /* Which of those sizes the PDP already shows as gone (pear-widget.js:
+         extractSoldOutSizes()). Carried RAW - the comma string - exactly as `sizes`
+         above is, for the same reason: every reader normalises through parseSizeList(),
+         which takes both forms, so this stays a pure param read. Read SYNCHRONOUSLY
+         because calculateSize() paints the recommendation on Screen 1, and a size shown
+         as available for a beat and then corrected to sold-out is worse than either
+         answer alone. Absent (the widget omits the param when nothing is sold out)
+         leaves it undefined, which resolvedSoldOutSizes() reads as "nothing known to be
+         gone" - identical to the pre-stock behaviour. */
+      soldOutSizes: q.get("garment_soldout") || undefined,
       /* Numeric-vs-alphabetic verdict on that same list (pear-widget.js:
          classifySizeRunType()), read SYNCHRONOUSLY for the same reason `sizes` is -
          isAlphaSizeRun() needs it on Screen 1, before any round trip lands, and only
@@ -2605,10 +2828,18 @@ function parseHandoff() {
        with the original URL, so each field is filled only while it is still undefined. */
     if (pendingSizes === undefined && result.sizes !== undefined) pendingSizes = result.sizes;
     if (pendingSizeRunType === undefined && result.sizeRunType !== undefined) pendingSizeRunType = result.sizeRunType;
+    if (pendingSoldOutSizes === undefined && result.soldOutSizes !== undefined) {
+      pendingSoldOutSizes = result.soldOutSizes;
+      // Stamped in the SAME assignment, never separately - the two are one fact ("this
+      // product's stock") and a stamp that could lag the list is the stale-claim bug
+      // this gate exists to prevent. See pendingSoldOutForImg's own comment.
+      pendingSoldOutForImg = result.img;
+    }
     if (pendingTitle === undefined && result.title !== undefined) pendingTitle = result.title;
     console.log("[PEAR] parseHandoff() - product signals for the size calculator:", {
       sizes: pendingSizes || "(none readable on the PDP)",
       sizeRunType: pendingSizeRunType || "(none)",
+      soldOut: pendingSoldOutSizes || "(none flagged - every size treated as available)",
       title: pendingTitle || "(none)",
     });
     // CHECK B instrumentation - the exact point imgBack is resolved, showing which of
@@ -3590,6 +3821,37 @@ window.addEventListener("message", (e) => {
      treatment: recorded on pendingSizes, and synced onto activeItem when one exists.
      Stored RAW, exactly as parseHandoff() does - every reader normalises through
      parseSizeList() - so this listener stays free of module-level dependencies. */
+  /* Stock for that same list, handled BEFORE the size block below so that block's own
+     calculateSize()/injectSizeSelector() re-render already sees the fresh verdict
+     rather than repainting the ladder with last scrape's strike-throughs.
+
+     AN EMPTY ARRAY IS A REAL ANSWER HERE, and this is the one place that matters. The
+     open URL OMITS ?garment_soldout= when nothing is gone, but the widget always sends
+     this field on the correction - so `[]` means "re-checked against the authoritative
+     variant JSON, nothing is sold out" and has to be able to CLEAR a strike-through the
+     open-time DOM scrape put there. Testing truthiness (the convention the size block
+     below uses, where an empty list carries no information) would make that correction
+     unrepresentable and strand a wrong "sold out" on screen for the whole session.
+     Hence the explicit Array.isArray/string shape test: it distinguishes "the widget
+     said none" from "this build of the widget never sends the field". */
+  const incomingSoldOut = e.data.garment_soldout;
+  if (Array.isArray(incomingSoldOut) || typeof incomingSoldOut === "string") {
+    pendingSoldOutSizes = incomingSoldOut;
+    /* Re-stamp onto whatever is active NOW. This correction is about the product the
+       room currently holds, and later in this same handler the classifier's verdict can
+       REPLACE activeItem.img with a different gallery photo - leaving the stamp on the
+       open-time URL would make resolvedSoldOutSizes() disown its own fresh data. The
+       per-item write below already short-circuits that path, so this is the belt to its
+       braces: it keeps the pending fallback correct for a product whose activeItem is
+       rebuilt afterwards. */
+    if (activeItem && activeItem.img) pendingSoldOutForImg = activeItem.img;
+    if (activeItem) activeItem.soldOutSizes = incomingSoldOut;
+    console.log("[PEAR] stock correction:", parseSizeList(incomingSoldOut).join("/") || "(nothing sold out)");
+    const sizeFormEl4 = $("sizeForm");
+    if (sizeFormEl4 && !sizeFormEl4.hidden) { try { calculateSize(); } catch {} }
+    try { injectSizeSelector(); } catch {}
+  }
+
   const incomingSizes = e.data.garment_sizes;
   if (incomingSizes && incomingSizes.length) {
     pendingSizes = incomingSizes;
@@ -14530,6 +14792,49 @@ function injectSizeSelector() {
         white-space: nowrap;
         flex-shrink: 0;
       }
+      /* ── Sold out ────────────────────────────────────────────────────────────
+         Struck through and dimmed, but still a live button - see the "MARKED, NEVER
+         REMOVED AND NEVER DISABLED" note on the markup below for why it stays
+         pressable. Kept ABOVE .is-active in specificity terms by combining the two
+         classes, so the recommended-and-sold-out case reads as both rather than
+         letting the green active glow paint over the strike.
+         opacity is deliberately not used on the button itself: it would fade the
+         pear-green active ring too, and a size can be both selected and sold out. */
+      .pear-sz-btn.is-oos {
+        text-decoration: line-through;
+        text-decoration-thickness: 1.5px;
+        text-decoration-color: rgba(190, 60, 60, 0.75);
+        color: #9a9aa0;
+        background: rgba(255,255,255,0.28);
+        border-color: rgba(0,0,0,0.10);
+        box-shadow: none;
+      }
+      .pear-sz-btn.is-oos:hover {
+        color: #6b6b70;
+        background: rgba(255,255,255,0.42);
+        border-color: rgba(0,0,0,0.16);
+        box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+      }
+      .pear-sz-btn.is-oos.is-active {
+        color: #5f7d00;
+        background: rgba(141,182,0,0.12);
+        border-color: rgba(141,182,0,0.45);
+      }
+      /* The legend - a third child of #pearSizeSelector, which is a COLUMN flex
+         container, so it already gets its own full-width row from align-items:stretch
+         and the 8px column gap. No flex-basis here on purpose: in a column container
+         the main axis is the HEIGHT, so a 100% flex-basis would size this to the whole
+         pod rather than making it span the width.
+         Shown struck through because that IS what it is explaining - the key and the
+         thing it describes are the same mark. */
+      .pear-sz-foot {
+        text-align: center;
+        font-size: 10px;
+        font-weight: 600;
+        color: #9a9aa0;
+        text-decoration: line-through;
+        text-decoration-color: rgba(190, 60, 60, 0.75);
+      }
       @media (prefers-reduced-motion: reduce) {
         .pear-sz-btn.is-active { animation: none; }
       }
@@ -14571,18 +14876,47 @@ function injectSizeSelector() {
     : (currentSizeCategory === "child" ? CHILD_SIZE_SCALE : SIZE_SCALE);
 
   const current = activeTryOnSize || currentUserSize;
+  /* SOLD-OUT SIZES ARE MARKED, NEVER REMOVED AND NEVER DISABLED (CLAUDE.md §2.5).
+     Removing them would silently contradict the store's own picker, which still shows
+     them; disabling them would let one wrong verdict from a DOM heuristic take a
+     try-on away from a shopper who could in fact buy that size. Trying on a size that
+     is out of stock is also a legitimate thing to want - it is how someone decides
+     whether waiting for a restock is worth it. So the button stays pressable and just
+     stops pretending the size is purchasable: a strike-through, a dimmed tile, and the
+     status in its accessible name, where a sighted shopper reads it off the styling and
+     a screen-reader user hears it (the strike-through alone carries no semantics).
+
+     The ★ still marks the recommendation even when it is the sold-out one - it IS
+     still their size, which is exactly what the notice on Screen 1 says. */
+  /* Defined INSIDE this function, not beside it, per CLAUDE.md §2.6: this block is
+     sliced out of app.js by kids-product-sizes.test.mjs on its opening line, so a
+     module-scope helper called from in here would simply not exist in the extracted
+     copy - the same reason stripCdnTransformPath lives inside each canonicaliser. */
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const oosLabel = t("stockSoldOutBadge");
   const btnHtml = scale.map((sz) => {
     const isActive = sz === current;
     const isRec    = sz === currentUserSize;
-    return `<button class="pear-sz-btn${isActive ? " is-active" : ""}" data-sz="${sz}" type="button" aria-pressed="${isActive}">${sz}${isRec ? " ★" : ""}</button>`;
+    const isOos    = isSizeSoldOut(sz);
+    const cls = "pear-sz-btn" + (isActive ? " is-active" : "") + (isOos ? " is-oos" : "");
+    // esc() on the accessible name only: `sz` itself is already emitted raw as button
+    // text by the shipped code above, and the ladder it comes from is built from
+    // parseSizeList()-normalised tokens.
+    const aria = isOos ? ` aria-label="${esc(sz + " - " + oosLabel)}"` : "";
+    return `<button class="${cls}" data-sz="${sz}" type="button" aria-pressed="${isActive}"${aria}>${sz}${isRec ? " ★" : ""}</button>`;
   }).join("");
 
+  const anySoldOut = scale.some((sz) => isSizeSoldOut(sz));
   row.innerHTML =
     `<div class="pear-sz-head">` +
       `<span class="pear-sz-label">מידה · Size</span>` +
       (currentUserSize ? `<span class="pear-sz-hint">★ מומלצת</span>` : "") +
     `</div>` +
-    `<div class="pear-sz-btns">${btnHtml}</div>`;
+    `<div class="pear-sz-btns">${btnHtml}</div>` +
+    // Legend, printed only when there is something for it to explain - it is the only
+    // thing that tells a shopper what the struck-through tiles mean.
+    (anySoldOut ? `<div class="pear-sz-foot">${esc(oosLabel)}</div>` : "");
 
   row.addEventListener("click", (e) => {
     const btn = e.target.closest(".pear-sz-btn");
@@ -20659,6 +20993,20 @@ function onRetake() {
 
 function init() {
   setupLangToggle();   // global page-level toggle - wired regardless of demo-gate state below
+  /* Repaint the strings i18n.js's own data-i18n walk cannot reach - the ones THIS file
+     wrote through t()/tf(). See applyLanguage()'s "REPAINT THE STRINGS THIS WALK CANNOT
+     SEE" note for why the direction is an event and not an import.
+
+     BOTH painters are idempotent and cheap, and both are guarded: calculateSize() is a
+     no-op before height/weight exist and is skipped entirely while Screen 1 is hidden
+     (the convention every other late-signal handler in this file uses), and
+     injectSizeSelector() rebuilds a row of at most a dozen buttons. A toggle click is
+     the only thing that fires this. */
+  document.addEventListener("pear:languagechanged", () => {
+    const sizeFormEl = $("sizeForm");
+    if (sizeFormEl && !sizeFormEl.hidden) { try { calculateSize(); } catch {} }
+    try { injectSizeSelector(); } catch {}
+  });
   // (Floating contextual help beacon: help-widget.js is loaded as its own
   // <script type="module"> in index.html and self-initializes independently
   // - nothing to wire here.)

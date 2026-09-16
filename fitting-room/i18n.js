@@ -215,6 +215,44 @@ const I18N = {
   // value is displayed or logged - see formatSizeLabel(). Adult sizes are never
   // touched by this key; the number alone ("M"/"L") is unambiguous on its own.
   sizeLabelKidsSuffix:      { he: "(ילדים)", en: "(Kids)" },
+  /* ── STOCK: the recommended size is real, but the shopper cannot buy it ──────────
+     Four keys rather than one assembled at runtime, because stockFallbacksFor() can
+     honestly return a smaller size, a larger one, both, or neither (see its own
+     comment), and each of those is a different SENTENCE in both languages - Hebrew
+     needs "או" only when there really are two options, and English's "or" the same.
+     Gluing clauses together in app.js would put Hebrew grammar in JavaScript; keeping
+     four whole sentences here keeps each language editable as a sentence.
+
+     The direction words describe the GARMENT's fit, never the shopper's body - the
+     same rule CLAUDE.md §2.4 imposes on the VTON fit language, applied to the UI copy
+     for the same reason: "צמוד/tighter" is a property of how the fabric sits, and
+     nothing here may read as a remark about the person wearing it.
+
+     Note {down} is always the SMALLER size and {up} the larger, whatever the ladder's
+     tokens look like (letters, EU numbers, waist inches) - renderStockNotice() resolves
+     both off purchasableLadder() before this copy ever sees them. */
+  stockSoldOutBoth: {
+    he: "המידה המומלצת שלך היא {size}, אך היא אזלה מהמלאי. ניתן לנסות {down} (התאמה צמודה יותר) או {up} (התאמה משוחררת יותר).",
+    en: "Your recommended size is {size}, but it's out of stock. You can try {down} (a closer fit) or {up} (a looser fit).",
+  },
+  stockSoldOutDown: {
+    he: "המידה המומלצת שלך היא {size}, אך היא אזלה מהמלאי. ניתן לנסות {down} (התאמה צמודה יותר).",
+    en: "Your recommended size is {size}, but it's out of stock. You can try {down} (a closer fit).",
+  },
+  stockSoldOutUp: {
+    he: "המידה המומלצת שלך היא {size}, אך היא אזלה מהמלאי. ניתן לנסות {up} (התאמה משוחררת יותר).",
+    en: "Your recommended size is {size}, but it's out of stock. You can try {up} (a looser fit).",
+  },
+  /* No alternative in EITHER direction is still worth saying out loud: the shopper
+     otherwise reads the size display, adds to cart and finds out from the storefront.
+     Deliberately does NOT invent an alternative to soften it. */
+  stockSoldOutNone: {
+    he: "המידה המומלצת שלך היא {size}, אך היא אזלה מהמלאי כרגע.",
+    en: "Your recommended size is {size}, but it's currently out of stock.",
+  },
+  /* The in-room ladder's marker for a size the store cannot sell. Short because it is
+     rendered inside a size button's accessible name, not as visible text. */
+  stockSoldOutBadge: { he: "אזל מהמלאי", en: "Out of stock" },
   errNameRequired:          { he: "נא להזין שם מלא.", en: "Please enter your full name." },
   errEmailInvalid:          { he: "נא להזין כתובת אימייל תקינה.", en: "Please enter a valid email address." },
   errGenericRetry:          { he: "נא לבדוק את הפרטים ולנסות שוב.", en: "Please check your details and try again." },
@@ -273,6 +311,25 @@ export function t(key) {
   return entry[getActiveLang()] || entry.he;
 }
 
+/* t() with {placeholders}. The stock copy is the first string in this file whose text
+   depends on runtime VALUES (which size sold out, which two are left), and the two
+   languages do not agree on where those values sit in the sentence - Hebrew opens
+   "המידה המומלצת שלך היא L" while English closes "...is L" - so concatenating fragments
+   around them in app.js would have to encode Hebrew word order in JavaScript. Named
+   placeholders keep each language's full sentence intact inside its own dictionary
+   entry, where a translator can reorder it freely.
+
+   A MISSING VALUE LEAVES THE PLACEHOLDER'S KEY UNSUBSTITUTED RATHER THAN PRINTING
+   "undefined" - callers pick a key whose placeholders they can all fill (see
+   renderStockNotice's four-key split in app.js), so an unsubstituted token showing up
+   on screen is a visible bug report rather than a silently plausible sentence. */
+export function tf(key, vars) {
+  const raw = t(key);
+  if (!raw || !vars) return raw;
+  return raw.replace(/\{(\w+)\}/g, (match, name) =>
+    (vars[name] === undefined || vars[name] === null) ? match : String(vars[name]));
+}
+
 /* Walks every tagged node and swaps in the active language's copy. Re-run on
    load and on every toggle - cheap (a few dozen small elements) and keeps
    text/placeholder/aria-label in sync without any per-element bookkeeping. */
@@ -312,6 +369,22 @@ export function applyLanguage(lang) {
   const applyText = () => {
     applyI18nText(lang);
     console.log("Applying language:", lang);
+    /* ── REPAINT THE STRINGS THIS WALK CANNOT SEE ──────────────────────────────
+       applyI18nText() above only rewrites nodes carrying data-i18n, i.e. STATIC
+       markup. Anything app.js wrote itself through t() - the result label, the
+       size display's "אין התאמה", and now the out-of-stock sentence - has no
+       data-i18n attribute to match (the stock one CANNOT have a static one: it
+       interpolates live size tokens), so a toggle used to leave those in the
+       previous language until something else happened to recompute them.
+
+       Invisible on a two-word label; a whole Hebrew sentence stranded under an
+       English form is not. Announced as an event rather than imported and called,
+       because i18n.js is imported BY app.js - a call in the other direction would
+       close an import cycle. app.js listens and re-runs its own painters; nothing
+       here needs to know which they are. */
+    try {
+      document.dispatchEvent(new CustomEvent("pear:languagechanged", { detail: { lang } }));
+    } catch {}
   };
 
   if (document.body) {

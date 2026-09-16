@@ -457,6 +457,59 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .error-result .size-display { font-size: 1.2rem; -webkit-text-fill-color: var(--ink); color: var(--ink); }
 
+/* ── Out-of-stock notice (#stockNotice, written by renderStockNotice in app.js) ──
+   Sits INSIDE .result-box under the size display, so it inherits the box's own
+   .show reveal and cannot animate separately from the number it is about.
+
+   [hidden] is honoured explicitly: .result-box's children are otherwise laid out by
+   the box, and a UA stylesheet's `display:none` for [hidden] loses to any later
+   `display` declaration - so the attribute app.js toggles is made load-bearing here
+   rather than relying on nothing else ever setting display on this element.
+
+   Sized in rem and wrapped, never truncated: this is a full sentence naming two
+   alternative sizes, and on a 320px phone it runs to four or five lines. Nothing here
+   sets a height, so the box simply grows.
+
+   WHAT THAT GROWTH RUNS INTO is .result-actions, which reveals itself by animating
+   max-height 0 -> 420px with overflow:hidden (see its own rule below). That ceiling was
+   measured for label + size display + Continue button; the extra lines fit today but
+   with little to spare, and overflow:hidden CLIPS rather than scrolls - it would fail
+   silently, on the narrowest screens, in the language with the longest copy. The
+   .has-stock-notice rule below raises the ceiling for exactly that case. */
+.stock-notice[hidden] { display: none; }
+.stock-notice {
+  margin: 10px auto 0;
+  max-width: 34ch;
+  font-size: .82rem;
+  line-height: 1.45;
+  font-weight: 600;
+  color: var(--ink);
+  opacity: .85;
+  text-wrap: pretty;
+  /* The sentence is bidirectional: Hebrew copy with Latin size tokens (L, XL) inside
+     it. `plaintext` lets the browser resolve each paragraph's base direction from its
+     own first strong character, so the same element reads correctly in both languages
+     without app.js having to set dir= per string. */
+  unicode-bidi: plaintext;
+}
+/* A warm amber wash, NOT the error red - the recommendation itself is still correct
+   and still shown; only its availability changed. Red here would read as "we could not
+   size you", which is the .error-result state and a different message entirely. */
+.result-box.has-stock-notice {
+  background: linear-gradient(135deg, rgba(214, 158, 46, .16), rgba(214, 158, 46, .05));
+  border-color: rgba(214, 158, 46, .38);
+}
+/* Headroom for the notice's extra lines. Only ever applies when app.js has actually
+   painted one, so the shipped reveal is byte-identical for an in-stock recommendation.
+   max-height is a CEILING, not a height - a shorter notice still collapses to its own
+   content, so this cannot introduce a gap. Wins on SPECIFICITY (three classes vs two),
+   not on source order - .result-actions.is-ready is defined much further down this
+   file. Both classes are set together by renderStockNotice(). */
+.result-actions.is-ready.has-stock-notice { max-height: 620px; }
+/* No dark-mode rule here on purpose: this stylesheet has no prefers-color-scheme
+   handling anywhere, the room is a fixed light glass theme, and a lone dark override
+   on this one element would be the only thing in the file that ever changed. */
+
 /* ── buttons (frosted capsules) ────────────────────────────────────────── */
 /* primary action - translucent pear-green glass */
 .btn-primary {
