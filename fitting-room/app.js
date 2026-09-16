@@ -6787,7 +6787,34 @@ const PRESENCE_PROMPT_YAW_SUPPRESS_DEG = 25;
    prints the computed transform per surface at each transition, and
    orientation-yaw-mirror.test.mjs pins every one of them. */
 
-/* Latest torso yaw MAGNITUDE and when it was measured, published by the shared pose loop
+/* ── SMOOTHING THIS SIGNAL: MEASURED AND DECLINED (2026-09-16) ────────────────────────
+   THE PROPOSAL, and it is the obvious one: the pose model's |yaw| carries jitter, the turn
+   model runs every pose scenario at +/-4 degrees of it precisely because that jitter is what
+   lets a held weight shift cross a threshold it never really reached, so low-pass the signal.
+   An EMA at alpha 0.25 was specified.
+
+   IT IS STRICTLY WORSE AT EVERY ALPHA. Implemented on this publish (smoothing before anything
+   reads it, the rise included, restarting after a staleness gap rather than blending across
+   one), mirrored into simulateGap so the 216 modelled 360s scored the smoothed series the
+   trigger actually reads, and swept. At 100ms on-screen latency:
+
+     alpha 0.25   total plain 1811ms/360   84 of 216 turns NEVER swap
+     alpha 0.5           996ms             37 of 216
+     alpha 0.75          728ms              9 of 216
+     alpha 0.9           604ms              7 of 216
+     alpha 1 (none)      577ms              5 of 216      ← what ships
+
+   WHY IT CANNOT WIN HERE, which is the part that generalises: readings land every ~240ms
+   (POSE_SAMPLE_MS x 2), so alpha 0.25 is roughly a second of lag on a signal this file is
+   fighting for tens of milliseconds on. The smoothed value reaches the early-turn threshold
+   late or never - on a fast turn the torso goes unreadable through edge-on before the filter
+   gets there, and the swap simply never goes out. The cost of lag is UNBOUNDED (a turn that
+   never swaps), while the jitter it removes is already handled by two mechanisms that cost no
+   lag at all: ORIENT_EARLY_TURN_MIN_SPEED (a crossing only counts while |yaw| is rising fast)
+   and maybeSwap's withdrawal. Adding a filter in front of those pays twice for one problem.
+   Any future proposal to filter this signal has to beat the alpha-1 row above, on that grid.
+
+   Latest torso yaw MAGNITUDE and when it was measured, published by the shared pose loop
    (startPresenceWatcher) and read by the orientation watcher. Module scope because the
    two loops are deliberately separate - one MediaPipe inference per tick is the whole
    point of the shared sampler, so the watcher reads the existing reading rather than
@@ -9753,7 +9780,36 @@ const _lookStitchCache = new Map();   // `${topUrl} ${bottomUrl}` → Promise<Bl
    to A/B this against a live session), or flip this constant. If you flip it, restore
    DENSE.contract + DENSE.select in buildCompositePrompt() in the same commit - a split
    reference with no panel contract is the worst of both modes. Keep both paths working;
-   do not delete one for the other. */
+   do not delete one for the other.
+
+   ── AND THAT RESTORE DOES NOT CURRENTLY FIT. MEASURED 2026-09-16. ─────────────────────
+   Re-evaluated on the question "can Decart condition on a side-by-side FRONT|BACK split
+   without rendering fragments of both". The answer is yes, but ONLY with the panel contract
+   in the prompt - which is exactly what strict image-only removed, and the budget will not
+   currently buy it back:
+
+     DENSE.contract                              94 chars
+     DENSE.select.front                          41
+     minimum panel contract                     137
+     (+ DENSE.ignoreFurniture, the gutter/marker disclaimer, takes it to 195)
+
+     tightest REAL branch, top / front / plain knit tee:   638/650 - 12 free
+     evicting fitSentence (88) yields 100 free            - still 37 short of the minimum
+
+   So restoring the contract on that branch also costs identityLockSentence (up to 96) - the
+   clause that asserts the garment's measured colour and print. That trade is backwards on its
+   face: identityLockSentence exists to stop the model rendering a DIFFERENT garment (it is the
+   tuxedo's counter), and spending it to explain a reference that is harder to interpret than a
+   single clean photograph gives up the defence and the grounding in one move.
+
+   WHAT WOULD MAKE THIS VIABLE, so the next evaluation starts here rather than at the top:
+   either PROMPT_MAX_CHARS rises (Decart's 226-token ceiling, not ours to move), or
+   identityLockSentence and fitSentence are deliberately retired - a product decision, since
+   both are live on the wire and both closed a specific report. Until one of those happens the
+   arithmetic above is the whole answer, and the prize it buys - a reference that is CONSTANT
+   across a turn, making an orientation flip a prompt-only set() with no image re-upload -
+   stays out of reach. That prize is real and is why this path keeps being re-proposed; it is
+   not being dismissed, it is being priced. */
 const COMPOSITE_DEFAULT = false;
 const COMPOSITE_MODE = (() => {
   try {
@@ -16710,7 +16766,28 @@ function finalizeVideoClip() {
    fraction the lower-body guard below has to use, and it is not a guarantee. */
 
 /* BlazePose 33-point topology. Named rather than inlined because a bare `landmarks[23]`
-   is unreviewable, and an off-by-one here silently gates trousers on an elbow. */
+   is unreviewable, and an off-by-one here silently gates trousers on an elbow.
+
+   ── THE HEAD POINTS ARE ABSENT ON PURPOSE. DO NOT ADD THEM. ───────────────────────────
+   Points 0-10 (nose, eyes, ears, mouth) are in the model's output and are deliberately not
+   named here, because naming them is the first step of a fix that has already shipped and
+   already failed. Build 128 took the FRONT vote from the pose model's face visibility, FRONT
+   came back - and BACK then stopped triggering at all.
+
+   MEASURED (pose_landmarker_lite, tasks-vision 0.10.14, on the catalog's own front and back
+   photos of one model): nose and eye visibility read 1.00 facing the lens AND 1.00 facing
+   away. BlazePose predicts a face on the back of the head and is fully confident about it.
+   So the signal is not weak, it is CONSTANT - it carries no front/back information at all,
+   in either direction: a "face visible means FRONT" vote never leaves FRONT, and a "visibility
+   below 0.2 means BACK" trigger can never fire. Re-proposed and re-tried 2026-09-16, averaged
+   over nose/eyes/ears rather than min(nose, eyes) in the hope the ears would grade it; the
+   guard in turn-yaw-window.test.mjs §9 caught it before it could be measured again.
+
+   WHAT ACTUALLY SEPARATES THE TWO SIDES is the image-space ORDER of the shoulders normalised
+   by torso height - (L.x - R.x) / torsoHeight, +0.76 facing the lens and -0.68 facing away,
+   unchanged at 40% scale and unchanged when the image is mirrored. That is poseShoulderFacing(),
+   and it is the single source of truth for which way the body faces. The guard above pins the
+   absence; §9's comment carries the full measurement. */
 const POSE_LANDMARK = Object.freeze({
   LEFT_SHOULDER: 11, RIGHT_SHOULDER: 12,
   LEFT_HIP: 23, RIGHT_HIP: 24,
