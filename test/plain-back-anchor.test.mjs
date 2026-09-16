@@ -123,8 +123,11 @@ console.log("\n── §4 SELECTED ON POSITIVE EVIDENCE ONLY (the §2.1 discipli
     !/item\.backIsPlain\s*\)/.test(resolver) &&
     !/!!item\.backIsPlain/.test(resolver),
     resolver);
+  /* RESTATED when the pixels gained a veto (§6): still scoped to the BACK angle, still `=== true`
+     on the verdict. The added term can only ever REFUSE a plain claim, never assert one, and it is
+     itself `!== true` so an unprobed rear behaves exactly as before. */
   check("...and it is scoped to the BACK angle, where a rear anchor is what ships",
-    /const plainBack = angle === "back" && item && item\.backIsPlain === true;/.test(resolver),
+    /const plainBack = angle === "back" && item && item\.backIsPlain === true && item\._backLooksPrinted !== true;/.test(resolver),
     resolver);
   /* Still a SELECTOR. Concatenating the plain clause onto the printed anchor would put
      both wordings on the wire - the print nouns included - which is the bug plus a patch. */
@@ -133,6 +136,94 @@ console.log("\n── §4 SELECTED ON POSITIVE EVIDENCE ONLY (the §2.1 discipli
     /const PLAIN_BACK_ANCHOR = Object\.freeze\(\{/.test(APP) &&
     !/PLAIN_BACK_ANCHOR = Object\.freeze\(\{[\s\S]{0,1200}?\$\{/.test(APP),
     "a template hole or a concatenation re-opens what the selector prevents");
+}
+
+console.log("\n── §6 THE PIXELS VETO A WRONG 'PLAIN' VERDICT - the probe, executed on real pixel arrays ──");
+{
+  /* REPORTED three times, latest 2026-09-16: the rear graphic renders for a beat and then the
+     shirt goes plain. PLAIN_BACK_ANCHOR is the only thing that can assert "smooth unbroken
+     fabric", and it fires on a SERVER verdict about the rear photo. The direction asked for was
+     "if a dedicated back image exists, force backIsPlain = false" - which cannot ship, because a
+     genuinely blank rear photo IS a dedicated back image and that is precisely the case the
+     anchor exists for. So the pixels get a veto instead: measured, one-sided, and only ever able
+     to REFUSE a plain claim. This section runs the real energy function over arrays it builds. */
+  const src = (() => {
+    const i = APP.indexOf("function bitmapBoxEnergy(bitmap, x0, y0, x1, y1) {");
+    return i === -1 ? "" : APP.slice(i, APP.indexOf("\n}", i) + 2);
+  })();
+  check("bitmapBoxEnergy() exists as a pure, synchronous measurement", src.length > 0);
+
+  /* A fake bitmap whose two boxes carry DIFFERENT content, because the ratio between them is what
+     the code computes - fabric texture, lighting and codec noise cancel in it, and only a ratio
+     can be compared against a fixed bar across garments. The fake context remembers which source
+     rect was asked for, so the real box-mapping arithmetic is exercised rather than stubbed. */
+  const makeBitmapCtx = (patternFor) => {
+    let current = null;
+    return {
+      drawImage(_bm, sx, sy) { current = patternFor(sx, sy); },
+      getImageData(_x, _y, w, h) {
+        const data = new Uint8ClampedArray(w * h * 4);
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const v = current(x, y, w, h);
+            const p = (y * w + x) * 4;
+            data[p] = data[p + 1] = data[p + 2] = v; data[p + 3] = 255;
+          }
+        }
+        return { data };
+      },
+    };
+  };
+  /* Fabric: a smooth shading gradient plus ±1 of codec noise. Graphic: lettering-shaped structure -
+     repeated hard edges, which is what a Laplacian sees in a real print (a single large rectangle
+     has almost none, which is why the bar is a ratio and not an absolute). */
+  const fabric = (x, y) => 90 + Math.round(6 * (y / 96)) + ((x + y) % 2);
+  const graphic = (x, y, w, h) =>
+    (x > w * 0.1 && x < w * 0.9 && y > h * 0.15 && y < h * 0.85)
+      ? (Math.floor(y / 6) % 2 ? 235 : 60)
+      : 90;
+  const W = 1000, HH = 1500;
+  const runPair = (rearIsPrinted) => {
+    const ctx = makeBitmapCtx((sx, sy) => {
+      /* The graphic box starts at 0.34*W, 0.42*H; the fabric box at 0.26*W, 0.40*H. */
+      const isGraphicBox = sx >= 0.30 * W && sy >= 0.41 * HH;
+      return isGraphicBox && rearIsPrinted ? graphic : fabric;
+    });
+    const fn = new Function("OffscreenCanvas", "document", src + "\nreturn bitmapBoxEnergy;")(
+      undefined, { createElement: () => ({ getContext: () => ctx }) });
+    const bm = { width: W, height: HH };
+    const g = fn(bm, 0.34, 0.42, 0.66, 0.68);
+    const f = fn(bm, 0.26, 0.40, 0.33, 0.46);
+    return { g, f, ratio: g / Math.max(f, 0.01) };
+  };
+  const printedRear = runPair(true), blankRear = runPair(false);
+  console.log(`        printed rear: graphic ${printedRear.g.toFixed(2)} / fabric ${printedRear.f.toFixed(2)} = ${printedRear.ratio.toFixed(2)}x` +
+    ` | blank rear: ${blankRear.g.toFixed(2)} / ${blankRear.f.toFixed(2)} = ${blankRear.ratio.toFixed(2)}x`);
+  check("a blank rear measures ~1x its own plain fabric - the two boxes are the same cloth",
+    blankRear.ratio < 2.5, `${blankRear.ratio}x`);
+  check("...and a rear carrying a graphic measures far above the bar",
+    printedRear.ratio >= 2.5 && printedRear.ratio > blankRear.ratio * 2,
+    `${printedRear.ratio}x vs ${blankRear.ratio}x - the real garment measured 6.59x`);
+
+  /* THE BAR, and the real numbers it was set from. The garment this was reported against
+     (fox.co.il 1824346900): printed rear 12.44 against 1.89 on its own shoulder = 6.59x; its three
+     FRONT photos, whose chest text is small, 1.35-3.05x. A blank rear is the same fabric as the
+     reference box, so ~1x by construction. */
+  check("BACK_PRINT_ENERGY_RATIO sits between flat fabric and a measured rear print",
+    /const BACK_PRINT_ENERGY_RATIO = 2\.5;/.test(APP),
+    "2.5: under the 6.59x measured on the reported garment, over flat fabric plus noise");
+  check("the probe is memoised per Blob, like the flat probe beside it",
+    /const _rearPrintVerdicts = new WeakMap\(\);/.test(APP) &&
+    /_rearPrintVerdicts\.set\(blob, printed\)/.test(APP),
+    "the selector runs on every dispatch and can never decode anything itself");
+  check("...and every failure path returns 'not proven printed', so a probe error changes nothing",
+    /printed = false;[\s\S]{0,200}?\}\s*\n\s*try \{ bitmap && bitmap\.close/.test(APP),
+    "fail-open in the direction that preserves the existing behaviour");
+  check("it is settled at pre-load, where the rear is already decoded for the flat probe",
+    /item\._backLooksPrinted = await blobLooksPrinted\(backBlob\);/.test(APP));
+  check("...and a contradiction between the verdict and the pixels is logged, not silently swallowed",
+    /rear-print probe CONTRADICTS the classifier/.test(APP),
+    "a classifier that calls a printed back plain is a server-side defect and must be findable");
 }
 
 console.log("\n── §5 THE VERDICT IS TRACEABLE - it is the only thing that changes what a BACK dispatch asserts ──");

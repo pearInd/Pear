@@ -149,7 +149,10 @@ console.log("\n── §3 THE PROMPT READS THE SWATCH, NOT THE BASE COLOUR ─�
   check("...and the resolver branches on the garment's fixed identity alone",
     /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\]/.test(APP) &&
     /const anchors = angle === "back"[\s\S]{0,120}?\(plainBack \? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR\)[\s\S]{0,40}?: CATEGORY_ANCHOR;/.test(APP) &&
-    /const plainBack = angle === "back" && item && item\.backIsPlain === true;/.test(APP) &&
+    /* `_backLooksPrinted` is admissible on the same terms as backIsPlain above: it is a property
+       of the PRODUCT's own rear photograph, measured once at pre-load and immutable for the
+       session. Not the selected variant, not the colour, not the size - and it fills no hole. */
+    /const plainBack = angle === "back" && item && item\.backIsPlain === true && item\._backLooksPrinted !== true;/.test(APP) &&
     /const bottoms = isBottomsGarment\(item\);/.test(APP) &&
     /const plainTee = !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(APP) &&
     /\.\.\.\(closure \? \[\[P\.HIGH, FRONT_CLOSURE_LOCK\]\] : \[\]\)/.test(APP) &&

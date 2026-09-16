@@ -233,6 +233,10 @@ console.log("\n── §3 THE GATE AND THE RE-DISPATCH, inside the REAL armFirst
       CAMERA_BLACK_AVG_LUMA: 8, CAMERA_BLACK_PIXEL_FRAC: 0.9,
       outputPassthroughDelta: () => verdicts[Math.min(i++, verdicts.length - 1)],
       PASSTHROUGH_GATE_MAX_MS: gateMaxMs,
+      /* The unconditional minimum hold is §8's subject; every section before it isolates the
+         detector it was written for, so it is disabled here exactly as ?cold_hold=0 does live. */
+      COLD_START_MIN_HOLD_MS: 0, COLD_START_REASSERT_MS: CONFIG.COLD_START_REASSERT_MS,
+      location: { search: "" },
       PASSTHROUGH_MAX_DELTA: CONFIG.PASSTHROUGH_MAX_DELTA,
       COLD_START_REDISPATCH_MS: redispatchMs,
       COLD_START_REDISPATCH_MAX: maxRedispatch,
@@ -365,6 +369,8 @@ console.log("\n── §4 THE GATE CANNOT HANG THE SESSION ──");
     PASSTHROUGH_MAX_DELTA: CONFIG.PASSTHROUGH_MAX_DELTA,
     COLD_START_REDISPATCH_MS: CONFIG.COLD_START_REDISPATCH_MS,
     COLD_START_REDISPATCH_MAX: CONFIG.COLD_START_REDISPATCH_MAX,
+    COLD_START_MIN_HOLD_MS: 0, COLD_START_REASSERT_MS: CONFIG.COLD_START_REASSERT_MS,
+    location: { search: "" },
     MODEL_READY_STABLE_FRAMES: 1, MODEL_READY_STABLE_MS: 0,
     isLive: () => true, wireBusy: () => false, referenceOnWire: () => true,
     applyActive: () => Promise.resolve(),
@@ -418,12 +424,18 @@ console.log("\n── §5 THE RE-UPLOAD RULE IS BENT KNOWINGLY, AND ONLY HERE �
      unchanged - the re-dispatch is reachable only from inside frameReady, which stops being called
      once fire() has run, so it can never re-upload over a revealed render. */
   check("the re-dispatch can only run BEFORE the reveal, never after",
-    /const unconditioned = \(probe\.ready && probe\.passthrough\) \|\| noReference;/.test(arm) &&
+    /const unconditioned = \(probe\.ready && probe\.passthrough\) \|\| noReference \|\| withinMinHold;/.test(arm) &&
     /const stillRaw = unconditioned && !passthroughGateExpired\(\);/.test(arm) &&
-    /if \(stillRaw\) redispatchColdStart\(gen, probe\.delta, noReference \? "no-reference" : "passthrough"\);/.test(arm) &&
+    /if \(stillRaw && !withinMinHold\) redispatchColdStart\(gen, probe\.delta, noReference \? "no-reference" : "passthrough"\);/.test(arm) &&
     arm.indexOf("redispatchColdStart(gen,") > arm.indexOf("const frameReady = () => {") &&
-    arm.indexOf("redispatchColdStart(gen,") < arm.indexOf("fire();"),
+    arm.lastIndexOf("redispatchColdStart(gen,") < arm.indexOf("fire();"),
     "it is inside frameReady, which stops being called once fire() has run");
+  /* THE MINIMUM HOLD SENDS ITS OWN, ONCE (§8), and must not stack with the detector path on the
+     same frame - hence the `&& !withinMinHold` above: inside the hold, the re-assert owns the send. */
+  check("...and inside the minimum hold exactly one re-assert is sent, not one per frame",
+    /if \(withinMinHold && !reasserted && sinceQualified >= COLD_START_REASSERT_MS\) \{/.test(arm) &&
+    /reasserted = true;/.test(arm),
+    "a hold that re-sends every frame is the churn the re-anchor ban exists for");
 }
 
 console.log("\n── §6 THE CONFIG RECORDS THE MISDIAGNOSIS ──");
@@ -465,6 +477,8 @@ console.log("\n── §7 THE OTHER UNCONDITIONED RENDER: no reference on the wi
       PASSTHROUGH_GATE_MAX_MS: CONFIG.PASSTHROUGH_GATE_MAX_MS,
       PASSTHROUGH_MAX_DELTA: CONFIG.PASSTHROUGH_MAX_DELTA,
       COLD_START_REDISPATCH_MS: redispatchMs, COLD_START_REDISPATCH_MAX: CONFIG.COLD_START_REDISPATCH_MAX,
+      COLD_START_MIN_HOLD_MS: 0, COLD_START_REASSERT_MS: CONFIG.COLD_START_REASSERT_MS,
+      location: { search: "" },
       MODEL_READY_STABLE_FRAMES: 1, MODEL_READY_STABLE_MS: 0,
       isLive: () => true, wireBusy: () => false, referenceOnWire: () => ref.on,
       applyActive: () => { applies.push(1); return Promise.resolve(); },
@@ -523,6 +537,89 @@ console.log("\n── §7 THE OTHER UNCONDITIONED RENDER: no reference on the wi
     /const noReference = !referenceOnWire\(\);/.test(APP));
   check("...and the re-dispatch says WHICH of the two reasons fired, in words the console can be searched for",
     /no garment reference ever reached the wire/.test(APP) && /PROMPT-ONLY/.test(APP));
+}
+
+console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see ──");
+{
+  /* THREE RECORDED SESSIONS in one day (13:57, 14:21, 17:14) were revealed on a frame carrying no
+     garment while BOTH detectors read "conditioned": Decart had acknowledged a reference and was
+     rendering something else - a bare torso, a raglan, a floral tank - and in every one the garment
+     landed the moment the shopper turned and the topology monitor force-dispatched a re-drape.
+     There is no cheap detector for that state (the config block records the measurement that ruled
+     the obvious one out), so this holds the reveal for a fixed moment and does that re-send itself,
+     before the shopper sees anything. Driven here on a fake clock. */
+  const code = extract("function armFirstFrameBilling(video, gen) {",
+                       "/* ═══════════════════════════════════════════════════════════════════════════\n   FRAME-FREEZE WATCHDOG");
+  const mk = ({ holdMs, search = "" }) => {
+    let now = 5_000_000, fired = false, frameCb = null;
+    const applies = [];
+    const sandbox = {
+      video: { videoWidth: 1000, videoHeight: 1800, requestVideoFrameCallback: (cb) => { frameCb = cb; } },
+      gen: 1, sessionGen: 1, billingStarted: false, isGarmentApplied: true, dressedFrameReady: false,
+      sampleVideoLuma: () => ({ ready: true, avgLuma: 120, blackFrac: 0 }),
+      CAMERA_BLACK_AVG_LUMA: 8, CAMERA_BLACK_PIXEL_FRAC: 0.9,
+      /* A frame the OLD gate would have revealed on: rendered (not a passthrough), reference on
+         the wire. Exactly the frame the three recordings were revealed on. */
+      outputPassthroughDelta: () => ({ ready: true, delta: 52, passthrough: false }),
+      referenceOnWire: () => true,
+      PASSTHROUGH_GATE_MAX_MS: CONFIG.PASSTHROUGH_GATE_MAX_MS,
+      PASSTHROUGH_MAX_DELTA: CONFIG.PASSTHROUGH_MAX_DELTA,
+      COLD_START_REDISPATCH_MS: 0, COLD_START_REDISPATCH_MAX: CONFIG.COLD_START_REDISPATCH_MAX,
+      COLD_START_MIN_HOLD_MS: holdMs, COLD_START_REASSERT_MS: CONFIG.COLD_START_REASSERT_MS,
+      location: { search },
+      MODEL_READY_STABLE_FRAMES: 1, MODEL_READY_STABLE_MS: 0,
+      isLive: () => true, wireBusy: () => false,
+      applyActive: () => { applies.push(now); return Promise.resolve(); },
+      lastSentImageRef: "REF", rtImageOnWire: true, lastSentPrompt: "P",
+      startBillingWindow: () => { fired = true; },
+      watchPostFireLuma: () => {}, requestAnimationFrame: (cb) => { frameCb = cb; return 1; },
+      console: { log() {}, warn() {} }, window: {}, Date: { now: () => now },
+    };
+    const api = new Function(...Object.keys(sandbox),
+      code + "\nreturn { arm: () => armFirstFrameBilling(video, gen) };")(...Object.values(sandbox));
+    api.arm();
+    return { tick: () => { const cb = frameCb; frameCb = null; if (cb) cb(); },
+             advance: (ms) => { now += ms; }, fired: () => fired, applies };
+  };
+
+  {
+    const h = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS });
+    h.tick();
+    check("the frame the old gate revealed on no longer reveals on its own",
+      h.fired() === false,
+      "both detectors say 'conditioned' here - this is exactly the frame the three recordings started on");
+    check("...and nothing is re-sent immediately - the first apply's own render gets its chance",
+      h.applies.length === 0);
+    h.advance(CONFIG.COLD_START_REASSERT_MS); h.tick();
+    check("one re-assert goes out inside the hold",
+      h.applies.length === 1, `${h.applies.length} applies`);
+    h.tick(); h.advance(50); h.tick();
+    check("...exactly one, not one per frame - the churn the re-anchor ban exists for",
+      h.applies.length === 1, `${h.applies.length} applies`);
+    h.advance(CONFIG.COLD_START_MIN_HOLD_MS); h.tick();
+    check("and once the hold is over, the feed is revealed",
+      h.fired() === true, "the hold is a fixed moment, never a verdict");
+  }
+  {
+    /* The escape hatch has to restore the previous behaviour EXACTLY, or it is not an A/B. */
+    const h = mk({ holdMs: CONFIG.COLD_START_MIN_HOLD_MS, search: "?cold_hold=0" });
+    h.tick();
+    check("?cold_hold=0 reveals on that same frame, exactly as before this change",
+      h.fired() === true && h.applies.length === 0);
+  }
+  check("the hold is measured from the first QUALIFYING frame, never from arming",
+    /if \(isGarmentApplied && dressed && firstQualifyingAt === null\) firstQualifyingAt = Date\.now\(\);/.test(APP),
+    "armFirstFrameBilling is armed when the remote TRACK attaches - before the first reference is even sent");
+  check("...and it can never outlast the ceiling that bounds this whole gate",
+    /return Math\.min\(v, PASSTHROUGH_GATE_MAX_MS\);/.test(APP) &&
+    CONFIG.COLD_START_MIN_HOLD_MS < CONFIG.PASSTHROUGH_GATE_MAX_MS,
+    `${CONFIG.COLD_START_MIN_HOLD_MS} vs ${CONFIG.PASSTHROUGH_GATE_MAX_MS}`);
+  check("...and the re-assert lands early enough to render before the hold ends",
+    CONFIG.COLD_START_REASSERT_MS < CONFIG.COLD_START_MIN_HOLD_MS,
+    `${CONFIG.COLD_START_REASSERT_MS} vs ${CONFIG.COLD_START_MIN_HOLD_MS}`);
+  check("the config states the cost in billed seconds, because there is none",
+    /It does NOT cost billed seconds/.test(CFG) && /\?cold_hold=<ms>/.test(CFG),
+    "the reveal is what starts the billing window - this delays the start, it does not spend it");
 }
 
 console.log(fails === 0 ? "\nALL CHECKS PASSED" : `\n${fails} CHECK(S) FAILED`);

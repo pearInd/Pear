@@ -26,6 +26,8 @@
  * @property {number}   PASSTHROUGH_GATE_MAX_MS Ceiling on how long that gate may hold the reveal before showing the feed anyway (ms).
  * @property {number}   COLD_START_REDISPATCH_MS Gap between startup re-dispatches while the output still looks like a passthrough (ms).
  * @property {number}   COLD_START_REDISPATCH_MAX Maximum startup re-dispatches before the gate gives up and reveals.
+ * @property {number}   COLD_START_MIN_HOLD_MS  Fixed hold on the reveal after the first otherwise-qualifying frame, covering a reference that was acknowledged but never rendered. 0 disables.
+ * @property {number}   COLD_START_REASSERT_MS  How far into that hold the single unconditional re-assert is sent.
  * @property {boolean}  BODY_TOPOLOGY_ENABLED   Re-drape the garment on the live body contour whenever it changes, instead of holding the go-live silhouette.
  * @property {number}   BODY_TOPOLOGY_SAMPLE_MS Cadence of the live pose loop that feeds both the presence watcher and the topology monitor (ms).
  * @property {number}   BODY_TRACK_MIN_VISIBILITY Per-landmark visibility bar for TRACKING (below the gate's, so a half-occluded turn is still readable).
@@ -207,6 +209,38 @@ export const CONFIG = Object.freeze({
      ongoing motion-refinement loop - and the first drape stops depending on it. */
   COLD_START_REDISPATCH_MS: 500,
   COLD_START_REDISPATCH_MAX: 3,
+  /* ── THE MINIMUM COLD-START HOLD, and why it is unconditional ───────────────
+     THREE CONSECUTIVE RECORDED SESSIONS (2026-09-16, 13:57 / 14:21 / 17:14) show the same
+     shape: the feed is revealed on a frame with no garment on it, the shopper watches that
+     for 2.75-3.19s, and the garment lands the instant they start to turn - i.e. when
+     reconditionForTopology() force-dispatches a re-drape. The 2026-08-24 report says the
+     same thing in the same words. A second full set() lands what the first one did not.
+
+     THE TWO DETECTORS ABOVE COULD NOT CATCH THOSE SESSIONS. The probe only fires when the
+     output IS the camera, pixel for pixel; a model that re-renders the shopper undressed,
+     or invents a garment, is not a passthrough. `referenceOnWire` only fires when the apply
+     went out prompt-only. If Decart acknowledged a reference and simply did not render it,
+     both read "conditioned" and the reveal fires on an undressed frame. Measured against
+     the recordings: sampling the chest region and comparing it to the reference garment's
+     colour does NOT separate the two states reliably (a fixed box tracks the background the
+     moment the body turns, and Decart's own colour drift moves the garment away from the
+     reference colour anyway), so there is no cheap detector to add here.
+
+     SO THIS ONE DETECTS NOTHING. It holds the reveal for a fixed moment after the frame the
+     old gate would have revealed on, and re-asserts the conditioning once inside it - doing
+     deliberately, and before the shopper sees anything, what their turn was doing by
+     accident three seconds later.
+
+     WHAT IT COSTS, STATED: every cold start waits this long before the feed appears, whether
+     or not it needed to, plus one extra reference send. It does NOT cost billed seconds -
+     the reveal is what starts the billing window - and it is strictly smaller than the
+     2600ms this gate may already hold when a detector does fire. ?cold_hold=<ms> tunes it
+     live and ?cold_hold=0 restores the previous behaviour exactly. */
+  COLD_START_MIN_HOLD_MS: 1500,
+  /* How far into that hold the single re-assert goes out. Early enough that its render can
+     land before the hold ends, late enough that the first apply's own render has had a
+     chance - a re-send that overtakes a reference already being applied buys nothing. */
+  COLD_START_REASSERT_MS: 700,
 
   /* ── Body-presence gate (see awaitBodyPresence in app.js) ────────────────
      Decart conditions on the frame it is handed, and the session is hard-capped at

@@ -53,6 +53,8 @@ const {
   PASSTHROUGH_GATE_MAX_MS,
   COLD_START_REDISPATCH_MS,
   COLD_START_REDISPATCH_MAX,
+  COLD_START_MIN_HOLD_MS,
+  COLD_START_REASSERT_MS,
   BODY_TOPOLOGY_ENABLED,
   BODY_TOPOLOGY_SAMPLE_MS,
   BODY_TRACK_MIN_VISIBILITY,
@@ -5752,6 +5754,95 @@ async function bitmapLooksFlat(bitmap) {
    A Blob that tests flat is dropped from _assetBlobCache by its caller, so its verdict is
    never read again either. Non-object inputs (test sandboxes pass strings) skip the memo. */
 const _flatVerdicts = new WeakMap();   // Blob → settled flat/not-flat verdict
+/* ══════════════════════════════════════════════════════════════════════════════
+   DOES THE REAR PHOTO ACTUALLY CARRY A GRAPHIC? - the second half of the plain-back verdict
+   ══════════════════════════════════════════════════════════════════════════════
+   REPORTED 2026-09-16, three clips: "the back graphic rendered for a split second and then
+   vanished into a plain shirt". PLAIN_BACK_ANCHOR is the only thing that can change what a BACK
+   dispatch asserts about the rear - `item.backIsPlain === true` swaps "Reproduce the rear panel
+   exactly as shown in the reference" for "The rear panel is smooth unbroken fabric" - and that
+   verdict is a SERVER classification. Its own comment already names the failure mode: "Guessing
+   'plain' on a garment with a genuine back print would suppress the one graphic the shopper
+   turned around to see."
+
+   THE DIRECTION ASKED FOR was to force backIsPlain=false whenever a dedicated back image exists.
+   That cannot ship as stated: the anchor exists because a genuinely BLANK rear photo, described
+   with "rear print, logos", made the sampler draw scrambled graphics across the shopper's back
+   (no negative_prompt - those nouns are positive tokens). A blank rear photo IS a dedicated back
+   image, so the blanket override would reopen that bug exactly.
+
+   SO REQUIRE POSITIVE EVIDENCE ON BOTH SIDES. The verdict is a claim about the pixels, and the
+   pixels are already in memory - preloadGarmentAssets() decodes every asset before connect. A
+   rear graphic is measurable: mean |Laplacian| over the upper-back box against the same measure
+   on a shoulder box of the SAME photo, so fabric texture, lighting and colour all cancel.
+   MEASURED on this garment's real assets (fox.co.il 1824346900): the printed rear scores 6.6x its
+   own plain fabric, the three front photos 1.4-3.1 (their chest text is small), and a blank panel
+   scores ~1 by construction - it is the same fabric as the reference box. The bar is
+   BACK_PRINT_ENERGY_RATIO, set at 2.5: comfortably under the measured print, comfortably over
+   flat fabric plus JPEG noise.
+
+   IT ONLY EVER VETOES A "PLAIN" CLAIM. A rear that measures flat keeps PLAIN_BACK_ANCHOR exactly
+   as before, so the scrambled-graphics fix is untouched; a rear that measurably carries a graphic
+   refuses to be described as smooth unbroken fabric. Every failure path (decode error, no probe
+   surface) returns false - "not proven printed" - which leaves the old behaviour in place. */
+const BACK_PRINT_ENERGY_RATIO = 2.5;
+const _rearPrintVerdicts = new WeakMap();   // Blob → settled printed/not-printed verdict
+
+/** Mean |Laplacian| over a relative box of a bitmap, at a fixed sample size. @returns {number} */
+function bitmapBoxEnergy(bitmap, x0, y0, x1, y1) {
+  const W = 96, H = 96;
+  const off = typeof OffscreenCanvas !== "undefined"
+    ? new OffscreenCanvas(W, H)
+    : Object.assign(document.createElement("canvas"), { width: W, height: H });
+  const ctx = off.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return 0;
+  const sx = x0 * bitmap.width, sy = y0 * bitmap.height;
+  const sw = Math.max(1, (x1 - x0) * bitmap.width), sh = Math.max(1, (y1 - y0) * bitmap.height);
+  ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, W, H);
+  const d = ctx.getImageData(0, 0, W, H).data;
+  const lum = new Float32Array(W * H);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) lum[p] = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+  let sum = 0, n = 0;
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      sum += Math.abs(4 * lum[i] - lum[i - 1] - lum[i + 1] - lum[i - W] - lum[i + W]);
+      n++;
+    }
+  }
+  return n ? sum / n : 0;
+}
+
+/**
+ * Does this rear photo measurably carry a graphic? See the block above.
+ * @returns {Promise<boolean>} false on every ambiguous or failing path - "not proven printed"
+ */
+async function blobLooksPrinted(blob) {
+  const memo = blob !== null && typeof blob === "object";
+  if (memo && _rearPrintVerdicts.has(blob)) return _rearPrintVerdicts.get(blob);
+  let bitmap = null, printed = false;
+  try {
+    bitmap = await createImageBitmap(blob);
+    /* The upper-back box is where a rear graphic sits on a packshot; the shoulder box is the same
+       garment with no graphic on it, which is what makes this a ratio rather than a threshold on
+       absolute texture. */
+    const graphic = bitmapBoxEnergy(bitmap, 0.34, 0.42, 0.66, 0.68);
+    const fabric = bitmapBoxEnergy(bitmap, 0.26, 0.40, 0.33, 0.46);
+    const ratio = graphic / Math.max(fabric, 0.01);
+    printed = ratio >= BACK_PRINT_ENERGY_RATIO;
+    if (ORIENT_DEBUG || (typeof window !== "undefined" && window.__pearDebugGarment)) {
+      console.log(`[PEAR] rear-print probe: graphic ${graphic.toFixed(2)} vs plain fabric ${fabric.toFixed(2)}` +
+        ` = ${ratio.toFixed(2)}x (bar ${BACK_PRINT_ENERGY_RATIO}) → ${printed ? "PRINTED" : "not proven printed"}`);
+    }
+  } catch (e) {
+    console.warn("[PEAR] blobLooksPrinted() probe failed; leaving the rear verdict as it stands:", e?.message || e);
+    printed = false;
+  }
+  try { bitmap && bitmap.close?.(); } catch (_) {}
+  if (memo) _rearPrintVerdicts.set(blob, printed);
+  return printed;
+}
+
 async function blobLooksFlat(blob) {
   const memo = blob !== null && typeof blob === "object";
   if (memo && _flatVerdicts.has(blob)) return _flatVerdicts.get(blob);
@@ -6375,6 +6466,22 @@ async function preloadGarmentAssets() {
        SETTLES the verdict on this Blob - so the first turn to the back reads it instead of
        decoding the packshot again on the swap path. */
     if (backOk && await blobLooksFlat(backBlob)) { backOk = false; _assetBlobCache.delete(back); }
+    /* ── AND WHILE THE REAR IS DECODED ANYWAY: does it carry a graphic? ──────────────────
+       Settled here, once, for the same reason the flat probe is: the BACK prompt's plain/printed
+       selector runs synchronously on every dispatch and cannot decode anything. It only ever
+       vetoes a "plain" claim the pixels contradict - see blobLooksPrinted(). */
+    /* typeof-guarded: this function is extracted and run standalone by preload-composite
+       (CLAUDE.md 2.7), and an unprobed rear leaves _backLooksPrinted undefined, which the
+       selector reads as "not proven printed" - the pre-probe behaviour exactly. */
+    if (backOk && typeof blobLooksPrinted === "function") {
+      item._backLooksPrinted = await blobLooksPrinted(backBlob);
+      if (item._backLooksPrinted && item.backIsPlain === true) {
+        console.warn("[PEAR] rear-print probe CONTRADICTS the classifier: this back photo carries a",
+          "measurable graphic but the verdict says the rear is plain.",
+          "\n  → keeping the printed anchor; 'smooth unbroken fabric' would suppress the graphic the shopper turns around to see.",
+          "\n  → garment:", label);
+      }
+    }
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back [${backOk ? "OK" : "FAIL"}]`);
     prepTick();
     if (!backOk) {
@@ -12351,7 +12458,15 @@ function imageOnlyPrompt(item, angle = "front") {
      anchor ships, nothing is concatenated, and the plain variant is SHORTER than the one
      it replaces. `=== true` and not a truthy test - undefined (nobody looked) and false
      (a real rear print) must both keep the existing wording. */
-  const plainBack = angle === "back" && item && item.backIsPlain === true;
+  /* ── AND THE PIXELS GET A VETO ────────────────────────────────────────────────────
+     The verdict above is a claim ABOUT the rear photo, so a measurement OF that photo can refuse
+     it: `_backLooksPrinted` is set once, at pre-load, when the rear measurably carries a graphic
+     (blobLooksPrinted - measured at 6.6x plain fabric on the garment this was reported against).
+     A rear that measures flat is untouched, so the scrambled-graphics fix PLAIN_BACK_ANCHOR
+     exists for is intact; a rear that measurably has a print can no longer be described as
+     smooth unbroken fabric by a classifier that got it wrong. `!== true` keeps the veto itself on
+     positive evidence: unprobed (undefined) changes nothing. */
+  const plainBack = angle === "back" && item && item.backIsPlain === true && item._backLooksPrinted !== true;
   const anchors = angle === "back"
     ? (plainBack ? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR)
     : CATEGORY_ANCHOR;
@@ -15849,6 +15964,20 @@ function armFirstFrameBilling(video, gen) {
   let redispatches = 0;
   let lastRedispatchAt = 0;
   let gateExpiryLogged = false;
+  /* The frame the OLD gate would have revealed on - gates 1-3 passing. The minimum hold and its
+     single re-assert are both measured from here, never from armedAt: this function is armed when
+     the remote TRACK attaches, which is before goLive() has even sent the first reference, so a
+     hold measured from arming would be spent on the handshake. See CONFIG.COLD_START_MIN_HOLD_MS. */
+  let firstQualifyingAt = null;
+  let reasserted = false;
+  /* ?cold_hold=<ms> - tune the hold live, 0 restores the pre-2026-09-16 behaviour exactly. */
+  const minHoldMs = (() => {
+    let raw = null;
+    try { raw = new URLSearchParams(location.search).get("cold_hold"); } catch (_) { return COLD_START_MIN_HOLD_MS; }
+    const v = Number(raw);
+    if (raw === null || raw === "" || !Number.isFinite(v) || v < 0) return COLD_START_MIN_HOLD_MS;
+    return Math.min(v, PASSTHROUGH_GATE_MAX_MS);   // never past the ceiling that bounds this gate
+  })();
 
   /* THE CEILING. A gate that can hold the reveal indefinitely does not degrade to "the
      shopper waits" - it degrades to FIRST_FRAME_TIMEOUT_MS tearing the session down and
@@ -15887,7 +16016,12 @@ function armFirstFrameBilling(video, gen) {
     if (wireBusy()) return;            // a write IS on the wire - let it land, re-offer next frame
     lastRedispatchAt = now;
     redispatches++;
-    console.warn(why === "no-reference"
+    console.warn(why === "cold-start re-assert"
+      ? `[PEAR] cold-start re-assert ${COLD_START_REASSERT_MS}ms into the reveal hold -` +
+        ` re-sending the garment once before the shopper sees anything (${redispatches}/${COLD_START_REDISPATCH_MAX}).` +
+        " Three recorded sessions were revealed on an undressed frame that both detectors read as conditioned;" +
+        " a turn's re-drape is what landed the garment, and this is that send, earlier and invisible."
+      : why === "no-reference"
       ? `[PEAR] no garment reference ever reached the wire (rtImageOnWire false) ${now - armedAt}ms` +
         ` after the first frame - re-dispatching the garment (${redispatches}/${COLD_START_REDISPATCH_MAX}).` +
         " That apply went out PROMPT-ONLY: Decart has no pixels to condition on and renders its own garment."
@@ -15997,9 +16131,22 @@ function armFirstFrameBilling(video, gen) {
        5 seconds: startBillingWindow() is what this gate defers, so the billed window starts when
        the feed does, and PASSTHROUGH_GATE_MAX_MS still caps the wait at 2.6s. */
     const noReference = !referenceOnWire();
-    const unconditioned = (probe.ready && probe.passthrough) || noReference;
+    /* ── AND THE CASE NEITHER DETECTOR CAN SEE ────────────────────────────────────────
+       Three recorded sessions in one day were revealed on a frame with no garment on it while
+       BOTH detectors read "conditioned" - Decart had acknowledged a reference and was rendering
+       something else - and in all three the garment landed only when the shopper's turn forced a
+       re-drape. So the first otherwise-qualifying frame starts a fixed hold instead of revealing,
+       and one re-assert goes out inside it. See CONFIG.COLD_START_MIN_HOLD_MS for the cost. */
+    if (isGarmentApplied && dressed && firstQualifyingAt === null) firstQualifyingAt = Date.now();
+    const sinceQualified = firstQualifyingAt === null ? 0 : Date.now() - firstQualifyingAt;
+    const withinMinHold = minHoldMs > 0 && firstQualifyingAt !== null && sinceQualified < minHoldMs;
+    if (withinMinHold && !reasserted && sinceQualified >= COLD_START_REASSERT_MS) {
+      reasserted = true;
+      redispatchColdStart(gen, NaN, "cold-start re-assert");
+    }
+    const unconditioned = (probe.ready && probe.passthrough) || noReference || withinMinHold;
     const stillRaw = unconditioned && !passthroughGateExpired();
-    if (stillRaw) redispatchColdStart(gen, probe.delta, noReference ? "no-reference" : "passthrough");
+    if (stillRaw && !withinMinHold) redispatchColdStart(gen, probe.delta, noReference ? "no-reference" : "passthrough");
     const qualifies = isGarmentApplied && dressed && !stillRaw;
     if (!qualifies) {
       stableSinceMs = null;

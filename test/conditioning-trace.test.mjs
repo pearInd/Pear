@@ -176,7 +176,11 @@ console.log("\n── §4 SELECTING, NOT APPENDING ──");
      volume-flat in the only direction that matters. */
   check("the resolver picks a frozen anchor set by angle",
     /const anchors = angle === "back"[\s\S]{0,120}?\(plainBack \? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR\)[\s\S]{0,40}?: CATEGORY_ANCHOR;/.test(resolver) &&
-    /const plainBack = angle === "back" && item && item\.backIsPlain === true;/.test(resolver),
+    /* The rear axis gained a pixel veto (plain-back-anchor §6): a rear that measurably carries a
+       graphic refuses a "plain" verdict. Same class of input as backIsPlain - a property of the
+       product's own rear photo, settled once at pre-load - and it still only SELECTS between the
+       two frozen literals; it can never assert plainness, only refuse it. */
+    /const plainBack = angle === "back" && item && item\.backIsPlain === true && item\._backLooksPrinted !== true;/.test(resolver),
     resolver);
   /* Exactly one CORE anchor still ships on every branch - that is the invariant, and it is
      what keeps the angle axis volume-flat. The tops+front branch additionally carries ONE

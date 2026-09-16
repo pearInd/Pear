@@ -435,7 +435,9 @@ console.log("── §1 THE TWO ANCHORS: product-specified, and genuinely consta
      many axes exist - and the new one is SHORTER than the branch it replaces (503 vs 515). */
   check("...and the resolver only SELECTS an anchor, never builds one",
     /const anchors = angle === "back"[\s\S]{0,120}?\(plainBack \? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR\)[\s\S]{0,40}?: CATEGORY_ANCHOR;/.test(SRC) &&
-    /const plainBack = angle === "back" && item && item\.backIsPlain === true;/.test(SRC) &&
+    /* Plus the pixel veto (plain-back-anchor §6) - still a selector, still one whole frozen
+       string on the wire; the added term can only refuse a plain claim, never build a string. */
+    /const plainBack = angle === "back" && item && item\.backIsPlain === true && item\._backLooksPrinted !== true;/.test(SRC) &&
     /const plainTee = !bottoms && angle !== "back" && isPlainKnitTop\(item\);/.test(SRC) &&
     !/PLAIN_BACK_ANCHOR\s*\+/.test(SRC) && !/\+\s*PLAIN_BACK_ANCHOR/.test(SRC) &&
     /\[P\.CORE, plainTee \? PLAIN_TEE_ANCHOR : bottoms \? anchors\.bottom : anchors\.top\]/.test(SRC) &&
