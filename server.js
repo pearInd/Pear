@@ -613,6 +613,14 @@ const otpAttempts = new Map();   // normalized email -> { count, windowStart }
 const OTP_TTL_MS = 60_000;
 const OTP_MAX_PER_HOUR = 10;
 
+/* Consumed-but-not-yet-expired records are kept (see /api/verify-otp), so drop
+   the dead ones whenever a new flow starts rather than letting the map grow one
+   entry per address forever. */
+function sweepOtpStore() {
+  const now = Date.now();
+  for (const [addr, rec] of otpStore) if (now > rec.expires) otpStore.delete(addr);
+}
+
 function otpRateLimited(email) {
   const now = Date.now();
   const rec = otpAttempts.get(email);
@@ -635,6 +643,7 @@ app.post("/api/send-otp", userLimiter, async (req, res) => {
     return res.status(429).json({ ok: false, error: "rate_limited", message: "יותר מדי בקשות - נסה שוב בעוד שעה." });
   }
 
+  sweepOtpStore();
   const code = Math.floor(100000 + Math.random() * 900000);
   otpStore.set(email, { code, expires: Date.now() + OTP_TTL_MS });
 
@@ -675,6 +684,22 @@ app.post("/api/send-otp", userLimiter, async (req, res) => {
   }
 });
 
+/* THE BUG THIS CLOSES: "it asked me for the code twice."
+   This used to otpStore.delete(email) the instant a code verified - strictly
+   once-only. That turned every RETRY into a second code entry, and a retry is
+   not something the client always chooses: a dropped response, a mobile radio
+   re-transmitting the POST, a proxy replay, or two verifies raced onto the wire
+   by a double Enter (the client-side half of this is OTP_IN_FLIGHT in
+   fitting-room/app.js). One of them won, the other came back `expired`, and the
+   shopper - who had just verified correctly - was told to request a new code.
+
+   So verification is now IDEMPOTENT: the same code, for the same email, keeps
+   answering ok for as long as that code was already going to live. Consumption
+   does NOT extend the record by a millisecond - `expires` is untouched - so
+   this adds no window a live code did not already have, and re-answering ok
+   grants nothing a first verify did not (the account write is a separate,
+   email-keyed, idempotent call). A DIFFERENT code is still refused, an expired
+   one is still expired, and the record is dropped on expiry / by sweepOtpStore. */
 app.post("/api/verify-otp", userLimiter, (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const code  = String(req.body?.code || "").trim();
@@ -687,7 +712,11 @@ app.post("/api/verify-otp", userLimiter, (req, res) => {
   if (String(rec.code) !== code) {
     return res.json({ ok: false, error: "invalid" });
   }
-  otpStore.delete(email);
+  // Logged, not silent: a replay is BENIGN but it is also the only signal that
+  // something upstream is double-dispatching. If this line starts appearing in
+  // volume, look at the client guards (OTP_IN_FLIGHT) before anything else.
+  if (rec.consumed) console.log(`[verify-otp] replay accepted for ${email} (code still within its TTL)`);
+  rec.consumed = true;   // kept, not deleted - see the block above
   res.json({ ok: true });
 });
 

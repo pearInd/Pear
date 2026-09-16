@@ -292,6 +292,22 @@
                       stores the selectors do not know: adidas.co.il (Salesforce
                       Commerce Cloud), where the walk-up shipped the wishlist heart
                       as the garment, and schema.org JSON-LD-only pages.
+     otp-single-verification
+                      "It asked me for the code twice." One correct code, entered once,
+                      must equal access. Runs app.js's real OTP/identity block headless
+                      and pins the three paths that each produced that one symptom: the
+                      re-entry guard was a DOM property (btn.disabled) that the Enter
+                      handlers never consulted, so two fast Enters dispatched twice - and
+                      the server's store is destructive at both ends, so a second dispatch
+                      either mints a second code (send overwrites) or reports `expired` on
+                      a code that just verified (verify consumed); nothing was persisted
+                      at the moment the code was ACCEPTED, so losing the following
+                      /api/users round trip threw away proof that no longer existed
+                      anywhere; and finishRegistration()'s degrade paths set the device id
+                      but never stamped the auth clock, re-gating a verified shopper on
+                      their next visit. §5 pins the server half - verification is now
+                      idempotent inside the code's own TTL, which consumption does not
+                      extend, so a retry the client never chose cannot cost a code.
      scanner-extraction
                       The store scanner's HTML-scrape path (non-Shopify stores): no
                       SVG, no header/nav/footer image, one entry per photo, JSON-LD
@@ -363,6 +379,7 @@ const SUITES = [
   ["gender-switch", "gender-switch.test.mjs"],
   ["cdn-url-integrity", "cdn-url-integrity.test.mjs"],
   ["product-image-trust", "product-image-trust.test.mjs"],
+  ["otp-single-verification", "otp-single-verification.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

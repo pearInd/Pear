@@ -15848,6 +15848,36 @@ function startOtpCountdown() {
   }, 1000);
 }
 
+/* THE BUG THIS CLOSES: "it asked me for the code twice."
+   ─────────────────────────────────────────────────────────────────────────────
+   submitIdentity() and verifyOtp() used to mark themselves busy with
+   `btn.disabled = true` and nothing else. That guards a second CLICK and
+   nothing more - setupOtpScreen() and showIdentityGate() also bind Enter on the
+   <input>s, and those handlers call the function DIRECTLY. `disabled` on a
+   <button> says nothing about a keydown on an <input>, so two fast Enters - the
+   most ordinary way there is to submit a 6-digit code - dispatched the request
+   twice.
+
+   A second dispatch is not harmless, because the server's OTP store is
+   destructive at both ends:
+     · /api/send-otp does otpStore.set() - last write wins. Two sends mint two
+       different codes and mail both. The shopper types whichever mail landed
+       first; the server is holding the other one. → "Wrong code."
+     · /api/verify-otp consumes the code. Of two in-flight verifies carrying the
+       SAME correct code, one wins and one comes back `expired`, and whichever
+       response settles LAST is the one that paints. → "That code expired."
+   Either way the shopper goes and enters a SECOND code.
+
+   Hence a plain in-memory flag rather than a DOM property: it is the same guard
+   no matter which event reached the function. Declared HERE, inside the block
+   test/otp-single-verification.test.mjs slices, not up beside PEAR_OTP_PENDING -
+   a module-scope flag above the extract marker would die on a ReferenceError in
+   the sandbox while the real file stayed green (CLAUDE.md §2.6).
+
+   The button's `disabled` is kept alongside it: the flag stops the double
+   dispatch, `disabled` is what the shopper can SEE.  */
+const OTP_IN_FLIGHT = { send: false, verify: false };
+
 function showOtpScreen(email) {
   const idForm  = $("identityForm");
   const otpForm = $("screen-otp");
@@ -15974,26 +16004,54 @@ async function finishReauth() {
 async function verifyOtp(code) {
   const errEl = $("otp-error");
   const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.hidden = false; } };
+  // Silent no-op, deliberately: the second of two fast Enters is the same
+  // submission, not a new one, so it must not paint an error either. See
+  // OTP_IN_FLIGHT above for why btn.disabled alone never covered this.
+  if (OTP_IN_FLIGHT.verify) return;
   if (!PEAR_OTP_PENDING) return showErr(t("otpSomethingWrong"));
   if (!/^\d{6}$/.test(code)) return showErr(t("otpEnter6Digits"));
 
+  // Read once, before the await - the whole point of what follows is that the
+  // verification must not depend on state that can move underneath it.
+  const pending = PEAR_OTP_PENDING;
+  const reauth  = PEAR_REAUTH_USER;
+
   const btn = $("btn-verify-otp");
+  OTP_IN_FLIGHT.verify = true;
   if (btn) btn.disabled = true;
   try {
     const res = await fetch("/api/verify-otp", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ email: PEAR_OTP_PENDING.email, code }),
+      body:    JSON.stringify({ email: pending.email, code }),
     });
     const data = await res.json().catch(() => null);
 
     if (data?.ok) {
-      if (PEAR_REAUTH_USER) {
+      /* PERSIST-ON-ACCEPT - this ordering is the fix, not a tidy-up.
+         The server has just CONSUMED this code inside /api/verify-otp. From
+         this line on, the proof that this browser owns this email exists
+         nowhere in the world except right here. This used to write nothing and
+         go straight into a SECOND network round trip (POST /api/users), only
+         calling setDeviceId()/stampAuthDate() if that one came back too - so a
+         5xx, a timeout, a backgrounded iframe torn down mid-flight or a reload
+         threw the proof away, and the next load ran the full identity gate and
+         a fresh OTP. The window was one Supabase round trip wide, on mobile
+         connections. Both writes are idempotent and the downstream paths still
+         make them, so nothing is lost by doing it here first.
+
+         Stamping the auth clock HERE is also what makes finishRegistration()'s
+         two degrade branches safe: they setDeviceId() but never stamped, which
+         re-gated a successfully-verified shopper on their very next visit via
+         isAuthRefreshDue(). */
+      setDeviceId(pending.deviceId);
+      stampAuthDate();
+
+      if (reauth) {
         await finishReauth();
         return;
       }
-      const { deviceId, name, email } = PEAR_OTP_PENDING;
-      await finishRegistration(deviceId, name, email);
+      await finishRegistration(pending.deviceId, pending.name, pending.email);
       return;
     }
 
@@ -16006,12 +16064,21 @@ async function verifyOtp(code) {
     console.warn("[otp] verify failed:", err?.message || err);
     showErr(t("errNetworkRetry"));
   } finally {
+    OTP_IN_FLIGHT.verify = false;
     if (btn) btn.disabled = false;
   }
 }
 
 async function resendOtp() {
   if (!PEAR_OTP_PENDING) return;
+  /* A resend is a DIFFERENT action from a double-submit, so it gets no send
+     guard of its own - minting a new code is exactly what it is for, and its
+     own button is click-only (btn.disabled covers a double-click). But it must
+     not fire while a verify is on the wire: /api/send-otp overwrites the stored
+     code, so a resend that lands first turns the verify the shopper is already
+     waiting on into "wrong code" and costs them a second entry - the very
+     symptom OTP_IN_FLIGHT exists to remove. The wait is sub-second. */
+  if (OTP_IN_FLIGHT.verify) return;
   const { name, email } = PEAR_OTP_PENDING;
   const btn = $("btn-resend-otp");
   if (btn) btn.disabled = true;
@@ -16074,12 +16141,18 @@ async function submitIdentity() {
 
   const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.hidden = false; } };
 
+  // Same guard, same reason as verifyOtp() - the Enter handlers on #userName /
+  // #userEmail call this directly and never saw btn.disabled. Two fast Enters
+  // used to mint TWO codes: /api/send-otp overwrites the store, so the shopper
+  // typed whichever mail arrived first and the server was holding the other.
+  if (OTP_IN_FLIGHT.send) return;
   if (name.length < 2)  return showErr(t("errNameRequired"));
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showErr(t("errEmailInvalid"));
   if (errEl) errEl.hidden = true;
 
   // Reuse the existing device id when re-registering (404 recovery); otherwise mint one.
   const deviceId = getDeviceId() || newUuid();
+  OTP_IN_FLIGHT.send = true;
   if (btn) btn.disabled = true;
 
   try {
@@ -16091,7 +16164,6 @@ async function submitIdentity() {
     const data = await res.json().catch(() => null);
 
     if (res.ok && data?.ok) {
-      if (btn) btn.disabled = false;
       PEAR_OTP_PENDING = { deviceId, name, email };
       setupOtpScreen();
       showOtpScreen(email);
@@ -16099,13 +16171,16 @@ async function submitIdentity() {
     }
 
     // Rate limited / bad input → surface it, let the visitor retry from the gate.
-    if (btn) btn.disabled = false;
     return showErr((data && (data.message || data.error)) || t("otpSendFailed"));
   } catch (err) {
     // Network error / API server down - never a dead end.
-    if (btn) btn.disabled = false;
     console.warn("[identity] send-otp failed:", err?.message || err);
     showErr(t("errNetworkRetry"));
+  } finally {
+    // Released on EVERY exit, including the success one: the gate is hidden by
+    // then, but a failed relink can send the visitor back to it.
+    OTP_IN_FLIGHT.send = false;
+    if (btn) btn.disabled = false;
   }
 }
 

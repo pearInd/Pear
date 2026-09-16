@@ -176,7 +176,10 @@ in a sandbox. Affected blocks: `setActiveItem`'s slot write
 (`outfit-slot-isolation`), the presence gate (`body-presence-gate`),
 `applyGarment` (`prompt-only-flip`, `side-profile`). `canonicalImageUrl` is one too
 (`back-view-readiness`, `back-view-diagnostic` slice from that literal; `url-identity`
-and `cdn-url-integrity` slice `server.js`/`scan-store.js` the same way).
+and `cdn-url-integrity` slice `server.js`/`scan-store.js` the same way). The OTP/identity
+block is one as well: `otp-single-verification` slices `app.js` from
+`const OTP_IN_FLIGHT = { send: false, verify: false };` to the `logSessionMeasurements`
+JSDoc, and `server.js` from `const otpStore = new Map();`.
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.
