@@ -113,7 +113,7 @@ wrong"*, *"it slimmed me down"*, *"front and back aren't right"*.
 | **A. Prompt text** | what the model is told | `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` | mostly dead |
 | **B. Reference image** | what the model is shown | `referenceImageFor`, `galleryOf`, `distinctBackOf`, `createGarmentComposite` | **live** |
 | **C. Orientation** | which asset is on the wire when | `OrientationWatcher`, `effectiveAngle`, `autoOrientation` | **live** |
-| **D. Size ladder** | the recommended size in the UI | `calculateSize`, `SIZE_SCALE`, `*_SIZE_CHART` | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
+| **D. Size ladder** | the recommended size in the UI | `calculateSize`, `SIZE_SCALE`, `*_SIZE_CHART`, `applyStoreChartOverlay` | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
 
 **Layer B is where most real fit/back-view problems actually live.** "The back
 came out plain" is almost never a prompt problem — it is `distinctBackOf()`
@@ -169,6 +169,27 @@ dimensions are fixed. Never the body's outline.
 `DEFAULT_CATEGORY = "unknown"`, never `"tops"` — a guess indistinguishable from
 a verdict outranks the room's own stronger classifier.
 
+### 2.5b A storefront's size chart may refine the fine-tune, never the kernel
+`calculateSize()` has two stages. The **kernel** is height + weight, scored by
+`coreHwPenalty()`, and it decides which rows are candidates at all,
+`currentBodyCategory`/`currentSizeCategory` (and so the kids/adult go-live guard),
+and the overflow ceiling behind "no size available". The **fine-tune** is the
+`×0.5` chest/waist/legs pass that only breaks a tie *between* rows the kernel
+already admitted.
+
+`applyStoreChartOverlay()` writes fine-tune columns and nothing else — it does not
+name `min/maxHeight` or `min/maxWeight` anywhere, and it may only *change* a band
+the base row already carries, never add or remove one. That bound is the whole
+reason parsing a merchant's HTML is an acceptable input to the size calculator: a
+bad scrape can at worst move the recommendation between two sizes that already fit
+this body, and only for a shopper who filled in an optional measurement. It cannot
+invent a candidate, remove one, flip adult↔child, or turn a match into a no-match.
+
+Do not widen it to the kernel "so the store's chart really counts". The store's
+chart is evidence about **cloth**; ours is vetted evidence about **bodies**, and
+the kernel is the half we vetted. `test/size-chart-overlay.test.mjs` §1 asserts
+this as an absence — the form that catches a new well-meant line being added.
+
 ### 2.6 Extract markers are an interface
 Several tests slice a block out of `app.js` by matching its **opening line as a
 literal string**, taking the **first occurrence in the file**, and executing it
@@ -180,6 +201,10 @@ and `cdn-url-integrity` slice `server.js`/`scan-store.js` the same way). The OTP
 block is one as well: `otp-single-verification` slices `app.js` from
 `const OTP_IN_FLIGHT = { send: false, verify: false };` to the `logSessionMeasurements`
 JSDoc, and `server.js` from `const otpStore = new Map();`.
+`calculateSize()`'s fine-tune tie-break is the newest one: `size-chart-overlay` slices
+`app.js` from `const candidates = currentSizeCategory === "child" ? childFits : adultFits;`
+to `// SNAP TO THE PRODUCT'S OWN LIST.` and runs that loop standalone, so it scores the
+real penalty formula rather than a copy of it.
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.
@@ -238,6 +263,8 @@ same commit. Whichever is wrong is the one that wins.
 | `srcset` parsing (split on whitespace, never on `,`) | `pear-widget.js: largestFromSrcset` ↔ `scan-store.js: largestFromSrcset` |
 | Decorative-image keyword list | `pear-widget.js: EXCLUDE_SRC` ↔ `scan-store.js: EXCLUDE_IMG_SRC` |
 | Trust-tiered exclusion + name corroboration | `isExcludedSrc` / `nameEchoesProduct` in `pear-widget.js` ↔ `scan-store.js` |
+| Size-chart wire format (`<unit>;<source>;SIZE:chest:waist:hips:legs\|…`) | `pear-widget.js: encodeSizeChart` ↔ `app.js: parseStoreSizeChart` |
+| Size-chart sanity clamps (cm) | `pear-widget.js: SIZE_CHART_CLAMPS` ↔ `app.js: STORE_CHART_CLAMPS` |
 
 The widget's category verdict is **explicit** and therefore outranks the room's
 own classifier. A widget-side category bug cannot be fixed room-side.
@@ -267,11 +294,18 @@ live — but if you ever re-run that backfill, port the current rules first.
 ## 4. Commands
 
 ```bash
-npm run test:unit      # .test.mjs suite  — the regression guardrail
-npm run test:api       # /api/classify-images health
-npm run test:e2e       # widget injection + modal, headless Chrome
+npm run test:unit      # .test.mjs suite  — the regression guardrail (alias: npm test)
 npm run trace:prompt   # prints every string that actually reaches Decart
+npm start              # the server (node server.js); npm run dev for --watch
+npm run scan           # scanner/scan-store.js over a storefront
 ```
+
+`test:api` and `test:e2e` were listed here for a long time and **do not exist** in
+`package.json` — there is no API-health script and no headless-Chrome runner. The
+widget IS exercised, but from inside `test:unit`: `widget-dom`, `widget-combined`,
+`stock-dom-scrape` and `size-chart-scrape` load `pear-widget.js` into jsdom and
+drive a real injection + modal open. Don't re-add the two dead lines; if you want
+a real API/e2e target, add the script first.
 
 `npm run trace:prompt` before and after any Layer-A edit. If the output is
 byte-identical, the edit changed nothing on the wire — say so.

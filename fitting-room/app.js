@@ -683,6 +683,22 @@ let pendingSoldOutSizes = undefined;         // string[] | string | undefined (n
    photo arrives under ?width= / _800x spellings and a raw compare would drop the stock
    verdict on the very product it was read from. */
 let pendingSoldOutForImg = undefined;        // string | undefined
+/* The STORE'S OWN size chart for this product, compact-encoded by pear-widget.js
+   (encodeSizeChart there; parseStoreSizeChart() here decodes it). Same two-stage
+   handoff as pendingSizes above - ?garment_size_chart= at open, then the
+   PEAR_UPDATE_GARMENT correction, which a JS-rendered size-guide modal routinely
+   needs because it hydrates after the shopper already clicked.
+
+   NO PRODUCT STAMP, DELIBERATELY - unlike pendingSoldOutSizes directly above, which
+   has one. The asymmetry is the point: a stale sold-out list is a FALSE CLAIM about a
+   specific SKU (product B's perfectly stocked L struck through because product A's L
+   was gone), which is the one way that feature could fail loudly. A stale size chart
+   is not a claim at all - applyStoreChartOverlay() can only write fine-tune bands, so
+   the worst it can do is nudge a tie-break between two sizes that ALREADY fit this
+   body on height and weight. That is the same call pendingSizes makes, for the same
+   reason, and the Complete-the-Look path is covered anyway: the widget re-sends this
+   field on every correction, including as "" to clear it. */
+let pendingSizeChart = undefined;            // string | Array | undefined (none arrived yet)
 let focusMode = false;
 
 /* Multi-Image Product Gallery Sync - which product angle the live engine is warping.
@@ -1418,6 +1434,177 @@ function parseSizeList(raw) {
   return list.map((s) => String(s == null ? "" : s).trim().toUpperCase()).filter(Boolean);
 }
 
+/* ══ THE STORE'S OWN SIZE CHART - decode, then overlay ══════════════════════════════
+   WHAT ARRIVES: pear-widget.js reads the "Size guide" / "מדריך מידות" table off the PDP
+   the shopper is standing on (extractSizeChart there) and encodes it compactly
+   (encodeSizeChart there). It reaches us on ?garment_size_chart= at open and again on
+   the PEAR_UPDATE_GARMENT correction.
+
+   ── WHAT IT IS ALLOWED TO DO, AND THE LINE IT MUST NOT CROSS ─────────────────────────
+   calculateSize() computes in two stages. The KERNEL is height + weight, scored by
+   coreHwPenalty(), and it decides three things that all matter enormously:
+     · which rows are candidates at all (the genuine-fit filter, penalty === 0),
+     · currentBodyCategory / currentSizeCategory, and so the kids/adult go-live guard,
+     · the overflow ceiling behind the "no size available" copy.
+   The FINE-TUNE is the ×0.5 chest/waist/legs pass that only ever breaks a tie BETWEEN
+   rows that already passed the kernel.
+
+   A merchant's chart publishes body circumferences. It never publishes a height or a
+   weight band. So applyStoreChartOverlay() writes the fine-tune columns and NOTHING
+   ELSE - it does not even name minHeight/maxHeight/minWeight/maxWeight - and the blast
+   radius of a bad scrape is bounded to "which of two adjacent sizes that both genuinely
+   fit this body is shown", and only for a shopper who filled in an optional
+   measurement. It cannot invent a candidate, remove one, flip adult↔child, or turn a
+   match into a no-match. That bound is the entire reason reading merchant HTML is an
+   acceptable input to this file at all. Do not widen it to the kernel "so the store's
+   chart really counts" - the store's chart is evidence about CLOTH, ours is vetted
+   evidence about BODIES, and the kernel is the half we vetted.
+
+   Spec: docs/superpowers/specs/2026-09-17-storefront-size-chart-scraper.md */
+
+/* Mirrors SIZE_CHART_CLAMPS in pear-widget.js (CLAUDE.md §3 - edit together). Re-checked
+   HERE rather than trusted from the wire because this is the last gate before a number
+   from a stranger's HTML becomes a band the calculator scores against, and the widget is
+   not the only possible sender (the message listener accepts a correction, and a
+   server-side chart cache is an obvious next step). Centimetres, post-conversion. */
+const STORE_CHART_CLAMPS = {
+  chest: [50, 200], waist: [40, 200], hips: [50, 200], legs: [40, 140],
+};
+
+/* The wire format, decoded:
+       <unit>;<source>;SIZE:chest:waist:hips:legs|SIZE:...
+       each measurement ::= "min-max", or "" when the chart doesn't publish it
+   e.g. cm;shopify;S:90-95:76-81::|M:96-101:82-87::|L:102-107:88-93::
+
+   ⚠️ CROSS-FILE LOCKSTEP (CLAUDE.md §3): the encoder is encodeSizeChart() in
+   pear-widget.js. One format, two files, same commit - test/size-chart-overlay.test.mjs
+   round-trips the widget's own encoder output through this decoder for that reason.
+
+   REFUSES A NON-"cm" UNIT OUTRIGHT rather than converting. The widget converts to
+   centimetres before encoding, so "in" on the wire means one of the two sides has
+   drifted - and a chart converted twice (or not at all) is the one failure mode here
+   that produces plausible, confident, WRONG bands instead of a visible absence.
+   @param {string|Array|null|undefined} raw
+   @returns {Array<object>} rows, or [] for anything unreadable */
+function parseStoreSizeChart(raw) {
+  try {
+    /* An already-parsed array is accepted so a future sender (a server-side cache, a
+       test) can hand rows straight over without a round trip through the string. */
+    if (Array.isArray(raw)) return raw.filter((r) => r && typeof r === "object" && r.size);
+    if (typeof raw !== "string") return [];
+    const s = raw.trim();
+    if (!s) return [];
+    const head = s.split(";");
+    if (head.length < 3) return [];
+    if (head[0].trim().toLowerCase() !== "cm") return [];
+    const body = head.slice(2).join(";");
+
+    const band = (tok) => {
+      const m = /^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/.exec(String(tok || "").trim());
+      if (!m) return null;
+      const lo = parseFloat(m[1]), hi = parseFloat(m[2]);
+      if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return null;
+      return { min: lo, max: hi };
+    };
+
+    const out = [], seen = new Set();
+    for (const chunk of body.split("|")) {
+      const cells = chunk.split(":");
+      /* parseSizeList() normalises exactly as every other size reader in this file does
+         (trim + uppercase) - CLAUDE.md §2.2's discipline applied to size tokens: "l",
+         " L " and "L" are one size, and a raw compare would silently overlay nothing. */
+      const size = parseSizeList([cells[0]])[0];
+      if (!size || seen.has(size)) continue;
+      const row = { size };
+      const keys = ["Chest", "Waist", "Hips", "Legs"];
+      let any = false;
+      for (let i = 0; i < keys.length; i++) {
+        const b = band(cells[i + 1]);
+        if (!b) continue;
+        row["min" + keys[i]] = b.min;
+        row["max" + keys[i]] = b.max;
+        any = true;
+      }
+      if (!any) continue;          // a size with no measurement overlays nothing
+      seen.add(size);
+      out.push(row);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/* THE OVERLAY. Returns a NEW array with the store's fine-tune bands written over the
+   matching rows of `baseChart`; `baseChart` itself is never mutated, and is returned
+   BY REFERENCE (not a copy) whenever there is nothing to apply.
+
+   FOUR RULES, each of which is a refusal:
+     1. Rows are matched by normalised size TOKEN. A store row naming a size the base
+        chart doesn't have is ignored - bestSize can only ever be one of the base
+        chart's own rows, so a row nothing can select is not worth carrying.
+     2. A column is written only when the store supplied BOTH bounds, both are finite,
+        min <= max, and both survive STORE_CHART_CLAMPS. A partial chart (chest only)
+        leaves waist and legs on ours.
+     3. A column is written only when the BASE ROW ALREADY HAS IT. This is "refine",
+        not "extend": the store may not introduce a measurement dimension the vetted
+        chart deliberately does not score. ZARA_SIZE_CHART has chest/waist/legs and no
+        hips; ADULT_PANTS_SIZE_CHART has waist/hips and no chest - each keeps its own
+        shape, and the overlay can only ever CHANGE a band, never add or remove one.
+     4. Height and weight are not writable. They are not read, not copied field by
+        field, not named anywhere below - the row is spread wholesale and only the four
+        fine-tune keys are overwritten, so there is no path by which a future edit
+        "accidentally" reaches the kernel.
+   Anything unexpected - a non-array, an empty match, a throw - returns `baseChart`.
+   @param {Array<object>} baseChart   ZARA_SIZE_CHART / a pants chart, untouched
+   @param {Array<object>} storeRows   parseStoreSizeChart() output
+   @returns {Array<object>} */
+function applyStoreChartOverlay(baseChart, storeRows) {
+  try {
+    if (!Array.isArray(baseChart) || !baseChart.length) return baseChart;
+    if (!Array.isArray(storeRows) || !storeRows.length) return baseChart;
+
+    const byToken = new Map();
+    for (const r of storeRows) {
+      const token = parseSizeList([r && r.size])[0];
+      if (!token || byToken.has(token)) continue;   // first spelling of a size wins
+      byToken.set(token, r);
+    }
+    if (!byToken.size) return baseChart;
+
+    let touched = 0;
+    const out = baseChart.map((row) => {
+      const token = parseSizeList([row && row.size])[0];
+      const store = token ? byToken.get(token) : undefined;
+      if (!store) return row;                        // pass through BY REFERENCE
+      let next = null;
+      for (const cap of ["Chest", "Waist", "Hips", "Legs"]) {
+        if (typeof row["min" + cap] !== "number" || typeof row["max" + cap] !== "number") continue;
+        const lo = store["min" + cap], hi = store["max" + cap];
+        if (typeof lo !== "number" || typeof hi !== "number") continue;
+        if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) continue;
+        const clamp = STORE_CHART_CLAMPS[cap.toLowerCase()];
+        if (!clamp || lo < clamp[0] || hi > clamp[1]) continue;
+        if (!next) next = { ...row };
+        next["min" + cap] = lo;
+        next["max" + cap] = hi;
+      }
+      if (next) touched++;
+      return next || row;
+    });
+    if (!touched) return baseChart;
+    console.log("[PEAR] store size chart overlaid on", touched, "of", baseChart.length,
+      "chart row(s) - fine-tune bands only, height/weight kernel untouched");
+    return out;
+  } catch (e) {
+    /* CLAUDE.md §2.5 - the default global matrix is the documented safe state, and it
+       is exactly what shipped before this feature existed. */
+    console.warn("[PEAR] store size-chart overlay failed, keeping the default matrix:",
+      e?.message || e);
+    return baseChart;
+  }
+}
+
 /**
  * @param {string[]|string|null} sizes - the host product's OWN size list, when known
  * @param {"kids"|"adult"|"uncertain"|undefined} garmentAgeGroup - classifier fallback only
@@ -1890,6 +2077,21 @@ function resolvedSoldOutSizes() {
   return parseSizeList(pending);
 }
 
+/* The active product's own published size chart, wherever it currently lives -
+   activeItem once Screen 2 exists, pendingSizeChart before that. Same two-stage shape
+   and the same CLAUDE.md §2.7 typeof guards as resolvedSoldOutSizes() directly above,
+   for the same reason: this region is executed as a standalone slice by several
+   harnesses with no module scope around it, so a bare reference to either binding is a
+   ReferenceError there rather than a lint nit.
+   @returns {Array<object>} decoded rows, or [] when no readable chart arrived */
+function resolvedStoreSizeChart() {
+  const item = typeof activeItem !== "undefined" ? activeItem : null;
+  if (item && item.sizeChart != null) return parseStoreSizeChart(item.sizeChart);
+  const pending = typeof pendingSizeChart !== "undefined" ? pendingSizeChart : undefined;
+  if (pending === undefined) return [];
+  return parseStoreSizeChart(pending);
+}
+
 /** @param {string|null|undefined} size @returns {boolean} true only for a size POSITIVELY known gone. */
 function isSizeSoldOut(size) {
   if (!size) return false;
@@ -2307,7 +2509,23 @@ function calculateSize() {
      here, so the EU-before-waist precedence lives in exactly ONE place - see that
      function on why reversing those two lines re-sizes every EU store in the catalog. */
   const useNumericPantsChart = useAdultPantsChart || useWaistInchChart;
-  const adultChart = useNumericPantsChart ? pantsChartForSizes(garmentSizes) : ZARA_SIZE_CHART;
+  /* ── THE STORE'S OWN CHART, LAID OVER THE VETTED ONE ──────────────────────────
+     Applied AFTER chart selection and BEFORE the genuine-fit filter below, and that
+     position is safe precisely because applyStoreChartOverlay() cannot write a height
+     or weight column: bodyAdultFits, currentBodyCategory, currentSizeCategory, the
+     kids/adult guard and the overflow ceiling all still compute off OUR bands, byte
+     for byte. The only consumer of what this changes is the ×0.5 fine-tune tie-break
+     further down. See applyStoreChartOverlay()'s own comment for the full argument,
+     and do not move this below the filter "for clarity" - the filter would then be
+     reading a chart the overlay had not seen, which is a difference nobody would
+     notice until a store published a chart we disagreed with.
+
+     CHILD_SIZE_CHART is deliberately NOT overlaid: it carries no measurement columns
+     at all and the fine-tune pass is skipped outright on the child path, so an overlay
+     there would be a clause that cannot reach the wire (CLAUDE.md RULE 0's spirit). */
+  const adultChart = applyStoreChartOverlay(
+    useNumericPantsChart ? pantsChartForSizes(garmentSizes) : ZARA_SIZE_CHART,
+    resolvedStoreSizeChart());
   /* Read by formatSizeLabel(), which must never decorate a numeric pants size. */
   currentSizeIsNumericPants = useNumericPantsChart;
   /* Computed BEFORE the garment constraint below, and kept: this is the shopper's own
@@ -2802,6 +3020,17 @@ function parseHandoff() {
          comment). Absent (not "unknown") when the widget declined or is too old to
          send it. */
       sizeRunType: q.get("garment_size_type") || undefined,
+      /* The store's OWN size chart for this product, compact-encoded by pear-widget.js
+         (see encodeSizeChart there for the grammar). Carried RAW - the encoded string -
+         exactly as `sizes` and `soldOutSizes` above are, for the same reason: every
+         reader normalises through parseStoreSizeChart(), so this stays a pure param
+         read with no dependency on code defined elsewhere in the module. Read
+         SYNCHRONOUSLY because calculateSize() paints the recommendation on Screen 1,
+         and a returning shopper is routed straight past Screen 1 by routeUser()'s
+         instant-skip path. Absent (the widget omits the param when it could read no
+         chart) leaves it undefined, which resolvedStoreSizeChart() reads as "no chart
+         evidence" - the default global matrix, i.e. the pre-feature behaviour. */
+      sizeChart: q.get("garment_size_chart") || undefined,
       /* The product's own title, carried explicitly rather than left to `name` alone.
          ?garment_title= is the v2 spelling pear-widget.js now sends alongside the
          original ?garment_name=; both carry the same string, so either build of the
@@ -2836,10 +3065,16 @@ function parseHandoff() {
       pendingSoldOutForImg = result.img;
     }
     if (pendingTitle === undefined && result.title !== undefined) pendingTitle = result.title;
+    /* Seeded under the same SEEDS-NEVER-OVERWRITES rule as the fields above: the
+       PEAR_UPDATE_GARMENT correction re-reads the PDP after the theme's own JS has had
+       a chance to render a size-guide modal, so it is the better of the two readings
+       and a late re-parse must not clobber it with the open-time string. */
+    if (pendingSizeChart === undefined && result.sizeChart !== undefined) pendingSizeChart = result.sizeChart;
     console.log("[PEAR] parseHandoff() - product signals for the size calculator:", {
       sizes: pendingSizes || "(none readable on the PDP)",
       sizeRunType: pendingSizeRunType || "(none)",
       soldOut: pendingSoldOutSizes || "(none flagged - every size treated as available)",
+      sizeChart: pendingSizeChart || "(none readable - the vetted default matrix applies)",
       title: pendingTitle || "(none)",
     });
     // CHECK B instrumentation - the exact point imgBack is resolved, showing which of
@@ -3850,6 +4085,30 @@ window.addEventListener("message", (e) => {
     const sizeFormEl4 = $("sizeForm");
     if (sizeFormEl4 && !sizeFormEl4.hidden) { try { calculateSize(); } catch {} }
     try { injectSizeSelector(); } catch {}
+  }
+
+  /* THE STORE'S OWN SIZE CHART, handled alongside the stock branch above and for the
+     identical reason it is: a size-guide modal is very often rendered by the theme's
+     own JS (or fetched into a drawer on demand), so at open time there was frequently
+     nothing in the DOM to read and THIS is the delivery.
+
+     AN EMPTY STRING IS A REAL ANSWER, same as the empty array above. The open URL
+     omits ?garment_size_chart= when nothing was readable, but the widget always sends
+     this field on the correction - so "" means "re-checked, this page publishes no
+     chart we can read" and must be able to CLEAR a chart the open-time scrape got
+     wrong. Testing truthiness would make that correction unrepresentable and strand a
+     wrong overlay for the whole session; hence the explicit shape test, which also
+     tells "the widget said none" apart from "this build never sends the field". */
+  const incomingChart = e.data.garment_size_chart;
+  if (typeof incomingChart === "string" || Array.isArray(incomingChart)) {
+    pendingSizeChart = incomingChart;
+    if (activeItem) activeItem.sizeChart = incomingChart;
+    const rows = parseStoreSizeChart(incomingChart);
+    console.log("[PEAR] store size-chart correction:",
+      rows.length ? rows.length + " row(s): " + rows.map((r) => r.size).join("/")
+                  : "(none readable - the vetted default matrix applies)");
+    const sizeFormEl5 = $("sizeForm");
+    if (sizeFormEl5 && !sizeFormEl5.hidden) { try { calculateSize(); } catch {} }
   }
 
   const incomingSizes = e.data.garment_sizes;

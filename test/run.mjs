@@ -292,6 +292,21 @@
                       stores the selectors do not know: adidas.co.il (Salesforce
                       Commerce Cloud), where the walk-up shipped the wishlist heart
                       as the garment, and schema.org JSON-LD-only pages.
+     size-chart-scrape / size-chart-overlay
+                      The storefront publishes its own size guide - real chest/waist
+                      centimetres per size, and the chart the merchant gets judged
+                      against when the parcel arrives - and calculateSize() was fitting
+                      every shopper against our own global matrix instead. The widget now
+                      reads that table (passively, at click time, never on page load) and
+                      the room lays it over the vetted chart. The scrape suite runs the
+                      widget for real in jsdom across the four shapes charts ship in, and
+                      - the half that matters - across the tables that must produce
+                      NOTHING: a colour table, a price column, a one-row table, garment
+                      "Length". The overlay suite pins the line the whole feature rests
+                      on: a merchant's chart may refine the fine-tune tie-break and may
+                      NOT touch the height/weight kernel, so a bad scrape can at worst
+                      move between two sizes that already fit, and can never invent a
+                      candidate, flip adult/child, or turn a match into a no-match.
      otp-single-verification
                       "It asked me for the code twice." One correct code, entered once,
                       must equal access. Runs app.js's real OTP/identity block headless
@@ -380,6 +395,8 @@ const SUITES = [
   ["cdn-url-integrity", "cdn-url-integrity.test.mjs"],
   ["product-image-trust", "product-image-trust.test.mjs"],
   ["otp-single-verification", "otp-single-verification.test.mjs"],
+  ["size-chart-scrape", "size-chart-scrape.test.mjs"],
+  ["size-chart-overlay", "size-chart-overlay.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

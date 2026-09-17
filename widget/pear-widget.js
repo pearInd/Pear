@@ -1759,6 +1759,499 @@
     return "unknown";
   }
 
+
+  /* ══ THE STORE'S OWN SIZE CHART ═════════════════════════════════════════════════
+     WHAT THIS IS FOR: calculateSize() in the fitting room fits every shopper against
+     ONE hardcoded global matrix (ZARA_SIZE_CHART and the two pants ladders). Those
+     bands are vetted, but they are OURS - and the storefront the shopper is standing
+     on almost always publishes its own "Size guide" / "מדריך מידות" table with real
+     chest/waist/hip centimetres per size. That table is the one the merchant gets
+     judged against when the parcel arrives. We were never reading it.
+
+     ── THE SAFETY LINE, AND WHY READING MERCHANT HTML IS ACCEPTABLE AT ALL ──────────
+     What travels from here can ONLY reach the fine-tune tie-break in calculateSize()
+     (the x0.5 chest/waist/legs pass over rows that ALREADY passed the height/weight
+     gate). applyStoreChartOverlay() in app.js refuses to write a height or weight
+     column, so a wrong scrape can at worst move the recommendation between two
+     adjacent sizes that both genuinely fit this body - it can never invent a
+     candidate, remove one, flip adult<->child, or turn a match into a no-match. See
+     docs/superpowers/specs/2026-09-17-storefront-size-chart-scraper.md.
+
+     ── PASSIVE, AND LAZY (zero page-load cost) ──────────────────────────────────────
+     Called ONLY from openModal(), i.e. after the shopper clicks the PEAR button -
+     never on DOMContentLoaded, never on load, never in the rAF injection pass. It
+     reads: no clicks, no dialog.showModal(), no fetch, no style writes. A size guide
+     that only EXISTS after a click is simply not found, which is the same answer as
+     "this store publishes no chart". A hidden-but-present modal (the common Shopify/
+     Woo shape - the markup ships in the DOM and CSS hides it) reads fine, because
+     querySelectorAll does not care about visibility.
+
+     ── EVERY FAILURE CONVERGES ON null (CLAUDE.md §2.5) ─────────────────────────────
+     No table, an unreadable header, ambiguous units, a non-monotonic column, a thrown
+     selector, a merchant who ships a 4,000-row table: all of them yield null, the
+     param is omitted, and the room uses the default global matrix - byte for byte the
+     behaviour that shipped before this existed. There is deliberately no tier here
+     that can half-trust a chart: a partially-read grid is worse than none, because it
+     is indistinguishable from a correctly-read one downstream. */
+
+  var SIZE_CHART_MAX_TABLES = 8;    // candidate tables scored per page
+  var SIZE_CHART_MAX_ROWS   = 40;   // rows read per table
+  var SIZE_CHART_MAX_COLS   = 12;   // columns read per row
+
+  /* Absolute sanity clamps, in CENTIMETRES, applied AFTER any inch conversion. These
+     are not "typical" bands - they are the outer edge of humanly-possible, sized to
+     catch a column that is really prices, weights, or a mis-read grid, while never
+     refusing a real chart. A value outside these drops its COLUMN, not the chart. */
+  var SIZE_CHART_CLAMPS = {
+    chest: { min: 50, max: 200 },
+    waist: { min: 40, max: 200 },
+    hips:  { min: 50, max: 200 },
+    legs:  { min: 40, max: 140 }
+  };
+  /* A band wider than this is a mis-read: two adjacent cells parsed as one range. */
+  var SIZE_CHART_MAX_BAND_CM = 40;
+  /* Point-value charts ("M = 96cm") get a symmetric band, since the fine-tune pass
+     scores DISTANCE OUTSIDE a band and a zero-width band would penalise every shopper
+     whose chest isn't exactly the published number. 2cm each way is the half-step
+     between adjacent sizes on every chart in this file. */
+  var SIZE_CHART_POINT_TOL_CM = 2;
+  /* Below this, a measurement column is inches, above it centimetres. A 38in chest and
+     a 38cm chest are not both plausible garments - no adult chest chart is under 60cm
+     and no inch chart is over 60in. Applied per COLUMN off that column's median, never
+     per cell, so one mis-typed value cannot flip a whole column's units. */
+  var SIZE_CHART_INCH_MAX = 60;
+
+  /* Units. CM IS TESTED FIRST AND THAT ORDER IS LOAD-BEARING: the Hebrew ס"מ contains
+     a double-quote, which is also the inch mark, so an inch-first test reads every
+     Hebrew centimetre chart as inches and divides the whole store by 2.54. */
+  var SIZE_CHART_CM_RE = /(?:\bcm\b|centimet|ס\s*["'״]?\s*מ|סנטימטר)/i;
+  var SIZE_CHART_IN_RE = /(?:inch(?:es)?|\bins?\b|["”″])/i;
+  function sizeChartUnitFromText(s) {
+    var t = String(s == null ? "" : s);
+    if (SIZE_CHART_CM_RE.test(t)) return "cm";
+    if (SIZE_CHART_IN_RE.test(t)) return "in";
+    return null;
+  }
+
+  /* Header cell -> the column key app.js's chart rows already use. English + Hebrew.
+     DELIBERATELY NARROW. An unmapped column contributes nothing, which is safe; a
+     WRONGLY mapped one silently re-bands a real measurement, which is not. Two
+     specific exclusions worth their own line:
+       · bare "length" / "אורך" is NOT mapped - on almost every chart that is the
+         GARMENT's length (shoulder to hem), a property of the cloth, not of the body,
+         and the fine-tune pass scores body measurements.
+       · "inseam" is NOT mapped to legs. app.js's minLegs/maxLegs is the OUTSEAM
+         convention (~0.575x height - see ZARA_SIZE_CHART's own comment); an inseam is
+         ~0.45x and would read as a shopper 25cm outside every band. A different
+         convention for the same body is a second column, never a substitute - the same
+         call ADULT_JEANS_WAIST_CHART's comment records for waist-inch vs EU. */
+  var SIZE_CHART_MEASURE_KEYS = [
+    ["chest", /(?:\bchest\b|\bbust\b|היקף\s*חזה|חזה)/i],
+    ["waist", /(?:\bwaist\b|היקף\s*מותן|מותניים|מותן)/i],
+    ["hips",  /(?:\bhips?\b|\bseat\b|היקף\s*אגן|ירכיים|אגן)/i],
+    ["legs",  /(?:\boutseam\b|\boutside\s*leg\b|\bleg\s*length\b|\btrouser\s*length\b|אורך\s*רגל|אורך\s*מכנס)/i]
+  ];
+  /* ⚠️ THE \b ON THE ENGLISH ALTERNATIVES IS LOAD-BEARING, AND THE HEBREW ONES
+     DELIBERATELY LACK IT. JavaScript's \b is defined on [A-Za-z0-9_], so a Hebrew
+     letter is never a word character and \bמותן\b can never match anything - adding it
+     "for consistency" silently unmaps every Hebrew chart in the catalog. On the English
+     side the opposite is true: without \b, `hips?` matches "Ship Weight" and a column
+     of shipping weights is read as a hip ladder.
+
+     AND A BODY WORD IS NOT ENOUGH ON ITS OWN. Real spec sheets carry columns like
+     "Waist to Hem", "Half Chest" and "Chest Width" - garment geometry (a length, or a
+     FLAT half-circumference) that happens to name a body part. Scoring a shopper's
+     94cm waist against a 63cm hem drop, or against a half-chest that is half the number
+     it looks like, is the expensive failure this whole file is built to avoid: a
+     confident, plausible, WRONG chart rather than a visible absence. So a header that
+     also names a garment dimension is refused outright, which costs nothing (the room
+     keeps its vetted band for that column).
+
+     NOT APPLIED TO `legs`, whose own patterns are garment-length-shaped by construction
+     ("leg length", "trouser length", "אורך רגל") - vetoing them would unmap the key
+     entirely. They are narrowly anchored instead. */
+  var SIZE_CHART_GARMENT_DIM_RE = new RegExp(
+    "\\bto\\s+(?:hem|waist|chest|hip|cuff|knee)\\b|\\blength\\b|\\bdrop\\b|\\bopening\\b" +
+    "|\\bhem\\b|\\bsleeve\\b|\\bshoulder\\b|\\binseam\\b|\\brise\\b|\\bacross\\b" +
+    "|\\bhalf\\b|\\bflat\\b|\\bwidth\\b|\\bpit\\s*to\\s*pit\\b|\\bp2p\\b|1/2" +
+    "|אורך|שרוול|כתף", "i");
+  function sizeChartMeasureKey(text) {
+    var t = String(text == null ? "" : text);
+    if (!t.trim()) return null;
+    for (var i = 0; i < SIZE_CHART_MEASURE_KEYS.length; i++) {
+      if (!SIZE_CHART_MEASURE_KEYS[i][1].test(t)) continue;
+      var key = SIZE_CHART_MEASURE_KEYS[i][0];
+      if (key !== "legs" && SIZE_CHART_GARMENT_DIM_RE.test(t)) return null;
+      return key;
+    }
+    return null;
+  }
+
+  /* Word sizes -> the tokens app.js's ladders are spelled in. Without this, a chart
+     headed "Small / Medium / Large" (which is most of them outside fast fashion)
+     yields a size column isPlausibleSizeToken() rejects wholesale, and the chart is
+     discarded for a spelling. */
+  var SIZE_CHART_WORD_SIZES = [
+    [/^(?:xx[\s-]*small|2x[\s-]*small)$/i, "XXS"],
+    [/^(?:x[\s-]*small|extra[\s-]*small)$/i, "XS"],
+    [/^small$/i, "S"], [/^medium$/i, "M"], [/^large$/i, "L"],
+    [/^(?:x[\s-]*large|extra[\s-]*large)$/i, "XL"],
+    [/^(?:xx[\s-]*large|2x[\s-]*large)$/i, "XXL"],
+    [/^(?:xxx[\s-]*large|3x[\s-]*large)$/i, "XXXL"]
+  ];
+
+  /* The size CELL, which is messier than the picker values isPlausibleSizeToken() was
+     written for: "M / 38", "L (EU 40)", "Medium". Takes the leading token, maps the
+     word forms, and then hands the result to the SAME plausibility test the size
+     scrape already uses - so the two can never disagree about what a size looks like.
+     @returns {string} the uppercased token, or "" when this is not a size cell */
+  function sizeChartSizeToken(raw) {
+    var t = String(raw == null ? "" : raw).replace(/ /g, " ").trim();
+    if (!t) return "";
+    t = t.split(/[\/|(,]/)[0].trim();          // "L (EU 40)" -> "L", "M / 38" -> "M"
+    for (var i = 0; i < SIZE_CHART_WORD_SIZES.length; i++) {
+      if (SIZE_CHART_WORD_SIZES[i][0].test(t)) return SIZE_CHART_WORD_SIZES[i][1];
+    }
+    t = t.toUpperCase();
+    return isPlausibleSizeToken(t) ? t : "";
+  }
+
+  /* One measurement cell -> { min, max, unit } in the cell's OWN units, or null.
+     Handles the four forms that actually ship: a point value ("96"), a range
+     ("92-96", "92 - 96", "92 to 96", "92/96"), a unit-suffixed value ("96 cm", 37.5in)
+     and a dash/blank placeholder ("-", "", ""). Decimal comma ("96,5") is accepted;
+     a thousands separator is not a thing in a chart of body centimetres.
+     PURE - no DOM, no globals - so the suite can exercise it directly. */
+  function parseMeasurementCell(raw) {
+    var t = String(raw == null ? "" : raw).replace(/ /g, " ").trim();
+    if (!t) return null;
+    var unit = sizeChartUnitFromText(t);
+    /* Numbers are pulled AFTER the unit test, and the inch mark is stripped first, so
+       the quote in 37.5" cannot be mistaken for part of the number. */
+    var nums = t.replace(/[”″"']/g, " ").match(/\d+(?:[.,]\d+)?/g);
+    if (!nums || !nums.length) return null;
+    var a = parseFloat(String(nums[0]).replace(",", "."));
+    var b = nums.length > 1 ? parseFloat(String(nums[1]).replace(",", ".")) : a;
+    if (!isFinite(a) || !isFinite(b)) return null;
+    /* Stored min-first. A chart printed "96-92" is a typo, not a reason to drop a row. */
+    return { min: Math.min(a, b), max: Math.max(a, b), unit: unit };
+  }
+
+  /* Reads a <table> into a capped grid of trimmed strings. Colspans are NOT expanded:
+     a chart that needs colspan arithmetic to line its columns up is exactly the kind
+     this refuses, and a wrong column alignment is the one failure mode that produces a
+     confident, plausible, WRONG chart. */
+  function sizeChartGrid(table) {
+    var rows = table.querySelectorAll ? table.querySelectorAll("tr") : [];
+    var grid = [];
+    for (var r = 0; r < rows.length && grid.length < SIZE_CHART_MAX_ROWS; r++) {
+      var cells = rows[r].querySelectorAll ? rows[r].querySelectorAll("th,td") : [];
+      if (!cells.length) continue;
+      var line = [];
+      for (var c = 0; c < cells.length && c < SIZE_CHART_MAX_COLS; c++) {
+        line.push(String(cells[c].textContent == null ? "" : cells[c].textContent)
+          .replace(/ /g, " ").replace(/\s+/g, " ").trim());
+      }
+      grid.push(line);
+    }
+    return grid;
+  }
+
+  /* ORIENTATION. Charts ship both ways round: sizes down the first column with
+     measurement names across the header (the common case), or sizes across the header
+     with measurement names down the first column. Decided by COUNTING plausible size
+     tokens on each axis rather than by guessing from the header text - a chart with
+     neither axis full of sizes reads as "not a size chart" instead of as a transposed
+     one, which is what keeps a price table from being read sideways. */
+  function sizeChartOrient(grid) {
+    if (!grid.length) return grid;
+    var down = 0, across = 0, i;
+    for (i = 1; i < grid.length; i++) if (sizeChartSizeToken(grid[i][0])) down++;
+    for (i = 1; i < (grid[0] || []).length; i++) if (sizeChartSizeToken(grid[0][i])) across++;
+    if (across <= down) return grid;
+    var width = 0;
+    for (i = 0; i < grid.length; i++) width = Math.max(width, grid[i].length);
+    var out = [];
+    for (var c = 0; c < width; c++) {
+      var line = [];
+      for (var r = 0; r < grid.length; r++) line.push(grid[r][c] == null ? "" : grid[r][c]);
+      out.push(line);
+    }
+    return out;
+  }
+
+  function sizeChartCap(key) { return key.charAt(0).toUpperCase() + key.slice(1); }
+
+  /* One column of parsed cells -> centimetre bands, or null to DROP THE COLUMN.
+     Column-level, never cell-level, because units, monotonicity and the clamp are all
+     properties of the ladder rather than of any one value - and dropping a column
+     leaves the rest of the chart (and app.js's own bands for that measurement) intact,
+     which is the whole reason this refuses a column instead of the chart. */
+  function sizeChartColumnToCm(col, tableUnit) {
+    var i, v, mids = [], explicit = null;
+    for (i = 0; i < col.vals.length; i++) {
+      v = col.vals[i];
+      if (!v) continue;
+      if (v.unit) explicit = explicit || v.unit;
+      mids.push((v.min + v.max) / 2);
+    }
+    if (mids.length < 2) return null;                 // a column of one value is noise
+
+    /* Unit, strongest evidence first: a cell said so, the header said so, the table's
+       caption/container said so, and only then the magnitude tier. */
+    var unit = explicit || col.unit || tableUnit;
+    if (!unit) {
+      var sorted = mids.slice().sort(function (a, b) { return a - b; });
+      var median = sorted[Math.floor(sorted.length / 2)];
+      unit = median < SIZE_CHART_INCH_MAX ? "in" : "cm";
+    }
+    var factor = unit === "in" ? 2.54 : 1;
+    var clamp = SIZE_CHART_CLAMPS[col.key];
+
+    var out = [], seen = [];
+    for (i = 0; i < col.vals.length; i++) {
+      v = col.vals[i];
+      if (!v) { out.push(null); continue; }
+      var min = v.min * factor, max = v.max * factor;
+      if (min === max) { min -= SIZE_CHART_POINT_TOL_CM; max += SIZE_CHART_POINT_TOL_CM; }
+      if (!(min >= clamp.min && max <= clamp.max)) return null;   // out of human range
+      if (max - min > SIZE_CHART_MAX_BAND_CM) return null;        // two cells read as one
+      out.push({ min: Math.round(min * 10) / 10, max: Math.round(max * 10) / 10 });
+      seen.push((min + max) / 2);
+    }
+
+    /* MONOTONICITY IS THE REAL FILTER, and it is direction-agnostic on purpose: a
+       chart may be printed largest-first, and the room keys rows by TOKEN so print
+       order is irrelevant to it. What a real ladder can never do is wander - a chest
+       that grows, shrinks and grows again across S/M/L is a column of prices, stock
+       counts or garment lengths that happened to sit under a "chest" header. Ties are
+       allowed (adjacent sizes really do share a band on some charts). */
+    var up = true, downward = true;
+    for (i = 1; i < seen.length; i++) {
+      if (seen[i] < seen[i - 1]) up = false;
+      if (seen[i] > seen[i - 1]) downward = false;
+    }
+    if (!up && !downward) return null;
+    return out;
+  }
+
+  /* Grid (already oriented sizes-as-rows) -> the validated rows, or null.
+     tableUnit is the unit named by the table's caption/container, used only when
+     neither the cells nor the header say.
+     PURE apart from the grid it is handed, so the suite drives it with literals. */
+  function sizeChartFromGrid(grid, tableUnit) {
+    if (!grid || grid.length < 3) return null;      // header + at least two size rows
+    var header = grid[0], cols = [], i, r;
+    for (i = 1; i < header.length; i++) {
+      var key = sizeChartMeasureKey(header[i]);
+      /* FIRST HEADER WINS on a duplicate key. A chart with two "waist" columns is
+         usually body-waist followed by garment-waist; the body one is printed first by
+         every convention this codebase has seen, and picking the later one silently
+         re-bands the shopper against the cloth. */
+      if (key && !sizeChartHasKey(cols, key)) {
+        cols.push({ key: key, idx: i, unit: sizeChartUnitFromText(header[i]), vals: [] });
+      }
+    }
+    if (!cols.length) return null;
+
+    var sizes = [];
+    for (r = 1; r < grid.length; r++) {
+      var token = sizeChartSizeToken(grid[r][0]);
+      if (!token) continue;                          // a notes row, a unit toggle row
+      if (sizes.indexOf(token) !== -1) continue;     // duplicate size row - first wins
+      sizes.push(token);
+      for (i = 0; i < cols.length; i++) {
+        cols[i].vals.push(parseMeasurementCell(grid[r][cols[i].idx]));
+      }
+    }
+    if (sizes.length < 2) return null;
+
+    var rowsOut = [];
+    for (i = 0; i < sizes.length; i++) rowsOut.push({ size: sizes[i] });
+    var kept = 0;
+
+    for (i = 0; i < cols.length; i++) {
+      var col = cols[i], band = sizeChartColumnToCm(col, tableUnit);
+      if (!band) continue;
+      for (r = 0; r < rowsOut.length; r++) {
+        if (!band[r]) continue;
+        rowsOut[r]["min" + sizeChartCap(col.key)] = band[r].min;
+        rowsOut[r]["max" + sizeChartCap(col.key)] = band[r].max;
+      }
+      kept++;
+    }
+    return kept ? rowsOut : null;
+  }
+
+  function sizeChartHasKey(cols, key) {
+    for (var i = 0; i < cols.length; i++) if (cols[i].key === key) return true;
+    return false;
+  }
+
+  /* The unit named by the table's own caption or by the container around it ("All
+     measurements in cm"), used only when neither a cell nor a header says. Walks at
+     most four ancestors and reads at most 400 characters, so a unit toggle buried in
+     the page chrome cannot pull in the whole document's text.
+
+     ⚠️ IT USES A STRICTER INCH TEST THAN THE CELL/HEADER TIERS, ON PURPOSE. Free page
+     prose is not a measurement label: "shown in blue", "Made in Portugal" and a stray
+     typographic quote all contain what SIZE_CHART_IN_RE is looking for, and reading a
+     centimetre chart as inches divides an entire store's bands by 2.54 - a wrong,
+     plausible, confident chart, which is the one failure mode this whole file is built
+     to avoid. At this tier only an unambiguous WORD counts ("inch"/"inches"). A cell or
+     a header is short and measurement-labelled, so the loose test stays correct there;
+     a paragraph is not. */
+  var SIZE_CHART_DECLARED_IN_RE = /inch(?:es)?/i;
+  function sizeChartTableUnit(table) {
+    var node = table, depth = 0;
+    while (node && depth < 4) {
+      var txt = String(node.textContent == null ? "" : node.textContent).slice(0, 400);
+      if (SIZE_CHART_CM_RE.test(txt)) return "cm";
+      if (SIZE_CHART_DECLARED_IN_RE.test(txt)) return "in";
+      node = node.parentNode; depth++;
+    }
+    return null;
+  }
+
+  /* ── WHERE THE CHART LIVES, per platform ─────────────────────────────────────────
+     Tier 1. Every list is tried on EVERY page, whatever stack we think we are on: a
+     Woo-flavoured theme on a headless Shopify is a real thing, and mis-detecting the
+     platform must not cost us the chart. The platform name rides along only as
+     provenance (it reaches the room as the chart's `source`, and the console line
+     below) - it never gates anything. */
+  var SIZE_CHART_CONTAINERS = [
+    ["shopify", [
+      ".size-chart", ".size-guide", ".sizing-chart", "[data-size-chart]",
+      'modal-dialog[id*="size" i]', '.product-popup-modal[id*="size" i]',
+      "[data-pear-size-chart]"
+    ]],
+    ["woocommerce", [
+      ".woocommerce-size-guide", "#tab-size_guide", "#tab-size-guide", ".wc-size-chart",
+      ".woo-size-chart", ".wcsg-table", '[class*="size-guide" i].woocommerce-tabs',
+      ".woocommerce-Tabs-panel--size_guide"
+    ]],
+    ["magento", [
+      ".size-guide-content", "#size-chart-modal", ".sizeguide", ".size-guide-popup",
+      '[data-role="size-guide"]', ".product.attribute.size-chart", ".amsizechart"
+    ]],
+    /* ── THE WILDCARDS GO LAST, AND THEY ARE NOT A PLATFORM ───────────────────────
+       These substring matchers ('[class*="size-guide" i]' and friends) catch the long
+       tail of themes nobody has a selector for, and they are the reason tier 1 covers
+       most real stores at all. But they also match the NAMED containers above -
+       .size-guide-content is a "size-guide" substring - so listing them under a
+       platform makes that platform claim every other platform's container, purely
+       because it was iterated first. consider() de-dupes by node, so being tried last
+       means they only ever label what no named selector recognised. The label is
+       provenance (it rides along as the chart's `source`, and shows up in the console
+       line and in merchant support threads); it gates nothing, which is why this is
+       worth getting right but not worth a scoring rule. */
+    ["container", [
+      '[id*="size-chart" i]', '[id*="size-guide" i]',
+      '[class*="size-chart" i]', '[class*="size-guide" i]'
+    ]]
+  ];
+
+  /* THE PAGE'S OWN SIZE CHART, or null. Two tiers, strongest first, exactly mirroring
+     extractHostSizes()/extractSoldOutSizes() above.
+     @returns {{unit:"cm", source:string, rows:Array<object>}|null} */
+  function extractSizeChart() {
+    try {
+      var candidates = [], nodes = [], i, j, k, m;
+
+      function consider(table, source, bonus) {
+        if (!table || nodes.indexOf(table) !== -1) return;
+        if (candidates.length >= SIZE_CHART_MAX_TABLES) return;
+        nodes.push(table);
+        candidates.push({ table: table, source: source, bonus: bonus });
+      }
+
+      for (i = 0; i < SIZE_CHART_CONTAINERS.length; i++) {
+        var platform = SIZE_CHART_CONTAINERS[i][0], sels = SIZE_CHART_CONTAINERS[i][1];
+        for (j = 0; j < sels.length; j++) {
+          var hosts;
+          /* Per-selector try/catch: one selector an older engine refuses to parse must
+             not take the other twenty-nine with it. */
+          try { hosts = d.querySelectorAll(sels[j]); } catch (e) { continue; }
+          for (k = 0; k < hosts.length; k++) {
+            var inner = hosts[k].querySelectorAll ? hosts[k].querySelectorAll("table") : [];
+            /* A container that IS the chart, laid out without a <table> at all, is not
+               readable here and deliberately yields nothing rather than a guess. */
+            for (m = 0; m < inner.length; m++) consider(inner[m], platform, 6);
+          }
+        }
+      }
+
+      /* Tier 2 - the universal fallback. Every remaining table on the page, judged
+         purely on its own content by sizeChartFromGrid(). */
+      var all = d.querySelectorAll ? d.querySelectorAll("table") : [];
+      for (i = 0; i < all.length; i++) consider(all[i], "generic", 0);
+
+      var best = null, bestScore = 0;
+      for (i = 0; i < candidates.length; i++) {
+        var cand = candidates[i], rows;
+        try {
+          rows = sizeChartFromGrid(sizeChartOrient(sizeChartGrid(cand.table)),
+            sizeChartTableUnit(cand.table));
+        } catch (e) { continue; }
+        if (!rows) continue;
+        var measured = 0;
+        for (j = 0; j < rows.length; j++) {
+          if (rows[j].minChest != null || rows[j].minWaist != null ||
+              rows[j].minHips != null || rows[j].minLegs != null) measured++;
+        }
+        var score = cand.bonus + measured;
+        if (score > bestScore) { bestScore = score; best = { source: cand.source, rows: rows }; }
+      }
+
+      if (!best) {
+        console.log("[PEAR widget] no readable size chart on this page - the room keeps its default matrix");
+        return null;
+      }
+      console.log("[PEAR widget] size chart read from the PDP (" + best.source + "):",
+        best.rows.length + " row(s):", best.rows.map(function (r) { return r.size; }).join("/"));
+      return { unit: "cm", source: best.source, rows: best.rows };
+    } catch (e) {
+      /* CLAUDE.md §2.5 - the room keeps its own vetted matrix, the shopper keeps their
+         recommendation, and nothing about this feature can stop a sale. */
+      console.log("[PEAR widget] size-chart scrape failed, using the default size matrix:", e && e.message);
+      return null;
+    }
+  }
+
+  /* ── THE WIRE FORMAT ─────────────────────────────────────────────────────────────
+         <unit>;<source>;SIZE:chest:waist:hips:legs|SIZE:...
+         each measurement ::= "min-max", or "" when this chart doesn't publish it
+     e.g. cm;shopify;S:90-95:76-81::|M:96-101:82-87::|L:102-107:88-93::
+
+     COMPACT, NOT JSON, because this rides the iframe URL alongside the image URLs:
+     ~25 chars a row, ~160 for a six-row chart, versus ~700 URL-encoded as JSON.
+
+     CROSS-FILE LOCKSTEP (CLAUDE.md §3). The decoder is parseStoreSizeChart() in
+     fitting-room/app.js. They are one format and must be edited in the same commit;
+     test/size-chart-overlay.test.mjs round-trips this encoder's own output through
+     that decoder for exactly that reason.
+     @returns {string} "" when there is nothing to send */
+  function encodeSizeChart(chart) {
+    if (!chart || !chart.rows || !chart.rows.length) return "";
+    function band(row, key) {
+      var lo = row["min" + key], hi = row["max" + key];
+      return (typeof lo === "number" && typeof hi === "number" && isFinite(lo) && isFinite(hi))
+        ? lo + "-" + hi : "";
+    }
+    var parts = [];
+    for (var i = 0; i < chart.rows.length; i++) {
+      var r = chart.rows[i];
+      /* A size token with no measurement at all is dropped rather than shipped as
+         "M:::" - the room would index it, find nothing to overlay, and clone a row for
+         no reason. */
+      var cells = [band(r, "Chest"), band(r, "Waist"), band(r, "Hips"), band(r, "Legs")];
+      if (!cells.join("")) continue;
+      parts.push(r.size + ":" + cells.join(":"));
+    }
+    if (!parts.length) return "";
+    return (chart.unit || "cm") + ";" + (chart.source || "generic") + ";" + parts.join("|");
+  }
+
   function optionValueAt(variant, idx) {
     if (idx === 0) return variant && variant.option1;
     if (idx === 1) return variant && variant.option2;
@@ -2331,9 +2824,14 @@
     var hostSizes = extractHostSizes();
     var hostSizeRunType = classifySizeRunType(hostSizes);
     var hostSoldOut = extractSoldOutSizes();
+    /* READ HERE AND NOWHERE EARLIER - see extractSizeChart()'s "PASSIVE, AND LAZY"
+       note. This is the first moment the shopper has asked for anything, so a DOM walk
+       costs them nothing they did not request, and the page-load path stays untouched. */
+    var hostSizeChart = encodeSizeChart(extractSizeChart());
     console.log("[PEAR widget] host product sizes:", hostSizes.length ? hostSizes.join("/") : "(none readable)",
       "| run type:", hostSizeRunType,
-      "| sold out:", hostSoldOut.length ? hostSoldOut.join("/") : "(none detected)");
+      "| sold out:", hostSoldOut.length ? hostSoldOut.join("/") : "(none detected)",
+      "| size chart:", hostSizeChart || "(none readable - the room keeps its default matrix)");
 
     var params =
       "garment_url=" + encodeURIComponent(garment.url) +
@@ -2391,6 +2889,16 @@
          round trip lands. Omitted on "unknown" - an absent param reads as "no run-type
          evidence" the same way an absent garment_sizes does, never as a claim. */
       (hostSizeRunType !== "unknown" ? "&garment_size_type=" + hostSizeRunType : "") +
+      /* THE STORE'S OWN SIZE CHART, compact-encoded (see encodeSizeChart's format
+         block). Sent at open for the same reason garment_sizes is: calculateSize()
+         paints its recommendation on Screen 1, and a returning shopper with a saved
+         profile is routed straight past Screen 1 by routeUser()'s instant-skip path -
+         a chart that only arrived with the PEAR_UPDATE_GARMENT correction would land
+         after the recommendation was already computed and shown.
+         OMITTED when nothing was readable, so an absent param reads as "no chart
+         evidence" rather than as a claim; the room then uses its own vetted matrix,
+         which is exactly the behaviour that shipped before this existed. */
+      (hostSizeChart ? "&garment_size_chart=" + encodeURIComponent(hostSizeChart) : "") +
       (COMPOSITE_PARAM ? "&composite=" + COMPOSITE_PARAM : "") +
       (REQUIRE_BOTH_VIEWS ? "&require_both_views=1" : "") +
       (DEMO_GATE ? "&demo_gate=1" : "") +
@@ -2939,6 +3447,16 @@
                    here is a real message ("re-checked, nothing is sold out") that must
                    be able to CLEAR a stale strike-through from the open-time scrape. */
                 garment_soldout: extractSoldOutSizes(),
+                /* The store's own size chart, RE-READ here rather than reused from the
+                   open URL. A size-guide modal is routinely rendered by the theme's JS
+                   (or fetched into a drawer) and can hydrate well after the shopper
+                   clicked, so this is the delivery for a chart that was not in the DOM
+                   at open time. Sent as a STRING ALWAYS, including "" - unlike the URL
+                   param, an empty string here is a real message ("re-checked, this page
+                   publishes no chart we can read") that must be able to CLEAR a chart
+                   the open-time scrape got wrong, the same argument garment_soldout's
+                   always-sent array makes one field up. */
+                garment_size_chart: encodeSizeChart(extractSizeChart()),
                 /* Re-sent with the correction, not only on the open URL. The PDP heading
                    can still be a skeleton placeholder at open on a JS-rendered store, so
                    this is the more accurate reading of the two and the room overwrites
