@@ -14,6 +14,10 @@
     "scan": "node scanner/scan-store.js",
     "scan:clothes": "node scripts/batch-scan-clothes.js",
     "test:unit": "node test/run.mjs",
+    "fixtures": "node test/e2e/fixtures.mjs",
+    "test:visual": "playwright test test/e2e/visual-agent.spec.mjs",
+    "inspect:visuals": "node scripts/inspect-visuals.mjs",
+    "qa:visual": "npm run test:visual && npm run inspect:visuals",
     "trace:prompt": "node scripts/trace-prompt.mjs fitting-room/app.js",
     "prepare": "husky"
   },
@@ -26,6 +30,7 @@
     "googleapis": "^144.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "husky": "^9.1.7",
     "jsdom": "^24.1.3"
   }

@@ -1,0 +1,95 @@
+#!/usr/bin/env sh
+# ============================================================================
+# PEAR pre-push  -  the visual gate
+# ----------------------------------------------------------------------------
+# pre-commit is the fast guardrail: it runs on every commit and has to stay in
+# seconds. This is the slow one, and it runs once per push, because the thing it
+# checks cannot be checked any other way.
+#
+# WHY A SEPARATE HOOK RATHER THAN MORE STAGES IN pre-commit. The visual run
+# launches Chromium, drives a full 360-degree session and scores fourteen
+# screenshots - about 30 seconds. Putting that on every commit is how a
+# mandatory check gets commented out within a week. A push is the point at which
+# the work leaves this machine, which is the right place to spend 30 seconds.
+#
+# IT FAILS CLOSED, with one documented escape hatch. A missing browser binary is
+# a real "this was never checked", not a reason to wave the push through - so the
+# hook stops and says how to fix it. PEAR_SKIP_VISUAL=1 exists for the cases
+# where that is genuinely the right call (a docs-only push, a machine that
+# cannot run a browser) and it announces itself loudly rather than passing
+# silently, so a skipped gate is never mistaken for a green one.
+#
+#   PEAR_SKIP_VISUAL=1 git push
+#
+# See CLAUDE.md "MANDATORY PRE-PUSH VISUAL QA PROTOCOL" for what this enforces
+# and what to do when it goes red.
+# ============================================================================
+
+echo "🍐 PEAR pre-push"
+
+# ── 1. syntax ──────────────────────────────────────────────────────────────
+echo ""
+echo "▸ syntax"
+node --check fitting-room/app.js || { echo "✖ fitting-room/app.js does not parse."; exit 1; }
+echo "  ok"
+
+# ── 2. regression suite ────────────────────────────────────────────────────
+echo ""
+echo "▸ regression suite"
+npm run test:unit || {
+  echo ""
+  echo "✖ A regression test failed. These encode bugs that already shipped once."
+  exit 1
+}
+
+# ── 3. the visual gate ─────────────────────────────────────────────────────
+echo ""
+echo "▸ visual QA (360 turn, garment swap, overlay integrity)"
+
+if [ "$PEAR_SKIP_VISUAL" = "1" ]; then
+  echo ""
+  echo "  ⚠  SKIPPED by PEAR_SKIP_VISUAL=1."
+  echo "     This push has NOT been visually verified. The 360 turn, the front/back"
+  echo "     swap and the overlay checks did not run. Say so in the PR."
+  echo ""
+  exit 0
+fi
+
+if [ ! -d "node_modules/@playwright/test" ]; then
+  echo "  ✖ @playwright/test is not installed - the visual gate cannot run."
+  echo ""
+  echo "    npm install"
+  echo "    npx playwright install chromium"
+  echo ""
+  echo "    Then push again. To push without visual verification (and say so):"
+  echo "    PEAR_SKIP_VISUAL=1 git push"
+  exit 1
+fi
+
+npm run test:visual || {
+  echo ""
+  echo "  ✖ The visual agent could not complete a session."
+  echo "    This is usually the room refusing to go live, not a rendering fault:"
+  echo "    read the error - it prints the wire state (connection, dispatches, angle,"
+  echo "    camera-card classes) at the moment it gave up."
+  echo "    Traces + screenshots: test-results/"
+  exit 1
+}
+
+npm run inspect:visuals || {
+  echo ""
+  echo "  ✖ Visual inspection FAILED. Do not push."
+  echo ""
+  echo "    Look at the frames in test-results/visual/ BEFORE touching a threshold."
+  echo "    Each finding names the CLAUDE.md rule it belongs to:"
+  echo "      plain-shirt-gap     the reference rendered as a flat fill"
+  echo "      missing-back-print  the 180-degree frame carries the FRONT photo (§2.1)"
+  echo "      white-flash         an overlay is pinned over the live feed   (§2.9)"
+  echo "      frozen-feed         the output stopped presenting frames      (§2.9)"
+  echo ""
+  echo "    Fix the code and re-run:  npm run qa:visual"
+  exit 1
+}
+
+echo ""
+echo "✅ all checks passed - pushing"

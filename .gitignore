@@ -16,3 +16,9 @@ Thumbs.db
 sessions.json
 data/
 .env*
+
+# visual-QA harness - both are GENERATED (test/e2e/fixtures.mjs) and large.
+# Regenerated on demand by the spec, so a fresh clone needs no extra setup.
+test/fixtures/
+test-results/
+playwright-report/

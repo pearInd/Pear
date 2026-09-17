@@ -5017,6 +5017,507 @@ function resetToLive() {
 }
 
 /* =============================================================================
+   MOCK DECART  -  ?mock_decart=1
+   ─────────────────────────────
+   A LOCAL stand-in for the whole realtime layer, so the 360-degree turn and the
+   garment swaps can be driven end-to-end by an automated browser with NO ek_
+   token, NO WebRTC, NO Decart session and therefore NO cost. It is off unless
+   the URL says otherwise, and it is substituted at exactly TWO seams:
+
+     loadSDK()            -> returns { createDecartClient } from here
+     mintEphemeralToken() -> returns a stub string, never touching TOKEN_ENDPOINT
+
+   Everything downstream of those two seams - connectRealtime(), applyGarment(),
+   sendCondition(), the OrientationWatcher, the reveal gate, the recorder - runs
+   COMPLETELY UNMODIFIED. That is the point: a harness that stubbed applyGarment
+   would prove only that the stub works, and the failures this repo keeps
+   reopening (a back view that renders the front print, a plain-shirt gap, a
+   white flash over the feed) all live downstream of the dispatch, not in it.
+
+   WHAT IT RENDERS, AND WHY IT IS RENDERED THAT WAY. The mock output frame is:
+
+     1. the live camera frame, full-bleed            <- proves frames still flow
+     2. the reference image CURRENTLY ON THE WIRE,   <- proves WHICH asset is live
+        drawn into a fixed torso rect
+     3. a prompt-fingerprint strip + a parity beacon <- see below
+
+   (2) is the whole contract. The mock paints the actual bytes handed to set(),
+   so a screenshot at 180 degrees carrying the FRONT photo's pixels IS the
+   print-less-back bug (CLAUDE.md 2.1), visible to a pixel check rather than
+   only to a human. A flat, featureless patch IS the plain-shirt gap. Nothing
+   here interprets the prompt or "renders" a garment - a mock that drew its own
+   idea of the garment would be able to look correct while the wire was wrong.
+
+   (3) covers the two failures that a single still frame cannot show. The
+   fingerprint strip is a colour derived from the prompt text, so a prompt-only
+   flip (which deliberately does NOT change the image - see prompt-only-flip)
+   still moves visibly between two screenshots. The beacon alternates colour on
+   every rendered frame, so two consecutive screenshots that share a beacon
+   colour mean the feed FROZE - the regression CLAUDE.md 2.9 exists to prevent,
+   and the one thing a frame-accurate mock can detect that a human clicking
+   around reliably misses.
+
+   THE MOCK NEVER PAINTS A NEAR-WHITE OR NEAR-UNIFORM FRAME. That is deliberate
+   and load-bearing: it means any near-white frame an automated screenshot ever
+   catches came from the APP's own overlay layer (a snapshot cover, a reveal
+   scrim), never from here - so "white shirt flash" is decidable.
+
+   COST: zero. Nothing in this block opens a socket or issues a network request.
+   ============================================================================= */
+
+/** @returns {boolean} true only with ?mock_decart=1 - the realtime session is served by a
+ *  local canvas loop instead of Decart. Read per call (never cached at module scope) to
+ *  match the other URL flags in this file and to stay safe under test extraction. */
+function mockDecartEnabled() {
+  try { return new URLSearchParams(location.search).get("mock_decart") === "1"; }
+  catch (_) { return false; }
+}
+
+/** Simulated ack latency for set()/setPrompt(), ms. ?mock_ack_ms= overrides it so a
+ *  harness can widen the window it is trying to catch a mid-swap artifact inside. */
+function mockAckMs() {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("mock_ack_ms"); } catch (_) { return 120; }
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 5000 ? n : 120;
+}
+
+/* How long the BILLED window runs. LIVE_DURATION_MS - the real 5s cap - in every real
+   session, always; ?mock_live_ms= can only widen it, and only under ?mock_decart=1.
+
+   WHY THIS SEAM EXISTS. LIVE_DURATION_MS is a BILLING bound: it is there so no credit can
+   leak past 5 seconds (see its own comment, and armFirstFrameBilling). Under the mock
+   there is no token, no session and no credit, so it is bounding nothing - but it still
+   tears the session down mid-capture, which turns a visual QA run into a stopwatch race
+   against a limit that is not what the run is checking. A full 360 at a realistic
+   72-90 deg/s IS roughly a 5s event, so the harness still exercises the real turn at the
+   real speed; what the extra time buys is the screenshots, not an easier turn.
+
+   IT CANNOT WIDEN A REAL SESSION. mockDecartEnabled() gates it, and that is the same flag
+   that replaces the SDK - so a URL able to lengthen this window is a URL with no Decart
+   client behind it. Every other path returns the cap unchanged. It can only ever widen:
+   a smaller or malformed value falls back to LIVE_DURATION_MS rather than shortening a
+   window that billing reasoning depends on.
+
+   THE COUNTDOWN UI IS DELIBERATELY NOT RESCALED - it still counts VIDEO_LENGTH_MS, so
+   under a widened mock window it reaches zero while the session continues. That is a
+   visible mock artifact, left visible rather than papered over: rescaling it would mean
+   touching a second real path for the harness's convenience. */
+function liveWindowMs() {
+  if (!mockDecartEnabled()) return LIVE_DURATION_MS;
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("mock_live_ms"); } catch (_) { return LIVE_DURATION_MS; }
+  const n = Number(raw);
+  return Number.isFinite(n) && n > LIVE_DURATION_MS && n <= 600000 ? n : LIVE_DURATION_MS;
+}
+
+/** Simulated connect latency (token + handshake + warm-up), ms. ?mock_connect_ms= overrides. */
+function mockConnectMs() {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("mock_connect_ms"); } catch (_) { return 250; }
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 10000 ? n : 250;
+}
+
+/* The torso rect the wire image is painted into, as fractions of the output frame, plus
+   the chrome band that carries the fingerprint strip and the beacon. Published on
+   window.__pearMockDecart.geometry so the screenshot inspector scores the SAME pixels
+   this block drew rather than a second, drifting copy of these numbers. */
+const MOCK_GEOMETRY = Object.freeze({
+  patch:  Object.freeze({ x: 0.27, y: 0.20, w: 0.46, h: 0.44 }),
+  strip:  Object.freeze({ x: 0.00, y: 0.94, w: 1.00, h: 0.06 }),
+  beacon: Object.freeze({ x: 0.92, y: 0.86, w: 0.06, h: 0.06 }),
+});
+
+/* Live, inspectable state for the automated harness. Deliberately plain data (no
+   functions to call, nothing to drive) so a spec can only OBSERVE what the app did -
+   it cannot reach in and make a failing render pass. */
+const MOCK_DECART_STATE = {
+  enabled: false,
+  connects: 0,
+  disconnects: 0,
+  tokenMints: 0,
+  frames: 0,
+  connectionState: "idle",
+  /** every set()/setPrompt() this session, oldest first */
+  dispatches: [],
+  /** what is on the wire RIGHT NOW */
+  wire: { seq: 0, prompt: null, imageKey: null, imageBytes: 0, decoded: false, at: 0 },
+  geometry: MOCK_GEOMETRY,
+};
+
+/** A stable, cheap identity for whatever set() was handed as `image`. Blobs are
+ *  identified by size+type (the composite/asset blobs are memoized, so the same garment
+ *  side is byte-identical across dispatches); strings by length + tail. Never logs the
+ *  bytes themselves - see CLAUDE.md 6. */
+function mockImageKey(image) {
+  if (!image) return null;
+  if (typeof Blob !== "undefined" && image instanceof Blob) {
+    return `blob:${image.size}:${image.type || "?"}`;
+  }
+  const s = String(image);
+  return `str:${s.length}:${s.slice(-32)}`;
+}
+
+/** FNV-1a over the prompt, mapped to a saturated HSL colour. Two different prompts
+ *  almost always differ visibly; the SAME prompt always reproduces the same colour, so
+ *  "did the wire text change between these two screenshots" is a pixel question. */
+function mockPromptColor(prompt) {
+  let h = 0x811c9dc5;
+  const s = String(prompt || "");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `hsl(${h % 360}, 85%, 45%)`;
+}
+
+/** Decode whatever set() accepted into something drawImage() takes. Blob -> ImageBitmap,
+ *  string (data: or http) -> HTMLImageElement. Resolves null on failure rather than
+ *  throwing: an undecodable reference must show up as an EMPTY torso patch (which the
+ *  inspector fails on) and never as a crashed render loop that freezes the feed. */
+function mockDecodeReference(image) {
+  if (!image) return Promise.resolve(null);
+  if (typeof Blob !== "undefined" && image instanceof Blob) {
+    if (typeof createImageBitmap !== "function") return Promise.resolve(null);
+    return createImageBitmap(image).catch(() => null);
+  }
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = String(image);
+  });
+}
+
+/**
+ * Build the local stand-in for @decartai/sdk's createDecartClient(). Same surface the
+ * real one exposes to this file: client.realtime.connect(stream, opts) resolving to a
+ * session with set / setPrompt / disconnect / on / getConnectionState.
+ * @returns {{ realtime: { connect: (stream: MediaStream, opts: object) => Promise<object> } }}
+ */
+function createMockDecartClient() {
+  return {
+    realtime: {
+      connect: (inputStream, opts) => mockRealtimeConnect(inputStream, opts),
+    },
+  };
+}
+
+/**
+ * Open the mock session: start a canvas loop fed by the app's OWN throttled input
+ * stream, hand its captureStream() back through onRemoteStream, and report
+ * "connected" - the same callback order the SDK uses, so connectRealtime() and the
+ * reveal gate take their normal paths.
+ * @param {MediaStream} inputStream the throttled camera clone connectRealtime() built
+ * @param {object} opts the real buildRealtimeConnectOpts() object
+ * @returns {Promise<object>} the mock session
+ */
+async function mockRealtimeConnect(inputStream, opts) {
+  const W = typeof LIVE_W === "number" ? LIVE_W : 512;
+  const H = typeof LIVE_H === "number" ? LIVE_H : 288;
+  const FPS = typeof LIVE_INFERENCE_FPS === "number" ? LIVE_INFERENCE_FPS : 15;
+
+  MOCK_DECART_STATE.enabled = true;
+  MOCK_DECART_STATE.connects++;
+  MOCK_DECART_STATE.frames = 0;
+  MOCK_DECART_STATE.dispatches.length = 0;
+  MOCK_DECART_STATE.wire = { seq: 0, prompt: null, imageKey: null, imageBytes: 0, decoded: false, at: 0 };
+
+  /* The camera frames this session paints. An off-screen (not display:none) element so
+     Chromium keeps decoding it - a display:none video stops producing frames in some
+     builds and the mock would then render a still, which is the ONE thing it must never
+     do (CLAUDE.md 2.9). It is 2x2 on screen; drawImage reads the intrinsic size. */
+  const src = document.createElement("video");
+  src.muted = true; src.autoplay = true; src.playsInline = true;
+  src.setAttribute("aria-hidden", "true");
+  src.style.cssText = "position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none";
+  src.srcObject = inputStream;
+  document.body.appendChild(src);
+  try { await src.play(); } catch (_) {}
+
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext("2d", { alpha: false });
+
+  /* The reference decoded from the CURRENT wire image, and the key it was decoded for.
+     Decoding is async; until it lands the patch is skipped, which reads to the inspector
+     as an undressed torso - the honest answer for "the reference is not on screen yet". */
+  let refBitmap = null;
+  let refKey = null;
+
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (stopped) return;
+    const f = MOCK_DECART_STATE.frames++;
+
+    // 1. the live camera frame. Black (never white) when it has not decoded yet.
+    ctx.fillStyle = "#101014";
+    ctx.fillRect(0, 0, W, H);
+    if (src.readyState >= 2 && src.videoWidth > 0) {
+      try { ctx.drawImage(src, 0, 0, W, H); } catch (_) {}
+    }
+
+    // 2. the bytes ACTUALLY on the wire, painted into the torso rect (object-fit: cover).
+    if (refBitmap) {
+      const r = MOCK_GEOMETRY.patch;
+      const dx = r.x * W, dy = r.y * H, dw = r.w * W, dh = r.h * H;
+      const sw0 = refBitmap.width || 1, sh0 = refBitmap.height || 1;
+      const scale = Math.max(dw / sw0, dh / sh0);
+      const sw = dw / scale, sh = dh / scale;
+      try {
+        ctx.drawImage(refBitmap, (sw0 - sw) / 2, (sh0 - sh) / 2, sw, sh, dx, dy, dw, dh);
+      } catch (_) {}
+    }
+
+    // 3a. prompt fingerprint - moves when the TEXT changes even if the image does not.
+    const st = MOCK_GEOMETRY.strip;
+    ctx.fillStyle = MOCK_DECART_STATE.wire.prompt ? mockPromptColor(MOCK_DECART_STATE.wire.prompt) : "#2a2a34";
+    ctx.fillRect(st.x * W, st.y * H, st.w * W, st.h * H);
+
+    // 3b. parity beacon - two consecutive screenshots sharing this colour mean the feed froze.
+    const bc = MOCK_GEOMETRY.beacon;
+    ctx.fillStyle = (f % 2) ? "#00e5ff" : "#ff00a8";
+    ctx.fillRect(bc.x * W, bc.y * H, bc.w * W, bc.h * H);
+  }, Math.max(16, Math.round(1000 / FPS)));
+
+  const outStream = cv.captureStream(FPS);
+
+  /** Record a dispatch and (re)decode its reference. Shared by set() and setPrompt() so
+   *  the wire log has one shape whichever half of the payload moved. */
+  function record(kind, payload) {
+    const image = payload && payload.image;
+    const key = mockImageKey(image);
+    const entry = {
+      kind,
+      seq: MOCK_DECART_STATE.dispatches.length + 1,
+      at: Date.now(),
+      prompt: payload && typeof payload.prompt === "string" ? payload.prompt : null,
+      promptChars: payload && typeof payload.prompt === "string" ? payload.prompt.length : 0,
+      imageKey: key,
+      imageBytes: (typeof Blob !== "undefined" && image instanceof Blob) ? image.size : 0,
+      hasImage: !!image,
+    };
+    MOCK_DECART_STATE.dispatches.push(entry);
+    MOCK_DECART_STATE.wire = {
+      seq: entry.seq,
+      prompt: entry.prompt !== null ? entry.prompt : MOCK_DECART_STATE.wire.prompt,
+      imageKey: key || MOCK_DECART_STATE.wire.imageKey,
+      imageBytes: entry.imageBytes || MOCK_DECART_STATE.wire.imageBytes,
+      decoded: key === refKey,
+      at: entry.at,
+    };
+    console.log("[PEAR][MOCK] dispatch", kind, "#" + entry.seq,
+      "| prompt", entry.promptChars, "chars | image", key || "(unchanged)");
+
+    if (key && key !== refKey) {
+      refKey = key;
+      mockDecodeReference(image).then((bm) => {
+        if (stopped || refKey !== key) return;      // a newer dispatch already won
+        refBitmap = bm;
+        MOCK_DECART_STATE.wire.decoded = !!bm;
+        if (!bm) console.warn("[PEAR][MOCK] reference did NOT decode - the torso patch will stay empty:", key);
+      });
+    }
+    return new Promise((resolve) => setTimeout(resolve, mockAckMs()));
+  }
+
+  const session = {
+    set: (payload) => record("set", payload || {}),
+    setPrompt: (prompt) => record("setPrompt", { prompt }),
+    on: (event, handler) => { if (event === "error") session.__onError = handler; },
+    getConnectionState: () => MOCK_DECART_STATE.connectionState,
+    disconnect: () => {
+      if (stopped) return;
+      stopped = true;
+      MOCK_DECART_STATE.disconnects++;
+      MOCK_DECART_STATE.connectionState = "disconnected";
+      clearInterval(timer);
+      try { outStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+      /* Only the mock's OWN mirror of the input is released here. inputStream itself
+         belongs to the throttle, and localStream to the preview - neither is touched.
+         Stopping either would be the frozen-mirror bug in a test harness. */
+      try { src.pause(); } catch (_) {}
+      src.srcObject = null;
+      try { src.remove(); } catch (_) {}
+      console.log("[PEAR][MOCK] session disconnected after", MOCK_DECART_STATE.frames, "frames");
+    },
+  };
+
+  MOCK_DECART_STATE.connectionState = "connecting";
+  if (typeof opts?.onConnectionChange === "function") opts.onConnectionChange("connecting");
+
+  await new Promise((r) => setTimeout(r, mockConnectMs()));
+
+  /* onRemoteStream BEFORE the "connected" transition and before connect() resolves -
+     the order the SDK produces, and the order armFirstFrameBilling()/gateAiFeed() were
+     written against. */
+  if (typeof opts?.onRemoteStream === "function") opts.onRemoteStream(outStream);
+  MOCK_DECART_STATE.connectionState = "connected";
+  if (typeof opts?.onConnectionChange === "function") opts.onConnectionChange("connected");
+
+  console.log("[PEAR][MOCK] realtime session OPEN -", W + "x" + H, "@", FPS, "fps. No Decart session was created.");
+  return session;
+}
+
+if (typeof window !== "undefined") window.__pearMockDecart = MOCK_DECART_STATE;
+
+/* ── MOCK POSE SENSOR (?mock_decart=1) ────────────────────────────────────────
+   The turn is the thing this repo keeps regressing on, and the turn is decided by
+   MediaPipe reading the webcam. A fake camera feeding a synthetic video gets us a
+   live, non-black feed - but no landmark model will read a reliable shoulder order
+   or a torso yaw off a synthetic figure, so an automated 360 has nothing to turn ON.
+
+   THIS REPLACES THE SENSOR, AND ONLY THE SENSOR. It substitutes the PoseLandmarker
+   with one that reports a skeleton at a scripted angle - the same seam the existing
+   `_testDetector` hook already opens for the sandboxed presence-gate test, taken to
+   the browser. EVERYTHING that reads it is the real thing: bodyYawDegrees(),
+   poseShoulderFacing(), the turn-yaw window, the anti-flap lock, maybeSwap(),
+   applyActive(), the dispatch. A harness that instead forced `autoOrientation` would
+   skip exactly the machinery the "after a 360 the front never comes back" reports
+   live in, and would pass while that machinery was broken.
+
+   THE SKELETON IS GENERATED FROM ONE ANGLE, theta, 0 = squarely facing the camera,
+   180 = fully turned away, and it is built so the REAL readers derive the real
+   quantities from it:
+     · poseShoulderFacing() = (ls.x - rs.x)/torsoH  -> +max at 0, ~0 at 90, -max at 180
+     · bodyYawDegrees()                             -> 0 at 0, +/-90 edge-on, 0 at 180
+       (yaw folds at edge-on exactly as the real signal does - see the turn-yaw window)
+     · bodyDepthRatio() / bodyProfileBox()          -> torso narrows and deepens toward 90
+
+   THE EDGE-ON GAP IS OPT-IN, via ?mock_pose_gap=<deg>. The real detector loses the far
+   shoulder near profile, which is the dropout the side-view pass exists to survive;
+   modelling it by default would make every run of this harness depend on that pass
+   rather than on what it is actually checking. Default 0 = torso readable all the way
+   round; set it to reproduce the gap deliberately.
+
+   DRIVEN BY THE SPEC, NOT BY A CLOCK: window.__pearMockPose.setAngle()/sweep(). The
+   harness decides when the shopper is at 0/90/180 and can then WAIT for the room to
+   agree, rather than screenshotting a timer and hoping. Nothing here writes
+   autoOrientation, currentAngle, or anything else the room derives - it only answers
+   the question the room asks the camera. Present only under ?mock_decart=1. */
+const MOCK_POSE = {
+  angle: 0,          // degrees, 0 = facing the camera
+  frames: 0,
+  gapDeg: 0,         // half-width of the unreadable band around edge-on (opt-in)
+  _sweep: null,
+};
+
+/** Half-band around 90/270 degrees where the far-side torso landmarks read as
+ *  unreadable. ?mock_pose_gap=12 reproduces the real detector's edge-on dropout. */
+function mockPoseGapDeg() {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("mock_pose_gap"); } catch (_) { return 0; }
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= 45 ? n : 0;
+}
+
+/** One MediaPipe-shaped landmark. */
+function mockLandmark(x, y, z, visibility) {
+  return { x, y, z, visibility };
+}
+
+/**
+ * A full 33-entry landmark array for a body rotated `deg` about its vertical axis.
+ * Only the indices the room actually reads carry meaning (shoulders 11/12, hips 23/24,
+ * knees 25/26); the rest are filled so array length and shape match the real result.
+ * @param {number} deg 0 = facing camera, 180 = facing away
+ * @param {number} gapDeg unreadable half-band around edge-on
+ * @returns {{landmarks: Array<Array>, worldLandmarks: Array<Array>}}
+ */
+function mockPoseSkeleton(deg, gapDeg) {
+  const th = (deg * Math.PI) / 180;
+  const cos = Math.cos(th), sin = Math.sin(th);
+
+  /* How far past square the body is, 0 (front or back) .. 1 (edge-on). Drives both the
+     visibility fade and the torso narrowing, so "turned" is one number, not two. */
+  const edge = Math.abs(sin);
+  /* Inside the gap the far-side landmarks fall under BODY_TRACK_MIN_VISIBILITY and the
+     torso stops being readable at all - the documented dropout. Outside it, visibility
+     stays comfortably above both bars so a turn is never rejected for being a turn. */
+  const nearEdge = gapDeg > 0 && edge >= Math.cos((gapDeg * Math.PI) / 180);
+  const vis = nearEdge ? 0.15 : 0.95;
+
+  const SH = 0.16;   // half shoulder width, square-on, in normalised image units
+  const HIP = 0.11;  // half hip width
+  const cx = 0.5;
+  const yShoulder = 0.34, yHip = 0.62, yKnee = 0.84;
+
+  const pts = new Array(33).fill(null).map(() => mockLandmark(cx, 0.5, 0, vis));
+
+  /* LEFT is the shopper's left, which sits to the RIGHT in a camera image - so at
+     theta=0 (ls.x - rs.x) is POSITIVE, which is what poseShoulderFacing() reads as
+     FRONT, and it goes negative past edge-on. z is the out-of-plane half that makes
+     bodyYawDegrees() return a real 3D yaw rather than a silhouette guess. */
+  pts[11] = mockLandmark(cx + SH * cos,  yShoulder, -SH * sin, vis);   // LEFT_SHOULDER
+  pts[12] = mockLandmark(cx - SH * cos,  yShoulder,  SH * sin, vis);   // RIGHT_SHOULDER
+  pts[23] = mockLandmark(cx + HIP * cos, yHip,      -HIP * sin, vis);  // LEFT_HIP
+  pts[24] = mockLandmark(cx - HIP * cos, yHip,       HIP * sin, vis);  // RIGHT_HIP
+  pts[25] = mockLandmark(cx + HIP * cos, yKnee,     -HIP * sin, vis);  // LEFT_KNEE
+  pts[26] = mockLandmark(cx - HIP * cos, yKnee,      HIP * sin, vis);  // RIGHT_KNEE
+
+  /* worldLandmarks are metric rather than normalised, but every reader treats them as
+     "the same skeleton, parallel array" - so the same points, scaled, is the honest
+     shape. Parallel by construction: same indices, same subject. */
+  const world = pts.map((p) => mockLandmark(p.x - cx, p.y - 0.5, p.z, p.visibility));
+
+  return { landmarks: [pts], worldLandmarks: [world] };
+}
+
+/** The stand-in PoseLandmarker. Same one-method surface detectPoseFrame() uses. */
+function mockPoseDetector() {
+  MOCK_POSE.gapDeg = mockPoseGapDeg();
+  console.log("[PEAR][MOCK] pose sensor substituted (?mock_decart=1). Edge-on gap:",
+    MOCK_POSE.gapDeg, "deg. Drive it with window.__pearMockPose.");
+  return {
+    detectForVideo() {
+      MOCK_POSE.frames++;
+      mockPoseAdvanceSweep();
+      return mockPoseSkeleton(MOCK_POSE.angle, MOCK_POSE.gapDeg);
+    },
+    close() {},
+  };
+}
+
+/** Move a running sweep to wherever wall-clock says it should be. Called on every
+ *  detector read, so the angle advances at the detector's own cadence - the same
+ *  cadence a real turn would be sampled at. */
+function mockPoseAdvanceSweep() {
+  const s = MOCK_POSE._sweep;
+  if (!s) return;
+  const elapsed = (Date.now() - s.startedAt) / 1000;
+  const travelled = elapsed * s.degPerSec;
+  const total = Math.abs(s.to - s.from);
+  if (travelled >= total) {
+    MOCK_POSE.angle = s.to;
+    MOCK_POSE._sweep = null;
+    s.resolve();
+    return;
+  }
+  MOCK_POSE.angle = s.from + Math.sign(s.to - s.from) * travelled;
+}
+
+if (typeof window !== "undefined") {
+  window.__pearMockPose = {
+    get angle() { return MOCK_POSE.angle; },
+    get frames() { return MOCK_POSE.frames; },
+    get gapDeg() { return MOCK_POSE.gapDeg; },
+    /** Jump straight to an angle - for "stand at 90 and hold" checks. */
+    setAngle(deg) { MOCK_POSE._sweep = null; MOCK_POSE.angle = Number(deg) || 0; },
+    /** Rotate to `deg` at `degPerSec`, resolving on arrival. The turn the yaw window reads. */
+    sweep(deg, degPerSec = 90) {
+      const to = Number(deg) || 0;
+      const rate = Math.max(1, Number(degPerSec) || 90);
+      return new Promise((resolve) => {
+        MOCK_POSE._sweep = { from: MOCK_POSE.angle, to, degPerSec: rate, startedAt: Date.now(), resolve };
+      });
+    },
+  };
+}
+
+
+/* =============================================================================
    Decart Lucy VTON realtime - connection
    ─────────────────────────────────────
    SECURITY: the browser never holds the permanent dct_ key. At the moment the
@@ -5032,6 +5533,12 @@ function resetToLive() {
         lockstep with server.js's DECART_VTON_MODEL fallback below.
    ============================================================================= */
 async function loadSDK() {
+  /* MOCK SEAM 1 of 2 (?mock_decart=1). Returning here means no CDN import, no SDK, and
+     no real client - everything below this line is the production path, untouched. */
+  if (mockDecartEnabled()) {
+    console.log("[PEAR][MOCK] loadSDK() - ?mock_decart=1: serving the LOCAL mock client (no CDN import, no Decart session)");
+    return { createDecartClient: createMockDecartClient };
+  }
   let lastErr;
   for (const url of SDK_URLS) {
     console.log("[PEAR] loadSDK() - importing", url);
@@ -5088,6 +5595,16 @@ function parseExpiry(raw) {
  * @throws {Error} if the proxy is unreachable or returns no valid token.
  */
 async function mintEphemeralToken() {
+  /* MOCK SEAM 2 of 2 (?mock_decart=1). Short-circuited ABOVE the cache and above the
+     fetch, so a mocked run never reaches TOKEN_ENDPOINT at all - which is what makes
+     the harness free. A test asserting zero /api/realtime-token requests is asserting
+     exactly this line. The stub is never sent anywhere: createMockDecartClient()
+     ignores its argument. */
+  if (mockDecartEnabled()) {
+    MOCK_DECART_STATE.tokenMints++;
+    console.log("[PEAR][MOCK] mintEphemeralToken() - ?mock_decart=1: stub token, TOKEN_ENDPOINT not contacted");
+    return "ek_mock_local_only";
+  }
   // Fast path: reuse cached token if still valid (30s safety margin before expiry).
   const now = Date.now();
   if (_tokenCache && _tokenCache.expiresAt > now + 30_000) {
@@ -16562,11 +17079,11 @@ function startBillingWindow(gen) {
   // still fires even if frames stall or stop arriving early - no credit can leak past it.
   liveDurationTimer = setTimeout(() => {
     if (sessionGen !== timerGen) return;   // a manual Stop already tore this session down
-    console.log("[PEAR] Billing ended - disconnecting Decart (" + LIVE_DURATION_MS + "ms ≈ " +
+    console.log("[PEAR] Billing ended - disconnecting Decart (" + liveWindowMs() + "ms ≈ " +
       CREDITS_PER_SESSION + " credits @ " + CREDITS_PER_SECOND + "/s)" +
       (VIDEO_LENGTH_MS > LIVE_DURATION_MS ? ", holding frozen frame to " + VIDEO_LENGTH_MS + "ms" : ""));
     beginFreezeHold();
-  }, LIVE_DURATION_MS);
+  }, liveWindowMs());   // LIVE_DURATION_MS in every real session - see liveWindowMs()
 }
 
 /* Fire the billed window ONCE - at the first frame #aiVideo presents that is VERIFIED
@@ -18405,6 +18922,11 @@ function loadPoseLandmarker() {
   if (_poseLandmarkerPromise) return _poseLandmarkerPromise;
   _poseLandmarkerPromise = (async () => {
     if (typeof _testDetector !== "undefined" && _testDetector) return _testDetector;
+    /* The BROWSER-side twin of the line above (?mock_decart=1 only): a scripted sensor so an
+       automated 360 has something to turn. Second, never first - an injected _testDetector is
+       a sandbox saying exactly what it wants and must keep outranking this. typeof-guarded:
+       body-presence-gate extracts this block and runs it with neither name in scope. */
+    if (typeof mockDecartEnabled === "function" && mockDecartEnabled()) return mockPoseDetector();
     try {
       /* Dynamic import of a CDN ES module: the only way to add this without a bundler,
          and it keeps the bytes off the initial page load entirely. */

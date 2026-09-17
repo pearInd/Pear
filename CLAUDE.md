@@ -120,6 +120,11 @@ came out plain" is almost never a prompt problem — it is `distinctBackOf()`
 returning `undefined`. Run `window.__pearDebugBackView()` in a live session; it
 returns one of five `BACK_VIEW_REASON` values and tells you which.
 
+**Layers B and C have a visual gate now.** `npm run qa:visual` (§8) drives a full 360 with
+a mocked Decart session and scores the frames, so "the back came out plain" and "the back
+carried the front print" are decidable without a live session or a real garment. Run it
+after any Layer-B or Layer-C edit — §7.
+
 **Layer D update:** the size selector's choice now DOES reach Decart, via
 `fitSentence()`/`getFitModifier()` at `P.MED` (§0) — sizing up or down changes
 the drape tension in the render. The one exception: on a top that also carries
@@ -244,6 +249,12 @@ live camera cross-faded in over the silent output and back out - and the recorde
 same layer so the clip matches the screen. The recorder's timestamps were never the problem;
 a frozen clip means frozen *content*. Never pause, gate or hold `#webcam`/`localStream`.
 
+**This one is now checked automatically.** `npm run qa:visual` (§8) captures a burst of
+consecutive frames through a turn and fails on `frozen-feed` (two identical frames) or
+`white-flash` (a near-uniform bright frame — i.e. an overlay pinned over the feed). If you
+are restoring `?swap_hold=1` / `?still_covers=1` for an A/B, expect those findings: they
+are the gate correctly reporting what those flags do.
+
 ---
 
 ## 3. Cross-file lockstep
@@ -294,18 +305,31 @@ live — but if you ever re-run that backfill, port the current rules first.
 ## 4. Commands
 
 ```bash
-npm run test:unit      # .test.mjs suite  — the regression guardrail (alias: npm test)
-npm run trace:prompt   # prints every string that actually reaches Decart
-npm start              # the server (node server.js); npm run dev for --watch
-npm run scan           # scanner/scan-store.js over a storefront
+npm run test:unit        # .test.mjs suite  — the regression guardrail (alias: npm test)
+npm run trace:prompt     # prints every string that actually reaches Decart
+npm start                # the server (node server.js); npm run dev for --watch
+npm run scan             # scanner/scan-store.js over a storefront
+
+npm run qa:visual        # the visual gate: drive a 360 + swap, then score the frames
+npm run test:visual      #   …just the agent  (npx playwright test test/e2e/visual-agent.spec.mjs)
+npm run inspect:visuals  #   …just the scoring (node scripts/inspect-visuals.mjs)
+npm run fixtures         # regenerate test/fixtures/ (generated, gitignored, --force to rebuild)
 ```
 
-`test:api` and `test:e2e` were listed here for a long time and **do not exist** in
-`package.json` — there is no API-health script and no headless-Chrome runner. The
-widget IS exercised, but from inside `test:unit`: `widget-dom`, `widget-combined`,
+`test:api` still **does not exist** in `package.json` — there is no API-health
+script. Don't re-add that dead line; if you want a real API target, add the script
+first.
+
+**`test:e2e` is also deliberately still absent, and that is not an oversight.** The
+browser suite is `test:visual`, under a different name on purpose: `.husky/pre-commit`
+stage 4 turns blocking the moment a script called `test:e2e` exists, and a 30-second
+Chromium run on *every commit* is how a mandatory check gets commented out. The visual
+suite runs once per **push** instead — see §8. If you ever do want it on every commit,
+rename it knowingly rather than by accident.
+
+The widget is exercised from inside `test:unit`: `widget-dom`, `widget-combined`,
 `stock-dom-scrape` and `size-chart-scrape` load `pear-widget.js` into jsdom and
-drive a real injection + modal open. Don't re-add the two dead lines; if you want
-a real API/e2e target, add the script first.
+drive a real injection + modal open.
 
 `npm run trace:prompt` before and after any Layer-A edit. If the output is
 byte-identical, the edit changed nothing on the wire — say so.
@@ -348,6 +372,143 @@ Do this yourself, unprompted, every time — not only at commit time:
 - touched pear-widget.js or app.js copies listed in §3? check the other
   file's copy yourself and flag it if it's now out of sync, even if I didn't
   ask you to look.
+- touched anything that changes what the shopper SEES — the reference that
+  reaches the wire (Layer B), the orientation that selects it (Layer C), the
+  reveal gate, any overlay over `#aiVideo`, the recorder? run
+  `npm run qa:visual` yourself and read the findings. §8 is the full protocol.
 
 If any of these come back red, say so plainly and stop — don't fix it by
 silently loosening the check.
+
+---
+
+## 8. MANDATORY PRE-PUSH VISUAL QA PROTOCOL
+
+Before executing any `git push`, run this loop to completion:
+
+1. **CODE MODIFICATION.** Apply the requested changes to `fitting-room/app.js` or
+   related modules.
+2. **SYNTAX & UNIT CHECKS.** `node --check fitting-room/app.js` and
+   `npm run test:unit`.
+3. **VISUAL QA EXECUTION.** `npx playwright test test/e2e/visual-agent.spec.mjs`
+   (alias `npm run test:visual`), then `node scripts/inspect-visuals.mjs`
+   (alias `npm run inspect:visuals`). `npm run qa:visual` runs both.
+4. **SELF-HEALING LOOP.** If the visual check fails:
+   a. Open the frames in `test-results/visual/` — *look at them* before anything else.
+   b. Diagnose the root cause and fix the code.
+   c. Re-run steps 2–3.
+   d. Repeat until every visual check passes.
+5. **DEPLOYMENT GATE.** Commit and push only once unit tests **and** visual
+   inspection are green.
+
+`.husky/pre-push` enforces steps 2–3 mechanically. `PEAR_SKIP_VISUAL=1 git push`
+is the documented escape hatch; it announces itself loudly, and a push that used
+it has **not** been visually verified — say so.
+
+### 8.1 What the loop actually runs, and why it is free
+
+| Piece | File | Job |
+|---|---|---|
+| Mock Decart | `fitting-room/app.js` (`?mock_decart=1`) | replaces `loadSDK()` and `mintEphemeralToken()` — no ek_ token, no WebRTC, no billing |
+| Mock pose sensor | same block, same flag | replaces the PoseLandmarker with a scripted skeleton, so a 360 is drivable |
+| Fake camera | `test/e2e/fixtures.mjs` → `user-turn-360.y4m` | Chromium's `--use-file-for-fake-video-capture` |
+| Agent | `test/e2e/visual-agent.spec.mjs` | drives the funnel, turns the shopper, captures 14 frames + `meta.json` |
+| Harness server | `test/e2e/static-server.mjs` | static repo + 3 stub routes; **counts** hits on `/api/realtime-token` |
+| Inspector | `scripts/inspect-visuals.mjs` | scores the PNG bytes; the only thing that passes or fails |
+
+Cost is enforced, not assumed: `?mock_decart=1` short-circuits **above** the token
+mint, and the last assertion in the spec is that `/api/realtime-token` was hit
+zero times. If that count is ever non-zero, the run was not free and the mock seam
+is broken — fix that before anything else.
+
+Fixtures are **generated** (`npm run fixtures`) and gitignored. A fresh clone needs
+`npm install && npx playwright install chromium`; nothing else.
+
+**The run is hermetic — every off-origin request is aborted, and that is load-bearing.**
+The suite ran green in ~24 s a dozen times, then began taking 8+ minutes and timing out,
+at 2 % CPU: blocked on I/O start to finish. The room reaches four public hosts on the way
+into a session — `fonts.googleapis.com` and three chained geo-IP lookups
+(`get.geojs.io`, `ipapi.co`, `ipwho.is`) — and once those start answering 429 or hanging,
+the fallback chain multiplies the stall. None of it is the code under test, and a
+mandatory gate that fails for reasons the committer did not cause is a gate that gets
+skipped. The spec now routes everything except its own origin to `abort()` and records
+the blocked hosts in `meta.json`. **Never "fix" a slow run by raising the timeout —
+check `blockedHosts` first.** If a change ever makes an external asset genuinely
+required, that list is where it will show up.
+
+### 8.2 The four checks, and the report each one closes
+
+| Finding | Means | Rule |
+|---|---|---|
+| `plain-shirt-gap` | the torso patch is a flat fill — no print reached the garment | §2.1 |
+| `missing-back-print` | the 180° frame carries the **front** photo | §2.1 / §2.2 |
+| `white-flash` | a near-uniform bright frame — an overlay pinned over the live feed | §2.9 |
+| `frozen-feed` | consecutive frames are identical — the output stopped presenting | §2.9 |
+| `front-not-restored` | after a full 360 the back asset is still on the shopper's chest | §2.3 |
+| `cost` | the run reached `/api/realtime-token` | §8.1 |
+
+**The inspector is calibrated against its own fixtures and must be able to fail.**
+`npm run inspect:visuals -- --self-test` proves the thresholds separate a printed
+garment from a plain one and a front photo from a back one. Two end-to-end negative
+controls exist and both were verified to fire:
+
+```bash
+PEAR_VISUAL_FRONT=plain.png npm run test:visual && npm run inspect:visuals
+#   → plain-shirt-gap on 00-front and 03-return-front, nothing else
+
+PEAR_VISUAL_BACK=front-mislabelled-as-back.png npm run test:visual && npm run inspect:visuals
+#   → missing-back-print on 02-back
+```
+
+The second one is worth understanding before trusting a green run: the two wire
+keys **differ** (they are genuinely different files), so a byte comparison passes —
+and the frame still shows the front print on the shopper's back. That gap is the
+entire reason this gate looks at pixels.
+
+### 8.3 Reading a red run — do this before touching a threshold
+
+`npm run inspect:visuals -- --verbose` prints every measurement, passes included.
+Move a threshold only with the distribution in front of you, and only after looking
+at the frames. **A threshold loosened to go green is the same sin as deleting a
+regression assertion (§4, `.husky/pre-commit`).** Record why in the comment block
+above `T` in `scripts/inspect-visuals.mjs`.
+
+If the *agent* fails rather than the inspector, it is usually the room refusing to
+go live, not a rendering fault. The timeout message prints the wire state at the
+moment it gave up: connection state, dispatch count, the current prompt (trimmed),
+the image key, the pose angle, and the camera-card classes.
+
+### 8.4 What this harness does NOT prove — state these limits, don't overclaim
+
+- **It does not evaluate Decart's output.** The mock paints the reference that is
+  *on the wire* into the torso rect; it does not render a garment. So the gate
+  answers "which asset and which prompt are live, and what did the page composite
+  over them" — never "does the try-on look good". A green run says nothing about
+  drape, fit or realism.
+- **Orientation is scripted.** The pose sensor is replaced, so MediaPipe's real
+  reading of a real body is untested here. What *is* tested is everything
+  downstream of the sensor: the yaw window, the anti-flap lock, `maybeSwap()`,
+  `applyActive()` and the dispatch. `?mock_pose_gap=<deg>` reproduces the real
+  detector's edge-on dropout when you want that path exercised.
+- **The billed window is widened.** `?mock_live_ms=` (mock only — see
+  `liveWindowMs()`) lifts the 5 s `LIVE_DURATION_MS` cap so the agent can
+  photograph a turn instead of racing it. The turn still runs at a realistic
+  72–90 °/s. The countdown UI is deliberately left un-rescaled, so it reads 0 while
+  a mocked session continues — a visible artifact, kept visible on purpose.
+- **Layer A is still out of scope.** Prompt text reaching the wire is
+  `trace:prompt`'s job (§0, RULE 0), not this gate's.
+
+### 8.5 Do not "improve" these
+
+- **The mock must never paint a near-white or near-uniform frame.** That is what
+  makes `white-flash` decidable: any such frame in a capture came from the app's
+  own overlay layer, never from the mock.
+- **The beacon must alternate every rendered frame.** It is the only evidence that
+  can distinguish a frozen feed from a still scene.
+- **Never add a test-only shortcut past `applyGarment` / the OrientationWatcher.**
+  The mock replaces *sensors and transports* — the camera, the SDK, the pose model.
+  Everything that decides what the shopper sees is the shipped code, deliberately.
+  A harness that forced `autoOrientation` would pass while the turn was broken.
+- **The reveal wait is load-bearing.** The spec waits for `.show-live` + the scan
+  overlay coming down before it captures. The first cut of it did not, photographed
+  the loading scrim, and every pixel check passed on an animation. Never remove it.
