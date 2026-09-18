@@ -15502,12 +15502,14 @@ function injectSizeSelector() {
            stage directly below this pod. 20px gives it real breathing room. */
         margin: 14px 0 20px;
         padding: 12px 16px;
-        background: linear-gradient(135deg, rgba(255,255,255,0.45) 0%, rgba(255,255,255,0.18) 100%);
-        border: 1px solid rgba(255,255,255,0.55);
+        /* Card material from style.css's design-system tokens (§1-§2), so this pod and
+           every other glass card change together. */
+        background: var(--lg-fill);
+        border: var(--lg-border);
         border-radius: 22px;
-        backdrop-filter: blur(25px) saturate(210%);
-        -webkit-backdrop-filter: blur(25px) saturate(210%);
-        box-shadow: 0 8px 32px rgba(0,0,0,0.10), inset 0 1px 0 rgba(255,255,255,0.6);
+        backdrop-filter: var(--lg-blur);
+        -webkit-backdrop-filter: var(--lg-blur);
+        box-shadow: var(--lg-shadow), var(--lg-edge);
       }
       .pear-sz-head {
         display: flex;
@@ -15518,7 +15520,7 @@ function injectSizeSelector() {
       .pear-sz-label {
         font-size: 11px;
         font-weight: 700;
-        letter-spacing: .12em;
+        letter-spacing: .08em;
         text-transform: uppercase;
         color: #5f7d00;
         white-space: nowrap;
@@ -15552,36 +15554,23 @@ function injectSizeSelector() {
         text-align: center;
         padding: 7px 13px;
         border-radius: 100px;
-        border: 1px solid rgba(255,255,255,0.55);
-        background: rgba(255,255,255,0.42);
-        -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-        color: #3a362f;
         font-size: 12px;
-        font-weight: 700;
-        letter-spacing: .04em;
         cursor: pointer;
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.5);
-        transition: all .5s cubic-bezier(0.16, 1, 0.3, 1);
       }
-      .pear-sz-btn:hover {
-        transform: translateY(-2px);
-        background: rgba(255,255,255,0.7);
-        border-color: rgba(141,182,0,0.45);
-        color: #0a0a0b;
-        box-shadow: 0 8px 22px rgba(0,0,0,0.12);
-      }
-      .pear-sz-btn:active { transform: scale(0.94); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+      /* PAINT AND PHYSICS LIVE IN style.css NOW. Each chip is a member of the Liquid
+         Glass button recipe (style.css §4 - clear family; .is-active is a tinted token
+         block), so its fill, frame, blur, hover lift and press are the same as every
+         other button's. They used to be declared here, and because this <style> is
+         appended AFTER style.css, anything restated here would silently win over the
+         recipe at equal weight - so only layout and the sold-out marking stay below. */
       .pear-sz-btn.is-active {
-        background: rgba(141,182,0,0.16);
-        border-color: rgba(141,182,0,0.55);
-        color: #5f7d00;
-        box-shadow: 0 0 0 1px rgba(141,182,0,0.25), 0 6px 20px rgba(141,182,0,0.25),
-                    inset 0 0 12px rgba(141,182,0,0.18);
         animation: pearSzPulse 2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
       }
+      /* The "recommended" breath, rebuilt on the recipe's own shadow so it never
+         repaints a pre-glass shadow over the chip for half of each cycle. */
       @keyframes pearSzPulse {
-        0%, 100% { box-shadow: 0 0 0 1px rgba(141,182,0,0.22), 0 6px 20px rgba(141,182,0,0.22), inset 0 0 12px rgba(141,182,0,0.16); }
-        50%      { box-shadow: 0 0 0 3px rgba(141,182,0,0.30), 0 10px 28px rgba(141,182,0,0.34), inset 0 0 18px rgba(141,182,0,0.28); }
+        0%, 100% { box-shadow: var(--lgb-shadow), 0 0 0 1px rgba(141,182,0,0.24); }
+        50%      { box-shadow: var(--lgb-shadow), 0 0 0 3px rgba(141,182,0,0.22), 0 8px 24px rgba(141,182,0,0.28); }
       }
       .pear-sz-hint {
         /* margin-left:auto removed - .pear-sz-head's own justify-content:space-between
@@ -20156,7 +20145,7 @@ function injectReplayStyles() {
     }
     /* garment name - now the prominent title (left, in RTL flow) */
     .pear-rz-title {
-      font-family: "Urbanist", sans-serif;
+      font-family: var(--font-ui);
       font-size: 1.06rem;
       font-weight: 800;
       letter-spacing: .005em;
@@ -20170,7 +20159,7 @@ function injectReplayStyles() {
       display: inline-flex;
       align-items: center;
       gap: 7px;
-      font-family: "Inter", sans-serif;
+      font-family: var(--font-ui);
       font-size: 10px;
       font-weight: 800;
       letter-spacing: .12em;
@@ -20215,7 +20204,7 @@ function injectReplayStyles() {
       gap: 8px;
       padding: 13px 16px;
       border-radius: 9999px;
-      font-family: "Urbanist", sans-serif;
+      font-family: var(--font-ui);
       font-size: .92rem;
       font-weight: 800;
       cursor: pointer;

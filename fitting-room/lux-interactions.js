@@ -413,10 +413,14 @@
      only stores the latest point, and at most one frame per display refresh writes
      two custom properties. Mouse only (fine pointers, no reduced motion) - on touch
      the bloom stays parked at the top lip and simply appears on press.
-     GLASS_BTN must list the same classes as the §4 recipe selector in style.css. */
+     GLASS_BTN must list the same classes as the §4 recipe AND the §4b icon-family
+     selectors in style.css. */
   const GLASS_BTN = ".btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download, " +
                     ".btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, " +
-                    ".pear-compare-bar, .plb-btn";
+                    ".pear-compare-bar, .plb-btn, .pear-sz-btn, " +
+                    ".pcmp__close, .gd-close, .pear-lightbox__close, .pear-help-widget__close, " +
+                    ".pear-help-widget__btn, .camera-card__flip, .cl-arrow, .pip-retake, .pip-clear, " +
+                    ".profile-btn, .profile-dropdown__logout, .cart-line__remove";
   function initGlassBloom() {
     let raf = 0, target = null, x = 0, y = 0;
     document.addEventListener("pointermove", (e) => {

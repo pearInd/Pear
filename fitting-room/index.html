@@ -13,15 +13,19 @@
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <!-- Heebo: the Hebrew + Latin face of the --font-ui stack (style.css) on every device
-         that is not Apple's - there, -apple-system resolves to SF Pro first. -->
-    <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800&family=Heebo:wght@500;600;700&display=swap" rel="stylesheet">
+    <!-- ONE UI face. Every font-family in style.css (and the styles app.js injects) is
+         var(--font-ui): SF Pro on Apple devices via -apple-system, Heebo - Hebrew + Latin,
+         so both directions share one face - everywhere else. Urbanist and Inter are no
+         longer referenced anywhere and are no longer downloaded. 400..900 covers body
+         copy through the 900 size display; Heebo is variable, so it is one file per
+         script subset, not one per weight. -->
+    <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400..900&display=swap" rel="stylesheet">
 
     <!-- Cache-buster added with the header-alignment work: style.css had none at
          all, so a shipped CSS change was served from cache indefinitely while
          app.js?v= was being bumped every deploy. Kept in step with app.js's
          version so there is one number to reason about, not two. -->
-    <link rel="stylesheet" href="style.css?v=38">
+    <link rel="stylesheet" href="style.css?v=39">
 </head>
 <body>
 
@@ -929,7 +933,7 @@
   <span class="lang-switch__thumb" aria-hidden="true"></span>
 </button>
 
-<script type="module" src="app.js?v=149"></script>
+<script type="module" src="app.js?v=150"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
      header shrink. Pure enhancement - touches no app.js logic or state. -->
 <script src="mobile-ux.js" defer></script>

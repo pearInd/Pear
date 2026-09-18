@@ -2,7 +2,9 @@
    PEAR - Monochrome "Liquid Glass" theme
    Black & white frosted-glass surfaces · a single pear-green accent
    Fluid hover lift (desktop) + tactile press (mobile/touch) · RTL-aware
-   Type: Inter / Urbanist
+   Type: var(--font-ui) everywhere - SF Pro / Heebo (was Inter / Urbanist; see the
+   LIQUID GLASS DESIGN SYSTEM layer at the end of this file). The PEAR wordmark alone
+   keeps --pear-wordmark.
    NOTE: pure styling + micro-interaction layer. Every existing id / class /
    state hook (.reveal .show .live .show-live .show-result .is-live .is-active
    .is-duo .is-complete .mock) is preserved 1:1 - no logic touched.
@@ -64,7 +66,7 @@ html, body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -110,7 +112,7 @@ body::after {
 }
 
 h1, h2, h3, h4 {
-  font-family: "Urbanist", "Inter", sans-serif;
+  font-family: var(--font-ui);
   letter-spacing: -.015em;
   color: var(--ink);
 }
@@ -450,7 +452,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 #resultLabel { font-size: .86rem; color: var(--muted); margin-bottom: 6px; font-weight: 600; }
 .size-display {
-  font-family: "Urbanist"; font-size: 2.6rem; font-weight: 900; line-height: 1;
+  font-family: var(--font-ui); font-size: 2.6rem; font-weight: 900; line-height: 1;
   background: linear-gradient(120deg, var(--pear-deep), var(--pear), var(--pear-deep));
   background-size: 220% 100%;
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
@@ -519,7 +521,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: var(--pear-tint);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep);
-  font-family: "Urbanist"; font-size: 1rem; font-weight: 800; letter-spacing: .01em;
+  font-family: var(--font-ui); font-size: 1rem; font-weight: 800; letter-spacing: .01em;
   cursor: pointer;
   box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .55);
   transition: all .4s var(--ease);
@@ -562,7 +564,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   border: 1px solid rgba(141, 182, 0, .40); border-radius: var(--pill);
   background: var(--pear-soft);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
-  color: var(--pear-deep); font-family: "Urbanist"; font-weight: 800;
+  color: var(--pear-deep); font-family: var(--font-ui); font-weight: 800;
   font-size: .9rem; letter-spacing: .01em; cursor: pointer;
   box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255, 255, 255, .5);
   transition: transform .4s var(--ease), background .3s var(--ease), border-color .3s var(--ease), box-shadow .4s var(--ease);
@@ -594,7 +596,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   margin: 0 0 16px; padding: 10px 14px;
   border: 1px solid rgba(141, 182, 0, .35); border-radius: 12px;
   background: var(--pear-tint); color: var(--pear-deep);
-  font-family: "Inter", sans-serif; font-size: .88rem; font-weight: 600; text-align: center;
+  font-family: var(--font-ui); font-size: .88rem; font-weight: 600; text-align: center;
 }
 .measurements-refresh-notice[hidden] { display: none; }
 
@@ -644,7 +646,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 #otpInput {
   width: 100%; padding: 16px 17px;
   border: 1px solid var(--glass-line); border-radius: var(--pill);
-  font-family: "Urbanist", sans-serif; font-size: 28px; font-weight: 800;
+  font-family: var(--font-ui); font-size: 28px; font-weight: 800;
   letter-spacing: 8px; text-align: center; color: var(--ink);
   background: rgba(255, 255, 255, .35);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
@@ -894,7 +896,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   padding: 7px 15px; border-radius: var(--pill); margin-bottom: 22px;
 }
 .calc-editorial__headline {
-  font-family: "Urbanist", sans-serif;
+  font-family: var(--font-ui);
   font-size: clamp(2rem, 3.6vw, 3.05rem); font-weight: 900; line-height: 1.03;
   letter-spacing: -.02em; color: #fff; margin: 0 0 16px;
 }
@@ -1075,7 +1077,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .focus-bar.is-scrolled .focus-bar__dot {
   animation: pulseDot 1.8s infinite, dotPop .5s var(--spring);
 }
-.focus-bar__text strong { font-family: "Urbanist"; font-weight: 800; }
+.focus-bar__text strong { font-family: var(--font-ui); font-weight: 800; }
 .focus-bar__badge {
   margin-inline-start: auto; font-size: .76rem; font-weight: 800; color: var(--pear-deep);
   background: var(--pear-tint); border: 1px solid rgba(141,182,0,.4);
@@ -1226,7 +1228,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      Scoped to just this button rather than changing --pear-deep globally (that
      variable is the app's one shared accent color, used well beyond the header). */
   color: #4a6300;
-  font-family: "Inter", sans-serif; font-size: .8rem; font-weight: 700;
+  font-family: var(--font-ui); font-size: .8rem; font-weight: 700;
   white-space: nowrap; cursor: pointer;
   transition: transform .3s var(--ease), box-shadow .3s var(--ease), border-color .3s var(--ease), background .3s var(--ease);
 }
@@ -1254,7 +1256,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    "PEAR" wordmark + subtitle truncate gracefully instead of overflowing the brand
    zone into the actions zone (.app-header__titles already carries min-width:0). */
 .app-header__brand {
-  font-family: "Urbanist"; font-weight: 900; font-size: 1.4rem; letter-spacing: .04em;
+  font-family: var(--font-ui); font-weight: 900; font-size: 1.4rem; letter-spacing: .04em;
   line-height: 1; max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   background: linear-gradient(120deg, var(--pear-deep), var(--pear));
@@ -1299,7 +1301,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   border: 1px solid var(--glass-border); background: rgba(255,255,255,.4); flex-shrink: 0;
 }
 .active-garment__eyebrow { display: block; font-size: .7rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--pear-deep); }
-.active-garment__name { display: block; font-family: "Urbanist"; font-size: 1.05rem; font-weight: 800; margin: 2px 0; color: var(--ink); }
+.active-garment__name { display: block; font-family: var(--font-ui); font-size: 1.05rem; font-weight: 800; margin: 2px 0; color: var(--ink); }
 .active-garment__type { font-size: .82rem; color: var(--muted); }
 
 /* ── COMBINED (FRONT|BACK) composite thumbnail ─────────────────────────────
@@ -1421,7 +1423,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 
 .ag-prep__readout { flex-shrink: 0; }
 .ag-prep__pct {
-  font-family: "Urbanist", system-ui, sans-serif;
+  font-family: var(--font-ui);
   font-size: 1.5rem; font-weight: 800; line-height: 1;
   color: var(--ink);
   /* Tabular figures - without these the counter's width changes on nearly every
@@ -1955,11 +1957,11 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 .live-countdown[hidden] { display: none; }
 .live-countdown__num {
-  font-family: "Urbanist", sans-serif; font-weight: 900; font-size: 1.5rem; line-height: 1;
+  font-family: var(--font-ui); font-weight: 900; font-size: 1.5rem; line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 .live-countdown__label {
-  font-family: "Inter", sans-serif; font-weight: 700; font-size: .5rem;
+  font-family: var(--font-ui); font-weight: 700; font-size: .5rem;
   letter-spacing: .05em; opacity: .82; margin-top: 1px;
 }
 .live-countdown.is-final {
@@ -2066,7 +2068,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
      layout shift between steps either. */
   min-height: 2.6em; max-width: 320px; margin: 0 auto;
   text-align: center;
-  font-family: "Urbanist"; font-weight: 800; font-size: 1.06rem; color: #fff;
+  font-family: var(--font-ui); font-weight: 800; font-size: 1.06rem; color: #fff;
   letter-spacing: .01em; text-shadow: 0 2px 16px rgba(0,0,0,.6);
 }
 #scanStepText { transition: opacity .18s var(--ease); }
@@ -2206,7 +2208,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 
 .btn-capture__icon { font-size: 1.2rem; }
-.btn-capture__label { font-family: "Urbanist"; font-weight: 800; font-size: 1.05rem; }
+.btn-capture__label { font-family: var(--font-ui); font-weight: 800; font-size: 1.05rem; }
 .btn-capture__en { font-size: .74rem; opacity: .85; letter-spacing: .06em; }
 .btn-ghost[hidden] { display: none; }
 
@@ -2383,7 +2385,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .cl-card__media { aspect-ratio: 3/4; background: rgba(255,255,255,.32); }
 .cl-card__body { padding: 12px 14px 4px; flex: 1; }
 .cl-card__cat { display: block; font-size: .68rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--pear-deep); }
-.cl-card__name { font-family: "Urbanist"; font-size: .98rem; font-weight: 800; margin: 4px 0; color: var(--ink); }
+.cl-card__name { font-family: var(--font-ui); font-size: .98rem; font-weight: 800; margin: 4px 0; color: var(--ink); }
 .cl-card__price { font-size: .84rem; color: var(--ink); font-weight: 600; }
 /* "Complete the Look" CTA - translucent pear-green glass capsule */
 .cl-card__look {
@@ -2443,7 +2445,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: var(--pear-tint);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep); cursor: pointer;
-  font-weight: 800; font-family: "Urbanist", sans-serif; font-size: 1rem;
+  font-weight: 800; font-family: var(--font-ui); font-size: 1rem;
   box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .55);
   transition: all .4s var(--ease);
 }
@@ -2459,7 +2461,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: var(--glass-strong);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--ink); cursor: pointer; font-weight: 800;
-  font-family: "Urbanist", sans-serif; font-size: 1rem; box-shadow: var(--shadow-soft);
+  font-family: var(--font-ui); font-size: 1rem; box-shadow: var(--shadow-soft);
   transition: transform .4s var(--ease), box-shadow .4s var(--ease), background .3s var(--ease);
 }
 .btn-download:hover { transform: translateY(-3px) scale(1.02); background: rgba(255,255,255,.85); box-shadow: var(--shadow); }
@@ -2640,7 +2642,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: rgba(255,255,255,.28);
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   border: 1px solid var(--glass-border);
-  color: var(--ink); font-family: "Urbanist", sans-serif; font-weight: 800; font-size: .86rem;
+  color: var(--ink); font-family: var(--font-ui); font-weight: 800; font-size: .86rem;
   cursor: pointer; box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,.6);
   transition: all .5s cubic-bezier(.16, 1, .3, 1);
 }
@@ -2714,7 +2716,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .live-gallery-item__size {
-  flex-shrink: 0; font-family: "Urbanist", sans-serif; font-size: .74rem; font-weight: 900;
+  flex-shrink: 0; font-family: var(--font-ui); font-size: .74rem; font-weight: 900;
   letter-spacing: .02em; color: var(--pear);
 }
 
@@ -2734,7 +2736,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   width: 100%; max-height: 74vh; object-fit: contain; border-radius: 22px;
   border: 1px solid var(--glass-border); box-shadow: var(--shadow-lift); background: #050505;
 }
-.pear-lightbox__cap { text-align: center; color: #fff; font-family: "Urbanist", sans-serif; font-weight: 800; font-size: 1rem; letter-spacing: .02em; }
+.pear-lightbox__cap { text-align: center; color: #fff; font-family: var(--font-ui); font-weight: 800; font-size: 1rem; letter-spacing: .02em; }
 .pear-lightbox__close {
   position: absolute; top: -8px; inset-inline-end: -8px; z-index: 2;
   width: 40px; height: 40px; border-radius: 50%;
@@ -2753,20 +2755,20 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
 }
 .pear-lightbox__name {
-  font-family: "Urbanist", sans-serif; font-weight: 800; font-size: 1.05rem; letter-spacing: .02em; color: #fff;
+  font-family: var(--font-ui); font-weight: 800; font-size: 1.05rem; letter-spacing: .02em; color: #fff;
 }
 .pear-lightbox__size {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 30px; height: 26px; padding: 0 10px;
   border-radius: var(--pill); background: var(--pear); color: #0a0a0b;
-  font-family: "Urbanist", sans-serif; font-weight: 900; font-size: .82rem; letter-spacing: .04em;
+  font-family: var(--font-ui); font-weight: 900; font-size: .82rem; letter-spacing: .04em;
   box-shadow: var(--shadow-pear);
 }
 .pear-lightbox__actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .plb-btn {
   display: inline-flex; align-items: center; gap: 7px;
   padding: 11px 18px; border-radius: var(--pill); cursor: pointer;
-  font-family: "Urbanist", sans-serif; font-weight: 800; font-size: .9rem;
+  font-family: var(--font-ui); font-weight: 800; font-size: .9rem;
   border: 1px solid rgba(255,255,255,.5);
   background: rgba(255,255,255,.16);
   -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
@@ -2816,7 +2818,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   background: linear-gradient(135deg, var(--pear-tint), rgba(141,182,0,.08));
   -webkit-backdrop-filter: blur(25px) saturate(200%); backdrop-filter: blur(25px) saturate(200%);
   border: 1px solid rgba(141,182,0,.45);
-  color: var(--pear-deep); font-family: "Urbanist", sans-serif; font-weight: 800; font-size: .92rem;
+  color: var(--pear-deep); font-family: var(--font-ui); font-weight: 800; font-size: .92rem;
   cursor: pointer; box-shadow: 0 10px 30px rgba(141,182,0,.22), inset 0 1px 0 rgba(255,255,255,.55);
   transition: all .5s cubic-bezier(.16, 1, .3, 1);
   animation: compareBarIn .5s cubic-bezier(.16, 1, .3, 1) both;
@@ -2890,8 +2892,8 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 .pcmp__media { aspect-ratio: 3 / 4; background: #050505; overflow: hidden; }
 .pcmp__media video, .pcmp__media img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .pcmp__label { display: flex; align-items: center; gap: 8px; padding: 11px 14px; font-size: .82rem; color: var(--ink); }
-.pcmp__label b { font-family: "Urbanist", sans-serif; font-weight: 800; }
-.pcmp__label .pcmp__size { margin-inline-start: auto; color: var(--pear-deep); font-family: "Urbanist", sans-serif; font-weight: 900; }
+.pcmp__label b { font-family: var(--font-ui); font-weight: 800; }
+.pcmp__label .pcmp__size { margin-inline-start: auto; color: var(--pear-deep); font-family: var(--font-ui); font-weight: 900; }
 @media (max-width: 640px) {
   .pcmp__split { grid-template-columns: 1fr; }
   .pcmp__panel { max-height: 94vh; overflow-y: auto; }
@@ -3311,7 +3313,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   min-width: 19px; height: 19px; padding: 0 5px; border-radius: var(--pill);
   display: inline-flex; align-items: center; justify-content: center;
   background: linear-gradient(135deg, var(--pear), var(--pear-deep));
-  color: #fff; font-family: "Urbanist", sans-serif; font-weight: 900; font-size: .68rem;
+  color: #fff; font-family: var(--font-ui); font-weight: 900; font-size: .68rem;
   line-height: 1; border: 1.5px solid rgba(255,255,255,.9);
   box-shadow: 0 3px 10px rgba(141,182,0,.4);
   transition: transform .5s var(--spring), opacity .35s var(--ease);
@@ -3368,14 +3370,14 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 
 .cart-dropdown__head {
   display: flex; align-items: baseline; gap: 6px;
-  font-family: "Urbanist", sans-serif; font-size: .95rem; color: var(--ink);
+  font-family: var(--font-ui); font-size: .95rem; color: var(--ink);
   padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--glass-line);
 }
 /* the heading itself may shrink/ellipsize; the count chip never does */
 .cart-dropdown__head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cart-dropdown__count {
   flex: none; margin-inline-start: auto;
-  font-family: "Inter", sans-serif; font-size: .76rem; font-weight: 700; color: var(--muted);
+  font-family: var(--font-ui); font-size: .76rem; font-weight: 700; color: var(--muted);
 }
 .cart-dropdown__count:empty { display: none; }
 
@@ -3606,7 +3608,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   border: 1px solid rgba(255, 255, 255, .4);
   background: linear-gradient(135deg, rgba(255, 253, 246, .92) 0%, rgba(250, 247, 235, .78) 100%);
   -webkit-backdrop-filter: blur(16px) saturate(180%); backdrop-filter: blur(16px) saturate(180%);
-  color: var(--help-accent); font-family: "Urbanist", sans-serif; font-weight: 800; font-size: 1.15rem;
+  color: var(--help-accent); font-family: var(--font-ui); font-weight: 800; font-size: 1.15rem;
   cursor: pointer;
   box-shadow: 0 8px 32px rgba(0, 0, 0, .06), inset 0 1px 0 rgba(255, 255, 255, .6);
   transition: box-shadow .3s var(--ease), background .3s var(--ease),
@@ -3649,7 +3651,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   padding-bottom: 10px; margin-bottom: 8px; border-bottom: 1px solid var(--glass-line);
 }
 .pear-help-widget__title {
-  margin: 0; font-family: "Urbanist", sans-serif; font-weight: 800; font-size: 1rem; color: var(--help-accent);
+  margin: 0; font-family: var(--font-ui); font-weight: 800; font-size: 1rem; color: var(--help-accent);
 }
 .pear-help-widget__close {
   flex: none; width: 26px; height: 26px; border-radius: 50%; border: 0; padding: 0;
@@ -3661,7 +3663,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 
 .pear-help-widget__steps {
   margin: 0; padding-inline-start: 20px; display: flex; flex-direction: column; gap: 8px;
-  font-family: "Inter", sans-serif; font-size: .86rem; line-height: 1.45; color: var(--text);
+  font-family: var(--font-ui); font-size: .86rem; line-height: 1.45; color: var(--text);
 }
 .pear-help-widget__steps li { padding-inline-start: 2px; }
 .pear-help-widget__steps li::marker { color: var(--help-accent); font-weight: 700; }
@@ -3721,7 +3723,7 @@ body.focus-mode.is-scrolled .profile-btn {
   transition: transform .3s var(--spring), opacity .25s var(--ease);
 }
 .profile-btn__initial {
-  font-family: "Urbanist", sans-serif; font-weight: 800; font-size: .92rem; line-height: 1;
+  font-family: var(--font-ui); font-weight: 800; font-size: .92rem; line-height: 1;
 }
 
 .profile-dropdown {
@@ -3755,14 +3757,14 @@ body.focus-mode.is-scrolled .profile-btn {
   width: 48px; height: 48px; margin-bottom: 6px;
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: 50%; background: var(--glass-dark); color: #fff;
-  font-family: "Urbanist", sans-serif; font-weight: 800; font-size: 1.05rem;
+  font-family: var(--font-ui); font-weight: 800; font-size: 1.05rem;
 }
 .profile-dropdown__name {
-  font-family: "Urbanist", sans-serif; font-weight: 800; font-size: .96rem; color: var(--ink);
+  font-family: var(--font-ui); font-weight: 800; font-size: .96rem; color: var(--ink);
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .profile-dropdown__email {
-  font-family: "Inter", sans-serif; font-size: .78rem; color: var(--muted);
+  font-family: var(--font-ui); font-size: .78rem; color: var(--muted);
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
@@ -3774,7 +3776,7 @@ body.focus-mode.is-scrolled .profile-btn {
 .profile-dropdown__measurements { text-align: start; }
 .profile-dropdown__row {
   display: flex; align-items: baseline; gap: 6px; padding: 4px 0;
-  font-family: "Inter", sans-serif; font-size: .82rem;
+  font-family: var(--font-ui); font-size: .82rem;
 }
 .profile-dropdown__label { color: var(--muted); flex: none; }
 .profile-dropdown__value {
@@ -3783,7 +3785,7 @@ body.focus-mode.is-scrolled .profile-btn {
 .profile-dropdown__logout {
   width: 100%; margin-top: 10px; padding: 9px 12px; border: 0; border-radius: var(--pill);
   background: rgba(220, 60, 60, .12); color: #b23a3a;
-  font-family: "Inter", sans-serif; font-size: .84rem; font-weight: 700; cursor: pointer;
+  font-family: var(--font-ui); font-size: .84rem; font-weight: 700; cursor: pointer;
   transition: background .25s var(--ease);
 }
 .profile-dropdown__logout:hover { background: rgba(220, 60, 60, .2); }
@@ -3798,7 +3800,7 @@ body.focus-mode.is-scrolled .profile-btn {
   background: linear-gradient(135deg, rgba(141,182,0,.22), rgba(141,182,0,.10));
   -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
   color: var(--pear-deep); cursor: pointer;
-  font-family: "Urbanist", sans-serif; font-weight: 800; font-size: 1.04rem; letter-spacing: .01em;
+  font-family: var(--font-ui); font-weight: 800; font-size: 1.04rem; letter-spacing: .01em;
   box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.55);
   transition: transform .45s var(--power), background .4s var(--ease),
               border-color .4s var(--ease), box-shadow .4s var(--ease), color .3s var(--ease);
@@ -3870,7 +3872,7 @@ body.focus-mode.is-scrolled .profile-btn {
   background: linear-gradient(135deg, rgba(255,255,255,.55), rgba(255,255,255,.32));
   -webkit-backdrop-filter: blur(24px) saturate(200%); backdrop-filter: blur(24px) saturate(200%);
   border: 1px solid var(--glass-border);
-  color: var(--ink); font-family: "Urbanist", sans-serif; font-weight: 800; font-size: .92rem;
+  color: var(--ink); font-family: var(--font-ui); font-weight: 800; font-size: .92rem;
   box-shadow: var(--shadow-lift), inset 0 1px 0 rgba(255,255,255,.6);
   opacity: 0; pointer-events: none;
   transform: translate(-50%, -130%);
@@ -4945,7 +4947,7 @@ body.corners-cleared .focus-bar { padding-left: 14px; }
      --muted-2 placeholder (#9a9aa0) was ~2.6:1 and read as disabled text. */
   --ink-input:       #0F172A;
   --ink-label:       #111827;
-  --ink-placeholder: rgba(15, 23, 42, .45);
+  --ink-placeholder: rgba(15, 23, 42, .5);
   --ink-secondary:   #4b5563;
 
   /* "primary" = the pear green the rings/tints above were already built from. */
@@ -4966,30 +4968,46 @@ body.corners-cleared .focus-bar { padding-left: 14px; }
      the Hebrew + Latin face everywhere else; Assistant / sans-serif only if both miss. */
   --font-ui:           -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Heebo", "Assistant", sans-serif;
   --ease-spring:       cubic-bezier(.2, .8, .2, 1);
-  --lgb-blur:          blur(24px) saturate(190%);
-  --lgb-blur-press:    blur(14px) saturate(170%);   /* the glass "thins" under a finger */
-  --lgb-border:        rgba(255, 255, 255, .35);
-  --lgb-border-hover:  rgba(255, 255, 255, .78);
-  --lgb-shadow:        0 10px 30px -10px rgba(0, 0, 0, .15),
-                       inset 0 1px 1px 0 rgba(255, 255, 255, .6),
+  --lgb-blur:          blur(24px) saturate(200%);
+  --lgb-blur-press:    blur(14px) saturate(180%);   /* the glass "thins" under a finger */
+  --lgb-blur-modal:    blur(30px) saturate(180%);   /* modal panels, sheets and their scrims */
+  --lgb-border:        rgba(255, 255, 255, .45);
+  --lgb-border-hover:  rgba(255, 255, 255, .85);
+  /* The spec'd glass body. Every button paints it; the families add a tint UNDER it
+     and the sheen OVER it (see --lgb-surface in §4). */
+  --lgb-glass:         linear-gradient(135deg, rgba(255, 255, 255, .4) 0%, rgba(255, 255, 255, .1) 100%);
+  --lgb-shadow:        0 12px 32px -8px rgba(0, 0, 0, .12),
+                       inset 0 1px 1px 0 rgba(255, 255, 255, .7),
                        inset 0 -1px 1px 0 rgba(0, 0, 0, .1);
-  --lgb-shadow-hover:  0 16px 36px -12px rgba(0, 0, 0, .22),
-                       inset 0 1px 1px 0 rgba(255, 255, 255, .85),
+  --lgb-shadow-hover:  0 18px 40px -10px rgba(0, 0, 0, .18),
+                       inset 0 1px 1px 0 rgba(255, 255, 255, .9),
                        inset 0 -1px 1px 0 rgba(0, 0, 0, .1);
-  --lgb-shadow-press:  0 4px 14px -8px rgba(0, 0, 0, .2),
-                       inset 0 1px 1px 0 rgba(255, 255, 255, .45),
+  --lgb-shadow-press:  0 6px 16px -8px rgba(0, 0, 0, .16),
+                       inset 0 1px 1px 0 rgba(255, 255, 255, .5),
                        inset 0 -1px 1px 0 rgba(0, 0, 0, .14);
+  /* Hover "amplified glow": a soft halo in the family's own colour (tinted family
+     overrides it with pear). Composed in the hover rule, never folded into
+     --lgb-shadow-hover here - a var() inside a :root custom property would freeze
+     :root's value and ignore the family's. */
+  --lgb-glow:          rgba(255, 255, 255, .55);
   /* The translucent sheen: bright at the top lip, clearing toward the middle. */
   --lgb-sheen:         linear-gradient(180deg, rgba(255, 255, 255, .5) 0%, rgba(255, 255, 255, .12) 52%, rgba(255, 255, 255, .04) 100%);
   --lgb-bloom:         rgba(255, 255, 255, .72);
   --lgb-disabled-ink:  rgba(15, 23, 42, .5);
-  /* Release is slow and springy; press (--lgb-transition-press, applied on :active)
-     is near-instant - a transition takes its timing from the state it moves TO. */
-  --lgb-transition:       transform .55s var(--ease-spring), box-shadow .45s var(--ease-spring),
-                          border-color .35s ease, color .3s ease,
-                          -webkit-backdrop-filter .35s ease, backdrop-filter .35s ease;
-  --lgb-transition-press: transform .14s var(--ease-spring), box-shadow .14s var(--ease-spring),
-                          -webkit-backdrop-filter .14s ease, backdrop-filter .14s ease;
+  /* FOCUS is emerald-500, deliberately NOT the pear accent: focus is "where the
+     keyboard is", selection/brand is "what is chosen" - two meanings, two hues, so a
+     focused-and-checked control never reads as doubly checked. */
+  --focus-rgb:         16, 185, 129;
+  /* Press lands in 0.2s on the spring curve; release settles a little slower. A
+     transition takes its timing from the state it moves TO, so the press list is the
+     one applied on :active. `translate` / `scale` are listed for the icon family (§4b),
+     which moves through the individual transform properties. */
+  --lgb-transition:       transform .35s var(--ease-spring), translate .35s var(--ease-spring), scale .35s var(--ease-spring),
+                          box-shadow .3s ease, border-color .3s ease, color .3s ease,
+                          -webkit-backdrop-filter .3s ease, backdrop-filter .3s ease;
+  --lgb-transition-press: transform .2s var(--ease-spring), translate .2s var(--ease-spring), scale .2s var(--ease-spring),
+                          box-shadow .2s var(--ease-spring),
+                          -webkit-backdrop-filter .2s ease, backdrop-filter .2s ease;
 }
 html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 
@@ -4999,15 +5017,54 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
    popover sit over the live camera and keep their near-opaque fills (see the
    "opaque enough that NOTHING behind it can read through" note on .cart-dropdown);
    only the glass treatment is unified, not their legibility floor. */
+/* MODAL CONTAINERS - the Screen-1 card (it IS the modal's content inside the widget
+   iframe), Compare, garment-detect: 28px corners and the 30px modal blur. On phones
+   §7 turns the two overlays into bottom sheets with 28px top corners. */
 #screen-calculator .container {
   background: var(--lg-fill);
-  -webkit-backdrop-filter: var(--lg-blur);
-          backdrop-filter: var(--lg-blur);
+  -webkit-backdrop-filter: var(--lgb-blur-modal);
+          backdrop-filter: var(--lgb-blur-modal);
   border: var(--lg-border);
+  border-radius: 28px;
   box-shadow: var(--lg-shadow), var(--lg-edge);
 }
 .pcmp__panel,
-.gd-overlay__panel,
+.gd-overlay__panel {
+  -webkit-backdrop-filter: var(--lgb-blur-modal);
+          backdrop-filter: var(--lgb-blur-modal);
+  border: var(--lg-border);
+  border-radius: 28px;
+  box-shadow: var(--lg-shadow), var(--lg-edge);
+}
+/* ...and their scrims frost at the same strength */
+.pcmp__backdrop,
+.gd-overlay__backdrop {
+  -webkit-backdrop-filter: var(--lgb-blur-modal);
+          backdrop-filter: var(--lgb-blur-modal);
+}
+/* THE BUG THIS CLOSES: "the modal blur is declared but nothing behind it is blurred."
+   ─────────────────────────────────────────────────────────────────────────────
+   Measured 2026-09-18 on the Compare modal: computed backdrop-filter blur(30px) on
+   both scrim and panel, yet the header underneath rendered pixel-sharp (edge energy
+   1.55 vs 0.05 when blurred; a bare control page proved headless Chromium blurs fine).
+   Cause: `.screen.active` and `.pear-compare-overlay.show` both run `fade ... both`,
+   and fill-mode BOTH keeps each animation alive after it ends. Chromium makes an
+   element with a live opacity animation a backdrop root, so the scrim and panel could
+   only ever sample their own (empty) layer. Bisected: removing either fill alone is not
+   enough - both must go.
+   The same filled animation also left the screen's identity transform in place, which
+   makes #screen-fitting the containing block for `position: fixed` - so the Compare
+   "modal" was fixed to the whole PAGE height, not the viewport, and sat half off-screen
+   on a tall page (the .profile-btn note records the same side effect).
+   Fix: `backwards` instead of `both`. `fade` ends on opacity:1 / transform:none - the
+   elements' own resting values - so nothing visible changes except that the effect
+   ends when the animation does. The Compare overlay is the only position:fixed element
+   inside a screen (the lightbox, detect overlay, toasts and banner live on <body>).
+   The Screen-1 card had the same problem one level down (.calc-shell), fixed with it. */
+.screen.active,
+.screen.active .calc-shell,
+.pear-compare-overlay.show { animation-fill-mode: backwards; }
+/* popovers and dropdowns: same material, the lighter card blur */
 .profile-dropdown,
 .cart-dropdown,
 .pear-help-widget__popover {
@@ -5044,9 +5101,63 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
   font-family: var(--font-ui);
 }
 .focus-bar__badge { background: var(--lgb-sheen), var(--pear-tint); }
+/* HEADER BADGE ("PEAR · PERSONAL FIT ENGINE") - an ELEVATED glass pill: the button
+   body (sheen + glass) over a white wash, a lifted two-stage drop shadow, and a looser
+   .08em track (was .16em - at that width the pill read as a banner, not a badge). */
 .kicker {
+  font-family: var(--font-ui);
+  font-weight: 700;
+  letter-spacing: .08em;
+  background: var(--lgb-sheen), var(--lgb-glass), linear-gradient(180deg, rgba(255, 255, 255, .56), rgba(255, 255, 255, .24));
   border: 1px solid var(--lgb-border);
-  box-shadow: var(--lgb-shadow);
+  box-shadow: 0 10px 24px -10px rgba(0, 0, 0, .18), 0 2px 6px -2px rgba(0, 0, 0, .06),
+              inset 0 1px 1px 0 rgba(255, 255, 255, .8), inset 0 -1px 1px 0 rgba(0, 0, 0, .06);
+}
+/* its twin on the dark "already measured" panel (#screen-locked) */
+.calc-editorial__kicker {
+  letter-spacing: .08em;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .2) 0%, rgba(255, 255, 255, .05) 52%, rgba(255, 255, 255, 0) 100%),
+              linear-gradient(135deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, .04));
+  border: 1px solid rgba(255, 255, 255, .35);
+  box-shadow: 0 10px 24px -10px rgba(0, 0, 0, .5), inset 0 1px 1px 0 rgba(255, 255, 255, .3), inset 0 -1px 1px 0 rgba(0, 0, 0, .3);
+}
+
+/* PROGRESS ("שלב 1 מתוך 2" · %) - a glass channel with a glowing liquid bar floating
+   inside it. The 2px padding is what makes the bar "float": the fill sits inset from
+   the frosted rim instead of touching it. Width eases on the spring curve, so the jump
+   to 100% when a size resolves reads as fill, not as a snap.
+   DIRECTION: the bar grows from the inline-START edge (right in Hebrew), so its bright
+   leading edge and the travelling sheen both run toward inline-END - the gradient is
+   mirrored for RTL, and progShine is re-keyed on --dir-x below. */
+.step-progress-label {
+  font-weight: 600; font-size: .8rem; letter-spacing: .01em;
+  color: var(--ink-secondary);
+}
+.step-progress-label span:last-child { color: #3d5200; font-weight: 800; font-variant-numeric: tabular-nums; }
+.step-progress-track {
+  height: 12px; padding: 2px;
+  background: var(--lgb-sheen), linear-gradient(180deg, rgba(255, 255, 255, .5), rgba(255, 255, 255, .22));
+  border: 1px solid var(--lgb-border);
+  -webkit-backdrop-filter: var(--lgb-blur);
+          backdrop-filter: var(--lgb-blur);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .12), inset 0 -1px 1px rgba(255, 255, 255, .7),
+              0 6px 16px -8px rgba(0, 0, 0, .14);
+}
+.step-progress-fill {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .55) 0%, rgba(255, 255, 255, 0) 60%),
+    linear-gradient(90deg, rgb(104, 138, 0), rgb(160, 200, 22));
+  box-shadow: 0 0 12px rgba(var(--primary-rgb), .55), 0 0 2px rgba(var(--primary-rgb), .8);
+  transition: width .8s var(--ease-spring);
+}
+html[dir="rtl"] .step-progress-fill {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .55) 0%, rgba(255, 255, 255, 0) 60%),
+    linear-gradient(270deg, rgb(104, 138, 0), rgb(160, 200, 22));
+}
+@keyframes progShine {
+  from { transform: translateX(calc(-100% * var(--dir-x))); }
+  to   { transform: translateX(calc(240% * var(--dir-x))); }
 }
 
 /* ── 3 · readable inputs ─────────────────────────────────────────────────── */
@@ -5060,7 +5171,9 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
   color: var(--ink-input);
   caret-color: var(--ink-input);
   font-weight: 500;
-  background: rgba(255, 255, 255, .62);
+  /* Frosted body on the buttons' 135deg axis. No backdrop-filter: every input lives
+     inside the Screen-1 card, which is a backdrop root (the PERF rule). */
+  background: linear-gradient(135deg, rgba(255, 255, 255, .74) 0%, rgba(255, 255, 255, .44) 100%);
   /* The dark hairline stays: a .35-white frame alone vanishes on a white card, and an
      input you cannot find the edge of is worse than one that is not glass. The glass
      reads through the inner gloss instead - the buttons' own top lip and bottom shade. */
@@ -5082,19 +5195,19 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 .form-group input:hover,
 .form-group select:hover,
 #otpInput:hover {
-  border-color: rgba(var(--primary-rgb), .45);
-  background: rgba(255, 255, 255, .74);
+  border-color: rgba(var(--focus-rgb), .32);
+  background: linear-gradient(135deg, rgba(255, 255, 255, .86) 0%, rgba(255, 255, 255, .58) 100%);
 }
 .form-group input:focus,
 .form-group select:focus,
 #otpInput:focus {
   outline: none;
-  border-color: rgba(var(--primary-rgb), .85);
-  background: rgba(255, 255, 255, .92);
+  border-color: rgba(var(--focus-rgb), .62);   /* the smooth border highlight */
+  background: rgba(255, 255, 255, .94);
   box-shadow:
-    0 0 0 2px rgba(var(--primary-rgb), .40),   /* ring-2 ring-primary/40 */
-    0 0 22px rgba(var(--primary-rgb), .22),    /* soft glow */
-    inset 0 2px 5px rgba(15, 23, 42, .07);     /* smooth inner shadow */
+    0 0 0 2px rgba(var(--focus-rgb), .30),   /* ring-2 ring-emerald-500/30 */
+    0 0 24px rgba(var(--focus-rgb), .16),    /* ambient glass glow */
+    inset 0 2px 5px rgba(15, 23, 42, .07);   /* smooth inner shadow */
   transform: scale(1.005);
 }
 /* Autofill paints its own opaque background + text colour over the glass. Keep the
@@ -5119,7 +5232,7 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 
      .btn-primary .btn-ghost .btn-capture .btn-add-cart .btn-watch .btn-download
      .btn-update-measure .btn-edit-measurements .cart-btn .cookie-btn
-     .pear-compare-bar .plb-btn
+     .pear-compare-bar .plb-btn .pear-sz-btn (size chips - their injected layout CSS in app.js)
 
    Paint, bottom → top:
      background  --lgb-sheen over a two-stop family tint (--lgb-tint-top/-bottom)
@@ -5159,16 +5272,29 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 
 /* families - clear first, tinted second: .plb-btn--live carries both classes and
    must end up tinted. */
-:is(.btn-ghost, .btn-download, .cart-btn, .cookie-btn--ghost, .plb-btn) {
-  --lgb-tint-top:    rgba(255, 255, 255, .64);
-  --lgb-tint-bottom: rgba(255, 255, 255, .28);
+/* The tint sits UNDER --lgb-glass (the spec'd 135deg white body). Clear buttons get
+   only a whisper of white so they still read on the cream page; tinted ones keep a
+   pear wash, because on a near-white card a pure-white primary is indistinguishable
+   from a secondary - the hierarchy has to live somewhere. Zero the two primary tint
+   stops to get the literal white-glass CTA. */
+:is(.btn-ghost, .btn-download, .cart-btn, .cookie-btn--ghost, .plb-btn, .pear-sz-btn) {
+  --lgb-tint-top:    rgba(255, 255, 255, .34);
+  --lgb-tint-bottom: rgba(255, 255, 255, .12);
   --lgb-ink:         #111827;
 }
 :is(.btn-primary, .btn-capture, .btn-add-cart, .btn-watch, .btn-update-measure,
     .btn-edit-measurements, .cookie-btn--primary, .pear-compare-bar, .plb-btn--live) {
-  --lgb-tint-top:    rgba(var(--primary-rgb), .34);
-  --lgb-tint-bottom: rgba(var(--primary-rgb), .16);
+  --lgb-tint-top:    rgba(var(--primary-rgb), .30);
+  --lgb-tint-bottom: rgba(var(--primary-rgb), .14);
   --lgb-ink:         #1c2a04;   /* deep olive: ~13:1 on the tinted glass */
+  --lgb-glow:        rgba(var(--primary-rgb), .38);
+}
+/* the selected size chip is a tinted chip (two classes - outranks the clear family) */
+.pear-sz-btn.is-active {
+  --lgb-tint-top:    rgba(var(--primary-rgb), .30);
+  --lgb-tint-bottom: rgba(var(--primary-rgb), .14);
+  --lgb-ink:         #3d5200;
+  --lgb-glow:        rgba(var(--primary-rgb), .38);
 }
 /* contexts - two classes, so they outrank either family */
 .btn-capture.is-live,
@@ -5189,7 +5315,9 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
                        inset 0 1px 1px 0 rgba(255, 255, 255, .18),
                        inset 0 -1px 1px 0 rgba(0, 0, 0, .4);
   --lgb-sheen:         linear-gradient(180deg, rgba(255, 255, 255, .18) 0%, rgba(255, 255, 255, .05) 52%, rgba(255, 255, 255, 0) 100%);
+  --lgb-glass:         linear-gradient(135deg, rgba(255, 255, 255, .14) 0%, rgba(255, 255, 255, .03) 100%);
   --lgb-bloom:         rgba(255, 255, 255, .28);
+  --lgb-glow:          rgba(255, 255, 255, .16);
 }
 /* dark AND primary: pear glass over a dark surface, white ink (~9:1) */
 .camera-card__size-mismatch .btn-primary,
@@ -5201,10 +5329,10 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 /* the recipe */
 :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
     .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
-    .pear-compare-bar, .plb-btn) {
+    .pear-compare-bar, .plb-btn, .pear-sz-btn) {
   /* declared HERE, on the button, so its var()s resolve against this button's own
      family/context tokens - declared on :root it would freeze :root's values */
-  --lgb-surface: var(--lgb-sheen), linear-gradient(180deg, var(--lgb-tint-top), var(--lgb-tint-bottom));
+  --lgb-surface: var(--lgb-sheen), var(--lgb-glass), linear-gradient(180deg, var(--lgb-tint-top), var(--lgb-tint-bottom));
   position: relative;
   isolation: isolate;
   font-family: var(--font-ui);
@@ -5235,7 +5363,7 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 
 :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
     .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
-    .pear-compare-bar, .plb-btn)::before {
+    .pear-compare-bar, .plb-btn, .pear-sz-btn)::before {
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   border-radius: inherit;
   background: radial-gradient(85% 150% at var(--lgb-x, 50%) var(--lgb-y, 0%), var(--lgb-bloom), transparent 60%);
@@ -5245,7 +5373,7 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 
 :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
     .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
-    .pear-compare-bar, .plb-btn):disabled {
+    .pear-compare-bar, .plb-btn, .pear-sz-btn):disabled {
   color: var(--lgb-disabled-ink);
   background: linear-gradient(180deg, rgba(255, 255, 255, .46), rgba(255, 255, 255, .2));
   border-color: rgba(255, 255, 255, .35);
@@ -5257,14 +5385,14 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 
 :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
     .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
-    .pear-compare-bar, .plb-btn):focus-visible {
+    .pear-compare-bar, .plb-btn, .pear-sz-btn):focus-visible {
   outline: none;
   /* INSET, on purpose. .btn-primary / .btn-capture / .btn-watch carry the BUTTON
      CORNER-CLIP FIX's clip-path, which clips everything outside the border box -
      an outline or an outer ring simply never paints on them (true of the previous
      focus ring as well: keyboard focus on Continue was invisible). A ring drawn
      inside the edge survives the clip, so every glass button shows the same one. */
-  box-shadow: inset 0 0 0 2px rgba(var(--primary-rgb), .9),
+  box-shadow: inset 0 0 0 2px rgba(var(--focus-rgb), .85),
               inset 0 0 0 3.5px rgba(255, 255, 255, .92),
               var(--lgb-shadow);
 }
@@ -5276,17 +5404,17 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 @media (hover: hover) and (pointer: fine) {
   :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
       .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
-      .pear-compare-bar, .plb-btn):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
-    transform: scale(1.025);
+      .pear-compare-bar, .plb-btn, .pear-sz-btn):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
+    transform: scale(1.025) translateY(-1px);
     background: var(--lgb-surface);
     border-color: var(--lgb-border-hover);
-    box-shadow: var(--lgb-shadow-hover);
+    box-shadow: var(--lgb-shadow-hover), 0 0 24px -4px var(--lgb-glow);   /* amplified glow */
   }
   :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
       .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
-      .pear-compare-bar, .plb-btn):hover:not(:disabled):not([aria-disabled="true"])::before { opacity: 1; }
+      .pear-compare-bar, .plb-btn, .pear-sz-btn):hover:not(:disabled):not([aria-disabled="true"])::before { opacity: 1; }
   /* #btn-next-screen's own id-level hover (translateY) outranks any class rule */
-  #btn-next-screen:hover:not(:disabled):not([aria-disabled="true"]) { transform: scale(1.025); }
+  #btn-next-screen:hover:not(:disabled):not([aria-disabled="true"]) { transform: scale(1.025) translateY(-1px); }
   .btn-cta:hover:not(:disabled):not([aria-disabled="true"]) { --arrow-nudge: 3px; }
 }
 /* ...and on touch, neutralise the older per-button hover rules above this layer (the
@@ -5294,7 +5422,7 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 @media (hover: none) {
   :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
       .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
-      .pear-compare-bar, .plb-btn):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
+      .pear-compare-bar, .plb-btn, .pear-sz-btn):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
     transform: none;
     background: var(--lgb-surface);
     border-color: var(--lgb-border);
@@ -5308,7 +5436,7 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
    taken from this state), springy out (the base --lgb-transition). */
 :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
     .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
-    .pear-compare-bar, .plb-btn):active:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
+    .pear-compare-bar, .plb-btn, .pear-sz-btn):active:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
   transform: scale(.96);
   -webkit-backdrop-filter: var(--lgb-blur-press);
           backdrop-filter: var(--lgb-blur-press);
@@ -5317,7 +5445,7 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 }
 :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
     .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
-    .pear-compare-bar, .plb-btn):active:not(:disabled):not([aria-disabled="true"])::before { opacity: .65; }
+    .pear-compare-bar, .plb-btn, .pear-sz-btn):active:not(:disabled):not([aria-disabled="true"])::before { opacity: .65; }
 #btn-next-screen:active:not(:disabled):not([aria-disabled="true"]) {
   transform: scale(.96);
   transition: var(--lgb-transition-press);
@@ -5360,6 +5488,153 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
   fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round;
   transform: scaleX(var(--dir-x)) translateX(var(--arrow-nudge, 0px));
   transition: transform .5s var(--ease-spring);
+}
+
+/* ── 4b · icon, close & secondary controls ────────────────────────────────────
+   The same material on every small control: close ×s, the carousel arrows, the
+   camera flip, Retake / Clear, the help button, the avatar, cart-line remove,
+   log out. One list, repeated verbatim below (keep in step):
+
+     .pcmp__close .gd-close .pear-lightbox__close .pear-help-widget__close
+     .pear-help-widget__btn .camera-card__flip .cl-arrow .pip-retake .pip-clear
+     .profile-btn .profile-dropdown__logout .cart-line__remove
+
+   PHYSICS GO THROUGH `translate` / `scale`, NOT `transform`. Several of these already
+   own a transform that is structural, not decorative: .cl-arrow is centred with
+   translateY(-50%), and .profile-btn is hidden on scroll by transform rules that
+   outrank anything here. The individual properties compose with those instead of
+   replacing them. The old decorative hover/press transforms (rotate(90deg) on the
+   ×s, the flip's spin, the translateY lifts) are neutralised explicitly below.
+   No `position` here: half of these are absolutely positioned, and the ::before bloom
+   only needs *a* positioned box - the static ones get position:relative by name. */
+:is(.pcmp__close, .gd-close, .pear-lightbox__close, .pear-help-widget__close,
+    .pear-help-widget__btn, .camera-card__flip, .cl-arrow, .pip-retake, .pip-clear,
+    .profile-btn, .profile-dropdown__logout, .cart-line__remove) {
+  --lgb-tint-top:    rgba(255, 255, 255, .5);
+  --lgb-tint-bottom: rgba(255, 255, 255, .24);
+  --lgb-ink:         var(--ink);
+  --lgb-surface: var(--lgb-sheen), var(--lgb-glass), linear-gradient(180deg, var(--lgb-tint-top), var(--lgb-tint-bottom));
+  isolation: isolate;
+  color: var(--lgb-ink);
+  background: var(--lgb-surface);
+  border: 1px solid var(--lgb-border);
+  -webkit-backdrop-filter: var(--lgb-blur);
+          backdrop-filter: var(--lgb-blur);
+  box-shadow: var(--lgb-shadow);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: var(--lgb-transition), background-color .3s ease;
+}
+:is(.pcmp__close, .gd-close, .pear-help-widget__close, .pear-help-widget__btn,
+    .pip-clear, .profile-dropdown__logout) { position: relative; }
+/* The avatar's own transition list animates its header compaction (top / width /
+   height) and its return from the scroll-hide (transform / opacity - see
+   body.focus-mode.is-scrolled .profile-btn). The family's `transition` above would
+   replace that list at equal weight, so it is restated here with both halves. */
+.profile-btn {
+  transition: var(--lgb-transition), background-color .3s ease,
+              top .3s var(--ease), width .3s var(--ease), height .3s var(--ease), opacity .35s var(--ease);
+}
+/* Remove keeps its red "this deletes" cue on hover - as tokens, so it stays glass. */
+.cart-line__remove:hover {
+  --lgb-ink:         #b23a3a;
+  --lgb-tint-top:    rgba(220, 60, 60, .16);
+  --lgb-tint-bottom: rgba(220, 60, 60, .06);
+  --lgb-glow:        rgba(220, 60, 60, .2);
+}
+/* over live video or the dark lightbox: a denser white body so the glyph stays legible */
+:is(.camera-card__flip, .pear-lightbox__close) {
+  --lgb-tint-top:    rgba(255, 255, 255, .82);
+  --lgb-tint-bottom: rgba(255, 255, 255, .62);
+}
+/* per-control ink / tint - tokens only */
+.gd-close                  { --lgb-ink: var(--royal); }
+.pear-help-widget__btn     { --lgb-ink: var(--help-accent); }
+.cl-arrow                  { --lgb-ink: var(--pear-deep); --lgb-tint-top: rgba(var(--primary-rgb), .26); --lgb-tint-bottom: rgba(var(--primary-rgb), .12); --lgb-glow: rgba(var(--primary-rgb), .34); }
+.pip-retake                { --lgb-tint-top: rgba(var(--primary-rgb), .22); --lgb-tint-bottom: rgba(var(--primary-rgb), .08); --lgb-glow: rgba(var(--primary-rgb), .3); }
+.pear-help-widget__close,
+.cart-line__remove         { --lgb-ink: var(--muted); }
+.profile-dropdown__logout  { --lgb-ink: #b23a3a; --lgb-tint-top: rgba(220, 60, 60, .14); --lgb-tint-bottom: rgba(220, 60, 60, .05); --lgb-glow: rgba(220, 60, 60, .22); }
+.profile-btn {             /* the avatar is dark glass with white initials - dark context tokens */
+  --lgb-tint-top:      rgba(44, 50, 64, .62);
+  --lgb-tint-bottom:   rgba(10, 12, 18, .74);
+  --lgb-ink:           #fff;
+  --lgb-border:        rgba(255, 255, 255, .22);
+  --lgb-border-hover:  rgba(255, 255, 255, .5);
+  --lgb-sheen:         linear-gradient(180deg, rgba(255, 255, 255, .2) 0%, rgba(255, 255, 255, .05) 52%, rgba(255, 255, 255, 0) 100%);
+  --lgb-glass:         linear-gradient(135deg, rgba(255, 255, 255, .14) 0%, rgba(255, 255, 255, .03) 100%);
+  --lgb-shadow:        0 10px 28px -10px rgba(0, 0, 0, .5), inset 0 1px 1px 0 rgba(255, 255, 255, .26), inset 0 -1px 1px 0 rgba(0, 0, 0, .35);
+  --lgb-bloom:         rgba(255, 255, 255, .28);
+  --lgb-glow:          rgba(255, 255, 255, .16);
+}
+:is(.pcmp__close, .gd-close, .pear-lightbox__close, .pear-help-widget__close,
+    .pear-help-widget__btn, .camera-card__flip, .cl-arrow, .pip-retake, .pip-clear,
+    .profile-btn, .profile-dropdown__logout, .cart-line__remove)::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  border-radius: inherit;
+  background: radial-gradient(90% 150% at var(--lgb-x, 50%) var(--lgb-y, 0%), var(--lgb-bloom), transparent 62%);
+  opacity: 0;
+  transition: opacity .4s var(--ease-spring);
+}
+/* neutralise the decorative transforms of the older per-control rules (same weight,
+   later) - .cl-arrow keeps its centring, the one transform that is structural */
+:is(.pcmp__close, .gd-close, .pear-lightbox__close, .camera-card__flip, .pip-retake,
+    .pip-clear, .profile-btn, .pear-help-widget__btn):is(:hover, :active) { transform: none; }
+.cl-arrow:is(:hover, :active) { transform: translateY(-50%); }
+/* the flip keeps its gesture, moved onto the glyph: a half-turn while pressed */
+.camera-card__flip svg { transition: rotate .45s var(--ease-spring); }
+.camera-card__flip:active svg { rotate: -180deg; }
+
+:is(.pcmp__close, .gd-close, .pear-lightbox__close, .pear-help-widget__close,
+    .pear-help-widget__btn, .camera-card__flip, .cl-arrow, .pip-retake, .pip-clear,
+    .profile-btn, .profile-dropdown__logout, .cart-line__remove):focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgba(var(--focus-rgb), .85), inset 0 0 0 3.5px rgba(255, 255, 255, .92), var(--lgb-shadow);
+}
+@media (hover: hover) and (pointer: fine) {
+  :is(.pcmp__close, .gd-close, .pear-lightbox__close, .pear-help-widget__close,
+      .pear-help-widget__btn, .camera-card__flip, .cl-arrow, .pip-retake, .pip-clear,
+      .profile-btn, .profile-dropdown__logout, .cart-line__remove):hover:not(:disabled) {
+    translate: 0 -1px;
+    scale: 1.025;
+    background: var(--lgb-surface);
+    border-color: var(--lgb-border-hover);
+    box-shadow: var(--lgb-shadow-hover), 0 0 22px -4px var(--lgb-glow);
+  }
+  :is(.pcmp__close, .gd-close, .pear-lightbox__close, .pear-help-widget__close,
+      .pear-help-widget__btn, .camera-card__flip, .cl-arrow, .pip-retake, .pip-clear,
+      .profile-btn, .profile-dropdown__logout, .cart-line__remove):hover:not(:disabled)::before { opacity: 1; }
+}
+:is(.pcmp__close, .gd-close, .pear-lightbox__close, .pear-help-widget__close,
+    .pear-help-widget__btn, .camera-card__flip, .cl-arrow, .pip-retake, .pip-clear,
+    .profile-btn, .profile-dropdown__logout, .cart-line__remove):active:not(:disabled) {
+  translate: 0 0;
+  scale: .96;
+  -webkit-backdrop-filter: var(--lgb-blur-press);
+          backdrop-filter: var(--lgb-blur-press);
+  box-shadow: var(--lgb-shadow-press);
+  transition: var(--lgb-transition-press);
+}
+
+/* ── 4c · segmented toggles (language, fullscreen) ────────────────────────────
+   Paint only. Their thumbs are positioned from live geometry during a drag
+   (setupLangToggle / setupFullscreenToggle), so the track itself never scales or
+   lifts; both already carry a 1px border, so re-colouring it costs no pixels. The
+   gender switch is the third toggle and already sits on this material - its track is
+   pinned by test/gender-switch.test.mjs and is deliberately left alone. */
+.fs-switch,
+.lang-switch {
+  background: var(--lgb-sheen), var(--lgb-glass), linear-gradient(180deg, rgba(255, 255, 255, .34), rgba(255, 255, 255, .12));
+  border-color: var(--lgb-border);
+  -webkit-backdrop-filter: var(--lgb-blur);
+          backdrop-filter: var(--lgb-blur);
+  box-shadow: var(--lgb-shadow);
+  -webkit-tap-highlight-color: transparent;
+}
+.lang-switch:focus-visible,
+.fs-switch:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, .9), 0 0 0 4px rgba(var(--focus-rgb), .5), var(--lgb-shadow);
 }
 
 @keyframes liquidSheen {
@@ -5427,7 +5702,7 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
 }
 .consent-panel__title {
   margin: 0 2px;
-  font-family: "Urbanist", "Inter", sans-serif;
+  font-family: var(--font-ui);
   font-size: .8rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
   color: var(--ink-label);
 }
@@ -5472,9 +5747,12 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
   position: absolute; inset: 0;
   display: grid; place-items: center;
   border-radius: 8px;
-  background: rgba(255, 255, 255, .76);
-  border: 1.5px solid rgba(15, 23, 42, .3);
-  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .08), 0 1px 0 rgba(255, 255, 255, .8);
+  /* Glass body (sheen over the 135deg frost). The dark 1.5px stroke stays for the
+     same reason the inputs keep theirs: an unticked box must be findable on white. */
+  background: var(--lgb-sheen), linear-gradient(135deg, rgba(255, 255, 255, .9), rgba(255, 255, 255, .52));
+  border: 1.5px solid rgba(15, 23, 42, .28);
+  box-shadow: 0 4px 10px -6px rgba(0, 0, 0, .22),
+              inset 0 1px 1px 0 rgba(255, 255, 255, .85), inset 0 -1px 1px 0 rgba(0, 0, 0, .08);
   transition: background .3s var(--ease-sheet), border-color .3s var(--ease),
               box-shadow .3s var(--ease), transform .35s var(--ease-sheet);
 }
@@ -5485,14 +5763,23 @@ html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
   transition: stroke-dashoffset .38s var(--ease-sheet) .04s;
 }
 .consent-check input:checked + .consent-check__box {
-  background: linear-gradient(180deg, rgb(150, 192, 16) 0%, var(--primary-solid) 100%);
+  /* liquid pear: a specular top half over the solid fill, then a one-shot spring pop */
+  background: linear-gradient(180deg, rgba(255, 255, 255, .38) 0%, rgba(255, 255, 255, 0) 55%),
+              linear-gradient(180deg, rgb(150, 192, 16) 0%, var(--primary-solid) 100%);
   border-color: rgba(84, 112, 0, .9);
-  box-shadow: 0 4px 12px rgba(var(--primary-rgb), .35), inset 0 1px 0 rgba(255, 255, 255, .45);
+  box-shadow: 0 6px 14px -4px rgba(var(--primary-rgb), .5),
+              inset 0 1px 1px 0 rgba(255, 255, 255, .6), inset 0 -1px 1px 0 rgba(0, 0, 0, .12);
+  animation: pearCheckPop .42s var(--ease-spring);
+}
+@keyframes pearCheckPop {
+  0%   { transform: scale(.86); }
+  55%  { transform: scale(1.08); }
+  100% { transform: scale(1); }
 }
 .consent-check input:checked + .consent-check__box svg { stroke-dashoffset: 0; }
 .consent-check input:active + .consent-check__box { transform: scale(.9); }
 .consent-check input:focus-visible + .consent-check__box {
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(var(--primary-rgb), .6);
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(var(--focus-rgb), .55);
 }
 .consent-check__text {
   font-size: .86rem; line-height: 1.5; font-weight: 500;
@@ -5666,21 +5953,27 @@ label.cookie-pref { cursor: pointer; }
 }
 .cookie-switch__track {
   position: absolute; inset: 0; border-radius: var(--pill);
-  background: rgba(15, 23, 42, .18);
-  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .16);
+  /* a recessed glass channel: frost over a slate wash, sunk by inner shadow */
+  background: var(--lgb-sheen), linear-gradient(180deg, rgba(15, 23, 42, .16), rgba(15, 23, 42, .1));
+  box-shadow: inset 0 1px 3px rgba(15, 23, 42, .22), inset 0 -1px 1px rgba(255, 255, 255, .5);
   transition: background .3s var(--ease);
 }
 .cookie-switch__thumb {
   position: absolute; top: 3px; inset-inline-start: 3px;
   width: 22px; height: 22px; border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 2px 6px rgba(15, 23, 42, .22);
-  transition: transform .42s var(--ease-sheet);
+  /* a glossy glass bead rather than a flat disc */
+  background: radial-gradient(120% 90% at 50% 12%, #fff 0%, #f4f5f7 60%, #e6e8ec 100%);
+  box-shadow: 0 3px 8px -2px rgba(15, 23, 42, .3), 0 1px 1px rgba(15, 23, 42, .12),
+              inset 0 1px 1px rgba(255, 255, 255, .9);
+  transition: transform .42s var(--ease-spring);
 }
-.cookie-switch input:checked + .cookie-switch__track { background: var(--primary-solid); }
+.cookie-switch input:checked + .cookie-switch__track {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .34) 0%, rgba(255, 255, 255, 0) 55%),
+              linear-gradient(180deg, rgb(140, 180, 14), var(--primary-solid));
+}
 .cookie-switch input:checked + .cookie-switch__track .cookie-switch__thumb { transform: translateX(18px); }
 html[dir="rtl"] .cookie-switch input:checked + .cookie-switch__track .cookie-switch__thumb { transform: translateX(-18px); }
-.cookie-switch input:focus-visible + .cookie-switch__track { box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(var(--primary-rgb), .6); }
+.cookie-switch input:focus-visible + .cookie-switch__track { box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(var(--focus-rgb), .55); }
 .cookie-settings__save { justify-self: end; }
 
 /* the help FAB steps up over the banner while it is showing */
@@ -5721,11 +6014,21 @@ body.has-cookie-banner .pear-help-widget {
      feedback that the tap registered, not decorative motion. */
   :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
       .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
-      .pear-compare-bar, .plb-btn):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading),
+      .pear-compare-bar, .plb-btn, .pear-sz-btn):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading),
   #btn-next-screen:hover:not(:disabled):not([aria-disabled="true"]) { transform: none; }
   :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
       .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
-      .pear-compare-bar, .plb-btn)::before,
+      .pear-compare-bar, .plb-btn, .pear-sz-btn)::before,
   .btn-cta__arrow svg { transition: none; }
   .btn-cta:hover:not(:disabled):not([aria-disabled="true"]) { --arrow-nudge: 0px; }   /* same weight as §4's, later */
+  /* §4b / §6 / §2: no icon lift, no check pop, no progress glide */
+  :is(.pcmp__close, .gd-close, .pear-lightbox__close, .pear-help-widget__close,
+      .pear-help-widget__btn, .camera-card__flip, .cl-arrow, .pip-retake, .pip-clear,
+      .profile-btn, .profile-dropdown__logout, .cart-line__remove):hover:not(:disabled) { translate: none; scale: none; }
+  :is(.pcmp__close, .gd-close, .pear-lightbox__close, .pear-help-widget__close,
+      .pear-help-widget__btn, .camera-card__flip, .cl-arrow, .pip-retake, .pip-clear,
+      .profile-btn, .profile-dropdown__logout, .cart-line__remove)::before,
+  .camera-card__flip svg { transition: none; }
+  .consent-check input:checked + .consent-check__box { animation: none; }
+  .step-progress-fill { transition: none; }
 }
