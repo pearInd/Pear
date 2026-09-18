@@ -87,7 +87,11 @@ const I18N = {
   placeholderName:           { he: "לדוגמה: דנה כהן", en: "e.g. Jane Cooper" },
   labelEmail:                { he: "אימייל:", en: "Email:" },
   placeholderEmail:          { he: "לדוגמה: dana@example.com", en: "e.g. jane@example.com" },
-  btnContinue:               { he: "המשך →", en: "Continue →" },
+  /* NO arrow in these two strings. The → used to live here, and a text arrow is not
+     Bidi_Mirrored, so Hebrew rendered "המשך →" pointing BACKWARD. The arrow is now an
+     SVG sibling of the label (index.html, .btn-cta__arrow) mirrored per direction in
+     style.css - so it reads "המשך ←" / "Continue →" with no per-language glyph. */
+  btnContinue:               { he: "המשך", en: "Continue" },
 
   otpTitle:                  { he: "אימות אימייל", en: "Verify your email" },
   otpPlaceholder:            { he: "הכנס קוד בן 6 ספרות", en: "Enter the 6-digit code" },
@@ -104,7 +108,7 @@ const I18N = {
   placeholderHeight:         { he: "לדוגמה: 175", en: "e.g. 175" },
   labelWeight:               { he: 'משקל (בק"ג):', en: "Weight (kg):" },
   placeholderWeight:         { he: "לדוגמה: 68", en: "e.g. 68" },
-  btnNextScreen:             { he: "המשך לחדר המדידה הוירטואלי →", en: "Continue to the virtual fitting room →" },
+  btnNextScreen:             { he: "המשך לחדר המדידה הוירטואלי", en: "Continue to the virtual fitting room" },   /* arrow: see btnContinue */
   fineTuneLabel:             { he: "כוונון עדין", en: "Fine-tune" },
   labelChest:                { he: 'היקף חזה (בס"מ)', en: "Chest circumference (cm)" },
   optionalTag:               { he: "(אופציונלי)", en: "(optional)" },
@@ -113,6 +117,29 @@ const I18N = {
   placeholderWaist:          { he: "לדוגמה: 80", en: "e.g. 80" },
   labelLegs:                 { he: 'אורך רגליים (בס"מ)', en: "Leg length (cm)" },
   placeholderLegs:           { he: "לדוגמה: 102", en: "e.g. 102" },
+
+  /* Terms & accuracy consent - the compliance panel inside #resultActions (see the
+     COMPLIANCE block in app.js). consentDisclaimer is the spec'd sentence verbatim in
+     Hebrew; do not paraphrase it - it is legal copy, not UI copy. */
+  consentTitle:              { he: "תנאים ומדיניות", en: "Terms & Policy" },
+  consentDisclaimer:         { he: "<strong>שימו לב:</strong> דיוק הדיגום מתבסס על הנתונים הוויזואליים והמידות המוזנות. אי-מילוי מלא של כל שדות המדידה עלול להשפיע על דיוק האלגוריתם, ואין המערכת מתחייבת ל-100% דיוק במקרים אלו.",
+                               en: "<strong>Please note:</strong> sizing accuracy is based on the visual data and the measurements you enter. Leaving any measurement field incomplete may affect the algorithm's accuracy, and the system does not guarantee 100% accuracy in those cases." },
+  consentTermsLabel:         { he: "אני מאשר/ת את תנאי השימוש ומדיניות הפרטיות של PEAR.", en: "I accept PEAR's Terms of Use and Privacy Policy." },
+  consentDataLabel:          { he: "אני מסכים/ה לעיבוד נתוני המידות לצורך התאמת גודל אישית.", en: "I agree to the processing of my measurement data for personalized size matching." },
+  consentGateHint:           { he: "יש לסמן את שתי התיבות כדי להמשיך", en: "Tick both boxes to continue" },
+
+  /* Cookie / local-storage banner (cookie-consent.js). The two category descriptions
+     name what the room ACTUALLY stores - keep them in step with the storage keys. */
+  cookieBannerAria:          { he: "הסכמה לעוגיות", en: "Cookie consent" },
+  cookieText:                { he: "אנו משתמשים בעוגיות ובזיכרון מקומי כדי לשמור את העדפות המידה שלך ולשפר את חווית ההתאמה.", en: "We use cookies and local storage to save your size preferences and improve your fitting experience." },
+  cookieAcceptAll:           { he: "מאשר/ת הכל", en: "Accept all" },
+  cookieSettings:            { he: "הגדרות", en: "Settings" },
+  cookieEssentialTitle:      { he: "חיוניים", en: "Essential" },
+  cookieEssentialDesc:       { he: "זיהוי המכשיר, התחברות מאובטחת ושמירת בחירות ההסכמה שלך.", en: "Device recognition, secure sign-in and remembering your consent choices." },
+  cookieAlwaysOn:            { he: "תמיד פעיל", en: "Always on" },
+  cookiePrefsTitle:          { he: "העדפות", en: "Preferences" },
+  cookiePrefsDesc:           { he: "שפת הממשק, תזכורות לעדכון מידות וגלריית המדידות שלך.", en: "Interface language, measurement-update reminders and your fit gallery." },
+  cookieSaveChoices:         { he: "שמירת הבחירה", en: "Save choices" },
 
   profileAria:               { he: "פרופיל משתמש · User profile", en: "User profile" },
   profileLabelHeight:        { he: "גובה:", en: "Height:" },

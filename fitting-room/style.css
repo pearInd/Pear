@@ -471,8 +471,9 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    sets a height, so the box simply grows.
 
    WHAT THAT GROWTH RUNS INTO is .result-actions, which reveals itself by animating
-   max-height 0 -> 420px with overflow:hidden (see its own rule below). That ceiling was
-   measured for label + size display + Continue button; the extra lines fit today but
+   max-height 0 -> a fixed ceiling with overflow:hidden (see its own rule below). That
+   ceiling was measured for label + size display + consent panel + Continue button
+   (420px before the consent panel existed); the extra lines fit today but
    with little to spare, and overflow:hidden CLIPS rather than scrolls - it would fail
    silently, on the narrowest screens, in the language with the longest copy. The
    .has-stock-notice rule below raises the ceiling for exactly that case. */
@@ -505,7 +506,7 @@ html.pear-returning-check #screen-calculator { display: none !important; }
    content, so this cannot introduce a gap. Wins on SPECIFICITY (three classes vs two),
    not on source order - .result-actions.is-ready is defined much further down this
    file. Both classes are set together by renderStockNotice(). */
-.result-actions.is-ready.has-stock-notice { max-height: 620px; }
+.result-actions.is-ready.has-stock-notice { max-height: 1080px; }   /* was 620px; +consent panel, see .result-actions.is-ready */
 /* No dark-mode rule here on purpose: this stylesheet has no prefers-color-scheme
    handling anywhere, the room is a fixed light glass theme, and a lone dark override
    on this one element would be the only thing in the file that ever changed. */
@@ -2513,8 +2514,14 @@ html.pear-returning-check #screen-calculator { display: none !important; }
     margin-top .6s cubic-bezier(.25, 1, .5, 1),
     visibility 0s linear .6s;
 }
+/* 420px → 860px (2026-09-18): the tray now also carries the terms & accuracy
+   consent panel (#consentPanel) between the size and Continue. Measured scrollHeight
+   at a 320px viewport: 668px Hebrew, 709px English (the longer copy) - ~150px spare
+   for font fallback and zoom. max-height is a CEILING, not a
+   height, so the extra headroom cannot open a gap - but overflow:hidden CLIPS, and a
+   clipped consent box would hide the very checkbox that unlocks Continue. */
 .result-actions.is-ready {
-  max-height: 420px; opacity: 1; visibility: visible;
+  max-height: 860px; opacity: 1; visibility: visible;
   transform: translateY(0) scale(1); margin-top: 10px;
   transition:
     max-height .6s cubic-bezier(.25, 1, .5, 1),
@@ -4897,3 +4904,828 @@ body.corners-cleared .focus-bar { padding-left: 14px; }
    portrait on a phone held upright, wider when the feed is landscape. */
 .camera-card[data-orientation="portrait"]  { aspect-ratio: 3 / 4; }
 .camera-card[data-orientation="landscape"] { aspect-ratio: 4 / 3; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   ✦ LIQUID GLASS DESIGN SYSTEM (2026-09-18)
+   ────────────────────────────────────────────────────────────────────────
+   One layer, appended LAST on purpose: every rule below restates a selector that
+   already exists above (or is new), so it wins on source order at equal
+   specificity without editing forty scattered rules - and deleting this block
+   restores the previous look exactly. It touches paint only (fill, border,
+   blur, shadow, colour, motion); it never sets width/height/padding/position on
+   an existing desktop component, so the breakpoint geometry above cannot drift.
+   The one deliberate exception is §7, which turns the two overlays into bottom
+   sheets at ≤768px.
+
+     1. tokens            5. step transitions (identity → OTP → size form)
+     2. unified surfaces  6. terms & accuracy consent panel
+     3. readable inputs   7. mobile sheets (.drag-indicator + sheet-gestures.js)
+     4. gloss CTAs        8. cookie / local-storage banner (cookie-consent.js)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1 · tokens ─────────────────────────────────────────────────────────── */
+:root {
+  --lg-blur:         blur(20px) saturate(180%);
+  --lg-border:       1px solid rgba(255, 255, 255, .4);
+  --lg-fill:         linear-gradient(135deg, rgba(255, 255, 255, .58) 0%, rgba(255, 255, 255, .24) 100%);
+  /* Multi-layered edge: a soft top refraction line, a hairline of shade along the
+     bottom lip, and a faint full inner ring - the SAME inner gloss the buttons use
+     (--lgb-shadow below), so cards and controls read as one material. */
+  --lg-edge:         inset 0 1px 1px 0 rgba(255, 255, 255, .6),
+                     inset 0 -1px 1px 0 rgba(0, 0, 0, .06),
+                     inset 0 0 0 1px rgba(255, 255, 255, .14);
+  --lg-edge-dark:    inset 0 1px 0 rgba(255, 255, 255, .16),
+                     inset 0 0 0 1px rgba(255, 255, 255, .05);
+  --lg-shadow:       0 0 0 .5px rgba(15, 23, 42, .05),
+                     0 2px 6px rgba(15, 23, 42, .04),
+                     0 12px 32px rgba(15, 23, 42, .08),
+                     0 32px 72px rgba(15, 23, 42, .10);
+
+  /* Input legibility. Slate-900 / gray-900 on white glass is ~17:1; the old
+     --muted-2 placeholder (#9a9aa0) was ~2.6:1 and read as disabled text. */
+  --ink-input:       #0F172A;
+  --ink-label:       #111827;
+  --ink-placeholder: rgba(15, 23, 42, .45);
+  --ink-secondary:   #4b5563;
+
+  /* "primary" = the pear green the rings/tints above were already built from. */
+  --primary-rgb:     141, 182, 0;
+  --primary-solid:   rgb(112, 148, 0);   /* checked fills - white glyph on it ≥ 3:1 */
+
+  /* iOS sheet curve - fast departure, long soft settle, no overshoot. */
+  --ease-sheet:      cubic-bezier(.32, .72, 0, 1);
+  /* Step slide distance. Forward motion follows the reading direction: next step
+     arrives from the right in LTR, from the left in RTL. */
+  --step-shift:      32px;
+  /* +1 in LTR, -1 in RTL. Multiplied into directional glyphs (the Continue arrow) so
+     "forward" points toward the end of the line in either language. */
+  --dir-x:           1;
+
+  /* ── Apple Liquid Glass controls (§4) ──
+     SF Pro on Apple devices via the system aliases; Heebo (loaded in index.html) is
+     the Hebrew + Latin face everywhere else; Assistant / sans-serif only if both miss. */
+  --font-ui:           -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Heebo", "Assistant", sans-serif;
+  --ease-spring:       cubic-bezier(.2, .8, .2, 1);
+  --lgb-blur:          blur(24px) saturate(190%);
+  --lgb-blur-press:    blur(14px) saturate(170%);   /* the glass "thins" under a finger */
+  --lgb-border:        rgba(255, 255, 255, .35);
+  --lgb-border-hover:  rgba(255, 255, 255, .78);
+  --lgb-shadow:        0 10px 30px -10px rgba(0, 0, 0, .15),
+                       inset 0 1px 1px 0 rgba(255, 255, 255, .6),
+                       inset 0 -1px 1px 0 rgba(0, 0, 0, .1);
+  --lgb-shadow-hover:  0 16px 36px -12px rgba(0, 0, 0, .22),
+                       inset 0 1px 1px 0 rgba(255, 255, 255, .85),
+                       inset 0 -1px 1px 0 rgba(0, 0, 0, .1);
+  --lgb-shadow-press:  0 4px 14px -8px rgba(0, 0, 0, .2),
+                       inset 0 1px 1px 0 rgba(255, 255, 255, .45),
+                       inset 0 -1px 1px 0 rgba(0, 0, 0, .14);
+  /* The translucent sheen: bright at the top lip, clearing toward the middle. */
+  --lgb-sheen:         linear-gradient(180deg, rgba(255, 255, 255, .5) 0%, rgba(255, 255, 255, .12) 52%, rgba(255, 255, 255, .04) 100%);
+  --lgb-bloom:         rgba(255, 255, 255, .72);
+  --lgb-disabled-ink:  rgba(15, 23, 42, .5);
+  /* Release is slow and springy; press (--lgb-transition-press, applied on :active)
+     is near-instant - a transition takes its timing from the state it moves TO. */
+  --lgb-transition:       transform .55s var(--ease-spring), box-shadow .45s var(--ease-spring),
+                          border-color .35s ease, color .3s ease,
+                          -webkit-backdrop-filter .35s ease, backdrop-filter .35s ease;
+  --lgb-transition-press: transform .14s var(--ease-spring), box-shadow .14s var(--ease-spring),
+                          -webkit-backdrop-filter .14s ease, backdrop-filter .14s ease;
+}
+html[dir="rtl"] { --step-shift: -32px; --dir-x: -1; }
+
+/* ── 2 · unified surfaces ───────────────────────────────────────────────────
+   Modal cards, banners, popovers and the toast share one blur, one border and one
+   edge/shadow stack. FILLS stay per-surface on purpose: the dropdowns and help
+   popover sit over the live camera and keep their near-opaque fills (see the
+   "opaque enough that NOTHING behind it can read through" note on .cart-dropdown);
+   only the glass treatment is unified, not their legibility floor. */
+#screen-calculator .container {
+  background: var(--lg-fill);
+  -webkit-backdrop-filter: var(--lg-blur);
+          backdrop-filter: var(--lg-blur);
+  border: var(--lg-border);
+  box-shadow: var(--lg-shadow), var(--lg-edge);
+}
+.pcmp__panel,
+.gd-overlay__panel,
+.profile-dropdown,
+.cart-dropdown,
+.pear-help-widget__popover {
+  -webkit-backdrop-filter: var(--lg-blur);
+          backdrop-filter: var(--lg-blur);
+  border: var(--lg-border);
+  box-shadow: var(--lg-shadow), var(--lg-edge);
+}
+.toast {
+  -webkit-backdrop-filter: var(--lg-blur);
+          backdrop-filter: var(--lg-blur);
+  border: var(--lg-border);
+  box-shadow: var(--lg-shadow), var(--lg-edge-dark);
+}
+/* Banners INSIDE the Screen-1 card get the border + edge but NO blur: the card is a
+   backdrop root (see "ONE blur pass per card" above), so a blur here would sample
+   only the card's own smooth gradient and paint nothing but compositing cost. */
+#screen-calculator .focus-calc-hint,
+.measurements-refresh-notice {
+  border: var(--lg-border);
+  box-shadow: var(--lg-edge), 0 4px 14px rgba(15, 23, 42, .05);
+}
+/* Badges share the button material (§4): the glossy .35 frame, the inner gloss, the
+   24px blur - fills unchanged, so LIVE stays legible over the camera. The kicker is
+   inside the Screen-1 card on one screen (no blur there, same reason as above) and on
+   the page itself on #screen-locked, so it gets the frame + gloss and keeps its own
+   blur rule. */
+.camera-card__live,
+.focus-bar__badge {
+  border: 1px solid var(--lgb-border);
+  -webkit-backdrop-filter: var(--lgb-blur);
+          backdrop-filter: var(--lgb-blur);
+  box-shadow: var(--lgb-shadow);
+  font-family: var(--font-ui);
+}
+.focus-bar__badge { background: var(--lgb-sheen), var(--pear-tint); }
+.kicker {
+  border: 1px solid var(--lgb-border);
+  box-shadow: var(--lgb-shadow);
+}
+
+/* ── 3 · readable inputs ─────────────────────────────────────────────────── */
+.form-group label,
+.form-group__label { color: var(--ink-label); }
+.optional { color: #5b6472; }   /* was --muted-2 (~2.6:1) - an unreadable "(optional)" is a hidden instruction */
+
+.form-group input,
+.form-group select,
+#otpInput {
+  color: var(--ink-input);
+  caret-color: var(--ink-input);
+  font-weight: 500;
+  background: rgba(255, 255, 255, .62);
+  /* The dark hairline stays: a .35-white frame alone vanishes on a white card, and an
+     input you cannot find the edge of is worse than one that is not glass. The glass
+     reads through the inner gloss instead - the buttons' own top lip and bottom shade. */
+  border: 1px solid rgba(15, 23, 42, .14);
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, .6),
+              inset 0 -1px 1px 0 rgba(0, 0, 0, .05),
+              inset 0 1px 3px rgba(15, 23, 42, .06);
+  transition: border-color .3s var(--ease), box-shadow .35s var(--ease),
+              background .3s var(--ease), transform .35s var(--ease-sheet);
+}
+#otpInput { font-weight: 800; }   /* the code itself keeps its display weight */
+.form-group input,
+.form-group select { font-family: var(--font-ui); }   /* values match the buttons; #otpInput keeps its display face */
+.form-group input::placeholder,
+#otpInput::placeholder {
+  color: var(--ink-placeholder);
+  opacity: 1;   /* Firefox dims placeholders by default - the token is the final colour */
+}
+.form-group input:hover,
+.form-group select:hover,
+#otpInput:hover {
+  border-color: rgba(var(--primary-rgb), .45);
+  background: rgba(255, 255, 255, .74);
+}
+.form-group input:focus,
+.form-group select:focus,
+#otpInput:focus {
+  outline: none;
+  border-color: rgba(var(--primary-rgb), .85);
+  background: rgba(255, 255, 255, .92);
+  box-shadow:
+    0 0 0 2px rgba(var(--primary-rgb), .40),   /* ring-2 ring-primary/40 */
+    0 0 22px rgba(var(--primary-rgb), .22),    /* soft glow */
+    inset 0 2px 5px rgba(15, 23, 42, .07);     /* smooth inner shadow */
+  transform: scale(1.005);
+}
+/* Autofill paints its own opaque background + text colour over the glass. Keep the
+   ink token and hold the UA background off indefinitely (the long-transition trick -
+   Chromium/WebKit expose no property to override it directly). */
+.form-group input:-webkit-autofill,
+#otpInput:-webkit-autofill {
+  -webkit-text-fill-color: var(--ink-input);
+  transition: background-color 600000s 0s, color 600000s 0s;
+}
+/* iOS zooms the page on focus for any input under 16px - the old .98rem (15.7px) did
+   exactly that on every tap into height/weight, and never zoomed back out. */
+@media (max-width: 768px) {
+  .form-group input,
+  .form-group select { font-size: 16px; }
+}
+
+/* ── 4 · Apple Liquid Glass controls ─────────────────────────────────────────
+   ONE recipe for every button in the room. The selector list is repeated verbatim in
+   each rule below (CSS has no selector variables) - keep them identical, and keep
+   GLASS_BTN in lux-interactions.js in step with it (it drives the bloom position):
+
+     .btn-primary .btn-ghost .btn-capture .btn-add-cart .btn-watch .btn-download
+     .btn-update-measure .btn-edit-measurements .cart-btn .cookie-btn
+     .pear-compare-bar .plb-btn
+
+   Paint, bottom → top:
+     background  --lgb-sheen over a two-stop family tint (--lgb-tint-top/-bottom)
+     border      1px rgba(255,255,255,.35) frame
+     box-shadow  soft drop + inner top lip + inner bottom shade (--lgb-shadow)
+     ::before    inner light bloom - radial, parked at the top lip, fades in on hover
+                 and follows a mouse (--lgb-x/-y, set by lux-interactions.js)
+     ::after     the existing sweep (btnShine / liquidSheen) where a button has one
+
+   FAMILIES and CONTEXTS only ever set tokens, never paint - so a new state is one
+   token block, not another copy of the recipe:
+     tinted   primary actions - pear-green glass, deep olive ink
+     clear    secondary actions - colourless glass, slate ink
+     dark     wherever the surface BEHIND the button is dark: the "Stop" state, the
+              size-mismatch card, the replay lightbox.
+   "Adapts to light/dark" is therefore per SURFACE, not prefers-color-scheme: the room
+   has no page-level dark theme (fixed light glass - see the .result-box note), so an
+   OS switch would paint a dark button onto a light card.
+
+   BLUR INSIDE THE SCREEN-1 CARD STAYS OFF. The card is a backdrop root and the PERF
+   rule "ONE blur pass per card" (id-level, so it outranks this) turns child blur off
+   there: a 24px blur of the card's own smooth gradient was pixel-identical to none
+   and cost a compositing layer per control. Everywhere else - Go Live, Add to Cart,
+   the camera placeholder, the header, the banner - the blur is live.
+
+   ::before at z-index:-1 lands above the button's background and below its label
+   only inside a stacking context - `isolation: isolate` guarantees one even where a
+   button has no blur or clip-path of its own. No overflow:hidden here on purpose:
+   .cart-btn's count bubble hangs outside its circle.
+
+   KNOWN LIMIT - the outer drop layer. .btn-primary / .btn-capture / .btn-watch keep
+   the BUTTON CORNER-CLIP FIX's `clip-path: inset(0 round 9999px)` (it cured jagged
+   capsule corners under backdrop-filter), and a clip-path clips box-shadow too. On
+   those three only the two INSET layers of --lgb-shadow paint; the 0 10px 30px
+   drop is clipped away. Widening the clip (negative inset) would bring it back but
+   also un-mask the corners that fix exists for - verify the corners before trying. */
+
+/* families - clear first, tinted second: .plb-btn--live carries both classes and
+   must end up tinted. */
+:is(.btn-ghost, .btn-download, .cart-btn, .cookie-btn--ghost, .plb-btn) {
+  --lgb-tint-top:    rgba(255, 255, 255, .64);
+  --lgb-tint-bottom: rgba(255, 255, 255, .28);
+  --lgb-ink:         #111827;
+}
+:is(.btn-primary, .btn-capture, .btn-add-cart, .btn-watch, .btn-update-measure,
+    .btn-edit-measurements, .cookie-btn--primary, .pear-compare-bar, .plb-btn--live) {
+  --lgb-tint-top:    rgba(var(--primary-rgb), .34);
+  --lgb-tint-bottom: rgba(var(--primary-rgb), .16);
+  --lgb-ink:         #1c2a04;   /* deep olive: ~13:1 on the tinted glass */
+}
+/* contexts - two classes, so they outrank either family */
+.btn-capture.is-live,
+.camera-card__size-mismatch .btn-primary,
+.pear-lightbox .plb-btn {
+  --lgb-tint-top:      rgba(44, 50, 64, .5);
+  --lgb-tint-bottom:   rgba(10, 12, 18, .66);
+  --lgb-ink:           #fff;
+  --lgb-border:        rgba(255, 255, 255, .22);
+  --lgb-border-hover:  rgba(255, 255, 255, .5);
+  --lgb-shadow:        0 10px 30px -10px rgba(0, 0, 0, .5),
+                       inset 0 1px 1px 0 rgba(255, 255, 255, .26),
+                       inset 0 -1px 1px 0 rgba(0, 0, 0, .35);
+  --lgb-shadow-hover:  0 16px 36px -12px rgba(0, 0, 0, .55),
+                       inset 0 1px 1px 0 rgba(255, 255, 255, .42),
+                       inset 0 -1px 1px 0 rgba(0, 0, 0, .35);
+  --lgb-shadow-press:  0 4px 14px -8px rgba(0, 0, 0, .5),
+                       inset 0 1px 1px 0 rgba(255, 255, 255, .18),
+                       inset 0 -1px 1px 0 rgba(0, 0, 0, .4);
+  --lgb-sheen:         linear-gradient(180deg, rgba(255, 255, 255, .18) 0%, rgba(255, 255, 255, .05) 52%, rgba(255, 255, 255, 0) 100%);
+  --lgb-bloom:         rgba(255, 255, 255, .28);
+}
+/* dark AND primary: pear glass over a dark surface, white ink (~9:1) */
+.camera-card__size-mismatch .btn-primary,
+.pear-lightbox .plb-btn--live {
+  --lgb-tint-top:    rgba(var(--primary-rgb), .44);
+  --lgb-tint-bottom: rgba(var(--primary-rgb), .22);
+}
+
+/* the recipe */
+:is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+    .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
+    .pear-compare-bar, .plb-btn) {
+  /* declared HERE, on the button, so its var()s resolve against this button's own
+     family/context tokens - declared on :root it would freeze :root's values */
+  --lgb-surface: var(--lgb-sheen), linear-gradient(180deg, var(--lgb-tint-top), var(--lgb-tint-bottom));
+  position: relative;
+  isolation: isolate;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  letter-spacing: -.01em;
+  color: var(--lgb-ink);
+  background: var(--lgb-surface);
+  border: 1px solid var(--lgb-border);
+  -webkit-backdrop-filter: var(--lgb-blur);
+          backdrop-filter: var(--lgb-blur);
+  box-shadow: var(--lgb-shadow);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;   /* no double-tap-zoom wait → no 300ms tap latency */
+  transition: var(--lgb-transition);
+}
+/* "Stop" and the tinted buttons' own two-class state rules outrank the one-class
+   recipe - restated at their weight so the tokens actually paint. */
+.btn-capture.is-live {
+  color: var(--lgb-ink);
+  background: var(--lgb-surface);
+  border-color: var(--lgb-border);
+  -webkit-backdrop-filter: var(--lgb-blur);
+          backdrop-filter: var(--lgb-blur);   /* the old rule pinned var(--blur), 20px */
+  box-shadow: var(--lgb-shadow);
+}
+/* child labels that set their own face */
+.btn-capture__label { font-family: inherit; font-weight: 600; letter-spacing: -.01em; }
+
+:is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+    .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
+    .pear-compare-bar, .plb-btn)::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  border-radius: inherit;
+  background: radial-gradient(85% 150% at var(--lgb-x, 50%) var(--lgb-y, 0%), var(--lgb-bloom), transparent 60%);
+  opacity: 0;
+  transition: opacity .4s var(--ease-spring);
+}
+
+:is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+    .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
+    .pear-compare-bar, .plb-btn):disabled {
+  color: var(--lgb-disabled-ink);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .46), rgba(255, 255, 255, .2));
+  border-color: rgba(255, 255, 255, .35);
+  -webkit-backdrop-filter: var(--lgb-blur);   /* .btn-primary/.btn-capture:disabled pinned 20px */
+          backdrop-filter: var(--lgb-blur);
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 1px 0 rgba(0, 0, 0, .05);
+  cursor: not-allowed;
+}
+
+:is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+    .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
+    .pear-compare-bar, .plb-btn):focus-visible {
+  outline: none;
+  /* INSET, on purpose. .btn-primary / .btn-capture / .btn-watch carry the BUTTON
+     CORNER-CLIP FIX's clip-path, which clips everything outside the border box -
+     an outline or an outer ring simply never paints on them (true of the previous
+     focus ring as well: keyboard focus on Continue was invisible). A ring drawn
+     inside the edge survives the clip, so every glass button shows the same one. */
+  box-shadow: inset 0 0 0 2px rgba(var(--primary-rgb), .9),
+              inset 0 0 0 3.5px rgba(255, 255, 255, .92),
+              var(--lgb-shadow);
+}
+
+/* HOVER - real mouse only. On touch, :hover sticks to the last-tapped button until
+   the next tap elsewhere, so a scale-up there reads as a stuck, half-pressed control.
+   :not(.is-done) keeps Add-to-Cart's success fill from being glassed over while the
+   pointer still rests on it; .is-loading is pointer-events:none, so never hovered. */
+@media (hover: hover) and (pointer: fine) {
+  :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+      .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
+      .pear-compare-bar, .plb-btn):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
+    transform: scale(1.025);
+    background: var(--lgb-surface);
+    border-color: var(--lgb-border-hover);
+    box-shadow: var(--lgb-shadow-hover);
+  }
+  :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+      .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
+      .pear-compare-bar, .plb-btn):hover:not(:disabled):not([aria-disabled="true"])::before { opacity: 1; }
+  /* #btn-next-screen's own id-level hover (translateY) outranks any class rule */
+  #btn-next-screen:hover:not(:disabled):not([aria-disabled="true"]) { transform: scale(1.025); }
+  .btn-cta:hover:not(:disabled):not([aria-disabled="true"]) { --arrow-nudge: 3px; }
+}
+/* ...and on touch, neutralise the older per-button hover rules above this layer (the
+   translateY lifts and flat hover fills) so a tapped button settles back to rest. */
+@media (hover: none) {
+  :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+      .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
+      .pear-compare-bar, .plb-btn):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
+    transform: none;
+    background: var(--lgb-surface);
+    border-color: var(--lgb-border);
+    box-shadow: var(--lgb-shadow);
+  }
+  #btn-next-screen:hover:not(:disabled):not([aria-disabled="true"]) { transform: none; }
+}
+
+/* PRESS - mouse and touch alike. Declared after both hover blocks at equal weight, so
+   it wins while a hovered button is also pressed. Near-instant in (the transition is
+   taken from this state), springy out (the base --lgb-transition). */
+:is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+    .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
+    .pear-compare-bar, .plb-btn):active:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
+  transform: scale(.96);
+  -webkit-backdrop-filter: var(--lgb-blur-press);
+          backdrop-filter: var(--lgb-blur-press);
+  box-shadow: var(--lgb-shadow-press);
+  transition: var(--lgb-transition-press);
+}
+:is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+    .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
+    .pear-compare-bar, .plb-btn):active:not(:disabled):not([aria-disabled="true"])::before { opacity: .65; }
+#btn-next-screen:active:not(:disabled):not([aria-disabled="true"]) {
+  transform: scale(.96);
+  transition: var(--lgb-transition-press);
+  animation: none;
+}
+/* #btn-next-screen's id-level base `transition` (opacity reveal + an 0.18s delay on
+   EVERY property) outranks the recipe - which also delayed every press by 180ms.
+   The delay now rides on the opacity reveal alone; presses are instant again. */
+#btn-next-screen {
+  transition: opacity .6s cubic-bezier(.25, 1, .5, 1) .18s, var(--lgb-transition);
+}
+
+/* The two attention pulses animate box-shadow, so their old keyframes would repaint
+   the pre-glass shadow over the recipe for half of every cycle. Same names, redefined
+   on the new tokens (the last @keyframes of a name wins). */
+@keyframes continueInvite {
+  0%, 100% { box-shadow: var(--lgb-shadow); }
+  50%      { box-shadow: 0 14px 32px -10px rgba(var(--primary-rgb), .5), 0 0 0 4px rgba(var(--primary-rgb), .12),
+                         inset 0 1px 1px 0 rgba(255, 255, 255, .75), inset 0 -1px 1px 0 rgba(0, 0, 0, .1); }
+}
+@keyframes capInvite {
+  0%, 100% { box-shadow: var(--lgb-shadow); }
+  50%      { box-shadow: 0 16px 34px -10px rgba(var(--primary-rgb), .5), 0 0 0 5px rgba(var(--primary-rgb), .1),
+                         inset 0 1px 1px 0 rgba(255, 255, 255, .75), inset 0 -1px 1px 0 rgba(0, 0, 0, .1); }
+}
+
+/* ── Continue: label + a direction-aware arrow ──
+   The arrow is an SVG element, not a "→" in the string. A text arrow is not
+   Bidi_Mirrored, so "המשך →" pointed backwards in Hebrew; the SVG is flipped by
+   --dir-x instead (the same reason the carousel uses SVG chevrons - see #clArrowPrev).
+   The flip sits on the <svg>, never on its wrapper span: lux-interactions.js drifts
+   each button CHILD with an inline transform, which would silently erase a flip set
+   on the child itself. Forward is scaleX(dir) then a positive nudge, so the hover
+   nudge moves toward the end of the line in both directions. */
+.btn-cta { display: inline-flex; align-items: center; justify-content: center; gap: .5em; }
+.btn-cta__label { min-width: 0; text-wrap: balance; }
+.btn-cta__arrow { display: inline-flex; flex: none; }
+.btn-cta__arrow svg {
+  width: 1.15em; height: 1.15em;
+  fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round;
+  transform: scaleX(var(--dir-x)) translateX(var(--arrow-nudge, 0px));
+  transition: transform .5s var(--ease-spring);
+}
+
+@keyframes liquidSheen {
+  0%        { left: -130%; }
+  24%, 100% { left: 140%; }
+}
+#btn-identity-continue:not(:disabled)::after,
+#btn-next-screen:not(:disabled):not([aria-disabled="true"])::after {
+  animation: liquidSheen 5.2s var(--ease) 1.4s infinite;
+}
+#btn-identity-continue:hover:not(:disabled)::after,
+#btn-next-screen:hover:not(:disabled):not([aria-disabled="true"])::after {
+  animation: btnShine .9s var(--ease);
+}
+
+/* Consent lock. calculateSize() owns [disabled] ("is there a size?"); the consent
+   gate owns [aria-disabled] (see the COMPLIANCE block in app.js). Visible - so the
+   shopper sees the next step waiting - but inert and clearly locked. */
+#btn-next-screen[aria-disabled="true"] {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .46), rgba(255, 255, 255, .2));
+  border-color: rgba(255, 255, 255, .35);
+  color: #5b6472;   /* darker than --lgb-disabled-ink on purpose: the label says what is waiting */
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 1px 0 rgba(0, 0, 0, .05);
+  cursor: not-allowed;
+  animation: none;
+}
+#btn-next-screen[aria-disabled="true"]:hover,
+#btn-next-screen[aria-disabled="true"]:active { transform: none; }
+#btn-next-screen[aria-disabled="true"]::after { animation: none; }
+
+/* ── 5 · step transitions ───────────────────────────────────────────────────
+   Identity → OTP → size form is a display toggle in app.js (showOtpScreen /
+   showSizeForm / showIdentityGate), and a CSS animation restarts whenever an
+   element goes from display:none to rendered - so each step slides in on its own
+   with zero JS timing and no change to the routing code. Enter-only by design: an
+   exit animation would need the outgoing step to stay painted after app.js has
+   hidden it, i.e. a timer between "hidden" and "gone" that the routing never waits
+   for. Outranks `.screen.active form`'s fade on specificity (ids). */
+@keyframes pearStepIn {
+  from { opacity: 0; transform: translate3d(var(--step-shift), 0, 0); }
+  to   { opacity: 1; transform: none; }
+}
+#screen-calculator.active #identityForm,
+#screen-calculator.active #screen-otp,
+#screen-calculator.active #sizeForm {
+  animation: pearStepIn .56s var(--ease-sheet) both .06s;
+}
+
+/* ── 6 · terms & accuracy consent panel (#consentPanel) ──────────────────────
+   Inside the Screen-1 card → no backdrop-filter (backdrop root, see §2 above). */
+.consent-panel {
+  display: grid; gap: 10px;
+  margin-top: 18px; padding: 14px;
+  border-radius: 20px;
+  text-align: start;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .62), rgba(255, 255, 255, .30));
+  border: var(--lg-border);
+  box-shadow: var(--lg-edge), 0 6px 20px rgba(15, 23, 42, .06);
+  transition: border-color .4s var(--ease), box-shadow .4s var(--ease);
+}
+.result-actions.is-ready .consent-panel { animation: pearPopIn .55s cubic-bezier(.34, 1.56, .64, 1) both .12s; }
+.consent-panel.is-complete {
+  border-color: rgba(var(--primary-rgb), .42);
+  box-shadow: var(--lg-edge), 0 6px 20px rgba(var(--primary-rgb), .12);
+}
+.consent-panel__title {
+  margin: 0 2px;
+  font-family: "Urbanist", "Inter", sans-serif;
+  font-size: .8rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-label);
+}
+/* The accuracy disclaimer is the one sentence here a shopper must not skim past -
+   amber (the stock notice's "still valid, but read this" colour, not error red),
+   an accent rule on the reading-start edge, and full ink. */
+.consent-panel__disclaimer {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 0; padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(214, 158, 46, .15), rgba(214, 158, 46, .05));
+  border: 1px solid rgba(214, 158, 46, .34);
+  border-inline-start: 3px solid rgba(190, 130, 20, .85);
+  color: var(--ink-label);
+  font-size: .82rem; line-height: 1.55; font-weight: 500;
+  text-wrap: pretty;
+}
+.consent-panel__disclaimer strong { font-weight: 800; }
+.consent-panel__icon {
+  flex: none; width: 18px; height: 18px; margin-top: 1px;
+  fill: none; stroke: #8a5a08; stroke-width: 2; stroke-linecap: round;
+}
+
+.consent-check {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 10px; border-radius: 14px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .25s var(--ease), box-shadow .25s var(--ease);
+}
+.consent-check:hover { background: rgba(255, 255, 255, .5); }
+.consent-check__control { position: relative; flex: none; width: 24px; height: 24px; margin-top: 1px; }
+/* The REAL checkbox, stretched over the drawn box at opacity 0 - so pointer, label,
+   keyboard and screen reader all operate the native control (never display:none,
+   which would drop it from the tab order and the accessibility tree). */
+.consent-check__control input {
+  position: absolute; inset: 0; z-index: 2;
+  width: 100%; height: 100%; margin: 0;
+  opacity: 0; cursor: pointer;
+}
+.consent-check__box {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .76);
+  border: 1.5px solid rgba(15, 23, 42, .3);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .08), 0 1px 0 rgba(255, 255, 255, .8);
+  transition: background .3s var(--ease-sheet), border-color .3s var(--ease),
+              box-shadow .3s var(--ease), transform .35s var(--ease-sheet);
+}
+.consent-check__box svg {
+  width: 16px; height: 16px;
+  fill: none; stroke: #fff; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 16; stroke-dashoffset: 16;
+  transition: stroke-dashoffset .38s var(--ease-sheet) .04s;
+}
+.consent-check input:checked + .consent-check__box {
+  background: linear-gradient(180deg, rgb(150, 192, 16) 0%, var(--primary-solid) 100%);
+  border-color: rgba(84, 112, 0, .9);
+  box-shadow: 0 4px 12px rgba(var(--primary-rgb), .35), inset 0 1px 0 rgba(255, 255, 255, .45);
+}
+.consent-check input:checked + .consent-check__box svg { stroke-dashoffset: 0; }
+.consent-check input:active + .consent-check__box { transform: scale(.9); }
+.consent-check input:focus-visible + .consent-check__box {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(var(--primary-rgb), .6);
+}
+.consent-check__text {
+  font-size: .86rem; line-height: 1.5; font-weight: 500;
+  color: var(--ink-label);
+}
+.consent-panel__hint {
+  margin: 0; text-align: center;
+  font-size: .78rem; font-weight: 600; color: var(--ink-secondary);
+  transition: color .3s var(--ease);
+}
+.consent-panel.is-complete .consent-panel__hint { display: none; }
+/* A press on the locked Continue (or Enter from a field) nudges instead of doing
+   nothing: the panel shakes once and the boxes still missing a tick light up. */
+.consent-panel.is-nudged { animation: consentNudge .5s var(--ease-sheet); }
+.consent-panel.is-nudged .consent-panel__hint { color: #9a4a06; }
+.consent-check.is-missing .consent-check__box {
+  border-color: #d97706;
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, .2);
+}
+@keyframes consentNudge {
+  0%, 100% { transform: none; }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(5px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(2px); }
+}
+
+/* ── 7 · mobile sheets ──────────────────────────────────────────────────────
+   .drag-indicator is a 96×26 grab zone around a 40×5 bar. Motion is applied by
+   sheet-gestures.js through the individual `translate` property, NOT `transform`:
+   both sheet panels run fill-mode:both entrance animations on `transform`, and an
+   animation's held end value outranks any inline style - a transform-based drag
+   would simply not move them. `translate` composes with the animation instead. */
+.drag-indicator { display: none; }
+@media (max-width: 768px) {
+  .drag-indicator {
+    display: flex; align-items: center; justify-content: center;
+    width: 96px; height: 26px; margin: 0 auto;
+    flex: none;
+    touch-action: none; cursor: grab;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none; user-select: none;
+  }
+  .drag-indicator::before {
+    content: "";
+    width: 40px; height: 5px; border-radius: var(--pill);
+    background: rgba(15, 23, 42, .22);
+    box-shadow: inset 0 1px 1px rgba(15, 23, 42, .12), 0 1px 0 rgba(255, 255, 255, .7);
+    transition: width .3s var(--ease-sheet), background .3s var(--ease);
+  }
+  [data-sheet].is-dragging .drag-indicator { cursor: grabbing; }
+  [data-sheet].is-dragging .drag-indicator::before { width: 54px; background: rgba(15, 23, 42, .38); }
+  [data-sheet].is-dragging { -webkit-user-select: none; user-select: none; }
+  [data-sheet-grab] { touch-action: none; }
+
+  /* Screen 1: the handle hugs the card's top edge, and exists only when there is a
+     host modal to dismiss (html.pear-embedded - set by the inline script in
+     index.html). */
+  #screen-calculator .drag-indicator { margin: -20px auto 6px; }
+  html:not(.pear-embedded) #screen-calculator .drag-indicator { display: none; }
+
+  /* Compare + detect overlays become bottom sheets. */
+  .pear-compare-overlay,
+  .gd-overlay { align-items: flex-end; padding: 0; }
+  .pcmp__panel,
+  .gd-overlay__panel {
+    width: 100%;
+    max-height: 92vh; max-height: 92dvh;
+    border-radius: 28px 28px 0 0;
+    border-bottom: 0;
+    padding-top: 6px;
+    padding-bottom: calc(clamp(16px, 3vw, 24px) + var(--safe-b, 0px));
+    overscroll-behavior: contain;
+    animation: pearSheetUp .56s var(--ease-sheet) both;
+  }
+  .gd-overlay.show .gd-overlay__panel { animation: pearSheetUp .56s var(--ease-sheet) both; }
+  .pcmp__panel .drag-indicator,
+  .gd-overlay__panel .drag-indicator { margin-bottom: -10px; }
+}
+@keyframes pearSheetUp {
+  from { transform: translate3d(0, 100%, 0); }
+  to   { transform: none; }
+}
+
+/* ── 8 · cookie / local-storage banner (#cookieBanner) ───────────────────────
+   Fixed to the bottom, above the help FAB (z 150). cookie-consent.js publishes its
+   live height as --cookie-banner-h so the help button can step up over it instead
+   of hiding underneath.
+   Z-INDEX ALONE CANNOT KEEP IT UNDER THE DIALOGS. The Compare overlay (z 220) lives
+   inside #screen-fitting, and .screen's z-index:1 makes every screen a stacking
+   context - so that 220 only ranks it among the screen's own children, and a
+   body-level banner at 160 painted straight over the open sheet (seen in a capture,
+   2026-09-18). The :has() rule below steps the banner aside while any dialog is
+   open instead; it slides back the moment the dialog closes, choice still pending. */
+.cookie-banner {
+  position: fixed; z-index: 160;
+  inset-inline: 16px; bottom: calc(16px + var(--safe-b, 0px));
+  max-width: 760px; margin-inline: auto;
+  padding: 14px 16px;
+  border-radius: 22px;
+  color: var(--ink-label);
+  background: linear-gradient(135deg, rgba(255, 255, 255, .80), rgba(255, 255, 255, .56));
+  -webkit-backdrop-filter: var(--lg-blur);
+          backdrop-filter: var(--lg-blur);
+  border: var(--lg-border);
+  box-shadow: var(--lg-shadow), var(--lg-edge);
+  opacity: 0;
+  transform: translate3d(0, calc(100% + 32px), 0);
+  transition: transform .6s var(--ease-sheet), opacity .4s var(--ease);
+}
+.cookie-banner[hidden] { display: none; }
+.cookie-banner.is-visible { opacity: 1; transform: none; }
+body:has(.pear-compare-overlay.show, .gd-overlay.show, .pear-lightbox.show) .cookie-banner.is-visible {
+  opacity: 0; pointer-events: none;
+  transform: translate3d(0, calc(100% + 32px), 0);
+}
+.cookie-banner__row { display: flex; align-items: center; gap: 14px; }
+.cookie-banner__icon {
+  flex: none; display: grid; place-items: center;
+  width: 38px; height: 38px; border-radius: 50%;
+  background: rgba(var(--primary-rgb), .16);
+  border: 1px solid rgba(var(--primary-rgb), .32);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6);
+}
+.cookie-banner__icon svg {
+  width: 20px; height: 20px;
+  fill: none; stroke: #3d4825; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
+.cookie-banner__text {
+  flex: 1; min-width: 0; margin: 0;
+  font-size: .84rem; line-height: 1.5; font-weight: 500; color: var(--ink-label);
+}
+.cookie-banner__actions { flex: none; display: flex; gap: 8px; }
+/* Layout only - paint, press and hover all come from the §4 recipe (.cookie-btn--
+   primary is a tinted family member, --ghost a clear one). This block sits AFTER §4,
+   so any paint declared here would silently beat the recipe at equal weight. */
+.cookie-btn {
+  min-height: 42px; padding: 10px 18px;
+  border-radius: var(--pill);
+  font-size: .9rem;
+  cursor: pointer; white-space: nowrap;
+}
+/* Settings open: the ghost button reads as "on" - a faint slate tint, via tokens. */
+.cookie-btn--ghost[aria-expanded="true"] {
+  --lgb-tint-top:    rgba(15, 23, 42, .10);
+  --lgb-tint-bottom: rgba(15, 23, 42, .04);
+}
+
+.cookie-settings {
+  display: grid; gap: 8px;
+  margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid rgba(15, 23, 42, .08);
+}
+.cookie-settings[hidden] { display: none; }
+.cookie-banner.is-settings-open .cookie-settings { animation: pearPopIn .45s var(--ease-sheet) both; }
+.cookie-pref {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border-radius: 14px;
+  background: rgba(255, 255, 255, .5);
+  border: 1px solid rgba(255, 255, 255, .65);
+}
+label.cookie-pref { cursor: pointer; }
+.cookie-pref__copy { display: grid; gap: 2px; font-size: .8rem; line-height: 1.45; color: var(--ink-secondary); }
+.cookie-pref__copy strong { font-size: .86rem; color: var(--ink-label); }
+.cookie-pref__always { flex: none; font-size: .74rem; font-weight: 700; color: #3d4825; white-space: nowrap; }
+.cookie-switch { position: relative; flex: none; width: 46px; height: 28px; }
+.cookie-switch input {
+  position: absolute; inset: 0; z-index: 2;
+  width: 100%; height: 100%; margin: 0;
+  opacity: 0; cursor: pointer;
+}
+.cookie-switch__track {
+  position: absolute; inset: 0; border-radius: var(--pill);
+  background: rgba(15, 23, 42, .18);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .16);
+  transition: background .3s var(--ease);
+}
+.cookie-switch__thumb {
+  position: absolute; top: 3px; inset-inline-start: 3px;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, .22);
+  transition: transform .42s var(--ease-sheet);
+}
+.cookie-switch input:checked + .cookie-switch__track { background: var(--primary-solid); }
+.cookie-switch input:checked + .cookie-switch__track .cookie-switch__thumb { transform: translateX(18px); }
+html[dir="rtl"] .cookie-switch input:checked + .cookie-switch__track .cookie-switch__thumb { transform: translateX(-18px); }
+.cookie-switch input:focus-visible + .cookie-switch__track { box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(var(--primary-rgb), .6); }
+.cookie-settings__save { justify-self: end; }
+
+/* the help FAB steps up over the banner while it is showing */
+body.has-cookie-banner .pear-help-widget {
+  bottom: calc(var(--cookie-banner-h, 0px) + 28px + var(--safe-b, 0px));
+  transition: bottom .5s var(--ease-sheet);
+}
+
+@media (max-width: 600px) {
+  .cookie-banner { inset-inline: 10px; bottom: calc(10px + var(--safe-b, 0px)); padding: 14px; border-radius: 20px; }
+  .cookie-banner__row { flex-wrap: wrap; gap: 12px; }
+  .cookie-banner__text { flex-basis: calc(100% - 52px); }
+  .cookie-banner__actions { width: 100%; }
+  .cookie-banner__actions .cookie-btn { flex: 1; }
+  .cookie-settings__save { justify-self: stretch; }
+}
+
+/* ── reduced motion: every new movement collapses to an instant state change ── */
+@media (prefers-reduced-motion: reduce) {
+  .form-group input:focus,
+  .form-group select:focus,
+  #otpInput:focus { transform: none; }
+  #screen-calculator.active #identityForm,
+  #screen-calculator.active #screen-otp,
+  #screen-calculator.active #sizeForm,
+  .result-actions.is-ready .consent-panel,
+  .consent-panel.is-nudged,
+  .cookie-banner.is-settings-open .cookie-settings,
+  .pcmp__panel,
+  .gd-overlay.show .gd-overlay__panel { animation: none; }
+  #btn-identity-continue:not(:disabled)::after,
+  #btn-next-screen:not(:disabled):not([aria-disabled="true"])::after { animation: none; }
+  .cookie-banner { transition: opacity .2s linear; transform: none; }
+  .consent-check__box,
+  .consent-check__box svg,
+  .cookie-switch__thumb { transition: none; }
+  /* §4: no hover growth, no drifting bloom or arrow. The press scale stays - it is
+     feedback that the tap registered, not decorative motion. */
+  :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+      .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
+      .pear-compare-bar, .plb-btn):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading),
+  #btn-next-screen:hover:not(:disabled):not([aria-disabled="true"]) { transform: none; }
+  :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
+      .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn,
+      .pear-compare-bar, .plb-btn)::before,
+  .btn-cta__arrow svg { transition: none; }
+  .btn-cta:hover:not(:disabled):not([aria-disabled="true"]) { --arrow-nudge: 0px; }   /* same weight as §4's, later */
+}

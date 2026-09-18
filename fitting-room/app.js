@@ -2852,7 +2852,9 @@ function onMeasurementKeydown(e) {
   const nextBtn = $("btn-next-screen");
   if (nextBtn && !nextBtn.disabled) { onSizeFormContinue(); return; }
 
-  const inputs = [...document.querySelectorAll("#sizeForm input")]
+  // :not([type=checkbox]) - the consent boxes live in #sizeForm too, but they are
+  // not measurements: Enter must never try to "advance focus" into them.
+  const inputs = [...document.querySelectorAll('#sizeForm input:not([type="checkbox"])')]
     // visible inputs only - and skip the optional panel while it's collapsed
     // (visibility:hidden keeps offsetParent set, so check the panel state too).
     .filter((el) => el.offsetParent !== null && !el.closest(".optional-fields:not(.is-expanded)"));
@@ -3533,6 +3535,16 @@ function goToFitting(opts) {
   // the camera indefinitely - the lock was being set but never read back.
   if (DEMO_GATE && isDemoGateLocked()) {
     showDemoGateLockedMessage();
+    return;
+  }
+  /* Consent backstop - everything below uploads the shopper's measurements
+     (/api/track-tryon, logSessionMeasurements). Both callers already check
+     (onSizeFormContinue, routeUser's instant-skip); this makes a future third
+     caller fail closed onto the form rather than open onto the network. See the
+     COMPLIANCE block above showSizeForm(). typeof-guarded: CLAUDE.md §2.7. */
+  if (typeof hasTermsConsent === "function" && !hasTermsConsent()) {
+    console.warn("[PEAR] goToFitting held: no terms / measurement consent on record → size form");
+    if (typeof showSizeForm === "function") showSizeForm();
     return;
   }
 
@@ -16018,6 +16030,132 @@ function clearReturningCheckGate() {
   document.documentElement.classList.remove("pear-returning-check");
 }
 
+/* =============================================================================
+   COMPLIANCE - terms & accuracy consent (the "תנאים ומדיניות" step, #consentPanel)
+   -----------------------------------------------------------------------------
+   WHAT IT GATES. The size form's Continue is the only way off Screen 1, and it is
+   also the first moment the room SENDS measurements anywhere: onSizeFormContinue()
+   PATCHes them to the profile, and goToFitting() posts them to /api/sessions and
+   /api/track-tryon. "I agree to the processing of my measurement data" therefore
+   has to be answered before that press, not after it - which is why the panel sits
+   between the recommendation and the button, and why goToFitting() itself refuses
+   to run without it (the backstop for any caller that is not the button).
+
+   TWO LOCKS, ONE BUTTON. calculateSize() owns #btn-next-screen's [disabled] ("is
+   there a size to continue with?"), and adult-pants-sizing / numeric-pants-sizing
+   run it in a sandbox and assert on exactly that property. Folding consent into the
+   same property would let either writer release the other's lock - the next
+   keystroke re-running calculateSize() would re-enable a button the shopper never
+   consented past. So consent is its own lock on [aria-disabled]: the button is live
+   only when BOTH are clear, and each writer touches only its own attribute. Because
+   aria-disabled blocks nothing by itself, onSizeFormContinue() re-checks the ticks
+   for every route that reaches it: the click, Enter-to-proceed, a synthetic click.
+
+   WHERE IT IS STORED. localStorage, versioned: bump PEAR_TERMS_VERSION when the
+   terms change and every visitor is asked again. Recorded on the Continue press
+   (proceeding IS the acceptance) and cleared the moment either box is unticked, so
+   withdrawing is as easy as agreeing. A browser that refuses storage still gets
+   through - hasTermsConsent() also reads the live ticks - and is simply asked
+   again next visit (CLAUDE.md §2.5: never strand a paying shopper on an infra gap).
+   Local only for now: there is no server-side consent record yet.
+
+   RETURNING VISITORS. routeUser()'s instant-skip used to take a known device with a
+   fresh profile straight to the camera, past Screen 1 - and straight into
+   goToFitting()'s measurement upload. With no consent on record it now lands on the
+   size form (prefilled) once, and is fast-pathed from then on.
+   ============================================================================= */
+const PEAR_CONSENT_KEY   = "pear_terms_consent";
+const PEAR_TERMS_VERSION = "2026-09-18";
+const CONSENT_BOX_IDS    = ["consentTerms", "consentData"];
+
+function readStoredConsent() {
+  try {
+    const rec = JSON.parse(localStorage.getItem(PEAR_CONSENT_KEY) || "null");
+    return (rec && rec.version === PEAR_TERMS_VERSION && rec.terms === true && rec.measurements === true) ? rec : null;
+  } catch { return null; }
+}
+
+function consentBoxesTicked() {
+  return CONSENT_BOX_IDS.every((id) => { const el = $(id); return !!(el && el.checked); });
+}
+
+/* The one question every gate asks. The live ticks count too, so a storage failure
+   can never be the reason a shopper who DID tick both boxes is refused. */
+function hasTermsConsent() {
+  return !!readStoredConsent() || consentBoxesTicked();
+}
+
+function recordTermsConsent() {
+  try {
+    localStorage.setItem(PEAR_CONSENT_KEY, JSON.stringify({
+      version: PEAR_TERMS_VERSION, terms: true, measurements: true,
+      acceptedAt: new Date().toISOString(),
+    }));
+  } catch {}
+}
+
+function clearTermsConsent() {
+  try { localStorage.removeItem(PEAR_CONSENT_KEY); } catch {}
+}
+
+/* Paint the consent lock. Writes [aria-disabled] and never [disabled] - see TWO
+   LOCKS above. Returns whether both boxes are ticked. */
+function syncConsentGate() {
+  const ok = consentBoxesTicked();
+  const btn = $("btn-next-screen");
+  if (btn) {
+    if (ok) btn.removeAttribute("aria-disabled");
+    else btn.setAttribute("aria-disabled", "true");
+  }
+  const panel = $("consentPanel");
+  if (panel) {
+    panel.classList.toggle("is-complete", ok);
+    if (ok) panel.classList.remove("is-nudged");
+  }
+  CONSENT_BOX_IDS.forEach((id) => {
+    const el = $(id);
+    if (el && el.checked) el.closest(".consent-check")?.classList.remove("is-missing");
+  });
+  return ok;
+}
+
+/* Continue was pressed while locked: show WHY instead of doing nothing - shake the
+   panel once, mark the unticked boxes, and move focus to the first of them. */
+function nudgeConsent() {
+  const panel = $("consentPanel");
+  if (!panel) return;
+  let firstMissing = null;
+  CONSENT_BOX_IDS.forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.closest(".consent-check")?.classList.toggle("is-missing", !el.checked);
+    if (!el.checked && !firstMissing) firstMissing = el;
+  });
+  panel.classList.remove("is-nudged");
+  void panel.offsetWidth;   // restart the shake on a repeat press
+  panel.classList.add("is-nudged");
+  if (firstMissing) { try { firstMissing.focus(); } catch {} }
+  console.log("[PEAR] consent: Continue held - terms / measurement-processing consent not ticked");
+}
+
+/* Idempotent - showSizeForm() runs it on every reveal. Re-ticks both boxes for a
+   visitor who already accepted THIS terms version; never unticks anything. */
+function setupConsentPanel() {
+  const stored = !!readStoredConsent();
+  CONSENT_BOX_IDS.forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    if (stored) el.checked = true;
+    if (el.dataset.wired) return;
+    el.dataset.wired = "1";
+    el.addEventListener("change", () => {
+      if (!el.checked) clearTermsConsent();   // withdrawal takes effect immediately
+      syncConsentGate();
+    });
+  });
+  syncConsentGate();
+}
+
 function showSizeForm(opts) {
   clearReturningCheckGate();
   const idForm = $("identityForm");
@@ -16033,6 +16171,7 @@ function showSizeForm(opts) {
     setIf("height", PEAR_USER.height); setIf("weight", PEAR_USER.weight);
   }
   try { calculateSize(); } catch {}
+  setupConsentPanel();   // terms & accuracy consent - see COMPLIANCE above
 }
 
 /* THE single decision point for what a visitor sees once we know who they are
@@ -16047,7 +16186,11 @@ function showSizeForm(opts) {
                                 nudge banner, prefilled - the visitor cannot
                                 reach the camera without confirming/updating.
      Profile, refresh NOT due → Screen 1 is never shown; prefill straight into
-                                calculateSize() and transition into the camera. */
+                                calculateSize() and transition into the camera -
+                                PROVIDED the terms/measurement consent for the
+                                current PEAR_TERMS_VERSION is on record. Without
+                                it: the measurement form, prefilled, once (see
+                                COMPLIANCE above showSizeForm). */
 function routeUser(user) {
   // `age` is deliberately NOT carried onto PEAR_USER any more, even when the server
   // still returns a stored one - that value is what the profile popover was painting
@@ -16069,12 +16212,16 @@ function routeUser(user) {
     // fitting room with no resolved size - fall through to Screen 1 below,
     // exactly the same blocking "no matching size" state a fresh visitor would
     // hit, instead of bypassing it entirely via this fast path.
-    if (currentUserSize) {
+    if (currentUserSize && hasTermsConsent()) {
       // instant:true - this visitor never saw Screen 1 (pre-paint gate kept
       // #screen-calculator hidden the whole time), so skip the branded transition
       // and land directly on the camera with zero visible animation/delay.
       goToFitting({ instant: true });
       return;
+    }
+    if (currentUserSize) {
+      console.log("[PEAR] returning device, no terms consent on record for v" +
+        PEAR_TERMS_VERSION + " → size form (prefilled) instead of the instant skip");
     }
   }
 
@@ -16107,8 +16254,12 @@ async function persistMeasurementsIfLoggedIn(height, weight) {
 
 /* Screen 1's "Continue →" action (button click AND Enter-to-submit - see
    onMeasurementKeydown). Persists the just-entered measurements server-side
-   for a logged-in returning/new user before transitioning into the room. */
+   for a logged-in returning/new user before transitioning into the room.
+   Consent is checked FIRST, before the PATCH: that request is itself the
+   "processing of measurement data" the second box asks about. */
 async function onSizeFormContinue() {
+  if (!syncConsentGate()) { nudgeConsent(); return; }
+  recordTermsConsent();
   await persistMeasurementsIfLoggedIn($("height")?.value, $("weight")?.value);
   goToFitting();
 }
@@ -21992,7 +22143,9 @@ function init() {
   setupCartButton();
   requestCartSync();         // no-op in standalone/demo mode (inIframe() guard) - see the module comment above
 
-  document.querySelectorAll("#sizeForm input").forEach((i) => {
+  // Measurements only - the consent checkboxes in #sizeForm are wired by
+  // setupConsentPanel(); ticking one must not re-run the size calculator.
+  document.querySelectorAll('#sizeForm input:not([type="checkbox"])').forEach((i) => {
     i.addEventListener("input", calculateSize);
     i.addEventListener("keydown", onMeasurementKeydown);   // Task 5 - Enter to proceed
   });

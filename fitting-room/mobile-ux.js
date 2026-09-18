@@ -121,7 +121,9 @@
   const RIPPLE = ".btn-capture, .btn-primary, .btn-watch, .btn-download, .pip-retake, .plb-btn, .pear-compare-bar";
   addEventListener("pointerdown", (ev) => {
     const el = ev.target.closest(RIPPLE);
-    if (!el || el.disabled) return;
+    // aria-disabled too: #btn-next-screen's consent lock is aria-only (see the
+    // COMPLIANCE block in app.js), and a ripple on a locked button reads as "it worked".
+    if (!el || el.disabled || el.getAttribute("aria-disabled") === "true") return;
 
     if (navigator.vibrate) { try { navigator.vibrate(7); } catch (_) {} }
     if (reduce) return;

@@ -13,13 +13,15 @@
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Heebo: the Hebrew + Latin face of the --font-ui stack (style.css) on every device
+         that is not Apple's - there, -apple-system resolves to SF Pro first. -->
+    <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800&family=Heebo:wght@500;600;700&display=swap" rel="stylesheet">
 
     <!-- Cache-buster added with the header-alignment work: style.css had none at
          all, so a shipped CSS change was served from cache indefinitely while
          app.js?v= was being bumped every deploy. Kept in step with app.js's
          version so there is one number to reason about, not two. -->
-    <link rel="stylesheet" href="style.css?v=36">
+    <link rel="stylesheet" href="style.css?v=38">
 </head>
 <body>
 
@@ -38,6 +40,15 @@
       document.documentElement.classList.add("pear-returning-check");
     }
   } catch (e) {}
+  /* pear-embedded: this room is inside the widget's modal iframe, so there IS a
+     host modal for the Screen-1 sheet's swipe-to-dismiss to close (sheet-gestures.js
+     posts PEAR_CLOSE_REQUEST to the parent). Standalone, the drag handle stays hidden:
+     a handle that can only ever spring back is a control that lies. A cross-origin
+     parent makes window.parent !== window without throwing; the catch covers the
+     sandboxed-frame case, where "embedded" is still the true answer. */
+  try {
+    if (window.parent !== window) document.documentElement.classList.add("pear-embedded");
+  } catch (e) { document.documentElement.classList.add("pear-embedded"); }
 })();
 </script>
 
@@ -74,7 +85,7 @@
          card shell (one radius/background/shadow) with the two zones split
          by a thin internal divider instead. #screen-locked doesn't use this
          wrapper - its .calc-editorial keeps its own separate dark card. ░░ -->
-    <div class="calc-card">
+    <div class="calc-card" data-sheet="room">
     <!-- ░░ Editorial panel - a soft cream/glass surface (NOT the old dark
          card) so it blends seamlessly into the ivory page canvas and the
          form panel beside it. Sole focal point: the looping brand video.
@@ -116,6 +127,11 @@
     </div>
 
     <div class="container">
+        <!-- Mobile sheet grip (≤768px, embedded only - see html.pear-embedded above).
+             Pointer-only affordance; the host modal's own × stays the accessible close.
+             Drag physics + the PEAR_CLOSE_REQUEST hand-off live in sheet-gestures.js;
+             data-sheet on .calc-card names what a completed swipe dismisses. -->
+        <div class="drag-indicator" data-sheet-handle aria-hidden="true"></div>
         <div class="focus-calc-hint" id="focusCalcHint" hidden></div>
         <span class="kicker">PEAR · Personal Fit Engine</span>
         <h2 id="calcHeading" data-i18n="calcHeading">התאמת מידה אישית</h2>
@@ -141,7 +157,13 @@
                  collapsed/invisible until the size-calc adds .is-ready, which would
                  permanently hide this Continue button). -->
             <div id="identityActions">
-                <button id="btn-identity-continue" type="button" class="btn-primary" data-i18n="btnContinue">המשך →</button>
+                <!-- Label + arrow as separate nodes: data-i18n swaps ONLY the label, and
+                     the arrow is an SVG mirrored by --dir-x (style.css §4 "Continue"), so it
+                     points toward the end of the line in Hebrew and English alike. -->
+                <button id="btn-identity-continue" type="button" class="btn-primary btn-cta">
+                    <span class="btn-cta__label" data-i18n="btnContinue">המשך</span>
+                    <span class="btn-cta__arrow" aria-hidden="true"><svg viewBox="0 0 20 20" focusable="false"><path d="M4 10h11.5M11 5.5 15.5 10 11 14.5"/></svg></span>
+                </button>
                 <p id="identityError" class="login-error" role="alert" hidden style="margin-top:10px"></p>
             </div>
         </form>
@@ -228,7 +250,46 @@
                     <p class="stock-notice" id="stockNotice" role="status" aria-live="polite" hidden></p>
                 </div>
 
-                <button id="btn-next-screen" type="button" class="btn-primary" disabled data-i18n="btnNextScreen">המשך לחדר המדידה הוירטואלי →</button>
+                <!-- ░░ Terms & accuracy consent ("תנאים ומדיניות") - the mandatory
+                     compliance step. Lives HERE, between the recommendation and the only
+                     control that leaves Screen 1, because every route into the room
+                     converges on this form (new visitor, re-auth, stale profile, demo) -
+                     and routeUser()'s instant-skip now sends a returning visitor with no
+                     recorded consent here too, rather than past it. See the COMPLIANCE
+                     block in app.js.
+                     Continue is gated with aria-disabled, NOT with [disabled]:
+                     calculateSize() owns [disabled] ("is there a size?") and six suites
+                     assert on it, so the two locks stay independent and neither writer
+                     can release the other's. The native checkboxes sit ON TOP of their
+                     drawn boxes at opacity 0, so a tap, a label click, keyboard and a
+                     test driver all hit the real <input>. ░░ -->
+                <section class="consent-panel" id="consentPanel" aria-labelledby="consentTitle">
+                    <h3 class="consent-panel__title" id="consentTitle" data-i18n="consentTitle">תנאים ומדיניות</h3>
+                    <p class="consent-panel__disclaimer" role="note">
+                        <svg class="consent-panel__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9.5"/><path d="M12 11v5.5M12 7.6v.1"/></svg>
+                        <span data-i18n="consentDisclaimer"><strong>שימו לב:</strong> דיוק הדיגום מתבסס על הנתונים הוויזואליים והמידות המוזנות. אי-מילוי מלא של כל שדות המדידה עלול להשפיע על דיוק האלגוריתם, ואין המערכת מתחייבת ל-100% דיוק במקרים אלו.</span>
+                    </p>
+                    <label class="consent-check">
+                        <span class="consent-check__control">
+                            <input type="checkbox" id="consentTerms" required aria-required="true">
+                            <span class="consent-check__box" aria-hidden="true"><svg viewBox="0 0 16 16" focusable="false"><path d="M3.5 8.4l3 3 6-6.8"/></svg></span>
+                        </span>
+                        <span class="consent-check__text"><span class="required" aria-hidden="true">*</span><span data-i18n="consentTermsLabel">אני מאשר/ת את תנאי השימוש ומדיניות הפרטיות של PEAR.</span></span>
+                    </label>
+                    <label class="consent-check">
+                        <span class="consent-check__control">
+                            <input type="checkbox" id="consentData" required aria-required="true">
+                            <span class="consent-check__box" aria-hidden="true"><svg viewBox="0 0 16 16" focusable="false"><path d="M3.5 8.4l3 3 6-6.8"/></svg></span>
+                        </span>
+                        <span class="consent-check__text"><span class="required" aria-hidden="true">*</span><span data-i18n="consentDataLabel">אני מסכים/ה לעיבוד נתוני המידות לצורך התאמת גודל אישית.</span></span>
+                    </label>
+                    <p class="consent-panel__hint" id="consentGateHint" data-i18n="consentGateHint">יש לסמן את שתי התיבות כדי להמשיך</p>
+                </section>
+
+                <button id="btn-next-screen" type="button" class="btn-primary btn-cta" disabled aria-disabled="true" aria-describedby="consentGateHint">
+                    <span class="btn-cta__label" data-i18n="btnNextScreen">המשך לחדר המדידה הוירטואלי</span>
+                    <span class="btn-cta__arrow" aria-hidden="true"><svg viewBox="0 0 20 20" focusable="false"><path d="M4 10h11.5M11 5.5 15.5 10 11 14.5"/></svg></span>
+                </button>
             </div>
 
             <!-- ░░ Optional "Fine-tune your fit" tray - pushed to the bottom,
@@ -702,8 +763,9 @@
         <!-- ░░ Compare Fits - split-screen liquid-glass overlay ░░ -->
         <div class="pear-compare-overlay" id="pearCompare" role="dialog" aria-modal="true" aria-label="השוואת מדידות" hidden data-i18n-aria="pearCompareAria">
             <div class="pcmp__backdrop" data-compare-close></div>
-            <div class="pcmp__panel" role="document">
-                <header class="pcmp__head">
+            <div class="pcmp__panel" role="document" data-sheet="compare">
+                <div class="drag-indicator" data-sheet-handle aria-hidden="true"></div>
+                <header class="pcmp__head" data-sheet-grab>
                     <h3 class="pcmp__title"><span data-i18n="pcmpTitle">השוואת מדידות</span> <span data-i18n-hide-on-en>· Compare Fits</span></h3>
                     <button class="pcmp__close" id="compareClose" type="button" aria-label="סגור" data-compare-close data-i18n-aria="ariaClose">✕</button>
                 </header>
@@ -725,8 +787,9 @@
 <div class="gd-overlay" id="garmentDetect" role="dialog" aria-modal="true"
      aria-label="בחירת בגד מהתמונה שהעלית" hidden data-i18n-aria="garmentDetectAria">
   <div class="gd-overlay__backdrop" data-gd-close></div>
-  <div class="gd-overlay__panel" role="document">
-    <header class="gd-head">
+  <div class="gd-overlay__panel" role="document" data-sheet="detect">
+    <div class="drag-indicator" data-sheet-handle aria-hidden="true"></div>
+    <header class="gd-head" data-sheet-grab>
       <div class="gd-head__text">
         <span class="gd-eyebrow">PEAR · Detect</span>
         <h3 class="gd-title"><span data-i18n="gdTitle">בחר/י את הבגד</span> <span data-i18n-hide-on-en>· Select a garment</span></h3>
@@ -812,6 +875,44 @@
   </div>
 </div>
 
+<!-- ░░ Cookie / local-storage consent - Liquid Glass banner pinned to the bottom of
+     the viewport. Ships [hidden]: cookie-consent.js reveals it ONLY when no
+     acknowledgement is stored under pear_cookie_consent, so an acknowledged visitor
+     never sees it paint. Not modal - nothing behind it is blocked - and it never
+     dismisses without a choice (a swipe-away is not consent). ░░ -->
+<aside class="cookie-banner" id="cookieBanner" role="region" aria-label="הסכמה לעוגיות" data-i18n-aria="cookieBannerAria" hidden>
+  <div class="cookie-banner__row">
+    <span class="cookie-banner__icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" focusable="false"><path d="M12 3a9 9 0 1 0 9 9 3.2 3.2 0 0 1-3.6-3.3A3.4 3.4 0 0 1 14 5.2 3 3 0 0 1 12 3Z"/><circle cx="8.5" cy="10" r="1"/><circle cx="10.5" cy="15.5" r="1"/><circle cx="15.5" cy="14.5" r="1"/></svg>
+    </span>
+    <p class="cookie-banner__text" data-i18n="cookieText">אנו משתמשים בעוגיות ובזיכרון מקומי כדי לשמור את העדפות המידה שלך ולשפר את חווית ההתאמה.</p>
+    <div class="cookie-banner__actions">
+      <button type="button" class="cookie-btn cookie-btn--ghost" id="cookieSettingsBtn" aria-expanded="false" aria-controls="cookieSettings" data-i18n="cookieSettings">הגדרות</button>
+      <button type="button" class="cookie-btn cookie-btn--primary" id="cookieAcceptAll" data-i18n="cookieAcceptAll">מאשר/ת הכל</button>
+    </div>
+  </div>
+  <div class="cookie-settings" id="cookieSettings" hidden>
+    <div class="cookie-pref">
+      <span class="cookie-pref__copy">
+        <strong data-i18n="cookieEssentialTitle">חיוניים</strong>
+        <span data-i18n="cookieEssentialDesc">זיהוי המכשיר, התחברות מאובטחת ושמירת בחירות ההסכמה שלך.</span>
+      </span>
+      <span class="cookie-pref__always" data-i18n="cookieAlwaysOn">תמיד פעיל</span>
+    </div>
+    <label class="cookie-pref">
+      <span class="cookie-pref__copy">
+        <strong data-i18n="cookiePrefsTitle">העדפות</strong>
+        <span data-i18n="cookiePrefsDesc">שפת הממשק, תזכורות לעדכון מידות וגלריית המדידות שלך.</span>
+      </span>
+      <span class="cookie-switch">
+        <input type="checkbox" id="cookiePrefsToggle" role="switch" checked>
+        <span class="cookie-switch__track" aria-hidden="true"><span class="cookie-switch__thumb"></span></span>
+      </span>
+    </label>
+    <button type="button" class="cookie-btn cookie-btn--primary cookie-settings__save" id="cookieSaveChoices" data-i18n="cookieSaveChoices">שמירת הבחירה</button>
+  </div>
+</aside>
+
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <!-- Language segmented switch - Apple Liquid Glass drag physics, the exact same
      architecture/interaction model as the fullscreen switch
@@ -828,7 +929,7 @@
   <span class="lang-switch__thumb" aria-hidden="true"></span>
 </button>
 
-<script type="module" src="app.js?v=148"></script>
+<script type="module" src="app.js?v=149"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
      header shrink. Pure enhancement - touches no app.js logic or state. -->
 <script src="mobile-ux.js" defer></script>
@@ -836,6 +937,14 @@
      ambient side rails, magnetic buttons, floating labels. Additive only -
      touches no app.js logic or state. -->
 <script src="lux-interactions.js" defer></script>
+<!-- Mobile sheet physics: drag handle → follow the finger → spring back or dismiss
+     (compare / detect overlays, and the embedded Screen-1 card). Dismissal reuses
+     each surface's OWN close path, so app.js state never diverges from what is
+     on screen. -->
+<script src="sheet-gestures.js" defer></script>
+<!-- Cookie / local-storage consent banner - reads and writes pear_cookie_consent
+     only; independent of app.js so a room that fails to boot still asks. -->
+<script src="cookie-consent.js" defer></script>
 <!-- Floating help widget: fixed bottom-corner "?" button with step-by-step
      guidance for the current screen (email, profile/measurements, live
      try-on). Additive only - reads app.js's screen state, touches nothing. -->

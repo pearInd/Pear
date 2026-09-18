@@ -218,8 +218,18 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
   await page.goto(roomUrl(server.url), { waitUntil: "domcontentloaded" });
 
   /* ── Screen 1: measurements ─────────────────────────────────────────────── */
+  /* Cookie banner first, through its real button: it is fixed to the bottom of the
+     viewport, so left up it would sit over the camera card in every capture and be
+     scored as part of the frame. */
+  await page.locator("#cookieAcceptAll").click();
+  await expect(page.locator("#cookieBanner")).toBeHidden({ timeout: 5_000 });
   await page.locator("#height").fill("178");
   await page.locator("#weight").fill("74");
+  /* The terms & measurement-processing consent gates Continue (aria-disabled, which
+     Playwright treats as disabled). Ticked the way a shopper ticks them - no storage
+     seeding - so the gate itself stays under test. */
+  await page.locator("#consentTerms").check();
+  await page.locator("#consentData").check();
   await page.locator("#btn-next-screen").click();
   await expect(page.locator("#screen-fitting")).toHaveClass(/active/, { timeout: 20_000 });
 

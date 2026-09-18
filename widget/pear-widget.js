@@ -2813,6 +2813,23 @@
     w.setTimeout(removeOverlay, TEARDOWN_ACK_TIMEOUT_MS);
   }
 
+  /* Swipe-to-dismiss from INSIDE the room. On a phone the modal is the whole
+     viewport and the only way out was the small × in its corner; the room's
+     Screen-1 card now carries a drag handle, and a completed downward swipe posts
+     PEAR_CLOSE_REQUEST here (fitting-room/sheet-gestures.js). It runs the same
+     closeModal() as × / Esc / backdrop - PEAR_TEARDOWN ack included - so a swipe
+     can never leave the camera or the WebRTC session running behind a closed modal.
+     Honoured ONLY from the iframe this widget itself opened: the origin check is
+     the same one every other room message gets, and the source check stops any
+     other PEAR frame on the page from closing this one. */
+  w.addEventListener("message", function (e) {
+    if (e.origin !== PEAR_BASE) return;
+    if (!e.data || e.data.type !== "PEAR_CLOSE_REQUEST") return;
+    if (!activeIframe || e.source !== activeIframe.contentWindow) return;
+    console.log("[PEAR widget] fitting room requested close (" + (e.data.source || "unknown") + ")");
+    closeModal();
+  });
+
   function openModal(garment) {
     closeModal(); // never stack two modals
 
