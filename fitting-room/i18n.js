@@ -87,11 +87,13 @@ const I18N = {
   placeholderName:           { he: "לדוגמה: דנה כהן", en: "e.g. Jane Cooper" },
   labelEmail:                { he: "אימייל:", en: "Email:" },
   placeholderEmail:          { he: "לדוגמה: dana@example.com", en: "e.g. jane@example.com" },
-  /* NO arrow in these two strings. The → used to live here, and a text arrow is not
-     Bidi_Mirrored, so Hebrew rendered "המשך →" pointing BACKWARD. The arrow is now an
-     SVG sibling of the label (index.html, .btn-cta__arrow) mirrored per direction in
-     style.css - so it reads "המשך ←" / "Continue →" with no per-language glyph. */
-  btnContinue:               { he: "המשך", en: "Continue" },
+  /* THE ARROW IS PER LANGUAGE, IN THE STRING. Arrows are not Bidi_Mirrored, so the
+     glyph is drawn exactly as typed in either direction: the original shared "→" made
+     Hebrew point BACKWARD. Each language now carries its own forward arrow - "←" for
+     Hebrew (it sits at the visual left end of an RTL run), "→" for English. Kept as
+     text (the baseline button structure, one node, data-i18n on the <button>) rather
+     than an SVG child, so the button's layout is exactly the 1912c0b one. */
+  btnContinue:               { he: "המשך ←", en: "Continue →" },
 
   otpTitle:                  { he: "אימות אימייל", en: "Verify your email" },
   otpPlaceholder:            { he: "הכנס קוד בן 6 ספרות", en: "Enter the 6-digit code" },
@@ -108,7 +110,7 @@ const I18N = {
   placeholderHeight:         { he: "לדוגמה: 175", en: "e.g. 175" },
   labelWeight:               { he: 'משקל (בק"ג):', en: "Weight (kg):" },
   placeholderWeight:         { he: "לדוגמה: 68", en: "e.g. 68" },
-  btnNextScreen:             { he: "המשך לחדר המדידה הוירטואלי", en: "Continue to the virtual fitting room" },   /* arrow: see btnContinue */
+  btnNextScreen:             { he: "המשך לחדר המדידה הוירטואלי ←", en: "Continue to the virtual fitting room →" },   /* arrow: see btnContinue */
   fineTuneLabel:             { he: "כוונון עדין", en: "Fine-tune" },
   labelChest:                { he: 'היקף חזה (בס"מ)', en: "Chest circumference (cm)" },
   optionalTag:               { he: "(אופציונלי)", en: "(optional)" },

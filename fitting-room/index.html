@@ -13,19 +13,18 @@
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <!-- ONE UI face. Every font-family in style.css (and the styles app.js injects) is
-         var(--font-ui): SF Pro on Apple devices via -apple-system, Heebo - Hebrew + Latin,
-         so both directions share one face - everywhere else. Urbanist and Inter are no
-         longer referenced anywhere and are no longer downloaded. 400..900 covers body
-         copy through the 900 size display; Heebo is variable, so it is one file per
-         script subset, not one per weight. -->
-    <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400..900&display=swap" rel="stylesheet">
+    <!-- Text uses var(--font-ui) (SF Pro on Apple, Heebo elsewhere). BUTTONS keep their
+         baseline faces (1912c0b) - Urbanist, and Inter on two header/profile controls -
+         because the face is part of a button's geometry: on Heebo's taller line box 36
+         buttons grew 3-10px. So both baseline families are requested again, with the
+         exact baseline weights, beside Heebo (variable, one file per script subset). -->
+    <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800&family=Heebo:wght@400..900&display=swap" rel="stylesheet">
 
     <!-- Cache-buster added with the header-alignment work: style.css had none at
          all, so a shipped CSS change was served from cache indefinitely while
          app.js?v= was being bumped every deploy. Kept in step with app.js's
          version so there is one number to reason about, not two. -->
-    <link rel="stylesheet" href="style.css?v=39">
+    <link rel="stylesheet" href="style.css?v=40">
 </head>
 <body>
 
@@ -161,13 +160,10 @@
                  collapsed/invisible until the size-calc adds .is-ready, which would
                  permanently hide this Continue button). -->
             <div id="identityActions">
-                <!-- Label + arrow as separate nodes: data-i18n swaps ONLY the label, and
-                     the arrow is an SVG mirrored by --dir-x (style.css §4 "Continue"), so it
-                     points toward the end of the line in Hebrew and English alike. -->
-                <button id="btn-identity-continue" type="button" class="btn-primary btn-cta">
-                    <span class="btn-cta__label" data-i18n="btnContinue">המשך</span>
-                    <span class="btn-cta__arrow" aria-hidden="true"><svg viewBox="0 0 20 20" focusable="false"><path d="M4 10h11.5M11 5.5 15.5 10 11 14.5"/></svg></span>
-                </button>
+                <!-- Baseline structure (1912c0b): one text node, data-i18n on the button.
+                     The arrow lives in the string and is chosen per language in i18n.js
+                     ("המשך ←" / "Continue →") - see the note on btnContinue there. -->
+                <button id="btn-identity-continue" type="button" class="btn-primary" data-i18n="btnContinue">המשך ←</button>
                 <p id="identityError" class="login-error" role="alert" hidden style="margin-top:10px"></p>
             </div>
         </form>
@@ -290,10 +286,7 @@
                     <p class="consent-panel__hint" id="consentGateHint" data-i18n="consentGateHint">יש לסמן את שתי התיבות כדי להמשיך</p>
                 </section>
 
-                <button id="btn-next-screen" type="button" class="btn-primary btn-cta" disabled aria-disabled="true" aria-describedby="consentGateHint">
-                    <span class="btn-cta__label" data-i18n="btnNextScreen">המשך לחדר המדידה הוירטואלי</span>
-                    <span class="btn-cta__arrow" aria-hidden="true"><svg viewBox="0 0 20 20" focusable="false"><path d="M4 10h11.5M11 5.5 15.5 10 11 14.5"/></svg></span>
-                </button>
+                <button id="btn-next-screen" type="button" class="btn-primary" disabled aria-disabled="true" aria-describedby="consentGateHint" data-i18n="btnNextScreen">המשך לחדר המדידה הוירטואלי ←</button>
             </div>
 
             <!-- ░░ Optional "Fine-tune your fit" tray - pushed to the bottom,
@@ -933,7 +926,7 @@
   <span class="lang-switch__thumb" aria-hidden="true"></span>
 </button>
 
-<script type="module" src="app.js?v=150"></script>
+<script type="module" src="app.js?v=151"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
      header shrink. Pure enhancement - touches no app.js logic or state. -->
 <script src="mobile-ux.js" defer></script>

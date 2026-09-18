@@ -40,7 +40,6 @@
     initFloatingLabels();
     initSkeletons();
     if (fine && !reduce) initMagnetic();
-    if (fine && !reduce) initGlassBloom();
     enableTouchActive();
   }
   /* NOTE: the Bitten-Pear transition is now orchestrated entirely by app.js
@@ -407,41 +406,10 @@
     });
   }
 
-  /* 4d · LIQUID GLASS BLOOM - the inner light (style.css §4, the recipe's ::before)
-     follows the cursor across a hovered button. One delegated, rAF-coalesced
-     listener for every glass button, including ones app.js injects later: a move
-     only stores the latest point, and at most one frame per display refresh writes
-     two custom properties. Mouse only (fine pointers, no reduced motion) - on touch
-     the bloom stays parked at the top lip and simply appears on press.
-     GLASS_BTN must list the same classes as the §4 recipe AND the §4b icon-family
-     selectors in style.css. */
-  const GLASS_BTN = ".btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download, " +
-                    ".btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, " +
-                    ".pear-compare-bar, .plb-btn, .pear-sz-btn, " +
-                    ".pcmp__close, .gd-close, .pear-lightbox__close, .pear-help-widget__close, " +
-                    ".pear-help-widget__btn, .camera-card__flip, .cl-arrow, .pip-retake, .pip-clear, " +
-                    ".profile-btn, .profile-dropdown__logout, .cart-line__remove";
-  function initGlassBloom() {
-    let raf = 0, target = null, x = 0, y = 0;
-    document.addEventListener("pointermove", (e) => {
-      if (e.pointerType === "touch") return;
-      const el = e.target && e.target.closest ? e.target.closest(GLASS_BTN) : null;
-      if (!el) return;
-      target = el; x = e.clientX; y = e.clientY;
-      if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        const r = target.getBoundingClientRect();
-        if (!r.width || !r.height) return;
-        target.style.setProperty("--lgb-x", (((x - r.left) / r.width) * 100).toFixed(1) + "%");
-        target.style.setProperty("--lgb-y", (((y - r.top) / r.height) * 100).toFixed(1) + "%");
-      });
-    }, { passive: true });
-  }
-
-  /* 4e · TOUCH :active - iOS Safari only applies :active (the recipe's scale(.96)
-     press) when a touchstart listener exists somewhere up the tree. An empty passive
-     one is the documented switch: it costs nothing and never blocks scrolling. */
+  /* 4d · TOUCH :active - iOS Safari only applies :active (the button overlay's
+     scale(.97) press, style.css §4) when a touchstart listener exists somewhere up the
+     tree. An empty passive one is the documented switch: it costs nothing and never
+     blocks scrolling. */
   function enableTouchActive() {
     document.addEventListener("touchstart", () => {}, { passive: true });
   }
