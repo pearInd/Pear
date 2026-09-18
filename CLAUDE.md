@@ -498,7 +498,47 @@ the image key, the pose angle, and the camera-card classes.
 - **Layer A is still out of scope.** Prompt text reaching the wire is
   `trace:prompt`'s job (§0, RULE 0), not this gate's.
 
-### 8.5 Do not "improve" these
+### 8.5 KNOWN LIMITATION — the agent is not yet reliable enough to be a hard gate
+
+**State as of 2026-09-18: the gate is not yet reliable enough to be trusted as a hard
+blocker.** Measured over repeated back-to-back batches it passes roughly half to
+five-sixths of runs; the last clean batch of six was 3 pass / 2 agent stall / 1 inspector
+red on a session that looked healthy. Read that honestly before trusting
+`.husky/pre-push`:
+
+- **It fails CLOSED, always.** Every observed failure is the agent giving up on a wait or
+  a capture, or the inspector rejecting frames — never a bad render scored as good. A
+  flaky run blocks a push; it does not wave one through. The direction is the safe one.
+- **The inspector is deterministic on a GIVEN set of frames** — its self-test and both
+  negative controls reproduce exactly — but it has been seen to report `frozen-feed` on a
+  completed run, which on inspection was a capture artifact rather than a real freeze. So
+  a red inspector is strong evidence, not yet proof. Look at the frames.
+- **A red gate is therefore not automatically a code problem.** Read the `[PEAR]`
+  transcript the failure prints. If it ends inside the room's go-live sequence rather than
+  on a finding, it is the harness.
+
+Until this is fixed, `PEAR_SKIP_VISUAL=1 git push` is a legitimate move — **and it must be
+stated in the PR**, because the visual checks genuinely did not run.
+
+**What has already been ruled out**, so nobody re-treads it:
+
+| Tried | Result |
+|---|---|
+| Blocking off-origin requests | Real fix — the room chains 3 geo-IP lookups + fonts, which hung for minutes once rate-limited |
+| `--disable-renderer-backgrounding` etc. | Real fix — headless counts as occluded and every loop on the page throttles together |
+| `--disable-gpu` / software compositing | Real fix — GPU compositing returned *stale* video frames, so healthy sessions read as `frozen-feed` |
+| Not awaiting `src.play()` in the mock | Real fix — `play()` on an off-screen element can never settle, parking `connectRealtime()` forever |
+| `animations: "disabled"` on the screenshot | **Reverted** — it freezes the video too, and blinded `frozen-feed` entirely (§8.6) |
+| `channel: "chromium"` | Kept, but it is *not* sufficient on its own |
+| Raising the reveal wait to 90s | Helped, did not eliminate |
+
+**The most likely remaining cause** is the reveal gate: `armFirstFrameBilling()` verifies a
+frame as genuinely AI-rendered before revealing, by watching real frames over real time,
+and under headless that verification is slow and variable. The next thing to try is
+instrumenting *that* function rather than widening another timeout — every timeout
+widening so far has moved the failure rather than removed it.
+
+### 8.6 Do not "improve" these
 
 - **The mock must never paint a near-white or near-uniform frame.** That is what
   makes `white-flash` decidable: any such frame in a capture came from the app's

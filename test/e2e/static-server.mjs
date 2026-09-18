@@ -65,7 +65,13 @@ export function startStaticServer(port = 0) {
   let tokenMints = 0;
 
   const server = createServer((req, res) => {
-    const url = new URL(req.url, "http://localhost");
+    /* The request's OWN host, not a placeholder. img-proxy below compares the url it is
+       asked to fetch against this origin, and the room addresses the harness as
+       127.0.0.1:<ephemeral port> - so a hardcoded "http://localhost" made every
+       same-origin garment fetch fail the origin check and 404. It still worked, because
+       fetchWithFallback() drops through to a direct fetch, but it spent a wasted
+       round-trip per asset and filled the transcript with 404s that look like a fault. */
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
     if (url.pathname === "/api/health") {
       res.writeHead(200, { "Content-Type": "application/json" });

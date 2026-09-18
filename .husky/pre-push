@@ -27,6 +27,25 @@
 
 echo "🍐 PEAR pre-push"
 
+# ── stdin MUST be detached before anything launches a browser ───────────────
+# THE BUG THIS CLOSES: this gate passed every time it was run by hand and failed
+# every time it ran from `git push` - the worst possible failure mode for a
+# mandatory check, because the obvious conclusion is "the gate is broken" and the
+# obvious next step is to stop running it.
+#
+# git hands a pre-push hook the ref list on STDIN, so stdin is a pipe rather than
+# a terminal. Chromium and the Playwright runner inherit it, and the browser
+# never comes up: the agent reported connectionState "idle" with zero frames and
+# zero dispatches, having gone live and got nothing back. Reproduced exactly by
+# piping anything into this script; fixed by detaching stdin from the commands
+# that launch a browser.
+#
+# We do not need the ref list - this hook checks the working tree, not the refs -
+# so it is consumed and dropped here rather than redirected at each call site,
+# which would be one `< /dev/null` to forget on the next command added.
+cat > /dev/null 2>&1 || true
+exec < /dev/null
+
 # ── 1. syntax ──────────────────────────────────────────────────────────────
 echo ""
 echo "▸ syntax"

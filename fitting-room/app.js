@@ -5235,7 +5235,19 @@ async function mockRealtimeConnect(inputStream, opts) {
   src.style.cssText = "position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none";
   src.srcObject = inputStream;
   document.body.appendChild(src);
-  try { await src.play(); } catch (_) {}
+  /* ── NEVER AWAIT play(). THE BUG THIS CLOSES ───────────────────────────────────
+     This used to be `await src.play()`, and the harness failed intermittently - roughly
+     one run in three - with the session stuck forever at "stage 4/4: opening WebRTC
+     session". HTMLMediaElement.play() resolves when playback actually BEGINS; on an
+     off-screen 2px element whose MediaStream has not yet produced its first frame it can
+     simply never settle, and it does not reject either, so a try/catch around it catches
+     nothing. connectRealtime() was then parked on a promise with no timeout behind it.
+
+     Fire-and-forget is also what every other video sampler in this file does
+     (`video.play().catch(() => {})` - the orientation watcher, the continuity bridge),
+     and the render loop below already guards on readyState/videoWidth and paints black
+     until frames arrive. So there is nothing to wait for: waiting was the whole fault. */
+  src.play().catch(() => {});
 
   const cv = document.createElement("canvas");
   cv.width = W; cv.height = H;

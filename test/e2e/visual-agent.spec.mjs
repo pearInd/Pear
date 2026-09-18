@@ -52,6 +52,21 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => { await server?.close(); });
 
+/* The room narrates its whole go-live sequence through console.log("[PEAR] …") - that
+   prefix is the debugging contract with live merchants (CLAUDE.md §6) and it is the most
+   useful thing on screen when this suite fails. Printed on ANY failure, not just the ones
+   routed through until(): a plain expect() that times out (say, Screen 1 never advancing)
+   otherwise reports only which class was missing, which is the one thing that does not
+   say why. */
+let transcriptOf = () => [];
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus) return;
+  const lines = transcriptOf();
+  console.log(`\n── [PEAR] transcript (last 40 of ${lines.length}) ─────────────────────────`);
+  for (const l of lines.slice(-40)) console.log("   " + l);
+  console.log("──────────────────────────────────────────────────────────────────\n");
+});
+
 /* The room's own deep-link contract (parseHandoff): a front photo, a distinct back
    photo, a category and a name. A distinct back is what makes canCombineViews() true
    and puts the session in AI Auto - the only mode in which a turn swaps the asset. */
@@ -84,6 +99,12 @@ async function until(page, label, fn, timeoutMs = 30_000, arg = undefined) {
   for (;;) {
     if (await page.evaluate(fn, arg)) return;
     if (Date.now() - started > timeoutMs) {
+      /* The room narrates its own go-live sequence through console.log("[PEAR] …") -
+         that prefix is the debugging contract with live merchants (CLAUDE.md §6), and it
+         is just as useful here. Without the tail of it, a stalled gate is indistinguishable
+         from any other stalled gate: the wire state below says "not connected" for the
+         black-screen gate, the presence gate and the asset preload gate alike. */
+      const tail = (page.__pearTranscript || []).slice(-25).join("\n      ");
       const wire = await page.evaluate(() => ({
         state: window.__pearMockDecart?.connectionState,
         frames: window.__pearMockDecart?.frames,
@@ -95,8 +116,9 @@ async function until(page, label, fn, timeoutMs = 30_000, arg = undefined) {
         cardClasses: document.getElementById("cameraCard")?.className,
         scanHidden: document.getElementById("scanOverlay")?.hidden,
       }));
-      throw new Error(`timed out waiting for ${label} after ${timeoutMs}ms. ` +
-        `Wire: ${JSON.stringify(wire)}`);
+      throw new Error(`timed out waiting for ${label} after ${timeoutMs}ms.\n` +
+        `    Wire: ${JSON.stringify(wire)}\n` +
+        `    Last [PEAR] lines:\n      ${tail}`);
     }
     await page.waitForTimeout(120);
   }
@@ -119,8 +141,13 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
   const pageErrors = [];
   const criticalLogs = [];
   const consoleNoise = [];
+  page.__pearTranscript = [];
+  transcriptOf = () => page.__pearTranscript;
   page.on("console", (m) => {
     const t = m.text();
+    if (t.startsWith("[PEAR]") || t.startsWith("[PEAR][MOCK]") || t.startsWith("[go-live]")) {
+      page.__pearTranscript.push(t.slice(0, 160));
+    }
     if (/\bCRITICAL\b/.test(t)) criticalLogs.push(t);
     else if (m.type() === "error") consoleNoise.push(t);
   });
@@ -131,7 +158,24 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
    *  video; shooting the video element would frame them out of the evidence. */
   async function shoot(name, angle) {
     const file = join(OUT, `${name}.png`);
-    await page.locator("#cameraCard").screenshot({ path: file });
+    /* ── DO NOT ADD animations: "disabled" HERE. IT WAS TRIED, AND IT BROKE THE
+       FROZEN-FEED CHECK ────────────────────────────────────────────────────────────
+       It looks like the obvious fix for a screenshot that stalls on an element which
+       is never visually stable (#cameraCard carries a reveal animation, a pulsing live
+       badge and a ticking countdown). It is not. With it set, every consecutive pair in
+       the burst came back PIXEL-IDENTICAL - mean diff 0.000 - and the suite reported
+       frozen-feed on a session that was rendering perfectly. Whatever it does to hold
+       the page still for the capture, it holds the video with it, which disables
+       precisely the regression this suite exists to catch (CLAUDE.md §2.9).
+
+       The stall it was meant to fix had a different cause and is fixed at the source:
+       the headless renderer was being throttled as an occluded window, which stalled
+       every loop on the page at once - see the launch flags in playwright.config.mjs.
+
+       The explicit timeout stays: a capture that cannot complete should fail in 20s
+       naming the frame, not eat the whole test budget and surface as "the room never
+       went live". */
+    await page.locator("#cameraCard").screenshot({ path: file, timeout: 20_000 });
     const wire = await page.evaluate(() => ({ ...window.__pearMockDecart.wire }));
     shots.push({ name, file: `${name}.png`, angle, wire, at: Date.now() });
     return file;
@@ -151,16 +195,25 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
      network mid-session" is worth being able to see - and if a future change makes the
      room genuinely REQUIRE an external asset, this list is where that shows up.
 
-     It also removes the last way this run could cost anything. */
+     It also removes the last way this run could cost anything.
+
+     THE MATCHER IS A PREDICATE, NOT A CATCH-ALL GLOB, and that is a second bug fixed on
+     top of the first. Routing every URL and calling continue() on the same-origin ones sends
+     each of them - app.js at 1.3MB, style.css at 266KB, every image - out to the test
+     process and back before the browser sees a byte. It worked, but it turned a 34s run
+     into anything from 34s to several minutes depending on machine load, and a
+     MANDATORY gate that is sometimes slow enough to hit its own timeout is a flaky gate,
+     which is worse than no gate at all. A predicate that matches only off-origin URLs
+     leaves same-origin traffic entirely alone: Playwright never intercepts what the
+     matcher does not select. */
   const blockedHosts = new Set();
-  await page.route("**/*", (route) => {
-    const u = new URL(route.request().url());
-    if (u.origin === server.url || u.protocol === "data:" || u.protocol === "blob:") {
-      return route.continue();
-    }
-    blockedHosts.add(u.host);
-    return route.abort();
-  });
+  await page.route(
+    (url) => url.origin !== server.url && url.protocol !== "data:" && url.protocol !== "blob:",
+    (route) => {
+      blockedHosts.add(new URL(route.request().url()).host);
+      return route.abort();
+    },
+  );
 
   await page.goto(roomUrl(server.url), { waitUntil: "domcontentloaded" });
 
@@ -197,9 +250,19 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
      .show-live is added in the same statement that hides the overlay, at the first frame
      VERIFIED as AI-rendered rather than forwarded camera - so waiting on it is waiting on
      the room's own proof that what is on screen came from the wire. */
+  /* 90s, not the 30s default, and the reason is in the transcript of the runs that made
+     it necessary: they ended on "[PEAR] First verified AI frame - billing + 5s capture
+     started", which is logged BY THE SAME FUNCTION that hides the overlay and adds
+     .show-live. The reveal was not failing - it was arriving late. armFirstFrameBilling()
+     will not reveal until it has verified a frame as genuinely AI-rendered rather than
+     forwarded camera, and that verification watches real frames arrive over real time;
+     headless, on a loaded machine, it can take well over half a minute.
+     This is a wait for an event that does happen, so the only thing a short timeout buys
+     is a false failure. It is not a quality threshold and it is not in the same category
+     as anything in scripts/inspect-visuals.mjs. */
   await until(page, "the AI feed to be revealed (.show-live, scan overlay down)",
     () => document.getElementById("cameraCard")?.classList.contains("show-live") === true &&
-          document.getElementById("scanOverlay")?.hidden === true);
+          document.getElementById("scanOverlay")?.hidden === true, 90_000);
 
   const frontKey = await page.evaluate(() => window.__pearMockDecart.wire.imageKey);
   await shoot("00-front", 0);
