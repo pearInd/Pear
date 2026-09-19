@@ -28,6 +28,9 @@
  * @property {number}   COLD_START_REDISPATCH_MAX Maximum startup re-dispatches before the gate gives up and reveals.
  * @property {number}   COLD_START_MIN_HOLD_MS  Fixed hold on the reveal after the first otherwise-qualifying frame, covering a reference that was acknowledged but never rendered. 0 disables.
  * @property {number}   COLD_START_REASSERT_MS  How far into that hold the single unconditional re-assert is sent.
+ * @property {number}   REFERENCE_RENDER_SETTLE_MS How long after an image ack the reveal still holds - Decart's render wait before it switches off its own prior (ms).
+ * @property {number}   REVEAL_SETTLE_MAX_MS    Ceiling on that settle hold, measured from the remote track attaching (ms).
+ * @property {number}   FLOOR_ASSET_WAIT_MS     How long connect waits for the garment bytes that seed the SDK's initialState before falling back to the URL (ms).
  * @property {boolean}  BODY_TOPOLOGY_ENABLED   Re-drape the garment on the live body contour whenever it changes, instead of holding the go-live silhouette.
  * @property {number}   BODY_TOPOLOGY_SAMPLE_MS Cadence of the live pose loop that feeds both the presence watcher and the topology monitor (ms).
  * @property {number}   BODY_TRACK_MIN_VISIBILITY Per-landmark visibility bar for TRACKING (below the gate's, so a half-occluded turn is still readable).
@@ -237,10 +240,46 @@ export const CONFIG = Object.freeze({
      2600ms this gate may already hold when a detector does fire. ?cold_hold=<ms> tunes it
      live and ?cold_hold=0 restores the previous behaviour exactly. */
   COLD_START_MIN_HOLD_MS: 1500,
-  /* How far into that hold the single re-assert goes out. Early enough that its render can
-     land before the hold ends, late enough that the first apply's own render has had a
-     chance - a re-send that overtakes a reference already being applied buys nothing. */
+  /* How far into that hold the single re-assert goes out - late enough that the first
+     apply's own render has had a chance, since a re-send that overtakes a reference already
+     being applied buys nothing.
+     IT USED TO SAY "early enough that its render can land before the hold ends", and that was
+     the arithmetic of a send, not of a render: 700ms in, a 1500ms hold leaves 800ms, and the
+     re-assert still needs its ack AND Decart's render wait after the ack (~1s, see
+     REFERENCE_RENDER_SETTLE_MS). So the hold ended INSIDE the re-assert's own generic-garment
+     window, and the reveal showed Decart's prior for up to a second before the real garment
+     snapped in - reported 2026-09-19 as "a multicolor patterned long-sleeve at 00:00, the
+     selected black tee at 00:01". The reveal now waits for that render (REFERENCE_RENDER_SETTLE_MS),
+     so the timing here decides only WHEN the re-send goes out, never whether it is seen. */
   COLD_START_REASSERT_MS: 700,
+
+  /* ── THE RENDER WAIT AFTER AN IMAGE ACK - what a reveal must never land inside ──────
+     rtClient.set({ image }) resolves on set_image_ack: Decart RECEIVED the reference. The
+     render switches to it later - 700-1000ms reported, 780-1100ms measured on the real
+     watchdog (app.js, the FRAME_FREEZE_AFTER_SWAP_MS note) - and until it does, the model
+     renders from its own prior: a generic garment nobody picked (a raglan, a floral tank, a
+     grey sweater, a multicolor long-sleeve - four recordings, one mechanism). Every full
+     image upload opens that window, the cold start's own re-assert included.
+     So the reveal holds while an image write is in flight or was acknowledged less than this
+     long ago. 1200ms covers the measured worst case (1100) with a frame of margin. It costs
+     loading time only, never billed seconds: the reveal is what starts the billing window.
+     ?settle_hold=0 disables it for a live A/B, exactly as ?cold_hold=0 does the fixed hold. */
+  REFERENCE_RENDER_SETTLE_MS: 1200,
+  /* The ceiling on that hold, from the moment the remote track attaches - the same anchor
+     PASSTHROUGH_GATE_MAX_MS uses. Bounded independently because it must be able to outlast
+     that gate: a re-dispatch sent just before the 2.6s ceiling still has a render to wait out.
+     Every re-send is capped (COLD_START_REDISPATCH_MAX + one re-assert), so the hold is
+     finite by construction; this is the backstop, kept far inside FIRST_FRAME_TIMEOUT_MS
+     (15s) so a gate can never turn a slow render into a torn-down session. */
+  REVEAL_SETTLE_MAX_MS: 6000,
+  /* How long connectRealtime() waits for the garment's BYTES before opening a session.
+     The conditioning floor is sent inside the SDK's join and acknowledged before any video is
+     published, so it has to exist before connect() is called at all. Waiting for the bytes
+     rather than handing the SDK a URL means the floor is the SAME Blob applyGarment() sends
+     (one prewarm cache), which is what lets the go-live apply recognise it as already on the
+     wire instead of uploading it a second time. On timeout the proxied URL is used - the SDK
+     fetches that itself before the join - so a slow CDN costs latency, never the garment. */
+  FLOOR_ASSET_WAIT_MS: 6000,
 
   /* ── Body-presence gate (see awaitBodyPresence in app.js) ────────────────
      Decart conditions on the frame it is handed, and the session is hard-capped at

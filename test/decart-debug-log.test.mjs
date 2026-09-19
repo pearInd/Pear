@@ -114,15 +114,43 @@ console.log("\n── §2 THE HIDDEN DEFAULT, VERIFIED AGAINST THE INSTALLED SDK
   check("app.js explicitly overrides enhance:false at every send site (never relies on the SDK default)",
     /enhance: false,/.test(APP) && /\{ enhance: false \}/.test(APP), `${enhanceFalse} occurrences`);
 
-  /* client.realtime.connect()'s own opts (buildRealtimeConnectOpts) is a SEPARATE
-     schema from set()/setPrompt() and has its own optional `initialState.prompt.enhance`
-     - omitted entirely here, which is correct: no prompt/image/enhance is asserted at
-     connect time, so the first content-bearing payload is unambiguously the one
-     applyGarment()/applyLook() builds, not some earlier default this file never wrote. */
+  /* ── THIS INVARIANT WAS DELIBERATELY INVERTED (2026-09-19, ported from 17d20c7), so the
+     reasoning is kept ──
+     It used to assert that connect() is given NO initialState, on the grounds that "the
+     first content-bearing payload is unambiguously the one applyGarment()/applyLook()
+     builds, not some earlier default this file never wrote."
+
+     The clause that mattered is the last one: a default THIS FILE NEVER WROTE. That is
+     still the hazard this section audits for. What changed is that omitting the option
+     turned out to cost more than it bought, verified in the installed SDK: with no
+     initialState, StreamSession.getInitialState() is { image: null, prompt: null }, so
+     (a) InitialStateGate.hasCallerProvidedInitialState() is false and publishLocalTracks()
+     runs before any conditioning is acknowledged, and (b) every SDK-internal reconnect's
+     sendInitialState() sends setImage({ data: null }) - an explicit CLEAR of the garment,
+     mid-session. That is the reported "garment vanished / reverted to my own clothes".
+
+     So the state IS now asserted at connect - but written by this file, explicitly, with
+     enhance:false, which is precisely the property the original check protected. A default
+     nobody wrote is the bug; a floor this file wrote on purpose is not. */
   const connectOpts = APP.slice(APP.indexOf("function buildRealtimeConnectOpts(gen)"),
-                                APP.indexOf("function buildRealtimeConnectOpts(gen)") + 900);
-  check("connect() is not given its own initialState - no separate default prompt to conflict with",
-    !/initialState/.test(connectOpts), connectOpts.slice(0, 300));
+                                APP.indexOf("\n/**\n * Single teardown that kills the server-side Decart session"));
+  check("connect() IS given an initialState - the SDK's own gate and reconnect replay need one",
+    /initialState: _sessionInitialState/.test(connectOpts), connectOpts.slice(0, 300));
+  /* Marker moved 2026-09-19: the floor became strict and async and takes the item the caller
+     read (so the logged Garment ID and the seeded image come from ONE read of the selection).
+     Its strictness is asserted in reveal-settle.test.mjs; this section still audits only what
+     the floor puts on the wire. */
+  const floor = APP.slice(APP.indexOf("async function resolveInitialConditioning(item)"),
+                          APP.indexOf("let _sessionInitialState = null;"));
+  check("...and this file writes it, rather than letting the SDK default anything",
+    /prompt: \{ text: clampPromptForWire\(/.test(floor) && /image,/.test(floor),
+    floor.slice(-400));
+  check("...with enhance explicitly false, the same override every send site makes",
+    /enhance: false \}/.test(floor),
+    "modelStateSchema defaults initialState.prompt.enhance to TRUE - the exact hidden default this section audits for");
+  check("...and never ships a reference the SDK cannot read as image bytes",
+    /usableImageRef\(image\)\.usable/.test(floor),
+    "a floor the SDK re-sends on every reconnect is the worst place for a corrupt reference");
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

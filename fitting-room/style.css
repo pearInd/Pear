@@ -2036,6 +2036,23 @@ html.pear-returning-check #screen-calculator { display: none !important; }
   -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
 }
 .scan-overlay[hidden] { display: none; }
+/* ── THE LOADING WINDOW SHOWED THE BARE BODY (2026-09-19) ───────────────────────────
+   REPORTED: "the raw camera is shown before the garment appears". The AI feed is held at
+   opacity 0 until Model Ready (gateAiFeed / startBillingWindow), but #webcam - the raw
+   preview - is only hidden from .show-live on (see the visibility rules above). For the
+   whole loading window (asset preload, token, handshake, warm-up, first verified frame -
+   often several seconds) the shopper watched their undressed camera through this
+   overlay's 34% scrim and 3px blur - which dims a body, it does not hide one.
+   So while the loading overlay is up, the raw preview is frosted to a silhouette: enough
+   to stay framed, nothing more. Removed by the same event that removes the overlay - the
+   first VERIFIED dressed frame - so there is no gap between the two.
+   DISPLAY ONLY, and that is load-bearing (CLAUDE.md §2.9: never pause, gate or hold
+   #webcam/localStream). A CSS filter changes nothing about the stream: Decart's input is
+   a cloned track drawn by createThrottledInputStream(), and drawImage()/getImageData()
+   read the decoded frames, never the filtered paint - so the presence gate, the black-
+   screen check and the reveal verification all still see the real camera. */
+.camera-card #webcam { transition: filter .45s var(--ease); }
+.camera-card:has(> #scanOverlay:not([hidden])) #webcam { filter: blur(28px) saturate(1.1) brightness(1.03); }
 .scan-overlay__lines { position: absolute; inset: 0; overflow: hidden; }
 .scan-overlay__lines::before {
   content: ""; position: absolute; inset: -50% 0;

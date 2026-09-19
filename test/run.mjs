@@ -371,6 +371,7 @@ const SUITES = [
   ["first-frame-integrity", "first-frame-integrity.test.mjs"],
   ["input-gate-lifecycle", "input-gate-lifecycle.test.mjs"],
   ["cold-start-passthrough", "cold-start-passthrough.test.mjs"],
+  ["reveal-settle", "reveal-settle.test.mjs"],
   ["turn-hold", "turn-hold.test.mjs"],
   ["prompt-reanchor", "prompt-reanchor.test.mjs"],
   ["signaling-retry", "signaling-retry.test.mjs"],

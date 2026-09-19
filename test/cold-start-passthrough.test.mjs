@@ -614,9 +614,20 @@ console.log("\n── §8 THE MINIMUM HOLD - the case neither detector can see �
     /return Math\.min\(v, PASSTHROUGH_GATE_MAX_MS\);/.test(APP) &&
     CONFIG.COLD_START_MIN_HOLD_MS < CONFIG.PASSTHROUGH_GATE_MAX_MS,
     `${CONFIG.COLD_START_MIN_HOLD_MS} vs ${CONFIG.PASSTHROUGH_GATE_MAX_MS}`);
-  check("...and the re-assert lands early enough to render before the hold ends",
-    CONFIG.COLD_START_REASSERT_MS < CONFIG.COLD_START_MIN_HOLD_MS,
-    `${CONFIG.COLD_START_REASSERT_MS} vs ${CONFIG.COLD_START_MIN_HOLD_MS}`);
+  /* ── THIS CHECK WAS THE BUG, AND WAS REPLACED (2026-09-19) ─────────────────────────────
+     It read "the re-assert lands early enough to render before the hold ends" and asserted
+     REASSERT < MIN_HOLD (700 < 1500). That compares when the re-send LEAVES with when the hold
+     ENDS, and a render does not happen at the send: it needs the ack and then Decart's render
+     wait (780-1100ms measured), during which the model draws its own prior. 800ms was never
+     enough, so the hold routinely ended inside the re-assert's generic-garment window - the
+     "multicolor long-sleeve at 00:00, my tee at 00:01" report. The property it wanted is now
+     enforced where it can actually hold - the reveal waits for the render (reveal-settle.test.mjs
+     §1 replays the timeline against the real gate) - and this check asserts that wiring. */
+  check("...and the reveal cannot land inside the re-assert's own render wait",
+    CONFIG.COLD_START_REASSERT_MS < CONFIG.COLD_START_MIN_HOLD_MS &&
+    /const qualifies = isGarmentApplied && dressed && !stillRaw && !settleHold && !wrongGarmentHold;/.test(APP) &&
+    CONFIG.REFERENCE_RENDER_SETTLE_MS >= 1100,
+    "a fixed hold cannot cover a render that finishes after it; the settle hold waits for it");
   check("the config states the cost in billed seconds, because there is none",
     /It does NOT cost billed seconds/.test(CFG) && /\?cold_hold=<ms>/.test(CFG),
     "the reveal is what starts the billing window - this delays the start, it does not spend it");

@@ -55,6 +55,9 @@ const {
   COLD_START_REDISPATCH_MAX,
   COLD_START_MIN_HOLD_MS,
   COLD_START_REASSERT_MS,
+  REFERENCE_RENDER_SETTLE_MS,
+  REVEAL_SETTLE_MAX_MS,
+  FLOOR_ASSET_WAIT_MS,
   BODY_TOPOLOGY_ENABLED,
   BODY_TOPOLOGY_SAMPLE_MS,
   BODY_TRACK_MIN_VISIBILITY,
@@ -821,13 +824,91 @@ let wireQueue = Promise.resolve();
    exists to prevent. Each write remembers the epoch it belongs to and only touches the
    shared state while that epoch is still current. */
 let wireEpoch = 0;
+/* ── THE COUNTER THAT DOES NOT BELONG TO AN EPOCH ─────────────────────────────
+   Ported 2026-09-19 from 17d20c7 (rescue/pre-8eb4099-reset; discarded by a reset, not
+   rejected on its merits). THE HOLE THIS CLOSES. The queue above is epoch-scoped on
+   purpose - a write from a torn-down session must not hold the next session's queue. But
+   wireWrites was also what wireBusy() reported, and resetConditionWire() sets it to 0
+   while a send() ALREADY handed to the SDK is still awaiting its ack. For that ack's
+   length, wireBusy() said "the wire is free" about a wire that had a write on it - and
+   every skip-gate that exists to keep a SECOND write off the wire (re-anchor, presence
+   re-condition, topology re-drape, freeze keep-alive, the tracker's canDispatch) believed it.
 
-/** @returns {boolean} true when a conditioning write is queued or in flight. */
-function wireBusy() { return wireWrites > 0; }
+   WHY A SECOND CONCURRENT WRITE IS WORSE THAN A REDUNDANT ONE - verified against the
+   installed @decartai/sdk@0.1.5: signaling-channel.js matches ANY set_image_ack to ANY
+   pending image write and resolves the first match, so with two writes in flight the first
+   ack resolves the older one whichever it acknowledges - and applyGarment() stamps
+   lastAckedImageRef on that resolution. A reference Decart never confirmed becomes the
+   session's pin, and the pin is what every later dispatch falls back to: a wrong garment
+   that persists.
+
+   SO THIS COUNTS THE WIRE, NOT THE SESSION: incremented immediately before send(), and
+   decremented in an unconditional finally. It cannot wedge - rtClient.set() carries the
+   SDK's 30s ack timeout, setPrompt() 15s, and disconnecting rejects every pending ack. */
+let wireInFlight = 0;
+
+/** @returns {boolean} true when a conditioning write is queued, or genuinely on the wire
+ *  right now - including one left over from an epoch resetConditionWire() has retired. */
+function wireBusy() { return wireWrites > 0 || wireInFlight > 0; }
 /* Has a PIXEL reference actually reached the wire this session? Deliberately a function rather than
    a direct read of rtImageOnWire: the reveal gate that consumes it runs standalone in
    cold-start-passthrough.test.mjs, where the flag has to be able to flip between frames (see §7). */
 function referenceOnWire() { return !!rtImageOnWire; }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   HAS THE LAST IMAGE UPLOAD FINISHED RENDERING? - and WHOSE garment is it?
+   ══════════════════════════════════════════════════════════════════════════════
+   REPORTED 2026-09-19 (a video log): at 00:00 the feed showed a multicolor patterned
+   long-sleeve nobody picked; at 00:01 it jumped to the selected black tee. Nothing in this
+   repo carries such a garment - the only built-in item is PEAR_CATALOG[0], a blue tank shown
+   only in the standalone catalog room. It is Decart's own prior, the fourth recording of it
+   (config.js lists the raglan, the floral tank, the grey sweater).
+   THE CAUSE WAS THE REVEAL'S TIMING, not the dispatch. A set({ image }) resolves on
+   set_image_ack; the render switches ~1s LATER, and in between the model draws its prior.
+   The cold-start hold (1500ms) sent its re-assert - a full re-upload - 700ms in, so the hold
+   ran out inside that re-upload's own prior window: the reveal landed on the generic garment
+   and the real one arrived a second later. Exactly the clip.
+   So every acknowledged image upload is stamped here, and the reveal gate refuses to open
+   while one is in flight or younger than REFERENCE_RENDER_SETTLE_MS.
+
+   WIRE IDENTITY. Decart's output carries no garment identity - there is no hash to read back
+   off a frame, and the config block above COLD_START_MIN_HOLD_MS records the measurement
+   that ruled out a pixel colour match. What IS knowable exactly is which garment the
+   acknowledged reference belongs to, so that is recorded beside the stamp and the reveal
+   checks it against the garment the shopper has selected.
+   Reset per session in connectRealtime(). */
+let lastImageUploadAckAt = 0;
+let wireGarmentId = null;
+
+/** Stamp an ACKNOWLEDGED full image upload. Only after the ack resolves - a send that failed
+ *  never reached the model and opened no render window.
+ *  @param {string} where   send site, for the trace
+ *  @param {string} [garmentId]  garmentIdOf() the reference belongs to; omitted when the send
+ *    re-pinned an earlier reference, whose owner is already what wireGarmentId says */
+function noteImageUploadAcked(where, garmentId) {
+  lastImageUploadAckAt = Date.now();
+  if (garmentId !== undefined) wireGarmentId = garmentId;
+  if (typeof window !== "undefined" && window.__pearDebugFrameTiming) {
+    console.log(`[PEAR][DEBUG] image upload acknowledged (${where}) - garment on the wire: ${wireGarmentId};`,
+      `the reveal holds ${REFERENCE_RENDER_SETTLE_MS}ms for Decart's render to switch to it`);
+  }
+}
+
+/** @returns {{settling: boolean, sinceAckMs: number, inFlight: boolean}} whether Decart may
+ *  still be rendering its own prior because an image upload has not finished rendering. */
+function referenceRenderSettle() {
+  const sinceAckMs = lastImageUploadAckAt ? Date.now() - lastImageUploadAckAt : Infinity;
+  const inFlight = wireBusy();
+  return { settling: inFlight || sinceAckMs < REFERENCE_RENDER_SETTLE_MS, sinceAckMs, inFlight };
+}
+
+/** The garment the shopper has SELECTED - the one whose image occupies the single slot (a full
+ *  look's TOP, as applyLook documents). Compared against wireGarmentId at the reveal. */
+function selectedGarmentId() {
+  const look = resolveLook();
+  return garmentIdOf(look ? look.top : activeItem);
+}
+
 /* Set by an open ?orient_debug=1 swap trace (traceSwapTimeline); sendCondition() calls it once, when the
    reference write takes the wire - DISPATCH_SENT. Declared up here, ahead of sendCondition(). */
 let _orientSendMark = null;
@@ -864,10 +945,16 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
       _orientSendMark = null;
       try { markSent(label); } catch (_) {}
     }
+    /* Claimed HERE - after the stale-epoch bail above, immediately before the send reaches
+       the SDK. A queued write that never gets this far never held the wire. */
+    wireInFlight++;
     try {
       await send();
       return true;
     } finally {
+      /* UNCONDITIONAL, unlike the epoch-scoped release beside it: the write was on the wire
+         whether or not its session still exists, and it leaves the wire when it settles. */
+      wireInFlight--;
       if (epoch === wireEpoch) { isSettingCondition = false; wireWrites--; }
     }
   };
@@ -878,10 +965,13 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
   return next;
 }
 
-/* Cleared with the session: a queue entry from a torn-down client must not make the next
+/* Cleared with the session: a QUEUE entry from a torn-down client must not make the next
    session's first apply believe the wire is busy. The promise chain itself is replaced
    rather than cancelled - an in-flight send against a dead rtClient will settle or reject
-   on its own, and either way its `finally` has already stopped mattering by then. */
+   on its own, and its epoch-scoped `finally` has stopped mattering by then.
+   What it deliberately does NOT clear is wireInFlight (see its declaration): a write that
+   is physically on the wire is still on the wire after a reset. The queue is session
+   state; wireInFlight is transport state. */
 function resetConditionWire() {
   wireEpoch++;
   isSettingCondition = false;
@@ -980,17 +1070,95 @@ function verifyGarmentAsset(payload, source) {
     detail = valid ? `Blob, ${asset.size} bytes, type=${asset.type || "?"}`
                     : "Blob is 0 bytes - decode/composite likely failed silently";
   } else if (typeof asset === "string" && asset.length > 0) {
-    valid = /^(https?:|data:|blob:)/i.test(asset);
+    /* blob: WAS IN THIS LIST and had to come out - see usableImageRef() below. The SDK
+       cannot read one, so counting it as valid made this diagnostic agree with the bug it
+       exists to find. "Recognizable URL" is not the question; "can imageToBase64() turn
+       this into bytes?" is. typeof-guarded: this function runs in extracted sandboxes. */
+    valid = typeof usableImageRef === "function" ? usableImageRef(asset).usable : /^(https?:|data:)/i.test(asset);
     detail = valid ? `string ref (${asset.slice(0, 40)}…)`
-                    : `string but not a recognizable URL: "${asset.slice(0, 60)}"`;
+                    : `string the SDK cannot read as image bytes: "${asset.slice(0, 60)}"`;
   }
   if (!valid) {
     console.warn(`[PEAR][DEBUG] ${source}() - garmentAsset NOT valid before rtClient.set(): ${detail}`,
-      "\n  → this set() will run PROMPT-ONLY; Decart has no pixel reference and will render its default/generic output.");
+      "\n  → a set() without usable image bytes CLEARS Decart's reference (the SDK sends image_data: null);",
+      "the dispatch sites now refuse one - see assertUsableImageRef().");
   } else if (typeof window !== "undefined" && window.__pearDebugGarment) {
     console.log(`[PEAR][DEBUG] ${source}() - garmentAsset OK:`, detail);
   }
   return valid;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   CAN THE SDK ACTUALLY TURN THIS INTO IMAGE BYTES?
+   ══════════════════════════════════════════════════════════════════════════════
+   Ported 2026-09-19 from 17d20c7 (see wireInFlight for the provenance note).
+   NOT A PRESENCE CHECK. A reference can be present, non-null, the right rough shape, and
+   still arrive at the model as garbage - silently.
+
+   THE SDK CONTRACT, read in the installed @decartai/sdk@0.1.5 rather than assumed:
+     · utils/media.js imageToBase64(): a Blob/File is read to base64; a string is tested
+       for a data: URL and for an ABSOLUTE http(s) URL; anything else hits a bare
+       `return image;` - the string itself travels to Decart where base64 bytes belong.
+       A blob: URL and any relative URL both land there. Neither throws, neither logs:
+       the model is conditioned on the characters of a URL and renders an arbitrary garment.
+     · realtime/methods.js set(): `image !== undefined && image !== null ? … : null`, then
+       setImage({ kind: "data", data: imageBase64 }). So an OMITTED image key is not "leave
+       the conditioning alone" - it is image_data: null on the wire, an explicit CLEAR.
+       (setPrompt() is the prompt-only method; set() without an image wipes the garment.)
+
+   WHY HERE AND NOT IN node_modules: that directory is gitignored and rebuilt by the
+   `npm ci` every deploy runs - a fix there would be invisible to git and gone on the next
+   deploy. The invariant is enforced on the last line this repo owns.
+
+   FAIL LOUD, NEVER SUBSTITUTE. This only classifies. The callers own the recovery (the
+   session's acknowledged pin, then an abandoned dispatch), so it never rewrites a payload.
+   @param {Blob|string|null|undefined} ref
+   @returns {{usable: boolean, kind: string, detail: string}} */
+function usableImageRef(ref) {
+  if (ref === undefined) return { usable: false, kind: "absent", detail: "no image on the payload" };
+  if (ref === null) return { usable: false, kind: "null", detail: "explicit null - the SDK sends this as CLEAR the current image" };
+  if (typeof Blob !== "undefined" && ref instanceof Blob) {
+    return ref.size > 0
+      ? { usable: true, kind: "blob", detail: `Blob ${ref.size} bytes ${ref.type || "(no type)"}` }
+      : { usable: false, kind: "empty-blob", detail: "0-byte Blob - a composite or decode failed silently" };
+  }
+  if (typeof ref !== "string") return { usable: false, kind: "wrong-type", detail: `${typeof ref}, neither Blob nor string` };
+  if (!ref) return { usable: false, kind: "empty-string", detail: "empty string" };
+  let url = null;
+  try { url = new URL(ref); } catch (_) { /* relative or malformed - handled below */ }
+  if (url && url.protocol === "data:") {
+    const payload = ref.split(",", 2)[1];
+    return payload
+      ? { usable: true, kind: "data-url", detail: `data: URL, ${payload.length} base64 chars` }
+      : { usable: false, kind: "data-url-empty", detail: "data: URL with nothing after the comma" };
+  }
+  if (url && (url.protocol === "http:" || url.protocol === "https:")) {
+    return { usable: true, kind: "http-url", detail: ref.slice(0, 90) };
+  }
+  return {
+    usable: false,
+    kind: "sdk-fallthrough",
+    detail: `"${ref.slice(0, 60)}" is neither a Blob, a data: URL, nor an ABSOLUTE http(s) URL - ` +
+      "imageToBase64() would return it verbatim in place of image bytes and Decart would render an arbitrary garment",
+  };
+}
+
+/**
+ * The hard stop, called by every dispatch site immediately before it builds a payload.
+ * Throws rather than returning a verdict: each caller sits inside applyActive()'s bounded
+ * retry or applyConditioningWithRecovery(), so a throw is already this file's established
+ * way to say "this dispatch must not go out".
+ * @param {Blob|string|null|undefined} ref
+ * @param {string} where  caller name, for the message
+ * @returns {Blob|string} the same ref, when it is usable
+ */
+function assertUsableImageRef(ref, where) {
+  const cls = usableImageRef(ref);
+  if (cls.usable) return ref;
+  console.error(`[PEAR] ${where}() - REFUSED an unusable garment reference (${cls.kind}): ${cls.detail}`,
+    "\n  → the dispatch is abandoned. Sending it would replace the model's conditioning",
+    "with its own prior, which renders a garment nobody chose.");
+  throw new Error(`[PEAR] ${where}: unusable garment reference (${cls.kind}) - ${cls.detail}`);
 }
 
 /**
@@ -5123,6 +5291,19 @@ function liveWindowMs() {
   return Number.isFinite(n) && n > LIVE_DURATION_MS && n <= 600000 ? n : LIVE_DURATION_MS;
 }
 
+/* Decart's render wait, simulated: for this long after each IMAGE ack the mock paints a generic
+   multicolor pattern ("the prior") into the torso instead of the reference - what the real model
+   draws before its render switches to a newly acknowledged reference (see
+   REFERENCE_RENDER_SETTLE_MS). ?mock_prior_ms=<ms>, OFF (0) by default so the standard visual
+   gate is unchanged. It exists to REPRODUCE the 2026-09-19 "wrong garment at 00:00" report in the
+   harness and to prove the reveal never lands on it. */
+function mockPriorMs() {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("mock_prior_ms"); } catch (_) { return 0; }
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 && n <= 5000 ? n : 0;
+}
+
 /** Simulated connect latency (token + handshake + warm-up), ms. ?mock_connect_ms= overrides. */
 function mockConnectMs() {
   let raw = null;
@@ -5151,8 +5332,11 @@ const MOCK_DECART_STATE = {
   tokenMints: 0,
   frames: 0,
   connectionState: "idle",
-  /** every set()/setPrompt() this session, oldest first */
+  /** every set()/setPrompt() this session, oldest first - plus the connect's initialState */
   dispatches: [],
+  /** ?mock_prior_ms only: output frames painted with the generic prior, and when (ms epoch) */
+  priorFrames: 0,
+  priorPaintedAt: [],
   /** what is on the wire RIGHT NOW */
   wire: { seq: 0, prompt: null, imageKey: null, imageBytes: 0, decoded: false, at: 0 },
   geometry: MOCK_GEOMETRY,
@@ -5235,7 +5419,11 @@ async function mockRealtimeConnect(inputStream, opts) {
   MOCK_DECART_STATE.connects++;
   MOCK_DECART_STATE.frames = 0;
   MOCK_DECART_STATE.dispatches.length = 0;
+  MOCK_DECART_STATE.priorFrames = 0;
+  MOCK_DECART_STATE.priorPaintedAt.length = 0;
   MOCK_DECART_STATE.wire = { seq: 0, prompt: null, imageKey: null, imageBytes: 0, decoded: false, at: 0 };
+  const PRIOR_MS = mockPriorMs();
+  let priorUntil = 0;     // the render wait of the latest image ack - see mockPriorMs()
 
   /* The camera frames this session paints. An off-screen (not display:none) element so
      Chromium keeps decoding it - a display:none video stops producing frames in some
@@ -5283,8 +5471,20 @@ async function mockRealtimeConnect(inputStream, opts) {
       try { ctx.drawImage(src, 0, 0, W, H); } catch (_) {}
     }
 
-    // 2. the bytes ACTUALLY on the wire, painted into the torso rect (object-fit: cover).
-    if (refBitmap) {
+    // 2. the bytes ACTUALLY on the wire, painted into the torso rect (object-fit: cover) -
+    //    or, inside a simulated render wait, the model's generic prior instead.
+    if (PRIOR_MS && Date.now() < priorUntil) {
+      const r = MOCK_GEOMETRY.patch;
+      const dx = r.x * W, dy = r.y * H, dw = r.w * W, dh = r.h * H;
+      const band = Math.max(4, Math.round(dw / 10));
+      const colours = ["#39ff14", "#ff6b00", "#7b2cff", "#ffd400", "#00b3ff"];   // saturated, never near-white
+      for (let x = 0, k = 0; x < dw; x += band, k++) {
+        ctx.fillStyle = colours[k % colours.length];
+        ctx.fillRect(dx + x, dy, Math.min(band, dw - x), dh);
+      }
+      MOCK_DECART_STATE.priorFrames++;
+      if (MOCK_DECART_STATE.priorPaintedAt.length < 600) MOCK_DECART_STATE.priorPaintedAt.push(Date.now());
+    } else if (refBitmap) {
       const r = MOCK_GEOMETRY.patch;
       const dx = r.x * W, dy = r.y * H, dw = r.w * W, dh = r.h * H;
       const sw0 = refBitmap.width || 1, sh0 = refBitmap.height || 1;
@@ -5344,7 +5544,12 @@ async function mockRealtimeConnect(inputStream, opts) {
         if (!bm) console.warn("[PEAR][MOCK] reference did NOT decode - the torso patch will stay empty:", key);
       });
     }
-    return new Promise((resolve) => setTimeout(resolve, mockAckMs()));
+    return new Promise((resolve) => setTimeout(() => {
+      /* The ack is RECEIPT; the render switches PRIOR_MS later (see mockPriorMs). Only an
+         image-bearing write opens that window - setPrompt() does not re-condition on pixels. */
+      if (PRIOR_MS && key) priorUntil = Date.now() + PRIOR_MS;
+      resolve();
+    }, mockAckMs()));
   }
 
   const session = {
@@ -5372,12 +5577,23 @@ async function mockRealtimeConnect(inputStream, opts) {
   MOCK_DECART_STATE.connectionState = "connecting";
   if (typeof opts?.onConnectionChange === "function") opts.onConnectionChange("connecting");
 
+  /* THE initialState, AS THE SDK HANDLES IT (stream-session.js runOneConnect): sent inside the
+     join, then media connects (remoteStream), then connect() WAITS for its ack before publishing
+     video and reporting "connected". Ignoring it - as this mock did until 2026-09-19 - made the
+     harness blind to the one thing the floor changes: that the garment is on the wire before the
+     first frame, so go-live's apply is a no-op rather than a second upload. */
+  const init = opts && opts.initialState;
+  const initAck = init && init.image
+    ? record("initialState", { image: init.image, prompt: init.prompt && init.prompt.text })
+    : null;
+
   await new Promise((r) => setTimeout(r, mockConnectMs()));
 
   /* onRemoteStream BEFORE the "connected" transition and before connect() resolves -
      the order the SDK produces, and the order armFirstFrameBilling()/gateAiFeed() were
      written against. */
   if (typeof opts?.onRemoteStream === "function") opts.onRemoteStream(outStream);
+  if (initAck) await initAck;
   MOCK_DECART_STATE.connectionState = "connected";
   if (typeof opts?.onConnectionChange === "function") opts.onConnectionChange("connected");
 
@@ -6100,6 +6316,182 @@ function inputGateHeld() {
    session generation captured by connectRealtime() at the top of that call - every
    callback below closes over it and bails the instant a teardown/new-connect has
    moved sessionGen on, exactly as before this was extracted. */
+/* ══════════════════════════════════════════════════════════════════════════════
+   THE CONDITIONING FLOOR - what the SDK holds when this file is not looking
+   ══════════════════════════════════════════════════════════════════════════════
+   Ported 2026-09-19 from 17d20c7 (rescue/pre-8eb4099-reset), re-verified line by line
+   against the installed @decartai/sdk@0.1.5 before landing:
+
+   THIS FILE USED TO PASS NO initialState, and StreamSession.getInitialState() then
+   returns { image: null, prompt: null } (stream-session.js: the `this.config.localStream`
+   branch). Two consequences, both of them reported symptoms:
+     1. THE SDK'S OWN GATE WAS OFF. InitialStateGate.hasCallerProvidedInitialState() reads
+        false for nulls, so waitForReadiness() never awaits initialStateAck and
+        publishLocalTracks() runs immediately. (At go-live our own input gate stands in;
+        on a reconnect nothing did.)
+     2. EVERY SDK-INTERNAL RECONNECT CLEARED THE GARMENT. scheduleReconnect() →
+        runOneConnect() → openAndJoin({ initialState }) → sendInitialState(), and
+        `initialState.image !== undefined` holds for null - so it sent
+        setImage({ kind: "data", data: null }): an explicit clear, on a rejoined room with
+        live frames flowing. The shopper's garment vanished mid-measurement until our
+        re-apply landed, and that re-apply was fire-once. The old comment in
+        onConnectionChange said the SDK "puts the shopper back in the ORIGINAL garment";
+        it put them in nothing.
+
+   SO THIS IS A FLOOR, NOT THE CONDITIONING: the active item's single FRONT packshot plus
+   the same frozen prompt applyGarment() sends, with enhance explicitly false (the SDK's
+   modelStateSchema defaults it to TRUE). Captured once per connect and replayed by the SDK
+   on every internal reconnect, so it can go stale after a garment swap - stale-but-real is
+   the point: it is what a rejoined room shows during the round-trip before applyActive()
+   re-derives the CURRENT state on top of it. Never the composite: small matters, because
+   client.js base64s it before the handshake can proceed.
+
+   AND IT IS NO LONGER OPTIONAL (2026-09-19). It shipped as best-effort - no floor meant a bare
+   connect, and a connect that failed with one retried bare. That is the "initialize anyway
+   and hope go-live's set() lands first" shape behind the 00:00 wrong-garment report, so a
+   session now opens WITH the selected garment acknowledged by Decart, or does not open:
+     · no garment, or no front image for it    → throw; the shopper is told, nothing is billed
+     · bytes still downloading                 → await them (FLOOR_ASSET_WAIT_MS), because the
+                                                  floor must be the SAME Blob applyGarment() will
+                                                  send - that identity is what lets go-live see
+                                                  the garment is already on the wire
+     · bytes never arrive                      → the proxied URL; the SDK fetches it itself
+                                                  before the join, so it is still THIS garment
+     · a reference the SDK cannot read         → throw (see usableImageRef)
+   @param {object|null} item  the garment to seed - the caller's single read of the selection
+   @returns {Promise<{prompt: {text: string, enhance: boolean}, image: Blob|string}>} */
+async function resolveInitialConditioning(item) {
+  const refuse = (why) => {
+    const e = new Error("לא ניתן לטעון את תמונת הבגד שנבחר - המדידה לא הופעלה · " +
+      `The selected garment could not be loaded, so the session was not started (${why})`);
+    e.isNoGarment = true;
+    return e;
+  };
+  if (!item) throw refuse("no garment is selected");
+  const g = galleryOf(item) || {};
+  /* FRONT ONLY - never `|| g.back`. The floor is what a shopper FACING the camera is
+     conditioned on until go-live's own apply lands, and what every SDK reconnect replays.
+     A back photo there puts the rear print on the chest (the §2.1 failure shape) for as long
+     as it is live. A wrong-side floor is a wrong render. */
+  const primary = g.front || item.img;
+  if (!primary) throw refuse(`"${item.name}" has no front image`);
+  let timer = null;
+  const bytes = await Promise.race([
+    Promise.resolve(garmentBlobCached(primary)).catch(() => null),
+    new Promise((r) => { timer = setTimeout(() => r(null), FLOOR_ASSET_WAIT_MS); }),
+  ]);
+  clearTimeout(timer);
+  if (!bytes) {
+    console.warn(`[VTO Pipeline] garment bytes not ready within ${FLOOR_ASSET_WAIT_MS}ms for "${item.name}" -`,
+      "seeding the session with the proxied URL; the SDK fetches it before the join, so it is still this garment.");
+  }
+  const image = bytes || garmentImageRef(primary);
+  /* The same readability contract every dispatch site enforces. A floor the SDK cannot read
+     would hand the model a URL string as its reference on every reconnect for the session. */
+  if (!image || !usableImageRef(image).usable) {
+    throw refuse(`the image for "${item.name}" is not readable as image bytes`);
+  }
+  return {
+    prompt: { text: clampPromptForWire(imageOnlyPrompt(item), "initialConditioning"), enhance: false },
+    image,
+  };
+}
+
+/* Read by buildRealtimeConnectOpts() on every attempt of a connect. Module-level rather than
+   a parameter because the retry loop rebuilds the options per attempt and must rebuild them
+   IDENTICALLY. Cleared by teardown(). _sessionInitialGarmentId is whose garment it is. */
+let _sessionInitialState = null;
+let _sessionInitialGarmentId = null;
+
+/* WHICH GARMENT, BY A KEY THAT EXISTS ON THE REAL PATH. A widget handover - how every store
+   session arrives - builds its item with `id: null` (parseHandoff(): the store's product has
+   no catalog id here), so logging item.id alone printed "(none)" for essentially every
+   production session and identified nothing. Catalog id when there is one, else the
+   storefront's variant id, else the canonical front-photo URL - the same identity
+   garment_cache keys on. The prefix says which, so two logs are comparable at a glance. */
+function garmentIdOf(item) {
+  if (!item) return "(none)";
+  if (item.id != null && item.id !== "") return String(item.id);
+  if (item.variantId) return `variant:${item.variantId}`;
+  const front = (galleryOf(item) || {}).front || item.img;
+  if (!front) return "(unidentified - no id, variant or image)";
+  if (/^data:/i.test(front)) return `upload:${front.length}chars`;
+  const canon = typeof canonicalImageUrl === "function" ? canonicalImageUrl(front) : front;
+  return `url:${canon.length > 90 ? canon.slice(0, 90) + "…" : canon}`;
+}
+
+/* abbrevImg() labels EVERY Blob a "stitched combined ref" - true where it was written, false
+   here: the floor is never the composite (see resolveInitialConditioning), and a log that
+   says it is would send the next reader chasing §2.3's double-logo bug. */
+function describeFloorImage(image) {
+  if (typeof Blob !== "undefined" && image instanceof Blob) {
+    return `front packshot, Blob ${image.type || "image"} ${image.size.toLocaleString()} bytes (prewarmed)`;
+  }
+  return `front packshot, ${abbrevImg(image)}`;
+}
+
+/** Resolve the floor for the session about to open, and say which garment it is. Throws -
+ *  and so refuses the session - when the selected garment cannot seed one. */
+async function primeInitialConditioning() {
+  _sessionInitialState = null;
+  _sessionInitialGarmentId = null;
+  /* Read the selection, await its bytes, then confirm it is STILL the selection: a garment
+     tapped during a slow download must not open a session seeded with the one before it.
+     Bounded - a selection that keeps moving gets the latest read on the second pass. */
+  let item = null, look = null, floor = null;
+  for (let pass = 1; pass <= 2; pass++) {
+    look = resolveLook();
+    item = look ? look.top : activeItem;   // one image slot - the TOP, as applyLook documents
+    try {
+      floor = await resolveInitialConditioning(item);
+    } catch (e) {
+      console.error(`[VTO Pipeline] REFUSING to initialize the Decart session - Garment ID: ${garmentIdOf(item)}`,
+        `| ${e?.message || e}`, "\n  → no session is opened and no token is minted: a session with no",
+        "acknowledged garment renders Decart's own default garment until one arrives.");
+      throw e;
+    }
+    const nowLook = resolveLook();
+    if ((nowLook ? nowLook.top : activeItem) === item) break;
+    console.warn("[VTO Pipeline] the selected garment changed while its bytes loaded - re-resolving for the new one");
+  }
+  _sessionInitialState = floor;
+  _sessionInitialGarmentId = garmentIdOf(item);
+  const g = galleryOf(item) || {};
+  console.log(`[VTO Pipeline] Initializing Decart session with Garment ID: ${_sessionInitialGarmentId}`,
+    `| name: ${item?.name ?? "(none)"}`,
+    look ? `| full look, top + ${look.bottom?.name ?? "?"} (${garmentIdOf(look.bottom)})` : "",
+    `| front: ${abbrevImg(g.front || item?.img)} | back: ${abbrevImg(g.back)}`,
+    `| initialState: ${describeFloorImage(floor.image)} - sent inside the join; the SDK publishes`,
+    "no video until Decart acknowledges it, and replays it on any internal reconnect");
+}
+
+/* ── THE ACKNOWLEDGED FLOOR IS ON THE WIRE - SAY SO ────────────────────────────────────
+   Verified in stream-session.js runOneConnect(): with an initialState, openAndJoin() sends it
+   as set_image (bytes + prompt), and waitForReadiness() awaits its set_image_ack BEFORE
+   publishLocalTracks(). So when connect() resolves - and again when an internal reconnect
+   reports "connected" - Decart holds exactly this image and this prompt, acknowledged.
+   THIS FILE USED NOT TO KNOW IT. The wire bookkeeping stayed empty, so go-live's apply
+   uploaded the identical garment a SECOND time - a full re-upload, with its own ~1s render
+   wait, at the very start of the session; and after a reconnect the re-apply did the same
+   mid-stream, which is a generic-garment flicker (the churn 0762bea reverted the
+   re-anchor's re-upload over - see the throttle's hold()). Recording what is true lets both
+   take applyGarment()'s own fast paths: an identical image AND prompt is skipped, an
+   identical image with a new prompt goes as a setPrompt(), and only a genuinely different
+   garment or side re-uploads.
+   @param {string} why  for the trace
+   @returns {boolean} false when the session has no floor - the caller must then invalidate */
+function adoptInitialStateAsWire(why) {
+  if (!_sessionInitialState) return false;
+  lastSentImageRef = _sessionInitialState.image;
+  rtImageOnWire = true;
+  lastSentPrompt = _sessionInitialState.prompt.text;
+  lastAckedImageRef = _sessionInitialState.image;
+  noteImageUploadAcked(why, _sessionInitialGarmentId);
+  console.log(`[VTO Pipeline] Decart acknowledged Garment ID ${_sessionInitialGarmentId} (${why})`,
+    "before a single frame was published - recorded as the conditioning on the wire.");
+  return true;
+}
+
 function buildRealtimeConnectOpts(gen) {
   return {
     model: {
@@ -6134,6 +6526,14 @@ function buildRealtimeConnectOpts(gen) {
        un-mirrored, the bug is in the CSS rule above, and there is now exactly one place
        to look. */
     mirror: false,
+    /* THE CONDITIONING FLOOR - see resolveInitialConditioning() for what its absence cost.
+       In the app it is always present by the time this runs: connectRealtime() refuses to
+       reach connect() without one. Still spread conditionally - never `initialState: null`,
+       which the SDK's zod schema rejects - because reconnect.test.mjs and
+       signaling-retry.test.mjs execute this function standalone against fixed sandbox
+       globals that do not declare the `let` (hence the typeof guard too). */
+    ...(typeof _sessionInitialState !== "undefined" && _sessionInitialState
+      ? { initialState: _sessionInitialState } : {}),
     onRemoteStream: (editedStream) => {
       if (gen !== sessionGen) return;    // stale callback from a torn-down session
       // DEBUG WRAPPER: flag a stream rendering with no garment on the wire. typeof-guarded,
@@ -6210,16 +6610,20 @@ function buildRealtimeConnectOpts(gen) {
          @decartai/sdk@0.1.5's StreamSession ALREADY retries a dropped mid-session
          connection internally (media/signaling loss → handleConnectionLoss() →
          scheduleReconnect(), p-retry, 5 attempts, 1s/2s/4s/8s/10s backoff) - this file
-         does not need to reimplement that, and did not need a queue for outgoing
-         messages either. What it DOES need is this: scheduleReconnect()'s internal
-         reconnect calls runOneConnect(), which resends getInitialState() - and that
-         reads this.config.initialImage/initialPrompt, captured ONCE when
-         client.realtime.connect() was first called and never updated by any later
-         rtClient.set()/setPrompt() (verified in stream-session.js - neither method
-         touches those fields). So an SDK-level reconnect silently puts the shopper back
-         in whatever garment/pose was live at the ORIGINAL go-live moment, discarding
-         every colour swap, orientation flip, or profile-pose update sent since - with
-         no error, no log, nothing to say it happened. That is a correctness bug a
+         does not need to reimplement that (nor a heartbeat: the SDK owns the signaling
+         socket, and WebRTC's own ICE consent checks keep the media path alive), and did
+         not need a queue for outgoing messages either. What it DOES need is this:
+         scheduleReconnect()'s internal reconnect calls runOneConnect(), which resends
+         getInitialState() - built from the initialState passed at connect, captured ONCE
+         and never updated by any later rtClient.set()/setPrompt().
+         CORRECTED 2026-09-19. This comment used to say that replay "puts the shopper back
+         in whatever garment was live at the ORIGINAL go-live moment". Verified against
+         the SDK source, it did not: with no initialState passed, getInitialState() is
+         { image: null, prompt: null } and the replay was setImage({ data: null }) - an
+         explicit CLEAR, i.e. the garment vanished mid-session. The connect now passes a
+         floor (resolveInitialConditioning), so the replay restores the go-live garment
+         for real; what it still cannot know is every colour swap, orientation flip or
+         pose update sent since - with no error, no log, nothing to say it happened. That is a correctness bug a
          message queue could not have fixed either: replaying literal past messages
          would restore whichever one happened to be queued, not necessarily what is
          actually true NOW if the shopper kept interacting during the outage.
@@ -6251,10 +6655,53 @@ function buildRealtimeConnectOpts(gen) {
            so the recovered connection would be left holding whatever the SDK replayed -
            the ORIGINAL go-live state, which is precisely what this block exists to
            correct. Clearing here is what makes the re-apply a real set({ image }) and
-           puts the CURRENT garment blob back on the new transport. */
-        invalidateWireState("SDK reconnect - the transport was rebuilt underneath us");
-        applyActive().catch((e) =>
-          console.warn("[PEAR] post-reconnect re-apply failed:", e?.message || e));
+           puts the CURRENT garment blob back on the new transport.
+
+           ...AND WITH A FLOOR, THE REPLAY IS KNOWN EXACTLY (2026-09-19). The SDK rejoined
+           with the initialState captured at connect, and waited for its ack before
+           re-publishing video - so the wire holds the floor, not "nothing we can name".
+           Blanking our belief anyway made this re-apply re-upload the SAME front packshot in
+           the common case (the shopper still facing the camera, same garment): a full
+           mid-stream re-upload, whose render wait is a generic-garment flicker right after a
+           network blip. Recording the replayed floor keeps the property this block exists
+           for - the CURRENT state is restored whenever it differs from the replay (turned
+           around, a new colour, a new garment) - and drops only the redundant upload.
+           No floor (a standalone sandbox) still takes the old, safe path: invalidate. */
+        if (!(typeof adoptInitialStateAsWire === "function" &&
+              adoptInitialStateAsWire("SDK reconnect - the SDK replayed the initialState"))) {
+          invalidateWireState("SDK reconnect - the transport was rebuilt underneath us");
+        }
+        /* ── THIS RE-APPLY IS THE RECOVERY, SO IT MAY NOT BE FIRE-AND-FORGET ──────────
+           (Ported with the floor from 17d20c7.) It used to be `.catch(console.warn)`: one
+           attempt. But nothing else re-asserts the garment after a reconnect - the
+           re-anchor is a no-op under a frozen prompt and the re-drape only fires on
+           movement - so a single rejection left the session live and billing on whatever
+           the SDK replayed. A rejection is also the LIKELIEST outcome at this moment: the
+           SDK reports "connected" the instant its join completes, and the first set() can
+           land while the rebuilt transport is still settling. So: bounded, backing off,
+           abandoned the moment this session is no longer current. Inline, using only
+           identifiers this function already uses, so the standalone suites still run it. */
+        (async () => {
+          const genAtReconnect = sessionGen;
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            if (sessionGen !== genAtReconnect) return;   // superseded - whoever moved it owns this
+            try {
+              await applyActive();
+              return;                                    // the CURRENT garment is back on the wire
+            } catch (e) {
+              console.warn(`[PEAR] post-reconnect re-apply attempt ${attempt}/3 failed:`, e?.message || e);
+              if (attempt === 3) break;
+              await new Promise((r) => setTimeout(r, 400 * attempt));
+            }
+          }
+          if (sessionGen !== genAtReconnect) return;
+          const hadFloor = typeof _sessionInitialState !== "undefined" && !!_sessionInitialState;
+          console.error("[PEAR] post-reconnect re-apply FAILED three times -",
+            hadFloor
+              ? "the session keeps the go-live floor the SDK replayed (the right garment, possibly a stale colour/side)."
+              : "this session connected WITHOUT a floor, so the SDK's replay was a CLEAR: the model holds no garment.",
+            "\n  → window.__pearDebugReinjectGarment() forces a fresh attempt by hand.");
+        })();
       }
 
       /* ── PERMANENT FAILURE CLEANUP ──────────────────────────────────────────
@@ -6330,6 +6777,10 @@ async function connectRealtime({ force = false } = {}) {
   lastSentImageRef = null;
   rtImageOnWire = false;
   lastSentPrompt = null;
+  /* ...nor any render window, nor any garment identity - a stamp left by the last session
+     would let this session's reveal gate judge its first frame against the wrong upload.
+     typeof-guarded: signaling-retry.test.mjs runs this function standalone. */
+  if (typeof lastImageUploadAckAt !== "undefined") { lastImageUploadAckAt = 0; wireGarmentId = null; }
   /* ...and the QUEUE with them. A write left pending against the client we just
      disconnected would otherwise make this session's very first apply see wireBusy() and
      wait behind a promise that can no longer settle - the go-live hang, reintroduced by
@@ -6366,6 +6817,13 @@ async function connectRealtime({ force = false } = {}) {
        than silently eating 2x the latency. The cached ek_ token is invalidated
        before retrying: it already failed one join, and mintEphemeralToken()'s cache
        has no way to know that on its own. */
+    /* The conditioning floor, resolved ONCE before the first attempt so every retry rebuilds
+       the same options from the same floor - and BEFORE the token mint, so a garment that
+       cannot seed a session costs the shopper an error message, not a billed session. It
+       THROWS in that case, and the throw is the refusal: goLive()'s catch shows it.
+       typeof-guarded because signaling-retry.test.mjs executes this function standalone. */
+    if (typeof primeInitialConditioning === "function") await primeInitialConditioning();
+    if (gen !== sessionGen) return;      // torn down while the garment bytes loaded
     let attempt = 0;
     for (;;) {
       attempt++;
@@ -6410,6 +6868,12 @@ async function connectRealtime({ force = false } = {}) {
         realtimeInput = null;
 
         const isSignalingRace = /WebSocket is not open/.test(e?.message || "");
+        /* NO BARE RETRY. A handshake that failed while carrying the floor used to get one
+           retry WITHOUT it - a session opened with no acknowledged garment, which renders
+           Decart's own default until go-live's set() lands: the exact thing the floor exists
+           to prevent. A retry keeps the floor (the options are rebuilt from the same
+           _sessionInitialState), and only for the signaling race below; any other failure
+           reaches the shopper as an error rather than as a wrong garment. */
         if (!isSignalingRace || attempt >= 2 || gen !== sessionGen) throw e;
 
         console.warn("[PEAR] connectRealtime() - signaling race on attempt", attempt,
@@ -6436,6 +6900,10 @@ async function connectRealtime({ force = false } = {}) {
     connState = (rtClient.getConnectionState && rtClient.getConnectionState()) || "connected";
     setConn(connState);
     console.log("[PEAR] connectRealtime() - WebRTC session open. connState:", connState);
+    /* connect() resolved, so the floor's set_image_ack already came back (the SDK awaited it
+       before publishing video) - record it, so go-live's apply sees its garment is already
+       on the wire. typeof-guarded for the signaling-retry sandbox. */
+    if (typeof adoptInitialStateAsWire === "function") adoptInitialStateAsWire("connect");
 
   } catch (err) {
     console.error("[connectRealtime] failed at stage:", err?.message || String(err), err);
@@ -6513,6 +6981,11 @@ function teardown() {
   lastSentPrompt = null;
   redrapeCoverEnd("session-torn-down");   // a cover must never outlive the session it covered
   resetConditionWire();          // nothing may be queued for a session that no longer exists
+  /* The conditioning floor is session-scoped: it holds a reference (often decoded bytes) for
+     the garment THIS session opened with. connectRealtime() re-primes it on the next connect,
+     so clearing here is about not carrying one shopper's garment into the next try-on. */
+  _sessionInitialState = null;
+  _sessionInitialGarmentId = null;
 
   // Bug 3 fix: stop this session's cloned camera tracks (the WebRTC sender side).
   // localStream - the real camera/preview - is intentionally left running.
@@ -11409,11 +11882,24 @@ function stitchLookBlob(topUrl, bottomUrl) {
  */
 function garmentImageRef(cdnUrl) {
   if (!cdnUrl) return undefined;
-  // "Upload Your Own Garment": a cropped custom garment is a self-contained
-  // data:/blob: URL - it is NOT a fetchable http(s) CDN URL, so it must be handed
-  // to the SDK verbatim. Routing it through /api/img-proxy (which fetches a remote
-  // URL) would corrupt it. Pass it straight through.
-  if (/^(data:|blob:)/i.test(cdnUrl)) return cdnUrl;
+  // "Upload Your Own Garment": a cropped custom garment is a self-contained data: URL -
+  // it is NOT a fetchable http(s) CDN URL, so it must be handed to the SDK verbatim.
+  // Routing it through /api/img-proxy (which fetches a remote URL) would corrupt it.
+  if (/^data:/i.test(cdnUrl)) return cdnUrl;
+  /* ── blob: IS REFUSED - it used to be waved through beside data: ─────────────────
+     On the belief that the SDK treats the two alike. It does not (see usableImageRef()):
+     imageToBase64() returns a blob: string VERBATIM as the "image bytes", so Decart
+     received the characters of the URL and rendered an arbitrary garment, silently.
+     Refused rather than converted because conversion is async and this function is not;
+     garmentBlobCached() is the path that turns blob: bytes into a real Blob. Returning
+     undefined puts the caller on its loud, recoverable no-reference path. */
+  if (/^blob:/i.test(cdnUrl)) {
+    console.error("[PEAR] garmentImageRef() - REFUSED a blob: URL.", abbrevImg(cdnUrl),
+      "\n  → the SDK's imageToBase64() cannot read one: it would ship the URL string itself",
+      "as the reference and render an arbitrary garment.",
+      "\n  → route blob: bytes through garmentBlobCached() and pass the Blob instead.");
+    return undefined;
+  }
   const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
   if (isLocal) {
     console.log("[PEAR] garmentImageRef() - localhost, using raw CDN URL:", cdnUrl);
@@ -14670,18 +15156,45 @@ async function applyGarment(item) {
       }
     }
   }
-  /* Still nothing. Loud, and at ERROR: every prompt this file builds now depends on an
-     image being on the wire, so this is a broken render, not a degraded one. It does NOT
-     throw - a live session that renders the shopper undressed is still recoverable by the
-     next applyActive()/re-anchor, while a throw ends the stream before the first frame. */
+  /* ── STILL NOTHING: RE-PIN, OR REFUSE - NEVER SEND A CLEAR ───────────────────────
+     THIS USED TO DISPATCH ANYWAY. It logged "Decart will render its own default garment"
+     and sent the payload without an image, on the reasoning that "a live session that
+     renders the shopper undressed is still recoverable, while a throw ends the stream".
+     Verified 2026-09-19 against the installed SDK (realtime/methods.js set()): an omitted
+     image is sent as image_data: null - an explicit CLEAR of whatever garment the model
+     held. So the send did not "render undressed and recover"; it actively wiped a correct
+     garment and replaced it with the model's default - the reported "wrong garment", and
+     mid-session the "reverted to my own clothes". Ported ladder (17d20c7):
+       1. the session's last ACKNOWLEDGED reference (lastAckedImageRef) - the garment
+          Decart confirmed it is holding, so re-sending it is at worst a no-op;
+       2. otherwise THROW. applyActive() retries, and at go-live
+          applyConditioningWithRecovery() reconnects and walks the fallback ladder; if that
+          finds nothing either, the shopper is told - never shown a garment nobody chose.
+     A throw no longer "ends the stream before the first frame" silently: the input gate is
+     still shut at that point, so nothing unconditioned has been shown. */
+  /* Whether the reference below is this item's own or a re-pinned earlier one - the reveal's
+     garment-identity check must not be told a pinned reference belongs to this item. */
+  let repinned = false;
+  if (!imageRef && lastAckedImageRef) {
+    console.warn("[PEAR] applyGarment() - no reference resolved for", item.name,
+      `(id=${item.id}, angle=${angleAtStart}); re-pinning the session's ACKNOWLEDGED garment`,
+      "rather than sending a payload that would clear it:", abbrevImg(lastAckedImageRef));
+    imageRef = lastAckedImageRef;
+    repinned = true;
+  }
   if (!imageRef) {
     console.error("[PEAR] applyGarment() - NO garment asset could be resolved for", item.name,
-      `(id=${item.id}, angle=${angleAtStart}).`,
-      "\n  → the prompt is image-first and will have no reference to condition on;",
-      "Decart will render its own default garment.",
+      `(id=${item.id}, angle=${angleAtStart}) and nothing is pinned from this session.`,
+      "\n  → DISPATCH REFUSED. A set() without an image sends image_data: null, which CLEARS",
+      "the model's reference and renders a garment nobody chose.",
       "\n  → check the item's gallery/img fields; window.__pearDebugReinjectGarment({ bustCache: true })",
       "forces a fresh resolve once they are fixed.");
+    throw new Error(`[PEAR] applyGarment: no garment reference for ${item.name} (id=${item.id}) - dispatch refused`);
   }
+  /* ...AND IT MUST BE ONE THE SDK CAN READ - see usableImageRef(). After the pin, so a corrupt
+     fresh resolve still gets the chance to fall back to the acknowledged reference.
+     typeof-guarded: applyGarment() runs standalone in prompt-only-flip/side-profile. */
+  if (typeof assertUsableImageRef === "function") assertUsableImageRef(imageRef, "applyGarment");
 
   /* ── STRICT ORIENTATION/ASSET BINDING (last line of defence) ──────────────────
      The pairing that produces "the chest print is rendered on the back" is a BACK
@@ -14741,7 +15254,10 @@ async function applyGarment(item) {
       : buildPrompt(item, angleAtStart),
       "applyGarment"),
     enhance: false,
-    ...(imageRef ? { image: imageRef } : {}),
+    /* Unconditional: the ladder above re-pins or throws, so no path reaches here without a
+       usable reference. The old `...(imageRef ? { image } : {})` spread is what shipped the
+       clear - an omitted key is image_data: null to the SDK. */
+    image: imageRef,
   };
 
   console.group("[PEAR] applyGarment() - VTON payload debug");
@@ -14874,6 +15390,13 @@ async function applyGarment(item) {
   rtImageOnWire = !!imageRef;
   lastSentPrompt = payload.prompt;
   if (imageRef) lastAckedImageRef = imageRef;   // survives a wire invalidation - see its declaration
+  /* A full image upload was just ACKNOWLEDGED: Decart renders its own prior until it switches
+     (~1s), so the reveal gate must hold that long - see noteImageUploadAcked(). typeof-guarded:
+     this function runs standalone in prompt-only-flip / side-profile. */
+  if (typeof noteImageUploadAcked === "function") {
+    noteImageUploadAcked("applyGarment",
+      repinned ? undefined : (typeof garmentIdOf === "function" ? garmentIdOf(item) : undefined));
+  }
   /* Stamped AFTER lastAckedImageRef, so the trace can report whether the ack it is
      describing is the one for this very reference. */
   if (typeof traceConditioning === "function") traceConditioning(item, imageRef, condBefore);
@@ -15363,23 +15886,38 @@ async function applyLook(top, bottom) {
     if (primaryImage) console.warn("[PEAR] applyLook() - stitch and top reference both failed;",
       "falling back to a single raw garment ref:", abbrevImg(primaryImage));
   }
+  /* Re-pin or refuse - the ladder applyGarment() documents, for the same verified reason:
+     the SDK sends an omitted image AND an explicit null as image_data: null, a CLEAR. The
+     old dispatch here logged "Decart will render its own default garments" and sent it. */
+  let repinned = false;   // see applyGarment(): a pinned reference is not this look's own
+  if (!primaryImage && lastAckedImageRef) {
+    console.warn("[PEAR] applyLook() - no reference resolved for this look",
+      `(${top?.name} + ${bottom?.name}); re-pinning the session's ACKNOWLEDGED garment:`,
+      abbrevImg(lastAckedImageRef));
+    primaryImage = lastAckedImageRef;
+    repinned = true;
+  }
   if (!primaryImage) {
     console.error("[PEAR] applyLook() - NO garment asset resolved for this look",
-      `(${top?.name} + ${bottom?.name}).`,
-      "\n  → the prompt is image-first and has no reference to condition on;",
-      "Decart will render its own default garments.");
+      `(${top?.name} + ${bottom?.name}) and nothing is pinned from this session.`,
+      "\n  → DISPATCH REFUSED rather than sending a payload that would clear the model's",
+      "reference and render default garments.");
+    throw new Error(`[PEAR] applyLook: no garment reference for ${top?.name} + ${bottom?.name} - dispatch refused`);
   }
+  /* A look has MORE ways to arrive with a bad reference than a single garment (a stitch
+     Blob, a top reference, a bare garmentImageRef of either half) - all land on this line. */
+  if (typeof assertUsableImageRef === "function") assertUsableImageRef(primaryImage, "applyLook");
   const images = [topImg, bottomImg].filter(Boolean).map(garmentImageRef).filter(Boolean);
 
   // ONE combined payload - both garments, one pass, same session.
-  /* The image key is OMITTED rather than set to null when nothing resolved. `image: null`
-     is not the same thing as no image: it is an explicit empty value on a key the SDK
-     validates, and it is exactly the "sent as an empty/default image state" shape that
-     looks, in a payload log, like a reference was delivered when none was. */
+  /* CORRECTED 2026-09-19. This used to OMIT the image key when nothing resolved, on the
+     belief that an omitted key is safer than `image: null`. Verified in the installed SDK
+     (realtime/methods.js set()), both become image_data: null - an explicit clear. The ladder
+     above now guarantees a usable reference, so the key is unconditional. */
   const payload = {
     prompt,
     enhance: false,
-    ...(primaryImage ? { image: primaryImage } : {}),   // SDK single-image slot: TOP+BOTTOM stitched composite (or fallback)
+    image: primaryImage,              // SDK single-image slot: TOP+BOTTOM stitched composite (or fallback)
     images,                           // both verified proxy URLs, bundled together
     garments: [                       // per-slot metadata incl. category (top|bottom)
       { category: "top",    type: top.garmentType,    image: topImg,    color: top.color,    subType: top.subType,    name: top.name,    angle: currentAngle },
@@ -15400,8 +15938,8 @@ async function applyLook(top, bottom) {
       // A stricter SDK build may reject the enriched shape - retry with the minimal contract.
       console.warn("look payload rejected, retrying minimal:", e?.message || e);
       console.log("[DECART PROMPT DEBUG] (retry, minimal payload)", prompt, abbrevImg(primaryImage));
-      // Same omit-don't-null rule as the enriched payload above.
-      await rtClient.set({ prompt, enhance: false, ...(primaryImage ? { image: primaryImage } : {}) });
+      // Same unconditional image as the enriched payload above - never a clearing set().
+      await rtClient.set({ prompt, enhance: false, image: primaryImage });
     }
   });
   /* Keep the reference tracker honest: a look sends its OWN stitched image, so whatever
@@ -15412,6 +15950,12 @@ async function applyLook(top, bottom) {
   rtImageOnWire = !!primaryImage;
   lastSentPrompt = prompt;
   if (primaryImage) lastAckedImageRef = primaryImage;
+  /* An acknowledged full upload - its render window gates the reveal (noteImageUploadAcked).
+     Identified by the TOP, the garment that owns the single image slot. */
+  if (typeof noteImageUploadAcked === "function") {
+    noteImageUploadAcked("applyLook",
+      repinned ? undefined : (typeof garmentIdOf === "function" ? garmentIdOf(top) : undefined));
+  }
 }
 
 /**
@@ -17382,6 +17926,33 @@ function armFirstFrameBilling(video, gen) {
     return Math.min(v, PASSTHROUGH_GATE_MAX_MS);   // never past the ceiling that bounds this gate
   })();
 
+  /* ── THE RENDER-SETTLE HOLD (2026-09-19) - the reveal never lands inside an upload's render wait ──
+     The minimum hold below was fixed-length, and its own re-assert is a full re-upload sent 700ms
+     into it: ack, then ~1s before Decart's render leaves its prior. The hold expired first, so the
+     reveal landed on the prior - "a multicolor long-sleeve at 00:00, my black tee at 00:01". Holding
+     until the latest acknowledged image upload has had REFERENCE_RENDER_SETTLE_MS closes that for
+     every upload, not just the re-assert: go-live's own, a re-dispatch, a reconnect's.
+     Its own ceiling (REVEAL_SETTLE_MAX_MS), not PASSTHROUGH_GATE_MAX_MS: a re-dispatch sent just
+     before that 2.6s ceiling still has a render to wait out. ?settle_hold=0 disables it for a live
+     A/B. typeof-guarded throughout: cold-start-passthrough.test.mjs runs this function standalone,
+     and its sections that predate the hold must still see exactly the old gate. */
+  const settleHoldEnabled = typeof referenceRenderSettle === "function" && (() => {
+    try { return new URLSearchParams(location.search).get("settle_hold") !== "0"; } catch (_) { return true; }
+  })();
+  const settleMaxMs = typeof REVEAL_SETTLE_MAX_MS === "number" ? REVEAL_SETTLE_MAX_MS : 6000;
+  let settleExpiryLogged = false;
+  const settleGateExpired = () => {
+    const expired = Date.now() - armedAt >= settleMaxMs;
+    if (expired && !settleExpiryLogged) {
+      settleExpiryLogged = true;
+      console.warn(`[PEAR] render-settle hold expired after ${settleMaxMs}ms - revealing anyway.`,
+        "An image upload was still rendering or the wire held a different garment; a torn-down",
+        "session would be worse than an honest late frame.");
+    }
+    return expired;
+  };
+  const renderSettling = () => settleHoldEnabled && referenceRenderSettle().settling;
+
   /* THE CEILING. A gate that can hold the reveal indefinitely does not degrade to "the
      shopper waits" - it degrades to FIRST_FRAME_TIMEOUT_MS tearing the session down and
      showing a hard failure, which is strictly worse than an unconditioned render they can
@@ -17417,6 +17988,10 @@ function armFirstFrameBilling(video, gen) {
     if (now - lastRedispatchAt < COLD_START_REDISPATCH_MS) return;
     if (myGen !== sessionGen || !isLive()) return;
     if (wireBusy()) return;            // a write IS on the wire - let it land, re-offer next frame
+    /* ...nor while the LAST upload is still rendering. A re-send inside that window restarts the
+       prior-garment window it is waiting out, and buys nothing: the verdict that asked for it was
+       read off frames that predate the render it is about to replace. Re-offered once it settles. */
+    if (renderSettling()) return;
     lastRedispatchAt = now;
     redispatches++;
     console.warn(why === "cold-start re-assert"
@@ -17424,6 +17999,10 @@ function armFirstFrameBilling(video, gen) {
         ` re-sending the garment once before the shopper sees anything (${redispatches}/${COLD_START_REDISPATCH_MAX}).` +
         " Three recorded sessions were revealed on an undressed frame that both detectors read as conditioned;" +
         " a turn's re-drape is what landed the garment, and this is that send, earlier and invisible."
+      : why === "wrong-garment"
+      ? `[PEAR] the garment on the wire (${typeof wireGarmentId !== "undefined" ? wireGarmentId : "?"}) is not the` +
+        ` selected one (${typeof selectedGarmentId === "function" ? selectedGarmentId() : "?"}) ${now - armedAt}ms` +
+        ` after the first frame - re-dispatching the selection (${redispatches}/${COLD_START_REDISPATCH_MAX}).`
       : why === "no-reference"
       ? `[PEAR] no garment reference ever reached the wire (rtImageOnWire false) ${now - armedAt}ms` +
         ` after the first frame - re-dispatching the garment (${redispatches}/${COLD_START_REDISPATCH_MAX}).` +
@@ -17471,6 +18050,19 @@ function armFirstFrameBilling(video, gen) {
         `since arming (isGarmentApplied=${isGarmentApplied}, stableFrameCount=${stableFrameCount},`,
         `stableFor=${stableSinceMs !== null ? Date.now() - stableSinceMs : "n/a"}ms)`);
       watchPostFireLuma(video, gen, armedAt);   // keep sampling briefly - see if the frame is still settling
+    }
+    /* THE FIRST-FRAME VERDICT, one line, every session - what the reveal was decided on. Decart's
+       frames carry no garment identity, so this reports the two things that ARE knowable: whose
+       garment the acknowledged reference is, and how long its render has had. typeof-guarded. */
+    if (typeof selectedGarmentId === "function" && typeof referenceRenderSettle === "function") {
+      const want = selectedGarmentId();
+      const have = wireGarmentId;
+      const s = referenceRenderSettle();
+      (have === want ? console.log : console.warn)(
+        `[VTO Pipeline] first frame revealed +${Date.now() - armedAt}ms | selected Garment ID: ${want}`,
+        `| conditioning on the wire: ${have} ${have === want ? "(match)" : "(MISMATCH - revealed at the ceiling)"}`,
+        `| last image acknowledged ${Number.isFinite(s.sinceAckMs) ? Math.round(s.sinceAckMs) + "ms" : "never"} ago`,
+        `(render wait ${REFERENCE_RENDER_SETTLE_MS}ms) | re-sends before reveal: ${redispatches}`);
     }
     startBillingWindow(gen);
   };
@@ -17544,13 +18136,29 @@ function armFirstFrameBilling(video, gen) {
     const sinceQualified = firstQualifyingAt === null ? 0 : Date.now() - firstQualifyingAt;
     const withinMinHold = minHoldMs > 0 && firstQualifyingAt !== null && sinceQualified < minHoldMs;
     if (withinMinHold && !reasserted && sinceQualified >= COLD_START_REASSERT_MS) {
-      reasserted = true;
-      redispatchColdStart(gen, NaN, "cold-start re-assert");
+      /* Deferred, not spent, while an upload is still rendering: redispatchColdStart() would
+         decline it, and a re-assert marked sent but never sent is the one-shot lost for good. */
+      if (!renderSettling()) {
+        reasserted = true;
+        redispatchColdStart(gen, NaN, "cold-start re-assert");
+      }
     }
     const unconditioned = (probe.ready && probe.passthrough) || noReference || withinMinHold;
     const stillRaw = unconditioned && !passthroughGateExpired();
     if (stillRaw && !withinMinHold) redispatchColdStart(gen, probe.delta, noReference ? "no-reference" : "passthrough");
-    const qualifies = isGarmentApplied && dressed && !stillRaw;
+    /* ── (5) SETTLED, AND THE RIGHT GARMENT ──────────────────────────────────────────────
+       SETTLED: no image upload in flight, and the latest one acknowledged at least
+       REFERENCE_RENDER_SETTLE_MS ago - until then Decart may be drawing its own prior. This is
+       the gate that closes the 00:00 wrong-garment report; see the settle-hold note above.
+       RIGHT GARMENT: the acknowledged reference belongs to the garment the shopper selected
+       (wireGarmentId vs selectedGarmentId). A mismatch - a garment tapped while its
+       predecessor's upload was in flight - holds and re-dispatches the selection, through the
+       same bounded redispatchColdStart(). Both yield to REVEAL_SETTLE_MAX_MS. */
+    const settleHold = renderSettling() && !settleGateExpired();
+    const garmentMismatch = settleHoldEnabled && wireGarmentId !== null && wireGarmentId !== selectedGarmentId();
+    const wrongGarmentHold = garmentMismatch && !settleGateExpired();
+    if (wrongGarmentHold && !settleHold) redispatchColdStart(gen, NaN, "wrong-garment");
+    const qualifies = isGarmentApplied && dressed && !stillRaw && !settleHold && !wrongGarmentHold;
     if (!qualifies) {
       stableSinceMs = null;
       stableFrameCount = 0;
@@ -17574,6 +18182,10 @@ function armFirstFrameBilling(video, gen) {
           `| Δin=${probe.ready ? probe.delta.toFixed(2) : "n/a"}`,
           `| passthrough=${probe.ready ? probe.passthrough : "n/a"}`,
           `| referenceOnWire=${referenceOnWire()}`,
+          /* THE FIFTH GATE, for the same reason: "settling" true on the frames just before the
+             reveal is what the 00:00 wrong-garment clip looked like from in here. */
+          `| settling=${settleHold}${settleHoldEnabled ? ` (last image ack ${Math.round(referenceRenderSettle().sinceAckMs)}ms ago)` : " (disabled)"}`,
+          `| wireGarment=${settleHoldEnabled ? wireGarmentId : "n/a"}${garmentMismatch ? " MISMATCH" : ""}`,
           `| redispatches=${redispatches}`);
       }
     }
@@ -18061,23 +18673,74 @@ async function applyFallbackConditioning() {
   if (!item || !rtClient) throw new Error("no garment / no client for the fallback apply");
 
   const gallery = galleryOf(item) || {};
-  const image = garmentImageRef(gallery.front || item.img || gallery.back);
+  /* FRONT ONLY, like the floor: this pairs the image with imageOnlyPrompt(item)'s FRONT anchor,
+     so `|| gallery.back` would have put the rear print on the chest (§2.1). With no front, the
+     ladder below re-pins the acknowledged garment or refuses. */
+  const primary = gallery.front || item.img;
+  /* Warm bytes first (no server-side fetch before Decart can condition), the URL otherwise. */
+  let image = (primary && garmentBlobIfWarm(primary)) || garmentImageRef(primary);
   const prompt = clampPromptForWire(imageOnlyPrompt(item), "fallbackConditioning");
 
+  /* ALREADY ON THE WIRE - the common case now. This recovery runs right after
+     connectRealtime({ force: true }), and that connect's own join carried this garment as its
+     initialState and waited for Decart's ack (adoptInitialStateAsWire). The identical image and
+     prompt are therefore already held, acknowledged; sending them again would be a second full
+     upload with its own render wait. Mark the session dressed and open the gate instead. */
+  if (image && rtImageOnWire && lastSentImageRef === image && lastSentPrompt === prompt) {
+    console.log("[PEAR] fallback conditioning:", item.name,
+      "- the reconnect's initialState already delivered this exact garment and prompt; nothing to re-send");
+    isGarmentApplied = true;
+    releaseInputGate("fallback conditioning");
+    return;
+  }
+
+  /* ── THE LAST CALL SITE THAT COULD SHIP AN UNCONDITIONED PAYLOAD ────────────────────
+     Ported 2026-09-19 from 17d20c7. This send used to read `...(image ? { image } : {})` -
+     and it mattered MORE here than anywhere, because of the two lines after the send: this
+     path also sets isGarmentApplied and opens the input gate. An unresolved reference
+     therefore CLEARED the model's conditioning (the SDK sends an omitted image as
+     image_data: null), declared the shopper dressed, and started streaming frames at it - in
+     that order. Now: the item's own reference, then the session's acknowledged pin, then a
+     THROW. Throwing rather than returning is deliberate: this function IS the recovery, and
+     a recovery that quietly does nothing would let applyConditioningWithRecovery() report
+     success over a session with no garment on it. The throw reaches goLive(), which tells
+     the shopper. */
+  let repinned = false;   // see applyGarment(): a pinned reference is not this item's own
+  if (!image && lastAckedImageRef) {
+    console.warn("[PEAR] applyFallbackConditioning() - no reference resolved; re-pinning the",
+      "session's acknowledged garment rather than sending an unconditioned payload:",
+      abbrevImg(lastAckedImageRef));
+    image = lastAckedImageRef;
+    repinned = true;
+  }
+  if (!image) {
+    console.error("[PEAR] applyFallbackConditioning() - NO garment asset for", item.name,
+      "and nothing pinned from earlier in this session.",
+      "\n  → DISPATCH ABANDONED. set() without an image sends image_data: null, which",
+      "CLEARS the model's reference and renders a garment nobody chose.");
+    throw new Error("[PEAR] fallback conditioning: no usable garment reference to send");
+  }
+  assertUsableImageRef(image, "applyFallbackConditioning");
+
   console.log("[PEAR] fallback conditioning:", item.name,
-    "| reference:", abbrevImg(image) || "(none - prompt only)",
+    "| reference:", abbrevImg(image),
     look ? "| full look reduced to its TOP for this send" : "");
   console.log("[DECART PROMPT DEBUG]", prompt, abbrevImg(image), "(lightweight fallback)");
 
+  /* Unconditional now - the ladder above returns or throws rather than reaching here with
+     nothing, so neither an omitted key nor an explicit null can leave this line. */
   await sendCondition("fallbackConditioning",
-    () => rtClient.set({ prompt, enhance: false, ...(image ? { image } : {}) }));
+    () => rtClient.set({ prompt, enhance: false, image }));
 
   isGarmentApplied = true;         // the wire holds a garment - the next frame is dressed
   releaseInputGate("fallback conditioning");
-  lastSentImageRef = image || null;
-  rtImageOnWire = !!image;
+  lastSentImageRef = image;
+  rtImageOnWire = true;
   lastSentPrompt = prompt;
-  if (image) lastAckedImageRef = image;
+  lastAckedImageRef = image;
+  if (typeof noteImageUploadAcked === "function") {
+    noteImageUploadAcked("fallbackConditioning", repinned ? undefined : garmentIdOf(item));
+  }
 }
 
 /**

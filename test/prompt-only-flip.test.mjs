@@ -91,11 +91,26 @@ function makeHarness({ composite = true } = {}) {
     _ref: null,
     _gallery: { front: "https://cdn.test/front.jpg", back: "https://cdn.test/back.jpg" },
   };
+  /* lastAckedImageRef IS DECLARED HERE, AND THE OMISSION WAS A LIVE LEAK. applyGarment()
+     writes the session pin (`lastAckedImageRef = imageRef`) after every acknowledged set().
+     Undeclared, that sloppy-mode `new Function` assignment created a GLOBAL - so one case's
+     garment silently survived into every later harness. It was harmless while nothing read
+     the pin; applyGarment() now does (re-pin or refuse, see NOTHING TO RECOVER below), and
+     the leaked global made a bare item "recover" a garment from an unrelated earlier case.
+     Declared per harness, endSession() is also a faithful session boundary: app.js clears
+     the pin at its own boundaries, so a harness that did not would test an unreachable state. */
+  /* THE READABILITY GUARD, EXECUTED - not stubbed out. applyGarment() asserts that the
+     reference it resolved is one the SDK's imageToBase64() can actually turn into bytes
+     before it builds a payload, and a stub that always said yes would let this suite keep
+     passing over a reference that reaches Decart as the characters of a URL. The real pair
+     is cheap and pure, so it goes in as itself. */
+  const guardSrc = extract("function usableImageRef(ref) {", "\n/**\n * Fires once per session");
   const body =
-    "let lastSentImageRef = null; let rtImageOnWire = false;\n" +
+    "let lastSentImageRef = null; let rtImageOnWire = false; let lastAckedImageRef = null;\n" +
+    guardSrc +
     applyGarmentSrc +
-    "\nreturn { applyGarment, state: () => ({ lastSentImageRef, rtImageOnWire })," +
-    " endSession: () => { lastSentImageRef = null; rtImageOnWire = false; } };";
+    "\nreturn { applyGarment, state: () => ({ lastSentImageRef, rtImageOnWire, lastAckedImageRef })," +
+    " endSession: () => { lastSentImageRef = null; rtImageOnWire = false; lastAckedImageRef = null; } };";
   const api = new Function(...Object.keys(sandbox), body)(...Object.values(sandbox));
   return { api, sent, sandbox };
 }
@@ -261,13 +276,69 @@ console.log("\n── a prompt-only path must never be taken with no image on th
   sandbox._gallery = {};
   sandbox._angle = "front";
   const bare = { ...item, img: undefined, composite: undefined };
-  await api.applyGarment(bare);
-  await api.applyGarment(bare);
-  check("null references never collapse into setPrompt()",
-    sent.every((s) => s.kind === "set"), JSON.stringify(sent.map((s) => s.kind)));
-  check("...and no image is invented onto the payload either",
-    sent.every((s) => s.hasImage === false), JSON.stringify(sent.map((s) => s.hasImage)));
-  check("and nothing is recorded as being on the wire", api.state().rtImageOnWire === false);
+  const refusals = [];
+  for (let i = 0; i < 2; i++) {
+    try { await api.applyGarment(bare); } catch (e) { refusals.push(e?.message || String(e)); }
+  }
+  /* ── THE CONTRACT CHANGED, AND IT GOT STRICTER (2026-09-19, ported from 17d20c7) ──
+     This used to assert that a resolve-nothing dispatch still went out as a set() with
+     no image key - the point being that it must not take the setPrompt() fast path.
+     Both halves of that are now moot, because it does not go out AT ALL.
+
+     Verified in the installed SDK (realtime/methods.js set()): an omitted image key is sent
+     as image_data: null - an explicit CLEAR of the garment the model holds. So the old
+     "set() with no image" did not leave the session undressed-but-recoverable; it wiped a
+     correct garment and put the model's own default in its place - the reported "wrong
+     garment rendered". Resolving nothing must mean sending nothing, and saying so: the
+     dispatch THROWS, which applyActive()'s retry and applyConditioningWithRecovery() already
+     treat as "this dispatch must not go out". */
+  check("null references never collapse into setPrompt() - nor into an image-less set()",
+    sent.length === 0, JSON.stringify(sent.map((s) => ({ k: s.kind, img: s.hasImage }))));
+  check("...the dispatch is REFUSED loudly, every time, rather than skipped silently",
+    refusals.length === 2 && refusals.every((m) => /dispatch refused/.test(m)), JSON.stringify(refusals));
+  check("and nothing is recorded as being on the wire",
+    api.state().rtImageOnWire === false && api.state().lastSentImageRef === null);
+  check("...and no garment is pinned, because none was ever acknowledged",
+    api.state().lastAckedImageRef === null, String(api.state().lastAckedImageRef));
+}
+{
+  /* THE PIN, the other half of the ladder: a session that WAS dressed and then resolves
+     nothing for its next dispatch re-sends the garment Decart acknowledged, rather than
+     refusing. Re-sending the confirmed reference is at worst a no-op on the model; clearing
+     it is the bug. */
+  const { api, sent, sandbox } = makeHarness({ composite: false });
+  sandbox._ref = "https://cdn.test/front.jpg";
+  sandbox._angle = "front";
+  await api.applyGarment(item);
+  check("a dressed session pins the reference Decart acknowledged",
+    api.state().lastAckedImageRef === "https://cdn.test/front.jpg", String(api.state().lastAckedImageRef));
+  sandbox._ref = null;
+  sandbox._gallery = {};
+  const bare = { ...item, img: undefined, composite: undefined };
+  let threw = null;
+  try { await api.applyGarment(bare); } catch (e) { threw = e; }
+  /* Not throwing IS the proof the pin was taken: the identical resolve-nothing dispatch
+     refuses in the case above, where nothing was acknowledged. Here the re-pinned reference
+     and the frozen prompt both match what is on the wire, so the no-op skip rightly sends
+     nothing further - the model keeps the garment it confirmed. */
+  check("...and a later resolve-nothing dispatch re-pins it instead of refusing or clearing",
+    !threw && sent.every((s) => s.hasImage === true) &&
+    api.state().lastAckedImageRef === "https://cdn.test/front.jpg",
+    JSON.stringify({ threw: threw?.message, sent: sent.map((s) => ({ k: s.kind, img: s.image })) }));
+  check("...and the pin survives an endSession() only as far as the session does",
+    (api.endSession(), api.state().lastAckedImageRef === null));
+}
+{
+  /* THE READABILITY GUARD, at the dispatch site: a reference the SDK would forward verbatim
+     (a blob: URL, a relative path) is conditioning on the characters of a URL. Refused. */
+  const { api, sent, sandbox } = makeHarness({ composite: false });
+  sandbox._ref = "blob:https://app.test/9f1c";
+  sandbox._angle = "front";
+  let threw = null;
+  try { await api.applyGarment(item); } catch (e) { threw = e; }
+  check("a blob: reference is refused before it reaches set()",
+    !!threw && /unusable garment reference/.test(threw.message) && sent.length === 0,
+    JSON.stringify({ threw: threw?.message, sent: sent.length }));
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

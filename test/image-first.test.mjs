@@ -699,20 +699,42 @@ console.log("\n── §5 AN IMAGE ON EVERY UPDATE AND EVERY RETRY ──");
 
   const look = SRC.slice(SRC.indexOf("async function applyLook(top, bottom) {"),
                          SRC.indexOf("function buildLookPrompt"));
-  /* `image: null` is NOT the same as no image key: it is an explicit empty value on a key
-     the SDK validates, and in a payload log it looks like a reference was delivered. */
-  check("applyLook omits the image key rather than sending image: null",
-    !/image: primaryImage,/.test(look) &&
-    /\.\.\.\(primaryImage \? \{ image: primaryImage \} : \{\}\)/.test(look));
+  /* ── SUPERSEDED BY A STRONGER CONTRACT (2026-09-19, ported from 17d20c7) ─────────────
+     This pair used to assert that the image key was OMITTED rather than set to null when
+     nothing resolved - on the reasoning that `image: null` is an explicit empty value that
+     reads, in a payload log, like a reference was delivered. A real distinction, but it
+     turned out to make no difference on the wire: the installed SDK's realtime/methods.js
+     set() maps undefined AND null alike to setImage({ kind: "data", data: null }) -
+     image_data: null, an explicit CLEAR of the garment the model holds. Both spellings
+     wiped a correct garment and put the model's own default in its place: the "wrong
+     garment rendered" report. So the fix is not to spell the absence better, it is to never
+     dispatch with one: re-pin the session's acknowledged reference, and refuse (throw) when
+     even that is empty. Stripped of comments first, because the retired idiom is now quoted
+     in the comment that records why it was retired. */
+  const lookCode = look.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  check("applyLook sends the image key unconditionally - the absence cannot be spelled",
+    /image: primaryImage,/.test(lookCode) &&
+    !/\.\.\.\(primaryImage \? \{ image: primaryImage \} : \{\}\)/.test(lookCode));
   check("...on the minimal-retry path too, not just the enriched payload",
-    (look.match(/\.\.\.\(primaryImage \? \{ image: primaryImage \} : \{\}\)/g) || []).length === 2);
+    (lookCode.match(/image: primaryImage/g) || []).length >= 2);
+  check("...because it re-pins the session's acknowledged reference first",
+    /if \(!primaryImage && lastAckedImageRef\) \{/.test(lookCode),
+    "lastAckedImageRef is the session lock - it survives invalidateWireState()");
+  check("...and REFUSES the dispatch when nothing is pinned, rather than blanking the model",
+    /DISPATCH REFUSED/.test(look) && /throw new Error\(`\[PEAR\] applyLook: no garment reference/.test(lookCode),
+    "an image-less set() is worse than no set() - it destroys working conditioning");
   check("applyLook falls back to a raw garment ref before giving up",
     /garmentImageRef\(topImg\) \|\| garmentImageRef\(bottomImg\)/.test(look));
 
   check("verifyGarmentAsset still inspects the payload at both full-set sites",
     (SRC.match(/verifyGarmentAsset\(payload, "(applyGarment|applyLook)"\)/g) || []).length === 2);
+  /* The message changed with the contract: it used to say the set() would "run PROMPT-ONLY"
+     and Decart "will render its default/generic output" - true of the render, wrong about
+     the mechanism (a set() with no image is not prompt-only, it is a clear). It now names
+     the clear, and points at the guard that makes such a payload unreachable. */
   check("...and still says what a payload with no image will actually do",
-    /Decart has no pixel reference and will render its default\/generic output/.test(SRC));
+    /CLEARS Decart's reference \(the SDK sends image_data: null\)/.test(SRC) &&
+    /see assertUsableImageRef\(\)/.test(SRC));
 }
 
 console.log("\n── §6 A FREEZE MUST NOT RESUME UNCONDITIONED ──");
@@ -803,9 +825,39 @@ console.log("\n── §6 A FREEZE MUST NOT RESUME UNCONDITIONED ──");
      through a rebuilt transport still claiming the blob is on it. */
   const opts = SRC.slice(SRC.indexOf("function buildRealtimeConnectOpts(gen)"),
                          SRC.indexOf("async function connectRealtime"));
-  check("a post-reconnect re-apply invalidates the wire state FIRST",
-    /invalidateWireState\("SDK reconnect[\s\S]{0,200}applyActive\(\)/.test(opts),
-    "without it the re-apply matches on both halves and dispatches nothing");
+  /* Comments stripped first: the re-apply is now a bounded retry, and the block comment
+     explaining WHY it may not be fire-and-forget sits between the invalidate and the call.
+     A distance budget measured across that explanation would force whoever reads it to
+     delete the documentation to keep the check green. The property is the ORDER.
+     ORDER, ASSERTED AS ORDER (2026-09-19, ported from 17d20c7). This used to be a
+     200-character proximity window, which read as "invalidate, then re-apply" only while
+     the re-apply was a one-liner. Two indices and a comparison say what was always meant. */
+  const optsCode = opts.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  /* AND WITH A FLOOR, THE BELIEF IS CORRECTED RATHER THAN BLANKED (2026-09-19). The SDK
+     rejoins with the connect-time initialState and waits for its ack, so the wire provably
+     holds the floor. Blanking the belief made the re-apply re-upload that same front packshot
+     mid-stream - a generic-garment flicker after every network blip. The property this check
+     has always protected is unchanged: the belief is FIXED before the re-apply reads it, so a
+     re-apply whose target differs from what the transport holds really dispatches.
+     Invalidation stays as the no-floor branch. */
+  const iAdopt = optsCode.indexOf('adoptInitialStateAsWire("SDK reconnect');
+  const iInvalidate = optsCode.indexOf('invalidateWireState("SDK reconnect');
+  const iReapply = optsCode.indexOf("applyActive()", Math.max(iAdopt, iInvalidate));
+  check("a post-reconnect re-apply corrects the wire state FIRST - to the replayed floor, else blank",
+    iAdopt !== -1 && iInvalidate !== -1 && iReapply !== -1 && iAdopt < iReapply && iInvalidate < iReapply &&
+    iAdopt < iInvalidate,
+    "without it the re-apply matches a stale belief on both halves and dispatches nothing");
+  /* ...AND IT RETRIES, a separate property from the ordering. Nothing else re-asserts the
+     garment after a reconnect - the re-anchor is a no-op under a frozen prompt and the
+     re-drape only fires on movement - so one rejected re-apply used to leave the session
+     live, billing, and conditioned on whatever the SDK replayed. */
+  check("...and retries rather than logging one rejection and giving up",
+    /attempt <= 3/.test(optsCode) && /post-reconnect re-apply attempt/.test(opts),
+    "a set() landing on a still-settling rebuilt transport is the likeliest outcome here");
+  check("...abandoning the retry the moment the session is superseded",
+    /const genAtReconnect = sessionGen;/.test(optsCode) &&
+    /if \(sessionGen !== genAtReconnect\) return;/.test(optsCode),
+    "a retry that outlives its session re-conditions someone else's try-on");
   const invalidate = (SRC.match(/function invalidateWireState\(why\) \{[\s\S]*?\n\}/) || [""])[0];
   check("invalidateWireState clears all three wire flags",
     /lastSentImageRef = null;/.test(invalidate) && /rtImageOnWire = false;/.test(invalidate) &&
