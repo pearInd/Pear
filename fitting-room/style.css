@@ -2518,8 +2518,9 @@ html.pear-returning-check #screen-calculator { display: none !important; }
 }
 /* 420px → 860px (2026-09-18): the tray now also carries the terms & accuracy
    consent panel (#consentPanel) between the size and Continue. Measured scrollHeight
-   at a 320px viewport: 668px Hebrew, 709px English (the longer copy) - ~150px spare
-   for font fallback and zoom. max-height is a CEILING, not a
+   at a 320px viewport with the original TWO-box panel: 668px Hebrew, 709px English.
+   The one-row consent (2026-09-19) is shorter, so the ceiling only gained headroom;
+   it is kept rather than re-tuned to a tighter number that could clip on zoom. max-height is a CEILING, not a
    height, so the extra headroom cannot open a gap - but overflow:hidden CLIPS, and a
    clipped consent box would hide the very checkbox that unlocks Continue. */
 .result-actions.is-ready {
@@ -5238,12 +5239,12 @@ html[dir="rtl"] .step-progress-fill {
 
      .btn-primary .btn-ghost .btn-capture .btn-add-cart .btn-watch .btn-download
      .btn-update-measure .btn-edit-measurements .cart-btn .cookie-btn .pear-compare-bar
-     .plb-btn .pear-sz-btn .pear-rz-btn .pcmp__close .gd-close .pear-lightbox__close
+     .plb-btn .pear-sz-btn .pear-rz-btn .pcmp__close .terms-modal__close .gd-close .pear-lightbox__close
      .pear-help-widget__btn .pear-help-widget__close .camera-card__flip .cl-arrow
      .pip-retake .pip-clear .profile-btn .profile-dropdown__logout .cart-line__remove */
 body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
          .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
-         .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .gd-close, .pear-lightbox__close,
+         .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
          .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .cl-arrow,
          .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout, .cart-line__remove) {
   -webkit-backdrop-filter: blur(20px) saturate(180%);
@@ -5265,7 +5266,7 @@ body :is(.pear-help-widget__close, .profile-dropdown__logout) {
 }
 /* ::before needs a positioned box; these are static at baseline (position:relative
    with no offsets moves nothing). The others are already relative or absolute. */
-:is(.btn-ghost, .btn-edit-measurements, .btn-update-measure, .pcmp__close, .gd-close,
+:is(.btn-ghost, .btn-edit-measurements, .btn-update-measure, .pcmp__close, .terms-modal__close, .gd-close,
     .pear-help-widget__btn, .pear-help-widget__close, .pip-clear, .profile-dropdown__logout) {
   position: relative;
 }
@@ -5281,7 +5282,7 @@ body :is(.pear-help-widget__close, .profile-dropdown__logout) {
 /* the glass sheen - OVER the button's own fill, UNDER its label */
 body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
          .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
-         .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .gd-close, .pear-lightbox__close,
+         .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
          .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .cl-arrow,
          .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout, .cart-line__remove)::before {
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
@@ -5298,7 +5299,7 @@ body :is(.btn-primary, .btn-capture, .btn-add-cart, .btn-ghost, .cookie-btn):dis
 @media (hover: hover) and (pointer: fine) {
   :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
       .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
-      .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .gd-close, .pear-lightbox__close,
+      .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
       .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip,
       .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout,
       .cart-line__remove):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
@@ -5308,7 +5309,7 @@ body :is(.btn-primary, .btn-capture, .btn-add-cart, .btn-ghost, .cookie-btn):dis
   .cl-arrow:hover { transform: translateY(-50%) scale(1.02); }
   body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
            .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
-           .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .gd-close, .pear-lightbox__close,
+           .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
            .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .cl-arrow,
            .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout,
            .cart-line__remove):hover:not(:disabled):not([aria-disabled="true"])::before { opacity: 1; }
@@ -5319,7 +5320,7 @@ body :is(.btn-primary, .btn-capture, .btn-add-cart, .btn-ghost, .cookie-btn):dis
    button's own (longer) settle. */
 :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
     .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
-    .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .gd-close, .pear-lightbox__close,
+    .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
     .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip,
     .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout,
     .cart-line__remove):active:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading) {
@@ -5369,58 +5370,22 @@ body :is(.btn-primary, .btn-capture, .btn-add-cart, .btn-ghost, .cookie-btn):dis
   animation: pearStepIn .56s var(--ease-sheet) both .06s;
 }
 
-/* ── 6 · terms & accuracy consent panel (#consentPanel) ──────────────────────
-   Inside the Screen-1 card → no backdrop-filter (backdrop root, see §2 above). */
-.consent-panel {
-  display: grid; gap: 10px;
-  margin-top: 18px; padding: 14px;
-  border-radius: 20px;
-  text-align: start;
-  background: linear-gradient(135deg, rgba(255, 255, 255, .62), rgba(255, 255, 255, .30));
-  border: var(--lg-border);
-  box-shadow: var(--lg-edge), 0 6px 20px rgba(15, 23, 42, .06);
-  transition: border-color .4s var(--ease), box-shadow .4s var(--ease);
-}
+/* ── 6 · terms & accuracy consent (#consentPanel) + the policy popup (#termsModal) ──
+   ONE compact row since 2026-09-19: a checkbox and a sentence whose middle is a link
+   that opens the popup. No card and no alert box in the form any more - the accuracy
+   disclaimer and the measurement-processing statement live in the popup, one tap
+   away, and ticking the box accepts them. Inside the Screen-1 card → no blur. */
+.consent-panel { position: relative; margin-top: 14px; text-align: start; }
 .result-actions.is-ready .consent-panel { animation: pearPopIn .55s cubic-bezier(.34, 1.56, .64, 1) both .12s; }
-.consent-panel.is-complete {
-  border-color: rgba(var(--primary-rgb), .42);
-  box-shadow: var(--lg-edge), 0 6px 20px rgba(var(--primary-rgb), .12);
-}
-.consent-panel__title {
-  margin: 0 2px;
-  font-family: var(--font-ui);
-  font-size: .8rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--ink-label);
-}
-/* The accuracy disclaimer is the one sentence here a shopper must not skim past -
-   amber (the stock notice's "still valid, but read this" colour, not error red),
-   an accent rule on the reading-start edge, and full ink. */
-.consent-panel__disclaimer {
-  display: flex; align-items: flex-start; gap: 10px;
-  margin: 0; padding: 12px 14px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(214, 158, 46, .15), rgba(214, 158, 46, .05));
-  border: 1px solid rgba(214, 158, 46, .34);
-  border-inline-start: 3px solid rgba(190, 130, 20, .85);
-  color: var(--ink-label);
-  font-size: .82rem; line-height: 1.55; font-weight: 500;
-  text-wrap: pretty;
-}
-.consent-panel__disclaimer strong { font-weight: 800; }
-.consent-panel__icon {
-  flex: none; width: 18px; height: 18px; margin-top: 1px;
-  fill: none; stroke: #8a5a08; stroke-width: 2; stroke-linecap: round;
-}
 
 .consent-check {
-  display: flex; align-items: flex-start; gap: 12px;
-  padding: 10px; border-radius: 14px;
-  cursor: pointer;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 14px;
   -webkit-tap-highlight-color: transparent;
-  transition: background .25s var(--ease), box-shadow .25s var(--ease);
+  transition: background .25s var(--ease);
 }
-.consent-check:hover { background: rgba(255, 255, 255, .5); }
-.consent-check__control { position: relative; flex: none; width: 24px; height: 24px; margin-top: 1px; }
+.consent-check:hover { background: rgba(255, 255, 255, .45); }
+.consent-check__control { position: relative; flex: none; width: 22px; height: 22px; }
 /* The REAL checkbox, stretched over the drawn box at opacity 0 - so pointer, label,
    keyboard and screen reader all operate the native control (never display:none,
    which would drop it from the tab order and the accessibility tree). */
@@ -5432,7 +5397,7 @@ body :is(.btn-primary, .btn-capture, .btn-add-cart, .btn-ghost, .cookie-btn):dis
 .consent-check__box {
   position: absolute; inset: 0;
   display: grid; place-items: center;
-  border-radius: 8px;
+  border-radius: 7px;
   /* Glass body (sheen over the 135deg frost). The dark 1.5px stroke stays for the
      same reason the inputs keep theirs: an unticked box must be findable on white. */
   background: var(--lgb-sheen), linear-gradient(135deg, rgba(255, 255, 255, .9), rgba(255, 255, 255, .52));
@@ -5443,7 +5408,7 @@ body :is(.btn-primary, .btn-capture, .btn-add-cart, .btn-ghost, .cookie-btn):dis
               box-shadow .3s var(--ease), transform .35s var(--ease-sheet);
 }
 .consent-check__box svg {
-  width: 16px; height: 16px;
+  width: 14px; height: 14px;
   fill: none; stroke: #fff; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round;
   stroke-dasharray: 16; stroke-dashoffset: 16;
   transition: stroke-dashoffset .38s var(--ease-sheet) .04s;
@@ -5467,20 +5432,49 @@ body :is(.btn-primary, .btn-capture, .btn-add-cart, .btn-ghost, .cookie-btn):dis
 .consent-check input:focus-visible + .consent-check__box {
   box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgba(var(--focus-rgb), .55);
 }
+/* The sentence. Its two <label for> halves tick the box; the link between them does
+   not (it is a <button>, deliberately outside any <label>). It may wrap on a narrow
+   phone - it is one row of layout, not a forced single line of text. */
 .consent-check__text {
-  font-size: .86rem; line-height: 1.5; font-weight: 500;
+  margin: 0; min-width: 0;
+  font-size: .84rem; line-height: 1.45; font-weight: 500;
   color: var(--ink-label);
 }
-.consent-panel__hint {
-  margin: 0; text-align: center;
-  font-size: .78rem; font-weight: 600; color: var(--ink-secondary);
-  transition: color .3s var(--ease);
+.consent-check__text label { cursor: pointer; }
+/* "תנאי השימוש ומדיניות הפרטיות" - a text button: inherits the sentence's type, a
+   quiet underline at rest, the accent on hover. The 4px padding is cancelled by an
+   equal negative margin, so the tap target grows without moving a single glyph. */
+.terms-link-btn {
+  display: inline;
+  padding: 4px 2px; margin: -4px -2px;
+  border: 0; border-radius: 5px;
+  background: none;
+  font: inherit; font-weight: 700;
+  color: #3d5200;
+  text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px;
+  text-decoration-color: rgba(61, 82, 0, .35);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: color .2s var(--ease), text-decoration-color .2s var(--ease), background-color .2s var(--ease);
 }
-.consent-panel.is-complete .consent-panel__hint { display: none; }
-/* A press on the locked Continue (or Enter from a field) nudges instead of doing
-   nothing: the panel shakes once and the boxes still missing a tick light up. */
-.consent-panel.is-nudged { animation: consentNudge .5s var(--ease-sheet); }
-.consent-panel.is-nudged .consent-panel__hint { color: #9a4a06; }
+.terms-link-btn:hover { color: #2a3a00; text-decoration-color: currentColor; background-color: rgba(var(--primary-rgb), .12); }
+.terms-link-btn:active { background-color: rgba(var(--primary-rgb), .22); }
+.terms-link-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(var(--focus-rgb), .55); }
+
+/* The hint is for assistive tech (Continue's aria-describedby) until a press on the
+   locked Continue: then it shows, the row shakes once and the box lights up amber. */
+.consent-panel__hint {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+  margin: 0;
+}
+.consent-panel.is-nudged:not(.is-complete) .consent-panel__hint {
+  position: static; width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal;
+  margin: 2px 10px 0; padding-inline-start: 32px;
+  font-size: .76rem; font-weight: 600; color: #9a4a06;
+}
+.consent-panel.is-nudged .consent-check { animation: consentNudge .5s var(--ease-sheet); }
 .consent-check.is-missing .consent-check__box {
   border-color: #d97706;
   box-shadow: 0 0 0 3px rgba(217, 119, 6, .2);
@@ -5491,6 +5485,81 @@ body :is(.btn-primary, .btn-capture, .btn-add-cart, .btn-ghost, .cookie-btn):dis
   40% { transform: translateX(5px); }
   60% { transform: translateX(-3px); }
   80% { transform: translateX(2px); }
+}
+
+/* The popup. <body>-level (index.html), so it is never inside a screen's stacking
+   context. The fade is a TRANSITION, not a filled animation, on purpose: a filled
+   animation would keep the overlay a backdrop root and silently disable the blur
+   (see THE BUG THIS CLOSES in §2). z 450: above the detect overlay (400) and the
+   cookie banner (160), which also steps aside while this is open (§8). */
+.terms-modal {
+  position: fixed; inset: 0; z-index: 450;
+  display: flex; align-items: center; justify-content: center;
+  padding: clamp(16px, 4vw, 40px);
+  opacity: 0;
+  transition: opacity .26s var(--ease);
+}
+.terms-modal[hidden] { display: none; }
+.terms-modal.is-open { opacity: 1; }
+.terms-modal__backdrop {
+  position: absolute; inset: 0;
+  background: rgba(8, 10, 12, .38);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+          backdrop-filter: blur(24px) saturate(160%);
+}
+.terms-modal__panel {
+  position: relative; z-index: 1;
+  width: min(460px, 100%); max-height: min(80vh, 640px);
+  overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 20px 22px 22px;
+  border-radius: 28px;
+  text-align: start; color: var(--ink-label);
+  background: linear-gradient(135deg, rgba(255, 255, 255, .88) 0%, rgba(255, 255, 255, .68) 100%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+          backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, .45);
+  box-shadow: var(--lg-shadow), var(--lg-edge);
+  transform: translateY(12px) scale(.98);
+  transition: transform .34s var(--ease-spring);
+}
+.terms-modal.is-open .terms-modal__panel { transform: none; }
+.terms-modal__head { display: flex; align-items: center; gap: 12px; }
+.terms-modal__title { margin: 0; font-size: 1.12rem; font-weight: 800; color: var(--ink); }
+.terms-modal__close {
+  margin-inline-start: auto; flex: none;
+  display: inline-grid; place-items: center;
+  width: 36px; height: 36px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--glass-border); background: var(--glass-strong);
+  color: var(--ink); font-size: 1rem; line-height: 1; cursor: pointer;
+  transition: transform .3s var(--ease), background .3s var(--ease);
+}
+.terms-modal__body { display: grid; gap: 14px; }
+.terms-modal__section h4 {
+  margin: 0 0 4px;
+  font-size: .78rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+  color: #3d5200;
+}
+.terms-modal__section p { margin: 0; font-size: .9rem; line-height: 1.6; color: var(--ink-label); }
+.terms-modal__section p strong { font-weight: 800; }
+/* "הבנתי" is a baseline .btn-primary (plus the §4 glass overlay); only its top gap
+   is tightened for the popup. */
+.terms-modal__panel .terms-modal__ok { margin-top: 4px; }
+
+/* phones: the same bottom sheet as Compare / detect, with a working drag handle
+   (sheet-gestures.js: data-sheet="terms" → clicks #termsClose) */
+@media (max-width: 768px) {
+  .terms-modal { align-items: flex-end; padding: 0; }
+  .terms-modal__panel {
+    width: 100%;
+    max-height: 88vh; max-height: 88dvh;
+    border-radius: 28px 28px 0 0; border-bottom: 0;
+    padding-top: 6px;
+    padding-bottom: calc(22px + var(--safe-b, 0px));
+    transform: translateY(100%);
+  }
+  .terms-modal.is-open .terms-modal__panel { transform: none; }
+  .terms-modal__panel .drag-indicator { margin-bottom: -6px; }
 }
 
 /* ── 7 · mobile sheets ──────────────────────────────────────────────────────
@@ -5578,7 +5647,7 @@ body :is(.btn-primary, .btn-capture, .btn-add-cart, .btn-ghost, .cookie-btn):dis
 }
 .cookie-banner[hidden] { display: none; }
 .cookie-banner.is-visible { opacity: 1; transform: none; }
-body:has(.pear-compare-overlay.show, .gd-overlay.show, .pear-lightbox.show) .cookie-banner.is-visible {
+body:has(.pear-compare-overlay.show, .gd-overlay.show, .pear-lightbox.show, .terms-modal.is-open) .cookie-banner.is-visible {
   opacity: 0; pointer-events: none;
   transform: translate3d(0, calc(100% + 32px), 0);
 }
@@ -5708,7 +5777,7 @@ body.has-cookie-banner .pear-help-widget {
      that the tap registered, not decorative motion. Same weights as §4's, later. */
   :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
       .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
-      .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .gd-close, .pear-lightbox__close,
+      .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
       .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip,
       .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout,
       .cart-line__remove):hover:not(:disabled):not([aria-disabled="true"]):not(.is-done):not(.is-loading),
@@ -5716,10 +5785,12 @@ body.has-cookie-banner .pear-help-widget {
   .cl-arrow:hover { transform: translateY(-50%); }
   body :is(.btn-primary, .btn-ghost, .btn-capture, .btn-add-cart, .btn-watch, .btn-download,
            .btn-update-measure, .btn-edit-measurements, .cart-btn, .cookie-btn, .pear-compare-bar,
-           .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .gd-close, .pear-lightbox__close,
+           .plb-btn, .pear-sz-btn, .pear-rz-btn, .pcmp__close, .terms-modal__close, .gd-close, .pear-lightbox__close,
            .pear-help-widget__btn, .pear-help-widget__close, .camera-card__flip, .cl-arrow,
            .pip-retake, .pip-clear, .profile-btn, .profile-dropdown__logout,
            .cart-line__remove)::before { transition: none; }
   .consent-check input:checked + .consent-check__box { animation: none; }
+  .consent-panel.is-nudged .consent-check { animation: none; }
+  .terms-modal, .terms-modal__panel { transition: none; }
   .step-progress-fill { transition: none; }
 }

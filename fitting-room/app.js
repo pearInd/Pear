@@ -16051,9 +16051,16 @@ function clearReturningCheckGate() {
    aria-disabled blocks nothing by itself, onSizeFormContinue() re-checks the ticks
    for every route that reaches it: the click, Enter-to-proceed, a synthetic click.
 
+   ONE BOX (2026-09-19). The row used to be a disclaimer card plus two checkboxes
+   (terms; measurement processing). It is now one checkbox whose sentence links to
+   the policy popup (#termsModal, setupTermsModal below), and the popup states that
+   ticking the box also accepts measurement processing - so the single tick carries
+   both consents, and the stored record keeps both flags. Opening the popup is never
+   required: the box works on its own, and the full text is one tap away.
+
    WHERE IT IS STORED. localStorage, versioned: bump PEAR_TERMS_VERSION when the
    terms change and every visitor is asked again. Recorded on the Continue press
-   (proceeding IS the acceptance) and cleared the moment either box is unticked, so
+   (proceeding IS the acceptance) and cleared the moment the box is unticked, so
    withdrawing is as easy as agreeing. A browser that refuses storage still gets
    through - hasTermsConsent() also reads the live ticks - and is simply asked
    again next visit (CLAUDE.md §2.5: never strand a paying shopper on an infra gap).
@@ -16066,7 +16073,7 @@ function clearReturningCheckGate() {
    ============================================================================= */
 const PEAR_CONSENT_KEY   = "pear_terms_consent";
 const PEAR_TERMS_VERSION = "2026-09-18";
-const CONSENT_BOX_IDS    = ["consentTerms", "consentData"];
+const CONSENT_BOX_IDS    = ["consentTerms"];   // one box since 2026-09-19 - see ONE BOX above
 
 function readStoredConsent() {
   try {
@@ -16079,8 +16086,8 @@ function consentBoxesTicked() {
   return CONSENT_BOX_IDS.every((id) => { const el = $(id); return !!(el && el.checked); });
 }
 
-/* The one question every gate asks. The live ticks count too, so a storage failure
-   can never be the reason a shopper who DID tick both boxes is refused. */
+/* The one question every gate asks. The live tick counts too, so a storage failure
+   can never be the reason a shopper who DID tick the box is refused. */
 function hasTermsConsent() {
   return !!readStoredConsent() || consentBoxesTicked();
 }
@@ -16099,7 +16106,7 @@ function clearTermsConsent() {
 }
 
 /* Paint the consent lock. Writes [aria-disabled] and never [disabled] - see TWO
-   LOCKS above. Returns whether both boxes are ticked. */
+   LOCKS above. Returns whether the consent box is ticked. */
 function syncConsentGate() {
   const ok = consentBoxesTicked();
   const btn = $("btn-next-screen");
@@ -16120,7 +16127,7 @@ function syncConsentGate() {
 }
 
 /* Continue was pressed while locked: show WHY instead of doing nothing - shake the
-   panel once, mark the unticked boxes, and move focus to the first of them. */
+   row once, mark the unticked box, reveal the hint, and move focus to the box. */
 function nudgeConsent() {
   const panel = $("consentPanel");
   if (!panel) return;
@@ -16138,7 +16145,7 @@ function nudgeConsent() {
   console.log("[PEAR] consent: Continue held - terms / measurement-processing consent not ticked");
 }
 
-/* Idempotent - showSizeForm() runs it on every reveal. Re-ticks both boxes for a
+/* Idempotent - showSizeForm() runs it on every reveal. Re-ticks the box for a
    visitor who already accepted THIS terms version; never unticks anything. */
 function setupConsentPanel() {
   const stored = !!readStoredConsent();
@@ -16153,7 +16160,55 @@ function setupConsentPanel() {
       syncConsentGate();
     });
   });
+  setupTermsModal();
   syncConsentGate();
+}
+
+/* The policy popup (#termsModal), opened by the consent row's link (#termsLinkBtn).
+   Purely informational: it never ticks, unticks or gates anything - the box works
+   whether or not it was ever opened. Closes on ✕, "הבנתי", the backdrop and Esc;
+   Tab is kept inside while it is open, and focus returns to whatever opened it.
+   Idempotent (dataset.wired) because setupConsentPanel() runs on every reveal.
+   The hide is deferred so the close animation plays; a reopen inside that window
+   cancels it, so a quick close-then-open can never leave the popup [hidden]. */
+function setupTermsModal() {
+  const modal = $("termsModal"), link = $("termsLinkBtn");
+  if (!modal || !link || modal.dataset.wired) return;
+  modal.dataset.wired = "1";
+  let returnFocus = null, hideTimer = 0;
+
+  const focusables = () => [...modal.querySelectorAll("button:not([disabled])")]
+    .filter((b) => b.getClientRects().length);
+  const onKey = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); close(); return; }
+    if (e.key !== "Tab") return;
+    const f = focusables();
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
+
+  function open() {
+    clearTimeout(hideTimer);
+    returnFocus = document.activeElement;
+    modal.hidden = false;
+    requestAnimationFrame(() => modal.classList.add("is-open"));
+    document.addEventListener("keydown", onKey);
+    try { $("termsOk")?.focus({ preventScroll: true }); } catch {}
+    console.log("[PEAR] consent: policy popup opened");
+  }
+  function close() {
+    if (modal.hidden) return;
+    modal.classList.remove("is-open");
+    document.removeEventListener("keydown", onKey);
+    const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    hideTimer = setTimeout(() => { modal.hidden = true; }, reduce ? 0 : 260);
+    try { (returnFocus && returnFocus.isConnected ? returnFocus : link).focus({ preventScroll: true }); } catch {}
+  }
+
+  link.addEventListener("click", (e) => { e.preventDefault(); open(); });
+  modal.addEventListener("click", (e) => { if (e.target.closest("[data-terms-close]")) close(); });
 }
 
 function showSizeForm(opts) {

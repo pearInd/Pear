@@ -24,7 +24,7 @@
          all, so a shipped CSS change was served from cache indefinitely while
          app.js?v= was being bumped every deploy. Kept in step with app.js's
          version so there is one number to reason about, not two. -->
-    <link rel="stylesheet" href="style.css?v=40">
+    <link rel="stylesheet" href="style.css?v=41">
 </head>
 <body>
 
@@ -260,31 +260,35 @@
                      Continue is gated with aria-disabled, NOT with [disabled]:
                      calculateSize() owns [disabled] ("is there a size?") and six suites
                      assert on it, so the two locks stay independent and neither writer
-                     can release the other's. The native checkboxes sit ON TOP of their
-                     drawn boxes at opacity 0, so a tap, a label click, keyboard and a
-                     test driver all hit the real <input>. ░░ -->
-                <section class="consent-panel" id="consentPanel" aria-labelledby="consentTitle">
-                    <h3 class="consent-panel__title" id="consentTitle" data-i18n="consentTitle">תנאים ומדיניות</h3>
-                    <p class="consent-panel__disclaimer" role="note">
-                        <svg class="consent-panel__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9.5"/><path d="M12 11v5.5M12 7.6v.1"/></svg>
-                        <span data-i18n="consentDisclaimer"><strong>שימו לב:</strong> דיוק הדיגום מתבסס על הנתונים הוויזואליים והמידות המוזנות. אי-מילוי מלא של כל שדות המדידה עלול להשפיע על דיוק האלגוריתם, ואין המערכת מתחייבת ל-100% דיוק במקרים אלו.</span>
-                    </p>
-                    <label class="consent-check">
+                     can release the other's. The native checkbox sits ON TOP of its drawn
+                     box at opacity 0, so a tap, a label click, keyboard and a test driver
+                     all hit the real <input>.
+                     ONE BOX, ONE LINE (2026-09-19). The accuracy disclaimer and the
+                     measurement-processing statement moved into the policy popup
+                     (#termsModal); ticking this box accepts all of it. The sentence is
+                     the box's label in three parts - the two <label for> halves and the
+                     link <button> between them. A <button> may not live INSIDE a
+                     <label> (a label's only interactive content is its own control), so
+                     the checkbox takes its accessible name from all three through
+                     aria-labelledby, and a click on the link opens the popup without
+                     ticking the box. ░░ -->
+                <div class="consent-panel" id="consentPanel">
+                    <div class="consent-check">
                         <span class="consent-check__control">
-                            <input type="checkbox" id="consentTerms" required aria-required="true">
+                            <input type="checkbox" id="consentTerms" required aria-required="true"
+                                   aria-labelledby="consentTextA termsLinkBtn consentTextB">
                             <span class="consent-check__box" aria-hidden="true"><svg viewBox="0 0 16 16" focusable="false"><path d="M3.5 8.4l3 3 6-6.8"/></svg></span>
                         </span>
-                        <span class="consent-check__text"><span class="required" aria-hidden="true">*</span><span data-i18n="consentTermsLabel">אני מאשר/ת את תנאי השימוש ומדיניות הפרטיות של PEAR.</span></span>
-                    </label>
-                    <label class="consent-check">
-                        <span class="consent-check__control">
-                            <input type="checkbox" id="consentData" required aria-required="true">
-                            <span class="consent-check__box" aria-hidden="true"><svg viewBox="0 0 16 16" focusable="false"><path d="M3.5 8.4l3 3 6-6.8"/></svg></span>
-                        </span>
-                        <span class="consent-check__text"><span class="required" aria-hidden="true">*</span><span data-i18n="consentDataLabel">אני מסכים/ה לעיבוד נתוני המידות לצורך התאמת גודל אישית.</span></span>
-                    </label>
-                    <p class="consent-panel__hint" id="consentGateHint" data-i18n="consentGateHint">יש לסמן את שתי התיבות כדי להמשיך</p>
-                </section>
+                        <p class="consent-check__text">
+                            <label for="consentTerms" id="consentTextA" data-i18n="consentTermsPrefix">אני מאשר/ת את</label>
+                            <button type="button" class="terms-link-btn" id="termsLinkBtn" aria-haspopup="dialog" aria-controls="termsModal" data-i18n="consentTermsLink">תנאי השימוש ומדיניות הפרטיות</button>
+                            <label for="consentTerms" id="consentTextB" data-i18n="consentTermsSuffix">של PEAR.</label>
+                        </p>
+                    </div>
+                    <!-- Visually hidden until Continue is pressed while locked (nudgeConsent);
+                         always available to assistive tech through the button's describedby. -->
+                    <p class="consent-panel__hint" id="consentGateHint" data-i18n="consentGateHint">יש לסמן את התיבה כדי להמשיך</p>
+                </div>
 
                 <button id="btn-next-screen" type="button" class="btn-primary" disabled aria-disabled="true" aria-describedby="consentGateHint" data-i18n="btnNextScreen">המשך לחדר המדידה הוירטואלי ←</button>
             </div>
@@ -835,6 +839,34 @@
   </div>
 </div>
 
+<!-- ░░ Terms & policy popup - opened by the consent row's link (#termsLinkBtn),
+     wired by setupTermsModal() in app.js. On <body>, not inside a screen: a screen is
+     its own stacking context (see the fill-mode note in style.css), and a modal
+     inside one can be painted over by body-level chrome. Reading it is optional -
+     the checkbox never requires it - but everything the box accepts is here. On
+     phones it is a bottom sheet with the same drag handle as the other overlays. ░░ -->
+<div class="terms-modal" id="termsModal" role="dialog" aria-modal="true" aria-labelledby="termsModalTitle" hidden>
+  <div class="terms-modal__backdrop" data-terms-close></div>
+  <div class="terms-modal__panel" role="document" data-sheet="terms">
+    <div class="drag-indicator" data-sheet-handle aria-hidden="true"></div>
+    <header class="terms-modal__head" data-sheet-grab>
+      <h3 class="terms-modal__title" id="termsModalTitle" data-i18n="consentTitle">תנאים ומדיניות</h3>
+      <button class="terms-modal__close" id="termsClose" type="button" aria-label="סגירה" data-terms-close data-i18n-aria="ariaClose">✕</button>
+    </header>
+    <div class="terms-modal__body">
+      <section class="terms-modal__section">
+        <h4 data-i18n="termsAccuracyTitle">דיוק הדיגום</h4>
+        <p data-i18n="consentDisclaimer"><strong>שימו לב:</strong> דיוק הדיגום מתבסס על הנתונים הוויזואליים והמידות המוזנות. אי-מילוי מלא של כל שדות המדידה עלול להשפיע על דיוק האלגוריתם, ואין המערכת מתחייבת ל-100% דיוק במקרים אלו.</p>
+      </section>
+      <section class="terms-modal__section">
+        <h4 data-i18n="termsDataTitle">עיבוד נתוני המידות</h4>
+        <p data-i18n="termsDataText">בסימון התיבה את/ה מסכים/ה לעיבוד נתוני המידות שהזנת לצורך התאמת גודל אישית.</p>
+      </section>
+    </div>
+    <button class="btn-primary terms-modal__ok" id="termsOk" type="button" data-terms-close data-i18n="termsGotIt">הבנתי</button>
+  </div>
+</div>
+
 <!-- ════════════════════════════════════════════════════════════════════
      SCREEN 3 - one-time public demo already used (localStorage gate)
      Shown INSTEAD of Screen 1/2 the moment 'pear_demo_measured' is set: on
@@ -926,7 +958,7 @@
   <span class="lang-switch__thumb" aria-hidden="true"></span>
 </button>
 
-<script type="module" src="app.js?v=151"></script>
+<script type="module" src="app.js?v=152"></script>
 <!-- Additive touch-interaction layer: scroll-reveal, tap ripple, haptics, sticky
      header shrink. Pure enhancement - touches no app.js logic or state. -->
 <script src="mobile-ux.js" defer></script>

@@ -120,15 +120,26 @@ const I18N = {
   labelLegs:                 { he: 'אורך רגליים (בס"מ)', en: "Leg length (cm)" },
   placeholderLegs:           { he: "לדוגמה: 102", en: "e.g. 102" },
 
-  /* Terms & accuracy consent - the compliance panel inside #resultActions (see the
-     COMPLIANCE block in app.js). consentDisclaimer is the spec'd sentence verbatim in
-     Hebrew; do not paraphrase it - it is legal copy, not UI copy. */
+  /* Terms & accuracy consent - ONE checkbox row inside #resultActions plus the policy
+     popup (#termsModal) it links to (see the COMPLIANCE block in app.js).
+     consentDisclaimer is the spec'd sentence verbatim in Hebrew; do not paraphrase it -
+     it is legal copy, not UI copy. The row's sentence is three keys because its middle
+     is the link <button>: each language keeps its own word order around it (Hebrew
+     "...את [link] של PEAR." / English "I accept PEAR's [link]."). termsDataText carries
+     the consent the retired second checkbox used to ask for, so ticking the one box
+     still covers measurement processing - and says so. */
   consentTitle:              { he: "תנאים ומדיניות", en: "Terms & Policy" },
   consentDisclaimer:         { he: "<strong>שימו לב:</strong> דיוק הדיגום מתבסס על הנתונים הוויזואליים והמידות המוזנות. אי-מילוי מלא של כל שדות המדידה עלול להשפיע על דיוק האלגוריתם, ואין המערכת מתחייבת ל-100% דיוק במקרים אלו.",
                                en: "<strong>Please note:</strong> sizing accuracy is based on the visual data and the measurements you enter. Leaving any measurement field incomplete may affect the algorithm's accuracy, and the system does not guarantee 100% accuracy in those cases." },
-  consentTermsLabel:         { he: "אני מאשר/ת את תנאי השימוש ומדיניות הפרטיות של PEAR.", en: "I accept PEAR's Terms of Use and Privacy Policy." },
-  consentDataLabel:          { he: "אני מסכים/ה לעיבוד נתוני המידות לצורך התאמת גודל אישית.", en: "I agree to the processing of my measurement data for personalized size matching." },
-  consentGateHint:           { he: "יש לסמן את שתי התיבות כדי להמשיך", en: "Tick both boxes to continue" },
+  consentTermsPrefix:        { he: "אני מאשר/ת את", en: "I accept PEAR's" },
+  consentTermsLink:          { he: "תנאי השימוש ומדיניות הפרטיות", en: "Terms of Use and Privacy Policy" },
+  consentTermsSuffix:        { he: "של PEAR.", en: "." },
+  consentGateHint:           { he: "יש לסמן את התיבה כדי להמשיך", en: "Tick the box to continue" },
+  termsAccuracyTitle:        { he: "דיוק הדיגום", en: "Sizing accuracy" },
+  termsDataTitle:            { he: "עיבוד נתוני המידות", en: "Your measurement data" },
+  termsDataText:             { he: "בסימון התיבה את/ה מסכים/ה לעיבוד נתוני המידות שהזנת לצורך התאמת גודל אישית.",
+                               en: "By ticking the box you agree to the processing of the measurements you entered for personalized size matching." },
+  termsGotIt:                { he: "הבנתי", en: "Got it" },
 
   /* Cookie / local-storage banner (cookie-consent.js). The two category descriptions
      name what the room ACTUALLY stores - keep them in step with the storage keys. */

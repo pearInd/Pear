@@ -51,6 +51,7 @@
   const DISMISS = {
     compare: () => clickEl("#compareClose"),
     detect:  () => clickEl("#gdClose"),
+    terms:   () => clickEl("#termsClose"),   // the policy popup (setupTermsModal in app.js)
     room:    requestHostClose,
   };
 
@@ -80,7 +81,7 @@
 
   function backdropOf(sheet) {
     return sheet.parentElement
-      ? sheet.parentElement.querySelector(":scope > .pcmp__backdrop, :scope > .gd-overlay__backdrop")
+      ? sheet.parentElement.querySelector(":scope > .pcmp__backdrop, :scope > .gd-overlay__backdrop, :scope > .terms-modal__backdrop")
       : null;
   }
 
