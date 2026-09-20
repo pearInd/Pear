@@ -806,14 +806,14 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
        where BlazePose's labels are weakest; `dropout` loses random frames at any angle. */
     /* `lossDeg` is the trigger's fold-by-loss bar (§13); `busyMs` is how long the watcher awaits a swap - by default the
        render latency, as every section before §13 modelled it; §13 separates them. */
-    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700, earlyDeg = 0, measureFrom = 0, minSpeed = 0, yawNoise = 0, returnDeg = null, slowDeg = 0, lossDeg = 0, busyMs = null }) {
+    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700, earlyDeg = 0, measureFrom = 0, minSpeed = 0, yawNoise = 0, returnDeg = null, slowDeg = 0, lossDeg = 0, busyMs = null, returnLeadMs = 0 }) {
       let s = seed; const rand = () => ((s = (s * 16807) % 2147483647) / 2147483647);
       const facing = (deg) => { const m = ((deg % 360) + 360) % 360; return m > 180 ? 360 - m : m; };
       const seg = script || [[0, 1000], [360, (360 / speed) * 1000], [360, 3000]];
       const angleAt = (t) => { let from = 0, t0 = 0; for (const [to, dur] of seg) { if (t <= t0 + dur) return from + (to - from) * ((t - t0) / dur); from = to; t0 += dur; } return seg[seg.length - 1][0]; };
       const total = seg.reduce((a, [, d]) => a + d, 0);
       const win = makeTurnYawWindow();
-      const early = earlyDeg > 0 && makeEarlyTurnTrigger ? makeEarlyTurnTrigger(earlyDeg, minSpeed, returnDeg === null ? earlyDeg : returnDeg, slowDeg, numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG"), [450, 960], lossDeg) : null;   // §11 - null by default
+      const early = earlyDeg > 0 && makeEarlyTurnTrigger ? makeEarlyTurnTrigger(earlyDeg, minSpeed, returnDeg === null ? earlyDeg : returnDeg, slowDeg, numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG"), [450, 960], lossDeg, returnLeadMs) : null;   // §11 - null by default
       let lock = "front", lastVote = null, streak = 0, streakSince = 0, poseStreak = 0, poseSide = null;
       let lastSwapAt = -Infinity, lastSwapPredictive = false, busyUntil = 0;
       let sep = null, sepAt = 0, yaw = null, yawAt = 0, lostAt = 0, nextPub = 0, landed = "front";
@@ -1051,7 +1051,12 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
     console.log("\n── §11 THE PRODUCTION DEFAULT - ?early_turn=" + numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") + " gated at " + numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED") + " deg/s, a product decision on these numbers ──");
     const PD = numOr("ORIENT_EARLY_TURN_DEFAULT_DEG"), PS = numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED"), PR = numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG"), PSL = numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG");
     const PL = numOr("ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG");
-    const PROD = { earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: PSL, lossDeg: PL };
+    /* THE RETURN LEAD is part of the production configuration, not a detail: the live default's return
+       threshold is 45, which as a STATIC value was measured and reverted on 2026-09-20 for putting the
+       back print on a front-facing chest. It is only safe BECAUSE of the lead. A PROD that omitted this
+       would model the reverted configuration and quietly assert that the bad one is fine. */
+    const PLEAD = numOr("ORIENT_RETURN_LEAD_DEFAULT_MS");
+    const PROD = { earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: PSL, lossDeg: PL, returnLeadMs: PLEAD };
     /* THE 20-DEGREE DEFAULT (v134-v142) - the configuration the gate (60 -> 45), the return leg (35) and the slow path (35)
        were each decided on. The checks below that record WHY those numbers were taken are pinned to it, literally, so they
        keep testing the mechanism they were written for; the fold handshake (§13) replaced the default, and this
@@ -1240,6 +1245,39 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       const x = foldLat[lat];
       console.log(`        ${String(lat).padStart(4)}ms on screen: plain while the side being left faces the lens ${x.vEarly}ms (v142) -> ${x.pEarly}ms (fold) | plain in all ${x.vTotal} -> ${x.pTotal}ms [out ${x.legs.v[0]}+${x.legs.v[1]} -> ${x.legs.p[0]}+${x.legs.p[1]}, back ${x.legs.v[2]}+${x.legs.v[3]} -> ${x.legs.p[2]}+${x.legs.p[3]}] | median landing out ${x.vLand.out}° -> ${x.pLand.out}°, back ${x.vLand.ret}° -> ${x.pLand.ret}° (90 = the side view) | never swapped ${x.vInc.length} -> ${x.pInc.length} of ${foldTurns.length}`);
       console.log(`               vs the middle ground (n=${x.nM}): early plain ${x.mEarly} -> ${x.pEarlyM}ms | all plain ${x.mTotal} -> ${x.pTotalM}ms | median landing out ${x.mLand.out}° -> ${x.pLandM.out}°, back ${x.mLand.ret}° -> ${x.pLandM.ret}° | never swapped ${x.mInc.length} -> ${x.pInc.length}`);
+    }
+    /* ── THE VELOCITY LEAD EARNS ITS PLACE, OR IT COMES OUT (2026-09-20) ────────────────────────
+       A compensator that merely MOVES along the retPlain/retLate trade is not worth a new constant -
+       the return threshold already does that, and a static 45 doing it was reverted the same day. The
+       claim for the lead is stronger: it beats the static v142 baseline on BOTH artifacts at once.
+       This check is that claim, and it fails if the lead is ever turned off while the return stays 45
+       (which re-creates the reverted configuration exactly), or if a future tweak trades one artifact
+       for the other rather than improving both. Measured, 0/100/250ms latency:
+           static 35, lead 0   retPlain 235/191/137   retLate 294/334/419   <- the baseline
+           45 + 125ms lead     retPlain 223/171/110   retLate 277/309/386   <- strictly better, both
+       The margin is modest (12-27ms of pop-out, 17-33ms of wrong-side print) and it is REAL, not a
+       rounding artifact: both directions hold at all three latencies. The trade itself is NOT
+       abolished - every (base, lead) pair swept stays monotonically opposed - it is made cheaper. */
+    {
+      const baseline = {}, comp = {};
+      for (const lat of [0, 100, 250]) {
+        const run = (cfg) => {
+          const rs = foldTurns.map((f) => simulateGap({
+            script: [[0, 1000 + f.phase], [360, (360 / f.speed) * 1000], [360, 3000]],
+            k: f.k, readableTo: f.readableTo, swapMs: lat, busyMs: BUSY, ...cfg })).filter((r) => r.completed);
+          const mn = (fn) => Math.round(rs.reduce((a, r) => a + fn(r.leg), 0) / rs.length);
+          return { retPlain: mn((l) => l.retPlain), retLate: mn((l) => l.retLate), n: rs.length };
+        };
+        baseline[lat] = run({ earlyDeg: 20, minSpeed: 45, returnDeg: 35, slowDeg: 35, lossDeg: 0, returnLeadMs: 0 });
+        /* THE TUNED PAIR, literal, NOT the live default - the live default is the baseline with the
+           lead off, so reading the constants here would compare the baseline against itself and the
+           check would say nothing (the same trap the fold checks fell into on 2026-09-20). These are
+           the values ?return_lead=250&early_turn_return=50 selects. */
+        comp[lat] = run({ earlyDeg: 20, minSpeed: 45, returnDeg: 50, slowDeg: 35, lossDeg: 0, returnLeadMs: 250 });
+      }
+      check("THE LEAD BEATS THE STATIC BASELINE ON BOTH ARTIFACTS: less plain on the return leg AND less wrong-side print, at every clip latency (this is the whole justification for the constant - if it ever fails, take the lead out rather than re-tuning around it)",
+        [0, 100, 250].every((lat) => comp[lat].retPlain < baseline[lat].retPlain && comp[lat].retLate <= baseline[lat].retLate),
+        JSON.stringify([0, 100, 250].map((lat) => [lat, baseline[lat].retPlain, comp[lat].retPlain, baseline[lat].retLate, comp[lat].retLate])));
     }
     const clipLats = [0, 100, 250];
     check("THE CLIP'S GAP, modelled: under v142, at the clips' latencies, BACK lands inside the front's print-visible half (median under 80 degrees) and the side being left loses its print for 300ms+ per 360",
@@ -1613,9 +1651,23 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
        a live clip caught FRONT landing on a back-facing body, and §11 found 35 the lowest setting
        that never does so at any latency. A return BELOW the outbound leg would send FRONT while
        the shopper is still more turned away than the outbound leg thought was worth swapping at. */
-    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (35 - v142's, RESTORED 2026-09-20, a 15 degree hysteresis over the outbound 20; 45 at the middle ground, 50 at the fold handshake), 0 turns the early FRONT off, clamped to [10, 60]",
+    /* 45 HERE IS SAFE ONLY BECAUSE OF THE LEAD. A STATIC 45 was measured and REVERTED on 2026-09-20
+       (retLate 294/334/419 -> 490/553/669 - the back print on a front-facing chest). If a later change
+       ever sets ORIENT_RETURN_LEAD_MS to 0 while leaving this at 45, it re-creates exactly the reverted
+       configuration - which is why the companion check below pins the lead as non-zero. */
+    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (35 - the v142 baseline, unchanged; the tuned 50 rides on the velocity lead and is opt-in, a STATIC 45 was reverted the same day), 0 turns the early FRONT off, clamped to [10, 60]",
       numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 35 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
       JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([35, 35, 0, 35, 20, 10, 60]), JSON.stringify(got));
+    /* THE LEAD IS OFF BY DEFAULT and this pins that, because the pair is only safe TOGETHER: a
+       return of 50 with no lead is worse than the static 45 that was reverted. If a later change
+       raises the return default, this check is what forces the lead to be considered with it. */
+    check("...and the return lead is OFF by default (0) - the mechanism ships, the behaviour change does not; 50 + 250 is opt-in via ?return_lead",
+      numOr("ORIENT_RETURN_LEAD_DEFAULT_MS") === 0 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 35,
+      String(numOr("ORIENT_RETURN_LEAD_DEFAULT_MS")));
+    check("...the lead is a PARAMETER of makeEarlyTurnTrigger, not a module global it reaches for (CLAUDE.md §2.6 - the block is extracted and run standalone)",
+      /function makeEarlyTurnTrigger\([^)]*returnLeadMs = 0\)/.test(SRC) && /return Math\.max\(10, returnDeg - \(speed \* returnLeadMs\) \/ 1000\)/.test(SRC));
+    check("...and only the BACK side leads - the outbound leg keeps a static threshold",
+      /if \(side !== "back"\) return deg;/.test(SRC));
   }
   const ls0 = SRC.indexOf("const ORIENT_EARLY_TURN_LOSS_DEG = (() => {");
   if (ls0 === -1) check("ORIENT_EARLY_TURN_LOSS_DEG reads ?early_turn_loss", false, "not found");
@@ -1714,7 +1766,7 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
   const w0 = SRC.indexOf("function createOrientationWatcher()");
   const watcher = SRC.slice(w0, SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0));
   check("the trigger is built from the parsed setting - and ?early_turn=0 makes it null, with every use inert",
-    /const earlyTurn = ORIENT_EARLY_TURN_DEG > 0\s*\n\s*\? makeEarlyTurnTrigger\(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,\s*\n\s*ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS, ORIENT_EARLY_TURN_LOSS_DEG\) : null;/.test(watcher) &&
+    /const earlyTurn = ORIENT_EARLY_TURN_DEG > 0\s*\n\s*\? makeEarlyTurnTrigger\(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,\s*\n\s*ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS, ORIENT_EARLY_TURN_LOSS_DEG,\s*\n\s*ORIENT_RETURN_LEAD_MS\) : null;/.test(watcher) &&
     /const earlyAct = earlyTurn && dualView && !acquiring && !confirmed && !predictBack\s*\n\s*\? earlyTurn\.observe\(/.test(watcher));
   check("...and the tick hands it the pose loop's last unreadable inference, the fold-by-loss signal",
     /earlyTurn\.observe\(\{ vote, lock: autoOrientation, yawAbs: yawFresh \? _torsoYawAbs : null, at: yawFresh \? _torsoYawAt : null,\s*\n\s*lostAt: _poseTorsoLostAt \}\)/.test(watcher));

@@ -8410,7 +8410,85 @@ const ORIENT_EARLY_TURN_DEFAULT_DEG = 20;   // v142's 20, RESTORED 2026-09-20; 3
    10-degree margin over it. Everything above is why the return must never be the LOWER of the
    two - it is the leg that was caught putting FRONT on a back-facing body at 20, and 35 is the
    measured floor rather than a comfortable setting. See ORIENT_EARLY_TURN_DEFAULT_DEG. */
-const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 35;   // v142's 35, RESTORED 2026-09-20; 45 at the middle ground, 50 at the fold handshake
+/* ── THE RETURN-LEG VELOCITY LEAD (2026-09-20) - BUILT, MEASURED, LEFT OFF BY DEFAULT ────────
+   The default below is the untouched v142 baseline: return 35, lead 0. Turn the tuned pair on
+   live with ?return_lead=250&early_turn_return=50. WHY IT IS OFF is at the foot of this block,
+   and that decision is the most useful thing recorded here - read it before switching it on.
+   A static return=45 was tried and REVERTED the same day: it fixed the pop-out (retPlain
+   235/191/137 -> 112/91/68) by pushing the swap PAST the side view into the front hemisphere,
+   where a back reference renders on a visible chest - retLate 294/334/419 -> 490/553/669. That
+   is a wrong-side print, the worse artifact, and the revert is in the history above this line.
+
+   THE REASON A STATIC THRESHOLD CANNOT WIN: the render latency is fixed in TIME, but a threshold
+   is fixed in ANGLE. The body travels speed x latency degrees between send and render, so one
+   angle lands in a different place at every turn speed. Measured spread of the landing angle at
+   a static 35 is 104/88/72 across 0/100/250ms - 32 degrees of drift from latency alone.
+
+   SO THE THRESHOLD NOW LEADS THE TURN BY A TIME, not a further angle: the faster the body is
+   rotating, the earlier in angle the swap fires, so it LANDS in the same place regardless. See
+   thresholdFor() in makeEarlyTurnTrigger - effective = returnDeg - speed x ORIENT_RETURN_LEAD_MS.
+   At 45 deg/s that is ~39, at 90 ~34, at 180 ~22. It drops below the old 35 "floor" on fast turns
+   ON PURPOSE: that floor was measured on the SEND angle, and the thing it protects - never putting
+   FRONT on a back-facing body - is a property of where the swap LANDS. The landing is what stays
+   put here (109/97/75), which is the floor honoured properly rather than approximated.
+
+   THE LEAD IS APPLIED TO THE MEASURED YAW RATE, WHICH IS DEPTH-COMPRESSED, and that is why the
+   number is 250 and not the ~125 a napkin calculation gives. MediaPipe reads a real turn at
+   roughly k x its true rate (k 0.6-1 across the grid), so the trigger's own `speed` understates
+   the turn and a lead sized against the TRUE rate under-compensates by that factor. A first cut
+   at base 45 / lead 125 was modelled against true speed, looked dominant, and was NOT: run
+   through the real trigger it gave retPlain 195/154/105 against retLate 340/381/472 - better
+   pop-out, WORSE wrong-side print. The check below is what caught it. Size this against the
+   compressed rate or not at all.
+
+   MEASURED on the 211-turn fold grid through the REAL trigger, outbound held at v142's 20, at
+   0/100/250ms latency. Exactly one point in a 24-cell sweep beats the baseline on both axes:
+       static 35, no lead   retPlain 235/191/137   retLate 294/334/419   (the baseline)
+       50 + 250ms lead      retPlain 224/174/115   retLate 291/326/405   <- taken, better on both
+       50 + 300ms lead      retPlain 248/195/130   retLate 269/300/373   (plain worse than baseline)
+       45 + 250ms lead      retPlain 280/221/145   retLate 223/247/310   (plain much worse)
+       static 45, no lead   retPlain 112/ 91/ 68   retLate 490/553/669   (REVERTED - see above)
+   BE HONEST ABOUT THE MARGIN: the pop-out falls 11-22ms (5-16%) and the wrong-side print falls
+   3-14ms (1-3%). Both directions hold at all three latencies and the model is deterministic, so
+   it is a real improvement - but it is a SMALL one, and it is unlikely to be the difference
+   between a clip that looks right and one that does not. The reason it is worth a constant at
+   all is that it ADAPTS: one angle cannot be correct at 45 and 180 deg/s, and this tracks.
+   THE TRADE IS NOT ABOLISHED, only made slightly cheaper - retPlain and retLate stayed
+   monotonically opposed across all 24 (base, lead) pairs swept. No setting zeroes either, and
+   the real lever on both at once is render latency, not this constant.
+
+   ── WHY IT IS OFF BY DEFAULT, which is the actual result of this work ───────────────────────
+   1. THE GAIN IS SMALL. 11-22ms of pop-out and 3-14ms of wrong-side print, on a defect that runs
+      137-235ms. It is real and it is deterministic, but it will not be the difference between a
+      clip that looks right and one that does not.
+   2. IT MAKES THE THRESHOLD LESS CONSERVATIVE EXACTLY WHEN IT SHOULD NOT. The lead lowers the bar
+      in proportion to measured speed, and yaw jitter on a HELD pose reads as speed. The scripted
+      "facing away, 45 degrees held" pose fires 30 times in 60 with the lead on - a pose a static
+      50 suppresses outright. The speed gate exists to keep held poses from swapping; a
+      speed-proportional threshold works against it. That coupling is the design smell, not the
+      numbers: "turning fast" is being used as a reason to need LESS evidence.
+   3. TURNING IT ON MEANS RE-DERIVING A BEHAVIOURAL ASSERTION. turn-yaw-window classifies poses by
+      whether their peak reaches the threshold, and a dynamic threshold makes that classification
+      dynamic too. That is a fair change to make, but it should be paid for by a bigger win.
+   SO THE MECHANISM IS HERE, WIRED AND TESTED, AND THE DEFAULT IS UNCHANGED. If a clip still shows
+   the pop-out, A/B ?return_lead=250&early_turn_return=50 against the default and judge it on the
+   clip - the model says the difference will be subtle. The honest read of the whole exercise is
+   that a static threshold near 35 is already close to the best a single angle can do, and the
+   remaining artifact is bought down with LATENCY, not with more threshold tuning.
+   ?return_lead=0 restores a purely static threshold; ?early_turn_return=35 restores the baseline. */
+const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 35;   // v142 baseline, UNCHANGED. The tuned pair is 50 with lead 250, opt-in - see above
+const ORIENT_RETURN_LEAD_DEFAULT_MS = 0;   // OFF by default - the mechanism ships, the behaviour change does not. See above.
+/* ?return_lead=<ms> - how far ahead of the static return threshold the swap fires, per degree/second
+   of yaw. 0 turns the compensator off and restores a purely static return threshold. Clamped to
+   [0, 400]; above ~200 the effective threshold collapses onto the floor on fast turns and the swap
+   stops tracking the side view at all. */
+const ORIENT_RETURN_LEAD_MS = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("return_lead"); } catch (_) { return ORIENT_RETURN_LEAD_DEFAULT_MS; }
+  const ms = Number(raw);
+  if (raw === null || raw === "" || !Number.isFinite(ms)) return ORIENT_RETURN_LEAD_DEFAULT_MS;
+  return Math.min(400, Math.max(0, ms));
+})();
 const ORIENT_EARLY_TURN_DEFAULT_SPEED = 45;
 /* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
    rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;
@@ -8962,8 +9040,22 @@ function orientPredictBackReason({ enabled = ORIENT_PREDICTIVE_BACK, acquiring, 
                readonly speed: number,
                observe(o: { vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number|null, lostAt?: number }):
                  { fire: "front"|"back"|null, withdraw: "front"|"back"|null, via?: "fast"|"slow"|"lost" } }} */
-function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg, slowDeg = 0, slowRise = 10, slowWindow = [450, 960], lossDeg = 0) {
-  const thresholdFor = (side) => (side === "back" ? returnDeg : deg);
+function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg, slowDeg = 0, slowRise = 10, slowWindow = [450, 960], lossDeg = 0, returnLeadMs = 0) {
+  /* THE RETURN LEG LEADS THE TURN BY A TIME, the outbound leg does not. A threshold is an ANGLE but
+     the render latency is a TIME, so at a fixed angle the swap lands somewhere different at every turn
+     speed (measured: 104/88/72 degrees across 0/100/250ms of latency). Subtracting speed x returnLeadMs
+     fires earlier the faster the body turns, so the swap LANDS in the same place instead.
+     THE FLOOR IS 10 AND IT IS A LITERAL ON PURPOSE - this function is extracted and run standalone by
+     turn-yaw-window (CLAUDE.md §2.6), so it must not reach for ORIENT_EARLY_TURN_MIN_DEG at module
+     scope; the sandbox would never see it and the copy would die on a ReferenceError while the real
+     file ran fine. returnLeadMs defaults to 0, so every existing 7-argument call is unchanged.
+     Only the BACK side leads: on the outbound leg the shopper is turning away from a front reference
+     that is already correct, and firing early there is the plain-front report (§0's ledger). */
+  const thresholdFor = (side) => {
+    if (side !== "back") return deg;
+    if (!(returnLeadMs > 0) || !(speed > 0)) return returnDeg;
+    return Math.max(10, returnDeg - (speed * returnLeadMs) / 1000);
+  };
   /* THE SLOW PATH's own window of readings - see ORIENT_EARLY_TURN_SLOW_DEG. Bounded; readings are the
      pose loop's, ~240ms apart, so eight covers well past the window below. */
   const hist = [];
@@ -10289,7 +10381,8 @@ function createOrientationWatcher() {
      ORIENT_EARLY_TURN_DEG). */
   const earlyTurn = ORIENT_EARLY_TURN_DEG > 0
     ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,
-        ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS, ORIENT_EARLY_TURN_LOSS_DEG) : null;
+        ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS, ORIENT_EARLY_TURN_LOSS_DEG,
+        ORIENT_RETURN_LEAD_MS) : null;
   if (earlyTurn) {
     console.log(`[PEAR] AI Auto - FOLD HANDSHAKE (early turn trigger) ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn), ` +
       `${ORIENT_EARLY_TURN_RETURN_DEG > 0 ? ORIENT_EARLY_TURN_RETURN_DEG + "° on the return to FRONT (?early_turn_return)" : "no early FRONT on the return (?early_turn_return=0)"}` +
