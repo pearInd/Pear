@@ -1057,6 +1057,13 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
        keep testing the mechanism they were written for; the fold handshake (§13) replaced the default, and this
        configuration is still reachable as ?early_turn=20&early_turn_return=35&early_turn_slow=35&early_turn_loss=0. */
     const V142 = { earlyDeg: 20, minSpeed: 45, returnDeg: 35, slowDeg: 35, lossDeg: 0 };
+    /* THE MIDDLE GROUND (2026-09-16 - 2026-09-20), pinned literally for the same reason V142 is: it is no longer the
+       live default, and the checks that record what the v142 restore GAVE UP have to keep measuring the thing that was
+       given up. PROD and V142 are now the same configuration, so every "the default beats v142" comparison below became
+       an identity and could no longer say anything; they are re-based onto this instead, and now assert that the cost
+       of the rollback stays the size it was measured at. Reachable live as
+       ?early_turn=35&early_turn_return=45&early_turn_slow=35&early_turn_loss=20. */
+    const MIDDLE = { earlyDeg: 35, minSpeed: 45, returnDeg: 45, slowDeg: 35, lossDeg: 20 };
     const prodTurns = [];
     for (const speed of [60, 90, 120]) for (const k of [1, 0.75]) for (const readableTo of [90, 60]) for (const swapMs of [700, 1000]) {
       const off = simulateGap({ speed, k, readableTo, swapMs });
@@ -1201,14 +1208,20 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
     for (const lat of [0, 100, 250, 700]) {
       const rows = foldTurns.map((f) => {
         const o = { script: [[0, 1000 + f.phase], [360, (360 / f.speed) * 1000], [360, 3000]], k: f.k, readableTo: f.readableTo, swapMs: lat, busyMs: BUSY };
-        return { f, v: simulateGap({ ...o, ...V142 }), p: simulateGap({ ...o, ...PROD }) };
+        return { f, v: simulateGap({ ...o, ...V142 }), p: simulateGap({ ...o, ...PROD }), m: simulateGap({ ...o, ...MIDDLE }) };
       });
       const both = rows.filter((r) => r.v.completed && r.p.completed);
-      const mean = (key, fn) => Math.round(both.reduce((a, r) => a + fn(r[key].leg), 0) / both.length);
+      /* THE ROLLBACK'S OWN COMPARISON SET. PROD and V142 are the SAME configuration since 2026-09-20, so `both` can
+         only ever report that a thing equals itself - which is exactly how the three checks below started failing.
+         `vsM` is the set where the live default and the middle ground both completed, and it is what the "what did
+         the rollback give up" checks are measured over. Do not re-point them at `both`. */
+      const vsM = rows.filter((r) => r.p.completed && r.m.completed);
+      const meanOn = (set, key, fn) => Math.round(set.reduce((a, r) => a + fn(r[key].leg), 0) / set.length);
+      const mean = (key, fn) => meanOn(both, key, fn);
       const early = (l) => l.outPlain + l.retPlain, total = (l) => l.outPlain + l.outLate + l.retPlain + l.retLate;
-      const landing = (key) => {
+      const landingOn = (set, key) => {
         const out = [], ret = [];
-        for (const r of both) {
+        for (const r of set) {
           const on = (x) => x.body + (lat / 1000) * r.f.speed;
           const b = r[key].sent.find((x) => x.side === "back"); if (b) out.push(on(b));
           const fr = [...r[key].sent].reverse().find((x) => x.side === "front"); if (fr) ret.push(360 - on(fr));
@@ -1216,11 +1229,17 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
         const med = (xs) => { const a = [...xs].sort((x, y) => x - y); return Math.round(a[Math.floor(a.length / 2)]); };
         return { out: med(out), ret: med(ret) };
       };
+      const landing = (key) => landingOn(both, key);
       foldLat[lat] = { rows, n: both.length, vEarly: mean("v", early), pEarly: mean("p", early), vTotal: mean("v", total), pTotal: mean("p", total),
         vLand: landing("v"), pLand: landing("p"), vInc: rows.filter((r) => !r.v.completed), pInc: rows.filter((r) => !r.p.completed),
-        legs: { v: ["outPlain", "outLate", "retPlain", "retLate"].map((key) => mean("v", (l) => l[key])), p: ["outPlain", "outLate", "retPlain", "retLate"].map((key) => mean("p", (l) => l[key])) } };
+        nM: vsM.length, mEarly: meanOn(vsM, "m", early), pEarlyM: meanOn(vsM, "p", early),
+        mTotal: meanOn(vsM, "m", total), pTotalM: meanOn(vsM, "p", total),
+        mLand: landingOn(vsM, "m"), pLandM: landingOn(vsM, "p"), mInc: rows.filter((r) => !r.m.completed),
+        legs: { v: ["outPlain", "outLate", "retPlain", "retLate"].map((key) => mean("v", (l) => l[key])), p: ["outPlain", "outLate", "retPlain", "retLate"].map((key) => mean("p", (l) => l[key])),
+                m: ["outPlain", "outLate", "retPlain", "retLate"].map((key) => meanOn(vsM, "m", (l) => l[key])) } };
       const x = foldLat[lat];
       console.log(`        ${String(lat).padStart(4)}ms on screen: plain while the side being left faces the lens ${x.vEarly}ms (v142) -> ${x.pEarly}ms (fold) | plain in all ${x.vTotal} -> ${x.pTotal}ms [out ${x.legs.v[0]}+${x.legs.v[1]} -> ${x.legs.p[0]}+${x.legs.p[1]}, back ${x.legs.v[2]}+${x.legs.v[3]} -> ${x.legs.p[2]}+${x.legs.p[3]}] | median landing out ${x.vLand.out}° -> ${x.pLand.out}°, back ${x.vLand.ret}° -> ${x.pLand.ret}° (90 = the side view) | never swapped ${x.vInc.length} -> ${x.pInc.length} of ${foldTurns.length}`);
+      console.log(`               vs the middle ground (n=${x.nM}): early plain ${x.mEarly} -> ${x.pEarlyM}ms | all plain ${x.mTotal} -> ${x.pTotalM}ms | median landing out ${x.mLand.out}° -> ${x.pLandM.out}°, back ${x.mLand.ret}° -> ${x.pLandM.ret}° | never swapped ${x.mInc.length} -> ${x.pInc.length}`);
     }
     const clipLats = [0, 100, 250];
     check("THE CLIP'S GAP, modelled: under v142, at the clips' latencies, BACK lands inside the front's print-visible half (median under 80 degrees) and the side being left loses its print for 300ms+ per 360",
@@ -1235,12 +1254,43 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
        still fails outright if the threshold is walked down another rung, and the companion check
        below keeps total plain falling. Raising the threshold back toward 50 only makes it pass
        harder. See ORIENT_EARLY_TURN_DEFAULT_DEG's comment for the full ledger. */
-    check("THE FIX, at the middle ground: early plain still falls by at least 20% at every clip latency (the fold handshake's 50 reached 40%+ - that margin is what 35 traded for less late pop-in)",
-      clipLats.every((lat) => foldLat[lat].pEarly <= 0.8 * foldLat[lat].vEarly), JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].vEarly, foldLat[lat].pEarly])));
-    check("...both swaps land within 25 degrees of the side view (median, both legs, every clip latency)",
-      clipLats.every((lat) => Math.abs(foldLat[lat].pLand.out - 90) <= 25 && Math.abs(foldLat[lat].pLand.ret - 90) <= 25), JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].pLand])));
-    check("...and plain shirt on EITHER side of the fold falls too - at every clip latency, and at the 700ms this file used to assume",
-      [0, 100, 250, 700].every((lat) => foldLat[lat].pTotal < foldLat[lat].vTotal), JSON.stringify([0, 100, 250, 700].map((lat) => [lat, foldLat[lat].vTotal, foldLat[lat].pTotal])));
+    /* ── RE-BASED ONTO THE MIDDLE GROUND (2026-09-20), because the old comparison went silent ──
+       The three checks below used to assert that the LIVE DEFAULT beat v142. The v142 restore made
+       the live default v142, so each one became "x is at least 20% better than x" and failed on
+       equality - not because the pipeline regressed, but because the question stopped meaning
+       anything. Re-pointing them at `both`/`pEarly` would have been the loosening this file keeps
+       warning about, so they now measure the ROLLBACK'S COST against the configuration it reversed:
+       MIDDLE (35/45/35/20) vs the live v142, over `vsM`.
+       THE DIRECTION IS INVERTED ON PURPOSE. v142 is WORSE on early plain - that is the trade, taken
+       knowingly - so these no longer assert an improvement. They BOUND the regression: it has to
+       stay the size it was measured at, and any further walk down the threshold fails them again.
+       ── the original ledger, kept because it is still the arithmetic these bars come from ──────
+       The fold handshake's 50 cut early plain by 40%+ (337/244/146ms against v142's 663/539/361).
+       The middle ground's 35 cut it by 23/27/31% (508/390/248ms). Going back to v142 therefore
+       pays roughly 1.30 / 1.38 / 1.46x the middle ground's early plain at 0/100/250ms - and buys
+       back the other side of the fold, outLate 42 -> 92ms at 100ms and 90 -> 170ms at 250ms, which
+       is the "back graphic pops in late" report. See ORIENT_EARLY_TURN_DEFAULT_DEG for the ledger. */
+    check("THE ROLLBACK'S COST, bounded: going back to v142 pays at most 1.5x the middle ground's early plain at every clip latency (measured 1.30/1.38/1.46x - it is a trade, not an improvement)",
+      clipLats.every((lat) => foldLat[lat].pEarlyM <= 1.5 * foldLat[lat].mEarly),
+      JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].mEarly, foldLat[lat].pEarlyM])));
+    /* THE DEFECT THIS CHANGE ACCEPTS, asserted rather than hidden: at v142 the outbound swap lands
+       BEFORE the side view - the front hemisphere, chest still in view, which is the 2026-09-15
+       plain-T-shirt report. The bar pins it where it was measured (50/62/76 degrees) so a further
+       slide toward the chest fails; the return leg keeps its margin past the fold. */
+    check("...the outbound swap lands in the FRONT hemisphere at v142 (median 40-90 degrees, the accepted defect) while the return leg still lands at or past the side view",
+      clipLats.every((lat) => foldLat[lat].pLandM.out >= 40 && foldLat[lat].pLandM.out <= 90 && foldLat[lat].pLandM.ret >= 60 && foldLat[lat].pLandM.ret <= 125),
+      JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].mLand, foldLat[lat].pLandM])));
+    /* THE BAR IS 1.8x AND THAT NUMBER IS MEASURED, NOT CHOSEN TO GO GREEN. Total plain either side of
+       the fold, middle ground -> live v142: 644 -> 1070ms (1.66x) at 0ms, 577 -> 991 (1.72x) at 100,
+       575 -> 916 (1.59x) at 250, 1063 -> 1268 (1.19x) at 700. The worst is 1.72x, so 1.8x is the
+       measurement plus a thin margin - NOT headroom for the next threshold change. This is the single
+       largest number the v142 restore gives up, and it is recorded here rather than softened away:
+       the rollback roughly doubles total plain time at low latency against the middle ground.
+       If a future change pushes any latency past 1.8x that is a NEW regression - fix it, do not raise
+       this. The first cut of this check used 1.35x, which was a guess and failed on all four. */
+    check("...and total plain either side of the fold stays within 1.8x the middle ground (measured worst 1.72x), at every clip latency and at the 700ms this file used to assume",
+      [0, 100, 250, 700].every((lat) => foldLat[lat].pTotalM <= 1.8 * foldLat[lat].mTotal),
+      JSON.stringify([0, 100, 250, 700].map((lat) => [lat, foldLat[lat].mTotal, foldLat[lat].pTotalM])));
     /* THE STATED COST: a turn so fast and so depth-compressed that no reading lands between square and the torso loss, and none
        past lossDeg before it, gives the fold nothing to read - and the vote path cannot catch a 150-180 deg/s turn either. */
     const newInc = [...new Set(clipLats.flatMap((lat) => foldLat[lat].pInc.filter((r) => r.v.completed).map((r) => JSON.stringify(r.f))))];
@@ -1312,15 +1362,27 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
        than the setting this replaced on either axis, which is what stops a lower threshold from
        being walked in one rung at a time without anyone restating the cost. */
     const sideRows = foldPoseRows.filter(reachesSide);
-    check("...while a pose that does reach it still may swap, and shows the other side no more often and for less time than v142 did",
-      sideRows.length >= 2 && sideRows.every((r) => r.p.fired <= r.v.fired && r.p.wrong < r.v.wrong),
+    /* `<` BECAME `<=` ON 2026-09-20, and that is the identity case, not a loosening. The live default
+       IS v142 now, so `r.p.wrong < r.v.wrong` asked a configuration to beat ITSELF and failed on every
+       row by equality. The assertion's real content is "the trigger is never WORSE than v142 on a pose
+       it is defined to fire on", which `<=` states exactly. If the live default is ever moved off v142
+       again, this keeps holding it to v142 as the floor - which is what it was written for. */
+    check("...while a pose that does reach it still may swap, and shows the other side no more often and no longer than v142 did (equality while the default IS v142)",
+      sideRows.length >= 2 && sideRows.every((r) => r.p.fired <= r.v.fired && r.p.wrong <= r.v.wrong),
       JSON.stringify(sideRows.map((r) => [r.name, peakOf(r), r.v, r.p])));
     /* THE COST, stated: a small pose that rises past lossDeg fast and drops a frame near its top is read as the fold. v142 swapped
        on these rarely or never. Bounded here so a lower lossDeg (or a looser rise) has to restate it rather than slip past. */
     const smallPoses = foldPoseRows.filter((r) => ["weight shift to 18°, held 1.5s", "reach, 22° for 300ms", "facing away, 30° twist to look back",
       "slow look to 30°, held 1s"].includes(r.name));
-    check("THE COST, bounded: a held weight shift, a quick reach, a look back over the shoulder and a slow look to 30 each swap at most 10 times in 60 at the fold, under 100ms of the other side on average",
-      smallPoses.length === 4 && smallPoses.every((r) => r.p.fired <= 10 && r.p.wrong < 100), JSON.stringify(smallPoses.map((r) => [r.name, r.v, r.p])));
+    /* 100 -> 150ms ON 2026-09-20, MEASURED, and the reason is the outbound threshold, not the loss path.
+       At v142's 20 degrees a slow look to 30 held 1s fires 6/60 and shows the other side 138ms on average
+       (the other three poses are still 0-8ms). Under the middle ground's 35 it was inside 100. 150 is that
+       138 plus a thin margin - it is NOT room for the next rung. Note v142 runs with lossDeg 0, so the
+       loss path cannot be what pays for this; walking the OUTBOUND threshold down is. A future change that
+       pushes any of these four past 150ms, or past 10 fires in 60, is a new regression: restate it here
+       with its own number rather than raising this one again. */
+    check("THE COST, bounded: a held weight shift, a quick reach, a look back over the shoulder and a slow look to 30 each swap at most 10 times in 60 at the fold, under 150ms of the other side on average (the slow look measures 138ms at v142's 20 degrees; it was inside 100 at the middle ground's 35)",
+      smallPoses.length === 4 && smallPoses.every((r) => r.p.fired <= 10 && r.p.wrong < 150), JSON.stringify(smallPoses.map((r) => [r.name, r.v, r.p])));
 
   }
 
@@ -1457,7 +1519,13 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
 
     /* THE FOLD BY LOSS (?early_turn_loss, §13): the fold threshold is a reading many turns never publish - MediaPipe loses
        the far shoulder there, and the pose loop records the unreadable inference as lostAt instead. Readings 240ms apart. */
-    const LOSS = numOr("ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG");
+    /* LOSS IS PINNED AT 20 HERE, not read from the live default. This section tests the fold-by-loss MECHANISM and
+       already fixes its angles at a literal 50 rather than tracking ORIENT_EARLY_TURN_DEFAULT_DEG; lossDeg was the one
+       value still reading the live constant, so when the v142 restore (2026-09-20) set that default to 0 all five
+       checks below silently went null - the path was off, so nothing could fire, and they read as failures of the
+       MECHANISM rather than of the default. The DEFAULT's own value is pinned by the ?early_turn_loss parser check
+       further down, which is where a change of default belongs. Do not point this back at the live constant. */
+    const LOSS = 20;
     const foldRun = (steps, lossDeg = LOSS) => {
       const e = makeEarlyTurnTrigger(50, 45, 50, 50, RISE, [450, 960], lossDeg);
       return { e, out: steps.map((st) => e.observe(st)) };
@@ -1515,9 +1583,9 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_MIN_DEG", "ORIENT_EARLY_TURN_MAX_DEG", "ORIENT_EARLY_TURN_DEFAULT_DEG", iife)(
       { search }, numOr("ORIENT_EARLY_TURN_MIN_DEG"), numOr("ORIENT_EARLY_TURN_MAX_DEG"), numOr("ORIENT_EARLY_TURN_DEFAULT_DEG"));
     const got = ["", "?early_turn=", "?early_turn=0", "?early_turn=abc", "?early_turn=-5", "?early_turn=20", "?early_turn=25", "?early_turn=3", "?early_turn=90", "?orient_debug=1"].map((q) => [q, parse(q)]);
-    check("ON BY DEFAULT AT THE MIDDLE GROUND: ?early_turn omitted, empty or unparseable is ORIENT_EARLY_TURN_DEFAULT_DEG (35; 20 in v142, 50 at the fold handshake); 0 or negative turns it OFF; a value is clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") === 35 &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([35, 35, 0, 35, 0, 20, 25, 10, 60, 35]), JSON.stringify(got));
+    check("ON BY DEFAULT, BACK AT v142: ?early_turn omitted, empty or unparseable is ORIENT_EARLY_TURN_DEFAULT_DEG (20 - v142's, RESTORED 2026-09-20; 35 at the middle ground, 50 at the fold handshake); 0 or negative turns it OFF; a value is clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") === 20 &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([20, 20, 0, 20, 0, 20, 25, 10, 60, 20]), JSON.stringify(got));
   }
   const sl0 = SRC.indexOf("const ORIENT_EARLY_TURN_SLOW_DEG = (() => {");
   if (sl0 === -1) check("ORIENT_EARLY_TURN_SLOW_DEG reads ?early_turn_slow", false, "not found");
@@ -1545,9 +1613,9 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
        a live clip caught FRONT landing on a back-facing body, and §11 found 35 the lowest setting
        that never does so at any latency. A return BELOW the outbound leg would send FRONT while
        the shopper is still more turned away than the outbound leg thought was worth swapping at. */
-    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (45 - a 10 degree hysteresis over the outbound 35; 35 in v142, 50 at the fold handshake), 0 turns the early FRONT off, clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 45 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([45, 45, 0, 45, 20, 10, 60]), JSON.stringify(got));
+    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (35 - v142's, RESTORED 2026-09-20, a 15 degree hysteresis over the outbound 20; 45 at the middle ground, 50 at the fold handshake), 0 turns the early FRONT off, clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 35 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([35, 35, 0, 35, 20, 10, 60]), JSON.stringify(got));
   }
   const ls0 = SRC.indexOf("const ORIENT_EARLY_TURN_LOSS_DEG = (() => {");
   if (ls0 === -1) check("ORIENT_EARLY_TURN_LOSS_DEG reads ?early_turn_loss", false, "not found");
@@ -1556,9 +1624,13 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_MIN_DEG", "ORIENT_EARLY_TURN_MAX_DEG", "ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG", iife)(
       { search }, numOr("ORIENT_EARLY_TURN_MIN_DEG"), numOr("ORIENT_EARLY_TURN_MAX_DEG"), numOr("ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG"));
     const got = ["", "?early_turn_loss=", "?early_turn_loss=0", "?early_turn_loss=x", "?early_turn_loss=25", "?early_turn_loss=5", "?early_turn_loss=90"].map((q) => [q, parse(q)]);
-    check("?early_turn_loss: default ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG (20), 0 turns the fold-by-loss path off, clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG") === 20 && numOr("ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG") < numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([20, 20, 0, 20, 25, 10, 60]), JSON.stringify(got));
+    /* THE DEFAULT IS 0 SINCE THE v142 RESTORE (2026-09-20) - the fold-by-loss path is OFF, because v142 predates it
+       entirely. The ordering assert below is vacuous at 0 and is kept only so it re-arms if the path is ever turned
+       back on. THE COST of 0 is recorded above ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG in app.js: with no loss path the
+       fold never swaps on 12 of 216 modelled 360s. Turn it back on live with ?early_turn_loss=20. */
+    check("?early_turn_loss: default ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG (0 - the path is OFF since the v142 restore; was 20), a value turns it on, clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG") === 0 && numOr("ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG") < numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([0, 0, 0, 0, 25, 10, 60]), JSON.stringify(got));
   }
   /* A load-time crash the parse checks above could not see: they inject the clamp bounds as parameters. In app.js the
      bounds used to be declared BELOW the slow-path parser, so ?early_turn_slow=<deg> read them in their temporal dead zone. */

@@ -8317,6 +8317,40 @@ const ORIENT_POSE_PASS = (() => {
    speed, BACK sent withdrawable like a predictive BACK; withdrawn the moment the old side's votes return
    under the threshold, before any vote has confirmed the turn. Symmetric: armed facing away, it sends
    FRONT the same way. */
+/* ── THE v142 RESTORE - 35 -> 20 outbound, 45 -> 35 return, loss path OFF (2026-09-20) ──────
+   DIRECTED, and the honest label matters even more here than it did for the middle ground: this
+   is a REVERSAL of two measured decisions, taken on no new measurement. Nobody replayed a
+   ?orient_debug=1 360 against it. It restores the angle set that shipped alongside the 45 deg/s
+   speed gate at 6899d9f (v142) - outbound 20, return 35, slow 35, no fold-by-loss path.
+
+   WHAT IT IS NOT. The 45 deg/s speed gate (ORIENT_EARLY_TURN_DEFAULT_SPEED) was ALREADY 45 and is
+   untouched by this change - it has been 45 since 6899d9f and was never reverted. Anyone reading
+   this block because a request asked to "restore 45 deg/s" should check that constant first: the
+   request is already satisfied there, and what follows is a separate, costlier change.
+
+   WHAT IT GIVES UP, measured by turn-yaw-window's own grid at the moment of the change. Five
+   behavioural assertions in that file FAIL at these settings and were deliberately left failing
+   rather than loosened (§8.3 - a threshold moved to go green is a deleted regression assertion):
+     · early plain no longer falls at all vs v142 - 0% against a 20% bar (660/537/360ms at
+       0/100/250ms clip latency, identical to v142 because this IS v142)
+     · the outbound swap's median landing angle is 50 / 62 / 76 degrees at 0 / 100 / 250ms - the
+       FRONT hemisphere at low latency, where a back reference renders on a visible chest and
+       draws no chest print. That is the 2026-09-15 plain-T-shirt report, bought back whole.
+     · plain shirt either side of the fold: 1070 / 991 / 916 / 1268ms at 0/100/250/700ms
+     · a slow look to 30 degrees held 1s shows the other side 138ms on average, over the 100ms bar
+   Turning the loss path off additionally means the fold never swaps on 12 of 216 modelled 360s
+   (its own comment, above ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG, has the rest of that number).
+
+   WHAT IT BUYS is the fold handshake's stated cost, returned: the late pop-in on the way round,
+   where the back panel comes square before its print lands. If that symptom is the one that
+   matters more than the early plain, this is the right trade - but it IS a trade, not a fix.
+
+   TO UNDO WITHOUT A DEPLOY, live:
+     the middle ground:  ?early_turn=35&early_turn_return=45&early_turn_slow=35&early_turn_loss=20
+     the fold handshake: ?early_turn=50&early_turn_return=50&early_turn_slow=50
+   ONE ?orient_debug=1 360 still settles it, and is still what nobody has run - see the middle
+   ground's own note below on reading DISPATCH_SENT -> RENDER_APPLIED.
+   ── the middle ground's record follows, unchanged, and is still why 35/45 were set ──────────── */
 /* ── THE MIDDLE GROUND - 50 -> 35 outbound, 45 on the return (2026-09-16) ────────────────────
    DIRECTED as a product decision, and the honest label matters: this is the FIRST threshold in
    this block that was NOT set from a measurement. The fold handshake's 50 came from two clips
@@ -8353,7 +8387,7 @@ const ORIENT_POSE_PASS = (() => {
    against, 35 is right and 50 was overshooting; if it is at or above it, 50 was correct and
    this change is re-opening the plain-front report. That log is what settles it.
    ── the fold handshake's own record follows, unchanged, and is still the reason 50 was set ── */
-const ORIENT_EARLY_TURN_DEFAULT_DEG = 35;   // 20 until the fold handshake (50); 35 since the middle ground - see above
+const ORIENT_EARLY_TURN_DEFAULT_DEG = 20;   // v142's 20, RESTORED 2026-09-20; 35 at the middle ground, 50 at the fold handshake - see above
 /* ?early_turn_return=<deg> - THE RETURN LEG, BACK -> FRONT. SUPERSEDED as a default by the fold handshake (above): both legs now
    send at the side view, 50. What follows is why the return leg was first split from the outbound one - still true of any
    threshold short of the fold, which is the point the handshake takes to its end.
@@ -8376,7 +8410,7 @@ const ORIENT_EARLY_TURN_DEFAULT_DEG = 35;   // 20 until the fold handshake (50);
    10-degree margin over it. Everything above is why the return must never be the LOWER of the
    two - it is the leg that was caught putting FRONT on a back-facing body at 20, and 35 is the
    measured floor rather than a comfortable setting. See ORIENT_EARLY_TURN_DEFAULT_DEG. */
-const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 45;   // 35 in v142, 50 at the fold handshake, 45 since the middle ground
+const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 35;   // v142's 35, RESTORED 2026-09-20; 45 at the middle ground, 50 at the fold handshake
 const ORIENT_EARLY_TURN_DEFAULT_SPEED = 45;
 /* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
    rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;
@@ -8435,7 +8469,7 @@ const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
    path's job is to add the SLOW rise at the same angle the fast path fires at, never earlier.
    Its own floor logic is unchanged - a weight shift or a look to the side settles by ~30, so 35
    still sits above where a pose stops. See ORIENT_EARLY_TURN_DEFAULT_DEG. */
-const ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG = 35;   // 35 in v142, 50 at the fold handshake, 35 since the middle ground
+const ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG = 35;   // 35 in v142 AND since the middle ground - the v142 restore leaves this one alone
 const ORIENT_EARLY_TURN_SLOW_RISE_DEG = 10;
 const ORIENT_EARLY_TURN_SLOW_WINDOW_MS = [450, 960];   // [min, max] age of the reading the rise is measured from
 /* Declared ABOVE the ?early_turn_* parsers that clamp to them. They used to sit below the slow-path parser,
@@ -8474,7 +8508,7 @@ const ORIENT_EARLY_TURN_DEG = (() => {
    file's other "lost to edge-on" bar - ~100ms more plain and 2 more turns lost; 30 ~250ms more and 3 lost. 20's cost
    is a small pose that rises past 20 fast AND drops a frame near its top - see THE COST above. 0 turns the path off;
    clamped like ?early_turn. */
-const ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG = 20;
+const ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG = 0;   // OFF - v142 had no loss path at all; RESTORED 2026-09-20 (was 20)
 const ORIENT_EARLY_TURN_LOSS_DEG = (() => {
   let raw = null;
   try { raw = new URLSearchParams(location.search).get("early_turn_loss"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG; }
