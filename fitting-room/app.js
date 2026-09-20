@@ -8410,37 +8410,7 @@ const ORIENT_EARLY_TURN_DEFAULT_DEG = 20;   // v142's 20, RESTORED 2026-09-20; 3
    10-degree margin over it. Everything above is why the return must never be the LOWER of the
    two - it is the leg that was caught putting FRONT on a back-facing body at 20, and 35 is the
    measured floor rather than a comfortable setting. See ORIENT_EARLY_TURN_DEFAULT_DEG. */
-/* ── BACK TO 45 (2026-09-20, hours after the v142 restore set it to 35) ──────────────────────
-   THE REPORT, from a clip: on the way back from the back view the "VENICE BEACH LA" print drops
-   off while the body is still back/profile - the back texture pops out early. That is this leg,
-   and it is the predicted cost of the v142 restore: 35 is the MEASURED FLOOR (the lowest value
-   that never puts FRONT on a back-facing body), and the restore parked the default exactly on it
-   with no margin. The paragraph above said so before the report arrived.
-
-   MEASURED, on turn-yaw-window's 211-turn fold grid, outbound held at v142's 20, at 0/100/250ms
-   on-screen latency. `land` is where FRONT arrives in degrees still to go to front-square (90 is
-   the side view); retPlain is the EARLY POP-OUT this report is about; retLate is the mirror
-   failure - the back print still on a chest that has come round to face the lens:
-       return 35   land 104/88/72   retPlain 235/191/137   retLate 294/334/419
-       return 45   land  45/37/25   retPlain 112/ 91/ 68   retLate 490/553/669   <- taken
-       return 50   land  30/26/15   retPlain  67/ 54/ 44   retLate 580/652/782
-       return 60   land  14/ 5/-8   retPlain  27/ 25/ 27   retLate 695/777/919
-   45 roughly HALVES the reported pop-out and lands FRONT 45 degrees from front-square, which is
-   what "hold it past the profile" asks for.
-
-   WHY NOT 50 OR 60, both of which cut retPlain further. They buy it with retLate, and retLate is
-   the WORSE artifact: a back graphic rendered on a chest that is facing the lens is a wrong-side
-   print, not a missing one (§2.1's failure, not §2.3's). 50 costs another ~90-113ms of it and 60
-   costs 205-250ms, to remove 45-68ms and 64-85ms of pop-out respectively. Declining diminishing
-   returns against a worsening artifact. THE POP-OUT IS NOT DRIVEN TO ZERO and cannot be from this
-   constant alone - 27ms remains even at 60, and pushing past that trades a plain frame for a
-   wrong-print frame. If the clip still shows it at 45, the next lever is the render latency
-   (COND_TRACE_SETTLE_MS), not another rung here.
-
-   THE HYSTERESIS IS NOW 25 DEGREES over the outbound 20 - wider than the middle ground's 10 over
-   35, because the outbound leg is at v142's 20 and this leg must never be the lower of the two.
-   The speed gate is untouched at 45 deg/s. Restore the floor live with ?early_turn_return=35. */
-const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 45;   // 45 again 2026-09-20 - v142's 35 sat on the measured floor with no margin; 50 at the fold handshake
+const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 35;   // v142's 35, RESTORED 2026-09-20; 45 at the middle ground, 50 at the fold handshake
 const ORIENT_EARLY_TURN_DEFAULT_SPEED = 45;
 /* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
    rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;

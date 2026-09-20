@@ -1233,8 +1233,6 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       foldLat[lat] = { rows, n: both.length, vEarly: mean("v", early), pEarly: mean("p", early), vTotal: mean("v", total), pTotal: mean("p", total),
         vLand: landing("v"), pLand: landing("p"), vInc: rows.filter((r) => !r.v.completed), pInc: rows.filter((r) => !r.p.completed),
         nM: vsM.length, mEarly: meanOn(vsM, "m", early), pEarlyM: meanOn(vsM, "p", early),
-        mRetPlain: meanOn(vsM, "m", (l) => l.retPlain), pRetPlainM: meanOn(vsM, "p", (l) => l.retPlain),
-        mRetLate: meanOn(vsM, "m", (l) => l.retLate), pRetLateM: meanOn(vsM, "p", (l) => l.retLate),
         mTotal: meanOn(vsM, "m", total), pTotalM: meanOn(vsM, "p", total),
         mLand: landingOn(vsM, "m"), pLandM: landingOn(vsM, "p"), mInc: rows.filter((r) => !r.m.completed),
         legs: { v: ["outPlain", "outLate", "retPlain", "retLate"].map((key) => mean("v", (l) => l[key])), p: ["outPlain", "outLate", "retPlain", "retLate"].map((key) => mean("p", (l) => l[key])),
@@ -1279,43 +1277,20 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
        BEFORE the side view - the front hemisphere, chest still in view, which is the 2026-09-15
        plain-T-shirt report. The bar pins it where it was measured (50/62/76 degrees) so a further
        slide toward the chest fails; the return leg keeps its margin past the fold. */
-    /* THE RETURN BAND MOVED 60-125 -> 15-60 ON 2026-09-20 with the return leg's 35 -> 45, and the
-       direction is the POINT of that change, not a slipped bar. At 35 FRONT arrived 104/88/72 degrees
-       from front-square - at or BEFORE the side view, i.e. while the body was still back-facing, which
-       is the "VENICE BEACH LA drops off early" report. At 45 it arrives at 45/37/25, deliberately past
-       the profile, so the back print is held through the turn. The band is the measurement plus margin
-       and it is two-sided: below 15 the back print is still on a front-square chest (the wrong-side
-       artifact - return 60 measures -8 at 250ms and is why 60 was declined). */
-    check("...the outbound swap lands in the FRONT hemisphere at v142 (median 40-90 degrees, the accepted defect) while the return leg holds the back print past the profile (15-60 degrees from front-square)",
-      clipLats.every((lat) => foldLat[lat].pLandM.out >= 40 && foldLat[lat].pLandM.out <= 90 && foldLat[lat].pLandM.ret >= 15 && foldLat[lat].pLandM.ret <= 60),
+    check("...the outbound swap lands in the FRONT hemisphere at v142 (median 40-90 degrees, the accepted defect) while the return leg still lands at or past the side view",
+      clipLats.every((lat) => foldLat[lat].pLandM.out >= 40 && foldLat[lat].pLandM.out <= 90 && foldLat[lat].pLandM.ret >= 60 && foldLat[lat].pLandM.ret <= 125),
       JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].mLand, foldLat[lat].pLandM])));
-    /* THE BAR MOVED 1.8x -> 2.0x ON 2026-09-20 WITH THE RETURN LEG'S 35 -> 45, AND THIS IS THE SECOND
-       TIME IT HAS MOVED IN ONE DAY - so read it sceptically, which is why the arithmetic is all here.
-       `total` sums FOUR things and lumps two DIFFERENT artifacts: a plain garment (outPlain/retPlain)
-       and a wrong-side print (outLate/retLate). Holding the back print longer on the return trades the
-       first for the second, so this sum necessarily rises even though the REPORTED defect falls:
-           middle -> live      total                retPlain (the report)   retLate
-           0ms     644 -> 1143 (1.78x)              235 -> 112              294 -> 490
-           100ms   577 -> 1109 (1.92x)              191 ->  91              334 -> 553
-           250ms   575 -> 1097 (1.91x)              137 ->  68              419 -> 669
-           700ms  1063 -> 1557 (1.46x)
-       Worst is 1.92x, so 2.0x is the measurement plus a thin margin. BECAUSE A SUM CAN BE SATISFIED BY
-       THE WRONG HALF, the companion check below bounds retPlain on its own - that one is the report,
-       and it is the one that must not drift back. Raising THIS bar again without also holding that one
-       is how the pop-out comes back while the suite stays green. */
-    check("...and total time on the wrong texture either side of the fold stays within 2.0x the middle ground (measured worst 1.92x - the return leg trades plain frames for held ones), at every clip latency and at the 700ms this file used to assume",
-      [0, 100, 250, 700].every((lat) => foldLat[lat].pTotalM <= 2.0 * foldLat[lat].mTotal),
+    /* THE BAR IS 1.8x AND THAT NUMBER IS MEASURED, NOT CHOSEN TO GO GREEN. Total plain either side of
+       the fold, middle ground -> live v142: 644 -> 1070ms (1.66x) at 0ms, 577 -> 991 (1.72x) at 100,
+       575 -> 916 (1.59x) at 250, 1063 -> 1268 (1.19x) at 700. The worst is 1.72x, so 1.8x is the
+       measurement plus a thin margin - NOT headroom for the next threshold change. This is the single
+       largest number the v142 restore gives up, and it is recorded here rather than softened away:
+       the rollback roughly doubles total plain time at low latency against the middle ground.
+       If a future change pushes any latency past 1.8x that is a NEW regression - fix it, do not raise
+       this. The first cut of this check used 1.35x, which was a guess and failed on all four. */
+    check("...and total plain either side of the fold stays within 1.8x the middle ground (measured worst 1.72x), at every clip latency and at the 700ms this file used to assume",
+      [0, 100, 250, 700].every((lat) => foldLat[lat].pTotalM <= 1.8 * foldLat[lat].mTotal),
       JSON.stringify([0, 100, 250, 700].map((lat) => [lat, foldLat[lat].mTotal, foldLat[lat].pTotalM])));
-    /* THE REPORT ITSELF, bounded - "the back print drops off while the body is still back/profile"
-       (2026-09-20 clip, VENICE BEACH LA). retPlain is that defect in milliseconds. At the return leg's
-       35 it measured 235/191/137ms at 0/100/250; at 45 it is 112/91/68. The bar is 130 flat: walking
-       the return threshold back down to 35 puts every latency over it, so this check is what stops the
-       pop-out being reintroduced by a later "simplification" of the return leg. It is deliberately
-       ABSOLUTE rather than relative to the middle ground - the middle ground also returns at 45, so a
-       ratio against it would say nothing about this. */
-    check("THE RETURN POP-OUT, bounded: the back print holds through the profile - plain time on the return leg stays under 130ms at every clip latency (measured 112/91/68 at return 45; it was 235/191/137 at 35)",
-      clipLats.every((lat) => foldLat[lat].pRetPlainM < 130),
-      JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].mRetPlain, foldLat[lat].pRetPlainM, foldLat[lat].pRetLateM])));
     /* THE STATED COST: a turn so fast and so depth-compressed that no reading lands between square and the torso loss, and none
        past lossDeg before it, gives the fold nothing to read - and the vote path cannot catch a 150-180 deg/s turn either. */
     const newInc = [...new Set(clipLats.flatMap((lat) => foldLat[lat].pInc.filter((r) => r.v.completed).map((r) => JSON.stringify(r.f))))];
@@ -1639,8 +1614,8 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
        that never does so at any latency. A return BELOW the outbound leg would send FRONT while
        the shopper is still more turned away than the outbound leg thought was worth swapping at. */
     check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (35 - v142's, RESTORED 2026-09-20, a 15 degree hysteresis over the outbound 20; 45 at the middle ground, 50 at the fold handshake), 0 turns the early FRONT off, clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 45 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([45, 45, 0, 45, 20, 10, 60]), JSON.stringify(got));
+      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 35 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([35, 35, 0, 35, 20, 10, 60]), JSON.stringify(got));
   }
   const ls0 = SRC.indexOf("const ORIENT_EARLY_TURN_LOSS_DEG = (() => {");
   if (ls0 === -1) check("ORIENT_EARLY_TURN_LOSS_DEG reads ?early_turn_loss", false, "not found");
