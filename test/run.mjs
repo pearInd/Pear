@@ -352,6 +352,7 @@ const SUITES = [
   ["image-bytes-cache", "image-bytes-cache.test.mjs"],
   ["angle-race", "angle-race.test.mjs"],
   ["preload-composite", "preload-composite.test.mjs"],
+  ["reference-resolution", "reference-resolution.test.mjs"],
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
   ["side-profile", "side-profile.test.mjs"],
   ["image-first", "image-first.test.mjs"],

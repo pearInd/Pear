@@ -7947,6 +7947,87 @@ function syncAssetPrep() {
  *   hasBack=false → at least one item's BACK is missing/broken - goLive() should proceed
  *                    FRONT-ONLY rather than arm AI Auto with a known-bad asset.
  */
+/* ── IS THE REFERENCE BIG ENOUGH TO CARRY THE ARTWORK? ─────────────────────────────
+   ══════════════════════════════════════════════════════════════════════════════
+   REPORTED 2026-09-21: "Decart is generating approximate/hallucinated print artwork
+   rather than the exact graphics in the reference." The request was to tune the
+   conditioning payload. There is nothing left to tune, and that is the finding:
+
+     · enhance is ALREADY false on every dispatch - resolveInitialConditioning,
+       applyGarment, its setPrompt path, applyLook, the keep-alive and
+       fallbackConditioning. Seven sites, explicit, because the SDK defaults it TRUE.
+     · there is NO negative_prompt and NO mask/ROI/region parameter. Verified against
+       @decartai/sdk@0.1.5: setInputSchema is exactly { prompt, enhance, image } and it
+       STRIPS unknown keys, so an invented field is silently dropped, not honoured.
+     · nothing in this file downsamples or re-encodes a reference. The Blob fetched is the
+       Blob sent, base64d once by preEncodeReference(). The camera INPUT is scaled to
+       LIVE_W x LIVE_H; the garment reference never is.
+     · the widget already maximises the URL before handover (upgradeImageUrl: Shopify size
+       suffixes, Woo thumbnails, width/height params, SFCC sw/sh/sm, Cloudinary path
+       transforms, largest-of-srcset).
+
+   SO THE ONE LINK NOBODY WAS MEASURING is what those upgrades actually yielded. Every
+   check on this path asks whether the bytes DECODE (garmentBlobCached), whether they are a
+   flat placeholder (blobLooksFlat) and whether the rear carries a graphic
+   (blobLooksPrinted). None of them asks how BIG the picture is. A storefront whose CDN
+   pattern upgradeImageUrl does not match hands over its thumbnail, we validate it happily -
+   it decodes, it is not flat, it is genuinely the product - and Decart conditions on a
+   200px packshot in which the chest graphic is sixty pixels wide. The model cannot
+   reproduce detail that is not in the reference, so it approximates: exactly the report.
+
+   THIS ONLY REPORTS. It never blocks, never downgrades and never changes a dispatch
+   (CLAUDE.md 2.5 - a wrong block stops a paying shopper, and a small reference still
+   renders a better try-on than no session). It turns "the reference is high-fidelity" from
+   an assumption into a logged fact a merchant session can be grepped for.
+
+   THE FLOOR IS A JUDGEMENT, NOT A MEASUREMENT, and it is labelled as one. Anchors: this
+   repo's own catalog requests width=1600-2160; the visual fixtures are 512x640 and must
+   not warn; a chest graphic occupies roughly a third of a packshot's width, so at a 512px
+   short edge the artwork is ~170px - about the floor at which lettering survives. Nobody
+   has yet correlated this against a real store's render quality. If a garment that warns
+   here turns out to render its logo fine, raise it or retire it - do not silently widen it
+   to make a noisy merchant quiet. */
+const REFERENCE_MIN_EDGE_PX = 512;
+const _refResolutions = new WeakMap();   // Blob -> {w, h}, settled once per Blob
+
+/* Decoded pixel size of a reference Blob, or null if it cannot be read. Memoised by Blob
+   identity exactly as _flatVerdicts is: garmentBlobCached() returns the same object for a
+   URL until it is evicted, and a refetch earns its own probe. A decode failure is NOT
+   memoised - it fails open and the next caller tries again. */
+async function referenceResolution(blob) {
+  if (!blob || typeof blob !== "object" || typeof createImageBitmap !== "function") return null;
+  if (_refResolutions.has(blob)) return _refResolutions.get(blob);
+  try {
+    const bmp = await createImageBitmap(blob);
+    const dims = { w: bmp.width, h: bmp.height };
+    if (typeof bmp.close === "function") bmp.close();
+    _refResolutions.set(blob, dims);
+    return dims;
+  } catch (e) {
+    console.warn("[PEAR] referenceResolution() - could not decode the reference to measure it:", e?.message || e);
+    return null;
+  }
+}
+
+/* Log what Decart will actually be conditioned on. Fire-and-forget by design: this is a
+   diagnostic and must never add latency in front of the shopper's go-live.
+   @param {Blob} blob  @param {string} label garment name  @param {string} which "front"/"back" */
+function probeReferenceResolution(blob, label, which) {
+  Promise.resolve(referenceResolution(blob)).then((d) => {
+    if (!d) return;
+    const kb = blob && blob.size ? ` | ${(blob.size / 1024).toFixed(0)}KB` : "";
+    const edge = Math.min(d.w, d.h);
+    if (edge < REFERENCE_MIN_EDGE_PX) {
+      console.warn(`[PEAR] LOW-RES REFERENCE - ${label} ${which}: ${d.w}x${d.h}${kb}, short edge ${edge}px` +
+        ` is under ${REFERENCE_MIN_EDGE_PX}px. Decart cannot reproduce print detail the reference does not` +
+        ` carry, so logos and lettering will render approximate. The storefront served a thumbnail and` +
+        ` upgradeImageUrl() (pear-widget.js) did not match its CDN pattern.`);
+    } else {
+      console.log(`[PEAR] reference resolution - ${label} ${which}: ${d.w}x${d.h}${kb} (ok)`);
+    }
+  }).catch(() => {});
+}
+
 async function preloadGarmentAssets() {
   const look = resolveLook();
   const items = (look ? [look.top, look.bottom] : [activeItem]).filter(Boolean);
@@ -7985,6 +8066,11 @@ async function preloadGarmentAssets() {
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front […]`);
     const frontBlob = front ? await garmentBlobCached(front) : null;
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Front [${frontBlob ? "OK" : "FAIL"}]`);
+    /* What Decart will actually be conditioned on, measured rather than assumed - see
+       REFERENCE_MIN_EDGE_PX. Fire-and-forget and typeof-guarded: this function is extracted
+       and run standalone by preload-composite (CLAUDE.md 2.6/2.7), where the helper above the
+       slice does not exist, and a diagnostic must never delay go-live. */
+    if (frontBlob && typeof probeReferenceResolution === "function") probeReferenceResolution(frontBlob, label, "front");
     prepTick();
     if (!frontBlob) {
       console.error("[PEAR] CRITICAL: GARMENT_FRONT failed pre-load validation -", label, front);
@@ -7996,6 +8082,7 @@ async function preloadGarmentAssets() {
 
     setText(`בודק תמונות בגד… · Scanning Garment Assets… ${label} Back […]`);
     const backBlob = await garmentBlobCached(back);
+    if (backBlob && typeof probeReferenceResolution === "function") probeReferenceResolution(backBlob, label, "back");
     let backOk = !!backBlob;
     /* blobLooksFlat() fails open on a probe error, exactly as the inline probe here did, and
        SETTLES the verdict on this Blob - so the first turn to the back reads it instead of
