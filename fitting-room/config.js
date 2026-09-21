@@ -196,8 +196,35 @@ export const CONFIG = Object.freeze({
      feed anyway. A GATE THAT CAN HANG A SESSION IS WORSE THAN THE DEFECT IT PREVENTS:
      FIRST_FRAME_TIMEOUT_MS would eventually tear the session down and show the shopper a
      hard failure, which is a strictly worse outcome than an unconditioned render they can
-     at least see. Past this, the feed is revealed and the console says why. */
-  PASSTHROUGH_GATE_MAX_MS: 2600,
+     at least see. Past this, the feed is revealed and the console says why.
+
+     ── 2600 -> 5000 (2026-09-21), A PRODUCT DECISION ON WHAT THE GATE IS PROTECTING ──────
+     REPORTED: on a slow Decart initialisation the raw webcam feed reached the shopper before
+     conditioning took effect - "exposing the user's unconditioned state (e.g. shirtless)
+     before jumping to the garment overlay". The gate already existed for exactly this and
+     already caught it; what it did not do was hold long enough. 2600 was set as a liveness
+     number - comfortably clear of a healthy cold start - and the thing on the other side of
+     it was assumed to be a cosmetically wrong render. On a shopper who is changing, it is
+     their body. That is a different trade and it is re-taken here in that light.
+
+     WHAT IT COSTS, stated rather than buried: on a genuinely slow init the shopper now waits
+     up to 5s behind the loading overlay instead of 2.6s. Nothing is billed for that wait -
+     startBillingWindow() fires on the reveal, not on connect - so the cost is perceived load
+     time only, and a longer scan overlay is a cheaper failure than an unconditioned frame of
+     someone getting dressed.
+
+     WHY 5000 AND NOT "HOLD UNTIL A CONDITIONED FRAME ARRIVES". A gate with no ceiling does
+     not degrade to "the shopper waits" - it degrades to FIRST_FRAME_TIMEOUT_MS (15000)
+     tearing the session down into a hard error, which shows them nothing at all and bills
+     nothing back. 5000 leaves 10s of headroom under that teardown and stays under
+     REVEAL_SETTLE_MAX_MS (6000), so the render-settle hold remains the outer bound.
+     cold-start-passthrough.test.mjs asserts both relationships from CONFIG rather than from
+     a literal, so they are checked on every run rather than remembered.
+
+     THE RESIDUAL IS REAL AND IS NOT CLOSED BY THIS. The gate still fails open at the
+     ceiling: past 5000 an unconditioned frame can still be revealed. This buys margin, not a
+     guarantee, and there is no guarantee available while a teardown is the alternative. */
+  PASSTHROUGH_GATE_MAX_MS: 5000,
   /* ── THE STARTUP RE-DISPATCH, keyed on the gate above ───────────────────────
      While the output is still measurably a passthrough, re-assert the conditioning. This
      is deliberately NOT keyed on a missing ack - a missing ack already has two mechanisms
@@ -267,11 +294,29 @@ export const CONFIG = Object.freeze({
   REFERENCE_RENDER_SETTLE_MS: 1200,
   /* The ceiling on that hold, from the moment the remote track attaches - the same anchor
      PASSTHROUGH_GATE_MAX_MS uses. Bounded independently because it must be able to outlast
-     that gate: a re-dispatch sent just before the 2.6s ceiling still has a render to wait out.
+     that gate: a re-dispatch sent just before that ceiling still has a render to wait out.
      Every re-send is capped (COLD_START_REDISPATCH_MAX + one re-assert), so the hold is
      finite by construction; this is the backstop, kept far inside FIRST_FRAME_TIMEOUT_MS
-     (15s) so a gate can never turn a slow render into a torn-down session. */
-  REVEAL_SETTLE_MAX_MS: 6000,
+     (15s) so a gate can never turn a slow render into a torn-down session.
+
+     ── 6000 -> 7000 (2026-09-21), DRAGGED BY THE PASSTHROUGH CEILING ─────────────────────
+     THESE TWO CONSTANTS ARE COUPLED, and the coupling is an assertion, not a convention:
+     reveal-settle.test.mjs §7 requires
+
+         REVEAL_SETTLE_MAX_MS > PASSTHROUGH_GATE_MAX_MS + REFERENCE_RENDER_SETTLE_MS
+
+     because a re-dispatch fired in the last instant before the passthrough gate expires
+     still needs its full render wait covered. Raising the passthrough ceiling 2600 -> 5000
+     for the bare-body report made the old 6000 fail that (6000 > 6200 is false), and a
+     settle ceiling that expires DURING a late re-dispatch's render is the 00:00 prior bug
+     (448abc6) reached from the other side - the reveal would land inside the render it was
+     built to wait out. So this moves with it rather than the test being relaxed.
+
+     7000 is the smallest round value clearing 6200 while staying under the suite's other
+     bound, REVEAL_SETTLE_MAX_MS < FIRST_FRAME_TIMEOUT_MS / 2 (7500). That leaves only 500ms
+     of headroom there: if PASSTHROUGH_GATE_MAX_MS is ever raised again, this cannot simply
+     follow it, and FIRST_FRAME_TIMEOUT_MS becomes the thing to reconsider first. */
+  REVEAL_SETTLE_MAX_MS: 7000,
   /* How long connectRealtime() waits for the garment's BYTES before opening a session.
      The conditioning floor is sent inside the SDK's join and acknowledged before any video is
      published, so it has to exist before connect() is called at all. Waiting for the bytes

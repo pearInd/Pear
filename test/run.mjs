@@ -353,6 +353,7 @@ const SUITES = [
   ["angle-race", "angle-race.test.mjs"],
   ["preload-composite", "preload-composite.test.mjs"],
   ["reference-resolution", "reference-resolution.test.mjs"],
+  ["summoning-tokens", "summoning-tokens.test.mjs"],
   ["prompt-only-flip", "prompt-only-flip.test.mjs"],
   ["side-profile", "side-profile.test.mjs"],
   ["image-first", "image-first.test.mjs"],
