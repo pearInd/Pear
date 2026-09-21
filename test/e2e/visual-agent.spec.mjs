@@ -89,6 +89,34 @@ function roomUrl(base) {
     garment_type: "tops",
     garment_name: "Harness Tee",
   });
+  /* DECART'S OWN PRIOR, REPRODUCED - the third negative control, and the only one that
+     covers the START of a session rather than a turn.
+
+     THE REPORT IT MAKES TESTABLE (448abc6, "wrong garment at 00:00", the fifth recording
+     of it): between set_image_ack and Decart's render actually switching to the new
+     reference, the model keeps drawing from its own prior - a garment nobody picked, on
+     the shopper, for 780-1100ms measured. It reads as the selected garment distorting or
+     being replaced at 00:00. It is NOT a local gesture, a warp or an overlay; nothing in
+     this room draws on the body (the only transform on #aiVideo is the selfie scaleX(-1)).
+
+     mockPriorMs() paints that prior into the torso for <ms> after every image ack, so the
+     question "does the reveal ever land on it" becomes decidable here instead of needing a
+     billed session and a lucky recording. REFERENCE_RENDER_SETTLE_MS (1200) is the gate
+     that must beat it, so a value at or above that is the interesting one.
+
+     OFF UNLESS ASKED, and deliberately not a default: with no env var nothing is appended
+     and the standard run's URL is byte-identical to what it was before this existed, so
+     the mandatory gate is unchanged. Same contract as PEAR_VISUAL_FRONT/BACK above.
+
+       PEAR_VISUAL_PRIOR_MS=1500 npm run test:visual && npm run inspect:visuals
+         -> must stay green: the reveal waited the prior out
+         -> plain-shirt-gap / white-flash on 00-front means it revealed onto the prior */
+  if (process.env.PEAR_VISUAL_PRIOR_MS) q.set("mock_prior_ms", process.env.PEAR_VISUAL_PRIOR_MS);
+  /* THE CONTROL'S OWN CONTROL. ?settle_hold=0 is the room's documented A/B switch for the
+     reveal settle that 448abc6 added (REFERENCE_RENDER_SETTLE_MS). With the prior on and
+     the settle off, revealed-on-prior MUST fire - that is what proves the check is wired
+     to something real rather than passing because it never looks. Off unless asked. */
+  if (process.env.PEAR_VISUAL_SETTLE_HOLD) q.set("settle_hold", process.env.PEAR_VISUAL_SETTLE_HOLD);
   return `${base}/fitting-room/index.html?${q}`;
 }
 
@@ -324,12 +352,23 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
   const geometry = await page.evaluate(() => window.__pearMockDecart.geometry);
   const dispatches = await page.evaluate(() => window.__pearMockDecart.dispatches);
   const frames = await page.evaluate(() => window.__pearMockDecart.frames);
+  /* WHEN THE PRIOR WAS ON SCREEN (?mock_prior_ms only; both are empty/0 otherwise).
+     The mock already recorded this and nothing read it, so a run with the prior enabled
+     was scored by checks that cannot see it: the prior is a MULTICOLOR pattern, so it
+     clears plain-shirt-gap's flat-fill bar, and it is neither wire key, so it clears
+     missing-back-print. Carrying the timestamps out is what makes "the reveal landed on
+     a garment nobody picked" a measurement instead of a screenshot someone has to squint
+     at. Scored by the revealed-on-prior check in inspect-visuals.mjs. */
+  const priorFrames = await page.evaluate(() => window.__pearMockDecart.priorFrames);
+  const priorPaintedAt = await page.evaluate(() => window.__pearMockDecart.priorPaintedAt);
 
   writeFileSync(join(OUT, "meta.json"), JSON.stringify({
     generatedAt: new Date().toISOString(),
     geometry,
     frames,
     dispatches,
+    priorFrames,
+    priorPaintedAt,
     pageErrors,
     criticalLogs,
     consoleNoise,

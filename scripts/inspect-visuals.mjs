@@ -259,7 +259,45 @@ const T = {
   UNIFORM_DETAIL: 1.5,   // ...and this flat with it means nothing is being shown at all
   HUE_SHIFT_MIN: 0.22,   // front vs back profiles must differ by at least this
   FROZEN_DIFF: 1.0,      // consecutive burst frames flatter than this = a frozen feed
+  /* Fraction of the torso patch that must match the mock's prior palette before a frame is
+     called "the prior". The prior is five FIXED saturated bands filling the whole patch, so
+     a true hit scores near 1.0; a real garment fixture has no reason to be built from those
+     five exact colours. Set well clear of both - see the revealed-on-prior check.
+     MEASURED on this harness's own frames: prior-on-torso 0.93-0.99, front.png 0.00,
+     back.png 0.00. Only ever read when ?mock_prior_ms is on. */
+  PRIOR_MATCH_MIN: 0.55,
+  PRIOR_RGB_TOL: 40,     // per-channel slack, for PNG/scaling softness at band edges
 };
+
+/* THE MOCK'S PRIOR, BY ITS PIXELS. These are the five colours mockDecart paints into the
+   torso during a simulated render wait (fitting-room/app.js - keep in lockstep if they are
+   ever changed). Chosen there to be saturated and never near-white so they cannot be
+   confused with an overlay; that also makes them trivially identifiable here.
+   WHY PIXELS AND NOT TIMESTAMPS. The first cut of this check compared the capture's clock
+   time against the mock's per-frame prior paints. It separated the two controls once and
+   then stopped: on the next run the nearest paint sat 192ms from the reveal against a
+   150ms bar - a near-miss, because the mock paints only on frames it renders and a
+   screenshot can land in the gap between two of them. That is a timing proxy for a
+   question about what is ON SCREEN, and §8.2 already says why this gate looks at pixels. */
+const PRIOR_PALETTE = [[0x39, 0xff, 0x14], [0xff, 0x6b, 0x00], [0x7b, 0x2c, 0xff],
+                       [0xff, 0xd4, 0x00], [0x00, 0xb3, 0xff]];
+
+/** Fraction of sampled cells in `r` that match one of the prior's five band colours, 0-1. */
+function priorMatch(img, r, step = gridStep(img, r)) {
+  const { x0, y0, x1, y1 } = rectOf(img, r);
+  let hit = 0, n = 0;
+  for (let y = y0; y < y1; y += step) {
+    for (let x = x0; x < x1; x += step) {
+      const [R, G, B] = px(img, x, y);
+      n++;
+      if (PRIOR_PALETTE.some(([r0, g0, b0]) =>
+        Math.abs(R - r0) <= T.PRIOR_RGB_TOL &&
+        Math.abs(G - g0) <= T.PRIOR_RGB_TOL &&
+        Math.abs(B - b0) <= T.PRIOR_RGB_TOL)) hit++;
+    }
+  }
+  return n ? hit / n : 0;
+}
 
 /* ── the run ─────────────────────────────────────────────────────────────── */
 
@@ -367,6 +405,68 @@ function inspect(dir) {
         `(CLAUDE.md §2.9).`);
     } else {
       pass("frozen-feed", burst[i].name, `mean diff vs previous ${d.toFixed(2)}`);
+    }
+  }
+
+  /* ── 5. the reveal landed on Decart's own prior ────────────────────────────
+     THE REPORT THIS CLOSES (448abc6, "wrong garment at 00:00" - the fifth recording):
+     between set_image_ack and Decart's render switching to the new reference, the model
+     keeps drawing from its own prior, 780-1100ms measured. Reveal inside that window and
+     the shopper's first dressed frame is a garment nobody picked. It is not a local warp,
+     gesture or overlay - nothing in the room draws on the body.
+
+     WHY THE OTHER FOUR CHECKS CANNOT SEE IT, which is the reason this one exists: the
+     prior is a MULTICOLOR pattern, so it is well clear of DETAIL_FLOOR (not a flat fill)
+     and nowhere near WHITE_LUMA (not an overlay), and it is neither wire key, so the
+     front/back hue test never looks at it. A run with the prior enabled scored a clean 40
+     while the question it was enabled to answer went unasked.
+
+     INERT ON A NORMAL RUN, and that is deliberate: ?mock_prior_ms is off by default, so
+     priorPaintedAt is empty and this neither passes nor fails. It reports only when the
+     harness was actually asked to paint a prior. */
+  const priorAt = Array.isArray(meta.priorPaintedAt) ? meta.priorPaintedAt : [];
+  const revealShot = meta.shots.find((sh) => sh.name === "00-front");
+  const revealImg = revealShot ? named[revealShot.name] : null;
+  if (priorAt.length && revealImg) {
+    /* THE REVEAL ONLY, and the scoping is the whole correctness of this check. The mock
+       repaints the prior after EVERY image ack, so each of a turn's swap dispatches opens
+       its own window - and scoring those as failures was measured here first: with the
+       shipped settle ON, 00-front was clean while 7 mid-turn captures sat inside windows
+       opened by swap acks. That is Decart's ~1s render switch, which is known physics and
+       the reason the early-turn trigger exists (app.js ORIENT_EARLY_TURN_DEFAULT_DEG) -
+       not a regression anyone committed. A mandatory gate that fails for it is a gate that
+       gets commented out (§8.1), so only the shopper's FIRST dressed frame is scored.
+
+       CALIBRATION, measured here - and read the limit before trusting a green run.
+         · SEPARATION IS DECISIVE. A reveal that lands on the prior scores 95%; a clean one
+           scores 0%. The bar at 55% is not near either. Verified to fire:
+             PEAR_VISUAL_PRIOR_MS=5000 PEAR_VISUAL_SETTLE_HOLD=0 npm run test:visual
+         · THE ROOM'S GATE ENDS AT REFERENCE_RENDER_SETTLE_MS (1200). At a 5000ms prior the
+           reveal lands on it WITH the settle on too - by construction, not by fault: the
+           reveal waits 1200ms past the last ack and then goes. 780-1100ms is the measured
+           real band (448abc6), so the shipped number covers it with ~100ms to spare and
+           nothing beyond it. If a live capture ever shows a render switch past 1200ms,
+           that constant is the thing to move, and this check is how you would know.
+         · WHAT THIS DOES NOT PROVE. At a realistic 1100ms prior the reveal is clean with
+           ?settle_hold=0 AS WELL, twice over - the spec's own reveal wait (.show-live plus
+           the scan overlay coming down) and the cold-start hold already carry the capture
+           past it. So this is a regression guard on the OUTCOME - the shopper's first
+           dressed frame is never Decart's prior - and NOT an A/B that isolates which of
+           those three mechanisms delivers it. Do not cite a green run as proof that
+           REFERENCE_RENDER_SETTLE_MS specifically is load-bearing. */
+    const m = priorMatch(revealImg.img, patch);
+    if (m >= T.PRIOR_MATCH_MIN) {
+      fail("revealed-on-prior", revealShot.name,
+        `the first dressed frame IS Decart's prior - ${(m * 100).toFixed(0)}% of the torso ` +
+        `patch is the prior's band palette (bar ${(T.PRIOR_MATCH_MIN * 100).toFixed(0)}%, ` +
+        `${meta.priorFrames} prior frame(s) this run). The reveal did not wait out the render ` +
+        `switch, so the shopper opens on a garment nobody picked ` +
+        `(448abc6 / REFERENCE_RENDER_SETTLE_MS).`);
+    } else {
+      pass("revealed-on-prior", revealShot.name,
+        `${meta.priorFrames} prior frame(s) painted this run; the reveal's torso is ` +
+        `${(m * 100).toFixed(0)}% prior palette (bar ${(T.PRIOR_MATCH_MIN * 100).toFixed(0)}%) ` +
+        `- it waited the render switch out`);
     }
   }
 
