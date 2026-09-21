@@ -417,11 +417,20 @@ console.log("\n── §5 THE FRAME BUDGET ON THE WIRE ──");
     /const LIVE_FPS\s+= 60;/.test(SRC) && /const LIVE_INFERENCE_FPS\s+= 10;/.test(SRC),
     "the preview is mirror-smooth locally; only 10 frames/s ever leave the browser");
   const throttleSrc = extract("function createThrottledInputStream", "function releaseInputGate");
-  check("...and the throttle's clone never constrains the shared camera's frame rate",
-    /srcTrack\.applyConstraints\(\{\s*\n\s*width:/.test(throttleSrc) &&
-      !/frameRate/.test(throttleSrc.slice(throttleSrc.indexOf("srcTrack.applyConstraints"),
-                                          throttleSrc.indexOf("}).catch", throttleSrc.indexOf("srcTrack.applyConstraints")))),
-    "the canvas + requestFrame() pacing is the rate guarantee; the clone constraint only risks the preview");
+  /* STRENGTHENED (2026-09-20), not loosened: this used to assert that the clone's
+     applyConstraints call carried no frameRate. The call is GONE now, so the shape it
+     matched on no longer exists - and the replacement asserts strictly more, because
+     "no applyConstraints at all" subsumes "an applyConstraints without frameRate".
+     WHY THE REST OF THE CALL WENT TOO: a width/height constraint reconfigures the shared
+     capture source exactly as a frameRate one does, and re-negotiating the capture format
+     restarts auto-exposure / auto-white-balance with it - at session start, and again when
+     dispose() stops the clone at the end of the billed window. That is the end-of-turn
+     colour/exposure step. The canvas was always the real guarantee for both rate and size. */
+  check("...and the throttle's clone never constrains the shared camera at all",
+    !/srcTrack\.applyConstraints/.test(throttleSrc),
+    "the canvas + requestFrame() pacing is the rate AND size guarantee; any constraint on a " +
+    "clone of the preview's track can reconfigure the shared source under the shopper - and " +
+    "restart AE/AWB with it");
 
   /* THE POSE LOOP SHARES THIS THREAD. detectForVideo() is a WASM/GPU pass on the main
      thread - the same one servicing the datachannel - so the cheapest available saving is
@@ -435,6 +444,53 @@ console.log("\n── §5 THE FRAME BUDGET ON THE WIRE ──");
     (watcher.match(/detectPoseFrame\(/g) || []).length === 1);
 }
 
+
+/* ── THE CAMERA COLOUR PIN (2026-09-20) ────────────────────────────────────────────────
+   REPORTED: "on completing the 360 the feed abruptly changes colour temperature/exposure".
+   The sensor's AE/AWB loops re-converge across a turn because a turn sweeps a large
+   differently-coloured surface through the frame; lockCameraColor() pins them to the values
+   the camera itself converged on, before the token mint. These checks pin the two decisions
+   that are easy to undo by accident and expensive to re-diagnose. */
+{
+  const goLiveSrc = extract("async function goLive", "/* ── Billed-window cap");
+  /* The CALL, not any mention: goLive() names connectRealtime() in two comments above the
+     call site, and matching those compared the pin against prose. */
+  const mintAt = goLiveSrc.indexOf("await connectRealtime();");
+  const lockAt = goLiveSrc.indexOf("lockCameraColor");
+  check("goLive() pins the camera's AE/AWB before it opens a billed session",
+    lockAt !== -1 && mintAt !== -1 && lockAt < mintAt,
+    "the pin must land after the settle gates and BEFORE the mint, so a reconfiguration " +
+    "hitch happens where nothing is billed, revealed or recorded");
+
+  /* THE ONE THAT MATTERS. Releasing the pin when the billed window closes re-converges AWB
+     at exactly the 00:04 boundary the report is about - the artifact moved a few frames, not
+     removed. The pin is held through the frozen-result tail and released only where the
+     camera itself goes away. Asserted as an ABSENCE, the form that catches a well-meant
+     "tidy up at the end of the session" line being added later. */
+  const billingSrc  = extract("function stopBilling", "/* Close out the frozen-hold");
+  const teardownSrc = extract("function teardown()", "/* ── A NEW TRY-ON INHERITS NOTHING");
+  check("...and neither stopBilling() nor teardown() releases it",
+    !/releaseCameraColor/.test(billingSrc) && !/releaseCameraColor/.test(teardownSrc),
+    "handing the auto loops back at the end of the billed window re-grades the feed at " +
+    "exactly the boundary the pin exists to keep steady");
+
+  const releasers = (SRC.match(/^\s*releaseCameraColor\(\);/gm) || []).length;
+  check("...and it is released in exactly the two places the camera itself goes away",
+    releasers === 2 && /function fullTeardown\(\) \{\n  teardown\(\);/.test(SRC),
+    `fullTeardown() + reinitCameraForOrientation(); found ${releasers} call sites`);
+
+  /* The pin must be the camera's OWN converged answer, never a hardcoded guess - a fixed
+     colour temperature would correctly expose one room and wreck every other. */
+  const lockSrc = extract("async function lockCameraColor", "function releaseCameraColor");
+  check("...and it pins the converged values read back from the track, not a constant",
+    /getSettings\(\)/.test(lockSrc) && /settled\.colorTemperature/.test(lockSrc) &&
+      /settled\.exposureTime/.test(lockSrc),
+    "lockCameraColor() must freeze the auto loops at their own answer");
+  check("...and a device with no exposure/white-balance control is left untouched",
+    /getCapabilities/.test(lockSrc) && /left on auto/.test(lockSrc),
+    "AE/AWB control is optional in the spec; a session must never fail because a camera " +
+    "would not be pinned");
+}
 console.log("\n── §6 THE 'STARTED RENDERING WITHOUT A GARMENT' WARNING TELLS THE TRUTH ──");
 /* REPORTED AS A RACE: "[PEAR][DEBUG] Decart stream started rendering WITHOUT a garment
    asset on the wire" on every session, read as proof that the first frame beats the

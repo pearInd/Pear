@@ -4827,6 +4827,116 @@ async function startCamera(facing = cameraFacing) {
   finally { cameraStartPromise = null; }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+   THE CAMERA'S AUTO-EXPOSURE IS A SECOND RENDERER, AND IT MOVES DURING A TURN
+   ══════════════════════════════════════════════════════════════════════════════
+   REPORTED, from a clip: "on completing the 360 the feed abruptly changes colour
+   temperature / exposure - the shorts read bright pink". The report came with a
+   diagnosis naming a WebGL canvas state reset and a clearColor flush. THERE IS NO
+   WebGL IN THIS FILE - every drawing surface here is a 2D context (grep getContext:
+   they are all "2d"), so nothing can reset a GL clear colour and that mechanism does
+   not exist. Do not go looking for it again. The one that DOES exist is the sensor.
+
+   THE MECHANISM. Auto-exposure and auto-white-balance are closed loops over the WHOLE
+   frame, and a 360 sweeps a large, differently-coloured surface - the shopper's back,
+   the garment, whatever the room puts behind them - through most of that frame. The
+   loops re-converge while the body is side-on and converge BACK as it returns square,
+   so the colour swing is widest exactly when the turn completes. Nothing in this page
+   re-grades a pixel at that moment; the camera does, and #aiVideo carries it because
+   Decart renders whatever the camera handed it. The same loops are why a session's
+   first second already warms up - see cameraLooksBlack()'s brightest-of-samples note.
+
+   SO THE LOOPS ARE PINNED FOR THE BILLED WINDOW. goLive() calls this once the camera is
+   open and settled (after the black-screen and presence gates, both of which spend real
+   time watching frames) and BEFORE the token mint - so any reconfiguration hitch
+   applyConstraints provokes lands before anything is billed, revealed or recorded, where
+   no shopper can see it. The values pinned are the ones the camera itself converged on,
+   read back from getSettings(): this freezes the auto loops AT THEIR OWN ANSWER, it does
+   not impose a guess, so a dim room stays correctly exposed.
+
+   EVERY STEP IS BEST-EFFORT AND NON-FATAL. Exposure and white-balance control are
+   optional in the Media Capture spec and absent on most desktop webcams. A device that
+   does not advertise the capability is left exactly as it is, a device that refuses is
+   logged and left alone, and no session may ever fail because a camera would not be
+   pinned - a complete no-op here restores today's behaviour precisely.
+
+   THIS IS NOT A GATE ON #webcam (CLAUDE.md 2.9). It changes how the sensor METERS. It
+   does not pause, hold, gate or withhold a single frame; localStream is never stopped,
+   re-requested or replaced, and the preview keeps running throughout.
+
+   THE RELEASE IS DELIBERATELY NOT AT stopBilling(). Handing the loops back when the
+   billed window closes would re-converge AWB at exactly the 00:04 boundary the report
+   is about - the artifact moved by a few frames rather than removed. The pin is held
+   through the frozen-result tail and released only when the camera itself goes away
+   (fullTeardown / reinitCameraForOrientation), so the live view, the frozen
+   "masterpiece" and the saved clip are all graded the same. */
+let _colorLockedTrack = null;   // the exact track we pinned - a NEW camera open re-locks, a stale handle never blocks
+
+/**
+ * Pin auto-exposure / auto-white-balance to the values the camera has already converged
+ * on, so a turn cannot re-grade the feed mid-session. Idempotent per track.
+ * @returns {Promise<void>} always resolves; a camera that cannot or will not be pinned
+ *   is left on auto and says so once.
+ */
+async function lockCameraColor() {
+  const track = localStream && localStream.getVideoTracks()[0];
+  if (!track || _colorLockedTrack === track) return;
+  if (typeof track.getCapabilities !== "function" || typeof track.applyConstraints !== "function") return;
+  let caps = {}, settled = {};
+  try { caps = track.getCapabilities() || {}; } catch (_) { return; }
+  try { settled = track.getSettings() || {}; } catch (_) { settled = {}; }
+
+  /* Capability mode lists are arrays of supported strings. "manual" is the only value
+     that actually freezes a loop; "continuous" is the AUTO mode and cannot stop drift -
+     it is still worth pinning explicitly on a device that offers nothing better, because
+     it stops the MODE from being re-chosen under us on a track reconfiguration. */
+  const pins = [];
+  const wbModes = Array.isArray(caps.whiteBalanceMode) ? caps.whiteBalanceMode : [];
+  if (wbModes.includes("manual") && Number.isFinite(settled.colorTemperature)) {
+    pins.push({ whiteBalanceMode: "manual", colorTemperature: settled.colorTemperature });
+  } else if (wbModes.includes("continuous")) {
+    pins.push({ whiteBalanceMode: "continuous" });
+  }
+  const expModes = Array.isArray(caps.exposureMode) ? caps.exposureMode : [];
+  if (expModes.includes("manual") && Number.isFinite(settled.exposureTime)) {
+    const exposure = { exposureMode: "manual", exposureTime: settled.exposureTime };
+    if (Number.isFinite(settled.iso)) exposure.iso = settled.iso;
+    pins.push(exposure);
+  } else if (expModes.includes("continuous")) {
+    pins.push({ exposureMode: "continuous" });
+  }
+
+  if (!pins.length) {
+    console.log("[PEAR] camera colour lock: this device exposes no exposure/white-balance control - left on auto");
+    return;
+  }
+  try {
+    await track.applyConstraints({ advanced: pins });
+    _colorLockedTrack = track;
+    const frozen = pins.some((p) => p.whiteBalanceMode === "manual" || p.exposureMode === "manual");
+    console.log("[PEAR] camera colour lock:", frozen ? "pinned to the converged values" : "modes pinned (device has no manual mode)",
+      "-", JSON.stringify(pins));
+  } catch (e) {
+    console.log("[PEAR] camera colour lock: device refused (" + (e && e.message ? e.message : e) + ") - left on auto");
+  }
+}
+
+/**
+ * Hand the auto loops back to the camera. Called ONLY where the camera itself is being
+ * released or rebuilt - never when a billed window ends (see the block comment above).
+ * @returns {void}
+ */
+function releaseCameraColor() {
+  const track = _colorLockedTrack;
+  _colorLockedTrack = null;
+  if (!track || typeof track.applyConstraints !== "function") return;
+  try {
+    track.applyConstraints({
+      advanced: [{ whiteBalanceMode: "continuous" }, { exposureMode: "continuous" }],
+    }).catch(() => {});
+  } catch (_) {}
+}
+
 /* Sample ONE frame of ANY <video> element into a tiny downscaled canvas and measure
    how dark it is. Returns { ready, avgLuma, blackFrac }:
      • ready=false  → no decoded frame yet (videoWidth 0 / not paintable) - caller
@@ -5073,6 +5183,9 @@ async function reinitCameraForOrientation() {
     do {
       reinitPending = false;
       const facing = cameraFacing;
+      /* This track is about to be stopped and replaced, so drop the pin with it - the new
+         track re-locks on the next goLive() against the orientation it actually opened in. */
+      releaseCameraColor();
       localStream.getTracks().forEach((t) => t.stop());
       localStream = null;
       await startCamera(facing);   // re-open with orientation-matched constraints, fully awaited
@@ -5999,20 +6112,30 @@ function createThrottledInputStream(srcStream, {
   // No video track (camera failed) - hand the stream back untouched; nothing to throttle.
   if (!srcTrack) return { stream: srcStream, dispose: () => {} };
 
-  // Best-effort native constraint first - some devices honour it and trim work
-  // upstream. The canvas throttle below is the guarantee regardless of the result.
-  /* NO frameRate HERE ANY MORE. It used to ask this track for `max: fps` (10). This track
-     is a CLONE of the preview camera's, and a browser that applies a clone's constraints to
-     the shared capture source (rather than decimating per track) would drag the shopper's
-     own preview - and the continuity layer drawn from it - down to 10fps with it. The rate
-     that reaches Decart never depended on this line: the setInterval + requestFrame() below
-     emits exactly `fps` frames a second whatever the camera delivers. */
-  try {
-    srcTrack.applyConstraints({
-      width:  { ideal: width },
-      height: { ideal: height },
-    }).catch(() => {});
-  } catch (_) {}
+  /* ── THIS CLONE ASKS THE SHARED CAMERA FOR NOTHING AT ALL, AND THAT IS THE POINT ──────
+     It used to call applyConstraints({ width, height }) here, "best-effort, some devices
+     honour it and trim work upstream". The frameRate half of that call was already removed
+     for the reason this paragraph now extends to the whole thing: this track is a CLONE of
+     the preview camera's, and a browser that applies a clone's constraints to the SHARED
+     capture source - rather than decimating or scaling per track - reconfigures the source
+     under the shopper's own preview.
+
+     A RESOLUTION RECONFIGURATION IS WORSE THAN THE RATE ONE WAS. Re-negotiating the capture
+     format restarts the sensor pipeline, and auto-exposure and auto-white-balance re-converge
+     from scratch when it does - at session START, where the warm-up is hidden by the loading
+     overlay, and again when this clone is STOPPED at dispose(), which is the end of the
+     billed window. That is a colour/exposure step at exactly the 00:04 boundary the
+     end-of-turn report describes. On a phone it is not even asking for the same SHAPE:
+     buildVideoConstraints() requests a portrait 9:16 preview, and this asked the same source
+     for a landscape 512x288.
+
+     NOTHING IS LOST. The canvas below is the guarantee and always was - it draws whatever the
+     camera delivers into a width x height context, so the frame that reaches Decart is
+     512x288 regardless of what the source is doing. The only thing the constraint ever bought
+     was a possible upstream saving on devices that scale in hardware, and it bought it by
+     reaching into a source it does not own. Do not add it back; if a per-track saving is ever
+     genuinely needed, it belongs on a track this function OWNS, not on a clone of the
+     preview's. See lockCameraColor() for the other half of keeping the grade steady. */
 
   const video = document.createElement("video");
   video.muted = true; video.playsInline = true; video.autoplay = true;
@@ -7073,6 +7196,10 @@ function resetTryOnSession() {
  */
 function fullTeardown() {
   teardown();
+  /* The camera is going away, so the pin goes with it - this is one of exactly two places
+     that may release it (the other is reinitCameraForOrientation). Never at the end of a
+     billed window: see lockCameraColor()'s block comment. */
+  releaseCameraColor();
   if (localStream) {
     try { localStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
     localStream = null;
@@ -18985,6 +19112,13 @@ async function goLive() {
       console.warn(`[go-live] presence gate did not confirm (${presence}) - continuing`);
     }
     hidePresenceOverlay();   // belt-and-braces: never leave it over a live session
+
+    /* Pin the sensor's auto-exposure / auto-white-balance loops BEFORE the token mint, so
+       a turn cannot re-grade the feed at the 00:04 boundary. Here specifically: the camera
+       is open and has spent the two gates above settling, and nothing is billed, revealed
+       or recorded yet, so a reconfiguration hitch costs nothing visible. Best-effort and
+       non-fatal - see lockCameraColor(). */
+    await lockCameraColor();
 
     /* BUG FIX (cross-run mode persistence): a PREVIOUS session in this same page load
        may have downgraded currentAngle to "front" below (watcher couldn't arm that
