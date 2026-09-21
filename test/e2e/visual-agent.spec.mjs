@@ -117,6 +117,13 @@ function roomUrl(base) {
      the settle off, revealed-on-prior MUST fire - that is what proves the check is wired
      to something real rather than passing because it never looks. Off unless asked. */
   if (process.env.PEAR_VISUAL_SETTLE_HOLD) q.set("settle_hold", process.env.PEAR_VISUAL_SETTLE_HOLD);
+  /* THE EARLY-TURN THRESHOLDS, so a candidate can be MEASURED rather than argued. The room
+     already exposes ?early_turn / ?early_turn_return as live overrides; forwarding them here
+     lets the same scripted 360 be replayed at each candidate and the dispatch's own body
+     angle read out of meta.json (see poseAngle on each dispatch). Off unless asked, so the
+     standard gate still runs at the shipped defaults. */
+  if (process.env.PEAR_VISUAL_EARLY_TURN) q.set("early_turn", process.env.PEAR_VISUAL_EARLY_TURN);
+  if (process.env.PEAR_VISUAL_EARLY_TURN_RETURN) q.set("early_turn_return", process.env.PEAR_VISUAL_EARLY_TURN_RETURN);
   return `${base}/fitting-room/index.html?${q}`;
 }
 

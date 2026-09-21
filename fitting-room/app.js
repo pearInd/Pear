@@ -5522,6 +5522,15 @@ async function mockRealtimeConnect(inputStream, opts) {
       imageKey: key,
       imageBytes: (typeof Blob !== "undefined" && image instanceof Blob) ? image.size : 0,
       hasImage: !!image,
+      /* THE BODY ANGLE THIS DISPATCH WENT OUT AT - the number every early-turn threshold
+         argument has been conducted without. MOCK_POSE.angle is the TRUE angle the scripted
+         skeleton is at (0 = facing the camera, 180 = away), not the depth-compressed |yaw|
+         the trigger reads, so it answers "where was the shopper actually standing when BACK
+         was sent" directly. Mock-only and OBSERVATION ONLY: nothing reads it back, no
+         decision consults it, and the trigger/vote/maybeSwap path is untouched (CLAUDE.md
+         §8.6 - the mock may replace sensors and transports, never the logic under test). */
+      poseAngle: (typeof MOCK_POSE !== "undefined" && MOCK_POSE && Number.isFinite(MOCK_POSE.angle))
+        ? Math.round(MOCK_POSE.angle * 10) / 10 : null,
     };
     MOCK_DECART_STATE.dispatches.push(entry);
     MOCK_DECART_STATE.wire = {
