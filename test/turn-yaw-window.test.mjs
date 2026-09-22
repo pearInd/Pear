@@ -1545,9 +1545,18 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
        a live clip caught FRONT landing on a back-facing body, and §11 found 35 the lowest setting
        that never does so at any latency. A return BELOW the outbound leg would send FRONT while
        the shopper is still more turned away than the outbound leg thought was worth swapping at. */
-    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (45 - a 10 degree hysteresis over the outbound 35; 35 in v142, 50 at the fold handshake), 0 turns the early FRONT off, clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 45 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([45, 45, 0, 45, 20, 10, 60]), JSON.stringify(got));
+    /* THE PINNED VALUE IS 50 SINCE THE 2026-09-22 CALIBRATION (45 at the middle ground, 50 at
+       the fold handshake before that, 35 in v142). This half of the check is a PIN, not a
+       bound - it records what shipped so a change has to be deliberate - and it was updated
+       because the default legitimately moved, not to make a failing run pass. The BOUND in
+       this check is the clause beside it: RETURN >= OUTBOUND, which is the invariant and
+       which was not touched. The behavioural bar on the value itself is the "both swaps land
+       within 25 degrees of the side view" check above; 50 passes it with the failure edge
+       measured between 54 and 55. See ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG's comment for the
+       sweep and the plain-time ledger. */
+    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (50 - a 15 degree hysteresis over the outbound 35; 35 in v142, 50 at the fold handshake, 45 at the middle ground), 0 turns the early FRONT off, clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 50 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([50, 50, 0, 50, 20, 10, 60]), JSON.stringify(got));
   }
   const ls0 = SRC.indexOf("const ORIENT_EARLY_TURN_LOSS_DEG = (() => {");
   if (ls0 === -1) check("ORIENT_EARLY_TURN_LOSS_DEG reads ?early_turn_loss", false, "not found");

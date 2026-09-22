@@ -8472,52 +8472,53 @@ const ORIENT_EARLY_TURN_DEFAULT_DEG = 35;   // 20 until the fold handshake (50);
    10-degree margin over it. Everything above is why the return must never be the LOWER of the
    two - it is the leg that was caught putting FRONT on a back-facing body at 20, and 35 is the
    measured floor rather than a comfortable setting. See ORIENT_EARLY_TURN_DEFAULT_DEG. */
-/* ── 60 WAS TRIED HERE ON 2026-09-22 AND BACKED OUT. READ THIS BEFORE TRYING IT AGAIN ──
-   REPORTED, from a rotation video: on the return arc the back graphic drops off around
-   profile (60-80 degrees of real yaw) while the torso is still three-quarters turned, so
-   the artwork vanishes well before the shopper is square to the camera. The ask was to hold
-   the back until |yaw| <= 20-25, i.e. nearly front-square.
+/* ── 45 -> 50 (2026-09-22), CALIBRATED AGAINST THE MODEL, NOT CHOSEN ──────────────────
+   REPORTED, across several rotation videos: on the return arc the back print drops off
+   while the rear/side torso is still facing the lens, leaving a plain-shirt window before
+   the front print engages.
 
-   WHAT THE HARNESS MEASURED (new: meta.json poseAngle + the spec forwarding
-   ?early_turn_return). The same scripted 360, outbound held at 35, n=4 per setting, giving
-   the TRUE body angle the FRONT dispatch goes out at on the return arc - 180 is facing
-   away, 270 is edge-on, 360 is square to the camera:
+   THE REPORT IS CORRECT AND THE MODEL AGREES. turn-yaw-window's back-leg ledger splits the
+   plain window into EARLY (the side being left has lost its print while it still faces the
+   lens - the reported symptom) and LATE (the arriving side's print has not landed yet).
+   At 45 the early half was 190/145/96/65ms at 0/100/250/700ms latency. At 50 it is
+   155/116/75/57ms - down 12-22% at every latency. The "plain while the side being left
+   faces the lens" figure the fold handshake is scored on improves on both legs together:
+   508->474, 390->361, 248->227, 89->81ms.
 
-       return=20   215.2 216.3 209.3 200.1   mean 210.2   (150 deg short of square)
-       return=45   243.4 246.1 227.3 241.3   mean 239.5   (120 deg short)  <- shipped
-       return=60   247.0 258.2 277.9 247.1   mean 257.6   (102 deg short)
-       return=0    311.4 321.8 311.2 322.3   mean 316.7   ( 43 deg short)  vote path only
+   WHAT IT COSTS, and it is a genuine trade, not a free win. The late half grows -
+   105/145/238/610 -> 131/177/278/663ms - so TOTAL plain is slightly better at 0ms
+   (644->635) and slightly worse at the long end (250ms 575->596, 700ms 1063->1107). This
+   buys the reported symptom down and pays for it in late pop-in, which is the opposite
+   report and is not the one open.
 
-   So the report is accurate and the direction is real: every setting sends FRONT well
-   before the shopper is square, and only turning the early trigger off reaches the
-   requested angle. 60 was set, and turn-yaw-window.test.mjs rejected it.
+   50 IS NOT A GUESS AND NOT THE MAXIMUM. Sweeping the return threshold against
+   turn-yaw-window's "both swaps land within 25 degrees of the side view" bar - the
+   overshoot guard, and the reason the front print cannot bleed onto a chest already facing
+   the camera:
+       48 PASS   50 PASS   52 PASS   53 PASS   54 PASS   55 FAIL   58 FAIL   60 FAIL
+   The failure edge is between 54 and 55 (at 55 the return's median landing is 60 degrees at
+   250ms, 30 off the side view). 50 keeps four degrees of margin rather than sitting on that
+   edge, and it is not a novel number: the fold handshake shipped 50/50. Back-leg median
+   landing stays inside the bar at every clip latency (95/84/70 against 90).
 
-   WHY IT FAILED, AND IT IS NOT A STALE TEST. That suite models 216 turns and asserts BOTH
-   swaps land within 25 degrees of the SIDE VIEW - the fold handshake's whole premise, since
-   a real shirt shows neither print edge-on, so a swap that lands there is invisible. At 60
-   the return leg's median landing is 90/78/60 degrees at 0/100/250ms, and 60 is 30 off the
-   side view. Raising the threshold does not delay the landing indefinitely: past the fold
-   the swap comes down the FAR side of 90, so it overshoots rather than arriving later.
+   THE OUTBOUND LEG IS UNTOUCHED at 35, and RETURN >= OUTBOUND still holds - see the
+   invariant below, which is the thing that must never break.
 
-   THE REAL BLOCKER IS THAT TWO LATENCY MODELS DISAGREE, and this file contains both:
-     · the CLIP latencies (0-250ms), measured off real recordings - "the same clip timed
-       Decart's output stalls around the swaps at 234-333ms". turn-yaw-window uses these.
-     · the 700-1000ms dispatch-to-render this block's older comments were tuned against.
-   Under the fast model 60 overshoots the fold and the test is right to refuse it. Under the
-   slow model 60 lands 12-52 degrees before square and is strictly better than 45. The
-   settings cannot both be correct, and NOTHING IN THE REPO RESOLVES WHICH LATENCY IS REAL.
+   TWO SETTINGS WERE TRIED FIRST AND BOTH WERE BACKED OUT; do not re-run them.
+     · 60 - dispatches later but overshoots the fold: the swap comes down the FAR side of 90
+       rather than arriving later, median landing 60 at 250ms, 30 off the bar.
+     · 0 (hold until the vote path carries it, i.e. "until the torso is nearly square") -
+       total plain grows 10/22/44/53% at 0/100/250/700ms and the return lands at -20 degrees,
+       PAST front-square: the back print on a chest facing the camera. Measured, not modelled
+       away; the harness put the dispatch at body angle 316.7 on average.
 
-   SO THE NEXT STEP IS NOT THIS CONSTANT. One ?orient_debug=1 360 prints DISPATCH_SENT ->
-   SERVER_CONFIRMED -> RENDER_APPLIED on a live session and settles it outright:
-     · RENDER_APPLIED - DISPATCH_SENT at or under ~250ms  -> the clip model holds, 45 stays,
-       and the reported early drop is the cost the fold handshake documents, not a bug.
-     · materially above it (600ms+)                       -> the clip latencies the test is
-       built on are stale, turn-yaw-window's bar is what needs re-deriving FIRST, and only
-       then does 60 become defensible.
-   Do not raise this constant without that log, and do not relax the 25-degree bar to make
-   it fit - that is the same sin as deleting a regression assertion (CLAUDE.md §4/§8.3).
+   THE UNDERLYING UNCERTAINTY IS UNCHANGED. Two latency models live in this file - the CLIP
+   latencies (0-250ms) this bar is built on, and the 700-1000ms the older comments assume -
+   and at 700ms this change is a small net loss rather than a win. One ?orient_debug=1 360
+   (DISPATCH_SENT -> RENDER_APPLIED) settles which column to optimise; until then 50 is
+   calibrated for the clip latencies, because those are the ones that were measured.
    Everything below is why the return leg must never be the LOWER of the two. */
-const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 45;   // 35 in v142, 50 at the fold handshake, 45 since the middle ground
+const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 50;   // 35 in v142, 50 at the fold handshake, 45 at the middle ground, 50 again since the calibration
 const ORIENT_EARLY_TURN_DEFAULT_SPEED = 45;
 /* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
    rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;
