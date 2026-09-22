@@ -290,8 +290,53 @@ export const CONFIG = Object.freeze({
      So the reveal holds while an image write is in flight or was acknowledged less than this
      long ago. 1200ms covers the measured worst case (1100) with a frame of margin. It costs
      loading time only, never billed seconds: the reveal is what starts the billing window.
-     ?settle_hold=0 disables it for a live A/B, exactly as ?cold_hold=0 does the fixed hold. */
-  REFERENCE_RENDER_SETTLE_MS: 1200,
+     ?settle_hold=0 disables it for a live A/B, exactly as ?cold_hold=0 does the fixed hold.
+
+     ── 1200 -> 1400 (2026-09-22): THE RENDER IS ACKNOWLEDGED BEFORE IT IS FINISHED ──────
+     REPORTED: at 00:00-00:01 the garment renders SLEEVELESS - a tank - and the sleeves pop
+     in a beat later. The shopper had not picked a tank; PEAR_CATALOG[0] ("Halo Tank",
+     subType sleeveless) is the only built-in one and is not on this path. This is the same
+     mechanism 448abc6 recorded as "Decart's own prior", seen one stage further along: the
+     reference IS acknowledged and the render IS switching to it, but a realtime diffusion
+     model resolves a garment coarsely first and the fine geometry - sleeves, cuffs, hems -
+     converges late. Reveal inside that and the first dressed frame is a half-built garment.
+
+     1200 WAS SET AGAINST THE WRONG QUANTITY, and reveal-settle.test.mjs's own header says
+     so: "NOT PROVEN HERE: that Decart's real render wait never exceeds
+     REFERENCE_RENDER_SETTLE_MS." The 780-1100ms this number covers is the measured delay
+     until the render STARTS carrying the new reference - the moment the prior stops. It was
+     never a measurement of when that render is COMPLETE, and the sleeve report is the
+     difference between the two.
+
+     WHY ONLY 1400, WHICH IS LESS THAN THE SYMPTOM PROBABLY NEEDS. 1800 was tried first and
+     reveal-settle.test.mjs refused it, for a reason worth writing down because it is not the
+     obvious one. The arithmetic ceiling everyone looks at is §7's
+     REVEAL_SETTLE_MAX_MS > PASSTHROUGH_GATE_MAX_MS + REFERENCE_RENDER_SETTLE_MS (7000 >
+     5000 + this), which allows anything under 2000. The BINDING ceiling is tighter and
+     sits elsewhere: the cold-start re-assert comes due at COLD_START_REASSERT_MS (700) and
+     is DEFERRED while an upload is still rendering, so a settle longer than
+     COLD_START_MIN_HOLD_MS (1500) outlives the hold that would retry it and the re-assert
+     is never sent at all - 0 instead of 1, which is what the suite caught.
+
+     AND COLD_START_MIN_HOLD_MS CANNOT SIMPLY FOLLOW IT. §7 also asserts
+     COLD_START_MIN_HOLD_MS - COLD_START_REASSERT_MS < 1100 - that the fixed hold CANNOT
+     cover a render wait, which is the arithmetic of the original bug and the reason this
+     settle gate exists at all. Raising the hold to cover the settle would make the gate
+     redundant and re-open that design. So three constants pin each other, and 1499 is the
+     real ceiling on this one.
+
+     COST: the loading overlay is up ~200ms longer on every session. No billed seconds -
+     startBillingWindow() fires on the reveal, not on connect - so this is perceived load
+     time traded against opening on a garment that is still growing its sleeves.
+
+     NOT VERIFIED, AND LIKELY NOT SUFFICIENT ON ITS OWN. Nothing here has timed how long
+     sleeve geometry takes to converge, so +200ms is what the constraints allow rather than
+     what the symptom was measured to need. If the sleeveless first frame survives this, the
+     fix is NOT to keep nudging this number - it is to measure the convergence
+     (__pearDebugFrameTiming prints the per-frame trace; watchPostFireLuma() already samples
+     past the reveal for exactly this question) and then decide whether the
+     hold/re-assert/settle trio needs re-deriving together. ?settle_hold=0 A/Bs it. */
+  REFERENCE_RENDER_SETTLE_MS: 1400,
   /* The ceiling on that hold, from the moment the remote track attaches - the same anchor
      PASSTHROUGH_GATE_MAX_MS uses. Bounded independently because it must be able to outlast
      that gate: a re-dispatch sent just before that ceiling still has a render to wait out.
