@@ -410,5 +410,93 @@ console.log("\n── §7 THE OVERLAY: bilingual, and never left on screen ─�
     `hidden=${el.hidden} leaving=${el.classList.contains("is-leaving")}`);
 }
 
+console.log("\n── §8 MID-SESSION ABSENCE NEEDS A RUN OF MISSES - a pose dip is not a cutout ──");
+{
+  /* THE REPORT (2026-09-22): a brief pose-confidence dip during a 360 "cuts out" the try-on. No
+     passthrough path reads pose (§8's wiring checks below pin that); what did was the watcher
+     declaring the shopper ABSENT on ONE missed frame, which dims and blurs the render under the
+     "step into the frame" guide until four qualifying frames bring it back. */
+  const sandbox = {
+    POSE_MIN_CONFIDENCE: CONFIG.POSE_MIN_CONFIDENCE, POSE_CONSECUTIVE_FRAMES: CONFIG.POSE_CONSECUTIVE_FRAMES,
+    POSE_GATE_TIMEOUT_MS: CONFIG.POSE_GATE_TIMEOUT_MS, POSE_SAMPLE_MS: CONFIG.POSE_SAMPLE_MS,
+    POSE_MODEL_URL: "https://cdn.test/pose.task", POSE_WASM_BASE: "https://cdn.test/wasm",
+    console: { warn() {}, log() {}, error() {} }, _testDetector: null, FaceDetector: null,
+  };
+  const { makePresenceGate, makePresenceLoss, PRESENCE_LOSS_FRAMES: N } = new Function(...Object.keys(sandbox),
+    code + "\nreturn { makePresenceGate, makePresenceLoss, PRESENCE_LOSS_FRAMES };")(...Object.values(sandbox));
+
+  check("PRESENCE_LOSS_FRAMES is at least 2 and no more than the entry bar",
+    Number.isInteger(N) && N >= 2 && N <= CONFIG.POSE_CONSECUTIVE_FRAMES,
+    `N=${N} - one frame is a hair trigger; more than POSE_CONSECUTIVE_FRAMES reports a real walk-out slower than presence confirms`);
+  {
+    const l = makePresenceLoss();
+    const run = [false, false, false].map((v) => l.feed(v).absent);
+    check("misses short of the run are not absence; the run is", run.slice(0, N - 1).every((a) => !a) && run[N - 1] === true, JSON.stringify(run));
+    const c = makePresenceLoss();
+    c.feed(false); c.feed(false); c.feed(true);
+    check("...a qualifying frame clears the run", c.feed(false).absent === false);
+    const n = makePresenceLoss();
+    n.feed(false); n.feed(null);
+    const afterNull = [];
+    for (let i = 2; i <= N; i++) afterNull.push(n.feed(false).absent);
+    check("...and a verdict-less frame leaves it, as it leaves the entry streak", afterNull[afterNull.length - 1] === true, JSON.stringify(afterNull));
+    const t = makePresenceLoss();
+    t.feed(false, true);
+    let last; for (let i = 1; i < N; i++) last = t.feed(false, false);
+    check("a turn seen on ANY miss of the run is latched - the yaw that explains it has usually gone stale by the last",
+      last.absent && last.turning === true, JSON.stringify(last));
+  }
+
+  /* The watcher's two branches, driven by the real gate and loss, 240ms ticks. `old` is the shipped
+     behaviour this replaces: absence on the first miss, judged on that tick's yaw alone - which is
+     exactly makePresenceLoss(1). Returns how long the guide was over the render. */
+  const TICK = CONFIG.POSE_SAMPLE_MS * 2;
+  const watch = (frames, needed) => {
+    const gate = makePresenceGate(), loss = makePresenceLoss(needed);
+    let wasPresent = true, shownAt = null, shownMs = 0;
+    frames.forEach(([ok, turning], i) => {
+      const present = gate.feed(ok === true);
+      const lost = loss.feed(ok, turning);
+      if (present && !wasPresent) { wasPresent = true; if (shownAt !== null) { shownMs += (i - shownAt) * TICK; shownAt = null; } }
+      else if (!present && wasPresent && ok === false && lost.absent) { wasPresent = false; if (!lost.turning) shownAt = i; }
+    });
+    if (shownAt !== null) shownMs += (frames.length - shownAt) * TICK;
+    return shownMs;
+  };
+  const ok = (n) => Array(n).fill([true, false]);
+  const scenarios = {
+    "one-frame dip, square to the camera": [...ok(6), [false, false], ...ok(8)],
+    "two-frame dip at the start of a fast turn (last yaw under 25)": [...ok(6), [false, false], [false, false], ...ok(8)],
+    "turn: torso lost past 25, stays unreadable 5 frames": [...ok(6), [false, true], ...Array(5).fill([false, false]), ...ok(8)],
+  };
+  const rows = Object.entries(scenarios).map(([name, f]) => ({ name, old: watch(f, 1), now: watch(f, N) }));
+  for (const r of rows) console.log(`        ${r.name}: guide over the render ${r.old}ms -> ${r.now}ms`);
+  check("THE BUG, modelled: a one- or two-frame dip used to put the guide over the render for ~1s",
+    rows[0].old >= 3 * TICK && rows[1].old >= 3 * TICK, JSON.stringify(rows));
+  check("THE FIX: neither dip touches the render now, and a turn still never shows the guide",
+    rows.every((r) => r.now === 0), JSON.stringify(rows));
+  const away = [...ok(6), ...Array(12).fill([false, false])];
+  const firstShownTick = (needed) => { for (let k = 7; k <= away.length; k++) if (watch(away.slice(0, k), needed) > 0) return k - 7; return null; };
+  check(`THE COST, bounded: a shopper who really walks out still gets the guide, ${N - 1} tick(s) later`,
+    firstShownTick(1) === 0 && firstShownTick(N) === N - 1, `old ${firstShownTick(1)} now ${firstShownTick(N)}`);
+
+  /* THE WIRING - and the claims the report rested on that turned out to be false, pinned so they stay false. */
+  const watcher = extract("function startPresenceWatcher", "/* ── end body-presence gate ── */");
+  check("the watcher feeds every verdict to the loss run, and declares absence only on it",
+    /const loss = makePresenceLoss\(\);/.test(watcher) &&
+    /const lost = loss\.feed\(verdict === true, yawFresh && _torsoYawAbs > PRESENCE_PROMPT_YAW_SUPPRESS_DEG\);/.test(watcher) &&
+    /\} else if \(!present && wasPresent && verdict === false && lost\.absent\) \{/.test(watcher));
+  check("...and holds the guide back on the LATCHED turn, not on the last tick's yaw",
+    /if \(lost\.turning\) \{/.test(watcher));
+  const gateFn = extract("function armFirstFrameBilling(", "\nfunction ");
+  check("no passthrough fallback reads pose: the cold-start gate never consults pose, presence or yaw",
+    !/\bpose|\bpresence|landmark|_torsoYaw/i.test(gateFn.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")));
+  check("...and is one-shot per session - it will not arm once the billed window has started",
+    /if \(!video \|\| billingStarted \|\| gen !== sessionGen\) return;/.test(gateFn));
+  const cont = extract("function makeStreamContinuity(", "\nlet _continuityCanvas");
+  check("the only mid-session camera layer (LIVE CONTINUITY) is timed on Decart's output frames, never on pose",
+    !/\bpose|\bpresence|landmark|_torsoYaw/i.test(cont.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "")));
+}
+
 console.log(fails ? `\n${fails} FAILING` : "\nall green");
 process.exit(fails ? 1 : 0);

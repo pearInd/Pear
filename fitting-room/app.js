@@ -19622,6 +19622,42 @@ function makePresenceGate(needed = POSE_CONSECUTIVE_FRAMES) {
   };
 }
 
+/* ── MID-SESSION ABSENCE NEEDS A RUN OF MISSES TOO (2026-09-22) ────────────────
+   REPORTED: during a 360, a brief pose-confidence dip "cuts out" the try-on. Traced, there is
+   no passthrough fallback anywhere downstream of pose - the cold-start passthrough gate is
+   one-shot and pre-reveal (armFirstFrameBilling() returns once billingStarted), and LIVE
+   CONTINUITY is driven by Decart's output going silent, never by pose. What pose DID drive
+   was this gate's other half: the watcher declared the shopper ABSENT on a single missed
+   frame, and that dims and blurs the render under "step into the frame" for the four
+   qualifying frames recovery needs (~1s at POSE_SAMPLE_MS * 2) plus the fade.
+   The asymmetry was never argued for. Entry needs POSE_CONSECUTIVE_FRAMES because one lucky
+   frame is not presence; by the same reasoning one unlucky frame - motion blur on a sharp
+   turn, an arm across the torso, a landmark dipping under the 0.78 go-live bar - is not
+   absence. The turn exemption (PRESENCE_PROMPT_YAW_SUPPRESS_DEG) only caught it when the
+   previous reading was already past 25 degrees, which the first frames of a fast turn are not.
+   PRESENCE_LOSS_FRAMES consecutive misses now declare absence; a qualifying frame clears the
+   run, a verdict-less frame leaves it (as it leaves the entry streak). `turning` is LATCHED
+   across the run: the yaw that explains a miss is published from a readable torso, so by
+   the last miss of a turn it may be stale, and judging the prompt on that tick alone would
+   show it mid-turn more often than before, not less.
+   THE COST, stated: a shopper who really walks out is told to step back in ~0.5s later.
+   3, not the 12 once proposed: 12 frames is ~2.9s of a 5s session. A judgement, not a
+   measurement - no clip of the dip exists; ?orient_debug=1 logs each absence decision. */
+const PRESENCE_LOSS_FRAMES = 3;
+
+/** @returns {{ feed(ok: boolean|null, turning?: boolean): { absent: boolean, turning: boolean }, reset(): void }} */
+function makePresenceLoss(needed = PRESENCE_LOSS_FRAMES) {
+  let misses = 0, turning = false;
+  return {
+    feed(ok, turningNow = false) {
+      if (ok === true) { misses = 0; turning = false; }
+      else if (ok === false) { misses++; turning = turning || !!turningNow; }
+      return { absent: misses >= needed, turning };
+    },
+    reset() { misses = 0; turning = false; },
+  };
+}
+
 /* ══════════════════════════════════════════════════════════════════════════════
    CONTINUOUS BODY TOPOLOGY - the dynamic half of "static garment, dynamic body"
    ══════════════════════════════════════════════════════════════════════════════
@@ -20240,6 +20276,7 @@ function startPresenceWatcher() {
   if (!video) return;
   const category = isBottomsGarment(activeItem) ? "bottom" : "top";
   const gate = makePresenceGate();
+  const loss = makePresenceLoss();   // absence needs a run of misses too - see PRESENCE_LOSS_FRAMES
   let wasPresent = true;      // the go-live gate just confirmed presence
   let inFlight = false;
   let lastTopologyAt = 0;
@@ -20284,6 +20321,11 @@ function startPresenceWatcher() {
         const verdict = presenceFromPoseResult(result, category);
         if (verdict !== null) {
           const present = gate.feed(verdict === true);
+          const yawFresh = _torsoYawAbs !== null && Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS;
+          const lost = loss.feed(verdict === true, yawFresh && _torsoYawAbs > PRESENCE_PROMPT_YAW_SUPPRESS_DEG);
+          if (ORIENT_DEBUG && verdict === false && wasPresent && !lost.absent) {
+            console.log(`[PEAR] presence: frame missed - not an absence yet (a run of ${PRESENCE_LOSS_FRAMES} is), render untouched`);
+          }
           if (present && !wasPresent) {
             wasPresent = true;
             hidePresenceOverlay();
@@ -20292,7 +20334,7 @@ function startPresenceWatcher() {
                holding is no longer the shape on screen. Re-acquire rather than compare the
                next frame against a baseline the render has already moved off. */
             if (bodyTopology) bodyTopology.reset();
-          } else if (!present && wasPresent && verdict === false) {
+          } else if (!present && wasPresent && verdict === false && lost.absent) {
             wasPresent = false;
             /* ── DO NOT PROMPT A SHOPPER WHO IS SIMPLY TURNING ──────────────────────
                REPORTED: "Please step into the frame" appears mid-rotation, over a
@@ -20318,14 +20360,15 @@ function startPresenceWatcher() {
                indistinguishable from "nobody there" - which is the case the overlay was
                written for. 25 degrees is deliberately well below
                ORIENT_YAW_TURN_DEG (45): this is not deciding a turn happened, only that
-               the body is off-square enough to explain unreadable landmarks. */
-            const yawFresh = _torsoYawAbs !== null &&
-                             Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS;
-            const turning = yawFresh && _torsoYawAbs > PRESENCE_PROMPT_YAW_SUPPRESS_DEG;
-            if (turning) {
+               the body is off-square enough to explain unreadable landmarks.
+               JUDGED ACROSS THE WHOLE RUN OF MISSES since absence needs PRESENCE_LOSS_FRAMES
+               of them (see makePresenceLoss): a fresh reading past 25 on ANY miss of the run
+               holds the prompt back, because by the run's last miss a torso lost edge-on has
+               usually stopped publishing the yaw that explains it. */
+            if (lost.turning) {
               if (ORIENT_DEBUG) {
-                console.log(`[PEAR] presence: unreadable at |yaw|=${_torsoYawAbs.toFixed(0)}°` +
-                  ` - a turn, not an absence; holding the prompt back`);
+                console.log(`[PEAR] presence: unreadable for ${PRESENCE_LOSS_FRAMES} frames after |yaw| passed` +
+                  ` ${PRESENCE_PROMPT_YAW_SUPPRESS_DEG}° - a turn, not an absence; holding the prompt back`);
               }
             } else {
               showPresenceOverlay();
