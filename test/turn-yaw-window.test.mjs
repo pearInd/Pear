@@ -1515,13 +1515,9 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_MIN_DEG", "ORIENT_EARLY_TURN_MAX_DEG", "ORIENT_EARLY_TURN_DEFAULT_DEG", iife)(
       { search }, numOr("ORIENT_EARLY_TURN_MIN_DEG"), numOr("ORIENT_EARLY_TURN_MAX_DEG"), numOr("ORIENT_EARLY_TURN_DEFAULT_DEG"));
     const got = ["", "?early_turn=", "?early_turn=0", "?early_turn=abc", "?early_turn=-5", "?early_turn=20", "?early_turn=25", "?early_turn=3", "?early_turn=90", "?orient_debug=1"].map((q) => [q, parse(q)]);
-    /* PIN, NOT A BOUND - as with ?early_turn_return's. 45 since the 2026-09-22 outbound
-       calibration (35 at the middle ground, 50 at the fold handshake, 20 in v142). The
-       BOUNDS on this value are the 25-degree landing check and the >=20% early-plain check
-       above, plus SLOW >= OUTBOUND below; none was touched and all three pass at 45. */
-    check("ON BY DEFAULT: ?early_turn omitted, empty or unparseable is ORIENT_EARLY_TURN_DEFAULT_DEG (45; 20 in v142, 50 at the fold handshake, 35 at the middle ground); 0 or negative turns it OFF; a value is clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") === 45 &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([45, 45, 0, 45, 0, 20, 25, 10, 60, 45]), JSON.stringify(got));
+    check("ON BY DEFAULT AT THE MIDDLE GROUND: ?early_turn omitted, empty or unparseable is ORIENT_EARLY_TURN_DEFAULT_DEG (35; 20 in v142, 50 at the fold handshake); 0 or negative turns it OFF; a value is clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") === 35 &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([35, 35, 0, 35, 0, 20, 25, 10, 60, 35]), JSON.stringify(got));
   }
   const sl0 = SRC.indexOf("const ORIENT_EARLY_TURN_SLOW_DEG = (() => {");
   if (sl0 === -1) check("ORIENT_EARLY_TURN_SLOW_DEG reads ?early_turn_slow", false, "not found");
@@ -1530,12 +1526,9 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_MIN_DEG", "ORIENT_EARLY_TURN_MAX_DEG", "ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG", iife)(
       { search }, numOr("ORIENT_EARLY_TURN_MIN_DEG"), numOr("ORIENT_EARLY_TURN_MAX_DEG"), numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG"));
     const got = ["", "?early_turn_slow=", "?early_turn_slow=0", "?early_turn_slow=x", "?early_turn_slow=45", "?early_turn_slow=5", "?early_turn_slow=90"].map((q) => [q, parse(q)]);
-    /* PIN. It tracks the outbound threshold and moved only because that did: the invariant
-       below requires SLOW >= OUTBOUND, and a slow-path threshold under the fast one makes a
-       SLOW turn swap EARLIER than a fast one. That invariant is the bound and is unchanged. */
-    check("?early_turn_slow: default ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG (45, tracking the outbound threshold; 35 in v142 and at the middle ground, 50 at the fold handshake), 0 turns the slow path off, clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG") === 45 &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([45, 45, 0, 45, 45, 10, 60]), JSON.stringify(got));
+    check("?early_turn_slow: default ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG (35; 35 in v142, 50 at the fold handshake), 0 turns the slow path off, clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG") === 35 &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([35, 35, 0, 35, 45, 10, 60]), JSON.stringify(got));
     check("...and it is never below the outbound threshold - at the fold it only adds the slow rise there, it never sends earlier",
       numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") && numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG") >= 8);
   }
