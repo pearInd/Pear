@@ -8449,47 +8449,7 @@ const ORIENT_POSE_PASS = (() => {
    against, 35 is right and 50 was overshooting; if it is at or above it, 50 was correct and
    this change is re-opening the plain-front report. That log is what settles it.
    ── the fold handshake's own record follows, unchanged, and is still the reason 50 was set ── */
-/* ── 35 -> 42 OUTBOUND (2026-09-22), CALIBRATED THE SAME WAY THE RETURN LEG WAS ───────
-   REPORTED, with a still: on the outbound turn the front print ("PEAK") unbinds at the side
-   profile while the chest is still partly to the lens, leaving it plain before the back
-   print lands.
-
-   THIS IS THE MIRROR OF THE RETURN-LEG REPORT and it is the OTHER half of the middle
-   ground's own stated trade. Dropping the outbound from 50 to 35 bought less late pop-in on
-   the back panel and paid for it in exactly this: "at 35 the swap lands near 35, which is
-   still the FRONT hemisphere: the chest is in view, and a back reference rendered on a
-   visible chest draws no chest print." The report is that cost being felt.
-
-   THE LEDGER, out leg, turn-yaw-window's early+late split at 0/100/250/700ms latency
-   (EARLY = the side being left has lost its print while it still faces the lens - the
-   reported symptom; LATE = the arriving side's print has not landed yet):
-
-       outbound=35   early 318 245 152  24ms
-       outbound=38   early  -   -  123  -
-       outbound=40   early  -   -  112  -
-       outbound=42   early  -   -   95  -   late 127 (from 90)
-       outbound=45   early  -   -   89  -
-       outbound=50   early  -   -   65  -   late 170 (from 90)
-
-   At 250ms the reported symptom falls 152 -> 95ms, a 37% cut, and the late half rises
-   90 -> 127ms. 50 would cut it further (65ms) but nearly doubles the late half to 170ms,
-   which is the fold handshake's own over-correction - the report the middle ground was
-   created to answer. 42 takes most of the available reduction without going back there.
-
-   THE LANDING BAR PASSES AT EVERY VALUE TRIED (38/40/42/45/50), so unlike the return leg
-   this was not bounded by overshoot. What bounds it instead:
-     · SLOW >= OUTBOUND. ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG moved 35 -> 42 with it, because
-       a slow-path threshold below the fast one makes a SLOW turn swap EARLIER than a fast
-       one. turn-yaw-window asserts this directly and caught it at 42/35.
-     · RETURN >= OUTBOUND. The return leg is 50, so 42 keeps 8 degrees of hysteresis between
-       the legs. 50/50 would erase it, and asymmetric legs are the v136-v142 design.
-
-   NOT VERIFIED LIVE. Every figure above is turn-yaw-window's model at the CLIP latencies
-   (0-250ms). At 700ms the outbound early plain is only 24ms to begin with, so this change
-   buys almost nothing there and still pays the late cost - the same latency ambiguity that
-   governs the return leg governs this one. ?early_turn=35 restores the middle ground
-   exactly, with no deploy. */
-const ORIENT_EARLY_TURN_DEFAULT_DEG = 42;   // 20 in v142, 50 at the fold handshake, 35 at the middle ground, 42 since the outbound calibration - see above
+const ORIENT_EARLY_TURN_DEFAULT_DEG = 35;   // 20 until the fold handshake (50); 35 since the middle ground - see above
 /* ?early_turn_return=<deg> - THE RETURN LEG, BACK -> FRONT. SUPERSEDED as a default by the fold handshake (above): both legs now
    send at the side view, 50. What follows is why the return leg was first split from the outbound one - still true of any
    threshold short of the fold, which is the point the handshake takes to its end.
@@ -8617,7 +8577,7 @@ const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
    path's job is to add the SLOW rise at the same angle the fast path fires at, never earlier.
    Its own floor logic is unchanged - a weight shift or a look to the side settles by ~30, so 35
    still sits above where a pose stops. See ORIENT_EARLY_TURN_DEFAULT_DEG. */
-const ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG = 42;   // 35 in v142, 50 at the fold handshake, 35 at the middle ground, 42 with the outbound (it may never sit below it)
+const ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG = 35;   // 35 in v142, 50 at the fold handshake, 35 since the middle ground
 const ORIENT_EARLY_TURN_SLOW_RISE_DEG = 10;
 const ORIENT_EARLY_TURN_SLOW_WINDOW_MS = [450, 960];   // [min, max] age of the reading the rise is measured from
 /* Declared ABOVE the ?early_turn_* parsers that clamp to them. They used to sit below the slow-path parser,
