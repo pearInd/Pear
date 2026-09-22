@@ -806,7 +806,7 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
        where BlazePose's labels are weakest; `dropout` loses random frames at any angle. */
     /* `lossDeg` is the trigger's fold-by-loss bar (§13); `busyMs` is how long the watcher awaits a swap - by default the
        render latency, as every section before §13 modelled it; §13 separates them. */
-    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700, earlyDeg = 0, measureFrom = 0, minSpeed = 0, yawNoise = 0, returnDeg = null, slowDeg = 0, lossDeg = 0, busyMs = null }) {
+    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700, earlyDeg = 0, measureFrom = 0, minSpeed = 0, yawNoise = 0, returnDeg = null, slowDeg = 0, lossDeg = 0, busyMs = null, postPeak = true }) {
       let s = seed; const rand = () => ((s = (s * 16807) % 2147483647) / 2147483647);
       const facing = (deg) => { const m = ((deg % 360) + 360) % 360; return m > 180 ? 360 - m : m; };
       const seg = script || [[0, 1000], [360, (360 / speed) * 1000], [360, 3000]];
@@ -852,17 +852,20 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
         const tw = win.observe(vote, lock, fresh ? yaw : null, fresh ? yawAt : t, lostAt);
         const d = orientFlipDecision({ acquiring: false, needsSwitch: !!lastVote && lastVote !== lock, streak,
           held: lastVote ? t - streakSince : 0, yawCorroborates: tw.corroborates, lock, lastVote, faceStreak: 0, poseStreak,
-          turnPassed: pass && tw.passed });
+          turnPassed: pass && tw.passed,
+          /* §14: the tick's post-peak caps (ORIENT_POST_PEAK), mirrored; `postPeak: false` is ?post_peak=0. */
+          postPeakVotes: postPeak ? tw.postPeakVotes : Infinity,
+          postPeakHeld: !postPeak ? Infinity : tw.postPeakSince === null ? 0 : t - tw.postPeakSince });
         const predict = !d.confirmed && orientPredictBack({ acquiring: false, lock, win, yawAbs: fresh ? yaw : null, now: t });
-        const swap = (side, predictive) => {
+        const swap = (side, predictive, via = "vote") => {
           if (t - lastSwapAt < COOLDOWN && !(side === "front" && lastSwapPredictive)) return;
           lock = side; lastSwapAt = t; lastSwapPredictive = predictive; busyUntil = t + (busyMs === null ? swapMs : busyMs);
-          pending.push({ at: t + swapMs, side }); sent.push({ side, body: Math.round(angleAt(t)) });
+          pending.push({ at: t + swapMs, side }); sent.push({ side, body: Math.round(angleAt(t)), via });
         };
         /* §11: the tick's early-turn block - only with ?early_turn, only when nothing confirmed or predictive is due. */
         const ea = early && !d.confirmed && !predict ? early.observe({ vote, lock, yawAbs: fresh ? yaw : null, at: fresh ? yawAt : null, lostAt }) : null;
-        if (ea && ea.fire) { lastVote = null; streak = 0; poseStreak = 0; poseSide = null; swap(ea.fire, ea.fire === "back"); continue; }
-        if (ea && ea.withdraw) { if (ea.withdraw === "back") lastSwapAt = -Infinity; swap(ea.withdraw, false); continue; }
+        if (ea && ea.fire) { lastVote = null; streak = 0; poseStreak = 0; poseSide = null; swap(ea.fire, ea.fire === "back", "early"); continue; }
+        if (ea && ea.withdraw) { if (ea.withdraw === "back") lastSwapAt = -Infinity; swap(ea.withdraw, false, "withdraw"); continue; }
         if (d.confirmed && d.early && lastVote === "back") swap("back", true);
         else if (d.confirmed) swap(lastVote, false);
         else if (predict) { lastVote = null; streak = 0; poseStreak = 0; poseSide = null; swap("back", true); }
@@ -1322,6 +1325,156 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
     check("THE COST, bounded: a held weight shift, a quick reach, a look back over the shoulder and a slow look to 30 each swap at most 10 times in 60 at the fold, under 100ms of the other side on average",
       smallPoses.length === 4 && smallPoses.every((r) => r.p.fired <= 10 && r.p.wrong < 100), JSON.stringify(smallPoses.map((r) => [r.name, r.v, r.p])));
 
+    console.log("\n── §14 POST-PEAK EVIDENCE - one BACK, one FRONT per 360, each on its own side of the fold ──");
+    /* THE REPORT (2026-09-22, no clip): prints bleed across mid-turn and the reference chatters front/back at the
+       side view. Every section above scores where a 360 ENDS and how long the wrong side shows; none counted how
+       many times the reference MOVED. Counted, some 360s sent 4-6 dispatches - FRONT out past the side view on the
+       way out, BACK past it on the way back - most at 20-35 deg/s, where 56 of 216 turns flapped at 30 deg/s.
+       Both causes are fixed in app.js and pinned here: the flip bars counted votes cast on the way INTO the turn
+       (ORIENT_POST_PEAK), and the early trigger measured its rise across the fold (makeEarlyTurnTrigger's fresh
+       arm). `postPeak: false` is ?post_peak=0. The trigger's fix has no switch, so the "before" column below
+       already includes it - see the unit reproduction for what it alone changes. */
+    {
+      /* THE WINDOW'S COUNT. Lock BACK already on the wire (an early BACK), the chest still to the lens. */
+      const run = (steps) => { const w = makeTurnYawWindow(); let r; for (const s of steps) r = w.observe(...s); return r; };
+      const intoTurn = run([["back", "back", 30, 0], ["front", "back", 38, 240], ["front", "back", 45, 480], ["front", "back", 52, 720],
+        [null, "back", 60, 960], [null, "back", 67, 1200]]);
+      check("FRONT votes cast while |yaw| still climbs toward edge-on are cleared by the climb - none survive to un-do BACK",
+        intoTurn.postPeakVotes === 0 && intoTurn.postPeakSince === null, JSON.stringify(intoTurn));
+      const parked = run([["back", "back", 2, 0], ["front", "back", 3, 240], ["front", "back", 4, 480], ["front", "back", 1, 720],
+        ["front", "back", 4, 960], ["front", "back", 0, 1200], ["front", "back", 5, 1440]]);
+      check("...but +/-4 degrees of jitter on a pose held still is not a climb: every vote counts",
+        parked.postPeakVotes === 6 && parked.postPeakSince === 240, JSON.stringify(parked));
+      const acrossGap = run([["front", "front", 0, 0], [null, "front", null, 600], [null, "front", null, 1200], ["back", "front", 26, 1440], ["back", "front", 5, 1680]]);
+      check("a reading that is the first past the fold after the torso was unreadable through edge-on counts its own vote",
+        acrossGap.postPeakVotes === 2, JSON.stringify(acrossGap));
+      const lostEdge = run([["back", "back", 10, 0], ["front", "back", 30, 240], ["front", "back", 34, 480], [null, "back", null, 1200]]);
+      check("...and a torso first lost to edge-on restarts the count, like a climb",
+        lostEdge.postPeakVotes === 0, JSON.stringify(lostEdge));
+
+      /* THE DECISION'S CAPS. */
+      const every = { acquiring: false, needsSwitch: true, streak: 20, held: 9000, yawCorroborates: true, lock: "back", lastVote: "front",
+        faceStreak: 20, poseStreak: 20, turnPassed: true };
+      const capped = orientFlipDecision({ ...every, postPeakVotes: 0, postPeakHeld: 0 });
+      check("with no evidence after the peak, no bar un-does the lock - votes, held time, face return, pose flip",
+        !capped.confirmed && !capped.faceReturn && !capped.poseFlip, JSON.stringify(capped));
+      const acq = orientFlipDecision({ ...every, acquiring: true, lock: null, streak: 2, postPeakVotes: 0, postPeakHeld: 0 });
+      check("...acquisition is exempt: there is no lock yet for stale evidence to un-do", acq.confirmed === true);
+      /* The old decision, verbatim, as the reference the Infinity defaults must reproduce. */
+      const oldDecision = ({ acquiring, needsSwitch, streak, held, yawCorroborates, lock, lastVote, faceStreak, poseStreak, turnPassed }) => {
+        const flipBar = yawCorroborates ? Math.min(LOCK_F, CORR_F) : LOCK_F;
+        const faceReturn = !acquiring && lock === "back" && lastVote === "front" && yawCorroborates && faceStreak >= FACE_F;
+        const poseFlip = !acquiring && !!lock && (lastVote === "front" || lastVote === "back") && lastVote !== lock &&
+          (yawCorroborates || turnPassed) && poseStreak >= numOr("ORIENT_POSE_FLIP_FRAMES");
+        const confirmed = needsSwitch && (acquiring ? streak >= ACQ_F : (streak >= flipBar || held >= LOCK_MS || faceReturn || poseFlip));
+        return { confirmed, poseFlip, faceReturn, early: confirmed && !acquiring && poseFlip && !yawCorroborates && !(streak >= flipBar || held >= LOCK_MS) };
+      };
+      let r = 12345; const rnd = (n) => ((r = (r * 16807) % 2147483647) % n);
+      let offDiffers = 0, capAdds = 0;
+      for (let i = 0; i < 4000; i++) {
+        const x = { acquiring: rnd(5) === 0, needsSwitch: rnd(4) !== 0, streak: rnd(14), held: rnd(4000), yawCorroborates: rnd(2) === 0,
+          lock: ["front", "back", null][rnd(3)], lastVote: ["front", "back", null][rnd(3)], faceStreak: rnd(6), poseStreak: rnd(6), turnPassed: rnd(2) === 0 };
+        const off = orientFlipDecision(x), ref = oldDecision(x);
+        if (off.confirmed !== ref.confirmed || off.poseFlip !== ref.poseFlip || off.faceReturn !== ref.faceReturn || off.early !== ref.early) offDiffers++;
+        if (orientFlipDecision({ ...x, postPeakVotes: rnd(12), postPeakHeld: rnd(4000) }).confirmed && !off.confirmed) capAdds++;
+      }
+      check("with the caps at their Infinity defaults (?post_peak=0) the decision is the old one, input for input",
+        offDiffers === 0, `${offDiffers}/4000 differ`);
+      check("...and a cap can only withhold a flip, never add one - it raises the bar, it cannot lower it",
+        capAdds === 0, `${capAdds}/4000 confirmed only WITH a cap`);
+
+      /* THE EARLY TRIGGER ACROSS THE FOLD - the modelled F@158, replayed on the real trigger. BACK went out from
+         FRONT (by any path); the trigger still held a reading from the FRONT leg; the torso was unreadable
+         through edge-on; the first reading past it armed BACK; one dropped frame after that. */
+      if (makeEarlyTurnTrigger) {
+        const trig = makeEarlyTurnTrigger(PD, PS, PR, PSL, numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG"), [450, 960], PL);
+        trig.observe({ vote: "front", lock: "front", yawAbs: 5, at: 0 });
+        trig.observe({ vote: "front", lock: "front", yawAbs: 12, at: 480 });
+        trig.observe({ vote: "front", lock: "front", yawAbs: 22, at: 960 });
+        trig.observe({ vote: "front", lock: "front", yawAbs: 29.7, at: 1440 });
+        trig.observe({ vote: null, lock: "back", yawAbs: null, at: null, lostAt: 2160 });
+        trig.observe({ vote: "back", lock: "back", yawAbs: 40.5, at: 2400, lostAt: 2160 });
+        const dropped = trig.observe({ vote: "back", lock: "back", yawAbs: 40.5, at: 2400, lostAt: 2640 });
+        check("a rise measured across the fold no longer fires: armed past it, one dropped frame sends nothing (it sent FRONT)",
+          dropped.fire === null && trig.armed === "back", JSON.stringify({ dropped, armed: trig.armed }));
+        trig.observe({ vote: "back", lock: "back", yawAbs: 4, at: 3120 });
+        trig.observe({ vote: "back", lock: "back", yawAbs: 30, at: 3360 });
+        const turn = trig.observe({ vote: "back", lock: "back", yawAbs: PR + 2, at: 3600 });
+        check("...while a real return from that arm, rising past the return threshold, still fires FRONT",
+          turn.fire === "front", JSON.stringify(turn));
+      }
+    }
+    const SIDE = (x) => (x.side === "front" ? x.body > 95 && x.body < 185 : x.body > 275);   // past the side view, wrong side
+    const flapGrid = [];
+    for (const speed of [20, 25, 30, 35, 45, 60, 90, 120, 150, 180]) for (const k of [1, 0.75, 0.6]) for (const readableTo of [90, 70, 60, 50])
+      for (const phase of [0, 80, 160]) for (const [dropout, yawNoise, noise] of [[0, 0, 0], [0, 4, 0], [0.15, 4, 0.4], [0.3, 4, 0.6]]) {
+        const o = { script: [[0, 1000 + phase], [360, (360 / speed) * 1000], [360, 3000]], k, readableTo, swapMs: 100, busyMs: BUSY,
+          dropout, yawNoise, noise, seed: 7 + phase + readableTo, ...PROD };
+        flapGrid.push({ speed, clean: dropout === 0, before: simulateGap({ ...o, postPeak: false }), after: simulateGap(o) });
+      }
+    const tally = (rows, key) => ({ flap: rows.filter((r) => r[key].sent.length > 2).length, side: rows.filter((r) => r[key].sent.some(SIDE)).length,
+      never: rows.filter((r) => !r[key].sent.length).length, notFront: rows.filter((r) => r[key].final !== "front").length });
+    for (const clean of [true, false]) for (const band of [[20, 35], [45, 180]]) {
+      const rows = flapGrid.filter((r) => r.clean === clean && r.speed >= band[0] && r.speed <= band[1]);
+      const b = tally(rows, "before"), a = tally(rows, "after");
+      console.log(`        ${band[0]}-${band[1]} deg/s, ${clean ? "clean + yaw jitter  " : "15-30% dropped + label noise"}: ` +
+        `flapping 360s ${b.flap} -> ${a.flap}, a swap past the side view on the wrong side ${b.side} -> ${a.side}, never swapped ${b.never} -> ${a.never}, not ending on FRONT ${b.notFront} -> ${a.notFront} (of ${rows.length})`);
+    }
+    const cleanRows = flapGrid.filter((r) => r.clean);
+    check("THE BUG, modelled: without the post-peak rule, clean slow 360s send FRONT out past the side view and flap",
+      tally(cleanRows.filter((r) => r.speed <= 35), "before").side >= 40, JSON.stringify(tally(cleanRows, "before")));
+    /* To 150, not 180: at 180 deg/s one pose reading lands every ~43 degrees, and on one k=0.6 turn the only
+       back-facing reading (238) fires BACK correctly but the dispatch lands past 270 - §13's "a turn too fast for
+       the fold to read" limit, identical with or without this rule and held to "no worse" below. */
+    check("THE FIX: no clean or jitter-only 360 at 20-150 deg/s sends either side past the side view on the wrong side",
+      cleanRows.filter((r) => r.speed <= 150).every((r) => !r.after.sent.some(SIDE)),
+      JSON.stringify(cleanRows.filter((r) => r.speed <= 150 && r.after.sent.some(SIDE)).slice(0, 3).map((r) => [r.speed, r.after.sent])));
+    /* What is left of the flapping, stated: an early fire the trigger itself withdraws - the fire-and-withdraw
+       trade §11 and §13 price. Anything else - a vote-path flip back, a double fire - is the bug returning. */
+    const extraIsWithdrawnFire = (sent) => sent.length <= 2 ||
+      sent.every((x, i) => x.via !== "withdraw" || (i > 0 && sent[i - 1].via === "early")) &&
+      sent.filter((x) => x.via === "withdraw").length * 2 === sent.length - 2;
+    check("...every clean 360 that still sends more than BACK then FRONT does so as an early fire and its own withdrawal, and no more than 1 in 100",
+      cleanRows.every((r) => extraIsWithdrawnFire(r.after.sent)) && tally(cleanRows, "after").flap * 100 <= cleanRows.length,
+      JSON.stringify(cleanRows.filter((r) => r.after.sent.length > 2).slice(0, 3).map((r) => [r.speed, r.after.sent])));
+    const madeWorse = flapGrid.filter((r) => r.after.sent.filter(SIDE).length > r.before.sent.filter(SIDE).length ||
+      (r.before.final === "front" && r.after.final !== "front") || (r.before.sent.length && !r.after.sent.length));
+    check("THE RULE MAKES NO TURN WORSE, noise included: no more wrong-side swaps past the side view, no turn that stops ending on FRONT, none that stops swapping",
+      madeWorse.length === 0, JSON.stringify(madeWorse.slice(0, 3).map((r) => [r.speed, r.before.sent, r.after.sent])));
+    const noisy = flapGrid.filter((r) => !r.clean);
+    check("...and under dropped frames and edge-on label noise, wrong-side swaps past the side view fall at least fivefold",
+      tally(noisy, "after").side * 5 <= tally(noisy, "before").side, JSON.stringify([tally(noisy, "before"), tally(noisy, "after")]));
+
+    /* PARKED AT THE SIDE VIEW - the "chatter near profile" the report names. A body that stays around 90 either
+       way sends BACK and FRONT once each, however it wobbles. */
+    const wobble = {
+      "wobble 75-105 at the side view": [[0, 1000], [90, 800], [75, 300], [105, 300], [75, 300], [105, 300], [75, 300], [105, 300], [90, 300], [0, 800], [0, 3000]],
+      "slow wobble 70-110 at the side view": [[0, 1000], [90, 800], [70, 600], [110, 600], [70, 600], [110, 600], [70, 600], [110, 600], [90, 400], [0, 800], [0, 3000]],
+    };
+    const wobbleRows = [];
+    for (const [name, script] of Object.entries(wobble)) for (const [dropout, yawNoise, noise] of [[0, 0, 0], [0, 4, 0], [0.15, 4, 0.4], [0.3, 4, 0.6]])
+      for (let rep = 0; rep < 10; rep++) for (const swapMs of [100, 250]) {
+        const o = { script, swapMs, busyMs: BUSY, k: rep % 2 ? 1 : 0.75, readableTo: rep % 3 ? 90 : 60, dropout, yawNoise, noise, seed: 7 + rep * 97, ...PROD };
+        wobbleRows.push({ name, before: simulateGap({ ...o, postPeak: false }), after: simulateGap(o) });
+      }
+    for (const name of Object.keys(wobble)) {
+      const rows = wobbleRows.filter((r) => r.name === name), most = (key) => Math.max(...rows.map((r) => r[key].sent.length));
+      console.log(`        ${name}: at most ${most("before")} dispatches in a run -> ${most("after")} (${rows.length} runs, noise included)`);
+    }
+    check("wobbling at the side view never sends more than one BACK and one FRONT, and always ends on FRONT",
+      wobbleRows.every((r) => r.after.sent.length <= 2 && r.after.final === "front"),
+      JSON.stringify(wobbleRows.filter((r) => r.after.sent.length > 2 || r.after.final !== "front").slice(0, 3).map((r) => [r.name, r.after.sent])));
+
+    /* THE STATED COST: a count that restarts while |yaw| is still climbing can only DELAY an un-doing flip. The
+       poses §13 prices must not show the other side any longer for it. */
+    const poseCost = Object.entries(foldPoses).map(([name, script]) => {
+      const away = name.startsWith("facing away");
+      return { name, before: poseRun(script, { ...PROD, postPeak: false }, away), after: poseRun(script, PROD, away) };
+    });
+    check("...and no pose §13 prices shows the other side for longer, or ends on the wrong side, with the rule",
+      poseCost.every((r) => r.after.wrong <= r.before.wrong && r.after.stuck === 0),
+      JSON.stringify(poseCost.filter((r) => r.after.wrong > r.before.wrong || r.after.stuck).map((r) => [r.name, r.before, r.after])));
+
   }
 
   const w0 = SRC.indexOf("function createOrientationWatcher()");
@@ -1336,6 +1489,12 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
     /const ORIENT_POSE_PASS = /.test(SRC) && /get\("pose_pass"\) !== "0"/.test(SRC));
   check("an early BACK is sent as a withdrawable one, ahead of the unchanged confirmed-swap line",
     /if \(dualView && confirmed && early && lastVote === "back"\) await maybeSwap\("back", true\);\s*\n\s*else if \(dualView && confirmed\) await maybeSwap\(lastVote\);/.test(watcher));
+  check("§14: the tick caps every un-doing bar at the post-peak evidence, behind the ?post_peak=0 kill switch",
+    /postPeakVotes: ORIENT_POST_PEAK \? turnYaw\.postPeakVotes : Infinity,/.test(watcher) &&
+    /postPeakHeld: !ORIENT_POST_PEAK \? Infinity : turnYaw\.postPeakSince === null \? 0 : Date\.now\(\) - turnYaw\.postPeakSince,/.test(watcher) &&
+    /const ORIENT_POST_PEAK = /.test(SRC) && /get\("post_peak"\) !== "0"/.test(SRC));
+  check("§14: a fresh arm restarts the early trigger's history at the arming reading",
+    /if \(armed !== lock\) \{ hist\.length = 0; if \(Number\.isFinite\(at\)\) hist\.push\(\{ y: yawAbs, at \}\); speed = 0; \}/.test(SRC));
   check("the debug line says whether the torso was lost in the turn and whether it passed the side view",
     /torso lost \$\{yawWindow\.lostInTurn/.test(watcher) && /passed \$\{turnYaw\.passed/.test(watcher) && /POSE-FLIP\(pass\)/.test(watcher));
 }

@@ -8337,6 +8337,53 @@ const ORIENT_POSE_FLIP_FRAMES    = 2;    // shoulder-order votes needed for a co
 const ORIENT_POSE_PASS = (() => {
   try { return new URLSearchParams(location.search).get("pose_pass") !== "0"; } catch (_) { return true; }
 })();
+/* ── POST-PEAK EVIDENCE - "the prints bleed across and the view chatters at the side" (2026-09-22) ──────────────
+   REPORTED: on a 360 the back graphic leaks onto the chest or the front graphic onto the back panel mid-turn, and
+   near the side view the reference toggles front/back/front. No clip came with it, so it was taken to the model.
+   COUNTED (turn-yaw-window, the §13 grid plus 20-35 deg/s turns, dispatches per 360, not only where they end):
+   most 360s send exactly BACK then FRONT, but some send 4-6. At 30 deg/s 56 of 216 modelled turns flapped, at 20
+   deg/s 140 - a clean 20 deg/s turn with no noise at all sent B@40 F@100 B@130 F@235 B@290 F@305. Each extra FRONT
+   on the way OUT (and BACK on the way back) goes out with the body already past the side view: FRONT on a back
+   panel, then BACK again - the reported bleed and the reported chatter, from one cause.
+   THE CAUSE: EVIDENCE CAST ON THE WAY INTO THE TURN WAS COUNTED AS A RETURN FROM IT. Every bar that un-does the
+   lock assumed the new side's votes begin after the turn's edge-on peak, and until the early trigger that was
+   true - the lock only moved once the body had come round. The early trigger (and predictive BACK) move the lock
+   AHEAD of the body: BACK goes out at ~35 degrees while the chest still faces the lens, and the shoulders
+   correctly keep voting FRONT until ~69. Against a BACK lock those votes disagree, so they build a FRONT streak.
+   Abstains never reset a streak, and the shoulder vote abstains from ~69 to ~111. Then, on the far side:
+     · the side-view pass (|yaw| 15 down from the peak) corroborated that pre-peak FRONT streak - FRONT at 117;
+     · or ORIENT_LOCK_MS counted one pre-peak FRONT vote plus 2.5s of edge-on abstains as "sustained agreement" -
+       FRONT at 100 on a slow turn;
+     · and the same on the return leg, with the roles swapped - BACK at 290.
+   THE RULE: a vote cast while |yaw| was still RISING toward the turn's peak is evidence of LEAVING that side, not
+   of returning to it. So every bar that un-does a lock - the vote bar, the corroborated bar, the held time, the
+   face return and the pose flip - counts only the votes, and the time, since |yaw| last climbed
+   ORIENT_POST_PEAK_RISE_DEG or the torso was first lost to edge-on (makeTurnYawWindow's postPeakVotes /
+   postPeakSince; orientFlipDecision caps each bar at them with Math.min, so a cap can only raise a bar).
+   TWO CUTS WERE MEASURED AND BACKED OUT FIRST - do not re-run them:
+     · restarting the count on EVERY new maximum: +/-4 degrees of jitter on a body standing square sets a new
+       maximum every few readings, so BACK left on the chest after a fast 360 kept losing the FRONT votes that
+       should undo it - 52 more modelled fast 360s under dropped frames never swapped and 12 ended on BACK;
+     · also refusing the vote cast from the reading that restarted the count: after a torso unreadable straight
+       through edge-on, that reading is the first one PAST the fold, and 16 fast 360s lost their only BACK.
+   MEASURED (turn-yaw-window §14; 20-180 deg/s, k 0.6-1, torso readable to 50-90, 100ms on screen):
+     20-35 deg/s, clean + jitter        flapping 360s 64 -> 1    a side sent past the side view, wrong side 62 -> 0
+     20-35 deg/s, 15-30% dropped+noise  flapping 360s 127 -> 97                                               53 -> 2
+     45-180 deg/s, either               unchanged; §13's fold ledger is byte-identical
+   No turn swaps less, ends anywhere but FRONT, or sends more wrong-side swaps than before, and no pose §13
+   prices shows the other side for longer. Wobbling 70-110 at the side view: at most 4 dispatches -> 2.
+   WHAT IT DOES NOT CHANGE. The normal 360 already met the assumption - the new side's votes come after the peak -
+   so it sends exactly what it sent. With no pose reading at all nothing ever restarts the count, which is the bar
+   exactly as before. Acquisition is exempt: with no lock there is nothing stale to un-do.
+   WHAT IS LEFT, stated: the 97 noisy slow flaps are the early trigger's fold-by-loss firing on a dropped frame at
+   |yaw| 20-40 and withdrawing itself ~10 degrees later - the cost ?early_turn_loss's comment already prices, and a
+   threshold decision, not this bug. And it is a model: ?orient_debug=1 prints `after peak Nv` on every tick of a
+   pending switch - the live check. ?post_peak=0 turns this rule off for an A/B.
+   Paired with a fix in makeEarlyTurnTrigger (the rise it fires on is measured from a fresh arm) - the second,
+   independent route to FRONT on a back panel the same count found. */
+const ORIENT_POST_PEAK = (() => {
+  try { return new URLSearchParams(location.search).get("post_peak") !== "0"; } catch (_) { return true; }
+})();
 /* ── THE FOLD HANDSHAKE - the swap goes out at the SIDE VIEW, not as the turn starts (2026-09-15) ─────────────
    REPORTED, with two clips (pear-tryon-...-FOX-20260915-164257 and -165625, v142): "the front print unmounts too early
    while the front is still partly visible, leaving a plain T-shirt before the back locks on - and the same on the way
@@ -8908,16 +8955,22 @@ function poseFacingVote({ enabled = ORIENT_POSE_FACING, sep, at, now }) {
    `passed` is the side-view pass (see ORIENT_POSE_PASS): open, a fresh reading, a real turn behind it -
    the readable peak past turnDeg, or `lostAt` (the pose loop's last unreadable inference) later than
    the reading that last agreed with the lock - and |yaw| fallen descentDeg from the readable peak.
+   `postPeakVotes` / `postPeakSince` are the votes for the other side since |yaw| last climbed
+   peakRiseDeg (or the torso was first lost to edge-on), and when the first of them was taken - see
+   ORIENT_POST_PEAK for why a flip may count nothing else.
    @param {number} [turnDeg] the swing that counts as a real torso rotation
    @param {number} [edgeLossDeg] a torso lost past this |yaw| mid-turn was lost to edge-on
    @param {number} [edgeOnDeg] a reading at or past this has reached the side view
    @param {number} [descentDeg] the fall from the readable peak that shows the torso went through
    @returns {{ readonly peak: number|null, readonly edgeLost: boolean, readonly open: boolean,
                readonly turning: boolean, readonly edgeAt: number|null, readonly lostInTurn: boolean,
+               readonly postPeakVotes: number,
                observe(vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number, lostAt?: number):
-                 { usable: boolean, swing: number, corroborates: boolean, passed: boolean } }} */
+                 { usable: boolean, swing: number, corroborates: boolean, passed: boolean,
+                   postPeakVotes: number, postPeakSince: number|null } }} */
 function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE_PROMPT_YAW_SUPPRESS_DEG,
-                           edgeOnDeg = ORIENT_EDGE_ON_DEG, descentDeg = ORIENT_PREDICT_DESCENT_DEG) {
+                           edgeOnDeg = ORIENT_EDGE_ON_DEG, descentDeg = ORIENT_PREDICT_DESCENT_DEG,
+                           peakRiseDeg = ORIENT_POST_PEAK_RISE_DEG) {
   let peak = null;        // highest fresh |yaw| since the last vote that agreed with the lock
   let lastFresh = null;   // the most recent fresh |yaw|, to read a gap against
   let lastFreshAt = 0;    // ...and when it was taken
@@ -8926,15 +8979,20 @@ function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE
   let open = false;       // a vote has not agreed with the lock since this turn began
   let agreedAt = 0;       // the reading time of the last vote that agreed with the lock
   let lostInTurn = false; // the pose loop could not read the torso after that reading
+  let peakMark = null;    // |yaw| when the post-peak count last restarted - the next rise is measured from it
+  let postVotes = 0;      // votes for the other side since then (see ORIENT_POST_PEAK)
+  let postSince = null;   // ...and the reading time of the first of them
   return {
     get peak() { return peak; },
     get edgeLost() { return edgeLost; },
     get edgeAt() { return edgeAt; },
     get open() { return open; },
     get lostInTurn() { return lostInTurn; },
+    get postPeakVotes() { return postVotes; },
     get turning() { return open && (edgeLost || (peak !== null && peak >= turnDeg)); },
     observe(vote, lock, yawAbs, at = Date.now(), lostAt = 0) {
       const fresh = yawAbs !== null && Number.isFinite(yawAbs);
+      const edgeLostBefore = edgeLost;
       if (vote && vote === lock) {
         peak = fresh ? yawAbs : null;
         edgeLost = false;
@@ -8951,6 +9009,19 @@ function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE
           if (edgeAt === null) edgeAt = lastFreshAt;
         }
       }
+      /* POST-PEAK EVIDENCE (see ORIENT_POST_PEAK), kept out of the branches above so they read as they
+         always have. The count restarts while the body is still turning AWAY: |yaw| has risen peakRiseDeg
+         past where it was last marked (a rotation, not the jitter of a pose held still), or the torso is
+         first lost to edge-on. The vote on that very tick counts - a reading that moves the mark can be
+         the first one past the fold, after the torso went unreadable straight through edge-on; if the body
+         is in fact still rising, the next 10 degrees clears it. */
+      if (!open) { peakMark = fresh ? yawAbs : null; postVotes = 0; postSince = null; }
+      else {
+        const rising = fresh && (peakMark === null || yawAbs >= peakMark + peakRiseDeg);
+        if (rising) peakMark = yawAbs;
+        if (rising || (edgeLost && !edgeLostBefore)) { postVotes = 0; postSince = null; }
+        if (vote) { postVotes++; if (postSince === null) postSince = at; }
+      }
       if (fresh) { lastFresh = yawAbs; lastFreshAt = at; }
       /* Sticky until the next agreeing vote - which is what clears it - so a dropped frame during a
          pose the shoulders keep voting for (a twist) is erased by the very next readable reading. */
@@ -8962,10 +9033,18 @@ function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE
          already well under 90, so descent from 90 is what a parked profile with one dropped frame
          would show. */
       const passed = open && fresh && peak !== null && (peak >= turnDeg || lostInTurn) && peak - yawAbs >= descentDeg;
-      return { usable, swing, corroborates: swing >= turnDeg, passed };
+      return { usable, swing, corroborates: swing >= turnDeg, passed, postPeakVotes: postVotes, postPeakSince: postSince };
     },
   };
 }
+/* How far |yaw| must rise past its last mark for the post-peak count to restart (ORIENT_POST_PEAK). Measured
+   as a cumulative rise, not per reading - a slow turn climbs 3-5 degrees a reading. 10 sits above the +/-4
+   degrees of yaw jitter the turn model assumes: the first cut restarted the count on every new jitter
+   maximum, so a shopper standing square with BACK still on the wire kept losing the FRONT votes that should
+   undo it - 52 more modelled fast 360s under dropped frames never swapped, and 12 ended on BACK. The same 10
+   the slow path takes for "a rise, not jitter" (ORIENT_EARLY_TURN_SLOW_RISE_DEG). Declared inside the block
+   the tests extract, so it stays self-contained (CLAUDE.md 2.6). */
+const ORIENT_POST_PEAK_RISE_DEG = 10;
 
 /* The flip decision the sampler acts on, lifted out of the tick so it is real code under test
    rather than arithmetic buried in a closure. Every bar is the one documented beside its
@@ -8976,20 +9055,27 @@ function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE
    `turnPassed` (the window's side-view pass - see ORIENT_POSE_PASS) corroborates the pose flip ONLY:
    the corroborated bar and the face return keep the 45-degree swing. `early` is a flip confirmed on
    the pass alone, which the tick sends as withdrawable.
+   `postPeakVotes` / `postPeakHeld` cap every UN-DOING bar at the evidence cast after the turn's peak -
+   the vote count and the held time alike, all four routes - see ORIENT_POST_PEAK. Acquisition is
+   exempt: there is no lock yet for stale evidence to un-do. Both default to Infinity, which is the
+   decision exactly as it was before them (and what ?post_peak=0 passes).
    @returns {{ flipBar: number, faceReturn: boolean, poseFlip: boolean, early: boolean, confirmed: boolean }} */
-function orientFlipDecision({ acquiring, needsSwitch, streak, held, yawCorroborates, lock, lastVote, faceStreak, poseStreak = 0, turnPassed = false }) {
+function orientFlipDecision({ acquiring, needsSwitch, streak, held, yawCorroborates, lock, lastVote, faceStreak, poseStreak = 0, turnPassed = false,
+                              postPeakVotes = Infinity, postPeakHeld = Infinity }) {
   const flipBar = yawCorroborates
     ? Math.min(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES)
     : ORIENT_LOCK_FRAMES;
+  const votes = Math.min(streak, postPeakVotes);
+  const dwell = Math.min(held, postPeakHeld);
   const faceReturn = !acquiring && lock === "back" && lastVote === "front" &&
-    yawCorroborates && faceStreak >= ORIENT_FACE_RETURN_FRAMES;
+    yawCorroborates && Math.min(faceStreak, postPeakVotes) >= ORIENT_FACE_RETURN_FRAMES;
   /* Either direction - see ORIENT_POSE_FLIP_FRAMES. */
   const poseFlip = !acquiring && !!lock && (lastVote === "front" || lastVote === "back") && lastVote !== lock &&
-    (yawCorroborates || turnPassed) && poseStreak >= ORIENT_POSE_FLIP_FRAMES;
+    (yawCorroborates || turnPassed) && Math.min(poseStreak, postPeakVotes) >= ORIENT_POSE_FLIP_FRAMES;
   const confirmed = needsSwitch && (acquiring
     ? streak >= ORIENT_ACQUIRE_FRAMES
-    : (streak >= flipBar || held >= ORIENT_LOCK_MS || faceReturn || poseFlip));
-  const early = confirmed && !acquiring && poseFlip && !yawCorroborates && !(streak >= flipBar || held >= ORIENT_LOCK_MS);
+    : (votes >= flipBar || dwell >= ORIENT_LOCK_MS || faceReturn || poseFlip));
+  const early = confirmed && !acquiring && poseFlip && !yawCorroborates && !(votes >= flipBar || dwell >= ORIENT_LOCK_MS);
   return { flipBar, faceReturn, poseFlip, early, confirmed };
 }
 
@@ -9124,7 +9210,18 @@ function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg, slowDeg = 0, s
          30 held 0.7s, a slow look to 30 and a 45-degree mirror check by about a third under dropped frames. */
       const lost = lossDeg > 0 && lastAt !== null && Number.isFinite(lostAt) && lostAt > lastAt && lastYaw >= lossDeg &&
         ((minSpeed > 0 ? speed >= minSpeed : speed > 0) || (riseTo(lastYaw, lastAt) >= slowRise && speed >= LOSS_MIN_RISE));
-      if (!lost && vote === lock && fresh && yawAbs < threshold) { armed = lock; return none; }
+      if (!lost && vote === lock && fresh && yawAbs < threshold) {
+        /* A FRESH ARM IS WHERE THIS LEG'S READINGS BEGIN (2026-09-22). Every rise this trigger fires on - the
+           fast path's speed, the slow path's window, the loss path's "still rising" - is measured AWAY from the
+           side it is armed on, so it may only be measured from readings taken since it was armed there. Kept
+           across the arm, the history reached back past the edge-on fold the lock just moved across: |yaw| folds
+           at 90, so a reading of ~30 on the way INTO a turn and one of ~40 on the way OUT of it, with the torso
+           unreadable between them, read as a +11 deg/s, +10.8-degree rise while the body was de-rotating toward
+           back-square. One dropped frame after that fired FRONT at a body angle of 158 degrees (the loss path),
+           withdrawn at 180 - modelled, turn-yaw-window §14. The arming reading itself stays as the baseline. */
+        if (armed !== lock) { hist.length = 0; if (Number.isFinite(at)) hist.push({ y: yawAbs, at }); speed = 0; }
+        armed = lock; return none;
+      }
       /* THE FAST PATH: past the threshold, rising at the gate's speed between two readings. */
       const fast = yawAbs >= threshold && (!(minSpeed > 0) || speed >= minSpeed);
       /* THE SLOW PATH: a deliberate slow turn never clears the gate between two readings, but it keeps
@@ -11225,6 +11322,9 @@ function createOrientationWatcher() {
       const { flipBar, faceReturn, poseFlip, early, confirmed } = orientFlipDecision({
         acquiring, needsSwitch, streak, held, yawCorroborates, lock: autoOrientation, lastVote, faceStreak, poseStreak,
         turnPassed: ORIENT_POSE_PASS && turnYaw.passed,
+        /* Only evidence from after the turn's peak may un-do the lock - see ORIENT_POST_PEAK. */
+        postPeakVotes: ORIENT_POST_PEAK ? turnYaw.postPeakVotes : Infinity,
+        postPeakHeld: !ORIENT_POST_PEAK ? Infinity : turnYaw.postPeakSince === null ? 0 : Date.now() - turnYaw.postPeakSince,
       });
 
       if (ORIENT_DEBUG) {
@@ -11250,7 +11350,8 @@ function createOrientationWatcher() {
           : ` (${streak}/${flipBar}f${yawCorroborates ? "+yaw" : ""}, ${held}/${ORIENT_LOCK_MS}ms` +
             `, yawΔ${yawSwing.toFixed(0)}° from ${yawWindow.edgeLost ? "edge-on (torso lost)" : "peak " + (yawWindow.peak === null ? "n/a" : yawWindow.peak.toFixed(0) + "°")}` +
             `, face ${faceStreak}/${ORIENT_FACE_RETURN_FRAMES}${faceReturn ? " FACE-RETURN" : ""}${poseFlip ? (early ? " POSE-FLIP(pass)" : " POSE-FLIP") : ""}` +
-            `, torso lost ${yawWindow.lostInTurn ? "yes" : "no"}, passed ${turnYaw.passed ? (ORIENT_POSE_PASS ? "yes" : "yes (off: ?pose_pass=0)") : "no"})`;
+            `, torso lost ${yawWindow.lostInTurn ? "yes" : "no"}, passed ${turnYaw.passed ? (ORIENT_POSE_PASS ? "yes" : "yes (off: ?pose_pass=0)") : "no"}` +
+            `, after peak ${turnYaw.postPeakVotes}v${ORIENT_POST_PEAK ? "" : " (off: ?post_peak=0)"})`;
         /* Pose is reported separately from the lock, because it IS separate - reading them
            on one line is what makes "locked FRONT, but edge-on right now" legible while
            tuning. ratio/score/width are the three numbers the thresholds are set from, so

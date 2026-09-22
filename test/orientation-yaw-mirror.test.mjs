@@ -76,8 +76,16 @@ console.log("\n── §2 ORIENT_LOCK_FRAMES IS UNTOUCHED, AND IS STILL THE FALL
   check("...and corroboration can only ever lower the bar, never raise it",
     /Math\.min\(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES\)/.test(APP),
     "a bare swap would let a misconfigured constant make corroborated turns SLOWER");
+  /* 2026-09-22 (ORIENT_POST_PEAK): both bars now read the streak and the held time CAPPED at the
+     evidence cast after the turn's peak. A cap is Math.min over an input that defaults to Infinity,
+     so it can only ever RAISE the bar, never lower it - which is the property this section exists
+     to protect, now pinned directly rather than through the old variable names. */
   check("the time-based path (ORIENT_LOCK_MS) is unchanged and still ORs in",
-    /streak >= flipBar \|\| held >= ORIENT_LOCK_MS/.test(APP));
+    /votes >= flipBar \|\| dwell >= ORIENT_LOCK_MS/.test(APP) &&
+    /const votes = Math\.min\(streak, postPeakVotes\);/.test(APP) &&
+    /const dwell = Math\.min\(held, postPeakHeld\);/.test(APP) &&
+    /postPeakVotes = Infinity, postPeakHeld = Infinity \}\)/.test(APP),
+    "the post-peak caps must be Math.min over Infinity defaults - a cap that could add evidence would lower the anti-flap bar");
   /* Acquiring has no locked side to protect and already settles on two samples; pulling
      corroboration into it would be pure risk for no latency win. */
   check("acquiring is untouched - it never consults yaw",
