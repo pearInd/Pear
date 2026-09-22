@@ -8496,7 +8496,41 @@ const ORIENT_POST_PEAK = (() => {
    against, 35 is right and 50 was overshooting; if it is at or above it, 50 was correct and
    this change is re-opening the plain-front report. That log is what settles it.
    ── the fold handshake's own record follows, unchanged, and is still the reason 50 was set ── */
-const ORIENT_EARLY_TURN_DEFAULT_DEG = 35;   // 20 until the fold handshake (50); 35 since the middle ground - see above
+/* ── 35 -> 40 (2026-09-22, evening), DIRECTED INTO 38-42 AND CALIBRATED THERE ──────────
+   REPORTED again: the back graphic bleeds onto the front chest during the outbound turn, and the
+   request named a 38-42 degree outbound bound. At 35 the swap lands in the front hemisphere -
+   the stated cost of the middle ground, above - and the fold ledger scores exactly that as
+   outPlain (BACK on the wire while the chest still faces the lens).
+   SWEPT (turn-yaw-window §13's grid; return 50, slow path tracking the outbound leg as always;
+   total wrong-side ms per 360 and outPlain at 0/100/250 | 700ms on screen):
+       35   total 635 580 596 | 1107   outPlain 318 245 152   never swapped 5 of 216
+       38         595 549 582 | 1133            276 207 123                 5
+       40         580 540 582 | 1152            258 192 112                 5
+       42         556 522 575 | 1169            232 169  95                 5
+       50         519 500 581 | 1217            180 125  65                 6
+   Every step up buys the reported symptom down at every MEASURED (clip) latency and pays in late
+   pop-in (outLate 30/42/90 -> 36/55/116 at 40) and at the unmeasured 700ms column - the same
+   trade, in the same direction, the 45->50 return calibration took. The 25-degree landing bar
+   does not bind anywhere in 35-58; 40 lands NEARER the side view than 35, whose 0ms median sat
+   exactly on the bar's edge (65 -> 71, 77 -> 81, 90 -> 99). Poses: fired 205 -> 197 of the §13
+   set, mean wrong-side 280 -> 263ms.
+   THE COST UNDER NOISE, found by §14's grid (15-30% dropped frames, edge-on label noise) and not by
+   the clean sweep above - smooth in the threshold, stated rather than hidden:
+       outbound                         35    38    40    42
+       slow noisy 360s that flap        97    99   104   109   (of 288 - fold-by-loss fire + withdraw)
+       fast noisy 360s never swapped    16    18    18    18   (of 432)
+       clean 360s, wrong side past 90    1     2     2     3   (the 180 deg/s k 0.6 sampling limit)
+   40 WITHIN THE DIRECTED RANGE because it keeps the 10-degree hysteresis to the return leg's 50
+   that the middle ground argued for - RETURN >= OUTBOUND still holds, with margin.
+   ON THE HARNESS (the dispatch-angle instrument, same scripted 360, n=4 each), the true body
+   angle BACK goes out at:  35 -> 49.0 54.7 43.9 36.6 (mean 46.1)   40 -> 62.8 50.5 40.4 59.4
+   (mean 53.3). Two side changes per 360 in all eight runs; zero token mints.
+   NOT TAKEN from the same request, measured: an EWMA on |yaw| (see SMOOTHING THIS SIGNAL below -
+   re-run on this build, alpha 0.25 still leaves 84 of 216 turns never swapping), and holding BACK
+   "until front chest visibility is restored" on the return (?early_turn_return=0 - see the 45->50
+   record: it lands the return past front-square, the back print on a chest facing the camera).
+   ?early_turn=35&early_turn_slow=35 restores the middle ground exactly. */
+const ORIENT_EARLY_TURN_DEFAULT_DEG = 40;   // 20 until the fold handshake (50); 35 at the middle ground; 40 since the 2026-09-22 calibration - see above
 /* ?early_turn_return=<deg> - THE RETURN LEG, BACK -> FRONT. SUPERSEDED as a default by the fold handshake (above): both legs now
    send at the side view, 50. What follows is why the return leg was first split from the outbound one - still true of any
    threshold short of the fold, which is the point the handshake takes to its end.
@@ -8623,8 +8657,10 @@ const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
 /* 35 SINCE THE MIDDLE GROUND (2026-09-16), tracking the outbound leg as it always has: the slow
    path's job is to add the SLOW rise at the same angle the fast path fires at, never earlier.
    Its own floor logic is unchanged - a weight shift or a look to the side settles by ~30, so 35
-   still sits above where a pose stops. See ORIENT_EARLY_TURN_DEFAULT_DEG. */
-const ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG = 35;   // 35 in v142, 50 at the fold handshake, 35 since the middle ground
+   still sits above where a pose stops. See ORIENT_EARLY_TURN_DEFAULT_DEG.
+   40 SINCE THE 2026-09-22 CALIBRATION, for the same reason - it tracks the outbound leg; the
+   sweep in ORIENT_EARLY_TURN_DEFAULT_DEG's comment moved both together. */
+const ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG = 40;   // 35 in v142, 50 at the fold handshake, 35 at the middle ground, 40 since the calibration
 const ORIENT_EARLY_TURN_SLOW_RISE_DEG = 10;
 const ORIENT_EARLY_TURN_SLOW_WINDOW_MS = [450, 960];   // [min, max] age of the reading the rise is measured from
 /* Declared ABOVE the ?early_turn_* parsers that clamp to them. They used to sit below the slow-path parser,

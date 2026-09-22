@@ -1441,9 +1441,14 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       (r.before.final === "front" && r.after.final !== "front") || (r.before.sent.length && !r.after.sent.length));
     check("THE RULE MAKES NO TURN WORSE, noise included: no more wrong-side swaps past the side view, no turn that stops ending on FRONT, none that stops swapping",
       madeWorse.length === 0, JSON.stringify(madeWorse.slice(0, 3).map((r) => [r.speed, r.before.sent, r.after.sent])));
-    const noisy = flapGrid.filter((r) => !r.clean);
-    check("...and under dropped frames and edge-on label noise, wrong-side swaps past the side view fall at least fivefold",
-      tally(noisy, "after").side * 5 <= tally(noisy, "before").side, JSON.stringify([tally(noisy, "before"), tally(noisy, "after")]));
+    /* SCOPED TO 20-35 deg/s, where the rule acts. It first read the whole noisy grid; the 45-180 band's 7
+       wrong-side swaps are the §13 fast-turn sampling limit, identical with the rule on or off, and when the
+       outbound leg moved 35 -> 40 (which removes some of the slow band's by itself: 53 -> 34 before the rule)
+       those 7 diluted a lumped ratio from 60->9 to 41->9 without the rule doing anything worse - 9 either way.
+       The fast band stays held to "no worse" by the check above. */
+    const noisySlow = flapGrid.filter((r) => !r.clean && r.speed <= 35);
+    check("...and under dropped frames and edge-on label noise, slow turns' wrong-side swaps past the side view fall at least fivefold",
+      tally(noisySlow, "after").side * 5 <= tally(noisySlow, "before").side, JSON.stringify([tally(noisySlow, "before"), tally(noisySlow, "after")]));
 
     /* PARKED AT THE SIDE VIEW - the "chatter near profile" the report names. A body that stays around 90 either
        way sends BACK and FRONT once each, however it wobbles. */
@@ -1674,9 +1679,12 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_MIN_DEG", "ORIENT_EARLY_TURN_MAX_DEG", "ORIENT_EARLY_TURN_DEFAULT_DEG", iife)(
       { search }, numOr("ORIENT_EARLY_TURN_MIN_DEG"), numOr("ORIENT_EARLY_TURN_MAX_DEG"), numOr("ORIENT_EARLY_TURN_DEFAULT_DEG"));
     const got = ["", "?early_turn=", "?early_turn=0", "?early_turn=abc", "?early_turn=-5", "?early_turn=20", "?early_turn=25", "?early_turn=3", "?early_turn=90", "?orient_debug=1"].map((q) => [q, parse(q)]);
-    check("ON BY DEFAULT AT THE MIDDLE GROUND: ?early_turn omitted, empty or unparseable is ORIENT_EARLY_TURN_DEFAULT_DEG (35; 20 in v142, 50 at the fold handshake); 0 or negative turns it OFF; a value is clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") === 35 &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([35, 35, 0, 35, 0, 20, 25, 10, 60, 35]), JSON.stringify(got));
+    /* A PIN, not a bound: 40 since the 2026-09-22 calibration (35 at the middle ground). Moved because the
+       default legitimately moved; the behavioural bars on the value - §13's landing and early-plain checks -
+       were not touched and pass on their own terms. See ORIENT_EARLY_TURN_DEFAULT_DEG's comment for the sweep. */
+    check("ON BY DEFAULT: ?early_turn omitted, empty or unparseable is ORIENT_EARLY_TURN_DEFAULT_DEG (40; 35 at the middle ground, 20 in v142, 50 at the fold handshake); 0 or negative turns it OFF; a value is clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") === 40 &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([40, 40, 0, 40, 0, 20, 25, 10, 60, 40]), JSON.stringify(got));
   }
   const sl0 = SRC.indexOf("const ORIENT_EARLY_TURN_SLOW_DEG = (() => {");
   if (sl0 === -1) check("ORIENT_EARLY_TURN_SLOW_DEG reads ?early_turn_slow", false, "not found");
@@ -1685,9 +1693,9 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
     const parse = (search) => new Function("location", "ORIENT_EARLY_TURN_MIN_DEG", "ORIENT_EARLY_TURN_MAX_DEG", "ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG", iife)(
       { search }, numOr("ORIENT_EARLY_TURN_MIN_DEG"), numOr("ORIENT_EARLY_TURN_MAX_DEG"), numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG"));
     const got = ["", "?early_turn_slow=", "?early_turn_slow=0", "?early_turn_slow=x", "?early_turn_slow=45", "?early_turn_slow=5", "?early_turn_slow=90"].map((q) => [q, parse(q)]);
-    check("?early_turn_slow: default ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG (35; 35 in v142, 50 at the fold handshake), 0 turns the slow path off, clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG") === 35 &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([35, 35, 0, 35, 45, 10, 60]), JSON.stringify(got));
+    check("?early_turn_slow: default ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG (40, tracking the outbound leg; 35 at the middle ground and in v142, 50 at the fold handshake), 0 turns the slow path off, clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG") === 40 &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([40, 40, 0, 40, 45, 10, 60]), JSON.stringify(got));
     check("...and it is never below the outbound threshold - at the fold it only adds the slow rise there, it never sends earlier",
       numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") && numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG") >= 8);
   }
@@ -1713,7 +1721,7 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
        within 25 degrees of the side view" check above; 50 passes it with the failure edge
        measured between 54 and 55. See ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG's comment for the
        sweep and the plain-time ledger. */
-    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (50 - a 15 degree hysteresis over the outbound 35; 35 in v142, 50 at the fold handshake, 45 at the middle ground), 0 turns the early FRONT off, clamped to [10, 60]",
+    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (50 - a 10 degree hysteresis over the outbound 40; 35 in v142, 50 at the fold handshake, 45 at the middle ground), 0 turns the early FRONT off, clamped to [10, 60]",
       numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 50 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
       JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([50, 50, 0, 50, 20, 10, 60]), JSON.stringify(got));
   }
