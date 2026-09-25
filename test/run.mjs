@@ -323,6 +323,13 @@
                       their next visit. §5 pins the server half - verification is now
                       idempotent inside the code's own TTL, which consumption does not
                       extend, so a retry the client never chose cannot cost a code.
+     static-allowlist
+                      "The server was handing out its own source." express.static(__dirname)
+                      served the repo: /server.js, /CLAUDE.md, /package.json, the scanner and
+                      this test directory all answered 200. Slices server.js's real static
+                      block onto a bare express app and asserts both halves - private paths
+                      404 (an absence, so a new "just serve the root" line fails), public
+                      ones still load, and ../ cannot climb out of a public directory.
      scanner-extraction
                       The store scanner's HTML-scrape path (non-Shopify stores): no
                       SVG, no header/nav/footer image, one entry per photo, JSON-LD
@@ -400,6 +407,7 @@ const SUITES = [
   ["otp-single-verification", "otp-single-verification.test.mjs"],
   ["size-chart-scrape", "size-chart-scrape.test.mjs"],
   ["size-chart-overlay", "size-chart-overlay.test.mjs"],
+  ["static-allowlist", "static-allowlist.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

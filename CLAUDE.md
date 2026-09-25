@@ -210,6 +210,9 @@ JSDoc, and `server.js` from `const otpStore = new Map();`.
 `app.js` from `const candidates = currentSizeCategory === "child" ? childFits : adultFits;`
 to `// SNAP TO THE PRODUCT'S OWN LIST.` and runs that loop standalone, so it scores the
 real penalty formula rather than a copy of it.
+`server.js`'s static-hosting block is one too: `static-allowlist` slices it from
+`/* ── Static hosting` to `/* ── Start (local only` and mounts it on a bare express app
+with only `app`/`express`/`path`/`fs`/`__dirname` in scope (§2.10).
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.
@@ -254,6 +257,16 @@ consecutive frames through a turn and fails on `frozen-feed` (two identical fram
 `white-flash` (a near-uniform bright frame — i.e. an overlay pinned over the feed). If you
 are restoring `?swap_hold=1` / `?still_covers=1` for an A/B, expect those findings: they
 are the gate correctly reporting what those flags do.
+
+### 2.10 The server serves an allowlist, never the repo
+`server.js` used to run `express.static(__dirname)`, which handed the repository to anyone
+who asked: `/server.js`, `/CLAUDE.md`, `/package.json`, `/scanner/…`, `/test/…` and even
+`/node_modules/…` answered 200. Public files now come only from `PUBLIC_DIRS`
+(`fitting-room`, `widget`, `admin`) and `PUBLIC_FILES` (`pear-logo.png`,
+`Commercial_video_for_a_tech_fa.mp4`); everything else is a 404 by construction. If an
+asset 404s, add its directory or file to those lists — never widen back to the root.
+`test/static-allowlist.test.mjs` asserts the absence, the presence, and that `../` cannot
+climb out of a public directory.
 
 ---
 

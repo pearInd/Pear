@@ -3182,30 +3182,59 @@ app.get(["/fitting-room", "/fitting-room/", "/fitting-room/index.html"], (req, r
 });
 
 /* ── Static hosting ──────────────────────────────────────────────────────── */
+/* PUBLIC ALLOWLIST - the ONLY paths this server hands to a browser.
+
+   THE BUG THIS CLOSES: this block used to be `express.static(__dirname)` plus a page
+   router rooted at the repo, which served the REPOSITORY ITSELF to anyone who asked -
+   /server.js, /CLAUDE.md, /package.json, /scanner/scan-store.js, /test/run.mjs and
+   /docs/… all answered 200 (verified 2026-09-25 with a probe running that exact
+   config). .env was refused only because `send` ignores dot-paths by default, not
+   because anything here meant to refuse it. Every sizing table, prompt rule and
+   classifier heuristic was one GET away, comments included.
+
+   Everything a shopper, a store page or the admin needs lives under three directories
+   and two root files. Anything else is a 404 BY CONSTRUCTION: a new file at the repo
+   root is private until someone adds it here, on purpose. Never go back to serving
+   __dirname "because an asset 404'd" - add that asset's directory or file instead.
+
+   test/static-allowlist.test.mjs slices this block (from its opening line to the
+   "Start (local only" banner) and asserts both halves: the private paths 404, the
+   public ones load. Keep it self-contained - it runs with only app/express/path/fs/
+   __dirname in scope (CLAUDE.md §2.6). */
 const uiRoot = __dirname;
+const PUBLIC_DIRS  = ["fitting-room", "widget", "admin"];
+const PUBLIC_FILES = ["pear-logo.png", "Commercial_video_for_a_tech_fa.mp4"];
 
-/* serve-static for all assets (JS, CSS, images, fonts…) */
-app.use(express.static(uiRoot, { extensions: ["html"], index: false }));
+/* serve-static per public directory (JS, CSS, images, video…) - never the repo root */
+for (const dir of PUBLIC_DIRS) {
+  app.use(`/${dir}`, express.static(path.join(uiRoot, dir), { extensions: ["html"], index: false }));
+}
+for (const file of PUBLIC_FILES) {
+  app.get(`/${file}`, (_req, res) => res.sendFile(path.join(uiRoot, file)));
+}
 
-/* Page router - resolves every URL to the right HTML file under ui/ */
+/* Page router - directory index and extensionless .html, INSIDE a public directory only.
+   path.join() normalises "..", so every candidate is re-checked against its directory
+   after joining: /admin/../server must never resolve to /server.html. */
 app.use((req, res) => {
-  const candidates = [
-    path.join(uiRoot, req.path),                     // exact file
-    path.join(uiRoot, req.path, "index.html"),        // directory index
-    path.join(uiRoot, req.path.replace(/\/$/, "") + ".html"), // extensionless → .html
-    path.join(uiRoot, "index.html"),                  // SPA fallback
-  ];
-  for (const file of candidates) {
-    try {
-      if (fs.statSync(file).isFile()) {
-        console.log(`[page-router] ${req.method} ${req.path} → ${path.relative(uiRoot, file) || "index.html"}`);
-        return res.sendFile(file);
-      }
-    } catch {}
+  const top = req.path.split("/")[1] || "";
+  if (PUBLIC_DIRS.includes(top)) {
+    const base = path.join(uiRoot, top) + path.sep;
+    const candidates = [
+      path.join(uiRoot, req.path, "index.html"),                // directory index
+      path.join(uiRoot, req.path.replace(/\/$/, "") + ".html"), // extensionless → .html
+    ];
+    for (const file of candidates) {
+      if (!file.startsWith(base)) continue;
+      try {
+        if (fs.statSync(file).isFile()) {
+          console.log(`[page-router] ${req.method} ${req.path} → ${path.relative(uiRoot, file)}`);
+          return res.sendFile(file);
+        }
+      } catch {}
+    }
   }
-  // Unreachable in practice - candidate 4 (root index.html) always exists, so this
-  // route never actually 404s; logged anyway in case that ever changes.
-  console.warn(`[page-router] 404 - no file resolved for ${req.method} ${req.path}`);
+  console.warn(`[page-router] 404 - no public file for ${req.method} ${req.path}`);
   res.status(404).json({ error: "not_found", path: req.path });
 });
 
