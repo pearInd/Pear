@@ -210,6 +210,12 @@ const FORBIDDEN = [
 if (!QA) {
   FORBIDDEN.push(
     ["a developer key hint", /DECART_API_KEY/],
+    /* Which engines PEAR runs on is not public information - not in code, not in a log
+       line, not in the merchant guide's marketing copy (which named both until
+       2026-09-26). The model id the SDK is handed ("lucy-…") is the one exception: it
+       travels to the engine on every connect regardless, so it is reported below
+       rather than refused here until the connection itself is proxied. */
+    ["a vendor or engine name", /decart|nano ?banana|gemini|livekit/i],
     ["the mock harness", /mock_decart|createMockDecartClient|__pearMock/],
     /* An ASSIGNMENT, not a mention: console.error hints may still name a hook ("run
        window.__pearDebugReinjectGarment()"), which is harmless when nothing registers it. */
@@ -231,13 +237,13 @@ console.log(`\n🍐 PEAR build → ${rel(OUT)}${QA ? "   (QA: debug + mock kept)
 for (const [name, before, after] of report) {
   console.log(`   ${name.padEnd(44)} ${before ? kb(before) + " →" : "".padStart(13)} ${kb(after)}`);
 }
-/* Reported, not enforced: the merchant guide names the vendor in its marketing copy, which
-   is a product decision rather than a build one. Every other file should read 0. */
+/* Reported, not enforced: the model id (see the FORBIDDEN note above). Anything else
+   listed here in a production build is worth a look. */
 for (const abs of walk(OUT)) {
   const f = relative(OUT, abs);
   if (f === SDK_OUT) continue;
-  const n = (readFileSync(abs, "utf8").match(/decart/gi) || []).length;
-  if (n) console.log(`   "decart" still appears ${n}× in ${f}`);
+  const hits = readFileSync(abs, "utf8").match(/lucy[\w.-]*/gi) || [];
+  if (hits.length) console.log(`   engine model id in ${f}: ${[...new Set(hits)].join(", ")} (goes on the wire regardless)`);
 }
 if (violations) fail(`${violations} forbidden string(s) in the output - see above`);
 console.log("   ✓ no forbidden strings in the output\n");
