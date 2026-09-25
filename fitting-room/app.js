@@ -1246,126 +1246,30 @@ const sessionElapsedMs = () => (billingStartedAt ? Date.now() - billingStartedAt
 /* =============================================================================
    SCREEN 1 - Size / measurement calculator
    ============================================================================= */
-/* FOX MEN'S TOPS STANDARD (updated 2026-09-14). The chest-cm bands below are FOX's own
-   published ladder: S 90-95, M 96-101, L 102-107, XL 108-113, XXL 114-119. FOX gives no
-   height/weight bands - the form's MANDATORY inputs are height+weight, chest is only an
-   optional fine-tune field - so those columns are derived, not copied from FOX.
+/* ══ SIZING - THE CLIENT HALF ═════════════════════════════════════════════════
+   The size charts and the fit itself moved to lib/sizing.js on 2026-09-26 and are served
+   by POST /api/size (see requestSizeVerdict() below onMeasurementKeydown()). Every
+   table this region's comments name - ZARA_SIZE_CHART, WOMEN_TOPS_EU_SIZE_CHART,
+   CHILD_SIZE_CHART, ADULT_PANTS_SIZE_CHART, ADULT_JEANS_WAIST_CHART - and the derivation of
+   each band now lives there, along with coreHwPenalty(), the store-chart decode/overlay
+   and the adult/child/overflow/fine-tune logic. Read that file's header before editing
+   any of it.
 
-   HOW THEY WERE DERIVED. The chart already had a working, shipped chest<->BMI
-   relationship (this is what let a 185cm/82kg shopper land on the pre-FOX "L" row) - the
-   four old center points (chest 91/98/106/114 -> BMI 21.8/23.0/24.4/25.8) fit a line
-   BMI = 0.174*chest + 5.96 (R^2 > 0.999). That fitted line, not the waist-inch formula
-   ADULT_JEANS_WAIST_CHART uses (chest and waist scale differently at the same BMI - do
-   not reuse that formula here, it was tried and put a lean 90cm chest at BMI 26), maps
-   each new FOX chest band to a BMI band. Height ranges reuse the old chart's own ladder
-   (real "sold into" ranges, not re-derived) with a new XXL tier extending the existing
-   step pattern. Weight bounds are the corner of each row's box: BMI_min at minHeight,
-   BMI_max at maxHeight - so a row's weight band is exactly what its own chest band
-   implies at its own height extremes.
-     S:   BMI 21.6-22.5 over 160-172cm -> weight 55-67
-     M:   BMI 22.7-23.5 over 170-180cm -> weight 65-76
-     L:   BMI 23.7-24.6 over 178-186cm -> weight 75-85
-     XL:  BMI 24.8-25.6 over 184-195cm -> weight 84-97
-     XXL: BMI 25.8-26.7 over 190-205cm -> weight 93-112 (new tier - FOX's ladder had no
-          XXL row to restore; this is the first time this chart has had one)
-   Benchmark this must hold (see CLAUDE.md §1 Layer D): 185cm/82kg -> BMI 23.96, inside
-   L's 23.71-24.58 band, and neither S nor M's height band reaches 185cm - so L wins as
-   the first (and only) genuine match in chart order, same as before this update.
+   What stays HERE is the product side: which chart a garment belongs on (kids-only,
+   lower-body, EU-numbered…), the size LADDERS the override selector and the stock
+   fallbacks walk (labels only - no bands), stock, labels and every DOM effect.
+   calculateSize() gathers that evidence, asks the server, and applySizeVerdict() paints
+   the answer exactly as the old in-browser function did.
 
-   waist/legs columns have no FOX spec at all (FOX publishes chest only for tops) and are
-   not covered by any test assertion (test/numeric-pants-sizing.test.mjs and
-   test/adult-pants-sizing.test.mjs only check these are finite numbers) - waist keeps
-   the old chart's own chest-14cm offset (91->77, 98->84, 106->92, 114->101, i.e. a
-   near-constant 14cm gap), legs keeps the old chart's own ~0.575x-height ratio.
-
-   THE CONSTANT NAME IS UNCHANGED ON PURPOSE. "ZARA_SIZE_CHART" is a load-bearing extract
-   marker (CLAUDE.md §2.6) matched as a literal opening-line string by
-   test/numeric-pants-sizing.test.mjs, test/adult-pants-sizing.test.mjs and
-   test/kids-product-sizes.test.mjs. Renaming it to something FOX-flavored would steal
-   every one of those matches for no behavioral gain - the data is FOX's, the identifier
-   is legacy plumbing. */
-const ZARA_SIZE_CHART = [
-  { size: "S",   minHeight: 160, maxHeight: 172, minWeight: 55, maxWeight: 67,  minChest: 90,  maxChest: 95,  minWaist: 76,  maxWaist: 81,  minLegs: 92,  maxLegs: 99  },
-  { size: "M",   minHeight: 170, maxHeight: 180, minWeight: 65, maxWeight: 76,  minChest: 96,  maxChest: 101, minWaist: 82,  maxWaist: 87,  minLegs: 98,  maxLegs: 104 },
-  { size: "L",   minHeight: 178, maxHeight: 186, minWeight: 75, maxWeight: 85,  minChest: 102, maxChest: 107, minWaist: 88,  maxWaist: 93,  minLegs: 102, maxLegs: 107 },
-  { size: "XL",  minHeight: 184, maxHeight: 195, minWeight: 84, maxWeight: 97,  minChest: 108, maxChest: 113, minWaist: 94,  maxWaist: 99,  minLegs: 106, maxLegs: 112 },
-  { size: "XXL", minHeight: 190, maxHeight: 205, minWeight: 93, maxWeight: 112, minChest: 114, maxChest: 119, minWaist: 100, maxWaist: 105, minLegs: 109, maxLegs: 118 },
-];
-
-/* FOX WOMEN'S TOPS STANDARD - data received 2026-09-14.
-   WIRED 2026-09-15: a gender selector now exists on Screen 1 (#genderToggle in
-   index.html -> currentUserGender in app.js) and calculateSize() reads it, via
-   currentSizeIsWomensTops (see that flag's own comment) and formatSizeLabel().
-
-   FOX's women's ladder is a EU dress-size token (XS 34 / S 36 / M 38 / L 40 / XL 42 /
-   XXL 44), not a chest-cm band, so it does NOT replace ZARA_SIZE_CHART's rows as the
-   fit-matching chart - it never grew height/weight columns and coreHwPenalty() cannot
-   score a row that has none. What actually happens: EVERY shopper, regardless of
-   gender, is still fitted against ZARA_SIZE_CHART's vetted height/weight/chest bands
-   (a garment fits the same body no matter which token is printed on the label) - this
-   chart is consulted AFTER that match, purely to relabel the resolved letter with its
-   EU dress-size token for a shopper who selected "women". Same reason
-   ADULT_JEANS_WAIST_CHART is a second chart rather than an edit to ADULT_PANTS_SIZE_CHART
-   (see that chart's own comment): a different convention for the same body, not a
-   replacement. Letters here are intentionally identical to ZARA_SIZE_CHART's (minus
-   3XL, which FOX did not publish a women's token for - see currentSizeIsWomensTops's
-   euRow-miss fallback in formatSizeLabel(), which keeps the plain letter rather than
-   guessing one). */
-const WOMEN_TOPS_EU_SIZE_CHART = [
-  { size: "XS",  euSize: 34 },
-  { size: "S",   euSize: 36 },
-  { size: "M",   euSize: 38 },
-  { size: "L",   euSize: 40 },
-  { size: "XL",  euSize: 42 },
-  { size: "XXL", euSize: 44 },
-];
-
-/* Children's numeric sizing (EU/IL kids convention, sizes 8-18).
-   Height/weight bands only - unlike ZARA_SIZE_CHART there are no chest/waist/legs
-   columns, so the optional fine-tune inputs contribute no penalty against these
-   rows - calculateSize() skips them outright on the child path.
-
-   Size 20+ is deliberately absent: the ladder connects into the adult chart on its
-   own, since adult S starts at 160cm/55kg and already overlaps size 18's upper end
-   (170-176cm / 54-60kg). */
-const CHILD_SIZE_CHART = [
-  { size: "8",  minHeight: 122, maxHeight: 135, minWeight: 22, maxWeight: 27 },
-  { size: "10", minHeight: 135, maxHeight: 145, minWeight: 27, maxWeight: 32 },
-  { size: "12", minHeight: 145, maxHeight: 155, minWeight: 32, maxWeight: 38 },
-  { size: "14", minHeight: 155, maxHeight: 163, minWeight: 38, maxWeight: 46 },
-  { size: "16", minHeight: 163, maxHeight: 170, minWeight: 46, maxWeight: 54 },
-  { size: "18", minHeight: 170, maxHeight: 176, minWeight: 54, maxWeight: 60 },
-];
-
-/* Ordered child scale, derived from the chart so the two can never drift apart.
-   → ["8","10","12","14","16","18"] */
-const CHILD_SIZE_SCALE = CHILD_SIZE_CHART.map((r) => r.size);
+   The three literal size lists below mirror the sizes of lib/sizing.js's charts;
+   numeric-pants-sizing asserts they match, since a ladder that drifted from its chart
+   would offer a size the fit can never return. */
+const CHILD_SIZE_SCALE = ["8", "10", "12", "14", "16", "18"];
 
 /* Ordered size scale - full range used by the override selector and delta math. */
 const SIZE_SCALE = ["XS", "S", "M", "L", "XL", "XXL", "3XL"];
 
-/* Adult PANTS numeric sizing (EU convention: 36-46 even sizes). A bottoms garment is
-   fitted on waist and hip, not chest - so this chart swaps ZARA_SIZE_CHART's
-   minChest/maxChest and minLegs/maxLegs columns for minHips/maxHips, and keeps
-   waist. calculateSize() only has a "waist" optional input today (no separate hip
-   measurement field), so the fine-tune pass below scores waist alone; minHips/
-   maxHips still ride on each row for a standards-comparable chart and for any
-   future hip input, they just contribute no penalty yet.
-   Ceiling matches ZARA_SIZE_CHART's XL row (195cm/100kg → here 195cm/102kg) so the
-   "genuinely out of catalog" overflow guard in calculateSize() means the same thing
-   on either chart - see isAdultPantsProduct() below for when this chart is chosen
-   over ZARA_SIZE_CHART. */
-const ADULT_PANTS_SIZE_CHART = [
-  { size: "36", minHeight: 155, maxHeight: 165, minWeight: 48, maxWeight: 58,  minWaist: 64, maxWaist: 70,  minHips: 88,  maxHips: 94  },
-  { size: "38", minHeight: 160, maxHeight: 170, minWeight: 55, maxWeight: 65,  minWaist: 68, maxWaist: 74,  minHips: 92,  maxHips: 98  },
-  { size: "40", minHeight: 165, maxHeight: 175, minWeight: 62, maxWeight: 73,  minWaist: 72, maxWaist: 79,  minHips: 96,  maxHips: 103 },
-  { size: "42", minHeight: 170, maxHeight: 180, minWeight: 70, maxWeight: 82,  minWaist: 77, maxWaist: 85,  minHips: 101, maxHips: 109 },
-  { size: "44", minHeight: 175, maxHeight: 186, minWeight: 78, maxWeight: 92,  minWaist: 83, maxWaist: 92,  minHips: 107, maxHips: 116 },
-  { size: "46", minHeight: 180, maxHeight: 195, minWeight: 87, maxWeight: 102, minWaist: 90, maxWaist: 100, minHips: 114, maxHips: 124 },
-];
-
-/* The EU adult pants ladder, derived from ADULT_PANTS_SIZE_CHART so the two can never
-   drift apart - same convention as CHILD_SIZE_SCALE above. → ["36","38","40","42","44","46"]
+/* The EU adult pants ladder - the sizes of lib/sizing.js's ADULT_PANTS_SIZE_CHART.
    Defined HERE, immediately beside its chart, rather than beside isAdultPantsProduct()
    below (which is where it's actually used) - some test harnesses extract a narrower
    slice of this file that starts AFTER this point but still before that function, and an
@@ -1373,7 +1277,7 @@ const ADULT_PANTS_SIZE_CHART = [
    at import time. isAdultPantsProduct() itself is a plain function body (deferred, not
    eagerly evaluated), so it can safely read this from a slice that doesn't include the
    chart, as long as the Set itself was already built here. */
-const ADULT_PANTS_NUMERIC_SIZES = new Set(ADULT_PANTS_SIZE_CHART.map((r) => r.size));
+const ADULT_PANTS_NUMERIC_SIZES = new Set(["36", "38", "40", "42", "44", "46"]);
 /* ── APOSTROPHE NORMALISATION - one Hebrew word, four codepoints ─────────────────
    THE BUG THIS CLOSES: a jeans product titled "ג'ינס סקיני" was fitted against the
    adult LETTER chart, because the keyword lists in this file spell the geresh two
@@ -1406,84 +1310,9 @@ function _normApos(s) {
     .toLowerCase();
 }
 
-/* ── ADULT_JEANS_WAIST_CHART - the FOX WAIST-CM ladder (28-38, updated 2026-09-14) ──
-   THE BUG THIS CLOSES (history - keep reading past the FOX update below): "the
-   calculator says L for a pair of jeans." A 185cm/82kg shopper on a product sold
-   28/30/32/34/36 was sized against ZARA_SIZE_CHART - the adult LETTER chart, which
-   bands on CHEST - and handed back "L", a value that does not appear anywhere in
-   that product's size picker and cannot be selected.
-
-   WHY THIS IS A SECOND CHART AND NOT AN EDIT TO ADULT_PANTS_SIZE_CHART.
-   ────────────────────────────────────────────────────────────────────
-   ADULT_PANTS_SIZE_CHART above is the EU ladder (36-46). This is the WAIST ladder.
-   They are two different measurement systems that happen to share the tokens 36-46,
-   and a store lists one or the other, never both. Collapsing them into one chart
-   would have to pick a single meaning for "38" - either a 97cm EU hip size or a
-   38-size waist - and would be wrong for every store on the other convention.
-   adult-pants-sizing.test.mjs pins the EU behaviour precisely because it was itself
-   a fix for a real report; this chart is additive and leaves every one of those
-   assertions untouched.
-
-   WHICH CHART A PRODUCT GETS is decided in calculateSize() from the product's OWN
-   size run, EU first (see pantsChartForSizes below) - never from a guess.
-
-   THE 2026-09-14 FOX UPDATE - ROW LIST REPLACED, METHOD KEPT. FOX's own men's waist
-   ladder is exactly 8 sizes - 28 (71-73cm), 30 (76-78cm), 31 (79-81cm), 32 (81-83cm),
-   33 (84-86cm), 34 (86-88cm), 36 (91-93cm), 38 (96-98cm) - narrower bands than the
-   old 24-48-even chart this replaces, and it does NOT cover 24, 26, 40, 42, 44, 46,
-   48. Those bodies now genuinely fall outside every row (the overflow/no-match guard
-   below handles that the same way it already handles any out-of-catalog body -
-   CLAUDE.md §2.5, never a guess) rather than getting an old chart's extrapolated
-   size. This was a deliberate scope call, not an oversight - see the PR description
-   for the decision to replace rather than merge/extend.
-
-   HOW THE BANDS WERE DERIVED (method unchanged from the original fix, only the input
-   waist values changed). Waist circumference tracks BMI far more closely than it
-   tracks weight alone, which is the whole reason the original reported case was
-   wrong in the first place: at 82kg the shopper reads as "large" on a weight-only
-   view, and as a lean 24.0 BMI once height is accounted for. Each row's centre is
-   BMI = (waist_cm + 14) / 4, the same male waist/BMI regression the original fix
-   used (waist_in * 2.54 IS waist_cm, so this chart plugs FOX's cm values in
-   directly - do not re-multiply by 2.54, that was only ever a units conversion for
-   an inch input). Height/weight bounds are the corner of each row's box: BMI at
-   minWaist paired with minHeight, BMI at maxWaist paired with maxHeight - so a row's
-   weight band is exactly what its own FOX waist band implies at its own height
-   extremes. Height ranges below 32 reuse the old chart's ladder for those same
-   numeric sizes (already a real "sold into" range, not re-derived); 31 and 33 are
-   new rows and interpolate their height range from the neighbours either side.
-   Benchmark this must hold (CLAUDE.md §1 Layer D): 185cm/82kg -> BMI 23.96, which
-   sits in row 32's 23.75-24.25 band (82cm waist center = BMI 24.0 almost exactly) -
-   row 31 also reaches height 185 but its weight band tops out at 81kg, so 32 is the
-   first genuine match in chart order, same "32" this benchmark got before the
-   FOX update.
-
-   ROW ORDER IS LOAD-BEARING. calculateSize() keeps the FIRST genuinely-fitting row
-   when no optional waist measurement narrows it (every candidate scores penalty 0,
-   and the first 0 wins), so rows run smallest-first. A shopper on a boundary is
-   offered the SMALLER size, matching how denim is actually bought - jeans stretch
-   out, they do not shrink in.
-
-   Columns mirror ADULT_PANTS_SIZE_CHART exactly (waist + hips, no chest/legs) so
-   coreHwPenalty() and calculateSize()'s fine-tune pass work against it unmodified.
-   minHips/maxHips ride along for a standards-comparable chart and for a future hip
-   input; there is no hips field on the form today, so they contribute no penalty -
-   FOX did not publish a hip figure either, so these keep the old chart's own
-   waist+21cm offset, same as every prior row here. */
-const ADULT_JEANS_WAIST_CHART = [
-  { size: "28", minHeight: 155, maxHeight: 178, minWeight: 51, maxWeight: 69,  minWaist: 71, maxWaist: 73, minHips: 92,  maxHips: 94  },
-  { size: "30", minHeight: 160, maxHeight: 180, minWeight: 58, maxWeight: 75,  minWaist: 76, maxWaist: 78, minHips: 97,  maxHips: 99  },
-  { size: "31", minHeight: 163, maxHeight: 185, minWeight: 62, maxWeight: 81,  minWaist: 79, maxWaist: 81, minHips: 100, maxHips: 102 },
-  { size: "32", minHeight: 165, maxHeight: 190, minWeight: 65, maxWeight: 88,  minWaist: 81, maxWaist: 83, minHips: 102, maxHips: 104 },
-  { size: "33", minHeight: 168, maxHeight: 193, minWeight: 69, maxWeight: 93,  minWaist: 84, maxWaist: 86, minHips: 105, maxHips: 107 },
-  { size: "34", minHeight: 170, maxHeight: 195, minWeight: 72, maxWeight: 97,  minWaist: 86, maxWaist: 88, minHips: 107, maxHips: 109 },
-  { size: "36", minHeight: 172, maxHeight: 198, minWeight: 78, maxWeight: 105, minWaist: 91, maxWaist: 93, minHips: 112, maxHips: 114 },
-  { size: "38", minHeight: 174, maxHeight: 200, minWeight: 83, maxWeight: 112, minWaist: 96, maxWaist: 98, minHips: 117, maxHips: 119 },
-];
-
-/* The waist-inch ladder, derived from the chart so the two can never drift apart -
-   same convention as CHILD_SIZE_SCALE / ADULT_PANTS_NUMERIC_SIZES above, and defined
-   HERE beside its chart for the same load-order reason those record. */
-const ADULT_JEANS_WAIST_SIZES = new Set(ADULT_JEANS_WAIST_CHART.map((r) => r.size));
+/* The FOX waist ladder - the sizes of lib/sizing.js's ADULT_JEANS_WAIST_CHART, in chart
+   order (smallest first; see that chart's "ROW ORDER IS LOAD-BEARING"). */
+const ADULT_JEANS_WAIST_SIZES = new Set(["28", "30", "31", "32", "33", "34", "36", "38"]);
 
 /* True while the resolved chart is one of the two NUMERIC pants ladders. Read only by
    formatSizeLabel(), which must never decorate a numeric pants size: the kids suffix
@@ -1520,22 +1349,10 @@ let currentSizeIsNumericPants = false;
    same reason the kids suffix below is also adult-only). */
 let currentSizeIsWomensTops = false;
 
-/**
- * Height/weight penalty for one chart row - the scoring kernel behind
- * calculateSize()'s match pass, shared by every chart (ZARA_SIZE_CHART,
- * CHILD_SIZE_CHART, and ADULT_PANTS_SIZE_CHART all carry the same four
- * min/maxHeight/min/maxWeight fields). Same ×2 per-cm/kg weighting as the
- * original adult matcher.
- * @returns {number}
- */
-function coreHwPenalty(row, height, weight) {
-  let pen = 0;
-  if (height < row.minHeight) pen += (row.minHeight - height) * 2;
-  if (height > row.maxHeight) pen += (height - row.maxHeight) * 2;
-  if (weight < row.minWeight) pen += (row.minWeight - weight) * 2;
-  if (weight > row.maxWeight) pen += (weight - row.maxWeight) * 2;
-  return pen;
-}
+/* The FOX women's letter -> EU token map for formatSizeLabel(), delivered with the size
+   verdict only while currentSizeIsWomensTops is true, and reset alongside it. */
+let currentEuTokens = null;
+
 
 /* CHILD_AGE_MAX / pickSizeCategory() lived here and are GONE - see the "AGE -
    REMOVED" note further down. Both were already unreachable: nothing called
@@ -1602,176 +1419,12 @@ function parseSizeList(raw) {
   return list.map((s) => String(s == null ? "" : s).trim().toUpperCase()).filter(Boolean);
 }
 
-/* ══ THE STORE'S OWN SIZE CHART - decode, then overlay ══════════════════════════════
-   WHAT ARRIVES: pear-widget.js reads the "Size guide" / "מדריך מידות" table off the PDP
-   the shopper is standing on (extractSizeChart there) and encodes it compactly
-   (encodeSizeChart there). It reaches us on ?garment_size_chart= at open and again on
-   the PEAR_UPDATE_GARMENT correction.
-
-   ── WHAT IT IS ALLOWED TO DO, AND THE LINE IT MUST NOT CROSS ─────────────────────────
-   calculateSize() computes in two stages. The KERNEL is height + weight, scored by
-   coreHwPenalty(), and it decides three things that all matter enormously:
-     · which rows are candidates at all (the genuine-fit filter, penalty === 0),
-     · currentBodyCategory / currentSizeCategory, and so the kids/adult go-live guard,
-     · the overflow ceiling behind the "no size available" copy.
-   The FINE-TUNE is the ×0.5 chest/waist/legs pass that only ever breaks a tie BETWEEN
-   rows that already passed the kernel.
-
-   A merchant's chart publishes body circumferences. It never publishes a height or a
-   weight band. So applyStoreChartOverlay() writes the fine-tune columns and NOTHING
-   ELSE - it does not even name minHeight/maxHeight/minWeight/maxWeight - and the blast
-   radius of a bad scrape is bounded to "which of two adjacent sizes that both genuinely
-   fit this body is shown", and only for a shopper who filled in an optional
-   measurement. It cannot invent a candidate, remove one, flip adult↔child, or turn a
-   match into a no-match. That bound is the entire reason reading merchant HTML is an
-   acceptable input to this file at all. Do not widen it to the kernel "so the store's
-   chart really counts" - the store's chart is evidence about CLOTH, ours is vetted
-   evidence about BODIES, and the kernel is the half we vetted.
-
-   Spec: docs/superpowers/specs/2026-09-17-storefront-size-chart-scraper.md */
-
-/* Mirrors SIZE_CHART_CLAMPS in pear-widget.js (CLAUDE.md §3 - edit together). Re-checked
-   HERE rather than trusted from the wire because this is the last gate before a number
-   from a stranger's HTML becomes a band the calculator scores against, and the widget is
-   not the only possible sender (the message listener accepts a correction, and a
-   server-side chart cache is an obvious next step). Centimetres, post-conversion. */
-const STORE_CHART_CLAMPS = {
-  chest: [50, 200], waist: [40, 200], hips: [50, 200], legs: [40, 140],
-};
-
-/* The wire format, decoded:
-       <unit>;<source>;SIZE:chest:waist:hips:legs|SIZE:...
-       each measurement ::= "min-max", or "" when the chart doesn't publish it
-   e.g. cm;shopify;S:90-95:76-81::|M:96-101:82-87::|L:102-107:88-93::
-
-   ⚠️ CROSS-FILE LOCKSTEP (CLAUDE.md §3): the encoder is encodeSizeChart() in
-   pear-widget.js. One format, two files, same commit - test/size-chart-overlay.test.mjs
-   round-trips the widget's own encoder output through this decoder for that reason.
-
-   REFUSES A NON-"cm" UNIT OUTRIGHT rather than converting. The widget converts to
-   centimetres before encoding, so "in" on the wire means one of the two sides has
-   drifted - and a chart converted twice (or not at all) is the one failure mode here
-   that produces plausible, confident, WRONG bands instead of a visible absence.
-   @param {string|Array|null|undefined} raw
-   @returns {Array<object>} rows, or [] for anything unreadable */
-function parseStoreSizeChart(raw) {
-  try {
-    /* An already-parsed array is accepted so a future sender (a server-side cache, a
-       test) can hand rows straight over without a round trip through the string. */
-    if (Array.isArray(raw)) return raw.filter((r) => r && typeof r === "object" && r.size);
-    if (typeof raw !== "string") return [];
-    const s = raw.trim();
-    if (!s) return [];
-    const head = s.split(";");
-    if (head.length < 3) return [];
-    if (head[0].trim().toLowerCase() !== "cm") return [];
-    const body = head.slice(2).join(";");
-
-    const band = (tok) => {
-      const m = /^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/.exec(String(tok || "").trim());
-      if (!m) return null;
-      const lo = parseFloat(m[1]), hi = parseFloat(m[2]);
-      if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return null;
-      return { min: lo, max: hi };
-    };
-
-    const out = [], seen = new Set();
-    for (const chunk of body.split("|")) {
-      const cells = chunk.split(":");
-      /* parseSizeList() normalises exactly as every other size reader in this file does
-         (trim + uppercase) - CLAUDE.md §2.2's discipline applied to size tokens: "l",
-         " L " and "L" are one size, and a raw compare would silently overlay nothing. */
-      const size = parseSizeList([cells[0]])[0];
-      if (!size || seen.has(size)) continue;
-      const row = { size };
-      const keys = ["Chest", "Waist", "Hips", "Legs"];
-      let any = false;
-      for (let i = 0; i < keys.length; i++) {
-        const b = band(cells[i + 1]);
-        if (!b) continue;
-        row["min" + keys[i]] = b.min;
-        row["max" + keys[i]] = b.max;
-        any = true;
-      }
-      if (!any) continue;          // a size with no measurement overlays nothing
-      seen.add(size);
-      out.push(row);
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-/* THE OVERLAY. Returns a NEW array with the store's fine-tune bands written over the
-   matching rows of `baseChart`; `baseChart` itself is never mutated, and is returned
-   BY REFERENCE (not a copy) whenever there is nothing to apply.
-
-   FOUR RULES, each of which is a refusal:
-     1. Rows are matched by normalised size TOKEN. A store row naming a size the base
-        chart doesn't have is ignored - bestSize can only ever be one of the base
-        chart's own rows, so a row nothing can select is not worth carrying.
-     2. A column is written only when the store supplied BOTH bounds, both are finite,
-        min <= max, and both survive STORE_CHART_CLAMPS. A partial chart (chest only)
-        leaves waist and legs on ours.
-     3. A column is written only when the BASE ROW ALREADY HAS IT. This is "refine",
-        not "extend": the store may not introduce a measurement dimension the vetted
-        chart deliberately does not score. ZARA_SIZE_CHART has chest/waist/legs and no
-        hips; ADULT_PANTS_SIZE_CHART has waist/hips and no chest - each keeps its own
-        shape, and the overlay can only ever CHANGE a band, never add or remove one.
-     4. Height and weight are not writable. They are not read, not copied field by
-        field, not named anywhere below - the row is spread wholesale and only the four
-        fine-tune keys are overwritten, so there is no path by which a future edit
-        "accidentally" reaches the kernel.
-   Anything unexpected - a non-array, an empty match, a throw - returns `baseChart`.
-   @param {Array<object>} baseChart   ZARA_SIZE_CHART / a pants chart, untouched
-   @param {Array<object>} storeRows   parseStoreSizeChart() output
-   @returns {Array<object>} */
-function applyStoreChartOverlay(baseChart, storeRows) {
-  try {
-    if (!Array.isArray(baseChart) || !baseChart.length) return baseChart;
-    if (!Array.isArray(storeRows) || !storeRows.length) return baseChart;
-
-    const byToken = new Map();
-    for (const r of storeRows) {
-      const token = parseSizeList([r && r.size])[0];
-      if (!token || byToken.has(token)) continue;   // first spelling of a size wins
-      byToken.set(token, r);
-    }
-    if (!byToken.size) return baseChart;
-
-    let touched = 0;
-    const out = baseChart.map((row) => {
-      const token = parseSizeList([row && row.size])[0];
-      const store = token ? byToken.get(token) : undefined;
-      if (!store) return row;                        // pass through BY REFERENCE
-      let next = null;
-      for (const cap of ["Chest", "Waist", "Hips", "Legs"]) {
-        if (typeof row["min" + cap] !== "number" || typeof row["max" + cap] !== "number") continue;
-        const lo = store["min" + cap], hi = store["max" + cap];
-        if (typeof lo !== "number" || typeof hi !== "number") continue;
-        if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) continue;
-        const clamp = STORE_CHART_CLAMPS[cap.toLowerCase()];
-        if (!clamp || lo < clamp[0] || hi > clamp[1]) continue;
-        if (!next) next = { ...row };
-        next["min" + cap] = lo;
-        next["max" + cap] = hi;
-      }
-      if (next) touched++;
-      return next || row;
-    });
-    if (!touched) return baseChart;
-    console.log("[PEAR] store size chart overlaid on", touched, "of", baseChart.length,
-      "chart row(s) - fine-tune bands only, height/weight kernel untouched");
-    return out;
-  } catch (e) {
-    /* CLAUDE.md §2.5 - the default global matrix is the documented safe state, and it
-       is exactly what shipped before this feature existed. */
-    console.warn("[PEAR] store size-chart overlay failed, keeping the default matrix:",
-      e?.message || e);
-    return baseChart;
-  }
-}
+/* ══ THE STORE'S OWN SIZE CHART ══════════════════════════════════════════════
+   Decoded and laid over our charts server-side now - see parseStoreSizeChart() and
+   applyStoreChartOverlay() in lib/sizing.js, and CLAUDE.md §2.5b for the bound that makes
+   parsing a merchant's HTML an acceptable input (fine-tune columns only, never the
+   height/weight kernel). The browser forwards the raw string the widget encoded
+   (resolvedStoreSizeChart() below) and never parses it. */
 
 /**
  * @param {string[]|string|null} sizes - the host product's OWN size list, when known
@@ -2145,43 +1798,28 @@ function isPantsProduct(sizes, title, cachedCategory, item) {
  * first claim on its own run and the waist-inch chart takes everything else. Reversing
  * these two lines silently re-sizes every EU store in the catalog.
  *
+ * Returns the chart's KIND since 2026-09-26: the banded charts themselves live in
+ * lib/sizing.js, which receives this verdict as the evidence's `chart` field. The
+ * precedence still lives in exactly one place - here.
+ *
  * @param {string[]|string|null|undefined} sizes
- * @returns {Array<object>} ADULT_PANTS_SIZE_CHART (EU) or ADULT_JEANS_WAIST_CHART
+ * @returns {"eu"|"waist"} ADULT_PANTS_SIZE_CHART (EU) or ADULT_JEANS_WAIST_CHART
  *   (waist inches). Never null: callers reach this only once isPantsProduct() has
  *   confirmed a lower-body garment, and a pants product whose size list scraped to
  *   nothing still belongs on a waist ladder rather than back on a chest-banded chart.
  */
-function pantsChartForSizes(sizes) {
-  if (isAdultPantsProduct(sizes)) return ADULT_PANTS_SIZE_CHART;
-  return ADULT_JEANS_WAIST_CHART;
+function pantsChartKindForSizes(sizes) {
+  if (isAdultPantsProduct(sizes)) return "eu";
+  return "waist";
 }
 
-
-/**
- * The shopper's OWN scale, derived with NO garment constraint applied.
- *
- * WHY THIS IS NOT currentSizeCategory. calculateSize() deliberately forces
- * `adultFits = []` once the garment resolves to kids, so a kids garment can never
- * recommend an adult size. For the 180cm/80kg shopper in the bug report that leaves no
- * candidate in EITHER chart (the child chart ends at 176cm/60kg), so currentSizeCategory
- * lands on null - meaning a guard keyed on `currentSizeCategory === "adult"` would go
- * quiet again the moment the product-size fix made the garment resolve correctly. The
- * guard has to read a category that the garment cannot influence. This is that value.
- *
- * NOTE ON THE METHOD: chart-fit, never a raw height/weight threshold. pickSizeCategory()
- * previously recorded why - a threshold guess "routed petite adults (150cm/50kg -> kids
- * 14) and slim tall adults (174cm/56kg -> kids 18) into children's sizing with no way
- * for them to correct it". The mirror of that mistake here would block a 13-year-old
- * off the kids items they actually need. Adult wins genuine ties, matching the same
- * convention calculateSize() already uses for the overlap zone.
- * @returns {"adult"|"child"|null}
- */
-function userBodyCategory(height, weight) {
-  if (!height || !weight) return null;
-  if (ZARA_SIZE_CHART.some((row) => coreHwPenalty(row, height, weight) === 0)) return "adult";
-  if (CHILD_SIZE_CHART.some((row) => coreHwPenalty(row, height, weight) === 0)) return "child";
-  return null;
+/** The size ladder (labels only, smallest first) of the pants chart pantsChartKindForSizes()
+ *  picks - what the override selector and the stock fallbacks walk when a numeric-pants
+ *  product listed no sizes of its own. */
+function pantsLadderForSizes(sizes) {
+  return [...(pantsChartKindForSizes(sizes) === "eu" ? ADULT_PANTS_NUMERIC_SIZES : ADULT_JEANS_WAIST_SIZES)];
 }
+
 
 /**
  * @param {"child"|"adult"|null} userCategory - userBodyCategory()'s garment-independent verdict
@@ -2253,11 +1891,13 @@ function resolvedSoldOutSizes() {
    ReferenceError there rather than a lint nit.
    @returns {Array<object>} decoded rows, or [] when no readable chart arrived */
 function resolvedStoreSizeChart() {
+  /* RAW since 2026-09-26 - the widget's encoded string (or its row array), forwarded
+     as-is in the size evidence; lib/sizing.js decodes and bounds it. null = no chart. */
   const item = typeof activeItem !== "undefined" ? activeItem : null;
-  if (item && item.sizeChart != null) return parseStoreSizeChart(item.sizeChart);
+  if (item && item.sizeChart != null) return item.sizeChart;
   const pending = typeof pendingSizeChart !== "undefined" ? pendingSizeChart : undefined;
-  if (pending === undefined) return [];
-  return parseStoreSizeChart(pending);
+  if (pending === undefined) return null;
+  return pending;
 }
 
 /** @param {string|null|undefined} size @returns {boolean} true only for a size POSITIVELY known gone. */
@@ -2286,7 +1926,7 @@ function purchasableLadder() {
   const own = resolvedGarmentSizes();
   if (!own.length) {
     return currentSizeCategory === "child" ? [...CHILD_SIZE_SCALE]
-      : currentSizeIsNumericPants ? pantsChartForSizes(own).map((r) => r.size)
+      : currentSizeIsNumericPants ? pantsLadderForSizes(own)
       : [...SIZE_SCALE];
   }
   const unique = [...new Set(own)];
@@ -2521,8 +2161,10 @@ function formatSizeLabel(size) {
   // mean a chart edit desynced the two lists - falling back to the plain letter
   // rather than throwing, same "abstain, don't guess" rule as everywhere else.
   if (currentSizeIsWomensTops) {
-    const euRow = WOMEN_TOPS_EU_SIZE_CHART.find((r) => r.size === size);
-    if (euRow) return `${size} (EU ${euRow.euSize})`;
+    /* The letter -> EU token map arrives with the size verdict (lib/sizing.js,
+       WOMEN_TOPS_EU_SIZE_CHART) and only when this flag is set. */
+    const eu = currentEuTokens && currentEuTokens[size];
+    if (eu) return `${size} (EU ${eu})`;
   }
   return size;
 }
@@ -2546,6 +2188,43 @@ function setOptionalVisible(show) {
   }
 }
 
+/* THE RESET every calculateSize() outcome starts from - moved out of calculateSize()
+   verbatim when the fit went server-side, so the synchronous early returns and
+   applySizeVerdict() start from the identical state. */
+function resetSizeResult() {
+  const resultBox = $("resultBox"), resultLabel = $("resultLabel");
+  const nextBtn = $("btn-next-screen");
+  const resultActions = $("resultActions");
+
+  resultBox.classList.remove("show", "error-result", "no-match-result");
+  // Cleared HERE, before both early returns below, for the same reason
+  // currentSizeIsNumericPants is: an invalid or unmatched measurement must never leave
+  // the PREVIOUS garment's "your size is sold out" sentence sitting under a result box
+  // that no longer shows that size.
+  renderStockNotice(null);
+  if (resultActions) resultActions.classList.remove("is-ready");   // collapse the tray
+  resultLabel.innerText = t("resultLabelDefault");
+  nextBtn.disabled = true;
+  currentUserSize = null;
+  // Cleared alongside the size so the two never disagree; both early-return paths in
+  // calculateSize() (missing input / out of range) therefore leave the category null.
+  currentSizeCategory = null;
+  currentBodyCategory = null;   // ...and the garment-independent one with it
+  // Reset here, BEFORE either early return, so a missing/out-of-range measurement can
+  // never leave a PREVIOUS garment chart description behind for formatSizeLabel().
+  currentSizeIsNumericPants = false;
+  currentSizeIsWomensTops = false;
+  currentEuTokens = null;
+  updateProgress();
+}
+
+/* Size verdicts by evidence, for the session - see calculateSize()'s "SYNCHRONOUS WHEN IT
+   CAN BE". A value is either a verdict or the in-flight Promise for one, so two runs on
+   the same new evidence share a single request. _sizeSeq numbers the runs; only the
+   newest may paint. */
+const _sizeVerdicts = new Map();
+let _sizeSeq = 0;
+
 /**
  * Recompute the recommended size from height+weight ALONE - a genuine-fit
  * lookup against both charts, not a closest-match guess. A chart row only
@@ -2568,8 +2247,27 @@ function setOptionalVisible(show) {
  *
  * Drives the result box and the "continue" button enabled-state, and - via
  * setOptionalVisible - the conditional reveal of the optional measurement
- * fields. Re-run on every input event. Pure UI/state; no network.
- * @returns {void}
+ * fields. Re-run on every input event.
+ *
+ * ASKS THE SERVER SINCE 2026-09-26. The charts and the fit moved to lib/sizing.js
+ * (POST /api/size); this function resolves the PRODUCT evidence - which chart the
+ * garment belongs on, kids-only / adult-only, lower-body - sends it with the
+ * measurements, and applySizeVerdict() paints the answer exactly as the old in-browser
+ * computation did (proven over 1,458,028 cases; see lib/sizing.js's header).
+ *
+ * SYNCHRONOUS WHEN IT CAN BE. Missing and out-of-range input are answered here with no
+ * request, and every verdict is memoised by its evidence for the session, so a re-run on
+ * inputs already seen - goLive()'s fresh re-check, a gender toggle back, a late widget
+ * correction that changed nothing the fit reads - paints in the same tick, as it always
+ * did. Only genuinely new evidence waits on the network; until it lands, Continue is
+ * locked and the previous answer stays on screen (clearing it would flicker on every
+ * keystroke). The newest call always wins: an older answer arriving late is ignored.
+ *
+ * NEVER REJECTS. A failed request paints a "couldn't calculate" result (Continue stays
+ * locked, exactly like a no-match) and resolves null; the next input retries. Callers
+ * that must read the result - goLive(), routeUser()'s instant skip, Enter on the form -
+ * await it.
+ * @returns {Promise<object|null>} the verdict applied, or null
  */
 function calculateSize() {
   const num = (id) => ($(id).value ? parseFloat($(id).value) : null);
@@ -2583,40 +2281,19 @@ function calculateSize() {
   setOptionalVisible(mandatoryReady);
 
   const chest = num("chest"), waist = num("waist"), legs = num("legs");
+  const seq = ++_sizeSeq;
 
-  const resultBox = $("resultBox"), sizeResult = $("sizeResult"), resultLabel = $("resultLabel");
-  const nextBtn = $("btn-next-screen");
-  const resultActions = $("resultActions");
-
-  resultBox.classList.remove("show", "error-result", "no-match-result");
-  // Cleared HERE, before both early returns below, for the same reason
-  // currentSizeIsNumericPants is: an invalid or unmatched measurement must never leave
-  // the PREVIOUS garment's "your size is sold out" sentence sitting under a result box
-  // that no longer shows that size.
-  renderStockNotice(null);
-  if (resultActions) resultActions.classList.remove("is-ready");   // collapse the tray
-  resultLabel.innerText = t("resultLabelDefault");
-  nextBtn.disabled = true;
-  currentUserSize = null;
-  // Cleared alongside the size so the two never disagree; both early-return paths
-  // below (missing input / out of range) therefore leave the category null.
-  currentSizeCategory = null;
-  currentBodyCategory = null;   // ...and the garment-independent one with it
-  // Reset here, BEFORE the two early returns below, so a missing/out-of-range
-  // measurement can never leave a PREVIOUS garment chart description behind for
-  // formatSizeLabel() to read.
-  currentSizeIsNumericPants = false;
-  currentSizeIsWomensTops = false;
-  updateProgress();
-
-  if (!height || !weight) return;
+  if (!height || !weight) { resetSizeResult(); return Promise.resolve(null); }
 
   if (height > 240 || height < 110 || weight > 220 || weight < 18) {
+    resetSizeResult();
+    const resultBox = $("resultBox"), sizeResult = $("sizeResult"), resultLabel = $("resultLabel");
+    const resultActions = $("resultActions");
     resultLabel.innerText = t("resultLabelError");
     sizeResult.innerText = t("sizeResultInvalid");
     resultBox.classList.add("show", "error-result");
     if (resultActions) resultActions.classList.add("is-ready");
-    return;
+    return Promise.resolve(null);
   }
 
   // "Genuine fit" candidates per chart: rows where BOTH height AND weight land
@@ -2677,162 +2354,103 @@ function calculateSize() {
      here, so the EU-before-waist precedence lives in exactly ONE place - see that
      function on why reversing those two lines re-sizes every EU store in the catalog. */
   const useNumericPantsChart = useAdultPantsChart || useWaistInchChart;
-  /* ── THE STORE'S OWN CHART, LAID OVER THE VETTED ONE ──────────────────────────
-     Applied AFTER chart selection and BEFORE the genuine-fit filter below, and that
-     position is safe precisely because applyStoreChartOverlay() cannot write a height
-     or weight column: bodyAdultFits, currentBodyCategory, currentSizeCategory, the
-     kids/adult guard and the overflow ceiling all still compute off OUR bands, byte
-     for byte. The only consumer of what this changes is the ×0.5 fine-tune tie-break
-     further down. See applyStoreChartOverlay()'s own comment for the full argument,
-     and do not move this below the filter "for clarity" - the filter would then be
-     reading a chart the overlay had not seen, which is a difference nobody would
-     notice until a store published a chart we disagreed with.
+  /* THE EVIDENCE. Everything the fit needs that is a verdict about the PRODUCT is
+     resolved above, here, by the same functions as before; lib/sizing.js never re-derives
+     any of it. `sizes` rides along for the snap-to-own-list step, `storeChart` raw for
+     the overlay (decoded and bounded server-side - CLAUDE.md §2.5b). */
+  const evidence = {
+    height, weight, chest, waist, legs,
+    chart: useNumericPantsChart ? pantsChartKindForSizes(garmentSizes) : "letters",
+    kidsOnly: isKidsProduct(garmentSizes, garmentAgeGroup),
+    adultOnly: isAdultProduct(garmentSizes, garmentAgeGroup),
+    lowerBody: isConfidentlyPants,
+    snap: useAdultPantsChart,
+    gender: currentUserGender || null,
+    sizes: garmentSizes,
+    storeChart: resolvedStoreSizeChart(),
+  };
+  const key = JSON.stringify(evidence);
+  const known = _sizeVerdicts.get(key);
+  if (known && typeof known.then !== "function") {
+    applySizeVerdict(known, useNumericPantsChart);
+    return Promise.resolve(known);
+  }
 
-     CHILD_SIZE_CHART is deliberately NOT overlaid: it carries no measurement columns
-     at all and the fine-tune pass is skipped outright on the child path, so an overlay
-     there would be a clause that cannot reach the wire (CLAUDE.md RULE 0's spirit). */
-  const adultChart = applyStoreChartOverlay(
-    useNumericPantsChart ? pantsChartForSizes(garmentSizes) : ZARA_SIZE_CHART,
-    resolvedStoreSizeChart());
+  const nextBtn = $("btn-next-screen");
+  if (nextBtn) nextBtn.disabled = true;   // no Continue on an answer to the PREVIOUS inputs
+  const pending = known || requestSizeVerdict(evidence);
+  _sizeVerdicts.set(key, pending);
+  return pending.then((verdict) => {
+    _sizeVerdicts.set(key, verdict);
+    if (seq === _sizeSeq) {
+      applySizeVerdict(verdict, useNumericPantsChart);
+      /* Callers that re-render the room's selector right after calling this (the
+         widget's late size/stock corrections) did so before the answer existed. */
+      if ($("pearSizeSelector") && typeof injectSizeSelector === "function") {
+        try { injectSizeSelector(); } catch {}
+      }
+    }
+    return verdict;
+  }, (err) => {
+    _sizeVerdicts.delete(key);
+    console.error("[PEAR] size verdict request failed:", err?.message || err);
+    if (seq === _sizeSeq) {
+      /* DISPLAY ONLY - the size STATE is deliberately left as the last answer that did
+         land. Continue is already locked (above), so Screen 1 cannot advance on it; and
+         goLive(), which awaits this, keeps a size and category to gate on instead of a
+         network blip nulling them into a false block (CLAUDE.md §2.5). */
+      const resultBox = $("resultBox"), sizeResult = $("sizeResult"), resultLabel = $("resultLabel");
+      const resultActions = $("resultActions");
+      resultBox.classList.remove("show", "error-result", "no-match-result");
+      renderStockNotice(null);
+      resultLabel.innerText = t("resultLabelServiceError");
+      sizeResult.innerText = t("sizeResultServiceError");
+      resultBox.classList.add("show", "error-result");
+      if (resultActions) resultActions.classList.add("is-ready");
+    }
+    return null;
+  });
+}
+
+/* Paints one verdict from lib/sizing.js - the DOM half of the old calculateSize(), in
+   the same order it ran there. */
+function applySizeVerdict(verdict, useNumericPantsChart) {
+  const resultBox = $("resultBox"), sizeResult = $("sizeResult"), resultLabel = $("resultLabel");
+  const nextBtn = $("btn-next-screen");
+  const resultActions = $("resultActions");
+
+  resetSizeResult();
+  if (verdict.status === "empty") return;   // the browser answers these itself; defensive
+  if (verdict.status === "invalid") {
+    resultLabel.innerText = t("resultLabelError");
+    sizeResult.innerText = t("sizeResultInvalid");
+    resultBox.classList.add("show", "error-result");
+    if (resultActions) resultActions.classList.add("is-ready");
+    return;
+  }
+
   /* Read by formatSizeLabel(), which must never decorate a numeric pants size. */
   currentSizeIsNumericPants = useNumericPantsChart;
-  /* Computed BEFORE the garment constraint below, and kept: this is the shopper's own
-     scale, which the mismatch guard needs precisely because the constrained result
-     cannot express "an adult body looking at a kids-only product" (it collapses to
-     null). See userBodyCategory()'s comment.
-
-     DELIBERATELY SIMPLE: judged against `adultChart` - the SINGLE chart THIS garment
-     resolved to - and nothing cleverer. Two earlier versions of this line tried to make
-     the CACHED value itself correct for every garment the shopper might view for the
-     rest of the session (checking both adult charts unconditionally, then only when
-     garmentSizes was empty) and each shipped a real, reproduced false block in a
-     different direction - see goLive()'s own big comment for both incidents and why the
-     fix belongs THERE instead: calculateSize() is re-run fresh, right before the
-     authoritative gate checks, so this simple per-garment answer is always being asked
-     about the garment that is ACTUALLY active, never a stale one. Do not reintroduce a
-     multi-chart union here - it solves nothing goLive()'s freshness doesn't already
-     solve, and both times it was tried, it broke a real shopper. */
-  const bodyChildFits = CHILD_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
-  const bodyAdultFits = adultChart.filter((row) => coreHwPenalty(row, height, weight) === 0);
-  currentBodyCategory = bodyAdultFits.length ? "adult" : (bodyChildFits.length ? "child" : null);
-
-  const childFits = isAdultProduct(garmentSizes, garmentAgeGroup) ? [] : bodyChildFits;
-  const adultFits = isKidsProduct(garmentSizes, garmentAgeGroup) ? [] : bodyAdultFits;
-
-  // Overlap zone (genuinely fits BOTH charts, e.g. ~170-172cm/54-60kg) defaults
-  // to adult - same tie-break convention used elsewhere in this codebase
-  // (userBodyCategory's adult-first rule, resolveAgeGroup's server-side tie rule).
-  // Adult winning whenever it has ANY candidate covers "adult-only" and
-  // "fits both" in the same branch. This only actually applies in the
-  // "uncertain" case above - a confident garment already has the other
-  // chart's array forced empty, so there's nothing left for it to tie with.
-  currentSizeCategory = adultFits.length ? "adult" : (childFits.length ? "child" : null);
-
-  /* GENDER ROUTING - see currentSizeIsWomensTops's own comment for why this only ever
-     swaps the DISPLAYED token, never the fit chart itself. Gated on !isConfidentlyPants
-     rather than !useNumericPantsChart - deliberately the STRICTER of the two: a
-     letter-sized bottoms garment (a sweatpants pair sold S/M/L, alpha-vetoed off the
-     waist chart per isAlphaSizeRun()) still resolves onto ZARA_SIZE_CHART for FIT
-     purposes, but must not be decorated with a TOPS dress-size token - "M (EU 38)" on
-     a pair of sweatpants reads as an EU PANTS size (this app already has one, on
-     ADULT_PANTS_SIZE_CHART, numbered 36-46 - a colliding, wrong-scale range) even
-     though the FOX women's tops ladder means something else entirely. isConfidentlyPants
-     is the same "is this worn on the lower body" verdict isPantsProduct() already
-     gives independent of which chart the fit math landed on - see that const's own
-     comment. Gated on "adult" because the chart has no child rows. */
-  currentSizeIsWomensTops =
-    currentUserGender === "women" && !isConfidentlyPants && currentSizeCategory === "adult";
+  currentBodyCategory = verdict.bodyCategory || null;
+  currentSizeCategory = verdict.sizeCategory || null;
+  currentSizeIsWomensTops = !!verdict.womensTops;
+  currentEuTokens = verdict.euTokens || null;
 
   if (!currentSizeCategory) {
-    // Fits NEITHER chart - no closest-match guess. A real gap between the two
-    // charts, or genuinely out-of-catalog proportions, is now a visible "no
-    // size found" result instead of a silently wrong recommendation.
-    // Blocking, same severity as the sane-range validation error above -
-    // Continue stays disabled until the visitor's measurements resolve to a
-    // real chart match.
-    //
-    // A body ABOVE the resolved adult chart's own ceiling (currently 195cm/100kg on
-    // ZARA_SIZE_CHART, 195cm/102kg on ADULT_PANTS_SIZE_CHART) can never match any row
-    // in either chart - unlike a gap between the two charts, there is no bigger size
-    // to suggest. That case gets its own explicit "no size available" copy instead of
-    // the generic no-match text, so it doesn't read as a fixable input mistake.
-    // Column-wise max, NOT the chart's last row - the charts happen to be ordered
-    // smallest..largest today so the two coincide, but height's ceiling and weight's
-    // ceiling aren't guaranteed to live on the same row, so each bound is taken
-    // independently. Read off adultChart (whichever one this garment resolved to),
-    // so a numeric-pants product is judged against ITS OWN ceiling, not the letter
-    // chart's.
-    const maxAdultHeight = Math.max(...adultChart.map((row) => row.maxHeight));
-    const maxAdultWeight = Math.max(...adultChart.map((row) => row.maxWeight));
-    const overflowsMaxSize = height > maxAdultHeight || weight > maxAdultWeight;
-
+    // Fits NEITHER chart - no closest-match guess (see lib/sizing.js for the full
+    // reasoning, and for the overflow ceiling behind the distinct "no size available").
     resultLabel.innerText = t("resultLabelNoMatch");
-    sizeResult.innerText = overflowsMaxSize ? t("sizeResultOverflow") : t("sizeResultNoMatch");
+    sizeResult.innerText = verdict.status === "overflow" ? t("sizeResultOverflow") : t("sizeResultNoMatch");
     resultBox.classList.add("show", "no-match-result");
     if (resultActions) resultActions.classList.add("is-ready");
-    // nextBtn/currentUserSize were already reset to disabled/null at the top of this
-    // function and neither is touched again below - Continue (and everything gated on
-    // currentUserSize, including goLive()'s token mint) stays locked on this path.
+    // nextBtn/currentUserSize were already reset to disabled/null by resetSizeResult() and
+    // neither is touched again below - Continue (and everything gated on currentUserSize,
+    // including goLive()'s token mint) stays locked on this path.
     updateProgress();
     return;
   }
 
-  // Among the genuinely-fitting rows only, chest/waist/legs still refine WHICH
-  // one is shown when more than one qualifies (adjacent adult sizes' bands
-  // really do overlap, e.g. S and M both fit 170-172cm/64-65kg) - same scoring
-  // as before, just scoped to candidates that already passed the height/weight
-  // gate, never to a row that didn't.
-  const candidates = currentSizeCategory === "child" ? childFits : adultFits;
-  let bestSize = candidates[0].size, minPenalty = Infinity;
-  candidates.forEach((row) => {
-    let pen = 0;   // height/weight are already an exact fit for every candidate here
-    if (currentSizeCategory === "adult" && useNumericPantsChart) {
-      // Pants rows carry minWaist/maxWaist same as ZARA_SIZE_CHART, but chest/legs
-      // are swapped for minHips/maxHips (see ADULT_PANTS_SIZE_CHART's comment) -
-      // there is no "hips" optional input on the form yet, so only waist fine-tunes.
-      if (waist) { if (waist < row.minWaist) pen += (row.minWaist - waist) * 0.5; if (waist > row.maxWaist) pen += (waist - row.maxWaist) * 0.5; }
-    } else if (currentSizeCategory === "adult") {
-      if (chest) { if (chest < row.minChest) pen += (row.minChest - chest) * 0.5; if (chest > row.maxChest) pen += (chest - row.maxChest) * 0.5; }
-      if (waist) { if (waist < row.minWaist) pen += (row.minWaist - waist) * 0.5; if (waist > row.maxWaist) pen += (waist - row.maxWaist) * 0.5; }
-      if (legs)  { if (legs  < row.minLegs)  pen += (row.minLegs  - legs)  * 0.5; if (legs  > row.maxLegs)  pen += (legs  - row.maxLegs)  * 0.5; }
-    }
-    if (pen < minPenalty) { minPenalty = pen; bestSize = row.size; }
-  });
-
-  // SNAP TO THE PRODUCT'S OWN LIST. isAdultPantsProduct() now recognizes numeric runs
-  // that don't literally match ADULT_PANTS_SIZE_CHART's own six EU rows (e.g. a real
-  // US/UK jeans run of 26-40 - see that chart's "THE 26-40 REPORT" comment). bestSize
-  // above is still only ever one of those six chart values, since it comes from a
-  // genuine height/weight fit against the one chart with VERIFIED bands. When the
-  // product doesn't actually sell that exact number, recommending it anyway would be a
-  // real SKU the shopper can't buy - so snap to whichever size the product's OWN list
-  // actually has that sits closest to it. Pure numeric distance, never a fabricated
-  // cm/kg claim about the sizes this chart has no data for, and always a size that
-  // exists on this specific product - never a letter, matching this file's "the
-  // product's own list wins" precedent (see isKidsProduct()'s comment).
-  //
-  // TIE-BREAK IS AN EXPLICIT "prefer smaller" RULE, NOT ARRAY ORDER. A bare
-  // `reduce((closest, n) => dist(n) < dist(closest) ? n : closest)` looks like it picks
-  // the closest value, but on an exact tie its strict `<` keeps whichever candidate the
-  // reduce happened to visit first - which for a no-initial-value reduce is
-  // ownNumericSizes[0], i.e. WHICHEVER SIZE THE STORE HAPPENED TO SCRAPE FIRST. Every
-  // list in this file's own tests is written in ascending order, so that accidentally
-  // read as "prefers the lower size" - but nothing about a store's DOM guarantees
-  // ascending order, and a differently-ordered size list would have silently flipped
-  // which of two equidistant sizes got recommended. The `n < closest` clause below
-  // makes "prefer the smaller size" a real, order-independent rule instead of an
-  // artifact of whatever order the product happened to list its sizes in.
-  if (currentSizeCategory === "adult" && useAdultPantsChart && garmentSizes.length) {
-    const ownNumericSizes = garmentSizes.map(Number).filter(Number.isFinite);
-    if (ownNumericSizes.length && !garmentSizes.includes(bestSize)) {
-      const target = Number(bestSize);
-      bestSize = String(ownNumericSizes.reduce((closest, n) => {
-        const dn = Math.abs(n - target), dc = Math.abs(closest - target);
-        return dn < dc || (dn === dc && n < closest) ? n : closest;
-      }));
-    }
-  }
-
+  const bestSize = verdict.size;
   sizeResult.innerText = formatSizeLabel(bestSize);
   resultBox.classList.add("show");
   if (resultActions) resultActions.classList.add("is-ready");
@@ -3015,8 +2633,11 @@ function updateProgress() {
 function onMeasurementKeydown(e) {
   if (e.key !== "Enter") return;
   e.preventDefault();
-  calculateSize();
-
+  /* The size may be a server round-trip away now (calculateSize()'s doc) - Continue's
+     [disabled] is only meaningful once THIS input's answer has been painted. */
+  calculateSize().then(() => onMeasurementEnterResolved(e));
+}
+function onMeasurementEnterResolved(e) {
   const nextBtn = $("btn-next-screen");
   if (nextBtn && !nextBtn.disabled) { onSizeFormContinue(); return; }
 
@@ -3030,6 +2651,42 @@ function onMeasurementKeydown(e) {
   const next = inputs.slice(idx + 1).find((el) => !el.value) || inputs[idx + 1];
   if (next) next.focus();
   else e.target.blur();
+}
+
+/* ── THE SIZE SERVICE ─────────────────────────────────────────────────────────
+   POST /api/size - lib/sizing.js behind server.js. The only network call calculateSize()
+   makes, and deliberately defined OUTSIDE the Screen 1 region the sizing suites slice:
+   they inject a stand-in that runs the real lib/sizing.js in-process, so the tests keep
+   exercising the real fit through the real client shell.
+   One retry on a transport or 5xx/429 failure (a Vercel cold start is the usual cause);
+   a 4xx is a malformed request and is not retried. Throws on failure - calculateSize()
+   turns that into its "couldn't calculate" result. */
+async function requestSizeVerdict(evidence) {
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 700));
+    try {
+      const resp = await fetch("/api/size", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(evidence),
+        cache: "no-store",
+      });
+      if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
+        const err = new Error(`HTTP ${resp.status}`);
+        err.permanent = true;
+        throw err;
+      }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const verdict = await resp.json();
+      if (!verdict || typeof verdict.status !== "string") throw new Error("malformed size verdict");
+      return verdict;
+    } catch (e) {
+      lastErr = e;
+      if (e && e.permanent) break;
+    }
+  }
+  throw lastErr;
 }
 
 /* =============================================================================
@@ -4283,10 +3940,9 @@ window.addEventListener("message", (e) => {
   if (typeof incomingChart === "string" || Array.isArray(incomingChart)) {
     pendingSizeChart = incomingChart;
     if (activeItem) activeItem.sizeChart = incomingChart;
-    const rows = parseStoreSizeChart(incomingChart);
-    console.log("[PEAR] store size-chart correction:",
-      rows.length ? rows.length + " row(s): " + rows.map((r) => r.size).join("/")
-                  : "(none readable - the vetted default matrix applies)");
+    console.log("[PEAR] store size-chart correction received",
+      "(" + (Array.isArray(incomingChart) ? incomingChart.length + " row(s)" : String(incomingChart).length + " chars") +
+      ") - decoded and bounded server-side with the next size verdict");
     const sizeFormEl5 = $("sizeForm");
     if (sizeFormEl5 && !sizeFormEl5.hidden) { try { calculateSize(); } catch {} }
   }
@@ -16507,7 +16163,7 @@ function injectSizeSelector() {
      EU-before-waist precedence is not spelled out a second time; productSizes is empty on
      this branch by construction, so it yields the waist ladder. */
   const scale = productSizes.length ? productSizes
-    : currentSizeIsNumericPants ? pantsChartForSizes(productSizes).map((r) => r.size)
+    : currentSizeIsNumericPants ? pantsLadderForSizes(productSizes)
     // Child results get the numeric kids ladder ONLY - no adult S/M/L/XL button is
     // rendered at all, so there is nothing for a child profile to cross over into.
     //
@@ -17104,24 +16760,31 @@ function routeUser(user) {
     hideAllScreen1Forms();
     const setIf = (id, v) => { const el = $(id); if (el && v != null && v !== "") el.value = String(v); };
     setIf("height", user.height); setIf("weight", user.weight);
-    try { calculateSize(); } catch {}
-    // A stored height/weight that was valid when saved can still land in the
-    // "fits neither chart" gap calculateSize() now recognizes (it no longer
-    // forces a closest-match guess). Don't silently instant-skip into the
-    // fitting room with no resolved size - fall through to Screen 1 below,
-    // exactly the same blocking "no matching size" state a fresh visitor would
-    // hit, instead of bypassing it entirely via this fast path.
-    if (currentUserSize && hasTermsConsent()) {
-      // instant:true - this visitor never saw Screen 1 (pre-paint gate kept
-      // #screen-calculator hidden the whole time), so skip the branded transition
-      // and land directly on the camera with zero visible animation/delay.
-      goToFitting({ instant: true });
-      return;
-    }
-    if (currentUserSize) {
-      console.log("[PEAR] returning device, no terms consent on record for v" +
-        PEAR_TERMS_VERSION + " → size form (prefilled) instead of the instant skip");
-    }
+    /* The size is a server answer now (calculateSize()'s doc), so the skip decision waits
+       for it - the forms are already hidden, which is the same "checking…" state the
+       pear-returning-check class paints on load. calculateSize() never rejects; a failed
+       request lands on the prefilled form with its "couldn't calculate" result. */
+    calculateSize().then(() => {
+      // A stored height/weight that was valid when saved can still land in the
+      // "fits neither chart" gap calculateSize() now recognizes (it no longer
+      // forces a closest-match guess). Don't silently instant-skip into the
+      // fitting room with no resolved size - fall through to Screen 1 below,
+      // exactly the same blocking "no matching size" state a fresh visitor would
+      // hit, instead of bypassing it entirely via this fast path.
+      if (currentUserSize && hasTermsConsent()) {
+        // instant:true - this visitor never saw Screen 1 (pre-paint gate kept
+        // #screen-calculator hidden the whole time), so skip the branded transition
+        // and land directly on the camera with zero visible animation/delay.
+        goToFitting({ instant: true });
+        return;
+      }
+      if (currentUserSize) {
+        console.log("[PEAR] returning device, no terms consent on record for v" +
+          PEAR_TERMS_VERSION + " → size form (prefilled) instead of the instant skip");
+      }
+      showSizeForm({ refreshNotice: true });
+    });
+    return;
   }
 
   showSizeForm({ refreshNotice: !!hasProfile });
@@ -19055,8 +18718,14 @@ async function applyFallbackConditioning() {
  * single release point for `busy` and the capture button.
  * @returns {Promise<void>}
  */
+/* True only while goLive() waits on its size re-check - the one await that sits BEFORE
+   `busy` is claimed (see the comment on that await). A second click in that window must
+   not start a second go-live; busy cannot guard it, because claiming busy there would
+   make a recompute able to hold billing state, which adult-pants-sizing §7 forbids. */
+let goLiveResolvingSize = false;
+
 async function goLive() {
-  if (busy || isLive()) return;
+  if (busy || isLive() || goLiveResolvingSize) return;
 
   /* THE STALE-currentBodyCategory RACE, CLOSED AT THE ENFORCEMENT POINT. calculateSize()
      is the only writer of currentUserSize/currentSizeCategory/currentBodyCategory, but it
@@ -19069,14 +18738,19 @@ async function goLive() {
      one garment and "adult" under another with the SAME height/weight (ADULT_PANTS_-
      SIZE_CHART and ZARA_SIZE_CHART cover different, only-partially-overlapping bands), so
      a value computed for garment A and never refreshed can wrongly block - or wrongly
-     admit - garment B. calculateSize() is pure UI/state with no network call (its own doc
-     comment says so), and Screen 1's inputs are still real, hidden (not removed) DOM
-     elements on Screen 2 - CSS class toggling, never a DOM detach - so re-running it here
-     is cheap and safe, and makes this gate correct for whichever garment is ACTUALLY
-     active right now, regardless of what any earlier call left cached. This is the
+     admit - garment B. calculateSize() reads Screen 1's inputs, which are still real,
+     hidden (not removed) DOM elements on Screen 2 - CSS class toggling, never a DOM detach -
+     so re-running it here makes this gate correct for whichever garment is ACTUALLY active
+     right now, regardless of what any earlier call left cached. This is the
      "authoritative backstop" updateSizeMismatchUI()'s own comment already claims this
-     function is - now actually true even when nothing upstream remembered to refresh. */
-  calculateSize();
+     function is - now actually true even when nothing upstream remembered to refresh.
+     AWAITED since the fit moved server-side (2026-09-26): usually a same-tick memo hit,
+     since the garment rarely changed since Screen 1; a server round-trip only when it did.
+     A failed request leaves the last-known answer in place (calculateSize()'s failure
+     branch never clears state), so a network blip cannot turn into a false block
+     (CLAUDE.md §2.5). goLiveResolvingSize holds the door shut for the duration. */
+  goLiveResolvingSize = true;
+  try { await calculateSize(); } finally { goLiveResolvingSize = false; }
 
   // Two-view gate - runs BEFORE any token mint / WebRTC connect / billing. Graceful
   // by default; only opt-in requireBothViews items (or a garment with no front) are

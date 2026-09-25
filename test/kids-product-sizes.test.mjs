@@ -46,13 +46,19 @@ function extract(src, startMarker, endMarker) {
   return src.slice(start, end);
 }
 
-/* The category logic, executed for real. CHILD_SIZE_CHART/ZARA_SIZE_CHART/
-   coreHwPenalty sit just above it, so one contiguous slice carries the real charts
-   rather than a stub of them - the exact numbers are what this bug turned on. */
-const catCode = extract(APP, "const ZARA_SIZE_CHART", "function calculateSize()");
-const cat = await import("data:text/javascript," + encodeURIComponent(
-  catCode + "\nexport { isKidsProduct, isCompatibleSizeCategory, userBodyCategory, parseSizeList };"
-));
+/* The category logic, executed for real. The PRODUCT half (isKidsProduct,
+   isCompatibleSizeCategory, parseSizeList) is still the browser's - sliced from app.js's
+   Screen 1 region. The BODY half (userBodyCategory, over the real CHILD_SIZE_CHART /
+   ZARA_SIZE_CHART bands and coreHwPenalty) moved server-side on 2026-09-26 and is imported
+   from lib/sizing.js - the real charts rather than a stub, since the exact numbers are
+   what this bug turned on. */
+const catCode = extract(APP, "const CHILD_SIZE_SCALE = [", "function calculateSize()");
+const cat = {
+  ...(await import("data:text/javascript," + encodeURIComponent(
+    catCode + "\nexport { isKidsProduct, isCompatibleSizeCategory, parseSizeList };"
+  ))),
+  userBodyCategory: (await import("../lib/sizing.js")).userBodyCategory,
+};
 
 console.log("── §1 isKidsProduct(): the REAL size list decides, not the image classifier ──");
 {

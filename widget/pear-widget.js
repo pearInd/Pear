@@ -2227,7 +2227,8 @@
      ~25 chars a row, ~160 for a six-row chart, versus ~700 URL-encoded as JSON.
 
      CROSS-FILE LOCKSTEP (CLAUDE.md §3). The decoder is parseStoreSizeChart() in
-     fitting-room/app.js. They are one format and must be edited in the same commit;
+     lib/sizing.js (server-side since 2026-09-26 - the room forwards this string raw).
+     They are one format and must be edited in the same commit;
      test/size-chart-overlay.test.mjs round-trips this encoder's own output through
      that decoder for exactly that reason.
      @returns {string} "" when there is nothing to send */

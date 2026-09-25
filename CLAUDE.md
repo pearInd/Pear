@@ -113,7 +113,7 @@ wrong"*, *"it slimmed me down"*, *"front and back aren't right"*.
 | **A. Prompt text** | what the model is told | `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` | mostly dead |
 | **B. Reference image** | what the model is shown | `referenceImageFor`, `galleryOf`, `distinctBackOf`, `createGarmentComposite` | **live** |
 | **C. Orientation** | which asset is on the wire when | `OrientationWatcher`, `effectiveAngle`, `autoOrientation` | **live** |
-| **D. Size ladder** | the recommended size in the UI | `calculateSize`, `SIZE_SCALE`, `*_SIZE_CHART`, `applyStoreChartOverlay` | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
+| **D. Size ladder** | the recommended size in the UI | `calculateSize` (client shell, `app.js`) → `lib/sizing.js` (`*_SIZE_CHART`, `computeSizeVerdict`, `applyStoreChartOverlay`, §2.12) | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
 
 **Layer B is where most real fit/back-view problems actually live.** "The back
 came out plain" is almost never a prompt problem — it is `distinctBackOf()`
@@ -208,10 +208,17 @@ and `cdn-url-integrity` slice `server.js`/`scan-store.js` the same way). The OTP
 block is one as well: `otp-single-verification` slices `app.js` from
 `const OTP_IN_FLIGHT = { send: false, verify: false };` to the `logSessionMeasurements`
 JSDoc, and `server.js` from `const otpStore = new Map();`.
-`calculateSize()`'s fine-tune tie-break is the newest one: `size-chart-overlay` slices
-`app.js` from `const candidates = currentSizeCategory === "child" ? childFits : adultFits;`
-to `// SNAP TO THE PRODUCT'S OWN LIST.` and runs that loop standalone, so it scores the
-real penalty formula rather than a copy of it.
+The fit's fine-tune tie-break is one too: `size-chart-overlay` slices **`lib/sizing.js`**
+(server-side since 2026-09-26, §2.12) from
+`const candidates = currentSizeCategory === "child" ? childFits : adultFits;` to
+`// SNAP TO THE PRODUCT'S OWN LIST.` and runs that loop standalone, so it scores the real
+penalty formula rather than a copy of it - the local names inside `computeSizeVerdict()`
+are therefore an interface. The browser's Screen 1 sizing region is sliced by
+`numeric-pants-sizing`, `adult-pants-sizing` and `kids-product-sizes` from
+`const CHILD_SIZE_SCALE = [` (it was `const ZARA_SIZE_CHART` until the charts moved out) to
+`function calculateSize()` or `\nfunction onMeasurementKeydown`; `requestSizeVerdict()`
+sits deliberately just AFTER that end marker, so each harness injects its own and runs the
+real `lib/sizing.js` through it.
 `server.js`'s public-roots + static-hosting block is one too: `static-allowlist` slices it
 from `/* ── Public roots` to `/* ── Start (local only` and mounts it on a bare express app
 with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (§2.10).
@@ -305,6 +312,31 @@ run on the unbuilt files. Rules that keep the build honest:
 - After a change to anything the build touches, `npm run qa:visual:dist` drives the same
   360 against the minified room (build `--qa` keeps the mock so the agent can run it).
 
+### 2.12 The size fit is server-side
+Since 2026-09-26 every size chart (FOX's bands and their derivations), `coreHwPenalty()`, the
+store-chart decode/overlay and the fit itself live in `lib/sizing.js`, served by
+`POST /api/size`. `calculateSize()` in `app.js` is a shell: it resolves the **product**
+verdicts that stay in the browser (which chart - `pantsChartKindForSizes()`, kids-only,
+adult-only, lower-body; these move with the garment plan in the next phase), sends them with
+the measurements, and `applySizeVerdict()` paints the answer in the old order.
+
+- **Behaviour was proven identical**, not assumed: the old in-browser `calculateSize()` and
+  the new shell + server were run over the same 1,458,028 cases (26 garment situations × the
+  height/weight grid × the optional-measurement grid) and matched byte for byte; a 1cm edit to
+  one band showed up in 18,182 of them. Re-run that comparison for any change to the fit.
+- **Synchronous when it can be.** Missing/out-of-range input is answered locally; every verdict
+  is memoised by its evidence, so re-runs on known inputs paint in the same tick. Only new
+  evidence waits on the network - Continue is locked until it lands, and the newest call wins.
+- **It never rejects, and a failure keeps the last answer.** A failed request paints
+  `resultLabelServiceError`/`sizeResultServiceError` but leaves the size STATE alone, so
+  `goLive()`'s re-check can never turn a network blip into a false block (§2.5).
+- **`goLive()` awaits the re-check BEFORE claiming `busy`** (adult-pants-sizing §7: a recompute
+  never holds billing state) and guards that one await with `goLiveResolvingSize`;
+  `stream-continuity` asserts it is the only await ahead of the claim.
+- **No chart may come back to the browser.** `scripts/build.mjs` fails if the room bundle
+  carries a body-measurement band key (`minChest`, `maxHeight`, …). The visual harness runs the
+  real `lib/sizing.js` for `/api/size` - it is shipped logic, not a stub target (§8.6).
+
 ---
 
 ## 3. Cross-file lockstep
@@ -324,8 +356,9 @@ same commit. Whichever is wrong is the one that wins.
 | `srcset` parsing (split on whitespace, never on `,`) | `pear-widget.js: largestFromSrcset` ↔ `scan-store.js: largestFromSrcset` |
 | Decorative-image keyword list | `pear-widget.js: EXCLUDE_SRC` ↔ `scan-store.js: EXCLUDE_IMG_SRC` |
 | Trust-tiered exclusion + name corroboration | `isExcludedSrc` / `nameEchoesProduct` in `pear-widget.js` ↔ `scan-store.js` |
-| Size-chart wire format (`<unit>;<source>;SIZE:chest:waist:hips:legs\|…`) | `pear-widget.js: encodeSizeChart` ↔ `app.js: parseStoreSizeChart` |
-| Size-chart sanity clamps (cm) | `pear-widget.js: SIZE_CHART_CLAMPS` ↔ `app.js: STORE_CHART_CLAMPS` |
+| Size-chart wire format (`<unit>;<source>;SIZE:chest:waist:hips:legs\|…`) | `pear-widget.js: encodeSizeChart` ↔ `lib/sizing.js: parseStoreSizeChart` |
+| Size-chart sanity clamps (cm) | `pear-widget.js: SIZE_CHART_CLAMPS` ↔ `lib/sizing.js: STORE_CHART_CLAMPS` |
+| Size ladders (labels only) vs the charts they index | `app.js: CHILD_SIZE_SCALE / ADULT_PANTS_NUMERIC_SIZES / ADULT_JEANS_WAIST_SIZES` ↔ `lib/sizing.js: CHILD_SIZE_CHART / ADULT_PANTS_SIZE_CHART / ADULT_JEANS_WAIST_CHART` (asserted by `numeric-pants-sizing` §5) |
 
 The widget's category verdict is **explicit** and therefore outranks the room's
 own classifier. A widget-side category bug cannot be fixed room-side.

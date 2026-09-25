@@ -32,6 +32,8 @@ import { supabase } from "./lib/supabase.js";
    field on classifyFrontBackDetailed() (short version: that one is stamped with
    CLASSIFIER_PROMPT_VERSION, and widening it re-classifies the whole catalog). */
 import { classifyGarmentFull } from "./lib/garment-category.js";
+/* The size charts and the fit - moved out of the browser 2026-09-26 (see lib/sizing.js). */
+import { computeSizeVerdict, sanitizeSizeEvidence } from "./lib/sizing.js";
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -124,6 +126,7 @@ const trackLimiter    = rateLimit({ windowMs: 60_000, max: 60 });   // analytics
 const proxyLimiter    = rateLimit({ windowMs: 60_000, max: 120 });  // image proxy
 const classifyLimiter = rateLimit({ windowMs: 60_000, max: 200 });   // garment front/back classification - calls Gemini
 const storeCatalogLimiter = rateLimit({ windowMs: 60_000, max: 30 }); // "Complete the Look" store-scoped catalog reads
+const sizeLimiter     = rateLimit({ windowMs: 60_000, max: 120 });  // size verdicts - one per NEW measurement set, memoised client-side
 
 /* ── CORS enforcement ────────────────────────────────────────────────────────
    The fitting room is PUBLICLY ACCESSIBLE to any anonymous visitor - no login
@@ -830,6 +833,22 @@ async function saveSession(req, res) {
 /* Session-log ingest: open but rate limited. POST only - nothing here reads the table
    back or wipes it (see the SESSION LOG header above). /api/session-log is the older
    spelling of the same route, kept for clients that still use it. */
+/* ── Size verdict - POST /api/size ──────────────────────────────────────────────
+   The fit the fitting room used to compute in the browser (lib/sizing.js). The body is
+   the shopper's measurements plus the product verdicts app.js resolves; it is sanitised
+   field by field before it reaches the fit, and the answer is the verdict
+   applySizeVerdict() paints. Pure computation - no storage, no third party - so it is
+   cheap enough to answer every new measurement set the shopper types. */
+app.post("/api/size", sizeLimiter, (req, res) => {
+  res.set("Cache-Control", "no-store");
+  try {
+    res.json(computeSizeVerdict(sanitizeSizeEvidence(req.body)));
+  } catch (err) {
+    console.error("[size] verdict failed:", err?.message || err);
+    res.status(500).json({ error: "size_failed" });
+  }
+});
+
 app.post("/api/sessions",    sessionLimiter, saveSession);
 app.post("/api/session-log", sessionLimiter, saveSession);
 

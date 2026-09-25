@@ -251,6 +251,11 @@ const I18N = {
   // see calculateSize()'s "fits neither" branch. There is no bigger size to suggest,
   // so the copy says so plainly rather than implying the input might still be fixable.
   sizeResultOverflow:       { he: "אין מידה מתאימה", en: "No size available" },
+  // The size service (POST /api/size) did not answer, after one retry - see
+  // calculateSize()'s failure branch. Not a verdict about the shopper, so it says
+  // nothing about their measurements; the next keystroke or Enter asks again.
+  resultLabelServiceError:  { he: "לא הצלחנו לחשב מידה כרגע:", en: "We couldn't calculate your size:" },
+  sizeResultServiceError:   { he: "נסו שוב בעוד רגע", en: "Try again in a moment" },
   // Appended to a bare child-chart size ("12" -> "12 (ילדים)") everywhere a size
   // value is displayed or logged - see formatSizeLabel(). Adult sizes are never
   // touched by this key; the number alone ("M"/"L") is unambiguous on its own.

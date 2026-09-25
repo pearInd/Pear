@@ -323,6 +323,13 @@
                       their next visit. §5 pins the server half - verification is now
                       idempotent inside the code's own TTL, which consumption does not
                       extend, so a retry the client never chose cannot cost a code.
+     size-fit-pin
+                      The size charts and the fit moved server-side (lib/sizing.js,
+                      POST /api/size). The move was proven exact over 1,458,028 cases;
+                      this keeps that conclusion: the real client shell + the real module
+                      over ~258k cases, hashed and compared with a value computed from
+                      the PRE-MOVE browser code. Any change to any recommendation, even
+                      1cm on one band, turns it red until re-pinned on purpose.
      static-allowlist
                       "The server was handing out its own source." express.static(__dirname)
                       served the repo: /server.js, /CLAUDE.md, /package.json, the scanner and
@@ -408,6 +415,7 @@ const SUITES = [
   ["size-chart-scrape", "size-chart-scrape.test.mjs"],
   ["size-chart-overlay", "size-chart-overlay.test.mjs"],
   ["static-allowlist", "static-allowlist.test.mjs"],
+  ["size-fit-pin", "size-fit-pin.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

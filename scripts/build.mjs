@@ -237,6 +237,19 @@ console.log(`\n🍐 PEAR build → ${rel(OUT)}${QA ? "   (QA: debug + mock kept)
 for (const [name, before, after] of report) {
   console.log(`   ${name.padEnd(44)} ${before ? kb(before) + " →" : "".padStart(13)} ${kb(after)}`);
 }
+/* The size charts and the fit are server-side (lib/sizing.js, POST /api/size, since
+   2026-09-26). A body-measurement band key in the room bundle means a chart - or a copy of
+   the fit - found its way back into the browser. Room bundle only: the widget legitimately
+   builds band rows when it scrapes a store's own chart. */
+{
+  const room = readFileSync(join(OUT, APP_ENTRY), "utf8");
+  const band = room.match(/\b(?:min|max)(?:Chest|Waist|Hips|Legs|Height|Weight)\b/);
+  if (band) {
+    violations++;
+    console.error(`✖ ${APP_ENTRY} carries a size-chart band key ("${band[0]}") - the charts live in lib/sizing.js`);
+  }
+}
+
 /* Reported, not enforced: the model id (see the FORBIDDEN note above). Anything else
    listed here in a production build is worth a look. */
 for (const abs of walk(OUT)) {

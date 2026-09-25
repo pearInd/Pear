@@ -41,6 +41,11 @@
 import { readFileSync } from "node:fs";
 
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The decoder, the overlay and the fit moved out of the browser on 2026-09-26 - they run
+   server-side from lib/sizing.js now. This suite imports that module for execution and
+   reads its source for the absence checks; app.js is still read for what stayed there
+   (the evidence it sends, the handoff, the widget listener). */
+const LIB = readFileSync(new URL("../lib/sizing.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const PW  = readFileSync(new URL("../widget/pear-widget.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 let fails = 0;
@@ -61,16 +66,10 @@ function extract(src, startMarker, endMarker) {
 const load = (code, exports) =>
   import("data:text/javascript," + encodeURIComponent(code + "\nexport {" + exports.join(",") + "};"));
 
-/* The sizing slice - the same span numeric-pants-sizing.test.mjs already extracts
-   (CLAUDE.md §2.6: these opening lines are an interface, not a coincidence). */
-const SIZING = extract(APP, "const ZARA_SIZE_CHART", "\nfunction onMeasurementKeydown");
 const {
   applyStoreChartOverlay, parseStoreSizeChart, parseSizeList, coreHwPenalty,
   STORE_CHART_CLAMPS, ZARA_SIZE_CHART, ADULT_PANTS_SIZE_CHART,
-} = await load(SIZING, [
-  "applyStoreChartOverlay", "parseStoreSizeChart", "parseSizeList", "coreHwPenalty",
-  "STORE_CHART_CLAMPS", "ZARA_SIZE_CHART", "ADULT_PANTS_SIZE_CHART",
-]);
+} = await import("../lib/sizing.js");
 
 const KERNEL_KEYS = ["minHeight", "maxHeight", "minWeight", "maxWeight"];
 const kernelOf = (chart) =>
@@ -131,7 +130,7 @@ console.log("\n── §1 height and weight are not writable ──");
      to the overlay later - the same discipline image-first.test.mjs uses on the prompt
      builders. If a future edit needs a height column, it has to delete this test first,
      which is exactly the conversation that should happen. */
-  const fn = extract(APP, "function applyStoreChartOverlay(baseChart, storeRows) {", "\n/**");
+  const fn = extract(LIB, "function applyStoreChartOverlay(baseChart, storeRows) {", "\n/**");
   check("§1.8 applyStoreChartOverlay()'s body never names a height or weight field",
     !/min(?:Height|Weight)|max(?:Height|Weight)/.test(fn),
     (fn.match(/(?:min|max)(?:Height|Weight)/g) || []).join(", "));
@@ -148,7 +147,7 @@ console.log("\n── §2 the overlay moves the size a real body resolves to ─
      the block below, lifted verbatim out of calculateSize().
      ⚠️ CLAUDE.md §2.6 - this start line is now an extract marker. */
   const fineTuneSrc = extract(
-    APP,
+    LIB,
     'const candidates = currentSizeCategory === "child" ? childFits : adultFits;',
     "// SNAP TO THE PRODUCT'S OWN LIST.");
   const fineTune = new Function(
@@ -185,19 +184,23 @@ console.log("\n── §2 the overlay moves the size a real body resolves to ─
 
   /* And the call site: the overlay has to sit between chart selection and the
      genuine-fit filter. Below the filter it would score rows the overlay never saw. */
-  const calcHead = extract(APP, "const useAdultPantsChart = isAdultNumericPantsGarment(",
+  const calcHead = extract(LIB, "const useNumericPantsChart = ev.chart",
     "const childFits =");
   const overlayIdx = calcHead.indexOf("applyStoreChartOverlay(");
   const filterIdx = calcHead.indexOf("const bodyAdultFits =");
-  check("§2.5 calculateSize() overlays the chart BEFORE the genuine-fit filter",
+  check("§2.5 computeSizeVerdict() overlays the chart BEFORE the genuine-fit filter",
     overlayIdx > 0 && filterIdx > overlayIdx, `overlay@${overlayIdx} filter@${filterIdx}`);
-  check("§2.6 ...and feeds it from resolvedStoreSizeChart(), not a literal",
-    /applyStoreChartOverlay\([\s\S]{0,200}resolvedStoreSizeChart\(\)\)/.test(calcHead));
+  check("§2.6 ...and feeds it from the evidence's store chart, not a literal",
+    /applyStoreChartOverlay\([\s\S]{0,200}parseStoreSizeChart\(ev\.storeChart\)\)/.test(calcHead));
+  check("§2.6b ...which calculateSize() fills from resolvedStoreSizeChart()",
+    /storeChart: resolvedStoreSizeChart\(\),/.test(extract(APP, "function calculateSize() {", "\nfunction applySizeVerdict(")));
   /* CHILD_SIZE_CHART carries no measurement columns and the fine-tune pass is skipped
      outright on the child path, so an overlay there would be a clause that cannot reach
      the wire - CLAUDE.md RULE 0's spirit, asserted as an absence. */
   check("§2.7 the child chart is deliberately NOT overlaid",
-    !/applyStoreChartOverlay\(\s*CHILD_SIZE_CHART/.test(APP));
+    !/applyStoreChartOverlay\(\s*CHILD_SIZE_CHART/.test(LIB) &&
+    /* ...and the browser runs no overlay at all (comments may still name it). */
+    !/applyStoreChartOverlay\(/.test(APP.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")));
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -351,8 +354,10 @@ console.log("\n── §4 encodeSizeChart (widget) <-> parseStoreSizeChart (room
      exist, in their own files, or the format has silently become one-way. */
   check("§4.14 the encoder lives in the widget and names its counterpart",
     /function encodeSizeChart\(/.test(PW) && /parseStoreSizeChart\(\) in/.test(PW));
-  check("§4.15 the decoder lives in the room and names its counterpart",
-    /function parseStoreSizeChart\(/.test(APP) && /encodeSizeChart\(\) in/.test(APP));
+  check("§4.15 the decoder lives server-side (lib/sizing.js) and names its counterpart",
+    /function parseStoreSizeChart\(/.test(LIB) && /encodeSizeChart\(\) in/.test(LIB));
+  check("§4.15b ...and the browser no longer carries a copy of it",
+    !/function parseStoreSizeChart\(/.test(APP));
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
