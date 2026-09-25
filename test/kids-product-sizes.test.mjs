@@ -46,19 +46,28 @@ function extract(src, startMarker, endMarker) {
   return src.slice(start, end);
 }
 
-/* The category logic, executed for real. The PRODUCT half (isKidsProduct,
-   isCompatibleSizeCategory, parseSizeList) is still the browser's - sliced from app.js's
-   Screen 1 region. The BODY half (userBodyCategory, over the real CHILD_SIZE_CHART /
-   ZARA_SIZE_CHART bands and coreHwPenalty) moved server-side on 2026-09-26 and is imported
-   from lib/sizing.js - the real charts rather than a stub, since the exact numbers are
-   what this bug turned on. */
+/* The category logic, executed for real - and since 2026-09-26 it lives server-side.
+   The BODY half (userBodyCategory, over the real CHILD_SIZE_CHART / ZARA_SIZE_CHART bands
+   and coreHwPenalty) moved to lib/sizing.js with the charts; the PRODUCT half
+   (isKidsProduct, isAdultProduct) followed it the same day. Both are imported from there
+   - the real rules and charts rather than stubs, since the exact numbers are what this
+   bug turned on. What stays in the browser is the COMBINATION (isCompatibleSizeCategory()
+   over the body category and the server's product verdict), so §3 drives it end to end:
+   app.js's own evidence builder -> JSON -> sanitiser -> the rules -> back into the gate. */
+const SIZING = await import("../lib/sizing.js");
+const requestSizeVerdict = (ev) =>
+  Promise.resolve(SIZING.computeSizeVerdict(SIZING.sanitizeSizeEvidence(JSON.parse(JSON.stringify(ev)))));
 const catCode = extract(APP, "const CHILD_SIZE_SCALE = [", "function calculateSize()");
-const cat = {
-  ...(await import("data:text/javascript," + encodeURIComponent(
-    catCode + "\nexport { isKidsProduct, isCompatibleSizeCategory, parseSizeList };"
-  ))),
-  userBodyCategory: (await import("../lib/sizing.js")).userBodyCategory,
-};
+/** app.js's isCompatibleSizeCategory() as the room evaluates it for a product carrying
+ *  `sizes` and the classifier's `ageGroup`, once the server's verdict on it has landed. */
+async function compat(bodyCategory, sizes, ageGroup) {
+  const room = new Function("activeItem", "pendingSizes", "pendingAgeGroup", "requestSizeVerdict", "$",
+    catCode + "\nreturn { isCompatibleSizeCategory, productVerdictNow, loadProductVerdict };")(
+    { sizes, ageGroup }, undefined, undefined, requestSizeVerdict, () => null);
+  await room.loadProductVerdict();
+  return room.isCompatibleSizeCategory(bodyCategory, room.productVerdictNow());
+}
+const cat = { isKidsProduct: SIZING.isKidsProduct, userBodyCategory: SIZING.userBodyCategory };
 
 console.log("── §1 isKidsProduct(): the REAL size list decides, not the image classifier ──");
 {
@@ -142,25 +151,24 @@ console.log("\n── §2 userBodyCategory(): the shopper's OWN scale, independe
 
 console.log("\n── §3 isCompatibleSizeCategory(): the end-to-end reported scenario ──");
 {
-  const { isCompatibleSizeCategory } = cat;
   const KIDS_TEE = ["8", "10", "12", "14", "16"];
   const ADULT_SML = ["S", "M", "L"];
 
   check("THE BUG, END TO END: adult body + kids-only product + 'uncertain' classifier\n" +
         "        is now INCOMPATIBLE (this returned true before the fix)",
-    isCompatibleSizeCategory("adult", KIDS_TEE, "uncertain") === false);
+    await compat("adult", KIDS_TEE, "uncertain") === false);
 
   check("a child body on the same product is fine",
-    isCompatibleSizeCategory("child", KIDS_TEE, "uncertain") === true);
+    await compat("child", KIDS_TEE, "uncertain") === true);
 
   check("an adult body on an adult product is fine",
-    isCompatibleSizeCategory("adult", ADULT_SML, "uncertain") === true);
+    await compat("adult", ADULT_SML, "uncertain") === true);
 
   check("an unresolved body category never blocks",
-    isCompatibleSizeCategory(null, KIDS_TEE, "uncertain") === true);
+    await compat(null, KIDS_TEE, "uncertain") === true);
 
   check("no size list + uncertain classifier still never blocks (unchanged)",
-    isCompatibleSizeCategory("adult", [], "uncertain") === true);
+    await compat("adult", [], "uncertain") === true);
 
   /* THE REVERSE-DIRECTION BUG: isKidsProduct() reads the real size list first and
      correctly zeroed adultFits for a kids product, but nothing mirrored that for an
@@ -171,20 +179,20 @@ console.log("\n── §3 isCompatibleSizeCategory(): the end-to-end reported sc
      of being blocked. Fixed by isAdultProduct(), a mirror of isKidsProduct(). */
   check("THE REVERSE BUG, END TO END: child body + adult-only product + 'uncertain'\n" +
         "        classifier is now INCOMPATIBLE (this returned true before the fix)",
-    isCompatibleSizeCategory("child", ADULT_SML, "uncertain") === false);
+    await compat("child", ADULT_SML, "uncertain") === false);
 
   check("...and still incompatible with NO classifier verdict at all (size list alone decides)",
-    isCompatibleSizeCategory("child", ADULT_SML, undefined) === false);
+    await compat("child", ADULT_SML, undefined) === false);
 
   check("...but a wrong 'kids' classifier verdict can't override a real adult size list\n" +
         "        (the deterministic signal wins in BOTH directions, not just the blocking one)",
-    isCompatibleSizeCategory("child", ADULT_SML, "kids") === false);
+    await compat("child", ADULT_SML, "kids") === false);
 
   check("an adult body on the same product remains fine",
-    isCompatibleSizeCategory("adult", ADULT_SML, "uncertain") === true);
+    await compat("adult", ADULT_SML, "uncertain") === true);
 
   check("no size list + uncertain classifier still never blocks a child body either (unchanged)",
-    isCompatibleSizeCategory("child", [], "uncertain") === true);
+    await compat("child", [], "uncertain") === true);
 }
 
 console.log("\n── §4 THE SIZE SELECTOR renders the HOST PRODUCT's real variants ──");

@@ -21,12 +21,12 @@
    and the chart-aware overflow guard together. */
 import { readFileSync } from "node:fs";
 
-/* THE FIT RUNS SERVER-SIDE since 2026-09-26 (lib/sizing.js behind POST /api/size). The
-   charts and coreHwPenalty() are imported from there; the product-side helpers are still
-   the browser's and are sliced from app.js as before. calculateSize() asks for the fit
-   through requestSizeVerdict(), defined just outside the Screen 1 slice - every harness
-   below injects this stand-in, which runs the REAL module in-process through the same
-   sanitiser and a JSON round trip. calculateSize() returns a Promise now; calls await it. */
+/* THE FIT RUNS SERVER-SIDE since 2026-09-26 (lib/sizing.js behind POST /api/size), and
+   so do the product rules that pick its chart (isAdultPantsProduct(), isWaistInchSizeRun(),
+   isAdultNumericPantsGarment()…) - both are imported from there. calculateSize() asks for
+   the fit through requestSizeVerdict(), defined just outside the Screen 1 slice - every
+   harness below injects this stand-in, which runs the REAL module in-process through the
+   same sanitiser and a JSON round trip. calculateSize() returns a Promise now; calls await it. */
 const SIZING_LIB = await import("../lib/sizing.js");
 const requestSizeVerdict = (evidence) =>
   Promise.resolve(SIZING_LIB.computeSizeVerdict(SIZING_LIB.sanitizeSizeEvidence(JSON.parse(JSON.stringify(evidence)))));
@@ -50,11 +50,7 @@ function extract(src, startMarker, endMarker) {
 
 console.log("── §1 ADULT_PANTS_SIZE_CHART / isAdultPantsProduct(): the chart and its own confidence rule ──");
 {
-  const catCode = extract(APP, "const CHILD_SIZE_SCALE = [", "function calculateSize()");
-  const cat = await import("data:text/javascript," + encodeURIComponent(
-    catCode + "\nexport { isAdultPantsProduct, isWaistInchSizeRun, isAdultProduct, isKidsProduct };"
-  ));
-  const { isAdultPantsProduct, isWaistInchSizeRun, isAdultProduct, isKidsProduct } = cat;
+  const { isAdultPantsProduct, isWaistInchSizeRun, isAdultProduct, isKidsProduct } = SIZING_LIB;
   const { ADULT_PANTS_SIZE_CHART, coreHwPenalty } = SIZING_LIB;
 
   check("the chart carries the EU ladder 36-46, one row per even size",
@@ -139,41 +135,31 @@ console.log("── §1 ADULT_PANTS_SIZE_CHART / isAdultPantsProduct(): the char
 
 console.log("\n── §2 isAdultNumericPantsGarment(): sizing evidence, narrowed by a known item ──");
 {
-  // Wide slice (from the chart definitions, not just resolvedGarmentAgeGroup()) so
-  // WAIST_RUN_FLOOR/WAIST_RUN_CEIL - the plausibility window isAdultPantsProduct()
-  // reuses from categoryFromSizeRun(), see that function's own comment - are actually
-  // in scope for isAdultPantsProduct() below.
-  const code = extract(APP, "const CHILD_SIZE_SCALE = [", "function calculateSize()");
-  // isBottomsGarment lives much later in app.js (the garment-category-detection
-  // region) and is genuinely out of scope for this narrower slice - the real
-  // function guards its call with `typeof isBottomsGarment === "function"` for
-  // exactly this reason (see the comment above it). Injecting it here as an
-  // ordinary parameter gives the extracted code a real binding to call, the same
-  // way `$`/`t` are injected elsewhere in this suite - it does not change app.js.
-  function harness(isBottomsGarment) {
-    const fn = new Function("isBottomsGarment", code + "\nreturn { isAdultNumericPantsGarment };");
-    return fn(isBottomsGarment);
-  }
+  /* The REAL rule, server-side since 2026-09-26. isBottomsGarment() - the garment-region
+     classifier the browser shares with the prompt pipeline - stayed in app.js, so its
+     verdict now travels as item.bottoms: true, false, or null when the browser had none.
+     null keeps the old "typeof isBottomsGarment" guard's meaning - no verdict, no veto. */
+  const { isAdultNumericPantsGarment } = SIZING_LIB;
 
-  const noItemKnown = harness(undefined);
   check("Screen 1, no item known yet (the common case - see resolvedGarmentSizes()'s\n" +
         "        two-stage comment): sizing evidence alone decides",
-    noItemKnown.isAdultNumericPantsGarment(["36", "38", "40"], null) === true);
+    isAdultNumericPantsGarment(["36", "38", "40"], null) === true);
   check("...and a non-pants size list alone decides false, with no item either",
-    noItemKnown.isAdultNumericPantsGarment(["S", "M", "L"], null) === false);
+    isAdultNumericPantsGarment(["S", "M", "L"], null) === false);
 
-  const bottomsTrue = harness(() => true);
   check("a known BOTTOMS item does not override a genuine pants-numeric list",
-    bottomsTrue.isAdultNumericPantsGarment(["36", "38", "40"], { type: "pants" }) === true);
+    isAdultNumericPantsGarment(["36", "38", "40"], { type: "pants", bottoms: true }) === true);
 
-  const bottomsFalse = harness(() => false);
   check("THE NARROWING CASE: a numeric list that reads as pants-numeric, but the item\n" +
         "        is CONFIDENTLY NOT bottoms (e.g. an EU-numbered top run - see\n" +
         "        categoryFromSizeRun()'s own note that an EU run is genuinely ambiguous\n" +
         "        with tops) - the known category wins, ZARA_SIZE_CHART stays in play",
-    bottomsFalse.isAdultNumericPantsGarment(["36", "38", "40"], { type: "shirt" }) === false);
+    isAdultNumericPantsGarment(["36", "38", "40"], { type: "shirt", bottoms: false }) === false);
   check("...and a non-pants list with a known non-bottoms item is still false",
-    bottomsFalse.isAdultNumericPantsGarment(["S", "M", "L"], { type: "shirt" }) === false);
+    isAdultNumericPantsGarment(["S", "M", "L"], { type: "shirt", bottoms: false }) === false);
+  check("an item the browser had NO bottoms verdict for (null) vetoes nothing - the old\n" +
+        "        missing-classifier behaviour, not a silent 'false'",
+    isAdultNumericPantsGarment(["36", "38", "40"], { type: "shirt", bottoms: null }) === true);
 }
 
 console.log("\n── §3 calculateSize() END TO END: chart selection, numeric display, overflow ──");
@@ -214,8 +200,7 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
       // currentUserGender lives with the rest of the top-of-file state (declared
       // well before "const CHILD_SIZE_SCALE = [", this slice's start marker), same
       // reason currentUserSize/currentSizeCategory/currentBodyCategory are shadowed
-      // here rather than read off app.js's own declaration - see ADULT_PANTS_NUMERIC_SIZES's
-      // own comment in app.js for the general "some harnesses extract a narrower slice" rule.
+      // here rather than read off app.js's own declaration (CLAUDE.md §2.6/§2.7).
       "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null, currentUserGender = null;\n" +
       code +
       "\nreturn { calculateSize, isCompatibleSizeCategory, getUserSize: () => currentUserSize, " +
@@ -376,22 +361,27 @@ console.log("\n── §4 activeSizeLadder() / getSizeDelta(): THE 26-40 REPORT'
      size-up/down as "true to size". activeSizeLadder() is the fix: SIZE_SCALE for a
      letter product, the product's own ascending numeric list for an adult-pants one.
      Extracted narrowly with its real dependencies (resolvedGarmentSizes,
-     isAdultNumericPantsGarment, SIZE_SCALE, activeItem) INJECTED as parameters, same
-     technique §2 above uses for isBottomsGarment - this is the real function body,
-     not a re-implementation. */
+     productVerdictNow, SIZE_SCALE, activeItem) INJECTED as parameters - this is the real
+     function body, not a re-implementation. Since 2026-09-26 the "is this product's own
+     list a numeric pants ladder" answer is lib/sizing.js's (adultNumericPants on the
+     product verdict), read through productVerdictNow(); the stand-in below answers it
+     with a deliberately WIDE rule so the ladder mechanics are exercised on a 26-40 run. */
   const code = extract(APP, "function activeSizeLadder() {", "/* getFitModifier(), FABRIC_PHYSICS");
-  function harness({ sizes, currentSizeCategory = "adult", currentUserSize = null, activeTryOnSize = null } = {}) {
-    const isAdultNumericPantsGarment = (list) => {
+  function harness({ sizes, currentSizeCategory = "adult", currentUserSize = null, activeTryOnSize = null,
+                     verdictUnknown = false } = {}) {
+    const wideNumeric = (list) => {
       const l = (Array.isArray(list) ? list : []).map((s) => String(s).trim().toUpperCase());
       return l.length > 0 && l.every((s) => /^\d{1,2}$/.test(s) && Number(s) >= 24 && Number(s) <= 48);
     };
+    const productVerdictNow = verdictUnknown ? () => null
+      : () => ({ adultNumericPants: wideNumeric(sizes ?? []) });
     const fn = new Function(
-      "resolvedGarmentSizes", "isAdultNumericPantsGarment", "SIZE_SCALE", "activeItem",
+      "resolvedGarmentSizes", "productVerdictNow", "SIZE_SCALE", "activeItem",
       "currentSizeCategory", "currentUserSize", "activeTryOnSize",
       code + "\nreturn { activeSizeLadder, getSizeDelta };"
     );
     return fn(
-      () => sizes ?? [], isAdultNumericPantsGarment, ["XS", "S", "M", "L", "XL", "XXL", "3XL"], null,
+      () => sizes ?? [], productVerdictNow, ["XS", "S", "M", "L", "XL", "XXL", "3XL"], null,
       currentSizeCategory, currentUserSize, activeTryOnSize
     );
   }
@@ -425,6 +415,12 @@ console.log("\n── §4 activeSizeLadder() / getSizeDelta(): THE 26-40 REPORT'
   const missingApi = harness({ sizes: ["36", "38", "40"], currentUserSize: null, activeTryOnSize: "38" });
   check("no currentUserSize yet -> 0, not a throw",
     missingApi.getSizeDelta() === 0);
+
+  const unknownApi = harness({ sizes: ["36", "38", "40"], verdictUnknown: true, currentUserSize: "36", activeTryOnSize: "40" });
+  check("while the server's product verdict is still in flight, the ladder is SIZE_SCALE -\n" +
+        "        the letter answer, never a guess (and the delta abstains to 0, not a throw)",
+    JSON.stringify(unknownApi.activeSizeLadder()) === JSON.stringify(["XS", "S", "M", "L", "XL", "XXL", "3XL"]) &&
+    unknownApi.getSizeDelta() === 0);
 }
 
 console.log("\n── §5 setSizeOverride()'s onLadder check reads the same ladder ──");

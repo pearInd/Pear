@@ -641,7 +641,7 @@ let pendingTitle = undefined;                // string | undefined (none arrived
 
    THE BUG THIS CLOSES: sweatpants sold S/M/L matched isPantsProduct() on the TITLE
    tier ("sweatpants" names a bottoms garment) with no numeric evidence of its own,
-   and pantsChartForSizes()'s "no confidently-numeric run" default landed on
+   and pantsChartKindForSizes()'s "no confidently-numeric run" default landed on
    ADULT_JEANS_WAIST_CHART - the waist-inch ladder meant for 28/30/32 jeans whose
    picker scrapes to nothing. A shopper was quoted a bare waist-inch number ("32")
    for a product whose own picker only ever offers S/M/L. */
@@ -1243,11 +1243,13 @@ const sessionElapsedMs = () => (billingStartedAt ? Date.now() - billingStartedAt
    and the adult/child/overflow/fine-tune logic. Read that file's header before editing
    any of it.
 
-   What stays HERE is the product side: which chart a garment belongs on (kids-only,
-   lower-body, EU-numbered…), the size LADDERS the override selector and the stock
-   fallbacks walk (labels only - no bands), stock, labels and every DOM effect.
-   calculateSize() gathers that evidence, asks the server, and applySizeVerdict() paints
-   the answer exactly as the old in-browser function did.
+   The PRODUCT rules followed the same day: which chart a garment belongs on - kids-only,
+   adult-only, lower-body, EU- or waist-numbered - is decided there too (productVerdict()),
+   from raw evidence this region gathers (sizeProductEvidence()). What stays HERE is the
+   size LADDERS the override selector and the stock fallbacks walk (labels only - no
+   bands), stock, labels and every DOM effect. calculateSize() gathers the evidence, asks
+   the server, and applySizeVerdict() paints the answer exactly as the old in-browser
+   function did.
 
    The three literal size lists below mirror the sizes of lib/sizing.js's charts;
    numeric-pants-sizing asserts they match, since a ladder that drifted from its chart
@@ -1257,14 +1259,8 @@ const CHILD_SIZE_SCALE = ["8", "10", "12", "14", "16", "18"];
 /* Ordered size scale - full range used by the override selector and delta math. */
 const SIZE_SCALE = ["XS", "S", "M", "L", "XL", "XXL", "3XL"];
 
-/* The EU adult pants ladder - the sizes of lib/sizing.js's ADULT_PANTS_SIZE_CHART.
-   Defined HERE, immediately beside its chart, rather than beside isAdultPantsProduct()
-   below (which is where it's actually used) - some test harnesses extract a narrower
-   slice of this file that starts AFTER this point but still before that function, and an
-   eager `.map()` over a chart those harnesses never included would throw ReferenceError
-   at import time. isAdultPantsProduct() itself is a plain function body (deferred, not
-   eagerly evaluated), so it can safely read this from a slice that doesn't include the
-   chart, as long as the Set itself was already built here. */
+/* The EU adult pants ladder - the sizes of lib/sizing.js's ADULT_PANTS_SIZE_CHART, in
+   chart order. pantsLadderFor("eu") walks it. */
 const ADULT_PANTS_NUMERIC_SIZES = new Set(["36", "38", "40", "42", "44", "46"]);
 /* ── APOSTROPHE NORMALISATION - one Hebrew word, four codepoints ─────────────────
    THE BUG THIS CLOSES: a jeans product titled "ג'ינס סקיני" was fitted against the
@@ -1284,9 +1280,10 @@ const ADULT_PANTS_NUMERIC_SIZES = new Set(["36", "38", "40", "42", "44", "46"]);
    U+05F4 / U+201C-D (the double geresh/gershayim, as in דגמ"ח) are folded too, for
    exactly the same reason and by the same editors.
 
-   Kept in lockstep with normApos() in widget/pear-widget.js - see CLAUDE.md §3.
-   Whichever copy is wrong is the one that wins, because the widget's category
-   verdict is explicit and therefore outranks this file's own classifier.
+   Kept in lockstep with normApos() in widget/pear-widget.js and _normApos() in
+   lib/sizing.js (the pants title rules) - see CLAUDE.md §3. Whichever copy is wrong is
+   the one that wins, because the widget's category verdict is explicit and therefore
+   outranks this file's own classifier.
  * @param {unknown} s
  * @returns {string} the same text with every apostrophe/quote variant folded to
  *   ASCII ' and ", lower-cased. Never throws; non-strings become "".
@@ -1310,6 +1307,12 @@ const ADULT_JEANS_WAIST_SIZES = new Set(["28", "30", "31", "32", "33", "34", "36
    PREVIOUS garment's chart. */
 let currentSizeIsNumericPants = false;
 
+/* WHICH numeric pants chart the last size verdict used - "eu" or "waist" while
+   currentSizeIsNumericPants is true, null otherwise, and reset alongside it. Read only by
+   pantsLadderFor(), so a numeric-pants product that listed no sizes of its own is offered
+   the ladder of the chart that actually produced currentUserSize. */
+let currentPantsChart = null;
+
 /* True while the recommended size should be shown with its FOX WOMEN'S TOPS EU
    dress-size token (WOMEN_TOPS_EU_SIZE_CHART) alongside the letter - "M (EU 38)"
    rather than plain "M". Read only by formatSizeLabel(), same convention as
@@ -1332,7 +1335,8 @@ let currentSizeIsNumericPants = false;
    chart": a letter-sized sweatpants pair alpha-vetoed onto ZARA_SIZE_CHART for FIT still
    answers true here, so it is never decorated with a TOPS EU token that would collide
    with ADULT_PANTS_SIZE_CHART's own, differently-scaled EU numbers - see
-   calculateSize()'s own comment on isConfidentlyPants), and the body landed on the ADULT
+   productVerdict()'s comment on isConfidentlyPants in lib/sizing.js), and the body landed
+   on the ADULT
    chart (currentSizeCategory === "adult" - WOMEN_TOPS_EU_SIZE_CHART has no child rows,
    same reason the kids suffix below is also adult-only). */
 let currentSizeIsWomensTops = false;
@@ -1354,7 +1358,7 @@ let currentEuTokens = null;
    (an older cached correction from before this feature existed).
 
    ⚠️ This is the WEAKER of the two category signals and is consulted only as a
-   fallback - see isKidsProduct() below for why the product's own size list outranks
+   fallback - see isKidsProduct() in lib/sizing.js for why the product's own size list outranks
    it, and what shipped to production when it didn't.
  * @returns {"kids"|"adult"|"uncertain"}
  */
@@ -1363,35 +1367,12 @@ function resolvedGarmentAgeGroup() {
   return (ag === "kids" || ag === "adult") ? ag : "uncertain";
 }
 
-/* KIDS/ADULT SIZE-CATEGORY GUARD.
-
-   ── WHY THIS READS THE PRODUCT'S REAL SIZE LIST, AND NOT JUST THE CLASSIFIER ──────
-   The first version of this guard keyed entirely on resolvedGarmentAgeGroup() - the
-   per-product kids/adult verdict from Gemini's image classification - and it FAILED IN
-   PRODUCTION on a FOX Spiderman tee sold only in kids 8/10/12/14/16: an adult
-   180cm/80kg profile sailed straight into the fitting room, with an adult XS-3XL size
-   selector rendered over a product that has no adult size at all.
-
-   That failure was not a coding slip, it was the wrong source of truth. server.js's own
-   classifier prompt INSTRUCTS the model to abstain on exactly this kind of item:
-     · "Flat-lay / packshot with NO model and NO visible size label ... answer
-        'uncertain' - do not guess from styling alone."
-     · "Do NOT infer age group from color, PRINT STYLE, or price positioning alone"
-     · "below 0.7 you must answer 'uncertain'"
-   A character-print packshot hits all three, so "uncertain" is the CORRECT answer from
-   that model - and "uncertain" can never block. Meanwhile the storefront was displaying
-   8/10/12/14/16 the entire time: deterministic ground truth, sitting unread.
-
-   So the ordering below is deliberate and load-bearing: when the host page gives us a
-   real size list, THAT decides, in both directions (it can also clear a wrong "kids"
-   verdict). The classifier is consulted only when no size list reached us at all - a
-   probabilistic signal designed to abstain must never outrank a deterministic one. */
-
-/* The kids numeric ladder, per the retail convention this codebase already encodes in
-   CHILD_SIZE_CHART (which runs 8-18; 2-6 are included here because a product can list
-   them even though we don't size-match against those rows). Adult numeric systems -
-   waist/chest 28-44 - deliberately fall OUTSIDE this set, so "32" never reads as kids. */
-const KIDS_NUMERIC_SIZES = new Set(["2", "4", "6", "8", "10", "12", "14", "16", "18"]);
+/* KIDS/ADULT SIZE-CATEGORY GUARD - the rules (isKidsProduct(), isAdultProduct(),
+   KIDS_NUMERIC_SIZES) live in lib/sizing.js since 2026-09-26, with the FOX kids-tee
+   production failure that ordered them: the product's own size list outranks the
+   classifier's age group, in both directions. This region forwards both as evidence
+   (sizeProductEvidence()) and reads back kidsOnly / adultOnly - see
+   isCompatibleSizeCategory() below. */
 /* Adult letter scales, incl. the 2XL/3XL spellings storefronts use interchangeably
    with XXL/XXXL. Presence of ANY of these is proof the product is not kids-only. */
 const ADULT_ALPHA_SIZES = new Set([
@@ -1414,23 +1395,6 @@ function parseSizeList(raw) {
    height/weight kernel). The browser forwards the raw string the widget encoded
    (resolvedStoreSizeChart() below) and never parses it. */
 
-/**
- * @param {string[]|string|null} sizes - the host product's OWN size list, when known
- * @param {"kids"|"adult"|"uncertain"|undefined} garmentAgeGroup - classifier fallback only
- * @returns {boolean} true only when the product is CONFIDENTLY kids-only.
- */
-function isKidsProduct(sizes, garmentAgeGroup) {
-  const list = parseSizeList(sizes);
-  if (list.length) {
-    // Any adult letter size present -> the product serves adults, whatever else it lists.
-    if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
-    // Otherwise: kids only if EVERY token is a kids numeric. A mixed or unrecognised
-    // list (an adult 28-44 waist run, a one-size product, a store's own odd labels)
-    // is NOT confidently kids - and an unconfident verdict must never block a sale.
-    return list.every((s) => KIDS_NUMERIC_SIZES.has(s));
-  }
-  return garmentAgeGroup === "kids";
-}
 
 /* ── THE SIZE RUN AS EVIDENCE - "STRAIGHT BASIC" and "LOOSE" ─────────────────────
    REPORTED: long trousers ran through the tops pipeline while the size selector
@@ -1442,8 +1406,8 @@ function isKidsProduct(sizes, garmentAgeGroup) {
 
    But the shopper was looking at the right answer the whole time. A size run of 26-38 is
    a WAIST measurement - it is the product telling us its own region, in the one field
-   that was never ambiguous. This file already reasons about exactly this vocabulary one
-   screen up, where KIDS_NUMERIC_SIZES documents that "adult numeric systems - waist/chest
+   that was never ambiguous. The size rules reason about exactly this vocabulary in
+   lib/sizing.js, where KIDS_NUMERIC_SIZES documents that "adult numeric systems - waist/chest
    28-44 - deliberately fall OUTSIDE this set".
 
    IT ABSTAINS UNLESS THE RUN IS UNAMBIGUOUSLY A WAIST, which is what makes it safe to
@@ -1468,222 +1432,14 @@ function categoryFromSizeRun(sizes) {
   return Math.min(...nums) <= WAIST_RUN_OPENS_BY ? "bottom" : null;
 }
 
-/**
- * Mirror of isKidsProduct - true only when the product is CONFIDENTLY adult.
- * Needed because the childFits guard was zeroing only on garmentAgeGroup ===
- * "adult" (the classifier verdict), never on the real size list - so an adult
- * product with a real S/M/L list but an "uncertain" classifier read (common:
- * the classifier is instructed to abstain on packshots with no model) let a
- * child-bodied shopper through to a genuine CHILD_SIZE_CHART match instead of
- * being blocked, same class of bug isKidsProduct itself was written to fix.
- * @param {string[]|string|null} sizes
- * @param {"kids"|"adult"|"uncertain"|undefined} garmentAgeGroup
- * @returns {boolean}
- */
-function isAdultProduct(sizes, garmentAgeGroup) {
-  const list = parseSizeList(sizes);
-  if (list.length) {
-    if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return true;
-    // Not every token kids-numeric -> an adult numeric run (e.g. 28-44 waist)
-    // or unrecognised labels, treated as adult, mirroring isKidsProduct's
-    // "not confidently kids" default for a deterministic size list.
-    return !list.every((s) => KIDS_NUMERIC_SIZES.has(s));
-  }
-  return garmentAgeGroup === "adult";
-}
 
-/**
- * Whether the product's OWN size list is confidently the EU pants ladder
- * (ADULT_PANTS_SIZE_CHART's own six values: 36/38/40/42/44/46) - same "every token or
- * abstain" confidence rule isKidsProduct()/isAdultProduct() use for their own charts.
- * A letter scale, a kids numeric run, anything outside those six values, or no list at
- * all is NOT confidently EU-numeric, and defers to pantsChartForSizes()'s waist-inch
- * branch (or ZARA_SIZE_CHART, if the run isn't pants-numeric at all) - never a guess,
- * matching this file's "an unconfident verdict must not outrank" rule (CLAUDE.md §2.5).
- *
- * NARROWED BACK TO EXACT EU MEMBERSHIP - it was briefly widened to accept ANY plausible
- * all-numeric adult-bottoms run (24-48), which is what "THE 26-40 REPORT" below used to
- * describe. That widening shipped its own real bug once ADULT_JEANS_WAIST_CHART
- * (pantsChartForSizes()'s other branch) existed: a genuine US/UK waist-inch run like
- * 28-36 also sits inside 24-48, so the widened check claimed it for the EU chart too -
- * and pantsChartForSizes()'s own EU-first precedence then handed a real FOX waist-inch
- * product a chest-banded EU size (a 185cm/82kg shopper got EU "36" off a snap-to-list
- * guess instead of the FOX chart's genuine "32"). isWaistInchSizeRun() below already
- * covers the SAME 24-48 window this function used to - narrowing this one back to exact
- * EU membership is what lets pantsChartForSizes()'s "EU claims its own run, waist-inch
- * takes everything else" precedence actually mean something. THE 26-40 REPORT ITSELF
- * STAYS FIXED: that run no longer falls back to letters, it now resolves through
- * isWaistInchSizeRun() to the waist-inch chart instead of being force-fit to EU - see
- * test/numeric-pants-sizing.test.mjs for the current, chart-precise coverage of that
- * exact scenario.
- * @param {string[]|string|null} sizes
- * @returns {boolean}
- */
-function isAdultPantsProduct(sizes) {
-  const list = parseSizeList(sizes);
-  if (!list.length) return false;
-  // A letter size proves the product ships in the alpha scale - never treat it as
-  // numeric-pants no matter what else the list contains (same precedent
-  // isKidsProduct()/isAdultProduct() use for ADULT_ALPHA_SIZES).
-  if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
-  return list.every((s) => ADULT_PANTS_NUMERIC_SIZES.has(s));
-}
-
-/**
- * THE VETO that stops a letter-sized garment being pulled onto a numeric pants
- * chart - the counterpart to isAdultPantsProduct()/isWaistInchSizeRun() above, which
- * establish POSITIVE numeric evidence. This establishes positive ALPHA evidence, and
- * outranks it: isPantsProduct() correctly calls a pair of sweatpants sold S/M/L a
- * lower-body garment from its TITLE alone (no numeric evidence needed), and without
- * this veto that verdict fed straight into pantsChartForSizes()'s "no confidently-
- * numeric run" default - ADULT_JEANS_WAIST_CHART, the ladder written for 28/30/32
- * jeans whose picker scrapes to nothing. A sports-pants shopper was quoted a bare
- * waist-inch number for a product whose picker only ever offers S/M/L.
- *
- * TWO TIERS, SAME "every token or abstain" confidence rule as isAdultPantsProduct():
- *   1. the product's OWN size run   free, synchronous, THIS visit's own scrape -
- *                                    checked first because live evidence always
- *                                    outranks a remembered one.
- *   2. the cached size-run-type     a PREVIOUS visit's scrape of the SAME product,
- *                                    consulted only when this visit's list is empty
- *                                    (a JS-rendered picker that hasn't hydrated yet) -
- *                                    see pendingSizeRunType's own comment for the
- *                                    full round trip.
- *
- * NEVER GUESSES: an empty/mixed size list with no cached hint returns false, which
- * simply leaves the existing numeric-chart default in place for products this can't
- * yet speak to (CLAUDE.md §2.5).
- * @param {string[]|string|null} sizes - the host product's OWN size list, THIS visit
- * @param {"numeric"|"alpha"|"unknown"|undefined} sizeRunType - cached fallback
- * @returns {boolean}
- */
-function isAlphaSizeRun(sizes, sizeRunType) {
-  const list = parseSizeList(sizes);
-  if (list.length) return list.every((s) => ADULT_ALPHA_SIZES.has(s));
-  return sizeRunType === "alpha";
-}
-
-/**
- * The chart-selection gate calculateSize() reads: true only when the product is
- * confidently adult-pants-numeric AND (whenever a real item is already known) it is
- * confidently a bottoms garment. The `item` check only ever narrows a numeric match
- * that turns out to belong to a known non-bottoms item (e.g. an EU-numbered top run -
- * see categoryFromSizeRun()'s own note that an EU run opening at 34/36 is genuinely
- * ambiguous with tops) - it can never widen a list that isn't pants-numeric in the
- * first place. `item` is usually unavailable here (calculateSize() runs on Screen 1,
- * before activeItem exists - see resolvedGarmentSizes()'s comment), so the sizing
- * evidence alone decides in the common case, exactly like isKidsProduct()/
- * isAdultProduct() already do with no item at all.
- * @param {string[]|string|null} sizes
- * @param {object|null|undefined} item - activeItem, when it already exists
- * @returns {boolean}
- */
-function isAdultNumericPantsGarment(sizes, item) {
-  if (!isAdultPantsProduct(sizes)) return false;
-  if (item && typeof isBottomsGarment === "function" && !isBottomsGarment(item)) return false;
-  return true;
-}
-/* ── TIER 1 of isPantsProduct(): the size run as a WAIST measurement ─────────────
-   A run of plain integers in 24-48 is a waist in inches. Nothing else in apparel is
-   numbered that way: a kids run is 2-18, a shirt NECK run is 14-18, and both fall
-   below the floor; a shoe run and an EU dress run overshoot or carry letters.
-
-   SEPARATE FROM categoryFromSizeRun() ABOVE, DELIBERATELY, and they are not
-   interchangeable. That one answers "can this run PROVE a bottom?" for the prompt
-   pipeline and therefore also demands the run OPEN at 32 or lower, because an EU
-   women's top run opening at 34/36 is genuinely ambiguous with tops. This one
-   answers the narrower question "which adult CHART does this run belong to?", and
-   it is reached only after the EU ladder has already claimed its own runs
-   (pantsChartForSizes below), so the ambiguous 34/36-opening case has been taken
-   off the table before this ever sees it. Folding the two together would either
-   re-open that ambiguity or reject legitimate large-waist runs (34/36/38).
-
-   ABSTAINS RATHER THAN GUESSES, on the same "every token or nothing" rule
-   isKidsProduct()/isAdultPantsProduct() use: any adult letter, any non-integer
-   token (one-size, "36R", a store's own labels) or any token outside the ladder
-   and the whole run yields nothing, which simply leaves the letter chart in place.
-   @param {string[]|string|null|undefined} sizes
-   @returns {boolean} */
-const WAIST_INCH_FLOOR = 24, WAIST_INCH_CEIL = 48;
-function isWaistInchSizeRun(sizes) {
-  const list = parseSizeList(sizes);
-  if (!list.length) return false;
-  if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
-  if (!list.every((s) => /^\d{1,2}$/.test(s))) return false;
-  return list.every((s) => {
-    const n = Number(s);
-    return n >= WAIST_INCH_FLOOR && n <= WAIST_INCH_CEIL;
-  });
-}
-
-/* ── TIER 2 vocabulary: the garment noun, in both languages ──────────────────────
-   Kept in step with GARMENT_CATEGORY_KEYWORDS.bottom and BOTTOMS_TOKENS further down
-   this file - three separate mechanisms over one vocabulary, which is the convention
-   this file already records for the other two ("a word added to only one of them is a
-   miss on whichever path the item happens to take").
-
-   IT IS A SEPARATE COPY ON PURPOSE, not an oversight. GARMENT_CATEGORY_KEYWORDS lives
-   in the garment-category region ~700 lines below, and several test harnesses execute
-   THIS region as a standalone slice that stops before it (see CLAUDE.md §2.6/§2.7).
-   A reference across that boundary is a ReferenceError at import time, not a lint nit.
-
-   Hebrew entries are STEMS (Hebrew inflects by suffix - מכנס covers מכנסי/מכנסיים);
-   English entries are word-bounded, because English compounds the other way and a
-   stem match on "short" swallows "short sleeve" and turns every tee into shorts.
-
-   ALREADY APOSTROPHE-NORMALISED: every entry here is matched only against _normApos()
-   output, so each Hebrew word carries ONE spelling of its geresh (ASCII U+0027) and
-   the U+05F3/U+2018/U+2019 variants fold onto it at the door. */
-const PANTS_TITLE_STEMS_HE = [
-  "מכנס", "ג'ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "טייצ", "לגינ", "סווטפנט",
-];
-const PANTS_TITLE_WORDS_EN = [
-  "pants", "pant", "jeans", "jean", "denim", "trouser", "trousers", "shorts", "skirt", "skirts",
-  "leggings", "chino", "chinos", "jogger", "joggers", "sweatpant", "sweatpants", "slacks",
-  "culottes", "bermuda", "bermudas", "capri", "capris", "palazzo", "bottoms",
-];
-/* "ג'ינס"/"denim" name a lower-body garment AND a material, so "ז'קט ג'ינס" (a denim
-   JACKET) matches the pants list on the fabric alone - and a denim jacket fitted on a
-   waist ladder is not a near miss, it is the wrong chart entirely. Mirrors
-   FABRIC_AMBIGUOUS / classifyGarmentTitle()'s strip-and-rescan pass below. */
-const PANTS_FABRIC_WORDS = ["ג'ינס", "jeans", "jean", "denim"];
-const PANTS_TOP_STEMS_HE = [
-  "חולצ", "טישרט", "טי-שירט", "סווטשירט", "סוודר", "גופי", "ז'קט", "מעיל", "קפוצ'ון",
-  "בלייזר", "קרדיגן", "טופ", "שמלה",
-];
-const PANTS_TOP_WORDS_EN = [
-  "shirt", "tshirt", "t-shirt", "tee", "top", "tops", "hoodie", "jacket", "blazer", "sweater",
-  "sweatshirt", "cardigan", "blouse", "polo", "tank", "pullover", "coat", "dress",
-];
-const _stemHit = (text, stems) => stems.some((s) => text.includes(s));
-/* Word-boundary match, mirroring hasEnglishWord() in the garment-category region (see
-   PANTS_TITLE_STEMS_HE on why that is a separate copy rather than a shared reference).
-   String.raw so the two backslashes of a \\b are unmistakable in review - this pair
-   has been silently collapsed to a backspace escape by a shell heredoc once already, and
-   /\bjeans\b/ quietly becoming /\u0008jeans\u0008/ matches NOTHING while still compiling. */
-const _RE_WORD_BOUND = String.raw`\b`;
-const _wordHit = (text, words) =>
-  words.some((w) => new RegExp(_RE_WORD_BOUND + w + _RE_WORD_BOUND, "i").test(text));
-
-/* TIER 2 proper. True only when the title names a lower-body garment AND that evidence
-   survives the fabric strip.
-   @param {string|null|undefined} title
-   @returns {boolean} */
-function titleNamesPants(title) {
-  const text = _normApos(title);
-  if (!text.trim()) return false;
-  const bottom = _stemHit(text, PANTS_TITLE_STEMS_HE) || _wordHit(text, PANTS_TITLE_WORDS_EN);
-  if (!bottom) return false;
-  const top = _stemHit(text, PANTS_TOP_STEMS_HE) || _wordHit(text, PANTS_TOP_WORDS_EN);
-  if (!top) return true;
-  /* Both sides matched. Strip the fabric words and re-test: if the lower-body evidence
-     was ONLY the fabric ("ז'קט ג'ינס" → "ז'קט "), the top noun stands alone and this is
-     NOT pants. If real lower-body evidence survives ("מכנס ג'ינס" → "מכנס "), it is. */
-  const stripped = PANTS_FABRIC_WORDS.reduce((s, w) => s.split(w).join(" "), text);
-  const reBottom = _stemHit(stripped, PANTS_TITLE_STEMS_HE) || _wordHit(stripped, PANTS_TITLE_WORDS_EN);
-  const reTop = _stemHit(stripped, PANTS_TOP_STEMS_HE) || _wordHit(stripped, PANTS_TOP_WORDS_EN);
-  return reBottom && !reTop;
-}
+/* THE PANTS RULES - which chart a lower-body garment is fitted against - live in
+   lib/sizing.js since 2026-09-26 (POST /api/size; CLAUDE.md §2.12): isPantsProduct() and
+   its four tiers, isWaistInchSizeRun(), isAdultPantsProduct(), isAlphaSizeRun()'s veto,
+   isAdultNumericPantsGarment(), titleNamesPants() with its Hebrew/English word lists, and
+   pantsChartKindForSizes()'s EU-before-waist precedence - each with the report that shaped
+   it. This region gathers the evidence they read (sizeProductEvidence() below) and
+   receives the chart KIND with the size verdict (currentPantsChart). */
 
 /* The Gemini Vision verdict cached in garment_cache.garment_category (see
    archive/supabase_setup_v13.sql and GET /api/garment-category in server.js), fetched
@@ -1706,121 +1462,30 @@ function resolvedGarmentTitle() {
   return "";
 }
 
-/* Explicit lower-body type markers for tier 4. Deliberately the same vocabulary as
-   EXPLICIT_BOTTOM_TYPES further down (another §2.6 slice-boundary copy - see
-   PANTS_TITLE_STEMS_HE's note). "dress" is absent for the reason that set records: a
-   dress covers both regions and has no correct answer on a waist-vs-chest question. */
-const PANTS_EXPLICIT_TYPES = new Set([
-  "pants", "bottoms", "bottom", "shorts", "skirt", "lower_body", "jeans", "trousers",
-]);
 
-/**
- * IS THIS PRODUCT WORN ON THE LOWER BODY? - the gate that routes a shopper onto a
- * WAIST chart instead of the chest-banded letter chart.
- *
- * THE BUG THIS CLOSES: a 185cm/82kg shopper on a pair of jeans sold 28/30/32/34/36 was
- * recommended "L" - a value that appears nowhere in that product's size picker, because
- * ZARA_SIZE_CHART bands on CHEST and the product is sold by WAIST.
- *
- * FOUR TIERS, STRONGEST EVIDENCE FIRST, each consulted only when every tier above it
- * abstained. The ordering is the same principle isKidsProduct() established and had to
- * learn the hard way: a DETERMINISTIC signal the storefront actually rendered outranks a
- * PROBABILISTIC one a model produced, because the model is explicitly instructed to
- * abstain on the flat-lay packshots this catalog is full of.
- *
- *   1. the product's own size run   free, synchronous and unambiguous - 24-48 integers
- *                                   can only be a waist (isWaistInchSizeRun), and the EU
- *                                   ladder is claimed here too (isAdultPantsProduct).
- *   2. the title                    free and synchronous, and the tier that answers a
- *                                   store whose size picker is rendered in JS and
- *                                   scrapes to nothing. Fabric ambiguity resolved
- *                                   (titleNamesPants) so a denim JACKET is not pants.
- *   3. the cached Gemini verdict    a network round trip, already cached per photo - the
- *                                   tier that answers "STRAIGHT BASIC" and "LOOSE",
- *                                   titles that name a CUT and a FIT with no garment
- *                                   noun for tier 2 to find.
- *   4. the catalog/handoff type     last, NOT first: the widget forwards "unknown" for a
- *                                   product it could not classify, and an older widget
- *                                   forwards nothing at all. Treating a marker that weak
- *                                   as a verdict is the documented shape of the bug in
- *                                   parseHandoff()'s "HARDCODED DEFAULT" note.
- *
- * NEVER BLOCKS, NEVER GUESSES. Every tier abstains rather than defaulting, and false
- * simply leaves ZARA_SIZE_CHART in place - the behaviour that shipped before this
- * existed. Per CLAUDE.md §2.5 a wrong confident answer here costs a paying shopper a
- * size they cannot select; an abstention costs nothing.
- *
- * @param {string[]|string|null|undefined} sizes - the host product's OWN size list
- * @param {string|null|undefined} title - the product title (tier 2)
- * @param {string|null|undefined} cachedCategory - garment_cache.garment_category (tier 3)
- * @param {object|null|undefined} item - activeItem, when one already exists (tier 4)
- * @returns {boolean}
- */
-function isPantsProduct(sizes, title, cachedCategory, item) {
-  // TIER 1 - the size run.
-  if (isWaistInchSizeRun(sizes)) return true;
-  if (isAdultPantsProduct(sizes)) return true;
-
-  // TIER 2 - the title.
-  if (titleNamesPants(title)) return true;
-
-  // TIER 3 - the cached Gemini Vision verdict. Only an explicit "pants" counts:
-  // "unknown" is the model declining, and null is nobody ever having asked.
-  if (String(cachedCategory == null ? "" : cachedCategory).toLowerCase().trim() === "pants") return true;
-
-  // TIER 4 - the catalog/handoff type marker.
-  const type = String(item?.garmentType ?? item?.type ?? item?.category ?? "").toLowerCase().trim();
-  if (PANTS_EXPLICIT_TYPES.has(type)) return true;
-  if (type && typeof isBottomsGarment === "function" && isBottomsGarment(item)) return true;
-
-  return false;
-}
-
-/**
- * WHICH adult chart a confidently-pants product is fitted against.
- *
- * EU IS TESTED FIRST AND THAT ORDER IS LOAD-BEARING. The two ladders share the tokens
- * 36-46, so ["36","38","40","42","44","46"] is a valid reading on either convention. It
- * has meant EU since ADULT_PANTS_SIZE_CHART shipped, adult-pants-sizing.test.mjs pins
- * that, and a store on one convention never lists the other - so the EU ladder keeps
- * first claim on its own run and the waist-inch chart takes everything else. Reversing
- * these two lines silently re-sizes every EU store in the catalog.
- *
- * Returns the chart's KIND since 2026-09-26: the banded charts themselves live in
- * lib/sizing.js, which receives this verdict as the evidence's `chart` field. The
- * precedence still lives in exactly one place - here.
- *
- * @param {string[]|string|null|undefined} sizes
- * @returns {"eu"|"waist"} ADULT_PANTS_SIZE_CHART (EU) or ADULT_JEANS_WAIST_CHART
- *   (waist inches). Never null: callers reach this only once isPantsProduct() has
- *   confirmed a lower-body garment, and a pants product whose size list scraped to
- *   nothing still belongs on a waist ladder rather than back on a chest-banded chart.
- */
-function pantsChartKindForSizes(sizes) {
-  if (isAdultPantsProduct(sizes)) return "eu";
-  return "waist";
-}
-
-/** The size ladder (labels only, smallest first) of the pants chart pantsChartKindForSizes()
- *  picks - what the override selector and the stock fallbacks walk when a numeric-pants
- *  product listed no sizes of its own. */
-function pantsLadderForSizes(sizes) {
-  return [...(pantsChartKindForSizes(sizes) === "eu" ? ADULT_PANTS_NUMERIC_SIZES : ADULT_JEANS_WAIST_SIZES)];
+/** The size ladder (labels only, smallest first) of a numeric pants chart - what the
+ *  override selector and the stock fallbacks walk when a numeric-pants product listed no
+ *  sizes of its own. `kind` is the chart the last size verdict used (currentPantsChart),
+ *  so the ladder always matches the chart that produced currentUserSize.
+ *  @param {"eu"|"waist"|null} kind */
+function pantsLadderFor(kind) {
+  return [...(kind === "eu" ? ADULT_PANTS_NUMERIC_SIZES : ADULT_JEANS_WAIST_SIZES)];
 }
 
 
 /**
- * @param {"child"|"adult"|null} userCategory - userBodyCategory()'s garment-independent verdict
- * @param {string[]|string|null} sizes - the host product's own size list, when known
- * @param {"kids"|"adult"|"uncertain"|undefined} garmentAgeGroup - classifier fallback only
+ * @param {"child"|"adult"|null} userCategory - the garment-independent body category the
+ *   last size verdict carried (currentBodyCategory)
+ * @param {{kidsOnly: boolean, adultOnly: boolean}|null} product - lib/sizing.js's verdict on
+ *   the active product (productVerdictNow()), or null while it is not known yet
  * @returns {boolean} false for a confidently-kids product against a confidently-adult
  *   body, OR a confidently-adult product against a child body; every other combination
- *   (unknown product category, no measurements yet) passes - never block on ambiguity,
- *   matching liveBlockReason()/livePendingReason().
+ *   (unknown product category, a verdict still in flight, no measurements yet) passes -
+ *   never block on ambiguity, matching liveBlockReason()/livePendingReason().
  */
-function isCompatibleSizeCategory(userCategory, sizes, garmentAgeGroup) {
-  if (isKidsProduct(sizes, garmentAgeGroup) && userCategory === "adult") return false;
-  if (isAdultProduct(sizes, garmentAgeGroup) && userCategory === "child") return false;
+function isCompatibleSizeCategory(userCategory, product) {
+  if (product && product.kidsOnly && userCategory === "adult") return false;
+  if (product && product.adultOnly && userCategory === "child") return false;
   return true;
 }
 
@@ -1914,7 +1579,7 @@ function purchasableLadder() {
   const own = resolvedGarmentSizes();
   if (!own.length) {
     return currentSizeCategory === "child" ? [...CHILD_SIZE_SCALE]
-      : currentSizeIsNumericPants ? pantsLadderForSizes(own)
+      : currentSizeIsNumericPants ? pantsLadderFor(currentPantsChart)
       : [...SIZE_SCALE];
   }
   const unique = [...new Set(own)];
@@ -2039,6 +1704,82 @@ function resolvedSizeRunType() {
   return typeof pendingSizeRunType !== "undefined" ? pendingSizeRunType : undefined;
 }
 
+/* ══ THE PRODUCT VERDICT - asked of the server, remembered for the session ══════════
+   Which chart this garment belongs on, and whether it is kids-only or adult-only, is
+   lib/sizing.js's to decide (see "THE PANTS RULES" above). Every size verdict carries it
+   for the evidence it was asked about; a product-only request (no measurements) fetches
+   it when a surface needs it before any size was asked for this product - the in-room
+   size ladder, the kids/adult card after a garment swap.
+
+   NEUTRAL UNTIL KNOWN. While the verdict for the CURRENT evidence is in flight,
+   productVerdictNow() answers null, which every reader treats as "no product evidence":
+   no mismatch, the letter ladder. That is the CLAUDE.md §2.5 direction (never block on
+   ambiguity), and goLive() - the enforcement point - awaits calculateSize() first, which
+   brings the verdict for exactly the evidence it then checks. When a background verdict
+   lands, updateSizeMismatchUI() repaints the card. A request that FAILS leaves the
+   product unknown, so the kids/adult guard passes rather than blocking on a network
+   blip - the same trade calculateSize()'s own failure path makes. */
+const _productVerdicts = new Map();
+
+/* The raw product evidence lib/sizing.js reads (sanitizeProductEvidence() there). Plain
+   values only: the size list, title, classifier age group and category and cached
+   size-run type as this region resolves them, and the active item's three type fields
+   plus this file's isBottomsGarment() verdict - null where that function does not exist
+   (a standalone test slice), which the rules read as "no verdict", exactly as the old
+   typeof guard did. */
+function sizeProductEvidence() {
+  const item = typeof activeItem !== "undefined" ? activeItem : null;
+  const str = (v) => (v == null ? null : String(v));
+  const runType = resolvedSizeRunType();
+  return {
+    sizes: resolvedGarmentSizes(),
+    ageGroup: resolvedGarmentAgeGroup(),
+    title: resolvedGarmentTitle(),
+    cachedCategory: str(currentGarmentCategory),
+    sizeRunType: typeof runType === "string" ? runType : null,
+    item: item ? {
+      garmentType: str(item.garmentType), type: str(item.type), category: str(item.category),
+      bottoms: typeof isBottomsGarment === "function" ? !!isBottomsGarment(item) : null,
+    } : null,
+  };
+}
+
+/** The product verdict for the CURRENT evidence, or null while it is unknown - in which
+ *  case the request is started (once; concurrent readers share it). Synchronous on
+ *  purpose: every reader is a synchronous gate or ladder. */
+function productVerdictNow() {
+  const known = _productVerdicts.get(JSON.stringify(sizeProductEvidence()));
+  if (known && typeof known.then !== "function") return known;
+  if (!known) loadProductVerdict();
+  return null;
+}
+
+/** Resolves the product verdict for the current evidence - from memory, or by asking.
+ *  Never rejects: a failed request resolves null and is forgotten, so the next reader
+ *  asks again. */
+function loadProductVerdict() {
+  const product = sizeProductEvidence();
+  const key = JSON.stringify(product);
+  const known = _productVerdicts.get(key);
+  if (known) return Promise.resolve(known);
+  if (typeof requestSizeVerdict !== "function") return Promise.resolve(null);
+  const pending = requestSizeVerdict({ product }).then((verdict) => {
+    if (!verdict || !verdict.product) throw new Error("the size verdict carried no product verdict");
+    _productVerdicts.set(key, verdict.product);
+    /* A surface that read null while this was in flight painted "no mismatch". */
+    if (typeof updateSizeMismatchUI === "function") {
+      try { updateSizeMismatchUI(); } catch (e) { console.warn("[PEAR] size mismatch repaint failed:", e?.message || e); }
+    }
+    return verdict.product;
+  }).catch((err) => {
+    if (_productVerdicts.get(key) === pending) _productVerdicts.delete(key);
+    console.warn("[PEAR] product size verdict unavailable:", err?.message || err);
+    return null;
+  });
+  _productVerdicts.set(key, pending);
+  return pending;
+}
+
 /* The ONE mismatch predicate every surface reads - the go-live gate, the modal card,
    and the size selector alike - so they can never disagree about what is blocked.
    Reads currentBodyCategory as-is, whatever calculateSize() last computed - it does
@@ -2048,7 +1789,9 @@ function resolvedSizeRunType() {
    goLive()'s own comment for the two production bugs a STALE currentBodyCategory
    shipped before that refresh existed, in two different directions. */
 function hasSizeCategoryMismatch() {
-  return !isCompatibleSizeCategory(currentBodyCategory, resolvedGarmentSizes(), resolvedGarmentAgeGroup());
+  /* No body category, nothing to compare - answered without asking about the product. */
+  if (currentBodyCategory !== "adult" && currentBodyCategory !== "child") return false;
+  return !isCompatibleSizeCategory(currentBodyCategory, productVerdictNow());
 }
 
 const SIZE_MISMATCH_MESSAGE =
@@ -2201,6 +1944,7 @@ function resetSizeResult() {
   // Reset here, BEFORE either early return, so a missing/out-of-range measurement can
   // never leave a PREVIOUS garment chart description behind for formatSizeLabel().
   currentSizeIsNumericPants = false;
+  currentPantsChart = null;
   currentSizeIsWomensTops = false;
   currentEuTokens = null;
   updateProgress();
@@ -2237,11 +1981,11 @@ let _sizeSeq = 0;
  * setOptionalVisible - the conditional reveal of the optional measurement
  * fields. Re-run on every input event.
  *
- * ASKS THE SERVER SINCE 2026-09-26. The charts and the fit moved to lib/sizing.js
- * (POST /api/size); this function resolves the PRODUCT evidence - which chart the
- * garment belongs on, kids-only / adult-only, lower-body - sends it with the
- * measurements, and applySizeVerdict() paints the answer exactly as the old in-browser
- * computation did (proven over 1,458,028 cases; see lib/sizing.js's header).
+ * ASKS THE SERVER SINCE 2026-09-26. The charts, the fit and the product rules moved to
+ * lib/sizing.js (POST /api/size); this function gathers the product's raw evidence
+ * (sizeProductEvidence()), sends it with the measurements, and applySizeVerdict() paints
+ * the answer exactly as the old in-browser computation did (proven over 1,458,028 cases;
+ * see lib/sizing.js's header).
  *
  * SYNCHRONOUS WHEN IT CAN BE. Missing and out-of-range input are answered here with no
  * request, and every verdict is memoised by its evidence for the session, so a re-run on
@@ -2284,83 +2028,23 @@ function calculateSize() {
     return Promise.resolve(null);
   }
 
-  // "Genuine fit" candidates per chart: rows where BOTH height AND weight land
-  // inside the band. coreHwPenalty() is exactly 0 in that case (it only ever
-  // adds penalty for being OUTSIDE a bound), so filtering on that gives exactly
-  // the genuine-fit set - a chart with no such row contributes NOTHING below,
-  // rather than still "winning" via whichever row happened to score lowest.
-  //
-  // A CONFIDENT garment classification restricts the search to a single
-  // chart from the start - the other chart's array is left empty rather than
-  // filtered, so it can never contribute a candidate below, even if the body
-  // would technically fit a row there.
-  const garmentAgeGroup = resolvedGarmentAgeGroup();
-  const garmentSizes = resolvedGarmentSizes();
-  /* WHICH ADULT CHART APPLIES TO THIS GARMENT. Three of them now, resolved
-     strongest-evidence-first:
-
-       EU numeric   isAdultNumericPantsGarment() - the product's own size list IS the EU
-                    ladder (36-46). Unchanged and tested FIRST, so every store already on
-                    that convention keeps the behaviour adult-pants-sizing.test.mjs pins.
-       waist inch   isPantsProduct() - a confidently lower-body garment by any of its four
-                    tiers. THE FIX for "the calculator recommends L for a pair of jeans":
-                    185cm/82kg now resolves to "32" instead of a letter that appears
-                    nowhere in that product's own size picker.
-       letters      everything else - including every garment we are NOT confident about,
-                    which is the whole point (CLAUDE.md §2.5: never block, never guess).
-
-     THE ITEM NARROWS, IT NEVER WIDENS, mirroring isAdultNumericPantsGarment()'s own
-     rule: a known non-bottoms item vetoes the waist chart (an EU-numbered TOP run must
-     not be pulled onto a waist ladder), but no item marker can put a letter-sized
-     product onto one. activeItem is usually unavailable here anyway - calculateSize()
-     runs on Screen 1, before it exists - so the sizing/title evidence decides in the
-     common case, exactly as the kids/adult guard already does with no item at all.
-
-     ALPHA EVIDENCE VETOES THE WAIST CHART TOO, same as the item check above - see
-     isAlphaSizeRun()'s own comment for the bug this closes (sweatpants sold S/M/L,
-     confidently pants by title, quoted a waist-inch number that appears on no picker
-     anywhere). Checked ALONGSIDE itemContradictsPants rather than folded into
-     isPantsProduct() itself: isPantsProduct() answers "is this worn on the lower
-     body", which a letter-sized pair of sweatpants still genuinely is - the veto
-     belongs at the CHART-selection step, not at the body-region step. */
-  const useAdultPantsChart = isAdultNumericPantsGarment(garmentSizes, activeItem);
-  const itemContradictsPants =
-    !!activeItem && typeof isBottomsGarment === "function" && !isBottomsGarment(activeItem);
-  /* Named separately from useWaistInchChart below - per THAT flag's own comment,
-     isPantsProduct() answers "is this worn on the lower body" independently of which
-     literal CHART ends up handling the fit (a letter-sized sweatpants pair still
-     answers true here even though isAlphaSizeRun() vetoes it off the waist chart).
-     Read a second time below, by currentSizeIsWomensTops, for exactly that
-     independence: WOMEN_TOPS_EU_SIZE_CHART must never decorate a bottoms
-     recommendation just because it happens to share ZARA_SIZE_CHART's letters. */
-  const isConfidentlyPants =
-    isPantsProduct(garmentSizes, resolvedGarmentTitle(), currentGarmentCategory, activeItem);
-  const useWaistInchChart = !useAdultPantsChart && !itemContradictsPants &&
-    !isAlphaSizeRun(garmentSizes, resolvedSizeRunType()) &&
-    isConfidentlyPants;
-  /* Both numeric branches route through pantsChartForSizes() rather than naming a chart
-     here, so the EU-before-waist precedence lives in exactly ONE place - see that
-     function on why reversing those two lines re-sizes every EU store in the catalog. */
-  const useNumericPantsChart = useAdultPantsChart || useWaistInchChart;
-  /* THE EVIDENCE. Everything the fit needs that is a verdict about the PRODUCT is
-     resolved above, here, by the same functions as before; lib/sizing.js never re-derives
-     any of it. `sizes` rides along for the snap-to-own-list step, `storeChart` raw for
-     the overlay (decoded and bounded server-side - CLAUDE.md §2.5b). */
+  /* THE EVIDENCE: the measurements, and the PRODUCT as this region sees it - raw facts,
+     not verdicts. Which chart it belongs on, kids-only / adult-only and lower-body are
+     lib/sizing.js's to decide (productVerdict(), with the reasoning that shaped each
+     rule) and come back as verdict.product. `storeChart` rides raw for the overlay
+     (decoded and bounded server-side - CLAUDE.md §2.5b). */
+  const product = sizeProductEvidence();
   const evidence = {
     height, weight, chest, waist, legs,
-    chart: useNumericPantsChart ? pantsChartKindForSizes(garmentSizes) : "letters",
-    kidsOnly: isKidsProduct(garmentSizes, garmentAgeGroup),
-    adultOnly: isAdultProduct(garmentSizes, garmentAgeGroup),
-    lowerBody: isConfidentlyPants,
-    snap: useAdultPantsChart,
     gender: currentUserGender || null,
-    sizes: garmentSizes,
     storeChart: resolvedStoreSizeChart(),
+    product,
   };
   const key = JSON.stringify(evidence);
   const known = _sizeVerdicts.get(key);
   if (known && typeof known.then !== "function") {
-    applySizeVerdict(known, useNumericPantsChart);
+    if (known.product) _productVerdicts.set(JSON.stringify(product), known.product);
+    applySizeVerdict(known);
     return Promise.resolve(known);
   }
 
@@ -2370,8 +2054,9 @@ function calculateSize() {
   _sizeVerdicts.set(key, pending);
   return pending.then((verdict) => {
     _sizeVerdicts.set(key, verdict);
+    if (verdict.product) _productVerdicts.set(JSON.stringify(product), verdict.product);
     if (seq === _sizeSeq) {
-      applySizeVerdict(verdict, useNumericPantsChart);
+      applySizeVerdict(verdict);
       /* Callers that re-render the room's selector right after calling this (the
          widget's late size/stock corrections) did so before the answer existed. */
       if ($("pearSizeSelector") && typeof injectSizeSelector === "function") {
@@ -2402,7 +2087,7 @@ function calculateSize() {
 
 /* Paints one verdict from lib/sizing.js - the DOM half of the old calculateSize(), in
    the same order it ran there. */
-function applySizeVerdict(verdict, useNumericPantsChart) {
+function applySizeVerdict(verdict) {
   const resultBox = $("resultBox"), sizeResult = $("sizeResult"), resultLabel = $("resultLabel");
   const nextBtn = $("btn-next-screen");
   const resultActions = $("resultActions");
@@ -2417,8 +2102,11 @@ function applySizeVerdict(verdict, useNumericPantsChart) {
     return;
   }
 
-  /* Read by formatSizeLabel(), which must never decorate a numeric pants size. */
-  currentSizeIsNumericPants = useNumericPantsChart;
+  /* Read by formatSizeLabel(), which must never decorate a numeric pants size; the kind
+     picks the ladder a list-less numeric product walks (pantsLadderFor()). */
+  const pantsChart = verdict.product ? verdict.product.chart : null;
+  currentSizeIsNumericPants = pantsChart === "eu" || pantsChart === "waist";
+  currentPantsChart = currentSizeIsNumericPants ? pantsChart : null;
   currentBodyCategory = verdict.bodyCategory || null;
   currentSizeCategory = verdict.sizeCategory || null;
   currentSizeIsWomensTops = !!verdict.womensTops;
@@ -3188,8 +2876,8 @@ async function classifyGarmentViaLLM(title) {
   return verdict;
 }
 
-/* ── TIER 3 of isPantsProduct(): the cached Gemini VISION verdict ────────────────
-   The tiers above it read the storefront's own text - the size run and the title. Both
+/* ── TIER 3 of isPantsProduct() (lib/sizing.js): the cached Gemini VISION verdict ─
+   The tiers above it (there) read the storefront's own text - the size run and the title. Both
    abstain on a real catalog more often than they should: a store that renders its size
    picker in JavaScript scrapes to nothing, and a title like "STRAIGHT BASIC" or "LOOSE"
    names a CUT and a FIT with no garment noun in it at all. When the text says nothing,
@@ -13271,7 +12959,11 @@ async function applyGarment(item) {
  */
 function activeSizeLadder() {
   const sizes = resolvedGarmentSizes();
-  if (!isAdultNumericPantsGarment(sizes, activeItem)) return SIZE_SCALE;
+  /* adultNumericPants is lib/sizing.js's isAdultNumericPantsGarment() verdict for the
+     active product. Unknown (still in flight) reads as SIZE_SCALE - the letter answer,
+     and the one every product this cannot yet speak to already got. */
+  const product = typeof productVerdictNow === "function" ? productVerdictNow() : null;
+  if (!product || !product.adultNumericPants) return SIZE_SCALE;
   return [...new Set(sizes.map(Number).filter(Number.isFinite))]
     .sort((a, b) => a - b)
     .map(String);
@@ -13720,11 +13412,12 @@ function injectSizeSelector() {
      tiers exist for - the fallback has to match whichever CHART produced currentUserSize,
      or the recommended size is not among the buttons at all: a jeans product resolved by
      title alone would recommend "32" and then render S/M/L/XL, with no ★ on anything and
-     nothing for the shopper to press. Routed through pantsChartForSizes() so the
-     EU-before-waist precedence is not spelled out a second time; productSizes is empty on
-     this branch by construction, so it yields the waist ladder. */
+     nothing for the shopper to press. The chart kind arrives with the size verdict
+     (currentPantsChart), so the EU-before-waist precedence is not spelled out a second
+     time; productSizes is empty on this branch by construction, so it is the waist
+     ladder. */
   const scale = productSizes.length ? productSizes
-    : currentSizeIsNumericPants ? pantsLadderForSizes(productSizes)
+    : currentSizeIsNumericPants ? pantsLadderFor(currentPantsChart)
     // Child results get the numeric kids ladder ONLY - no adult S/M/L/XL button is
     // rendered at all, so there is nothing for a child profile to cross over into.
     //

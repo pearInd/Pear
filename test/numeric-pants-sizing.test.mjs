@@ -29,8 +29,14 @@
    numeric rendering and the ladder fallback are held together rather than separately.
 
    THE ONE THING TO BREAK CAREFULLY: §5 pins EU-before-waist precedence. The two ladders
-   share 36-46, so reversing those two lines in pantsChartForSizes() silently re-sizes
-   every EU store in the catalog while every test here still passes except that one. */
+   share 36-46, so reversing those two lines in pantsChartKindForSizes() (lib/sizing.js)
+   silently re-sizes every EU store in the catalog while every test here still passes
+   except that one.
+
+   WHERE THE RULES LIVE: server-side since 2026-09-26. The charts, the fit AND the product
+   rules this suite pins (isWaistInchSizeRun(), titleNamesPants(), isPantsProduct(),
+   pantsChartKindForSizes(), isAlphaSizeRun()) are lib/sizing.js's and are imported from
+   there; the end-to-end sections still drive app.js's real calculateSize() against them. */
 import { readFileSync } from "node:fs";
 
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -56,10 +62,10 @@ function extract(src, startMarker, endMarker) {
   return src.slice(start, end);
 }
 
-/* The SAME slice adult-pants-sizing.test.mjs and kids-product-sizes.test.mjs take. Every
-   symbol this suite exercises has to live inside it - which is exactly why _normApos(),
-   the waist chart and isPantsProduct() sit in the Screen 1 region rather than beside
-   GARMENT_CATEGORY_KEYWORDS ~700 lines later (CLAUDE.md §2.6/§2.7). */
+/* The SAME slice adult-pants-sizing.test.mjs and kids-product-sizes.test.mjs take - the
+   browser's half of sizing: the evidence builder, the ladders, calculateSize() and the
+   DOM. Its browser-side symbols (_normApos(), the ladders) have to live inside it
+   (CLAUDE.md §2.6/§2.7); the rules are imported from lib/sizing.js below. */
 const SIZING_SLICE = extract(APP, "const CHILD_SIZE_SCALE = [", "\nfunction onMeasurementKeydown");
 
 /* THE FIT RUNS SERVER-SIDE since 2026-09-26 (lib/sizing.js behind POST /api/size), and the
@@ -84,14 +90,12 @@ function classList() {
 const input = (v) => ({ value: v == null ? "" : String(v) });
 
 /* isBottomsGarment() lives ~8000 lines further down app.js (the garment-category-
-   detection region), outside SIZING_SLICE - see PANTS_TITLE_STEMS_HE's own comment on
-   why several harnesses in this file execute a slice that stops before it. In the REAL
-   file this is a non-issue: function declarations hoist across the whole module, so by
-   the time a shopper's click actually calls calculateSize(), isBottomsGarment already
-   exists. adult-pants-sizing.test.mjs hits the identical gap for
-   isAdultNumericPantsGarment() and solves it the same way this does: inject a stand-in
-   as a real parameter, so the `typeof isBottomsGarment === "function"` guards inside
-   the slice see a real binding rather than silently no-op'ing. */
+   detection region), outside SIZING_SLICE. In the REAL file this is a non-issue:
+   function declarations hoist across the whole module, so by the time a shopper's click
+   actually calls calculateSize(), isBottomsGarment already exists. Here a stand-in is
+   injected as a real parameter, so sizeProductEvidence()'s `typeof isBottomsGarment`
+   guard sees a real binding and sends its verdict as item.bottoms - which is what the
+   server's rules read - rather than null. */
 function harness({ height, weight, chest, waist, legs,
                    pendingSizes, pendingTitle, pendingAgeGroup, pendingSizeRunType, gender = null,
                    activeItem = null, garmentCategory = null, isBottomsGarment } = {}) {
@@ -119,8 +123,7 @@ function harness({ height, weight, chest, waist, legs,
     "__category", "isBottomsGarment", "__gender", "requestSizeVerdict",
     // currentUserGender: same shim-not-slice reason as the other three - it is
     // declared well before "const CHILD_SIZE_SCALE = [" (SIZING_SLICE's start marker) in
-    // app.js's top-of-file state block. See ADULT_PANTS_NUMERIC_SIZES's own comment
-    // in app.js for the general "some harnesses extract a narrower slice" rule.
+    // app.js's top-of-file state block (CLAUDE.md §2.6/§2.7).
     // Seeded from __gender (rather than left null, like the other three) so this
     // harness can actually drive the gender-routing branch under test.
     "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null, currentUserGender = __gender;\n" +
@@ -132,17 +135,18 @@ function harness({ height, weight, chest, waist, legs,
     "  label: () => formatSizeLabel(currentUserSize)," +
     "  isNumericPants: () => currentSizeIsNumericPants," +
     "  isWomensTops: () => currentSizeIsWomensTops," +
-    "  _normApos, isWaistInchSizeRun, titleNamesPants, isPantsProduct, pantsChartKindForSizes," +
-    "  pantsLadderForSizes, isAdultPantsProduct, isAlphaSizeRun, ADULT_JEANS_WAIST_SIZES," +
-    "  ADULT_PANTS_NUMERIC_SIZES, CHILD_SIZE_SCALE };",
+    "  _normApos, pantsLadderFor, ADULT_JEANS_WAIST_SIZES, ADULT_PANTS_NUMERIC_SIZES, CHILD_SIZE_SCALE };",
   );
   const api = fn($, t, activeItem, pendingSizes, pendingAgeGroup, pendingTitle, pendingSizeRunType, {},
                  garmentCategory, isBottomsGarment, gender, requestSizeVerdict);
-  /* The banded charts are server-side now - attached here from lib/sizing.js so the
-     assertions below keep reading the real rows. */
+  /* The banded charts and the product rules are server-side now - attached here from
+     lib/sizing.js so the assertions below keep reading the real rows and rules. */
   Object.assign(api, {
     ADULT_JEANS_WAIST_CHART: SIZING_LIB.ADULT_JEANS_WAIST_CHART,
     ADULT_PANTS_SIZE_CHART: SIZING_LIB.ADULT_PANTS_SIZE_CHART,
+    isWaistInchSizeRun: SIZING_LIB.isWaistInchSizeRun, titleNamesPants: SIZING_LIB.titleNamesPants,
+    isPantsProduct: SIZING_LIB.isPantsProduct, pantsChartKindForSizes: SIZING_LIB.pantsChartKindForSizes,
+    isAdultPantsProduct: SIZING_LIB.isAdultPantsProduct, isAlphaSizeRun: SIZING_LIB.isAlphaSizeRun,
   });
   return { api, els };
 }
@@ -263,7 +267,7 @@ console.log("\n── §4 isPantsProduct(): four tiers, strongest evidence first
 
 console.log("\n── §5 pantsChartKindForSizes(): EU keeps first claim on its own ladder ──");
 {
-  const { pantsChartKindForSizes, pantsLadderForSizes, ADULT_PANTS_SIZE_CHART, ADULT_JEANS_WAIST_CHART,
+  const { pantsChartKindForSizes, pantsLadderFor, ADULT_PANTS_SIZE_CHART, ADULT_JEANS_WAIST_CHART,
           ADULT_JEANS_WAIST_SIZES, ADULT_PANTS_NUMERIC_SIZES, CHILD_SIZE_SCALE } = pure;
   check("the waist chart is the FOX ladder (28-38, updated 2026-09-14) - replaced\n" +
         "        wholesale, so 24/26/40/42/44/46/48 are deliberately gone (CLAUDE.md\n" +
@@ -304,7 +308,10 @@ console.log("\n── §5 pantsChartKindForSizes(): EU keeps first claim on its 
         "        chest-banded fallback (this is the title/vision-tier path)",
     pantsChartKindForSizes(null) === "waist");
   check("...and its ladder is the waist ladder, which is what the selector walks then",
-    JSON.stringify(pantsLadderForSizes(null)) === JSON.stringify(ADULT_JEANS_WAIST_CHART.map((r) => r.size)));
+    JSON.stringify(pantsLadderFor(pantsChartKindForSizes(null))) === JSON.stringify(ADULT_JEANS_WAIST_CHART.map((r) => r.size)));
+  check("...while an EU verdict walks the EU ladder (the chart kind arrives with the size\n" +
+        "        verdict as currentPantsChart - pantsLadderFor() only maps it)",
+    JSON.stringify(pantsLadderFor("eu")) === JSON.stringify(ADULT_PANTS_SIZE_CHART.map((r) => r.size)));
 }
 
 console.log("\n── §6 calculateSize() END TO END: the reported case, and what must not move ──");
@@ -454,6 +461,10 @@ console.log("\n── §7 the handoff: sizes and title reach Screen 1 synchronou
   )();
   check("...and the WIDGET's own copy folds the identical set, executed for real",
     CURLY_QUOTE_VARIANTS.every((c) => widgetNormApos("ג" + c + "ינס") === "ג'ינס"));
+  check("...and so does the SERVER's copy (lib/sizing.js, which reads pants titles since\n" +
+        "        2026-09-26) - a third copy is a third place a spelling can be missed",
+    CURLY_QUOTE_VARIANTS.every((c) => SIZING_LIB._normApos("ג" + c + "ינס") === "ג'ינס") &&
+    SIZING_LIB._normApos("דגמ״ח") === pure._normApos("דגמ״ח"));
   check("...and detectCategory() runs its haystack through it, not toLowerCase()",
     /var haystack = normApos\(\(name \|\| ""\) \+ " " \+ \(d\.title \|\| ""\)\);/.test(PW));
 

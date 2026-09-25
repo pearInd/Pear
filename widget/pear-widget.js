@@ -376,7 +376,7 @@
      spelling out every variant multiplies every list and a later contributor adding
      one word has to remember all of them.
 
-     KEPT IN LOCKSTEP WITH _normApos() IN fitting-room/app.js - see CLAUDE.md §3, and
+     KEPT IN LOCKSTEP WITH _normApos() IN fitting-room/app.js AND lib/sizing.js - see CLAUDE.md §3, and
      note which way that lockstep cuts: this widget's category verdict is EXPLICIT and
      therefore OUTRANKS the room's own classifier, so a miss HERE cannot be fixed
      room-side. */

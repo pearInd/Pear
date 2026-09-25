@@ -118,7 +118,7 @@ wrong"*, *"it slimmed me down"*, *"front and back aren't right"*.
 | **A. Prompt text** | what the model is told | `lib/prompts.js` (server): `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` — §2.13 | mostly dead |
 | **B. Reference image** | what the model is shown | `referenceImageFor`, `galleryOf`, `distinctBackOf`, `createGarmentComposite` | **live** |
 | **C. Orientation** | which asset is on the wire when | `OrientationWatcher`, `effectiveAngle`, `autoOrientation` | **live** |
-| **D. Size ladder** | the recommended size in the UI | `calculateSize` (client shell, `app.js`) → `lib/sizing.js` (`*_SIZE_CHART`, `computeSizeVerdict`, `applyStoreChartOverlay`, §2.12) | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
+| **D. Size ladder** | the recommended size in the UI | `calculateSize` (client shell, `app.js`) → `lib/sizing.js` (`productVerdict`, `*_SIZE_CHART`, `computeSizeVerdict`, `applyStoreChartOverlay`, §2.12) | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
 
 **Layer B is where most real fit/back-view problems actually live.** "The back
 came out plain" is almost never a prompt problem — it is `distinctBackOf()`
@@ -176,8 +176,10 @@ Any new fit wording must describe what the **fabric** does over a body whose
 dimensions are fixed. Never the body's outline.
 
 ### 2.5 Never block on ambiguity
-`isKidsProduct` / `isAdultProduct` / `isCompatibleSizeCategory` /
+`isKidsProduct` / `isAdultProduct` (`lib/sizing.js`) / `isCompatibleSizeCategory` /
 `liveBlockReason` all pass when uncertain. A wrong block stops a paying shopper.
+That includes a product verdict still in flight or lost to the network:
+`productVerdictNow()` answers `null`, which reads as "no mismatch, letter ladder" (§2.12).
 `DEFAULT_CATEGORY = "unknown"`, never `"tops"` — a guess indistinguishable from
 a verdict outranks the room's own stronger classifier.
 
@@ -221,9 +223,13 @@ penalty formula rather than a copy of it - the local names inside `computeSizeVe
 are therefore an interface. The browser's Screen 1 sizing region is sliced by
 `numeric-pants-sizing`, `adult-pants-sizing` and `kids-product-sizes` from
 `const CHILD_SIZE_SCALE = [` (it was `const ZARA_SIZE_CHART` until the charts moved out) to
-`function calculateSize()` or `\nfunction onMeasurementKeydown`; `requestSizeVerdict()`
-sits deliberately just AFTER that end marker, so each harness injects its own and runs the
-real `lib/sizing.js` through it.
+`function calculateSize()` or `\nfunction onMeasurementKeydown` (as are `kids-adult-size-guard`
+and `size-mismatch-view` from `function resolvedGarmentAgeGroup(`, and `size-fit-pin`, whose §2
+drives `sizeProductEvidence()` out of the same slice); `requestSizeVerdict()` sits deliberately
+just AFTER that end marker, so each harness injects its own and runs the real `lib/sizing.js`
+through it. `size-chart-overlay` also slices `lib/sizing.js` from
+`const useNumericPantsChart = product.chart` to `const childFits =` to pin where the overlay
+sits.
 The shared prompt slice (from the `P` priority table to the full-look composite clause) is
 sliced out of **`lib/prompts.js`** now (§2.13) by `image-first`, `plain-tee-fidelity`,
 `model-agnostic`, `garment-category-prompt`, `summoning-tokens`, `body-presence-gate` and
@@ -329,10 +335,27 @@ run on the unbuilt files. Rules that keep the build honest:
 ### 2.12 The size fit is server-side
 Since 2026-09-26 every size chart (FOX's bands and their derivations), `coreHwPenalty()`, the
 store-chart decode/overlay and the fit itself live in `lib/sizing.js`, served by
-`POST /api/size`. `calculateSize()` in `app.js` is a shell: it resolves the **product**
-verdicts that stay in the browser (which chart - `pantsChartKindForSizes()`, kids-only,
-adult-only, lower-body; these move with the garment plan in the next phase), sends them with
-the measurements, and `applySizeVerdict()` paints the answer in the old order.
+`POST /api/size` - and so do the **product** rules that pick a chart (`isKidsProduct()`,
+`isAdultProduct()`, `isPantsProduct()` and its tiers, `isAlphaSizeRun()`'s veto,
+`pantsChartKindForSizes()`, the Hebrew/English pants vocabulary), moved the same day into
+`productVerdict()`. `calculateSize()` in `app.js` is a shell: it sends the measurements and
+the product's RAW evidence (`sizeProductEvidence()`: size list, title, age group, cached
+category and size-run type, the item's type fields, and its own `isBottomsGarment()` verdict
+as `item.bottoms` - true/false, or null for "no verdict"), and `applySizeVerdict()` paints the
+answer in the old order. Garment-title classification (`classifyGarmentTitle`,
+`categoryFromSizeRun`) and image selection stay in the browser.
+
+- **The browser reads back only what it acts on:** `verdict.product` = `{chart, kidsOnly,
+  adultOnly, adultNumericPants}` on EVERY status, including `"empty"` - a product-only request
+  (`loadProductVerdict()`) is how the in-room ladder (`activeSizeLadder()`) and the kids/adult
+  card (`hasSizeCategoryMismatch()`) learn about a garment swapped in after the last size. They
+  read it synchronously through `productVerdictNow()`, which is `null` until it lands (§2.5);
+  the late answer repaints the card by itself. `lowerBody` stays server-side.
+- **The product move was proven the same way:** the old in-browser rules vs the new
+  evidence → JSON → sanitiser → `productVerdict()` path over 1,092,000 product situations, zero
+  differences, with four mutations each caught (kids ladder, the `bottoms` tri-state, EU-before-
+  waist, the geresh fold); the 1,458,028-case fit grid re-ran identical. `size-fit-pin` §2 pins
+  92,695 of those situations against a hash computed from the pre-move code.
 
 - **Behaviour was proven identical**, not assumed: the old in-browser `calculateSize()` and
   the new shell + server were run over the same 1,458,028 cases (26 garment situations × the
@@ -401,6 +424,10 @@ same commit. Whichever is wrong is the one that wins.
 | Size-chart sanity clamps (cm) | `pear-widget.js: SIZE_CHART_CLAMPS` ↔ `lib/sizing.js: STORE_CHART_CLAMPS` |
 | Garment region classifier (`isBottomsGarment`, `BOTTOMS_TOKENS`, `TOPS_TOKENS`) | `app.js` ↔ `lib/prompts.js` (server copy honours the browser's verdict; asserted identical by `prompt-engine` §2) |
 | Prompt facts the browser sends vs the fields the engine accepts | `app.js: PROMPT_FACT_STRINGS / PROMPT_FACT_BOOLS` ↔ `lib/prompts.js: PROMPT_ITEM_STRINGS / PROMPT_ITEM_BOOLS` (`prompt-engine` §3) |
+| Apostrophe/geresh fold | `pear-widget.js: normApos` ↔ `app.js: _normApos` ↔ `lib/sizing.js: _normApos` — **three** copies (`numeric-pants-sizing` §7 runs all three) |
+| Size tokens (`parseSizeList`, `ADULT_ALPHA_SIZES`) | `app.js` (ladders, `categoryFromSizeRun`) ↔ `lib/sizing.js` (the product rules) |
+| Lower-body vocabulary | `lib/sizing.js: PANTS_TITLE_STEMS_HE / PANTS_TITLE_WORDS_EN / PANTS_EXPLICIT_TYPES` ↔ `app.js: GARMENT_CATEGORY_KEYWORDS.bottom / BOTTOMS_TOKENS / EXPLICIT_BOTTOM_TYPES` — a word added to one side only is a miss on the other path |
+| Size product evidence the browser sends vs the fields the rules accept | `app.js: sizeProductEvidence` ↔ `lib/sizing.js: sanitizeProductEvidence` (`size-fit-pin` §3) |
 | Size ladders (labels only) vs the charts they index | `app.js: CHILD_SIZE_SCALE / ADULT_PANTS_NUMERIC_SIZES / ADULT_JEANS_WAIST_SIZES` ↔ `lib/sizing.js: CHILD_SIZE_CHART / ADULT_PANTS_SIZE_CHART / ADULT_JEANS_WAIST_CHART` (asserted by `numeric-pants-sizing` §5) |
 
 The widget's category verdict is **explicit** and therefore outranks the room's

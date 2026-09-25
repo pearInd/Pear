@@ -184,7 +184,7 @@ console.log("\n── §2 the overlay moves the size a real body resolves to ─
 
   /* And the call site: the overlay has to sit between chart selection and the
      genuine-fit filter. Below the filter it would score rows the overlay never saw. */
-  const calcHead = extract(LIB, "const useNumericPantsChart = ev.chart",
+  const calcHead = extract(LIB, "const useNumericPantsChart = product.chart",
     "const childFits =");
   const overlayIdx = calcHead.indexOf("applyStoreChartOverlay(");
   const filterIdx = calcHead.indexOf("const bodyAdultFits =");

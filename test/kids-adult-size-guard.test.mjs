@@ -15,6 +15,12 @@
 import { readFileSync } from "node:fs";
 
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The kids/adult RULES are server-side since 2026-09-26 (lib/sizing.js, POST /api/size).
+   The gate below is the browser's; it is driven here against the REAL rules, through the
+   same sanitiser and JSON round trip the network puts between them. */
+const SIZING = await import("../lib/sizing.js");
+const requestSizeVerdict = (ev) =>
+  Promise.resolve(SIZING.computeSizeVerdict(SIZING.sanitizeSizeEvidence(JSON.parse(JSON.stringify(ev)))));
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -31,9 +37,9 @@ function extract(startMarker, endMarker) {
   return APP.slice(start, end);
 }
 
-/* NOTE ON SCOPE: the CATEGORY logic itself (isKidsProduct / userBodyCategory /
-   isCompatibleSizeCategory, and the product-size-list signal that now drives them)
-   is owned by kids-product-sizes.test.mjs, which was written against the production
+/* NOTE ON SCOPE: the CATEGORY logic itself (isKidsProduct / userBodyCategory in
+   lib/sizing.js, isCompatibleSizeCategory in app.js, and the product-size-list signal
+   that drives them) is owned by kids-product-sizes.test.mjs, which was written against the production
    failure that proved the classifier-only version of this guard wrong. This file
    stays focused on the GO-LIVE GATE: that a mismatch produces a reason, that the
    reason carries the required copy, and that goLive() consults it before spending
@@ -42,14 +48,22 @@ function extract(startMarker, endMarker) {
 console.log("── §1 sizeCategoryMismatchReason(): reads real module state, real message ──");
 {
   const code = extract("function resolvedGarmentAgeGroup(", "function calculateSize()");
-  function harness({ activeItem = null, pendingAgeGroup = undefined, pendingSizes = undefined,
-                      currentBodyCategory = null } = {}) {
+  /* Resolved: the product verdict has landed, as it has by the time goLive() gates (it
+     awaits calculateSize(), whose answer carries it). */
+  async function harness(opts = {}) {
+    const api = rawHarness(opts);
+    await api.loadProductVerdict();
+    return api;
+  }
+  function rawHarness({ activeItem = null, pendingAgeGroup = undefined, pendingSizes = undefined,
+                        currentBodyCategory = null, request = requestSizeVerdict } = {}) {
     const fn = new Function("activeItem", "pendingAgeGroup", "pendingSizes", "currentBodyCategory",
-      code + "\nreturn { sizeCategoryMismatchReason, hasSizeCategoryMismatch };");
-    return fn(activeItem, pendingAgeGroup, pendingSizes, currentBodyCategory);
+      "requestSizeVerdict", "$",
+      code + "\nreturn { sizeCategoryMismatchReason, hasSizeCategoryMismatch, loadProductVerdict };");
+    return fn(activeItem, pendingAgeGroup, pendingSizes, currentBodyCategory, request, () => null);
   }
 
-  const blocked = harness({
+  const blocked = await harness({
     activeItem: { ageGroup: "uncertain", sizes: ["8", "10", "12", "14", "16"] },
     currentBodyCategory: "adult",
   });
@@ -64,29 +78,50 @@ console.log("── §1 sizeCategoryMismatchReason(): reads real module state, r
 
   /* The classifier-only fallback path, unchanged: still works when NO size list ever
      reached us, which is the only situation it is still trusted for. */
-  const blockedByClassifier = harness({ activeItem: { ageGroup: "kids" }, currentBodyCategory: "adult" });
+  const blockedByClassifier = await harness({ activeItem: { ageGroup: "kids" }, currentBodyCategory: "adult" });
   check("no size list at all + a confident 'kids' verdict still blocks (fallback intact)",
     blockedByClassifier.sizeCategoryMismatchReason() !== null);
 
-  const allowedAdult = harness({
+  const allowedAdult = await harness({
     activeItem: { ageGroup: "uncertain", sizes: ["S", "M", "L"] }, currentBodyCategory: "adult",
   });
   check("adult body + adult product: no reason (null)", allowedAdult.sizeCategoryMismatchReason() === null);
 
-  const allowedChild = harness({
+  const allowedChild = await harness({
     activeItem: { ageGroup: "kids", sizes: ["8", "10"] }, currentBodyCategory: "child",
   });
   check("child body + kids product: no reason (null)", allowedChild.sizeCategoryMismatchReason() === null);
 
-  const allowedUnknown = harness({ activeItem: null, currentBodyCategory: "adult" });
+  const allowedUnknown = await harness({ activeItem: null, currentBodyCategory: "adult" });
   check("adult body + nothing resolved about the product yet: no reason (null)",
     allowedUnknown.sizeCategoryMismatchReason() === null);
 
-  const noMeasurements = harness({
+  const noMeasurements = await harness({
     activeItem: { sizes: ["8", "10"] }, currentBodyCategory: null,
   });
   check("kids product but no measurements entered yet: no reason (null)",
     noMeasurements.sizeCategoryMismatchReason() === null);
+
+  /* NEUTRAL UNTIL KNOWN (CLAUDE.md §2.5). The verdict is the server's now, so there is a
+     window - a garment swap, a first read in the room - where it has not arrived. The gate
+     passes through that window rather than guessing, and blocks once it lands. */
+  const inFlight = rawHarness({
+    activeItem: { ageGroup: "uncertain", sizes: ["8", "10", "12", "14", "16"] }, currentBodyCategory: "adult",
+  });
+  check("while the product verdict is in flight, the gate passes (never block on ambiguity)",
+    inFlight.sizeCategoryMismatchReason() === null);
+  await inFlight.loadProductVerdict();
+  check("...and blocks the moment it lands", inFlight.sizeCategoryMismatchReason() !== null);
+
+  const offline = rawHarness({
+    activeItem: { ageGroup: "kids", sizes: ["8", "10"] }, currentBodyCategory: "adult",
+    request: () => Promise.reject(new Error("offline")),
+  });
+  const quiet = console.warn; console.warn = () => {};
+  const got = await offline.loadProductVerdict();
+  console.warn = quiet;
+  check("a FAILED product request resolves null, never throws, and the gate passes",
+    got === null && offline.sizeCategoryMismatchReason() === null);
 }
 
 console.log("\n── §2 goLive() WIRING: the gate fires before any camera/token/billing work ──");
