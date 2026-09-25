@@ -47,13 +47,27 @@ const MIME = {
   ".y4m": "video/x-yuv4mpeg",
 };
 
-/** Resolve a request path to a real file inside ROOT, or null if it escapes or is absent. */
+/* PEAR_VISUAL_OVERLAY=<dir> (npm run qa:visual:dist) serves a BUILT client over the repo:
+   scripts/build.mjs --qa writes the same minified bundle production ships, with the mock
+   kept so the agent can still drive it. Mirrors server.js with dist/ live - a code file
+   (.js/.css/.html) comes from the overlay or not at all, never falling back to source, so
+   a file the build forgot to emit fails here the way it would for a shopper. Fixtures,
+   images and video still come from the repo. */
+const OVERLAY = process.env.PEAR_VISUAL_OVERLAY ? resolve(ROOT, process.env.PEAR_VISUAL_OVERLAY) : null;
+const CODE_FILE = /\.(m?js|css|html)$/i;
+
+function resolveUnder(base, rel) {
+  const abs = resolve(join(base, normalize(rel)));
+  if (abs !== base && !abs.startsWith(base + sep)) return null;   // traversal
+  try { return statSync(abs).isFile() ? abs : null; } catch (_) { return null; }
+}
+
+/** Resolve a request path to a real file inside ROOT (or the overlay), or null if it escapes or is absent. */
 function resolveInRoot(urlPath) {
   let rel;
   try { rel = decodeURIComponent(urlPath.split("?")[0]); } catch (_) { return null; }
-  const abs = resolve(join(ROOT, normalize(rel)));
-  if (abs !== ROOT && !abs.startsWith(ROOT + sep)) return null;   // traversal
-  try { return statSync(abs).isFile() ? abs : null; } catch (_) { return null; }
+  if (OVERLAY && CODE_FILE.test(rel) && !rel.startsWith("/test/")) return resolveUnder(OVERLAY, rel);
+  return resolveUnder(ROOT, rel);
 }
 
 /**

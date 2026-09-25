@@ -3119,6 +3119,46 @@ app.all("/api/*", (req, res) => {
   res.status(404).json({ error: "not_found", message: `No API route for ${req.method} ${req.path}` });
 });
 
+/* ── Public roots: the shipped build, or the source ─────────────────────────
+   Everything from here to the "Start (local only" banner decides what a browser can
+   download, and test/static-allowlist.test.mjs runs it as one block with only
+   app/express/path/fs/crypto/__dirname/process in scope (CLAUDE.md §2.6, §2.10).
+
+   PRODUCTION SERVES dist/ (scripts/build.mjs): minified, comments and log narration
+   stripped, the mock harness and debug hooks folded away, the SDK same-origin. That
+   is the whole point of the build - the source spelled out every sizing rule, prompt
+   clause and heuristic, with the reasoning, to anyone with DevTools. On Vercel dist/
+   is produced by the vercel-build script; locally PEAR_SERVE_DIST=1 opts in after
+   `npm run build`, and PEAR_SERVE_DIST=0 forces source anywhere.
+
+   A MISSING dist/ WHERE ONE WAS EXPECTED SERVES SOURCE, LOUDLY. Refusing to serve would
+   take the fitting room down for every shopper over a build hiccup; serving source is the
+   pre-build behaviour and keeps them trying on. The error line is the tripwire.
+
+   SUPPORT VIEW: /fitting-room/?pear_debug=<PEAR_DEBUG_TOKEN> serves the SOURCE room -
+   every [PEAR] log line and window.__pearDebug* hook - so the "[PEAR] console is the
+   debugging contract with live merchants" rule (CLAUDE.md §6) survives the build. Off
+   unless PEAR_DEBUG_TOKEN is set, and set to at least 16 characters; compared in
+   constant time. Hand the link to whoever is debugging, never publish it. */
+const SRC_ROOT   = __dirname;
+const DIST_ROOT  = path.join(__dirname, "dist");
+const DIST_BUILT = fs.existsSync(path.join(DIST_ROOT, "fitting-room", "app.js"));
+const WANT_DIST  = process.env.PEAR_SERVE_DIST === "1" ||
+                   (!!process.env.VERCEL && process.env.PEAR_SERVE_DIST !== "0");
+const SERVE_DIST = WANT_DIST && DIST_BUILT;
+if (WANT_DIST && !DIST_BUILT) {
+  console.error("[PEAR] ✖ dist/ is missing - serving the unminified SOURCE to shoppers. " +
+    "Run `npm run build` (on Vercel: the vercel-build script) before deploying.");
+}
+const CODE_ROOT = SERVE_DIST ? DIST_ROOT : SRC_ROOT;
+
+const PEAR_DEBUG_TOKEN = String(process.env.PEAR_DEBUG_TOKEN || "");
+function isDebugToken(candidate) {
+  if (PEAR_DEBUG_TOKEN.length < 16 || typeof candidate !== "string") return false;
+  const a = Buffer.from(candidate), b = Buffer.from(PEAR_DEBUG_TOKEN);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 /* ── Embeddable widget (pear-widget.js) ────────────────────────────────────
    Served with an explicit route so it carries CORS + cache headers - stores
    embed it with a plain <script src> from any origin. */
@@ -3126,12 +3166,12 @@ app.get("/widget/pear-widget.js", (req, res) => {
   res.setHeader("Content-Type", "application/javascript");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "public, max-age=3600");
-  res.sendFile(path.join(__dirname, "widget/pear-widget.js"));
+  res.sendFile(path.join(CODE_ROOT, "widget/pear-widget.js"));
 });
 
 /* Store-integration guide (widget/pear-widget-guide.html). */
 app.get("/widget/guide", (req, res) => {
-  res.sendFile(path.join(__dirname, "widget/pear-widget-guide.html"));
+  res.sendFile(path.join(CODE_ROOT, "widget/pear-widget-guide.html"));
 });
 
 /* Root redirect - index.html no longer exists, so send visitors straight to the
@@ -3159,13 +3199,23 @@ app.get("/", (req, res) => {
    path. */
 let fittingRoomHtmlCache = null;
 function getFittingRoomHtml() {
+  const file = path.join(CODE_ROOT, "fitting-room/index.html");
   if (!process.env.VERCEL) {
-    return fs.readFileSync(path.join(__dirname, "fitting-room/index.html"), "utf8");
+    return fs.readFileSync(file, "utf8");
   }
   if (fittingRoomHtmlCache === null) {
-    fittingRoomHtmlCache = fs.readFileSync(path.join(__dirname, "fitting-room/index.html"), "utf8");
+    fittingRoomHtmlCache = fs.readFileSync(file, "utf8");
   }
   return fittingRoomHtmlCache;
+}
+/* The support view's page: the SOURCE index.html, with every relative script/stylesheet
+   pointed at /__src/<token>/fitting-room/ so the whole room - and the modules app.js
+   imports relative to itself - load unbuilt. Attributes are rewritten rather than a
+   <base> injected, because <base> also re-targets in-page "#" links into navigations. */
+function debugFittingRoomHtml() {
+  const prefix = `/__src/${PEAR_DEBUG_TOKEN}/fitting-room/`;
+  return fs.readFileSync(path.join(SRC_ROOT, "fitting-room/index.html"), "utf8")
+    .replace(/\b(src|href)="(?![a-z]+:|\/|#)([^"]+\.(?:m?js|css)(?:\?[^"]*)?)"/gi, `$1="${prefix}$2"`);
 }
 app.get(["/fitting-room", "/fitting-room/", "/fitting-room/index.html"], (req, res) => {
   // x-vercel-ip-country is set by Vercel's edge network from the client's IP; it's
@@ -3173,10 +3223,12 @@ app.get(["/fitting-room", "/fitting-room/", "/fitting-room/index.html"], (req, r
   // every country other than Israel) defaults to English.
   const country = String(req.headers["x-vercel-ip-country"] || "").toUpperCase();
   const lang = country === "IL" ? "he" : "en";
-  const html = getFittingRoomHtml().replace(
+  const debug = isDebugToken(req.query.pear_debug);
+  const html = (debug ? debugFittingRoomHtml() : getFittingRoomHtml()).replace(
     "<head>",
     `<head>\n    <script>window.__PEAR_DEFAULT_LANG__="${lang}"</script>`
   );
+  if (debug) console.log("[PEAR] support view: serving the SOURCE fitting room (?pear_debug)");
   res.setHeader("Content-Type", "text/html; charset=UTF-8");
   res.send(html);
 });
@@ -3197,20 +3249,58 @@ app.get(["/fitting-room", "/fitting-room/", "/fitting-room/index.html"], (req, r
    root is private until someone adds it here, on purpose. Never go back to serving
    __dirname "because an asset 404'd" - add that asset's directory or file instead.
 
-   test/static-allowlist.test.mjs slices this block (from its opening line to the
-   "Start (local only" banner) and asserts both halves: the private paths 404, the
-   public ones load. Keep it self-contained - it runs with only app/express/path/fs/
-   __dirname in scope (CLAUDE.md §2.6). */
-const uiRoot = __dirname;
-const PUBLIC_DIRS  = ["fitting-room", "widget", "admin"];
+   test/static-allowlist.test.mjs slices from the "Public roots" banner above to the
+   "Start (local only" banner and asserts both halves: the private paths 404, the
+   public ones load - from source, and from dist/ when the build is live. Keep it
+   self-contained - it runs with only app/express/path/fs/crypto/__dirname/process in
+   scope (CLAUDE.md §2.6). */
+const PUBLIC_DIRS  = ["fitting-room", "widget", "admin"];   // lockstep: scripts/build.mjs
 const PUBLIC_FILES = ["pear-logo.png", "Commercial_video_for_a_tech_fa.mp4"];
+const STATIC_OPTS  = { extensions: ["html"], index: false };
 
-/* serve-static per public directory (JS, CSS, images, video…) - never the repo root */
+/* CODE_FILE is what the build rewrites. With dist/ live those come ONLY from dist/ - a
+   request the build did not produce (config.js and i18n.js, folded into app.js) is a 404,
+   never a fall-through to the readable source. Everything else (images, video, svg) is
+   not code and still comes from the source directory. */
+const CODE_FILE = /\.(m?js|css|html)$/i;
+/* The SDK bundle is content-hashed (rt.<12 hex>.js), so it is safe to cache for a year -
+   and it must be: it is ~800 KB and the room is otherwise no-store. s-maxage lets
+   Vercel's CDN hold it too, so it is not re-served by this function per visitor. */
+const SDK_BUNDLE_FILE = /(^|[\\/])rt\.[0-9a-f]{12}\.js$/;
+const DIST_OPTS = {
+  ...STATIC_OPTS,
+  setHeaders(res, filePath) {
+    if (SDK_BUNDLE_FILE.test(filePath)) {
+      res.setHeader("Cache-Control", "public, max-age=31536000, s-maxage=31536000, immutable");
+    }
+  },
+};
+
+/* Support view assets - source, behind the token, never cached. A wrong or absent token
+   is the same 404 as any unknown path, so the route does not advertise itself.
+   ONE STATIC ROOT PER PUBLIC DIRECTORY, never one at the repo: `send` only refuses a ".."
+   that climbs OUT of its root, so a repo-rooted mount served /__src/<t>/fitting-room/../
+   server.js - the source of this file - to anyone holding the token. Rooted at the
+   directory, the same "../" climbs out and is refused (static-allowlist §5.18). */
+const debugSources = Object.fromEntries(
+  PUBLIC_DIRS.map((dir) => [dir, express.static(path.join(SRC_ROOT, dir), STATIC_OPTS)]));
+app.use("/__src/:token/:dir", (req, res, next) => {
+  if (!isDebugToken(req.params.token) || !Object.hasOwn(debugSources, req.params.dir)) {
+    return res.status(404).json({ error: "not_found", path: req.path });
+  }
+  res.setHeader("Cache-Control", "no-store");
+  return debugSources[req.params.dir](req, res, next);
+});
+
+/* serve-static per public directory - never the repo root */
 for (const dir of PUBLIC_DIRS) {
-  app.use(`/${dir}`, express.static(path.join(uiRoot, dir), { extensions: ["html"], index: false }));
+  if (SERVE_DIST) app.use(`/${dir}`, express.static(path.join(DIST_ROOT, dir), DIST_OPTS));
+  const fromSource = express.static(path.join(SRC_ROOT, dir), STATIC_OPTS);
+  app.use(`/${dir}`, (req, res, next) =>
+    SERVE_DIST && CODE_FILE.test(req.path) ? next() : fromSource(req, res, next));
 }
 for (const file of PUBLIC_FILES) {
-  app.get(`/${file}`, (_req, res) => res.sendFile(path.join(uiRoot, file)));
+  app.get(`/${file}`, (_req, res) => res.sendFile(path.join(SRC_ROOT, file)));
 }
 
 /* Page router - directory index and extensionless .html, INSIDE a public directory only.
@@ -3219,16 +3309,16 @@ for (const file of PUBLIC_FILES) {
 app.use((req, res) => {
   const top = req.path.split("/")[1] || "";
   if (PUBLIC_DIRS.includes(top)) {
-    const base = path.join(uiRoot, top) + path.sep;
+    const base = path.join(CODE_ROOT, top) + path.sep;
     const candidates = [
-      path.join(uiRoot, req.path, "index.html"),                // directory index
-      path.join(uiRoot, req.path.replace(/\/$/, "") + ".html"), // extensionless → .html
+      path.join(CODE_ROOT, req.path, "index.html"),                // directory index
+      path.join(CODE_ROOT, req.path.replace(/\/$/, "") + ".html"), // extensionless → .html
     ];
     for (const file of candidates) {
       if (!file.startsWith(base)) continue;
       try {
         if (fs.statSync(file).isFile()) {
-          console.log(`[page-router] ${req.method} ${req.path} → ${path.relative(uiRoot, file)}`);
+          console.log(`[page-router] ${req.method} ${req.path} → ${path.relative(SRC_ROOT, file)}`);
           return res.sendFile(file);
         }
       } catch {}

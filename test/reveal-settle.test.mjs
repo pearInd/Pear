@@ -504,7 +504,7 @@ console.log("\n── §7 THE NUMBERS ──");
 
 console.log("\n── §8 THE MOCK SPEAKS THE SDK'S initialState ──");
 {
-  const mock = extract("async function mockRealtimeConnect(inputStream, opts) {", "\nif (typeof window !== \"undefined\") window.__pearMockDecart");
+  const mock = extract("async function mockRealtimeConnect(inputStream, opts) {", "\nif ((typeof PEAR_DEBUG_BUILD === \"undefined\" || PEAR_DEBUG_BUILD) && typeof window !== \"undefined\") window.__pearMockDecart");
   const iInit = mock.indexOf('record("initialState"');
   const iAwait = mock.indexOf("if (initAck) await initAck;");
   const iConnected = mock.indexOf('MOCK_DECART_STATE.connectionState = "connected";');

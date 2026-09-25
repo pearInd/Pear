@@ -552,9 +552,9 @@ console.log("\n── §7 DETECTION IS LOCAL; THE SWAP TIMELINE IS MEASURED ─�
   const trace = t0 === -1 ? "" : SRC.slice(t0, SRC.indexOf("\n}\n", t0));
   check("the swap timeline exists, and costs nothing unless ?orient_debug=1",
     /if \(!ORIENT_DEBUG\) return null;/.test(trace));
-  check("...it stamps dispatch, the ack and the first Decart frame presented after it, each with the LOCAL yaw",
+  check("...it stamps dispatch, the ack and the first rendered frame presented after it, each with the LOCAL yaw",
     /set\(\) acked/.test(trace) && /requestVideoFrameCallback/.test(trace) &&
-    /first Decart frame presented after the ack/.test(trace) && /local \|yaw\|/.test(trace));
+    /first rendered frame presented after the ack/.test(trace) && /local \|yaw\|/.test(trace));
   check("...and maybeSwap() drives it around the one set() it times",
     /const trace = typeof traceSwapTimeline === "function"/.test(SRC) &&
     /await applyActive\(\);[^\n]*\n\s*if \(heldGate\) heldGate\.unhold\("swap acknowledged"\);\s*\n\s*if \(trace\) trace\.acknowledged\(\);/.test(SRC));

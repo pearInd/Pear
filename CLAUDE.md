@@ -118,7 +118,9 @@ wrong"*, *"it slimmed me down"*, *"front and back aren't right"*.
 **Layer B is where most real fit/back-view problems actually live.** "The back
 came out plain" is almost never a prompt problem — it is `distinctBackOf()`
 returning `undefined`. Run `window.__pearDebugBackView()` in a live session; it
-returns one of five `BACK_VIEW_REASON` values and tells you which.
+returns one of five `BACK_VIEW_REASON` values and tells you which. On the deployed site
+that hook only exists in the support view (`/fitting-room/?pear_debug=<PEAR_DEBUG_TOKEN>`,
+§2.11) — the production bundle strips it.
 
 **Layers B and C have a visual gate now.** `npm run qa:visual` (§8) drives a full 360 with
 a mocked Decart session and scores the frames, so "the back came out plain" and "the back
@@ -210,9 +212,12 @@ JSDoc, and `server.js` from `const otpStore = new Map();`.
 `app.js` from `const candidates = currentSizeCategory === "child" ? childFits : adultFits;`
 to `// SNAP TO THE PRODUCT'S OWN LIST.` and runs that loop standalone, so it scores the
 real penalty formula rather than a copy of it.
-`server.js`'s static-hosting block is one too: `static-allowlist` slices it from
-`/* ── Static hosting` to `/* ── Start (local only` and mounts it on a bare express app
-with only `app`/`express`/`path`/`fs`/`__dirname` in scope (§2.10).
+`server.js`'s public-roots + static-hosting block is one too: `static-allowlist` slices it
+from `/* ── Public roots` to `/* ── Start (local only` and mounts it on a bare express app
+with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (§2.10).
+`reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
+guarded `window.__pearMockDecart = …` line that follows it — that line's exact text (with its
+`PEAR_DEBUG_BUILD` guard, §2.11) is its end marker.
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.
@@ -267,6 +272,32 @@ who asked: `/server.js`, `/CLAUDE.md`, `/package.json`, `/scanner/…`, `/test/�
 asset 404s, add its directory or file to those lists — never widen back to the root.
 `test/static-allowlist.test.mjs` asserts the absence, the presence, and that `../` cannot
 climb out of a public directory.
+
+### 2.11 Shoppers download the BUILD, not the source
+Production serves `dist/` (`scripts/build.mjs`, run on Vercel by the `vercel-build` script):
+minified, every comment and log line stripped, the mock harness and debug hooks folded
+away, and the vendor SDK bundled same-origin as `rt.<hash>.js` instead of imported from a
+CDN URL that names it. The source stays the source — tests, `trace:prompt` and `qa:visual`
+run on the unbuilt files. Rules that keep the build honest:
+
+- **Any new debug hook or mock seam is guarded** with the inline expression
+  `(typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && …` (never a module-scope
+  const — §2.6/§2.7). The build defines it `false`, the branch folds away, and the mock
+  block tree-shakes out. An unguarded `window.__pearDebugX = …` fails the build.
+- **Shipped strings are vendor-neutral.** `console.error` messages, thrown errors and
+  anything a shopper can see survive minification; write "render engine", not the vendor's
+  name. Developer-only hints go behind the same guard. The build's `FORBIDDEN` list fails on
+  comment blocks, vendor CDN URLs, `createDecartClient`, `DECART_API_KEY`, the mock and
+  debug-hook registrations.
+- **The `[PEAR]` console contract (§6) lives in the support view.** With
+  `PEAR_DEBUG_TOKEN` set (≥16 chars), `/fitting-room/?pear_debug=<token>` serves the source
+  room — every log line and `window.__pearDebug*` hook — through `/__src/<token>/<dir>/`.
+  Each support mount is rooted at its own public directory: a repo-rooted one served
+  `server.js` through `fitting-room/../` (static-allowlist §5.18).
+- **A missing `dist/` degrades to source, loudly** (`[PEAR] ✖ dist/ is missing`) rather
+  than taking the room down. If that line shows up in Vercel logs, the build did not run.
+- After a change to anything the build touches, `npm run qa:visual:dist` drives the same
+  360 against the minified room (build `--qa` keeps the mock so the agent can run it).
 
 ---
 
@@ -327,6 +358,10 @@ npm run qa:visual        # the visual gate: drive a 360 + swap, then score the f
 npm run test:visual      #   …just the agent  (npx playwright test test/e2e/visual-agent.spec.mjs)
 npm run inspect:visuals  #   …just the scoring (node scripts/inspect-visuals.mjs)
 npm run fixtures         # regenerate test/fixtures/ (generated, gitignored, --force to rebuild)
+
+npm run build            # dist/ — the minified client production serves (§2.11)
+npm run qa:visual:dist   # the visual gate against the MINIFIED room (build --qa → dist-qa/)
+PEAR_SERVE_DIST=1 npm start   # run the server the way production does, after npm run build
 ```
 
 `test:api` still **does not exist** in `package.json` — there is no API-health
@@ -367,7 +402,8 @@ byte-identical, the edit changed nothing on the wire — say so.
 - Prefer abstaining over guessing. An unconfident verdict must not outrank a
   downstream classifier.
 - `console.log("[PEAR] ...")` is the debugging contract with live merchants; keep
-  the prefix and keep messages findable.
+  the prefix and keep messages findable. The production build strips log/warn/group
+  lines, so on a live store that contract is served by the support view (§2.11).
 - Never log a raw `data:` URL — use `abbrevImg()` / `abbrevUrl()`.
 
 ---

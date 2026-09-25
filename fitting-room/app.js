@@ -1139,7 +1139,7 @@ function usableImageRef(ref) {
     usable: false,
     kind: "sdk-fallthrough",
     detail: `"${ref.slice(0, 60)}" is neither a Blob, a data: URL, nor an ABSOLUTE http(s) URL - ` +
-      "imageToBase64() would return it verbatim in place of image bytes and Decart would render an arbitrary garment",
+      "imageToBase64() would return it verbatim in place of image bytes and the render engine would draw an arbitrary garment",
   };
 }
 
@@ -1232,7 +1232,7 @@ async function debugReinjectGarment(opts = {}) {
     return false;
   }
 }
-if (typeof window !== "undefined") window.__pearDebugReinjectGarment = debugReinjectGarment;
+if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") window.__pearDebugReinjectGarment = debugReinjectGarment;
 
 /** @returns {boolean} true while a billable realtime session is active. */
 const isLive = () => connState === "connected" || connState === "generating";
@@ -5245,6 +5245,19 @@ function resetToLive() {
    COST: zero. Nothing in this block opens a socket or issues a network request.
    ============================================================================= */
 
+/* PEAR_DEBUG_BUILD - WHY EVERY MOCK SEAM AND DEBUG HOOK CARRIES A typeof GUARD.
+   scripts/build.mjs ships this file minified, and defines PEAR_DEBUG_BUILD=false for the
+   production bundle. Each seam into this block, and each window.__pearDebug* registration,
+   is written as
+       (typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && …
+   which esbuild folds to `false` there - so the call site disappears, nothing references the
+   mock any more, and the whole block below is tree-shaken out of what a shopper downloads
+   (and ?mock_decart=1 stops being a switch anyone can flip on the live site).
+   Everywhere else the name is UNDEFINED, the guard is true, and nothing changes: the source
+   the tests extract, the visual harness (?mock_decart=1), and the ?pear_debug=<token> view
+   that server.js serves from source for merchant support. Written inline rather than as a
+   module-scope const because extracted blocks run standalone (CLAUDE.md §2.6/§2.7). */
+
 /** @returns {boolean} true only with ?mock_decart=1 - the realtime session is served by a
  *  local canvas loop instead of Decart. Read per call (never cached at module scope) to
  *  match the other URL flags in this file and to stay safe under test extraction. */
@@ -5284,7 +5297,7 @@ function mockAckMs() {
    visible mock artifact, left visible rather than papered over: rescaling it would mean
    touching a second real path for the harness's convenience. */
 function liveWindowMs() {
-  if (!mockDecartEnabled()) return LIVE_DURATION_MS;
+  if (!(typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) || !mockDecartEnabled()) return LIVE_DURATION_MS;
   let raw = null;
   try { raw = new URLSearchParams(location.search).get("mock_live_ms"); } catch (_) { return LIVE_DURATION_MS; }
   const n = Number(raw);
@@ -5610,7 +5623,7 @@ async function mockRealtimeConnect(inputStream, opts) {
   return session;
 }
 
-if (typeof window !== "undefined") window.__pearMockDecart = MOCK_DECART_STATE;
+if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") window.__pearMockDecart = MOCK_DECART_STATE;
 
 /* ── MOCK POSE SENSOR (?mock_decart=1) ────────────────────────────────────────
    The turn is the thing this repo keeps regressing on, and the turn is decided by
@@ -5747,7 +5760,7 @@ function mockPoseAdvanceSweep() {
   MOCK_POSE.angle = s.from + Math.sign(s.to - s.from) * travelled;
 }
 
-if (typeof window !== "undefined") {
+if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
   window.__pearMockPose = {
     get angle() { return MOCK_POSE.angle; },
     get frames() { return MOCK_POSE.frames; },
@@ -5784,9 +5797,9 @@ if (typeof window !== "undefined") {
 async function loadSDK() {
   /* MOCK SEAM 1 of 2 (?mock_decart=1). Returning here means no CDN import, no SDK, and
      no real client - everything below this line is the production path, untouched. */
-  if (mockDecartEnabled()) {
+  if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && mockDecartEnabled()) {
     console.log("[PEAR][MOCK] loadSDK() - ?mock_decart=1: serving the LOCAL mock client (no CDN import, no Decart session)");
-    return { createDecartClient: createMockDecartClient };
+    return { createClient: createMockDecartClient };
   }
   let lastErr;
   for (const url of SDK_URLS) {
@@ -5794,7 +5807,11 @@ async function loadSDK() {
     try {
       const mod = await import(/* @vite-ignore */ url);
       console.log("[PEAR] loadSDK() - loaded OK from", url);
-      return mod;
+      /* ONE NEUTRAL NAME for the factory, whichever build loaded it: the CDN module exports
+         the vendor's createDecartClient, the production same-origin bundle (rt.js, see
+         scripts/build.mjs) re-exports it as createClient - and PEAR_SDK_BUNDLE folds this to
+         the second branch there, so the vendor's export name never ships in app.js. */
+      return { createClient: typeof PEAR_SDK_BUNDLE === "string" ? mod.createClient : mod.createDecartClient };
     }
     catch (e) { lastErr = e; console.warn("SDK load failed from", url, e?.message || e); }
   }
@@ -5849,7 +5866,7 @@ async function mintEphemeralToken() {
      the harness free. A test asserting zero /api/realtime-token requests is asserting
      exactly this line. The stub is never sent anywhere: createMockDecartClient()
      ignores its argument. */
-  if (mockDecartEnabled()) {
+  if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && mockDecartEnabled()) {
     MOCK_DECART_STATE.tokenMints++;
     console.log("[PEAR][MOCK] mintEphemeralToken() - ?mock_decart=1: stub token, TOKEN_ENDPOINT not contacted");
     return "ek_mock_local_only";
@@ -5894,7 +5911,8 @@ async function mintEphemeralToken() {
     const detail = data.message || data.error || `HTTP ${resp.status}`;
     console.error("[PEAR] mintEphemeralToken() - token mint failed:", detail,
       "\n  Full server response:", data,
-      resp.status !== 405
+      !(typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) ? ""
+        : resp.status !== 405
         ? "\n  → Check that DECART_API_KEY in .env is set to a valid dct_… key from platform.decart.ai"
         : "\n  → Open the fitting room via http://localhost:3000/fitting-room/ (the Express server)");
     throw new Error("מינטינג טוקן נכשל: " + detail);
@@ -6196,7 +6214,7 @@ function createThrottledInputStream(srcStream, {
         settleTimer = null;
         if (disposed || gateOpen || held) return;
         gateOpen = true;
-        console.log(`[PEAR] input gate released (${why}) - streaming to Decart now;`,
+        console.log(`[PEAR] input gate released (${why}) - streaming to the render engine now;`,
           "its first frame is conditioned on the real reference");
       };
       /* THE CEILING HAS DONE ITS JOB HERE. It exists for a caller that never reports success
@@ -6256,7 +6274,7 @@ function createThrottledInputStream(srcStream, {
          keeps Decart from rendering the blank shirt while the reference uploads (see hold()). */
       const now = timer !== null && clock() - lastFrameAt >= frameMs;
       if (now) { clearInterval(timer); timer = null; tick(); start(); }
-      console.log(`[PEAR] input gate unheld (${why}) - streaming to Decart on the new reference` +
+      console.log(`[PEAR] input gate unheld (${why}) - streaming to the render engine on the new reference` +
         (now ? " (first frame sent at the ACK)" : ""));
       return true;
     },
@@ -6454,9 +6472,9 @@ async function primeInitialConditioning() {
     try {
       floor = await resolveInitialConditioning(item);
     } catch (e) {
-      console.error(`[VTO Pipeline] REFUSING to initialize the Decart session - Garment ID: ${garmentIdOf(item)}`,
+      console.error(`[VTO Pipeline] REFUSING to initialize the render session - Garment ID: ${garmentIdOf(item)}`,
         `| ${e?.message || e}`, "\n  → no session is opened and no token is minted: a session with no",
-        "acknowledged garment renders Decart's own default garment until one arrives.");
+        "acknowledged garment renders the engine's own default garment until one arrives.");
       throw e;
     }
     const nowLook = resolveLook();
@@ -6806,7 +6824,7 @@ async function connectRealtime({ force = false } = {}) {
   console.log("[PEAR] connectRealtime() - stage 1/4: loading SDK from CDN…");
   try {
     /* ── load SDK ─────────────────────────────────────────────────────────── */
-    const { createDecartClient } = await loadSDK();
+    const { createClient } = await loadSDK();
 
     /* ── mint token → create client → build the throttled input, WITH ONE RETRY ──
        THE FAILURE THIS COVERS: "WebSocket is not open" thrown from the SDK's
@@ -6847,7 +6865,10 @@ async function connectRealtime({ force = false } = {}) {
       console.log("[PEAR] connectRealtime() - stage 3/4: token OK. Creating Decart client…");
 
       /* ── create client with the ephemeral token ───────────────────────────── */
-      const client = createDecartClient({ apiKey: ekToken });
+      /* telemetry:false - the SDK otherwise reports to the vendor's telemetry host from the
+         shopper's browser, which names the vendor in the Network tab and adds a request
+         that nothing in this product reads. Option verified in @decartai/sdk@0.1.5. */
+      const client = createClient({ apiKey: ekToken, telemetry: false });
       console.log("[PEAR] connectRealtime() - stage 4/4: opening WebRTC session (waiting for 'connected')…");
 
       /* Bug 3 fix: work off a CLONE of the camera tracks so disconnect/teardown never
@@ -6902,8 +6923,8 @@ async function connectRealtime({ force = false } = {}) {
     }
 
     rtClient.on("error", (err) => {
-      console.error("[session] Decart error:", err?.message || String(err));
-      showCamError("שגיאת Decart: " + (err?.message || err));
+      console.error("[session] render engine error:", err?.message || String(err));
+      showCamError("שגיאת חיבור: " + (err?.message || err));
     });
 
     connState = (rtClient.getConnectionState && rtClient.getConnectionState()) || "connected";
@@ -9708,9 +9729,9 @@ function startStreamContinuity() {
     const live = isLive() && cardEl.classList.contains("show-live");
     const { alpha, event } = model.step(now, live);
     if (event && event.type === "stall") {
-      console.log(`[PEAR] stream continuity: Decart output silent for ${event.gapMs}ms - cross-fading the live camera in so the view keeps moving`);
+      console.log(`[PEAR] stream continuity: render output silent for ${event.gapMs}ms - cross-fading the live camera in so the view keeps moving`);
     } else if (event && event.type === "resume") {
-      console.log(`[PEAR] stream continuity: Decart output back after ${event.stalledMs}ms - cross-fading to the render`);
+      console.log(`[PEAR] stream continuity: render output back after ${event.stalledMs}ms - cross-fading to the render`);
     }
     /* Draw BEFORE the opacity rises, so the first visible camera frame is a current one. */
     const drawn = alpha > 0 ? drawContinuityFrame(c, cam, ai) : true;
@@ -10287,7 +10308,7 @@ function traceSwapTimeline(next, predictive, held, refUrl) {
     finished = true;
     dropMark();
     if (hit) {
-      marks.push(`first Decart frame presented after the ack +${Math.round(hit.at - p0)}ms (local |yaw| ${yaw()})`);
+      marks.push(`first rendered frame presented after the ack +${Math.round(hit.at - p0)}ms (local |yaw| ${yaw()})`);
       console.log(`[PEAR][ORIENT] RENDER_APPLIED → ${tag}: +${ms(hit.at - ackAt)} after SERVER_CONFIRMED · ${hit.how} · local |yaw| ${yaw()}`);
     }
     const clientToAck = ackAt !== null && sentAt !== null ? ms(ackAt - sentAt) : "n/a";
@@ -10316,9 +10337,9 @@ function traceSwapTimeline(next, predictive, held, refUrl) {
       marks.push(`set() acked +${Date.now() - t0}ms (local |yaw| ${yaw()})`);
       console.log(`[PEAR][ORIENT] SERVER_CONFIRMED → ${tag}: set_image_ack received, ` +
         `+${sentAt === null ? "n/a (no reference write was marked)" : ms(ackAt - sentAt)} after DISPATCH_SENT ` +
-        `(upload + Decart accepting the reference) · local |yaw| ${yaw()} · the view toast follows in ${ORIENT_FADE_HOLD_MS}ms`);
+        `(upload + the engine accepting the reference) · local |yaw| ${yaw()} · the view toast follows in ${ORIENT_FADE_HOLD_MS}ms`);
       if (!watchable) { finish(null, "output frame time not measurable here (no requestVideoFrameCallback)"); return; }
-      setTimeout(() => finish(null, `no Decart output frame presented within ${SWAP_RENDER_TRACE_MAX_MS}ms of the ACK`),
+      setTimeout(() => finish(null, `no rendered output frame presented within ${SWAP_RENDER_TRACE_MAX_MS}ms of the ACK`),
         SWAP_RENDER_TRACE_MAX_MS + 250);
     },
     failed(e) {
@@ -14952,7 +14973,7 @@ function clampPromptForWire(prompt, where) {
   if (s.length <= PROMPT_MAX_CHARS) return s;
   console.error(
     `[PEAR] ${where}: prompt is ${s.length} chars, over the ${PROMPT_MAX_CHARS} budget ` +
-    `(Decart hard-rejects >226 tokens). Truncating to keep the session alive - a builder ` +
+    `(the engine hard-rejects >226 tokens). Truncating to keep the session alive - a builder ` +
     `is bypassing fitPrompt(). Prefix: ${s.slice(0, 120)}…`
   );
   return s.slice(0, PROMPT_MAX_CHARS).trim();
@@ -15121,7 +15142,7 @@ function describeBackViewReadiness(item) {
 
 /* Answerable on a live session without a redeploy, which is the whole point: a shopper
    reporting a plain back is reporting one of five states and cannot tell you which. */
-if (typeof window !== "undefined") {
+if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
   window.__pearDebugBackView = () => {
     const r = describeBackViewReadiness(activeItem);
     /* ── PROVENANCE, BECAUSE "READY" WAS LYING ABOUT THE ONE CASE THAT MATTERED ──────
@@ -20122,7 +20143,7 @@ function loadPoseLandmarker() {
        automated 360 has something to turn. Second, never first - an injected _testDetector is
        a sandbox saying exactly what it wants and must keep outranking this. typeof-guarded:
        body-presence-gate extracts this block and runs it with neither name in scope. */
-    if (typeof mockDecartEnabled === "function" && mockDecartEnabled()) return mockPoseDetector();
+    if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof mockDecartEnabled === "function" && mockDecartEnabled()) return mockPoseDetector();
     try {
       /* Dynamic import of a CDN ES module: the only way to add this without a bundler,
          and it keeps the bytes off the initial page load entirely. */
