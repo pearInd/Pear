@@ -53,14 +53,6 @@ const TOKEN_TTL   = Math.min(3600, Math.max(1, Number(process.env.DECART_TOKEN_T
 const ALLOWED_ORIGINS = (process.env.DECART_ALLOWED_ORIGINS || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
 
-/* Admin authorization allowlist. requireAdminAuth() only accepts a Supabase Auth
-   JWT whose verified email is in this list. Without it, ANY account that can sign
-   up against the public anon key would pass the auth check (authentication ≠
-   authorization). Set ADMIN_EMAILS in .env AND in your Vercel env vars:
-     ADMIN_EMAILS=you@example.com,partner@example.com                            */
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
-  .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-
 /* ── Express setup ───────────────────────────────────────────────────────── */
 const app = express();
 app.use(express.json({ limit: "8mb" }));
@@ -68,28 +60,23 @@ app.disable("x-powered-by");
 app.set("trust proxy", true);   // Vercel/edge sets X-Forwarded-For; needed for req.ip + rate limiting
 
 /* ── Security headers (all responses) ──────────────────────────────────────────
-   Applied globally so HTML pages (not just /api) carry hardening headers. The
-   admin dashboard additionally gets strict anti-framing + no-store to defeat
-   clickjacking and stop the (login-gated) page being cached on shared machines.
-   The rest of the site allows same-origin framing so the storefront can embed the
-   fitting room (its "back to store" link uses target="_top", implying embedding). */
+   Applied globally so HTML pages (not just /api) carry hardening headers. The rest
+   of the site allows same-origin framing so the storefront can embed the fitting
+   room (its "back to store" link uses target="_top", implying embedding). The admin
+   dashboard that used to get its own deny-framing branch here was removed from this
+   project on 2026-09-26, with every /api/admin* route. */
 app.use((req, res, next) => {
   res.header("X-Content-Type-Options", "nosniff");
   res.header("Referrer-Policy", "strict-origin-when-cross-origin");
   res.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  const isAdmin = /(^|\/)admin(\.html|\.js|\.css)?(\/|$)/i.test(req.path);
   // The fitting room is embedded cross-origin by the pear-widget.js modal on
   // third-party store pages, so it (and the widget assets) must be frameable
   // from anywhere. It is a public, unauthenticated surface - the clickjacking
-  // protections stay in force on the admin dashboard and the rest of the site.
+  // protections stay in force on the rest of the site.
   const isEmbeddable = /^\/(fitting-room|widget)(\/|$)/i.test(req.path);
-  if (isAdmin) {
-    res.header("X-Frame-Options", "DENY");
-    res.header("Content-Security-Policy", "frame-ancestors 'none'");
-    res.header("Cache-Control", "no-store, no-cache, must-revalidate");
-  } else if (isEmbeddable) {
+  if (isEmbeddable) {
     res.header("Content-Security-Policy", "frame-ancestors *");
-    // Same no-store guarantee as /admin above: the fitting-room HTML/JS/CSS iterate
+    // No-store: the fitting-room HTML/JS/CSS iterate
     // fast (active demo work) and are embedded via <iframe>/<script src> on third-party
     // pages we don't control the caching of, so nothing here should ever be served
     // from a browser/CDN/proxy cache - every load must hit the origin fresh. Query
@@ -135,7 +122,6 @@ const sessionLimiter  = rateLimit({ windowMs: 60_000, max: 40 });   // session-l
 const userLimiter     = rateLimit({ windowMs: 60_000, max: 20 });   // user registration
 const trackLimiter    = rateLimit({ windowMs: 60_000, max: 60 });   // analytics ping
 const proxyLimiter    = rateLimit({ windowMs: 60_000, max: 120 });  // image proxy
-const authLimiter     = rateLimit({ windowMs: 60_000, max: 10 });   // admin login - brake password guessing
 const classifyLimiter = rateLimit({ windowMs: 60_000, max: 200 });   // garment front/back classification - calls Gemini
 const storeCatalogLimiter = rateLimit({ windowMs: 60_000, max: 30 }); // "Complete the Look" store-scoped catalog reads
 
@@ -402,36 +388,13 @@ app.post("/api/track-tryon", trackLimiter, async (req, res) => {
   }
 });
 
-/* ── Debug: verify Sheets env vars and write a test row (admin-only) ──────────
-   Gated behind requireAdminAuth: it previously exposed the Google Sheet ID and the
-   service-account email to any anonymous caller and let anyone write test rows.
-   Env-var VALUES are no longer echoed - only presence - even to admins. */
-app.get("/api/test-sheets", requireAdminAuth, async (req, res) => {
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  const email   = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const key     = process.env.GOOGLE_PRIVATE_KEY;
-  const envCheck = {
-    GOOGLE_SHEET_ID:              sheetId ? "✓ present" : "✗ MISSING",
-    GOOGLE_SERVICE_ACCOUNT_EMAIL: email   ? "✓ present" : "✗ MISSING",
-    GOOGLE_PRIVATE_KEY:           key     ? "✓ present" : "✗ MISSING",
-  };
-  if (!sheetId || !email || !key) {
-    return res.json({ ok: false, envCheck, error: "Missing env vars - check Vercel settings" });
-  }
-  try {
-    await logTryOn({ garmentId: "test", garmentName: "TEST", garmentType: "test", subType: "test", size: "test", ip: req.ip });
-    res.json({ ok: true, envCheck, message: "Row written successfully - check the sheet!" });
-  } catch (err) {
-    res.json({ ok: false, envCheck, error: err?.message });
-  }
-});
-
 /* ═══════════════════════════════════════════════════════════════════════════
-   ADMIN DASHBOARD - session-log ingest + read API (OPEN ACCESS)
+   SESSION LOG - ingest only
    ---------------------------------------------------------------------------
-   The password/login gate has been removed: the admin endpoints below respond
-   directly with no auth header required. Session rows persist in Supabase
-   (lib/supabase.js), shared and durable across all server instances.
+   The fitting room POSTs one row per try-on; rows persist in Supabase
+   (lib/supabase.js). There is no read or delete API any more: the admin
+   dashboard and every /api/admin* route were removed from this project on
+   2026-09-26. The data itself is untouched - read it in Supabase directly.
    ══════════════════════════════════════════════════════════════════════════ */
 
 /* ── Session persistence ──────────────────────────────────────────────────────
@@ -457,76 +420,11 @@ function storageUnavailable(res) {
   return true;
 }
 
-/* ── Admin auth middleware - verifies Supabase Auth JWT + admin allowlist ───────
-   Two independent checks, both required:
-     1. AUTHENTICATION - the Bearer token is a valid, unexpired Supabase Auth JWT
-        (verified server-side via getUser()).
-     2. AUTHORIZATION  - the token's verified email is in ADMIN_EMAILS. This is the
-        critical second gate: the fitting room ships the PUBLIC anon key, so anyone
-        who signs up against it gets a valid JWT. Without the allowlist, "logged in"
-        would equal "admin" and any member of the public could read all PII and wipe
-        the sessions table.
-   On success the verified email is attached as req.adminEmail for audit logging. */
-async function requireAdminAuth(req, res, next) {
-  if (storageUnavailable(res)) return;   // no Supabase client → can't verify → fail closed
-  const auth  = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (!token) {
-    return res.status(401).json({ ok: false, error: "unauthorized", message: "Missing auth token." });
-  }
-  try {
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) {
-      return res.status(401).json({ ok: false, error: "unauthorized", message: "Invalid or expired token." });
-    }
-    const email = (user.email || "").toLowerCase();
-    if (ADMIN_EMAILS.length === 0) {
-      // FAIL CLOSED. This used to fail open "for backward compatibility", which
-      // was survivable only because /api/admin/check-auth separately required a
-      // password from ADMIN_PASSWORDS before anyone could obtain a session at
-      // all. Sign-in is now plain Supabase signInWithPassword against the public
-      // anon key, so that second gate is gone: failing open here would authorize
-      // ANY Supabase Auth user in the project as a full admin.
-      console.error(
-        "[admin-auth] ADMIN_EMAILS is empty - refusing all admin access. " +
-        "Set ADMIN_EMAILS (comma-separated) in .env and in the Vercel project."
-      );
-      return res.status(503).json({
-        ok: false, error: "admin_allowlist_unconfigured",
-        message: "Admin access is not configured on this deployment.",
-      });
-    } else if (!ADMIN_EMAILS.includes(email)) {
-      console.warn(`[admin-auth] blocked non-admin login: "${email}"`);
-      return res.status(403).json({ ok: false, error: "forbidden", message: "Not an admin account." });
-    }
-    req.adminEmail = email;
-    next();
-  } catch (err) {
-    console.error("[admin-auth] getUser failed:", err?.message);
-    return res.status(401).json({ ok: false, error: "unauthorized", message: "Auth check failed." });
-  }
-}
-
-async function readSessionLogs() {
-  const { data, error } = await supabase
-    .from("sessions")
-    .select("*")
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return data || [];
-}
-
 async function saveSessionLog(entry) {
   const { error } = await supabase.from("sessions").insert([entry]);
   if (error) throw new Error(error.message);
   // Return approximate total count without a separate COUNT query.
   return null;
-}
-
-async function clearSessionLogs() {
-  // Delete every row. Supabase requires a filter for safety; `neq` on id covers all rows.
-  const { error } = await supabase.from("sessions").delete().neq("id", 0);
-  if (error) throw new Error(error.message);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -893,73 +791,6 @@ async function relinkUserDevice(req, res) {
   }
 }
 
-/* GET /api/admin/users - open access. Returns every user with their total
-   measurement (session) count, newest user first. */
-async function getUsersWithCounts(_req, res) {
-  if (storageUnavailable(res)) return;
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
-  try {
-    const [{ data: users, error: uErr }, { data: rows, error: sErr }] = await Promise.all([
-      supabase.from("users").select("*").order("created_at", { ascending: false }),
-      supabase.from("sessions").select("user_id"),
-    ]);
-    if (uErr) throw new Error(uErr.message);
-    if (sErr) throw new Error(sErr.message);
-
-    // Tally sessions per user_id in one pass.
-    const counts = new Map();
-    for (const r of rows || []) {
-      if (!r.user_id) continue;
-      counts.set(r.user_id, (counts.get(r.user_id) || 0) + 1);
-    }
-
-    const withCounts = (users || []).map((u) => ({
-      ...u,
-      session_count: counts.get(u.id) || 0,
-    }));
-
-    res.json({ ok: true, count: withCounts.length, users: withCounts });
-  } catch (err) {
-    console.error("[admin/users] read failed:", err?.message);
-    res.status(500).json({ ok: false, error: err?.message, users: [], count: 0 });
-  }
-}
-
-/* GET /api/admin/stats/averages - admin-only. Average height/weight across all
-   users that have both measurements set (users.height/weight, not sessions -
-   see publicUser comment: those columns are the single current-measurement
-   source of truth per user). */
-async function getAverageMeasurements(_req, res) {
-  if (storageUnavailable(res)) return;
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
-  try {
-    const { data, error } = await supabase
-      .from("users")
-      .select("height, weight")
-      .not("height", "is", null)
-      .not("weight", "is", null);
-    if (error) throw new Error(error.message);
-
-    if (!data.length) {
-      return res.json({ avgHeight: null, avgWeight: null, count: 0 });
-    }
-
-    const avgHeight = Math.round(
-      data.reduce((sum, u) => sum + u.height, 0) / data.length
-    );
-    const avgWeight = Math.round(
-      data.reduce((sum, u) => sum + u.weight, 0) / data.length
-    );
-
-    res.json({ avgHeight, avgWeight, count: data.length });
-  } catch (err) {
-    console.error("[admin/stats/averages] read failed:", err?.message);
-    res.status(500).json({ ok: false, error: err?.message });
-  }
-}
-
-app.get("/api/admin/stats/averages", requireAdminAuth, getAverageMeasurements);
-
 /* ── POST: save a session → appends to sessions.json ─────────────────────── */
 async function saveSession(req, res) {
   if (storageUnavailable(res)) return;
@@ -996,49 +827,14 @@ async function saveSession(req, res) {
   }
 }
 
-/* ── GET: retrieve sessions (open access) → reads from Supabase ───────────── */
-async function getSessions(_req, res) {
-  if (storageUnavailable(res)) return;
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
-  try {
-    const sessions = await readSessionLogs();   // already newest-first from Supabase ORDER BY
-    console.log(`[admin/sessions] Supabase → ${sessions.length} session(s) found`);
-    res.json({ ok: true, count: sessions.length, sessions });
-  } catch (err) {
-    console.error("[admin/sessions] read failed:", err?.message);
-    res.status(500).json({ ok: false, error: err?.message, sessions: [], count: 0 });
-  }
-}
-
-/* DELETE: wipe all sessions (admin-only). */
-async function clearSessions(req, res) {
-  if (storageUnavailable(res)) return;
-  try {
-    await clearSessionLogs();
-    console.log(`[sessions] cleared all → Supabase (by admin: ${req.adminEmail || "unknown"})`);
-    res.json({ ok: true });
-  } catch (err) {
-    console.error("[sessions] clear failed:", err?.message);
-    res.status(500).json({ ok: false, error: err?.message });
-  }
-}
-
-/* Canonical routes the dashboard uses. POST (fitting-room ingest) is open but rate
-   limited; GET and DELETE are admin-only and require a valid Supabase Auth token. */
-app.post("/api/sessions", sessionLimiter, saveSession);
-app.get("/api/sessions", requireAdminAuth, getSessions);
-app.delete("/api/sessions", requireAdminAuth, clearSessions);
-
-/* Back-compat aliases (older clients / earlier code paths).
-   SECURITY: these MUST carry the same guards as the canonical routes above - the
-   GET/DELETE aliases previously had NO auth, which fully bypassed the admin gate
-   (unauthenticated read of all data + wipe of the entire table). */
-app.post("/api/session-log",      sessionLimiter, saveSession);
-app.get("/api/admin/sessions",    requireAdminAuth, getSessions);
-app.delete("/api/admin/sessions", requireAdminAuth, clearSessions);
+/* Session-log ingest: open but rate limited. POST only - nothing here reads the table
+   back or wipes it (see the SESSION LOG header above). /api/session-log is the older
+   spelling of the same route, kept for clients that still use it. */
+app.post("/api/sessions",    sessionLimiter, saveSession);
+app.post("/api/session-log", sessionLimiter, saveSession);
 
 /* User identity routes (returning-visitor recognition). POST is rate limited; the
-   public GET returns non-PII fields only; the admin list is auth-gated. */
+   public GET returns non-PII fields only. */
 app.post("/api/users",            userLimiter, createUser);
 // NOTE: /api/users/relink must be registered BEFORE the /:deviceId param
 // route below - otherwise Express would match "relink" as a deviceId value
@@ -1046,41 +842,6 @@ app.post("/api/users",            userLimiter, createUser);
 app.patch("/api/users/relink",    userLimiter, relinkUserDevice);
 app.get("/api/users/:deviceId",   getUserByDevice);
 app.patch("/api/users/:deviceId", userLimiter, updateUserMeasurements);
-app.get("/api/admin/users",       requireAdminAuth, getUsersWithCounts);
-
-/* Pre-login allowlist check: the admin login page calls this before requesting a
-   magic link so only ADMIN_EMAILS + ADMIN_PASSWORDS matches ever trigger a
-   Supabase email send. Returns only { allowed: true|false } - no PII, no
-   token, no session. POST with a JSON body (not GET query params) so the
-   password is never written into a URL - URLs land in server/proxy access
-   logs and browser history in plaintext, which a query-string password would
-   leak into. ADMIN_PASSWORDS must list one password per ADMIN_EMAILS entry,
-   in the SAME ORDER (index i pairs with index i). Rate limited - this is a
-   password-guessing target. */
-app.post("/api/admin/check-auth", authLimiter, (req, res) => {
-  const email    = (req.body?.email || "").toLowerCase().trim();
-  const password = req.body?.password || "";
-  const allowed = (process.env.ADMIN_EMAILS || "")
-    .split(",")
-    .map((e) => e.toLowerCase().trim());
-  console.log('[admin-auth] email received:', email);
-  console.log('[admin-auth] allowed emails:', allowed);
-  const emailIndex = allowed.indexOf(email);
-  if (emailIndex === -1) {
-    console.log('[admin-auth] match result:', false);
-    return res.json({ allowed: false });
-  }
-  const passwords = (process.env.ADMIN_PASSWORDS || "")
-    .split(",")
-    .map((p) => p.trim());
-  const correctPassword = passwords[emailIndex];
-  if (!correctPassword || password !== correctPassword) {
-    console.log('[admin-auth] match result:', false);
-    return res.json({ allowed: false });
-  }
-  console.log('[admin-auth] match result:', true);
-  res.json({ allowed: true });
-});
 
 /* ── In-memory image cache - avoids re-fetching the same CDN image within a warm
    Lambda container. Keyed by full URL; evicts oldest entry when the cap is hit.
@@ -3244,8 +3005,8 @@ app.get(["/fitting-room", "/fitting-room/", "/fitting-room/index.html"], (req, r
    because anything here meant to refuse it. Every sizing table, prompt rule and
    classifier heuristic was one GET away, comments included.
 
-   Everything a shopper, a store page or the admin needs lives under three directories
-   and two root files. Anything else is a 404 BY CONSTRUCTION: a new file at the repo
+   Everything a shopper or a store page needs lives under two directories and two
+   root files. Anything else is a 404 BY CONSTRUCTION: a new file at the repo
    root is private until someone adds it here, on purpose. Never go back to serving
    __dirname "because an asset 404'd" - add that asset's directory or file instead.
 
@@ -3254,7 +3015,7 @@ app.get(["/fitting-room", "/fitting-room/", "/fitting-room/index.html"], (req, r
    public ones load - from source, and from dist/ when the build is live. Keep it
    self-contained - it runs with only app/express/path/fs/crypto/__dirname/process in
    scope (CLAUDE.md §2.6). */
-const PUBLIC_DIRS  = ["fitting-room", "widget", "admin"];   // lockstep: scripts/build.mjs
+const PUBLIC_DIRS  = ["fitting-room", "widget"];   // lockstep: scripts/build.mjs
 const PUBLIC_FILES = ["pear-logo.png", "Commercial_video_for_a_tech_fa.mp4"];
 const STATIC_OPTS  = { extensions: ["html"], index: false };
 
@@ -3305,7 +3066,7 @@ for (const file of PUBLIC_FILES) {
 
 /* Page router - directory index and extensionless .html, INSIDE a public directory only.
    path.join() normalises "..", so every candidate is re-checked against its directory
-   after joining: /admin/../server must never resolve to /server.html. */
+   after joining: /widget/../server must never resolve to /server.html. */
 app.use((req, res) => {
   const top = req.path.split("/")[1] || "";
   if (PUBLIC_DIRS.includes(top)) {

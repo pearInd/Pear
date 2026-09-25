@@ -89,6 +89,8 @@ async function mount(dirname, env = {}) {
       "/scanner/scan-store.js", "/test/run.mjs", "/scripts/trace-prompt.mjs", "/scripts/build.mjs",
       "/lib/garment-category.js", "/archive/DESIGN.md", "/docs/", "/.env", "/.env.example",
       "/node_modules/express/package.json", "/index.html", "/dist/fitting-room/app.js",
+      /* The admin dashboard was removed from this project on 2026-09-26. */
+      "/admin", "/admin/", "/admin/index.html", "/admin/admin.js", "/admin/admin.css",
     ];
     for (const p of PRIVATE) {
       const r = await request("GET", p);
@@ -106,8 +108,6 @@ async function mount(dirname, env = {}) {
       ["GET",  "/fitting-room/style.css"],
       ["GET",  "/widget/pear-widget.js"],
       ["GET",  "/widget/guide"],
-      ["GET",  "/admin/"],
-      ["GET",  "/admin/admin.js"],
       ["GET",  "/pear-logo.png"],
       ["HEAD", "/Commercial_video_for_a_tech_fa.mp4"],
     ];
@@ -117,8 +117,8 @@ async function mount(dirname, env = {}) {
     }
 
     console.log("\n── §3 no traversal out of a public directory ──");
-    for (const p of ["/admin/../server.js", "/fitting-room/../CLAUDE.md", "/widget/..%2fserver.js",
-                     "/admin/../server", "/fitting-room/%2e%2e/package.json"]) {
+    for (const p of ["/widget/../server.js", "/fitting-room/../CLAUDE.md", "/widget/..%2fserver.js",
+                     "/widget/../server", "/fitting-room/%2e%2e/package.json"]) {
       const r = await request("GET", p);
       check(`§3 GET ${p} → not 200`, r.status !== 200, `got ${r.status} (${r.body.length} bytes)`);
     }
@@ -149,6 +149,10 @@ check("§4.4 server.js and scripts/build.mjs publish the same PUBLIC_DIRS",
         const build = readFileSync(path.join(ROOT, "scripts/build.mjs"), "utf8");
         return !!list(SERVER) && list(SERVER) === list(build);
       })());
+check("§4.5 no admin API is mounted - the dashboard and its routes were removed 2026-09-26",
+      !/\/api\/admin|requireAdminAuth|ADMIN_EMAILS|ADMIN_PASSWORDS/.test(SERVER_CODE));
+check("§4.6 the session log is ingest-only: nothing reads it back or wipes it over HTTP",
+      !/app\.(get|delete|put|patch)\(\s*["'`]\/api\/(sessions|session-log)/.test(SERVER_CODE));
 
 /* ══ §5 production mode, on a synthetic tree ══════════════════════════════════════
    A throwaway directory with a source file and a DIFFERENT built file at each path, so
@@ -167,14 +171,14 @@ put("fitting-room/style.css", "SOURCE-CSS");
 put("fitting-room/photo.png", "SOURCE-PHOTO");
 put("widget/pear-widget.js", "SOURCE-WIDGET");
 put("widget/pear-widget-guide.html", "SOURCE-GUIDE");
-put("admin/index.html", "SOURCE-ADMIN");
+put("admin/index.html", "SOURCE-ADMIN");      // a directory that is NOT public any more
 put("dist/fitting-room/index.html", "<html><head></head><body>BUILT-INDEX</body></html>");
 put("dist/fitting-room/app.js", "BUILT-APP");
 put("dist/fitting-room/style.css", "BUILT-CSS");
 put("dist/fitting-room/rt.0123456789ab.js", "BUILT-SDK");
 put("dist/widget/pear-widget.js", "BUILT-WIDGET");
 put("dist/widget/pear-widget-guide.html", "BUILT-GUIDE");
-put("dist/admin/index.html", "BUILT-ADMIN");
+put("dist/admin/index.html", "BUILT-ADMIN");  // ...not even when a stale build carries it
 const TOKEN = "t0k3n-for-the-support-view-only";
 
 try {
@@ -187,7 +191,9 @@ try {
       check("§5.3 style.css comes from dist/",        (await body("/fitting-room/style.css")) === "BUILT-CSS");
       check("§5.4 the widget comes from dist/",       (await body("/widget/pear-widget.js")) === "BUILT-WIDGET");
       check("§5.5 the guide comes from dist/",        (await body("/widget/guide")) === "BUILT-GUIDE");
-      check("§5.6 the admin page comes from dist/",   (await body("/admin/")) === "BUILT-ADMIN");
+      const admin = await request("GET", "/admin/");
+      check("§5.6 a directory outside PUBLIC_DIRS stays a 404 even with a dist/ copy (the removed admin)",
+            admin.status === 404 && !/ADMIN/.test(admin.body), `got ${admin.status} ${admin.body.slice(0, 40)}`);
       const cfg = await request("GET", "/fitting-room/config.js");
       check("§5.7 a code file the build did not emit is a 404 - never the readable source",
             cfg.status === 404 && !cfg.body.includes("SOURCE-CONFIG"), `got ${cfg.status} ${cfg.body.slice(0, 40)}`);

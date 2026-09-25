@@ -16654,10 +16654,10 @@ function logTryOnAnalytics(item, size) {
 }
 
 /* =============================================================================
-   Admin dashboard - anonymized session log
+   Anonymized session log
    One stable, anonymous id per browser session (NO name/email/PII). It lets the
-   admin dashboard group multiple try-ons by the same visitor without ever
-   identifying who they are.
+   session rows in Supabase group multiple try-ons by the same visitor without
+   ever identifying who they are.
    ============================================================================= */
 const PEAR_SESSION_ID = (() => {
   const rnd = () =>

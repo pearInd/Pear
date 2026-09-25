@@ -55,7 +55,7 @@ const OUT = resolve(ROOT, outAt !== -1 ? args[outAt + 1] : QA ? "dist-qa" : "dis
 
 /* Lockstep with server.js PUBLIC_DIRS (CLAUDE.md §2.10): a directory the server does not
    publish has nothing to build, and one it does publish must never ship unbuilt. */
-const PUBLIC_DIRS = ["fitting-room", "widget", "admin"];
+const PUBLIC_DIRS = ["fitting-room", "widget"];
 const APP_ENTRY = "fitting-room/app.js";
 /* rt.<content-hash>.js - a neutral name, and a hashed one: server.js serves exactly this
    pattern with a one-year immutable Cache-Control (the room itself is no-store), so the

@@ -267,11 +267,17 @@ are the gate correctly reporting what those flags do.
 `server.js` used to run `express.static(__dirname)`, which handed the repository to anyone
 who asked: `/server.js`, `/CLAUDE.md`, `/package.json`, `/scanner/…`, `/test/…` and even
 `/node_modules/…` answered 200. Public files now come only from `PUBLIC_DIRS`
-(`fitting-room`, `widget`, `admin`) and `PUBLIC_FILES` (`pear-logo.png`,
+(`fitting-room`, `widget`) and `PUBLIC_FILES` (`pear-logo.png`,
 `Commercial_video_for_a_tech_fa.mp4`); everything else is a 404 by construction. If an
 asset 404s, add its directory or file to those lists — never widen back to the root.
 `test/static-allowlist.test.mjs` asserts the absence, the presence, and that `../` cannot
 climb out of a public directory.
+
+**There is no admin in this project.** The admin dashboard (`admin/`), `requireAdminAuth`,
+`ADMIN_EMAILS`/`ADMIN_PASSWORDS`, every `/api/admin*` route, `/api/test-sheets` and the
+GET/DELETE on `/api/sessions` were removed on 2026-09-26. The session log is ingest-only
+(POST); the rows live in Supabase and are read there. `static-allowlist` §4.5/§4.6 assert
+the absence, so re-adding an admin surface here is a deliberate act, not a drive-by.
 
 ### 2.11 Shoppers download the BUILD, not the source
 Production serves `dist/` (`scripts/build.mjs`, run on Vercel by the `vercel-build` script):
