@@ -14,6 +14,11 @@ before editing, and read the comment block above any function you touch.
 
 **The repo is in strict image-only conditioning mode.**
 
+**The engine lives in `lib/prompts.js`, server-side, since 2026-09-26 (§2.13)** —
+every function and constant named in this section is there, not in `app.js`, and
+`npm run trace:prompt` traces that file. The browser asks `POST /api/prompt` for the
+one string a dispatch needs.
+
 Every prompt builder — `buildPrompt()`, `buildCustomPrompt()`,
 `buildCompositePrompt()` — returns `imageOnlyPrompt()`. The only text that
 reaches Decart is:
@@ -110,7 +115,7 @@ wrong"*, *"it slimmed me down"*, *"front and back aren't right"*.
 
 | Layer | What it controls | Where it lives | Live? |
 |---|---|---|---|
-| **A. Prompt text** | what the model is told | `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` | mostly dead |
+| **A. Prompt text** | what the model is told | `lib/prompts.js` (server): `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` — §2.13 | mostly dead |
 | **B. Reference image** | what the model is shown | `referenceImageFor`, `galleryOf`, `distinctBackOf`, `createGarmentComposite` | **live** |
 | **C. Orientation** | which asset is on the wire when | `OrientationWatcher`, `effectiveAngle`, `autoOrientation` | **live** |
 | **D. Size ladder** | the recommended size in the UI | `calculateSize` (client shell, `app.js`) → `lib/sizing.js` (`*_SIZE_CHART`, `computeSizeVerdict`, `applyStoreChartOverlay`, §2.12) | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
@@ -219,6 +224,15 @@ are therefore an interface. The browser's Screen 1 sizing region is sliced by
 `function calculateSize()` or `\nfunction onMeasurementKeydown`; `requestSizeVerdict()`
 sits deliberately just AFTER that end marker, so each harness injects its own and runs the
 real `lib/sizing.js` through it.
+The shared prompt slice (from the `P` priority table to the full-look composite clause) is
+sliced out of **`lib/prompts.js`** now (§2.13) by `image-first`, `plain-tee-fidelity`,
+`model-agnostic`, `garment-category-prompt`, `summoning-tokens`, `body-presence-gate` and
+`composite` — which read the engine first and `app.js` after it. `applyGarment` is sliced from
+`app.js` up to the pointer comment `/* getAnatomicalAnchor() (restore seam`, `applyLook` up to
+`/* buildLookPrompt() (returns lookAnchorPrompt()`, and `side-profile`/`angle-race` assemble
+`REAR_POSE … angleClause()` from the engine plus `activeBackIsReal … compositeActiveFor` from
+`app.js` (up to `/* angleClause() (dead relative to the wire`). Those pointer comments are
+markers now — and `lib/prompts.js`'s header must never quote the slice's opening line.
 `server.js`'s public-roots + static-hosting block is one too: `static-allowlist` slices it
 from `/* ── Public roots` to `/* ── Start (local only` and mounts it on a bare express app
 with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (§2.10).
@@ -337,6 +351,33 @@ the measurements, and `applySizeVerdict()` paints the answer in the old order.
   carries a body-measurement band key (`minChest`, `maxHeight`, …). The visual harness runs the
   real `lib/sizing.js` for `/api/size` - it is shipped logic, not a stub target (§8.6).
 
+
+### 2.13 The prompt engine is server-side
+Since 2026-09-26 every prompt word — the category/back/plain-tee anchors, the closure lock, the
+identity/colour/print sentence, the fit ladder, `fitPrompt()`'s priorities and budget, and the
+whole restore seam (`DENSE`, the composite contract, side-profile/lateral-seam clauses) — lives
+in `lib/prompts.js`, moved verbatim, behind `POST /api/prompt`. RULE 0 applies there now.
+
+- **What the browser sends:** `promptFactsOf(item)` — plain fields only (`name`, `title`,
+  `type`, `category`, `subType`, `garmentType`, `colorHex`, `textOcr`, `fabric`,
+  `backIsPlain`, `_backLooksPrinted`, `custom`) plus its own `isBottomsGarment()` verdict as
+  `__bottoms` — and the angle, the frozen pose (`inProfile`) and `getSizeDelta()`. A field a
+  builder starts reading must be added to BOTH lists (`prompt-engine` §3 asserts they match).
+- **`isBottomsGarment()` has two copies** — the browser's (sizing, go-live and the presence gate
+  read it synchronously) and the server's, which honours the browser's verdict first and only
+  runs its own body for callers that send none. `prompt-engine` §2 asserts identical bodies.
+- **Behaviour was proven identical:** 351,779 prompts from the old in-browser engine vs the new
+  browser→server path matched byte for byte (a dropped field changed 87,885 of them), and
+  `trace:prompt --json` is identical. `prompt-engine` §1 pins ~162k of them to a hash computed
+  from the pre-move engine.
+- **Dispatch discipline is unchanged:** `applyGarment()` requests its prompt right after freezing
+  `angleAtStart`/`profileAtStart` and before the first await (§2.8), in parallel with the
+  reference resolve; the session start prefetches the other angle/pose variants so a turn never
+  waits on the network. Prompts are memoised per request for the session.
+- **The browser carries no wording:** `scripts/build.mjs` fails on engine phrases in the room
+  bundle; `prompt-engine` §5 asserts the absence over `app.js`. The pre-commit hook traces
+  `lib/prompts.js` (falling back to HEAD's `app.js` only for the commit that moved it).
+
 ---
 
 ## 3. Cross-file lockstep
@@ -358,6 +399,8 @@ same commit. Whichever is wrong is the one that wins.
 | Trust-tiered exclusion + name corroboration | `isExcludedSrc` / `nameEchoesProduct` in `pear-widget.js` ↔ `scan-store.js` |
 | Size-chart wire format (`<unit>;<source>;SIZE:chest:waist:hips:legs\|…`) | `pear-widget.js: encodeSizeChart` ↔ `lib/sizing.js: parseStoreSizeChart` |
 | Size-chart sanity clamps (cm) | `pear-widget.js: SIZE_CHART_CLAMPS` ↔ `lib/sizing.js: STORE_CHART_CLAMPS` |
+| Garment region classifier (`isBottomsGarment`, `BOTTOMS_TOKENS`, `TOPS_TOKENS`) | `app.js` ↔ `lib/prompts.js` (server copy honours the browser's verdict; asserted identical by `prompt-engine` §2) |
+| Prompt facts the browser sends vs the fields the engine accepts | `app.js: PROMPT_FACT_STRINGS / PROMPT_FACT_BOOLS` ↔ `lib/prompts.js: PROMPT_ITEM_STRINGS / PROMPT_ITEM_BOOLS` (`prompt-engine` §3) |
 | Size ladders (labels only) vs the charts they index | `app.js: CHILD_SIZE_SCALE / ADULT_PANTS_NUMERIC_SIZES / ADULT_JEANS_WAIST_SIZES` ↔ `lib/sizing.js: CHILD_SIZE_CHART / ADULT_PANTS_SIZE_CHART / ADULT_JEANS_WAIST_CHART` (asserted by `numeric-pants-sizing` §5) |
 
 The widget's category verdict is **explicit** and therefore outranks the room's
@@ -389,7 +432,7 @@ live — but if you ever re-run that backfill, port the current rules first.
 
 ```bash
 npm run test:unit        # .test.mjs suite  — the regression guardrail (alias: npm test)
-npm run trace:prompt     # prints every string that actually reaches Decart
+npm run trace:prompt     # prints every string that actually reaches Decart (traces lib/prompts.js)
 npm start                # the server (node server.js); npm run dev for --watch
 npm run scan             # scanner/scan-store.js over a storefront
 

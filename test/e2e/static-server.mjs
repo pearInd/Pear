@@ -16,6 +16,7 @@
                                 before falling through to the direct fetch)
      · POST /api/size        -> the REAL lib/sizing.js (the size fit is server-side since
                                 2026-09-26; shipped logic, so it runs here unstubbed)
+     · POST /api/prompt      -> the REAL lib/prompts.js, for the same reason
      · POST /api/realtime-token -> 402, AND COUNTED
 
    THAT LAST ONE IS A TEST, not a stub. ?mock_decart=1 is supposed to short-circuit
@@ -119,6 +120,23 @@ export function startStaticServer(port = 0) {
         } catch (e) {
           res.writeHead(500, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "size_failed", message: String(e?.message || e) }));
+        }
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/prompt" && req.method === "POST") {
+      let raw = "";
+      req.on("data", (c) => { raw += c; if (raw.length > 64 * 1024) req.destroy(); });
+      req.on("end", async () => {
+        try {
+          const { promptForRequest, sanitizePromptRequest } = await import("../../lib/prompts.js");
+          const prompt = promptForRequest(sanitizePromptRequest(JSON.parse(raw || "{}")));
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ prompt }));
+        } catch (e) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "prompt_failed", message: String(e?.message || e) }));
         }
       });
       return;

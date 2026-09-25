@@ -216,6 +216,10 @@ if (!QA) {
        travels to the engine on every connect regardless, so it is reported below
        rather than refused here until the connection itself is proxied. */
     ["a vendor or engine name", /decart|nano ?banana|gemini|livekit/i],
+    /* The prompt engine is server-side (lib/prompts.js, since 2026-09-26): the room bundle
+       must carry none of its wording - these are fragments of its anchors and of the
+       restore seam that only the engine has. */
+    ["prompt-engine wording", /Drape and fit the EXACT|Fit and replace BOTH the subject|Reproduce the reference's front closure|rear view, turned around|TURNED TO THEIR SIDE|clean break at the ankle/],
     ["the mock harness", /mock_decart|createMockDecartClient|__pearMock/],
     /* An ASSIGNMENT, not a mention: console.error hints may still name a hook ("run
        window.__pearDebugReinjectGarment()"), which is harmless when nothing registers it. */

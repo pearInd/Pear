@@ -379,7 +379,7 @@ console.log("\n── §4 activeSizeLadder() / getSizeDelta(): THE 26-40 REPORT'
      isAdultNumericPantsGarment, SIZE_SCALE, activeItem) INJECTED as parameters, same
      technique §2 above uses for isBottomsGarment - this is the real function body,
      not a re-implementation. */
-  const code = extract(APP, "function activeSizeLadder() {", "function getFitModifier(");
+  const code = extract(APP, "function activeSizeLadder() {", "/* getFitModifier(), FABRIC_PHYSICS");
   function harness({ sizes, currentSizeCategory = "adult", currentUserSize = null, activeTryOnSize = null } = {}) {
     const isAdultNumericPantsGarment = (list) => {
       const l = (Array.isArray(list) ? list : []).map((s) => String(s).trim().toUpperCase());

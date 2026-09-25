@@ -15,7 +15,11 @@
    the graphic nouns. This suite pins both halves - the wording, and the abstention. */
 import { readFileSync } from "node:fs";
 
-const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The prompt engine moved server-side on 2026-09-26 (lib/prompts.js, CLAUDE.md §2.13). This
+   reads it FIRST and app.js after it: the engine slices/checks find it where it lives now,
+   and every app.js marker used here exists only in the app.js half. */
+const APP = (readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8") + "\n" +
+  readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 
 let fails = 0;
 function check(label, ok, detail) {
@@ -244,13 +248,15 @@ console.log("\n── §5 THE VERDICT IS TRACEABLE - it is the only thing that c
     "undefined and false are different facts and must read differently");
   check("...and it says out loud what a wrong 'plain' verdict costs",
     /suppresses it/.test(fn), "the next reader must not have to infer the consequence");
-  /* typeof-guarded at that call site, because the listener body is extracted and run standalone
-     by composite-handoff.test.mjs (CLAUDE.md 2.7) - the guard is part of what is pinned here. */
+  /* The sentence the verdict selects is built server-side since 2026-09-26
+     (describeRearConstruction() in lib/prompts.js), so both log sites now print the raw flags
+     that select it. The lock log is typeof-guarded on activeItem because the orientation
+     watcher runs standalone in side-profile.test.mjs (CLAUDE.md 2.7). */
   check("the verdict is logged where it LANDS - the widget's post-open correction",
-    /PEAR_UPDATE_GARMENT applied[\s\S]{0,600}?rear:", typeof describeRearConstruction === "function"\s*\n?\s*\? describeRearConstruction\(activeItem\)/.test(APP),
+    /PEAR_UPDATE_GARMENT applied[\s\S]{0,700}?"\| rear: backIsPlain=" \+ activeItem\.backIsPlain \+ " looksPrinted=" \+ activeItem\._backLooksPrinted/.test(APP),
     "it can arrive mid-session; a silent change to what the wire asserts is what made this unanswerable");
   check("...and where the BACK lock is reported, but only on that lock",
-    /autoOrientation === "back" && typeof describeRearConstruction === "function"/.test(APP),
+    /autoOrientation === "back" && typeof activeItem !== "undefined" && activeItem\s*\n?\s*\? ` \| rear: backIsPlain=/.test(APP),
     "logVtonState fires on lock changes, not on the ~625ms re-anchor cadence - this must not spam");
   /* The trace must stay a trace: the builders are what trace:prompt executes, and a console
      line inside one of them would pollute that output as well as every dispatch. */

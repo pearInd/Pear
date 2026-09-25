@@ -21,7 +21,7 @@
     "inspect:visuals": "node scripts/inspect-visuals.mjs",
     "qa:visual": "npm run test:visual && npm run inspect:visuals",
     "qa:visual:dist": "node scripts/build.mjs --qa && PEAR_VISUAL_OVERLAY=dist-qa npm run qa:visual",
-    "trace:prompt": "node scripts/trace-prompt.mjs fitting-room/app.js",
+    "trace:prompt": "node scripts/trace-prompt.mjs lib/prompts.js",
     "prepare": "husky"
   },
   "dependencies": {

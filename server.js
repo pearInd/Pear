@@ -34,6 +34,8 @@ import { supabase } from "./lib/supabase.js";
 import { classifyGarmentFull } from "./lib/garment-category.js";
 /* The size charts and the fit - moved out of the browser 2026-09-26 (see lib/sizing.js). */
 import { computeSizeVerdict, sanitizeSizeEvidence } from "./lib/sizing.js";
+/* The prompt engine - moved out of the browser 2026-09-26 (see lib/prompts.js). */
+import { promptForRequest, sanitizePromptRequest } from "./lib/prompts.js";
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -127,6 +129,7 @@ const proxyLimiter    = rateLimit({ windowMs: 60_000, max: 120 });  // image pro
 const classifyLimiter = rateLimit({ windowMs: 60_000, max: 200 });   // garment front/back classification - calls Gemini
 const storeCatalogLimiter = rateLimit({ windowMs: 60_000, max: 30 }); // "Complete the Look" store-scoped catalog reads
 const sizeLimiter     = rateLimit({ windowMs: 60_000, max: 120 });  // size verdicts - one per NEW measurement set, memoised client-side
+const promptLimiter   = rateLimit({ windowMs: 60_000, max: 240 });  // wire prompts - a few per garment (angle x size delta), memoised client-side
 
 /* ── CORS enforcement ────────────────────────────────────────────────────────
    The fitting room is PUBLICLY ACCESSIBLE to any anonymous visitor - no login
@@ -846,6 +849,21 @@ app.post("/api/size", sizeLimiter, (req, res) => {
   } catch (err) {
     console.error("[size] verdict failed:", err?.message || err);
     res.status(500).json({ error: "size_failed" });
+  }
+});
+
+/* ── Wire prompt - POST /api/prompt ────────────────────────────────────────────
+   The one string a dispatch sends to Decart (lib/prompts.js): the browser posts the
+   garment's plain facts, the angle and the size delta, and gets the clamped prompt back.
+   The engine - anchors, clauses, priorities, budget, the restore seam - never leaves this
+   server; only the string Decart would see on the wire anyway does. */
+app.post("/api/prompt", promptLimiter, (req, res) => {
+  res.set("Cache-Control", "no-store");
+  try {
+    res.json({ prompt: promptForRequest(sanitizePromptRequest(req.body)) });
+  } catch (err) {
+    console.error("[prompt] build failed:", err?.message || err);
+    res.status(500).json({ error: "prompt_failed" });
   }
 });
 

@@ -34,7 +34,7 @@ function extract(startMarker, endMarker) {
   return SRC.slice(start, end);
 }
 
-const applyGarmentSrc = extract("async function applyGarment(item) {", "\n/**\n * Reads the Screen 1 physical inputs");
+const applyGarmentSrc = extract("async function applyGarment(item) {", "\n/* getAnatomicalAnchor() (restore seam");
 check("extracted applyGarment", /rtClient\.setPrompt\(/.test(applyGarmentSrc) && /rtClient\.set\(payload\)/.test(applyGarmentSrc),
   "applyGarment no longer contains both a setPrompt and a set path - has it been restructured?");
 
@@ -84,6 +84,11 @@ function makeHarness({ composite = true } = {}) {
     describeCompositeLayout: () => "layout",
     // Both builders echo the profile flag so the assertions can read what was actually sent.
     buildCompositePrompt: (_it, angle, inProfile) => `COMPOSITE_PROMPT_${angle}${inProfile ? "_PROFILE" : ""}`,
+    /* The builders are server-side since 2026-09-26 (lib/prompts.js); applyGarment() asks
+       wirePrompt() with its frozen angle AND frozen edge-on reading, and the server hands
+       both to buildCompositePrompt(). Echoed the same way, so every assertion below keeps
+       reading exactly what applyGarment() threaded through. */
+    wirePrompt: async (_it, angle, _where, opts = {}) => `COMPOSITE_PROMPT_${angle}${opts.inProfile ? "_PROFILE" : ""}`,
     buildPrompt: () => "PLAIN_PROMPT",
     angleClause: (_it, _a, _c, inProfile) => `_CLAUSE${inProfile ? "_PROFILE" : ""}`,
     _angle: "front",

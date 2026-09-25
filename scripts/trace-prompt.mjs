@@ -25,7 +25,10 @@ import { resolve, dirname, join as joinPath } from "node:path";
 
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
-const APP = resolve(args.find((a) => !a.startsWith("--")) ?? "fitting-room/app.js");
+/* The prompt engine lives in lib/prompts.js since 2026-09-26 (server-side - CLAUDE.md
+   §2.13). An app.js path still works: the pre-commit hook traces HEAD's app.js for the
+   commit that moved the engine, and any older checkout traces the same way it always did. */
+const APP = resolve(args.find((a) => !a.startsWith("--")) ?? "lib/prompts.js");
 
 if (!existsSync(APP)) {
   console.error(`✖ app.js not found at: ${APP}`);
@@ -94,7 +97,10 @@ function resolvePromptMaxChars() {
   }
   searched.push(`${APP} (no top-level const PROMPT_MAX_CHARS)`);
 
-  const configPath = joinPath(dirname(APP), "config.js");
+  /* Beside app.js (the old layout), or ../fitting-room/config.js beside lib/prompts.js
+     (which imports it from there). First one that exists wins. */
+  const configPath = [joinPath(dirname(APP), "config.js"), joinPath(dirname(APP), "..", "fitting-room", "config.js")]
+    .find((p) => existsSync(p)) || joinPath(dirname(APP), "config.js");
   searched.push(configPath);
   if (existsSync(configPath)) {
     const configSrc = readFileSync(configPath, "utf8");

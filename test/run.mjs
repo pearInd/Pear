@@ -323,6 +323,14 @@
                       their next visit. §5 pins the server half - verification is now
                       idempotent inside the code's own TTL, which consumption does not
                       extend, so a retry the client never chose cannot cost a code.
+     prompt-engine
+                      Every prompt word moved server-side (lib/prompts.js, POST /api/prompt).
+                      Proven exact over 351,779 prompts at the move; this keeps it: the real
+                      browser path (promptFactsOf -> JSON -> sanitiser -> engine) over ~162k
+                      prompts, hashed and compared with a value computed from the PRE-MOVE
+                      engine. Also pins the two isBottomsGarment() copies as identical, the
+                      browser's verdict winning, the facts list agreeing on both sides, and
+                      no prompt wording left in app.js.
      size-fit-pin
                       The size charts and the fit moved server-side (lib/sizing.js,
                       POST /api/size). The move was proven exact over 1,458,028 cases;
@@ -416,6 +424,7 @@ const SUITES = [
   ["size-chart-overlay", "size-chart-overlay.test.mjs"],
   ["static-allowlist", "static-allowlist.test.mjs"],
   ["size-fit-pin", "size-fit-pin.test.mjs"],
+  ["prompt-engine", "prompt-engine.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

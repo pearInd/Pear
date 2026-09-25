@@ -295,6 +295,9 @@ console.log("\n── §3 THE FLOOR IS STRICT - no garment, no session; never th
       garmentImageRef: ref,
       clampPromptForWire: (p) => p,
       imageOnlyPrompt: (_it, angle = "front") => `ANCHOR_${angle}`,
+      /* The prompt is a server answer since 2026-09-26 (wirePrompt(), lib/prompts.js) -
+         the same marker the old in-browser imageOnlyPrompt() stub produced. */
+      wirePrompt: async (_it, angle = "front") => `ANCHOR_${angle}`,
       FLOOR_ASSET_WAIT_MS: 25,
       setTimeout, clearTimeout, Blob, URL,
       console: { log() {}, warn() {}, error() {} },
@@ -434,7 +437,7 @@ console.log("\n── §5 THE ACKNOWLEDGED FLOOR IS RECORDED AS ON THE WIRE ─�
 
 console.log("\n── §6 SO GO-LIVE'S APPLY IS A NO-OP, NOT A SECOND UPLOAD ──");
 {
-  const applyGarmentSrc = extract("async function applyGarment(item) {", "\n/**\n * Reads the Screen 1 physical inputs");
+  const applyGarmentSrc = extract("async function applyGarment(item) {", "\n/* getAnatomicalAnchor() (restore seam");
   const FLOOR = new Blob(["front-packshot"], { type: "image/jpeg" });
   const run = ({ ref, prompt = "ANCHOR_front" }) => {
     const sent = [];
@@ -459,6 +462,7 @@ console.log("\n── §6 SO GO-LIVE'S APPLY IS A NO-OP, NOT A SECOND UPLOAD ─
       abbrevImg: (u) => String(u).slice(0, 20), vtonState: () => "FRONT_MODE", hasDedicatedAngle: () => false,
       describeCompositeLayout: () => "", buildCompositePrompt: () => "COMPOSITE",
       buildPrompt: () => prompt, angleClause: () => "",
+      wirePrompt: async () => prompt,
       noteImageUploadAcked: (w, id) => notes.push([w, id]),
       garmentIdOf: (it) => String(it.id),
     };

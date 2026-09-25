@@ -63,7 +63,15 @@ function extract(startMarker, endMarker) {
    constants and angleClause() sit back-to-back, so one extract cannot assemble mismatched
    fragments. Executed, not regex-matched, so the assertions below read the REAL rendered
    prompt rather than a hopeful pattern over source text. */
-const code = extract("const REAR_POSE", "/**\n * Resolve the reference image handed to rtClient.set");
+/* SPLIT ACROSS TWO FILES since 2026-09-26: the prompt text - REAR_POSE … CUSTOM_BACK_INFERRED
+   and angleClause() - moved server-side to lib/prompts.js, while the asset-selection helpers
+   angleClause() reads (activeBackIsReal … compositeActiveFor) are still the browser's. The
+   sandbox gets both, in their original order, so this still executes the real clauses
+   against the real selectors. */
+const PROMPTS_SRC = readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const code =
+  PROMPTS_SRC.slice(PROMPTS_SRC.indexOf("const REAR_POSE"), PROMPTS_SRC.indexOf("\n/**\n * Reads the Screen 1 physical inputs")) +
+  "\n" + extract("function activeBackIsReal(", "/* angleClause() (dead relative to the wire");
 
 function run({ angle = "front", inProfile = false, distinctBack, custom = false, useComposite, auto = true }) {
   const sandbox = {
@@ -801,16 +809,18 @@ console.log("\n── §6 NO TOCTOU: the pose is a frozen snapshot, like the ang
   /* Same race angle-race.test.mjs was written for: the watcher samples on its own 250ms
      interval and can toggle the pose during applyGarment()'s await, which would leave the
      pose sentence describing a different moment than the resolved reference. */
-  const apply = extract("async function applyGarment(item) {", "\n/**\n * Reads the Screen 1 physical inputs");
+  const apply = extract("async function applyGarment(item) {", "\n/* getAnatomicalAnchor() (restore seam");
   check("applyGarment snapshots profileActive() ONCE, before any await",
     /const profileAtStart = profileActive\(\);/.test(apply));
   const snapAt = apply.indexOf("const profileAtStart");
   const awaitAt = apply.indexOf("await referenceImageFor");
   check("...and the snapshot is taken BEFORE the reference is resolved",
     snapAt !== -1 && awaitAt !== -1 && snapAt < awaitAt, `snapshot@${snapAt} await@${awaitAt}`);
+  /* The builders are server-side since 2026-09-26: the frozen angle AND pose ride the
+     prompt request, and the server hands both to buildCompositePrompt(). */
   check("both prompt builders receive the frozen snapshot, never a fresh read",
-    /buildCompositePrompt\(item, angleAtStart, profileAtStart\)/.test(apply) &&
-    /buildPrompt\(item, angleAtStart\)/.test(apply), apply.slice(-600));
+    /wirePrompt\(item, angleAtStart, "applyGarment", \{ inProfile: profileAtStart \}\)/.test(apply) &&
+    /buildCompositePrompt\(req\.item, req\.angle, req\.inProfile\)/.test(PROMPTS_SRC), apply.slice(0, 900));
   check("applyGarment never re-reads profileActive() after the await",
     apply.split("profileActive()").length - 1 === 1, "expected exactly one read");
 
@@ -819,8 +829,13 @@ console.log("\n── §6 NO TOCTOU: the pose is a frozen snapshot, like the ang
   const lookAwait = look.indexOf("await stitchLookBlob");
   check("applyLook snapshots it before the stitch await too",
     lookSnap !== -1 && lookAwait !== -1 && lookSnap < lookAwait, `snapshot@${lookSnap} await@${lookAwait}`);
-  check("...and threads it into its angleClause() call",
-    /angleClause\(undefined, undefined, undefined, profileAtStart\)/.test(look), look.slice(-300));
+  /* It used to thread the snapshot into angleClause() - whose result buildLookPrompt()
+     discarded (it returns lookAnchorPrompt()). The look prompt is pose-independent, so the
+     one honest check left is that it is asked for once, AFTER the snapshot, and never re-reads
+     the pose. */
+  check("...and the look prompt it sends is the pose-independent anchor, asked for once",
+    /const prompt = await wireLookPrompt\("applyLook"\);/.test(look) &&
+    look.split("profileActive()").length - 1 === 1, look.slice(-300));
 }
 
 console.log("\n── §7 profileActive() is scoped to a LIVE watcher, not to AI Auto specifically ──");

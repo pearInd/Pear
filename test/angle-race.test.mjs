@@ -29,7 +29,12 @@
    it. */
 import { readFileSync } from "node:fs";
 
-const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* SRC is the prompt engine (lib/prompts.js, server-side since 2026-09-26) followed by app.js -
+   the builder and restore-library checks below read the engine where it lives now; the
+   dispatch-side checks still read app.js. extract() searches the same text; the markers it
+   is given (activeBackIsReal … the angleClause() pointer) exist only in the app.js half. */
+const APP_ONLY = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const SRC = readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8").replace(/\r\n/g, "\n") + "\n" + APP_ONLY;
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -54,7 +59,15 @@ function extract(startMarker, endMarker) {
 // Starts at REAR_POSE rather than ANGLE_CLAUSE: the rear pose sentence and the three
 // garment tails were factored out ABOVE ANGLE_CLAUSE (so an edge-on pose can replace the
 // opener without touching the print instructions), and ANGLE_CLAUSE now references them.
-const code = extract("const REAR_POSE", "/**\n * Resolve the reference image handed to rtClient.set");
+/* SPLIT ACROSS TWO FILES since 2026-09-26: the prompt text - REAR_POSE … CUSTOM_BACK_INFERRED
+   and angleClause() - moved server-side to lib/prompts.js, while the asset-selection helpers
+   angleClause() reads (activeBackIsReal … compositeActiveFor) are still the browser's. The
+   sandbox gets both, in their original order, so this still executes the real clauses
+   against the real selectors. */
+const PROMPTS_SRC = readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const code =
+  PROMPTS_SRC.slice(PROMPTS_SRC.indexOf("const REAR_POSE"), PROMPTS_SRC.indexOf("\n/**\n * Reads the Screen 1 physical inputs")) +
+  "\n" + extract("function activeBackIsReal(", "/* angleClause() (dead relative to the wire");
 
 check("extracted angleClause with the angleOverride + useComposite + inProfile parameters",
   /function angleClause\(item, angleOverride, useComposite, inProfile\)/.test(code));
