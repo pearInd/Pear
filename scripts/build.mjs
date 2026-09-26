@@ -117,9 +117,13 @@ write(SDK_OUT, sdkResult.outputFiles[0].text);
 
 /* The orientation link (see PEAR_ORIENT_URL below). A production build without one still
    works - every AI Auto session then stays on the front view - so this warns rather than
-   fails, loudly enough to be seen in the Vercel build log. A wss:// URL only. */
+   fails, loudly enough to be seen in the Vercel build log. A wss:// URL only - except that
+   a QA build may point at a local `wrangler dev` (ws://localhost / 127.0.0.1) to drive the
+   Worker itself through the visual gate. */
 const ORIENT_URL = String(process.env.PEAR_ORIENT_URL || "").trim();
-if (ORIENT_URL && !/^wss:\/\/[^\s/?#]+(\/[^\s?#]*)?$/.test(ORIENT_URL)) fail(`PEAR_ORIENT_URL must be a wss:// URL, got "${ORIENT_URL}"`);
+const ORIENT_URL_OK = /^wss:\/\/[^\s/?#]+(\/[^\s?#]*)?$/.test(ORIENT_URL) ||
+  (QA && /^ws:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/[^\s?#]*)?$/.test(ORIENT_URL));
+if (ORIENT_URL && !ORIENT_URL_OK) fail(`PEAR_ORIENT_URL must be a wss:// URL, got "${ORIENT_URL}"`);
 if (!ORIENT_URL && !QA) {
   console.warn("   ⚠ PEAR_ORIENT_URL is not set - the room will look for the orientation link on its own origin (/orient),");
   console.warn("     which Vercel cannot serve: AI Auto sessions will stay on the front view until it is set.");

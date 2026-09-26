@@ -19,6 +19,9 @@
      §3  THE WIRE: the protocol session and the sample sanitiser - shopper-controlled input.
      §4  THE BROWSER NO LONGER DECIDES: the moved logic is absent from app.js's code, and the
          tick is the shell it is meant to be (measure, send, execute; no decision → no swap).
+     §5  THE WORKER (cloudflare/orient/) wraps the same protocol session and fails closed: its
+         Origin allowlist, the debug token and its config. Its byte-equivalence with the
+         in-process engine was checked against `wrangler dev` (33,122 steps, 0 differences).
    ============================================================================= */
 import { readFileSync } from "node:fs";
 import { runCorpus } from "./orient-replay.mjs";
@@ -141,6 +144,33 @@ console.log("\n── §4 the decision is absent from the browser, and the tick 
     /if \(!acts\) \{ maybeReanchorPrompt\(\)\.catch\(\(\) => \{\}\); return; \}/.test(tick));
   check("the swap is the only awaited action, as it was", (tick.match(/await /g) || []).length === 3 &&
     /a\.do === "swap"\) await maybeSwap\(/.test(tick), (tick.match(/[^\n]*await [^\n]*/g) || []).join(" | "));
+}
+
+/* ── §5 the Worker ────────────────────────────────────────────────────────────── */
+console.log("\n── §5 the Cloudflare Worker is a transport around the same session, and fails closed ──");
+{
+  const WSRC = readFileSync(new URL("../cloudflare/orient/src/worker.js", import.meta.url), "utf8");
+  const W = await import("../cloudflare/orient/src/worker.js");
+  const wcode = WSRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  check("the Worker runs the shared protocol session - no engine or protocol of its own",
+    /from "\.\.\/\.\.\/\.\.\/lib\/orient-protocol\.js"/.test(WSRC) && /createOrientSession\(/.test(wcode) &&
+    !/createOrientEngine|JSON\.parse/.test(wcode));
+  const LIST = "https://pear.example.com, https://pear-interface-*-team.vercel.app";
+  check("an allowed origin passes; `*` stands for one [a-z0-9-] run and nothing more",
+    W.originAllowed("https://pear.example.com", LIST) && W.originAllowed("https://pear-interface-git-x-team.vercel.app", LIST) &&
+    !W.originAllowed("https://pear-interface-x.evil.com-team.vercel.app", LIST) && !W.originAllowed("https://pear-interface-a.b-team.vercel.app", LIST) &&
+    !W.originAllowed("https://pear.example.com.evil.com", LIST) && !W.originAllowed("http://pear.example.com", LIST));
+  check("no list, no origin, or an empty list refuses everyone (fail closed)",
+    !W.originAllowed("https://pear.example.com", "") && !W.originAllowed("https://pear.example.com", undefined) &&
+    !W.originAllowed(null, LIST) && !W.originAllowed("", LIST) && !W.originAllowed("https://x", " , "));
+  check("the debug token must be set, >= 16 chars, and equal",
+    W.keyMatches("0123456789abcdef", "0123456789abcdef") && !W.keyMatches("short", "short") &&
+    !W.keyMatches(undefined, "0123456789abcdef") && !W.keyMatches("0123456789abcdeX", "0123456789abcdef") &&
+    !W.keyMatches("0123456789abcdef", undefined));
+  const CONF = readFileSync(new URL("../cloudflare/orient/wrangler.jsonc", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  check("wrangler.jsonc: no workers.dev hostname, no logs, and no committed origin wildcard",
+    /"workers_dev":\s*false/.test(CONF) && /"observability":\s*\{\s*"enabled":\s*false/.test(CONF) &&
+    !/"ALLOWED_ORIGINS":\s*"[^"]*(^|,)\s*\*/.test(CONF) && !/PEAR_DEBUG_TOKEN"\s*:/.test(CONF));
 }
 
 console.log(fails === 0 ? "\norient-engine: OK" : `\norient-engine: ${fails} FAILED`);

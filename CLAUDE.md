@@ -460,6 +460,13 @@ skin/face) and EXECUTES (`maybeSwap`, the hold, `turnMark`, the profile/re-ancho
 - **Debug is gated.** The engine's per-tick trace prints every threshold, so a channel gets it only
   when `allowDebug(dk)` passes — in the Worker, `dk` must equal `PEAR_DEBUG_TOKEN` (the support
   view's `?pear_debug=` token, §2.11); the local server always allows it.
+- **The Worker fails closed** (`cloudflare/orient/`, deploy steps in its README): `/orient` only,
+  an Origin allowlist (`ALLOWED_ORIGINS`; empty refuses everyone, `*` is one `[a-z0-9-]` run), a
+  per-connection message rate cap, no `workers.dev` hostname and no logs. The Origin gate is a
+  fence, not a lock — a scripted client can forge it and use the engine as an oracle; what it
+  never gets is the thresholds. It was checked against `wrangler dev` byte for byte (33,122 steps)
+  and drove the minified room through the visual gate. **A change to `lib/orient-engine.js` needs
+  a `wrangler deploy` too**, or production keeps deciding with the old engine.
 - **The browser carries no decision:** `scripts/build.mjs` fails on the engine's reason codes in
   the room bundle (it fired on the pre-move room); `orient-engine` §4 asserts the thresholds and
   decision functions are absent from `app.js`. The action names and knob keys ARE in the room —
@@ -543,6 +550,7 @@ npm run fixtures         # regenerate test/fixtures/ (generated, gitignored, --f
 npm run build            # dist/ — the minified client production serves (§2.11)
 npm run qa:visual:dist   # the visual gate against the MINIFIED room (build --qa → dist-qa/)
 PEAR_SERVE_DIST=1 npm start   # run the server the way production does, after npm run build
+(cd cloudflare/orient && npx wrangler dev)   # the orientation Worker locally (README there; §2.14)
 ```
 
 `test:api` still **does not exist** in `package.json` — there is no API-health

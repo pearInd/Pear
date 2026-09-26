@@ -1,0 +1,15 @@
+/* PEAR orientation engine - see src/worker.js and CLAUDE.md §2.14.
+   Served ONLY on a custom domain of ours (routes, added at deploy), never on workers.dev,
+   so no Cloudflare/vendor hostname appears in the room. PEAR_DEBUG_TOKEN is a secret
+   (`npx wrangler secret put PEAR_DEBUG_TOKEN`), never committed. */
+{
+  "name": "pear-orient",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  /* The room's own origins (production + Vercel previews). Empty = every connection is
+     refused, so a deploy that forgot this fails closed: the room falls back to front-only. */
+  "vars": { "ALLOWED_ORIGINS": "" }
+}
