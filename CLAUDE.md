@@ -116,7 +116,7 @@ wrong"*, *"it slimmed me down"*, *"front and back aren't right"*.
 | Layer | What it controls | Where it lives | Live? |
 |---|---|---|---|
 | **A. Prompt text** | what the model is told | `lib/prompts.js` (server): `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` — §2.13 | mostly dead |
-| **B. Reference image** | what the model is shown | `referenceImageFor`, `galleryOf`, `distinctBackOf`, `createGarmentComposite` | **live** |
+| **B. Reference image** | what the model is shown | `referenceImageFor`, `galleryOf`, `distinctBackOf`, `createGarmentComposite`, `cropReferenceToGarment` (§2.15) | **live** |
 | **C. Orientation** | which asset is on the wire when | the DECISION in `lib/orient-engine.js` (server, §2.14): streaks, `makeTurnYawWindow`, `orientFlipDecision`, early turn, `orientPredictBack`, the hold; the browser's `OrientationWatcher` measures (`classify`, the pose loop) and executes (`maybeSwap`, `effectiveAngle`, `autoOrientation`) | **live** |
 | **D. Size ladder** | the recommended size in the UI | `calculateSize` (client shell, `app.js`) → `lib/sizing.js` (`productVerdict`, `*_SIZE_CHART`, `computeSizeVerdict`, `applyStoreChartOverlay`, §2.12) | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
 
@@ -479,6 +479,25 @@ skin/face) and EXECUTES (`maybeSwap`, the hold, `turnMark`, the profile/re-ancho
   the room bundle (it fired on the pre-move room); `orient-engine` §4 asserts the thresholds and
   decision functions are absent from `app.js`. The action names and knob keys ARE in the room —
   they are the protocol.
+
+### 2.15 A model-worn store photo is cropped to the garment before it is sent
+Reported 2026-09-27 (FOX 1823925817, frame by frame): the shopper's grey shorts rendered as JEANS,
+then a giant printed BACK pasted into half the frame while the shopper got an invented tee. Every
+photo of that product is ON A MODEL (head, jeans, backdrop) and the room sent them whole; the engine
+conditions on the whole image. `garmentBlobCached()` now runs `cropReferenceToGarment()` on store
+URLs: the room's own MediaPipe pose model, in its own IMAGE-mode instance, finds the body and
+`garmentCropRect()` keeps a top from under the chin to the hem (sleeves in), bottoms from the
+waistband down, a long garment (coat, dress…) at full length with only the head removed.
+
+- **It abstains - sends the original - on any doubt:** no body (packshots and flat-lays: most
+  catalogs, never touched), shoulders/hips not confidently seen, a body too small, a crop that keeps
+  more than `REF_CROP_KEEP_MAX` of the photo, or any failure. The visual harness blocks the CDN, so
+  there it always abstains: the gate cannot see this; `reference-crop` and a real browser do.
+- **A store-widget garment is `custom:true`.** `parseHandoff()` marks every embed that way, so
+  `referenceCropHint()` must NOT skip `custom` - the first cut did and cropped nothing. A shopper's own
+  upload is excluded by its `data:`/`blob:` URL, and has its own crop (`detectGarments`).
+- Owner lookup is `sameImage()`, never `===` (§2.2). `reference-crop` slices `garmentCropRect` from its
+  opening line to the next `\n}\n` - keep it self-contained (§2.6).
 
 ---
 
