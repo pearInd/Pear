@@ -98,9 +98,22 @@ const report = [];
 /* ── 1. the SDK, same-origin ──────────────────────────────────────────────────
    Re-exported under a neutral name: app.js's loadSDK() reads `createClient` from this
    bundle (PEAR_SDK_BUNDLE folds its CDN branch away), so the vendor's export name never
-   appears in the room's own code. The SDK's internals are third-party and ship as-is. */
+   appears in the room's own code. The SDK's internals are third-party and ship as-is.
+
+   ONE THING IS ADDED: the media library the SDK bundles (livekit-client) logs at "info" by
+   default, and its connect lines print the engine's media host by name ("signal connecting
+   to wss://….decart.ai/rtc/…", reported 2026-09-26 right after the SDK's own logger was
+   silenced - that is a different logger). Every one of its named loggers is set silent when
+   this bundle is evaluated, i.e. at loadSDK(), long before a connect. setLevel(…, false):
+   loglevel otherwise PERSISTS the level in the origin's localStorage, which would also mute
+   the support view - which loads its own copy from the CDN and should keep these lines. */
+const SDK_ENTRY = [
+  'import { LoggerNames, getLogger } from "livekit-client";',
+  'for (const n of Object.values(LoggerNames)) getLogger(n).setLevel("silent", false);',
+  'export { createDecartClient as createClient } from "@decartai/sdk";',
+].join("\n");
 const sdkResult = await build({
-  stdin: { contents: 'export { createDecartClient as createClient } from "@decartai/sdk";', resolveDir: ROOT, loader: "js" },
+  stdin: { contents: SDK_ENTRY, resolveDir: ROOT, loader: "js" },
   bundle: true,
   format: "esm",
   platform: "browser",
@@ -281,6 +294,11 @@ for (const [name, before, after] of report) {
   if (!QA && !/telemetry:!1,logger:/.test(room)) {
     violations++;
     console.error(`✖ ${APP_ENTRY} creates the render client without telemetry:false and a logger - see connectRealtime()`);
+  }
+  /* ...and the media library inside the SDK bundle has its own loggers (SDK_ENTRY, step 1). */
+  if (!/\.setLevel\("silent",!1\)/.test(sdkResult.outputFiles[0].text)) {
+    violations++;
+    console.error(`✖ ${SDK_OUT} does not silence the media library's loggers - see SDK_ENTRY`);
   }
 }
 
