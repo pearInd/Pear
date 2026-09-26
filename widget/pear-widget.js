@@ -2640,6 +2640,76 @@
     toastTimer = w.setTimeout(function () { toastEl.classList.remove("show"); }, 2600);
   }
 
+  /* ── THE PRODUCT SIGNALS EVERY PEAR_UPDATE_GARMENT CARRIES ──────────────────────
+     THE BUG THIS CLOSES: these fields used to ride ONLY on the full re-anchor message.
+     The two other messages - the bare ready signal sent when the classifier AGREED with
+     the DOM-order guess (the COMMON path on a well-marked-up store) and the one sent when
+     the classify pipeline FAILED - carried nothing but garment_classify_done. So on
+     exactly those visits:
+       · the room never heard garment_age_group at all - resolvedGarmentAgeGroup() read
+         "uncertain" even when Gemini had said "kids" with high confidence, and the
+         kids/adult guard's classifier fallback was dead;
+       · a Shopify variant list that resolved AFTER the click (loadShopifyProductJSON()
+         is fire-and-forget at boot) and a size picker the theme's JS hydrated late were
+         never delivered - the room kept the open-time DOM reading, often [].
+     One builder, used by all three messages, so they cannot drift apart again.
+
+     RE-READ AT MESSAGE TIME, never reused from the open URL: the whole point is the
+     reading that became available after the click. The room already treats every field
+     here as a correction (see its PEAR_UPDATE_GARMENT listener), handles all of them
+     ABOVE its `!front` guard, and so applies them from a message with no garment_url.
+
+     `res` is the classifyImages() result, or null on the failure path - where there is
+     no verdict to relay, so only the page re-reads go out. garment_age_group is then
+     OMITTED rather than sent as "uncertain": "uncertain" means "the classifier looked
+     and could not tell", which is not what happened.
+
+     NEVER THROWS. The message it feeds is also the room's classification-gate release;
+     a scrape that threw here would strand the shopper behind that gate for its full
+     30s timeout. On any failure the signals are dropped and the message still goes. */
+  function productSignals(res) {
+    try {
+      var fresh = {
+        /* Re-read HERE and OUTRANKING the classifier in the room (isKidsProduct). The
+           Shopify product JSON is fetched at boot but can resolve after the modal
+           already opened, so this is the delivery for a size list that wasn't
+           readable yet at open time. */
+        garment_sizes: extractHostSizes(),
+        /* Stock for that same list. Sent as an ARRAY always, including the empty one:
+           unlike the URL param, an empty array here is a real message ("re-checked,
+           nothing is sold out") that must be able to CLEAR a stale strike-through from
+           the open-time scrape. */
+        garment_soldout: extractSoldOutSizes(),
+        /* The store's own size chart, re-read because a size-guide modal is routinely
+           rendered by the theme's JS after the click. Sent as a STRING ALWAYS, including
+           "" - "re-checked, this page publishes no chart we can read" must be able to
+           CLEAR a chart the open-time scrape got wrong. */
+        garment_size_chart: encodeSizeChart(extractSizeChart())
+      };
+      if (!res) return fresh;
+      return Object.assign(fresh, {
+        // Kids/adult verdict for this product, resolved server-side from the same
+        // classify call. "uncertain" is sent explicitly (not omitted) so the fitting
+        // room can tell "we checked and don't know" apart from "this correction
+        // predates the field existing".
+        garment_age_group: res.ageGroup,
+        garment_age_group_confidence: res.ageGroupConfidence,
+        /* Numeric-vs-alphabetic size-run verdict for this product (this page's own
+           scrape, or a cache hit from a previous visit - see classifyImages()). Sent as
+           "unknown" explicitly, not omitted, mirroring garment_age_group above. */
+        garment_size_type: res.sizeRunType,
+        /* The PDP heading can still be a skeleton placeholder at open on a JS-rendered
+           store, so this is the more accurate reading of the two and the room
+           overwrites pendingTitle with it - see its "A LATE TITLE" note. */
+        garment_title: getGarmentName()
+      });
+    } catch (e) {
+      console.warn("[PEAR widget] product-signal re-read failed, sending the message without it:",
+        e && e.message);
+      return {};
+    }
+  }
+
   /* ── front/back classification (Gemini, via the PEAR server) ──────────────────
      Called on every PEAR button click - even a single-image product - so every
      visit contributes to the Supabase cache (garment_cache), not just the ones
@@ -3393,21 +3463,28 @@
                well-marked-up store "the classifier agreed" is the COMMON path - so
                returning here without a word left the gate to sit until its 30s timeout
                on exactly the products that were never at risk.
-               A bare ready signal carries no garment fields, so the room releases the
-               gate and returns without touching activeItem. Nothing is re-anchored. */
+               A ready signal carries no garment_url, so the room releases the gate and
+               returns before touching activeItem's reference. Nothing is re-anchored.
+               It DOES carry the product signals (productSignals() - see there for the
+               kids/adult bug their absence caused); the room applies those above its
+               `!front` guard, so they land without any re-anchor. */
             if (!composite && frontUrl === imgs[0] && backUrl === openBack) {
               console.log("[PEAR widget] classifier agreed with the DOM-order guess - " +
-                "sending a bare ready signal (no re-anchor)");
+                "sending a ready signal with product signals only (no re-anchor)");
               try {
-                openedIframe.contentWindow.postMessage(
-                  { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true }, PEAR_BASE);
+                openedIframe.contentWindow.postMessage(Object.assign(
+                  { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true },
+                  productSignals(res)), PEAR_BASE);
               } catch (e) {
                 console.warn("[PEAR widget] ready signal failed to post:", e && e.message);
               }
               return;
             }
             try {
-              openedIframe.contentWindow.postMessage({
+              /* The product signals (sizes, stock, chart, kids/adult, run type, title)
+                 come from productSignals() - the SAME builder the ready signal and the
+                 failure path use, so the three messages cannot drift apart again. */
+              openedIframe.contentWindow.postMessage(Object.assign({
                 type: "PEAR_UPDATE_GARMENT",
                 garment_url: frontUrl,
                 garment_back: backUrl || undefined,
@@ -3422,19 +3499,6 @@
                    than trusting that two separately-bundled stitchers still agree. */
                 garment_composite_layout: (composite && built.layout) || undefined,
                 garment_images: sorted,
-                // Kids/adult verdict for this product, resolved server-side from the
-                // same classify call. "uncertain" is sent explicitly (not omitted) so
-                // the fitting room can tell "we checked and don't know" apart from
-                // "this correction predates the field existing".
-                garment_age_group: res.ageGroup,
-                garment_age_group_confidence: res.ageGroupConfidence,
-                /* Numeric-vs-alphabetic size-run verdict for this product (this page's
-                   own scrape, or a cache hit from a previous visit - see classifyImages()).
-                   Sent as "unknown" explicitly, not omitted, mirroring garment_age_group
-                   above: the room tells "checked, no answer" apart from "correction
-                   predates this field". Re-sent alongside garment_sizes for the same
-                   reason - a size list that scrapes in late still needs its run type. */
-                garment_size_type: res.sizeRunType,
                 /* Sampled main-fabric colour for THIS product. Sent so the room can
                    name the colour in the prompt instead of relying on the anchor's
                    generic "preserve the original color" - the black/yellow
@@ -3449,37 +3513,8 @@
                 garment_text_ocr: typeof res.textOcr === "string" ? res.textOcr : undefined,
                 /* Whether the rear is positively known blank. Omitted (not false-d) when
                    unknown, so the room can abstain rather than assume. */
-                garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined,
-                /* Re-sent alongside the verdict above, and OUTRANKING it in the room.
-                   The Shopify product JSON is fetched at boot but can resolve after the
-                   modal already opened, so this is the delivery for a size list that
-                   wasn't readable yet at open time. */
-                garment_sizes: extractHostSizes(),
-                /* Stock for that same list, re-read HERE rather than reused from the
-                   open URL. The Shopify product JSON is fetched at boot and routinely
-                   resolves after the modal opened, so at open time the DOM tier may
-                   have been the only thing readable (or nothing was) - this is the
-                   delivery for the authoritative variant-level answer. Sent as an ARRAY
-                   always, including the empty one: unlike the URL param, an empty array
-                   here is a real message ("re-checked, nothing is sold out") that must
-                   be able to CLEAR a stale strike-through from the open-time scrape. */
-                garment_soldout: extractSoldOutSizes(),
-                /* The store's own size chart, RE-READ here rather than reused from the
-                   open URL. A size-guide modal is routinely rendered by the theme's JS
-                   (or fetched into a drawer) and can hydrate well after the shopper
-                   clicked, so this is the delivery for a chart that was not in the DOM
-                   at open time. Sent as a STRING ALWAYS, including "" - unlike the URL
-                   param, an empty string here is a real message ("re-checked, this page
-                   publishes no chart we can read") that must be able to CLEAR a chart
-                   the open-time scrape got wrong, the same argument garment_soldout's
-                   always-sent array makes one field up. */
-                garment_size_chart: encodeSizeChart(extractSizeChart()),
-                /* Re-sent with the correction, not only on the open URL. The PDP heading
-                   can still be a skeleton placeholder at open on a JS-rendered store, so
-                   this is the more accurate reading of the two and the room overwrites
-                   pendingTitle with it - see its "A LATE TITLE" note. */
-                garment_title: getGarmentName()
-              }, PEAR_BASE);
+                garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined
+              }, productSignals(res)), PEAR_BASE);
             } catch (_) {}
           });
         }).catch(function (err) {
@@ -3496,8 +3531,12 @@
              a different product while the request was in flight. */
           if (activeIframe !== openedIframe) return;
           try {
-            openedIframe.contentWindow.postMessage(
-              { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true }, PEAR_BASE);
+            /* No verdict to relay (productSignals(null) omits garment_age_group), but the
+               page re-reads still go out - a Shopify list or a JS-built picker that
+               landed after the click is just as real when the classifier is down. */
+            openedIframe.contentWindow.postMessage(Object.assign(
+              { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true },
+              productSignals(null)), PEAR_BASE);
           } catch (e) {
             console.warn("[PEAR widget] ready signal failed to post after error:", e && e.message);
           }
