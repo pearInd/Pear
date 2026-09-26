@@ -461,7 +461,15 @@
      before can stop working because of it (CLAUDE.md §2.5 - never block on ambiguity).
 
      A one-argument call is exactly the old behaviour, which is what every heuristic
-     caller still wants. Lockstep with isExcludedSrc() in scanner/scan-store.js (§3). */
+     caller still wants. Lockstep with isExcludedSrc() in scanner/scan-store.js (§3).
+
+     WHY THIS STAYS IN THE WIDGET (evaluated 2026-09-26, when the size-chart reader moved
+     server-side). Moving the keyword tier to the server was tried and measured: on a grid
+     card with a sale badge before the photo, a PDP with a brand logo beside the buy
+     button, and a promo banner leading the product container, the room opened on the
+     badge / logo / banner - and the real photo was never sent to /api/classify-images at
+     all, because these paths choose ONE image here. A server cannot repair a choice it
+     never sees. Keep this filter where the choice is made. */
   function isExcludedSrc(src, ctx) {
     var s = String(src || "").toLowerCase();   // coerced like isVectorSrc - a non-string must not throw
     if (isVectorSrc(s)) return true;                       // tier 1 - never bypassed

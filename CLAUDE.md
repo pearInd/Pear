@@ -448,6 +448,10 @@ token the product's own name explains **and** whose filename echoes that name is
 forgiven. A bare one-argument call is the old blanket behaviour and is correct only for
 genuinely untrusted URLs. Never widen `EXCLUDE_SRC` to "fix" a false positive — that is
 what refused adidas's "Icon" line and every `logo-tee.jpg` in the industry.
+It also stays IN THE WIDGET: moving it server-side was measured on 2026-09-26 and opened
+the room on a badge / logo / banner with the real photo never sent — several widget paths
+choose a single image, and the server cannot repair a choice it never sees (see the note
+above `isExcludedSrc` in `pear-widget.js`).
 
 **`canonicalImageUrl` has FOUR copies, not two** — `app.js`, `server.js`,
 `scanner/scan-store.js` and (as `canonicalPhoto`) `pear-widget.js`. They are the
