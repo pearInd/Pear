@@ -166,7 +166,7 @@ console.log("\n── §5 WIRING ──");
   check("the camera is only ever READ - no pause, no gate, no hold anywhere in the layer",
     !/\.pause\(|\.hold\(|holdInputGate|srcObject\s*=/.test(layer));
   check("the frame is drawn before the opacity rises, so the first visible camera frame is current",
-    layer.indexOf("drawContinuityFrame(c, cam, ai)") < layer.indexOf("c.style.opacity = String(a)"));
+    layer.indexOf("drawContinuityFrame(c, continuitySource(cam), ai)") < layer.indexOf("c.style.opacity = String(a)"));
 
   /* GEOMETRY IN LOCKSTEP WITH #aiVideo. The canvas must carry #aiVideo's live transform, or the
      body jumps sideways when the camera fades in. Read off both files, not restated. */
@@ -180,6 +180,27 @@ console.log("\n── §5 WIRING ──");
   check("the camera is cover-cropped with the throttle's own math - the crop Decart renders from",
     /Math\.max\(W \/ vw, H \/ vh\)/.test(draw) && /Math\.max\(width \/ vw, height \/ vh\)/.test(throttleDraw));
   check("...drawn un-mirrored, like every video surface the recorder reads", /g\.setTransform\(1, 0, 0, 1, 0, 0\);/.test(draw));
+
+  /* THE SAME SOURCE, NOT JUST THE SAME MATH (reported 2026-09-26: "a zoom-in between the first
+     and second second"). The crop above was always identical; the picture was not - the bridge
+     drew #webcam while Decart is sent a clone track carrying its own resolution constraint, and
+     on the shopper's device the two came back framed ~2.2x apart. The bridge must draw the
+     element drawFrame() itself reads. */
+  const throttleSrc = extract("function createThrottledInputStream(", "\n}\n");
+  check("the input throttle exposes the element drawFrame() crops for Decart",
+    /sourceVideo: video,/.test(throttleSrc) && /ctx\.drawImage\(video, dx, dy, dw, dh\);/.test(throttleDraw));
+  check("the bridge is drawn through continuitySource(), never straight from #webcam",
+    /drawContinuityFrame\(c, continuitySource\(cam\), ai\)/.test(layer) && !/drawContinuityFrame\(c, cam,/.test(SRC));
+  const continuitySource = (throttle) => new Function("inputThrottle",
+    extract("function continuitySource(cam)", "\n}\n") + "\n}\nreturn continuitySource;")(throttle);
+  const webcam = { id: "webcam", videoWidth: 1280, videoHeight: 720 };
+  const clone = { id: "clone", videoWidth: 512, videoHeight: 288 };
+  check("...which returns the clone's element while a session streams",
+    continuitySource({ sourceVideo: clone })(webcam) === clone);
+  check("...and #webcam only with no input stream, or before the clone has a frame",
+    continuitySource(null)(webcam) === webcam &&
+    continuitySource({ sourceVideo: { videoWidth: 0, videoHeight: 0 } })(webcam) === webcam &&
+    continuitySource({})(webcam) === webcam);
 
   /* THE CLIP. Blended in the LIVE branch at the layer's own opacity - never in the frozen-hold
      tail, which paints a captured end frame after the session has left .show-live. */

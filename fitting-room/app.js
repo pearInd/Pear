@@ -5524,6 +5524,12 @@ function createThrottledInputStream(srcStream, {
        reveal gate compares it against #aiVideo to tell a render from a forwarded camera.
        Read-only by convention: nothing outside this factory ever draws on it. */
     canvas,
+    /* THE ELEMENT drawFrame() READS - the clone track, playing at the camera's own rate.
+       LIVE CONTINUITY draws its bridge from this rather than #webcam: the clone carries its
+       own resolution constraint and can come back framed differently from the preview, and
+       a bridge framed differently from the render reads as a zoom (see "THE SAME SOURCE").
+       Read-only, like `canvas` above. */
+    sourceVideo: video,
     get gateOpen() { return gateOpen; },
     /* Idempotent, and called from applyActive() the moment a garment is genuinely on the
        wire - which is every path that can dress a session (go-live, the cold-start
@@ -8918,6 +8924,17 @@ function syncOrientationWatcher() {
    carries #aiVideo's own CSS (object-fit:cover, the scaleX(-1) selfie flip) - so the body
    lands where the render puts it. The frames are reality-oriented like #aiVideo's, so the
    recorder blends this canvas in with no flip of its own (see startRecording).
+
+   THE SAME SOURCE, NOT JUST THE SAME MATH - THE BUG THIS CLOSES. Reported 2026-09-26 with a
+   clip (pear-tryon-…-FOX-20260926-140537): "a zoom-in in the middle, between the first and
+   second second". At 0.94s the output went silent for 310ms, this layer faded in - and it
+   showed the shopper's torso at ~2.2x, then faded back out to the wide render. The crop
+   math was identical; the PICTURE it was applied to was not. This drew #webcam (the preview
+   track), while Decart is sent a CLONE of that track carrying its own resolution constraint
+   (createThrottledInputStream's applyConstraints), and on that device the two tracks came
+   back framed differently. So the bridge now draws the clone's own element - the very frames
+   drawFrame() crops for Decart, at the camera's full rate (continuitySource()). #webcam is
+   only the fallback for a moment with no input stream, which a live session never has.
    LATENCY IS NOT ALIGNED, and cannot be: the camera is ~a render round-trip AHEAD of the
    output, so the fade reads as a short catch-up. LIVE_CONTINUITY_FADE_MS keeps it short.
 
@@ -9028,9 +9045,10 @@ function continuityEl() {
   return c;
 }
 
-/* The camera, cover-cropped to #aiVideo's aspect - the same centre crop drawFrame() sends. */
-function drawContinuityFrame(c, cam, ai) {
-  const vw = cam.videoWidth, vh = cam.videoHeight;
+/* The camera, cover-cropped to #aiVideo's aspect - the same centre crop drawFrame() sends,
+   of the same frames (`src` is continuitySource()'s answer, not necessarily #webcam). */
+function drawContinuityFrame(c, src, ai) {
+  const vw = src.videoWidth, vh = src.videoHeight;
   if (!vw || !vh) return false;
   const aw = ai.videoWidth || LIVE_W, ah = ai.videoHeight || LIVE_H;
   const W = Math.min(LIVE_CONTINUITY_MAX_W, aw), H = Math.round(W * ah / aw);
@@ -9039,8 +9057,18 @@ function drawContinuityFrame(c, cam, ai) {
   const scale = Math.max(W / vw, H / vh);
   const dw = vw * scale, dh = vh * scale;
   g.setTransform(1, 0, 0, 1, 0, 0);   // reality in, like every other video surface here
-  g.drawImage(cam, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  g.drawImage(src, (W - dw) / 2, (H - dh) / 2, dw, dh);
   return true;
+}
+
+/* The frames the bridge is drawn from: the input throttle's own source element - what
+   drawFrame() crops for Decart - so the camera cannot be framed differently from the render
+   it stands in for (see "THE SAME SOURCE" above). #webcam only when there is no input stream.
+   typeof-guarded (CLAUDE.md §2.7): inputThrottle is module state a sandbox may not carry. */
+function continuitySource(cam) {
+  const throttle = typeof inputThrottle !== "undefined" ? inputThrottle : null;
+  const src = throttle && throttle.sourceVideo;
+  return src && src.videoWidth && src.videoHeight ? src : cam;
 }
 
 /* Started where the feed is revealed (startBillingWindow), stopped by teardown(). Idempotent. */
@@ -9074,7 +9102,7 @@ function startStreamContinuity() {
       console.log(`[PEAR] stream continuity: render output back after ${event.stalledMs}ms - cross-fading to the render`);
     }
     /* Draw BEFORE the opacity rises, so the first visible camera frame is a current one. */
-    const drawn = alpha > 0 ? drawContinuityFrame(c, cam, ai) : true;
+    const drawn = alpha > 0 ? drawContinuityFrame(c, continuitySource(cam), ai) : true;
     const a = drawn ? alpha : 0;
     if (a !== shownAlpha) { c.style.opacity = String(a); shownAlpha = a; }
     liveContinuityAlpha = a;
