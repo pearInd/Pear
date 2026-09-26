@@ -9,7 +9,11 @@
   "workers_dev": false,
   "preview_urls": false,
   "observability": { "enabled": false },
-  /* The room's own origins (production + Vercel previews). Empty = every connection is
-     refused, so a deploy that forgot this fails closed: the room falls back to front-only. */
-  "vars": { "ALLOWED_ORIGINS": "" }
+  /* rt.pear-ai.io - a Workers custom domain on our own zone (Cloudflare creates the DNS
+     record and the certificate). The room reaches it as PEAR_ORIENT_URL=wss://rt.pear-ai.io/orient. */
+  "routes": [{ "pattern": "rt.pear-ai.io", "custom_domain": true }],
+  /* The room's own origins: production, and every Vercel preview of the "pear" project in
+     the pear2 team (pear-<deployment id>-pear2 and pear-git-<branch>-pear2). Empty = every
+     connection is refused, so a deploy that loses this fails closed: the room goes front-only. */
+  "vars": { "ALLOWED_ORIGINS": "https://app.pear-ai.io,https://pear-*-pear2.vercel.app" }
 }
