@@ -3128,7 +3128,7 @@ app.use((req, res) => {
 
 /* ── Start (local only - Vercel manages its own listener) ────────────────── */
 if (!process.env.VERCEL) {
-  app.listen(PORT, () => {
+  const httpServer = app.listen(PORT, () => {
     console.log("\n────────────────────────────────────────────────────────");
     console.log(`  PEAR VTON server → http://localhost:${PORT}`);
     console.log(`  Storefront  : http://localhost:${PORT}/`);
@@ -3145,6 +3145,13 @@ if (!process.env.VERCEL) {
     }
     console.log("────────────────────────────────────────────────────────\n");
   });
+  /* THE ORIENTATION LINK, locally. Production runs the decision engine in a Cloudflare
+     Worker (PEAR_ORIENT_URL at build time - Vercel's functions cannot hold a WebSocket);
+     here the same engine answers on this origin's /orient, which is where the room connects
+     when no URL was built in. Loaded lazily so the Vercel bundle never needs `ws`. */
+  import("./lib/orient-server.js")
+    .then(({ attachOrientServer }) => { attachOrientServer(httpServer); console.log("  Orientation : ws://localhost:" + PORT + "/orient (local engine)"); })
+    .catch((e) => console.warn("  ⚠ orientation link not served locally:", e?.message || e));
 }
 
 export default app;

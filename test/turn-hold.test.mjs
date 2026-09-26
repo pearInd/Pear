@@ -17,7 +17,13 @@
    extracted from app.js. */
 import { readFileSync } from "node:fs";
 
-const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The tick's DECISION half moved to lib/orient-engine.js on 2026-09-26 (CLAUDE.md §2.14): the
+   hold is still raised, promoted and released by the browser, but WHEN is the engine's step(),
+   which emits it as actions. SRC carries both files, and each `watcher` below is the browser's
+   tick plus the engine's per-watcher state and step() - the two halves of what used to be one. */
+const ENGINE = readFileSync(new URL("../lib/orient-engine.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n") + "\n" + ENGINE;
+const ENGINE_STEP = ENGINE.slice(ENGINE.indexOf("/* ── ONE WATCHER'S DECISION STATE"), ENGINE.indexOf("function armLine()"));
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -208,14 +214,14 @@ console.log("\n── wiring: the sampler raises the hold before confirmation, n
 {
   /* The whole point is the 2.5s the old code left uncovered, so assert the call sits on
      the pre-confirmation branch rather than only inside maybeSwap(). */
-  const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);");
+  const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);") + "\n" + ENGINE_STEP;
   check("raised while a switch is pending but NOT yet confirmed (dual-view axis)",
     /const frontBackTurn = dualView && !acquiring && needsSwitch && !confirmed;/.test(watcher),
     watcher.slice(watcher.indexOf("frontBackTurn ="), watcher.indexOf("frontBackTurn =") + 200));
   check("...raised on that axis alone now - see the profile-axis section below",
-    /if \(frontBackTurn\) \{[\s\S]*?orientHoldBegin\("turn-detected"\);/.test(watcher));
+    /if \(frontBackTurn\) \{[\s\S]*?act\(\{ do: "holdBegin", reason: "turn-detected" \}\);/.test(watcher));
   check("released as soon as that evidence clears",
-    /if \(frontBackTurn\) \{[\s\S]*?else if \(_orientHoldActive\) orientHoldEnd\("turn-abandoned"\);/.test(watcher));
+    /if \(frontBackTurn\) \{[\s\S]*?else act\(\{ do: "holdEndIfActive", reason: "turn-abandoned" \}\);/.test(watcher));
 
   /* ── THE DISPLAY IS GATED SEPARATELY FROM THE BANKING ──────────────────────────
      "the live view freezes whenever I move." Banking on the first disagreeing vote is
@@ -224,10 +230,10 @@ console.log("\n── wiring: the sampler raises the hold before confirmation, n
      stay on the early branch (a late snapshot banks the reverted frame) while the cover
      waits for a corroborated torso rotation. */
   check("the feed is covered only on a corroborated torso rotation",
-    /if \(frontBackTurn\) \{[\s\S]*?yawCorroborates\) orientHoldPromote\(/.test(watcher),
+    /if \(frontBackTurn\) \{[\s\S]*?yawCorroborates\) act\(\{ do: "holdPromote"/.test(watcher),
     "a bare disagreeing vote must not stop the shopper's video");
   check("...and abstains to the old cover-it-anyway behaviour when yaw is unusable",
-    /if \(!yawUsable\) orientHoldPromote\(/.test(watcher),
+    /if \(!yawUsable\) act\(\{ do: "holdPromote"/.test(watcher),
     "no pose detector / occluded torso must not silently lose the cover");
   /* Fresh reading AND a peak banked this turn - see makeTurnYawWindow(). The window's own
      `usable` is that conjunction, pinned in orientation-yaw-mirror.test.mjs §3. */
@@ -277,7 +283,7 @@ console.log("\n── wiring: the PROFILE hold is RETIRED - it was the 90-degree
      TO RESTORE: give it something to cover first (restore a pose clause to the prompt -
      see IMAGE_ONLY_PROMPT's restore list), then raise it on ORIENT_PROFILE_ENTER_SCORE,
      never on the EXIT floor. */
-  const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);");
+  const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);") + "\n" + ENGINE_STEP;
   /* Comments stripped: the block comment at this exact site is the RECORD of the bug and
      names every symbol below by design. A check that trips over the explanation would
      force whoever reads it to delete the documentation - the same rule variant-sync and
@@ -290,7 +296,7 @@ console.log("\n── wiring: the PROFILE hold is RETIRED - it was the 90-degree
     !/lastProfileScore > ORIENT_PROFILE_EXIT_SCORE/.test(code),
     "the exit threshold is hysteresis on the way OUT - as an entry trigger it fires far too early");
   check("the front/back hold is untouched - it covers a real asset swap",
-    /if \(frontBackTurn\) \{[\s\S]*?orientHoldBegin\("turn-detected"\);/.test(watcher));
+    /if \(frontBackTurn\) \{[\s\S]*?act\(\{ do: "holdBegin", reason: "turn-detected" \}\);/.test(watcher));
   /* A CONFIRMED swap promotes unconditionally. This is the half that keeps the display
      split from being a regression: whatever the yaw signal did or did not say during the
      turn, once the reference is actually being replaced the model IS between garments for
@@ -303,7 +309,7 @@ console.log("\n── wiring: the PROFILE hold is RETIRED - it was the 90-degree
      plug back into. Retiring a trigger must not delete the machinery behind it. */
   check("the hold machinery itself survives, so restoring the trigger stays a one-liner",
     /function orientHoldBegin\(reason\)/.test(SRC) && /function orientHoldEnd\(reason\)/.test(SRC));
-  check("...and app.js records why it went, next to the code that used to do it",
+  check("...and the code records why it went, next to the decision that used to do it (lib/orient-engine.js now)",
     /THE 90-DEGREE FREEZE\. This block WAS the bug/.test(SRC));
 }
 
@@ -313,9 +319,9 @@ console.log("\n── wiring: single-view items get the SAME protection, with th
      real, distinct back photo (canCombineViews() true) - a custom upload or single-photo
      catalog item got NONE of it, no matter how the shopper turned, because the entire
      watcher was gated on `currentAngle === AUTO_ANGLE`, which those items never reach. */
-  const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);");
+  const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);") + "\n" + ENGINE_STEP;
   check("dualView is read fresh from currentAngle, not assumed",
-    /const dualView = currentAngle === AUTO_ANGLE;/.test(watcher));
+    /dualView: currentAngle === AUTO_ANGLE/.test(watcher) && /const dualView = s\.dualView;/.test(watcher));
   /* `acquiring` (autoOrientation === null) never resolves for a single-view item - there is
      no lock for it to leave PENDING, since maybeSwap() (the only place that sets
      autoOrientation) is permanently inert without AUTO_ANGLE. isGarmentApplied is the
@@ -343,14 +349,14 @@ console.log("\n── wiring: single-view items get the SAME protection, with th
      mutex lives inside maybeUpdateProfile (`applying`), not here, so dropping the await
      cannot produce overlapping applies. */
   check("maybeUpdateProfile's per-tick call is skipped only for a PENDING DUAL-VIEW swap",
-    /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{\s*\n(?:[^\n]*\n)*?\s*maybeUpdateProfile\(lastProfileScore\)\.catch\(\(\) => \{\}\);/.test(watcher));
+    /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{\s*\n(?:[^\n]*\n)*?\s*act\(\{ do: "profile", next: profileNext\(s\.profileScore, s\.profile\) \}\);/.test(watcher));
   check("...and runs in the background, so a slow apply cannot stall the next sample",
-    /maybeUpdateProfile\(lastProfileScore\)\.catch\(\(\) => \{\}\);/.test(watcher) &&
-    !/await maybeUpdateProfile\(/.test(watcher));
+    /a\.do === "profile"\) maybeApplyProfile\(a\.next\)\.catch\(\(\) => \{\}\);/.test(watcher) &&
+    !/await maybeApplyProfile\(/.test(watcher));
   check("...while maybeSwap stays awaited - it owns the hold's lifecycle",
-    /if \(dualView && confirmed\) await maybeSwap\(lastVote\);/.test(watcher));
+    /a\.do === "swap"\) await maybeSwap\(a\.next, a\.predictive === true\);/.test(watcher));
   check("maybeSwap is only ever invoked for a dual-view session",
-    /if \(dualView && confirmed\) await maybeSwap\(lastVote\);/.test(watcher));
+    /else if \(dualView && confirmed\) act\(\{ do: "swap", next: lastVote, predictive: false \}\);/.test(watcher));
 }
 
 console.log("\n── wiring: syncOrientationWatcher arms for single-view items too, without going stale ──");

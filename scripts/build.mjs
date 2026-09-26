@@ -115,6 +115,16 @@ const SDK_OUT = `fitting-room/rt.${sdkHash}.js`;
 if (!SDK_NAME_RE.test(SDK_OUT.split("/").pop())) fail(`SDK file name ${SDK_OUT} does not match server.js's cache pattern`);
 write(SDK_OUT, sdkResult.outputFiles[0].text);
 
+/* The orientation link (see PEAR_ORIENT_URL below). A production build without one still
+   works - every AI Auto session then stays on the front view - so this warns rather than
+   fails, loudly enough to be seen in the Vercel build log. A wss:// URL only. */
+const ORIENT_URL = String(process.env.PEAR_ORIENT_URL || "").trim();
+if (ORIENT_URL && !/^wss:\/\/[^\s/?#]+(\/[^\s?#]*)?$/.test(ORIENT_URL)) fail(`PEAR_ORIENT_URL must be a wss:// URL, got "${ORIENT_URL}"`);
+if (!ORIENT_URL && !QA) {
+  console.warn("   ⚠ PEAR_ORIENT_URL is not set - the room will look for the orientation link on its own origin (/orient),");
+  console.warn("     which Vercel cannot serve: AI Auto sessions will stay on the front view until it is set.");
+}
+
 const JS_OPTS = {
   minify: true,
   legalComments: "none",
@@ -127,6 +137,10 @@ const JS_OPTS = {
   define: {
     PEAR_DEBUG_BUILD: QA ? "true" : "false",
     PEAR_SDK_BUNDLE: JSON.stringify("./" + SDK_OUT.split("/").pop()),
+    /* Where the room reaches the orientation engine (CLAUDE.md §2.14) - the Cloudflare
+       Worker in production. Empty means the page's own origin at /orient, which is what
+       local servers and the QA build's harness serve. */
+    PEAR_ORIENT_URL: JSON.stringify(ORIENT_URL),
   },
 };
 
@@ -220,6 +234,10 @@ if (!QA) {
        must carry none of its wording - these are fragments of its anchors and of the
        restore seam that only the engine has. */
     ["prompt-engine wording", /Drape and fit the EXACT|Fit and replace BOTH the subject|Reproduce the reference's front closure|rear view, turned around|TURNED TO THEIR SIDE|clean break at the ankle/],
+    /* The orientation DECISION is server-side too (lib/orient-engine.js, since 2026-09-26):
+       these are its reason codes and state names, which only the engine speaks. The action
+       names and the knob keys ARE in the room, on purpose - they are the protocol. */
+    ["orientation-engine vocabulary", /turn-corroborated|turn-abandoned|profile-turn-detected|waiting-to-switch|no-yaw-signal|fold handshake|sustained agreement/],
     ["the mock harness", /mock_decart|createMockDecartClient|__pearMock/],
     /* An ASSIGNMENT, not a mention: console.error hints may still name a hook ("run
        window.__pearDebugReinjectGarment()"), which is harmless when nothing registers it. */

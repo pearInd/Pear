@@ -30,7 +30,8 @@
     "@supabase/supabase-js": "^2.108.2",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
-    "googleapis": "^144.0.0"
+    "googleapis": "^144.0.0",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

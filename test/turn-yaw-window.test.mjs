@@ -40,7 +40,22 @@
    ============================================================================= */
 import { readFileSync } from "node:fs";
 
-const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const APP_SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* THE DECISION MOVED (2026-09-26, CLAUDE.md §2.14): the window, the flip decision, the early
+   trigger, the knobs and the tick's decision half live in lib/orient-engine.js, inside
+   createOrientEngine(). Its body is read DEDENTED so every "^const X =" reader below matches
+   either file, and WATCHER is the two halves of what used to be one tick: the browser's
+   createOrientationWatcher() (measure, execute) and the engine's per-watcher state + step(). */
+const ENGINE_SRC = readFileSync(new URL("../lib/orient-engine.js", import.meta.url), "utf8").replace(/\r\n/g, "\n")
+  .split("\n").map((l) => (l.startsWith("  ") ? l.slice(2) : l)).join("\n");
+const SRC = APP_SRC + "\n" + ENGINE_SRC;
+const WATCHER = (() => {
+  const a = APP_SRC.indexOf("function createOrientationWatcher()");
+  const b = APP_SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", a);
+  const e0 = ENGINE_SRC.indexOf("/* ── ONE WATCHER'S DECISION STATE");
+  const e1 = ENGINE_SRC.indexOf("function armLine()", e0);
+  return a === -1 || b === -1 || e0 === -1 || e1 === -1 ? "" : APP_SRC.slice(a, b) + "\n" + ENGINE_SRC.slice(e0, e1);
+})();
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -73,7 +88,7 @@ check("ORIENT_FACE_RETURN_FRAMES exists, and sits between acquisition and the co
   `face=${FACE_F} acquire=${ACQ_F} corroborated=${CORR_F} - one detection is a hair trigger`);
 
 const start = SRC.indexOf("function makeTurnYawWindow(");
-const end   = SRC.indexOf("/* ── THE BEST FRONT-FACING FRAME");
+const end   = SRC.indexOf("/* Edge-on detection thresholds.");
 let makeTurnYawWindow = null, orientFlipDecision = null, orientPredictBack = null, makeEarlyTurnTrigger = null;
 if (start === -1 || end === -1 || end < start) {
   check("makeTurnYawWindow() exists in app.js", false, "the peak-since-agreement window is not implemented");
@@ -384,20 +399,20 @@ console.log("\n── §5 THE WIRING ──");
 {
   const w0 = SRC.indexOf("function createOrientationWatcher()");
   const w1 = SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0);
-  const watcher = w0 !== -1 && w1 !== -1 ? SRC.slice(w0, w1) : "";
+  const watcher = WATCHER;
   check("one window per watcher instance, so an item swap cannot inherit a pose",
     /const yawWindow = makeTurnYawWindow\(\);/.test(watcher));
   check("fed the vote, the lock BEFORE this tick's swap, and a fresh-only reading",
-    /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null,/.test(watcher));
+    /yawWindow\.observe\(vote, s\.lock, yawFresh \? s\.yawAbs : null,/.test(watcher));
   check("the streak-start baseline is gone - it cannot be measured after the peak it needs",
     !/yawAtStreakStart/.test(SRC));
   check("the tick confirms through orientFlipDecision(), fed the face streak",
     /orientFlipDecision\(\{[^}]*faceStreak[^}]*\}\)/.test(watcher));
   check("the face streak counts FaceDetector detections only, and a vote for the other side breaks it",
-    /faceStreak = vote === "front" && lastFaceSeen \? faceStreak \+ 1 : 0;/.test(watcher) &&
+    /faceStreak = vote === "front" && s\.faceSeen \? faceStreak \+ 1 : 0;/.test(watcher) &&
     /lastFaceSeen = faceSeen;/.test(watcher));
   check("dual-view only, never while acquiring, raised on a pending switch OR a turn the window can see",
-    /orientTurnMark\(dualView && !acquiring && \(needsSwitch \|\| yawWindow\.turning\)\);/.test(watcher));
+    /act\(\{ do: "turnMark", on: dualView && !acquiring && \(needsSwitch \|\| yawWindow\.turning\) \}\);/.test(watcher));
   check("a stopped watcher releases the flag - a dead sampler cannot suppress re-drapes",
     /stop\(\) \{[\s\S]*?orientTurnMark\(false\);/.test(watcher));
 
@@ -509,13 +524,13 @@ if (orientPredictBack && orientFlipDecision) {
 {
   const w0 = SRC.indexOf("function createOrientationWatcher()");
   const w1 = SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0);
-  const watcher = w0 !== -1 && w1 !== -1 ? SRC.slice(w0, w1) : "";
+  const watcher = WATCHER;
   check("the kill switch is a constant with a ?predict_back=0 override for A/B",
     /const ORIENT_PREDICTIVE_BACK = /.test(SRC) && /get\("predict_back"\) !== "0"/.test(SRC));
   check("the tick feeds the window the READING's timestamp, so dwell is measured on the pose clock",
-    /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null, yawFresh \? _torsoYawAt : Date\.now\(\), _poseTorsoLostAt\)/.test(watcher));
+    /yawWindow\.observe\(vote, s\.lock, yawFresh \? s\.yawAbs : null, yawFresh \? s\.yawAt : s\.t, s\.lostAt\)/.test(watcher));
   check("a predictive dispatch clears the pre-turn front streak first, so it cannot count toward withdrawing itself",
-    /else if \(predictBack\) \{[\s\S]*?lastVote = null; streak = 0; faceStreak = 0;[\s\S]*?await maybeSwap\("back", true\);/.test(watcher));
+    /else if \(predictBack\) \{[\s\S]*?lastVote = null; streak = 0; faceStreak = 0;[\s\S]*?act\(\{ do: "swap", next: "back", predictive: true \}\);/.test(watcher));
   check("...and the pose/re-anchor updates stand aside for it exactly as for a confirmed swap",
     /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{/.test(watcher));
   check("maybeSwap() lets a face return withdraw a predictive BACK inside the cooldown - and only that",
@@ -569,7 +584,7 @@ console.log("\n── §8 A LIVE LOG MUST SAY WHY THE PREDICTION DID OR DID NOT 
    be tied to a build. */
 {
   const r0 = SRC.indexOf("function orientPredictBackReason(");
-  const end = SRC.indexOf("/* ── THE BEST FRONT-FACING FRAME");
+  const end = SRC.indexOf("/* Edge-on detection thresholds.");
   let reasonFn = null;
   if (r0 === -1 || end < r0) {
     check("orientPredictBackReason() exists", false, "not implemented");
@@ -596,7 +611,7 @@ console.log("\n── §8 A LIVE LOG MUST SAY WHY THE PREDICTION DID OR DID NOT 
   check("orientPredictBack() is exactly 'the reason is fire' - one gate, not two that can drift",
     /function orientPredictBack\(args\) \{\s*\n\s*return orientPredictBackReason\(args\) === "fire";/.test(SRC));
   const w0 = SRC.indexOf("function createOrientationWatcher()");
-  const watcher = SRC.slice(w0, SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0));
+  const watcher = WATCHER;
   check("the debug tick line reports the prediction on every tick of an open turn from a FRONT lock",
     /predict: \$\{orientPredictBackReason\(/.test(watcher));
   check("every session logs the build it is running, so a log or a clip can be tied to the code",
@@ -675,7 +690,7 @@ const MEASURED = { front: 0.76, back: -0.68, frontMirrored: 0.78, backMirrored: 
   }
 
   const w0 = SRC.indexOf("function createOrientationWatcher()");
-  const watcher = SRC.slice(w0, SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0));
+  const watcher = WATCHER;
   check("with no FaceDetector, classify() takes the shoulder order BEFORE the skin heuristic, in BOTH directions",
     /const poseVote = poseFacingVote\(\{ sep: _poseFacingSep, at: _poseFacingAt, now: Date\.now\(\) \}\);/.test(watcher) &&
     /if \(poseVote\) \{[^}]*vote = poseVote;[^}]*posed = true;/.test(watcher) &&
@@ -684,7 +699,7 @@ const MEASURED = { front: 0.76, back: -0.68, frontMirrored: 0.78, backMirrored: 
     !/if \(poseVote\) \{[^}]*faceSeen = true/.test(watcher));
   check("the tick counts consecutive shoulder votes per side into poseStreak",
     /lastPoseVoted = posed;/.test(watcher) &&
-    /if \(lastPoseVoted\) \{ poseStreak = vote === poseSide \? poseStreak \+ 1 : 1; poseSide = vote; \}/.test(watcher));
+    /if \(s\.poseVoted\) \{ poseStreak = vote === poseSide \? poseStreak \+ 1 : 1; poseSide = vote; \}/.test(watcher));
   check("...and hands it to orientFlipDecision()", /orientFlipDecision\(\{[^}]*poseStreak[^}]*\}\)/.test(watcher));
   check("the watcher names the engine it armed", /MediaPipe shoulder order/.test(watcher));
   const p0 = SRC.indexOf("function startPresenceWatcher");
@@ -1483,20 +1498,20 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
   }
 
   const w0 = SRC.indexOf("function createOrientationWatcher()");
-  const watcher = SRC.slice(w0, SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0));
+  const watcher = WATCHER;
   const p0 = SRC.indexOf("function startPresenceWatcher");
   const pose = SRC.slice(p0, SRC.indexOf("/* ── end body-presence gate ── */", p0));
   check("the pose loop records an inference that could not read the torso, beside the shoulder-order publish",
     /if \(facingSep !== null\) \{ _poseFacingSep = facingSep; _poseFacingAt = now; \}\s*\n\s*else _poseTorsoLostAt = now;/.test(pose));
   check("the tick hands that time to the window, and the window's pass to the decision behind the ?pose_pass=0 kill switch",
-    /yawWindow\.observe\([^;]*, _poseTorsoLostAt\);/.test(watcher) &&
+    /yawWindow\.observe\([^;]*, s\.lostAt\);/.test(watcher) &&
     /turnPassed: ORIENT_POSE_PASS && turnYaw\.passed,/.test(watcher) &&
     /const ORIENT_POSE_PASS = /.test(SRC) && /get\("pose_pass"\) !== "0"/.test(SRC));
   check("an early BACK is sent as a withdrawable one, ahead of the unchanged confirmed-swap line",
-    /if \(dualView && confirmed && early && lastVote === "back"\) await maybeSwap\("back", true\);\s*\n\s*else if \(dualView && confirmed\) await maybeSwap\(lastVote\);/.test(watcher));
+    /if \(dualView && confirmed && early && lastVote === "back"\) act\(\{ do: "swap", next: "back", predictive: true \}\);\s*\n\s*else if \(dualView && confirmed\) act\(\{ do: "swap", next: lastVote, predictive: false \}\);/.test(watcher));
   check("§14: the tick caps every un-doing bar at the post-peak evidence, behind the ?post_peak=0 kill switch",
     /postPeakVotes: ORIENT_POST_PEAK \? turnYaw\.postPeakVotes : Infinity,/.test(watcher) &&
-    /postPeakHeld: !ORIENT_POST_PEAK \? Infinity : turnYaw\.postPeakSince === null \? 0 : Date\.now\(\) - turnYaw\.postPeakSince,/.test(watcher) &&
+    /postPeakHeld: !ORIENT_POST_PEAK \? Infinity : turnYaw\.postPeakSince === null \? 0 : s\.t - turnYaw\.postPeakSince,/.test(watcher) &&
     /const ORIENT_POST_PEAK = /.test(SRC) && /get\("post_peak"\) !== "0"/.test(SRC));
   check("§14: a fresh arm restarts the early trigger's history at the arming reading",
     /if \(armed !== lock\) \{ hist\.length = 0; if \(Number\.isFinite\(at\)\) hist\.push\(\{ y: yawAbs, at \}\); speed = 0; \}/.test(SRC));
@@ -1816,22 +1831,25 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
   }
 
   const w0 = SRC.indexOf("function createOrientationWatcher()");
-  const watcher = SRC.slice(w0, SRC.indexOf("\n/* Decode a garment URL into an ImageBitmap", w0));
+  const watcher = WATCHER;
   check("the trigger is built from the parsed setting - and ?early_turn=0 makes it null, with every use inert",
     /const earlyTurn = ORIENT_EARLY_TURN_DEG > 0\s*\n\s*\? makeEarlyTurnTrigger\(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,\s*\n\s*ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS, ORIENT_EARLY_TURN_LOSS_DEG\) : null;/.test(watcher) &&
     /const earlyAct = earlyTurn && dualView && !acquiring && !confirmed && !predictBack\s*\n\s*\? earlyTurn\.observe\(/.test(watcher));
   check("...and the tick hands it the pose loop's last unreadable inference, the fold-by-loss signal",
-    /earlyTurn\.observe\(\{ vote, lock: autoOrientation, yawAbs: yawFresh \? _torsoYawAbs : null, at: yawFresh \? _torsoYawAt : null,\s*\n\s*lostAt: _poseTorsoLostAt \}\)/.test(watcher));
+    /earlyTurn\.observe\(\{ vote, lock: s\.lock, yawAbs: yawFresh \? s\.yawAbs : null, at: yawFresh \? s\.yawAt : null,\s*\n\s*lostAt: s\.lostAt \}\)/.test(watcher));
   const skipAt = watcher.indexOf("if (!(dualView && (confirmed || predictBack))) {");
-  const fireAt = watcher.indexOf('await maybeSwap(earlyAct.fire, earlyAct.fire === "back");');
-  const withdrawAt = watcher.indexOf("await maybeSwap(earlyAct.withdraw);");
+  const fireAt = watcher.indexOf('act({ do: "swap", next: earlyAct.fire, predictive: earlyAct.fire === "back" });');
+  const withdrawAt = watcher.indexOf('act({ do: "swap", next: earlyAct.withdraw, predictive: false });');
   check("the early block dispatches ahead of the pose/re-anchor updates and ends the tick (they would take the mutex and drop it)",
     fireAt !== -1 && withdrawAt !== -1 && fireAt < skipAt && withdrawAt < skipAt &&
-    /await maybeSwap\(earlyAct\.fire, earlyAct\.fire === "back"\);[^\n]*\n\s*return;/.test(watcher) &&
-    /await maybeSwap\(earlyAct\.withdraw\);\s*\n\s*return;/.test(watcher));
+    /act\(\{ do: "swap", next: earlyAct\.fire, predictive: earlyAct\.fire === "back" \}\);[^\n]*\n\s*return acts;/.test(watcher) &&
+    /act\(\{ do: "swap", next: earlyAct\.withdraw, predictive: false \}\);\s*\n\s*return acts;/.test(watcher));
   check("...clears the pre-turn streak before an early fire, and only a BACK withdrawal resets the cooldown",
     /if \(earlyAct && earlyAct\.fire\) \{[\s\S]*?lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;/.test(watcher) &&
-    /if \(earlyAct\.withdraw === "back"\) lastSwapAt = 0;/.test(watcher) && (watcher.match(/lastSwapAt = 0;/g) || []).length === 1);
+    /if \(earlyAct\.withdraw === "back"\) act\(\{ do: "resetSwapCooldown" \}\);/.test(watcher) &&
+    (watcher.match(/do: "resetSwapCooldown"/g) || []).length === 1 &&            /* the engine emits it in one place... */
+    /a\.do === "resetSwapCooldown"\) lastSwapAt = 0;/.test(watcher) &&          /* ...the shell executes it... */
+    (watcher.match(/lastSwapAt = 0;/g) || []).length === 1);                    /* ...and nothing else zeroes the cooldown */
 
   const t0 = SRC.indexOf("function traceSwapTimeline(");
   const trace = SRC.slice(t0, SRC.indexOf("\n}\n", t0));

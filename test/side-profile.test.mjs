@@ -43,6 +43,10 @@
 import { readFileSync } from "node:fs";
 
 const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The orientation DECISION - including the profile axis's enter/exit rule - is server-side
+   since 2026-09-26 (lib/orient-engine.js, CLAUDE.md §2.14). */
+const ORIENT_SRC = readFileSync(new URL("../lib/orient-engine.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const ORIENT = await import("../lib/orient-engine.js");
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -132,17 +136,11 @@ const LATERAL_MARKER = /continuing its front and back panels/;
    paraphrase of them. Returns a step(score) → autoProfile function; call it once per
    simulated 250ms sample. */
 function poseMachine() {
-  const upd = extract("async function maybeUpdateProfile(score)", "\n  const timer = setInterval");
-  const decide = upd.slice(0, upd.indexOf("if (next === autoProfile) return;"));
-  const CONSTS = {
-    ORIENT_PROFILE_WINDOW: 5, ORIENT_PROFILE_ENTER: 2, ORIENT_PROFILE_ENTER_SCORE: 0.55,
-    ORIENT_PROFILE_EXIT: 2, ORIENT_PROFILE_FAST_SCORE: 0.85, ORIENT_PROFILE_FAST_FRAMES: 2,
-    ORIENT_PROFILE_EXIT_SCORE: 0.25,
-  };
-  return new Function(...Object.keys(CONSTS),
-    "let profileBuf = [], squareStreak = 0, strongStreak = 0, autoProfile = false;\n" +
-    "return (score) => {\n" + decide.slice(decide.indexOf("{") + 1) +
-    "\n autoProfile = next; return autoProfile; };")(...Object.values(CONSTS));
+  /* The decision half lives in the orientation engine since 2026-09-26 (profileNext(),
+     lib/orient-engine.js) - run for real, with the shipped constants. */
+  const engine = ORIENT.createOrientEngine({});
+  let autoProfile = false;
+  return (score) => { autoProfile = engine.internals.profileNext(score, autoProfile); return autoProfile; };
 }
 
 console.log("── §1 THE RETIRED ARCHIVE IS INTACT (these no longer reach the model) ──");
@@ -507,8 +505,12 @@ console.log("\n── §5 THE WATCHER: edge-on is a separate channel from the fr
   check("the width baseline is learned ONLY from confident square-on votes",
     /if \(vote && !skinAmbiguous && width !== null\) \{/.test(watcher));
 
-  const upd = extract("async function maybeUpdateProfile(score)", "\n  const timer = setInterval");
-  check("maybeUpdateProfile NEVER assigns the orientation lock",
+  /* The pose transition is two halves since 2026-09-26: the DECISION (the rolling window,
+     the streaks, the enter/exit rule) is the engine's profileNext(), and APPLYING it (the
+     mutex, the cooldown, the dispatch) is the browser's maybeApplyProfile(). Both are read. */
+  const upd = extract("async function maybeApplyProfile(next)", "\n  const timer = setInterval") + "\n" +
+    ORIENT_SRC.slice(ORIENT_SRC.indexOf("function profileNext(score, autoProfile)"), ORIENT_SRC.indexOf("/** One tick"));
+  check("the pose transition NEVER assigns the orientation lock",
     !/autoOrientation\s*=/.test(upd), upd.slice(0, 300));
   check("...and never touches the frozen garment assets",
     !/GARMENT_FRONT|GARMENT_BACK/.test(upd));
@@ -532,14 +534,14 @@ console.log("\n── §5 THE WATCHER: edge-on is a separate channel from the fr
     /if \(disposed \|\| !isLive\(\)\) return;/.test(upd) &&
     !/currentAngle !== AUTO_ANGLE\) return;\n\n {4}applying = true;/.test(upd));
 
-  const tick = extract("const timer = setInterval", "if (dualView && confirmed) await maybeSwap(lastVote);");
+  const tick = ORIENT_SRC.slice(ORIENT_SRC.indexOf("function step(s) {"), ORIENT_SRC.indexOf("function armLine()"));
   /* Fire-and-forget since the 90-degree freeze work: awaiting it held the sampler's
      `sampling` flag across a network round-trip, so the next orientation sample was
      skipped and the watcher went stale during the very turn it tracks. The GATE is what
      this asserts and it is unchanged; the `applying` mutex inside maybeUpdateProfile is
      what makes dropping the await safe. */
   check("the tick skips the pose update only for a PENDING DUAL-VIEW swap (no redundant second set())",
-    /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{\s*\n(?:[^\n]*\n)*?\s*maybeUpdateProfile\(lastProfileScore\)\.catch\(\(\) => \{\}\);/.test(tick),
+    /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{\s*\n(?:[^\n]*\n)*?\s*act\(\{ do: "profile", next: profileNext\(s\.profileScore, s\.profile\) \}\);/.test(tick),
     tick.slice(-400));
 }
 

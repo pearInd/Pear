@@ -117,7 +117,7 @@ wrong"*, *"it slimmed me down"*, *"front and back aren't right"*.
 |---|---|---|---|
 | **A. Prompt text** | what the model is told | `lib/prompts.js` (server): `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` — §2.13 | mostly dead |
 | **B. Reference image** | what the model is shown | `referenceImageFor`, `galleryOf`, `distinctBackOf`, `createGarmentComposite` | **live** |
-| **C. Orientation** | which asset is on the wire when | `OrientationWatcher`, `effectiveAngle`, `autoOrientation` | **live** |
+| **C. Orientation** | which asset is on the wire when | the DECISION in `lib/orient-engine.js` (server, §2.14): streaks, `makeTurnYawWindow`, `orientFlipDecision`, early turn, `orientPredictBack`, the hold; the browser's `OrientationWatcher` measures (`classify`, the pose loop) and executes (`maybeSwap`, `effectiveAngle`, `autoOrientation`) | **live** |
 | **D. Size ladder** | the recommended size in the UI | `calculateSize` (client shell, `app.js`) → `lib/sizing.js` (`productVerdict`, `*_SIZE_CHART`, `computeSizeVerdict`, `applyStoreChartOverlay`, §2.12) | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
 
 **Layer B is where most real fit/back-view problems actually live.** "The back
@@ -245,6 +245,18 @@ with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (�
 `reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
 guarded `window.__pearMockDecart = …` line that follows it — that line's exact text (with its
 `PEAR_DEBUG_BUILD` guard, §2.11) is its end marker.
+The orientation decision (§2.14) is sliced out of **`lib/orient-engine.js`** now: `turn-yaw-window`
+and `orientation-yaw-mirror` take `function makeTurnYawWindow(` to `/* Edge-on detection thresholds.`
+(and `function orientPredictBackReason(` to the same end); `turn-hold` and `turn-yaw-window` append
+the engine's `/* ── ONE WATCHER'S DECISION STATE` to `function armLine()` to the browser's
+`function createOrientationWatcher()` … `\n/* Decode a garment URL into an ImageBitmap`;
+`side-profile` and `prompt-reanchor` take `function step(s) {` to `function armLine()`, and
+`side-profile` `function profileNext(score, autoProfile)` to `/** One tick`. On the browser side,
+`prompt-reanchor` slices `async function maybeReanchorPrompt()` to
+`\n\n  /* What only the browser measured`, `orient-engine` §4 the tick from
+`  const timer = setInterval(async () => {` to `}, ORIENT_SAMPLE_MS);`, and `test/orient-replay.mjs`
+(the harness `orient-engine` §1 replays) runs `const ORIENT_SAMPLE_MS` through the end of
+`function createOrientationWatcher() {`.
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.
@@ -405,6 +417,54 @@ in `lib/prompts.js`, moved verbatim, behind `POST /api/prompt`. RULE 0 applies t
   bundle; `prompt-engine` §5 asserts the absence over `app.js`. The pre-commit hook traces
   `lib/prompts.js` (falling back to HEAD's `app.js` only for the commit that moved it).
 
+### 2.14 The orientation decision is server-side
+Since 2026-09-26 the half of Layer C that DECIDES — the vote streaks, `makeTurnYawWindow`,
+`orientFlipDecision`, the early-turn handshake, `orientPredictBack`, when the turn hold rises and
+falls, `orientTurnMark`, the profile ladder (`profileNext`), which swap goes out and when, and every
+`ORIENT_*` threshold and `?early_turn=`/`?pose_pass=`… knob — lives in `lib/orient-engine.js`, moved
+verbatim. In production it runs in a Cloudflare Worker (`cloudflare/orient/`) over one WebSocket per
+page (`lib/orient-protocol.js`); locally `server.js` and the visual harness serve the same protocol
+at `/orient` (`lib/orient-server.js`). The browser MEASURES (`classify()`, the pose loop, MediaPipe,
+skin/face) and EXECUTES (`maybeSwap`, the hold, `turnMark`, the profile/re-anchor dispatch).
+
+- **The contract:** `createOrientEngine(knobs, {debug}) → step(sample) → actions`. The sample is
+  plain measurements (`t, vote, faceSeen, poseVoted, profileScore, yawAbs, yawAt, lostAt, lock,
+  profile, dualView`); the actions run IN ORDER in the tick exactly where the old code ran them,
+  `swap` last and awaited. **Time comes from the browser's sample**, never the server's clock, so a
+  decision is independent of network latency — that is what made it provable.
+- **Behaviour was proven identical:** 4,116 scripted sessions (turn trajectories × speeds × dropouts
+  × noise × every knob combination) replayed through the old in-browser watcher and the new
+  browser→engine path produced the same action sequence byte for byte (239,223 events); four
+  mutated thresholds were each caught (a 1° early-turn change moved 185 sessions). `orient-engine` §1 pins 504 of them to a hash computed from
+  the pre-move code.
+- **Latency, measured (6,174 sessions, the harness's random busy-wire off so only the link moves):**
+  at 10 and 50 ms every decision lands on the same sample, shifted by the latency alone — 6
+  sessions differ, each a reply still in flight when the session ended. At 200 ms the round trip
+  plus the measurement overruns the 250 ms tick, `sampling` skips every other sample, and later
+  swaps change in 122 sessions (34 more, 88 fewer; the first back view never moves). Tel Aviv
+  measured ~7 ms. With the busy-wire noise ON, even 50 ms reshuffles ~100 sessions each way (back lost 47 / gained 52) —
+  that is the harness keying its randomness on execution time, not the link; compare outcomes,
+  not byte logs, when you re-measure.
+- **The fallback is the front view, never a local copy.** If the link is down, slow (800 ms step
+  timeout) or unset, a tick decides nothing: no swap, the lock stays PENDING, the front renders —
+  the same safe path as a product with no back photo. Only `maybeReanchorPrompt()` keeps its
+  cadence. One `[PEAR] AI Auto - the orientation link is unavailable …` warning says so. Do not
+  "fix" an outage by putting a copy of the decision back in the browser: that is the thing this
+  section exists to keep out.
+- **Where the room connects:** `PEAR_ORIENT_URL` (a `wss://` URL, injected by `scripts/build.mjs`,
+  set in Vercel) or, when empty, the page's own origin at `/orient` — which Vercel cannot serve, so
+  a production build without it warns. The link opens at `enterRoom()`, not at go-live.
+- **Knobs travel as data.** The browser forwards only `ORIENT_KNOB_KEYS` from its URL at channel
+  open; the engine sanitises them (`sanitizeOrientKnobs`) and every sample (`sanitizeOrientSample`).
+  The protocol is bounded (16 channels, 16 KB per message) because the body is shopper-controlled.
+- **Debug is gated.** The engine's per-tick trace prints every threshold, so a channel gets it only
+  when `allowDebug(dk)` passes — in the Worker, `dk` must equal `PEAR_DEBUG_TOKEN` (the support
+  view's `?pear_debug=` token, §2.11); the local server always allows it.
+- **The browser carries no decision:** `scripts/build.mjs` fails on the engine's reason codes in
+  the room bundle (it fired on the pre-move room); `orient-engine` §4 asserts the thresholds and
+  decision functions are absent from `app.js`. The action names and knob keys ARE in the room —
+  they are the protocol.
+
 ---
 
 ## 3. Cross-file lockstep
@@ -429,6 +489,8 @@ same commit. Whichever is wrong is the one that wins.
 | Size-token plausibility (`isPlausibleSizeToken`) | `pear-widget.js` (the size-list scrape) ↔ `lib/sizing.js` (the chart reader) |
 | Centimetre unit regex (`SIZE_CHART_CM_RE`) | `pear-widget.js` (caption tier, `sizeChartTableUnit`) ↔ `lib/sizing.js` (cell/header tier) |
 | Garment region classifier (`isBottomsGarment`, `BOTTOMS_TOKENS`, `TOPS_TOKENS`) | `app.js` ↔ `lib/prompts.js` (server copy honours the browser's verdict; asserted identical by `prompt-engine` §2) |
+| Orientation knobs the browser forwards vs the knobs the engine reads | `app.js: ORIENT_KNOB_KEYS` ↔ `lib/orient-engine.js: ORIENT_KNOB_KEYS` (`orient-engine` §2) |
+| Orientation values both halves need | `ORIENT_YAW_FRESH_MS`, `PRESENCE_PROMPT_YAW_SUPPRESS_DEG`, `ORIENT_EARLY_TURN_DEFAULT_SPEED` and the `?early_turn_speed` parse (`ORIENT_EARLY_TURN_MIN_SPEED`) in `app.js` (the pose loop, the presence prompt) ↔ `lib/orient-engine.js` (`orient-engine` §2) |
 | Prompt facts the browser sends vs the fields the engine accepts | `app.js: PROMPT_FACT_STRINGS / PROMPT_FACT_BOOLS` ↔ `lib/prompts.js: PROMPT_ITEM_STRINGS / PROMPT_ITEM_BOOLS` (`prompt-engine` §3) |
 | Apostrophe/geresh fold | `pear-widget.js: normApos` ↔ `app.js: _normApos` ↔ `lib/sizing.js: _normApos` — **three** copies (`numeric-pants-sizing` §7 runs all three) |
 | Size tokens (`parseSizeList`, `ADULT_ALPHA_SIZES`) | `app.js` (ladders, `categoryFromSizeRun`) ↔ `lib/sizing.js` (the product rules) |

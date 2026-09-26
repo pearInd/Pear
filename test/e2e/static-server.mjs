@@ -17,6 +17,7 @@
      · POST /api/size        -> the REAL lib/sizing.js (the size fit is server-side since
                                 2026-09-26; shipped logic, so it runs here unstubbed)
      · POST /api/prompt      -> the REAL lib/prompts.js, for the same reason
+     · WS   /orient          -> the REAL orientation engine (lib/orient-server.js)
      · POST /api/realtime-token -> 402, AND COUNTED
 
    THAT LAST ONE IS A TEST, not a stub. ?mock_decart=1 is supposed to short-circuit
@@ -32,6 +33,7 @@ import { createServer } from "node:http";
 import { createReadStream, statSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { attachOrientServer } from "../../lib/orient-server.js";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
@@ -169,6 +171,11 @@ export function startStaticServer(port = 0) {
     });
     createReadStream(file).pipe(res);
   });
+
+  /* The orientation link runs the REAL engine over a real socket, as it does in
+     production - the decision is shipped logic, not a sensor, so the harness must not stub
+     it (CLAUDE.md §8.6). The mocked pose sensor feeds it through the room's own watcher. */
+  attachOrientServer(server);
 
   return new Promise((ok) => {
     server.listen(port, "127.0.0.1", () => {
