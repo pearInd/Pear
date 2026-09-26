@@ -15,6 +15,14 @@
    feature exists to keep passing, and every one of them is a table that a naive "find
    a <table>, read some numbers" scraper would happily have swallowed.
 
+   WHERE THE READING HAPPENS NOW (2026-09-26). The widget only COLLECTS the candidate
+   tables and sends them raw; lib/sizing.js reads them (readStoreSizeChart(), with every
+   rule these sections pin). So each page below runs the REAL widget in jsdom and hands
+   its param to the REAL server reader (storeChartWire()), and asserts on the chart the
+   size verdict would actually use. A table that is not a size chart is now SENT (raw)
+   but READ as nothing - "nothing is read" below means exactly the old "nothing is sent":
+   the room keeps its vetted matrix. A page with no table at all still sends no param.
+
    Run in jsdom against the DOM rather than by regex over the source for the same reason
    stock-dom-scrape.test.mjs is: the DOM tier's bugs live in things that read perfectly
    on the page - an attribute accessor that returns "" instead of null, a units regex
@@ -22,6 +30,7 @@
    ============================================================================= */
 import { JSDOM, VirtualConsole } from "jsdom";
 import { readFileSync } from "node:fs";
+const SIZING = await import("../lib/sizing.js");
 
 const WIDGET = readFileSync(new URL("../widget/pear-widget.js", import.meta.url), "utf8");
 const PX = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -35,7 +44,7 @@ function check(label, cond, detail) {
   if (!cond && detail !== undefined) console.log("        " + detail);
 }
 
-/* The chart as it reaches the room: "<unit>;<source>;SIZE:chest:waist:hips:legs|..." */
+/* The chart as the size service reads it, in the v1 shape "<unit>;<source>;SIZE:chest:waist:hips:legs|..." */
 function decode(param) {
   if (!param) return null;
   const head = param.split(";");
@@ -92,10 +101,13 @@ async function run(name, html, assertions) {
   const params = new URLSearchParams(iframe ? (iframe.src.split("?")[1] || "") : "");
 
   console.log(`\n=== ${name} ===`);
+  const raw = params.get("garment_size_chart");
+  const wire = raw == null ? null : SIZING.storeChartWire(raw);   // what the server reads
   assertions({
     params,
-    chart: decode(params.get("garment_size_chart")),
-    raw: params.get("garment_size_chart"),
+    chart: decode(wire),
+    raw,
+    wire,
     beforeClick,
     window,
   });
@@ -275,9 +287,9 @@ await run("§11 a colour/fabric table is not a size chart",
     <tr><td>Black</td><td>Cotton</td></tr>
     <tr><td>Blue</td><td>Linen</td></tr>
   </table>`),
-  ({ params }) => {
-    check("nothing is sent - no measurement column mapped",
-      params.get("garment_size_chart") === null, String(params.get("garment_size_chart")));
+  ({ params, wire }) => {
+    check("nothing is read - no measurement column mapped",
+      !wire, String(wire));
   });
 
 /* THE TRAP. A size column AND numbers, so the shape is right - but the numbers are
@@ -290,9 +302,9 @@ await run("§12 a non-monotonic 'chest' column is refused",
     <tr><td>L</td><td>89</td></tr>
     <tr><td>XL</td><td>149</td></tr>
   </table></div>`),
-  ({ params }) => {
-    check("nothing is sent - the ladder wanders, so it is not a ladder",
-      params.get("garment_size_chart") === null, String(params.get("garment_size_chart")));
+  ({ params, wire }) => {
+    check("nothing is read - the ladder wanders, so it is not a ladder",
+      !wire, String(wire));
   });
 
 await run("§13 an out-of-human-range column is refused",
@@ -302,11 +314,11 @@ await run("§13 an out-of-human-range column is refused",
     <tr><td>M</td><td>6</td></tr>
     <tr><td>L</td><td>8</td></tr>
   </table></div>`),
-  ({ params }) => {
+  ({ params, wire }) => {
     /* Ascending and plausibly shaped, but 4-8 of anything is not a chest. The clamp is
        applied AFTER unit inference, so the inches reading (10-20cm) fails it too. */
-    check("nothing is sent - the clamp rejects it in either unit",
-      params.get("garment_size_chart") === null, String(params.get("garment_size_chart")));
+    check("nothing is read - the clamp rejects it in either unit",
+      !wire, String(wire));
   });
 
 await run("§14 a one-row table is refused",
@@ -314,9 +326,9 @@ await run("§14 a one-row table is refused",
     <tr><th>Size</th><th>Chest (cm)</th></tr>
     <tr><td>M</td><td>96-101</td></tr>
   </table></div>`),
-  ({ params }) => {
-    check("nothing is sent - a single row is not a ladder",
-      params.get("garment_size_chart") === null, String(params.get("garment_size_chart")));
+  ({ params, wire }) => {
+    check("nothing is read - a single row is not a ladder",
+      !wire, String(wire));
   });
 
 /* GARMENT LENGTH IS NOT BODY LENGTH, and "inseam" is not this file's "legs" (which is
@@ -329,9 +341,9 @@ await run("§15 'Length' and 'Inseam' columns are deliberately unmapped",
     <tr><td>M</td><td>70</td><td>78</td></tr>
     <tr><td>L</td><td>72</td><td>80</td></tr>
   </table></div>`),
-  ({ params }) => {
-    check("nothing is sent - neither header describes a body measurement we score",
-      params.get("garment_size_chart") === null, String(params.get("garment_size_chart")));
+  ({ params, wire }) => {
+    check("nothing is read - neither header describes a body measurement we score",
+      !wire, String(wire));
   });
 
 /* ── §15b THE HAZARD CLASS THAT MATTERS MOST: a body WORD in a garment column ──────
@@ -366,11 +378,11 @@ await run("§15c 'Half Chest' / 'Chest Width' are flat measurements, not circumf
     <tr><td>M</td><td>51</td><td>52</td></tr>
     <tr><td>L</td><td>54</td><td>55</td></tr>
   </table></div>`),
-  ({ params }) => {
+  ({ params, wire }) => {
     /* Half of a 96-108cm chest, and in-clamp as a "chest" the whole way - which is
        exactly why a value check could never catch this and the HEADER has to. */
-    check("nothing is sent - a half-chest scored as a chest is a 2x error",
-      params.get("garment_size_chart") === null, String(params.get("garment_size_chart")));
+    check("nothing is read - a half-chest scored as a chest is a 2x error",
+      !wire, String(wire));
   });
 
 /* The pure substring bug, in the one column where nothing reads the value today
@@ -383,9 +395,9 @@ await run("§15d 'Ship Weight' is not a hip measurement",
     <tr><td>M</td><td>170</td></tr>
     <tr><td>L</td><td>190</td></tr>
   </table></div>`),
-  ({ params }) => {
-    check("nothing is sent - 'hips' must not match inside 'Ship'",
-      params.get("garment_size_chart") === null, String(params.get("garment_size_chart")));
+  ({ params, wire }) => {
+    check("nothing is read - 'hips' must not match inside 'Ship'",
+      !wire, String(wire));
   });
 
 /* The other half of the same fix: \b is an ASCII notion in JavaScript, so adding it to

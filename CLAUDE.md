@@ -338,7 +338,11 @@ store-chart decode/overlay and the fit itself live in `lib/sizing.js`, served by
 `POST /api/size` - and so do the **product** rules that pick a chart (`isKidsProduct()`,
 `isAdultProduct()`, `isPantsProduct()` and its tiers, `isAlphaSizeRun()`'s veto,
 `pantsChartKindForSizes()`, the Hebrew/English pants vocabulary), moved the same day into
-`productVerdict()`. `calculateSize()` in `app.js` is a shell: it sends the measurements and
+`productVerdict()`, and so does the storefront's own size-chart READER (which header is
+chest or waist, word sizes, range/inch cells, clamps, monotonicity, which table wins —
+`readStoreSizeChart()`): the widget only collects the page's tables and sends them raw
+(`encodeRawSizeChart()`, 1,506 pages proven identical to the old in-widget reader, both
+transports). An old widget's v1 string still decodes. `calculateSize()` in `app.js` is a shell: it sends the measurements and
 the product's RAW evidence (`sizeProductEvidence()`: size list, title, age group, cached
 category and size-run type, the item's type fields, and its own `isBottomsGarment()` verdict
 as `item.bottoms` - true/false, or null for "no verdict"), and `applySizeVerdict()` paints the
@@ -420,8 +424,10 @@ same commit. Whichever is wrong is the one that wins.
 | `srcset` parsing (split on whitespace, never on `,`) | `pear-widget.js: largestFromSrcset` ↔ `scan-store.js: largestFromSrcset` |
 | Decorative-image keyword list | `pear-widget.js: EXCLUDE_SRC` ↔ `scan-store.js: EXCLUDE_IMG_SRC` |
 | Trust-tiered exclusion + name corroboration | `isExcludedSrc` / `nameEchoesProduct` in `pear-widget.js` ↔ `scan-store.js` |
-| Size-chart wire format (`<unit>;<source>;SIZE:chest:waist:hips:legs\|…`) | `pear-widget.js: encodeSizeChart` ↔ `lib/sizing.js: parseStoreSizeChart` |
-| Size-chart sanity clamps (cm) | `pear-widget.js: SIZE_CHART_CLAMPS` ↔ `lib/sizing.js: STORE_CHART_CLAMPS` |
+| Raw size-chart wire (`raw;` + candidate tables, U+001C–U+001F separators) | `pear-widget.js: encodeRawSizeChart` ↔ `lib/sizing.js: decodeRawSizeChart` (`size-chart-overlay` §4 round-trips it) |
+| Size-chart sanity clamps (cm) | `lib/sizing.js: SIZE_CHART_CLAMPS` (the reader, per column) ↔ `lib/sizing.js: STORE_CHART_CLAMPS` (the overlay) — one file now, still two gates that must agree |
+| Size-token plausibility (`isPlausibleSizeToken`) | `pear-widget.js` (the size-list scrape) ↔ `lib/sizing.js` (the chart reader) |
+| Centimetre unit regex (`SIZE_CHART_CM_RE`) | `pear-widget.js` (caption tier, `sizeChartTableUnit`) ↔ `lib/sizing.js` (cell/header tier) |
 | Garment region classifier (`isBottomsGarment`, `BOTTOMS_TOKENS`, `TOPS_TOKENS`) | `app.js` ↔ `lib/prompts.js` (server copy honours the browser's verdict; asserted identical by `prompt-engine` §2) |
 | Prompt facts the browser sends vs the fields the engine accepts | `app.js: PROMPT_FACT_STRINGS / PROMPT_FACT_BOOLS` ↔ `lib/prompts.js: PROMPT_ITEM_STRINGS / PROMPT_ITEM_BOOLS` (`prompt-engine` §3) |
 | Apostrophe/geresh fold | `pear-widget.js: normApos` ↔ `app.js: _normApos` ↔ `lib/sizing.js: _normApos` — **three** copies (`numeric-pants-sizing` §7 runs all three) |
