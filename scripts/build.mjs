@@ -75,6 +75,28 @@ const pinned = [...readFileSync(join(ROOT, "fitting-room/config.js"), "utf8").ma
 if (!pinned.length) fail("could not find the @decartai/sdk@x.y.z pin in fitting-room/config.js");
 for (const v of pinned) if (v !== installed) fail(`config.js pins @decartai/sdk@${v} but node_modules has ${installed} - align them first`);
 
+/* ...and the SDK's OWN dependencies, which the pin above does not reach. The CDN build the
+   source room imports (esm.sh) resolves the SDK's ranges - livekit-client ^2.0.0, zod ^4.0.17 -
+   to their newest release; rt.js takes whatever node_modules holds. The first bundle
+   (4ce8fde) therefore shipped livekit-client 2.19.1 while production - 3a9b55d, still on the
+   CDN - ran 2.22.3: three releases of the library that carries the live video, and the one
+   runtime difference found when the room was reported to work better on 3a9b55d (2026-09-27;
+   the orientation decision measured the same on both, swap for swap). package.json's
+   overrides pin them to what the CDN served that day; this refuses a build whose
+   node_modules disagrees. Moving them is a deliberate act: update both, test a real session. */
+const sdkDeps = (JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).overrides || {})["@decartai/sdk"] || {};
+if (!sdkDeps["livekit-client"]) fail('package.json must pin the SDK\'s livekit-client in overrides["@decartai/sdk"]');
+const depVersion = (dep) => {
+  for (const base of [join(ROOT, "node_modules/@decartai/sdk/node_modules", dep), join(ROOT, "node_modules", dep)]) {
+    try { return JSON.parse(readFileSync(join(base, "package.json"), "utf8")).version; } catch { /* not here */ }
+  }
+  return null;
+};
+for (const [dep, want] of Object.entries(sdkDeps)) {
+  const have = depVersion(dep);
+  if (have !== want) fail(`the SDK bundle would carry ${dep}@${have} but package.json pins ${want} - run npm install`);
+}
+
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 
@@ -178,7 +200,7 @@ report.push([APP_ENTRY, statSync(join(ROOT, APP_ENTRY)).size, appResult.outputFi
    404 in production instead of being served as readable side files. */
 const bundled = new Set(Object.keys(appResult.metafile.inputs).map((p) => resolve(ROOT, p)));
 
-report.push([`${SDK_OUT} (@decartai/sdk@${installed})`, 0, sdkResult.outputFiles[0].contents.length]);
+report.push([`${SDK_OUT} (@decartai/sdk@${installed}, livekit-client@${depVersion("livekit-client")})`, 0, sdkResult.outputFiles[0].contents.length]);
 
 /* ── 3. every other public file that carries code or commentary ─────────────── */
 const INLINE_SCRIPT = /<script(\s[^>]*)?>([\s\S]*?)<\/script>/gi;

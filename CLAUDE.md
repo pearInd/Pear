@@ -343,6 +343,14 @@ run on the unbuilt files. Rules that keep the build honest:
   than taking the room down. If that line shows up in Vercel logs, the build did not run.
 - After a change to anything the build touches, `npm run qa:visual:dist` drives the same
   360 against the minified room (build `--qa` keeps the mock so the agent can run it).
+- **The bundled SDK must carry the dependency versions the CDN would.** rt.js is built from
+  node_modules; the source room's CDN import resolves the SDK's own ranges to their newest
+  release. The first bundle shipped livekit-client 2.19.1 where production (3a9b55d, CDN) ran
+  2.22.3 - the one runtime difference found when the room was reported to work better on
+  3a9b55d (2026-09-27). `package.json` pins them (`overrides["@decartai/sdk"]`) and the build
+  refuses a node_modules that disagrees. Neither `qa:visual` nor the unit suite can see this:
+  the mock replaces the SDK. The build also silences the SDK's and livekit's console loggers
+  (they print the vendor's hosts) - see `SDK_ENTRY` and `connectRealtime()`.
 
 ### 2.12 The size fit is server-side
 Since 2026-09-26 every size chart (FOX's bands and their derivations), `coreHwPenalty()`, the
