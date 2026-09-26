@@ -44,3 +44,31 @@ answer to the `cpu` question.
 The relay only covers the first hop. The engine answers the signaling socket with a
 `livekit_url` — a second host the media connects to — which a real session through the
 relay (billed, ~10 credits, only on request) would reveal. Phase 6 has to cover that hop too.
+
+## Results — 2026-09-26 (free plan, laptop in Israel, Worker deleted afterwards)
+
+| Measurement | Result |
+|---|---|
+| Colo | **TLV** |
+| Edge round trip (WebSocket echo, 60 pings) | median **7ms**, p90 30ms, max 93ms |
+| Plain Worker, 90s at one frame / 120ms, n=1 and n=40 (740 msgs each) | **both survived**; median 7–8ms, p90 41–46ms, max 157–196ms |
+| Plain Worker, ~30ms/message spike (n=20000) | **killed after ~2s** — `exceededCpu` (~1.9s CPU) |
+| Durable Object, same sessions | survived, but median **~61ms** (the object is not placed in TLV) |
+| Engine host from the colo / from the laptop (HTTPS round trip) | 49ms / 63ms — same neighbourhood, not a US reroute |
+| Relay handshake (invalid key) | **identical answer** to a direct connection (same message, close 1008); open 887 vs 687ms, first reply 1062 vs 1209ms (single samples) |
+
+**What it means.**
+
+- A plain Worker's WebSocket is **one invocation for the whole session**. `wrangler tail` logged
+  ~208ms of CPU for each 90s session, 20× the documented 10ms free-plan figure, and it was not
+  cut off, while a genuinely heavy burst was. So a light per-frame decision passes on the free
+  plan **today**, but on enforcement behaviour Cloudflare does not document. Phase 5 must keep
+  the per-message work at or below the n=1 level (the real watcher is lighter than that). It must
+  also keep the in-browser watcher as the fallback if the socket closes, or move to Workers Paid
+  for a documented limit.
+- A Durable Object resets CPU per message (documented) but costs ~55ms per decision from Israel.
+- The relay carries the signaling handshake byte for byte at no measurable cost, and the engine
+  host is not farther from Cloudflare's TLV egress than from the shopper.
+- **Not answered here:** the second hop (`livekit_url`, where the media goes) and which region
+  the engine assigns to a session arriving through the relay. Both need one real, billed session
+  through the relay.
