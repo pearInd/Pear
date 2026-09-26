@@ -107,6 +107,15 @@
 
   var STORE_KEY = (script && script.getAttribute("data-pear-key")) || "";
 
+  /* SUPPORT VIEW FROM A STORE PAGE. data-pear-debug="<PEAR_DEBUG_TOKEN>" on the embed opens
+     the room in the support view (CLAUDE.md §2.11: the source room, every [PEAR] log line)
+     with the orientation trace on (orient_debug=1: the swap timeline - dispatch yaw, send,
+     ack). Added 2026-09-26 because a turn's timing could only be read from a real session
+     on a real store, and the widget forwarded neither. The attribute carries no power of its
+     own: the server compares it with its own token and serves the normal room on a mismatch,
+     and orient_debug only switches on log lines the production build strips anyway. */
+  var DEBUG_TOKEN = (script && script.getAttribute("data-pear-debug")) || "";
+
   /* Opt-in strict two-view gate: when data-pear-require-both-views is present (and
      not "false"), the fitting room hard-blocks go-live unless a real back image
      arrived. Absent → graceful default (Back view falls back to the front + prompt). */
@@ -2673,6 +2682,7 @@
       (REQUIRE_BOTH_VIEWS ? "&require_both_views=1" : "") +
       (DEMO_GATE ? "&demo_gate=1" : "") +
       (STORE_KEY ? "&pear_key=" + encodeURIComponent(STORE_KEY) : "") +
+      (DEBUG_TOKEN ? "&pear_debug=" + encodeURIComponent(DEBUG_TOKEN) + "&orient_debug=1" : "") +
       /* Tells the fitting room to skip registration + apply the one-time lock -
          see the "demo mode" block above. Only ever set for the marketing-site
          embed; every other embed (main app, real merchants) omits it entirely.

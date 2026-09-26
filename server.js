@@ -2950,6 +2950,17 @@ if (WANT_DIST && !DIST_BUILT) {
 }
 const CODE_ROOT = SERVE_DIST ? DIST_ROOT : SRC_ROOT;
 
+/* The orientation link for the SUPPORT VIEW (CLAUDE.md §2.14). The built room has the Worker's
+   URL baked in by scripts/build.mjs; the source room the support view serves has no build
+   step, so without this it would look for /orient on its own origin - which Vercel cannot
+   serve - and every turn would stay on the front view in exactly the view used to debug
+   turns. Same env var, same wss://-only rule as the build, and nothing that could close the
+   <script> it is written into. */
+const PEAR_ORIENT_URL = (() => {
+  const u = String(process.env.PEAR_ORIENT_URL || "").trim();
+  return /^wss:\/\/[^\s/?#"'<>\\]+(\/[^\s?#"'<>\\]*)?$/.test(u) ? u : "";
+})();
+
 const PEAR_DEBUG_TOKEN = String(process.env.PEAR_DEBUG_TOKEN || "");
 function isDebugToken(candidate) {
   if (PEAR_DEBUG_TOKEN.length < 16 || typeof candidate !== "string") return false;
@@ -3022,9 +3033,10 @@ app.get(["/fitting-room", "/fitting-room/", "/fitting-room/index.html"], (req, r
   const country = String(req.headers["x-vercel-ip-country"] || "").toUpperCase();
   const lang = country === "IL" ? "he" : "en";
   const debug = isDebugToken(req.query.pear_debug);
+  const orient = debug && PEAR_ORIENT_URL ? `<script>window.PEAR_ORIENT_URL=${JSON.stringify(PEAR_ORIENT_URL)}</script>` : "";
   const html = (debug ? debugFittingRoomHtml() : getFittingRoomHtml()).replace(
     "<head>",
-    `<head>\n    <script>window.__PEAR_DEFAULT_LANG__="${lang}"</script>`
+    `<head>\n    <script>window.__PEAR_DEFAULT_LANG__="${lang}"</script>${orient}`
   );
   if (debug) console.log("[PEAR] support view: serving the SOURCE fitting room (?pear_debug)");
   res.setHeader("Content-Type", "text/html; charset=UTF-8");

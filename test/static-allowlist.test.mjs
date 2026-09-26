@@ -228,6 +228,29 @@ try {
     }
   }
   {
+    /* The support view runs the SOURCE room, which has no build-time orientation URL (§2.14). */
+    const ORIENT = "wss://rt.example.test/orient";
+    const { request, close } = await mount(TMP, { PEAR_SERVE_DIST: "1", PEAR_DEBUG_TOKEN: TOKEN, PEAR_ORIENT_URL: ORIENT });
+    try {
+      const body = async (p) => (await request("GET", p)).body;
+      check("§5.23 the support view is handed the orientation Worker's URL",
+            (await body(`/fitting-room/?pear_debug=${TOKEN}`)).includes(`<script>window.PEAR_ORIENT_URL="${ORIENT}"</script>`));
+      check("§5.24 ...the shopper's (built) page is not - its URL is baked in by the build",
+            !(await body("/fitting-room/")).includes("PEAR_ORIENT_URL"));
+    } finally {
+      await close();
+    }
+    for (const bad of ["ws://rt.example.test/orient", "wss://x/</script><script>alert(1)</script>", 'wss://x/"+alert(1)+"', "https://rt.example.test/orient"]) {
+      const m = await mount(TMP, { PEAR_SERVE_DIST: "1", PEAR_DEBUG_TOKEN: TOKEN, PEAR_ORIENT_URL: bad });
+      try {
+        check(`§5.25 a PEAR_ORIENT_URL that is not a plain wss:// URL is never written into the page: ${bad}`,
+              !(await m.request("GET", `/fitting-room/?pear_debug=${TOKEN}`)).body.includes("PEAR_ORIENT_URL"));
+      } finally {
+        await m.close();
+      }
+    }
+  }
+  {
     const { request, close } = await mount(TMP, { PEAR_SERVE_DIST: "1", PEAR_DEBUG_TOKEN: "short" });
     try {
       const r = await request("GET", "/__src/short/fitting-room/app.js");

@@ -6216,8 +6216,18 @@ async function connectRealtime({ force = false } = {}) {
       /* ── create client with the ephemeral token ───────────────────────────── */
       /* telemetry:false - the SDK otherwise reports to the vendor's telemetry host from the
          shopper's browser, which names the vendor in the Network tab and adds a request
-         that nothing in this product reads. Option verified in @decartai/sdk@0.1.5. */
-      const client = createClient({ apiKey: ekToken, telemetry: false });
+         that nothing in this product reads. Option verified in @decartai/sdk@0.1.5.
+         logger - REPORTED 2026-09-26 ("it showed Decart in the console"): the SDK's default
+         logger prints its own warnings under the vendor's name ("[DecartSDK] …"), and the
+         SDK bundle is shipped as-is (scripts/build.mjs skips it), so no build step removes
+         them. The shopper's room gets a silent logger; the support view keeps the warnings
+         and errors - they are diagnostic evidence - under the neutral [PEAR][rt] prefix. */
+      const rtLogger = (typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD)
+        ? { debug() {}, info() {},
+            warn: (m, d) => console.warn("[PEAR][rt]", m, d ?? ""),
+            error: (m, d) => console.error("[PEAR][rt]", m, d ?? "") }
+        : { debug() {}, info() {}, warn() {}, error() {} };
+      const client = createClient({ apiKey: ekToken, telemetry: false, logger: rtLogger });
       console.log("[PEAR] connectRealtime() - stage 4/4: opening WebRTC session (waiting for 'connected')…");
 
       /* Bug 3 fix: work off a CLONE of the camera tracks so disconnect/teardown never

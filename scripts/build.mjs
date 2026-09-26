@@ -274,6 +274,14 @@ for (const [name, before, after] of report) {
     violations++;
     console.error(`✖ ${APP_ENTRY} carries a size-chart band key ("${band[0]}") - the charts live in lib/sizing.js`);
   }
+  /* The SDK bundle is shipped as-is (skipped above), so the only place its own console lines
+     ("[DecartSDK] …") and its telemetry host can be silenced is the one call that creates the
+     client, in connectRealtime(): telemetry:false plus a logger. Drop either and the shopper's
+     console or Network tab names the vendor again (reported 2026-09-26). */
+  if (!QA && !/telemetry:!1,logger:/.test(room)) {
+    violations++;
+    console.error(`✖ ${APP_ENTRY} creates the render client without telemetry:false and a logger - see connectRealtime()`);
+  }
 }
 
 /* Reported, not enforced: the model id (see the FORBIDDEN note above). Anything else
