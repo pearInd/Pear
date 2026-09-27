@@ -5,19 +5,14 @@
    iad1 (~350ms from Israel, 620ms cold) - Continue sat locked for two of them (+~720ms) and go-live
    waited on two more (+~750ms). Fixed by asking the Cloudflare Worker behind the orientation link
    first (~10-20ms, same modules) with the origin as the fallback, and by prefetching the wire
-   prompts when the room warms its assets. The recorder also stopped redrawing an unchanged picture
-   every display frame. This suite keeps all three:
+   prompts when the room warms its assets. This suite keeps both:
      §1  edgeApiUrl(): derived from PEAR_ORIENT_URL (wss://host -> https://host; a local wrangler
          dev ws://localhost -> http://localhost), nothing for anything else.
      §2  postPearApi(): the edge first; ANY non-OK, throw or timeout falls back to /api/<route>,
          and a failed edge is skipped for EDGE_API_RETRY_MS instead of taxing every call.
      §3  the size and prompt fetchers go through it - no direct "/api/size" / "/api/prompt" left.
      §4  the room prefetches the four wire-prompt variants when it warms its assets, under the same
-         memo key go-live and the turn use (the call site is NOT part of the key).
-     §5  the recorder draws on a NEW frame (requestVideoFrameCallback), whenever the continuity
-         layer shows or fades, on a resize, and every frame without the API; the frozen tail at
-         the capture rate. Measured: the same 80 distinct pictures per 8s clip as main, 45% fewer
-         encoded frames (main's extra ones were exact duplicates). */
+         memo key go-live and the turn use (the call site is NOT part of the key). */
 import { readFileSync } from "node:fs";
 
 let fails = 0;
@@ -89,19 +84,6 @@ console.log("\n── §4 the prompts are warm before go-live ──");
   const req = fn("function requestWirePrompt(req, where) {");
   check("...under the SAME memo key go-live and the turn use - the call site is not part of it",
     /const key = JSON\.stringify\(req\);/.test(req) && /fetchWirePrompt\(\{ \.\.\.req, where/.test(req));
-}
-
-console.log("\n── §5 the recorder draws a picture only when there is a new one ──");
-{
-  const rec = APP.slice(APP.indexOf("function startRecording()"), APP.indexOf("/** Halt the canvas paint loop"));
-  check("new frames are counted with requestVideoFrameCallback when the browser has it",
-    /const frameTimed = typeof video\.requestVideoFrameCallback === "function";/.test(rec) && /aiSeq\+\+/.test(rec));
-  check("the live branch draws on a new frame, while the continuity layer shows or fades, on a resize - and always without the API",
-    /const changed = !frameTimed \|\| aiSeq !== paintedSeq \|\| alpha > 0 \|\| alpha !== paintedAlpha \|\|\s*\n\s*w !== paintedW \|\| h !== paintedH;/.test(rec) &&
-    /if \(w && h && changed\) \{/.test(rec));
-  check("the frozen tail repaints at the capture rate (captureStream(30)), not every display frame",
-    /const RECORD_FRAME_MS = 1000 \/ 30;/.test(rec) && /captureStream\(30\)/.test(rec) &&
-    /if \(frameTimed && now - holdPaintedAt < RECORD_FRAME_MS - 2\) \{ recordRaf = requestAnimationFrame\(paint\); return; \}/.test(rec));
 }
 
 console.log(fails === 0 ? "\nroom-latency: OK" : `\nroom-latency: ${fails} FAILED`);

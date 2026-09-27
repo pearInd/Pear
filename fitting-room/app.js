@@ -5554,7 +5554,6 @@ function createThrottledInputStream(srcStream, {
       drawFrame();
       if (outTrack && typeof outTrack.requestFrame === "function") outTrack.requestFrame();
       lastFrameAt = clock();
-      if (typeof traceInputFrame === "function") traceInputFrame(canvas);   // a TEST session's lag probe; no-op otherwise
     } catch (_) {}
   };
 
@@ -5567,12 +5566,6 @@ function createThrottledInputStream(srcStream, {
        reveal gate compares it against #aiVideo to tell a render from a forwarded camera.
        Read-only by convention: nothing outside this factory ever draws on it. */
     canvas,
-    /* THE ELEMENT drawFrame() READS - the clone track, playing at the camera's own rate.
-       LIVE CONTINUITY draws its bridge from this rather than #webcam: the clone carries its
-       own resolution constraint and can come back framed differently from the preview, and
-       a bridge framed differently from the render reads as a zoom (see "THE SAME SOURCE").
-       Read-only, like `canvas` above. */
-    sourceVideo: video,
     get gateOpen() { return gateOpen; },
     /* Idempotent, and called from applyActive() the moment a garment is genuinely on the
        wire - which is every path that can dress a session (go-live, the cold-start
@@ -7667,8 +7660,6 @@ const ORIENT_SAMPLE_MS      = 250;   // ~4 analyses/s - cheap on a 96px canvas
    sample per tick and carries out the actions that come back. */
 const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
 const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
-const ORIENT_SWAP_WAIT_MS   = 1000;  // how long a decided swap waits out an in-flight profile/re-anchor apply (see maybeSwap)
-const ORIENT_SWAP_MAX_DELAY_MS = 400; // the most a swap's measured moment may hold it (the engine sends <= one tick, 250)
 
 /* Yaw corroboration, the pose flip, the side-view pass, post-peak evidence and the fold
    handshake (early turn) moved to lib/orient-engine.js. */
@@ -8106,17 +8097,6 @@ function syncOrientationWatcher() {
    carries #aiVideo's own CSS (object-fit:cover, the scaleX(-1) selfie flip) - so the body
    lands where the render puts it. The frames are reality-oriented like #aiVideo's, so the
    recorder blends this canvas in with no flip of its own (see startRecording).
-
-   THE SAME SOURCE, NOT JUST THE SAME MATH - THE BUG THIS CLOSES. Reported 2026-09-26 with a
-   clip (pear-tryon-…-FOX-20260926-140537): "a zoom-in in the middle, between the first and
-   second second". At 0.94s the output went silent for 310ms, this layer faded in - and it
-   showed the shopper's torso at ~2.2x, then faded back out to the wide render. The crop
-   math was identical; the PICTURE it was applied to was not. This drew #webcam (the preview
-   track), while Decart is sent a CLONE of that track carrying its own resolution constraint
-   (createThrottledInputStream's applyConstraints), and on that device the two tracks came
-   back framed differently. So the bridge now draws the clone's own element - the very frames
-   drawFrame() crops for Decart, at the camera's full rate (continuitySource()). #webcam is
-   only the fallback for a moment with no input stream, which a live session never has.
    LATENCY IS NOT ALIGNED, and cannot be: the camera is ~a render round-trip AHEAD of the
    output, so the fade reads as a short catch-up. LIVE_CONTINUITY_FADE_MS keeps it short.
 
@@ -8227,10 +8207,9 @@ function continuityEl() {
   return c;
 }
 
-/* The camera, cover-cropped to #aiVideo's aspect - the same centre crop drawFrame() sends,
-   of the same frames (`src` is continuitySource()'s answer, not necessarily #webcam). */
-function drawContinuityFrame(c, src, ai) {
-  const vw = src.videoWidth, vh = src.videoHeight;
+/* The camera, cover-cropped to #aiVideo's aspect - the same centre crop drawFrame() sends. */
+function drawContinuityFrame(c, cam, ai) {
+  const vw = cam.videoWidth, vh = cam.videoHeight;
   if (!vw || !vh) return false;
   const aw = ai.videoWidth || LIVE_W, ah = ai.videoHeight || LIVE_H;
   const W = Math.min(LIVE_CONTINUITY_MAX_W, aw), H = Math.round(W * ah / aw);
@@ -8239,18 +8218,8 @@ function drawContinuityFrame(c, src, ai) {
   const scale = Math.max(W / vw, H / vh);
   const dw = vw * scale, dh = vh * scale;
   g.setTransform(1, 0, 0, 1, 0, 0);   // reality in, like every other video surface here
-  g.drawImage(src, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  g.drawImage(cam, (W - dw) / 2, (H - dh) / 2, dw, dh);
   return true;
-}
-
-/* The frames the bridge is drawn from: the input throttle's own source element - what
-   drawFrame() crops for Decart - so the camera cannot be framed differently from the render
-   it stands in for (see "THE SAME SOURCE" above). #webcam only when there is no input stream.
-   typeof-guarded (CLAUDE.md §2.7): inputThrottle is module state a sandbox may not carry. */
-function continuitySource(cam) {
-  const throttle = typeof inputThrottle !== "undefined" ? inputThrottle : null;
-  const src = throttle && throttle.sourceVideo;
-  return src && src.videoWidth && src.videoHeight ? src : cam;
 }
 
 /* Started where the feed is revealed (startBillingWindow), stopped by teardown(). Idempotent. */
@@ -8268,12 +8237,7 @@ function startStreamContinuity() {
   const model = makeStreamContinuity();
   const t0 = performance.now();
   let stopped = false, raf = 0, aiFrames = 0, camFrames = 0, shownAlpha = -1;
-  const onAi = (now) => {
-    if (stopped) return;
-    aiFrames++; model.frame(now);
-    if (typeof traceOutputFrame === "function") traceOutputFrame(ai);   // a TEST session's lag probe; no-op otherwise
-    ai.requestVideoFrameCallback(onAi);
-  };
+  const onAi = (now) => { if (stopped) return; aiFrames++; model.frame(now); ai.requestVideoFrameCallback(onAi); };
   ai.requestVideoFrameCallback(onAi);
   const camTimed = typeof cam.requestVideoFrameCallback === "function";
   const onCam = () => { if (stopped) return; camFrames++; cam.requestVideoFrameCallback(onCam); };
@@ -8290,7 +8254,7 @@ function startStreamContinuity() {
       console.log(`[PEAR] stream continuity: render output back after ${event.stalledMs}ms - cross-fading to the render`);
     }
     /* Draw BEFORE the opacity rises, so the first visible camera frame is a current one. */
-    const drawn = alpha > 0 ? drawContinuityFrame(c, continuitySource(cam), ai) : true;
+    const drawn = alpha > 0 ? drawContinuityFrame(c, cam, ai) : true;
     const a = drawn ? alpha : 0;
     if (a !== shownAlpha) { c.style.opacity = String(a); shownAlpha = a; }
     liveContinuityAlpha = a;
@@ -9460,38 +9424,15 @@ function createOrientationWatcher() {
 
   /* Confirmed flip → cross-fade + hot-swap the live reference, using ONLY the frozen
      GARMENT_FRONT/GARMENT_BACK captured above - never a value re-derived elsewhere.
-     The sampler keeps voting during the swap, so a VOTE-confirmed turn completed mid-flight
-     is re-confirmed and applied by a later tick - no queue needed for those.
-     THE EARLY TURN IS NOT RE-CONFIRMED (2026-09-27), and that is why a decided swap now waits
-     out a busy `applying` instead of being dropped. The fold handshake fires ONCE per turn at
-     ~40 degrees and resets the vote streaks; if it met a profile or re-anchor apply still in
-     flight (not awaited by the tick - usually a few ms) it was silently dropped here, and the
-     next thing able to send BACK was a back-of-head vote at ~150+ degrees: the print arriving
-     late, or not at all on a quick turn. Reported on a first measurement, frame by frame: no
-     back print through the whole back view. The wait is bounded (ORIENT_SWAP_WAIT_MS); the
-     anti-flap cooldown still drops, as it always did. */
-  async function maybeSwap(next, predictive = false, waitMs = 0) {
-    /* THE MEASURED MOMENT (2026-09-27). A side-view crossing is sent ~0.3s after the camera saw the side, because
-       the render paints a swap on the body as it was ~0.3s before the send (lib/orient-engine.js, ORIENT_SIDE_DEG).
-       The engine decides on the last tick before that moment and says how much of it is left; waiting it out here
-       keeps the 250ms tick - or a late one - from moving the swap. Bounded, whatever the link sends. */
-    const maxDelay = typeof ORIENT_SWAP_MAX_DELAY_MS === "number" ? ORIENT_SWAP_MAX_DELAY_MS : 400;   // typeof: runs sandboxed (CLAUDE.md 2.7)
-    const wait = Number.isFinite(waitMs) ? Math.min(Math.max(0, waitMs), maxDelay) : 0;
-    if (wait > 0) {
-      await new Promise((r) => setTimeout(r, wait));
-      if (disposed) return;
-    }
+     The sampler keeps voting during the swap, so a turn completed mid-flight is
+     re-confirmed and applied by a later tick - no queue needed. */
+  async function maybeSwap(next, predictive = false) {
     /* The cooldown is anti-flap, and withdrawing a PREDICTIVE BACK is the one flap that must not
        wait for it: the face came back, so the shopper never finished the turn and the back
        reference is sitting on their front. Only that direction and only that kind of swap -
        see ORIENT_PREDICTIVE_BACK. */
     const withdrawing = next === "front" && lastSwapPredictive;
-    if (typeof traceOrient === "function") traceOrient("swap-req", { next, predictive, applying, waited: wait, cooldown: Math.max(0, ORIENT_COOLDOWN_MS - (Date.now() - lastSwapAt)) });
-    if (applying) {
-      const waitUntil = Date.now() + ORIENT_SWAP_WAIT_MS;
-      while (applying && Date.now() < waitUntil) await new Promise((r) => setTimeout(r, 20));
-      if (disposed) return;
-    }
+    if (typeof traceOrient === "function") traceOrient("swap-req", { next, predictive, applying, cooldown: Math.max(0, ORIENT_COOLDOWN_MS - (Date.now() - lastSwapAt)) });
     if (applying || (Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing)) {
       if (typeof traceOrient === "function") traceOrient("swap-drop", { next, why: applying ? "applying" : "cooldown" });
       return;
@@ -9925,7 +9866,7 @@ function createOrientationWatcher() {
         /* NOT AWAITED, exactly as before - see maybeApplyProfile()/maybeReanchorPrompt(). */
         else if (a.do === "profile") maybeApplyProfile(a.next).catch(() => {});
         else if (a.do === "reanchor") maybeReanchorPrompt().catch(() => {});
-        else if (a.do === "swap") await maybeSwap(a.next, a.predictive === true, a.waitMs);
+        else if (a.do === "swap") await maybeSwap(a.next, a.predictive === true);
       }
     } catch (_) {} finally { sampling = false; }
   }, ORIENT_SAMPLE_MS);
@@ -10125,10 +10066,6 @@ function openOrientChannel() {
     y: typeof s.yawAbs === "number" ? Math.round(s.yawAbs) : null,
     ya: s.yawAt ? s.t - s.yawAt : null, la: s.lostAt ? s.t - s.lostAt : null,
     l: s.lock ?? null, p: s.profile ? 1 : 0, d: s.dualView ? 1 : 0, rtt,
-    /* The camera's signed shoulder separation and its age - what body pose reads off the output frames,
-       so the two timelines can be lined up to the frame. */
-    sep: typeof _poseFacingSep === "number" ? Math.round(_poseFacingSep * 1000) / 1000 : null,
-    sepAge: typeof _poseFacingAt === "number" && _poseFacingAt ? s.t - _poseFacingAt : null,
     a: Array.isArray(acts) ? acts.filter((x) => x && x.do !== "log") : null,
   });
   return {
@@ -10233,7 +10170,6 @@ function traceSessionBegin(ctx) {
     n: _traceSessions, build: typeof PEAR_BUILD !== "undefined" ? PEAR_BUILD : null,
     at: new Date().toISOString(), t0: Date.now(), ua, ctx: ctx || null, ev: [], over: 0,
   };
-  lagProbeStart();
 }
 
 /** One event, stamped in ms since go-live. A no-op outside a recorded session. */
@@ -10248,7 +10184,6 @@ function traceOrient(type, data) {
 function traceSessionEnd(why) {
   const tr = _trace;
   if (!tr) return;
-  lagProbeStop();
   _trace = null;
   tr.end = why;
   tr.dur = Date.now() - tr.t0;
@@ -10264,125 +10199,6 @@ function traceSessionEnd(why) {
       keepalive: body.length < 60000 }).catch(() => {});
   } catch (_) { /* never let the recorder break a teardown */ }
 }
-/* ── WHAT THE RENDER'S TIMING WAS, measured in the same record (2026-09-27) ──────────────────────────
-   Three sessions put the render's lag at 0.77-1.08s, and the offset at which a swap lands on the depicted
-   body anywhere from 0 to -0.43s - which is the whole difference between "the front print on the back" and
-   "a plain shirt at the side". A fixed rule can only be right for one of them; a rule that adapts needs the
-   lag measured in the session, and a measurement nobody has checked against a real session must not steer
-   anything. So, for a TEST session only, and only recorded:
-     · lag: each frame sent to the render and each frame that comes back is reduced to a 24x14 luma grid
-       (z-scored, so exposure does not matter); an output frame is matched against the last 2s of sent
-       frames, and when the scene moved enough for one to stand out the difference in time is the lag.
-       No model runs: ~20 tiny readbacks a second, for the 5s window.
-     · rtc: the connection's own numbers every 500ms - round trip, send-queue delay, why the encoder is
-       limited, the jitter buffer, dropped frames - to say whether a long lag is the network or the render.
-   Checked against the clip offline (body pose on every output frame vs the camera's shoulder separation,
-   recorded in each tick) before any decision reads it. */
-const LAG_GRID_W = 24, LAG_GRID_H = 14, LAG_HISTORY_MS = 2500, LAG_MAX_MS = 2000, LAG_MIN_CONTRAST = 0.05;
-let _lagProbe = null, _rtcProbeTimer = null;
-
-/* Never throws: it runs inside goLive() (traceSessionBegin), and a measurement must not be able to stop a session. */
-function lagProbeStart() {
-  lagProbeStop();
-  if (!_trace || typeof document === "undefined" || typeof document.createElement !== "function") return;
-  try {
-    const grid = () => {
-      const c = document.createElement("canvas");
-      c.width = LAG_GRID_W; c.height = LAG_GRID_H;
-      return c.getContext("2d", { willReadFrequently: true });
-    };
-    const ctxIn = grid(), ctxOut = grid();
-    if (!ctxIn || !ctxOut) return;
-    _lagProbe = { inputs: [], ctxIn, ctxOut, n: 0, kept: 0 };
-    if (typeof window !== "undefined" && typeof setInterval === "function") {
-      _rtcProbeTimer = setInterval(() => { rtcProbeSample().catch(() => {}); }, 500);
-    }
-  } catch (_) { _lagProbe = null; }
-}
-
-function lagProbeStop() {
-  if (_rtcProbeTimer) { clearInterval(_rtcProbeTimer); _rtcProbeTimer = null; }
-  if (_lagProbe && _trace) traceOrient("lag-sum", { outFrames: _lagProbe.n, matched: _lagProbe.kept });
-  _lagProbe = null;
-}
-
-/** A frame, reduced to a z-scored 24x14 luma grid. Throws on a tainted or empty source. */
-function lagGrid(ctx, src) {
-  ctx.drawImage(src, 0, 0, LAG_GRID_W, LAG_GRID_H);
-  const d = ctx.getImageData(0, 0, LAG_GRID_W, LAG_GRID_H).data;
-  const n = LAG_GRID_W * LAG_GRID_H, g = new Float32Array(n);
-  let mean = 0;
-  for (let i = 0; i < n; i++) { g[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2]; mean += g[i]; }
-  mean /= n;
-  let v = 0;
-  for (let i = 0; i < n; i++) { g[i] -= mean; v += g[i] * g[i]; }
-  const sd = Math.sqrt(v / n) || 1;
-  for (let i = 0; i < n; i++) g[i] /= sd;
-  return g;
-}
-
-/** Called by the input throttle after each frame it hands the render. A no-op outside a probed session. */
-function traceInputFrame(canvas) {
-  const p = _lagProbe;
-  if (!p || !canvas) return;
-  const now = performance.now();
-  try { p.inputs.push({ t: now, g: lagGrid(p.ctxIn, canvas) }); } catch (_) { return; }
-  while (p.inputs.length && p.inputs[0].t < now - LAG_HISTORY_MS) p.inputs.shift();
-}
-
-/** Called for each rendered frame presented in #aiVideo. A no-op outside a probed session. */
-function traceOutputFrame(video) {
-  const p = _lagProbe;
-  if (!p || !video || !video.videoWidth) return;
-  const now = performance.now();
-  let g;
-  try { g = lagGrid(p.ctxOut, video); } catch (_) { return; }
-  p.n++;
-  let best = Infinity, bestAt = null;
-  const all = [];
-  for (const x of p.inputs) {
-    if (now - x.t > LAG_MAX_MS) continue;
-    let sum = 0;
-    for (let i = 0; i < g.length; i++) sum += Math.abs(g[i] - x.g[i]);
-    const dist = sum / g.length;
-    all.push(dist);
-    if (dist < best) { best = dist; bestAt = x.t; }
-  }
-  if (all.length < 6 || bestAt === null) return;
-  all.sort((a, b) => a - b);
-  const contrast = all[all.length >> 1] - best;
-  if (contrast < LAG_MIN_CONTRAST) return;   // a still scene: every sent frame matches, the lag is unreadable
-  p.kept++;
-  traceOrient("lag", { ms: Math.round(now - bestAt), c: Math.round(contrast * 100) / 100 });
-}
-
-/** One snapshot of the connection's own numbers, for the record. */
-async function rtcProbeSample() {
-  if (!_trace || typeof window === "undefined" || !window.__pearPCs) return;
-  const out = [];
-  for (const pc of Array.from(window.__pearPCs)) {
-    if (!pc || typeof pc.getStats !== "function") continue;
-    const r = await pc.getStats();
-    const e = {};
-    r.forEach((x) => {
-      if (x.type === "candidate-pair" && x.nominated && x.state === "succeeded") {
-        e.rtt = x.currentRoundTripTime != null ? Math.round(x.currentRoundTripTime * 1000) : null;
-        e.outKbps = x.availableOutgoingBitrate != null ? Math.round(x.availableOutgoingBitrate / 1000) : null;
-      } else if (x.type === "outbound-rtp" && x.kind === "video") {
-        e.sent = x.framesSent; e.enc = x.framesEncoded; e.sendDelay = x.totalPacketSendDelay; e.pkts = x.packetsSent;
-        e.limit = x.qualityLimitationReason; e.w = x.frameWidth; e.fpsOut = x.framesPerSecond;
-      } else if (x.type === "remote-inbound-rtp" && x.kind === "video") {
-        e.rrtt = x.roundTripTime != null ? Math.round(x.roundTripTime * 1000) : null; e.lost = x.packetsLost;
-      } else if (x.type === "inbound-rtp" && x.kind === "video") {
-        e.dec = x.framesDecoded; e.drop = x.framesDropped; e.jbd = x.jitterBufferDelay; e.jbn = x.jitterBufferEmittedCount;
-        e.jbt = x.jitterBufferTargetDelay; e.fpsIn = x.framesPerSecond; e.freezes = x.freezeCount;
-      }
-    });
-    if (Object.keys(e).length) out.push(e);
-  }
-  if (out.length) traceOrient("rtc", out);
-}
-
 /* The source room's read-out: the record in progress, else the last one closed (tests, the visual
    harness's PEAR_VISUAL_TRACE=1, the support view). Folded away in the production build. */
 if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
@@ -17388,31 +17204,9 @@ function startRecording() {
     catch (e) { console.warn("recorder start failed:", e?.message || e); stopPaintLoop(); mediaRecorder = null; }
   };
 
-  /* ── PAINT ONLY WHEN THE PICTURE CAN HAVE CHANGED (2026-09-27) ─────────────────────────────
-     This loop ran on requestAnimationFrame and redrew #aiVideo EVERY display frame - 120 times a
-     second on a ProMotion Mac - while the render arrives at ~20-30fps and captureStream(30) keeps
-     at most 30 of whatever is drawn. Every draw between two decoded frames painted the identical
-     picture: GPU/CPU work with nothing to show for it, for the whole session, on the machine the
-     shopper is standing in front of ("it makes the whole computer slower"). Now the live branch
-     draws when #aiVideo PRESENTED a new frame (requestVideoFrameCallback), whenever the LIVE
-     CONTINUITY layer is showing or fading (its canvas changes every frame then - unchanged, it
-     draws every frame as before), and on a resize; the frozen-hold tail repaints its still at the
-     capture rate, which is all captureStream ever kept of it. The clip is frame-for-frame what it
-     was. No requestVideoFrameCallback (an old browser) = every frame, exactly as before. */
-  const RECORD_FRAME_MS = 1000 / 30;   // captureStream(30): more than this per second is dropped anyway
-  const frameTimed = typeof video.requestVideoFrameCallback === "function";
-  let aiSeq = 0, paintedSeq = -1, paintedAlpha = -1, paintedW = 0, paintedH = 0, holdPaintedAt = -Infinity;
-  if (frameTimed) {
-    const onPresented = () => { if (!recordingActive) return; aiSeq++; video.requestVideoFrameCallback(onPresented); };
-    video.requestVideoFrameCallback(onPresented);
-  }
-
   const paint = () => {
     if (!recordingActive) return;
     if (recordHold && recordHoldSrc) {
-      const now = performance.now();
-      if (frameTimed && now - holdPaintedAt < RECORD_FRAME_MS - 2) { recordRaf = requestAnimationFrame(paint); return; }
-      holdPaintedAt = now;
       // FROZEN-HOLD phase: Decart is disconnected (billing stopped); keep repainting
       // the captured final frame so canvas.captureStream keeps emitting and the clip
       // grows to VIDEO_LENGTH_MS. beginRecorder() is idempotent - it covers the case
@@ -17424,11 +17218,7 @@ function startRecording() {
       try { ctx.drawImage(recordHoldSrc, 0, 0, recordCanvas.width, recordCanvas.height); beginRecorder(); } catch (_) {}
     } else {
       const w = video.videoWidth, h = video.videoHeight;
-      const alpha = typeof liveContinuityAlpha === "number" ? liveContinuityAlpha : 0;
-      const changed = !frameTimed || aiSeq !== paintedSeq || alpha > 0 || alpha !== paintedAlpha ||
-        w !== paintedW || h !== paintedH;
-      if (w && h && changed) {
-        paintedSeq = aiSeq; paintedAlpha = alpha; paintedW = w; paintedH = h;
+      if (w && h) {
         if (recordCanvas.width !== w || recordCanvas.height !== h) {
           recordCanvas.width = w; recordCanvas.height = h;
         }

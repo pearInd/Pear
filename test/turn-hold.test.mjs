@@ -354,7 +354,7 @@ console.log("\n── wiring: single-view items get the SAME protection, with th
     /a\.do === "profile"\) maybeApplyProfile\(a\.next\)\.catch\(\(\) => \{\}\);/.test(watcher) &&
     !/await maybeApplyProfile\(/.test(watcher));
   check("...while maybeSwap stays awaited - it owns the hold's lifecycle",
-    /a\.do === "swap"\) await maybeSwap\(a\.next, a\.predictive === true, a\.waitMs\);/.test(watcher));
+    /a\.do === "swap"\) await maybeSwap\(a\.next, a\.predictive === true\);/.test(watcher));
   check("maybeSwap is only ever invoked for a dual-view session",
     /else if \(dualView && confirmed\) act\(\{ do: "swap", next: lastVote, predictive: false \}\);/.test(watcher));
 }
@@ -410,7 +410,7 @@ console.log("\n── wiring: a torn-down watcher's in-flight maybeSwap() can't 
      reconnect path (see reconnect.test.mjs). Asserted structurally: a disposed check sits
      immediately after each of maybeSwap()'s three await points, before anything the await
      resolved to is used for anything. */
-  const swap = extract("async function maybeSwap(next, predictive = false, waitMs = 0)", "\n  }\n\n  /* The edge-on counterpart");
+  const swap = extract("async function maybeSwap(next, predictive = false)", "\n  }\n\n  /* The edge-on counterpart");
   check("guarded immediately after the back-Blob fetch (before the null check uses it)",
     /const backBlob = await garmentBlobCached\(GARMENT_BACK\);[\s\S]*?\n {6}if \(disposed\) return;\n {6}if \(!backBlob\)/.test(swap),
     swap.slice(swap.indexOf("const backBlob"), swap.indexOf("const backBlob") + 120));

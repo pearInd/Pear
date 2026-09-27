@@ -169,19 +169,12 @@ const BOTTOMS_SPEC =
    the rear artwork was instructing the model to INVENT it. The replacement names no
    graphic and grounds on the reference instead; image-first's whole thesis (text volume
    and named garment features compete with the pixels) is the reason it had to. */
-/* AND IT MOVED AGAIN ON 2026-09-27, by one sentence - the front anchor's lower-body lock,
-   byte-identical. Reported (OASIS tee, frame by frame): the hem held at the hip while the
-   front anchor shipped and ran down to mid-thigh from the moment the rear asset went out -
-   the lock's own note had recorded the back branch as a KNOWN GAP to close "if a rear-view
-   lower-body leak is ever reported". It sits INSIDE the frozen literal, exactly as on the
-   front, so it is not an appended clause: one anchor still ships, and it cannot shed. */
 const BACK_TOPS_SPEC =
   "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
   " the live subject's CURRENT back contour and volume in this frame. Reproduce the rear" +
   " panel exactly as shown in the reference. Dynamically adapt the garment drape to the" +
   " subject's exact silhouette, angle, depth, and back volume without stretching or" +
-  " warping the fabric. Strictly preserve the original shirt texture, pattern, and color." +
-  " Keep the subject's lower body, shoes, and background unmodified.";
+  " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.";
 const BACK_BOTTOMS_SPEC =
   "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
   " onto the live subject's CURRENT lower-body contour and volume in this frame." +
@@ -231,13 +224,10 @@ const TOPS_FRONT_SPEC = TOPS_SPEC + " " + CLOSURE_SPEC;
    branches share it because the report is against tops-front generally, not against one
    construction; a lock that shipped on structured tops but not on tees would leave the
    most common garment in the catalog leaking. */
-/* 2026-09-27: "plain ... smooth" -> "knit neckline and unbroken front panel" - the tee anchor also serves printed
-   tees, and those two words kept the front print off the chest at 55-90 degrees after the return (sessions 6-7).
-   See the note above PLAIN_TEE_ANCHOR in lib/prompts.js. */
 const PLAIN_TEE_SPEC =
   "Drape and fit the EXACT static t-shirt from the reference image onto the live" +
-  " subject's CURRENT body contour and volume in this frame. Keep the reference's knit" +
-  " neckline and unbroken front panel exactly as shown. Dynamically adapt the" +
+  " subject's CURRENT body contour and volume in this frame. Keep the reference's plain" +
+  " knit neckline and smooth unbroken front exactly as shown. Dynamically adapt the" +
   " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
   " without stretching or warping the fabric. Strictly preserve the original t-shirt" +
   " texture, pattern, and color. Keep the subject's lower body, shoes, and" +

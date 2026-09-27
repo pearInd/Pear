@@ -63,10 +63,6 @@ rendered hanging open is a worse failure than a wrong tension. In practice
 this means sizing down 1-2 steps on a button-front top can silently drop
 the fit-modifier text (163 free chars on that branch vs. up to ~213 chars
 for the largest size-down phrasing); true-to-size and sizing up always fit.
-The **back** tops anchors carry the same lower-body lock as the front since 2026-09-27
-(the rear asset let the hem run down the legs on every turn - see the lock's note above
-`PLAIN_TEE_ANCHOR`), so on the back the fit sentence sheds when sizing down (printed back:
-down 1-2; plain back: down 2) and lands on true-to-size and every size-up rung.
 This is not a bug — see the comment above the `[P.MED, fitSentence(...)]`
 line in `imageOnlyPrompt()` before "fixing" it by raising its priority,
 which would risk the closure lock shedding instead and reopening the
@@ -98,7 +94,7 @@ Rules for a restore:
   outrank the category anchor is `P.HIGH` or lower.
 - Budget is `PROMPT_MAX_CHARS` (Decart hard-rejects >226 tokens). The category
   anchor alone is 338 chars on tops, 320 on bottoms; with the restored
-  `fitSentence()` clause (§0), a real dispatch ships 338-645 chars on tops and
+  `fitSentence()` clause (§0), a real dispatch ships 338-644 chars on tops and
   320-550 on bottoms depending on size delta and closure. Adding a clause can
   silently evict another one — state the new total in the PR description.
 - Restore order recorded in `IMAGE_ONLY_PROMPT`'s comment: `inpaintLock` first
@@ -491,7 +487,7 @@ skin/face) and EXECUTES (`maybeSwap`, the hold, `turnMark`, the profile/re-ancho
   they are the protocol.
 - **A decision is never lost between the engine and the wire (§2.16).**
 
-### 2.15 The room must not wait where main did not - and must not draw what did not change
+### 2.15 The room must not wait where main did not
 Reported 2026-09-27: "the whole interface is laggy… main is excellent - it should be the same
 version, only with the code hidden." Measured against origin/main on the same machine
 (scratch perf harness: the real room, the render engine mocked, real CDNs), and fixed at the cause:
@@ -507,20 +503,18 @@ version, only with the code hidden." Measured against origin/main on the same ma
   `postPearApi()` asks it first and falls back to `/api/<route>` on anything but a 200, backing off
   for `EDGE_API_RETRY_MS`. `prewarmOrientationAssets()` prefetches the four wire prompts, so go-live
   reads the memo. Measured after: room entry 1.11s, live 4.18s - main's 1.05s / 4.0s.
-- **The recorder redrew an unchanged picture every display frame** (120/s on ProMotion) for a
-  ~25fps render. It now draws on a presented frame (`requestVideoFrameCallback`), while the
-  continuity layer shows or fades, and on a resize; the frozen tail at the capture rate. Measured:
-  the SAME distinct pictures per clip as main (80/80/81 vs 80/80/80), ~45% fewer encoded frames -
-  main's extra ones were exact duplicates.
+- ~~The recorder drew only on a presented frame~~ - **reverted 2026-09-28** (§2.17): `startRecording()`
+  is main's again, byte for byte.
 - The Worker change needs a `wrangler deploy`; until then the room falls back to the origin and is
-  exactly as slow as before, never broken. `room-latency` pins all three.
+  exactly as slow as before, never broken. `room-latency` pins both.
 
-### 2.16 A decision the engine made is executed - and a TEST session records why
+### 2.16 A decision the engine made reaches the room - and a TEST session records why
 Reported 2026-09-27, a first measurement read frame by frame: no back print through the whole back
 view, then the rear reference landing as the shopper faced front again; a second one showed the
 print arriving late. The engine's early turn fires ONCE per turn (~40°) and resets the vote
 streaks, so any path that loses that one "send BACK" leaves the FRONT on a turned-away body until a
-back-of-head vote at ~150°+. Two such paths existed; both are closed:
+back-of-head vote at ~150°+. On main the decision was a function call and could not go missing;
+over a socket it could. The link is what closes that:
 
 - **The link watchdog proves the link, it does not race the reply.** A step that missed its timer
   (800 ms, on a busy main thread) was DROPPED while the engine had already acted on it. Now a slow
@@ -532,76 +526,9 @@ back-of-head vote at ~150°+. Two such paths existed; both are closed:
   socket that died quietly is replaced before a turn needs it. The ping is `{k:"ping",q}` →
   `{k:"pong",q}` in `lib/orient-protocol.js` - **the Worker must be deployed with it BEFORE a room
   that pings ships**, or the room reads a healthy link as dead. `orient-link` §1-§3.
-- **`maybeSwap()` waits out a busy `applying` (bounded, `ORIENT_SWAP_WAIT_MS` 1000) instead of
-  dropping the swap.** A pose or re-anchor apply the tick does not await held the mutex; the swap
-  found it held and returned. Replayed over the 4,116-session corpus: the first back view came
-  earlier in 442 sessions (later in 31), FRONT on a turned-away body fell 47-49%, BACK on a facing
-  body 20-21% in the realistic environments. The anti-flap cooldown still drops, as before.
-  `front-reference-guard` §11; `orient-engine` §1 re-pinned for exactly this (the wait removed
-  reproduces the old pin).
-- **The render applies a new reference to the PAST - so the return waits for the camera to say
-  FRONT.** Measured on two real sessions (flight records + Apple Vision body pose on every output
-  frame): the output shows the body 0.67s after the camera at the first swap and 0.77 / 1.08s at the
-  return - the lag grew by about the first swap's ack - and a swap lands on the body as it was at
-  send -0.1..+0.06s on the way out, send **-0.27 / -0.43s** on the way back. Every calibration of the
-  early turn assumed that offset was 0-250ms and never negative. A FRONT fired ahead of the side view
-  (the fold's yaw return at 50) therefore lands on the back half - the FRONT print on the shopper's
-  back, frame by frame. Now `ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 0` (off; `?early_turn_return=<deg>`
-  for an A/B) and `ORIENT_POSE_RETURN_FRAMES = 1`: from a BACK lock, one shoulder vote for FRONT with
-  the torso's 45-degree swing down from the side view confirms the return (the side-view pass alone
-  is not enough for one vote - at the side the shoulder order is noise; 25-40 degree swings were swept
-  and put FRONT on the back at the slower measured offset). `turn-yaw-window` §15 models the measured
-  timing (`simulateGap`'s `laterSwapMs`, a post-run ledger that lets a landing precede its dispatch):
-  FRONT on the back per 360 366-510ms -> 4-10ms, 178-183 of 211 turns landing on the back half -> 0;
-  the COST is the BACK reference on past the side on the way back (43-75 -> 307-467ms), which both
-  clips render as a plain shirt, not the back print. The OUTBOUND is untouched (its early BACK renders
-  plain if early; a late FRONT on the back half is the print on the back - the asymmetry is why only
-  the return moved). §11/§13's non-negative-latency bars now gate the outbound only.
-- **SEND AT THE SIDE VIEW + THE MEASURED OFFSET - the current rule (sessions 4-5, 2026-09-27).**
-  The live lag probe made the offsets measurable by ANGLE-MATCHING (the output frame where the new
-  print first appears vs the camera moment at the same body angle - no lag estimate needed): the
-  return landed at send -0.31 / -0.36 / -0.36s where the switch was visible, the outbound -0.28s.
-  The "offset ~0" of the third session was an artifact of estimating the lag from yaw peaks. So the
-  earlier two rules both missed: the fold's yaw return fired AHEAD of the side (FRONT on the back),
-  the shoulder-vote return fired ~0.6s AFTER it (sessions 4-5: the BACK print on the chest). Now a
-  crossing at the side view - |yaw| >= `ORIENT_SIDE_DEG` (70) with a vote no longer for the side
-  being left, >= `ORIENT_SIDE_SURE_DEG` (80; 85 until sessions 6-7 read 84/80 at the side with the skin
-  vote still "front"), or the torso lost with the last reading already there -
-  is SCHEDULED for that reading + `ORIENT_SIDE_RET_DELAY_MS` (330, the return; the return fires only
-  at the side, `ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG` 70) or `ORIENT_SIDE_OUT_DELAY_MS` (280, the
-  outbound when its crossing reading is itself at the side - angle-matched -0.28/-0.27/-0.26s in
-  sessions 4/6/7; below the side it fires at once, as it always did). The engine hands it over up to 1.5 ticks early with `waitMs` and `maybeSwap()` waits
-  that out (capped at `ORIENT_SWAP_MAX_DELAY_MS`), so neither the 250ms tick nor a late one moves
-  it. A STRONG vote (shoulders/face - never skin, which reads a profile face as FRONT at the side)
-  for the side being left cancels a scheduled swap: a wobble at the side sends nothing. A backstop
-  covers a side view no reading caught (a peak >= `ORIENT_SIDE_PAST_PEAK_DEG`, then a strong FRONT
-  vote). On the seven real sessions every return goes out 322-332ms after its side reading and every
-  outbound with a side reading 280-286ms after it, each landing within 0.03s of the side where
-  measurable (`orient-engine` §7 replays them from
-  `test/real-turns-2026-09-27.json`); `turn-yaw-window` §15 models it on the measured offsets.
-  **Deploy order matters:** the room (which honours `waitMs`) must be live BEFORE the Worker - an
-  old room ignores `waitMs` and would send a scheduled return up to 375ms early.
-- **The tee anchor no longer calls the front "plain ... smooth" (sessions 6-7).** With the return
-  landing at the side, the chest still showed a plain shirt from 90 to ~45-50 degrees before the
-  print - while the BACK anchor ("Reproduce the rear panel exactly as shown") drew its print on a
-  torso at 60-90 (sessions 4-5). `PLAIN_TEE_ANCHOR` serves every tee by vocabulary, printed ones
-  included, and told the model the front was "plain ... smooth unbroken"; it now reads "knit
-  neckline and unbroken front panel" (the anti-placket words kept). 6,510 of the pinned 161,756
-  prompts moved, all tee fronts. Layer A: judged on real sessions, not by the gate.
-- **THE OFFSET VARIES BY SESSION, so no fixed rule is right for all of them** (third session,
-  2026-09-27 17:20Z): lag 0.82s with no growth despite a 460ms ack, and the return landed at send
-  +0.0s - the FRONT went out on the second shoulder vote (swing 88->47, under 45) and the chest showed
-  plain from the side to ~54 degrees for 0.6s. Replayed on all three sessions: a rule timed for
-  offset 0 (fire near the side) puts FRONT on the back at -0.43; the current rule (safe at -0.43)
-  leaves 0.3-0.6s of plain at 0. The first shoulder vote cannot tell a real return from a wobble at
-  the side (the test's fast wobble moves at 100 deg/s, the real returns at 95-180), and |yaw| is
-  folded, so "yaw under N" also fires at back-square - both were swept and rejected. The one input
-  that separates the regimes is the session's own lag, so a TEST session now RECORDS it (`lag`
-  events: 24x14 luma grids of each sent frame matched against each output frame; `rtc` events: the
-  connection's numbers every 500ms; `sep`/`sepAge` in every tick for an offline Vision alignment).
-  **No decision reads it** until real sessions show it matches the offline measurement - an estimator
-  that under-reads the lag would put FRONT on the back. `orient-link` §5 pins the matcher (800ms read
-  back as ~800ms, a still scene claims nothing) and that the probe can never throw out of go-live.
+- ~~`maybeSwap()` waits out a busy `applying`~~ - **reverted 2026-09-28** (§2.17). It changed WHEN
+  swaps land (2,737 of 4,116 replayed sessions) and was reported as worse than main on a real body.
+  `maybeSwap()` drops on `applying` exactly as main does; `orient-engine` §1 is back on main's pin.
 - **The FLIGHT RECORDER** (`fitting-room/app.js`, after the orientation link). A TEST session -
   store key `TEST` (the preview script's `data-pear-key="TEST"`) or `?pear_trace=1` - keeps every
   orientation tick (the sample, the engine's reply, its round trip), every swap from `swap-req` to
@@ -613,6 +540,33 @@ back-of-head vote at ~150°+. Two such paths existed; both are closed:
   nothing; the record holds numbers, decisions and timings only. In the source room
   `window.__pearDebugTrace()` returns it, and `PEAR_VISUAL_TRACE=1 npm run test:visual` saves the
   harness's as `test-results/visual/flight.json`. `orient-link` §4, `orient-engine` §6.
+
+### 2.17 The branch behaves as main, one to one - only the code is hidden (2026-09-28)
+Reported after the rule changes of 2026-09-27: "I measured again - the same result, it works
+very badly… copy exactly how main works, one to one, and only keep the code hiding." Every
+BEHAVIOURAL change made after the verbatim moves was reverted:
+
+| Reverted | What it had changed |
+|---|---|
+| `5835270`, `99387d2`, `43ef549` | engine rules: side-view send scheduling, return default 50 → 0, FRONT-only return |
+| `8d27676`, `5835270` (prompts) | the back anchors' lower-body lock; the plain-tee anchor wording |
+| `126650a` | the render-lag probe (per-frame grids over the input and output) |
+| `eafe242` (part) | `maybeSwap()`'s wait on a busy `applying` |
+| `744de6d` (part) | the recorder's frame gating |
+| `05d1e99` | LIVE CONTINUITY drawn from the throttle's clone instead of `#webcam` |
+
+What stays is hiding and its plumbing: the server-side engines (§2.12-§2.14), the minified build
+(§2.11), the edge API and prompt prefetch (§2.15), the link watchdog (§2.16) and the TEST-session
+recorder (passive: it records, it decides nothing).
+
+**Proven, not assumed:** `lib/orient-engine.js` is the 854d629 verbatim move again and
+`orient-engine` §1 replays 504 sessions to main's pre-move hash (`4b2ead79…`); `lib/prompts.js` is the
+897ab44 move and `prompt-engine` pins main's hash (`221a5b58…`); `trace:prompt --json` is byte
+identical to a run on `3a9b55d`; `startRecording()` and the continuity layer are main's text.
+
+**Before changing behaviour here again**: the fix goes to main's code FIRST, measured on a real body
+against main, and only then through the move. A rule tuned on this branch alone is what this
+section undoes.
 
 ---
 

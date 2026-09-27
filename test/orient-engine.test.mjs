@@ -26,34 +26,7 @@
 import { readFileSync } from "node:fs";
 import { runCorpus } from "./orient-replay.mjs";
 
-/* RE-PINNED 2026-09-27 for ONE intended move, in the BROWSER's half: maybeSwap() now waits a bounded
-   ORIENT_SWAP_WAIT_MS for an in-flight pose/re-anchor apply to clear instead of dropping the swap the
-   engine decided (the early turn fires once per turn - a dropped one left the front on a turned-away
-   body). Proven to be the only move: the current app.js with that wait removed reproduces the
-   previous pin (4b2ead79…a65a706) exactly. Over the full 4,116-session corpus, 2,737 logs changed:
-   the first back view came earlier in 442 sessions, later in 31, appeared in 127 that never had one
-   and vanished from 7 (all 7 in noisy-slowapply, each a back that had landed on the FRONT); FRONT on
-   a turned-away body fell 47% (pose) / 49% (face), BACK on a facing body 20% / 21%. See
-   front-reference-guard §11. */
-/* RE-PINNED AGAIN 2026-09-27 for ONE intended move, in the ENGINE: the return from BACK no longer fires on the yaw
-   (ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG 50 -> 0) and is confirmed by the first shoulder vote for FRONT with the torso's
-   swing corroborated (ORIENT_POSE_RETURN_FRAMES) - two real sessions measured the render applying a new reference to
-   the body as it was 0.27-0.43s BEFORE the send, so a FRONT fired ahead of the side view landed on the back (the
-   print on the shopper's back, frame by frame). Over the full 4,116-session corpus 775 logs changed and not one
-   session's first BACK dispatch moved: the outbound is untouched. The previous pin (10ef2eae…359c49) is this file with
-   the old engine. See turn-yaw-window §15 for the measured-timing model and its bars. */
-/* RE-PINNED A THIRD TIME 2026-09-27 (sessions 4-5: the BACK print on the chest on the way round to the front): a
-   crossing at the side view is SCHEDULED for its reading + the measured render offset (ORIENT_SIDE_DEG; the return
-   ORIENT_SIDE_RET_DELAY_MS = 330, the outbound ORIENT_SIDE_OUT_DELAY_MS = 200 when its crossing reading is itself at
-   the side) and handed to the browser up to a tick and a half early with the exact `waitMs`; the return fires at the
-   side again (ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG 0 -> 70), with a backstop for a side view no reading caught. Over the
-   4,116-session corpus 690 logs changed: the returns, and 13 first BACK dispatches that moved ~120ms later because
-   their crossing reading was already at the side. §7 replays the five real sessions. Previous pin: 7610452e…791d92. */
-/* ...AND A FOURTH TIME, 2026-09-27 (sessions 6-7): ORIENT_SIDE_SURE_DEG 85 -> 80 (their outbound side readings were
-   84 and 80 with the skin vote still "front", so the outbound fired 0.3s early and put the back label on the front
-   edge) and ORIENT_SIDE_OUT_DELAY_MS 200 -> 280 (the outbound offset angle-matched at -0.28/-0.27/-0.26s in sessions
-   4/6/7). 32 of 4,116 replays changed, 12 of them a first BACK dispatch. Previous pin: 661afc9d…a4227d. */
-const PINNED = "7338fe2449cf81a43e39cc362c4eb507fd758d3f50d7e3470bec4a4052224a42";
+const PINNED = "4b2ead79da82f69520d245bf054d2e1353051f7ec2cf8e5fd2f14b2c0a65a706";
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -80,7 +53,7 @@ console.log("── §1 every scripted turn behaves as it did before the move �
       filter: (s) => PIN_ENVS.has(s.key.split("|")[1]) && PIN_KNOBS.has(s.search) });
   } finally { [console.log, console.warn, console.error] = quiet; }
   if (process.argv.includes("--print")) { console.log(r.hash); process.exit(0); }
-  check(`${r.scenarios} replayed sessions (${r.events} events) match the pre-move watcher (+ the 2026-09-27 swap wait)`, r.hash === PINNED,
+  check(`${r.scenarios} replayed sessions (${r.events} events) match the pre-move watcher`, r.hash === PINNED,
     `expected ${PINNED}\n        got      ${r.hash}`);
   check("...and the replay is not vacuous (it swaps, holds and re-anchors)",
     r.events > 20000 && [...r.perScenario.values()].some((v) => /apply \{"o":"back"/.test(v)) &&
@@ -164,7 +137,7 @@ console.log("\n── §4 the decision is absent from the browser, and the tick 
     check(`app.js code no longer carries ${fn}()`, !new RegExp(`\\b${fn}\\b`).test(code));
   }
   for (const k of ["ORIENT_LOCK_FRAMES", "ORIENT_LOCK_MS", "ORIENT_ACQUIRE_FRAMES", "ORIENT_CORROBORATED_FRAMES", "ORIENT_FACE_RETURN_FRAMES",
-                   "ORIENT_POSE_FLIP_FRAMES", "ORIENT_POSE_RETURN_FRAMES", "ORIENT_POSE_PASS", "ORIENT_POST_PEAK", "ORIENT_EARLY_TURN_DEG", "ORIENT_EARLY_TURN_RETURN_DEG",
+                   "ORIENT_POSE_FLIP_FRAMES", "ORIENT_POSE_PASS", "ORIENT_POST_PEAK", "ORIENT_EARLY_TURN_DEG", "ORIENT_EARLY_TURN_RETURN_DEG",
                    "ORIENT_EDGE_ON_DEG", "ORIENT_PREDICTIVE_BACK", "ORIENT_YAW_TURN_DEG", "ORIENT_PROFILE_ENTER_SCORE", "ORIENT_PROFILE_EXIT"]) {
     check(`app.js code no longer carries ${k}`, !new RegExp(`\\b${k}\\b`).test(code));
   }
@@ -260,49 +233,6 @@ console.log("\n── §6 the edge answers /size and /prompt with the SAME modul
     (await tcall({ v: 1, id: "x", ev: "no" })).status === 400 && (await tcall("x".repeat(300000))).status === 413 && puts.length === 1);
   check("a foreign origin is refused, and no TRACES binding stores nothing (404)",
     (await tcall(rec, { origin: "https://evil.example" })).status === 403 && (await tcall(rec, { withKv: false })).status === 404 && puts.length === 1);
-}
-
-/* ── §7 five real 360s, replayed (2026-09-27) ───────────────────────────────────────────── */
-console.log("\n── §7 on seven real sessions each side goes out at the side view + the measured offset ──");
-{
-  /* The flight records of five real turns (test/real-turns-2026-09-27.json - numbers only), each tick replayed
-     through the engine with the lock following its own swaps. The render paints a swap on the body as it was ~0.3s
-     before the send; the return must therefore go out ~0.33s after the camera saw the side view - never before it
-     (the FRONT print on the back, session 2) and not ~0.6s after (the BACK print on the chest, sessions 4-5). */
-  const data = JSON.parse(readFileSync(new URL("./real-turns-2026-09-27.json", import.meta.url), "utf8"));
-  const retDelay = Number((/const ORIENT_SIDE_RET_DELAY_MS = (\d+);/.exec(ENGINE_SRC) || [])[1]);
-  const outDelay = Number((/const ORIENT_SIDE_OUT_DELAY_MS = (\d+);/.exec(ENGINE_SRC) || [])[1]);
-  const rows = data.sessions.map((sess) => {
-    const eng = E.createOrientEngine(E.sanitizeOrientKnobs({}));
-    let lock = null, profile = false, front = null, back = null;
-    for (const [t0, v, f, pv, ps, y, ya, la, d, rtt] of sess.samples) {
-      const t = 1_000_000 + t0 - (rtt || 0);
-      const acts = eng.step(E.sanitizeOrientSample({ t, vote: v, faceSeen: !!f, poseVoted: !!pv, profileScore: ps ?? 0, yawAbs: y,
-        yawAt: ya == null ? 0 : t - ya, lostAt: la == null ? 0 : t - la, lock, profile, dualView: !!d }));
-      for (const a of acts) {
-        if (a.do === "profile") profile = a.next;
-        if (a.do !== "swap" || a.next === lock) continue;
-        if (a.next === "front" && lock === "back" && front === null) front = (t0 + (a.waitMs || 0) - sess.reveal) / 1000;
-        if (a.next === "back" && back === null) back = (t0 + (a.waitMs || 0) - sess.reveal) / 1000;
-        lock = a.next;
-      }
-    }
-    return { name: sess.name, side: sess.retSide, off: sess.retOffset, front, after: front === null ? null : Math.round((front - sess.retSide) * 1000),
-      outSide: sess.outSide, outOff: sess.outOffset, back, outAfter: back === null || sess.outSide === null ? null : Math.round((back - sess.outSide) * 1000) };
-  });
-  for (const r of rows) console.log(`        ${r.name}: side view ${r.side}s, FRONT out at ${r.front}s (+${r.after}ms)` +
-    (r.off !== null ? `, lands on the body at ${(r.front + r.off - r.side).toFixed(2)}s from the side` : ""));
-  check("every real return goes out after the camera saw the side view, at the measured offset (within 50ms of it)",
-    rows.every((r) => r.after !== null && Math.abs(r.after - retDelay) <= 50), JSON.stringify(rows));
-  check("...so where the switch was measurable it lands on the body within 0.1s of the side view - never the FRONT print on the back, never the BACK print on the chest",
-    rows.filter((r) => r.off !== null).every((r) => Math.abs(r.front + r.off - r.side) <= 0.1), JSON.stringify(rows));
-  /* The outbound, where a reading was taken at the side view (sessions 5-7): scheduled the same way, for its own offset. */
-  const outs = rows.filter((r) => r.outSide !== null);
-  for (const r of outs) console.log(`        ${r.name}: side view out ${r.outSide}s, BACK out at ${r.back}s (+${r.outAfter}ms)` +
-    (r.outOff !== null ? `, lands on the body at ${(r.back + r.outOff - r.outSide).toFixed(2)}s from the side` : ""));
-  check("every real outbound with a side-view reading goes out at its measured offset after it, and lands within 0.1s of the side where measurable",
-    outs.length >= 3 && outs.every((r) => r.outAfter !== null && Math.abs(r.outAfter - outDelay) <= 50) &&
-    outs.filter((r) => r.outOff !== null).every((r) => Math.abs(r.back + r.outOff - r.outSide) <= 0.1), JSON.stringify(outs));
 }
 
 console.log(fails === 0 ? "\norient-engine: OK" : `\norient-engine: ${fails} FAILED`);

@@ -30,7 +30,7 @@ const SRC = APP.slice(a, b);
 const edgeSrc = APP.slice(APP.indexOf("function edgeApiUrl(route) {"), APP.indexOf("\n}\n", APP.indexOf("function edgeApiUrl(route) {")) + 3);
 
 /* ── a fake world: clock, timers, sockets, fetch ─────────────────────────────── */
-function world({ search = "", orientUrl = "wss://rt.pear-ai.io/orient", server = {}, withDom = false } = {}) {
+function world({ search = "", orientUrl = "wss://rt.pear-ai.io/orient", server = {} } = {}) {
   let now = 1_000_000;
   let seq = 1;
   const timers = [];
@@ -84,21 +84,10 @@ function world({ search = "", orientUrl = "wss://rt.pear-ai.io/orient", server =
     navigator: { userAgent: "test-agent" },
     console: { log() {}, warn: (...m) => warns.push(m.join(" ")), error() {} },
     fetch: (url, init) => { posts.push({ url, init }); return Promise.resolve({ ok: true }); },
-    /* §5: a canvas whose drawImage() remembers its source and whose getImageData() returns that source's own
-       pixels - so the lag probe's grids are exactly the synthetic frames the test feeds it. */
-    ...(withDom ? {
-      document: { hidden: false, createElement: () => {
-        let src = null;
-        return { width: 0, height: 0, getContext: () => ({ drawImage: (x) => { src = x; },
-          getImageData: () => ({ data: src.pix }) }) };
-      } },
-      performance: { now: () => now },
-    } : {}),
   };
   const body = edgeSrc + "\n" + SRC + `
 return { orientLinkConnect, orientLinkDrop, orientLinkPing, orientLinkEnsureFresh, orientLinkKeepAlive, openOrientChannel,
   traceEnabled, traceSessionBegin, traceOrient, traceSessionEnd, trace: () => _trace, TRACE_MAX_EVENTS,
-  traceInputFrame, traceOutputFrame, lagProbeActive: () => _lagProbe !== null,
   ORIENT_LINK_STEP_TIMEOUT_MS, ORIENT_LINK_STEP_HARD_MS, ORIENT_LINK_PONG_TIMEOUT_MS, ORIENT_LINK_PING_MS };`;
   const api = new Function(...Object.keys(sandbox), body)(...Object.values(sandbox));
   return { api, advance, sockets, posts, warns, now: () => now };
@@ -234,53 +223,6 @@ console.log("\n── §4 the flight recorder: a TEST session only, bounded, pos
   local.api.traceSessionBegin({});
   local.api.traceSessionEnd("clip");
   check("no edge (no PEAR_ORIENT_URL) - nothing is posted anywhere", local.posts.length === 0);
-}
-
-console.log("\n── §5 the render-lag probe: recorded for a TEST session, matched on the frames we sent ──");
-{
-  /* A 24x14 RGBA frame: a bright block (the "body") at column x on a textured backdrop. */
-  const frame = (x, noise = 0) => {
-    const pix = new Uint8ClampedArray(24 * 14 * 4);
-    for (let r = 0; r < 14; r++) for (let c = 0; c < 24; c++) {
-      const i = (r * 24 + c) * 4, v = (c >= x && c < x + 4 ? 220 : 40 + ((r * 7 + c * 13) % 50)) + noise;
-      pix[i] = pix[i + 1] = pix[i + 2] = Math.max(0, Math.min(255, v)); pix[i + 3] = 255;
-    }
-    return { pix };
-  };
-  const out = { videoWidth: 24 };
-  const run = async (moving, lagMs) => {
-    const w = world({ search: "?pear_key=TEST", withDom: true });
-    w.api.traceSessionBegin({});
-    const sent = [];
-    for (let k = 0; k < 40; k++) {                      // 4s at 10 frames a second
-      const f = frame(moving ? (k * 3) % 20 : 8);
-      w.api.traceInputFrame(f); sent.push({ at: w.now(), f });
-      await w.advance(100);
-      /* The render hands back the frame sent lagMs ago - redrawn, so a little different in every pixel. */
-      const due = sent.filter((x) => x.at <= w.now() - lagMs).pop();
-      if (due) { out.pix = frame(moving ? ((sent.indexOf(due) * 3) % 20) : 8, 6).pix; w.api.traceOutputFrame(out); }
-    }
-    const lags = w.api.trace().ev.filter((e) => e[1] === "lag").map((e) => e[2].ms);
-    w.api.traceSessionEnd("clip");
-    return { lags, active: w.api.lagProbeActive() };
-  };
-  const moving = await run(true, 800);
-  const med = moving.lags.slice().sort((a, b) => a - b)[moving.lags.length >> 1];
-  check("a moving scene returned 800ms late reads as ~800ms (within one frame)", moving.lags.length >= 10 && Math.abs(med - 800) <= 100,
-    `${moving.lags.length} samples, median ${med}`);
-  const still = await run(false, 800);
-  check("a still scene reports no lag at all - every sent frame matches, so nothing is claimed", still.lags.length === 0, JSON.stringify(still.lags.slice(0, 5)));
-  check("the probe stops with the record", moving.active === false && still.active === false);
-  const shopper = world({ search: "?pear_key=LIVE", withDom: true });
-  shopper.api.traceSessionBegin({});
-  check("a shopper's session starts no probe", shopper.api.lagProbeActive() === false);
-  /* It runs inside goLive(): a measurement that throws must not stop a session (the first cut did, on a
-     document without createElement - found by §4's own world). */
-  const broken = world({ search: "?pear_key=TEST" });   // its document has no createElement
-  let threw = null;
-  try { broken.api.traceSessionBegin({}); } catch (e) { threw = e; }
-  check("a probe that cannot start never throws out of go-live: the record opens, the probe stays off",
-    threw === null && broken.api.trace() !== null && broken.api.lagProbeActive() === false, String(threw));
 }
 
 console.log(fails === 0 ? "\norient-link: OK" : `\norient-link: ${fails} FAILED`);

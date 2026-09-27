@@ -25,21 +25,7 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-/* RE-PINNED 2026-09-27 for ONE intended move: the front anchor's lower-body lock added to both
-   back tops anchors (BACK_CATEGORY_ANCHOR.top, PLAIN_BACK_ANCHOR.top - the hem ran down the legs
-   while the rear asset was on the wire; see the lock's note above PLAIN_TEE_ANCHOR). Proven over
-   this exact corpus against the previous engine before re-pinning: of 161,756 prompts, 49,434
-   moved - 32,690 by the lock sentence alone, 16,744 by the lock plus fitSentence() shedding on a
-   size-down rung - and 0 front prompts, 0 bottoms prompts, the look prompt and anything else
-   unchanged. The previous pin (from the pre-move in-browser engine) was
-   221a5b5835f450b0c12fe8d3037456af0ea1b62b1155c26476e97b24519d912c. */
-/* RE-PINNED AGAIN 2026-09-27 for ONE intended move: PLAIN_TEE_ANCHOR's "plain knit neckline and smooth unbroken
-   front" -> "knit neckline and unbroken front panel" (the anchor also serves printed tees; those two words kept the
-   front print off the chest at 55-90 degrees after the return - sessions 6-7, see the note above PLAIN_TEE_ANCHOR).
-   Over this corpus against the previous engine: 6,510 of 161,756 prompts moved - 6,354 by that sentence alone and
-   156 where the 5 characters it saves let fitSentence() back in on a rung that used to shed it - and 0 back
-   prompts, 0 bottoms prompts, the look prompt and anything else unchanged. Previous pin: 78b7ff4b…16e8b. */
-const PINNED = "3676465009b137dd72950a5393a6d404a3d589366f3b88c805119b1b18c020fe";
+const PINNED = "221a5b5835f450b0c12fe8d3037456af0ea1b62b1155c26476e97b24519d912c";
 
 let fails = 0;
 function check(label, cond, detail) {
