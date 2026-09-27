@@ -2337,17 +2337,56 @@ function onMeasurementEnterResolved(e) {
    One retry on a transport or 5xx/429 failure (a Vercel cold start is the usual cause);
    a 4xx is a malformed request and is not retried. Throws on failure - calculateSize()
    turns that into its "couldn't calculate" result. */
+/* ── THE SIZE FIT AND THE WIRE PROMPT ARE ASKED AT THE EDGE FIRST (2026-09-27) ──────────────────
+   REPORTED: "the whole interface is laggy" once the fit and the prompt moved server-side. Measured
+   against origin/main on the same machine: every /api/size and /api/prompt went to Vercel's iad1 -
+   ~350ms a round trip from Israel (620ms cold) for work the in-browser original did in 0ms - and
+   Continue sat locked for two of them in a row (+~720ms), go-live waited on two more (+~750ms).
+   The Cloudflare Worker behind the orientation link (PEAR_ORIENT_URL, wss://<host>/orient) answers
+   POST /size and /prompt from the SAME modules and sanitisers, at the edge nearest the shopper
+   (~10-20ms). It is asked first; ANY non-OK answer, transport error or EDGE_API_TIMEOUT_MS falls
+   back to this origin's /api/<route> - so an answer never depends on which one gave it - and a
+   failed edge is skipped for EDGE_API_RETRY_MS rather than taxing every later call. No
+   PEAR_ORIENT_URL (local servers, the visual harness) means the origin, exactly as before. */
+const EDGE_API_TIMEOUT_MS = 1500;
+const EDGE_API_RETRY_MS = 60000;
+let _edgeApiDownAt = 0;
+
+function edgeApiUrl(route) {
+  const ws = typeof PEAR_ORIENT_URL === "string" ? PEAR_ORIENT_URL : "";
+  const m = /^wss:\/\/([^/?#\s]+)/.exec(ws);
+  if (m) return `https://${m[1]}/${route}`;
+  /* A local `wrangler dev` (only a --qa build or the support view can carry one) is plain ws://. */
+  const local = /^ws:\/\/((?:localhost|127\.0\.0\.1)(?::\d+)?)\//.exec(ws);
+  return local ? `http://${local[1]}/${route}` : null;
+}
+
+/** POST a JSON body to the edge's /<route>, falling back to /api/<route>. Resolves a Response. */
+async function postPearApi(route, bodyText) {
+  const init = { method: "POST", headers: { "Content-Type": "application/json" }, body: bodyText, cache: "no-store" };
+  const edge = edgeApiUrl(route);
+  if (edge && Date.now() - _edgeApiDownAt > EDGE_API_RETRY_MS) {
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), EDGE_API_TIMEOUT_MS) : null;
+    try {
+      const resp = await fetch(edge, ctl ? { ...init, signal: ctl.signal } : init);
+      if (resp.ok) return resp;
+      _edgeApiDownAt = Date.now();
+    } catch (_) {
+      _edgeApiDownAt = Date.now();
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  return fetch(`/api/${route}`, init);
+}
+
 async function requestSizeVerdict(evidence) {
   let lastErr;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 700));
     try {
-      const resp = await fetch("/api/size", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(evidence),
-        cache: "no-store",
-      });
+      const resp = await postPearApi("size", JSON.stringify(evidence));
       if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
         const err = new Error(`HTTP ${resp.status}`);
         err.permanent = true;
@@ -7017,6 +7056,17 @@ function garmentBlobIfWarm(url) {
    next action (or the WebRTC handshake) instead of serialising into the first swap. */
 function prewarmOrientationAssets() {
   const look = resolveLook();
+  /* The wire prompts too, while the shopper is still on their way to go-live: go-live's own
+     request (resolveInitialConditioning) and every turn then read the session memo instead of
+     waiting on a round trip - measured at +~750ms on go-live before this (see postPearApi()).
+     Fire-and-forget; a failure here only means go-live asks again. typeof-guarded (§2.7). */
+  if (look) {
+    if (typeof wireLookPrompt === "function") wireLookPrompt("prefetch").catch(() => {});
+  } else if (activeItem && typeof wirePrompt === "function") {
+    for (const [angle, inProfile] of [["front", false], ["back", false], ["front", true], ["back", true]]) {
+      wirePrompt(activeItem, angle, "prefetch", { inProfile }).catch(() => {});
+    }
+  }
   for (const it of (look ? [look.top, look.bottom] : [activeItem])) {
     if (!it) continue;
     const g = galleryOf(it);
@@ -11271,12 +11321,7 @@ async function fetchWirePrompt(body) {
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 500));
     try {
-      const resp = await fetch("/api/prompt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        cache: "no-store",
-      });
+      const resp = await postPearApi("prompt", JSON.stringify(body));   // the edge first - see postPearApi()
       if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
         const err = new Error(`prompt service HTTP ${resp.status}`);
         err.permanent = true;
@@ -16946,9 +16991,31 @@ function startRecording() {
     catch (e) { console.warn("recorder start failed:", e?.message || e); stopPaintLoop(); mediaRecorder = null; }
   };
 
+  /* ── PAINT ONLY WHEN THE PICTURE CAN HAVE CHANGED (2026-09-27) ─────────────────────────────
+     This loop ran on requestAnimationFrame and redrew #aiVideo EVERY display frame - 120 times a
+     second on a ProMotion Mac - while the render arrives at ~20-30fps and captureStream(30) keeps
+     at most 30 of whatever is drawn. Every draw between two decoded frames painted the identical
+     picture: GPU/CPU work with nothing to show for it, for the whole session, on the machine the
+     shopper is standing in front of ("it makes the whole computer slower"). Now the live branch
+     draws when #aiVideo PRESENTED a new frame (requestVideoFrameCallback), whenever the LIVE
+     CONTINUITY layer is showing or fading (its canvas changes every frame then - unchanged, it
+     draws every frame as before), and on a resize; the frozen-hold tail repaints its still at the
+     capture rate, which is all captureStream ever kept of it. The clip is frame-for-frame what it
+     was. No requestVideoFrameCallback (an old browser) = every frame, exactly as before. */
+  const RECORD_FRAME_MS = 1000 / 30;   // captureStream(30): more than this per second is dropped anyway
+  const frameTimed = typeof video.requestVideoFrameCallback === "function";
+  let aiSeq = 0, paintedSeq = -1, paintedAlpha = -1, paintedW = 0, paintedH = 0, holdPaintedAt = -Infinity;
+  if (frameTimed) {
+    const onPresented = () => { if (!recordingActive) return; aiSeq++; video.requestVideoFrameCallback(onPresented); };
+    video.requestVideoFrameCallback(onPresented);
+  }
+
   const paint = () => {
     if (!recordingActive) return;
     if (recordHold && recordHoldSrc) {
+      const now = performance.now();
+      if (frameTimed && now - holdPaintedAt < RECORD_FRAME_MS - 2) { recordRaf = requestAnimationFrame(paint); return; }
+      holdPaintedAt = now;
       // FROZEN-HOLD phase: Decart is disconnected (billing stopped); keep repainting
       // the captured final frame so canvas.captureStream keeps emitting and the clip
       // grows to VIDEO_LENGTH_MS. beginRecorder() is idempotent - it covers the case
@@ -16960,7 +17027,11 @@ function startRecording() {
       try { ctx.drawImage(recordHoldSrc, 0, 0, recordCanvas.width, recordCanvas.height); beginRecorder(); } catch (_) {}
     } else {
       const w = video.videoWidth, h = video.videoHeight;
-      if (w && h) {
+      const alpha = typeof liveContinuityAlpha === "number" ? liveContinuityAlpha : 0;
+      const changed = !frameTimed || aiSeq !== paintedSeq || alpha > 0 || alpha !== paintedAlpha ||
+        w !== paintedW || h !== paintedH;
+      if (w && h && changed) {
+        paintedSeq = aiSeq; paintedAlpha = alpha; paintedW = w; paintedH = h;
         if (recordCanvas.width !== w || recordCanvas.height !== h) {
           recordCanvas.width = w; recordCanvas.height = h;
         }

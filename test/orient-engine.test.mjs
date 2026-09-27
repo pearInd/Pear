@@ -152,9 +152,13 @@ console.log("\n── §5 the Cloudflare Worker is a transport around the same s
   const WSRC = readFileSync(new URL("../cloudflare/orient/src/worker.js", import.meta.url), "utf8");
   const W = await import("../cloudflare/orient/src/worker.js");
   const wcode = WSRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  /* Since 2026-09-27 the Worker also answers POST /size and /prompt (handleApi), which parse a JSON
+     body - so JSON.parse is allowed THERE and nowhere else: the orientation messages still go only
+     through the shared session's own parser. */
+  const apiFn = wcode.slice(wcode.indexOf("export async function handleApi("), wcode.indexOf("\n}\n", wcode.indexOf("export async function handleApi(")));
   check("the Worker runs the shared protocol session - no engine or protocol of its own",
     /from "\.\.\/\.\.\/\.\.\/lib\/orient-protocol\.js"/.test(WSRC) && /createOrientSession\(/.test(wcode) &&
-    !/createOrientEngine|JSON\.parse/.test(wcode));
+    !/createOrientEngine/.test(wcode) && !/JSON\.parse/.test(wcode.replace(apiFn, "")));
   const LIST = "https://pear.example.com, https://pear-interface-*-team.vercel.app";
   check("an allowed origin passes; `*` stands for one [a-z0-9-] run and nothing more",
     W.originAllowed("https://pear.example.com", LIST) && W.originAllowed("https://pear-interface-git-x-team.vercel.app", LIST) &&
@@ -171,6 +175,42 @@ console.log("\n── §5 the Cloudflare Worker is a transport around the same s
   check("wrangler.jsonc: no workers.dev hostname, no logs, and no committed origin wildcard",
     /"workers_dev":\s*false/.test(CONF) && /"observability":\s*\{\s*"enabled":\s*false/.test(CONF) &&
     !/"ALLOWED_ORIGINS":\s*"[^"]*(^|,)\s*\*/.test(CONF) && !/PEAR_DEBUG_TOKEN"\s*:/.test(CONF));
+}
+
+/* ── §6 the Worker's /size and /prompt (2026-09-27) ──────────────────────────────────── */
+console.log("\n── §6 the edge answers /size and /prompt with the SAME modules, and only to the room ──");
+{
+  const W = await import("../cloudflare/orient/src/worker.js");
+  const S = await import("../lib/sizing.js");
+  const PR = await import("../lib/prompts.js");
+  const env = { ALLOWED_ORIGINS: "https://app.pear-ai.io,https://pear-*-pear2.vercel.app" };
+  const call = (route, { method = "POST", origin = "https://app.pear-ai.io", body } = {}) =>
+    W.handleApi(new Request("https://rt.pear-ai.io" + route, { method, headers: origin ? { Origin: origin, "Content-Type": "application/json" } : {},
+      body: method === "POST" ? (typeof body === "string" ? body : JSON.stringify(body)) : undefined }), env, route);
+  const ev = { height: 178, weight: 74, chest: null, waist: null, legs: null, gender: null, storeChart: null,
+    product: { sizes: ["XS", "S", "M", "L", "XL"], title: "חולצה חלקה עם הדפס", bottoms: false } };
+  const pr = { kind: "single", item: { name: "חולצה חלקה עם הדפס", type: "shirt", __bottoms: false }, angle: "back", inProfile: true, delta: -1 };
+  const r1 = await call("/size", { body: ev });
+  check("POST /size answers exactly what the server's computeSizeVerdict answers",
+    r1.status === 200 && (await r1.text()) === JSON.stringify(S.computeSizeVerdict(S.sanitizeSizeEvidence(JSON.parse(JSON.stringify(ev))))));
+  check("...with CORS for that origin only, never *", r1.headers.get("Access-Control-Allow-Origin") === "https://app.pear-ai.io" &&
+    r1.headers.get("Cache-Control") === "no-store");
+  const r2 = await call("/prompt", { body: pr });
+  check("POST /prompt answers exactly what the server's promptForRequest answers",
+    r2.status === 200 && (await r2.text()) === JSON.stringify({ prompt: PR.promptForRequest(PR.sanitizePromptRequest(JSON.parse(JSON.stringify(pr)))) }));
+  check("a preview origin is allowed; a foreign one, a look-alike and a missing Origin are refused",
+    (await call("/size", { origin: "https://pear-git-x-pear2.vercel.app", body: ev })).status === 200 &&
+    (await call("/size", { origin: "https://evil.example", body: ev })).status === 403 &&
+    (await call("/size", { origin: "https://app.pear-ai.io.evil.example", body: ev })).status === 403 &&
+    (await call("/size", { origin: null, body: ev })).status === 403);
+  const pre = await call("/size", { method: "OPTIONS" });
+  check("the preflight is answered (204) and cached", pre.status === 204 && pre.headers.get("Access-Control-Max-Age") === "7200");
+  check("a GET is refused, bad JSON is a 400, an oversized body a 413",
+    (await call("/size", { method: "GET" })).status === 405 &&
+    (await call("/size", { body: "{not json" })).status === 400 &&
+    (await call("/prompt", { body: "x".repeat(70000) })).status === 413);
+  check("no ALLOWED_ORIGINS refuses everyone (fail closed)",
+    (await W.handleApi(new Request("https://rt.pear-ai.io/size", { method: "POST", headers: { Origin: "https://app.pear-ai.io" }, body: "{}" }), {}, "/size")).status === 403);
 }
 
 console.log(fails === 0 ? "\norient-engine: OK" : `\norient-engine: ${fails} FAILED`);

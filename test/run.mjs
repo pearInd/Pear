@@ -339,7 +339,14 @@
                       watcher with the REAL engine behind a JSON round trip, hashed against the
                       PRE-MOVE watcher. Also pins the values both sides copy, the knob list the
                       browser forwards, the protocol's bounds, debug gating, and the decision's
-                      absence from app.js.
+                      absence from app.js. §6: the Worker's /size and /prompt answer exactly
+                      what the server's modules answer, only to the room's origins.
+     room-latency
+                      "The whole interface is laggy" (2026-09-27): the fit and the prompt are
+                      asked at the edge first with the origin as the fallback, the wire
+                      prompts are prefetched before go-live, and the recorder draws only a
+                      new picture. Pins the edge URL derivation, the fallback and its back-off,
+                      the prefetch keys, and the recorder's gate.
      size-fit-pin
                       The size charts and the fit moved server-side (lib/sizing.js,
                       POST /api/size). The move was proven exact over 1,458,028 cases;
@@ -435,6 +442,7 @@ const SUITES = [
   ["size-fit-pin", "size-fit-pin.test.mjs"],
   ["prompt-engine", "prompt-engine.test.mjs"],
   ["orient-engine", "orient-engine.test.mjs"],
+  ["room-latency", "room-latency.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

@@ -30,8 +30,53 @@
    Nothing is logged: observability is off in wrangler.jsonc and this file prints nothing.
    ============================================================================= */
 import { createOrientSession } from "../../../lib/orient-protocol.js";
+import { computeSizeVerdict, sanitizeSizeEvidence } from "../../../lib/sizing.js";
+import { promptForRequest, sanitizePromptRequest } from "../../../lib/prompts.js";
 
 const MAX_MSGS_PER_SEC = 120;
+const MAX_BODY_CHARS = 65536;
+
+/* ── THE SIZE FIT AND THE WIRE PROMPT, ALSO HERE (2026-09-27) ─────────────────────────────
+   REPORTED: "the whole interface is laggy" after the logic moved server-side. Measured: every
+   /api/size and /api/prompt call went to Vercel's iad1 (Washington) - ~350ms a round trip from
+   Israel, 620ms cold - where the in-browser original answered in 0ms. Continue sat locked for two
+   of those in a row (~720ms) and go-live waited two more. The same two pure modules answer here,
+   at the edge nearest the shopper (~10-20ms), with the SAME sanitisers and the SAME code as
+   server.js's routes - the room falls back to those if this is unreachable, so an answer never
+   depends on which one it came from. computeSizeVerdict costs ~0.02ms, promptForRequest ~0.01ms.
+   Same Origin allowlist as /orient; the reply carries CORS for that origin only. */
+function corsHeaders(origin) {
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "7200",
+    "Vary": "Origin",
+  };
+}
+
+/** POST /size and /prompt - exported for the unit test. */
+export async function handleApi(request, env, route) {
+  const origin = request.headers.get("Origin");
+  if (!originAllowed(origin, env.ALLOWED_ORIGINS)) return new Response("forbidden", { status: 403 });
+  const cors = corsHeaders(origin);
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+  if (request.method !== "POST") return new Response("method not allowed", { status: 405, headers: cors });
+  const json = (body, status = 200) => new Response(JSON.stringify(body), {
+    status, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" } });
+  let body;
+  try {
+    const text = await request.text();
+    if (text.length > MAX_BODY_CHARS) return json({ error: "too_large" }, 413);
+    body = JSON.parse(text);
+  } catch { return json({ error: "bad_json" }, 400); }
+  try {
+    if (route === "/size") return json(computeSizeVerdict(sanitizeSizeEvidence(body)));
+    return json({ prompt: promptForRequest(sanitizePromptRequest(body)) });
+  } catch {
+    return json({ error: route === "/size" ? "size_failed" : "prompt_failed" }, 500);
+  }
+}
 
 /** @param {string|null} origin @param {string|undefined} list  comma-separated patterns */
 export function originAllowed(origin, list) {
@@ -58,6 +103,7 @@ export function keyMatches(given, expected) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/size" || url.pathname === "/prompt") return handleApi(request, env, url.pathname);
     if (url.pathname !== "/orient") return new Response("not found", { status: 404 });
     if (request.headers.get("Upgrade") !== "websocket") return new Response("expected a WebSocket upgrade", { status: 426 });
     if (!originAllowed(request.headers.get("Origin"), env.ALLOWED_ORIGINS)) return new Response("forbidden", { status: 403 });

@@ -474,11 +474,37 @@ skin/face) and EXECUTES (`maybeSwap`, the hold, `turnMark`, the profile/re-ancho
   fence, not a lock — a scripted client can forge it and use the engine as an oracle; what it
   never gets is the thresholds. It was checked against `wrangler dev` byte for byte (33,122 steps)
   and drove the minified room through the visual gate. **A change to `lib/orient-engine.js` needs
-  a `wrangler deploy` too**, or production keeps deciding with the old engine.
+  a `wrangler deploy` too**, or production keeps deciding with the old engine. Since 2026-09-27 it
+  also answers POST `/size` and `/prompt` (§2.15) - so a change to `lib/sizing.js` or
+  `lib/prompts.js` needs the same redeploy, or the edge and the origin answer differently.
 - **The browser carries no decision:** `scripts/build.mjs` fails on the engine's reason codes in
   the room bundle (it fired on the pre-move room); `orient-engine` §4 asserts the thresholds and
   decision functions are absent from `app.js`. The action names and knob keys ARE in the room —
   they are the protocol.
+
+### 2.15 The room must not wait where main did not - and must not draw what did not change
+Reported 2026-09-27: "the whole interface is laggy… main is excellent - it should be the same
+version, only with the code hidden." Measured against origin/main on the same machine
+(scratch perf harness: the real room, the render engine mocked, real CDNs), and fixed at the cause:
+
+- **A second pose model on the GPU** (the reference crop, 479cdfd - reverted): go-live 12.8s vs
+  4.0s, GPU work 34.6s vs 12.6s. It fixed a real bug (a model-worn store photo's jeans/back bled into
+  the render) but main has that bug too; if it comes back, the garment box must come from the server
+  (e.g. the classifier that already sees every photo), never from a second MediaPipe in the browser.
+- **Server round trips on the critical path**: every /api/size and /api/prompt went to Vercel iad1
+  (~350ms from Israel, 620ms cold) where the in-browser original took 0ms - Continue locked for two
+  (+~720ms), go-live waited on two (+~750ms). The Worker behind the orientation link answers POST
+  `/size` and `/prompt` from the SAME modules (`handleApi`, `orient-engine` §6) at ~10-20ms;
+  `postPearApi()` asks it first and falls back to `/api/<route>` on anything but a 200, backing off
+  for `EDGE_API_RETRY_MS`. `prewarmOrientationAssets()` prefetches the four wire prompts, so go-live
+  reads the memo. Measured after: room entry 1.11s, live 4.18s - main's 1.05s / 4.0s.
+- **The recorder redrew an unchanged picture every display frame** (120/s on ProMotion) for a
+  ~25fps render. It now draws on a presented frame (`requestVideoFrameCallback`), while the
+  continuity layer shows or fades, and on a resize; the frozen tail at the capture rate. Measured:
+  the SAME distinct pictures per clip as main (80/80/81 vs 80/80/80), ~45% fewer encoded frames -
+  main's extra ones were exact duplicates.
+- The Worker change needs a `wrangler deploy`; until then the room falls back to the origin and is
+  exactly as slow as before, never broken. `room-latency` pins all three.
 
 ---
 
