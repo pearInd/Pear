@@ -557,6 +557,20 @@ back-of-head vote at ~150°+. Two such paths existed; both are closed:
   clips render as a plain shirt, not the back print. The OUTBOUND is untouched (its early BACK renders
   plain if early; a late FRONT on the back half is the print on the back - the asymmetry is why only
   the return moved). §11/§13's non-negative-latency bars now gate the outbound only.
+- **THE OFFSET VARIES BY SESSION, so no fixed rule is right for all of them** (third session,
+  2026-09-27 17:20Z): lag 0.82s with no growth despite a 460ms ack, and the return landed at send
+  +0.0s - the FRONT went out on the second shoulder vote (swing 88->47, under 45) and the chest showed
+  plain from the side to ~54 degrees for 0.6s. Replayed on all three sessions: a rule timed for
+  offset 0 (fire near the side) puts FRONT on the back at -0.43; the current rule (safe at -0.43)
+  leaves 0.3-0.6s of plain at 0. The first shoulder vote cannot tell a real return from a wobble at
+  the side (the test's fast wobble moves at 100 deg/s, the real returns at 95-180), and |yaw| is
+  folded, so "yaw under N" also fires at back-square - both were swept and rejected. The one input
+  that separates the regimes is the session's own lag, so a TEST session now RECORDS it (`lag`
+  events: 24x14 luma grids of each sent frame matched against each output frame; `rtc` events: the
+  connection's numbers every 500ms; `sep`/`sepAge` in every tick for an offline Vision alignment).
+  **No decision reads it** until real sessions show it matches the offline measurement - an estimator
+  that under-reads the lag would put FRONT on the back. `orient-link` §5 pins the matcher (800ms read
+  back as ~800ms, a still scene claims nothing) and that the probe can never throw out of go-live.
 - **The FLIGHT RECORDER** (`fitting-room/app.js`, after the orientation link). A TEST session -
   store key `TEST` (the preview script's `data-pear-key="TEST"`) or `?pear_trace=1` - keeps every
   orientation tick (the sample, the engine's reply, its round trip), every swap from `swap-req` to

@@ -5554,6 +5554,7 @@ function createThrottledInputStream(srcStream, {
       drawFrame();
       if (outTrack && typeof outTrack.requestFrame === "function") outTrack.requestFrame();
       lastFrameAt = clock();
+      if (typeof traceInputFrame === "function") traceInputFrame(canvas);   // a TEST session's lag probe; no-op otherwise
     } catch (_) {}
   };
 
@@ -8266,7 +8267,12 @@ function startStreamContinuity() {
   const model = makeStreamContinuity();
   const t0 = performance.now();
   let stopped = false, raf = 0, aiFrames = 0, camFrames = 0, shownAlpha = -1;
-  const onAi = (now) => { if (stopped) return; aiFrames++; model.frame(now); ai.requestVideoFrameCallback(onAi); };
+  const onAi = (now) => {
+    if (stopped) return;
+    aiFrames++; model.frame(now);
+    if (typeof traceOutputFrame === "function") traceOutputFrame(ai);   // a TEST session's lag probe; no-op otherwise
+    ai.requestVideoFrameCallback(onAi);
+  };
   ai.requestVideoFrameCallback(onAi);
   const camTimed = typeof cam.requestVideoFrameCallback === "function";
   const onCam = () => { if (stopped) return; camFrames++; cam.requestVideoFrameCallback(onCam); };
@@ -10108,6 +10114,10 @@ function openOrientChannel() {
     y: typeof s.yawAbs === "number" ? Math.round(s.yawAbs) : null,
     ya: s.yawAt ? s.t - s.yawAt : null, la: s.lostAt ? s.t - s.lostAt : null,
     l: s.lock ?? null, p: s.profile ? 1 : 0, d: s.dualView ? 1 : 0, rtt,
+    /* The camera's signed shoulder separation and its age - what body pose reads off the output frames,
+       so the two timelines can be lined up to the frame. */
+    sep: typeof _poseFacingSep === "number" ? Math.round(_poseFacingSep * 1000) / 1000 : null,
+    sepAge: typeof _poseFacingAt === "number" && _poseFacingAt ? s.t - _poseFacingAt : null,
     a: Array.isArray(acts) ? acts.filter((x) => x && x.do !== "log") : null,
   });
   return {
@@ -10212,6 +10222,7 @@ function traceSessionBegin(ctx) {
     n: _traceSessions, build: typeof PEAR_BUILD !== "undefined" ? PEAR_BUILD : null,
     at: new Date().toISOString(), t0: Date.now(), ua, ctx: ctx || null, ev: [], over: 0,
   };
+  lagProbeStart();
 }
 
 /** One event, stamped in ms since go-live. A no-op outside a recorded session. */
@@ -10226,6 +10237,7 @@ function traceOrient(type, data) {
 function traceSessionEnd(why) {
   const tr = _trace;
   if (!tr) return;
+  lagProbeStop();
   _trace = null;
   tr.end = why;
   tr.dur = Date.now() - tr.t0;
@@ -10241,6 +10253,125 @@ function traceSessionEnd(why) {
       keepalive: body.length < 60000 }).catch(() => {});
   } catch (_) { /* never let the recorder break a teardown */ }
 }
+/* ── WHAT THE RENDER'S TIMING WAS, measured in the same record (2026-09-27) ──────────────────────────
+   Three sessions put the render's lag at 0.77-1.08s, and the offset at which a swap lands on the depicted
+   body anywhere from 0 to -0.43s - which is the whole difference between "the front print on the back" and
+   "a plain shirt at the side". A fixed rule can only be right for one of them; a rule that adapts needs the
+   lag measured in the session, and a measurement nobody has checked against a real session must not steer
+   anything. So, for a TEST session only, and only recorded:
+     · lag: each frame sent to the render and each frame that comes back is reduced to a 24x14 luma grid
+       (z-scored, so exposure does not matter); an output frame is matched against the last 2s of sent
+       frames, and when the scene moved enough for one to stand out the difference in time is the lag.
+       No model runs: ~20 tiny readbacks a second, for the 5s window.
+     · rtc: the connection's own numbers every 500ms - round trip, send-queue delay, why the encoder is
+       limited, the jitter buffer, dropped frames - to say whether a long lag is the network or the render.
+   Checked against the clip offline (body pose on every output frame vs the camera's shoulder separation,
+   recorded in each tick) before any decision reads it. */
+const LAG_GRID_W = 24, LAG_GRID_H = 14, LAG_HISTORY_MS = 2500, LAG_MAX_MS = 2000, LAG_MIN_CONTRAST = 0.05;
+let _lagProbe = null, _rtcProbeTimer = null;
+
+/* Never throws: it runs inside goLive() (traceSessionBegin), and a measurement must not be able to stop a session. */
+function lagProbeStart() {
+  lagProbeStop();
+  if (!_trace || typeof document === "undefined" || typeof document.createElement !== "function") return;
+  try {
+    const grid = () => {
+      const c = document.createElement("canvas");
+      c.width = LAG_GRID_W; c.height = LAG_GRID_H;
+      return c.getContext("2d", { willReadFrequently: true });
+    };
+    const ctxIn = grid(), ctxOut = grid();
+    if (!ctxIn || !ctxOut) return;
+    _lagProbe = { inputs: [], ctxIn, ctxOut, n: 0, kept: 0 };
+    if (typeof window !== "undefined" && typeof setInterval === "function") {
+      _rtcProbeTimer = setInterval(() => { rtcProbeSample().catch(() => {}); }, 500);
+    }
+  } catch (_) { _lagProbe = null; }
+}
+
+function lagProbeStop() {
+  if (_rtcProbeTimer) { clearInterval(_rtcProbeTimer); _rtcProbeTimer = null; }
+  if (_lagProbe && _trace) traceOrient("lag-sum", { outFrames: _lagProbe.n, matched: _lagProbe.kept });
+  _lagProbe = null;
+}
+
+/** A frame, reduced to a z-scored 24x14 luma grid. Throws on a tainted or empty source. */
+function lagGrid(ctx, src) {
+  ctx.drawImage(src, 0, 0, LAG_GRID_W, LAG_GRID_H);
+  const d = ctx.getImageData(0, 0, LAG_GRID_W, LAG_GRID_H).data;
+  const n = LAG_GRID_W * LAG_GRID_H, g = new Float32Array(n);
+  let mean = 0;
+  for (let i = 0; i < n; i++) { g[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2]; mean += g[i]; }
+  mean /= n;
+  let v = 0;
+  for (let i = 0; i < n; i++) { g[i] -= mean; v += g[i] * g[i]; }
+  const sd = Math.sqrt(v / n) || 1;
+  for (let i = 0; i < n; i++) g[i] /= sd;
+  return g;
+}
+
+/** Called by the input throttle after each frame it hands the render. A no-op outside a probed session. */
+function traceInputFrame(canvas) {
+  const p = _lagProbe;
+  if (!p || !canvas) return;
+  const now = performance.now();
+  try { p.inputs.push({ t: now, g: lagGrid(p.ctxIn, canvas) }); } catch (_) { return; }
+  while (p.inputs.length && p.inputs[0].t < now - LAG_HISTORY_MS) p.inputs.shift();
+}
+
+/** Called for each rendered frame presented in #aiVideo. A no-op outside a probed session. */
+function traceOutputFrame(video) {
+  const p = _lagProbe;
+  if (!p || !video || !video.videoWidth) return;
+  const now = performance.now();
+  let g;
+  try { g = lagGrid(p.ctxOut, video); } catch (_) { return; }
+  p.n++;
+  let best = Infinity, bestAt = null;
+  const all = [];
+  for (const x of p.inputs) {
+    if (now - x.t > LAG_MAX_MS) continue;
+    let sum = 0;
+    for (let i = 0; i < g.length; i++) sum += Math.abs(g[i] - x.g[i]);
+    const dist = sum / g.length;
+    all.push(dist);
+    if (dist < best) { best = dist; bestAt = x.t; }
+  }
+  if (all.length < 6 || bestAt === null) return;
+  all.sort((a, b) => a - b);
+  const contrast = all[all.length >> 1] - best;
+  if (contrast < LAG_MIN_CONTRAST) return;   // a still scene: every sent frame matches, the lag is unreadable
+  p.kept++;
+  traceOrient("lag", { ms: Math.round(now - bestAt), c: Math.round(contrast * 100) / 100 });
+}
+
+/** One snapshot of the connection's own numbers, for the record. */
+async function rtcProbeSample() {
+  if (!_trace || typeof window === "undefined" || !window.__pearPCs) return;
+  const out = [];
+  for (const pc of Array.from(window.__pearPCs)) {
+    if (!pc || typeof pc.getStats !== "function") continue;
+    const r = await pc.getStats();
+    const e = {};
+    r.forEach((x) => {
+      if (x.type === "candidate-pair" && x.nominated && x.state === "succeeded") {
+        e.rtt = x.currentRoundTripTime != null ? Math.round(x.currentRoundTripTime * 1000) : null;
+        e.outKbps = x.availableOutgoingBitrate != null ? Math.round(x.availableOutgoingBitrate / 1000) : null;
+      } else if (x.type === "outbound-rtp" && x.kind === "video") {
+        e.sent = x.framesSent; e.enc = x.framesEncoded; e.sendDelay = x.totalPacketSendDelay; e.pkts = x.packetsSent;
+        e.limit = x.qualityLimitationReason; e.w = x.frameWidth; e.fpsOut = x.framesPerSecond;
+      } else if (x.type === "remote-inbound-rtp" && x.kind === "video") {
+        e.rrtt = x.roundTripTime != null ? Math.round(x.roundTripTime * 1000) : null; e.lost = x.packetsLost;
+      } else if (x.type === "inbound-rtp" && x.kind === "video") {
+        e.dec = x.framesDecoded; e.drop = x.framesDropped; e.jbd = x.jitterBufferDelay; e.jbn = x.jitterBufferEmittedCount;
+        e.jbt = x.jitterBufferTargetDelay; e.fpsIn = x.framesPerSecond; e.freezes = x.freezeCount;
+      }
+    });
+    if (Object.keys(e).length) out.push(e);
+  }
+  if (out.length) traceOrient("rtc", out);
+}
+
 /* The source room's read-out: the record in progress, else the last one closed (tests, the visual
    harness's PEAR_VISUAL_TRACE=1, the support view). Folded away in the production build. */
 if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
