@@ -209,7 +209,13 @@ JSDoc, and `server.js` from `const otpStore = new Map();`.
 `calculateSize()`'s fine-tune tie-break is the newest one: `size-chart-overlay` slices
 `app.js` from `const candidates = currentSizeCategory === "child" ? childFits : adultFits;`
 to `// SNAP TO THE PRODUCT'S OWN LIST.` and runs that loop standalone, so it scores the
-real penalty formula rather than a copy of it.
+real penalty formula rather than a copy of it. `stored-size-chart` runs that same loop
+against `fineTunePickForDiagnostics()` (the Phase 0 logger's mirror of it) on a grid of
+bodies — change one, the test tells you to change the other. The widget's
+`@pear-shared:size-token` / `@pear-shared:size-chart-parser` BEGIN/END comments are
+markers too (`sync-size-chart-parser.mjs` slices between them), as are
+`var SIZE_TOKEN_ALPHA_RE`, `var LD_OUT_OF_STOCK_RE` and `function canonicalStoreHost(raw) {`
+in the widget (`jsonld-sizes`, `store-size-chart-api`).
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.
@@ -275,10 +281,21 @@ same commit. Whichever is wrong is the one that wins.
 | Decorative-image keyword list | `pear-widget.js: EXCLUDE_SRC` ↔ `scan-store.js: EXCLUDE_IMG_SRC` |
 | Trust-tiered exclusion + name corroboration | `isExcludedSrc` / `nameEchoesProduct` in `pear-widget.js` ↔ `scan-store.js` |
 | Size-chart wire format (`<unit>;<source>;SIZE:chest:waist:hips:legs\|…`) | `pear-widget.js: encodeSizeChart` ↔ `app.js: parseStoreSizeChart` |
-| Size-chart sanity clamps (cm) | `pear-widget.js: SIZE_CHART_CLAMPS` ↔ `app.js: STORE_CHART_CLAMPS` |
+| Size-chart sanity clamps (cm) | `pear-widget.js: SIZE_CHART_CLAMPS` ↔ `app.js: STORE_CHART_CLAMPS` ↔ `lib/store-size-charts.js: STORE_CHART_CLAMPS` — **three** copies |
+| Store host key (`store_size_charts.store_domain`) | `canonicalStoreHost` in `pear-widget.js` ↔ `app.js` ↔ `lib/store-size-charts.js` ↔ `scanner/size-charts.js` — **four** copies |
+| Size-guide parser | `pear-widget.js` `@pear-shared:size-token` + `@pear-shared:size-chart-parser` blocks → **generated** `scanner/size-chart-parser.js` (`npm run sync:size-chart-parser`) |
 
 The widget's category verdict is **explicit** and therefore outranks the room's
 own classifier. A widget-side category bug cannot be fixed room-side.
+
+**The size-guide parser is the one lockstep pair that is generated, not hand-kept.**
+Edit the widget's `@pear-shared:*` blocks, then run `npm run sync:size-chart-parser`;
+never edit `scanner/size-chart-parser.js` by hand. `test/size-chart-parser-sync.test.mjs`
+fails on a single-byte difference and runs one fixture set through both runtimes. The
+blocks must stay self-contained (only `d` and `console` are free) — the §2.6 rule, since
+the scanner copy runs with nothing from the widget around it. The three clamp copies and
+the four `canonicalStoreHost` copies are compared by value in
+`test/store-size-chart-api.test.mjs`.
 
 **`isExcludedSrc` is trust-tiered — a keyword is the weakest signal, not a veto.**
 SVG is refused at every tier (Gemini cannot classify a vector). An image the store
@@ -314,6 +331,10 @@ npm run qa:visual        # the visual gate: drive a 360 + swap, then score the f
 npm run test:visual      #   …just the agent  (npx playwright test test/e2e/visual-agent.spec.mjs)
 npm run inspect:visuals  #   …just the scoring (node scripts/inspect-visuals.mjs)
 npm run fixtures         # regenerate test/fixtures/ (generated, gitignored, --force to rebuild)
+
+npm run sync:size-chart-parser            # regenerate scanner/size-chart-parser.js from the widget
+npm run scan:size-charts -- <store-url>   # size-guide DRY RUN: coverage report, no keys, writes nothing
+node scanner/scan-store.js --size-charts --save <store-url>   # capture into store_size_charts (needs v15 + Supabase env)
 ```
 
 `test:api` still **does not exist** in `package.json` — there is no API-health

@@ -19,6 +19,8 @@
     "inspect:visuals": "node scripts/inspect-visuals.mjs",
     "qa:visual": "npm run test:visual && npm run inspect:visuals",
     "trace:prompt": "node scripts/trace-prompt.mjs fitting-room/app.js",
+    "sync:size-chart-parser": "node scripts/sync-size-chart-parser.mjs",
+    "scan:size-charts": "node scanner/scan-store.js --size-charts",
     "prepare": "husky"
   },
   "dependencies": {

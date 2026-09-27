@@ -1472,11 +1472,21 @@
      and the DOM tier only accepts a control whose values are ALL recognisable size
      tokens. Anything less confident yields nothing at all, which simply restores the
      previous (classifier-only) behaviour rather than risking a false block. */
+  /* 2XS / 3XS / XXXS are the SAME sizes as XXS / XXXS, spelled the way adidas and most
+     sportswear JSON-LD spells them (verified live: adidas.it's ProductGroup lists
+     2XS...3XL). Without them a real run was discarded whole by the every-token-or-
+     abstain rule below, for a spelling. The room canonicalises both spellings to one
+     token before comparing (canonicalSizeToken() in app.js), so accepting it here can
+     never make two spellings of one size look like two sizes.
+     @pear-shared:size-token BEGIN - copied verbatim into scanner/size-chart-parser.js by
+     scripts/sync-size-chart-parser.mjs; test/size-chart-parser-sync.test.mjs fails on drift. */
+  var SIZE_TOKEN_ALPHA_RE = /^(?:XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL|[23]XS)$/i;
   function isPlausibleSizeToken(s) {
     var t = String(s == null ? "" : s).trim();
     if (!t || t.length > 5) return false;
-    return /^\d{1,2}$/.test(t) || /^(?:XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL)$/i.test(t);
+    return /^\d{1,2}$/.test(t) || SIZE_TOKEN_ALPHA_RE.test(t);
   }
+  /* @pear-shared:size-token END */
 
   /* Distinct values of the declared Size option, in catalog order. sizeOptionIndex
      comes from the product's own options array (see loadShopifyProductJSON) - never a
@@ -1557,9 +1567,259 @@
     return out;
   }
 
+  /* ── schema.org PRODUCT FACTS - the size list, its stock, and the audience ─────────
+     THE GAP THIS CLOSES (proposal B): on adidas.it the DOM tier finds ZERO size
+     controls - the picker is built by client JS from data the page already shipped -
+     while the page's own JSON-LD ProductGroup lists every variant's size:
+       hasVariant[].size -> [undefined, "2XS", "XS", "S", "M", "L", "XL", "2XL", "3XL"]
+     That payload is the store DECLARING its size run to Google Shopping, which is
+     stronger evidence than any DOM heuristic below it, so it sits between the Shopify
+     variant JSON and the DOM scrape in extractHostSizes().
+
+     THE undefined ENTRY IS FILTERED BEFORE THE PLAUSIBILITY CHECK, never by it. A
+     ProductGroup routinely carries one variant with no size at all (the parent/"select
+     a size" offer). Fed through the every-token-or-abstain rule, that blank would have
+     been "a value that is not a size" and discarded adidas's whole run - the same
+     failure mode the DOM tier's leading-placeholder skip exists for.
+
+     SAME STRICTNESS AS THE OTHER TIERS, because a wrong list blocks a paying shopper:
+       · exactly ONE product described on the page (the image walker's rule - a grid
+         page emits one Product per card),
+       · every non-empty size is a plausible token, else the tier abstains wholesale,
+       · at least two distinct sizes.
+     Shapes read: ProductGroup.hasVariant[].size, Product.offers[].size and
+     offers[].itemOffered.size, each possibly a SizeSpecification {name}, possibly under
+     @graph or mainEntity. PURE over parsed documents (productFactsFromLd) so the suite
+     can drive it with literals; jsonLdProductFacts() is the memoised DOM wrapper. */
+  var LD_OUT_OF_STOCK_RE = /(?:OutOfStock|SoldOut|Discontinued)\s*$/i;
+  var LD_IN_STOCK_RE = /(?:InStock|LimitedAvailability|PreOrder|PreSale|BackOrder|OnlineOnly|InStoreOnly)\s*$/i;
+  function productFactsFromLd(docs) {
+    var out = { productCount: 0, sizes: [], soldOut: [], gender: "", crumbs: [] };
+    var products = [], ids = [], anon = 0;
+    function isArr(v) { return Object.prototype.toString.call(v) === "[object Array]"; }
+    function arr(v) { return v == null ? [] : (isArr(v) ? v : [v]); }
+    function typeIs(n, re) {
+      var t = arr(n["@type"]);
+      for (var i = 0; i < t.length; i++) {
+        if (typeof t[i] === "string" && re.test(t[i].replace(/^.*[\/:#]/, ""))) return true;
+      }
+      return false;
+    }
+    function walk(n, depth) {
+      if (!n || typeof n !== "object" || depth > 5) return;
+      if (isArr(n)) { for (var i = 0; i < n.length; i++) walk(n[i], depth + 1); return; }
+      if (typeIs(n, PRODUCT_LD_TYPE_RE)) {
+        var id = String(n.name || n.sku || n.productID || n["@id"] || "").trim().toLowerCase() || ("#" + anon++);
+        if (ids.indexOf(id) === -1) ids.push(id);
+        products.push(n);
+        return;   // hasVariant / offers are read below, never walked as more products
+      }
+      if (typeIs(n, /^BreadcrumbList$/)) {
+        var items = arr(n.itemListElement);
+        for (var b = 0; b < items.length; b++) {
+          var it = items[b] || {};
+          var nm = it.name || (it.item && typeof it.item === "object" ? it.item.name : "");
+          if (nm) out.crumbs.push(String(nm));
+        }
+        return;
+      }
+      if (n["@graph"]) walk(n["@graph"], depth + 1);
+      if (n.mainEntity) walk(n.mainEntity, depth + 1);
+    }
+    var docList = arr(docs);
+    for (var d0 = 0; d0 < docList.length; d0++) walk(docList[d0], 0);
+    out.productCount = ids.length;
+    if (ids.length !== 1) return out;
+
+    /* A size value as schema.org allows it: Text, a number, or a SizeSpecification. */
+    function sizeOf(v) {
+      if (v == null) return null;
+      if (isArr(v)) { for (var i = 0; i < v.length; i++) { var s = sizeOf(v[i]); if (s) return s; } return null; }
+      if (typeof v === "object") return sizeOf(v.name != null ? v.name : (v["@value"] != null ? v["@value"] : v.value));
+      var t = String(v).trim();
+      return t || null;
+    }
+    /* "out" | "in" | null (unstated). Unstated is NOT out - see soldOut below. */
+    function availabilityOf(offers) {
+      var list = arr(offers);
+      for (var i = 0; i < list.length; i++) {
+        var a = list[i] && list[i].availability;
+        if (typeof a !== "string") continue;
+        if (LD_OUT_OF_STOCK_RE.test(a)) return "out";
+        if (LD_IN_STOCK_RE.test(a)) return "in";
+      }
+      return null;
+    }
+    var entries = [], genders = [];
+    for (var p = 0; p < products.length; p++) {
+      var prod = products[p];
+      var variants = arr(prod.hasVariant);
+      for (var v = 0; v < variants.length; v++) {
+        if (!variants[v] || typeof variants[v] !== "object") continue;
+        entries.push({ size: sizeOf(variants[v].size), avail: availabilityOf(variants[v].offers) });
+      }
+      var offers = [];
+      var top = arr(prod.offers);
+      for (var o = 0; o < top.length; o++) {
+        if (!top[o] || typeof top[o] !== "object") continue;
+        offers.push(top[o]);
+        var inner = arr(top[o].offers);            // AggregateOffer.offers[]
+        for (var q = 0; q < inner.length; q++) if (inner[q] && typeof inner[q] === "object") offers.push(inner[q]);
+      }
+      for (var f = 0; f < offers.length; f++) {
+        var sz = sizeOf(offers[f].size) || sizeOf(offers[f].itemOffered && offers[f].itemOffered.size);
+        entries.push({ size: sz, avail: availabilityOf([offers[f]]) });
+      }
+      var aud = arr(prod.audience);
+      for (var g = 0; g < aud.length; g++) {
+        var sg = aud[g] && typeof aud[g] === "object" ? arr(aud[g].suggestedGender) : [];
+        for (var h = 0; h < sg.length; h++) {
+          var gv = genderFromLdValue(sg[h]);
+          if (gv && genders.indexOf(gv) === -1) genders.push(gv);
+        }
+      }
+    }
+    out.gender = genders.length === 1 ? genders[0] : (genders.length > 1 ? "unisex" : "");
+
+    var sizes = [], state = {}, sawAvailability = false;
+    for (var e = 0; e < entries.length; e++) {
+      var raw = entries[e].size;
+      if (raw == null) continue;                  // FILTERED FIRST - see the header note
+      var val = String(raw).trim();
+      if (!val) continue;
+      if (!isPlausibleSizeToken(val)) return out; // one non-size value -> abstain wholesale
+      var key = val.toLowerCase();
+      if (!(key in state)) { sizes.push(val); state[key] = { out: 0, other: 0 }; }
+      if (entries[e].avail === "out") state[key].out++; else state[key].other++;
+      if (entries[e].avail) sawAvailability = true;
+    }
+    if (sizes.length < 2) return out;
+    out.sizes = sizes;
+    /* SOLD OUT ONLY WHEN EVERY OFFER CARRYING THE SIZE SAYS SO, and never when the
+       payload states no availability anywhere - soldOutFromVariants()' rule, for its
+       reason (an unstated field must not read as "the whole product is gone"). An offer
+       with no availability counts as NOT gone. */
+    if (sawAvailability) {
+      for (var z = 0; z < sizes.length; z++) {
+        var st = state[sizes[z].toLowerCase()];
+        if (st.out > 0 && st.other === 0) out.soldOut.push(sizes[z]);
+      }
+    }
+    return out;
+  }
+
+  /* suggestedGender -> "men" | "women" | "unisex" | "". "female" is tested before "male"
+     because it contains it. Accepts the bare word, the schema.org URL form and a
+     {name} object. */
+  function genderFromLdValue(v) {
+    if (v && typeof v === "object") v = v.name || v["@id"] || "";
+    var t = String(v == null ? "" : v).toLowerCase().replace(/^.*[\/:#]/, "").trim();
+    if (!t) return "";
+    if (/unisex/.test(t)) return "unisex";
+    if (/female|women|woman|ladies/.test(t)) return "women";
+    if (/male|\bmen\b|\bman\b/.test(t)) return "men";
+    return "";
+  }
+
+  var _ldFactsMemo = { key: null, facts: null };
+  function jsonLdProductFacts() {
+    var scripts = d.querySelectorAll('script[type="application/ld+json"]');
+    var key = (w.location && w.location.href) + "|" + scripts.length;
+    for (var k = 0; k < scripts.length; k++) key += ":" + (scripts[k].textContent || "").length;
+    if (key === _ldFactsMemo.key && _ldFactsMemo.facts) return _ldFactsMemo.facts;
+    var docs = [];
+    for (var s = 0; s < scripts.length; s++) {
+      try { docs.push(JSON.parse(scripts[s].textContent || "")); } catch (_) { /* one bad block is not a reason to lose the rest */ }
+    }
+    var facts = productFactsFromLd(docs);
+    _ldFactsMemo = { key: key, facts: facts };
+    return facts;
+  }
+
+  function sizesFromJsonLd() {
+    return jsonLdProductFacts().sizes.slice();
+  }
+
+  /* ── WHICH STORE, AND WHOSE GARMENT - Phase 0 measurement signals ──────────────────
+     Both ride the iframe URL so the room can (a) key a stored size chart by store and
+     (b) record who the garment is cut for. Neither changes a recommendation on its own;
+     the room only consults the gender when choosing between STORED charts, and logs it
+     otherwise (docs/superpowers/specs/2026-09-26-store-size-guides-phase0-1.md).
+
+     canonicalStoreHost: CROSS-FILE LOCKSTEP (CLAUDE.md §3) with app.js,
+     lib/store-size-charts.js and scanner/size-charts.js - it is the store_size_charts
+     key, so a copy that drifts reads a different store's row set (usually: none). */
+  function canonicalStoreHost(raw) {
+    var h = String(raw == null ? "" : raw).trim().toLowerCase();
+    if (!h) return "";
+    h = h.replace(/^[a-z][a-z0-9+.-]*:\/\//, "").split(/[\/?#]/)[0];
+    h = h.replace(/^[^@]*@/, "").replace(/:\d+$/, "").replace(/\.$/, "");
+    h = h.replace(/^(?:www\d*|m)\./, "");
+    return /^[a-z0-9.-]+$/.test(h) && h.indexOf(".") > 0 ? h : "";
+  }
+
+  /* Gender words, EN + HE, matched as WHOLE TOKENS so "women" never reads as "men".
+     Hebrew takes one optional prefix letter (ל/ה/ו/ב/מ/ש - "לגברים", "הנשים"), since
+     Hebrew attaches prepositions to the word. Boys/girls map to men/women: the store's
+     kids/adult axis is decided elsewhere (isKidsProduct in app.js), this only says
+     which cut. */
+  var GENDER_WORDS = {
+    men: ["men", "mens", "man", "male", "gents", "guys", "boy", "boys", "גברים", "גבר", "בנים", "גברי"],
+    women: ["women", "womens", "woman", "female", "ladies", "lady", "girl", "girls", "נשים", "אישה", "בנות", "נשי"],
+    unisex: ["unisex", "יוניסקס"]
+  };
+  function genderFromText(text) {
+    var tokens = String(text == null ? "" : text).toLowerCase().split(/[^a-z֐-׿]+/);
+    var found = {};
+    for (var i = 0; i < tokens.length; i++) {
+      var t = tokens[i];
+      if (!t) continue;
+      for (var g in GENDER_WORDS) {
+        var words = GENDER_WORDS[g];
+        if (words.indexOf(t) !== -1 ||
+            (/^[להובמש][֐-׿]{2,}$/.test(t) && words.indexOf(t.slice(1)) !== -1)) found[g] = true;
+      }
+    }
+    if (found.unisex && !found.men && !found.women) return "unisex";
+    if (found.men && found.women) return "";      // "Men | Women" nav text - abstain
+    if (found.men) return "men";
+    if (found.women) return "women";
+    return "";
+  }
+
+  /* Strongest first: the store's own structured audience -> the URL path -> the
+     breadcrumb (JSON-LD BreadcrumbList, then the DOM trail) -> unknown. Never a guess
+     from the product photo or the shopper. @returns {{gender:string, source:string}} */
+  function garmentGenderSignal() {
+    try {
+      var facts = jsonLdProductFacts();
+      if (facts.gender) return { gender: facts.gender, source: "jsonld" };
+      var path = "";
+      try { path = decodeURIComponent((w.location && w.location.pathname) || ""); }
+      catch (_) { path = (w.location && w.location.pathname) || ""; }
+      var fromUrl = genderFromText(path);
+      if (fromUrl) return { gender: fromUrl, source: "url" };
+      var crumbText = facts.crumbs.join(" ");
+      if (!crumbText) {
+        var trail = d.querySelector('nav[aria-label*="breadcrumb" i], [class*="breadcrumb" i]');
+        crumbText = trail ? String(trail.textContent || "").slice(0, 300) : "";
+      }
+      var fromCrumbs = genderFromText(crumbText);
+      if (fromCrumbs) return { gender: fromCrumbs, source: "breadcrumb" };
+    } catch (e) { /* §2.5 - an unreadable signal is "unknown", never a reason to fail */ }
+    return { gender: "unknown", source: "none" };
+  }
+
+  /* Tier order: the Shopify variant JSON (the store's own option named "Size") ->
+     the page's JSON-LD (the store's declared run, see productFactsFromLd) -> the DOM
+     control scrape. extractSoldOutSizes() below MUST keep this exact order. */
   function extractHostSizes() {
     var fromVariants = sizesFromVariants(_shopifyVariants, _shopifySizeOptionIndex);
     if (fromVariants.length) return fromVariants;
+    try {
+      var fromLd = sizesFromJsonLd();
+      if (fromLd.length) return fromLd;
+    } catch (e) { /* fall through to the DOM tier */ }
     try { return sizesFromDOM(); } catch (e) { return []; }
   }
 
@@ -1722,6 +1982,8 @@
       if (sizesFromVariants(_shopifyVariants, _shopifySizeOptionIndex).length) {
         return soldOutFromVariants(_shopifyVariants, _shopifySizeOptionIndex);
       }
+      var ldFacts = jsonLdProductFacts();
+      if (ldFacts.sizes.length) return ldFacts.soldOut.slice();
       return soldOutFromDOM();
     } catch (e) {
       console.log("[PEAR widget] stock scrape failed, treating every size as available:", e && e.message);
@@ -1752,7 +2014,7 @@
     var allNumeric = true, allAlpha = true;
     for (var i = 0; i < list.length; i++) {
       if (!/^\d{1,2}$/.test(list[i])) allNumeric = false;
-      if (!/^(?:XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL)$/i.test(list[i])) allAlpha = false;
+      if (!SIZE_TOKEN_ALPHA_RE.test(list[i])) allAlpha = false;
     }
     if (allNumeric) return "numeric";
     if (allAlpha) return "alpha";
@@ -1794,6 +2056,14 @@
      that can half-trust a chart: a partially-read grid is worse than none, because it
      is indistinguishable from a correctly-read one downstream. */
 
+  /* @pear-shared:size-chart-parser BEGIN
+     Everything from here to the matching END marker is copied VERBATIM into
+     scanner/size-chart-parser.js by `npm run sync:size-chart-parser`, so the store
+     scanner reads a size guide with exactly the code the widget reads it with.
+     test/size-chart-parser-sync.test.mjs fails the suite if the two copies differ by a
+     byte, and runs one set of fixtures through both. Edit HERE, then re-run the sync.
+     Inside the block: no reference to anything outside it except `d` (the document)
+     and isPlausibleSizeToken() (the size-token block above, shared the same way). */
   var SIZE_CHART_MAX_TABLES = 8;    // candidate tables scored per page
   var SIZE_CHART_MAX_ROWS   = 40;   // rows read per table
   var SIZE_CHART_MAX_COLS   = 12;   // columns read per row
@@ -2035,15 +2305,66 @@
     return out;
   }
 
+  /* SIZE-SYSTEM COLUMNS -> row aliases. A chart that prints "Size | EU | US | Chest"
+     (or "EU | INT | Chest") carries its own conversion table, and that is the only
+     EU/US equivalence this codebase trusts: numeric conventions differ by brand and by
+     gender (a women's EU 38 is an M, a men's chest-inch 38 is an S/M, an IT 40 is an EU
+     36), so the room never hardcodes a US or men's numeric mapping - it reads the
+     store's own. IT/FR/DE are kept as their OWN keys, never folded into "eu", for the
+     IT-is-EU+4 reason. Checked only AFTER sizeChartMeasureKey(), so "Waist (US)" stays
+     a waist column. Aliases never reach the widget's wire format (encodeSizeChart drops
+     them); they travel only through the scanner's stored charts. */
+  var SIZE_CHART_ALIAS_KEYS = [
+    ["eu",  /(?:^|[^a-z])(?:eu|eur|euro|european)(?:$|[^a-z])|אירופ/i],
+    ["us",  /(?:^|[^a-z])(?:us|usa)(?:$|[^a-z])|אמריק/i],
+    ["uk",  /(?:^|[^a-z])uk(?:$|[^a-z])|בריט/i],
+    ["it",  /(?:^|[^a-z])(?:it|ita|italy|italian)(?:$|[^a-z])|איטל/i],
+    ["fr",  /(?:^|[^a-z])(?:fr|france|french)(?:$|[^a-z])|צרפת/i],
+    ["int", /(?:^|[^a-z])(?:int|intl|international|size|letter)(?:$|[^a-z])|בינלאומ|מידה/i]
+  ];
+  function sizeChartAliasKey(text) {
+    var t = String(text == null ? "" : text).trim();
+    if (!t) return null;
+    for (var i = 0; i < SIZE_CHART_ALIAS_KEYS.length; i++) {
+      if (SIZE_CHART_ALIAS_KEYS[i][1].test(t)) return SIZE_CHART_ALIAS_KEYS[i][0];
+    }
+    return null;
+  }
+  /* The part of a size cell AFTER its leading token: "L (EU 40)" -> {eu:"40"},
+     "M / 38" -> {alt:"38"}. A labelled system wins; an unlabelled second token is kept
+     as "alt", which the room uses only when it is a LETTER (a bare number has no known
+     system). */
+  function sizeChartCellAliases(raw) {
+    var t = String(raw == null ? "" : raw).replace(/ /g, " ").trim();
+    var parts = t.split(/[\/|(,]/);
+    var out = {};
+    for (var i = 1; i < parts.length; i++) {
+      var seg = parts[i].replace(/[)\]]/g, " ").trim();
+      if (!seg) continue;
+      var m = /^([A-Za-z]{2,4})\s*[:.]?\s*(\S+)$/.exec(seg);
+      var key = m ? sizeChartAliasKey(m[1]) : null;
+      var tok = sizeChartSizeToken(m && key ? m[2] : seg);
+      if (!tok) continue;
+      var slot = key && key !== "int" ? key : "alt";
+      if (!out[slot]) out[slot] = tok;
+    }
+    return out;
+  }
+
   /* Grid (already oriented sizes-as-rows) -> the validated rows, or null.
      tableUnit is the unit named by the table's caption/container, used only when
      neither the cells nor the header say.
      PURE apart from the grid it is handed, so the suite drives it with literals. */
   function sizeChartFromGrid(grid, tableUnit) {
     if (!grid || grid.length < 3) return null;      // header + at least two size rows
-    var header = grid[0], cols = [], i, r;
+    var header = grid[0], cols = [], aliasCols = [], i, r;
     for (i = 1; i < header.length; i++) {
       var key = sizeChartMeasureKey(header[i]);
+      if (!key) {
+        var aliasKey = sizeChartAliasKey(header[i]);
+        if (aliasKey) aliasCols.push({ key: aliasKey, idx: i });
+        continue;
+      }
       /* FIRST HEADER WINS on a duplicate key. A chart with two "waist" columns is
          usually body-waist followed by garment-waist; the body one is printed first by
          every convention this codebase has seen, and picking the later one silently
@@ -2054,12 +2375,18 @@
     }
     if (!cols.length) return null;
 
-    var sizes = [];
+    var sizes = [], aliasesBySize = [];
     for (r = 1; r < grid.length; r++) {
       var token = sizeChartSizeToken(grid[r][0]);
       if (!token) continue;                          // a notes row, a unit toggle row
       if (sizes.indexOf(token) !== -1) continue;     // duplicate size row - first wins
       sizes.push(token);
+      var aliases = sizeChartCellAliases(grid[r][0]);
+      for (var a = 0; a < aliasCols.length; a++) {
+        var aTok = sizeChartSizeToken(grid[r][aliasCols[a].idx]);
+        if (aTok && aTok !== token && !aliases[aliasCols[a].key]) aliases[aliasCols[a].key] = aTok;
+      }
+      aliasesBySize.push(aliases);
       for (i = 0; i < cols.length; i++) {
         cols[i].vals.push(parseMeasurementCell(grid[r][cols[i].idx]));
       }
@@ -2067,7 +2394,11 @@
     if (sizes.length < 2) return null;
 
     var rowsOut = [];
-    for (i = 0; i < sizes.length; i++) rowsOut.push({ size: sizes[i] });
+    for (i = 0; i < sizes.length; i++) {
+      var rowOut = { size: sizes[i] };
+      for (var ak in aliasesBySize[i]) { rowOut.aliases = aliasesBySize[i]; break; }
+      rowsOut.push(rowOut);
+    }
     var kept = 0;
 
     for (i = 0; i < cols.length; i++) {
@@ -2251,6 +2582,7 @@
     if (!parts.length) return "";
     return (chart.unit || "cm") + ";" + (chart.source || "generic") + ";" + parts.join("|");
   }
+  /* @pear-shared:size-chart-parser END */
 
   function optionValueAt(variant, idx) {
     if (idx === 0) return variant && variant.option1;
@@ -2845,6 +3177,11 @@
        note. This is the first moment the shopper has asked for anything, so a DOM walk
        costs them nothing they did not request, and the page-load path stays untouched. */
     var hostSizeChart = encodeSizeChart(extractSizeChart());
+    /* Phase 0 measurement signals - see canonicalStoreHost()/garmentGenderSignal(). */
+    var storeHost = canonicalStoreHost(w.location && w.location.hostname);
+    var genderSignal = garmentGenderSignal();
+    console.log("[PEAR widget] store host:", storeHost || "(none)",
+      "| garment gender:", genderSignal.gender, "(" + genderSignal.source + ")");
     console.log("[PEAR widget] host product sizes:", hostSizes.length ? hostSizes.join("/") : "(none readable)",
       "| run type:", hostSizeRunType,
       "| sold out:", hostSoldOut.length ? hostSoldOut.join("/") : "(none detected)",
@@ -2916,6 +3253,14 @@
          evidence" rather than as a claim; the room then uses its own vetted matrix,
          which is exactly the behaviour that shipped before this existed. */
       (hostSizeChart ? "&garment_size_chart=" + encodeURIComponent(hostSizeChart) : "") +
+      /* Which store this is, canonicalised (the store_size_charts key), and who the
+         garment is cut for with the evidence tier that said so. The room falls back to
+         a STORED chart for this host only when no chart arrived above, and only as a
+         tie-break (CLAUDE.md §2.5b). "unknown" is sent explicitly so the room can tell
+         "we looked and could not tell" from "this widget build predates the field". */
+      (storeHost ? "&store_host=" + encodeURIComponent(storeHost) : "") +
+      "&garment_gender=" + encodeURIComponent(genderSignal.gender) +
+      "&garment_gender_source=" + encodeURIComponent(genderSignal.source) +
       (COMPOSITE_PARAM ? "&composite=" + COMPOSITE_PARAM : "") +
       (REQUIRE_BOTH_VIEWS ? "&require_both_views=1" : "") +
       (DEMO_GATE ? "&demo_gate=1" : "") +

@@ -32,6 +32,7 @@ import { supabase } from "./lib/supabase.js";
    field on classifyFrontBackDetailed() (short version: that one is stamped with
    CLASSIFIER_PROMPT_VERSION, and widening it re-classifies the whole catalog). */
 import { classifyGarmentFull } from "./lib/garment-category.js";
+import { makeStoreSizeChartHandler } from "./lib/store-size-charts.js";
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -3111,6 +3112,13 @@ app.post("/api/store-catalog", storeCatalogLimiter, async (req, res) => {
     res.status(500).json({ error: "query_failed", message: err?.message || String(err) });
   }
 });
+
+/* The store's own size guides, captured once per store by the scanner
+   (`--size-charts --save`, table from archive/supabase_setup_v15.sql). The room calls
+   this ONLY when the widget could not read a chart off the product page, and applies
+   the result ONLY as the fine-tune tie-break (CLAUDE.md §2.5b). Clamps are re-applied
+   on every read and every failure answers an empty list - see lib/store-size-charts.js. */
+app.get("/api/store-size-chart", storeCatalogLimiter, makeStoreSizeChartHandler(() => supabase));
 
 app.all("/api/*", (req, res) => {
   // Previously silent - a 404 here left zero trace in the server logs, making

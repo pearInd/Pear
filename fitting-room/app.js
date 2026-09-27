@@ -702,6 +702,23 @@ let pendingSoldOutForImg = undefined;        // string | undefined
    reason, and the Complete-the-Look path is covered anyway: the widget re-sends this
    field on every correction, including as "" to clear it. */
 let pendingSizeChart = undefined;            // string | Array | undefined (none arrived yet)
+/* ── PHASE 0/1 STORE SIGNALS (docs/superpowers/specs/2026-09-26-store-size-guides-phase0-1.md)
+   pendingStoreHost      the storefront's canonical host (pear-widget.js: canonicalStoreHost),
+                         the key the scanner files that store's size guides under.
+   pendingGarmentGender  who the garment is cut for - "men"|"women"|"unisex"|"unknown" - read
+                         off the PDP's JSON-LD audience, URL path or breadcrumb, never
+                         guessed. MEASURED, and consulted for exactly one decision: which of
+                         a store's STORED charts (if any) is this garment's. It never
+                         touches the height/weight kernel, the kids/adult guard or the fit
+                         prompt.
+   storedSizeCharts      GET /api/store-size-chart's answer for pendingStoreHost:
+                         undefined until it lands, [] for "none", else the charts. Used by
+                         resolvedStoreSizeChart() ONLY when the widget sent no chart. */
+let pendingStoreHost = undefined;            // string | undefined
+let pendingGarmentGender = undefined;        // "men" | "women" | "unisex" | "unknown" | undefined
+let pendingGarmentGenderSource = undefined;  // "jsonld" | "url" | "breadcrumb" | "none" | undefined
+let storedSizeCharts = undefined;            // Array<object> | undefined (not fetched / not landed yet)
+let storedSizeChartsHost = undefined;        // the host storedSizeCharts was requested for
 let focusMode = false;
 
 /* Multi-Image Product Gallery Sync - which product angle the live engine is warping.
@@ -1708,9 +1725,14 @@ function parseStoreSizeChart(raw) {
    BY REFERENCE (not a copy) whenever there is nothing to apply.
 
    FOUR RULES, each of which is a refusal:
-     1. Rows are matched by normalised size TOKEN. A store row naming a size the base
-        chart doesn't have is ignored - bestSize can only ever be one of the base
-        chart's own rows, so a row nothing can select is not worth carrying.
+     1. Rows are matched by CANONICAL size token (canonicalSizeToken: "2XL" is "XXL"),
+        or by an EU/US alias the store's own chart declared for that row
+        (storeChartTokenMap - letters always, an EU number only onto an EU chart). A
+        store row that answers to no size the base chart has is ignored - bestSize can
+        only ever be one of the base chart's own rows, so a row nothing can select is
+        not worth carrying. THE BUG THE ALIASES CLOSE: a store printing "2XL" or
+        "EU 48 | M" had those rows silently dropped, because the raw token was compared
+        and matched nothing - the overlay looked applied and did nothing.
      2. A column is written only when the store supplied BOTH bounds, both are finite,
         min <= max, and both survive STORE_CHART_CLAMPS. A partial chart (chest only)
         leaves waist and legs on ours.
@@ -1732,17 +1754,13 @@ function applyStoreChartOverlay(baseChart, storeRows) {
     if (!Array.isArray(baseChart) || !baseChart.length) return baseChart;
     if (!Array.isArray(storeRows) || !storeRows.length) return baseChart;
 
-    const byToken = new Map();
-    for (const r of storeRows) {
-      const token = parseSizeList([r && r.size])[0];
-      if (!token || byToken.has(token)) continue;   // first spelling of a size wins
-      byToken.set(token, r);
-    }
+    const numericBase = baseChart.every((row) => /^\d+$/.test(String(row && row.size)));
+    const byToken = storeChartTokenMap(storeRows, numericBase);
     if (!byToken.size) return baseChart;
 
     let touched = 0;
     const out = baseChart.map((row) => {
-      const token = parseSizeList([row && row.size])[0];
+      const token = canonicalSizeToken(row && row.size);
       const store = token ? byToken.get(token) : undefined;
       if (!store) return row;                        // pass through BY REFERENCE
       let next = null;
@@ -2245,19 +2263,305 @@ function resolvedSoldOutSizes() {
   return parseSizeList(pending);
 }
 
+/* ══ THE STORE'S STORED SIZE GUIDES - Phase 1 fallback, Phase 0 measurement ════════
+   The widget reads a chart off the PDP only when one is in the DOM at click time; most
+   stores keep their guide on a separate page or behind a click. The scanner now
+   captures those once per store (scanner/size-charts.js -> store_size_charts ->
+   GET /api/store-size-chart). This region decides WHICH stored chart, if any, belongs
+   to the garment in front of the shopper.
+
+   WHAT DOES NOT CHANGE (CLAUDE.md §2.5b, verbatim in force): whatever is picked here
+   reaches calculateSize() through resolvedStoreSizeChart() and applyStoreChartOverlay()
+   exactly like a widget chart does - fine-tune columns only, on rows the height/weight
+   kernel already admitted. A stored chart is used ONLY when the widget sent none: the
+   product page's own table is more specific evidence than a store-wide guide.
+
+   EVERY AMBIGUITY ABSTAINS (CLAUDE.md §2.5), and abstaining is free - it is the vetted
+   default matrix, i.e. the behaviour before this existed:
+     · kids product            -> none (CHILD_SIZE_CHART takes no overlay at all)
+     · garment type            -> the same isPantsProduct() verdict calculateSize()
+                                  routes on; tops charts for everything else
+     · garment gender known    -> that gender's chart, else a unisex one, else an
+                                  unlabelled one ONLY if the store has no gendered chart
+                                  of that type at all
+     · garment gender unknown  -> unisex / unlabelled only; a store that publishes men's
+                                  AND women's charts is never guessed between
+     · size overlap            -> the chart must share >= 2 sizes with the product's own
+                                  list (when the list is known) - the check that catches
+                                  the right store, wrong chart. */
+
+/* Mirrors canonicalStoreHost() in pear-widget.js, lib/store-size-charts.js and
+   scanner/size-charts.js - CLAUDE.md §3 lockstep; the store_size_charts key. */
+function canonicalStoreHost(raw) {
+  let h = String(raw == null ? "" : raw).trim().toLowerCase();
+  if (!h) return "";
+  h = h.replace(/^[a-z][a-z0-9+.-]*:\/\//, "").split(/[/?#]/)[0];
+  h = h.replace(/^[^@]*@/, "").replace(/:\d+$/, "").replace(/\.$/, "");
+  h = h.replace(/^(?:www\d*|m)\./, "");
+  return /^[a-z0-9.-]+$/.test(h) && h.indexOf(".") > 0 ? h : "";
+}
+
+/** @returns {"men"|"women"|"unisex"|"unknown"} */
+function normalizeGarmentGender(raw) {
+  const g = String(raw == null ? "" : raw).trim().toLowerCase();
+  return g === "men" || g === "women" || g === "unisex" ? g : "unknown";
+}
+
+/* The active garment's gender signal - activeItem's once it carries one, else the
+   open-time reading. Measured, never guessed; "unknown" is the common, correct answer. */
+function resolvedGarmentGender() {
+  const item = typeof activeItem !== "undefined" ? activeItem : null;
+  if (item && item.gender) return normalizeGarmentGender(item.gender);
+  return normalizeGarmentGender(typeof pendingGarmentGender !== "undefined" ? pendingGarmentGender : undefined);
+}
+
+/* ONE SIZE, ONE SPELLING. "2XL" and "XXL", "3XS" and "XXXS" are the same size spelled
+   two ways by two stores (adidas's JSON-LD says 2XS...3XL; our ladder says XXL); a raw
+   compare silently overlays nothing - CLAUDE.md §2.2's discipline, applied to sizes.
+   Trim + uppercase first (parseSizeList's own normalisation), then the numeric-X
+   prefix is expanded. Never maps a NUMBER to a letter - that is a convention, not a
+   spelling, and conventions only arrive through a chart's own aliases. */
+function canonicalSizeToken(raw) {
+  const t = parseSizeList([raw])[0] || "";
+  const m = /^([2-5])X([SL])$/.exec(t);
+  return m ? "X".repeat(Number(m[1])) + m[2] : t;
+}
+
+/* EU/US ALIASES - which OTHER tokens a store row may answer to.
+   A store chart printed "Size | EU | US | Chest" carries its own conversion; the
+   scanner stores it as row.aliases ({eu, us, uk, it, fr, int, alt}). Two rules keep
+   that from ever mis-matching:
+     · a LETTER alias is always usable - letters are one system everywhere;
+     · a NUMBER alias is usable only when it is labelled "eu" AND the chart it is being
+       laid over is itself numeric (ADULT_PANTS_SIZE_CHART's EU ladder). A US 8, a UK
+       10, an IT 42 or an unlabelled "38" each mean different bodies per brand and per
+       gender, so they never match a letter or an EU row.
+   The map is built in two passes: every row's OWN size claims its token first, then
+   aliases claim only what nobody's own size holds - so an "S/M" row's alias can never
+   take M from a real M row. First claim wins throughout.
+   @returns {Map<string, object>} canonical token -> store row */
+function storeChartTokenMap(storeRows, numericBase) {
+  const byToken = new Map();
+  for (const r of storeRows) {
+    const token = canonicalSizeToken(r && r.size);
+    if (!token || byToken.has(token)) continue;   // first spelling of a size wins
+    byToken.set(token, r);
+  }
+  for (const r of storeRows) {
+    const aliases = r && r.aliases && typeof r.aliases === "object" ? r.aliases : null;
+    if (!aliases) continue;
+    for (const key of Object.keys(aliases)) {
+      const token = canonicalSizeToken(aliases[key]);
+      if (!token || byToken.has(token)) continue;
+      const numeric = /^\d+$/.test(token);
+      if (numeric && !(numericBase && key === "eu")) continue;
+      if (!numeric && numericBase) continue;      // a letter never lands on an EU/waist row
+      byToken.set(token, r);
+    }
+  }
+  return byToken;
+}
+
+/* The garment's chart TYPE preference, from the same verdicts calculateSize() routes
+   on - so a stored chart can never be chosen for a different garment region than the
+   base chart it will be laid over. */
+function storedChartTypePrefs(sizes, item) {
+  const title = typeof resolvedGarmentTitle === "function" ? resolvedGarmentTitle() : "";
+  const cat = typeof currentGarmentCategory !== "undefined" ? currentGarmentCategory : null;
+  const pants = typeof isPantsProduct === "function" && isPantsProduct(sizes, title, cat, item);
+  if (!pants) return ["tops"];
+  const jeansish = /jean|denim|ג'ינס|גינס/.test(_normApos(title || ""));
+  return jeansish ? ["jeans", "bottoms"] : ["bottoms", "jeans"];
+}
+
+/**
+ * The stored chart for the active garment, or none - see the region comment above for
+ * every rule. Pure over module state (all typeof-guarded, CLAUDE.md §2.7).
+ * @returns {{rows: Array<object>, chart: object|null, reason: string}}
+ */
+function pickStoredSizeChart() {
+  const none = (reason) => ({ rows: [], chart: null, reason });
+  try {
+    const charts = typeof storedSizeCharts !== "undefined" ? storedSizeCharts : undefined;
+    if (!Array.isArray(charts) || !charts.length) return none("no stored chart for this store");
+    const item = typeof activeItem !== "undefined" ? activeItem : null;
+    const sizes = typeof resolvedGarmentSizes === "function" ? resolvedGarmentSizes() : [];
+    if (isKidsProduct(sizes, resolvedGarmentAgeGroup())) return none("kids product - the child chart takes no overlay");
+    const gender = resolvedGarmentGender();
+    for (const type of storedChartTypePrefs(sizes, item)) {
+      const pool = charts.filter((c) => c && c.age_group === "adult" && c.garment_type === type &&
+        Array.isArray(c.rows) && c.rows.length);
+      if (!pool.length) continue;
+      const gendered = pool.some((c) => c.gender === "men" || c.gender === "women");
+      let pick = null;
+      if (gender === "men" || gender === "women") pick = pool.find((c) => c.gender === gender);
+      if (!pick) pick = pool.find((c) => c.gender === "unisex");
+      if (!pick && !gendered) pick = pool.find((c) => c.gender === "unknown");
+      if (!pick) {
+        return none(gendered
+          ? `store has gendered ${type} charts, garment gender is ${gender} - not guessing`
+          : `no usable ${type} chart`);
+      }
+      let rows = pick.rows.map((r) => ({ ...r, aliases: r && r.aliases ? { ...r.aliases } : undefined }));
+      /* The ONE numeric convention this file already vets: FOX's women's tops ladder
+         (WOMEN_TOPS_EU_SIZE_CHART, EU 34-44 -> XS-XXL). Applied only to a chart the
+         store itself labelled women's tops, and only as an alias beside the store's
+         own token - never to a men's, unlabelled or bottoms chart, where the same
+         number means another body. */
+      if (pick.gender === "women" && type === "tops") {
+        rows = rows.map((r) => {
+          const eu = WOMEN_TOPS_EU_SIZE_CHART.find((w) => String(w.euSize) === canonicalSizeToken(r.size));
+          if (!eu || (r.aliases && r.aliases.int)) return r;
+          return { ...r, aliases: { ...(r.aliases || {}), int: eu.size } };
+        });
+      }
+      if (sizes.length >= 2) {
+        const own = new Set(sizes.map(canonicalSizeToken));
+        const tokens = new Set();
+        for (const r of rows) {
+          tokens.add(canonicalSizeToken(r.size));
+          for (const v of Object.values(r.aliases || {})) tokens.add(canonicalSizeToken(v));
+        }
+        const overlap = [...own].filter((t) => tokens.has(t)).length;
+        if (overlap < 2) return none(`stored ${pick.gender}/${type} chart shares ${overlap} size(s) with this product - not its chart`);
+      }
+      return { rows, chart: pick, reason: `stored ${pick.gender}/${pick.age_group}/${type} chart (${pick.source || "scanner"})` };
+    }
+    return none("no stored chart of this garment's type");
+  } catch (e) {
+    return none("stored-chart pick failed: " + (e && e.message ? e.message : e));
+  }
+}
+
+/* The one GET this session makes for the store's guides - de-duped by host, since
+   parseHandoff() runs several times. Every failure (older server, migration not run,
+   network) lands on [] = the default matrix. Re-runs the calculator only when a chart
+   actually arrived AND Screen 1 is showing - the same rule as the widget-chart
+   correction in the message listener. */
+function loadStoredSizeCharts(host) {
+  const h = canonicalStoreHost(host);
+  if (!h || storedSizeChartsHost === h || typeof fetch !== "function") return;
+  storedSizeChartsHost = h;
+  fetch("/api/store-size-chart?host=" + encodeURIComponent(h))
+    .then((r) => (r && r.ok ? r.json() : null))
+    .then((data) => {
+      const charts = data && Array.isArray(data.charts) ? data.charts : [];
+      storedSizeCharts = charts;
+      console.log("[PEAR] stored size charts for " + h + ":",
+        charts.length ? charts.map((c) => `${c.gender}/${c.age_group}/${c.garment_type}`).join(", ")
+                      : "(none" + (data && data.note ? " - " + data.note : "") + " - the vetted default matrix applies)");
+      if (!charts.length) return;
+      const form = typeof $ === "function" ? $("sizeForm") : null;
+      if (form && !form.hidden) { try { calculateSize(); } catch { /* the calculator's own guards own this */ } }
+    })
+    .catch((e) => {
+      storedSizeCharts = [];
+      console.log("[PEAR] stored size charts unavailable - the vetted default matrix applies:", e?.message || e);
+    });
+}
+
+/* ── PHASE 0: STORE CHART vs DEFAULT, measured and logged, never acted on ─────────
+   MIRRORS the ×0.5 tie-break loop inside calculateSize() (the block that starts at the
+   `const candidates = ...` extract marker, CLAUDE.md §2.6). It exists so the
+   comparison below can score the SAME candidates against BOTH charts without editing
+   that marked block; test/stored-size-chart.test.mjs runs both on the same inputs and
+   fails if they ever disagree. */
+function fineTunePickForDiagnostics(candidates, numericPants, chest, waist, legs) {
+  if (!candidates || !candidates.length) return null;
+  const outside = (v, lo, hi) => (!v ? 0 : v < lo ? (lo - v) * 0.5 : v > hi ? (v - hi) * 0.5 : 0);
+  let best = candidates[0].size, min = Infinity;
+  for (const row of candidates) {
+    const pen = numericPants
+      ? outside(waist, row.minWaist, row.maxWaist)
+      : outside(chest, row.minChest, row.maxChest) + outside(waist, row.minWaist, row.maxWaist) +
+        outside(legs, row.minLegs, row.maxLegs);
+    if (pen < min) { min = pen; best = row.size; }
+  }
+  return best;
+}
+
+let _storeChartDiagKey = "";
+/* Logs, once per distinct outcome (not per keystroke), how the store's chart differs
+   from ours and whether it moved the recommendation. Pure logging - it returns the
+   summary for tests and changes nothing the calculator decided. */
+function logStoreChartComparison({ source, baseChart, overlaidChart, storeRows, height, weight,
+  chest, waist, legs, numericPants, recommended }) {
+  try {
+    if (!Array.isArray(storeRows) || !storeRows.length) return null;
+    const numericBase = baseChart.every((r) => /^\d+$/.test(String(r.size)));
+    const tokenMap = storeChartTokenMap(storeRows, numericBase);
+    const matchedStoreRows = new Set();
+    const bandDeltas = [];
+    baseChart.forEach((b) => {
+      const s = tokenMap.get(canonicalSizeToken(b.size));
+      if (s) matchedStoreRows.add(s);
+      const o = overlaidChart.find((r) => r.size === b.size);
+      if (!o || o === b) return;
+      for (const cap of ["Chest", "Waist", "Hips", "Legs"]) {
+        if (typeof b["min" + cap] !== "number" || o["min" + cap] === b["min" + cap] && o["max" + cap] === b["max" + cap]) continue;
+        const d = ((o["min" + cap] + o["max" + cap]) - (b["min" + cap] + b["max" + cap])) / 2;
+        bandDeltas.push(`${b.size} ${cap.toLowerCase()} ${d >= 0 ? "+" : ""}${Math.round(d * 10) / 10}cm`);
+      }
+    });
+    const unmatched = storeRows.filter((r) => !matchedStoreRows.has(r)).map((r) => String(r && r.size));
+    const fits = (chart) => chart.filter((r) => coreHwPenalty(r, height, weight) === 0);
+    const defaultPick = fineTunePickForDiagnostics(fits(baseChart), numericPants, chest, waist, legs);
+    const storePick = fineTunePickForDiagnostics(fits(overlaidChart), numericPants, chest, waist, legs);
+    const idle = numericPants ? !waist : !chest && !waist && !legs;
+    const summary = {
+      source,
+      matchedRows: `${matchedStoreRows.size}/${storeRows.length} store rows matched our ${baseChart.length}`,
+      unmatchedStoreSizes: unmatched.length ? unmatched.join("/") : "(none)",
+      bandDeltas: bandDeltas.length ? bandDeltas.join(", ") : "(identical bands)",
+      defaultPick, storePick,
+      disagree: defaultPick !== storePick,
+      tieBreak: idle ? "idle - no optional measurement entered, so the chart cannot move the size" : "active",
+      recommended,
+    };
+    const key = JSON.stringify(summary);
+    if (key !== _storeChartDiagKey) {
+      _storeChartDiagKey = key;
+      console.log("[PEAR] store chart vs default:", summary);
+    }
+    return summary;
+  } catch (e) {
+    return null;   // measurement only - it may never cost the shopper anything
+  }
+}
+
+/* Where the chart calculateSize() is about to overlay came from - for the Phase 0 log. */
+function resolvedStoreSizeChartSource() {
+  const item = typeof activeItem !== "undefined" ? activeItem : null;
+  const widget = item && item.sizeChart != null ? item.sizeChart
+    : (typeof pendingSizeChart !== "undefined" ? pendingSizeChart : undefined);
+  if (widget !== undefined && parseStoreSizeChart(widget).length) return "widget (product page)";
+  const stored = pickStoredSizeChart();
+  return stored.rows.length ? stored.reason : "none - " + stored.reason;
+}
+
 /* The active product's own published size chart, wherever it currently lives -
    activeItem once Screen 2 exists, pendingSizeChart before that. Same two-stage shape
    and the same CLAUDE.md §2.7 typeof guards as resolvedSoldOutSizes() directly above,
    for the same reason: this region is executed as a standalone slice by several
    harnesses with no module scope around it, so a bare reference to either binding is a
    ReferenceError there rather than a lint nit.
-   @returns {Array<object>} decoded rows, or [] when no readable chart arrived */
+
+   THE WIDGET'S CHART WINS; THE STORE'S STORED GUIDE IS THE FALLBACK. A chart read off
+   this very product page is more specific than a store-wide guide, so a stored chart
+   (pickStoredSizeChart) is consulted only when the widget's reading decodes to nothing
+   - never sent, or re-checked and sent as "" ("this page publishes no chart we can
+   read"). Both reach calculateSize() the same way and both are tie-break only.
+   @returns {Array<object>} decoded rows, or [] when no readable chart exists */
 function resolvedStoreSizeChart() {
   const item = typeof activeItem !== "undefined" ? activeItem : null;
-  if (item && item.sizeChart != null) return parseStoreSizeChart(item.sizeChart);
-  const pending = typeof pendingSizeChart !== "undefined" ? pendingSizeChart : undefined;
-  if (pending === undefined) return [];
-  return parseStoreSizeChart(pending);
+  let rows = [];
+  if (item && item.sizeChart != null) rows = parseStoreSizeChart(item.sizeChart);
+  else {
+    const pending = typeof pendingSizeChart !== "undefined" ? pendingSizeChart : undefined;
+    if (pending !== undefined) rows = parseStoreSizeChart(pending);
+  }
+  if (rows.length) return rows;
+  return typeof pickStoredSizeChart === "function" ? pickStoredSizeChart().rows : [];
 }
 
 /** @param {string|null|undefined} size @returns {boolean} true only for a size POSITIVELY known gone. */
@@ -2691,9 +2995,8 @@ function calculateSize() {
      CHILD_SIZE_CHART is deliberately NOT overlaid: it carries no measurement columns
      at all and the fine-tune pass is skipped outright on the child path, so an overlay
      there would be a clause that cannot reach the wire (CLAUDE.md RULE 0's spirit). */
-  const adultChart = applyStoreChartOverlay(
-    useNumericPantsChart ? pantsChartForSizes(garmentSizes) : ZARA_SIZE_CHART,
-    resolvedStoreSizeChart());
+  const baseAdultChart = useNumericPantsChart ? pantsChartForSizes(garmentSizes) : ZARA_SIZE_CHART;
+  const adultChart = applyStoreChartOverlay(baseAdultChart, resolvedStoreSizeChart());
   /* Read by formatSizeLabel(), which must never decorate a numeric pants size. */
   currentSizeIsNumericPants = useNumericPantsChart;
   /* Computed BEFORE the garment constraint below, and kept: this is the shopper's own
@@ -2831,6 +3134,18 @@ function calculateSize() {
         return dn < dc || (dn === dc && n < closest) ? n : closest;
       }));
     }
+  }
+
+  /* PHASE 0 - MEASURED, NEVER ACTED ON. When a store chart (the widget's, or a stored
+     guide) was in play, log how its bands differ from ours and whether the tie-break
+     would land differently on each - the evidence a later decision about store charts
+     needs. It reads bestSize and returns; it cannot change what was computed above. */
+  if (currentSizeCategory === "adult" && typeof logStoreChartComparison === "function") {
+    logStoreChartComparison({
+      source: typeof resolvedStoreSizeChartSource === "function" ? resolvedStoreSizeChartSource() : "unknown",
+      baseChart: baseAdultChart, overlaidChart: adultChart, storeRows: resolvedStoreSizeChart(),
+      height, weight, chest, waist, legs, numericPants: useNumericPantsChart, recommended: bestSize,
+    });
   }
 
   sizeResult.innerText = formatSizeLabel(bestSize);
@@ -3201,6 +3516,12 @@ function parseHandoff() {
          chart) leaves it undefined, which resolvedStoreSizeChart() reads as "no chart
          evidence" - the default global matrix, i.e. the pre-feature behaviour. */
       sizeChart: q.get("garment_size_chart") || undefined,
+      /* Phase 0 store signals (pear-widget.js: canonicalStoreHost / garmentGenderSignal).
+         Pure param reads, same as the fields above; canonicalised again on use because
+         the URL is not the only possible sender. Absent = an older widget build. */
+      storeHost: q.get("store_host") || undefined,
+      garmentGender: q.get("garment_gender") || undefined,
+      garmentGenderSource: q.get("garment_gender_source") || undefined,
       /* The product's own title, carried explicitly rather than left to `name` alone.
          ?garment_title= is the v2 spelling pear-widget.js now sends alongside the
          original ?garment_name=; both carry the same string, so either build of the
@@ -3240,12 +3561,26 @@ function parseHandoff() {
        a chance to render a size-guide modal, so it is the better of the two readings
        and a late re-parse must not clobber it with the open-time string. */
     if (pendingSizeChart === undefined && result.sizeChart !== undefined) pendingSizeChart = result.sizeChart;
+    /* Same SEEDS-NEVER-OVERWRITES rule. The host also kicks off the one stored-chart
+       lookup this session makes (loadStoredSizeCharts() de-dupes by host, so the
+       repeated parseHandoff() calls cost nothing). */
+    if (pendingStoreHost === undefined && result.storeHost !== undefined) {
+      pendingStoreHost = canonicalStoreHost(result.storeHost) || undefined;
+    }
+    if (pendingGarmentGender === undefined && result.garmentGender !== undefined) {
+      pendingGarmentGender = normalizeGarmentGender(result.garmentGender);
+      pendingGarmentGenderSource = result.garmentGenderSource || "none";
+    }
+    if (pendingStoreHost) loadStoredSizeCharts(pendingStoreHost);
     console.log("[PEAR] parseHandoff() - product signals for the size calculator:", {
       sizes: pendingSizes || "(none readable on the PDP)",
       sizeRunType: pendingSizeRunType || "(none)",
       soldOut: pendingSoldOutSizes || "(none flagged - every size treated as available)",
       sizeChart: pendingSizeChart || "(none readable - the vetted default matrix applies)",
       title: pendingTitle || "(none)",
+      storeHost: pendingStoreHost || "(none - no stored-chart lookup)",
+      garmentGender: (pendingGarmentGender || "(not sent)") +
+        (pendingGarmentGenderSource ? " via " + pendingGarmentGenderSource : ""),
     });
     // CHECK B instrumentation - the exact point imgBack is resolved, showing which of
     // the three sources won, so a blank back can be traced to its origin immediately.

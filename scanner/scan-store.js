@@ -33,23 +33,37 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-if (!GEMINI_API_KEY) {
+/* ── MODES ────────────────────────────────────────────────────────────────────
+     node scan-store.js <store-url>                          image classification (default)
+     node scan-store.js --size-charts <store-url>            size-guide DRY RUN: report only,
+                                                             needs no key and writes nothing
+     node scan-store.js --size-charts --save <store-url>     capture into store_size_charts
+     --max-products=N                                        size-chart sample size (default 12)
+   The size-chart mode never calls Gemini and needs Supabase only with --save, so the
+   env checks below are per mode - a dry run must work on a laptop with no .env. */
+const ARGS = process.argv.slice(2);
+const SIZE_CHART_MODE = ARGS.includes("--size-charts");
+const SIZE_CHART_SAVE = ARGS.includes("--save");
+const MAX_PRODUCTS_ARG = (ARGS.find((a) => a.startsWith("--max-products=")) || "").split("=")[1];
+
+if (!SIZE_CHART_MODE && !GEMINI_API_KEY) {
   console.error("✗ GEMINI_API_KEY is not set - copy .env.example to .env and fill it in.");
   process.exit(1);
 }
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+if ((!SIZE_CHART_MODE || SIZE_CHART_SAVE) && (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY)) {
   console.error("✗ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are not set - copy .env.example to .env and fill them in.");
   process.exit(1);
 }
 
-const storeUrl = process.argv[2];
+const storeUrl = ARGS.find((a) => !a.startsWith("--"));
 if (!storeUrl) {
   console.error("Usage: node scan-store.js <store-url>");
+  console.error("       node scan-store.js --size-charts [--save] [--max-products=N] <store-url>");
   console.error("Example: node scan-store.js https://fox.co.il");
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+const supabase = !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY ? null : createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   realtime: { enabled: false },
   global: {
     headers: {},
@@ -937,7 +951,26 @@ async function main() {
   }
 }
 
-main().catch((err) => {
+/* ── size-guide mode (scanner/size-charts.js) ─────────────────────────────── */
+async function sizeChartMain() {
+  const { discoverSizeCharts, saveSizeChartRecords, formatReport } = await import("./size-charts.js");
+  const maxProducts = Math.max(1, Math.min(50, parseInt(MAX_PRODUCTS_ARG, 10) || 12));
+  console.log(`Size-guide ${SIZE_CHART_SAVE ? "CAPTURE" : "DRY RUN"}: ${storeUrl} (sampling up to ${maxProducts} product pages)
+`);
+  const { report, records } = await discoverSizeCharts(storeUrl, { maxProducts });
+  console.log(formatReport(report));
+  if (!SIZE_CHART_SAVE) {
+    console.log(`
+Dry run - nothing written. ${records.length} chart(s) would be stored; re-run with --save to capture them.`);
+    return;
+  }
+  const res = await saveSizeChartRecords(supabase, records);
+  console.log(res.saved ? `
+✓ saved ${res.saved} chart(s) to store_size_charts` : `
+Nothing saved (${res.skipped || "no charts"})`);
+}
+
+(SIZE_CHART_MODE ? sizeChartMain() : main()).catch((err) => {
   console.error("✗ Scan failed:", err?.message || err);
   process.exit(1);
 });

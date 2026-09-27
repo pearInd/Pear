@@ -400,6 +400,11 @@ const SUITES = [
   ["otp-single-verification", "otp-single-verification.test.mjs"],
   ["size-chart-scrape", "size-chart-scrape.test.mjs"],
   ["size-chart-overlay", "size-chart-overlay.test.mjs"],
+  ["jsonld-sizes", "jsonld-sizes.test.mjs"],
+  ["size-chart-parser-sync", "size-chart-parser-sync.test.mjs"],
+  ["scanner-size-charts", "scanner-size-charts.test.mjs"],
+  ["store-size-chart-api", "store-size-chart-api.test.mjs"],
+  ["stored-size-chart", "stored-size-chart.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

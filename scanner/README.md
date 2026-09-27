@@ -74,6 +74,40 @@ a 2s delay runs between calls, and a 429 (rate limited) response is retried
 after a 30s wait, up to 3 attempts, before falling back to `front` so a
 single stubborn image never stalls the whole scan.
 
+## Size guides (`--size-charts`)
+
+A second, independent mode finds the store's OWN size guide - the chest/waist/hip
+table per size - so the fitting room can use it when the widget cannot read one off
+the product page. It never calls Gemini.
+
+```
+# DRY RUN - a coverage report only. Needs no .env and writes nothing.
+node scanner/scan-store.js --size-charts https://store-url.com
+node scanner/scan-store.js --size-charts --max-products=20 https://store-url.com
+
+# CAPTURE - writes into store_size_charts (run archive/supabase_setup_v15.sql first;
+# without it the scanner prints a pointer to that file and exits cleanly).
+node scanner/scan-store.js --size-charts --save https://store-url.com
+```
+
+It samples product pages (Shopify `/products.json`, else the sitemap, else the
+homepage's product links), and for each capture path reports whether it succeeded:
+`inline_table` (a table in the PDP's HTML), `product_description` (a table in a
+Shopify description), `linked_page` (a same-site "size guide" page the PDP links to,
+or `/pages/size-guide` and friends), `image_chart_detected` (the guide is an image or
+PDF - not parsed yet), `js_app_detected` (a size-chart app or a linkless trigger - the
+content is rendered client-side, or a chart id in the page's embedded state), and
+`blocked_by_bot_protection` when the store answers a plain HTTP client with a challenge
+page or a 403 (the answer is then unknown, not "none"). The last line is
+`COVERAGE_JSON {...}`.
+
+Each table is labelled men/women/unisex/unknown, adult/kids and tops/bottoms/jeans
+from its own heading, tab or container first, then the page. The parser is the
+widget's own, copied mechanically into `size-chart-parser.js` - never edit that file;
+edit `widget/pear-widget.js` and run `npm run sync:size-chart-parser`.
+
+Needs `jsdom` (a dependency here and a devDependency in the repo root).
+
 ## Deploy on Railway
 
 1. Connect this GitHub repo on [railway.app](https://railway.app).
