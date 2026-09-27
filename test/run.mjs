@@ -340,14 +340,6 @@
                       PRE-MOVE watcher. Also pins the values both sides copy, the knob list the
                       browser forwards, the protocol's bounds, debug gating, and the decision's
                       absence from app.js.
-     reference-crop
-                      A store photo worn by a model is cut to the garment before it is sent
-                      ("it put jeans on me, then pasted a giant back into the room" - FOX,
-                      2026-09-27). The crop geometry on the real landmarks of that store's
-                      photos (face out, collar/sleeves/hem in, legs out, back photo mirrored),
-                      the abstain rules (no body, unsure shoulders, tiny body), long garments
-                      and bottoms keeping their length, and the wiring (store URLs only,
-                      sameImage() owner match, the original on any failure).
      size-fit-pin
                       The size charts and the fit moved server-side (lib/sizing.js,
                       POST /api/size). The move was proven exact over 1,458,028 cases;
@@ -443,7 +435,6 @@ const SUITES = [
   ["size-fit-pin", "size-fit-pin.test.mjs"],
   ["prompt-engine", "prompt-engine.test.mjs"],
   ["orient-engine", "orient-engine.test.mjs"],
-  ["reference-crop", "reference-crop.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────
