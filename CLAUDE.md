@@ -63,6 +63,10 @@ rendered hanging open is a worse failure than a wrong tension. In practice
 this means sizing down 1-2 steps on a button-front top can silently drop
 the fit-modifier text (163 free chars on that branch vs. up to ~213 chars
 for the largest size-down phrasing); true-to-size and sizing up always fit.
+The **back** tops anchors carry the same lower-body lock as the front since 2026-09-27
+(the rear asset let the hem run down the legs on every turn - see the lock's note above
+`PLAIN_TEE_ANCHOR`), so on the back the fit sentence sheds when sizing down (printed back:
+down 1-2; plain back: down 2) and lands on true-to-size and every size-up rung.
 This is not a bug — see the comment above the `[P.MED, fitSentence(...)]`
 line in `imageOnlyPrompt()` before "fixing" it by raising its priority,
 which would risk the closure lock shedding instead and reopening the
@@ -94,7 +98,7 @@ Rules for a restore:
   outrank the category anchor is `P.HIGH` or lower.
 - Budget is `PROMPT_MAX_CHARS` (Decart hard-rejects >226 tokens). The category
   anchor alone is 338 chars on tops, 320 on bottoms; with the restored
-  `fitSentence()` clause (§0), a real dispatch ships 338-644 chars on tops and
+  `fitSentence()` clause (§0), a real dispatch ships 338-645 chars on tops and
   320-550 on bottoms depending on size delta and closure. Adding a clause can
   silently evict another one — state the new total in the PR description.
 - Restore order recorded in `IMAGE_ONLY_PROMPT`'s comment: `inpaintLock` first

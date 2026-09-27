@@ -25,7 +25,15 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-const PINNED = "221a5b5835f450b0c12fe8d3037456af0ea1b62b1155c26476e97b24519d912c";
+/* RE-PINNED 2026-09-27 for ONE intended move: the front anchor's lower-body lock added to both
+   back tops anchors (BACK_CATEGORY_ANCHOR.top, PLAIN_BACK_ANCHOR.top - the hem ran down the legs
+   while the rear asset was on the wire; see the lock's note above PLAIN_TEE_ANCHOR). Proven over
+   this exact corpus against the previous engine before re-pinning: of 161,756 prompts, 49,434
+   moved - 32,690 by the lock sentence alone, 16,744 by the lock plus fitSentence() shedding on a
+   size-down rung - and 0 front prompts, 0 bottoms prompts, the look prompt and anything else
+   unchanged. The previous pin (from the pre-move in-browser engine) was
+   221a5b5835f450b0c12fe8d3037456af0ea1b62b1155c26476e97b24519d912c. */
+const PINNED = "78b7ff4bfc0eb769f02c9b87bf8447a39dde4ba6542b0291102c996b91816e8b";
 
 let fails = 0;
 function check(label, cond, detail) {
