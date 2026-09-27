@@ -536,7 +536,12 @@ if (orientPredictBack && orientFlipDecision) {
   check("maybeSwap() lets a face return withdraw a predictive BACK inside the cooldown - and only that",
     /async function maybeSwap\(next, predictive = false\)/.test(watcher) &&
     /const withdrawing = next === "front" && lastSwapPredictive;/.test(watcher) &&
-    /if \(applying \|\| \(Date\.now\(\) - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing\)\) return;/.test(watcher));
+    /if \(applying \|\| \(Date\.now\(\) - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing\)\) \{\s*\n[^\n]*"swap-drop"[^\n]*\n\s*return;\n\s*\}/.test(watcher));
+  /* 2026-09-27: a swap no longer drops on a busy `applying` at once - it waits a bounded
+     ORIENT_SWAP_WAIT_MS for the pose/re-anchor apply to clear (front-reference-guard §11). The
+     cooldown half is unchanged: it drops, and only a withdrawal skips it. */
+  check("...and a busy `applying` is waited out for at most ORIENT_SWAP_WAIT_MS before that check",
+    /if \(applying\) \{\s*\n\s*const waitUntil = Date\.now\(\) \+ ORIENT_SWAP_WAIT_MS;\s*\n\s*while \(applying && Date\.now\(\) < waitUntil\) await new Promise\(\(r\) => setTimeout\(r, 20\)\);\s*\n\s*if \(disposed\) return;/.test(watcher));
 }
 
 console.log("\n── §7 DETECTION IS LOCAL; THE SWAP TIMELINE IS MEASURED ──");
@@ -565,8 +570,10 @@ console.log("\n── §7 DETECTION IS LOCAL; THE SWAP TIMELINE IS MEASURED ─�
 
   const t0 = SRC.indexOf("function traceSwapTimeline(");
   const trace = t0 === -1 ? "" : SRC.slice(t0, SRC.indexOf("\n}\n", t0));
-  check("the swap timeline exists, and costs nothing unless ?orient_debug=1",
-    /if \(!ORIENT_DEBUG\) return null;/.test(trace));
+  /* 2026-09-27: a recorded TEST session (the FLIGHT RECORDER) runs it too - still nothing for a shopper. */
+  check("the swap timeline exists, and costs nothing unless ?orient_debug=1 or a recorded TEST session",
+    /if \(!ORIENT_DEBUG && !record\) return null;/.test(trace) &&
+    /const record = typeof traceOrient === "function" && typeof _trace !== "undefined" && _trace !== null/.test(trace));
   check("...it stamps dispatch, the ack and the first rendered frame presented after it, each with the LOCAL yaw",
     /set\(\) acked/.test(trace) && /requestVideoFrameCallback/.test(trace) &&
     /first rendered frame presented after the ack/.test(trace) && /local \|yaw\|/.test(trace));

@@ -35,6 +35,8 @@ import { promptForRequest, sanitizePromptRequest } from "../../../lib/prompts.js
 
 const MAX_MSGS_PER_SEC = 120;
 const MAX_BODY_CHARS = 65536;
+const MAX_TRACE_CHARS = 262144;
+const TRACE_TTL_S = 7 * 24 * 3600;
 
 /* ── THE SIZE FIT AND THE WIRE PROMPT, ALSO HERE (2026-09-27) ─────────────────────────────
    REPORTED: "the whole interface is laggy" after the logic moved server-side. Measured: every
@@ -55,7 +57,24 @@ function corsHeaders(origin) {
   };
 }
 
-/** POST /size and /prompt - exported for the unit test. */
+/* ── A TEST SESSION'S FLIGHT RECORD (2026-09-27) ──────────────────────────────────────────
+   POST /trace: the room's flight recorder (fitting-room/app.js, "FLIGHT RECORDER") posts one
+   record when a TEST session ends - each orientation tick's measurements and the engine's reply,
+   every swap from request to first frame, the output stalls. Kept in KV (binding TRACES) for
+   TRACE_TTL_S and read back with `wrangler kv key list/get --binding TRACES`. The room sends it
+   only for the TEST store key or ?pear_trace=1; this end checks the shape, bounds the size and
+   names the key itself. No TRACES binding = the route answers 404 and stores nothing. */
+async function storeTrace(env, body, json) {
+  if (!env.TRACES || typeof env.TRACES.put !== "function") return json({ error: "off" }, 404);
+  if (!body || typeof body !== "object" || body.v !== 1 || typeof body.id !== "string" || !Array.isArray(body.ev)) {
+    return json({ error: "bad_trace" }, 400);
+  }
+  const id = body.id.replace(/[^a-z0-9-]/gi, "").slice(0, 40) || "x";
+  await env.TRACES.put(`trace:${new Date().toISOString()}:${id}`, JSON.stringify(body), { expirationTtl: TRACE_TTL_S });
+  return json({ ok: true });
+}
+
+/** POST /size, /prompt and /trace - exported for the unit test. */
 export async function handleApi(request, env, route) {
   const origin = request.headers.get("Origin");
   if (!originAllowed(origin, env.ALLOWED_ORIGINS)) return new Response("forbidden", { status: 403 });
@@ -67,14 +86,15 @@ export async function handleApi(request, env, route) {
   let body;
   try {
     const text = await request.text();
-    if (text.length > MAX_BODY_CHARS) return json({ error: "too_large" }, 413);
+    if (text.length > (route === "/trace" ? MAX_TRACE_CHARS : MAX_BODY_CHARS)) return json({ error: "too_large" }, 413);
     body = JSON.parse(text);
   } catch { return json({ error: "bad_json" }, 400); }
   try {
+    if (route === "/trace") return await storeTrace(env, body, json);
     if (route === "/size") return json(computeSizeVerdict(sanitizeSizeEvidence(body)));
     return json({ prompt: promptForRequest(sanitizePromptRequest(body)) });
   } catch {
-    return json({ error: route === "/size" ? "size_failed" : "prompt_failed" }, 500);
+    return json({ error: route === "/size" ? "size_failed" : route === "/trace" ? "trace_failed" : "prompt_failed" }, 500);
   }
 }
 
@@ -103,7 +123,7 @@ export function keyMatches(given, expected) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === "/size" || url.pathname === "/prompt") return handleApi(request, env, url.pathname);
+    if (url.pathname === "/size" || url.pathname === "/prompt" || url.pathname === "/trace") return handleApi(request, env, url.pathname);
     if (url.pathname !== "/orient") return new Response("not found", { status: 404 });
     if (request.headers.get("Upgrade") !== "websocket") return new Response("expected a WebSocket upgrade", { status: 426 });
     if (!originAllowed(request.headers.get("Origin"), env.ALLOWED_ORIGINS)) return new Response("forbidden", { status: 403 });

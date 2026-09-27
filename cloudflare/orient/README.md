@@ -38,3 +38,19 @@ the harness's own `/orient`. Only a `--qa` build accepts a `ws://localhost` URL.
 
 The engine changes with `lib/orient-engine.js`; a change there needs a `wrangler deploy`
 as well as the Vercel deploy, or production keeps deciding with the old engine.
+
+## Test-session flight records (`POST /trace`, since 2026-09-27)
+
+A TEST session (store key `TEST`, or `?pear_trace=1`) posts one record when it ends: every
+orientation tick, swap and link event (CLAUDE.md §2.16). They are kept in the KV namespace bound as
+`TRACES` for 7 days. Without the binding the route answers 404 and stores nothing.
+
+```bash
+npx wrangler kv namespace create TRACES          # once; put the id in wrangler.jsonc's kv_namespaces
+npx wrangler kv key list --binding TRACES --remote
+npx wrangler kv key get "<key>" --binding TRACES --remote
+```
+
+The ping (`{k:"ping"}` → `{k:"pong"}`, `lib/orient-protocol.js`) must be deployed here BEFORE a
+room that pings its link ships - an older Worker never answers it, and the room would replace a
+healthy link on every keepalive.

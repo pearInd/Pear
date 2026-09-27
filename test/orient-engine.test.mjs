@@ -26,7 +26,16 @@
 import { readFileSync } from "node:fs";
 import { runCorpus } from "./orient-replay.mjs";
 
-const PINNED = "4b2ead79da82f69520d245bf054d2e1353051f7ec2cf8e5fd2f14b2c0a65a706";
+/* RE-PINNED 2026-09-27 for ONE intended move, in the BROWSER's half: maybeSwap() now waits a bounded
+   ORIENT_SWAP_WAIT_MS for an in-flight pose/re-anchor apply to clear instead of dropping the swap the
+   engine decided (the early turn fires once per turn - a dropped one left the front on a turned-away
+   body). Proven to be the only move: the current app.js with that wait removed reproduces the
+   previous pin (4b2ead79…a65a706) exactly. Over the full 4,116-session corpus, 2,737 logs changed:
+   the first back view came earlier in 442 sessions, later in 31, appeared in 127 that never had one
+   and vanished from 7 (all 7 in noisy-slowapply, each a back that had landed on the FRONT); FRONT on
+   a turned-away body fell 47% (pose) / 49% (face), BACK on a facing body 20% / 21%. See
+   front-reference-guard §11. */
+const PINNED = "10ef2eae5641aa8347bcdcc7ac6b5d20762ddfd0906693aa0fd787d668359c49";
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -53,7 +62,7 @@ console.log("── §1 every scripted turn behaves as it did before the move �
       filter: (s) => PIN_ENVS.has(s.key.split("|")[1]) && PIN_KNOBS.has(s.search) });
   } finally { [console.log, console.warn, console.error] = quiet; }
   if (process.argv.includes("--print")) { console.log(r.hash); process.exit(0); }
-  check(`${r.scenarios} replayed sessions (${r.events} events) match the pre-move watcher`, r.hash === PINNED,
+  check(`${r.scenarios} replayed sessions (${r.events} events) match the pre-move watcher (+ the 2026-09-27 swap wait)`, r.hash === PINNED,
     `expected ${PINNED}\n        got      ${r.hash}`);
   check("...and the replay is not vacuous (it swaps, holds and re-anchors)",
     r.events > 20000 && [...r.perScenario.values()].some((v) => /apply \{"o":"back"/.test(v)) &&
@@ -98,6 +107,11 @@ console.log("\n── §3 the protocol and the sanitiser ──");
   check("malformed, oversized and unknown messages are dropped without throwing",
     s.handle("not json") === null && s.handle("x".repeat(20000)) === null &&
     s.handle(JSON.stringify({ c: -1, k: "open" })) === null && s.handle(JSON.stringify({ c: 3, k: "boom" })) === null);
+  /* 2026-09-27: the room's keepalive - answered for the connection, no channel, no engine. */
+  check("a ping is answered with its own number and needs no channel",
+    s.handle(JSON.stringify({ k: "ping", q: 42 })) === JSON.stringify({ k: "pong", q: 42 }) &&
+    s.handle(JSON.stringify({ k: "ping", q: "x" })) === JSON.stringify({ k: "pong", q: 0 }) &&
+    s.handle(JSON.stringify({ k: "ping", q: 1e12 })) === JSON.stringify({ k: "pong", q: 0 }) && s.channelCount === 1);
   s.handle(JSON.stringify({ c: 2, k: "close" }));
   check("close frees the channel", s.channelCount === 0);
   for (let c = 1; c <= 40; c++) s.handle(JSON.stringify({ c, k: "open", knobs: {} }));
@@ -211,6 +225,23 @@ console.log("\n── §6 the edge answers /size and /prompt with the SAME modul
     (await call("/prompt", { body: "x".repeat(70000) })).status === 413);
   check("no ALLOWED_ORIGINS refuses everyone (fail closed)",
     (await W.handleApi(new Request("https://rt.pear-ai.io/size", { method: "POST", headers: { Origin: "https://app.pear-ai.io" }, body: "{}" }), {}, "/size")).status === 403);
+
+  /* POST /trace - a TEST session's flight record (fitting-room/app.js "FLIGHT RECORDER"). */
+  const puts = [];
+  const kv = { put: async (k, v, o) => { puts.push({ k, v, o }); } };
+  const tcall = (body, { origin = "https://app.pear-ai.io", withKv = true } = {}) =>
+    W.handleApi(new Request("https://rt.pear-ai.io/trace", { method: "POST", headers: { Origin: origin, "Content-Type": "text/plain" },
+      body: typeof body === "string" ? body : JSON.stringify(body) }), withKv ? { ...env, TRACES: kv } : env, "/trace");
+  const rec = { v: 1, id: "abc-12/../x", n: 1, ev: [[0, "reveal"], [250, "s", { v: "front" }]] };
+  const t1 = await tcall(rec);
+  check("a well-formed record is stored under a key the Worker names, for 7 days",
+    t1.status === 200 && puts.length === 1 && /^trace:\d{4}-\d\d-\d\dT[^:]+:\d\d:[\d.]+Z:abc-12x$/.test(puts[0].k) &&
+    puts[0].o.expirationTtl === 7 * 24 * 3600 && JSON.parse(puts[0].v).ev.length === 2, JSON.stringify(puts[0] && { k: puts[0].k, o: puts[0].o }));
+  check("a wrong shape is a 400, an oversized record a 413 - nothing stored",
+    (await tcall({ v: 2, id: "x", ev: [] })).status === 400 && (await tcall({ v: 1, ev: [] })).status === 400 &&
+    (await tcall({ v: 1, id: "x", ev: "no" })).status === 400 && (await tcall("x".repeat(300000))).status === 413 && puts.length === 1);
+  check("a foreign origin is refused, and no TRACES binding stores nothing (404)",
+    (await tcall(rec, { origin: "https://evil.example" })).status === 403 && (await tcall(rec, { withKv: false })).status === 404 && puts.length === 1);
 }
 
 console.log(fails === 0 ? "\norient-engine: OK" : `\norient-engine: ${fails} FAILED`);

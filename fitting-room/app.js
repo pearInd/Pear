@@ -3280,7 +3280,7 @@ function enterRoom() {
   const handoff = parseHandoff();
   /* Warm the orientation link now, so the first orientation sample after go-live does not
      wait on a fresh TLS handshake. typeof-guarded: enterRoom() runs in sandboxes without it. */
-  if (typeof orientLinkConnect === "function") orientLinkConnect();
+  if (typeof orientLinkKeepAlive === "function") orientLinkKeepAlive();
 
   if (handoff) {
     focusMode = true;
@@ -6393,6 +6393,8 @@ function teardown() {
   stopFrameFreezeWatch();
   // The live-camera bridge belongs to the live session - every exit path retires it here.
   if (typeof stopStreamContinuity === "function") stopStreamContinuity();
+  // ...and so does a TEST session's flight record (a no-op when the clip already closed it).
+  if (typeof traceSessionEnd === "function") traceSessionEnd("teardown");
 
   // Feature 2 - flush the recorder while the edited tracks are still live, so the
   // download clip is finalized before disconnect ends the stream.
@@ -7664,6 +7666,7 @@ const ORIENT_SAMPLE_MS      = 250;   // ~4 analyses/s - cheap on a 96px canvas
    sample per tick and carries out the actions that come back. */
 const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
 const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
+const ORIENT_SWAP_WAIT_MS   = 1000;  // how long a decided swap waits out an in-flight profile/re-anchor apply (see maybeSwap)
 
 /* Yaw corroboration, the pose flip, the side-view pass, post-peak evidence and the fold
    handshake (early turn) moved to lib/orient-engine.js. */
@@ -8273,6 +8276,7 @@ function startStreamContinuity() {
     if (stopped) return;
     const live = isLive() && cardEl.classList.contains("show-live");
     const { alpha, event } = model.step(now, live);
+    if (event && typeof traceOrient === "function") traceOrient("out-" + event.type, event);
     if (event && event.type === "stall") {
       console.log(`[PEAR] stream continuity: render output silent for ${event.gapMs}ms - cross-fading the live camera in so the view keeps moving`);
     } else if (event && event.type === "resume") {
@@ -8295,6 +8299,10 @@ function startStreamContinuity() {
       liveContinuityAlpha = 0;
       c.style.opacity = "0";
       const secs = Math.max(0.001, (performance.now() - t0) / 1000);
+      if (typeof traceOrient === "function") {
+        traceOrient("out-stats", { camFps: camTimed ? Math.round(camFrames / secs) : null, outFps: Math.round(aiFrames / secs),
+          longestGap: Math.round(model.stats.longestGapMs), stalls: model.stats.stalls, camMs: Math.round(model.stats.cameraMs) });
+      }
       console.log(`[PEAR] stream continuity: session - local camera ${camTimed ? (camFrames / secs).toFixed(0) + " fps" : "fps n/a"},` +
         ` Decart output ${(aiFrames / secs).toFixed(0)} fps, longest output gap ${Math.round(model.stats.longestGapMs)}ms,` +
         ` ${model.stats.stalls} stall(s) bridged with the live camera (${Math.round(model.stats.cameraMs)}ms on screen)`);
@@ -8822,7 +8830,10 @@ function makeRenderResumeDetector({ held, stallMinMs = SWAP_RENDER_STALL_MIN_MS,
 }
 
 function traceSwapTimeline(next, predictive, held, refUrl) {
-  if (!ORIENT_DEBUG) return null;
+  /* On for ?orient_debug=1, and for a recorded (TEST) session - see FLIGHT RECORDER. */
+  const record = typeof traceOrient === "function" && typeof _trace !== "undefined" && _trace !== null
+    ? (type, data) => traceOrient(type, data) : null;
+  if (!ORIENT_DEBUG && !record) return null;
   const t0 = Date.now();
   const clock = () => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now());
   const p0 = clock();
@@ -8841,6 +8852,7 @@ function traceSwapTimeline(next, predictive, held, refUrl) {
 
   const mark = (label) => {
     sentAt = clock();
+    if (record) record("swap-sent", { next, ms: Math.round(sentAt - p0) });
     console.log(`[PEAR][ORIENT] DISPATCH_SENT → ${tag}: ${label} set() handed to the SDK for the signaling WebSocket, ` +
       `+${ms(sentAt - p0)} after the swap began (pre-flight + wire wait) · local |yaw| ${yaw()} · reference ${refSize} · ` +
       `${intoTurn} · build v=${PEAR_BUILD}`);
@@ -8852,6 +8864,7 @@ function traceSwapTimeline(next, predictive, held, refUrl) {
     if (finished) return;
     finished = true;
     dropMark();
+    if (record) record("swap-render", { next, ms: hit ? Math.round(hit.at - p0) : null, held, why: hit ? null : why });
     if (hit) {
       marks.push(`first rendered frame presented after the ack +${Math.round(hit.at - p0)}ms (local |yaw| ${yaw()})`);
       console.log(`[PEAR][ORIENT] RENDER_APPLIED → ${tag}: +${ms(hit.at - ackAt)} after SERVER_CONFIRMED · ${hit.how} · local |yaw| ${yaw()}`);
@@ -8877,6 +8890,7 @@ function traceSwapTimeline(next, predictive, held, refUrl) {
   return {
     acknowledged() {
       ackAt = clock();
+      if (record) record("swap-acked", { next, ms: Math.round(ackAt - p0), kb: blob ? Math.round(blob.size / 1024) : null });
       detector.ack(ackAt);
       dropMark();   // unused means no reference write reached the wire for this swap - never let a later one take it
       marks.push(`set() acked +${Date.now() - t0}ms (local |yaw| ${yaw()})`);
@@ -8888,6 +8902,7 @@ function traceSwapTimeline(next, predictive, held, refUrl) {
         SWAP_RENDER_TRACE_MAX_MS + 250);
     },
     failed(e) {
+      if (record) record("swap-fail", { next, ms: Math.round(clock() - p0), err: String(e?.message || e).slice(0, 120) });
       console.log(`[PEAR][ORIENT] SERVER_CONFIRMED → ${tag}: set() FAILED ` +
         `+${ms(clock() - (sentAt ?? p0))} after ${sentAt === null ? "the swap began" : "DISPATCH_SENT"}: ${e?.message || e}`);
       finish(null, `set() FAILED +${Date.now() - t0}ms: ${e?.message || e}`);
@@ -9091,6 +9106,7 @@ function createOrientationWatcher() {
      (no link in this runtime) leaves every tick without a decision - the lock stays
      PENDING and the front renders, the same front-only degradation a single-view item gets. */
   const decide = typeof openOrientChannel === "function" ? openOrientChannel() : null;
+  if (typeof traceOrient === "function") traceOrient("watch", { back: !!GARMENT_BACK, dual: currentAngle === AUTO_ANGLE, link: !!decide });
   let lastSwapPredictive = false;   // the last committed swap was a predictive BACK - see maybeSwap()
   /* Edge-on axis - its own rolling buffer, exit streak and cooldown, sharing only the
      `applying` mutex so a pose update and an asset swap can never be in flight at once.
@@ -9437,16 +9453,36 @@ function createOrientationWatcher() {
 
   /* Confirmed flip → cross-fade + hot-swap the live reference, using ONLY the frozen
      GARMENT_FRONT/GARMENT_BACK captured above - never a value re-derived elsewhere.
-     The sampler keeps voting during the swap, so a turn completed mid-flight is
-     re-confirmed and applied by a later tick - no queue needed. */
+     The sampler keeps voting during the swap, so a VOTE-confirmed turn completed mid-flight
+     is re-confirmed and applied by a later tick - no queue needed for those.
+     THE EARLY TURN IS NOT RE-CONFIRMED (2026-09-27), and that is why a decided swap now waits
+     out a busy `applying` instead of being dropped. The fold handshake fires ONCE per turn at
+     ~40 degrees and resets the vote streaks; if it met a profile or re-anchor apply still in
+     flight (not awaited by the tick - usually a few ms) it was silently dropped here, and the
+     next thing able to send BACK was a back-of-head vote at ~150+ degrees: the print arriving
+     late, or not at all on a quick turn. Reported on a first measurement, frame by frame: no
+     back print through the whole back view. The wait is bounded (ORIENT_SWAP_WAIT_MS); the
+     anti-flap cooldown still drops, as it always did. */
   async function maybeSwap(next, predictive = false) {
     /* The cooldown is anti-flap, and withdrawing a PREDICTIVE BACK is the one flap that must not
        wait for it: the face came back, so the shopper never finished the turn and the back
        reference is sitting on their front. Only that direction and only that kind of swap -
        see ORIENT_PREDICTIVE_BACK. */
     const withdrawing = next === "front" && lastSwapPredictive;
-    if (applying || (Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing)) return;
-    if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) return;
+    if (typeof traceOrient === "function") traceOrient("swap-req", { next, predictive, applying, cooldown: Math.max(0, ORIENT_COOLDOWN_MS - (Date.now() - lastSwapAt)) });
+    if (applying) {
+      const waitUntil = Date.now() + ORIENT_SWAP_WAIT_MS;
+      while (applying && Date.now() < waitUntil) await new Promise((r) => setTimeout(r, 20));
+      if (disposed) return;
+    }
+    if (applying || (Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing)) {
+      if (typeof traceOrient === "function") traceOrient("swap-drop", { next, why: applying ? "applying" : "cooldown" });
+      return;
+    }
+    if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) {
+      if (typeof traceOrient === "function") traceOrient("swap-drop", { next, why: disposed ? "disposed" : !isLive() ? "not-live" : "not-auto" });
+      return;
+    }
 
     /* ACQUIRING the side that is ALREADY on the wire is a state record, not a swap.
        PENDING renders the front (effectiveAngle() resolves null → "front") and
@@ -9473,6 +9509,7 @@ function createOrientationWatcher() {
     }
     if (autoOrientation === null && next === "front" && !backOnWire) {
       autoOrientation = "front";
+      if (typeof traceOrient === "function") traceOrient("swap-acquire", { next });
       console.log("[PEAR] AI Auto - orientation ACQUIRED → FRONT (already rendered; no swap issued)");
       logVtonState();
       renderPerspectiveSelector();
@@ -9492,6 +9529,7 @@ function createOrientationWatcher() {
        and the shopper gets a toast every cooldown. Front-only is the documented
        graceful degradation - make it the confirmed state and stop re-litigating it. */
     const settleFrontOnBackFailure = () => {
+      if (typeof traceOrient === "function") traceOrient("swap-drop", { next, why: "back-unusable" });
       lastSwapAt = Date.now();            // throttle repeat toasts while turned away
       if (autoOrientation === null) {
         autoOrientation = "front";
@@ -9587,6 +9625,7 @@ function createOrientationWatcher() {
     applying = true;
     lastSwapAt = Date.now();
     lastSwapPredictive = predictive;
+    if (typeof traceOrient === "function") traceOrient("swap-go", { next, predictive, from: autoOrientation });
     /* THE LOCK IS A CLAIM ABOUT WHAT IS ON THE WIRE, so it is advanced here but ROLLED BACK
        if the dispatch below fails - see the catch. Kept as an advance-then-revert rather
        than a commit-after-success because renderPerspectiveSelector() and the prompt
@@ -9743,6 +9782,7 @@ function createOrientationWatcher() {
 
     applying = true;                    // shared with maybeSwap - one in-flight apply at a time
     lastProfileAt = Date.now();
+    if (typeof traceOrient === "function") traceOrient("profile-go", { next });
     // Also counts as a fresh re-anchor - this update IS the prompt landing with the
     // current pose baked in, so maybeReanchorPrompt() firing again immediately
     // afterward in this same tick would be pure redundancy (same argument as skipping
@@ -9766,6 +9806,7 @@ function createOrientationWatcher() {
       console.warn("[PEAR] AI Auto profile prompt update:", e?.message || e);
     } finally {
       applying = false;
+      if (typeof traceOrient === "function") traceOrient("profile-done", { ms: Date.now() - lastProfileAt });
     }
   }
 
@@ -9798,6 +9839,7 @@ function createOrientationWatcher() {
     if (!isGarmentApplied) return;
     applying = true;
     lastReanchorAt = Date.now();
+    if (typeof traceOrient === "function") traceOrient("reanchor-go");
     try {
       await applyActive();
       /* Session-relative, because that is the only form that is actually useful for the
@@ -9814,6 +9856,7 @@ function createOrientationWatcher() {
       console.warn("[PEAR] AI Auto prompt re-anchor:", e?.message || e);
     } finally {
       applying = false;
+      if (typeof traceOrient === "function") traceOrient("reanchor-done", { ms: Date.now() - lastReanchorAt });
     }
   }
 
@@ -9882,6 +9925,7 @@ function createOrientationWatcher() {
          deferring body re-drapes until its ceiling for a turn nobody is tracking. */
       orientTurnMark(false);
       if (decide) decide.close();
+      if (typeof traceOrient === "function") traceOrient("watch-stop", { lock: autoOrientation });
       try { video.pause(); } catch (_) {}
       video.srcObject = null;                    // detach only - the track is the preview's
     },
@@ -9899,18 +9943,43 @@ function createOrientationWatcher() {
    actions; no link, a dropped socket or a late reply all resolve null, and the tick then
    swaps nothing (see the watcher's "NO DECISION"). The shopper keeps the front view - the
    documented degradation of a single-view item - and it is said once, on the console.
-   A dropped socket is retried at most every ORIENT_LINK_RETRY_MS; a channel re-opened on a
-   new socket starts a clean engine (the lock itself lives here, in autoOrientation).
+   A socket that FAILS is retried at most every ORIENT_LINK_RETRY_MS; a channel re-opened on
+   a new socket starts a clean engine (the lock itself lives here, in autoOrientation).
+
+   A DECISION MAY NEVER BE LOST WHILE THE ENGINE BELIEVES IT WAS SENT (2026-09-27). REPORTED,
+   first measurement, read frame by frame: no back print through the whole back view, then
+   the rear reference landing as the shopper faced front again (an "open" shirt on the chest)
+   - and a milder version on the second: the print arriving at ~160 degrees. In the browser
+   the decision was a function call and could not go missing; over a socket it could. A reply
+   that missed the timeout was DROPPED while the engine had already acted on it: the early
+   turn fires ONCE per turn and resets the vote streaks, so a lost "send BACK at 40 degrees"
+   left the room on FRONT with nothing left to fire until the back of the head was seen. Now:
+     · a slow reply PROVES the link with a ping instead of being dropped (a busy main thread can
+       fire a timer ahead of a reply that arrived in time); only a link that cannot answer is
+       DROPPED (orientLinkDrop), and every channel re-opens on the next one with a FRESH engine
+       that starts from the room's real lock - never an engine whose idea of what was sent
+       differs from what the room did;
+     · the room PINGS its link every ORIENT_LINK_PING_MS while it is open (orientLinkKeepAlive)
+       and replaces one that does not answer - a socket that died quietly while the shopper
+       stood in front of the camera is found then, not by the first turn;
+     · go-live checks it answers (orientLinkEnsureFresh) and replaces it before the session,
+       in parallel with the connect - the first measurement is the one that waited longest.
 
    ORIENT_KNOB_KEYS mirrors lib/orient-engine.js's own list (CLAUDE.md §3): these URL
    parameters, and no others, are forwarded - the tuning knobs, never the garment, the
    store key or anything else on the page URL. */
 const ORIENT_KNOB_KEYS = ["pose_pass", "post_peak", "early_turn", "early_turn_return", "early_turn_slow",
   "early_turn_speed", "early_turn_loss", "predict_back"];
-const ORIENT_LINK_STEP_TIMEOUT_MS = 800;
+const ORIENT_LINK_STEP_TIMEOUT_MS = 1200;   // a healthy link answers in ~10ms; past this, prove it with a ping
+const ORIENT_LINK_STEP_HARD_MS = 4000;      // past this a reply is abandoned and the link replaced regardless
 const ORIENT_LINK_RETRY_MS = 3000;
+const ORIENT_LINK_PING_MS = 15000;          // keepalive cadence while the room is open and visible
+const ORIENT_LINK_PONG_TIMEOUT_MS = 2000;
+const ORIENT_LINK_FRESH_TIMEOUT_MS = 1000;  // go-live's check
 let _orientWs = null, _orientWsReady = null, _orientWsFailedAt = 0, _orientChanSeq = 0, _orientLinkNoted = false;
+let _orientPingSeq = 0, _orientKeepAliveTimer = null;
 const _orientPending = new Map();   // "c:q" -> resolve
+const _orientPongs = new Map();     // ping q -> resolve(bool)
 const _orientOpenChans = new Set();
 
 function orientLinkUrl() {
@@ -9937,18 +10006,25 @@ function orientLinkConnect() {
     let ws, settled = false;
     const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
     const fail = () => {
+      traceOrient("link-fail", { open: _orientWs === ws });
       if (_orientWs === ws) _orientWs = null;
       _orientWsReady = null;
       _orientWsFailedAt = Date.now();
       _orientOpenChans.clear();
       for (const [key, r] of _orientPending) { _orientPending.delete(key); r(null); }
+      for (const [key, p] of _orientPongs) { _orientPongs.delete(key); p(false); }
       finish(null);
     };
     try { ws = new WebSocket(url); } catch (_) { fail(); return; }
-    ws.onopen = () => { _orientWs = ws; finish(ws); };
+    ws.onopen = () => { _orientWs = ws; traceOrient("link-open"); finish(ws); };
     ws.onmessage = (e) => {
       let m;
       try { m = JSON.parse(e.data); } catch (_) { return; }
+      if (m && m.k === "pong") {
+        const p = _orientPongs.get(m.q);
+        if (p) { _orientPongs.delete(m.q); p(true); }
+        return;
+      }
       const r = m && _orientPending.get(m.c + ":" + m.q);
       if (!r) return;
       _orientPending.delete(m.c + ":" + m.q);
@@ -9960,6 +10036,61 @@ function orientLinkConnect() {
   return _orientWsReady;
 }
 
+/* Drop the socket ON PURPOSE - a step timed out, a ping went unanswered. Every channel
+   re-opens on the next socket with a fresh engine; pending steps resolve null now. Unlike a
+   connection FAILURE this starts no retry back-off: the next connect goes out at once. */
+function orientLinkDrop(why) {
+  const ws = _orientWs;
+  _orientWs = null;
+  _orientWsReady = null;
+  _orientOpenChans.clear();
+  for (const [key, r] of _orientPending) { _orientPending.delete(key); r(null); }
+  for (const [key, p] of _orientPongs) { _orientPongs.delete(key); p(false); }
+  if (ws) {
+    ws.onclose = null;          // this is not a failure - do not start the back-off
+    ws.onmessage = null;
+    try { ws.close(4000, "drop"); } catch (_) { /* already closed */ }
+  }
+  traceOrient("link-drop", { why });
+  console.warn("[PEAR] AI Auto - orientation link dropped (" + why + ") - reconnecting with a fresh engine");
+}
+
+/** Resolves true if the open socket answers a ping within timeoutMs. Never rejects. */
+function orientLinkPing(timeoutMs) {
+  const ws = _orientWs;
+  if (!ws || ws.readyState !== 1) return Promise.resolve(false);
+  const q = ++_orientPingSeq;
+  const t0 = Date.now();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { if (_orientPongs.delete(q)) { traceOrient("link-ping", { ok: false, ms: Date.now() - t0 }); resolve(false); } }, timeoutMs);
+    _orientPongs.set(q, (ok) => { clearTimeout(timer); traceOrient("link-ping", { ok, ms: Date.now() - t0 }); resolve(ok); });
+    try { ws.send(JSON.stringify({ k: "ping", q })); } catch (_) { _orientPongs.delete(q); clearTimeout(timer); resolve(false); }
+  });
+}
+
+/** The socket must answer NOW, or be replaced - called at go-live, never awaited there. */
+async function orientLinkEnsureFresh() {
+  if (!_orientWs || _orientWs.readyState !== 1) { await orientLinkConnect(); return; }
+  if (!(await orientLinkPing(ORIENT_LINK_FRESH_TIMEOUT_MS))) {
+    orientLinkDrop("no answer before go-live");
+    await orientLinkConnect();
+  }
+}
+
+/** Open the link and keep it proven alive while the room is open (idempotent). */
+function orientLinkKeepAlive() {
+  orientLinkConnect();
+  if (_orientKeepAliveTimer || typeof setInterval !== "function") return;
+  _orientKeepAliveTimer = setInterval(async () => {
+    if (typeof document !== "undefined" && document.hidden) return;   // no session runs hidden
+    if (!_orientWs || _orientWs.readyState !== 1) { orientLinkConnect(); return; }
+    if (!(await orientLinkPing(ORIENT_LINK_PONG_TIMEOUT_MS))) {
+      orientLinkDrop("keepalive unanswered");
+      orientLinkConnect();
+    }
+  }, ORIENT_LINK_PING_MS);
+}
+
 /** One watcher's channel: step(sample) -> Promise<actions|null>, close(). */
 function openOrientChannel() {
   const c = ++_orientChanSeq;
@@ -9969,33 +10100,23 @@ function openOrientChannel() {
   try { dk = new URLSearchParams(location.search).get("pear_debug") || undefined; } catch (_) { dk = undefined; }
   let q = 0, closed = false;
   orientLinkConnect();   // warm the socket while the first sample is being measured
+  /* A recorded (TEST) session keeps every tick: what was measured, what came back, how long it
+     took - null when no decision came (the link events say why). See FLIGHT RECORDER. */
+  const traceStep = (s, acts, rtt) => traceOrient("s", {
+    c, v: s.vote ?? null, f: s.faceSeen ? 1 : 0, pv: s.poseVoted ? 1 : 0,
+    ps: typeof s.profileScore === "number" ? Math.round(s.profileScore * 100) / 100 : null,
+    y: typeof s.yawAbs === "number" ? Math.round(s.yawAbs) : null,
+    ya: s.yawAt ? s.t - s.yawAt : null, la: s.lostAt ? s.t - s.lostAt : null,
+    l: s.lock ?? null, p: s.profile ? 1 : 0, d: s.dualView ? 1 : 0, rtt,
+    a: Array.isArray(acts) ? acts.filter((x) => x && x.do !== "log") : null,
+  });
   return {
     async step(sample) {
-      if (closed) return null;
-      const ws = await orientLinkConnect();
-      if (!ws || ws.readyState !== 1) {
-        if (!_orientLinkNoted) {
-          _orientLinkNoted = true;
-          console.warn("[PEAR] AI Auto - the orientation link is unavailable; the front view stays on",
-            "and the reference will not swap on a turn (the link is retried every", ORIENT_LINK_RETRY_MS + "ms)");
-        }
-        return null;
-      }
-      try {
-        if (!_orientOpenChans.has(c)) {
-          ws.send(JSON.stringify({ c, k: "open", knobs, dk }));
-          _orientOpenChans.add(c);
-        }
-        const id = ++q;
-        return await new Promise((resolve) => {
-          const key = c + ":" + id;
-          const timer = setTimeout(() => { if (_orientPending.delete(key)) resolve(null); }, ORIENT_LINK_STEP_TIMEOUT_MS);
-          _orientPending.set(key, (a) => { clearTimeout(timer); resolve(a); });
-          ws.send(JSON.stringify({ c, k: "step", q: id, s: sample }));
-        });
-      } catch (_) {
-        return null;
-      }
+      if (!_trace) return stepOnLink(sample);
+      const t0 = Date.now();
+      const acts = await stepOnLink(sample);
+      traceStep(sample, acts, Date.now() - t0);
+      return acts;
     },
     close() {
       closed = true;
@@ -10004,8 +10125,128 @@ function openOrientChannel() {
       }
     },
   };
+
+  async function stepOnLink(sample) {
+    if (closed) return null;
+    const ws = await orientLinkConnect();
+    if (!ws || ws.readyState !== 1) {
+      if (!_orientLinkNoted) {
+        _orientLinkNoted = true;
+        console.warn("[PEAR] AI Auto - the orientation link is unavailable; the front view stays on",
+          "and the reference will not swap on a turn (the link is retried every", ORIENT_LINK_RETRY_MS + "ms)");
+      }
+      return null;
+    }
+    try {
+      if (!_orientOpenChans.has(c)) {
+        ws.send(JSON.stringify({ c, k: "open", knobs, dk }));
+        _orientOpenChans.add(c);
+      }
+      const id = ++q;
+      return await new Promise((resolve) => {
+        const key = c + ":" + id;
+        /* THE WATCHDOG PROVES THE LINK, IT DOES NOT RACE THE REPLY. The timer and the reply both
+           run on the main thread, and a session's first seconds are its busiest - a long task
+           there can fire this timer ahead of a reply that arrived in time. Dropping on the timer
+           threw such a reply away while the engine had acted on it (the early turn fires once):
+           the lost "send BACK" of the first measurement. So a slow reply triggers a PING; only a
+           link that cannot answer one is dropped (and its engine with it, see orientLinkDrop).
+           On a live link the tick keeps waiting and applies the reply - exactly as the in-browser
+           decision was simply delayed by the same busy thread. ORIENT_LINK_STEP_HARD_MS caps it. */
+        let settled = false;
+        const done = (a) => { if (settled) return; settled = true; clearTimeout(soft); clearTimeout(hard); resolve(a); };
+        const soft = setTimeout(async () => {
+          if (settled || !_orientPending.has(key)) return;
+          traceOrient("link-slow", { c, q: id });
+          if (!(await orientLinkPing(ORIENT_LINK_PONG_TIMEOUT_MS)) && !settled && _orientWs === ws) orientLinkDrop("a step went unanswered and so did a ping");
+        }, ORIENT_LINK_STEP_TIMEOUT_MS);
+        const hard = setTimeout(() => {
+          if (settled || !_orientPending.delete(key)) return;
+          if (_orientWs === ws) orientLinkDrop("a step went unanswered for " + ORIENT_LINK_STEP_HARD_MS + "ms");
+          done(null);
+        }, ORIENT_LINK_STEP_HARD_MS);
+        _orientPending.set(key, done);
+        ws.send(JSON.stringify({ c, k: "step", q: id, s: sample }));
+      });
+    } catch (_) {
+      return null;
+    }
+  }
 }
 /* ── end orientation link ── */
+
+/* ── FLIGHT RECORDER - a TEST session's turn, as data (2026-09-27) ─────────────────────────
+   WHY IT EXISTS. A turn is measured here, decided at the edge and rendered by the engine, and
+   the reports that matter - "no back print on the first measurement", "the print was missing
+   for a few frames" - come from real sessions on real stores, where the production build strips
+   every log line. A clip read frame by frame shows WHAT the shopper saw, never WHY. This keeps
+   the why: every orientation tick's measurements and the engine's reply with its round trip,
+   every swap from request to its first rendered frame (or the reason it was dropped), the
+   output stalls the live camera bridged, and every orientation-link drop - and posts it once,
+   when the session ends, to the edge (POST /trace, kept 7 days, read back with wrangler).
+
+   ONLY A TEST SESSION IS RECORDED: the store key TEST (data-pear-key="TEST", the preview
+   script) or ?pear_trace=1. A shopper's session records nothing and sends nothing. The record
+   holds numbers, decisions and timings - no image, no body measurement, nothing typed.
+   Bounded (TRACE_MAX_EVENTS), never awaited, and a failed post is simply lost. */
+const TRACE_MAX_EVENTS = 1600;
+let _trace = null;
+let _traceSessions = 0;
+
+function traceEnabled() {
+  try {
+    const q = new URLSearchParams(location.search);
+    return q.get("pear_key") === "TEST" || q.get("pear_trace") === "1";
+  } catch (_) { return false; }
+}
+
+/** Open a record for the session go-live just claimed (closing any the last one left open). */
+function traceSessionBegin(ctx) {
+  if (_trace) traceSessionEnd("superseded");
+  if (!traceEnabled()) return;
+  _traceSessions++;
+  let ua = "";
+  try { ua = String(navigator.userAgent || "").slice(0, 200); } catch (_) { /* no navigator */ }
+  _trace = {
+    v: 1, id: Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8),
+    n: _traceSessions, build: typeof PEAR_BUILD !== "undefined" ? PEAR_BUILD : null,
+    at: new Date().toISOString(), t0: Date.now(), ua, ctx: ctx || null, ev: [], over: 0,
+  };
+}
+
+/** One event, stamped in ms since go-live. A no-op outside a recorded session. */
+function traceOrient(type, data) {
+  const tr = _trace;
+  if (!tr) return;
+  if (tr.ev.length >= TRACE_MAX_EVENTS) { tr.over++; return; }
+  tr.ev.push(data === undefined ? [Date.now() - tr.t0, type] : [Date.now() - tr.t0, type, data]);
+}
+
+/** Close the record and post it to the edge. Idempotent: the first caller wins. */
+function traceSessionEnd(why) {
+  const tr = _trace;
+  if (!tr) return;
+  _trace = null;
+  tr.end = why;
+  tr.dur = Date.now() - tr.t0;
+  /* The source room (tests, the visual harness, the support view) keeps the last record in reach. */
+  if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") window.__pearDebugLastTrace = tr;
+  const url = edgeApiUrl("trace");
+  if (!url || typeof fetch !== "function") return;
+  let body;
+  try { body = JSON.stringify(tr); } catch (_) { return; }
+  /* text/plain keeps it a simple request (no preflight), so it can also leave with a closing page. */
+  try {
+    fetch(url, { method: "POST", headers: { "Content-Type": "text/plain" }, body, cache: "no-store",
+      keepalive: body.length < 60000 }).catch(() => {});
+  } catch (_) { /* never let the recorder break a teardown */ }
+}
+/* The source room's read-out: the record in progress, else the last one closed (tests, the visual
+   harness's PEAR_VISUAL_TRACE=1, the support view). Folded away in the production build. */
+if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
+  window.__pearDebugTrace = () => _trace || window.__pearDebugLastTrace || null;
+}
+/* ── end flight recorder ── */
 
 /* Decode a garment URL into an ImageBitmap without tainting the canvas: http(s) CDN
    URLs go through the same-origin proxy (exactly like the live reference path); data:
@@ -13989,6 +14230,7 @@ function startBillingWindow(gen) {
   if (gen !== sessionGen) return;        // stale first-frame from a torn-down session
   billingStarted = true;
   billingStartedAt = Date.now();         // diagnostics clock - see sessionElapsedMs()
+  if (typeof traceOrient === "function") traceOrient("reveal");
 
   // Start recording from the SAME event that starts billing (the first DRESSED frame)
   // so the encoded clip and the billed window cover exactly the same span - no gap
@@ -15020,11 +15262,22 @@ async function goLive() {
 
   busy = true;                         // Task 10 - claim the flow before ANY await
   resetTryOnSession();                 // retire anything a previous session left running - before the first await
+  /* A TEST session records its turn (see FLIGHT RECORDER); anything else records nothing. */
+  if (typeof traceSessionBegin === "function") {
+    traceSessionBegin({
+      item: String((activeItem && (activeItem.name || activeItem.title)) || "").slice(0, 80),
+      pageMs: typeof performance !== "undefined" ? Math.round(performance.now()) : null,
+      link: typeof _orientWs !== "undefined" && _orientWs ? _orientWs.readyState : null,
+    });
+  }
   $("captureBtn").disabled = true;
   $("camError").hidden = true;
   exitClipReplay();                    // clear any history clip before a real session takes #aiVideo
   clearRecording();                    // Feature 2 - drop any previous clip + button
   card().classList.remove("show-result");  // drop any frozen snapshot so the live feed isn't covered by #resultCanvas
+  /* The orientation link must answer before this session's first turn needs it - checked now,
+     in parallel with everything below, never awaited (see "A DECISION MAY NEVER BE LOST"). */
+  if (typeof orientLinkEnsureFresh === "function") orientLinkEnsureFresh().catch(() => {});
 
   try {
     // Health probe is a soft warning only - fire-and-forget so it never serialises
@@ -15394,6 +15647,7 @@ function captureHoldFrame() {
    frozen-hold tail can complete. Bumps sessionGen so any late SDK callback no-ops. */
 function stopBilling() {
   if (liveDurationTimer) { clearTimeout(liveDurationTimer); liveDurationTimer = null; }
+  if (typeof traceOrient === "function") traceOrient("billing-stop");
   sessionGen++;                         // neutralise in-flight onRemoteStream/onConnectionChange
   stopStatsMonitor();
   if (rtClient) { try { rtClient.disconnect(); } catch (_) {} rtClient = null; }
@@ -15445,6 +15699,7 @@ function finalizeVideoClip() {
      between sessions and a retry of the same garment reused its stale state (see
      resetTryOnSession()). stop() also ends any hold and the turn mark it owned. */
   if (orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; orientWatcherItem = null; }
+  if (typeof traceSessionEnd === "function") traceSessionEnd("clip");
   setLiveControls(false);
   $("captureBtn").disabled = !localStream;
   toast("⏱ הסרטון בן " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות מוכן ✓");

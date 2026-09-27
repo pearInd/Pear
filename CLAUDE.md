@@ -246,6 +246,9 @@ markers now — and `lib/prompts.js`'s header must never quote the slice's openi
 `server.js`'s public-roots + static-hosting block is one too: `static-allowlist` slices it
 from `/* ── Public roots` to `/* ── Start (local only` and mounts it on a bare express app
 with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (§2.10).
+`orient-link` slices `app.js` from `const ORIENT_KNOB_KEYS = [` to `/* ── end flight recorder ── */`
+(the whole orientation link and the recorder, run on a fake clock and socket) plus
+`function edgeApiUrl(route) {` to its closing brace - keep the recorder inside that span.
 `reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
 guarded `window.__pearMockDecart = …` line that follows it — that line's exact text (with its
 `PEAR_DEBUG_BUILD` guard, §2.11) is its end marker.
@@ -457,15 +460,16 @@ skin/face) and EXECUTES (`maybeSwap`, the hold, `turnMark`, the profile/re-ancho
   measured ~7 ms. With the busy-wire noise ON, even 50 ms reshuffles ~100 sessions each way (back lost 47 / gained 52) —
   that is the harness keying its randomness on execution time, not the link; compare outcomes,
   not byte logs, when you re-measure.
-- **The fallback is the front view, never a local copy.** If the link is down, slow (800 ms step
-  timeout) or unset, a tick decides nothing: no swap, the lock stays PENDING, the front renders —
+- **The fallback is the front view, never a local copy.** If the link is down, dead (§2.16) or
+  unset, a tick decides nothing: no swap, the lock stays PENDING, the front renders —
   the same safe path as a product with no back photo. Only `maybeReanchorPrompt()` keeps its
   cadence. One `[PEAR] AI Auto - the orientation link is unavailable …` warning says so. Do not
   "fix" an outage by putting a copy of the decision back in the browser: that is the thing this
   section exists to keep out.
 - **Where the room connects:** `PEAR_ORIENT_URL` (a `wss://` URL, injected by `scripts/build.mjs`,
   set in Vercel) or, when empty, the page's own origin at `/orient` — which Vercel cannot serve, so
-  a production build without it warns. The link opens at `enterRoom()`, not at go-live.
+  a production build without it warns. The link opens at `enterRoom()` (`orientLinkKeepAlive()`),
+  not at go-live, and is proven alive before every go-live (§2.16).
 - **Knobs travel as data.** The browser forwards only `ORIENT_KNOB_KEYS` from its URL at channel
   open; the engine sanitises them (`sanitizeOrientKnobs`) and every sample (`sanitizeOrientSample`).
   The protocol is bounded (16 channels, 16 KB per message) because the body is shopper-controlled.
@@ -485,6 +489,7 @@ skin/face) and EXECUTES (`maybeSwap`, the hold, `turnMark`, the profile/re-ancho
   the room bundle (it fired on the pre-move room); `orient-engine` §4 asserts the thresholds and
   decision functions are absent from `app.js`. The action names and knob keys ARE in the room —
   they are the protocol.
+- **A decision is never lost between the engine and the wire (§2.16).**
 
 ### 2.15 The room must not wait where main did not - and must not draw what did not change
 Reported 2026-09-27: "the whole interface is laggy… main is excellent - it should be the same
@@ -509,6 +514,42 @@ version, only with the code hidden." Measured against origin/main on the same ma
   main's extra ones were exact duplicates.
 - The Worker change needs a `wrangler deploy`; until then the room falls back to the origin and is
   exactly as slow as before, never broken. `room-latency` pins all three.
+
+### 2.16 A decision the engine made is executed - and a TEST session records why
+Reported 2026-09-27, a first measurement read frame by frame: no back print through the whole back
+view, then the rear reference landing as the shopper faced front again; a second one showed the
+print arriving late. The engine's early turn fires ONCE per turn (~40°) and resets the vote
+streaks, so any path that loses that one "send BACK" leaves the FRONT on a turned-away body until a
+back-of-head vote at ~150°+. Two such paths existed; both are closed:
+
+- **The link watchdog proves the link, it does not race the reply.** A step that missed its timer
+  (800 ms, on a busy main thread) was DROPPED while the engine had already acted on it. Now a slow
+  reply (`ORIENT_LINK_STEP_TIMEOUT_MS`, 1200) triggers a ping; only a link that cannot answer is
+  dropped (`orientLinkDrop()`: pending steps resolve null, every channel re-opens on the next socket
+  with a fresh engine that starts from the room's real lock, no retry back-off);
+  `ORIENT_LINK_STEP_HARD_MS` (4000) caps it. The room also pings every `ORIENT_LINK_PING_MS` while it
+  is open (`orientLinkKeepAlive()`) and checks the link at go-live (`orientLinkEnsureFresh()`), so a
+  socket that died quietly is replaced before a turn needs it. The ping is `{k:"ping",q}` →
+  `{k:"pong",q}` in `lib/orient-protocol.js` - **the Worker must be deployed with it BEFORE a room
+  that pings ships**, or the room reads a healthy link as dead. `orient-link` §1-§3.
+- **`maybeSwap()` waits out a busy `applying` (bounded, `ORIENT_SWAP_WAIT_MS` 1000) instead of
+  dropping the swap.** A pose or re-anchor apply the tick does not await held the mutex; the swap
+  found it held and returned. Replayed over the 4,116-session corpus: the first back view came
+  earlier in 442 sessions (later in 31), FRONT on a turned-away body fell 47-49%, BACK on a facing
+  body 20-21% in the realistic environments. The anti-flap cooldown still drops, as before.
+  `front-reference-guard` §11; `orient-engine` §1 re-pinned for exactly this (the wait removed
+  reproduces the old pin).
+- **The FLIGHT RECORDER** (`fitting-room/app.js`, after the orientation link). A TEST session -
+  store key `TEST` (the preview script's `data-pear-key="TEST"`) or `?pear_trace=1` - keeps every
+  orientation tick (the sample, the engine's reply, its round trip), every swap from `swap-req` to
+  `swap-render` or the reason it was dropped, pose/re-anchor applies with their duration, output
+  stalls (`out-stall`/`out-resume`/`out-stats`) and link events, and posts it once when the session
+  ends to the Worker's `POST /trace` (KV binding `TRACES`, 7 days). Read it back with
+  `cd cloudflare/orient && npx wrangler kv key list --binding TRACES --remote` and
+  `... kv key get <key> --binding TRACES --remote`. A shopper's session records nothing and sends
+  nothing; the record holds numbers, decisions and timings only. In the source room
+  `window.__pearDebugTrace()` returns it, and `PEAR_VISUAL_TRACE=1 npm run test:visual` saves the
+  harness's as `test-results/visual/flight.json`. `orient-link` §4, `orient-engine` §6.
 
 ---
 

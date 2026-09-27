@@ -442,6 +442,7 @@ const SUITES = [
   ["size-fit-pin", "size-fit-pin.test.mjs"],
   ["prompt-engine", "prompt-engine.test.mjs"],
   ["orient-engine", "orient-engine.test.mjs"],
+  ["orient-link", "orient-link.test.mjs"],
   ["room-latency", "room-latency.test.mjs"],
 ];
 

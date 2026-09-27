@@ -53,6 +53,8 @@ const end   = SRC.indexOf("  /* The edge-on counterpart of maybeSwap");
 if (start === -1 || end === -1) { console.log("FAIL  could not extract maybeSwap()"); process.exit(1); }
 const swapSrc = SRC.slice(start, end);
 
+const SWAP_WAIT_MS = Number((/const ORIENT_SWAP_WAIT_MS\s*=\s*(\d+);/.exec(SRC) || [])[1]);
+
 const FRONT = "https://cdn.test/peak-front.jpg";
 const BACK  = "https://cdn.test/peak-back.jpg";
 
@@ -63,8 +65,13 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
                    backBlob  = { size: 1, type: "image/jpeg" },
                    startOrientation = "back", flat = false, applyThrows = false,
                    blobLooksFlat = async () => flat, wire,
-                   lastSwapAgoMs = null, lastSwapWasPredictive = false, gate = false, holdOptIn = gate } = {}) {
+                   lastSwapAgoMs = null, lastSwapWasPredictive = false, gate = false, holdOptIn = gate,
+                   applyingForMs = 0 } = {}) {
   const calls = [];
+  /* §11 only: a profile/re-anchor apply holds `applying` for applyingForMs of SIMULATED time.
+     The clock advances only through maybeSwap's own setTimeout, so the wait is measured exactly. */
+  const clock = { now: 1_000_000, start: 1_000_000 };
+  const hooks = {};
   const sandbox = {
     blobLooksFlat,
     /* Only when a test asks for the swap input hold - every other section runs with the name
@@ -111,15 +118,27 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
     abbrevImg: (s) => String(s),
     toast: (t) => calls.push({ op: "toast", t }),
     setTimeout: (fn) => { fn(); return 0; },
+    ...(applyingForMs ? {
+      Date: { now: () => clock.now },
+      setTimeout: (fn, ms) => {
+        clock.now += ms || 0;
+        if (clock.now - clock.start >= applyingForMs && hooks.release) hooks.release();
+        fn();
+        return 0;
+      },
+      ORIENT_SWAP_WAIT_MS: SWAP_WAIT_MS,
+      __hooks: hooks,
+    } : {}),
   };
   const body =
-    `let applying = false, disposed = false, autoOrientation = ${JSON.stringify(startOrientation)};\n` +
+    `let applying = ${applyingForMs > 0}, disposed = false, autoOrientation = ${JSON.stringify(startOrientation)};\n` +
+    (applyingForMs ? `__hooks.release = () => { applying = false; };\n` : "") +
     `let lastSwapAt = ${lastSwapAgoMs === null ? 0 : `Date.now() - ${lastSwapAgoMs}`};\n` +
     `let lastSwapPredictive = ${lastSwapWasPredictive};\n` +
     swapSrc +
     `\nreturn { maybeSwap, state: () => ({ applying, autoOrientation, lastSwapPredictive }) };`;
   const api = new Function(...Object.keys(sandbox), body)(...Object.values(sandbox));
-  return { ...api, calls };
+  return { ...api, calls, waitedMs: () => clock.now - clock.start };
 }
 
 console.log("── §1 THE RETURN LEG: front bytes missing must NOT commit the flip ──");
@@ -412,6 +431,42 @@ console.log("\n── §9 DECART'S INPUT KEEPS FLOWING THROUGH A SWAP - THE HOLD
   await flat.maybeSwap("back");
   check("a swap abandoned before dispatch never takes the hold at all",
     !flat.calls.some((c) => c.op === "hold"));
+}
+
+/* ── §11 A DECIDED SWAP WAITS OUT A SHORT APPLY INSTEAD OF BEING DROPPED (2026-09-27) ──
+   REPORTED, first measurement, frame by frame: no back print through the whole back view. The
+   fold handshake sends BACK ONCE per turn (~40 degrees) and resets the vote streaks; a pose or
+   re-anchor apply still in flight (the tick does not await those) held `applying`, and maybeSwap()
+   dropped the swap - the next thing able to send BACK was a back-of-head vote at ~150+ degrees.
+   Replayed over the 4,116-session corpus (test/orient-replay.mjs), waiting instead of dropping moved
+   the first back view earlier in 442 sessions and later in 31, and cut the time the FRONT sat on a
+   turned-away body by 47-49% in the realistic environments. The wait is bounded; the cooldown still
+   drops, as it always did. */
+console.log("\n── §11 a decided swap waits out a short in-flight apply ──");
+{
+  check("ORIENT_SWAP_WAIT_MS is a bounded constant in app.js", SWAP_WAIT_MS > 0 && SWAP_WAIT_MS <= 1500, String(SWAP_WAIT_MS));
+  const short = harness({ startOrientation: "front", applyingForMs: 300 });
+  await short.maybeSwap("back", true);
+  check("a BACK decided while a 300ms apply holds the mutex is SENT once it clears - not dropped",
+    short.calls.some((c) => c.op === "applyActive") && short.state().autoOrientation === "back",
+    short.calls.map((c) => c.op).join(" > "));
+  check("...having waited only as long as the apply held it", short.waitedMs() >= 300 && short.waitedMs() < 400, `${short.waitedMs()}ms`);
+
+  const long = harness({ startOrientation: "front", applyingForMs: 60000 });
+  await long.maybeSwap("back", true);
+  check("an apply that outlasts ORIENT_SWAP_WAIT_MS still drops the swap - the wait is bounded",
+    !long.calls.some((c) => c.op === "applyActive") && long.state().autoOrientation === "front" &&
+    long.waitedMs() >= SWAP_WAIT_MS && long.waitedMs() <= SWAP_WAIT_MS + 40, `${long.waitedMs()}ms, ${long.calls.map((c) => c.op).join(" > ")}`);
+
+  const cool = harness({ startOrientation: "front", lastSwapAgoMs: 200 });
+  await cool.maybeSwap("back");
+  check("the anti-flap cooldown still drops a swap exactly as before (no wait for it)",
+    !cool.calls.some((c) => c.op === "applyActive") && cool.state().autoOrientation === "front");
+
+  const free = harness({ startOrientation: "front" });
+  await free.maybeSwap("back");
+  check("with nothing in flight the swap goes out at once, as always",
+    free.calls.some((c) => c.op === "applyActive") && free.state().autoOrientation === "back");
 }
 
 console.log(fails === 0 ? "\nfront-reference-guard: OK" : `\nfront-reference-guard: ${fails} FAILED`);
