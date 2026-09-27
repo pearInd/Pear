@@ -565,20 +565,29 @@ back-of-head vote at ~150°+. Two such paths existed; both are closed:
   earlier two rules both missed: the fold's yaw return fired AHEAD of the side (FRONT on the back),
   the shoulder-vote return fired ~0.6s AFTER it (sessions 4-5: the BACK print on the chest). Now a
   crossing at the side view - |yaw| >= `ORIENT_SIDE_DEG` (70) with a vote no longer for the side
-  being left, >= `ORIENT_SIDE_SURE_DEG` (85), or the torso lost with the last reading already there -
+  being left, >= `ORIENT_SIDE_SURE_DEG` (80; 85 until sessions 6-7 read 84/80 at the side with the skin
+  vote still "front"), or the torso lost with the last reading already there -
   is SCHEDULED for that reading + `ORIENT_SIDE_RET_DELAY_MS` (330, the return; the return fires only
-  at the side, `ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG` 70) or `ORIENT_SIDE_OUT_DELAY_MS` (200, the
-  outbound when its crossing reading is itself at the side; below the side it fires at once, as it
-  always did). The engine hands it over up to 1.5 ticks early with `waitMs` and `maybeSwap()` waits
+  at the side, `ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG` 70) or `ORIENT_SIDE_OUT_DELAY_MS` (280, the
+  outbound when its crossing reading is itself at the side - angle-matched -0.28/-0.27/-0.26s in
+  sessions 4/6/7; below the side it fires at once, as it always did). The engine hands it over up to 1.5 ticks early with `waitMs` and `maybeSwap()` waits
   that out (capped at `ORIENT_SWAP_MAX_DELAY_MS`), so neither the 250ms tick nor a late one moves
   it. A STRONG vote (shoulders/face - never skin, which reads a profile face as FRONT at the side)
   for the side being left cancels a scheduled swap: a wobble at the side sends nothing. A backstop
   covers a side view no reading caught (a peak >= `ORIENT_SIDE_PAST_PEAK_DEG`, then a strong FRONT
-  vote). On the five real sessions every return now goes out 326-332ms after its side reading and
-  lands within 0.03s of the side (`orient-engine` §7 replays them from
+  vote). On the seven real sessions every return goes out 322-332ms after its side reading and every
+  outbound with a side reading 280-286ms after it, each landing within 0.03s of the side where
+  measurable (`orient-engine` §7 replays them from
   `test/real-turns-2026-09-27.json`); `turn-yaw-window` §15 models it on the measured offsets.
   **Deploy order matters:** the room (which honours `waitMs`) must be live BEFORE the Worker - an
   old room ignores `waitMs` and would send a scheduled return up to 375ms early.
+- **The tee anchor no longer calls the front "plain ... smooth" (sessions 6-7).** With the return
+  landing at the side, the chest still showed a plain shirt from 90 to ~45-50 degrees before the
+  print - while the BACK anchor ("Reproduce the rear panel exactly as shown") drew its print on a
+  torso at 60-90 (sessions 4-5). `PLAIN_TEE_ANCHOR` serves every tee by vocabulary, printed ones
+  included, and told the model the front was "plain ... smooth unbroken"; it now reads "knit
+  neckline and unbroken front panel" (the anti-placket words kept). 6,510 of the pinned 161,756
+  prompts moved, all tee fronts. Layer A: judged on real sessions, not by the gate.
 - **THE OFFSET VARIES BY SESSION, so no fixed rule is right for all of them** (third session,
   2026-09-27 17:20Z): lag 0.82s with no growth despite a 460ms ack, and the return landed at send
   +0.0s - the FRONT went out on the second shoulder vote (swing 88->47, under 45) and the chest showed

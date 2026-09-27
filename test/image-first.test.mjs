@@ -231,10 +231,13 @@ const TOPS_FRONT_SPEC = TOPS_SPEC + " " + CLOSURE_SPEC;
    branches share it because the report is against tops-front generally, not against one
    construction; a lock that shipped on structured tops but not on tees would leave the
    most common garment in the catalog leaking. */
+/* 2026-09-27: "plain ... smooth" -> "knit neckline and unbroken front panel" - the tee anchor also serves printed
+   tees, and those two words kept the front print off the chest at 55-90 degrees after the return (sessions 6-7).
+   See the note above PLAIN_TEE_ANCHOR in lib/prompts.js. */
 const PLAIN_TEE_SPEC =
   "Drape and fit the EXACT static t-shirt from the reference image onto the live" +
-  " subject's CURRENT body contour and volume in this frame. Keep the reference's plain" +
-  " knit neckline and smooth unbroken front exactly as shown. Dynamically adapt the" +
+  " subject's CURRENT body contour and volume in this frame. Keep the reference's knit" +
+  " neckline and unbroken front panel exactly as shown. Dynamically adapt the" +
   " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
   " without stretching or warping the fabric. Strictly preserve the original t-shirt" +
   " texture, pattern, and color. Keep the subject's lower body, shoes, and" +

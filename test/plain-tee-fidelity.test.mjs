@@ -167,8 +167,13 @@ console.log("\n── §2 THE TEE PROMPT: no closure tokens, and no negation eit
     !/\b(do not|don't|never|avoid|without buttons|no buttons|not render)\b/i.test(tee), tee);
   check("the anchor names a T-SHIRT, not a bare 'shirt' - the woven prior",
     /EXACT static t-shirt from the reference image/.test(tee), tee);
-  check("...and states the plain neckline POSITIVELY, as FRONT_CLOSURE_LOCK's own note requires",
-    /plain knit neckline/i.test(tee) && /unbroken front/i.test(tee), tee);
+  /* 2026-09-27: the construction is still stated positively - a KNIT neckline and an UNBROKEN front - but no longer
+     as "plain" or "smooth": the anchor also serves printed tees, and those words kept the front print off the chest
+     at oblique angles (sessions 6-7, see the note above PLAIN_TEE_ANCHOR). */
+  check("...and states the knit neckline and unbroken front POSITIVELY, as FRONT_CLOSURE_LOCK's own note requires",
+    /knit neckline/i.test(tee) && /unbroken front/i.test(tee), tee);
+  check("...without calling the front plain or smooth - it also serves a printed tee, whose front is neither",
+    !/\bplain\b/i.test(tee) && !/\bsmooth\b/i.test(tee), tee);
   check("it keeps the shared spine: bind, adapt per frame, preserve",
     tee.indexOf("Drape and fit the EXACT static t-shirt from the reference image") === 0 &&
     /Dynamically adapt the garment drape to the subject's exact/.test(tee) &&

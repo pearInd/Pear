@@ -49,7 +49,11 @@ import { runCorpus } from "./orient-replay.mjs";
    side again (ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG 0 -> 70), with a backstop for a side view no reading caught. Over the
    4,116-session corpus 690 logs changed: the returns, and 13 first BACK dispatches that moved ~120ms later because
    their crossing reading was already at the side. §7 replays the five real sessions. Previous pin: 7610452e…791d92. */
-const PINNED = "661afc9d2512a37bccd99879c4713a66325838ca41f2d1ba537800d074a4227d";
+/* ...AND A FOURTH TIME, 2026-09-27 (sessions 6-7): ORIENT_SIDE_SURE_DEG 85 -> 80 (their outbound side readings were
+   84 and 80 with the skin vote still "front", so the outbound fired 0.3s early and put the back label on the front
+   edge) and ORIENT_SIDE_OUT_DELAY_MS 200 -> 280 (the outbound offset angle-matched at -0.28/-0.27/-0.26s in sessions
+   4/6/7). 32 of 4,116 replays changed, 12 of them a first BACK dispatch. Previous pin: 661afc9d…a4227d. */
+const PINNED = "7338fe2449cf81a43e39cc362c4eb507fd758d3f50d7e3470bec4a4052224a42";
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -259,7 +263,7 @@ console.log("\n── §6 the edge answers /size and /prompt with the SAME modul
 }
 
 /* ── §7 five real 360s, replayed (2026-09-27) ───────────────────────────────────────────── */
-console.log("\n── §7 on five real sessions the return goes out at the side view + the measured offset ──");
+console.log("\n── §7 on seven real sessions each side goes out at the side view + the measured offset ──");
 {
   /* The flight records of five real turns (test/real-turns-2026-09-27.json - numbers only), each tick replayed
      through the engine with the lock following its own swaps. The render paints a swap on the body as it was ~0.3s
@@ -267,9 +271,10 @@ console.log("\n── §7 on five real sessions the return goes out at the side 
      (the FRONT print on the back, session 2) and not ~0.6s after (the BACK print on the chest, sessions 4-5). */
   const data = JSON.parse(readFileSync(new URL("./real-turns-2026-09-27.json", import.meta.url), "utf8"));
   const retDelay = Number((/const ORIENT_SIDE_RET_DELAY_MS = (\d+);/.exec(ENGINE_SRC) || [])[1]);
+  const outDelay = Number((/const ORIENT_SIDE_OUT_DELAY_MS = (\d+);/.exec(ENGINE_SRC) || [])[1]);
   const rows = data.sessions.map((sess) => {
     const eng = E.createOrientEngine(E.sanitizeOrientKnobs({}));
-    let lock = null, profile = false, front = null;
+    let lock = null, profile = false, front = null, back = null;
     for (const [t0, v, f, pv, ps, y, ya, la, d, rtt] of sess.samples) {
       const t = 1_000_000 + t0 - (rtt || 0);
       const acts = eng.step(E.sanitizeOrientSample({ t, vote: v, faceSeen: !!f, poseVoted: !!pv, profileScore: ps ?? 0, yawAbs: y,
@@ -278,10 +283,12 @@ console.log("\n── §7 on five real sessions the return goes out at the side 
         if (a.do === "profile") profile = a.next;
         if (a.do !== "swap" || a.next === lock) continue;
         if (a.next === "front" && lock === "back" && front === null) front = (t0 + (a.waitMs || 0) - sess.reveal) / 1000;
+        if (a.next === "back" && back === null) back = (t0 + (a.waitMs || 0) - sess.reveal) / 1000;
         lock = a.next;
       }
     }
-    return { name: sess.name, side: sess.retSide, off: sess.retOffset, front, after: front === null ? null : Math.round((front - sess.retSide) * 1000) };
+    return { name: sess.name, side: sess.retSide, off: sess.retOffset, front, after: front === null ? null : Math.round((front - sess.retSide) * 1000),
+      outSide: sess.outSide, outOff: sess.outOffset, back, outAfter: back === null || sess.outSide === null ? null : Math.round((back - sess.outSide) * 1000) };
   });
   for (const r of rows) console.log(`        ${r.name}: side view ${r.side}s, FRONT out at ${r.front}s (+${r.after}ms)` +
     (r.off !== null ? `, lands on the body at ${(r.front + r.off - r.side).toFixed(2)}s from the side` : ""));
@@ -289,6 +296,13 @@ console.log("\n── §7 on five real sessions the return goes out at the side 
     rows.every((r) => r.after !== null && Math.abs(r.after - retDelay) <= 50), JSON.stringify(rows));
   check("...so where the switch was measurable it lands on the body within 0.1s of the side view - never the FRONT print on the back, never the BACK print on the chest",
     rows.filter((r) => r.off !== null).every((r) => Math.abs(r.front + r.off - r.side) <= 0.1), JSON.stringify(rows));
+  /* The outbound, where a reading was taken at the side view (sessions 5-7): scheduled the same way, for its own offset. */
+  const outs = rows.filter((r) => r.outSide !== null);
+  for (const r of outs) console.log(`        ${r.name}: side view out ${r.outSide}s, BACK out at ${r.back}s (+${r.outAfter}ms)` +
+    (r.outOff !== null ? `, lands on the body at ${(r.back + r.outOff - r.outSide).toFixed(2)}s from the side` : ""));
+  check("every real outbound with a side-view reading goes out at its measured offset after it, and lands within 0.1s of the side where measurable",
+    outs.length >= 3 && outs.every((r) => r.outAfter !== null && Math.abs(r.outAfter - outDelay) <= 50) &&
+    outs.filter((r) => r.outOff !== null).every((r) => Math.abs(r.back + r.outOff - r.outSide) <= 0.1), JSON.stringify(outs));
 }
 
 console.log(fails === 0 ? "\norient-engine: OK" : `\norient-engine: ${fails} FAILED`);
