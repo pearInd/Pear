@@ -168,13 +168,16 @@ const BOTTOMS_SPEC =
    negative_prompt those nouns are positive tokens, so the clause that was meant to LOCK
    the rear artwork was instructing the model to INVENT it. The replacement names no
    graphic and grounds on the reference instead; image-first's whole thesis (text volume
-   and named garment features compete with the pixels) is the reason it had to. */
+   and named garment features compete with the pixels) is the reason it had to.
+   AND ITS NOUN MOVED (2026-09-28): "shirt" -> "top" in both sentences, after a back render
+   drew an open button-up at the side view - the word the front anchor dropped for summoning
+   plackets (see "THE BACK LOSES THE WORD" in lib/prompts.js). */
 const BACK_TOPS_SPEC =
-  "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
+  "Drape and fit the EXACT static top's REAR/BACK side from the reference image onto" +
   " the live subject's CURRENT back contour and volume in this frame. Reproduce the rear" +
   " panel exactly as shown in the reference. Dynamically adapt the garment drape to the" +
   " subject's exact silhouette, angle, depth, and back volume without stretching or" +
-  " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.";
+  " warping the fabric. Strictly preserve the original top texture, pattern, and color.";
 const BACK_BOTTOMS_SPEC =
   "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
   " onto the live subject's CURRENT lower-body contour and volume in this frame." +

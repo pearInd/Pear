@@ -413,9 +413,13 @@ console.log("\n── §5 THE FRAME BUDGET ON THE WIRE ──");
      and the stall bridge show the camera directly, and 15fps is visibly not a mirror. What
      must NOT move is the wire rate, and the throttle must not ask the shared camera for it -
      a clone's frameRate constraint can drag the preview down with it. */
+  /* LIVE_INFERENCE_FPS went 10 -> 20 on 2026-09-28 ("fewer frames, choppy"): the render emits one
+     frame per frame it is sent, so the wire rate IS the try-on's frame rate. 10 was a leftover of
+     the per-frame billing belief (see the note above LIVE_DURATION_MS); the model runs at 30. Still
+     capped - below the camera and below the model - and still a deliberate number, so it is pinned. */
   check("...and the rate is capped below the local capture rate",
-    /const LIVE_FPS\s+= 60;/.test(SRC) && /const LIVE_INFERENCE_FPS\s+= 10;/.test(SRC),
-    "the preview is mirror-smooth locally; only 10 frames/s ever leave the browser");
+    /const LIVE_FPS\s+= 60;/.test(SRC) && /const LIVE_INFERENCE_FPS\s+= 20;/.test(SRC),
+    "the preview is mirror-smooth locally; only 20 frames/s ever leave the browser");
   const throttleSrc = extract("function createThrottledInputStream", "function releaseInputGate");
   check("...and the throttle's clone never constrains the shared camera's frame rate",
     /srcTrack\.applyConstraints\(\{\s*\n\s*width:/.test(throttleSrc) &&

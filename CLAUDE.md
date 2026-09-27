@@ -568,6 +568,23 @@ identical to a run on `3a9b55d`; `startRecording()` and the continuity layer are
 against main, and only then through the move. A rule tuned on this branch alone is what this
 section undoes.
 
+**Two deliberate changes on top of main (2026-09-28)**, after the first two measurements of the
+reverted branch ("almost perfect" on the angles - keep them - but "a button-up opened on my belly",
+"text in the air", "choppy, fewer frames"). Neither touches WHEN a swap goes out:
+- **`LIVE_INFERENCE_FPS` 10 -> 20.** The render emits one frame per frame it is sent, so the wire
+  rate IS the try-on's frame rate (TEST records: 10 and 6 fps out; every real clip 7-10 distinct
+  pictures a second). 10 was a June leftover of per-frame billing; the credit model has been
+  per-second since 1468655, and the SDK lists lucy-vton at 30. `first-frame-integrity` pins it.
+  **Check the credit charge of the first session at 20** - if Decart's bill moves, this is why.
+- **The back tops anchors say "top", not "shirt"** (Layer A, both back anchors). A back render drew
+  an OPEN button-up at the side view - the word the front dropped for summoning plackets.
+  49,434 of 161,756 pinned prompts moved, only by those two words; back tops 521 -> 517 chars
+  (plain 503 -> 499). `prompt-engine` re-pinned, `plain-tee-fidelity` §7.4.
+Not changed, and why: the reveal wait (~5s from connect - the cold-start hold, re-assert and
+settle in `config.js`, each a recorded fix); the salmon-shorts leak at the side view (a model-worn
+store photo's lower garment - Layer B, main has it, §2.15's note on where a garment box must come
+from).
+
 ---
 
 ## 3. Cross-file lockstep
