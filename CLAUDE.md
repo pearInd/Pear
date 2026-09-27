@@ -557,6 +557,28 @@ back-of-head vote at ~150°+. Two such paths existed; both are closed:
   clips render as a plain shirt, not the back print. The OUTBOUND is untouched (its early BACK renders
   plain if early; a late FRONT on the back half is the print on the back - the asymmetry is why only
   the return moved). §11/§13's non-negative-latency bars now gate the outbound only.
+- **SEND AT THE SIDE VIEW + THE MEASURED OFFSET - the current rule (sessions 4-5, 2026-09-27).**
+  The live lag probe made the offsets measurable by ANGLE-MATCHING (the output frame where the new
+  print first appears vs the camera moment at the same body angle - no lag estimate needed): the
+  return landed at send -0.31 / -0.36 / -0.36s where the switch was visible, the outbound -0.28s.
+  The "offset ~0" of the third session was an artifact of estimating the lag from yaw peaks. So the
+  earlier two rules both missed: the fold's yaw return fired AHEAD of the side (FRONT on the back),
+  the shoulder-vote return fired ~0.6s AFTER it (sessions 4-5: the BACK print on the chest). Now a
+  crossing at the side view - |yaw| >= `ORIENT_SIDE_DEG` (70) with a vote no longer for the side
+  being left, >= `ORIENT_SIDE_SURE_DEG` (85), or the torso lost with the last reading already there -
+  is SCHEDULED for that reading + `ORIENT_SIDE_RET_DELAY_MS` (330, the return; the return fires only
+  at the side, `ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG` 70) or `ORIENT_SIDE_OUT_DELAY_MS` (200, the
+  outbound when its crossing reading is itself at the side; below the side it fires at once, as it
+  always did). The engine hands it over up to 1.5 ticks early with `waitMs` and `maybeSwap()` waits
+  that out (capped at `ORIENT_SWAP_MAX_DELAY_MS`), so neither the 250ms tick nor a late one moves
+  it. A STRONG vote (shoulders/face - never skin, which reads a profile face as FRONT at the side)
+  for the side being left cancels a scheduled swap: a wobble at the side sends nothing. A backstop
+  covers a side view no reading caught (a peak >= `ORIENT_SIDE_PAST_PEAK_DEG`, then a strong FRONT
+  vote). On the five real sessions every return now goes out 326-332ms after its side reading and
+  lands within 0.03s of the side (`orient-engine` §7 replays them from
+  `test/real-turns-2026-09-27.json`); `turn-yaw-window` §15 models it on the measured offsets.
+  **Deploy order matters:** the room (which honours `waitMs`) must be live BEFORE the Worker - an
+  old room ignores `waitMs` and would send a scheduled return up to 375ms early.
 - **THE OFFSET VARIES BY SESSION, so no fixed rule is right for all of them** (third session,
   2026-09-27 17:20Z): lag 0.82s with no growth despite a 460ms ack, and the return landed at send
   +0.0s - the FRONT went out on the second shoulder vote (swing 88->47, under 45) and the chest showed

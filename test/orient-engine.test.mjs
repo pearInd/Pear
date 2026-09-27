@@ -42,7 +42,14 @@ import { runCorpus } from "./orient-replay.mjs";
    print on the shopper's back, frame by frame). Over the full 4,116-session corpus 775 logs changed and not one
    session's first BACK dispatch moved: the outbound is untouched. The previous pin (10ef2eae…359c49) is this file with
    the old engine. See turn-yaw-window §15 for the measured-timing model and its bars. */
-const PINNED = "7610452ea3dc455c7cf842f841298686b4cd4c6e88de4d0e4b414ecd4e791d92";
+/* RE-PINNED A THIRD TIME 2026-09-27 (sessions 4-5: the BACK print on the chest on the way round to the front): a
+   crossing at the side view is SCHEDULED for its reading + the measured render offset (ORIENT_SIDE_DEG; the return
+   ORIENT_SIDE_RET_DELAY_MS = 330, the outbound ORIENT_SIDE_OUT_DELAY_MS = 200 when its crossing reading is itself at
+   the side) and handed to the browser up to a tick and a half early with the exact `waitMs`; the return fires at the
+   side again (ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG 0 -> 70), with a backstop for a side view no reading caught. Over the
+   4,116-session corpus 690 logs changed: the returns, and 13 first BACK dispatches that moved ~120ms later because
+   their crossing reading was already at the side. §7 replays the five real sessions. Previous pin: 7610452e…791d92. */
+const PINNED = "661afc9d2512a37bccd99879c4713a66325838ca41f2d1ba537800d074a4227d";
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -249,6 +256,39 @@ console.log("\n── §6 the edge answers /size and /prompt with the SAME modul
     (await tcall({ v: 1, id: "x", ev: "no" })).status === 400 && (await tcall("x".repeat(300000))).status === 413 && puts.length === 1);
   check("a foreign origin is refused, and no TRACES binding stores nothing (404)",
     (await tcall(rec, { origin: "https://evil.example" })).status === 403 && (await tcall(rec, { withKv: false })).status === 404 && puts.length === 1);
+}
+
+/* ── §7 five real 360s, replayed (2026-09-27) ───────────────────────────────────────────── */
+console.log("\n── §7 on five real sessions the return goes out at the side view + the measured offset ──");
+{
+  /* The flight records of five real turns (test/real-turns-2026-09-27.json - numbers only), each tick replayed
+     through the engine with the lock following its own swaps. The render paints a swap on the body as it was ~0.3s
+     before the send; the return must therefore go out ~0.33s after the camera saw the side view - never before it
+     (the FRONT print on the back, session 2) and not ~0.6s after (the BACK print on the chest, sessions 4-5). */
+  const data = JSON.parse(readFileSync(new URL("./real-turns-2026-09-27.json", import.meta.url), "utf8"));
+  const retDelay = Number((/const ORIENT_SIDE_RET_DELAY_MS = (\d+);/.exec(ENGINE_SRC) || [])[1]);
+  const rows = data.sessions.map((sess) => {
+    const eng = E.createOrientEngine(E.sanitizeOrientKnobs({}));
+    let lock = null, profile = false, front = null;
+    for (const [t0, v, f, pv, ps, y, ya, la, d, rtt] of sess.samples) {
+      const t = 1_000_000 + t0 - (rtt || 0);
+      const acts = eng.step(E.sanitizeOrientSample({ t, vote: v, faceSeen: !!f, poseVoted: !!pv, profileScore: ps ?? 0, yawAbs: y,
+        yawAt: ya == null ? 0 : t - ya, lostAt: la == null ? 0 : t - la, lock, profile, dualView: !!d }));
+      for (const a of acts) {
+        if (a.do === "profile") profile = a.next;
+        if (a.do !== "swap" || a.next === lock) continue;
+        if (a.next === "front" && lock === "back" && front === null) front = (t0 + (a.waitMs || 0) - sess.reveal) / 1000;
+        lock = a.next;
+      }
+    }
+    return { name: sess.name, side: sess.retSide, off: sess.retOffset, front, after: front === null ? null : Math.round((front - sess.retSide) * 1000) };
+  });
+  for (const r of rows) console.log(`        ${r.name}: side view ${r.side}s, FRONT out at ${r.front}s (+${r.after}ms)` +
+    (r.off !== null ? `, lands on the body at ${(r.front + r.off - r.side).toFixed(2)}s from the side` : ""));
+  check("every real return goes out after the camera saw the side view, at the measured offset (within 50ms of it)",
+    rows.every((r) => r.after !== null && Math.abs(r.after - retDelay) <= 50), JSON.stringify(rows));
+  check("...so where the switch was measurable it lands on the body within 0.1s of the side view - never the FRONT print on the back, never the BACK print on the chest",
+    rows.filter((r) => r.off !== null).every((r) => Math.abs(r.front + r.off - r.side) <= 0.1), JSON.stringify(rows));
 }
 
 console.log(fails === 0 ? "\norient-engine: OK" : `\norient-engine: ${fails} FAILED`);

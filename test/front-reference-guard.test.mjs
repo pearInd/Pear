@@ -48,7 +48,7 @@ function check(label, cond, detail) {
   if (!cond && detail !== undefined) console.log(`        ${detail}`);
 }
 
-const start = SRC.indexOf("  async function maybeSwap(next, predictive = false) {");
+const start = SRC.indexOf("  async function maybeSwap(next, predictive = false, waitMs = 0) {");
 const end   = SRC.indexOf("  /* The edge-on counterpart of maybeSwap");
 if (start === -1 || end === -1) { console.log("FAIL  could not extract maybeSwap()"); process.exit(1); }
 const swapSrc = SRC.slice(start, end);
@@ -66,7 +66,7 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
                    startOrientation = "back", flat = false, applyThrows = false,
                    blobLooksFlat = async () => flat, wire,
                    lastSwapAgoMs = null, lastSwapWasPredictive = false, gate = false, holdOptIn = gate,
-                   applyingForMs = 0 } = {}) {
+                   applyingForMs = 0, clockOn = applyingForMs > 0 } = {}) {
   const calls = [];
   /* §11 only: a profile/re-anchor apply holds `applying` for applyingForMs of SIMULATED time.
      The clock advances only through maybeSwap's own setTimeout, so the wait is measured exactly. */
@@ -112,13 +112,13 @@ function harness({ frontBlob = { size: 1, type: "image/jpeg" },
     orientHoldExtend: () => calls.push({ op: "holdExtend" }),
     orientHoldEnd: (r) => calls.push({ op: "holdEnd", r }),
     applyActive: async () => {
-      calls.push({ op: "applyActive" });
+      calls.push({ op: "applyActive", at: clock.now - clock.start });
       if (applyThrows) throw new Error("set() failed: ack timeout");
     },
     abbrevImg: (s) => String(s),
     toast: (t) => calls.push({ op: "toast", t }),
     setTimeout: (fn) => { fn(); return 0; },
-    ...(applyingForMs ? {
+    ...(clockOn ? {
       Date: { now: () => clock.now },
       setTimeout: (fn, ms) => {
         clock.now += ms || 0;
@@ -467,6 +467,26 @@ console.log("\n── §11 a decided swap waits out a short in-flight apply ─�
   await free.maybeSwap("back");
   check("with nothing in flight the swap goes out at once, as always",
     free.calls.some((c) => c.op === "applyActive") && free.state().autoOrientation === "back");
+}
+
+/* ── §12 THE MEASURED MOMENT: a scheduled swap is dispatched after the engine's waitMs (2026-09-27) ──
+   The engine sends a side-view crossing up to a tick and a half before its moment, with the rest as waitMs
+   (lib/orient-engine.js, ORIENT_SIDE_DEG); the browser holds the dispatch that long, and never longer than
+   ORIENT_SWAP_MAX_DELAY_MS whatever the link says. */
+console.log("\n── §12 a scheduled swap goes out after its waitMs, bounded ──");
+{
+  const w = harness({ startOrientation: "front", clockOn: true });
+  await w.maybeSwap("back", true, 230);
+  const apply = w.calls.find((c) => c.op === "applyActive");
+  check("a swap sent with waitMs 230 is dispatched 230ms later - not on the tick", !!apply && apply.at === 230 && w.state().autoOrientation === "back",
+    JSON.stringify(w.calls.map((c) => [c.op, c.at])));
+  const big = harness({ startOrientation: "front", clockOn: true });
+  await big.maybeSwap("back", true, 60000);
+  const bigApply = big.calls.find((c) => c.op === "applyActive");
+  check("...and a waitMs the link got wrong is capped at ORIENT_SWAP_MAX_DELAY_MS", !!bigApply && bigApply.at <= 400, JSON.stringify(bigApply));
+  const none = harness({ startOrientation: "front", clockOn: true });
+  await none.maybeSwap("back", true);
+  check("...while a swap with no waitMs goes out at once, exactly as before", none.calls.find((c) => c.op === "applyActive")?.at === 0);
 }
 
 console.log(fails === 0 ? "\nfront-reference-guard: OK" : `\nfront-reference-guard: ${fails} FAILED`);

@@ -536,7 +536,7 @@ if (orientPredictBack && orientFlipDecision) {
   check("...and the pose/re-anchor updates stand aside for it exactly as for a confirmed swap",
     /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{/.test(watcher));
   check("maybeSwap() lets a face return withdraw a predictive BACK inside the cooldown - and only that",
-    /async function maybeSwap\(next, predictive = false\)/.test(watcher) &&
+    /async function maybeSwap\(next, predictive = false, waitMs = 0\)/.test(watcher) &&
     /const withdrawing = next === "front" && lastSwapPredictive;/.test(watcher) &&
     /if \(applying \|\| \(Date\.now\(\) - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing\)\) \{\s*\n[^\n]*"swap-drop"[^\n]*\n\s*return;\n\s*\}/.test(watcher));
   /* 2026-09-27: a swap no longer drops on a busy `applying` at once - it waits a bounded
@@ -833,14 +833,15 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
     /* `laterSwapMs` (2026-09-27, §15): the dispatch-to-screen offset of every swap AFTER the session's first, which two
        real sessions measured NEGATIVE - the render applies a new reference to frames of the body from before it was sent,
        and more so as each swap adds its ack to the session's lag. Defaults to `swapMs`, so every section above is unchanged. */
-    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700, laterSwapMs = null, earlyDeg = 0, measureFrom = 0, minSpeed = 0, yawNoise = 0, returnDeg = null, slowDeg = 0, lossDeg = 0, busyMs = null, postPeak = true }) {
+    /* `side` (2026-09-27): the production trigger's side-view scheduling (ORIENT_SIDE_DEG) - null is the trigger as it was. */
+    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700, laterSwapMs = null, earlyDeg = 0, measureFrom = 0, minSpeed = 0, yawNoise = 0, returnDeg = null, slowDeg = 0, lossDeg = 0, busyMs = null, postPeak = true, side = null }) {
       let s = seed; const rand = () => ((s = (s * 16807) % 2147483647) / 2147483647);
       const facing = (deg) => { const m = ((deg % 360) + 360) % 360; return m > 180 ? 360 - m : m; };
       const seg = script || [[0, 1000], [360, (360 / speed) * 1000], [360, 3000]];
       const angleAt = (t) => { let from = 0, t0 = 0; for (const [to, dur] of seg) { if (t <= t0 + dur) return from + (to - from) * ((t - t0) / dur); from = to; t0 += dur; } return seg[seg.length - 1][0]; };
       const total = seg.reduce((a, [, d]) => a + d, 0);
       const win = makeTurnYawWindow();
-      const early = earlyDeg > 0 && makeEarlyTurnTrigger ? makeEarlyTurnTrigger(earlyDeg, minSpeed, returnDeg === null ? earlyDeg : returnDeg, slowDeg, numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG"), [450, 960], lossDeg) : null;   // §11 - null by default
+      const early = earlyDeg > 0 && makeEarlyTurnTrigger ? makeEarlyTurnTrigger(earlyDeg, minSpeed, returnDeg === null ? earlyDeg : returnDeg, slowDeg, numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG"), [450, 960], lossDeg, side) : null;   // §11 - null by default
       let lock = "front", lastVote = null, streak = 0, streakSince = 0, poseStreak = 0, poseSide = null;
       let lastSwapAt = -Infinity, lastSwapPredictive = false, busyUntil = 0;
       let sep = null, sepAt = 0, yaw = null, yawAt = 0, lostAt = 0, nextPub = 0, landed = "front";
@@ -873,15 +874,17 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
           postPeakVotes: postPeak ? tw.postPeakVotes : Infinity,
           postPeakHeld: !postPeak ? Infinity : tw.postPeakSince === null ? 0 : t - tw.postPeakSince });
         const predict = !d.confirmed && orientPredictBack({ acquiring: false, lock, win, yawAbs: fresh ? yaw : null, now: t });
-        const swap = (side, predictive, via = "vote") => {
+        /* waitMs: the browser holds the dispatch that long (maybeSwap) - the tick is busy for it, as it is awaited. */
+        const swap = (side, predictive, via = "vote", waitMs = 0) => {
           if (t - lastSwapAt < COOLDOWN && !(side === "front" && lastSwapPredictive)) return;
           const lat = sent.length && laterSwapMs !== null ? laterSwapMs : swapMs;
-          lock = side; lastSwapAt = t; lastSwapPredictive = predictive; busyUntil = t + (busyMs === null ? swapMs : busyMs);
-          pending.push({ at: t + lat, pushT: t, side, seq: pending.length }); sent.push({ side, body: Math.round(angleAt(t)), via, lat });
+          const d = t + waitMs;
+          lock = side; lastSwapAt = d; lastSwapPredictive = predictive; busyUntil = d + (busyMs === null ? swapMs : busyMs);
+          pending.push({ at: d + lat, pushT: d, side, seq: pending.length }); sent.push({ side, body: Math.round(angleAt(d)), via, lat });
         };
         /* §11: the tick's early-turn block - only with ?early_turn, only when nothing confirmed or predictive is due. */
-        const ea = early && !d.confirmed && !predict ? early.observe({ vote, lock, yawAbs: fresh ? yaw : null, at: fresh ? yawAt : null, lostAt }) : null;
-        if (ea && ea.fire) { lastVote = null; streak = 0; poseStreak = 0; poseSide = null; swap(ea.fire, ea.fire === "back", "early"); continue; }
+        const ea = early && !d.confirmed && !predict ? early.observe({ vote, lock, yawAbs: fresh ? yaw : null, at: fresh ? yawAt : null, lostAt, now: t, strong: !!vote }) : null;
+        if (ea && ea.fire) { lastVote = null; streak = 0; poseStreak = 0; poseSide = null; swap(ea.fire, ea.fire === "back", "early", ea.waitMs || 0); continue; }
         if (ea && ea.withdraw) { if (ea.withdraw === "back") lastSwapAt = -Infinity; swap(ea.withdraw, false, "withdraw"); continue; }
         if (d.confirmed && d.early && lastVote === "back") swap("back", true);
         else if (d.confirmed) swap(lastVote, false);
@@ -1093,7 +1096,9 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
     console.log("\n── §11 THE PRODUCTION DEFAULT - ?early_turn=" + numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") + " gated at " + numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED") + " deg/s, a product decision on these numbers ──");
     const PD = numOr("ORIENT_EARLY_TURN_DEFAULT_DEG"), PS = numOr("ORIENT_EARLY_TURN_DEFAULT_SPEED"), PR = numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG"), PSL = numOr("ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG");
     const PL = numOr("ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG");
-    const PROD = { earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: PSL, lossDeg: PL };
+    const SIDE_CFG = { deg: numOr("ORIENT_SIDE_DEG"), sureDeg: numOr("ORIENT_SIDE_SURE_DEG"), pastPeakDeg: numOr("ORIENT_SIDE_PAST_PEAK_DEG"), outDelayMs: numOr("ORIENT_SIDE_OUT_DELAY_MS"),
+      retDelayMs: numOr("ORIENT_SIDE_RET_DELAY_MS"), tickMs: numOr("ORIENT_TICK_MS") };
+    const PROD = { earlyDeg: PD, minSpeed: PS, returnDeg: PR, slowDeg: PSL, lossDeg: PL, side: Number.isFinite(SIDE_CFG.deg) ? SIDE_CFG : null };
     /* THE 20-DEGREE DEFAULT (v134-v142) - the configuration the gate (60 -> 45), the return leg (35) and the slow path (35)
        were each decided on. The checks below that record WHY those numbers were taken are pinned to it, literally, so they
        keep testing the mechanism they were written for; the fold handshake (§13) replaced the default, and this
@@ -1541,49 +1546,64 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       poseCost.every((r) => r.after.wrong <= r.before.wrong && r.after.stuck === 0),
       JSON.stringify(poseCost.filter((r) => r.after.wrong > r.before.wrong || r.after.stuck).map((r) => [r.name, r.before, r.after])));
 
-    console.log("\n── §15 THE MEASURED RENDER TIMING - the return waits for the camera to say FRONT ──");
-    const OLD50 = { ...PROD, returnDeg: 50 };
+    console.log("\n── §15 THE MEASURED RENDER TIMING - each swap sent at the side view + the measured offset ──");
+    /* Three configurations on the timing five real sessions measured (a swap lands on the body as it was ~0.3s before
+       it was sent; the first swap's offset -0.28s where visible, >= -0.16s where not):
+         OLD50 - the fold as it shipped: FRONT fired on the yaw at 50 from back-square, immediately;
+         VOTE  - the first fix: no yaw return, the first shoulder vote for FRONT carries it;
+         NOW   - the production default: a crossing at the side view is scheduled for that reading + the offset. */
+    const OLD50 = { ...PROD, returnDeg: 50, side: null };
+    const VOTE = { ...PROD, returnDeg: 0, side: null };
     const m15 = [];
-    for (const first of [-100, 0, 100]) for (const later of [-270, -430]) {
+    for (const first of [-300, -150, 0]) for (const later of [-200, -300, -400]) {
       const rows = foldTurns.map((f) => {
         const o = { script: [[0, 1000 + f.phase], [360, (360 / f.speed) * 1000], [360, 3000]], k: f.k, readableTo: f.readableTo, swapMs: first, laterSwapMs: later, busyMs: BUSY };
-        return { f, v: simulateGap({ ...o, ...V142 }), old: simulateGap({ ...o, ...OLD50 }), now: simulateGap({ ...o, ...PROD }), off: simulateGap(o) };
+        return { f, v: simulateGap({ ...o, ...V142 }), old: simulateGap({ ...o, ...OLD50 }), vote: simulateGap({ ...o, ...VOTE }), now: simulateGap({ ...o, ...PROD }), off: simulateGap(o) };
       });
       const ok = rows.filter((r) => r.old.completed && r.now.completed);
       const mean = (key, leg) => Math.round(ok.reduce((a, r) => a + r[key].leg[leg], 0) / ok.length);
-      const retLand = (key) => {
-        const xs = ok.map((r) => { const fr = [...r[key].sent].reverse().find((x) => x.side === "front"); return fr ? 360 - (fr.body + (fr.lat / 1000) * r.f.speed) : null; })
-          .filter((x) => x !== null).sort((a, b) => a - b);
-        return { med: Math.round(xs[Math.floor(xs.length / 2)]), worst: Math.round(xs[xs.length - 1]), onBack: xs.filter((x) => x > 100).length };
+      const landOf = (key, side) => {
+        const xs = ok.map((r) => {
+          const x = side === "front" ? [...r[key].sent].reverse().find((e) => e.side === "front") : r[key].sent.find((e) => e.side === "back");
+          if (!x) return null;
+          const body = x.body + (x.lat / 1000) * r.f.speed;
+          return side === "front" ? 360 - body : body;
+        }).filter((x) => x !== null).sort((p, q) => p - q);
+        return { med: Math.round(xs[Math.floor(xs.length / 2)]), lo: Math.round(xs[Math.floor(xs.length * 0.05)]), hi: Math.round(xs[Math.floor(xs.length * 0.95)]),
+          wrong: side === "front" ? xs.filter((x) => x > 100).length : xs.filter((x) => x < 80).length };
       };
-      const row = { first, later, n: ok.length, rows, inc: { v: rows.filter((r) => !r.v.completed).length, old: rows.filter((r) => !r.old.completed).length, now: rows.filter((r) => !r.now.completed).length, off: rows.filter((r) => !r.off.completed).length } };
-      for (const key of ["v", "old", "now", "off"]) {
-        row[key] = { retPlain: mean(key, "retPlain"), retLate: mean(key, "retLate"), outPlain: mean(key, "outPlain"), outLate: mean(key, "outLate"), land: retLand(key) };
+      const row = { first, later, n: ok.length, rows, inc: { v: rows.filter((r) => !r.v.completed).length, old: rows.filter((r) => !r.old.completed).length, vote: rows.filter((r) => !r.vote.completed).length, now: rows.filter((r) => !r.now.completed).length, off: rows.filter((r) => !r.off.completed).length } };
+      for (const key of ["v", "old", "vote", "now", "off"]) {
+        row[key] = { retPlain: mean(key, "retPlain"), retLate: mean(key, "retLate"), outPlain: mean(key, "outPlain"), outLate: mean(key, "outLate"), land: landOf(key, "front"), outLand: landOf(key, "back") };
         row[key].total = row[key].retPlain + row[key].retLate + row[key].outPlain + row[key].outLate;
       }
       m15.push(row);
-      console.log(`        first ${first}ms, later ${later}ms (${row.n} 360s): FRONT on the back ${row.v.retPlain} (v142) / ${row.old.retPlain} (return 50) -> ${row.now.retPlain}ms` +
-        ` | BACK past the side on return ${row.v.retLate} / ${row.old.retLate} -> ${row.now.retLate}ms | return landing median ${row.v.land.med}/${row.old.land.med} -> ${row.now.land.med}°, worst ${row.v.land.worst}/${row.old.land.worst} -> ${row.now.land.worst}°, >100° ${row.v.land.onBack}/${row.old.land.onBack} -> ${row.now.land.onBack}` +
-        ` | out ${row.now.outPlain}+${row.now.outLate} | never completes ${JSON.stringify(row.inc)}`);
-      console.log(`            either side of the fold, per 360: v142 ${row.v.total} / return 50 ${row.old.total} / trigger off ${row.off.total} -> ${row.now.total}ms`);
+      const L = (x) => `${x.med}° [${x.lo}-${x.hi}]`;
+      console.log(`        first ${first}ms, later ${later}ms (${row.n}): RETURN landing old50 ${L(row.old.land)} | vote ${L(row.vote.land)} | now ${L(row.now.land)} (90 = the side)` +
+        ` · FRONT on the back ${row.old.retPlain}/${row.vote.retPlain}/${row.now.retPlain}ms · BACK on the front after the side ${row.old.retLate}/${row.vote.retLate}/${row.now.retLate}ms`);
+      console.log(`            OUTBOUND landing vote ${L(row.vote.outLand)} -> now ${L(row.now.outLand)} · BACK on the front ${row.vote.outPlain} -> ${row.now.outPlain}ms · FRONT on the back ${row.vote.outLate} -> ${row.now.outLate}ms` +
+        ` · either side of the fold per 360: v142 ${row.v.total} / old50 ${row.old.total} / vote ${row.vote.total} / off ${row.off.total} -> now ${row.now.total}ms · never completes ${JSON.stringify(row.inc)}`);
     }
-    check("THE REPORT, modelled on the measured timing: the old default (the yaw fires FRONT at 50 from back-square) lands FRONT more than 10 degrees onto the back half in most full 360s - the print on the shopper's back",
-      m15.every((m) => m.old.land.onBack * 2 > m.n && m.old.land.med > 100), JSON.stringify(m15.map((m) => [m.first, m.later, m.old.land])));
-    check("THE FIX: FRONT on the back during the return falls by 90%+ at every measured offset, and no modelled 360 lands FRONT more than 10 degrees onto the back half",
-      m15.every((m) => m.now.retPlain * 10 <= m.old.retPlain && m.now.land.onBack === 0 && m.now.land.worst <= 100),
-      JSON.stringify(m15.map((m) => [m.first, m.later, m.old.retPlain, m.now.retPlain, m.now.land])));
-    check("...the return's median landing is on the FRONT half, within 45 degrees of the side view",
-      m15.every((m) => m.now.land.med <= 90 && m.now.land.med >= 45), JSON.stringify(m15.map((m) => [m.first, m.later, m.now.land.med])));
-    /* THE COST, stated: waiting for the camera leaves the BACK reference on past the side view - on the FRONT half,
-       where both clips show the render drawing a plain shirt, not the back print. Bounded so a later return has to
-       restate it. And the outbound is untouched: same trigger, same numbers. */
-    check("THE COST, bounded: the BACK reference past the side on the return stays under 500ms per 360, and no turn stops completing",
-      m15.every((m) => m.now.retLate < 500 && m.inc.now <= m.inc.old), JSON.stringify(m15.map((m) => [m.first, m.later, m.now.retLate, m.inc])));
-    check("...the outbound leg is exactly what it was: the same BACK dispatches at the same body angles",
-      m15.every((m) => m.rows.every((r) => JSON.stringify(r.now.sent.filter((x) => x.side === "back")) === JSON.stringify(r.old.sent.filter((x) => x.side === "back")))),
-      "an outbound BACK moved");
-    check("...and the time the other side shows either side of the fold is below v142's and the trigger-off config's at every measured offset",
-      m15.every((m) => m.now.total < m.v.total && m.now.total < m.off.total), JSON.stringify(m15.map((m) => [m.first, m.later, m.v.total, m.off.total, m.now.total])));
+    const wrongPct = (m, key) => m[key].land.wrong / m.n;
+    check("THE REPORT (session 2), on the measured timing: the fold's return (FRONT on the yaw at 50, at once) lands FRONT more than 10 degrees onto the back half in most full 360s",
+      m15.every((m) => m.old.land.wrong >= 150), JSON.stringify(m15.map((m) => [m.first, m.later, m.old.land])));
+    check("THE REPORT (sessions 4-5): waiting for the camera's FRONT vote lands the return 20+ degrees onto the front half (median) - the BACK print on the chest",
+      m15.every((m) => m.vote.land.med <= 70), JSON.stringify(m15.map((m) => [m.first, m.later, m.vote.land])));
+    check("THE FIX: scheduled at the side view, FRONT on the back falls 90%+ against the fold's, and at most 5% of 360s land it past 100 degrees at the measured -0.3s (10% at -0.4s)",
+      m15.every((m) => m.now.retPlain * 10 <= m.old.retPlain && wrongPct(m, "now") <= (m.later <= -400 ? 0.10 : 0.05)),
+      JSON.stringify(m15.map((m) => [m.first, m.later, m.old.retPlain, m.now.retPlain, m.now.land.wrong])));
+    check("...and it lands EARLIER than the vote did: the median nearer the side, and the BACK print on the chest after the side down 15%+",
+      m15.every((m) => m.now.land.med >= m.vote.land.med + 5 && m.now.retLate <= 0.85 * m.vote.retLate),
+      JSON.stringify(m15.map((m) => [m.first, m.later, m.vote.land.med, m.now.land.med, m.vote.retLate, m.now.retLate])));
+    check("THE COST, bounded: FRONT on the back stays under 40ms per 360, the outbound is no worse on either side of the fold, and no turn stops completing",
+      m15.every((m) => m.now.retPlain < 40 && m.now.outPlain <= m.vote.outPlain + 15 && m.now.outLate <= m.vote.outLate + 15 && m.inc.now <= m.inc.vote),
+      JSON.stringify(m15.map((m) => [m.first, m.later, m.now.retPlain, [m.vote.outPlain, m.now.outPlain], [m.vote.outLate, m.now.outLate], m.inc])));
+    /* One tie, stated: at the most negative outbound offset measured (-300) with a -400 return, the trigger-off config
+       (no early swap at all) shows the other side 837ms per 360 against this 839ms - its late vote-carried BACK happens
+       to land well when the first swap's offset is that negative. At every other offset this is 3-45% below it. */
+    check("...and the time the other side shows either side of the fold is below v142's and the vote's at every measured offset, and within 1% of (or below) the trigger-off config's",
+      m15.every((m) => m.now.total < m.v.total && m.now.total < m.vote.total && m.now.total <= m.off.total * 1.01),
+      JSON.stringify(m15.map((m) => [m.first, m.later, m.v.total, m.off.total, m.vote.total, m.now.total])));
 
   }
 
@@ -1834,9 +1854,15 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
        first shoulder vote for FRONT carries it (ORIENT_POSE_RETURN_FRAMES). "The return never sends
        FRONT earlier than the outbound thought worth swapping at" is satisfied by not sending on yaw at
        all; an A/B value (?early_turn_return=<deg>) is still clamped to [10, 60]. */
-    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG is 0 - OFF, the return waits for the camera to say FRONT (§15); an A/B value is clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 0 &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([0, 0, 0, 0, 20, 10, 60]), JSON.stringify(got));
+    /* ── 70, SCHEDULED, SINCE THE FIFTH SESSION (2026-09-27) ─────────────────────────────────────────────
+       Waiting for the camera's FRONT vote (0) landed the BACK print on the chest in sessions 4 and 5: the vote came
+       0.55-0.6s after the side view, and the render paints a swap ~0.3s into the past. The return now fires AT the side
+       view - |yaw| >= ORIENT_SIDE_DEG with a vote no longer for BACK, or >= ORIENT_SIDE_SURE_DEG - scheduled for that
+       reading + ORIENT_SIDE_RET_DELAY_MS, so it lands on the body at the side (§15). 70 is where that detection starts;
+       the ?early_turn_return A/B still clamps to [10, 60], and 0 still turns it off. */
+    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG is 70 - the return fires at the side view, scheduled (§15); an A/B value is clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 70 &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([70, 70, 0, 70, 20, 10, 60]), JSON.stringify(got));
   }
   const ls0 = SRC.indexOf("const ORIENT_EARLY_TURN_LOSS_DEG = (() => {");
   if (ls0 === -1) check("ORIENT_EARLY_TURN_LOSS_DEG reads ?early_turn_loss", false, "not found");
@@ -1931,16 +1957,16 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
   const w0 = SRC.indexOf("function createOrientationWatcher()");
   const watcher = WATCHER;
   check("the trigger is built from the parsed setting - and ?early_turn=0 makes it null, with every use inert",
-    /const earlyTurn = ORIENT_EARLY_TURN_DEG > 0\s*\n\s*\? makeEarlyTurnTrigger\(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,\s*\n\s*ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS, ORIENT_EARLY_TURN_LOSS_DEG\) : null;/.test(watcher) &&
+    /const earlyTurn = ORIENT_EARLY_TURN_DEG > 0\s*\n\s*\? makeEarlyTurnTrigger\(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,\s*\n\s*ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS, ORIENT_EARLY_TURN_LOSS_DEG,\s*\n\s*\{ deg: ORIENT_SIDE_DEG, sureDeg: ORIENT_SIDE_SURE_DEG, pastPeakDeg: ORIENT_SIDE_PAST_PEAK_DEG, outDelayMs: ORIENT_SIDE_OUT_DELAY_MS,\s*\n\s*retDelayMs: ORIENT_SIDE_RET_DELAY_MS, tickMs: ORIENT_TICK_MS \}\) : null;/.test(watcher) &&
     /const earlyAct = earlyTurn && dualView && !acquiring && !confirmed && !predictBack\s*\n\s*\? earlyTurn\.observe\(/.test(watcher));
   check("...and the tick hands it the pose loop's last unreadable inference, the fold-by-loss signal",
-    /earlyTurn\.observe\(\{ vote, lock: s\.lock, yawAbs: yawFresh \? s\.yawAbs : null, at: yawFresh \? s\.yawAt : null,\s*\n\s*lostAt: s\.lostAt \}\)/.test(watcher));
+    /earlyTurn\.observe\(\{ vote, lock: s\.lock, yawAbs: yawFresh \? s\.yawAbs : null, at: yawFresh \? s\.yawAt : null,\s*\n\s*lostAt: s\.lostAt, now: s\.t, strong: !!\(s\.poseVoted \|\| s\.faceSeen\) \}\)/.test(watcher));
   const skipAt = watcher.indexOf("if (!(dualView && (confirmed || predictBack))) {");
-  const fireAt = watcher.indexOf('act({ do: "swap", next: earlyAct.fire, predictive: earlyAct.fire === "back" });');
+  const fireAt = watcher.indexOf('const swapAct = { do: "swap", next: earlyAct.fire, predictive: earlyAct.fire === "back" };');
   const withdrawAt = watcher.indexOf('act({ do: "swap", next: earlyAct.withdraw, predictive: false });');
   check("the early block dispatches ahead of the pose/re-anchor updates and ends the tick (they would take the mutex and drop it)",
     fireAt !== -1 && withdrawAt !== -1 && fireAt < skipAt && withdrawAt < skipAt &&
-    /act\(\{ do: "swap", next: earlyAct\.fire, predictive: earlyAct\.fire === "back" \}\);[^\n]*\n\s*return acts;/.test(watcher) &&
+    /const swapAct = \{ do: "swap", next: earlyAct\.fire, predictive: earlyAct\.fire === "back" \};[^\n]*\n\s*if \(earlyAct\.waitMs > 0\) swapAct\.waitMs = earlyAct\.waitMs;\s*\n\s*act\(swapAct\);\s*\n\s*return acts;/.test(watcher) &&
     /act\(\{ do: "swap", next: earlyAct\.withdraw, predictive: false \}\);\s*\n\s*return acts;/.test(watcher));
   check("...clears the pre-turn streak before an early fire, and only a BACK withdrawal resets the cooldown",
     /if \(earlyAct && earlyAct\.fire\) \{[\s\S]*?lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;/.test(watcher) &&

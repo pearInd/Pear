@@ -7668,6 +7668,7 @@ const ORIENT_SAMPLE_MS      = 250;   // ~4 analyses/s - cheap on a 96px canvas
 const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
 const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
 const ORIENT_SWAP_WAIT_MS   = 1000;  // how long a decided swap waits out an in-flight profile/re-anchor apply (see maybeSwap)
+const ORIENT_SWAP_MAX_DELAY_MS = 400; // the most a swap's measured moment may hold it (the engine sends <= one tick, 250)
 
 /* Yaw corroboration, the pose flip, the side-view pass, post-peak evidence and the fold
    handshake (early turn) moved to lib/orient-engine.js. */
@@ -9469,13 +9470,23 @@ function createOrientationWatcher() {
      late, or not at all on a quick turn. Reported on a first measurement, frame by frame: no
      back print through the whole back view. The wait is bounded (ORIENT_SWAP_WAIT_MS); the
      anti-flap cooldown still drops, as it always did. */
-  async function maybeSwap(next, predictive = false) {
+  async function maybeSwap(next, predictive = false, waitMs = 0) {
+    /* THE MEASURED MOMENT (2026-09-27). A side-view crossing is sent ~0.3s after the camera saw the side, because
+       the render paints a swap on the body as it was ~0.3s before the send (lib/orient-engine.js, ORIENT_SIDE_DEG).
+       The engine decides on the last tick before that moment and says how much of it is left; waiting it out here
+       keeps the 250ms tick - or a late one - from moving the swap. Bounded, whatever the link sends. */
+    const maxDelay = typeof ORIENT_SWAP_MAX_DELAY_MS === "number" ? ORIENT_SWAP_MAX_DELAY_MS : 400;   // typeof: runs sandboxed (CLAUDE.md 2.7)
+    const wait = Number.isFinite(waitMs) ? Math.min(Math.max(0, waitMs), maxDelay) : 0;
+    if (wait > 0) {
+      await new Promise((r) => setTimeout(r, wait));
+      if (disposed) return;
+    }
     /* The cooldown is anti-flap, and withdrawing a PREDICTIVE BACK is the one flap that must not
        wait for it: the face came back, so the shopper never finished the turn and the back
        reference is sitting on their front. Only that direction and only that kind of swap -
        see ORIENT_PREDICTIVE_BACK. */
     const withdrawing = next === "front" && lastSwapPredictive;
-    if (typeof traceOrient === "function") traceOrient("swap-req", { next, predictive, applying, cooldown: Math.max(0, ORIENT_COOLDOWN_MS - (Date.now() - lastSwapAt)) });
+    if (typeof traceOrient === "function") traceOrient("swap-req", { next, predictive, applying, waited: wait, cooldown: Math.max(0, ORIENT_COOLDOWN_MS - (Date.now() - lastSwapAt)) });
     if (applying) {
       const waitUntil = Date.now() + ORIENT_SWAP_WAIT_MS;
       while (applying && Date.now() < waitUntil) await new Promise((r) => setTimeout(r, 20));
@@ -9914,7 +9925,7 @@ function createOrientationWatcher() {
         /* NOT AWAITED, exactly as before - see maybeApplyProfile()/maybeReanchorPrompt(). */
         else if (a.do === "profile") maybeApplyProfile(a.next).catch(() => {});
         else if (a.do === "reanchor") maybeReanchorPrompt().catch(() => {});
-        else if (a.do === "swap") await maybeSwap(a.next, a.predictive === true);
+        else if (a.do === "swap") await maybeSwap(a.next, a.predictive === true, a.waitMs);
       }
     } catch (_) {} finally { sampling = false; }
   }, ORIENT_SAMPLE_MS);
