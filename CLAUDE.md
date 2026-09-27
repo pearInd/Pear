@@ -539,6 +539,24 @@ back-of-head vote at ~150°+. Two such paths existed; both are closed:
   body 20-21% in the realistic environments. The anti-flap cooldown still drops, as before.
   `front-reference-guard` §11; `orient-engine` §1 re-pinned for exactly this (the wait removed
   reproduces the old pin).
+- **The render applies a new reference to the PAST - so the return waits for the camera to say
+  FRONT.** Measured on two real sessions (flight records + Apple Vision body pose on every output
+  frame): the output shows the body 0.67s after the camera at the first swap and 0.77 / 1.08s at the
+  return - the lag grew by about the first swap's ack - and a swap lands on the body as it was at
+  send -0.1..+0.06s on the way out, send **-0.27 / -0.43s** on the way back. Every calibration of the
+  early turn assumed that offset was 0-250ms and never negative. A FRONT fired ahead of the side view
+  (the fold's yaw return at 50) therefore lands on the back half - the FRONT print on the shopper's
+  back, frame by frame. Now `ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 0` (off; `?early_turn_return=<deg>`
+  for an A/B) and `ORIENT_POSE_RETURN_FRAMES = 1`: from a BACK lock, one shoulder vote for FRONT with
+  the torso's 45-degree swing down from the side view confirms the return (the side-view pass alone
+  is not enough for one vote - at the side the shoulder order is noise; 25-40 degree swings were swept
+  and put FRONT on the back at the slower measured offset). `turn-yaw-window` §15 models the measured
+  timing (`simulateGap`'s `laterSwapMs`, a post-run ledger that lets a landing precede its dispatch):
+  FRONT on the back per 360 366-510ms -> 4-10ms, 178-183 of 211 turns landing on the back half -> 0;
+  the COST is the BACK reference on past the side on the way back (43-75 -> 307-467ms), which both
+  clips render as a plain shirt, not the back print. The OUTBOUND is untouched (its early BACK renders
+  plain if early; a late FRONT on the back half is the print on the back - the asymmetry is why only
+  the return moved). §11/§13's non-negative-latency bars now gate the outbound only.
 - **The FLIGHT RECORDER** (`fitting-room/app.js`, after the orientation link). A TEST session -
   store key `TEST` (the preview script's `data-pear-key="TEST"`) or `?pear_trace=1` - keeps every
   orientation tick (the sample, the engine's reply, its round trip), every swap from `swap-req` to

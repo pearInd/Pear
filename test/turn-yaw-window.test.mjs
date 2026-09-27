@@ -96,12 +96,14 @@ if (start === -1 || end === -1 || end < start) {
   const api = new Function("ORIENT_YAW_TURN_DEG", "PRESENCE_PROMPT_YAW_SUPPRESS_DEG", "ORIENT_ACQUIRE_FRAMES",
     "ORIENT_LOCK_FRAMES", "ORIENT_CORROBORATED_FRAMES", "ORIENT_LOCK_MS", "ORIENT_FACE_RETURN_FRAMES",
     "ORIENT_EDGE_ON_DEG", "ORIENT_PREDICT_DESCENT_DEG", "ORIENT_PREDICT_DWELL_MS", "ORIENT_PREDICTIVE_BACK", "ORIENT_POSE_FLIP_FRAMES",
+    "ORIENT_POSE_RETURN_FRAMES",
     SRC.slice(start, end) +
     "\nreturn { makeTurnYawWindow," +
     " orientFlipDecision: typeof orientFlipDecision === 'function' ? orientFlipDecision : null," +
     " orientPredictBack: typeof orientPredictBack === 'function' ? orientPredictBack : null," +
     " makeEarlyTurnTrigger: typeof makeEarlyTurnTrigger === 'function' ? makeEarlyTurnTrigger : null };")(
-    TURN_DEG, LOSS_DEG, ACQ_F, LOCK_F, CORR_F, LOCK_MS, FACE_F, EDGE_DEG, DESCENT, DWELL_MS, true, numOr("ORIENT_POSE_FLIP_FRAMES"));
+    TURN_DEG, LOSS_DEG, ACQ_F, LOCK_F, CORR_F, LOCK_MS, FACE_F, EDGE_DEG, DESCENT, DWELL_MS, true, numOr("ORIENT_POSE_FLIP_FRAMES"),
+    numOr("ORIENT_POSE_RETURN_FRAMES"));
   makeTurnYawWindow = api.makeTurnYawWindow;
   orientFlipDecision = api.orientFlipDecision;
   orientPredictBack = api.orientPredictBack;
@@ -828,7 +830,10 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
        where BlazePose's labels are weakest; `dropout` loses random frames at any angle. */
     /* `lossDeg` is the trigger's fold-by-loss bar (§13); `busyMs` is how long the watcher awaits a swap - by default the
        render latency, as every section before §13 modelled it; §13 separates them. */
-    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700, earlyDeg = 0, measureFrom = 0, minSpeed = 0, yawNoise = 0, returnDeg = null, slowDeg = 0, lossDeg = 0, busyMs = null, postPeak = true }) {
+    /* `laterSwapMs` (2026-09-27, §15): the dispatch-to-screen offset of every swap AFTER the session's first, which two
+       real sessions measured NEGATIVE - the render applies a new reference to frames of the body from before it was sent,
+       and more so as each swap adds its ack to the session's lag. Defaults to `swapMs`, so every section above is unchanged. */
+    function simulateGap({ speed = 90, k = 0.75, readableTo = 60, pass = true, script, dropout = 0, noise = 0, seed = 7, swapMs = 700, laterSwapMs = null, earlyDeg = 0, measureFrom = 0, minSpeed = 0, yawNoise = 0, returnDeg = null, slowDeg = 0, lossDeg = 0, busyMs = null, postPeak = true }) {
       let s = seed; const rand = () => ((s = (s * 16807) % 2147483647) / 2147483647);
       const facing = (deg) => { const m = ((deg % 360) + 360) % 360; return m > 180 ? 360 - m : m; };
       const seg = script || [[0, 1000], [360, (360 / speed) * 1000], [360, 3000]];
@@ -852,18 +857,7 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
           } else lostAt = nextPub;
           nextPub += 240;
         }
-        while (pending.length && pending[0].at <= t) landed = pending.shift().side;
-        /* §11: FRONT on the wire while the body, on its way BACK round, still shows its back - the plain back of the live clip. 10ms resolution. */
-        if (landed === "front" && angleAt(t) >= 180 && facing(angleAt(t)) > 90) returnPlainMs += 10;
-        {
-          const a = angleAt(t), ph = facing(a);
-          if (a > 0 && a < 180) { if (landed === "back" && ph < 90) leg.outPlain += 10; if (landed === "front" && ph > 90) leg.outLate += 10; }
-          else if (a >= 180) { if (landed === "front" && ph > 90) leg.retPlain += 10; if (landed === "back" && ph < 90) leg.retLate += 10; }
-        }
         if (t % SAMPLE_MS !== 0) continue;
-        const phiNow = facing(angleAt(t));
-        if (t >= measureFrom && landed === "back" && phiNow < 90) backOnFront += SAMPLE_MS;
-        if (t >= measureFrom && landed === "front" && phiNow > 90) frontOnBack += SAMPLE_MS;
         if (t < busyUntil) continue;
         const vote = poseFacingVote({ sep, at: sepAt, now: t });
         if (vote) {
@@ -881,8 +875,9 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
         const predict = !d.confirmed && orientPredictBack({ acquiring: false, lock, win, yawAbs: fresh ? yaw : null, now: t });
         const swap = (side, predictive, via = "vote") => {
           if (t - lastSwapAt < COOLDOWN && !(side === "front" && lastSwapPredictive)) return;
+          const lat = sent.length && laterSwapMs !== null ? laterSwapMs : swapMs;
           lock = side; lastSwapAt = t; lastSwapPredictive = predictive; busyUntil = t + (busyMs === null ? swapMs : busyMs);
-          pending.push({ at: t + swapMs, side }); sent.push({ side, body: Math.round(angleAt(t)), via });
+          pending.push({ at: t + lat, pushT: t, side, seq: pending.length }); sent.push({ side, body: Math.round(angleAt(t)), via, lat });
         };
         /* §11: the tick's early-turn block - only with ?early_turn, only when nothing confirmed or predictive is due. */
         const ea = early && !d.confirmed && !predict ? early.observe({ vote, lock, yawAbs: fresh ? yaw : null, at: fresh ? yawAt : null, lostAt }) : null;
@@ -891,6 +886,28 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
         if (d.confirmed && d.early && lastVote === "back") swap("back", true);
         else if (d.confirmed) swap(lastVote, false);
         else if (predict) { lastVote = null; streak = 0; poseStreak = 0; poseSide = null; swap("back", true); }
+      }
+      /* THE LEDGER, after the run - a landing may now precede its dispatch (laterSwapMs < 0). A swap decided at tick T
+         lands at the first 10ms step at or after T + lat, and never on T's own step when lat >= 0 (the tick's decision came
+         after that step was counted) - exactly where the old in-loop ledger put it, so every non-negative row is unchanged.
+         With lat < 0 it lands in the past, on the depicted body the render was drawing when the new reference took hold. */
+      const ceil10 = (x) => Math.ceil(x / 10) * 10;
+      const lands = pending.map((p) => ({ ...p, eff: p.at < p.pushT ? ceil10(p.at) : Math.max(ceil10(p.at), p.pushT + 10) }))
+        .sort((a, b) => a.eff - b.eff || a.seq - b.seq);
+      let li = 0;
+      for (let t = 0; t <= total; t += 10) {
+        while (li < lands.length && lands[li].eff <= t) landed = lands[li++].side;
+        /* §11: FRONT on the wire while the body, on its way BACK round, still shows its back - the plain back of the live clip. 10ms resolution. */
+        if (landed === "front" && angleAt(t) >= 180 && facing(angleAt(t)) > 90) returnPlainMs += 10;
+        {
+          const a = angleAt(t), ph = facing(a);
+          if (a > 0 && a < 180) { if (landed === "back" && ph < 90) leg.outPlain += 10; if (landed === "front" && ph > 90) leg.outLate += 10; }
+          else if (a >= 180) { if (landed === "front" && ph > 90) leg.retPlain += 10; if (landed === "back" && ph < 90) leg.retLate += 10; }
+        }
+        if (t % SAMPLE_MS !== 0) continue;
+        const phiNow = facing(angleAt(t));
+        if (t >= measureFrom && landed === "back" && phiNow < 90) backOnFront += SAMPLE_MS;
+        if (t >= measureFrom && landed === "front" && phiNow > 90) frontOnBack += SAMPLE_MS;
       }
       const at = (side) => { const e = sent.find((x, i) => x.side === side && (side === "back" || i > 0)); return e ? e.body : null; };
       return { sent, backAt: at("back"), frontAt: at("front"), backOnFront, frontOnBack, returnPlainMs, leg, final: lock,
@@ -1089,8 +1106,12 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
     }
     const pMean = (key, lat) => { const xs = prodTurns.filter((x) => x.swapMs === lat); return Math.round(xs.reduce((a, x) => a + wrongMs(x[key]), 0) / xs.length); };
     for (const lat of [700, 1000]) console.log(`        full 360s at ${lat}ms render latency: wrong garment ${pMean("off", lat)}ms with the trigger off -> ${pMean("on", lat)}ms by default`);
-    check("every modelled full 360 completes under the default, none is worse than with the trigger off, and the mean is under half",
-      prodTurns.every((x) => x.on.completed && wrongMs(x.on) <= wrongMs(x.off)) && [700, 1000].every((lat) => pMean("on", lat) * 2 < pMean("off", lat)),
+    /* 2026-09-27: "and the mean is under half" was earned by a return the yaw fired EARLY, which a uniform 700-1000ms
+       model rewards and the measured render punishes - the return's offset is negative (§15), and there that early FRONT
+       lands on the back. The per-turn clauses stay here on this model, as the record; how much the default buys over the
+       trigger off is asserted on the measured timing in §15 ("below v142's and the trigger-off config's"). */
+    check("every modelled full 360 completes under the default, and none is worse than with the trigger off (the magnitude is §15's, on the measured timing)",
+      prodTurns.every((x) => x.on.completed && wrongMs(x.on) <= wrongMs(x.off)),
       JSON.stringify(prodTurns.filter((x) => !x.on.completed || wrongMs(x.on) > wrongMs(x.off)).map((x) => [x.speed, x.k, x.readableTo, x.swapMs, x.on.sent])));
     const prodSlow = [], prodFast = [];
     for (const yawNoise of [0, 4]) {
@@ -1262,10 +1283,19 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
        harder. See ORIENT_EARLY_TURN_DEFAULT_DEG's comment for the full ledger. */
     check("THE FIX, at the middle ground: early plain still falls by at least 20% at every clip latency (the fold handshake's 50 reached 40%+ - that margin is what 35 traded for less late pop-in)",
       clipLats.every((lat) => foldLat[lat].pEarly <= 0.8 * foldLat[lat].vEarly), JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].vEarly, foldLat[lat].pEarly])));
-    check("...both swaps land within 25 degrees of the side view (median, both legs, every clip latency)",
-      clipLats.every((lat) => Math.abs(foldLat[lat].pLand.out - 90) <= 25 && Math.abs(foldLat[lat].pLand.ret - 90) <= 25), JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].pLand])));
-    check("...and plain shirt on EITHER side of the fold falls too - at every clip latency, and at the 700ms this file used to assume",
-      [0, 100, 250, 700].every((lat) => foldLat[lat].pTotal < foldLat[lat].vTotal), JSON.stringify([0, 100, 250, 700].map((lat) => [lat, foldLat[lat].vTotal, foldLat[lat].pTotal])));
+    /* ── THE RETURN LEG LEFT THIS MODEL ON 2026-09-27 ────────────────────────────────────────────
+       These two checks scored BOTH legs on a dispatch-to-screen offset of 0-250ms (and 700). Two real sessions measured
+       the return's at -270 / -430ms (§15): the render applies a new reference to the body as it was before the send. On
+       that timing the old return (yaw at 50) lands FRONT on the back half in most 360s, and the return now waits for the
+       camera's first FRONT - which this non-negative model scores as late. So the return is scored in §15, on the
+       measured offsets, where its landing, its FRONT-on-the-back time and its cost are each asserted; the OUTBOUND,
+       whose first-swap offset measured -0.1..+0.06s, i.e. inside these clip latencies, stays here unchanged. */
+    check("...the OUTBOUND swap lands within 25 degrees of the side view (median, every clip latency); the return is §15's, on the measured offsets",
+      clipLats.every((lat) => Math.abs(foldLat[lat].pLand.out - 90) <= 25), JSON.stringify(clipLats.map((lat) => [lat, foldLat[lat].pLand])));
+    const outTotal = (legs) => legs[0] + legs[1];
+    check("...and on the outbound, plain shirt on EITHER side of the fold falls too - at every clip latency",
+      clipLats.every((lat) => outTotal(foldLat[lat].legs.p) < outTotal(foldLat[lat].legs.v)),
+      JSON.stringify([0, 100, 250, 700].map((lat) => [lat, outTotal(foldLat[lat].legs.v), outTotal(foldLat[lat].legs.p)])));
     /* THE STATED COST: a turn so fast and so depth-compressed that no reading lands between square and the torso loss, and none
        past lossDeg before it, gives the fold nothing to read - and the vote path cannot catch a 150-180 deg/s turn either. */
     const newInc = [...new Set(clipLats.flatMap((lat) => foldLat[lat].pInc.filter((r) => r.v.completed).map((r) => JSON.stringify(r.f))))];
@@ -1329,7 +1359,9 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
       const settled = angles.slice(angles.indexOf(180));
       return 180 - Math.min(...settled);
     };
-    const reachesSide = (r) => peakOf(r) >= numOr(r.away ? "ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG" : "ORIENT_EARLY_TURN_DEFAULT_DEG");
+    /* 0 is OFF (the return leg since 2026-09-27, §15): no pose reaches a threshold that does not fire. */
+    const thresholdOf = (name) => { const v = numOr(name); return v > 0 ? v : Infinity; };
+    const reachesSide = (r) => peakOf(r) >= thresholdOf(r.away ? "ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG" : "ORIENT_EARLY_TURN_DEFAULT_DEG");
     check("every pose that stops SHORT of the trigger's own threshold and v142 swapped on at least a third of the time, the trigger swaps on at most half as often",
       foldPoseRows.filter((r) => !reachesSide(r) && r.v.fired * 3 >= r.v.n).every((r) => r.p.fired * 2 <= r.v.fired),
       JSON.stringify(foldPoseRows.filter((r) => !reachesSide(r) && r.v.fired * 3 >= r.v.n && r.p.fired * 2 > r.v.fired).map((r) => [r.name, r.v.fired, r.p.fired])));
@@ -1382,13 +1414,17 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
         !capped.confirmed && !capped.faceReturn && !capped.poseFlip, JSON.stringify(capped));
       const acq = orientFlipDecision({ ...every, acquiring: true, lock: null, streak: 2, postPeakVotes: 0, postPeakHeld: 0 });
       check("...acquisition is exempt: there is no lock yet for stale evidence to un-do", acq.confirmed === true);
-      /* The old decision, verbatim, as the reference the Infinity defaults must reproduce. */
+      /* The old decision, verbatim, as the reference the Infinity defaults must reproduce - plus, since
+         2026-09-27, the return on the first shoulder vote for FRONT (ORIENT_POSE_RETURN_FRAMES), written
+         out here the same way so the cap is still checked against an independent statement of the bar. */
       const oldDecision = ({ acquiring, needsSwitch, streak, held, yawCorroborates, lock, lastVote, faceStreak, poseStreak, turnPassed }) => {
         const flipBar = yawCorroborates ? Math.min(LOCK_F, CORR_F) : LOCK_F;
         const faceReturn = !acquiring && lock === "back" && lastVote === "front" && yawCorroborates && faceStreak >= FACE_F;
         const poseFlip = !acquiring && !!lock && (lastVote === "front" || lastVote === "back") && lastVote !== lock &&
           (yawCorroborates || turnPassed) && poseStreak >= numOr("ORIENT_POSE_FLIP_FRAMES");
-        const confirmed = needsSwitch && (acquiring ? streak >= ACQ_F : (streak >= flipBar || held >= LOCK_MS || faceReturn || poseFlip));
+        const poseReturn = !acquiring && lock === "back" && lastVote === "front" &&
+          yawCorroborates && poseStreak >= numOr("ORIENT_POSE_RETURN_FRAMES");
+        const confirmed = needsSwitch && (acquiring ? streak >= ACQ_F : (streak >= flipBar || held >= LOCK_MS || faceReturn || poseFlip || poseReturn));
         return { confirmed, poseFlip, faceReturn, early: confirmed && !acquiring && poseFlip && !yawCorroborates && !(streak >= flipBar || held >= LOCK_MS) };
       };
       let r = 12345; const rnd = (n) => ((r = (r * 16807) % 2147483647) % n);
@@ -1409,7 +1445,10 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
          FRONT (by any path); the trigger still held a reading from the FRONT leg; the torso was unreadable
          through edge-on; the first reading past it armed BACK; one dropped frame after that. */
       if (makeEarlyTurnTrigger) {
-        const trig = makeEarlyTurnTrigger(PD, PS, PR, PSL, numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG"), [450, 960], PL);
+        /* The mechanism under test is the trigger's own, and it still ships behind ?early_turn_return=<deg> - so it runs
+           at the A/B value (the pre-2026-09-27 default, 50) whatever the default is; OFF (0) would test nothing (§15). */
+        const PR_AB = PR > 0 ? PR : 50;
+        const trig = makeEarlyTurnTrigger(PD, PS, PR_AB, PSL, numOr("ORIENT_EARLY_TURN_SLOW_RISE_DEG"), [450, 960], PL);
         trig.observe({ vote: "front", lock: "front", yawAbs: 5, at: 0 });
         trig.observe({ vote: "front", lock: "front", yawAbs: 12, at: 480 });
         trig.observe({ vote: "front", lock: "front", yawAbs: 22, at: 960 });
@@ -1421,7 +1460,7 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
           dropped.fire === null && trig.armed === "back", JSON.stringify({ dropped, armed: trig.armed }));
         trig.observe({ vote: "back", lock: "back", yawAbs: 4, at: 3120 });
         trig.observe({ vote: "back", lock: "back", yawAbs: 30, at: 3360 });
-        const turn = trig.observe({ vote: "back", lock: "back", yawAbs: PR + 2, at: 3600 });
+        const turn = trig.observe({ vote: "back", lock: "back", yawAbs: PR_AB + 2, at: 3600 });
         check("...while a real return from that arm, rising past the return threshold, still fires FRONT",
           turn.fire === "front", JSON.stringify(turn));
       }
@@ -1501,6 +1540,50 @@ console.log("\n── §10 THE SHOULDER VOTE READS ACROSS THE EDGE-ON GAP - AND 
     check("...and no pose §13 prices shows the other side for longer, or ends on the wrong side, with the rule",
       poseCost.every((r) => r.after.wrong <= r.before.wrong && r.after.stuck === 0),
       JSON.stringify(poseCost.filter((r) => r.after.wrong > r.before.wrong || r.after.stuck).map((r) => [r.name, r.before, r.after])));
+
+    console.log("\n── §15 THE MEASURED RENDER TIMING - the return waits for the camera to say FRONT ──");
+    const OLD50 = { ...PROD, returnDeg: 50 };
+    const m15 = [];
+    for (const first of [-100, 0, 100]) for (const later of [-270, -430]) {
+      const rows = foldTurns.map((f) => {
+        const o = { script: [[0, 1000 + f.phase], [360, (360 / f.speed) * 1000], [360, 3000]], k: f.k, readableTo: f.readableTo, swapMs: first, laterSwapMs: later, busyMs: BUSY };
+        return { f, v: simulateGap({ ...o, ...V142 }), old: simulateGap({ ...o, ...OLD50 }), now: simulateGap({ ...o, ...PROD }), off: simulateGap(o) };
+      });
+      const ok = rows.filter((r) => r.old.completed && r.now.completed);
+      const mean = (key, leg) => Math.round(ok.reduce((a, r) => a + r[key].leg[leg], 0) / ok.length);
+      const retLand = (key) => {
+        const xs = ok.map((r) => { const fr = [...r[key].sent].reverse().find((x) => x.side === "front"); return fr ? 360 - (fr.body + (fr.lat / 1000) * r.f.speed) : null; })
+          .filter((x) => x !== null).sort((a, b) => a - b);
+        return { med: Math.round(xs[Math.floor(xs.length / 2)]), worst: Math.round(xs[xs.length - 1]), onBack: xs.filter((x) => x > 100).length };
+      };
+      const row = { first, later, n: ok.length, rows, inc: { v: rows.filter((r) => !r.v.completed).length, old: rows.filter((r) => !r.old.completed).length, now: rows.filter((r) => !r.now.completed).length, off: rows.filter((r) => !r.off.completed).length } };
+      for (const key of ["v", "old", "now", "off"]) {
+        row[key] = { retPlain: mean(key, "retPlain"), retLate: mean(key, "retLate"), outPlain: mean(key, "outPlain"), outLate: mean(key, "outLate"), land: retLand(key) };
+        row[key].total = row[key].retPlain + row[key].retLate + row[key].outPlain + row[key].outLate;
+      }
+      m15.push(row);
+      console.log(`        first ${first}ms, later ${later}ms (${row.n} 360s): FRONT on the back ${row.v.retPlain} (v142) / ${row.old.retPlain} (return 50) -> ${row.now.retPlain}ms` +
+        ` | BACK past the side on return ${row.v.retLate} / ${row.old.retLate} -> ${row.now.retLate}ms | return landing median ${row.v.land.med}/${row.old.land.med} -> ${row.now.land.med}°, worst ${row.v.land.worst}/${row.old.land.worst} -> ${row.now.land.worst}°, >100° ${row.v.land.onBack}/${row.old.land.onBack} -> ${row.now.land.onBack}` +
+        ` | out ${row.now.outPlain}+${row.now.outLate} | never completes ${JSON.stringify(row.inc)}`);
+      console.log(`            either side of the fold, per 360: v142 ${row.v.total} / return 50 ${row.old.total} / trigger off ${row.off.total} -> ${row.now.total}ms`);
+    }
+    check("THE REPORT, modelled on the measured timing: the old default (the yaw fires FRONT at 50 from back-square) lands FRONT more than 10 degrees onto the back half in most full 360s - the print on the shopper's back",
+      m15.every((m) => m.old.land.onBack * 2 > m.n && m.old.land.med > 100), JSON.stringify(m15.map((m) => [m.first, m.later, m.old.land])));
+    check("THE FIX: FRONT on the back during the return falls by 90%+ at every measured offset, and no modelled 360 lands FRONT more than 10 degrees onto the back half",
+      m15.every((m) => m.now.retPlain * 10 <= m.old.retPlain && m.now.land.onBack === 0 && m.now.land.worst <= 100),
+      JSON.stringify(m15.map((m) => [m.first, m.later, m.old.retPlain, m.now.retPlain, m.now.land])));
+    check("...the return's median landing is on the FRONT half, within 45 degrees of the side view",
+      m15.every((m) => m.now.land.med <= 90 && m.now.land.med >= 45), JSON.stringify(m15.map((m) => [m.first, m.later, m.now.land.med])));
+    /* THE COST, stated: waiting for the camera leaves the BACK reference on past the side view - on the FRONT half,
+       where both clips show the render drawing a plain shirt, not the back print. Bounded so a later return has to
+       restate it. And the outbound is untouched: same trigger, same numbers. */
+    check("THE COST, bounded: the BACK reference past the side on the return stays under 500ms per 360, and no turn stops completing",
+      m15.every((m) => m.now.retLate < 500 && m.inc.now <= m.inc.old), JSON.stringify(m15.map((m) => [m.first, m.later, m.now.retLate, m.inc])));
+    check("...the outbound leg is exactly what it was: the same BACK dispatches at the same body angles",
+      m15.every((m) => m.rows.every((r) => JSON.stringify(r.now.sent.filter((x) => x.side === "back")) === JSON.stringify(r.old.sent.filter((x) => x.side === "back")))),
+      "an outbound BACK moved");
+    check("...and the time the other side shows either side of the fold is below v142's and the trigger-off config's at every measured offset",
+      m15.every((m) => m.now.total < m.v.total && m.now.total < m.off.total), JSON.stringify(m15.map((m) => [m.first, m.later, m.v.total, m.off.total, m.now.total])));
 
   }
 
@@ -1743,9 +1826,17 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
        within 25 degrees of the side view" check above; 50 passes it with the failure edge
        measured between 54 and 55. See ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG's comment for the
        sweep and the plain-time ledger. */
-    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG (50 - a 10 degree hysteresis over the outbound 40; 35 in v142, 50 at the fold handshake, 45 at the middle ground), 0 turns the early FRONT off, clamped to [10, 60]",
-      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 50 && numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") >= numOr("ORIENT_EARLY_TURN_DEFAULT_DEG") &&
-      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([50, 50, 0, 50, 20, 10, 60]), JSON.stringify(got));
+    /* ── OFF SINCE 2026-09-27, AND THE INVARIANT HOLDS MORE STRONGLY, NOT LESS ────────────────
+       The 25-degree bar above was built on a dispatch-to-screen offset of 0-250ms. Two real sessions
+       measured the return's at -270 / -430ms (§15): the render applies a new reference to the body as it
+       was BEFORE the send. At 50 the modelled return then lands FRONT on the back half in 178-183 of
+       211 full 360s - the report, frame by frame. The yaw-only return is therefore OFF by default and the
+       first shoulder vote for FRONT carries it (ORIENT_POSE_RETURN_FRAMES). "The return never sends
+       FRONT earlier than the outbound thought worth swapping at" is satisfied by not sending on yaw at
+       all; an A/B value (?early_turn_return=<deg>) is still clamped to [10, 60]. */
+    check("?early_turn_return: default ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG is 0 - OFF, the return waits for the camera to say FRONT (§15); an A/B value is clamped to [10, 60]",
+      numOr("ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG") === 0 &&
+      JSON.stringify(got.map(([, v]) => v)) === JSON.stringify([0, 0, 0, 0, 20, 10, 60]), JSON.stringify(got));
   }
   const ls0 = SRC.indexOf("const ORIENT_EARLY_TURN_LOSS_DEG = (() => {");
   if (ls0 === -1) check("ORIENT_EARLY_TURN_LOSS_DEG reads ?early_turn_loss", false, "not found");

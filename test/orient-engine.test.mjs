@@ -35,7 +35,14 @@ import { runCorpus } from "./orient-replay.mjs";
    and vanished from 7 (all 7 in noisy-slowapply, each a back that had landed on the FRONT); FRONT on
    a turned-away body fell 47% (pose) / 49% (face), BACK on a facing body 20% / 21%. See
    front-reference-guard §11. */
-const PINNED = "10ef2eae5641aa8347bcdcc7ac6b5d20762ddfd0906693aa0fd787d668359c49";
+/* RE-PINNED AGAIN 2026-09-27 for ONE intended move, in the ENGINE: the return from BACK no longer fires on the yaw
+   (ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG 50 -> 0) and is confirmed by the first shoulder vote for FRONT with the torso's
+   swing corroborated (ORIENT_POSE_RETURN_FRAMES) - two real sessions measured the render applying a new reference to
+   the body as it was 0.27-0.43s BEFORE the send, so a FRONT fired ahead of the side view landed on the back (the
+   print on the shopper's back, frame by frame). Over the full 4,116-session corpus 775 logs changed and not one
+   session's first BACK dispatch moved: the outbound is untouched. The previous pin (10ef2eae…359c49) is this file with
+   the old engine. See turn-yaw-window §15 for the measured-timing model and its bars. */
+const PINNED = "7610452ea3dc455c7cf842f841298686b4cd4c6e88de4d0e4b414ecd4e791d92";
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -146,7 +153,7 @@ console.log("\n── §4 the decision is absent from the browser, and the tick 
     check(`app.js code no longer carries ${fn}()`, !new RegExp(`\\b${fn}\\b`).test(code));
   }
   for (const k of ["ORIENT_LOCK_FRAMES", "ORIENT_LOCK_MS", "ORIENT_ACQUIRE_FRAMES", "ORIENT_CORROBORATED_FRAMES", "ORIENT_FACE_RETURN_FRAMES",
-                   "ORIENT_POSE_FLIP_FRAMES", "ORIENT_POSE_PASS", "ORIENT_POST_PEAK", "ORIENT_EARLY_TURN_DEG", "ORIENT_EARLY_TURN_RETURN_DEG",
+                   "ORIENT_POSE_FLIP_FRAMES", "ORIENT_POSE_RETURN_FRAMES", "ORIENT_POSE_PASS", "ORIENT_POST_PEAK", "ORIENT_EARLY_TURN_DEG", "ORIENT_EARLY_TURN_RETURN_DEG",
                    "ORIENT_EDGE_ON_DEG", "ORIENT_PREDICTIVE_BACK", "ORIENT_YAW_TURN_DEG", "ORIENT_PROFILE_ENTER_SCORE", "ORIENT_PROFILE_EXIT"]) {
     check(`app.js code no longer carries ${k}`, !new RegExp(`\\b${k}\\b`).test(code));
   }
