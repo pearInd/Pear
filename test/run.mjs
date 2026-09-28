@@ -347,6 +347,13 @@
                       prompts are prefetched before go-live, and the recorder draws only a
                       new picture. Pins the edge URL derivation, the fallback and its back-off,
                       the prefetch keys, and the recorder's gate.
+     live-timer
+                      "If the camera doesn't see the whole body it isn't the best result"
+                      (2026-09-29): the camera guide and the 3/5/10s self-timer. The timer
+                      may only decide WHEN an already-verified reveal is shown - off is the
+                      old path, an early render waits for zero, 3s counts after the render,
+                      a torn-down session is never revealed, and nothing in it touches the
+                      session. Run on a fake clock, with two mutations proven to fail it.
      size-fit-pin
                       The size charts and the fit moved server-side (lib/sizing.js,
                       POST /api/size). The move was proven exact over 1,458,028 cases;
@@ -444,6 +451,7 @@ const SUITES = [
   ["orient-engine", "orient-engine.test.mjs"],
   ["orient-link", "orient-link.test.mjs"],
   ["room-latency", "room-latency.test.mjs"],
+  ["live-timer", "live-timer.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

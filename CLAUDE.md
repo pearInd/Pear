@@ -245,6 +245,8 @@ with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (�
 `orient-link` slices `app.js` from `const ORIENT_KNOB_KEYS = [` to `/* ── end flight recorder ── */`
 (the whole orientation link and the recorder, run on a fake clock and socket) plus
 `function edgeApiUrl(route) {` to its closing brace - keep the recorder inside that span.
+`live-timer` slices `app.js` from `const LIVE_TIMER_CHOICES` to `function openCameraFromButton()`
+(the self-timer, §2.18) and runs it on a fake clock - keep the block self-contained.
 `reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
 guarded `window.__pearMockDecart = …` line that follows it — that line's exact text (with its
 `PEAR_DEBUG_BUILD` guard, §2.11) is its end marker.
@@ -587,6 +589,27 @@ one to one, keep only the hiding"). Recorded so they are not re-tried blind:
 Not changed on this branch, and why: the reveal wait (~5s from connect - recorded fixes in
 `config.js`); uploading references in advance (`client.files`, swap by id) - it would land every
 swap earlier on the body.
+
+### 2.18 The camera guide and the self-timer decide WHEN a verified reveal is shown - nothing else
+Added 2026-09-29 ("if the camera doesn't see the whole body the result isn't the best"). `#camGuide`
+sits between `#startCamBtn` and the camera once per room load (the camera stays open until the room
+closes, so "closing and reopening the camera" is a new room); its first step is the full-body one.
+The self-timer (`#timerBtn`, beside the LIVE badge, preview only; off / 3 / 5 / 10s, a per-viewer
+`localStorage` choice) never moves when a session opens or what is sent: the presence gate, the
+preload, the connect and every reveal gate run exactly as with it off. `fire()` in
+`armFirstFrameBilling()` hands the reveal to `revealAfterCountdown()` (typeof-guarded - the
+standalone harnesses call `startBillingWindow(gen)` as before):
+- **off** - no plan: `startBillingWindow` at once, the old path.
+- **5/10s ("during")** - the countdown starts at the press over the RAW preview (`.is-counting` sets
+  the loading and presence overlays aside, display only, and un-frosts `#webcam`); a render verified
+  before zero waits for zero; one still loading at zero gets the ordinary loading overlay.
+- **3s ("after")** - too short to hide a load: the loading overlay first, the 3-2-1 once verified.
+A hold retires the first-frame guard (a verified frame is what it waits for); a session torn down
+during it is dropped by the `sessionGen` check; `teardown()` and a go-live that never opened a
+session cancel it. The engine generates during a hold (at most the rest of the countdown), and the
+billed 5s window, the recorder and the kill-clock start at the reveal as before. `live-timer` pins
+all of it on a fake clock (two mutations proven to fail it); the visual agent clicks through the
+guide as a shopper would - it is UI, never a gate to skip.
 
 ---
 

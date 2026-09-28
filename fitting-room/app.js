@@ -6385,6 +6385,10 @@ function teardown() {
   // rather than the only one - deliberately, since it is the timer most likely to be
   // running at the exact moment a session ends.
   stopFrameFreezeWatch();
+  // The self-timer's stage countdown and its plan (see "CAMERA GUIDE + SELF-TIMER"). A reveal it
+  // was holding resolves after this returns and is dropped by the sessionGen bump above.
+  if (typeof cancelGoCountdown === "function") cancelGoCountdown();
+  if (typeof _liveTimerPlan !== "undefined") _liveTimerPlan = null;
   // The live-camera bridge belongs to the live session - every exit path retires it here.
   if (typeof stopStreamContinuity === "function") stopStreamContinuity();
   // ...and so does a TEST session's flight record (a no-op when the clip already closed it).
@@ -14169,6 +14173,222 @@ function logSessionMeasurements(item, size) {
 }
 
 /* =============================================================================
+   CAMERA GUIDE + SELF-TIMER (2026-09-29)
+   -----------------------------------------------------------------------------
+   REPORTED: "if the camera doesn't see the whole body, it doesn't give the best result".
+   The render can only dress the body it is shown, so the shopper needs (a) to be told, before
+   the camera opens, that the whole body must be in frame, and (b) time to walk back after
+   pressing the button. Two pieces, both on the camera stage:
+
+   · THE GUIDE (#camGuide) sits between "open the camera" and the camera, once per room load -
+     the camera is only ever opened by #startCamBtn and stays open until the room closes
+     (fullTeardown), so "closing the camera and opening it again" is a new room, and a new
+     guide. Its first step is the full-body one.
+
+   · THE SELF-TIMER (#timerBtn, off by default; 3 / 5 / 10 seconds). It moves nothing about
+     WHEN a session is opened or WHAT is sent - the presence gate, the preload, the connect and
+     every reveal gate run exactly as they do with the timer off. It only decides when a reveal
+     that is already verified is SHOWN, and what the stage shows until then:
+       5 / 10s ("during"): the countdown starts at the press and runs over the raw preview while
+         the session loads behind it. A render verified before 0 waits for 0; one still loading
+         at 0 gets the ordinary loading overlay, unchanged, for the rest.
+       3s ("after"): too short to hide a load, so the ordinary loading overlay runs first and the
+         3-2-1 runs once the render is verified - "the last three seconds before it starts".
+     What the hold costs: the engine is already generating while it waits (at most the rest of
+     the countdown, 3s for "after"), and the orientation watcher already runs from connect, as
+     it always has. The billed 5s window, the recorder and the kill-clock start at the reveal,
+     exactly as before - after the countdown.
+   Every hook into the go-live path is typeof-guarded (CLAUDE.md §2.7): several tests run
+   armFirstFrameBilling() standalone, and with no timer in scope it calls startBillingWindow()
+   directly, as it did before this existed. */
+const LIVE_TIMER_CHOICES = Object.freeze([0, 3, 5, 10]);
+const LIVE_TIMER_PREF_KEY = "pear_live_timer";
+const LIVE_TIMER_AFTER_READY_MAX_S = 3;   // at or below: count down AFTER the render is verified
+let liveTimerSec = 0;                     // the shopper's choice; 0 = off
+let _liveTimerPlan = null;                // { seconds, mode } captured by the go-live in flight
+let _goCountdown = null;                  // the running countdown's handle, or null
+let _camGuideShown = false;               // once per room load
+
+/** @param {number} seconds  @returns {null|"during"|"after"} */
+function liveTimerMode(seconds) {
+  const s = Number(seconds) || 0;
+  if (s <= 0) return null;
+  return s <= LIVE_TIMER_AFTER_READY_MAX_S ? "after" : "during";
+}
+
+function readLiveTimerPref() {
+  try {
+    const v = Number(localStorage.getItem(LIVE_TIMER_PREF_KEY));
+    return LIVE_TIMER_CHOICES.includes(v) ? v : 0;
+  } catch (_) { return 0; }
+}
+
+function renderLiveTimer() {
+  const btn = $("timerBtn"), val = $("timerBtnVal");
+  if (!btn || !val) return;
+  btn.classList.toggle("is-set", liveTimerSec > 0);
+  val.hidden = !(liveTimerSec > 0);
+  val.textContent = liveTimerSec > 0 ? tf("timerValue", { n: liveTimerSec }) : "";
+  document.querySelectorAll("#timerMenu [data-timer]").forEach((o) => {
+    o.setAttribute("aria-checked", String(Number(o.dataset.timer) === liveTimerSec));
+  });
+}
+
+function setLiveTimer(seconds) {
+  liveTimerSec = LIVE_TIMER_CHOICES.includes(Number(seconds)) ? Number(seconds) : 0;
+  try { localStorage.setItem(LIVE_TIMER_PREF_KEY, String(liveTimerSec)); } catch (_) { /* a per-viewer convenience */ }
+  renderLiveTimer();
+}
+
+function setLiveTimerMenu(open) {
+  const menu = $("timerMenu"), btn = $("timerBtn");
+  if (!menu || !btn) return;
+  menu.hidden = !open;
+  btn.setAttribute("aria-expanded", String(!!open));
+}
+
+function setupLiveTimer() {
+  const btn = $("timerBtn"), menu = $("timerMenu");
+  if (!btn || !menu) return;
+  liveTimerSec = readLiveTimerPref();
+  renderLiveTimer();
+  btn.addEventListener("click", (e) => { e.stopPropagation(); setLiveTimerMenu(menu.hidden); });
+  menu.addEventListener("click", (e) => {
+    const opt = e.target.closest("[data-timer]");
+    if (!opt) return;
+    e.stopPropagation();
+    setLiveTimer(opt.dataset.timer);
+    setLiveTimerMenu(false);
+    btn.focus();
+  });
+  document.addEventListener("click", (e) => { if (!menu.hidden && !e.target.closest("#camTimer")) setLiveTimerMenu(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menu.hidden) { setLiveTimerMenu(false); btn.focus(); } });
+  /* The value label carries a translated unit - repaint it on a language toggle. */
+  document.addEventListener("pear:languagechanged", renderLiveTimer);
+  /* The button sits in a row beside the LIVE badge (style.css "Camera guide + self-timer"). The
+     badge's width is measured, not assumed, so a different font cannot slide the two together. */
+  const badge = $("liveBadge"), cardEl = card();
+  if (badge && cardEl && typeof ResizeObserver === "function") {
+    new ResizeObserver(() => {
+      const w = badge.offsetWidth;
+      if (w > 0) cardEl.style.setProperty("--cam-live-w", `${w}px`);
+    }).observe(badge);
+  }
+}
+
+/**
+ * Run the stage countdown. Resolves true when it reaches zero, false if cancelled. Ticks against
+ * a deadline, not a chain of 1s timeouts, so a busy main thread cannot stretch it.
+ * @param {number} seconds
+ * @param {{hintKey?: string}} [opts]
+ * @returns {{done: Promise<boolean>, cancel: () => void, readonly running: boolean}}
+ */
+function runGoCountdown(seconds, { hintKey = "countdownHint" } = {}) {
+  cancelGoCountdown();
+  const el = $("goCountdown"), num = $("goCountdownNum"), arc = $("goCountdownArc"), hint = $("goCountdownHint");
+  const cardEl = card();
+  const endsAt = Date.now() + seconds * 1000;
+  let shown = null, timer = null, finished = false, resolveDone;
+  const done = new Promise((r) => { resolveDone = r; });
+  const handle = {
+    done,
+    cancel: () => finish(false),
+    get running() { return !finished; },
+  };
+  function finish(ok) {
+    if (finished) return;
+    finished = true;
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (el) el.hidden = true;
+    if (arc) { arc.classList.remove("is-running"); arc.style.removeProperty("--go-total"); }
+    if (cardEl) cardEl.classList.remove("is-counting");
+    if (_goCountdown === handle) _goCountdown = null;
+    resolveDone(ok);
+  }
+  function tick() {
+    timer = null;
+    if (finished) return;
+    const leftMs = endsAt - Date.now();
+    if (leftMs <= 0) { finish(true); return; }
+    const n = Math.ceil(leftMs / 1000);
+    if (n !== shown && num) {
+      shown = n;
+      num.textContent = String(n);
+      num.classList.remove("is-tick"); void num.offsetWidth; num.classList.add("is-tick");   // restart the pop
+    }
+    timer = setTimeout(tick, Math.min(250, leftMs - (n - 1) * 1000 + 5));
+  }
+  if (hint) hint.textContent = t(hintKey);
+  if (el) el.hidden = false;
+  if (cardEl) cardEl.classList.add("is-counting");
+  if (arc) {
+    arc.classList.remove("is-running");
+    arc.style.setProperty("--go-total", `${seconds}s`);
+    void arc.getBoundingClientRect();   // commit the full ring before the drain starts
+    arc.classList.add("is-running");
+  }
+  _goCountdown = handle;
+  tick();
+  return handle;
+}
+
+function cancelGoCountdown() {
+  if (_goCountdown) _goCountdown.cancel();
+}
+
+/**
+ * THE REVEAL, AFTER THE SELF-TIMER. Called by armFirstFrameBilling()'s fire() - every reveal gate
+ * has already passed - in place of startBillingWindow(gen). No plan (the timer off): straight
+ * through, exactly as before. A plan: hold the verified render until the countdown says go.
+ * The first-frame guard is retired on the way in: a verified frame is what it was waiting for, and
+ * the hold is bounded by the countdown; a session torn down during the hold bumps sessionGen, so
+ * the late reveal is dropped rather than shown over nothing.
+ * @param {number} gen
+ */
+function revealAfterCountdown(gen) {
+  const plan = _liveTimerPlan;
+  _liveTimerPlan = null;
+  if (!plan) { startBillingWindow(gen); return; }
+  const go = () => { if (gen === sessionGen) startBillingWindow(gen); };
+  const hold = (why) => {
+    if (typeof firstFrameGuardTimer !== "undefined" && firstFrameGuardTimer) {
+      clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null;
+    }
+    if (typeof traceOrient === "function") traceOrient("timer-hold", { why, s: plan.seconds });
+  };
+  if (plan.mode === "during" && _goCountdown && _goCountdown.running) {
+    hold("during");
+    _goCountdown.done.then(go);
+    return;
+  }
+  if (plan.mode === "after") {
+    hold("after");
+    runGoCountdown(plan.seconds, { hintKey: "countdownHintReady" }).done.then(go);
+    return;
+  }
+  startBillingWindow(gen);   // "during", and the countdown already ran out while it loaded
+}
+
+function openCameraFromButton() {
+  startCamera().then((ok) => { if (ok) requestAnimationFrame(scrollToCamera); });
+}
+
+function showCamGuide() {
+  _camGuideShown = true;
+  const g = $("camGuide");
+  if (!g) { openCameraFromButton(); return; }
+  g.hidden = false;
+  card().classList.add("show-guide");
+  requestAnimationFrame(() => $("camGuideGo")?.focus({ preventScroll: true }));
+}
+
+function hideCamGuide() {
+  const g = $("camGuide");
+  if (g) g.hidden = true;
+  card().classList.remove("show-guide");
+}
+
+/* =============================================================================
    Capture flow
    ============================================================================= */
 /* One button toggles the live session: Go Live ⇄ Stop. */
@@ -14471,7 +14691,11 @@ function armFirstFrameBilling(video, gen) {
         `| last image acknowledged ${Number.isFinite(s.sinceAckMs) ? Math.round(s.sinceAckMs) + "ms" : "never"} ago`,
         `(render wait ${REFERENCE_RENDER_SETTLE_MS}ms) | re-sends before reveal: ${redispatches}`);
     }
-    startBillingWindow(gen);
+    /* Through the self-timer when one is armed (see "CAMERA GUIDE + SELF-TIMER"): with the timer
+       off it calls startBillingWindow(gen) at once, as this line always did. typeof-guarded - the
+       standalone harnesses that run this function have no timer in scope. */
+    if (typeof revealAfterCountdown === "function") revealAfterCountdown(gen);
+    else startBillingWindow(gen);
   };
   // THREE independent gates, ALL required before firing - each closes a gap the others
   // don't cover:
@@ -15228,6 +15452,17 @@ async function goLive() {
       link: typeof _orientWs !== "undefined" && _orientWs ? _orientWs.readyState : null,
     });
   }
+  /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"). A
+     5/10s countdown starts now, over the preview, while everything below runs behind it;
+     a 3s one waits for the verified render. Off: no plan, and nothing below changes. */
+  _liveTimerPlan = null;
+  const liveTimer = typeof liveTimerMode === "function" ? liveTimerMode(liveTimerSec) : null;
+  if (liveTimer) {
+    _liveTimerPlan = { seconds: liveTimerSec, mode: liveTimer };
+    setLiveTimerMenu(false);
+    if (typeof traceOrient === "function") traceOrient("timer", { s: liveTimerSec, mode: liveTimer });
+    if (liveTimer === "during") runGoCountdown(liveTimerSec);
+  }
   $("captureBtn").disabled = true;
   $("camError").hidden = true;
   exitClipReplay();                    // clear any history clip before a real session takes #aiVideo
@@ -15492,7 +15727,13 @@ async function goLive() {
     // session - isLive() false). On success the session is already connected and we're
     // just waiting on the model's first verified frame, so leave the overlay + ticking
     // timer showing - startBillingWindow() (Model Ready) is what closes them, not this.
-    if (!isLive()) { stopScanTimer(); $("scanOverlay").hidden = true; }
+    if (!isLive()) {
+      stopScanTimer(); $("scanOverlay").hidden = true;
+      /* ...and a self-timer counting toward a session that never opened (black screen, a
+         garment that would not load, a failed connect) stops with it. */
+      if (typeof cancelGoCountdown === "function") cancelGoCountdown();
+      _liveTimerPlan = null;
+    }
     busy = false;
     if (!isLive()) $("captureBtn").disabled = !localStream;
   }
@@ -19355,9 +19596,14 @@ function init() {
   // reinitCameraForOrientation(), where the page shouldn't jump since the user is
   // already looking at the camera. rAF lets the newly-.live layout (card grows,
   // Go-Live button enables) settle before we measure it.
+  /* The guide comes first, once per room load; its button opens the camera. See "CAMERA GUIDE +
+     SELF-TIMER". */
   $("startCamBtn").addEventListener("click", () => {
-    startCamera().then((ok) => { if (ok) requestAnimationFrame(scrollToCamera); });
+    if (!_camGuideShown) showCamGuide();
+    else openCameraFromButton();
   });
+  $("camGuideGo")?.addEventListener("click", () => { hideCamGuide(); openCameraFromButton(); });
+  setupLiveTimer();
   $("flipCamBtn")?.addEventListener("click", () => flipCamera());
   $("captureBtn").addEventListener("click", onLiveToggle);
   // Size-mismatch card's CTA - same destination as the existing "Edit Measurements"

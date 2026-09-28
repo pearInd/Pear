@@ -5811,3 +5811,202 @@ body.has-cookie-banner .pear-help-widget {
   .terms-modal, .terms-modal__panel { transition: none; }
   .step-progress-fill { transition: none; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   ✦ CAMERA GUIDE + SELF-TIMER (2026-09-29)
+   ────────────────────────────────────────────────────────────────────────
+   REPORTED: "if the camera doesn't see the whole body the result isn't the best".
+   Three pieces, all on the camera stage, all built from the Liquid Glass tokens above:
+     · #camGuide     - the tips card between "open the camera" and the camera (once per
+                       room load); it takes the placeholder's place and material.
+     · #timerBtn     - the flip button's twin in the opposite top corner (inline-start:
+                       the RIGHT in Hebrew), preview only; its menu picks off / 3 / 5 / 10s.
+     · #goCountdown  - the whole stage while a self-timer runs, numbers big enough to read
+                       from across the room.
+   While a countdown runs, .is-counting sets the loading and presence overlays ASIDE -
+   display only, their own show/hide logic untouched - and with them the loading
+   overlay's frosted camera: the countdown exists so the shopper can frame themselves,
+   so it runs over the raw preview, exactly as the preview already shows it. The moment
+   it ends, whichever of those overlays is still due is back, unchanged. */
+
+/* ── the guide ─────────────────────────────────────────────────────────── */
+.cam-guide {
+  position: absolute; inset: 0; z-index: 11;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px 16px 0; container-type: size;
+  background: linear-gradient(160deg, rgba(255,255,255,.74), rgba(238,238,236,.82));
+  -webkit-backdrop-filter: var(--blur-lg); backdrop-filter: var(--blur-lg);
+  font-family: var(--font-ui);
+  overflow-y: auto; overscroll-behavior: contain;
+}
+.cam-guide[hidden] { display: none; }
+.camera-card.show-guide .camera-card__placeholder { display: none; }
+.cam-guide__panel {
+  width: 100%; max-width: 380px; margin: auto;
+  display: flex; flex-direction: column; gap: 10px;
+  animation: camGuideIn .5s var(--ease-spring) both;
+}
+@keyframes camGuideIn { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+.cam-guide__title { margin: 0; font-size: 1.18rem; font-weight: 800; letter-spacing: -.01em; color: var(--ink); text-align: center; }
+.cam-guide__sub { margin: -6px 0 2px; font-size: .84rem; color: var(--ink-secondary); text-align: center; }
+.cam-guide__steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr; gap: 7px; }
+.cam-guide__step {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 9px 11px; border-radius: 16px;
+  background: var(--lg-fill); border: var(--lg-border);
+  box-shadow: var(--lg-edge), 0 4px 14px -6px rgba(15, 23, 42, .10);
+  text-align: start;
+}
+.cam-guide__step--key {
+  background: linear-gradient(135deg, rgba(var(--primary-rgb), .16) 0%, rgba(255, 255, 255, .42) 100%);
+  border-color: rgba(var(--primary-rgb), .45);
+  box-shadow: var(--lg-edge), 0 6px 18px -8px rgba(var(--primary-rgb), .45);
+}
+.cam-guide__ico {
+  flex: 0 0 auto; width: 32px; height: 32px; border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(255, 255, 255, .7); color: var(--ink);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, .8), 0 1px 3px rgba(15, 23, 42, .08);
+}
+.cam-guide__step--key .cam-guide__ico { background: var(--primary-solid); color: #fff; }
+.cam-guide__ico svg { width: 20px; height: 20px; }
+.cam-guide__copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cam-guide__copy strong { font-size: .88rem; font-weight: 750; color: var(--ink); }
+.cam-guide__copy span { font-size: .78rem; line-height: 1.38; color: var(--ink-secondary); }
+/* The button never scrolls out of reach: pinned to the bottom of the card on a short stage. */
+.cam-guide__go {
+  position: sticky; bottom: 12px; z-index: 1;
+  width: 100%; margin-top: 2px; padding: 13px 20px;
+  box-shadow: 0 -10px 22px -6px rgba(238, 238, 236, .95), 0 8px 24px -6px rgba(0, 0, 0, .12);
+}
+.cam-guide__panel::after { content: ""; display: block; height: 14px; flex: 0 0 auto; }
+/* A wide stage (a landscape webcam): the four steps side by side, two rows. */
+@container (min-aspect-ratio: 1/1) {
+  .cam-guide__panel { max-width: 560px; }
+  .cam-guide__steps { grid-template-columns: 1fr 1fr; }
+}
+/* A short stage: tighter type so everything fits without scrolling. */
+@container (max-height: 470px) {
+  .cam-guide__title { font-size: 1.05rem; }
+  .cam-guide__sub { font-size: .78rem; }
+  .cam-guide__copy span { font-size: .74rem; line-height: 1.32; }
+  .cam-guide__step { padding: 8px 10px; }
+}
+
+/* ── the timer button (the flip button's twin) ─────────────────────────── */
+/* Beside the LIVE badge, which holds the same corner from the moment the camera is on: one row,
+   centred on the badge. --cam-live-w is the badge's measured width (setupLiveTimer), so a
+   different font cannot slide the two over each other. */
+.cam-timer {
+  position: absolute; z-index: 7; display: none;
+  top: 9.5px; inset-inline-start: calc(14px + var(--cam-live-w, 73px) + 8px);
+}
+.camera-card.live .cam-timer { display: block; }
+.camera-card.show-live .cam-timer,
+.camera-card.show-result .cam-timer,
+.camera-card.show-clip .cam-timer,
+.camera-card.is-counting .cam-timer,
+.camera-card:has(> #scanOverlay:not([hidden])) .cam-timer { display: none; }
+.camera-card__timer {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-width: 36px; height: 36px; padding: 0 9px; border-radius: var(--pill);
+  border: 1px solid rgba(255, 255, 255, .4);
+  background: rgba(255, 255, 255, .85);
+  -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 8px 24px -6px rgba(0, 0, 0, .12), inset 0 1px 1px 0 rgba(255, 255, 255, .6);
+  color: var(--ink); cursor: pointer; font: 750 .86rem/1 var(--font-ui);
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  transition: transform .3s var(--ease-spring), background .3s var(--ease), box-shadow .3s var(--ease);
+}
+.camera-card__timer:active { transform: scale(.94); }
+.camera-card__timer:focus-visible { outline: 2px solid var(--pear); outline-offset: 2px; }
+.camera-card__timer.is-set { background: var(--primary-solid); color: #fff; border-color: rgba(255, 255, 255, .5); }
+.camera-card__timer-val { font-variant-numeric: tabular-nums; }
+@media (hover: hover) and (pointer: fine) {
+  .camera-card__timer:hover { transform: scale(1.04); box-shadow: 0 10px 28px -6px rgba(0, 0, 0, .18), inset 0 1px 1px 0 rgba(255, 255, 255, .6); }
+}
+
+/* its menu - a glass segmented control under the button */
+.cam-timer__menu {
+  position: absolute; top: calc(100% + 8px); inset-inline-start: 0;
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 10px; border-radius: 20px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .78) 0%, rgba(255, 255, 255, .5) 100%);
+  border: var(--lg-border);
+  -webkit-backdrop-filter: var(--lgb-blur); backdrop-filter: var(--lgb-blur);
+  box-shadow: var(--lg-edge), 0 18px 40px -12px rgba(15, 23, 42, .28);
+  transform-origin: top; animation: camTimerMenuIn .32s var(--ease-spring) both;
+}
+[dir="rtl"] .cam-timer__menu { transform-origin: top right; }
+[dir="ltr"] .cam-timer__menu { transform-origin: top left; }
+.cam-timer__menu[hidden] { display: none; }
+@keyframes camTimerMenuIn { from { opacity: 0; transform: translateY(-4px) scale(.94); } to { opacity: 1; transform: none; } }
+.cam-timer__title { font: 700 .7rem/1 var(--font-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-secondary); padding-inline-start: 4px; }
+.cam-timer__opts { display: flex; gap: 4px; padding: 3px; border-radius: var(--pill); background: rgba(15, 23, 42, .06); }
+.cam-timer__opt {
+  min-width: 46px; height: 34px; padding: 0 10px; border-radius: var(--pill); border: 0;
+  background: transparent; color: var(--ink); cursor: pointer;
+  font: 750 .9rem/1 var(--font-ui); font-variant-numeric: tabular-nums;
+  display: inline-flex; align-items: center; justify-content: center; gap: 2px;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+  transition: background .25s var(--ease), color .25s var(--ease), box-shadow .25s var(--ease);
+}
+.cam-timer__opt small { font-size: .66rem; font-weight: 700; opacity: .7; }
+.cam-timer__opt[aria-checked="true"] {
+  background: #fff; color: var(--ink);
+  box-shadow: 0 2px 8px -2px rgba(15, 23, 42, .18), inset 0 0 0 1px rgba(var(--primary-rgb), .55);
+}
+.cam-timer__opt:focus-visible { outline: 2px solid var(--pear); outline-offset: 1px; }
+
+/* ── the countdown ─────────────────────────────────────────────────────── */
+.go-countdown {
+  position: absolute; inset: 0; z-index: 9;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4cqmin;
+  container-type: size; pointer-events: none;
+  background: radial-gradient(circle at 50% 46%, rgba(8, 8, 10, .30) 0%, rgba(8, 8, 10, .12) 45%, rgba(8, 8, 10, 0) 72%);
+  font-family: var(--font-ui);
+}
+.go-countdown[hidden] { display: none; }
+.go-countdown__dial { position: relative; width: 70cqmin; height: 70cqmin; display: grid; place-items: center; }
+.go-countdown__ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
+[dir="rtl"] .go-countdown__ring { transform: rotate(-90deg) scaleY(-1); }
+.go-countdown__track { fill: none; stroke: rgba(255, 255, 255, .22); stroke-width: 2.2; }
+.go-countdown__arc {
+  fill: none; stroke: #fff; stroke-width: 2.6; stroke-linecap: round;
+  stroke-dasharray: 100; stroke-dashoffset: 0;
+  filter: drop-shadow(0 0 1.2px rgba(var(--primary-rgb), .9));
+}
+.go-countdown__arc.is-running { transition: stroke-dashoffset var(--go-total, 3s) linear; stroke-dashoffset: 100; }
+.go-countdown__num {
+  font-size: 46cqmin; font-weight: 800; line-height: 1; letter-spacing: -.04em;
+  color: #fff; font-variant-numeric: tabular-nums;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, .35), 0 0 2px rgba(0, 0, 0, .25);
+}
+.go-countdown__num.is-tick { animation: goCountdownTick .9s var(--ease-spring) both; }
+@keyframes goCountdownTick {
+  0%   { opacity: 0; transform: scale(1.32); }
+  22%  { opacity: 1; }
+  100% { opacity: 1; transform: scale(1); }
+}
+.go-countdown__hint {
+  margin: 0; padding: 9px 18px; border-radius: var(--pill); max-width: 86%;
+  font-size: clamp(.85rem, 4.2cqmin, 1.25rem); font-weight: 700; text-align: center;
+  color: var(--ink);
+  background: linear-gradient(135deg, rgba(255, 255, 255, .82) 0%, rgba(255, 255, 255, .6) 100%);
+  border: var(--lg-border);
+  -webkit-backdrop-filter: var(--lgb-blur); backdrop-filter: var(--lgb-blur);
+  box-shadow: var(--lg-edge), 0 10px 26px -10px rgba(15, 23, 42, .35);
+}
+
+/* while it runs: the loading and presence overlays wait, and the preview stays sharp */
+.camera-card.is-counting #scanOverlay,
+.camera-card.is-counting #presenceOverlay { display: none !important; }
+/* ...and the camera is hands-off: flipping it here would restart the stream under a session that
+   is opening (the flip button is otherwise preview-only already). */
+.camera-card.is-counting .camera-card__flip { display: none; }
+.camera-card.is-counting:has(> #scanOverlay:not([hidden])) #webcam { filter: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cam-guide__panel, .cam-timer__menu, .go-countdown__num.is-tick { animation: none; }
+  .go-countdown__arc.is-running { transition: none; }
+}
