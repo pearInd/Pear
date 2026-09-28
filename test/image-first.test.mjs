@@ -171,12 +171,14 @@ const BOTTOMS_SPEC =
    and named garment features compete with the pixels) is the reason it had to.
    AND ITS NOUN MOVED (2026-09-28): "shirt" -> "top" in both sentences, after a back render
    drew an open button-up at the side view - the word the front anchor dropped for summoning
-   plackets (see "THE BACK LOSES THE WORD" in lib/prompts.js). */
+   plackets (see "THE BACK LOSES THE WORD" in lib/prompts.js). And its REGION moved the same day:
+   "body contour"/"body volume" where it said "back" - a chest still facing the camera was being
+   left bare while the fabric went on the back (see "AND THE REGION" there). */
 const BACK_TOPS_SPEC =
   "Drape and fit the EXACT static top's REAR/BACK side from the reference image onto" +
-  " the live subject's CURRENT back contour and volume in this frame. Reproduce the rear" +
+  " the live subject's CURRENT body contour and volume in this frame. Reproduce the rear" +
   " panel exactly as shown in the reference. Dynamically adapt the garment drape to the" +
-  " subject's exact silhouette, angle, depth, and back volume without stretching or" +
+  " subject's exact silhouette, angle, depth, and body volume without stretching or" +
   " warping the fabric. Strictly preserve the original top texture, pattern, and color.";
 const BACK_BOTTOMS_SPEC =
   "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +

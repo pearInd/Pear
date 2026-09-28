@@ -580,10 +580,21 @@ reverted branch ("almost perfect" on the angles - keep them - but "a button-up o
   an OPEN button-up at the side view - the word the front dropped for summoning plackets.
   49,434 of 161,756 pinned prompts moved, only by those two words; back tops 521 -> 517 chars
   (plain 503 -> 499). `prompt-engine` re-pinned, `plain-tee-fidelity` §7.4.
+- **...and their REGION says "body", not "back"** (same day, next measurement): a slower turn put the
+  BACK reference on the wire at 41 degrees and the top hung off one shoulder, chest bare - the anchor
+  said "onto the CURRENT back contour" / "back volume", i.e. dress the back and leave the front.
+  "body contour"/"body volume" like the front anchors; same length, same 49,434 prompts moved,
+  `prompt-engine` re-pinned again. What the pixels are (REAR/BACK side, "the rear panel") is unchanged.
+- **A TEST record also samples the media connection** (`rtc` events, every `RTC_SAMPLE_MS` = 500):
+  round trip, send estimate, bytes sent, fps both ways, the encoder's limit. Added after one first
+  measurement's back reference was acknowledged 2.9s late (130-500ms in twelve other sessions), so the
+  next one can be read against the uplink. Nothing decides from it; `orient-link` §4 pins it, including
+  that its timer is cancelled with the record.
 Not changed, and why: the reveal wait (~5s from connect - the cold-start hold, re-assert and
-settle in `config.js`, each a recorded fix); the salmon-shorts leak at the side view (a model-worn
-store photo's lower garment - Layer B, main has it, §2.15's note on where a garment box must come
-from).
+settle in `config.js`, each a recorded fix). The "salmon shorts" first read as a store photo's leak
+were the shopper's own pants (black with a pink side panel). Uploading the references in advance
+(`client.files`, swap by id) was weighed for the late acknowledgement and NOT done: it would make
+every swap land earlier on the body - moving the angles the shopper signed off on.
 
 ---
 

@@ -10186,6 +10186,53 @@ function traceSessionBegin(ctx) {
     n: _traceSessions, build: typeof PEAR_BUILD !== "undefined" ? PEAR_BUILD : null,
     at: new Date().toISOString(), t0: Date.now(), ua, ctx: ctx || null, ev: [], over: 0,
   };
+  rtcSampleStart();
+}
+
+/* THE MEDIA CONNECTION'S OWN NUMBERS, twice a second, while a TEST session records (2026-09-28).
+   REPORTED: a first measurement where the back never rendered. Its reference was handed to the
+   render engine on time (82 degrees) and acknowledged 2.9s later - against 130-500ms in the twelve
+   other recorded sessions - so the back landed as the session ended. The record could say WHEN, not
+   WHY: the reference travels on the engine's signalling socket and the camera on the media
+   connection, over the same uplink, and at 20 frames a second the camera sends twice what it did.
+   So a recorded session also keeps the media connection's numbers - its round trip, the bitrate the
+   browser estimates it may send, the bytes actually sent, the send delay, why the encoder is
+   limited, and what comes back - and the next slow acknowledgement can be read against them.
+   getStats() on the connections window.__pearPCs already tracks; NOTHING IS DECIDED FROM IT, and a
+   shopper's session (no record) runs none of it. */
+const RTC_SAMPLE_MS = 500;
+let _rtcSampleTimer = null;
+function rtcSampleStart() {
+  rtcSampleStop();
+  if (typeof setInterval !== "function") return;
+  _rtcSampleTimer = setInterval(() => { rtcSample().catch(() => {}); }, RTC_SAMPLE_MS);
+}
+function rtcSampleStop() {
+  if (_rtcSampleTimer !== null && typeof clearInterval === "function") clearInterval(_rtcSampleTimer);
+  _rtcSampleTimer = null;
+}
+async function rtcSample() {
+  if (!_trace || typeof window === "undefined" || !window.__pearPCs) return;
+  const out = [];
+  for (const pc of Array.from(window.__pearPCs)) {
+    if (!pc || typeof pc.getStats !== "function" || pc.connectionState === "closed") continue;
+    const e = {};
+    (await pc.getStats()).forEach((x) => {
+      if (x.type === "candidate-pair" && x.nominated && x.state === "succeeded") {
+        e.rtt = x.currentRoundTripTime != null ? Math.round(x.currentRoundTripTime * 1000) : null;
+        e.avail = x.availableOutgoingBitrate != null ? Math.round(x.availableOutgoingBitrate / 1000) : null;
+      } else if (x.type === "outbound-rtp" && x.kind === "video") {
+        e.bs = x.bytesSent; e.sent = x.framesSent; e.fpsOut = x.framesPerSecond; e.w = x.frameWidth;
+        e.sendDelay = x.totalPacketSendDelay != null ? Math.round(x.totalPacketSendDelay * 1000) : null;
+        e.limit = x.qualityLimitationReason;
+        e.target = x.targetBitrate != null ? Math.round(x.targetBitrate / 1000) : null;
+      } else if (x.type === "inbound-rtp" && x.kind === "video") {
+        e.fpsIn = x.framesPerSecond; e.dec = x.framesDecoded; e.drop = x.framesDropped; e.freezes = x.freezeCount;
+      }
+    });
+    if (Object.keys(e).length) out.push(e);
+  }
+  if (out.length) traceOrient("rtc", out);
 }
 
 /** One event, stamped in ms since go-live. A no-op outside a recorded session. */
@@ -10200,6 +10247,7 @@ function traceOrient(type, data) {
 function traceSessionEnd(why) {
   const tr = _trace;
   if (!tr) return;
+  rtcSampleStop();
   _trace = null;
   tr.end = why;
   tr.dur = Date.now() - tr.t0;

@@ -29,8 +29,11 @@ import { createHash } from "node:crypto";
    and PLAIN_BACK_ANCHOR.top) say "top" where they said "shirt" - "THE BACK LOSES THE WORD" in
    lib/prompts.js. Measured against the previous pin's engine (221a5b58...d912c, the pre-move one):
    49,434 of the 161,756 single prompts moved, every one a back-of-top prompt, and every one differs
-   by exactly those two words; nothing else moved. */
-const PINNED = "fac4dbd368693825a12ca3b1ef71675791a2e14db847fb00fe1e15981127a2f6";
+   by exactly those two words; nothing else moved.
+   RE-PINNED AGAIN 2026-09-28 for the back tops' REGION: "body contour"/"body volume" where they said
+   "back" ("AND THE REGION" in lib/prompts.js). Against the previous pin (fac4dbd3...a2f6): the same
+   49,434 back-of-top prompts moved, each by exactly those two words, same length; nothing else. */
+const PINNED = "6376a0fd6789c2dfe72ef178741f27ef857026b8f1098a52e2b6428d156f9488";
 
 let fails = 0;
 function check(label, cond, detail) {
