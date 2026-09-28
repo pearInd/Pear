@@ -13994,6 +13994,10 @@ async function verifyOtp(code) {
          isAuthRefreshDue(). */
       setDeviceId(pending.deviceId);
       stampAuthDate();
+      /* The "verified" moment (#otpSuccess). Fire-and-forget and pointer-transparent: the next
+         screen goes on underneath it, so it never holds the flow. typeof-guarded - this block runs
+         standalone in otp-single-verification. */
+      if (typeof celebrateOtpVerified === "function") celebrateOtpVerified();
 
       if (reauth) {
         await finishReauth();
@@ -14185,35 +14189,56 @@ function logSessionMeasurements(item, size) {
      (fullTeardown), so "closing the camera and opening it again" is a new room, and a new
      guide. Its first step is the full-body one.
 
-   · THE SELF-TIMER (#timerBtn, off by default; 3 / 5 / 10 seconds). It moves nothing about
-     WHEN a session is opened or WHAT is sent - the presence gate, the preload, the connect and
-     every reveal gate run exactly as they do with the timer off. It only decides when a reveal
-     that is already verified is SHOWN, and what the stage shows until then:
-       5 / 10s ("during"): the countdown starts at the press and runs over the raw preview while
-         the session loads behind it. A render verified before 0 waits for 0; one still loading
-         at 0 gets the ordinary loading overlay, unchanged, for the rest.
-       3s ("after"): too short to hide a load, so the ordinary loading overlay runs first and the
-         3-2-1 runs once the render is verified - "the last three seconds before it starts".
-     What the hold costs: the engine is already generating while it waits (at most the rest of
-     the countdown, 3s for "after"), and the orientation watcher already runs from connect, as
-     it always has. The billed 5s window, the recorder and the kill-clock start at the reveal,
-     exactly as before - after the countdown.
-   Every hook into the go-live path is typeof-guarded (CLAUDE.md §2.7): several tests run
-   armFirstFrameBilling() standalone, and with no timer in scope it calls startBillingWindow()
-   directly, as it did before this existed. */
+   · THE SELF-TIMER (#timerBtn, off by default; 3 / 5 / 10 seconds, picked on a glass slider that
+     can be tapped or dragged). ZERO IS THE FITTING: the measurement opens exactly when the
+     countdown ends - never before it, and with no loading screen after it.
+
+   WHY IT IS BUILT THIS WAY - the second round of reports (2026-09-29, two 10s sessions):
+     · "it started before the timer ended" (7.6s of 10). A render reported ready at 7.5s was
+       held - and 69ms later revealed. onRemoteStream() can fire more than once per session and
+       each call arms its own armFirstFrameBilling(); main never minded (the second fire finds
+       billingStarted and returns), but a HELD reveal leaves billingStarted false, and the first
+       hold had consumed the plan, so the second fire revealed at once. THE HOLD IS NOW THE
+       SESSION'S: a second fire for a gen already held is ignored, and the plan lives until the
+       reveal (or teardown).
+     · "a second or two of loading after zero". The records put the render verified 5.1-5.4s
+       after the session connects, every time - and the connect itself waited on the presence
+       gate, i.e. on the shopper having ALREADY walked back. So with a timer the countdown IS the
+       positioning step: the presence gate's wait is skipped (it shows its overlay and blocks the
+       connect until the body is in frame - the one thing the countdown is there to give time
+       for), and the session connects at the press. Then:
+       - 10s ("during", LIVE_TIMER_PRESS_START_MIN_S and up): the numbers start at the press.
+         At connect the render is expected LIVE_TIMER_READY_AFTER_CONNECT_MS later; if that would
+         land after zero, the remaining numbers are spread evenly to it (a slow connect only -
+         the number on screen never jumps back).
+       - 3s / 5s ("prep"): shorter than any connect + verify, so the stage shows "get ready"
+         until connect and the numbers start so that zero lands on the expected render.
+     A render verified before zero waits for it (the engine is generating meanwhile: ~0.3-2.5s
+     measured); one still not verified at zero (never seen, the margin covers the measured
+     spread) keeps the stage with a short "starting" state - never the loading overlay.
+
+   It moves nothing else: the preload, the connect, every reveal gate, what is sent and the
+   orientation run exactly as with the timer off, and the billed 5s window, the recorder and
+   the kill-clock start at the reveal. Every hook into the go-live path is typeof-guarded
+   (CLAUDE.md §2.7): with no timer in scope armFirstFrameBilling() calls startBillingWindow(). */
 const LIVE_TIMER_CHOICES = Object.freeze([0, 3, 5, 10]);
 const LIVE_TIMER_PREF_KEY = "pear_live_timer";
-const LIVE_TIMER_AFTER_READY_MAX_S = 3;   // at or below: count down AFTER the render is verified
-let liveTimerSec = 0;                     // the shopper's choice; 0 = off
-let _liveTimerPlan = null;                // { seconds, mode } captured by the go-live in flight
-let _goCountdown = null;                  // the running countdown's handle, or null
-let _camGuideShown = false;               // once per room load
+const LIVE_TIMER_PRESS_START_MIN_S = 8;           // at or above: the numbers start at the press
+/* Connect -> verified render, measured 5.1-5.4s in every recorded session (2026-09-27/28), plus
+   a margin so zero is never ahead of the render. Refine it from the records' "timer-*" events. */
+const LIVE_TIMER_READY_AFTER_CONNECT_MS = 5700;
+const LIVE_TIMER_DRAG_SLOP_PX = 6;                 // below this a press on the slider is a tap
+const LIVE_TIMER_RUBBER_BAND = 0.28;
+let liveTimerSec = 0;                              // the shopper's choice; 0 = off
+let _liveTimerPlan = null;                         // { seconds, mode, heldGen } for the go-live in flight
+let _goCountdown = null;                           // the stage countdown's handle, or null
+let _camGuideShown = false;                        // once per room load
 
-/** @param {number} seconds  @returns {null|"during"|"after"} */
+/** @param {number} seconds  @returns {null|"during"|"prep"} */
 function liveTimerMode(seconds) {
   const s = Number(seconds) || 0;
   if (s <= 0) return null;
-  return s <= LIVE_TIMER_AFTER_READY_MAX_S ? "after" : "during";
+  return s >= LIVE_TIMER_PRESS_START_MIN_S ? "during" : "prep";
 }
 
 function readLiveTimerPref() {
@@ -14224,14 +14249,22 @@ function readLiveTimerPref() {
 }
 
 function renderLiveTimer() {
-  const btn = $("timerBtn"), val = $("timerBtnVal");
-  if (!btn || !val) return;
-  btn.classList.toggle("is-set", liveTimerSec > 0);
-  val.hidden = !(liveTimerSec > 0);
-  val.textContent = liveTimerSec > 0 ? tf("timerValue", { n: liveTimerSec }) : "";
-  document.querySelectorAll("#timerMenu [data-timer]").forEach((o) => {
-    o.setAttribute("aria-checked", String(Number(o.dataset.timer) === liveTimerSec));
-  });
+  const btn = $("timerBtn"), val = $("timerBtnVal"), track = $("timerTrack");
+  if (btn && val) {
+    const was = btn.classList.contains("is-set") ? val.textContent : "";
+    btn.classList.toggle("is-set", liveTimerSec > 0);
+    val.hidden = !(liveTimerSec > 0);
+    val.textContent = liveTimerSec > 0 ? tf("timerValue", { n: liveTimerSec }) : "";
+    if (val.textContent !== was) { btn.classList.remove("is-pop"); void btn.offsetWidth; btn.classList.add("is-pop"); }
+  }
+  if (track) {
+    track.style.setProperty("--ti", String(Math.max(0, LIVE_TIMER_CHOICES.indexOf(liveTimerSec))));
+    track.querySelectorAll("[data-timer]").forEach((o) => {
+      const on = Number(o.dataset.timer) === liveTimerSec;
+      o.classList.toggle("is-active", on);
+      o.setAttribute("aria-checked", String(on));
+    });
+  }
 }
 
 function setLiveTimer(seconds) {
@@ -14247,20 +14280,87 @@ function setLiveTimerMenu(open) {
   btn.setAttribute("aria-expanded", String(!!open));
 }
 
+/* The slider: tap an option, or press and drag the glass pill - the gender switch's physics
+   (setupGenderSwitch), for four stops. The resting position is CSS-owned (--ti, mirrored by
+   [dir]); an inline transform exists only while a drag is live. Slots are read from offsetLeft,
+   which is physical in both directions, so the Hebrew layout needs no mirrored math. */
 function setupLiveTimer() {
-  const btn = $("timerBtn"), menu = $("timerMenu");
-  if (!btn || !menu) return;
+  const btn = $("timerBtn"), menu = $("timerMenu"), slider = $("timerTrack");
+  if (!btn || !menu || !slider) return;
   liveTimerSec = readLiveTimerPref();
   renderLiveTimer();
+  const pill = slider.querySelector(".cam-timer__pill");
+  const options = () => Array.from(slider.querySelectorAll("[data-timer]"));
+  let gesture = null, swallowClickUntil = 0, closeTimer = null;
+  const commit = (seconds) => {
+    const changed = Number(seconds) !== liveTimerSec;
+    setLiveTimer(seconds);
+    if (changed && typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+      try { navigator.vibrate(8); } catch (_) { /* haptics are a nicety */ }
+    }
+    if (closeTimer) clearTimeout(closeTimer);
+    closeTimer = setTimeout(() => { closeTimer = null; setLiveTimerMenu(false); }, 320);   // let the pill land first
+  };
   btn.addEventListener("click", (e) => { e.stopPropagation(); setLiveTimerMenu(menu.hidden); });
-  menu.addEventListener("click", (e) => {
-    const opt = e.target.closest("[data-timer]");
-    if (!opt) return;
+  slider.addEventListener("click", (e) => {
     e.stopPropagation();
-    setLiveTimer(opt.dataset.timer);
-    setLiveTimerMenu(false);
-    btn.focus();
+    if (Date.now() < swallowClickUntil) { swallowClickUntil = 0; return; }   // the tail of a drag
+    const opt = e.target.closest("[data-timer]");
+    if (opt) commit(opt.dataset.timer);
   });
+  const nearestTo = (centre) => {
+    let best = null, bestD = Infinity;
+    for (const o of options()) {
+      const d = Math.abs(o.offsetLeft + o.offsetWidth / 2 - centre);
+      if (d < bestD) { best = o; bestD = d; }
+    }
+    return best;
+  };
+  if (pill) {
+    slider.addEventListener("pointerdown", (e) => {
+      swallowClickUntil = 0;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      const opts = options();
+      const lefts = opts.map((o) => o.offsetLeft);
+      const active = opts.find((o) => Number(o.dataset.timer) === liveTimerSec) || opts[0];
+      gesture = { id: e.pointerId, x0: e.clientX, min: Math.min(...lefts), max: Math.max(...lefts),
+        pillW: pill.offsetWidth, anchor: pill.offsetLeft, start: active.offsetLeft, left: active.offsetLeft, dragging: false };
+    });
+    slider.addEventListener("pointermove", (e) => {
+      const g = gesture;
+      if (!g || e.pointerId !== g.id) return;
+      const dx = e.clientX - g.x0;
+      if (!g.dragging) {
+        if (Math.abs(dx) < LIVE_TIMER_DRAG_SLOP_PX) return;
+        g.dragging = true;
+        try { slider.setPointerCapture(g.id); } catch (_) { /* tracks while over the slider */ }
+        slider.classList.add("is-dragging");
+      }
+      let left = g.start + dx;
+      if (left < g.min) left = g.min - (g.min - left) * LIVE_TIMER_RUBBER_BAND;
+      else if (left > g.max) left = g.max + (left - g.max) * LIVE_TIMER_RUBBER_BAND;
+      g.left = left;
+      pill.style.transform = `translate3d(${(left - g.anchor).toFixed(1)}px, 0, 0)`;
+      const over = nearestTo(left + g.pillW / 2);
+      if (over) slider.dataset.preview = over.dataset.timer;
+    });
+    const endGesture = (e, doCommit) => {
+      const g = gesture;
+      if (!g || e.pointerId !== g.id) return;
+      gesture = null;
+      if (!g.dragging) return;   // a tap - the click that follows commits it
+      swallowClickUntil = Date.now() + 400;
+      try { slider.releasePointerCapture(g.id); } catch (_) { /* already released */ }
+      slider.classList.remove("is-dragging");
+      delete slider.dataset.preview;
+      pill.style.transform = "";
+      if (!doCommit) return;
+      const target = nearestTo(g.left + g.pillW / 2);
+      if (target) commit(target.dataset.timer);
+    };
+    slider.addEventListener("pointerup", (e) => endGesture(e, true));
+    slider.addEventListener("pointercancel", (e) => endGesture(e, false));
+  }
   document.addEventListener("click", (e) => { if (!menu.hidden && !e.target.closest("#camTimer")) setLiveTimerMenu(false); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menu.hidden) { setLiveTimerMenu(false); btn.focus(); } });
   /* The value label carries a translated unit - repaint it on a language toggle. */
@@ -14277,58 +14377,126 @@ function setupLiveTimer() {
 }
 
 /**
- * Run the stage countdown. Resolves true when it reaches zero, false if cancelled. Ticks against
- * a deadline, not a chain of 1s timeouts, so a busy main thread cannot stretch it.
+ * The stage countdown - see the block comment above for the timing rules.
  * @param {number} seconds
- * @param {{hintKey?: string}} [opts]
- * @returns {{done: Promise<boolean>, cancel: () => void, readonly running: boolean}}
+ * @param {"during"|"prep"} mode  during: the numbers start now; prep: "get ready" until connected()
+ * @returns {{zero: Promise<boolean>, connected: (at?: number) => void, readyNow: () => void,
+ *           close: () => void, cancel: () => void, readonly running: boolean,
+ *           readonly phase: string|null, readonly endsAt: number|null}}
  */
-function runGoCountdown(seconds, { hintKey = "countdownHint" } = {}) {
+function runGoCountdown(seconds, mode = "during") {
   cancelGoCountdown();
   const el = $("goCountdown"), num = $("goCountdownNum"), arc = $("goCountdownArc"), hint = $("goCountdownHint");
   const cardEl = card();
-  const endsAt = Date.now() + seconds * 1000;
-  let shown = null, timer = null, finished = false, resolveDone;
-  const done = new Promise((r) => { resolveDone = r; });
+  const total = seconds * 1000;
+  let phase = null, endsAt = null, paceStart = 0, paceCount = seconds, shown = null;
+  let timer = null, startTimer = null, zeroed = false, closed = false, resolveZero;
+  const zero = new Promise((r) => { resolveZero = r; });
   const handle = {
-    done,
-    cancel: () => finish(false),
-    get running() { return !finished; },
+    zero, connected, readyNow, close, cancel,
+    get running() { return !closed; },
+    get phase() { return phase; },
+    get endsAt() { return endsAt; },
   };
-  function finish(ok) {
-    if (finished) return;
-    finished = true;
+  const trace = (type, data) => { if (typeof traceOrient === "function") traceOrient(type, data); };
+  function setPhase(p, hintKey) {
+    phase = p;
+    if (el) el.dataset.phase = p;
+    if (hint && hintKey) hint.textContent = t(hintKey);
+  }
+  /* The ring drains from `fromFrac` to empty over `ms`, on the compositor. A retime restarts it
+     from where it is, so a stretch never jumps the ring either. */
+  function paintRing(fromFrac, ms) {
+    if (!arc) return;
+    arc.classList.remove("is-running");
+    arc.style.setProperty("--go-from", String((fromFrac * 100).toFixed(2)));
+    arc.style.setProperty("--go-total", `${Math.max(0, ms)}ms`);
+    void arc.getBoundingClientRect();
+    arc.classList.add("is-running");
+  }
+  function startNumbers(end) {
+    if (closed || phase === "count" || zeroed) return;
+    if (startTimer) { clearTimeout(startTimer); startTimer = null; }
+    const now = Date.now();
+    endsAt = Math.max(end, now + 1);
+    paceStart = now; paceCount = seconds; shown = null;
+    setPhase("count", "countdownHint");
+    paintRing(0, endsAt - now);
+    trace("timer-numbers", { in: endsAt - now });
+    tick();
+  }
+  function retime(newEnd) {
+    if (closed || phase !== "count" || zeroed || newEnd <= endsAt) return;
+    const now = Date.now();
+    const fracDone = (now - (endsAt - total)) / total;
+    trace("timer-stretch", { byMs: Math.round(newEnd - endsAt), shown });
+    paceStart = now; paceCount = shown || seconds; endsAt = newEnd;
+    paintRing(Math.min(1, Math.max(0, fracDone)), endsAt - now);
     if (timer) { clearTimeout(timer); timer = null; }
-    if (el) el.hidden = true;
-    if (arc) { arc.classList.remove("is-running"); arc.style.removeProperty("--go-total"); }
-    if (cardEl) cardEl.classList.remove("is-counting");
-    if (_goCountdown === handle) _goCountdown = null;
-    resolveDone(ok);
+    tick();
   }
   function tick() {
     timer = null;
-    if (finished) return;
-    const leftMs = endsAt - Date.now();
-    if (leftMs <= 0) { finish(true); return; }
-    const n = Math.ceil(leftMs / 1000);
+    if (closed || phase !== "count") return;
+    const left = endsAt - Date.now();
+    if (left <= 0) { reachZero(); return; }
+    const per = (endsAt - paceStart) / paceCount;
+    const n = Math.max(1, Math.ceil(left / per - 1e-9));
     if (n !== shown && num) {
       shown = n;
       num.textContent = String(n);
       num.classList.remove("is-tick"); void num.offsetWidth; num.classList.add("is-tick");   // restart the pop
     }
-    timer = setTimeout(tick, Math.min(250, leftMs - (n - 1) * 1000 + 5));
+    const untilFlip = left - (n - 1) * per;
+    timer = setTimeout(tick, Math.max(16, Math.min(250, untilFlip + 4)));
   }
-  if (hint) hint.textContent = t(hintKey);
+  function reachZero() {
+    if (zeroed) return;
+    zeroed = true;
+    /* Zero IS the fitting - revealAfterCountdown() closes the stage in the same task as the
+       reveal. Should the render still be on its way (never measured), the stage shows a short
+       "starting" state until it lands, never the loading overlay. */
+    setPhase("late", "countdownHintReady");
+    trace("timer-zero");
+    resolveZero(true);
+  }
+  function connected(at = Date.now()) {
+    if (closed || zeroed) return;
+    const readyBy = at + LIVE_TIMER_READY_AFTER_CONNECT_MS;
+    trace("timer-connected");
+    if (phase === "prep") {
+      const end = Math.max(readyBy, Date.now() + total);
+      const startAt = end - total;
+      const wait = startAt - Date.now();
+      if (wait <= 0) startNumbers(end);
+      else startTimer = setTimeout(() => { startTimer = null; startNumbers(end); }, wait);
+    } else if (phase === "count" && readyBy > endsAt) {
+      retime(readyBy);
+    }
+  }
+  /* The render was verified while the stage still says "get ready" - connected() never came
+     (a path that connects without going through goLive()). The numbers run now, in full. */
+  function readyNow() {
+    if (!closed && phase === "prep") startNumbers(Date.now() + total);
+  }
+  function close() {
+    if (closed) return;
+    closed = true;
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (startTimer) { clearTimeout(startTimer); startTimer = null; }
+    if (el) { el.hidden = true; delete el.dataset.phase; }
+    if (arc) { arc.classList.remove("is-running"); arc.style.removeProperty("--go-total"); arc.style.removeProperty("--go-from"); }
+    if (cardEl) cardEl.classList.remove("is-counting");
+    if (_goCountdown === handle) _goCountdown = null;
+    if (!zeroed) { zeroed = true; resolveZero(false); }
+  }
+  function cancel() { close(); }
+
   if (el) el.hidden = false;
   if (cardEl) cardEl.classList.add("is-counting");
-  if (arc) {
-    arc.classList.remove("is-running");
-    arc.style.setProperty("--go-total", `${seconds}s`);
-    void arc.getBoundingClientRect();   // commit the full ring before the drain starts
-    arc.classList.add("is-running");
-  }
   _goCountdown = handle;
-  tick();
+  if (mode === "prep") { setPhase("prep", "countdownHintPrep"); if (num) num.textContent = ""; }
+  else startNumbers(Date.now() + total);
   return handle;
 }
 
@@ -14336,41 +14504,71 @@ function cancelGoCountdown() {
   if (_goCountdown) _goCountdown.cancel();
 }
 
+/** goLive()'s "the session is connected" - the countdown times zero to the expected render. */
+function liveTimerConnected() {
+  if (_goCountdown && _goCountdown.running) _goCountdown.connected(Date.now());
+}
+
 /**
- * THE REVEAL, AFTER THE SELF-TIMER. Called by armFirstFrameBilling()'s fire() - every reveal gate
- * has already passed - in place of startBillingWindow(gen). No plan (the timer off): straight
- * through, exactly as before. A plan: hold the verified render until the countdown says go.
- * The first-frame guard is retired on the way in: a verified frame is what it was waiting for, and
- * the hold is bounded by the countdown; a session torn down during the hold bumps sessionGen, so
- * the late reveal is dropped rather than shown over nothing.
+ * THE REVEAL, AT ZERO. Called by armFirstFrameBilling()'s fire() - every reveal gate has already
+ * passed - in place of startBillingWindow(gen). No plan (the timer off): straight through, the
+ * old path. A plan: the verified render waits for zero, and the stage comes down in the same task
+ * as the reveal. ONE HOLD PER SESSION: onRemoteStream() can arm more than one gate, and a second
+ * fire for a gen already held is ignored (the 2026-09-29 "started at 7.6s of 10" report). The
+ * first-frame guard is retired on the way in - a verified frame is what it waits for, and the hold
+ * ends at zero; a session torn down during the hold is dropped by the sessionGen check.
  * @param {number} gen
  */
 function revealAfterCountdown(gen) {
   const plan = _liveTimerPlan;
-  _liveTimerPlan = null;
   if (!plan) { startBillingWindow(gen); return; }
-  const go = () => { if (gen === sessionGen) startBillingWindow(gen); };
-  const hold = (why) => {
-    if (typeof firstFrameGuardTimer !== "undefined" && firstFrameGuardTimer) {
-      clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null;
-    }
-    if (typeof traceOrient === "function") traceOrient("timer-hold", { why, s: plan.seconds });
-  };
-  if (plan.mode === "during" && _goCountdown && _goCountdown.running) {
-    hold("during");
-    _goCountdown.done.then(go);
-    return;
+  if (plan.heldGen === gen) return;
+  plan.heldGen = gen;
+  const cd = _goCountdown;
+  if (!cd || !cd.running) { _liveTimerPlan = null; startBillingWindow(gen); return; }
+  if (typeof firstFrameGuardTimer !== "undefined" && firstFrameGuardTimer) {
+    clearTimeout(firstFrameGuardTimer); firstFrameGuardTimer = null;
   }
-  if (plan.mode === "after") {
-    hold("after");
-    runGoCountdown(plan.seconds, { hintKey: "countdownHintReady" }).done.then(go);
-    return;
+  if (typeof traceOrient === "function") traceOrient("timer-hold", { s: plan.seconds, phase: cd.phase });
+  cd.readyNow();
+  cd.zero.then(() => {
+    if (gen !== sessionGen) return;          // torn down during the hold
+    if (_liveTimerPlan === plan) _liveTimerPlan = null;
+    cd.close();
+    startBillingWindow(gen);
+  });
+}
+
+/* ── CODE VERIFIED (2026-09-29) ─────────────────────────────────────────────────
+   The moment the emailed code is accepted: a pear-green check drawn across the screen - a wave of
+   light, the ring closing, the tick stroking in, a burst - then it clears over the next screen,
+   which verifyOtp() has already started showing underneath (#otpSuccess never takes a pointer and
+   never delays the flow). OTP_SUCCESS_MS is the whole piece, in style.css's keyframe order. */
+const OTP_SUCCESS_MS = 2100;
+let _otpSuccessTimer = null;
+function celebrateOtpVerified() {
+  const el = $("otpSuccess");
+  if (!el) return;
+  if (_otpSuccessTimer) clearTimeout(_otpSuccessTimer);
+  el.hidden = false;
+  el.classList.remove("is-playing"); void el.offsetWidth; el.classList.add("is-playing");
+  if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+    try { navigator.vibrate([10, 60, 18]); } catch (_) { /* haptics are a nicety */ }
   }
-  startBillingWindow(gen);   // "during", and the countdown already ran out while it loaded
+  _otpSuccessTimer = setTimeout(() => {
+    _otpSuccessTimer = null;
+    el.classList.remove("is-playing");
+    el.hidden = true;
+  }, OTP_SUCCESS_MS);
 }
 
 function openCameraFromButton() {
-  startCamera().then((ok) => { if (ok) requestAnimationFrame(scrollToCamera); });
+  startCamera().then((ok) => {
+    /* The guide's class keeps the placeholder away until the camera is up (or refused), so the
+       "open the camera" card does not flash between the guide leaving and the preview arriving. */
+    card().classList.remove("show-guide");
+    if (ok) requestAnimationFrame(scrollToCamera);
+  });
 }
 
 function showCamGuide() {
@@ -14384,8 +14582,9 @@ function showCamGuide() {
 
 function hideCamGuide() {
   const g = $("camGuide");
-  if (g) g.hidden = true;
-  card().classList.remove("show-guide");
+  if (!g || g.hidden) return;
+  g.classList.add("is-leaving");
+  setTimeout(() => { g.hidden = true; g.classList.remove("is-leaving"); }, 300);
 }
 
 /* =============================================================================
@@ -15452,16 +15651,16 @@ async function goLive() {
       link: typeof _orientWs !== "undefined" && _orientWs ? _orientWs.readyState : null,
     });
   }
-  /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"). A
-     5/10s countdown starts now, over the preview, while everything below runs behind it;
-     a 3s one waits for the verified render. Off: no plan, and nothing below changes. */
+  /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the
+     stage countdown starts now, over the preview, and everything below runs behind it - zero is
+     the fitting. Off: no plan, and nothing below changes. */
   _liveTimerPlan = null;
   const liveTimer = typeof liveTimerMode === "function" ? liveTimerMode(liveTimerSec) : null;
   if (liveTimer) {
-    _liveTimerPlan = { seconds: liveTimerSec, mode: liveTimer };
+    _liveTimerPlan = { seconds: liveTimerSec, mode: liveTimer, heldGen: null };
     setLiveTimerMenu(false);
     if (typeof traceOrient === "function") traceOrient("timer", { s: liveTimerSec, mode: liveTimer });
-    if (liveTimer === "during") runGoCountdown(liveTimerSec);
+    runGoCountdown(liveTimerSec, liveTimer);
   }
   $("captureBtn").disabled = true;
   $("camError").hidden = true;
@@ -15520,8 +15719,12 @@ async function goLive() {
        "step into frame" overlay while it waits, and proceeds anyway on timeout or with
        no usable detector - see awaitBodyPresence(). A shopper the model cannot see must
        still get their try-on. */
-    const presence = await awaitBodyPresence(isBottomsGarment(activeItem));
-    if (presence !== "present") {
+    /* ...EXCEPT under a self-timer, where the countdown IS the positioning step: the shopper
+       pressed and is walking back, and waiting for them here held the connect until they had
+       arrived - the "loading after zero" report. The billed window still starts at the reveal,
+       at zero, when they are in place. See "CAMERA GUIDE + SELF-TIMER". */
+    const presence = _liveTimerPlan ? "timer" : await awaitBodyPresence(isBottomsGarment(activeItem));
+    if (presence !== "present" && presence !== "timer") {
       console.warn(`[go-live] presence gate did not confirm (${presence}) - continuing`);
     }
     hidePresenceOverlay();   // belt-and-braces: never leave it over a live session
@@ -15607,6 +15810,8 @@ async function goLive() {
     await connectRealtime();
     await waitConnected(CONNECT_TIMEOUT_MS);
     console.log("[PEAR] Decart connected - waiting for first frame");
+    /* A self-timer times zero to the render it now expects (see "CAMERA GUIDE + SELF-TIMER"). */
+    if (typeof liveTimerConnected === "function") liveTimerConnected();
 
     /* Settle the try-on mode BEFORE the first reference is built, so exactly one
        rtClient.set() is issued for it. This is a SECOND, independent guard from the

@@ -5813,21 +5813,22 @@ body.has-cookie-banner .pear-help-widget {
 }
 
 /* ════════════════════════════════════════════════════════════════════════
-   ✦ CAMERA GUIDE + SELF-TIMER (2026-09-29)
+   ✦ CAMERA GUIDE + SELF-TIMER + CODE VERIFIED (2026-09-29)
    ────────────────────────────────────────────────────────────────────────
-   REPORTED: "if the camera doesn't see the whole body the result isn't the best".
-   Three pieces, all on the camera stage, all built from the Liquid Glass tokens above:
-     · #camGuide     - the tips card between "open the camera" and the camera (once per
-                       room load); it takes the placeholder's place and material.
-     · #timerBtn     - the flip button's twin in the opposite top corner (inline-start:
-                       the RIGHT in Hebrew), preview only; its menu picks off / 3 / 5 / 10s.
-     · #goCountdown  - the whole stage while a self-timer runs, numbers big enough to read
-                       from across the room.
-   While a countdown runs, .is-counting sets the loading and presence overlays ASIDE -
-   display only, their own show/hide logic untouched - and with them the loading
-   overlay's frosted camera: the countdown exists so the shopper can frame themselves,
-   so it runs over the raw preview, exactly as the preview already shows it. The moment
-   it ends, whichever of those overlays is still due is back, unchanged. */
+   REPORTED: "if the camera doesn't see the whole body the result isn't the best" - and then
+   "animate everything, make the timer draggable and easy on a phone, and a cool check when the
+   code is accepted". Built from the Liquid Glass tokens above and the gender switch's material:
+     · #camGuide     - the tips card between "open the camera" and the camera (once per room
+                       load); three steps that arrive one after another, icons that move.
+     · #timerBtn     - beside the LIVE badge, preview only; its menu is a glass slider (off /
+                       3 / 5 / 10s) you tap or drag, the pill springing to the nearest stop.
+     · #goCountdown  - the whole stage while a self-timer runs: "get ready", then numbers big
+                       enough to read from across the room, a draining ring, and zero IS the
+                       fitting (app.js "CAMERA GUIDE + SELF-TIMER").
+     · #otpSuccess   - the "verified" moment: a pear-green check across the screen.
+   While a countdown runs, .is-counting sets the loading and presence overlays ASIDE - display
+   only - and with them the frosted camera: the countdown is there so the shopper can frame
+   themselves, so it runs over the raw preview, exactly as the preview already shows it. */
 
 /* ── the guide ─────────────────────────────────────────────────────────── */
 .cam-guide {
@@ -5838,65 +5839,93 @@ body.has-cookie-banner .pear-help-widget {
   -webkit-backdrop-filter: var(--blur-lg); backdrop-filter: var(--blur-lg);
   font-family: var(--font-ui);
   overflow-y: auto; overscroll-behavior: contain;
+  animation: camGuideVeil .45s var(--ease) both;
 }
 .cam-guide[hidden] { display: none; }
+.cam-guide.is-leaving { animation: camGuideVeilOut .3s var(--ease) both; pointer-events: none; }
+.cam-guide.is-leaving .cam-guide__panel { animation: camGuidePanelOut .3s var(--ease) both; }
 .camera-card.show-guide .camera-card__placeholder { display: none; }
+@keyframes camGuideVeil { from { opacity: 0; } to { opacity: 1; } }
+@keyframes camGuideVeilOut { to { opacity: 0; } }
+@keyframes camGuidePanelOut { to { opacity: 0; transform: translateY(-8px) scale(.97); } }
 .cam-guide__panel {
   width: 100%; max-width: 380px; margin: auto;
   display: flex; flex-direction: column; gap: 10px;
-  animation: camGuideIn .5s var(--ease-spring) both;
+  animation: camGuideIn .6s var(--ease-spring) both;
 }
-@keyframes camGuideIn { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes camGuideIn { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
 .cam-guide__title { margin: 0; font-size: 1.18rem; font-weight: 800; letter-spacing: -.01em; color: var(--ink); text-align: center; }
 .cam-guide__sub { margin: -6px 0 2px; font-size: .84rem; color: var(--ink-secondary); text-align: center; }
-.cam-guide__steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr; gap: 7px; }
+.cam-guide__steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr; gap: 8px; }
+/* Each step arrives on its own beat (--i from the markup). */
 .cam-guide__step {
-  display: flex; align-items: flex-start; gap: 10px;
-  padding: 9px 11px; border-radius: 16px;
+  display: flex; align-items: flex-start; gap: 11px;
+  padding: 10px 12px; border-radius: 16px;
   background: var(--lg-fill); border: var(--lg-border);
   box-shadow: var(--lg-edge), 0 4px 14px -6px rgba(15, 23, 42, .10);
   text-align: start;
+  animation: camGuideStep .62s var(--ease-spring) both;
+  animation-delay: calc(.16s + var(--i, 0) * .11s);
 }
+@keyframes camGuideStep { from { opacity: 0; transform: translateY(12px) scale(.97); } to { opacity: 1; transform: none; } }
 .cam-guide__step--key {
   background: linear-gradient(135deg, rgba(var(--primary-rgb), .16) 0%, rgba(255, 255, 255, .42) 100%);
   border-color: rgba(var(--primary-rgb), .45);
   box-shadow: var(--lg-edge), 0 6px 18px -8px rgba(var(--primary-rgb), .45);
+  animation: camGuideStep .62s var(--ease-spring) both, camGuideKeyGlow 2.8s ease-in-out 1.1s infinite;
+  animation-delay: .16s, 1.1s;
+}
+@keyframes camGuideKeyGlow {
+  0%, 100% { box-shadow: var(--lg-edge), 0 6px 18px -8px rgba(var(--primary-rgb), .45); }
+  50%      { box-shadow: var(--lg-edge), 0 8px 26px -6px rgba(var(--primary-rgb), .7), 0 0 0 3px rgba(var(--primary-rgb), .12); }
 }
 .cam-guide__ico {
-  flex: 0 0 auto; width: 32px; height: 32px; border-radius: 10px;
+  flex: 0 0 auto; width: 34px; height: 34px; border-radius: 11px;
   display: inline-flex; align-items: center; justify-content: center;
   background: rgba(255, 255, 255, .7); color: var(--ink);
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, .8), 0 1px 3px rgba(15, 23, 42, .08);
+  animation: camGuideIco .7s var(--ease-spring) both;
+  animation-delay: calc(.3s + var(--i, 0) * .11s);
 }
+@keyframes camGuideIco { from { transform: scale(.4) rotate(-14deg); opacity: 0; } to { transform: none; opacity: 1; } }
 .cam-guide__step--key .cam-guide__ico { background: var(--primary-solid); color: #fff; }
-.cam-guide__ico svg { width: 20px; height: 20px; }
+.cam-guide__ico svg { width: 20px; height: 20px; overflow: visible; }
+/* the icons keep moving: the frame corners breathe around the body, the sun turns, the hand ticks */
+.cg-corners { transform-origin: 12px 12px; animation: cgCorners 2.4s ease-in-out 1.2s infinite; }
+@keyframes cgCorners { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.14); } }
+.cg-rays { transform-origin: 12px 12px; animation: cgRays 9s linear infinite; }
+@keyframes cgRays { to { transform: rotate(360deg); } }
+.cg-hand { transform-origin: 12px 14px; animation: cgHand 4s steps(8, end) infinite; }
+@keyframes cgHand { to { transform: rotate(360deg); } }
 .cam-guide__copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.cam-guide__copy strong { font-size: .88rem; font-weight: 750; color: var(--ink); }
-.cam-guide__copy span { font-size: .78rem; line-height: 1.38; color: var(--ink-secondary); }
-/* The button never scrolls out of reach: pinned to the bottom of the card on a short stage. */
+.cam-guide__copy strong { font-size: .9rem; font-weight: 750; color: var(--ink); }
+.cam-guide__copy span { font-size: .8rem; line-height: 1.4; color: var(--ink-secondary); }
+/* The button never scrolls out of reach, arrives last, and carries one sheen across it. */
 .cam-guide__go {
-  position: sticky; bottom: 12px; z-index: 1;
+  position: sticky; bottom: 12px; z-index: 1; overflow: hidden;
   width: 100%; margin-top: 2px; padding: 13px 20px;
   box-shadow: 0 -10px 22px -6px rgba(238, 238, 236, .95), 0 8px 24px -6px rgba(0, 0, 0, .12);
+  animation: camGuideStep .62s var(--ease-spring) .58s both;
 }
+.cam-guide__go::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, .55) 50%, transparent 70%);
+  transform: translateX(-120%); animation: camGuideSheen 1.1s var(--ease) 1.2s both;
+}
+@keyframes camGuideSheen { to { transform: translateX(120%); } }
 .cam-guide__panel::after { content: ""; display: block; height: 14px; flex: 0 0 auto; }
-/* A wide stage (a landscape webcam): the four steps side by side, two rows. */
 @container (min-aspect-ratio: 1/1) {
-  .cam-guide__panel { max-width: 560px; }
-  .cam-guide__steps { grid-template-columns: 1fr 1fr; }
+  .cam-guide__panel { max-width: 600px; }
+  .cam-guide__steps { grid-template-columns: repeat(3, 1fr); }
+  .cam-guide__step { flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 12px 10px; }
 }
-/* A short stage: tighter type so everything fits without scrolling. */
 @container (max-height: 470px) {
   .cam-guide__title { font-size: 1.05rem; }
   .cam-guide__sub { font-size: .78rem; }
-  .cam-guide__copy span { font-size: .74rem; line-height: 1.32; }
-  .cam-guide__step { padding: 8px 10px; }
+  .cam-guide__copy span { font-size: .75rem; line-height: 1.34; }
 }
 
-/* ── the timer button (the flip button's twin) ─────────────────────────── */
-/* Beside the LIVE badge, which holds the same corner from the moment the camera is on: one row,
-   centred on the badge. --cam-live-w is the badge's measured width (setupLiveTimer), so a
-   different font cannot slide the two over each other. */
+/* ── the timer button (beside the LIVE badge) ──────────────────────────── */
 .cam-timer {
   position: absolute; z-index: 7; display: none;
   top: 9.5px; inset-inline-start: calc(14px + var(--cam-live-w, 73px) + 8px);
@@ -5916,47 +5945,96 @@ body.has-cookie-banner .pear-help-widget {
   box-shadow: 0 8px 24px -6px rgba(0, 0, 0, .12), inset 0 1px 1px 0 rgba(255, 255, 255, .6);
   color: var(--ink); cursor: pointer; font: 750 .86rem/1 var(--font-ui);
   -webkit-tap-highlight-color: transparent; touch-action: manipulation;
-  transition: transform .3s var(--ease-spring), background .3s var(--ease), box-shadow .3s var(--ease);
+  transition: transform .3s var(--ease-spring), background .35s var(--ease), color .35s var(--ease), box-shadow .3s var(--ease);
 }
-.camera-card__timer:active { transform: scale(.94); }
+.camera-card__timer:active { transform: scale(.92); }
 .camera-card__timer:focus-visible { outline: 2px solid var(--pear); outline-offset: 2px; }
 .camera-card__timer.is-set { background: var(--primary-solid); color: #fff; border-color: rgba(255, 255, 255, .5); }
+.camera-card__timer.is-pop { animation: camTimerPop .5s var(--ease-spring); }
+@keyframes camTimerPop { 0% { transform: scale(.86); } 55% { transform: scale(1.08); } 100% { transform: scale(1); } }
 .camera-card__timer-val { font-variant-numeric: tabular-nums; }
+.camera-card__timer svg { transition: transform .5s var(--ease-spring); }
+.camera-card__timer[aria-expanded="true"] svg { transform: rotate(-24deg); }
 @media (hover: hover) and (pointer: fine) {
-  .camera-card__timer:hover { transform: scale(1.04); box-shadow: 0 10px 28px -6px rgba(0, 0, 0, .18), inset 0 1px 1px 0 rgba(255, 255, 255, .6); }
+  .camera-card__timer:hover { transform: scale(1.05); box-shadow: 0 10px 28px -6px rgba(0, 0, 0, .18), inset 0 1px 1px 0 rgba(255, 255, 255, .6); }
 }
 
-/* its menu - a glass segmented control under the button */
+/* its menu - a glass slider under the button */
 .cam-timer__menu {
-  position: absolute; top: calc(100% + 8px); inset-inline-start: 0;
-  display: flex; flex-direction: column; gap: 7px;
-  padding: 10px; border-radius: 20px;
-  background: linear-gradient(135deg, rgba(255, 255, 255, .78) 0%, rgba(255, 255, 255, .5) 100%);
+  /* Anchored to the LIVE badge's edge, not the button's, so the four stops fit a phone's card. */
+  position: absolute; top: calc(100% + 8px); inset-inline-start: calc(-1 * (var(--cam-live-w, 73px) + 8px));
+  display: flex; flex-direction: column; gap: 8px; width: max-content;
+  padding: 11px 11px 10px; border-radius: 22px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .8) 0%, rgba(255, 255, 255, .54) 100%);
   border: var(--lg-border);
   -webkit-backdrop-filter: var(--lgb-blur); backdrop-filter: var(--lgb-blur);
-  box-shadow: var(--lg-edge), 0 18px 40px -12px rgba(15, 23, 42, .28);
-  transform-origin: top; animation: camTimerMenuIn .32s var(--ease-spring) both;
+  box-shadow: var(--lg-edge), 0 18px 40px -12px rgba(15, 23, 42, .3);
+  animation: camTimerMenuIn .42s var(--ease-spring) both;
 }
 [dir="rtl"] .cam-timer__menu { transform-origin: top right; }
 [dir="ltr"] .cam-timer__menu { transform-origin: top left; }
 .cam-timer__menu[hidden] { display: none; }
-@keyframes camTimerMenuIn { from { opacity: 0; transform: translateY(-4px) scale(.94); } to { opacity: 1; transform: none; } }
+@keyframes camTimerMenuIn { from { opacity: 0; transform: translateY(-6px) scale(.9); } to { opacity: 1; transform: none; } }
 .cam-timer__title { font: 700 .7rem/1 var(--font-ui); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-secondary); padding-inline-start: 4px; }
-.cam-timer__opts { display: flex; gap: 4px; padding: 3px; border-radius: var(--pill); background: rgba(15, 23, 42, .06); }
+.cam-timer__help { font: 600 .7rem/1.2 var(--font-ui); color: var(--ink-secondary); text-align: center; opacity: .85; }
+.cam-timer__track {
+  --tp: 4px;
+  position: relative; isolation: isolate;
+  display: grid; grid-template-columns: repeat(4, minmax(54px, 1fr));
+  padding: var(--tp); border-radius: var(--pill);
+  background: linear-gradient(180deg, rgba(15, 23, 42, .07) 0%, rgba(15, 23, 42, .04) 100%);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, .08), inset 0 0 0 1px rgba(255, 255, 255, .4);
+  touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+  cursor: grab;
+}
+.cam-timer__track.is-dragging { cursor: grabbing; }
+/* The glass pill - one column wide, parked by --ti (the chosen stop), mirrored by [dir]. */
+.cam-timer__pill {
+  position: absolute; z-index: 1; top: var(--tp); bottom: var(--tp); inset-inline-start: var(--tp);
+  width: calc((100% - 2 * var(--tp)) / 4);
+  border-radius: var(--pill);
+  background: linear-gradient(135deg, rgba(255, 255, 255, .98) 0%, rgba(255, 255, 255, .8) 100%);
+  border: 1px solid rgba(255, 255, 255, .95);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .14), 0 1px 3px rgba(0, 0, 0, .08),
+              inset 0 1px 0 #fff, inset 0 0 0 1px rgba(var(--primary-rgb), .35);
+  transform: translate3d(calc(var(--ti, 0) * 100%), 0, 0);
+  transition: transform .55s var(--spring, var(--ease-spring));
+  will-change: transform; pointer-events: none;
+}
+[dir="rtl"] .cam-timer__pill { transform: translate3d(calc(var(--ti, 0) * -100%), 0, 0); }
+.cam-timer__track.is-dragging .cam-timer__pill { transition: none; box-shadow: 0 8px 22px rgba(0, 0, 0, .18), 0 1px 3px rgba(0, 0, 0, .08), inset 0 1px 0 #fff, inset 0 0 0 1px rgba(var(--primary-rgb), .55); }
 .cam-timer__opt {
-  min-width: 46px; height: 34px; padding: 0 10px; border-radius: var(--pill); border: 0;
-  background: transparent; color: var(--ink); cursor: pointer;
-  font: 750 .9rem/1 var(--font-ui); font-variant-numeric: tabular-nums;
+  position: relative; z-index: 2;
+  height: 38px; padding: 0 6px; border: 0; border-radius: var(--pill);
+  background: transparent; color: var(--ink-secondary); cursor: inherit;
+  font: 700 .86rem/1 var(--font-ui); font-variant-numeric: tabular-nums;
   display: inline-flex; align-items: center; justify-content: center; gap: 2px;
-  -webkit-tap-highlight-color: transparent; touch-action: manipulation;
-  transition: background .25s var(--ease), color .25s var(--ease), box-shadow .25s var(--ease);
+  touch-action: pan-y; -webkit-tap-highlight-color: transparent;
+  transition: color .3s var(--ease), transform .45s var(--ease-spring);
 }
-.cam-timer__opt small { font-size: .66rem; font-weight: 700; opacity: .7; }
-.cam-timer__opt[aria-checked="true"] {
-  background: #fff; color: var(--ink);
-  box-shadow: 0 2px 8px -2px rgba(15, 23, 42, .18), inset 0 0 0 1px rgba(var(--primary-rgb), .55);
+.cam-timer__opt b { font-size: 1.02rem; font-weight: 800; }
+.cam-timer__opt small { font-size: .64rem; font-weight: 700; opacity: .72; }
+.cam-timer__opt.is-active { color: var(--ink); transform: scale(1.04); }
+.cam-timer__track[data-preview] .cam-timer__opt.is-active { color: var(--ink-secondary); transform: none; }
+.cam-timer__track[data-preview="0"] .cam-timer__opt[data-timer="0"],
+.cam-timer__track[data-preview="3"] .cam-timer__opt[data-timer="3"],
+.cam-timer__track[data-preview="5"] .cam-timer__opt[data-timer="5"],
+.cam-timer__track[data-preview="10"] .cam-timer__opt[data-timer="10"] { color: var(--ink); transform: scale(1.06); }
+.cam-timer__opt:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--pear-ring); }
+/* the options arrive in turn as the menu opens */
+.cam-timer__menu:not([hidden]) .cam-timer__opt { animation: camTimerOpt .45s var(--ease-spring) both; }
+.cam-timer__opt:nth-of-type(1) { animation-delay: .05s; }
+.cam-timer__opt:nth-of-type(2) { animation-delay: .09s; }
+.cam-timer__opt:nth-of-type(3) { animation-delay: .13s; }
+.cam-timer__opt:nth-of-type(4) { animation-delay: .17s; }
+@keyframes camTimerOpt { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; } }
+/* A finger is bigger than a cursor. */
+@media (pointer: coarse) {
+  .cam-timer__opt { height: 44px; }
+  .cam-timer__track { grid-template-columns: repeat(4, minmax(58px, 1fr)); }
+  .camera-card__timer { min-width: 40px; height: 40px; }
+  .cam-timer { top: 7.5px; }
 }
-.cam-timer__opt:focus-visible { outline: 2px solid var(--pear); outline-offset: 1px; }
 
 /* ── the countdown ─────────────────────────────────────────────────────── */
 .go-countdown {
@@ -5965,15 +6043,17 @@ body.has-cookie-banner .pear-help-widget {
   container-type: size; pointer-events: none;
   background: radial-gradient(circle at 50% 46%, rgba(8, 8, 10, .30) 0%, rgba(8, 8, 10, .12) 45%, rgba(8, 8, 10, 0) 72%);
   font-family: var(--font-ui);
+  animation: goCountdownIn .4s var(--ease) both;
 }
 .go-countdown[hidden] { display: none; }
+@keyframes goCountdownIn { from { opacity: 0; } to { opacity: 1; } }
 .go-countdown__dial { position: relative; width: 70cqmin; height: 70cqmin; display: grid; place-items: center; }
 .go-countdown__ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
 [dir="rtl"] .go-countdown__ring { transform: rotate(-90deg) scaleY(-1); }
 .go-countdown__track { fill: none; stroke: rgba(255, 255, 255, .22); stroke-width: 2.2; }
 .go-countdown__arc {
   fill: none; stroke: #fff; stroke-width: 2.6; stroke-linecap: round;
-  stroke-dasharray: 100; stroke-dashoffset: 0;
+  stroke-dasharray: 100; stroke-dashoffset: var(--go-from, 0);
   filter: drop-shadow(0 0 1.2px rgba(var(--primary-rgb), .9));
 }
 .go-countdown__arc.is-running { transition: stroke-dashoffset var(--go-total, 3s) linear; stroke-dashoffset: 100; }
@@ -5984,10 +6064,26 @@ body.has-cookie-banner .pear-help-widget {
 }
 .go-countdown__num.is-tick { animation: goCountdownTick .9s var(--ease-spring) both; }
 @keyframes goCountdownTick {
-  0%   { opacity: 0; transform: scale(1.32); }
-  22%  { opacity: 1; }
+  0%   { opacity: 0; transform: scale(1.32); filter: blur(6px); }
+  22%  { opacity: 1; filter: blur(0); }
   100% { opacity: 1; transform: scale(1); }
 }
+/* "get ready" (and, if it ever happens, "starting" after zero): a short arc circling, no number */
+.go-countdown[data-phase="prep"] .go-countdown__arc,
+.go-countdown[data-phase="late"] .go-countdown__arc {
+  transition: none; stroke-dasharray: 22 78; stroke-dashoffset: 0;
+  transform-origin: 50% 50%; transform-box: fill-box; animation: goCountdownSpin 1.1s linear infinite;
+}
+@keyframes goCountdownSpin { to { transform: rotate(360deg); } }
+.go-countdown[data-phase="prep"] .go-countdown__num,
+.go-countdown[data-phase="late"] .go-countdown__num { display: none; }
+.go-countdown[data-phase="prep"] .go-countdown__dial::after,
+.go-countdown[data-phase="late"] .go-countdown__dial::after {
+  content: ""; width: 14cqmin; height: 14cqmin; border-radius: 50%;
+  background: radial-gradient(circle, #fff 0%, rgba(var(--primary-rgb), .85) 60%, rgba(var(--primary-rgb), 0) 72%);
+  animation: goCountdownBreath 1.4s ease-in-out infinite;
+}
+@keyframes goCountdownBreath { 0%, 100% { transform: scale(.75); opacity: .75; } 50% { transform: scale(1); opacity: 1; } }
 .go-countdown__hint {
   margin: 0; padding: 9px 18px; border-radius: var(--pill); max-width: 86%;
   font-size: clamp(.85rem, 4.2cqmin, 1.25rem); font-weight: 700; text-align: center;
@@ -5996,7 +6092,9 @@ body.has-cookie-banner .pear-help-widget {
   border: var(--lg-border);
   -webkit-backdrop-filter: var(--lgb-blur); backdrop-filter: var(--lgb-blur);
   box-shadow: var(--lg-edge), 0 10px 26px -10px rgba(15, 23, 42, .35);
+  animation: goCountdownHint .5s var(--ease-spring) .1s both;
 }
+@keyframes goCountdownHint { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 
 /* while it runs: the loading and presence overlays wait, and the preview stays sharp */
 .camera-card.is-counting #scanOverlay,
@@ -6006,7 +6104,83 @@ body.has-cookie-banner .pear-help-widget {
 .camera-card.is-counting .camera-card__flip { display: none; }
 .camera-card.is-counting:has(> #scanOverlay:not([hidden])) #webcam { filter: none; }
 
+/* ── code verified ─────────────────────────────────────────────────────── */
+.otp-success {
+  position: fixed; inset: 0; z-index: 2147483000; pointer-events: none;
+  display: grid; place-items: center; font-family: var(--font-ui);
+}
+.otp-success[hidden] { display: none; }
+.otp-success__veil {
+  position: absolute; inset: 0; opacity: 0;
+  background: radial-gradient(circle at 50% 46%, rgba(var(--primary-rgb), .30) 0%, rgba(255, 255, 255, .62) 38%, rgba(255, 255, 255, .0) 78%);
+  -webkit-backdrop-filter: blur(6px) saturate(140%); backdrop-filter: blur(6px) saturate(140%);
+}
+.otp-success__stage { position: relative; display: grid; place-items: center; width: min(84vmin, 460px); aspect-ratio: 1; }
+.otp-success__badge {
+  position: relative; width: 60%; aspect-ratio: 1; border-radius: 50%; display: grid; place-items: center;
+  background: radial-gradient(circle at 34% 28%, rgb(172, 214, 30) 0%, var(--primary-solid) 58%, rgb(86, 116, 0) 100%);
+  box-shadow: 0 24px 60px -14px rgba(var(--primary-rgb), .75), 0 8px 18px -6px rgba(0, 0, 0, .22),
+              inset 0 2px 3px rgba(255, 255, 255, .55), inset 0 -6px 14px rgba(0, 0, 0, .18);
+  opacity: 0; transform: scale(.2);
+}
+/* the glass lip on the badge */
+.otp-success__badge::before {
+  content: ""; position: absolute; inset: 6%; border-radius: 50%; pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .42) 0%, rgba(255, 255, 255, 0) 52%);
+}
+.otp-success__svg { position: relative; width: 78%; height: 78%; overflow: visible; }
+.otp-success__ring { fill: none; stroke: rgba(255, 255, 255, .55); stroke-width: 3; stroke-dasharray: 100; stroke-dashoffset: 100;
+  transform: rotate(-90deg); transform-origin: 60px 60px; }
+.otp-success__check { fill: none; stroke: #fff; stroke-width: 9; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 100; stroke-dashoffset: 100; filter: drop-shadow(0 3px 4px rgba(0, 0, 0, .18)); }
+.otp-success__wave {
+  position: absolute; width: 60%; aspect-ratio: 1; border-radius: 50%;
+  border: 2px solid rgba(var(--primary-rgb), .55); opacity: 0;
+}
+.otp-success__burst { position: absolute; inset: 0; }
+.otp-success__burst i {
+  position: absolute; left: 50%; top: 50%; width: 3.2%; aspect-ratio: 1; margin: -1.6%; border-radius: 50%;
+  background: var(--primary-solid); opacity: 0;
+  box-shadow: 0 0 10px rgba(var(--primary-rgb), .6);
+}
+.otp-success__burst i:nth-child(3n) { background: #fff; box-shadow: 0 0 8px rgba(var(--primary-rgb), .9); }
+.otp-success__burst i:nth-child(3n+1) { width: 2.2%; margin: -1.1%; }
+.otp-success__text {
+  position: absolute; top: calc(100% - 10%); margin: 0; white-space: nowrap;
+  font-size: clamp(1.05rem, 5.4vmin, 1.5rem); font-weight: 800; letter-spacing: -.01em; color: var(--ink);
+  opacity: 0; transform: translateY(10px);
+}
+/* THE PIECE, 2.1s: the veil breathes in, the badge springs up, the ring closes, the tick strokes
+   in, two waves and a burst leave it, then everything lifts away over the next screen. */
+.otp-success.is-playing .otp-success__veil  { animation: otpVeil 2.1s var(--ease) both; }
+.otp-success.is-playing .otp-success__badge { animation: otpBadge 2.1s var(--ease-spring) both; }
+.otp-success.is-playing .otp-success__ring  { animation: otpRing 2.1s var(--ease) both; }
+.otp-success.is-playing .otp-success__check { animation: otpCheck 2.1s var(--ease) both; }
+.otp-success.is-playing .otp-success__wave  { animation: otpWave 1.3s var(--ease) .5s both; }
+.otp-success.is-playing .otp-success__wave--2 { animation-delay: .72s; }
+.otp-success.is-playing .otp-success__burst i { animation: otpBurst 1.1s var(--ease) calc(.52s + var(--d, 1) * .05s) both; }
+.otp-success.is-playing .otp-success__text  { animation: otpText 2.1s var(--ease-spring) both; }
+@keyframes otpVeil   { 0% { opacity: 0; } 14% { opacity: 1; } 76% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes otpBadge  { 0% { opacity: 0; transform: scale(.2) rotate(-25deg); } 22% { opacity: 1; transform: scale(1.08) rotate(0); }
+                       32% { transform: scale(.97); } 42% { transform: scale(1); } 78% { opacity: 1; transform: scale(1); }
+                       100% { opacity: 0; transform: scale(.86) translateY(-6%); } }
+@keyframes otpRing   { 0%, 14% { stroke-dashoffset: 100; } 42% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 0; } }
+@keyframes otpCheck  { 0%, 26% { stroke-dashoffset: 100; } 48% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: 0; } }
+@keyframes otpWave   { from { opacity: .9; transform: scale(1); } to { opacity: 0; transform: scale(1.9); } }
+@keyframes otpBurst  {
+  0%   { opacity: 0; transform: rotate(var(--a)) translateY(0) scale(.4); }
+  18%  { opacity: 1; }
+  100% { opacity: 0; transform: rotate(var(--a)) translateY(calc(-1 * var(--d, 1) * 33vmin)) scale(1); }
+}
+@keyframes otpText   { 0%, 30% { opacity: 0; transform: translateY(10px); } 46% { opacity: 1; transform: none; } 78% { opacity: 1; } 100% { opacity: 0; transform: translateY(-6px); } }
+
 @media (prefers-reduced-motion: reduce) {
-  .cam-guide__panel, .cam-timer__menu, .go-countdown__num.is-tick { animation: none; }
-  .go-countdown__arc.is-running { transition: none; }
+  .cam-guide, .cam-guide__panel, .cam-guide__step, .cam-guide__ico, .cam-guide__go, .cam-guide__go::after,
+  .cg-corners, .cg-rays, .cg-hand, .cam-timer__menu, .cam-timer__menu .cam-timer__opt,
+  .camera-card__timer.is-pop, .go-countdown, .go-countdown__num.is-tick, .go-countdown__hint,
+  .go-countdown__dial::after { animation: none !important; }
+  .go-countdown__arc.is-running, .cam-timer__pill { transition: none; }
+  .otp-success.is-playing .otp-success__wave, .otp-success.is-playing .otp-success__burst i { animation: none; opacity: 0; }
+  .otp-success.is-playing .otp-success__badge { animation: otpVeil 2.1s linear both; transform: none; }
+  .otp-success.is-playing .otp-success__ring, .otp-success.is-playing .otp-success__check { animation: none; stroke-dashoffset: 0; }
 }
