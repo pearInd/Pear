@@ -268,5 +268,22 @@ console.log("\n── §8 the guide, the slider, the stage and the verified mome
   check("...it is pointer-transparent and on top of everything", /\.otp-success \{\s*\n\s*position: fixed; inset: 0; z-index: 2147483000; pointer-events: none;/.test(CSS) && /id="otpSuccess"/.test(HTML));
 }
 
+console.log("\n── §9 the pose model's first inference is never paid inside a fitting ──");
+{
+  /* 2026-09-29: a 10s session froze ~1.9s at the reveal and bridged to the raw camera - the first
+     MediaPipe inference (run by the presence gate the timer skips) landed on the fitting's first
+     second. It is warmed in preview now, and at a timer's go-live as a backstop. */
+  const warm = fnSrc("function warmPoseInference() {");
+  check("the warm-up runs the first inferences off to the side, and never once the fitting is on screen",
+    /loadPoseLandmarker\(\)\.then/.test(warm) && /detectPoseFrame\(detector, video\)/.test(warm) &&
+    /if \(billingStarted\) return;/.test(warm) && /if \(_poseInferenceWarmed\) return;/.test(warm));
+  check("...it runs when the camera opens in preview",
+    /if \(ok\) warmPoseInference\(\);/.test(fnSrc("function openCameraFromButton() {")));
+  const live = fnSrc("async function goLive() {");
+  check("...and at a timer's go-live, the path that skips the presence gate",
+    /runGoCountdown\(liveTimerSec, liveTimer\);[\s\S]{0,300}warmPoseInference\(\);/.test(live));
+  check("...and it lives outside the timer block (the timer still touches no sensor)", !/warmPoseInference|detectPoseFrame/.test(BLOCK.replace(/\/\*[\s\S]*?\*\//g, "")));
+}
+
 console.log(fails === 0 ? "\nlive-timer: OK" : `\nlive-timer: ${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

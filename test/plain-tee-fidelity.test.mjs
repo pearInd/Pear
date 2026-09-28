@@ -247,9 +247,11 @@ console.log("\n── §5 THE AXIS IS A SELECTOR, and its scope is deliberate �
   /* SCOPED TO FRONT, on purpose and on the record. The closure tokens never shipped on
      the back branch, and no back-view report exists - so the back pair stays byte-for-byte
      what it was, per this file's one-branch-at-a-time-on-evidence rule. */
-  check("the BACK branch is untouched: a tee and a button-down render identically behind",
+  /* (The back anchor's NOUN moved on 2026-09-29, on its own report - §7.4; that changes every
+     top's back alike, so a tee and a button-down still match behind.) */
+  check("the BACK branch has no tee axis: a tee and a button-down render identically behind",
     imageOnlyPrompt(TEE, "back") === imageOnlyPrompt(BUTTONDOWN, "back") &&
-    /EXACT static shirt's REAR\/BACK side/.test(imageOnlyPrompt(TEE, "back")),
+    /EXACT static top's REAR\/BACK side/.test(imageOnlyPrompt(TEE, "back")),
     "the tee axis is front-only until a back-view report says otherwise");
   /* SLEEVELESS STAYS ON THE DEFAULT BRANCH. Naming a tank a "t-shirt" invites the model
      to add sleeves, which trades a reported failure for an unreported one. */
@@ -411,9 +413,15 @@ console.log("\n── §7 THE ANCHOR NOUN: the last button-down lean, on the DEF
     generic.includes(ISOLATION_LOCK) && withoutLock.length < 342,
     `expected < 342 (the pre-swap default) net of the isolation lock, got ${withoutLock.length}`);
 
-  check("§7.4 the BACK branch is byte-identical - no report, no change",
-    /EXACT static shirt's REAR\/BACK side/.test(imageOnlyPrompt(UNKNOWN_TOP, "back")),
-    "the back anchor is out of scope on the one-branch-at-a-time rule");
+  /* §7.4 WAS "the BACK branch is byte-identical - no report, no change". The report came
+     (2026-09-29, on main's transport): a knit tee's back rendered with a button-down's side vent
+     in the hem, and an open button-up at the side view the day before - "shirt" doing on the back
+     what it did on the front. The same swap; this pins it: "top", "shirt" nowhere. */
+  const backTop = imageOnlyPrompt(UNKNOWN_TOP, "back");
+  check("§7.4 the BACK branch took the same swap on its own report - \"top\", never \"shirt\"",
+    /EXACT static top's REAR\/BACK side/.test(backTop) && /original top texture/.test(backTop) &&
+    !/\bshirt\b/.test(backTop) && !/\bshirt\b/.test(imageOnlyPrompt({ ...UNKNOWN_TOP, backIsPlain: true }, "back")),
+    backTop);
 
   check("§7.5 the tee branch is untouched - it already had the right noun",
     tee.indexOf("Drape and fit the EXACT static t-shirt from the reference image") === 0, tee);

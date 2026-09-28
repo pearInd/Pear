@@ -14568,7 +14568,48 @@ function openCameraFromButton() {
        "open the camera" card does not flash between the guide leaving and the preview arriving. */
     card().classList.remove("show-guide");
     if (ok) requestAnimationFrame(scrollToCamera);
+    if (ok) warmPoseInference();
   });
+}
+
+/* ── THE FIRST POSE INFERENCE IS PAID IN PREVIEW (2026-09-29) ────────────────────────────────
+   REPORTED: "the render stopped in the middle and just showed the camera" - a 10s self-timer
+   session. The record: the page's main thread blocked ~1.9s right at the reveal (the next
+   orientation reply was handled 1,882ms late), the render presented almost nothing after it
+   (outFps 0, longest gap 2,125ms), and LIVE CONTINUITY bridged the silence with the raw camera
+   for the rest of the window. The body angle was empty through the whole countdown in both
+   timer sessions and present from the first sample in every session before them: the pose
+   model's FIRST inference - where MediaPipe builds its GPU programs, the one heavy call - used
+   to run in the go-live presence gate, under the loading overlay; a self-timer skips that gate,
+   so the first inference moved to the presence watcher's first tick, i.e. the first second of
+   the fitting, and the throttle could not feed the engine while it ran.
+   So the first inferences are run once per page, off to the side: after the camera opens in
+   preview (the video keeps playing through a main-thread block; only a click waits a moment),
+   and again at a timer's go-live in case the shopper pressed before that finished. Never once
+   the fitting is on screen (billingStarted) - the watcher pays it there, as it always did. Main's
+   untimed flow gets the same benefit: its presence gate's first inference is warm now too. */
+let _poseInferenceWarmed = false;
+function warmPoseInference() {
+  if (_poseInferenceWarmed) return;
+  if (typeof POSE_GATE_ENABLED !== "undefined" && typeof BODY_TOPOLOGY_ENABLED !== "undefined" &&
+      !POSE_GATE_ENABLED && !BODY_TOPOLOGY_ENABLED) return;
+  const video = $("webcam");
+  if (!video) return;
+  _poseInferenceWarmed = true;
+  loadPoseLandmarker().then((detector) => {
+    if (!detector) { _poseInferenceWarmed = false; return; }
+    let tries = 0, runs = 0;
+    const run = () => {
+      if (billingStarted) return;                       // the fitting is showing - its own loop pays it
+      if (!video.videoWidth) { if (++tries < 30) setTimeout(run, 200); else _poseInferenceWarmed = false; return; }
+      const t0 = performance.now();
+      try { detectPoseFrame(detector, video); } catch (_) { return; }
+      runs++;
+      console.log(`[PEAR] pose model warm-up ${runs}/2 in ${Math.round(performance.now() - t0)}ms - no first inference inside a fitting`);
+      if (runs < 2) setTimeout(run, 300);
+    };
+    setTimeout(run, 400);
+  }).catch(() => { _poseInferenceWarmed = false; });
 }
 
 function showCamGuide() {
@@ -15661,6 +15702,9 @@ async function goLive() {
     setLiveTimerMenu(false);
     if (typeof traceOrient === "function") traceOrient("timer", { s: liveTimerSec, mode: liveTimer });
     runGoCountdown(liveTimerSec, liveTimer);
+    /* The presence gate - where the pose model's heavy first inference used to run - is skipped
+       under a timer; make sure it is not left for the first second of the fitting. */
+    if (typeof warmPoseInference === "function") warmPoseInference();
   }
   $("captureBtn").disabled = true;
   $("camError").hidden = true;

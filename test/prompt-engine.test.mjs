@@ -25,7 +25,15 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-const PINNED = "221a5b5835f450b0c12fe8d3037456af0ea1b62b1155c26476e97b24519d912c";
+/* RE-PINNED 2026-09-29 for TWO wire changes on the back tops anchors (BACK_CATEGORY_ANCHOR.top and
+   PLAIN_BACK_ANCHOR.top), each on its own frame-by-frame report on main's transport: the front's
+   lower-body lock appended (the shopper's shorts repainted as the rear photo's model's trousers -
+   the lock's note above PLAIN_TEE_ANCHOR had recorded the back as a KNOWN GAP to spend on exactly
+   this report) and "shirt" -> "top" (a button-down's side vent cut into a knit tee's hem). Against
+   the previous pin (221a5b58...d912c, main's pre-move engine): 49,434 of the 161,756 single prompts
+   moved, every one a back-of-top prompt; the back's fit sentence now sheds when sizing down
+   (printed back: down 1-2; plain back: down 2), as the lock's note predicted. Nothing else moved. */
+const PINNED = "bcb8b7fe40edb8552053d2175885583fe56cf41ceaa7ffc5eb9702f5af89757c";
 
 let fails = 0;
 function check(label, cond, detail) {

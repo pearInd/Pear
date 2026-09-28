@@ -63,6 +63,11 @@ rendered hanging open is a worse failure than a wrong tension. In practice
 this means sizing down 1-2 steps on a button-front top can silently drop
 the fit-modifier text (163 free chars on that branch vs. up to ~213 chars
 for the largest size-down phrasing); true-to-size and sizing up always fit.
+The **back** tops anchors carry the same lower-body lock as the front since 2026-09-29 (the rear
+photo's model's trousers were drawn over the shopper's shorts on every turn - the lock's note above
+`PLAIN_TEE_ANCHOR` had recorded the back as a known gap for exactly that report) and say "top", not
+"shirt" (a button-down's side vent in a knit tee's hem). So on the back the fit sentence sheds when
+sizing down (printed back: down 1-2; plain back: down 2) and lands on true-to-size and every size-up.
 This is not a bug — see the comment above the `[P.MED, fitSentence(...)]`
 line in `imageOnlyPrompt()` before "fixing" it by raising its priority,
 which would risk the closure lock shedding instead and reopening the
@@ -584,6 +589,9 @@ one to one, keep only the hiding"). Recorded so they are not re-tried blind:
   Each answered one real frame-by-frame failure (an open button-up at the side view; a chest left
   bare), but the sessions they were judged in ran at 20 fps as well, so neither was ever measured on
   main's transport. `lib/prompts.js` is main's move again and `prompt-engine` main's pin.
+  **Re-applied 2026-09-29, on main's transport and their own reports:** "shirt" -> "top" (a knit
+  tee's back drawn with a button-down's side vent) together with 8d27676's lower-body lock (the
+  shopper's shorts repainted as the rear photo's model's trousers) - see §0. "body contour" was not.
 - **A TEST record sampling the media connection every 500ms** (`rtc`). It found the above; it is
   recurring work main does not do, so it went too. The record's other events are passive and stay.
 Not changed on this branch, and why: the reveal wait (~5s from connect - recorded fixes in
@@ -614,7 +622,11 @@ Nothing else moves: preload, connect, every reveal gate, what is sent and the or
 the timer off; the billed 5s window, recorder and kill-clock start at the reveal. The engine generates
 during a hold (~0.3-2.5s). `live-timer` pins it on a fake clock - including the reported double fire
 (the old consume-on-first-fire code fails it in three places). The visual agent clicks through the
-guide as a shopper would. **The "verified" moment** (`#otpSuccess`, `celebrateOtpVerified()`): a
+guide as a shopper would. **The pose model's first inference is paid in preview**
+(`warmPoseInference()`, after the camera opens, and at a timer's go-live as a backstop; never once
+the fitting shows): it used to run in the presence gate the timer skips, so under a timer it landed
+on the fitting's first second - a ~1.9s main-thread block, the render starved, LIVE CONTINUITY on the
+raw camera for the rest of the window (reported 2026-09-29). `live-timer` §9. **The "verified" moment** (`#otpSuccess`, `celebrateOtpVerified()`): a
 pear-green check across the screen when the emailed code is accepted - fire-and-forget,
 pointer-transparent, typeof-guarded inside the OTP block (`otp-single-verification` runs it
 standalone), never awaited, so the flow is not held for it.
