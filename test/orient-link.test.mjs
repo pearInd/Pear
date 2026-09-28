@@ -30,7 +30,7 @@ const SRC = APP.slice(a, b);
 const edgeSrc = APP.slice(APP.indexOf("function edgeApiUrl(route) {"), APP.indexOf("\n}\n", APP.indexOf("function edgeApiUrl(route) {")) + 3);
 
 /* ── a fake world: clock, timers, sockets, fetch ─────────────────────────────── */
-function world({ search = "", orientUrl = "wss://rt.pear-ai.io/orient", server = {}, pcs = null } = {}) {
+function world({ search = "", orientUrl = "wss://rt.pear-ai.io/orient", server = {} } = {}) {
   let now = 1_000_000;
   let seq = 1;
   const timers = [];
@@ -84,14 +84,13 @@ function world({ search = "", orientUrl = "wss://rt.pear-ai.io/orient", server =
     navigator: { userAgent: "test-agent" },
     console: { log() {}, warn: (...m) => warns.push(m.join(" ")), error() {} },
     fetch: (url, init) => { posts.push({ url, init }); return Promise.resolve({ ok: true }); },
-    ...(pcs ? { window: { __pearPCs: new Set(pcs) } } : {}),
   };
   const body = edgeSrc + "\n" + SRC + `
 return { orientLinkConnect, orientLinkDrop, orientLinkPing, orientLinkEnsureFresh, orientLinkKeepAlive, openOrientChannel,
   traceEnabled, traceSessionBegin, traceOrient, traceSessionEnd, trace: () => _trace, TRACE_MAX_EVENTS,
-  ORIENT_LINK_STEP_TIMEOUT_MS, ORIENT_LINK_STEP_HARD_MS, ORIENT_LINK_PONG_TIMEOUT_MS, ORIENT_LINK_PING_MS, RTC_SAMPLE_MS };`;
+  ORIENT_LINK_STEP_TIMEOUT_MS, ORIENT_LINK_STEP_HARD_MS, ORIENT_LINK_PONG_TIMEOUT_MS, ORIENT_LINK_PING_MS };`;
   const api = new Function(...Object.keys(sandbox), body)(...Object.values(sandbox));
-  return { api, advance, sockets, posts, warns, now: () => now, intervals: () => timers.filter((t) => !t.dead && t.interval).map((t) => t.interval) };
+  return { api, advance, sockets, posts, warns, now: () => now };
 }
 const SAMPLE = { t: 1, vote: "front", faceSeen: true, poseVoted: false, profileScore: 0.2, yawAbs: 38.6, yawAt: 1, lostAt: 0, lock: "front", profile: false, dualView: true };
 /* Run one step to completion on the fake clock; resolves { acts, at } (at = ms it took). */
@@ -219,35 +218,6 @@ console.log("\n── §4 the flight recorder: a TEST session only, bounded, pos
   check("bounded: TRACE_MAX_EVENTS events, the rest only counted", big.api.trace().ev.length === big.api.TRACE_MAX_EVENTS && big.api.trace().over === 50);
   big.api.traceSessionBegin({});
   check("a new go-live closes (and posts) the record the last one left open", big.posts.length === 1 && JSON.parse(big.posts[0].init.body).end === "superseded" && big.api.trace().n === 2);
-
-  /* 2026-09-28: the media connection's numbers ride along in a recorded session - a back reference
-     acknowledged 2.9s late could say when, not why. Numbers only; nothing decides from them. */
-  let statsCalls = 0;
-  const fakePc = { connectionState: "connected", getStats: async () => { statsCalls++; return new Map([
-    ["a", { type: "candidate-pair", nominated: true, state: "succeeded", currentRoundTripTime: 0.041, availableOutgoingBitrate: 1_450_000 }],
-    ["b", { type: "outbound-rtp", kind: "video", bytesSent: 812345, framesSent: 96, framesPerSecond: 20, frameWidth: 512,
-            totalPacketSendDelay: 0.3, qualityLimitationReason: "bandwidth", targetBitrate: 900_000 }],
-    ["c", { type: "inbound-rtp", kind: "video", framesPerSecond: 19, framesDecoded: 90, framesDropped: 1, freezeCount: 0 }]]); } };
-  const rec = world({ search: "?pear_key=TEST", pcs: [fakePc] });
-  rec.api.traceSessionBegin({});
-  await rec.advance(rec.api.RTC_SAMPLE_MS * 3 + 10);
-  const rtc = rec.api.trace().ev.filter((e) => e[1] === "rtc");
-  check("a recorded session samples the media connection every RTC_SAMPLE_MS - round trip, send estimate, bytes, fps, limit",
-    rtc.length === 3 && rtc[0][2][0].rtt === 41 && rtc[0][2][0].avail === 1450 && rtc[0][2][0].bs === 812345 &&
-    rtc[0][2][0].fpsOut === 20 && rtc[0][2][0].limit === "bandwidth" && rtc[0][2][0].target === 900 && rtc[0][2][0].fpsIn === 19,
-    JSON.stringify(rtc));
-  const sampling = rec.intervals().filter((ms) => ms === rec.api.RTC_SAMPLE_MS).length;
-  rec.api.traceSessionEnd("clip");
-  const before = statsCalls;
-  await rec.advance(rec.api.RTC_SAMPLE_MS * 4);
-  check("...and stops when the record closes - its timer cancelled, not left idling",
-    sampling === 1 && rec.intervals().filter((ms) => ms === rec.api.RTC_SAMPLE_MS).length === 0 && statsCalls === before &&
-    !/https?:|data:|blob:/.test(rec.posts[0].init.body), `sampling timers before/after: ${sampling}/${rec.intervals().length}`);
-  let shopperCalls = 0;
-  const quiet = world({ search: "?pear_key=LIVE-STORE", pcs: [{ connectionState: "connected", getStats: async () => { shopperCalls++; return new Map(); } }] });
-  quiet.api.traceSessionBegin({});
-  await quiet.advance(quiet.api.RTC_SAMPLE_MS * 4);
-  check("...and a shopper's session never samples at all", shopperCalls === 0);
 
   const local = world({ search: "?pear_trace=1", orientUrl: "" });
   local.api.traceSessionBegin({});

@@ -245,12 +245,11 @@ console.log("\n── §5 THE AXIS IS A SELECTOR, and its scope is deliberate �
     !/PLAIN_TEE_ANCHOR\s*\+/.test(SRC) && !/\+\s*PLAIN_TEE_ANCHOR/.test(SRC),
     "appending one clause is how the dozen came back last time");
   /* SCOPED TO FRONT, on purpose and on the record. The closure tokens never shipped on
-     the back branch - so the tee axis stays front-only, per this file's one-branch-at-a-time-
-     on-evidence rule. (The back anchor's NOUN did move on 2026-09-28, on its own report - §7.4;
-     that changes every top's back alike, so a tee and a button-down still match behind.) */
-  check("the BACK branch has no tee axis: a tee and a button-down render identically behind",
+     the back branch, and no back-view report exists - so the back pair stays byte-for-byte
+     what it was, per this file's one-branch-at-a-time-on-evidence rule. */
+  check("the BACK branch is untouched: a tee and a button-down render identically behind",
     imageOnlyPrompt(TEE, "back") === imageOnlyPrompt(BUTTONDOWN, "back") &&
-    /EXACT static top's REAR\/BACK side/.test(imageOnlyPrompt(TEE, "back")),
+    /EXACT static shirt's REAR\/BACK side/.test(imageOnlyPrompt(TEE, "back")),
     "the tee axis is front-only until a back-view report says otherwise");
   /* SLEEVELESS STAYS ON THE DEFAULT BRANCH. Naming a tank a "t-shirt" invites the model
      to add sleeves, which trades a reported failure for an unreported one. */
@@ -412,16 +411,9 @@ console.log("\n── §7 THE ANCHOR NOUN: the last button-down lean, on the DEF
     generic.includes(ISOLATION_LOCK) && withoutLock.length < 342,
     `expected < 342 (the pre-swap default) net of the isolation lock, got ${withoutLock.length}`);
 
-  /* §7.4 WAS "the BACK branch is byte-identical - no report, no change". The report came
-     2026-09-28: a printed-back tee rendered as an OPEN button-up at the side view, the back
-     reference on the wire while the chest still faced the camera - "shirt" doing on the back
-     exactly what it did on the front. So the back gets the same swap, and this pins it: "top"
-     in both sentences, "shirt" nowhere, and shorter than before, as every fidelity fix must be. */
-  const backTop = imageOnlyPrompt(UNKNOWN_TOP, "back");
-  check("§7.4 the BACK branch took the same swap on its own report - \"top\", never \"shirt\"",
-    /EXACT static top's REAR\/BACK side/.test(backTop) && /original top texture/.test(backTop) &&
-    !/\bshirt\b/.test(backTop) && !/\bshirt\b/.test(imageOnlyPrompt({ ...UNKNOWN_TOP, backIsPlain: true }, "back")),
-    backTop);
+  check("§7.4 the BACK branch is byte-identical - no report, no change",
+    /EXACT static shirt's REAR\/BACK side/.test(imageOnlyPrompt(UNKNOWN_TOP, "back")),
+    "the back anchor is out of scope on the one-branch-at-a-time rule");
 
   check("§7.5 the tee branch is untouched - it already had the right noun",
     tee.indexOf("Drape and fit the EXACT static t-shirt from the reference image") === 0, tee);

@@ -182,27 +182,11 @@ function showDemoGateLockedMessage() {
    that show the camera directly: the pre-live preview and the LIVE CONTINUITY layer that
    bridges a Decart output stall. It changes nothing on the wire: createThrottledInputStream()
    repaints at exactly LIVE_INFERENCE_FPS whatever the camera delivers, and it no longer
-   asks the shared camera for a lower rate (see its applyConstraints note).
-
-   LIVE_INFERENCE_FPS WAS 10, AND 10 IS WHAT THE SHOPPER SAW (2026-09-28). The render emits
-   one frame per frame it is sent: a TEST session's inbound stats read 8-10fps for the whole
-   generation on a 10fps wire (27-29 only before the first reference, while the server paces
-   its own passthrough), and every real clip on record decodes to 7-10 distinct pictures a
-   second. So the try-on itself played at 10fps - reported as "fewer frames, choppy" over two
-   sessions that measured 10 and 6fps out, and the 6fps one drew a GHOSTED frame on a fast turn
-   (the back print floating over a half-dissolved body: one output frame spanning too much
-   motion). The 10 was never a quality choice. It survived from June, when the bill was
-   believed to be per frame (6fps "≈ ~12 tokens/session"); 1468655 moved the credit model to
-   per-second (CREDITS_PER_SECOND) and the rate stayed where the old model left it. The SDK's
-   model table lists every lucy-vton at 30fps ideal/max, so 20 doubles the output and keeps
-   headroom under the model's own rate. What it costs: twice the frames through the encoder
-   and the uplink at 512x288, and fewer bits per frame while WebRTC ramps its bitrate at the
-   start. What it does NOT touch: the orientation decision (it reads the local camera, never
-   the render), the billed window, the prompt. */
+   asks the shared camera for a lower rate (see its applyConstraints note). */
 const LIVE_DURATION_MS    = 5000;   // BILLED Decart window = 5s → hard-capped session; 2 credits/s × 5s = 10 credits
 const VIDEO_LENGTH_MS     = 5000;   // == LIVE_DURATION_MS → frozen-hold tail is zero; the 5s clip is all real live motion
 const LIVE_FPS            = 60;     // local getUserMedia capture rate (mirror-smooth preview; throttled to LIVE_INFERENCE_FPS)
-const LIVE_INFERENCE_FPS  = 20;     // frames/s handed to Decart = frames/s it renders back (was 10 - see above); credits are per-SECOND, not per-frame
+const LIVE_INFERENCE_FPS  = 10;     // frames/s handed to Decart - trims per-frame upload/encode; credits are per-SECOND, not per-frame
                                     //   ENFORCED client-side by createThrottledInputStream() - the SDK's own fps cap is a no-op on Chromium.
 
 /* ── Credit model (Decart bills per second of generation) ────────────────────
@@ -5381,8 +5365,8 @@ async function ensureOnline() {
    This is the ONE place raw camera frames become the payload Decart bills on, so
    it's where "minimal frame/token usage" is actually enforced, not a place that
    needed new code - it already does exactly that:
-     • fps capped to LIVE_INFERENCE_FPS (20) - the camera can capture faster (LIVE_FPS
-       =60 for a smooth local preview), but only 20 frames/sec ever leave the browser.
+     • fps capped to LIVE_INFERENCE_FPS (10) - the camera can capture faster (LIVE_FPS
+       =60 for a smooth local preview), but only 10 frames/sec ever leave the browser.
      • resolution capped to LIVE_W×LIVE_H (512×288) - every frame is downscaled before
        it's sent, regardless of the camera's native resolution.
      • captureStream(0) + a single requestFrame() per tick - the output track emits
@@ -8116,8 +8100,8 @@ function syncOrientationWatcher() {
    LATENCY IS NOT ALIGNED, and cannot be: the camera is ~a render round-trip AHEAD of the
    output, so the fade reads as a short catch-up. LIVE_CONTINUITY_FADE_MS keeps it short.
 
-   IT CANNOT FLAP ON NORMAL CADENCE. The output runs at ~LIVE_INFERENCE_FPS (a 50ms frame
-   period at 20; gaps up to ~200ms measured in the clips at 10); the bar is 350ms, and the way back
+   IT CANNOT FLAP ON NORMAL CADENCE. The output runs at ~LIVE_INFERENCE_FPS (a 100ms frame
+   period, gaps up to ~200ms measured in the clips); the bar is 350ms, and the way back
    needs consecutive frames, so one straggler cannot flip the view twice.
    NEEDS requestVideoFrameCallback to time the output. Without it the layer stays off and
    says so once - the page then behaves exactly as it does with no stall bridging. */
@@ -10186,53 +10170,6 @@ function traceSessionBegin(ctx) {
     n: _traceSessions, build: typeof PEAR_BUILD !== "undefined" ? PEAR_BUILD : null,
     at: new Date().toISOString(), t0: Date.now(), ua, ctx: ctx || null, ev: [], over: 0,
   };
-  rtcSampleStart();
-}
-
-/* THE MEDIA CONNECTION'S OWN NUMBERS, twice a second, while a TEST session records (2026-09-28).
-   REPORTED: a first measurement where the back never rendered. Its reference was handed to the
-   render engine on time (82 degrees) and acknowledged 2.9s later - against 130-500ms in the twelve
-   other recorded sessions - so the back landed as the session ended. The record could say WHEN, not
-   WHY: the reference travels on the engine's signalling socket and the camera on the media
-   connection, over the same uplink, and at 20 frames a second the camera sends twice what it did.
-   So a recorded session also keeps the media connection's numbers - its round trip, the bitrate the
-   browser estimates it may send, the bytes actually sent, the send delay, why the encoder is
-   limited, and what comes back - and the next slow acknowledgement can be read against them.
-   getStats() on the connections window.__pearPCs already tracks; NOTHING IS DECIDED FROM IT, and a
-   shopper's session (no record) runs none of it. */
-const RTC_SAMPLE_MS = 500;
-let _rtcSampleTimer = null;
-function rtcSampleStart() {
-  rtcSampleStop();
-  if (typeof setInterval !== "function") return;
-  _rtcSampleTimer = setInterval(() => { rtcSample().catch(() => {}); }, RTC_SAMPLE_MS);
-}
-function rtcSampleStop() {
-  if (_rtcSampleTimer !== null && typeof clearInterval === "function") clearInterval(_rtcSampleTimer);
-  _rtcSampleTimer = null;
-}
-async function rtcSample() {
-  if (!_trace || typeof window === "undefined" || !window.__pearPCs) return;
-  const out = [];
-  for (const pc of Array.from(window.__pearPCs)) {
-    if (!pc || typeof pc.getStats !== "function" || pc.connectionState === "closed") continue;
-    const e = {};
-    (await pc.getStats()).forEach((x) => {
-      if (x.type === "candidate-pair" && x.nominated && x.state === "succeeded") {
-        e.rtt = x.currentRoundTripTime != null ? Math.round(x.currentRoundTripTime * 1000) : null;
-        e.avail = x.availableOutgoingBitrate != null ? Math.round(x.availableOutgoingBitrate / 1000) : null;
-      } else if (x.type === "outbound-rtp" && x.kind === "video") {
-        e.bs = x.bytesSent; e.sent = x.framesSent; e.fpsOut = x.framesPerSecond; e.w = x.frameWidth;
-        e.sendDelay = x.totalPacketSendDelay != null ? Math.round(x.totalPacketSendDelay * 1000) : null;
-        e.limit = x.qualityLimitationReason;
-        e.target = x.targetBitrate != null ? Math.round(x.targetBitrate / 1000) : null;
-      } else if (x.type === "inbound-rtp" && x.kind === "video") {
-        e.fpsIn = x.framesPerSecond; e.dec = x.framesDecoded; e.drop = x.framesDropped; e.freezes = x.freezeCount;
-      }
-    });
-    if (Object.keys(e).length) out.push(e);
-  }
-  if (out.length) traceOrient("rtc", out);
 }
 
 /** One event, stamped in ms since go-live. A no-op outside a recorded session. */
@@ -10247,7 +10184,6 @@ function traceOrient(type, data) {
 function traceSessionEnd(why) {
   const tr = _trace;
   if (!tr) return;
-  rtcSampleStop();
   _trace = null;
   tr.end = why;
   tr.dur = Date.now() - tr.t0;
@@ -14744,8 +14680,8 @@ function armFirstFrameBilling(video, gen) {
 /* 800ms, down from 1500. The stall being reported is 1-2 seconds long, so a 1500ms
    threshold could only ever act at the very end of one - or miss a short one entirely -
    and inside a 5s billed window that is most of the session gone before anything moves.
-   Not lower than this: at the 10fps this app ran inference at (20 since 2026-09-28, which only
-   widens the margin), frames legitimately arrive ~100ms apart and a slow frame is normal, so a threshold near the frame interval
+   Not lower than this: at the 10fps this app runs inference at, frames legitimately
+   arrive ~100ms apart and a slow frame is normal, so a threshold near the frame interval
    would fire on healthy jitter. 800ms is ~8 missed frames - unambiguous. */
 const FRAME_FREEZE_MS = 800;
 const FRAME_FREEZE_POLL_MS = 250;          // 3+ ticks inside the freeze window, so it is caught near its start

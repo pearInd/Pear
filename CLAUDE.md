@@ -568,33 +568,25 @@ identical to a run on `3a9b55d`; `startRecording()` and the continuity layer are
 against main, and only then through the move. A rule tuned on this branch alone is what this
 section undoes.
 
-**Two deliberate changes on top of main (2026-09-28)**, after the first two measurements of the
-reverted branch ("almost perfect" on the angles - keep them - but "a button-up opened on my belly",
-"text in the air", "choppy, fewer frames"). Neither touches WHEN a swap goes out:
-- **`LIVE_INFERENCE_FPS` 10 -> 20.** The render emits one frame per frame it is sent, so the wire
-  rate IS the try-on's frame rate (TEST records: 10 and 6 fps out; every real clip 7-10 distinct
-  pictures a second). 10 was a June leftover of per-frame billing; the credit model has been
-  per-second since 1468655, and the SDK lists lucy-vton at 30. `first-frame-integrity` pins it.
-  **Check the credit charge of the first session at 20** - if Decart's bill moves, this is why.
-- **The back tops anchors say "top", not "shirt"** (Layer A, both back anchors). A back render drew
-  an OPEN button-up at the side view - the word the front dropped for summoning plackets.
-  49,434 of 161,756 pinned prompts moved, only by those two words; back tops 521 -> 517 chars
-  (plain 503 -> 499). `prompt-engine` re-pinned, `plain-tee-fidelity` §7.4.
-- **...and their REGION says "body", not "back"** (same day, next measurement): a slower turn put the
-  BACK reference on the wire at 41 degrees and the top hung off one shoulder, chest bare - the anchor
-  said "onto the CURRENT back contour" / "back volume", i.e. dress the back and leave the front.
-  "body contour"/"body volume" like the front anchors; same length, same 49,434 prompts moved,
-  `prompt-engine` re-pinned again. What the pixels are (REAR/BACK side, "the rear panel") is unchanged.
-- **A TEST record also samples the media connection** (`rtc` events, every `RTC_SAMPLE_MS` = 500):
-  round trip, send estimate, bytes sent, fps both ways, the encoder's limit. Added after one first
-  measurement's back reference was acknowledged 2.9s late (130-500ms in twelve other sessions), so the
-  next one can be read against the uplink. Nothing decides from it; `orient-link` §4 pins it, including
-  that its timer is cancelled with the record.
-Not changed, and why: the reveal wait (~5s from connect - the cold-start hold, re-assert and
-settle in `config.js`, each a recorded fix). The "salmon shorts" first read as a store photo's leak
-were the shopper's own pants (black with a pink side panel). Uploading the references in advance
-(`client.files`, swap by id) was weighed for the late acknowledgement and NOT done: it would make
-every swap land earlier on the body - moving the angles the shopper signed off on.
+**Changes tried on top of main on 2026-09-28 - ALL REVERTED 2026-09-29** ("take main and copy it
+one to one, keep only the hiding"). Recorded so they are not re-tried blind:
+- **`LIVE_INFERENCE_FPS` 10 -> 20.** The output did double (TEST records: 12-19 fps out against ~10),
+  but the uplink could not carry it. A record with the media connection's stats read the camera at
+  1.1-1.4 Mbps against a 1.2-1.45 Mbps send estimate, the browser's send queue growing from 2.5s to
+  57s of cumulative packet delay across the turn, and the output falling to 8-12 fps. The reference
+  images ride the same uplink on the engine's signalling socket: at 20 fps two of five back
+  references were acknowledged 1.35s and 2.9s late (130-500ms in twelve sessions at 10), so the back
+  landed as the shopper was already facing front again - "the back on the front", "lots of delay".
+  Raising it again needs a way to keep the uplink clear for a reference upload - measured first.
+- **The back tops anchors' "shirt" -> "top" and "back contour/volume" -> "body contour/volume".**
+  Each answered one real frame-by-frame failure (an open button-up at the side view; a chest left
+  bare), but the sessions they were judged in ran at 20 fps as well, so neither was ever measured on
+  main's transport. `lib/prompts.js` is main's move again and `prompt-engine` main's pin.
+- **A TEST record sampling the media connection every 500ms** (`rtc`). It found the above; it is
+  recurring work main does not do, so it went too. The record's other events are passive and stay.
+Not changed on this branch, and why: the reveal wait (~5s from connect - recorded fixes in
+`config.js`); uploading references in advance (`client.files`, swap by id) - it would land every
+swap earlier on the body.
 
 ---
 
