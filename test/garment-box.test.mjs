@@ -182,7 +182,10 @@ const fnSrc = (open) => { const i = APP.indexOf(open); return i === -1 ? "" : AP
   check("every abstain and every failure returns the ORIGINAL Blob",
     (cutFn.match(/return blob;/g) || []).length >= 4 && /catch \(e\) \{[\s\S]*?return blob;/.test(cutFn));
   check("the cut is re-encoded down toward the photo's own weight, and sent whole if it stays over 1.25x",
-    /out\.size > blob\.size\) out = await encode\(0\.85\)/.test(cutFn) && /out\.size > blob\.size \* 1\.25\) return blob;/.test(cutFn));
+    /out\.size > blob\.size\) out = await encode\(0\.85\)/.test(cutFn) && /out\.size > blob\.size \* 1\.25\) \{[\s\S]{0,200}?return blob;/.test(cutFn));
+  check("a TEST record learns what the crop did (cut or whole, and why) - no URL, no image",
+    /refs: typeof _refCropLog !== "undefined" \? _refCropLog\.slice\(-4\) : null/.test(APP) &&
+      /refCropNote\(url, \{ cut: true, w: sw, h: sh, kb0:/.test(cutFn));
   check("a PNG stays a PNG with its alpha (a transparent cut-out must not turn black)",
     /const png = \/\^image\\\/png\$\/i\.test/.test(cutFn) && /getContext\("2d", \{ alpha: png \}\)/.test(cutFn));
   check("no second pose model in the browser (CLAUDE.md §2.15)",

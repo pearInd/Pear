@@ -7146,6 +7146,14 @@ function garmentBlobIfWarm(url) {
    a back view that lands late is the failure this room has fought hardest (CLAUDE.md §2.17). */
 const REF_BOX_TIMEOUT_MS = 4000;
 const _refBoxJobs = new Map();   // `${canonical url}|${region}` -> Promise<{x0,y0,x1,y1}|null>
+/* The last few outcomes, for a TEST session's record (read at go-live): no URL, no image. */
+const _refCropLog = [];
+function refCropNote(url, note) {
+  let name = "";
+  try { name = String(url).split("?")[0].split("/").pop().slice(-40); } catch (_) { /* unnamed */ }
+  _refCropLog.push({ name, ...note });
+  if (_refCropLog.length > 8) _refCropLog.shift();
+}
 
 /* Which garment owns this URL, and so which body region to look for - or null (unknown owner: no
    cut). NOT `it.custom`: every garment the store widget hands over is custom:true, and 479cdfd's
@@ -7181,12 +7189,14 @@ function referenceGarmentBox(url) {
         c.x1 - c.x0 > 0.1 && c.y1 - c.y0 > 0.1;
       if (!ok) {
         console.log(`[PEAR] reference crop: sent whole (${(j && j.reason) || "no answer"}) -`, abbrevImg(url));
+        refCropNote(url, { cut: false, why: String((j && j.reason) || "no answer").slice(0, 24) });
         return null;
       }
       return { x0: c.x0, y0: c.y0, x1: c.x1, y1: c.y1 };
     } catch (e) {
       _refBoxJobs.delete(key);   // a timeout or a network blip is not an answer - the next fetch asks again
       console.log("[PEAR] reference crop: no box in time - the photo goes whole:", e?.message || e);
+      refCropNote(url, { cut: false, why: "no box in time" });
       return null;
     }
   })();
@@ -7218,7 +7228,13 @@ async function cropReferenceToBox(blob, url, crop) {
     let out = await encode(0.92);
     if (!png && out && out.size > blob.size) out = await encode(0.85);
     if (!png && out && out.size > blob.size) out = await encode(0.78);
-    if (!out || !out.size || out.size > blob.size * 1.25) return blob;
+    if (!out || !out.size || out.size > blob.size * 1.25) {
+      if (typeof refCropNote === "function") refCropNote(url, { cut: false, why: "heavier", kb: Math.round(blob.size / 1024) });
+      return blob;
+    }
+    if (typeof refCropNote === "function") {
+      refCropNote(url, { cut: true, w: sw, h: sh, kb0: Math.round(blob.size / 1024), kb: Math.round(out.size / 1024) });
+    }
     console.log(`[PEAR] reference crop: ${bmp.width}x${bmp.height} -> ${sw}x${sh}` +
       ` (${Math.round((crop.x1 - crop.x0) * (crop.y1 - crop.y0) * 100)}% kept,` +
       ` ${Math.round(blob.size / 1024)} -> ${Math.round(out.size / 1024)} KB) -`, abbrevImg(url));
@@ -15910,6 +15926,9 @@ async function goLive() {
       item: String((activeItem && (activeItem.name || activeItem.title)) || "").slice(0, 80),
       pageMs: typeof performance !== "undefined" ? Math.round(performance.now()) : null,
       link: typeof _orientWs !== "undefined" && _orientWs ? _orientWs.readyState : null,
+      /* What the reference crop did to this garment's photos (§2.19) - it runs before go-live, so
+         the record carries it here: per photo, cut or sent whole (and why), and the bytes. */
+      refs: typeof _refCropLog !== "undefined" ? _refCropLog.slice(-4) : null,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the
