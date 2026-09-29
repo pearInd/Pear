@@ -228,8 +228,10 @@ console.log("\n── §6 the wiring ──");
   check("goLive() reads the timer once, after claiming busy, and starts the stage in its mode",
     busyAt > 0 && readAt > busyAt && (live.match(/liveTimerMode\(/g) || []).length === 1 &&
     /runGoCountdown\(liveTimerSec, liveTimer\);/.test(live) && /heldGen: null/.test(live));
-  check("...skips the presence wait ONLY under a timer (the countdown is the positioning step)",
-    /const presence = _liveTimerPlan \? "timer" : await awaitBodyPresence\(isBottomsGarment\(activeItem\)\);/.test(live));
+  /* The presence gate runs under a timer too, as on main: skipping it for a day let a session open
+     on a shopper whose legs were out of frame, and the render invented long trousers and shoes. */
+  check("...and runs main's presence gate under a timer too - the engine first sees the whole body",
+    /const presence = await awaitBodyPresence\(isBottomsGarment\(activeItem\)\);/.test(live) && !/_liveTimerPlan \? "timer"/.test(live));
   check("...and reports the connect right after waitConnected()",
     /await waitConnected\(CONNECT_TIMEOUT_MS\);[\s\S]{0,300}liveTimerConnected\(\);/.test(live));
   check("...and a go-live that never opened a session stops it", /if \(!isLive\(\)\) \{[\s\S]{0,400}cancelGoCountdown\(\)[\s\S]{0,80}_liveTimerPlan = null;/.test(live));
@@ -280,7 +282,7 @@ console.log("\n── §9 the pose model's first inference is never paid inside 
   check("...it runs when the camera opens in preview",
     /if \(ok\) warmPoseInference\(\);/.test(fnSrc("function openCameraFromButton() {")));
   const live = fnSrc("async function goLive() {");
-  check("...and at a timer's go-live, the path that skips the presence gate",
+  check("...and at a timer's go-live, a backstop for a press before the preview warm-up finished",
     /runGoCountdown\(liveTimerSec, liveTimer\);[\s\S]{0,300}warmPoseInference\(\);/.test(live));
   check("...and it lives outside the timer block (the timer still touches no sensor)", !/warmPoseInference|detectPoseFrame/.test(BLOCK.replace(/\/\*[\s\S]*?\*\//g, "")));
 }

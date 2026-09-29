@@ -25,15 +25,14 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-/* RE-PINNED 2026-09-29 for TWO wire changes on the back tops anchors (BACK_CATEGORY_ANCHOR.top and
-   PLAIN_BACK_ANCHOR.top), each on its own frame-by-frame report on main's transport: the front's
-   lower-body lock appended (the shopper's shorts repainted as the rear photo's model's trousers -
-   the lock's note above PLAIN_TEE_ANCHOR had recorded the back as a KNOWN GAP to spend on exactly
-   this report) and "shirt" -> "top" (a button-down's side vent cut into a knit tee's hem). Against
-   the previous pin (221a5b58...d912c, main's pre-move engine): 49,434 of the 161,756 single prompts
-   moved, every one a back-of-top prompt; the back's fit sentence now sheds when sizing down
-   (printed back: down 1-2; plain back: down 2), as the lock's note predicted. Nothing else moved. */
-const PINNED = "bcb8b7fe40edb8552053d2175885583fe56cf41ceaa7ffc5eb9702f5af89757c";
+/* RE-PINNED 2026-09-29: main's engine with ONE word changed - the back tops anchors (BACK_CATEGORY_ANCHOR.top
+   and PLAIN_BACK_ANCHOR.top) say "top" where they said "shirt" ("THE BACK LOSES THE WORD" in
+   lib/prompts.js: a button-down's side vent cut into a knit tee's hem, read frame by frame on main's
+   transport). 49,434 of the 161,756 single prompts moved, every one a back-of-top prompt, each by
+   exactly those two words. This is the SAME hash as the 2026-09-28 "top" pin, arrived at again: the
+   front's lower-body lock was tried on the back in between and taken out on the shopper's report (the
+   shirt ran long and swallowed the shorts) - see the lock's note above PLAIN_TEE_ANCHOR. */
+const PINNED = "fac4dbd368693825a12ca3b1ef71675791a2e14db847fb00fe1e15981127a2f6";
 
 let fails = 0;
 function check(label, cond, detail) {

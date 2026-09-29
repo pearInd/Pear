@@ -14202,11 +14202,10 @@ function logSessionMeasurements(item, size) {
        SESSION'S: a second fire for a gen already held is ignored, and the plan lives until the
        reveal (or teardown).
      · "a second or two of loading after zero". The records put the render verified 5.1-5.4s
-       after the session connects, every time - and the connect itself waited on the presence
-       gate, i.e. on the shopper having ALREADY walked back. So with a timer the countdown IS the
-       positioning step: the presence gate's wait is skipped (it shows its overlay and blocks the
-       connect until the body is in frame - the one thing the countdown is there to give time
-       for), and the session connects at the press. Then:
+       after the session connects, every time, so zero is timed to the connect. The connect still
+       waits on main's presence gate (the whole body in frame first): skipping it for one day let
+       a session open on a shopper whose legs were out of frame, and the render invented long
+       trousers and shoes for them (2026-09-29, read frame by frame). Then:
        - 10s ("during", LIVE_TIMER_PRESS_START_MIN_S and up): the numbers start at the press.
          At connect the render is expected LIVE_TIMER_READY_AFTER_CONNECT_MS later; if that would
          land after zero, the remaining numbers are spread evenly to it (a slow connect only -
@@ -14579,10 +14578,12 @@ function openCameraFromButton() {
    (outFps 0, longest gap 2,125ms), and LIVE CONTINUITY bridged the silence with the raw camera
    for the rest of the window. The body angle was empty through the whole countdown in both
    timer sessions and present from the first sample in every session before them: the pose
-   model's FIRST inference - where MediaPipe builds its GPU programs, the one heavy call - used
-   to run in the go-live presence gate, under the loading overlay; a self-timer skips that gate,
-   so the first inference moved to the presence watcher's first tick, i.e. the first second of
-   the fitting, and the throttle could not feed the engine while it ran.
+   model's FIRST inference - where MediaPipe builds its GPU programs, the one heavy call - runs
+   in the go-live presence gate, under the loading overlay; the self-timer skipped that gate for
+   one day, so the first inference moved to the presence watcher's first tick, i.e. the first
+   second of the fitting, and the throttle could not feed the engine while it ran. (The gate is
+   back under the timer; a countdown draws over it, so the first inference must still not be
+   paid there - the numbers would stall.)
    So the first inferences are run once per page, off to the side: after the camera opens in
    preview (the video keeps playing through a main-thread block; only a click waits a moment),
    and again at a timer's go-live in case the shopper pressed before that finished. Never once
@@ -15702,8 +15703,8 @@ async function goLive() {
     setLiveTimerMenu(false);
     if (typeof traceOrient === "function") traceOrient("timer", { s: liveTimerSec, mode: liveTimer });
     runGoCountdown(liveTimerSec, liveTimer);
-    /* The presence gate - where the pose model's heavy first inference used to run - is skipped
-       under a timer; make sure it is not left for the first second of the fitting. */
+    /* A press before the preview warm-up finished: warm it now, under the countdown, rather than
+       leave the pose model's heavy first inference for the fitting (see warmPoseInference()). */
     if (typeof warmPoseInference === "function") warmPoseInference();
   }
   $("captureBtn").disabled = true;
@@ -15763,12 +15764,14 @@ async function goLive() {
        "step into frame" overlay while it waits, and proceeds anyway on timeout or with
        no usable detector - see awaitBodyPresence(). A shopper the model cannot see must
        still get their try-on. */
-    /* ...EXCEPT under a self-timer, where the countdown IS the positioning step: the shopper
-       pressed and is walking back, and waiting for them here held the connect until they had
-       arrived - the "loading after zero" report. The billed window still starts at the reveal,
-       at zero, when they are in place. See "CAMERA GUIDE + SELF-TIMER". */
-    const presence = _liveTimerPlan ? "timer" : await awaitBodyPresence(isBottomsGarment(activeItem));
-    if (presence !== "present" && presence !== "timer") {
+    /* ...and under a self-timer too, as on main. It was skipped there for one day (2026-09-29) so
+       the session could connect at the press - and a session opened while the shopper was still
+       walking back had no legs in frame: the render invented them (long trousers and shoes, the
+       store model's) and held on to them until the next reference write. The engine must first
+       see the whole body, exactly as main lets it. The countdown absorbs the later connect (it
+       spreads its last numbers to the expected render); see "CAMERA GUIDE + SELF-TIMER". */
+    const presence = await awaitBodyPresence(isBottomsGarment(activeItem));
+    if (presence !== "present") {
       console.warn(`[go-live] presence gate did not confirm (${presence}) - continuing`);
     }
     hidePresenceOverlay();   // belt-and-braces: never leave it over a live session

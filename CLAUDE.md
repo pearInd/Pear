@@ -63,11 +63,11 @@ rendered hanging open is a worse failure than a wrong tension. In practice
 this means sizing down 1-2 steps on a button-front top can silently drop
 the fit-modifier text (163 free chars on that branch vs. up to ~213 chars
 for the largest size-down phrasing); true-to-size and sizing up always fit.
-The **back** tops anchors carry the same lower-body lock as the front since 2026-09-29 (the rear
-photo's model's trousers were drawn over the shopper's shorts on every turn - the lock's note above
-`PLAIN_TEE_ANCHOR` had recorded the back as a known gap for exactly that report) and say "top", not
-"shirt" (a button-down's side vent in a knit tee's hem). So on the back the fit sentence sheds when
-sizing down (printed back: down 1-2; plain back: down 2) and lands on true-to-size and every size-up.
+The **back** tops anchors do NOT carry the lower-body lock - it was tried twice (2026-09-27 and
+2026-09-29) and both times made the back worse on a real body (the shirt ran long and swallowed the
+shorts); see the lock's note above `PLAIN_TEE_ANCHOR`. They say "top", not "shirt" (2026-09-29, a
+button-down's side vent in a knit tee's hem); otherwise the back is main's, and the fit sentence
+lands on every size rung there.
 This is not a bug — see the comment above the `[P.MED, fitSentence(...)]`
 line in `imageOnlyPrompt()` before "fixing" it by raising its priority,
 which would risk the closure lock shedding instead and reopening the
@@ -589,9 +589,11 @@ one to one, keep only the hiding"). Recorded so they are not re-tried blind:
   Each answered one real frame-by-frame failure (an open button-up at the side view; a chest left
   bare), but the sessions they were judged in ran at 20 fps as well, so neither was ever measured on
   main's transport. `lib/prompts.js` is main's move again and `prompt-engine` main's pin.
-  **Re-applied 2026-09-29, on main's transport and their own reports:** "shirt" -> "top" (a knit
-  tee's back drawn with a button-down's side vent) together with 8d27676's lower-body lock (the
-  shopper's shorts repainted as the rear photo's model's trousers) - see §0. "body contour" was not.
+  **"shirt" -> "top" re-applied 2026-09-29, on main's transport and its own report** (a knit tee's
+  back drawn with a button-down's side vent). 8d27676's lower-body lock was re-applied the same day
+  and taken out again the next measurement: the shirt ran long and swallowed the shorts, and the
+  shopper asked for main's pants back. "body contour" was not re-applied. `prompt-engine` is on the
+  main + "top" pin (`fac4dbd3…`).
 - **A TEST record sampling the media connection every 500ms** (`rtc`). It found the above; it is
   recurring work main does not do, so it went too. The record's other events are passive and stay.
 Not changed on this branch, and why: the reveal wait (~5s from connect - recorded fixes in
@@ -609,10 +611,12 @@ opens the measurement EXACTLY at zero, never before it and with no loading scree
   `armFirstFrameBilling()`; main never minded (the second fire finds `billingStarted`), but a held
   reveal leaves it false. That is how the first cut revealed at 7.6s of 10. `revealAfterCountdown()`
   ignores a second fire for a gen already held (`plan.heldGen`) and the plan lives until the reveal.
-- **The countdown is the positioning step**, so under a timer `goLive()` skips the presence gate's
-  wait (it held the connect until the shopper had already walked back - the "loading after zero").
-  The session connects at the press; `liveTimerConnected()` (right after `waitConnected`) times zero
-  to the render expected `LIVE_TIMER_READY_AFTER_CONNECT_MS` later (5.1-5.4s measured, 5.7 used).
+- **Main's presence gate still runs under a timer** - the engine must first see the whole body. It
+  was skipped for one day so the session could connect at the press, and a session opened while the
+  shopper was still walking back had no legs in frame: the render invented long trousers and shoes
+  and kept them until the next reference write. `liveTimerConnected()` (right after `waitConnected`)
+  times zero to the render expected `LIVE_TIMER_READY_AFTER_CONNECT_MS` later (5.1-5.4s measured,
+  5.7 used); a connect that comes late spreads the countdown's last numbers instead.
 - **10s ("during")**: numbers from the press; a render verified before zero waits for it; a slow
   connect spreads the remaining numbers to the expected render (never back up, never skipped).
   **3s / 5s ("prep")**: "get ready" until the connect, then a full N..1 placed so zero lands on the
@@ -624,9 +628,10 @@ during a hold (~0.3-2.5s). `live-timer` pins it on a fake clock - including the 
 (the old consume-on-first-fire code fails it in three places). The visual agent clicks through the
 guide as a shopper would. **The pose model's first inference is paid in preview**
 (`warmPoseInference()`, after the camera opens, and at a timer's go-live as a backstop; never once
-the fitting shows): it used to run in the presence gate the timer skips, so under a timer it landed
-on the fitting's first second - a ~1.9s main-thread block, the render starved, LIVE CONTINUITY on the
-raw camera for the rest of the window (reported 2026-09-29). `live-timer` §9. **The "verified" moment** (`#otpSuccess`, `celebrateOtpVerified()`): a
+the fitting shows): while the timer skipped the presence gate, the first inference landed on the
+fitting's first second - a ~1.9s main-thread block, the render starved, LIVE CONTINUITY on the raw
+camera for the rest of the window (reported 2026-09-29). With the gate back it would stall the
+countdown's numbers instead, so it stays in preview. `live-timer` §9. **The "verified" moment** (`#otpSuccess`, `celebrateOtpVerified()`): a
 pear-green check across the screen when the emailed code is accepted - fire-and-forget,
 pointer-transparent, typeof-guarded inside the OTP block (`otp-single-verification` runs it
 standalone), never awaited, so the flow is not held for it.

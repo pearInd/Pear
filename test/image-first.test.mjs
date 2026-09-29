@@ -169,17 +169,17 @@ const BOTTOMS_SPEC =
    the rear artwork was instructing the model to INVENT it. The replacement names no
    graphic and grounds on the reference instead; image-first's whole thesis (text volume
    and named garment features compete with the pixels) is the reason it had to. */
-/* 2026-09-29, on a real body: the back turned the shopper's green shorts into the store model's
-   grey trousers (the rear photo is model-worn) and cut a button-down's side vent into a knit
-   tee's hem. So the back tops anchor carries the front's lower-body lock and says "top", not
-   "shirt" - see "THE BACK LOSES THE WORD" and the lock's note above PLAIN_TEE_ANCHOR. */
+/* 2026-09-29, on a real body: the back cut a button-down's side vent into a knit tee's hem, so the
+   back tops anchor says "top", not "shirt" (see "THE BACK LOSES THE WORD"). The front's lower-body
+   lock was tried on the back the same day and made it worse - the shirt ran long and swallowed the
+   shorts - so the back ends on its preserve sentence, as on main (the lock's note above
+   PLAIN_TEE_ANCHOR). */
 const BACK_TOPS_SPEC =
   "Drape and fit the EXACT static top's REAR/BACK side from the reference image onto" +
   " the live subject's CURRENT back contour and volume in this frame. Reproduce the rear" +
   " panel exactly as shown in the reference. Dynamically adapt the garment drape to the" +
   " subject's exact silhouette, angle, depth, and back volume without stretching or" +
-  " warping the fabric. Strictly preserve the original top texture, pattern, and color." +
-  " Keep the subject's lower body, shoes, and background unmodified.";
+  " warping the fabric. Strictly preserve the original top texture, pattern, and color.";
 const BACK_BOTTOMS_SPEC =
   "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
   " onto the live subject's CURRENT lower-body contour and volume in this frame." +
