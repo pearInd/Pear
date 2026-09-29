@@ -398,56 +398,17 @@ console.log("\n── §4 THE PREFETCH THAT KEEPS THE GATED WINDOW SHORT ──"
 
 console.log("\n── §5 THE FRAME BUDGET ON THE WIRE ──");
 {
-  /* DELIBERATE, not inherited. It was 512x288 until 2026-09-29 ("raise the camera quality"):
-     the model renders at 1088x624, so a full-body shopper reached it as a ~130px figure,
-     upscaled 2.1x. Now 896x504 - still 16:9 (the camera's own shape, no letterbox), and under
-     960 on the long edge, because LiveKit gives a camera track whose long edge is >= 960 a
-     THIRD simulcast layer (640x360, up to 450kbps) on the same uplink as the garment
-     references. The bytes are held by LIVE_SEND_MAX_BPS, asserted below. */
+  /* DELIBERATE, not inherited. 512x288 is 147k pixels; a square 512x512 is 262k - 78%
+     MORE data per frame on the same channel, and it does not match the 16:9 the camera
+     actually delivers, so it would have to letterbox or crop to get there. The constraint
+     being optimised is bytes per second through the datachannel, and this is already the
+     lighter of the two. Asserted with the arithmetic in the failure message so the next
+     person to reach for a square doesn't have to re-derive it. */
   const w = Number((SRC.match(/const LIVE_W = (\d+), LIVE_H = (\d+);/) || [])[1]);
   const h = Number((SRC.match(/const LIVE_W = (\d+), LIVE_H = (\d+);/) || [])[2]);
-  check("the frame sent to the engine is 896x504: 16:9 and under LiveKit's 960px third-layer line",
-    w === 896 && h === 504 && Math.max(w, h) < 960 && Math.abs(w / h - 16 / 9) < 0.01,
-    `${w}x${h}`);
-  /* THE UPLINK CEILING. At 896x504 the encoder would fill the bandwidth estimate, and the
-     garment reference of every swap rides the same uplink - the 20fps sessions (camera at
-     ~1.1-1.4Mbps of ~1.3) delivered two back references 1.35s and 2.9s late (CLAUDE.md §2.17). */
-  const capBps = Number((SRC.match(/const LIVE_SEND_MAX_BPS = ([\d_]+);/) || [])[1]?.replace(/_/g, ""));
-  check("...and its top layer has a ceiling well under what the 20fps sessions sent",
-    capBps > 0 && capBps <= 700_000, String(capBps));
-  const hookSrc = extract("(function installRealtimeLatencyHook()", "/* =============================================================================\n   WebRTC live-stats monitor");
-  {
-    /* Run the hook's ceiling for real on a fake peer connection: the publisher's encodings are
-       lowered at addTransceiver(), and again on the sender's later setParameters() - never raised. */
-    const calls = [];
-    class FakePC {
-      constructor() { this.listeners = {}; }
-      addEventListener() {}
-      setLocalDescription(d) { return Promise.resolve(d); }
-      addTransceiver(trackOrKind, init) {
-        calls.push(init);
-        const sender = { set: [], setParameters(p) { this.set.push(p); return Promise.resolve(); } };
-        return { sender };
-      }
-    }
-    const win = { RTCPeerConnection: FakePC };
-    new Function("window", "LIVE_SEND_MAX_BPS", "VIDEO_TARGET_BITRATE_KBPS", "PREFER_LOW_LATENCY_CODEC", "CODEC_PREFERENCE", "PLAYOUT_DELAY_HINT",
-      hookSrc)(win, capBps, 0, false, [], 0.08);
-    const pc = new win.RTCPeerConnection();
-    const tr = pc.addTransceiver({ kind: "video" }, { direction: "sendonly",
-      sendEncodings: [{ rid: "q", maxBitrate: 160000, scaleResolutionDownBy: 2.8 }, { rid: "f", maxBitrate: 3500000 }] });
-    const enc = calls[0].sendEncodings;
-    check("the publisher's top layer is lowered to the ceiling at addTransceiver(); the 320x180 layer is untouched",
-      enc[1].maxBitrate === capBps && enc[0].maxBitrate === 160000 && enc[0].scaleResolutionDownBy === 2.8 && enc[1].rid === "f",
-      JSON.stringify(enc));
-    tr.sender.setParameters({ encodings: [{ rid: "q", maxBitrate: 160000 }, { rid: "f", maxBitrate: 3500000 }] });
-    check("...and again when the sender's parameters are re-applied later",
-      tr.sender.set[0].encodings[1].maxBitrate === capBps && tr.sender.set[0].encodings[0].maxBitrate === 160000);
-    pc.addTransceiver("audio", { direction: "sendonly", sendEncodings: [{ maxBitrate: 3500000 }] });
-    pc.addTransceiver("video", { direction: "recvonly" });
-    check("...and an audio sender or a receive-only transceiver is never touched",
-      calls[1].sendEncodings[0].maxBitrate === 3500000 && calls[2].sendEncodings === undefined);
-  }
+  check("the frame sent to Decart is capped at 512 on its longest edge",
+    w === 512 && h === 288,
+    `${w}x${h} - a square 512x512 would be ${((512 * 512) / (w * h) - 1) * 100}% more pixels per frame`);
   /* LIVE_FPS went 15 -> 60 with LIVE CONTINUITY ("it has to feel like a mirror"): the preview
      and the stall bridge show the camera directly, and 15fps is visibly not a mirror. What
      must NOT move is the wire rate, and the throttle must not ask the shared camera for it -

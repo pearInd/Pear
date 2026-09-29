@@ -230,32 +230,10 @@ const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples - spans ~300ms of
 /* Capture + inference resolution. The SDK never forwards model.width/height to the
    session, so resolution MUST be enforced at the track level too - the throttler
    downscales the canvas to LIVE_W×LIVE_H before capture, so Decart receives this
-   size rather than the camera's native frame. It was LOWERED to 512×288 (16:9) in June to
-   cut upload/encode overhead under per-FRAME token billing.
-
-   RAISED to 896×504 (2026-09-29, "raise the camera quality so it can be seen well"). The model
-   renders at 1088×624 (the SDK's lucy-vton model entry), so 512×288 reached it upscaled 2.1x: a
-   shopper standing back far enough for the whole body - which the camera guide asks for - was a
-   figure ~130px tall, the torso ~40px, and every clip came out soft. Billing is per SECOND now
-   (CREDITS_PER_SECOND), so pixels cost nothing. Why 896 and not the model's 1088: LiveKit
-   publishes a camera track as simulcast, and a track whose long edge is >= 960 gets a THIRD
-   layer (640×360, up to 450kbps) on the same uplink - below 960 it stays the two layers it
-   always had (320×180 + this one). The desktop camera is opened at this size too
-   (buildVideoConstraints), so the preview and LIVE CONTINUITY sharpen with it.
-   The uplink is the risk, and it is capped: see LIVE_SEND_MAX_BPS. */
-const LIVE_W = 896, LIVE_H = 504;
-
-/* ── THE CAMERA'S TOP LAYER HAS A CEILING (2026-09-29) ──────────────────────────────────────
-   The SDK publishes the camera with maxBitrate 3.5Mbps, so the only real limit on what the
-   encoder puts on the uplink is the browser's bandwidth estimate - and at 512×288 / 10fps the
-   picture was too small to need it. At 896×504 the encoder would fill whatever the estimate
-   allows, and the garment reference of every swap rides the SAME uplink (the engine's signalling
-   socket). That is the 20fps lesson (CLAUDE.md §2.17): a camera using ~1.1-1.4Mbps of a
-   ~1.3Mbps estimate delayed two of five back references by 1.35s and 2.9s - "the back on the
-   front". So the top layer is held to this ceiling (applied where the camera's sender is created,
-   and on every later setParameters()) - 60kbit a frame at 10fps, plenty for a mostly still
-   896×504 scene, and below what the 20fps sessions put on the wire. 0 disables it. */
-const LIVE_SEND_MAX_BPS = 600_000;
+   size rather than the camera's native frame. LOWERED to 512×288 (16:9) to cut
+   quality/upload/encode overhead per the cost trade. Tokens scale with FRAMES, not
+   pixels, so this lowers visual quality + pipeline cost, not the token count itself. */
+const LIVE_W = 512, LIVE_H = 288;
 
 /* Mobile detection (Feature 2 / mobile download fix). Drives the SAVE PATH only:
    iOS Safari ignores <a download>, so on mobile we hand the clip to the native
@@ -388,44 +366,6 @@ const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
         if ("jitterBufferTarget" in r) r.jitterBufferTarget = PLAYOUT_DELAY_HINT * 1000;
       } catch (_) {}
     });
-
-    /* (1b) THE CAMERA'S TOP-LAYER CEILING - see LIVE_SEND_MAX_BPS. The SDK's publisher builds its
-       simulcast encodings (320×180 at 160kbps + LIVE_W×LIVE_H at 3.5Mbps) and hands them to
-       addTransceiver(); every encoding above the ceiling is lowered to it there, and again on any
-       later setParameters() on that sender (the publisher re-applies its stored encodings after a
-       track restart). Only ever LOWERS a limit; never touches a receive-only transceiver. */
-    try {
-      const cap = typeof LIVE_SEND_MAX_BPS === "number" ? LIVE_SEND_MAX_BPS : 0;
-      const capEncoding = (e) => (e && typeof e === "object" && (!(e.maxBitrate > 0) || e.maxBitrate > cap)
-        ? { ...e, maxBitrate: cap } : e);
-      const origAddTransceiver = typeof pc.addTransceiver === "function" ? pc.addTransceiver.bind(pc) : null;
-      if (cap > 0 && origAddTransceiver) {
-        pc.addTransceiver = function (trackOrKind, init) {
-          let video = false;
-          try {
-            video = (typeof trackOrKind === "string" ? trackOrKind : trackOrKind && trackOrKind.kind) === "video";
-            if (video && init && Array.isArray(init.sendEncodings) && init.direction !== "recvonly") {
-              init = { ...init, sendEncodings: init.sendEncodings.map(capEncoding) };
-            }
-          } catch (_) {}
-          const tr = origAddTransceiver(trackOrKind, init);
-          try {
-            const sender = video && tr && tr.sender;
-            if (sender && typeof sender.setParameters === "function" && !sender.__pearCapped) {
-              const origSet = sender.setParameters.bind(sender);
-              sender.setParameters = function (params, ...rest) {
-                try {
-                  if (params && Array.isArray(params.encodings)) params.encodings = params.encodings.map(capEncoding);
-                } catch (_) {}
-                return origSet(params, ...rest);
-              };
-              sender.__pearCapped = true;
-            }
-          } catch (_) {}
-          return tr;
-        };
-      }
-    } catch (_) {}
 
     // (2) SDP munge - applied to setLocalDescription ONLY (our offer / our camera bitrate cap).
     //     The remote description is NOT munged: b=AS in an answer SDP doesn't override
@@ -4189,7 +4129,7 @@ function hidePearLoader() {
 /* Build getUserMedia video constraints for the CURRENT device + physical orientation.
    - Phones: request an orientation-matched aspect (portrait 9:16 / landscape 16:9) so the
      selfie preview fills the viewport without stretch, squish, or heavy crop.
-   - Desktop: the landscape hint LIVE_W×LIVE_H (896×504 since 2026-09-29) - desktop webcams are landscape.
+   - Desktop: keep the compact landscape hint (512×288) - desktop webcams are landscape.
    `aspectRatio` is an *ideal* (best-effort); whatever the browser actually returns is then
    measured in loadedmetadata and the stage adapts. createThrottledInputStream() still
    downscales to LIVE_W×LIVE_H before Decart, so the billed input is never affected. */
@@ -4235,7 +4175,7 @@ async function startCamera(facing = cameraFacing) {
       // the rear camera must not mirror, or background text would read backwards.
       card().dataset.facing = facing;
       // Detect portrait vs landscape from the real stream once metadata arrives and
-      // adapt the on-screen stage. Display only - the engine's LIVE_W×LIVE_H input is untouched.
+      // adapt the on-screen stage. Display only - Decart's 512×288 input is untouched.
       v.onloadedmetadata = () => {
         const vw = v.videoWidth, vh = v.videoHeight;
         if (!vw || !vh) return;
@@ -5427,7 +5367,7 @@ async function ensureOnline() {
    needed new code - it already does exactly that:
      • fps capped to LIVE_INFERENCE_FPS (10) - the camera can capture faster (LIVE_FPS
        =60 for a smooth local preview), but only 10 frames/sec ever leave the browser.
-     • resolution capped to LIVE_W×LIVE_H (896×504) - every frame is downscaled before
+     • resolution capped to LIVE_W×LIVE_H (512×288) - every frame is downscaled before
        it's sent, regardless of the camera's native resolution.
      • captureStream(0) + a single requestFrame() per tick - the output track emits
        EXACTLY fps frames/sec, never more; there is no separate/duplicate capture path
@@ -7012,11 +6952,6 @@ function garmentBlobCached(url) {
   console.log('[PEAR] garmentBlobCached result:', 'miss');
   const job = (async () => {
     try {
-      /* Where the garment is in this photo, asked NOW so the answer overlaps the download - see
-         cropReferenceToBox(). Store URLs only: a data:/blob: custom upload already went through
-         its own garment crop (detectGarments). typeof-guarded (CLAUDE.md §2.7). */
-      const boxJob = !/^(data:|blob:)/i.test(url) && typeof referenceGarmentBox === "function"
-        ? referenceGarmentBox(url) : null;
       // data:/blob: URLs (custom uploads) decode locally; http(s) rides the same-origin
       // proxy with a raw-CDN fallback and retries. This is the path AI Auto uses for
       // EVERY orientation swap, so a single transient proxy failure here is exactly
@@ -7026,12 +6961,7 @@ function garmentBlobCached(url) {
         : await fetchWithFallback(url);
       if (!raw) { _assetBlobCache.delete(url); return null; }   // never cache a failure - allow a retry
       // These bytes go straight to rtClient.set({ image }) in AI Auto mode.
-      let blob = await normalizeToSupportedImage(raw);
-      /* A store photo worn by a model is cut down to its garment before anything else sees it -
-         the model's trousers/shoes/head in the reference are drawn onto the shopper otherwise. */
-      if (blob && boxJob && typeof cropReferenceToBox === "function") {
-        blob = await cropReferenceToBox(blob, url, await boxJob);
-      }
+      const blob = await normalizeToSupportedImage(raw);
       /* Encoded NOW, while nothing is waiting on it, so a swap that sends this Blob later does no
          encoding at all - see preEncodeReference(). Fire-and-forget; a failure costs nothing. */
       if (blob && typeof preEncodeReference === "function") preEncodeReference(blob);
@@ -7119,132 +7049,6 @@ function garmentBlobIfWarm(url) {
   if (!url) return null;
   const job = _assetBlobCache.get(url);
   return (job && job.settled) || null;
-}
-
-/* ── A MODEL-WORN STORE PHOTO IS CUT DOWN TO ITS GARMENT (2026-09-29) ─────────────────────────────
-   REPORTED on the preview, FOX "חולצה קצרה OASIS" (1823750100), a half turn read frame by frame:
-   the torso twisted to the back with the legs still planted, and the shopper's GREEN shorts turned
-   GREY the moment the rear reference reached the wire - for the whole back view - and on the way
-   back to the front the shirt came out half tucked into them. The store's rear photo is a model in
-   GREY CARGO TROUSERS; the front shows the same trousers from mid-thigh; a third adds white shoes.
-   The render engine conditions on the WHOLE picture, so the trousers are candidates to be drawn -
-   and a body the engine is least sure of (a half turn) is where the reference wins. A full turn a
-   minute earlier kept the shorts; that is what a reference that INVITES the bug looks like.
-   (Main has it too: the tee "worked perfectly" there on a shopper who happened to wear grey.)
-
-   THE FIX: before the bytes are cached, cut the photo to the garment - collar to hem, sleeve to
-   sleeve - so there is no model's lower body, and no head, left to draw. 479cdfd did this with a
-   second pose model in the browser and was reverted for it (GPU work doubled, go-live 12.8s vs
-   4.0s, CLAUDE.md §2.15), so the box now comes from the SERVER (GET /api/garment-box, one model call
-   per photo, ever - cached at the CDN) and all the browser does is one canvas cut, off the critical
-   path, while the shopper is still getting ready.
-   IT ABSTAINS - the photo goes exactly as it did before - when: no person is in the photo (a
-   packshot or flat-lay: most of a catalog, which this must never touch), the box is unsure, the cut
-   would keep nearly the whole photo, the answer takes longer than REF_BOX_TIMEOUT_MS, or anything
-   fails. A cut is re-encoded down until it is no heavier than the photo it came from (at most a
-   quarter over, or the photo goes whole): the reference rides the same uplink as the camera, and
-   a back view that lands late is the failure this room has fought hardest (CLAUDE.md §2.17). */
-const REF_BOX_TIMEOUT_MS = 4000;
-const _refBoxJobs = new Map();   // `${canonical url}|${region}` -> Promise<{x0,y0,x1,y1}|null>
-/* The last few outcomes, for a TEST session's record (read at go-live): no URL, no image. */
-const _refCropLog = [];
-function refCropNote(url, note) {
-  let name = "";
-  try { name = String(url).split("?")[0].split("/").pop().slice(-40); } catch (_) { /* unnamed */ }
-  _refCropLog.push({ name, ...note });
-  if (_refCropLog.length > 8) _refCropLog.shift();
-}
-
-/* Which garment owns this URL, and so which body region to look for - or null (unknown owner: no
-   cut). NOT `it.custom`: every garment the store widget hands over is custom:true, and 479cdfd's
-   first cut skipped every store product that way. An upload is excluded by its URL instead. */
-function referenceCropHint(url) {
-  const look = typeof resolveLook === "function" ? resolveLook() : null;
-  const items = look ? [look.top, look.bottom] : [typeof activeItem !== "undefined" ? activeItem : null];
-  for (const it of items) {
-    if (!it) continue;
-    const g = (typeof galleryOf === "function" ? galleryOf(it) : null) || {};
-    const own = [g.front, g.back, it.img].filter(Boolean);
-    if (!own.some((u) => sameImage(u, url))) continue;
-    return { region: isBottomsGarment(it) ? "bottom" : "top" };
-  }
-  return null;
-}
-
-/** The server's cut for this photo, or null. Never rejects; memoised per photo and region. */
-function referenceGarmentBox(url) {
-  const hint = referenceCropHint(url);
-  if (!hint || typeof fetch !== "function" || typeof location === "undefined") return null;
-  const key = `${(typeof canonicalImageUrl === "function" && canonicalImageUrl(url)) || url}|${hint.region}`;
-  if (_refBoxJobs.has(key)) return _refBoxJobs.get(key);
-  const job = (async () => {
-    try {
-      const q = `image_url=${encodeURIComponent(url)}&region=${hint.region}&v=1`;
-      const r = await fetch(`${location.origin}/api/garment-box?${q}`,
-        typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(REF_BOX_TIMEOUT_MS) } : {});
-      if (!r.ok) { _refBoxJobs.delete(key); return null; }
-      const j = await r.json();
-      const c = j && j.crop;
-      const ok = c && [c.x0, c.y0, c.x1, c.y1].every((v) => Number.isFinite(v) && v >= 0 && v <= 1) &&
-        c.x1 - c.x0 > 0.1 && c.y1 - c.y0 > 0.1;
-      if (!ok) {
-        console.log(`[PEAR] reference crop: sent whole (${(j && j.reason) || "no answer"}) -`, abbrevImg(url));
-        refCropNote(url, { cut: false, why: String((j && j.reason) || "no answer").slice(0, 24) });
-        return null;
-      }
-      return { x0: c.x0, y0: c.y0, x1: c.x1, y1: c.y1 };
-    } catch (e) {
-      _refBoxJobs.delete(key);   // a timeout or a network blip is not an answer - the next fetch asks again
-      console.log("[PEAR] reference crop: no box in time - the photo goes whole:", e?.message || e);
-      refCropNote(url, { cut: false, why: "no box in time" });
-      return null;
-    }
-  })();
-  _refBoxJobs.set(key, job);
-  return job;
-}
-
-/** The reference Blob cut to `crop`, or the SAME Blob untouched. Never rejects. */
-async function cropReferenceToBox(blob, url, crop) {
-  if (!crop || !blob || typeof createImageBitmap !== "function") return blob;
-  let bmp = null;
-  try {
-    bmp = await createImageBitmap(blob);
-    const sx = Math.round(crop.x0 * bmp.width), sy = Math.round(crop.y0 * bmp.height);
-    const sw = Math.round((crop.x1 - crop.x0) * bmp.width), sh = Math.round((crop.y1 - crop.y0) * bmp.height);
-    if (sw < 64 || sh < 64) return blob;
-    /* A PNG stays a PNG, alpha and all - normalizeToSupportedImage() keeps PNGs for the same
-       reason (a transparent cut-out flattened to JPEG turns its background black). */
-    const png = /^image\/png$/i.test(blob.type || "");
-    const off = typeof OffscreenCanvas !== "undefined"
-      ? new OffscreenCanvas(sw, sh)
-      : Object.assign(document.createElement("canvas"), { width: sw, height: sh });
-    const ctx = off.getContext("2d", { alpha: png });
-    ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, sw, sh);
-    const type = png ? "image/png" : "image/jpeg";
-    const encode = (q) => (off.convertToBlob
-      ? off.convertToBlob({ type, quality: q })
-      : new Promise((res) => off.toBlob(res, type, q)));
-    let out = await encode(0.92);
-    if (!png && out && out.size > blob.size) out = await encode(0.85);
-    if (!png && out && out.size > blob.size) out = await encode(0.78);
-    if (!out || !out.size || out.size > blob.size * 1.25) {
-      if (typeof refCropNote === "function") refCropNote(url, { cut: false, why: "heavier", kb: Math.round(blob.size / 1024) });
-      return blob;
-    }
-    if (typeof refCropNote === "function") {
-      refCropNote(url, { cut: true, w: sw, h: sh, kb0: Math.round(blob.size / 1024), kb: Math.round(out.size / 1024) });
-    }
-    console.log(`[PEAR] reference crop: ${bmp.width}x${bmp.height} -> ${sw}x${sh}` +
-      ` (${Math.round((crop.x1 - crop.x0) * (crop.y1 - crop.y0) * 100)}% kept,` +
-      ` ${Math.round(blob.size / 1024)} -> ${Math.round(out.size / 1024)} KB) -`, abbrevImg(url));
-    return out;
-  } catch (e) {
-    console.warn("[PEAR] reference crop failed - sending the photo whole:", e?.message || e);
-    return blob;
-  } finally {
-    try { bmp && bmp.close && bmp.close(); } catch (_) { /* already closed */ }
-  }
 }
 
 /* Warm the cache with the front AND back assets of the active subject (both halves of a
@@ -7594,10 +7398,9 @@ function syncAssetPrep() {
      · there is NO negative_prompt and NO mask/ROI/region parameter. Verified against
        @decartai/sdk@0.1.5: setInputSchema is exactly { prompt, enhance, image } and it
        STRIPS unknown keys, so an invented field is silently dropped, not honoured.
-     · nothing in this file downsamples a reference. The Blob fetched is the Blob sent,
-       base64d once by preEncodeReference() - except that a store photo worn by a model is
-       CUT to its garment first (cropReferenceToBox, 2026-09-29): full resolution, re-encoded
-       once. The camera INPUT is scaled to LIVE_W x LIVE_H; the garment reference never is.
+     · nothing in this file downsamples or re-encodes a reference. The Blob fetched is the
+       Blob sent, base64d once by preEncodeReference(). The camera INPUT is scaled to
+       LIVE_W x LIVE_H; the garment reference never is.
      · the widget already maximises the URL before handover (upgradeImageUrl: Shopify size
        suffixes, Woo thumbnails, width/height params, SFCC sw/sh/sm, Cloudinary path
        transforms, largest-of-srcset).
@@ -10400,40 +10203,6 @@ function traceSessionEnd(why) {
       keepalive: body.length < 60000 }).catch(() => {});
   } catch (_) { /* never let the recorder break a teardown */ }
 }
-/* WHAT LEFT THE CAMERA, once per recorded session (2026-09-29). The render input went from
-   512×288 to 896×504 with a ceiling on its top layer (LIVE_W, LIVE_SEND_MAX_BPS), and neither
-   the clip nor the swap timings can say whether the browser actually sent that - an encoder short
-   of bandwidth scales its own resolution down. So a TEST session reads the media connection ONCE,
-   a few seconds into the fitting: every outgoing video layer (size, frame rate, bytes, the
-   encoder's target and what limits it) and the estimate of what the uplink can carry - to be read
-   against the reference acknowledgements beside it. One getStats() call, not a sampler (the 500ms
-   one was removed with 20fps, CLAUDE.md §2.17); nothing is decided from it, and a shopper's session
-   (no record) never runs it. */
-async function traceRtcSnapshot(tag) {
-  if (!_trace || typeof window === "undefined" || !window.__pearPCs) return;
-  const tr = _trace;
-  const out = { tag, layers: [] };
-  try {
-    for (const pc of Array.from(window.__pearPCs)) {
-      if (!pc || typeof pc.getStats !== "function" || pc.connectionState === "closed") continue;
-      (await pc.getStats()).forEach((x) => {
-        if (x.type === "candidate-pair" && x.nominated && x.state === "succeeded" && x.availableOutgoingBitrate != null) {
-          out.avail = Math.round(x.availableOutgoingBitrate / 1000);
-          out.rtt = x.currentRoundTripTime != null ? Math.round(x.currentRoundTripTime * 1000) : null;
-        } else if (x.type === "outbound-rtp" && x.kind === "video") {
-          out.layers.push({ rid: x.rid || null, w: x.frameWidth || null, h: x.frameHeight || null,
-            fps: x.framesPerSecond != null ? Math.round(x.framesPerSecond) : null, kb: Math.round((x.bytesSent || 0) / 1024),
-            target: x.targetBitrate != null ? Math.round(x.targetBitrate / 1000) : null,
-            limit: x.qualityLimitationReason || null, active: x.active !== false });
-        } else if (x.type === "inbound-rtp" && x.kind === "video") {
-          out.inW = x.frameWidth || null; out.inFps = x.framesPerSecond != null ? Math.round(x.framesPerSecond) : null;
-        }
-      });
-    }
-  } catch (_) { return; }
-  if (_trace === tr) traceOrient("rtc", out);
-}
-
 /* The source room's read-out: the record in progress, else the last one closed (tests, the visual
    harness's PEAR_VISUAL_TRACE=1, the support view). Folded away in the production build. */
 if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
@@ -14881,10 +14650,6 @@ function startBillingWindow(gen) {
   billingStarted = true;
   billingStartedAt = Date.now();         // diagnostics clock - see sessionElapsedMs()
   if (typeof traceOrient === "function") traceOrient("reveal");
-  /* A recorded session reads what left the camera once, 3s in - see traceRtcSnapshot(). */
-  if (typeof traceRtcSnapshot === "function" && typeof _trace !== "undefined" && _trace) {
-    setTimeout(() => { if (gen === sessionGen) traceRtcSnapshot("t3").catch(() => {}); }, 3000);
-  }
 
   // Start recording from the SAME event that starts billing (the first DRESSED frame)
   // so the encoded clip and the billed window cover exactly the same span - no gap
@@ -15926,9 +15691,6 @@ async function goLive() {
       item: String((activeItem && (activeItem.name || activeItem.title)) || "").slice(0, 80),
       pageMs: typeof performance !== "undefined" ? Math.round(performance.now()) : null,
       link: typeof _orientWs !== "undefined" && _orientWs ? _orientWs.readyState : null,
-      /* What the reference crop did to this garment's photos (§2.19) - it runs before go-live, so
-         the record carries it here: per photo, cut or sent whole (and why), and the bytes. */
-      refs: typeof _refCropLog !== "undefined" ? _refCropLog.slice(-4) : null,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the
