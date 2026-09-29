@@ -32,6 +32,9 @@ import { supabase } from "./lib/supabase.js";
    field on classifyFrontBackDetailed() (short version: that one is stamped with
    CLASSIFIER_PROMPT_VERSION, and widening it re-classifies the whole catalog). */
 import { classifyGarmentFull } from "./lib/garment-category.js";
+/* Where the garment is in a store photo, so the room can cut the model's trousers/head off the
+   reference before it is sent (2026-09-29 - see lib/garment-box.js and GET /api/garment-box). */
+import { detectGarmentCrop, GARMENT_BOX_VERSION } from "./lib/garment-box.js";
 /* The size charts and the fit - moved out of the browser 2026-09-26 (see lib/sizing.js). */
 import { computeSizeVerdict, sanitizeSizeEvidence } from "./lib/sizing.js";
 /* The prompt engine - moved out of the browser 2026-09-26 (see lib/prompts.js). */
@@ -2819,6 +2822,68 @@ app.get("/api/garment-category", classifyLimiter, async (req, res) => {
     source: verdict.source,
     cached: false,
   });
+});
+
+/* GET /api/garment-box?image_url=…&region=top|bottom&v=N
+     -> { crop: {x0,y0,x1,y1} | null, reason, source, v }
+
+   THE REFERENCE CROP'S BOX (2026-09-29). A store photo worn by a model carries the model's
+   trousers, shoes and head, and the render engine draws them: the shopper's green shorts turned
+   grey on a half turn when the rear photo (a model in grey cargo trousers) reached the wire. The
+   room cuts each store photo down to its garment before sending it - but it must not find the
+   garment itself (a second pose model in the browser doubled the GPU work and was reverted,
+   CLAUDE.md §2.15), so it asks here. See lib/garment-box.js for the prompt, the margins and every
+   abstain rule; `crop: null` always means "send the photo as it is".
+
+   Cached twice, because the same photo is asked for by every shopper of that product: in this
+   instance's memory, and at the CDN (s-maxage) - a verdict only, never an error or a throttle,
+   so a transient failure is re-asked on the next visit instead of pinned for a month. The
+   question costs one model call per photo, ever; the room never waits on it for long (it gives
+   up after a few seconds and sends the photo uncropped). */
+const _garmentBoxMemo = new Map();   // `${canonical}|${region}` -> { at, body }
+const GARMENT_BOX_MEMO_MS = 24 * 60 * 60 * 1000;
+const GARMENT_BOX_MEMO_MAX = 500;
+
+app.get("/api/garment-box", classifyLimiter, async (req, res) => {
+  const imageUrl = typeof req.query?.image_url === "string" ? req.query.image_url.trim() : "";
+  const region = req.query?.region === "bottom" ? "bottom" : "top";
+  if (!imageUrl || imageUrl.length > 2048 || !/^https?:\/\//i.test(imageUrl)) {
+    return res.status(400).json({ error: "missing_image_url", message: "image_url: an http(s) URL is required." });
+  }
+  let host = "";
+  try { host = new URL(imageUrl).hostname.toLowerCase(); } catch (_) { /* rejected below */ }
+  /* A photo on a public CDN, never this server's own network: the fetch below runs server-side. */
+  if (!host || host === "localhost" || /^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) || host.endsWith(".internal") || host.includes(":")) {
+    return res.status(400).json({ error: "bad_image_url", message: "image_url must be a public image." });
+  }
+
+  const key = `${canonicalImageUrl(imageUrl) || imageUrl}|${region}`;
+  const hit = _garmentBoxMemo.get(key);
+  if (hit && Date.now() - hit.at < GARMENT_BOX_MEMO_MS) {
+    res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=2592000");
+    return res.json({ ...hit.body, cached: true });
+  }
+
+  let out;
+  try {
+    out = await detectGarmentCrop(imageUrl, region, GEMINI_API_KEY);
+  } catch (e) {
+    /* Only a 429 reaches here. Not cached anywhere - the next visit asks again. */
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({ crop: null, reason: "rate-limited", source: "rate_limited", v: GARMENT_BOX_VERSION });
+  }
+  const body = { crop: out.crop, reason: out.reason, source: out.source, v: GARMENT_BOX_VERSION };
+  if (out.source === "gemini") {
+    _garmentBoxMemo.set(key, { at: Date.now(), body });
+    if (_garmentBoxMemo.size > GARMENT_BOX_MEMO_MAX) _garmentBoxMemo.delete(_garmentBoxMemo.keys().next().value);
+    res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=2592000");
+  } else {
+    res.setHeader("Cache-Control", "no-store");
+  }
+  console.log(`[garment-box] ${region} ${out.crop ? "crop " + JSON.stringify(out.crop) : "no crop (" + out.reason + ")"}` +
+    ` [${out.source}] ${imageUrl.slice(0, 120)}`);
+  return res.json(body);
 });
 
 app.post("/api/classify-garment", classifyLimiter, async (req, res) => {

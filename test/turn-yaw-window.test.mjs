@@ -1804,7 +1804,9 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
       wrapped === client && client.sessionId === "live-session" && pe.withPreEncodedReferences(client) === client && pe.withPreEncodedReferences(null) === null);
   }
   check("every fetched garment Blob is pre-encoded as it lands, and the live client is wrapped at connect",
-    /const blob = await normalizeToSupportedImage\(raw\);[\s\S]{0,300}preEncodeReference\(blob\);\s*\n\s*return blob;/.test(SRC) &&
+    /* The model-worn crop (cropReferenceToBox, 2026-09-29) sits between normalisation and the
+       pre-encode, so what is encoded is the FINAL Blob - the one sent. Order asserted, not a range. */
+    /let blob = await normalizeToSupportedImage\(raw\);[\s\S]{0,400}blob = await cropReferenceToBox\(blob, url, await boxJob\);\s*\n\s*\}[\s\S]{0,300}preEncodeReference\(blob\);\s*\n\s*return blob;/.test(SRC) &&
     /rtClient = await client\.realtime\.connect\(realtimeInput, buildRealtimeConnectOpts\(gen\)\);[^\n]*\n[^\n]*\n\s*if \(typeof withPreEncodedReferences === "function"\) rtClient = withPreEncodedReferences\(rtClient\);/.test(SRC));
 
   const r0 = SRC.indexOf("function makeRenderResumeDetector(");

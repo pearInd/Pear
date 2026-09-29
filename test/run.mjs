@@ -354,6 +354,15 @@
                       old path, an early render waits for zero, 3s counts after the render,
                       a torn-down session is never revealed, and nothing in it touches the
                       session. Run on a fake clock, with two mutations proven to fail it.
+     garment-box
+                      A store photo worn by a model is cut to its garment before it is sent
+                      ("the shorts turned grey on the half turn" - FOX OASIS, 2026-09-29: the
+                      rear photo's model wears grey trousers). The box comes from the server
+                      (GET /api/garment-box, lib/garment-box.js) - never a second pose model in
+                      the browser. The margins (collar, sleeves, hem in; trousers, head out),
+                      every abstain (no person, unsure, tiny, fills the photo), the model call
+                      (429 throws, only a verdict is cached), and the room's wiring (asked
+                      before the download, cut before the pre-encode, sameImage() owner).
      size-fit-pin
                       The size charts and the fit moved server-side (lib/sizing.js,
                       POST /api/size). The move was proven exact over 1,458,028 cases;
@@ -452,6 +461,7 @@ const SUITES = [
   ["orient-link", "orient-link.test.mjs"],
   ["room-latency", "room-latency.test.mjs"],
   ["live-timer", "live-timer.test.mjs"],
+  ["garment-box", "garment-box.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

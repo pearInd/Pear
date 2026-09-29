@@ -252,6 +252,8 @@ with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (�
 `function edgeApiUrl(route) {` to its closing brace - keep the recorder inside that span.
 `live-timer` slices `app.js` from `const LIVE_TIMER_CHOICES` to `/* ── CODE VERIFIED (2026-09-29)`
 (the self-timer, §2.18) and runs it on a fake clock - keep the block self-contained.
+`garment-box` slices `app.js` from `const REF_BOX_TIMEOUT_MS` to ``/** The reference Blob cut to `crop` ``
+(the reference crop's box request, §2.19) and runs it on a fake fetch and a fake room.
 `reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
 guarded `window.__pearMockDecart = …` line that follows it — that line's exact text (with its
 `PEAR_DEBUG_BUILD` guard, §2.11) is its end marker.
@@ -503,6 +505,8 @@ version, only with the code hidden." Measured against origin/main on the same ma
   4.0s, GPU work 34.6s vs 12.6s. It fixed a real bug (a model-worn store photo's jeans/back bled into
   the render) but main has that bug too; if it comes back, the garment box must come from the server
   (e.g. the classifier that already sees every photo), never from a second MediaPipe in the browser.
+  **It came back that way on 2026-09-29 (§2.19)**: the box from `GET /api/garment-box`, one canvas
+  cut in the browser.
 - **Server round trips on the critical path**: every /api/size and /api/prompt went to Vercel iad1
   (~350ms from Israel, 620ms cold) where the in-browser original took 0ms - Continue locked for two
   (+~720ms), go-live waited on two (+~750ms). The Worker behind the orientation link answers POST
@@ -635,6 +639,41 @@ countdown's numbers instead, so it stays in preview. `live-timer` §9. **The "ve
 pear-green check across the screen when the emailed code is accepted - fire-and-forget,
 pointer-transparent, typeof-guarded inside the OTP block (`otp-single-verification` runs it
 standalone), never awaited, so the flow is not held for it.
+
+### 2.19 A model-worn store photo is cut to its garment; the render input is 896×504 (2026-09-29)
+Reported on a half turn (torso twisted to the back, legs planted), FOX "חולצה קצרה OASIS" read frame
+by frame: the shopper's GREEN shorts turned GREY the moment the rear reference reached the wire, for the
+whole back view, and the shirt came back half tucked into them. The store's rear photo is a model in
+grey cargo trousers (the front shows them from mid-thigh, a third photo adds white shoes). Layer B,
+not the prompt and not the angles: the engine conditions on the whole picture. A full turn a minute
+earlier kept the shorts - a reference that INVITES the bug. Main has it (§2.15's first bullet).
+
+- **The cut** (`referenceCropHint` / `referenceGarmentBox` / `cropReferenceToBox` in `app.js`, after
+  `garmentBlobIfWarm`): `garmentBlobCached()` asks `GET /api/garment-box?image_url=&region=top|bottom`
+  BEFORE it starts the download (they overlap), and cuts the normalised Blob before the pre-encode, so
+  what is encoded is what is sent. Store URLs only; the owner is found with `sameImage()` (never
+  `===`, never skipping `custom:true` store garments). A cut is re-encoded down to the photo's own
+  weight (the OASIS pair: 59→51 KB and 69→51 KB - the back reaches the engine SMALLER), a PNG stays a PNG.
+- **The box** (`lib/garment-box.js`, the classifier's model): margins keep the collar, both sleeves and
+  the hem; the chin and the trousers' waistband go. It ABSTAINS - the photo goes whole, main's bytes -
+  on no person (packshots: most of a catalog), an unsure/malformed/tiny box, a cut keeping >85%, a
+  model error, or no answer within `REF_BOX_TIMEOUT_MS` (4s). Only a verdict is cached (instance memory
+  + CDN `s-maxage`); a 429 throws and is never cached. `garment-box` pins all of it, incl. a hem margin
+  that keeps the trousers failing it. What no test can see is whether the model's box is GOOD on a
+  photo - that is checked by eye on the deployed endpoint.
+- **The render input** went 512×288 → 896×504 (`LIVE_W/LIVE_H`, "raise the camera quality"): the model
+  renders at 1088×624, so a full-body shopper arrived as a ~130px figure upscaled 2.1x. Under 960 on the
+  long edge on purpose - LiveKit adds a THIRD simulcast layer at >= 960. The desktop camera opens at the
+  same size (sharper preview/continuity; the pose model's crop of the body is sharper too). The uplink
+  is the risk (§2.17's 20fps lesson), so the camera's top layer has a ceiling, `LIVE_SEND_MAX_BPS`
+  (600kbps), applied in the RTCPeerConnection hook at `addTransceiver()` and on every later
+  `setParameters()` of that sender - `first-frame-integrity` §5 runs it on a fake connection.
+- **A TEST record reads the media connection ONCE**, 3s into the fitting (`traceRtcSnapshot`, event
+  `rtc`): every outgoing video layer's size, fps, bytes, target and limitation, and the uplink estimate
+  - to read against the `swap-acked` times beside it. **If back acknowledgements come back slower than
+  the 430-570ms of the 512×288 sessions, the resolution is the first suspect** - lower `LIVE_W/LIVE_H`
+  or `LIVE_SEND_MAX_BPS` before touching anything else.
+The angles, the prompts (`trace:prompt` byte-identical) and when a swap goes out are unchanged.
 
 ---
 
