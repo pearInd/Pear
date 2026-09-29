@@ -391,8 +391,18 @@ export const CONFIG = Object.freeze({
      would defeat the feature. Every failure to load degrades to the native
      FaceDetector engine the orientation watcher already runs. */
   POSE_WASM_BASE: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm",
+  /* FULL, not lite (2026-09-29). Reported: "it has to work whatever the lighting" - a session
+     with a bright window behind the shopper, read frame by frame and replayed through both
+     models (tasks-vision 0.10.14, VIDEO mode, 512x288, the room's own input): lite read the
+     shopper's shoulders the wrong way round for the first second while they faced the lens -
+     a silhouette gives it nothing to tell left from right by - so the orientation vote said
+     BACK; full read them correctly the whole way (FRONT, the turn, BACK). On four sessions in
+     good light the two agree - the turn is caught on the same frame, front/back within one
+     100ms frame, |yaw| 3-6 degrees apart. Cost measured on the same Mac: 15.1 vs 12.7ms per
+     inference (~4 a second), the same ~0.33s first inference (warmPoseInference pays it in
+     preview), 9.2 vs 5.6 MB, downloaded at room entry. See also detectPoseFrame()'s window. */
   POSE_MODEL_URL: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/" +
-                  "pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+                  "pose_landmarker_full/float16/1/pose_landmarker_full.task",
   POSE_TASKS_MODULE: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14",
 
   /* ── Continuous body-topology monitor (see startBodyTopologyTracking in app.js) ──

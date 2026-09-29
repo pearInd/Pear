@@ -252,6 +252,8 @@ with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (�
 `function edgeApiUrl(route) {` to its closing brace - keep the recorder inside that span.
 `live-timer` slices `app.js` from `const LIVE_TIMER_CHOICES` to `/* ── CODE VERIFIED (2026-09-29)`
 (the self-timer, §2.18) and runs it on a fake clock - keep the block self-contained.
+`pose-focus` slices `app.js` from `let _lastPoseTimestamp = 0;` to
+`/* The loaded PoseLandmarker, as a memoized PROMISE` (the pose call and its focus window, §2.19).
 `reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
 guarded `window.__pearMockDecart = …` line that follows it — that line's exact text (with its
 `PEAR_DEBUG_BUILD` guard, §2.11) is its end marker.
@@ -635,6 +637,28 @@ countdown's numbers instead, so it stays in preview. `live-timer` §9. **The "ve
 pear-green check across the screen when the emailed code is accepted - fire-and-forget,
 pointer-transparent, typeof-guarded inside the OTP block (`otp-single-verification` runs it
 standalone), never awaited, so the flow is not held for it.
+
+### 2.19 The pose model sees a far-back shopper in any light (2026-09-29)
+Reported with a clip in a living room with a bright window behind the shopper: "it has to work
+whatever the lighting - it keeps changing the shape of the shirt". The flight record: the pose model
+found NO body in 24s (no yaw, no shoulder order), so the presence gate held the fitting 9s past the
+timer's zero, and the 96px skin heuristic - which cannot read a small backlit head - claimed a
+PROFILE for 4s (the side-view prompt on a shopper facing the lens) and then a BACK while they faced
+front. Replayed through the model on the clip (tasks-vision 0.10.14, VIDEO, 512×288): it was never
+the light - a full-length figure in a wide 16:9 frame is ~55px tall once the detector shrinks it to
+224px; a square window around the shopper finds them (41 of 47 frames vs 15, none of the first 32).
+- **`detectPoseFrame()`'s POSE FOCUS WINDOW:** after `POSE_FOCUS_AFTER_MISSES` (2) empty whole-frame
+  inferences, a square the frame's height (centre, then either side), following the hips; landmarks
+  mapped back to whole-frame coordinates (y untouched, x and image z scaled, worldLandmarks untouched);
+  `POSE_FOCUS_LOSE_MISSES` (3) empty windows hand back. Still one inference per call. While the whole
+  frame finds the body nothing changes (replayed on four good-light sessions: the window never opens).
+- **`POSE_MODEL_URL` is the FULL model, not lite:** with the window, lite read the backlit shopper's
+  shoulders mirrored for the first second (a BACK vote while facing the lens); full read FRONT, the
+  turn, BACK. In good light they agree (turn caught on the same frame, front/back within one 100ms
+  frame, |yaw| 3-6° apart). 15.1 vs 12.7ms an inference, same ~0.33s first inference, 9.2 vs 5.6MB.
+- `pose-focus` pins it (a window whose x is not mapped back fails 4 checks). The engine, the prompts,
+  the reference and the render input are untouched. The skin heuristic is still what votes when the
+  pose abstains (edge-on) - main's.
 
 ---
 

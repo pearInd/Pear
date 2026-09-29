@@ -16750,7 +16750,90 @@ let _lastPoseTimestamp = 0;
 function detectPoseFrame(detector, video) {
   const ts = Math.max(performance.now(), _lastPoseTimestamp + 1);
   _lastPoseTimestamp = ts;
-  return detector.detectForVideo(video, ts);
+  /* The whole frame, exactly as always - unless the whole frame has stopped finding a body, in
+     which case a window around the shopper (see POSE FOCUS WINDOW below). One call either way. */
+  const win = typeof poseFocusWindow === "function" ? poseFocusWindow(video) : null;
+  const result = detector.detectForVideo(win ? win.canvas : video, ts);
+  return typeof poseFocusSettle === "function" ? poseFocusSettle(result, video, win) : result;
+}
+
+/* ── POSE FOCUS WINDOW - "it has to work whatever the lighting" (2026-09-29) ─────────────────────
+   REPORTED with a clip from a living room with a bright window behind the shopper. Its flight
+   record: in 24 seconds the pose model never found the body once - no yaw, no shoulder order,
+   nothing - so the presence gate held the fitting 9 seconds past the timer's zero, the orientation
+   fell back to the 96px skin heuristic, which cannot read a far-away backlit head, and that
+   claimed a PROFILE for four seconds (the side-view prompt on a shopper facing the lens: "it keeps
+   changing the shape of the shirt") and then a BACK while they still faced front.
+   REPLAYED through the model on the clip itself: the shopper is visible and upright in every
+   frame, and the whole 512x288 frame finds them in none of the first 32 frames (15 of 47 in all) -
+   but a square the frame's height, around them, finds them in 41 of 47. The detector shrinks a 16:9 frame to 224px
+   before it looks, and a full-length figure in a wide, busy, backlit room ends up ~55px tall - too
+   small; the same pixels in a square window are ~100px. It was never the light itself.
+   SO: when the whole frame finds no body for POSE_FOCUS_AFTER_MISSES inferences in a row, the next
+   ones look in a square window (centre first, then either side), and once a body is found the
+   window follows the hips. The landmarks are mapped back to whole-frame coordinates (the window
+   is the frame's full height, so y is untouched; x and the image-space z scale by side/width;
+   worldLandmarks are metric and hip-centred - untouched), so every consumer - the presence gate,
+   the orientation's yaw and shoulder order, the topology monitor, the best frame - reads exactly
+   what it would have read had the whole frame found the body. POSE_FOCUS_LOSE_MISSES empty windows
+   hand back to the whole frame. Replayed on five recorded sessions (with the full model, see
+   POSE_MODEL_URL): the four where the whole frame already found the body are identical - the
+   window never opens; the backlit one reads FRONT for its first 2.3s, the turn, then BACK. A
+   landscape frame only: a portrait one already gives the body the height.
+   Still ONE inference per call - the window replaces the whole frame, it is never a second look. */
+const POSE_FOCUS_AFTER_MISSES = 2;
+const POSE_FOCUS_LOSE_MISSES = 3;
+const POSE_FOCUS_SCAN = [0.5, 0.3, 0.7];   // window centres tried, as a share of the frame width
+let _poseFocus = null;                     // { cx, scan, misses, found } while a window is in use
+let _poseFullMisses = 0;
+let _poseFocusCanvas = null;
+
+/** The window to infer on this call, or null for the whole frame. */
+function poseFocusWindow(video) {
+  if (!_poseFocus) return null;
+  const vw = video && video.videoWidth, vh = video && video.videoHeight;
+  if (!(vw > vh * 1.2) || typeof document === "undefined") { _poseFocus = null; _poseFullMisses = 0; return null; }
+  const side = vh;
+  const sx = Math.max(0, Math.min(vw - side, Math.round(_poseFocus.cx * vw - side / 2)));
+  if (!_poseFocusCanvas) _poseFocusCanvas = document.createElement("canvas");
+  const c = _poseFocusCanvas;
+  if (c.width !== side) c.width = side;
+  if (c.height !== side) c.height = side;
+  c.getContext("2d").drawImage(video, sx, 0, side, side, 0, 0, side, side);
+  return { canvas: c, sx, side, vw };
+}
+
+/** Book-keeping after an inference; a window's landmarks come back in whole-frame coordinates. */
+function poseFocusSettle(result, video, win) {
+  const found = !!(result && Array.isArray(result.landmarks) && result.landmarks.length);
+  if (!win) {
+    const vw = video && video.videoWidth, vh = video && video.videoHeight;
+    if (found || !(vw > vh * 1.2)) { _poseFullMisses = 0; return result; }
+    if (++_poseFullMisses >= POSE_FOCUS_AFTER_MISSES) {
+      _poseFocus = { cx: POSE_FOCUS_SCAN[0], scan: 0, misses: 0, found: false };
+      if (typeof ORIENT_DEBUG !== "undefined" && ORIENT_DEBUG) console.log("[PEAR] pose: no body in the whole frame - looking in a window around the shopper");
+    }
+    return result;
+  }
+  if (found) {
+    const k = win.side / win.vw, off = win.sx / win.vw;
+    const landmarks = result.landmarks.map((set) => set.map((p) => ({ ...p, x: off + p.x * k, z: (p.z ?? 0) * k })));
+    const L = landmarks[0];
+    const hipX = L && L[23] && L[24] ? (L[23].x + L[24].x) / 2 : NaN;
+    if (Number.isFinite(hipX)) _poseFocus.cx = Math.max(0, Math.min(1, hipX));
+    _poseFocus.misses = 0;
+    _poseFocus.found = true;
+    return { ...result, landmarks };
+  }
+  _poseFocus.misses++;
+  if (!_poseFocus.found) {
+    _poseFocus.scan++;
+    if (_poseFocus.scan >= POSE_FOCUS_SCAN.length) { _poseFocus = null; _poseFullMisses = 0; }
+    else _poseFocus.cx = POSE_FOCUS_SCAN[_poseFocus.scan];
+  } else if (_poseFocus.misses >= POSE_FOCUS_LOSE_MISSES) {
+    _poseFocus = null; _poseFullMisses = 0;
+  }
+  return result;
 }
 
 /* The loaded PoseLandmarker, as a memoized PROMISE - so N callers during preload share
