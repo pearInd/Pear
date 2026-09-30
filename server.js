@@ -2850,7 +2850,9 @@ app.get("/api/solo-prompt", classifyLimiter, async (req, res) => {
   if (!publicImageUrl(front) || !publicImageUrl(back)) {
     return res.status(400).json({ error: "bad_image_url", message: "front and back must be public http(s) image URLs." });
   }
-  const key = `${canonicalImageUrl(front) || front}|${canonicalImageUrl(back) || back}|${region}`;
+  /* The answer's version is part of the key: an instance that outlives a deploy must not hand a new
+     room an answer shaped by the old rules (the CDN key already carries the room's ?v=). */
+  const key = `v${SOLO_PROMPT_VERSION}|${canonicalImageUrl(front) || front}|${canonicalImageUrl(back) || back}|${region}`;
   const hit = _soloPromptMemo.get(key);
   if (hit && Date.now() - hit.at < SOLO_PROMPT_MEMO_MS) {
     res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=2592000");
@@ -2863,7 +2865,7 @@ app.get("/api/solo-prompt", classifyLimiter, async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     return res.json({ prompt: soloPromptFrom(null, region), source: "rate_limited", v: SOLO_PROMPT_VERSION });
   }
-  const body = { prompt: out.prompt, crops: out.crops || null, source: out.source, v: SOLO_PROMPT_VERSION };
+  const body = { prompt: out.prompt, crops: out.crops || null, boxes: out.boxes || null, source: out.source, v: SOLO_PROMPT_VERSION };
   if (out.source === "gemini") {
     _soloPromptMemo.set(key, { at: Date.now(), body });
     if (_soloPromptMemo.size > SOLO_PROMPT_MEMO_MAX) _soloPromptMemo.delete(_soloPromptMemo.keys().next().value);

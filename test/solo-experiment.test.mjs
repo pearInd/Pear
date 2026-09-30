@@ -106,6 +106,9 @@ console.log("\n── §3 the prompt frame ──");
   const c = garmentCropFrom([344, 167, 856, 817], "top");
   check("a garment box becomes a crop: collar and hem in (thin margins), both sleeves in (wider)",
     c && c.y0 < 0.344 && c.y0 > 0.33 && c.y1 > 0.856 && c.y1 < 0.87 && c.x0 < 0.167 && c.x1 > 0.817, JSON.stringify(c));
+  const c01 = garmentCropFrom([0.344, 0.167, 0.856, 0.817], "top");
+  check("...a box on a 0-1 scale is read as one, not refused as tiny",
+    c01 && Math.abs(c01.x0 - c.x0) < 1e-3 && Math.abs(c01.y1 - c.y1) < 1e-3, JSON.stringify(c01));
   check("...an unusable box is no crop: malformed, tiny, or keeping nearly the whole photo",
     garmentCropFrom(null, "top") === null && garmentCropFrom([1, 2, 3], "top") === null &&
     garmentCropFrom([400, 400, 450, 450], "top") === null && garmentCropFrom([0, 0, 1000, 1000], "top") === null);
@@ -129,8 +132,12 @@ console.log("\n── §4 the description call ──");
   check("a description comes back as a prompt, marked as the model's", r.source === "gemini" && /white tee, hip-length/.test(r.prompt));
   const withBoxes = await soloPromptFor({ front: "https://a/1.jpg", back: "https://a/3.jpg", region: "top" }, "k",
     { fetchImpl: mk({ answer: { garment: "white tee", front: "logo", back: "plain", front_box: [335, 170, 905, 850], back_box: [344, 167, 856, 817] } }).fetchImpl });
-  check("...with each photo's garment crop from the same call",
-    withBoxes.crops && withBoxes.crops.front && withBoxes.crops.back && withBoxes.crops.back.y1 > 0.856);
+  check("...with each photo's garment crop from the same call, and the raw boxes beside them",
+    withBoxes.crops && withBoxes.crops.front && withBoxes.crops.back && withBoxes.crops.back.y1 > 0.856 &&
+    withBoxes.boxes && withBoxes.boxes.back.join() === "344,167,856,817");
+  const sentSchema = JSON.parse(ok.seen[2].init.body).generationConfig.responseSchema;
+  check("...and both boxes are REQUIRED in the answer's schema",
+    ["front_box", "back_box"].every((k) => sentSchema.required.includes(k)));
   check("...and the model is asked for each print's SIZE and PLACE, and for both garment boxes",
     /SIZE relative to the garment/.test(DESCRIBE_INSTRUCTION) && /PLACE/.test(DESCRIBE_INSTRUCTION) &&
     /front_box/.test(DESCRIBE_INSTRUCTION) && /back_box/.test(DESCRIBE_INSTRUCTION) && /small label must never read as a large block/.test(DESCRIBE_INSTRUCTION));
@@ -173,6 +180,9 @@ console.log("\n── §5 the wiring ──");
     /ctx\.drawImage\(front, rf\.sx, rf\.sy, rf\.sw, rf\.sh, 0, 0, wf, H\);/.test(comp) &&
     /ctx\.drawImage\(back, rb\.sx, rb\.sy, rb\.sw, rb\.sh, wf \+ SOLO_GAP, 0, wb, H\);/.test(comp) &&
     !/fillText|strokeText/.test(comp) && /_soloComposites\.set\(item, job\)/.test(comp));
+  check("...a missing box on one side of a same-size pair borrows the other side's crop",
+    /const samePair = front\.width === back\.width && front\.height === back\.height;/.test(comp) &&
+    /const cf = crops\.front \|\| \(samePair \? crops\.back : null\), cb = crops\.back \|\| \(samePair \? crops\.front : null\);/.test(comp));
   check("...each side cut to its garment when the server sent a crop, whole when it did not",
     /soloAnswer\(item\)/.test(comp) && /const crops = \(answer && answer\.crops\) \|\| \{\};/.test(comp) &&
     /: \{ sx: 0, sy: 0, sw: bmp\.width, sh: bmp\.height, cut: false \}/.test(comp));
@@ -182,7 +192,7 @@ console.log("\n── §5 the wiring ──");
     /return requestWirePrompt\(\{ kind: "single"/.test(sp) && /catch \(e\) \{[\s\S]*?return null;/.test(sa));
   check("...a failure is re-asked at most every SOLO_PROMPT_RETRY_MS, never on every dispatch; v2 of the answer",
     /job\.fallbackAt = Date\.now\(\);/.test(sa) && /known\.fallbackAt && Date\.now\(\) - known\.fallbackAt > SOLO_PROMPT_RETRY_MS/.test(sa) &&
-    /&v=2`/.test(sa));
+    /&v=3`/.test(sa));
   const route = SERVER.slice(SERVER.indexOf('app.get("/api/solo-prompt"'), SERVER.indexOf("\n});\n", SERVER.indexOf('app.get("/api/solo-prompt"')));
   check("the endpoint takes public photos only and caches only a real description",
     /publicImageUrl\(front\)/.test(route) && /if \(out\.source === "gemini"\) \{[\s\S]*?s-maxage[\s\S]*?\} else \{\s*\n\s*res\.setHeader\("Cache-Control", "no-store"\);/.test(route));

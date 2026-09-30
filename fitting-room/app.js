@@ -11854,8 +11854,13 @@ function soloComposite(item) {
           ? { sx: c.x0 * bmp.width, sy: c.y0 * bmp.height, sw: (c.x1 - c.x0) * bmp.width, sh: (c.y1 - c.y0) * bmp.height, cut: true }
           : { sx: 0, sy: 0, sw: bmp.width, sh: bmp.height, cut: false };
       };
-      const rf = region(front, crops.front), rb = region(back, crops.back);
-      _soloCropped = rf.cut && rb.cut ? "both" : rf.cut ? "front" : rb.cut ? "back" : "none";
+      /* One side's box missing (the first v2 answer had no rear box): two photos of the same size are
+         a studio pair shot in one frame, so the side that has a crop lends it to the side that has none
+         - never one side cut and the other whole, which would draw the two prints at different scales. */
+      const samePair = front.width === back.width && front.height === back.height;
+      const cf = crops.front || (samePair ? crops.back : null), cb = crops.back || (samePair ? crops.front : null);
+      const rf = region(front, cf), rb = region(back, cb);
+      _soloCropped = rf.cut && rb.cut ? (crops.front && crops.back ? "both" : "both-shared") : rf.cut ? "front" : rb.cut ? "back" : "none";
       const H = SOLO_COMPOSITE_H;
       const wf = Math.round(rf.sw * H / rf.sh), wb = Math.round(rb.sw * H / rb.sh);
       const W = wf + SOLO_GAP + wb;
@@ -11896,7 +11901,7 @@ function soloAnswer(item) {
     try {
       const g = galleryOf(item) || {};
       const q = `front=${encodeURIComponent(g.front || item.img)}&back=${encodeURIComponent(distinctBackOf(item, g))}` +
-        `&region=${isBottomsGarment(item) ? "bottom" : "top"}&v=2`;
+        `&region=${isBottomsGarment(item) ? "bottom" : "top"}&v=3`;
       const r = await fetch(`${location.origin}/api/solo-prompt?${q}`,
         typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(9000) } : {});
       const j = r.ok ? await r.json() : null;
