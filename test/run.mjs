@@ -361,6 +361,10 @@
                       its landmarks mapped back to whole-frame coordinates, following the hips,
                       handing back after three empty windows; nothing changes while the whole
                       frame finds the body; one inference per call; the full model is loaded.
+     token-origin
+                      "The live measurement failed: Origin not allowed" on a new preview: the
+                      render token was scoped to DECART_ALLOWED_ORIGINS only. A page on this
+                      server's own host now also names its origin in the token.
      api-version
                       The edge answers /size and /prompt from the last deployed copy of the
                       engines; a stale deploy answered "top" where the room says "shirt"
@@ -479,6 +483,7 @@ const SUITES = [
   ["pose-focus", "pose-focus.test.mjs"],
   ["torso-twist", "torso-twist.test.mjs"],
   ["api-version", "api-version.test.mjs"],
+  ["token-origin", "token-origin.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

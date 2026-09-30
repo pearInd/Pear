@@ -227,11 +227,26 @@ if (API_KEY && /^(?:one)?dct_|^dct_last-/.test(API_KEY)) {
 }
 
 /* ── Tier 1: SDK ─────────────────────────────────────────────────────────── */
-async function trySDK() {
+/* The page's own origin, when it is THIS server's host - the same rule isOriginAllowed() applies
+   ("always works on any Vercel URL, preview deployment, or custom domain"), carried into the token.
+   REPORTED 2026-10-01 on a new preview branch: "the live measurement failed: Origin not allowed".
+   Our server minted the token (the CORS gate lets a page call its own host), but the token was
+   scoped to DECART_ALLOWED_ORIGINS alone, which named the OLD preview's URL and not the new one,
+   so the render engine refused the connection. A token for our own page now also names that page's
+   origin; production (app.pear-ai.io, already on the list) is unchanged, and an origin that is
+   neither ours nor listed never reaches here (the CORS gate refuses it first). */
+function ownPageOrigin(req) {
+  const origin = req && req.headers ? req.headers.origin : undefined;
+  const host = req && req.headers ? req.headers.host : undefined;
+  if (typeof origin !== "string" || typeof host !== "string" || !host) return null;
+  return origin === `https://${host}` || origin === `http://${host}` ? origin : null;
+}
+
+async function trySDK(extraOrigins = []) {
   if (!decart) throw Object.assign(new Error("SDK not initialised"), { tier: "sdk" });
 
   const opts = { expiresIn: TOKEN_TTL, allowedModels: [VTON_MODEL] };
-  if (ALLOWED_ORIGINS.length) opts.allowedOrigins = ALLOWED_ORIGINS;
+  if (ALLOWED_ORIGINS.length) opts.allowedOrigins = [...new Set([...ALLOWED_ORIGINS, ...extraOrigins])];
 
   let token;
   try {
@@ -306,9 +321,9 @@ async function tryREST(url) {
 }
 
 /* ── Waterfall: SDK → REST endpoints in order ────────────────────────────── */
-async function mintTokenWaterfall() {
+async function mintTokenWaterfall(extraOrigins = []) {
   // Tier 1
-  try { return await trySDK(); } catch (e) {
+  try { return await trySDK(extraOrigins); } catch (e) {
     console.warn(`[waterfall] SDK failed (${e.message}), trying REST fallback…`);
   }
 
@@ -338,7 +353,8 @@ async function mintToken(req, res) {
   }
 
   try {
-    const token = await mintTokenWaterfall();
+    const own = ownPageOrigin(req);
+    const token = await mintTokenWaterfall(own ? [own] : []);
     return res.json({ ...token, model: VTON_MODEL });
   } catch (err) {
     console.error("[mintToken] all tiers failed:", err?.message || err);
