@@ -6394,9 +6394,14 @@ async function connectRealtime({ force = false } = {}) {
       console.log("[PEAR] connectRealtime() - stage 3/4: token OK. Creating Decart client…");
 
       /* ── create client with the ephemeral token ───────────────────────────── */
-      /* telemetry:false - the SDK otherwise reports to the vendor's telemetry host from the
-         shopper's browser, which names the vendor in the Network tab and adds a request
-         that nothing in this product reads. Option verified in @decartai/sdk@0.1.5.
+      /* TELEMETRY IS MAIN'S DEFAULT (on) AGAIN - 2026-09-30. The branch had passed
+         telemetry:false (it hid a request to the vendor's telemetry host). In
+         @decartai/sdk@0.1.5 that flag does more than skip a POST: with it off and no onStats,
+         RealtimeObservability never starts its WebRTCStatsCollector, so the session ran
+         without the stats loop and the stall diagnostics main runs. The render connection
+         already names the vendor in the Network tab, so the flag hid little, and "the branch
+         behaves as main, one to one" (CLAUDE.md §2.17) wins: the client is created as main
+         creates it, plus the logger below, which only touches the console.
          logger - REPORTED 2026-09-26 ("it showed Decart in the console"): the SDK's default
          logger prints its own warnings under the vendor's name ("[DecartSDK] …"), and the
          SDK bundle is shipped as-is (scripts/build.mjs skips it), so no build step removes
@@ -6407,7 +6412,7 @@ async function connectRealtime({ force = false } = {}) {
             warn: (m, d) => console.warn("[PEAR][rt]", m, d ?? ""),
             error: (m, d) => console.error("[PEAR][rt]", m, d ?? "") }
         : { debug() {}, info() {}, warn() {}, error() {} };
-      const client = createClient({ apiKey: ekToken, telemetry: false, logger: rtLogger });
+      const client = createClient({ apiKey: ekToken, logger: rtLogger });
       console.log("[PEAR] connectRealtime() - stage 4/4: opening WebRTC session (waiting for 'connected')…");
 
       /* Bug 3 fix: work off a CLONE of the camera tracks so disconnect/teardown never

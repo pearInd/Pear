@@ -310,12 +310,17 @@ for (const [name, before, after] of report) {
     console.error(`✖ ${APP_ENTRY} carries a size-chart band key ("${band[0]}") - the charts live in lib/sizing.js`);
   }
   /* The SDK bundle is shipped as-is (skipped above), so the only place its own console lines
-     ("[DecartSDK] …") and its telemetry host can be silenced is the one call that creates the
-     client, in connectRealtime(): telemetry:false plus a logger. Drop either and the shopper's
-     console or Network tab names the vendor again (reported 2026-09-26). */
-  if (!QA && !/telemetry:!1,logger:/.test(room)) {
+     ("[DecartSDK] …") can be silenced is the one call that creates the client, in
+     connectRealtime(): a logger. Drop it and the shopper's console names the vendor again
+     (reported 2026-09-26). Telemetry stays main's default (on) - see that call's comment:
+     turning it off also switched off the SDK's stats loop, a behaviour main does not have. */
+  if (!QA && !/\(\{apiKey:[\w$]+,logger:/.test(room)) {
     violations++;
-    console.error(`✖ ${APP_ENTRY} creates the render client without telemetry:false and a logger - see connectRealtime()`);
+    console.error(`✖ ${APP_ENTRY} creates the render client without a logger - see connectRealtime()`);
+  }
+  if (/telemetry:!1/.test(room)) {
+    violations++;
+    console.error(`✖ ${APP_ENTRY} turns the render SDK's telemetry off - main runs it on (its stats loop), see connectRealtime()`);
   }
   /* ...and the media library inside the SDK bundle has its own loggers (SDK_ENTRY, step 1). */
   if (!/\.setLevel\("silent",!1\)/.test(sdkResult.outputFiles[0].text)) {
