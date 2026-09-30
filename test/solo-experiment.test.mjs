@@ -47,7 +47,8 @@ console.log("── §1 without the flag nothing changes ──");
   check("the room's own resolution line is untouched", /const LIVE_W = 512, LIVE_H = 288;/.test(APP) && /const LIVE_INFERENCE_FPS\s+= 10;/.test(APP));
   check("the pinned SDK is still 0.1.5 and is what loads without the flag",
     /"https:\/\/esm\.sh\/@decartai\/sdk@0\.1\.5"/.test(CONFIG) &&
-    /const sdkUrls = typeof SOLO_NEXT_SDK !== "undefined" && SOLO_NEXT_SDK && Array\.isArray\(SDK_NEXT_URLS\) \? SDK_NEXT_URLS : SDK_URLS;/.test(APP));
+    /const nextOk = typeof SOLO_NEXT_SDK !== "undefined" && SOLO_NEXT_SDK && Array\.isArray\(SDK_NEXT_URLS\) &&/.test(APP) &&
+    /const sdkUrls = nextOk \? SDK_NEXT_URLS : SDK_URLS;/.test(APP));
 }
 
 console.log("\n── §2 with the flag ──");
@@ -163,6 +164,32 @@ console.log("\n── §5 the wiring ──");
     /var EXP = \/\^\[a-z0-9-\]\{1,24\}\$\/\.test\(EXP_RAW\) \? EXP_RAW : "";/.test(WIDGET) && /\(EXP \? "&exp=" \+ EXP : ""\)/.test(WIDGET));
   const re = /^[a-z0-9-]{1,24}$/;
   check("...so a crafted value cannot inject parameters", !re.test("solo&pear_key=x") && !re.test("SOLO") && re.test("solo"));
+}
+
+console.log("\n── §6 the next SDK renders in the bundle, and a failure never repeats ──");
+{
+  /* REPORTED 2026-09-30, the first ?exp=solo session: "the connection produced no image". 0.2.x wraps
+     every frame in a transform run by a Worker loaded from ./frame-metadata-worker.js next to the SDK
+     module - a file the bundle does not ship (404), so no frame reached the engine. The CDN build
+     never takes that path (its worker URL is cross-origin); the bundle is patched to answer the same. */
+  const BUILD = readFileSync(new URL("../scripts/build.mjs", import.meta.url), "utf8");
+  check("the build switches the next SDK's frame-metadata worker off, and fails if the patch stops applying",
+    /plugins: \[noFrameMetadataWorker\]/.test(BUILD) &&
+    /"function isFrameMetadataRuntimeSupported\(\) \{\\n\\treturn false;"/.test(BUILD) &&
+    /if \(!frameMetadataPatched\) fail\(/.test(BUILD) && /if \(patched === src\) fail\(/.test(BUILD));
+  const guard = APP.slice(APP.indexOf('console.warn("[PEAR] No first frame within "'), APP.indexOf('showCamError("החיבור לא הניב תמונה - נסה שוב.");'));
+  check("a next-SDK session that never renders switches this page to the pinned SDK for the retry",
+    /_sdkInUse === "next" && typeof markSoloNextSdkFailed === "function"\) \{\s*\n\s*markSoloNextSdkFailed\(\);/.test(guard) &&
+    /!\(typeof soloNextSdkFailed === "function" && soloNextSdkFailed\(\)\)/.test(APP));
+  /* Run the switch for real. */
+  const blk = APP.slice(APP.indexOf('let _sdkInUse = "pinned";'), APP.indexOf("\n}\n", APP.indexOf("function markSoloNextSdkFailed()")) + 3);
+  const store = new Map();
+  const sw = new Function("sessionStorage", blk + "\nreturn { soloNextSdkFailed, markSoloNextSdkFailed };")(
+    { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) });
+  const before = sw.soloNextSdkFailed();
+  sw.markSoloNextSdkFailed();
+  check("...the switch starts off, flips once, and survives a reload of the room (sessionStorage)",
+    before === false && sw.soloNextSdkFailed() === true && store.get("pear_solo_next_sdk_failed") === "1");
 }
 
 console.log(fails === 0 ? "\nsolo-experiment: OK" : `\nsolo-experiment: ${fails} FAILED`);

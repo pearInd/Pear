@@ -184,8 +184,33 @@ const SDK_NEXT_ENTRY = [
   'for (const n of Object.values(LoggerNames)) getLogger(n).setLevel("silent", false);',
   'export { createDecartClient as createClient } from "decart-sdk-next";',
 ].join("\n");
+/* THE FRAME-METADATA WORKER IS SWITCHED OFF - reported 2026-09-30, the first ?exp=solo session:
+   "the connection produced no image". 0.2.x measures glass-to-glass latency by wrapping every sent
+   and received frame in an encoded-stream transform run by a Worker it starts from
+   new URL("./frame-metadata-worker.js", import.meta.url) - a file next to the SDK module. Bundled,
+   that URL is /fitting-room/frame-metadata-worker.js, which does not exist (404 on the preview): the
+   Worker never loads, the transform never passes a frame, the engine receives no video and sends
+   nothing back. The SDK's own CDN build never takes this path either - its worker URL is cross-origin
+   there, and isFrameMetadataRuntimeSupported() answers false for a cross-origin worker. So the bundle
+   is made to answer the same (§2.11: the bundle must behave as the CDN build does). It is a latency
+   diagnostic; nothing the engine renders depends on it. The build fails if the patch stops applying. */
+const noFrameMetadataWorker = {
+  name: "no-frame-metadata-worker",
+  setup(b) {
+    b.onLoad({ filter: /[\\/]frame-metadata-diagnostics\.js$/ }, (args) => {
+      const src = readFileSync(args.path, "utf8");
+      const patched = src.replace("function isFrameMetadataRuntimeSupported() {",
+        "function isFrameMetadataRuntimeSupported() {\n\treturn false;");
+      if (patched === src) fail(`the next SDK's frame-metadata check moved (${rel(args.path)}) - re-read the note above noFrameMetadataWorker`);
+      frameMetadataPatched = true;
+      return { contents: patched, loader: "js" };
+    });
+  },
+};
+let frameMetadataPatched = false;
 const sdkNextResult = await build({
   stdin: { contents: SDK_NEXT_ENTRY, resolveDir: join(ROOT, "node_modules/decart-sdk-next"), loader: "js" },
+  plugins: [noFrameMetadataWorker],
   bundle: true,
   format: "esm",
   platform: "browser",
@@ -195,6 +220,7 @@ const sdkNextResult = await build({
   write: false,
   logLevel: "warning",
 });
+if (!frameMetadataPatched) fail("the next SDK bundle no longer loads frame-metadata-diagnostics.js - check the frame-metadata worker note");
 const sdkNextHash = createHash("sha256").update(sdkNextResult.outputFiles[0].contents).digest("hex").slice(0, 12);
 const SDK_NEXT_OUT = `fitting-room/rt.${sdkNextHash}.js`;
 if (!SDK_NAME_RE.test(SDK_NEXT_OUT.split("/").pop())) fail(`next SDK file name ${SDK_NEXT_OUT} does not match server.js's cache pattern`);

@@ -273,6 +273,18 @@ const SOLO_NEXT_SDK = PEAR_EXP_SOLO && (() => {
 function liveFrameSpec() {
   return PEAR_EXP_SOLO ? SOLO_FRAME : { w: LIVE_W, h: LIVE_H, fps: LIVE_INFERENCE_FPS };
 }
+/* Which SDK loadSDK() last handed out ("next" / "pinned") - the TEST record reports it. And the
+   one-way switch the first-frame guard throws when the next SDK connected but never rendered. */
+let _sdkInUse = "pinned";
+let _soloNextSdkFailedHere = false;
+function soloNextSdkFailed() {
+  if (_soloNextSdkFailedHere) return true;
+  try { return sessionStorage.getItem("pear_solo_next_sdk_failed") === "1"; } catch (_) { return false; }
+}
+function markSoloNextSdkFailed() {
+  _soloNextSdkFailedHere = true;
+  try { sessionStorage.setItem("pear_solo_next_sdk_failed", "1"); } catch (_) { /* this page only */ }
+}
 
 /* Mobile detection (Feature 2 / mobile download fix). Drives the SAVE PATH only:
    iOS Safari ignores <a download>, so on mobile we hand the clip to the native
@@ -5218,7 +5230,12 @@ async function loadSDK() {
   let lastErr;
   /* The SOLO EXPERIMENT loads the vendor's current SDK (SDK_NEXT_URLS); every other session the
      pinned one. Same factory either way - the two are API-compatible (0.2.x only adds options). */
-  const sdkUrls = typeof SOLO_NEXT_SDK !== "undefined" && SOLO_NEXT_SDK && Array.isArray(SDK_NEXT_URLS) ? SDK_NEXT_URLS : SDK_URLS;
+  /* ...unless the next SDK already failed to produce a first frame on this page: the retry then runs
+     on the pinned one, so the shopper never meets that failure twice (see the first-frame guard). */
+  const nextOk = typeof SOLO_NEXT_SDK !== "undefined" && SOLO_NEXT_SDK && Array.isArray(SDK_NEXT_URLS) &&
+    !(typeof soloNextSdkFailed === "function" && soloNextSdkFailed());
+  const sdkUrls = nextOk ? SDK_NEXT_URLS : SDK_URLS;
+  if (typeof _sdkInUse !== "undefined") _sdkInUse = nextOk ? "next" : "pinned";
   for (const url of sdkUrls) {
     console.log("[PEAR] loadSDK() - importing", url);
     try {
@@ -15889,7 +15906,7 @@ async function goLive() {
       link: typeof _orientWs !== "undefined" && _orientWs ? _orientWs.readyState : null,
       /* The SOLO EXPERIMENT's settings, when it runs (see SOLO EXPERIMENT near LIVE_W). */
       exp: typeof PEAR_EXP_SOLO !== "undefined" && PEAR_EXP_SOLO && typeof soloActiveFor === "function" && soloActiveFor(activeItem)
-        ? { mode: "solo", frame: SOLO_FRAME, sdk: SOLO_NEXT_SDK ? "next" : "pinned", prompt: _soloPromptSource }
+        ? { mode: "solo", frame: SOLO_FRAME, sdk: typeof _sdkInUse !== "undefined" ? _sdkInUse : null, prompt: _soloPromptSource }
         : undefined,
     });
   }
@@ -16155,6 +16172,11 @@ async function goLive() {
         firstFrameGuardTimer = null;
         if (sessionGen !== guardGen || billingStarted) return;   // session moved on / billing already ticking
         console.warn("[PEAR] No first frame within " + FIRST_FRAME_TIMEOUT_MS + "ms - tearing down (no idle billing)");
+        /* SOLO EXPERIMENT on the next SDK: the retry uses the pinned one (see loadSDK()). */
+        if (typeof _sdkInUse !== "undefined" && _sdkInUse === "next" && typeof markSoloNextSdkFailed === "function") {
+          markSoloNextSdkFailed();
+          if (typeof traceOrient === "function") traceOrient("sdk-fallback", { from: "next", to: "pinned" });
+        }
         stopScanTimer();                // model never became ready - retire the loading UI here
         $("scanOverlay").hidden = true;
         stopLive();

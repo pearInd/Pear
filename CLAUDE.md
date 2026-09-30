@@ -694,6 +694,13 @@ identical, the regular visual gate 40/40).
   With no mid-session reference uploads, the 20fps lesson (§2.17) does not apply as it did.
 - **A TEST record** carries `ctx.exp` (frame, SDK, where the prompt came from) and one `rtc` event
   3s in (every outgoing layer's size/fps/bytes/limit, the uplink estimate).
+- **The first session on the next SDK produced no image** (2026-09-30): 0.2.x wraps every frame in a
+  transform run by a Worker it loads from `./frame-metadata-worker.js` beside the SDK module - a file
+  the bundle does not ship (404), so no frame reached the engine. Its CDN build never takes that path
+  (cross-origin worker URL → `isFrameMetadataRuntimeSupported()` false), so `scripts/build.mjs`
+  patches the bundle to answer the same (`noFrameMetadataWorker`; the build fails if the patch stops
+  applying). And if a next-SDK session still never renders, the first-frame guard sets
+  `pear_solo_next_sdk_failed` (sessionStorage) and the retry runs on the pinned SDK (`sdk-fallback`).
 - **Known going in:** a stitched front|back reference rendered fragments of both sides in July on an
   older model (23f5953) and on 2026-09-16 held only with the room naming the half. Never measured on
   lucy-vton-3.5 or with the vendor's prompt form. `PEAR_VISUAL_EXP=solo npm run test:visual` smoke-runs
