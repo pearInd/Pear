@@ -251,6 +251,12 @@ with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (�
 `orient-link` slices `app.js` from `const ORIENT_KNOB_KEYS = [` to `/* ── end flight recorder ── */`
 (the whole orientation link and the recorder, run on a fake clock and socket) plus
 `function edgeApiUrl(route) {` to its closing brace - keep the recorder inside that span.
+`live-timer` slices `app.js` from `const LIVE_TIMER_CHOICES` to `/* ── CODE VERIFIED (2026-09-29)`
+(the self-timer, §2.18) and runs it on a fake clock - keep the block self-contained.
+`pose-focus` slices `app.js` from `let _lastPoseTimestamp = 0;` to
+`/* The loaded PoseLandmarker, as a memoized PROMISE` (the pose call and its focus window, §2.19).
+`torso-twist` slices `app.js` from `const TWIST_SHOULDER_MAX` to `let _poseTwist = makeTwistState();`
+(the torso-only turn rule, §2.20) and runs it standalone - keep the block self-contained.
 `reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
 guarded `window.__pearMockDecart = …` line that follows it — that line's exact text (with its
 `PEAR_DEBUG_BUILD` guard, §2.11) is its end marker.
@@ -595,6 +601,129 @@ Not changed on this branch, and why: the reveal wait (~5s from connect - recorde
 swap earlier on the body.
 
 ---
+
+### 2.18 The camera guide and the self-timer - ZERO IS THE FITTING
+Added 2026-09-29 ("if the camera doesn't see the whole body the result isn't the best"), reworked the
+same day after two 10s sessions ("it started before the timer ended", "a second or two of loading
+after zero"). `#camGuide` sits between `#startCamBtn` and the camera once per room load (three steps,
+the full-body one first; no "turn slowly"). The self-timer (`#timerBtn`, beside the LIVE badge,
+preview only; off / 3 / 5 / 10s on a glass slider you tap or drag - `setupGenderSwitch`'s physics)
+opens the measurement EXACTLY at zero, never before it and with no loading screen after it:
+- **One hold per session.** `onRemoteStream()` can fire more than once and each call arms its own
+  `armFirstFrameBilling()`; main never minded (the second fire finds `billingStarted`), but a held
+  reveal leaves it false. That is how the first cut revealed at 7.6s of 10. `revealAfterCountdown()`
+  ignores a second fire for a gen already held (`plan.heldGen`) and the plan lives until the reveal.
+- **Main's presence gate still runs under a timer** - the engine must first see the whole body. It
+  was skipped for one day so the session could connect at the press, and a session opened while the
+  shopper was still walking back had no legs in frame: the render invented long trousers and shoes
+  and kept them until the next reference write. `liveTimerConnected()` (right after `waitConnected`)
+  times zero to the render expected `LIVE_TIMER_READY_AFTER_CONNECT_MS` later (5.1-5.4s measured,
+  5.7 used); a connect that comes late spreads the countdown's last numbers instead.
+- **10s ("during")**: numbers from the press; a render verified before zero waits for it; a slow
+  connect spreads the remaining numbers to the expected render (never back up, never skipped).
+  **3s / 5s ("prep")**: "get ready" until the connect, then a full N..1 placed so zero lands on the
+  expected render. A render not yet verified at zero (never measured) keeps the stage in a short
+  "starting" state - never the loading overlay.
+Nothing else moves: preload, connect, every reveal gate, what is sent and the orientation run as with
+the timer off; the billed 5s window, recorder and kill-clock start at the reveal. The engine generates
+during a hold (~0.3-2.5s). `live-timer` pins it on a fake clock - including the reported double fire
+(the old consume-on-first-fire code fails it in three places). The visual agent clicks through the
+guide as a shopper would. **The pose model's first inference is paid in preview**
+(`warmPoseInference()`, after the camera opens, and at a timer's go-live as a backstop; never once
+the fitting shows): while the timer skipped the presence gate, the first inference landed on the
+fitting's first second - a ~1.9s main-thread block, the render starved, LIVE CONTINUITY on the raw
+camera for the rest of the window (reported 2026-09-29). With the gate back it would stall the
+countdown's numbers instead, so it stays in preview - **and since 2026-09-30 only when a timer is set**
+(camera open with a timer, or a timer set while the preview is open): with the timer off the go-live is
+main's to the millisecond (§2.21). `live-timer` §9. **The "verified" moment** (`#otpSuccess`, `celebrateOtpVerified()`): a
+pear-green check across the screen when the emailed code is accepted - fire-and-forget,
+pointer-transparent, typeof-guarded inside the OTP block (`otp-single-verification` runs it
+standalone), never awaited, so the flow is not held for it.
+
+### 2.19 The pose model sees a far-back shopper in any light (2026-09-29)
+Reported with a clip in a living room with a bright window behind the shopper: "it has to work
+whatever the lighting - it keeps changing the shape of the shirt". The flight record: the pose model
+found NO body in 24s (no yaw, no shoulder order), so the presence gate held the fitting 9s past the
+timer's zero, and the 96px skin heuristic - which cannot read a small backlit head - claimed a
+PROFILE for 4s (the side-view prompt on a shopper facing the lens) and then a BACK while they faced
+front. Replayed through the model on the clip (tasks-vision 0.10.14, VIDEO, 512×288): it was never
+the light - a full-length figure in a wide 16:9 frame is ~55px tall once the detector shrinks it to
+224px; a square window around the shopper finds them (41 of 47 frames vs 15, none of the first 32).
+- **`detectPoseFrame()`'s POSE FOCUS WINDOW:** after `POSE_FOCUS_AFTER_MISSES` (2) empty whole-frame
+  inferences, a square the frame's height (centre, then either side), following the hips; landmarks
+  mapped back to whole-frame coordinates (y untouched, x and image z scaled, worldLandmarks untouched);
+  `POSE_FOCUS_LOSE_MISSES` (3) empty windows hand back. Still one inference per call. While the whole
+  frame finds the body nothing changes (replayed on four good-light sessions: the window never opens).
+- **`POSE_MODEL_URL` is main's LITE model (2026-09-30).** The full model was tried for the backlit
+  session (with the window, lite read that shopper's shoulders mirrored for the first second; full
+  read FRONT, the turn, BACK) on a claim that good light was identical. Measured through the whole
+  room against main (§2.21's A/B, 24 sessions on the user's own 360s) it was not: on one clip the back
+  went out ~300ms earlier every run, on another the front came back ~250ms later, and on a third it
+  flashed the back for ~0.5s before the shopper had turned; main never did. The full turn is main's,
+  so the model is too; the window is the lighting fix.
+- `pose-focus` pins it (a window whose x is not mapped back fails 4 checks). The engine, the prompts,
+  the reference and the render input are untouched. The skin heuristic is still what votes when the
+  pose abstains (edge-on) - main's.
+
+---
+
+### 2.20 The torso-only turn - "the back, with my legs where they are" (2026-09-30)
+Asked for with the rebuild: "it recognises the turn well when I turn my whole body - I want it to
+recognise it when only my back turns and my legs stay in place". Main reads a turn from the shoulder
+ORDER (it votes only past ±0.25 of torso height) and the shoulder-line |yaw| from the pose model's WORLD
+landmarks (the early turn at 40). On a torso turned over planted legs both go quiet: the shoulders
+overlap in the image, so the order abstains, and the world depth - compressed by BlazePose and kept
+coherent with legs that face the lens - stays under 40, so nothing fires and the lock stays FRONT.
+- **What tells them apart, measured:** thirteen recorded full 360s, every frame through the room's lite
+  model - a whole-body turn narrows the shoulders and the hips TOGETHER in the image (wherever the
+  shoulders were down to 20% of their square-on width, the hips were at 31% or less), while a torso
+  turned over planted legs narrows the shoulders and leaves the hips wide.
+- **The rule (`app.js`, THE TORSO-ONLY TURN, measurement only):** the shopper's square-on widths and
+  torso height are learned from readings the shoulder order already calls a side; shoulders at or under
+  `TWIST_SHOULDER_MAX` (0.2) of theirs while the hips keep `TWIST_HIP_MIN` (0.7), on a torso of its usual
+  height, `TWIST_READINGS` (2) in a row. While it holds the pose vote says BACK where the order abstains
+  (on the FaceDetector path only where no face was found) and the published |yaw| is acos(shoulder
+  ratio) when larger than the world one. **`lib/orient-engine.js` was not touched** - main's rules decide
+  on those readings, so no Worker deploy is needed for it. `?twist=0` is main's measurement; a TEST
+  record logs every on/off (`twist`) with the two ratios.
+- **Pinned by `torso-twist`:** the rule on literals; the twelve cleanly tracked recordings
+  (`test/torso-twist-poses.json`, 698 readings) fire it 0 times and a loosened rule does fire on them;
+  through the real engine a scripted torso-only turn sends BACK during the hold and FRONT after the
+  release, and `?twist=0` sends nothing (the report). The live room on four of the 360s logged no
+  activation, and §2.21's A/B keeps main's swap timing.
+- **Not yet measured on a real torso-only turn** - no recording of one existed. The first TEST sessions
+  of one are the check: their `twist` events and `shR`/`hipR` say whether a real twist reaches the bars.
+
+### 2.21 This branch is main (bd766b2) + the hiding, rebuilt 2026-09-30 - and how that was proven
+"Take the version on main now, give it all the code hiding, and make sure it works exactly the same;
+then add the display improvements, make sure the interface isn't laggy, improve the detection."
+`hide/main-v2` was cut from origin/main (bd766b2, the store size guides - which the old hiding branch
+never had) and 1cb8c2d (the hiding at "main one to one again", §2.17) merged in; the display
+improvements came from the approved f275ab4 WITHOUT its prompt edits; nothing of the solo experiment.
+- **bd766b2's stored-chart pick, aliases, overlay token map and Phase 0 comparison moved into
+  `lib/sizing.js`** with the rest of the fit; the browser fetches `/api/store-size-chart` as main does and
+  forwards the adult charts raw. The Phase 0 summary describes our bands, so it goes to the support view
+  only. The scanner's DOM reader left the widget with the rest of the reader:
+  `scanner/size-chart-reader.src.js` (SHARED_BLOCK_HASH unchanged). Proven: main's in-browser
+  calculateSize() vs the new path over 113,491 cases incl. 20 stored-guide situations - 0 differences in
+  outcome and in main's 2,662 Phase 0 log lines; three mutations caught.
+- **Found in a line-by-line read of every browser line the hiding added:** the render client was created
+  with `telemetry:false`, which in SDK 0.1.5 also switched off its stats loop. Created as main does now
+  (only the console logger silenced); the build refuses `telemetry:!1`.
+- **The whole-room A/B** (scratch harness, re-runnable): main's worktree vs this branch's MINIFIED build,
+  the user's own recorded 360s as the camera (a getUserMedia swap - a sensor), the real pose model, a
+  fake render SDK served to both at the network layer that records every connect option, dispatch
+  (prompt + image hashes, time in the clip), input frame and long task. Base: identical wire (model,
+  options, prompts, images, 10fps), swap timings within main's own run-to-run spread (the pose loop and
+  the orientation tick are two timers whose phase is random per run - proven by shifting it), connect
+  and reveal the same. With the pose warm-up paid in preview for everyone, connect was 793ms vs 1186
+  and the reveal ~0.5s sooner - but that moved the pose readings' phase against a turn, and on one clip
+  a 30-degree look (a documented cost of main's 40-degree early turn) swapped and withdrew at some
+  phases where main never did (4 of ~26 runs vs 0 of 11; 0 of 6 with the warm-up off). So the warm-up
+  runs ONLY under a self-timer (the countdown must not stall on it): with the timer off, go-live is
+  main's to the millisecond, its ~430ms first inference under the loading overlay as on main.
+- **The full pose model was measured the same way and taken out** (§2.19): it changed full-turn timing.
+- **prompts:** `trace:prompt --json` byte-identical to main's; `prompt-engine` on main's pin.
 
 ## 3. Cross-file lockstep
 

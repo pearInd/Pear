@@ -391,6 +391,17 @@ export const CONFIG = Object.freeze({
      would defeat the feature. Every failure to load degrades to the native
      FaceDetector engine the orientation watcher already runs. */
   POSE_WASM_BASE: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm",
+  /* LITE - main's model, on purpose (2026-09-30). The full model was tried on 2026-09-29 for a
+     backlit session (lite read that shopper's shoulders the wrong way round for the first second,
+     full read them correctly), with good light claimed identical on four sessions. Measured again
+     on 2026-09-30 through the whole room (a real clip as the camera, the real pose model, a fake
+     render SDK, 24 sessions against main): it is NOT identical on full turns - on one recorded 360
+     the back went out ~300ms earlier on every run, on another the front came back ~250ms later,
+     and on a third it flashed the back for ~0.5s at 1.9s, before the shopper had turned at all;
+     main (lite) never did. The full turn is main's and stays main's, so the model is too. What
+     fixes the backlit / far-back shopper is detectPoseFrame()'s FOCUS WINDOW (it only opens
+     when the whole frame finds no body - never in the good-light sessions above), and that
+     stays. */
   POSE_MODEL_URL: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/" +
                   "pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
   POSE_TASKS_MODULE: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14",

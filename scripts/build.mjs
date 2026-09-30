@@ -44,6 +44,8 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync }
 import { join, dirname, resolve, relative, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { apiFingerprint } from "./sync-api-version.mjs";
+import { API_VERSION } from "../lib/api-version.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -155,6 +157,9 @@ write(SDK_OUT, sdkResult.outputFiles[0].text);
    fails, loudly enough to be seen in the Vercel build log. A wss:// URL only - except that
    a QA build may point at a local `wrangler dev` (ws://localhost / 127.0.0.1) to drive the
    Worker itself through the visual gate. */
+/* The API fingerprint must describe the modules being shipped - a stale one would make the room
+   reject every answer of a correctly deployed edge (or accept an old one). */
+if (API_VERSION !== apiFingerprint()) fail("lib/api-version.js is stale - run: npm run sync:api-version");
 const ORIENT_URL = String(process.env.PEAR_ORIENT_URL || "").trim();
 const ORIENT_URL_OK = /^wss:\/\/[^\s/?#]+(\/[^\s?#]*)?$/.test(ORIENT_URL) ||
   (QA && /^ws:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/[^\s?#]*)?$/.test(ORIENT_URL));
@@ -180,6 +185,9 @@ const JS_OPTS = {
        Worker in production. Empty means the page's own origin at /orient, which is what
        local servers and the QA build's harness serve. */
     PEAR_ORIENT_URL: JSON.stringify(ORIENT_URL),
+    /* The fingerprint of lib/prompts.js + lib/sizing.js this build was made with - postPearApi()
+       takes an edge answer only when the Worker's X-Pear-Api matches it (scripts/sync-api-version.mjs). */
+    PEAR_API_VERSION: JSON.stringify(API_VERSION),
   },
 };
 

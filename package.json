@@ -23,6 +23,7 @@
     "qa:visual:dist": "node scripts/build.mjs --qa && PEAR_VISUAL_OVERLAY=dist-qa npm run qa:visual",
     "trace:prompt": "node scripts/trace-prompt.mjs lib/prompts.js",
     "sync:size-chart-parser": "node scripts/sync-size-chart-parser.mjs",
+    "sync:api-version": "node scripts/sync-api-version.mjs",
     "scan:size-charts": "node scanner/scan-store.js --size-charts",
     "prepare": "husky"
   },

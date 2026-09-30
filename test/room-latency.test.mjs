@@ -37,19 +37,20 @@ console.log("── §1 where the edge is ──");
 console.log("\n── §2 the edge first, the origin on any doubt ──");
 {
   const src = APP.slice(APP.indexOf("const EDGE_API_TIMEOUT_MS"), APP.indexOf("async function requestSizeVerdict(evidence) {"));
-  async function scenario(edgeBehaviour, calls = 1, orient = "wss://rt.pear-ai.io/orient") {
+  async function scenario(edgeBehaviour, calls = 1, orient = "wss://rt.pear-ai.io/orient", { built = undefined, stamp = undefined } = {}) {
     const log = [];
     const fetch = async (u, init) => {
       log.push(u);
       if (u.startsWith("https://rt.pear-ai.io/")) {
         if (edgeBehaviour === "throw") throw new Error("offline");
         if (edgeBehaviour === "hang") return new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(new Error("aborted"))));
-        return { ok: edgeBehaviour === "ok", status: edgeBehaviour === "ok" ? 200 : 503, from: "edge" };
+        return { ok: edgeBehaviour === "ok", status: edgeBehaviour === "ok" ? 200 : 503, from: "edge",
+          headers: { get: (h) => (h === "X-Pear-Api" ? stamp ?? null : null) } };
       }
       return { ok: true, status: 200, from: "origin" };
     };
-    const api = new Function("fetch", "PEAR_ORIENT_URL", "setTimeout", "clearTimeout", src + "\nreturn { postPearApi, EDGE_API_TIMEOUT_MS };")(
-      fetch, orient, (f, ms) => setTimeout(f, Math.min(ms, 30)), clearTimeout);
+    const api = new Function("fetch", "PEAR_ORIENT_URL", "setTimeout", "clearTimeout", "PEAR_API_VERSION", src + "\nreturn { postPearApi, EDGE_API_TIMEOUT_MS };")(
+      fetch, orient, (f, ms) => setTimeout(f, Math.min(ms, 30)), clearTimeout, built);
     const out = [];
     for (let i = 0; i < calls; i++) out.push((await api.postPearApi("size", "{}")).from);
     return { log, out };
@@ -65,6 +66,14 @@ console.log("\n── §2 the edge first, the origin on any doubt ──");
   check("a hanging edge is abandoned at the timeout and falls back", hang.out.join() === "origin", hang.log.join(" "));
   const none = await scenario("ok", 1, null);   // null, not undefined: undefined would take the default
   check("no PEAR_ORIENT_URL: the origin only, exactly as before", none.out.join() === "origin" && none.log.join() === "/api/size", none.log.join(" "));
+  /* 2026-09-30: a built room takes an edge answer only from the engines it was built with. */
+  const stale = await scenario("ok", 2, undefined, { built: "aaaa1111bbbb2222" });
+  check("a BUILT room and an edge with no X-Pear-Api stamp (an older deploy) -> the origin, and the edge is skipped after",
+    stale.out.join() === "origin,origin" && stale.log.filter((u) => u.startsWith("https://rt.")).length === 1, stale.log.join(" "));
+  const other = await scenario("ok", 1, undefined, { built: "aaaa1111bbbb2222", stamp: "cccc3333dddd4444" });
+  check("...and one stamped with DIFFERENT engines -> the origin", other.out.join() === "origin", other.log.join(" "));
+  const same = await scenario("ok", 2, undefined, { built: "aaaa1111bbbb2222", stamp: "aaaa1111bbbb2222" });
+  check("...one stamped with the SAME engines is used, and the origin never asked", same.out.join() === "edge,edge" && same.log.every((u) => u.startsWith("https://rt.")), same.log.join(" "));
 }
 
 console.log("\n── §3 the fetchers use it ──");

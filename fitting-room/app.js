@@ -2497,7 +2497,15 @@ async function postPearApi(route, bodyText) {
     const timer = ctl ? setTimeout(() => ctl.abort(), EDGE_API_TIMEOUT_MS) : null;
     try {
       const resp = await fetch(edge, ctl ? { ...init, signal: ctl.signal } : init);
-      if (resp.ok) return resp;
+      /* ...and only an answer from the SAME engines this room was built with (2026-09-30). The
+         Worker runs whatever was last `wrangler deploy`ed; measured that day, it still said "top" on
+         every back view where the room's own engine says "shirt". A build stamps PEAR_API_VERSION
+         (lib/api-version.js); the Worker stamps X-Pear-Api. A missing or different stamp is an
+         older deploy: ask the origin, which always runs this build's code. The source room (no
+         stamp) takes the edge as before. */
+      const want = typeof PEAR_API_VERSION === "string" ? PEAR_API_VERSION : null;
+      const sameEngine = !want || (resp.headers && typeof resp.headers.get === "function" && resp.headers.get("X-Pear-Api") === want);
+      if (resp.ok && sameEngine) return resp;
       _edgeApiDownAt = Date.now();
     } catch (_) {
       _edgeApiDownAt = Date.now();
@@ -8014,6 +8022,101 @@ function poseFacingVote({ enabled = ORIENT_POSE_FACING, sep, at, now }) {
   return sep >= ORIENT_POSE_FACING_MARGIN ? "front" : sep <= -ORIENT_POSE_FACING_MARGIN ? "back" : null;
 }
 
+/* ══ THE TORSO-ONLY TURN - "the back, with my legs where they are" (2026-09-30) ══════════════════
+   REPORTED: "it recognises the turn well when I turn my whole body - I want it to recognise it when
+   only my back turns and my legs stay in place."
+   WHY MAIN MISSES IT. A turn is read from two pose signals: the shoulder ORDER (above - it votes only
+   past ±ORIENT_POSE_FACING_MARGIN of torso height) and the shoulder-line |yaw| from the model's WORLD
+   landmarks (the early turn fires at 40 rising). On a torso turned over planted legs both go quiet:
+   the shoulders overlap in the image, so the order abstains, and the world depth is what BlazePose
+   compresses (turn-yaw-window's k 0.6-1) and keeps coherent with legs that still face the lens - so
+   the early turn does not fire, no vote says BACK, and the lock stays FRONT.
+   WHAT TELLS THE TWO APART, measured 2026-09-30 on thirteen recorded full 360s (the room's lite model
+   at 512x288, every frame; the full model read the same): a WHOLE-BODY turn narrows the shoulders and
+   the hips TOGETHER in the image - wherever the shoulders were down to 20% of their square-on width,
+   the hips were down to 31% of theirs or less (46% with the full model) - while a torso turned over
+   planted legs narrows the shoulders and leaves the hips wide. IMAGE widths, like the shoulder order: not the compressed depth,
+   and label-independent in magnitude.
+   SO: the shopper's own square-on shoulder/hip widths and torso height are learned from readings that
+   clearly face (or clearly face away from) the lens; a reading with the shoulders at or under
+   TWIST_SHOULDER_MAX of theirs while the hips keep TWIST_HIP_MIN, on a torso of its usual height,
+   TWIST_READINGS times in a row, is a torso turned away. While that holds, the pose vote says BACK
+   where the order abstains, and the published |yaw| is the image angle acos(shoulder ratio) when it
+   exceeds the world one. Nothing else: the ENGINE decides with main's rules on those readings (the
+   early turn, the corroborated flip, the return) - no rule was added to it.
+   A FULL TURN NEVER GETS HERE: on the twelve cleanly tracked recordings the rule fired 0 times; the
+   thirteenth, a clip the whole frame barely finds, read degenerate torsos (a height of 0.02 against
+   0.08) - the height check is for those. ?twist=0 turns it off for an A/B; a TEST record logs every
+   on/off with the two ratios. torso-twist pins the rule and the whole-turn clips' readings. */
+const TWIST_SHOULDER_MAX = 0.2;     // shoulder width, as a share of the shopper's square-on width
+const TWIST_HIP_MIN = 0.7;          // hip width that must remain, as a share of theirs
+const TWIST_READINGS = 2;           // consecutive readings before it counts
+const TWIST_BASELINE_MIN = 5;       // square-on readings learned before the rule may fire
+const TWIST_TORSO_BAND = [0.7, 1.4];   // torso height vs the learned one - a degenerate read is not a pose
+const TWIST_ENABLED = (() => {
+  try { return new URLSearchParams(location.search).get("twist") !== "0"; } catch (_) { return true; }
+})();
+/** A fresh twist state - the pose loop keeps one per page (_poseTwist below). */
+function makeTwistState() {
+  return { sh0: 0, hip0: 0, th0: 0, n: 0, streak: 0, active: false, at: 0, yawDeg: 0, shR: null, hipR: null };
+}
+/** Image-space torso widths of the primary subject, normalised by torso height, or null. */
+function poseTorsoWidths(result) {
+  const sets = result && Array.isArray(result.landmarks) ? result.landmarks : null;
+  const subject = sets && sets.length && typeof primaryPoseIndex === "function" ? primaryPoseIndex(sets) : (sets && sets.length ? 0 : -1);
+  const lm = subject >= 0 ? sets[subject] : null;
+  if (!Array.isArray(lm) || typeof torsoReadable !== "function" || !torsoReadable(lm)) return null;
+  const ls = lm[POSE_LANDMARK.LEFT_SHOULDER], rs = lm[POSE_LANDMARK.RIGHT_SHOULDER];
+  const lh = lm[POSE_LANDMARK.LEFT_HIP], rh = lm[POSE_LANDMARK.RIGHT_HIP];
+  const th = Math.abs((lh.y + rh.y) / 2 - (ls.y + rs.y) / 2);
+  if (!(th > 1e-3)) return null;
+  return { sh: (ls.x - rs.x) / th, hip: (lh.x - rh.x) / th, th };
+}
+/** One reading into the state. Pure over (state, reading) - torso-twist drives it with literals.
+ *  @param {{sh:number, hip:number, th:number}|null} w  poseTorsoWidths()
+ *  @param {number|null} worldYawAbs  the world-landmark shoulder |yaw| of the same reading
+ *  @returns {boolean} whether the torso reads as turned away over planted legs */
+function torsoTwistStep(s, w, worldYawAbs, now, enabled = TWIST_ENABLED) {
+  if (!enabled || !w) { s.streak = 0; s.active = false; return false; }
+  const ash = Math.abs(w.sh), ahip = Math.abs(w.hip);
+  /* Learn the square-on widths from readings the shoulder ORDER already calls a side - facing or
+     facing away, where both widths are at their full size - and a world yaw that agrees. */
+  if (ash >= ORIENT_POSE_FACING_MARGIN && (worldYawAbs === null || worldYawAbs < 20)) {
+    const a = s.n ? 0.2 : 1;
+    s.sh0 = s.sh0 * (1 - a) + ash * a; s.hip0 = s.hip0 * (1 - a) + ahip * a; s.th0 = s.th0 * (1 - a) + w.th * a;
+    s.n++;
+  }
+  s.shR = s.sh0 ? ash / s.sh0 : null;
+  s.hipR = s.hip0 ? ahip / s.hip0 : null;
+  const usual = s.th0 > 0 && w.th >= s.th0 * TWIST_TORSO_BAND[0] && w.th <= s.th0 * TWIST_TORSO_BAND[1];
+  const twisted = s.n >= TWIST_BASELINE_MIN && usual && s.shR !== null && s.hipR !== null &&
+    s.shR <= TWIST_SHOULDER_MAX && s.hipR >= TWIST_HIP_MIN;
+  s.streak = twisted ? s.streak + 1 : 0;
+  s.active = s.streak >= TWIST_READINGS;
+  if (s.active) { s.at = now; s.yawDeg = Math.acos(Math.max(0, Math.min(1, s.shR))) * 180 / Math.PI; }
+  return s.active;
+}
+let _poseTwist = makeTwistState();
+/** The pose loop's hook: one inference in, the published |yaw| out (the world one unless a torso-only
+ *  turn is being read). Logs and records the on/off edges. */
+function torsoTwistObserve(result, worldYawAbs, now) {
+  const was = _poseTwist.active;
+  const on = torsoTwistStep(_poseTwist, poseTorsoWidths(result), worldYawAbs, now);
+  if (on !== was) {
+    const r2 = (x) => (x === null ? null : Math.round(x * 100) / 100);
+    if (ORIENT_DEBUG) {
+      console.log(`[PEAR][ORIENT] torso-only turn ${on ? "ON" : "off"} - shoulders ${r2(_poseTwist.shR)} / hips ${r2(_poseTwist.hipR)}` +
+        ` of their square-on width${on ? ` (image angle ${Math.round(_poseTwist.yawDeg)}°)` : ""}`);
+    }
+    if (typeof traceOrient === "function") traceOrient("twist", { on, shR: r2(_poseTwist.shR), hipR: r2(_poseTwist.hipR) });
+  }
+  return on && Number.isFinite(worldYawAbs) ? Math.max(worldYawAbs, _poseTwist.yawDeg) : worldYawAbs;
+}
+/** "back" while a fresh torso-only turn holds (the vote's freshness bar), else null. */
+function torsoTwistVote(now) {
+  return _poseTwist.active && now - _poseTwist.at <= ORIENT_YAW_FRESH_MS ? "back" : null;
+}
+
 /* makeTurnYawWindow(), orientFlipDecision(), orientPredictBack(), makeEarlyTurnTrigger() - moved to
    lib/orient-engine.js (see THE ORIENTATION DECISION IS SERVER-SIDE above). */
 
@@ -9492,6 +9595,9 @@ function createOrientationWatcher() {
           const corroboration = skinRatioVote(px);
           // Both engines agree: squarely turned away, not mid-turn.
           if (corroboration === "back") vote = "back";
+          /* ...or the pose reads a torso turned away over planted legs (THE TORSO-ONLY TURN):
+             no face, and the torso itself says it - never on a whole-body turn. */
+          else if (typeof torsoTwistVote === "function" && torsoTwistVote(Date.now())) vote = "back";
           else {
             // Skin says "there is a face here" (or is ambiguous) while the detector found
             // none - the likeliest reading is a MISSED face, not a turned back. Abstain.
@@ -9511,8 +9617,11 @@ function createOrientationWatcher() {
          FACE visibility - build 128's vote - cannot tell the sides apart). It is not a face, so
          faceSeen stays false: the face streak and the profile score keep meaning what they say.
          When the shoulders abstain (edge-on, torso unreadable) the skin heuristic runs as before. */
-      const poseVote = poseFacingVote({ sep: _poseFacingSep, at: _poseFacingAt, now: Date.now() });
-      if (poseVote) { vote = poseVote; posed = true; lastConfidence = Math.min(1, Math.abs(_poseFacingSep)); lastSkinRatio = null; }
+      /* ...and where the order abstains, a torso turned away over planted legs (see THE TORSO-ONLY
+         TURN) votes BACK from the same pose reading - never on a whole-body turn. */
+      const poseVote = poseFacingVote({ sep: _poseFacingSep, at: _poseFacingAt, now: Date.now() }) ||
+        (typeof torsoTwistVote === "function" ? torsoTwistVote(Date.now()) : null);
+      if (poseVote) { vote = poseVote; posed = true; lastConfidence = Math.min(1, Math.max(Math.abs(_poseFacingSep ?? 0), ORIENT_POSE_FACING_MARGIN)); lastSkinRatio = null; }
       else vote = skinRatioVote(px);
     }
 
@@ -14422,6 +14531,9 @@ function setLiveTimer(seconds) {
   liveTimerSec = LIVE_TIMER_CHOICES.includes(Number(seconds)) ? Number(seconds) : 0;
   try { localStorage.setItem(LIVE_TIMER_PREF_KEY, String(liveTimerSec)); } catch (_) { /* a per-viewer convenience */ }
   renderLiveTimer();
+  /* A timer is set while the preview is open: pay the pose model's first inference now, not under
+     the countdown (see openCameraFromButton()). typeof-guarded - live-timer runs this standalone. */
+  if (liveTimerSec > 0 && typeof warmPoseInference === "function" && typeof localStream !== "undefined" && localStream) warmPoseInference();
 }
 
 function setLiveTimerMenu(open) {
@@ -14719,7 +14831,13 @@ function openCameraFromButton() {
        "open the camera" card does not flash between the guide leaving and the preview arriving. */
     card().classList.remove("show-guide");
     if (ok) requestAnimationFrame(scrollToCamera);
-    if (ok) warmPoseInference();
+    /* ONLY UNDER A SELF-TIMER (2026-09-30). With the timer off the go-live is main's, to the
+       millisecond - including where the pose model's first inference lands (its presence gate,
+       under the loading overlay). Warming it here moved the reveal ~0.4s earlier, which also moved
+       the phase of the pose readings against a turn: measured on the user's own 360s, a 30-degree
+       look it had never swapped on main swapped (and withdrew) at some phases. A timer needs the
+       warm-up (a countdown must not stall on it), so setting one warms it (setLiveTimer). */
+    if (ok && liveTimerSec > 0) warmPoseInference();
   });
 }
 
@@ -16902,7 +17020,90 @@ let _lastPoseTimestamp = 0;
 function detectPoseFrame(detector, video) {
   const ts = Math.max(performance.now(), _lastPoseTimestamp + 1);
   _lastPoseTimestamp = ts;
-  return detector.detectForVideo(video, ts);
+  /* The whole frame, exactly as always - unless the whole frame has stopped finding a body, in
+     which case a window around the shopper (see POSE FOCUS WINDOW below). One call either way. */
+  const win = typeof poseFocusWindow === "function" ? poseFocusWindow(video) : null;
+  const result = detector.detectForVideo(win ? win.canvas : video, ts);
+  return typeof poseFocusSettle === "function" ? poseFocusSettle(result, video, win) : result;
+}
+
+/* ── POSE FOCUS WINDOW - "it has to work whatever the lighting" (2026-09-29) ─────────────────────
+   REPORTED with a clip from a living room with a bright window behind the shopper. Its flight
+   record: in 24 seconds the pose model never found the body once - no yaw, no shoulder order,
+   nothing - so the presence gate held the fitting 9 seconds past the timer's zero, the orientation
+   fell back to the 96px skin heuristic, which cannot read a far-away backlit head, and that
+   claimed a PROFILE for four seconds (the side-view prompt on a shopper facing the lens: "it keeps
+   changing the shape of the shirt") and then a BACK while they still faced front.
+   REPLAYED through the model on the clip itself: the shopper is visible and upright in every
+   frame, and the whole 512x288 frame finds them in none of the first 32 frames (15 of 47 in all) -
+   but a square the frame's height, around them, finds them in 41 of 47. The detector shrinks a 16:9 frame to 224px
+   before it looks, and a full-length figure in a wide, busy, backlit room ends up ~55px tall - too
+   small; the same pixels in a square window are ~100px. It was never the light itself.
+   SO: when the whole frame finds no body for POSE_FOCUS_AFTER_MISSES inferences in a row, the next
+   ones look in a square window (centre first, then either side), and once a body is found the
+   window follows the hips. The landmarks are mapped back to whole-frame coordinates (the window
+   is the frame's full height, so y is untouched; x and the image-space z scale by side/width;
+   worldLandmarks are metric and hip-centred - untouched), so every consumer - the presence gate,
+   the orientation's yaw and shoulder order, the topology monitor, the best frame - reads exactly
+   what it would have read had the whole frame found the body. POSE_FOCUS_LOSE_MISSES empty windows
+   hand back to the whole frame. Replayed on five recorded sessions (with the full model, see
+   POSE_MODEL_URL): the four where the whole frame already found the body are identical - the
+   window never opens; the backlit one reads FRONT for its first 2.3s, the turn, then BACK. A
+   landscape frame only: a portrait one already gives the body the height.
+   Still ONE inference per call - the window replaces the whole frame, it is never a second look. */
+const POSE_FOCUS_AFTER_MISSES = 2;
+const POSE_FOCUS_LOSE_MISSES = 3;
+const POSE_FOCUS_SCAN = [0.5, 0.3, 0.7];   // window centres tried, as a share of the frame width
+let _poseFocus = null;                     // { cx, scan, misses, found } while a window is in use
+let _poseFullMisses = 0;
+let _poseFocusCanvas = null;
+
+/** The window to infer on this call, or null for the whole frame. */
+function poseFocusWindow(video) {
+  if (!_poseFocus) return null;
+  const vw = video && video.videoWidth, vh = video && video.videoHeight;
+  if (!(vw > vh * 1.2) || typeof document === "undefined") { _poseFocus = null; _poseFullMisses = 0; return null; }
+  const side = vh;
+  const sx = Math.max(0, Math.min(vw - side, Math.round(_poseFocus.cx * vw - side / 2)));
+  if (!_poseFocusCanvas) _poseFocusCanvas = document.createElement("canvas");
+  const c = _poseFocusCanvas;
+  if (c.width !== side) c.width = side;
+  if (c.height !== side) c.height = side;
+  c.getContext("2d").drawImage(video, sx, 0, side, side, 0, 0, side, side);
+  return { canvas: c, sx, side, vw };
+}
+
+/** Book-keeping after an inference; a window's landmarks come back in whole-frame coordinates. */
+function poseFocusSettle(result, video, win) {
+  const found = !!(result && Array.isArray(result.landmarks) && result.landmarks.length);
+  if (!win) {
+    const vw = video && video.videoWidth, vh = video && video.videoHeight;
+    if (found || !(vw > vh * 1.2)) { _poseFullMisses = 0; return result; }
+    if (++_poseFullMisses >= POSE_FOCUS_AFTER_MISSES) {
+      _poseFocus = { cx: POSE_FOCUS_SCAN[0], scan: 0, misses: 0, found: false };
+      if (typeof ORIENT_DEBUG !== "undefined" && ORIENT_DEBUG) console.log("[PEAR] pose: no body in the whole frame - looking in a window around the shopper");
+    }
+    return result;
+  }
+  if (found) {
+    const k = win.side / win.vw, off = win.sx / win.vw;
+    const landmarks = result.landmarks.map((set) => set.map((p) => ({ ...p, x: off + p.x * k, z: (p.z ?? 0) * k })));
+    const L = landmarks[0];
+    const hipX = L && L[23] && L[24] ? (L[23].x + L[24].x) / 2 : NaN;
+    if (Number.isFinite(hipX)) _poseFocus.cx = Math.max(0, Math.min(1, hipX));
+    _poseFocus.misses = 0;
+    _poseFocus.found = true;
+    return { ...result, landmarks };
+  }
+  _poseFocus.misses++;
+  if (!_poseFocus.found) {
+    _poseFocus.scan++;
+    if (_poseFocus.scan >= POSE_FOCUS_SCAN.length) { _poseFocus = null; _poseFullMisses = 0; }
+    else _poseFocus.cx = POSE_FOCUS_SCAN[_poseFocus.scan];
+  } else if (_poseFocus.misses >= POSE_FOCUS_LOSE_MISSES) {
+    _poseFocus = null; _poseFullMisses = 0;
+  }
+  return result;
 }
 
 /* The loaded PoseLandmarker, as a memoized PROMISE - so N callers during preload share
@@ -17240,9 +17441,14 @@ function startPresenceWatcher() {
       const facingSep = poseShoulderFacing(result);
       if (facingSep !== null) { _poseFacingSep = facingSep; _poseFacingAt = now; }
       else _poseTorsoLostAt = now;   // the turn window reads the gap from this - the side-view pass, lib/orient-engine.js
+      /* A torso turned over planted legs publishes the image angle when it exceeds the world one
+         (THE TORSO-ONLY TURN); every other reading publishes exactly what it always did. */
+      const yawAbsNow = sig && Number.isFinite(sig.yaw)
+        ? (typeof torsoTwistObserve === "function" ? torsoTwistObserve(result, Math.abs(sig.yaw), now) : Math.abs(sig.yaw))
+        : null;
       if (sig && Number.isFinite(sig.yaw)) {
-        _torsoYawRise = orientYawRise(_torsoYawAbs, _torsoYawAt, Math.abs(sig.yaw), now);   // before the publish overwrites the previous reading
-        _torsoYawAbs = Math.abs(sig.yaw);
+        _torsoYawRise = orientYawRise(_torsoYawAbs, _torsoYawAt, yawAbsNow, now);   // before the publish overwrites the previous reading
+        _torsoYawAbs = yawAbsNow;
         _torsoYawAt  = now;
         /* THE THIRD CONSUMER of this one reading (after the topology monitor and the
            orientation watcher's corroboration): bank the frame if this is the most

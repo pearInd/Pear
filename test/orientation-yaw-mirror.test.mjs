@@ -150,7 +150,8 @@ console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
     "module scope would carry a stale pose across item swaps");
   /* One MediaPipe inference per tick is the entire point of the shared sampler. */
   check("yaw is published from the EXISTING pose signature, not a second inference",
-    /_torsoYawAbs = Math\.abs\(sig\.yaw\);/.test(APP),
+    /* the same inference's signature; a torso-only turn reads the same `result` (THE TORSO-ONLY TURN) */
+    /torsoTwistObserve\(result, Math\.abs\(sig\.yaw\), now\) : Math\.abs\(sig\.yaw\)\)/.test(APP) && /_torsoYawAbs = yawAbsNow;/.test(APP),
     "a second inference per tick is real battery and thermal cost on a phone");
 }
 

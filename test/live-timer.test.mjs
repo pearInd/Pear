@@ -279,12 +279,17 @@ console.log("\n── §9 the pose model's first inference is never paid inside 
   check("the warm-up runs the first inferences off to the side, and never once the fitting is on screen",
     /loadPoseLandmarker\(\)\.then/.test(warm) && /detectPoseFrame\(detector, video\)/.test(warm) &&
     /if \(billingStarted\) return;/.test(warm) && /if \(_poseInferenceWarmed\) return;/.test(warm));
-  check("...it runs when the camera opens in preview",
-    /if \(ok\) warmPoseInference\(\);/.test(fnSrc("function openCameraFromButton() {")));
+  /* 2026-09-30: only under a self-timer - with it off, go-live is main's to the millisecond. */
+  check("...it runs when the camera opens in preview - only with a timer set",
+    /if \(ok && liveTimerSec > 0\) warmPoseInference\(\);/.test(fnSrc("function openCameraFromButton() {")) &&
+    /if \(liveTimerSec > 0 && typeof warmPoseInference === "function" && typeof localStream !== "undefined" && localStream\) warmPoseInference\(\);/.test(fnSrc("function setLiveTimer(seconds) {")));
   const live = fnSrc("async function goLive() {");
   check("...and at a timer's go-live, a backstop for a press before the preview warm-up finished",
     /runGoCountdown\(liveTimerSec, liveTimer\);[\s\S]{0,300}warmPoseInference\(\);/.test(live));
-  check("...and it lives outside the timer block (the timer still touches no sensor)", !/warmPoseInference|detectPoseFrame/.test(BLOCK.replace(/\/\*[\s\S]*?\*\//g, "")));
+  const code = BLOCK.replace(/\/\*[\s\S]*?\*\//g, "");
+  check("...and it lives outside the timer block: the block runs no inference, and only ASKS for the warm-up, typeof-guarded",
+    !/detectPoseFrame|function warmPoseInference/.test(code) &&
+    (code.match(/warmPoseInference\(/g) || []).length === (code.match(/typeof warmPoseInference === "function"[^;]*warmPoseInference\(\)/g) || []).length);
 }
 
 console.log(fails === 0 ? "\nlive-timer: OK" : `\nlive-timer: ${fails} FAILED`);

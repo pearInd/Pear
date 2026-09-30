@@ -32,6 +32,9 @@
 import { createOrientSession } from "../../../lib/orient-protocol.js";
 import { computeSizeVerdict, sanitizeSizeEvidence } from "../../../lib/sizing.js";
 import { promptForRequest, sanitizePromptRequest } from "../../../lib/prompts.js";
+/* The fingerprint of the two modules above - stamped on every /size and /prompt answer so the room
+   can tell an edge running an older deploy from one running its own code (scripts/sync-api-version.mjs). */
+import { API_VERSION } from "../../../lib/api-version.js";
 
 const MAX_MSGS_PER_SEC = 120;
 const MAX_BODY_CHARS = 65536;
@@ -52,6 +55,7 @@ function corsHeaders(origin) {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Expose-Headers": "X-Pear-Api",
     "Access-Control-Max-Age": "7200",
     "Vary": "Origin",
   };
@@ -82,7 +86,7 @@ export async function handleApi(request, env, route) {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
   if (request.method !== "POST") return new Response("method not allowed", { status: 405, headers: cors });
   const json = (body, status = 200) => new Response(JSON.stringify(body), {
-    status, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" } });
+    status, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store", "X-Pear-Api": API_VERSION } });
   let body;
   try {
     const text = await request.text();

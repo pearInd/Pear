@@ -424,9 +424,13 @@ console.log("\n── §5 THE WIRING ──");
   check("the pose loop no longer waits on a re-drape - it keeps publishing yaw through the upload",
     /if \(step\.state === "shift"\) reconditionForTopology\(step\)\.catch\(/.test(pose) &&
     !/await reconditionForTopology\(/.test(pose));
+  /* Since 2026-09-30 the published value is yawAbsNow - Math.abs(sig.yaw) itself unless a torso-only
+     turn is being read (THE TORSO-ONLY TURN in app.js; torso-twist pins that it never engages on a
+     whole-body turn). */
   check("yaw is published on EVERY pose tick, not only on the topology cadence",
-    pose.indexOf("_torsoYawAbs = Math.abs(sig.yaw);") !== -1 &&
-    pose.indexOf("_torsoYawAbs = Math.abs(sig.yaw);") < pose.indexOf("now - lastTopologyAt >= BODY_TOPOLOGY_SAMPLE_MS"));
+    pose.indexOf("_torsoYawAbs = yawAbsNow;") !== -1 &&
+    /const yawAbsNow = sig && Number\.isFinite\(sig\.yaw\)\s*\?\s*\(typeof torsoTwistObserve === "function" \? torsoTwistObserve\(result, Math\.abs\(sig\.yaw\), now\) : Math\.abs\(sig\.yaw\)\)/.test(pose) &&
+    pose.indexOf("_torsoYawAbs = yawAbsNow;") < pose.indexOf("now - lastTopologyAt >= BODY_TOPOLOGY_SAMPLE_MS"));
   const recon = SRC.slice(SRC.indexOf("async function reconditionForTopology("), SRC.indexOf("/* ── end body-presence gate ── */"));
   check("...and the dispatcher re-checks the flag itself (belt and braces, like its wireBusy check)",
     /if \(orientTurnInProgress\(\)\) \{/.test(recon));
@@ -694,7 +698,8 @@ const MEASURED = { front: 0.76, back: -0.68, frontMirrored: 0.78, backMirrored: 
   const w0 = SRC.indexOf("function createOrientationWatcher()");
   const watcher = WATCHER;
   check("with no FaceDetector, classify() takes the shoulder order BEFORE the skin heuristic, in BOTH directions",
-    /const poseVote = poseFacingVote\(\{ sep: _poseFacingSep, at: _poseFacingAt, now: Date\.now\(\) \}\);/.test(watcher) &&
+    /* the shoulder order FIRST; the torso-only turn only where the order abstains (THE TORSO-ONLY TURN) */
+    /const poseVote = poseFacingVote\(\{ sep: _poseFacingSep, at: _poseFacingAt, now: Date\.now\(\) \}\) \|\|\s*\(typeof torsoTwistVote === "function" \? torsoTwistVote\(Date\.now\(\)\) : null\);/.test(watcher) &&
     /if \(poseVote\) \{[^}]*vote = poseVote;[^}]*posed = true;/.test(watcher) &&
     /else vote = skinRatioVote\(px\);/.test(watcher));
   check("...and a shoulder vote is NOT dressed up as a face - faceSeen stays false for it",
@@ -1957,7 +1962,7 @@ console.log("\n── §12 A TURN THAT IS STARTING OWNS THE WIRE - the late BACK
   const p0 = SRC.indexOf("function startPresenceWatcher");
   const pose = SRC.slice(p0, SRC.indexOf("/* ── end body-presence gate ── */", p0));
   check("the pose tick publishes the rise from the SAME reading, before the publish overwrites the previous one",
-    /_torsoYawRise = orientYawRise\(_torsoYawAbs, _torsoYawAt, Math\.abs\(sig\.yaw\), now\);[^\n]*\n\s*_torsoYawAbs = Math\.abs\(sig\.yaw\);/.test(pose));
+    /_torsoYawRise = orientYawRise\(_torsoYawAbs, _torsoYawAt, yawAbsNow, now\);[^\n]*\n\s*_torsoYawAbs = yawAbsNow;/.test(pose));
   check("...and the re-drape gate is evaluated on that tick, not the orientation tick's",
     /const turnStarting = orientTurnStarting\(now\);\s*\n\s*const step = bodyTopology\.feed\(/.test(pose));
 }

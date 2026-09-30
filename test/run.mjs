@@ -354,6 +354,25 @@
                       old path, an early render waits for zero, 3s counts after the render,
                       a torn-down session is never revealed, and nothing in it touches the
                       session. Run on a fake clock, with two mutations proven to fail it.
+     pose-focus
+                      "It has to work whatever the lighting" (2026-09-29): a far-back shopper in
+                      a wide, backlit frame was never found by the pose model. When the whole
+                      frame finds no body twice, a square window around the shopper is used -
+                      its landmarks mapped back to whole-frame coordinates, following the hips,
+                      handing back after three empty windows; nothing changes while the whole
+                      frame finds the body; one inference per call; the full model is loaded.
+     api-version
+                      The edge answers /size and /prompt from the last deployed copy of the
+                      engines; a stale deploy answered "top" where the room says "shirt"
+                      (2026-09-30). The Worker stamps its answers with the engines' fingerprint
+                      and a built room takes only a matching one - else its own origin.
+     torso-twist
+                      "Recognise it when only my back turns and my legs stay in place"
+                      (2026-09-30): a torso turned away over planted legs - shoulders narrow in
+                      the image, hips stay wide - votes BACK where the shoulder order abstains.
+                      Never on a whole-body turn: twelve recorded 360s replayed, zero activations
+                      (a loosened rule does fire on them); through the real engine the scripted
+                      torso-only turn shows the back and main's measurement does not.
      size-fit-pin
                       The size charts and the fit moved server-side (lib/sizing.js,
                       POST /api/size). The move was proven exact over 1,458,028 cases;
@@ -457,6 +476,9 @@ const SUITES = [
   ["orient-link", "orient-link.test.mjs"],
   ["room-latency", "room-latency.test.mjs"],
   ["live-timer", "live-timer.test.mjs"],
+  ["pose-focus", "pose-focus.test.mjs"],
+  ["torso-twist", "torso-twist.test.mjs"],
+  ["api-version", "api-version.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────
