@@ -33,14 +33,21 @@
       "returns an equal copy" and "returns the base chart" are different promises to the
       caller and only one of them is free.
 
-   §4 THE LOCKSTEP (CLAUDE.md §3). The encoder lives in pear-widget.js and the decoder
-      here; they are one format in two files. §4 round-trips the widget's own
-      encodeSizeChart() output through parseStoreSizeChart(), so a change to either side
-      that the other did not receive fails here rather than in production.
+   §4 THE LOCKSTEP (CLAUDE.md §3). Since 2026-09-26 the widget sends the page's tables
+      RAW (encodeRawSizeChart()) and lib/sizing.js reads them (decodeRawSizeChart() ->
+      readStoreSizeChart() -> encodeSizeChart() -> parseStoreSizeChart()). §4 round-trips
+      the v1 grammar through the decoder, and the widget's own RAW encoder through the
+      server's raw decoder, so a change to either side that the other did not receive
+      fails here rather than in production.
    ============================================================================= */
 import { readFileSync } from "node:fs";
 
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The decoder, the overlay and the fit moved out of the browser on 2026-09-26 - they run
+   server-side from lib/sizing.js now. This suite imports that module for execution and
+   reads its source for the absence checks; app.js is still read for what stayed there
+   (the evidence it sends, the handoff, the widget listener). */
+const LIB = readFileSync(new URL("../lib/sizing.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const PW  = readFileSync(new URL("../widget/pear-widget.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 let fails = 0;
@@ -61,16 +68,11 @@ function extract(src, startMarker, endMarker) {
 const load = (code, exports) =>
   import("data:text/javascript," + encodeURIComponent(code + "\nexport {" + exports.join(",") + "};"));
 
-/* The sizing slice - the same span numeric-pants-sizing.test.mjs already extracts
-   (CLAUDE.md §2.6: these opening lines are an interface, not a coincidence). */
-const SIZING = extract(APP, "const ZARA_SIZE_CHART", "\nfunction onMeasurementKeydown");
 const {
   applyStoreChartOverlay, parseStoreSizeChart, parseSizeList, coreHwPenalty,
   STORE_CHART_CLAMPS, ZARA_SIZE_CHART, ADULT_PANTS_SIZE_CHART,
-} = await load(SIZING, [
-  "applyStoreChartOverlay", "parseStoreSizeChart", "parseSizeList", "coreHwPenalty",
-  "STORE_CHART_CLAMPS", "ZARA_SIZE_CHART", "ADULT_PANTS_SIZE_CHART",
-]);
+  encodeSizeChart, decodeRawSizeChart, readStoreSizeChart, storeChartWire, SIZE_CHART_CLAMPS, RAW_CHART_PREFIX,
+} = await import("../lib/sizing.js");
 
 const KERNEL_KEYS = ["minHeight", "maxHeight", "minWeight", "maxWeight"];
 const kernelOf = (chart) =>
@@ -131,7 +133,7 @@ console.log("\n── §1 height and weight are not writable ──");
      to the overlay later - the same discipline image-first.test.mjs uses on the prompt
      builders. If a future edit needs a height column, it has to delete this test first,
      which is exactly the conversation that should happen. */
-  const fn = extract(APP, "function applyStoreChartOverlay(baseChart, storeRows) {", "\n/**");
+  const fn = extract(LIB, "function applyStoreChartOverlay(baseChart, storeRows) {", "\n/**");
   check("§1.8 applyStoreChartOverlay()'s body never names a height or weight field",
     !/min(?:Height|Weight)|max(?:Height|Weight)/.test(fn),
     (fn.match(/(?:min|max)(?:Height|Weight)/g) || []).join(", "));
@@ -148,7 +150,7 @@ console.log("\n── §2 the overlay moves the size a real body resolves to ─
      the block below, lifted verbatim out of calculateSize().
      ⚠️ CLAUDE.md §2.6 - this start line is now an extract marker. */
   const fineTuneSrc = extract(
-    APP,
+    LIB,
     'const candidates = currentSizeCategory === "child" ? childFits : adultFits;',
     "// SNAP TO THE PRODUCT'S OWN LIST.");
   const fineTune = new Function(
@@ -185,19 +187,26 @@ console.log("\n── §2 the overlay moves the size a real body resolves to ─
 
   /* And the call site: the overlay has to sit between chart selection and the
      genuine-fit filter. Below the filter it would score rows the overlay never saw. */
-  const calcHead = extract(APP, "const useAdultPantsChart = isAdultNumericPantsGarment(",
+  const calcHead = extract(LIB, "const useNumericPantsChart = product.chart",
     "const childFits =");
   const overlayIdx = calcHead.indexOf("applyStoreChartOverlay(");
   const filterIdx = calcHead.indexOf("const bodyAdultFits =");
-  check("§2.5 calculateSize() overlays the chart BEFORE the genuine-fit filter",
+  check("§2.5 computeSizeVerdict() overlays the chart BEFORE the genuine-fit filter",
     overlayIdx > 0 && filterIdx > overlayIdx, `overlay@${overlayIdx} filter@${filterIdx}`);
-  check("§2.6 ...and feeds it from resolvedStoreSizeChart(), not a literal",
-    /applyStoreChartOverlay\([\s\S]{0,200}resolvedStoreSizeChart\(\)\)/.test(calcHead));
+  /* Since main bd766b2 the rows come through resolvedStoreSizeChart(ev): the widget's
+     chart first, the store's stored guide only when that reads as nothing. */
+  check("§2.6 ...and feeds it from the evidence's store chart, not a literal",
+    /applyStoreChartOverlay\(baseAdultChart, resolvedStoreSizeChart\(ev\)\)/.test(calcHead) &&
+    /function resolvedStoreSizeChart\(ev\) \{\s*const rows = parseStoreSizeChart\(ev\.storeChart\);\s*if \(rows\.length\) return rows;\s*return pickStoredSizeChart\(ev\)\.rows;/.test(LIB));
+  check("§2.6b ...which calculateSize() fills from resolvedStoreSizeChart()",
+    /storeChart: resolvedStoreSizeChart\(\),/.test(extract(APP, "function calculateSize() {", "\nfunction applySizeVerdict(")));
   /* CHILD_SIZE_CHART carries no measurement columns and the fine-tune pass is skipped
      outright on the child path, so an overlay there would be a clause that cannot reach
      the wire - CLAUDE.md RULE 0's spirit, asserted as an absence. */
   check("§2.7 the child chart is deliberately NOT overlaid",
-    !/applyStoreChartOverlay\(\s*CHILD_SIZE_CHART/.test(APP));
+    !/applyStoreChartOverlay\(\s*CHILD_SIZE_CHART/.test(LIB) &&
+    /* ...and the browser runs no overlay at all (comments may still name it). */
+    !/applyStoreChartOverlay\(/.test(APP.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")));
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -276,12 +285,8 @@ console.log("\n── §3 the fail-safe: anything unreadable keeps our own chart
 /* ══════════════════════════════════════════════════════════════════════════════
    §4 THE WIRE FORMAT - one grammar, two files (CLAUDE.md §3)
    ═════════════════════════════════════════════════════════════════════════════ */
-console.log("\n── §4 encodeSizeChart (widget) <-> parseStoreSizeChart (room) ──");
+console.log("\n── §4 the widget's raw tables <-> the server's reader and decoder ──");
 {
-  const { encodeSizeChart } = await load(
-    extract(PW, "function normalizeSizeToken(", "/* ── COMBINED composite"),
-    ["encodeSizeChart"]);
-
   const chart = {
     unit: "cm", source: "shopify", rows: [
       { size: "S", minChest: 90, maxChest: 95, minWaist: 76, maxWaist: 81 },
@@ -292,7 +297,7 @@ console.log("\n── §4 encodeSizeChart (widget) <-> parseStoreSizeChart (room
   const wire = encodeSizeChart(chart);
   check("§4.1 the encoder emits the documented grammar",
     wire === "cm;shopify;S:90-95:76-81::|M:96-101:82-87::|L:102-107:88-93::", wire);
-  check("§4.2 it is compact enough to ride the iframe URL (< 300 chars encoded)",
+  check("§4.2 it is compact (< 300 chars encoded) - an old widget still sends it on the URL",
     encodeURIComponent(wire).length < 300, `${encodeURIComponent(wire).length} chars`);
 
   const back = parseStoreSizeChart(wire);
@@ -332,27 +337,61 @@ console.log("\n── §4 encodeSizeChart (widget) <-> parseStoreSizeChart (room
   check("§4.13 the decoder normalises size tokens the same way parseSizeList does",
     parseStoreSizeChart("cm;generic;s:90-95:::|m:96-101:::").map((r) => r.size).join("/") === "S/M");
 
-  /* THE CLAMPS ARE THE SECOND COPY (CLAUDE.md §3). The widget clamps as it parses and
-     the room clamps again at the write point - deliberately, since the widget is not the
-     only possible sender - but the two are one decision about what a human body can
-     measure, and a drift between them means one side silently accepts what the other
-     refuses. Compared by VALUE across the two files rather than by eye. */
-  const widgetClamps = (await load(
-    extract(PW, "var SIZE_CHART_CLAMPS = {", "  /* A band wider than this") +
-      "\nvar out = SIZE_CHART_CLAMPS;", ["out"])).out;
+  /* THE CLAMPS ARE TWO GATES, ONE DECISION. The reader clamps as it parses a raw table
+     (refusing a column) and the overlay clamps again at the write point (refusing any
+     sender's number). Both live in lib/sizing.js now, but they are still two tables that
+     must agree about what a human body can measure. Compared by VALUE. */
   for (const key of ["chest", "waist", "hips", "legs"]) {
-    check(`§4.${16 + ["chest", "waist", "hips", "legs"].indexOf(key)} ${key} clamp agrees across both files`,
-      widgetClamps[key].min === STORE_CHART_CLAMPS[key][0] &&
-      widgetClamps[key].max === STORE_CHART_CLAMPS[key][1],
-      `widget ${JSON.stringify(widgetClamps[key])} vs room ${JSON.stringify(STORE_CHART_CLAMPS[key])}`);
+    check(`§4.${16 + ["chest", "waist", "hips", "legs"].indexOf(key)} ${key} clamp agrees between the reader and the overlay`,
+      SIZE_CHART_CLAMPS[key].min === STORE_CHART_CLAMPS[key][0] &&
+      SIZE_CHART_CLAMPS[key].max === STORE_CHART_CLAMPS[key][1],
+      `reader ${JSON.stringify(SIZE_CHART_CLAMPS[key])} vs overlay ${JSON.stringify(STORE_CHART_CLAMPS[key])}`);
   }
 
-  /* The lockstep check the §3 table is really about: both halves of the pair have to
-     exist, in their own files, or the format has silently become one-way. */
-  check("§4.14 the encoder lives in the widget and names its counterpart",
-    /function encodeSizeChart\(/.test(PW) && /parseStoreSizeChart\(\) in/.test(PW));
-  check("§4.15 the decoder lives in the room and names its counterpart",
-    /function parseStoreSizeChart\(/.test(APP) && /encodeSizeChart\(\) in/.test(APP));
+  /* THE RAW WIRE, round-tripped: the widget's own encoder, run for real, into the
+     server's own decoder - grids, units, bonus and order must come back exactly. */
+  const { encodeRawSizeChart } = await load(
+    extract(PW, "  var RAW_CHART_PREFIX = \"raw;\";", "\n  }\n") + "\n  }\n", ["encodeRawSizeChart"]);
+  const cands = [
+    { source: "shopify", bonus: 6, unit: "cm", grid: [["Size", "Chest (cm)", "Waist"], ["S", "90-95", "76-81"], ["M", "96-101", "82-87"], ["L", "102-107", ""]] },
+    { source: "generic", bonus: 0, unit: null, grid: [["מידה", "היקף חזה"], ["M", "96"], ["L", "a\u001fb"]] },
+  ];
+  const raw = encodeRawSizeChart(cands, 0);
+  const back2 = decodeRawSizeChart(raw);
+  check("§4.20 the widget's raw encoder carries its prefix", raw.startsWith(RAW_CHART_PREFIX), raw.slice(0, 20));
+  check("§4.21 ...and the server's decoder returns every candidate, in order, with its grid",
+    back2.length === 2 && back2[0].source === "shopify" && back2[0].bonus === 6 && back2[0].unit === "cm" &&
+    JSON.stringify(back2[0].grid) === JSON.stringify(cands[0].grid) &&
+    back2[1].unit === null && back2[1].grid[2][1] === "a b",
+    JSON.stringify(back2));
+  check("§4.22 a raw chart reaches the overlay as the v1 string its reader produces",
+    storeChartWire(raw) === encodeSizeChart(readStoreSizeChart(back2)) &&
+    storeChartWire(raw).startsWith("cm;shopify;S:90-95:76-81::|M:96-101:82-87::"), storeChartWire(raw));
+  check("§4.23 ...and the same rows parseStoreSizeChart() returns for that v1 string",
+    JSON.stringify(parseStoreSizeChart(raw)) === JSON.stringify(parseStoreSizeChart(storeChartWire(raw))));
+  const big = { source: "generic", bonus: 0, unit: null, grid: Array.from({ length: 40 }, (_, i) => ["row " + i, "x".repeat(200)]) };
+  const budgeted = decodeRawSizeChart(encodeRawSizeChart([cands[0], big, cands[1]], 1500));
+  check("§4.24 the URL budget skips a candidate that does not fit WHOLE - never cuts one - and keeps the ones after it",
+    budgeted.length === 2 && budgeted[0].source === "shopify" && JSON.stringify(budgeted[1].grid) === JSON.stringify(back2[1].grid),
+    JSON.stringify(budgeted.map((c) => [c.source, c.grid.length])));
+  check("§4.25 a raw chart past the size cap is refused whole, not truncated",
+    decodeRawSizeChart(RAW_CHART_PREFIX + "x".repeat(300000)).length === 0);
+
+  /* The lockstep check the §3 table is really about: both halves of each pair exist, in
+     their own files, and the READER is in exactly one of them. */
+  check("§4.14 the raw encoder lives in the widget and names its counterpart",
+    /function encodeRawSizeChart\(/.test(PW) && /decodeRawSizeChart\(\) in/.test(PW));
+  check("§4.15 the decoder lives server-side (lib/sizing.js) and names its counterpart",
+    /function decodeRawSizeChart\(/.test(LIB) && /encodeRawSizeChart\(\) in pear-widget\.js/.test(LIB) &&
+    /function parseStoreSizeChart\(/.test(LIB));
+  check("§4.15b ...and the browser no longer carries a copy of it",
+    !/function parseStoreSizeChart\(/.test(APP));
+  const pwCode = PW.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  for (const name of ["sizeChartFromGrid", "parseMeasurementCell", "sizeChartMeasureKey", "sizeChartOrient",
+                      "sizeChartColumnToCm", "SIZE_CHART_MEASURE_KEYS", "SIZE_CHART_GARMENT_DIM_RE",
+                      "SIZE_CHART_WORD_SIZES", "SIZE_CHART_CLAMPS", "encodeSizeChart", "extractSizeChart"]) {
+    check(`§4.26 the widget no longer carries the reader's ${name}`, !new RegExp(`\\b${name}\\b`).test(pwCode));
+  }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
@@ -394,16 +433,18 @@ console.log("\n── §5 the chart reaches Screen 1, and a correction can retra
   /* LAZY, AND ONLY LAZY. The whole zero-page-load-cost claim rests on there being no
      third call site - one added to the boot path or a DOMContentLoaded handler would
      walk every table on every PDP for every visitor who never clicks. Counted on the
-     full `encodeSizeChart(extractSizeChart())` call, not the bare name, so the
-     function's own definition and the comments that reference it don't inflate it. */
-  const callSites = (PW.match(/encodeSizeChart\(extractSizeChart\(\)\)/g) || []).length;
+     full `encodeRawSizeChart(collectSizeChartCandidates()` call, not the bare name, so
+     the function's own definition and the comments that reference it don't inflate it. */
+  const callSites = (PW.match(/encodeRawSizeChart\(collectSizeChartCandidates\(\)/g) || []).length;
   check("§5.9 exactly two call sites: openModal() and the PEAR_UPDATE_GARMENT correction",
     callSites === 2, callSites + " call sites");
   check("§5.9b ...and neither is on the page-load path",
-    !/(?:DOMContentLoaded|"load")[\s\S]{0,400}extractSizeChart\(\)/.test(PW));
+    !/(?:DOMContentLoaded|"load")[\s\S]{0,400}collectSizeChartCandidates\(\)/.test(PW));
   const openModalSrc = extract(PW, "function openModal(garment) {", "var overlay = d.createElement");
-  check("§5.10 ...and openModal() is one of them",
-    /encodeSizeChart\(extractSizeChart\(\)\)/.test(openModalSrc));
+  check("§5.10 ...and openModal() is one of them, inside the URL budget",
+    /encodeRawSizeChart\(collectSizeChartCandidates\(\), SIZE_CHART_URL_BUDGET\)/.test(openModalSrc));
+  check("§5.10b ...while the correction carries every candidate (no budget)",
+    /garment_size_chart: encodeRawSizeChart\(collectSizeChartCandidates\(\), 0\)/.test(PW));
   check("§5.11 ...emitting the param only when something was readable",
     /hostSizeChart \? "&garment_size_chart=" \+ encodeURIComponent\(hostSizeChart\) : ""/.test(openModalSrc));
 }

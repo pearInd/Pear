@@ -323,6 +323,44 @@
                       their next visit. §5 pins the server half - verification is now
                       idempotent inside the code's own TTL, which consumption does not
                       extend, so a retry the client never chose cannot cost a code.
+     prompt-engine
+                      Every prompt word moved server-side (lib/prompts.js, POST /api/prompt).
+                      Proven exact over 351,779 prompts at the move; this keeps it: the real
+                      browser path (promptFactsOf -> JSON -> sanitiser -> engine) over ~162k
+                      prompts, hashed and compared with a value computed from the PRE-MOVE
+                      engine. Also pins the two isBottomsGarment() copies as identical, the
+                      browser's verdict winning, the facts list agreeing on both sides, and
+                      no prompt wording left in app.js.
+     orient-engine
+                      Layer C's DECISION - front or back, and when the reference swaps - moved
+                      to lib/orient-engine.js (a Cloudflare Worker in production). Proven exact
+                      by replaying 4,116 scripted sessions through the old watcher and the new
+                      shell + engine; this keeps it: 504 of them replayed through the REAL
+                      watcher with the REAL engine behind a JSON round trip, hashed against the
+                      PRE-MOVE watcher. Also pins the values both sides copy, the knob list the
+                      browser forwards, the protocol's bounds, debug gating, and the decision's
+                      absence from app.js. §6: the Worker's /size and /prompt answer exactly
+                      what the server's modules answer, only to the room's origins.
+     room-latency
+                      "The whole interface is laggy" (2026-09-27): the fit and the prompt are
+                      asked at the edge first with the origin as the fallback, the wire
+                      prompts are prefetched before go-live, and the recorder draws only a
+                      new picture. Pins the edge URL derivation, the fallback and its back-off,
+                      the prefetch keys, and the recorder's gate.
+     size-fit-pin
+                      The size charts and the fit moved server-side (lib/sizing.js,
+                      POST /api/size). The move was proven exact over 1,458,028 cases;
+                      this keeps that conclusion: the real client shell + the real module
+                      over ~258k cases, hashed and compared with a value computed from
+                      the PRE-MOVE browser code. Any change to any recommendation, even
+                      1cm on one band, turns it red until re-pinned on purpose.
+     static-allowlist
+                      "The server was handing out its own source." express.static(__dirname)
+                      served the repo: /server.js, /CLAUDE.md, /package.json, the scanner and
+                      this test directory all answered 200. Slices server.js's real static
+                      block onto a bare express app and asserts both halves - private paths
+                      404 (an absence, so a new "just serve the root" line fails), public
+                      ones still load, and ../ cannot climb out of a public directory.
      scanner-extraction
                       The store scanner's HTML-scrape path (non-Shopify stores): no
                       SVG, no header/nav/footer image, one entry per photo, JSON-LD
@@ -405,6 +443,12 @@ const SUITES = [
   ["scanner-size-charts", "scanner-size-charts.test.mjs"],
   ["store-size-chart-api", "store-size-chart-api.test.mjs"],
   ["stored-size-chart", "stored-size-chart.test.mjs"],
+  ["static-allowlist", "static-allowlist.test.mjs"],
+  ["size-fit-pin", "size-fit-pin.test.mjs"],
+  ["prompt-engine", "prompt-engine.test.mjs"],
+  ["orient-engine", "orient-engine.test.mjs"],
+  ["orient-link", "orient-link.test.mjs"],
+  ["room-latency", "room-latency.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

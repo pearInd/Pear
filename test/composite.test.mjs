@@ -8,7 +8,11 @@ import { readFileSync } from "node:fs";
 // Normalised to LF: the repo checks out CRLF on Windows, and the slice markers below
 // are written with \n - a mismatch silently makes indexOf return -1 and drags in half
 // the file, which fails in a very confusing way.
-const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The prompt engine moved server-side on 2026-09-26 (lib/prompts.js, CLAUDE.md §2.13). This
+   reads it FIRST and app.js after it: the engine slices/checks find it where it lives now,
+   and every app.js marker used here exists only in the app.js half. */
+const SRC = (readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8") + "\n" +
+  readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -321,10 +325,15 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
   check("...while leaving an in-budget prompt byte-identical",
     clamp(sq, "test") === sq);
 
-  for (const site of ["applyGarment", "applyLook"]) {
+  /* Since 2026-09-26 both send sites ask the prompt service (wirePrompt / wireLookPrompt), and
+     the service clamps every answer before it leaves the server - the guard now sits on the
+     ONLY path a prompt can take into the browser, so no send site can route around it. */
+  const serviceClamps = /return clampPromptForWire\(raw, req\.where\);/.test(SRC);
+  for (const [site, re] of [["applyGarment", /wirePrompt\(item, angleAtStart, "applyGarment"/],
+                            ["applyLook", /await wireLookPrompt\("applyLook"\)/]]) {
     check(`the ${site} send path is wrapped by the wire guard`,
-      new RegExp(`clampPromptForWire\\([\\s\\S]{0,400}"${site}"`).test(SRC),
-      `no clampPromptForWire(..., "${site}") found`);
+      serviceClamps && re.test(SRC),
+      `${site} must take its prompt from the service, which clamps (serviceClamps=${serviceClamps})`);
   }
   /* Every rtClient.set()/setPrompt() call must draw from a guarded string. This is the
      count that catches a NEW send site being added straight from a builder.
@@ -399,11 +408,13 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
   check("...and every session boundary actually resets it",
     (SRC.match(/resetConditionWire\(\);/g) || []).length >= 3,
     "connectRealtime, teardown and the end-of-window stop each end a session");
-  const ping = (SRC.match(/const keepAlive = clampPromptForWire\([\s\S]{0,400}?"freezeKeepAlive"\);/) || [""])[0];
+  /* Server-side since 2026-09-26: the keep-alive asks the prompt service for both of its
+     branches, and the service clamps every answer (promptForRequest() in lib/prompts.js). */
+  const ping = (SRC.match(/keepAlive = keepAliveLook \? await wireLookPrompt\("freezeKeepAlive"\)[\s\S]{0,120}?"freezeKeepAlive"\);/) || [""])[0];
   check("the freeze keep-alive is clamped too, so recovery cannot bypass the budget guard",
-    ping !== "" && /imageOnlyPrompt\(activeItem\)/.test(ping) &&
-    /buildLookPrompt\(/.test(ping),
-    ping || 'no clampPromptForWire(..., "freezeKeepAlive") found');
+    ping !== "" && /wirePrompt\(activeItem, "front", "freezeKeepAlive"\)/.test(ping) &&
+    /return clampPromptForWire\(raw, req\.where\);/.test(SRC),
+    ping || 'no wireLookPrompt/wirePrompt("freezeKeepAlive") keep-alive found');
 }
 
 console.log(fails ? `\n${fails} FAILING` : "\nall green");

@@ -58,11 +58,13 @@ function check(label, cond, detail) {
 const code = SRC.slice(SRC.indexOf("/* ── Garment category detection"),
                        SRC.indexOf("function toItem(raw)"));
 /* categoryFromSizeRun() is tier 1.5 of the same chain but lives beside the size
-   vocabulary it reads (KIDS_NUMERIC_SIZES / ADULT_ALPHA_SIZES / parseSizeList), which is
-   a screen above this slice. Lifted REAL rather than stubbed - a stub here would let the
-   thresholds drift without this suite noticing, and the thresholds are the whole point. */
+   vocabulary it reads (ADULT_ALPHA_SIZES / parseSizeList), which is a screen above this
+   slice. Lifted REAL rather than stubbed - a stub here would let the thresholds drift
+   without this suite noticing, and the thresholds are the whole point. (It starts at
+   ADULT_ALPHA_SIZES since 2026-09-26: KIDS_NUMERIC_SIZES moved to lib/sizing.js with the
+   rest of the kids/adult rules, and categoryFromSizeRun() never read it.) */
 const SIZE_END = '? "bottom" : null;\n}';
-const sizeCode = SRC.slice(SRC.indexOf("const KIDS_NUMERIC_SIZES"),
+const sizeCode = SRC.slice(SRC.indexOf("const ADULT_ALPHA_SIZES = new Set(["),
                            SRC.indexOf(SIZE_END) + SIZE_END.length);
 const mkApi = ({ geminiImpl } = {}) => {
   const calls = [];

@@ -14,6 +14,11 @@ before editing, and read the comment block above any function you touch.
 
 **The repo is in strict image-only conditioning mode.**
 
+**The engine lives in `lib/prompts.js`, server-side, since 2026-09-26 (§2.13)** —
+every function and constant named in this section is there, not in `app.js`, and
+`npm run trace:prompt` traces that file. The browser asks `POST /api/prompt` for the
+one string a dispatch needs.
+
 Every prompt builder — `buildPrompt()`, `buildCustomPrompt()`,
 `buildCompositePrompt()` — returns `imageOnlyPrompt()`. The only text that
 reaches Decart is:
@@ -110,15 +115,17 @@ wrong"*, *"it slimmed me down"*, *"front and back aren't right"*.
 
 | Layer | What it controls | Where it lives | Live? |
 |---|---|---|---|
-| **A. Prompt text** | what the model is told | `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` | mostly dead |
+| **A. Prompt text** | what the model is told | `lib/prompts.js` (server): `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` — §2.13 | mostly dead |
 | **B. Reference image** | what the model is shown | `referenceImageFor`, `galleryOf`, `distinctBackOf`, `createGarmentComposite` | **live** |
-| **C. Orientation** | which asset is on the wire when | `OrientationWatcher`, `effectiveAngle`, `autoOrientation` | **live** |
-| **D. Size ladder** | the recommended size in the UI | `calculateSize`, `SIZE_SCALE`, `*_SIZE_CHART`, `applyStoreChartOverlay` | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
+| **C. Orientation** | which asset is on the wire when | the DECISION in `lib/orient-engine.js` (server, §2.14): streaks, `makeTurnYawWindow`, `orientFlipDecision`, early turn, `orientPredictBack`, the hold; the browser's `OrientationWatcher` measures (`classify`, the pose loop) and executes (`maybeSwap`, `effectiveAngle`, `autoOrientation`) | **live** |
+| **D. Size ladder** | the recommended size in the UI | `calculateSize` (client shell, `app.js`) → `lib/sizing.js` (`productVerdict`, `*_SIZE_CHART`, `computeSizeVerdict`, `applyStoreChartOverlay`, §2.12) | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
 
 **Layer B is where most real fit/back-view problems actually live.** "The back
 came out plain" is almost never a prompt problem — it is `distinctBackOf()`
 returning `undefined`. Run `window.__pearDebugBackView()` in a live session; it
-returns one of five `BACK_VIEW_REASON` values and tells you which.
+returns one of five `BACK_VIEW_REASON` values and tells you which. On the deployed site
+that hook only exists in the support view (`/fitting-room/?pear_debug=<PEAR_DEBUG_TOKEN>`,
+§2.11) — the production bundle strips it.
 
 **Layers B and C have a visual gate now.** `npm run qa:visual` (§8) drives a full 360 with
 a mocked Decart session and scores the frames, so "the back came out plain" and "the back
@@ -169,8 +176,10 @@ Any new fit wording must describe what the **fabric** does over a body whose
 dimensions are fixed. Never the body's outline.
 
 ### 2.5 Never block on ambiguity
-`isKidsProduct` / `isAdultProduct` / `isCompatibleSizeCategory` /
+`isKidsProduct` / `isAdultProduct` (`lib/sizing.js`) / `isCompatibleSizeCategory` /
 `liveBlockReason` all pass when uncertain. A wrong block stops a paying shopper.
+That includes a product verdict still in flight or lost to the network:
+`productVerdictNow()` answers `null`, which reads as "no mismatch, letter ladder" (§2.12).
 `DEFAULT_CATEGORY = "unknown"`, never `"tops"` — a guess indistinguishable from
 a verdict outranks the room's own stronger classifier.
 
@@ -206,16 +215,57 @@ and `cdn-url-integrity` slice `server.js`/`scan-store.js` the same way). The OTP
 block is one as well: `otp-single-verification` slices `app.js` from
 `const OTP_IN_FLIGHT = { send: false, verify: false };` to the `logSessionMeasurements`
 JSDoc, and `server.js` from `const otpStore = new Map();`.
-`calculateSize()`'s fine-tune tie-break is the newest one: `size-chart-overlay` slices
-`app.js` from `const candidates = currentSizeCategory === "child" ? childFits : adultFits;`
-to `// SNAP TO THE PRODUCT'S OWN LIST.` and runs that loop standalone, so it scores the
-real penalty formula rather than a copy of it. `stored-size-chart` runs that same loop
-against `fineTunePickForDiagnostics()` (the Phase 0 logger's mirror of it) on a grid of
-bodies — change one, the test tells you to change the other. The widget's
-`@pear-shared:size-token` / `@pear-shared:size-chart-parser` BEGIN/END comments are
-markers too (`sync-size-chart-parser.mjs` slices between them), as are
-`var SIZE_TOKEN_ALPHA_RE`, `var LD_OUT_OF_STOCK_RE` and `function canonicalStoreHost(raw) {`
-in the widget (`jsonld-sizes`, `store-size-chart-api`).
+The fit's fine-tune tie-break is one too: `size-chart-overlay` slices **`lib/sizing.js`**
+(server-side since 2026-09-26, §2.12) from
+`const candidates = currentSizeCategory === "child" ? childFits : adultFits;` to
+`// SNAP TO THE PRODUCT'S OWN LIST.` and runs that loop standalone, so it scores the real
+penalty formula rather than a copy of it - the local names inside `computeSizeVerdict()`
+are therefore an interface. The browser's Screen 1 sizing region is sliced by
+`numeric-pants-sizing`, `adult-pants-sizing` and `kids-product-sizes` from
+`const CHILD_SIZE_SCALE = [` (it was `const ZARA_SIZE_CHART` until the charts moved out) to
+`function calculateSize()` or `\nfunction onMeasurementKeydown` (as are `kids-adult-size-guard`
+and `size-mismatch-view` from `function resolvedGarmentAgeGroup(`, and `size-fit-pin`, whose §2
+drives `sizeProductEvidence()` out of the same slice); `requestSizeVerdict()` sits deliberately
+just AFTER that end marker, so each harness injects its own and runs the real `lib/sizing.js`
+through it. `size-chart-overlay` also slices `lib/sizing.js` from
+`const useNumericPantsChart = product.chart` to `const childFits =` to pin where the overlay
+sits. `stored-size-chart` runs that same tie-break loop against `fineTunePickForDiagnostics()`
+(main's Phase 0 mirror of it, in `lib/sizing.js` too) on a grid of bodies — change one, the
+test tells you to change the other. The widget's `@pear-shared:size-token` BEGIN/END comments
+and `scanner/size-chart-reader.src.js`'s `@pear-shared:size-chart-parser` ones are markers
+(`sync-size-chart-parser.mjs` slices between them), as are `var SIZE_TOKEN_ALPHA_RE`,
+`var LD_OUT_OF_STOCK_RE` and `function canonicalStoreHost(raw) {` in the widget
+(`jsonld-sizes`, `store-size-chart-api`).
+The shared prompt slice (from the `P` priority table to the full-look composite clause) is
+sliced out of **`lib/prompts.js`** now (§2.13) by `image-first`, `plain-tee-fidelity`,
+`model-agnostic`, `garment-category-prompt`, `summoning-tokens`, `body-presence-gate` and
+`composite` — which read the engine first and `app.js` after it. `applyGarment` is sliced from
+`app.js` up to the pointer comment `/* getAnatomicalAnchor() (restore seam`, `applyLook` up to
+`/* buildLookPrompt() (returns lookAnchorPrompt()`, and `side-profile`/`angle-race` assemble
+`REAR_POSE … angleClause()` from the engine plus `activeBackIsReal … compositeActiveFor` from
+`app.js` (up to `/* angleClause() (dead relative to the wire`). Those pointer comments are
+markers now — and `lib/prompts.js`'s header must never quote the slice's opening line.
+`server.js`'s public-roots + static-hosting block is one too: `static-allowlist` slices it
+from `/* ── Public roots` to `/* ── Start (local only` and mounts it on a bare express app
+with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (§2.10).
+`orient-link` slices `app.js` from `const ORIENT_KNOB_KEYS = [` to `/* ── end flight recorder ── */`
+(the whole orientation link and the recorder, run on a fake clock and socket) plus
+`function edgeApiUrl(route) {` to its closing brace - keep the recorder inside that span.
+`reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
+guarded `window.__pearMockDecart = …` line that follows it — that line's exact text (with its
+`PEAR_DEBUG_BUILD` guard, §2.11) is its end marker.
+The orientation decision (§2.14) is sliced out of **`lib/orient-engine.js`** now: `turn-yaw-window`
+and `orientation-yaw-mirror` take `function makeTurnYawWindow(` to `/* Edge-on detection thresholds.`
+(and `function orientPredictBackReason(` to the same end); `turn-hold` and `turn-yaw-window` append
+the engine's `/* ── ONE WATCHER'S DECISION STATE` to `function armLine()` to the browser's
+`function createOrientationWatcher()` … `\n/* Decode a garment URL into an ImageBitmap`;
+`side-profile` and `prompt-reanchor` take `function step(s) {` to `function armLine()`, and
+`side-profile` `function profileNext(score, autoProfile)` to `/** One tick`. On the browser side,
+`prompt-reanchor` slices `async function maybeReanchorPrompt()` to
+`\n\n  /* What only the browser measured`, `orient-engine` §4 the tick from
+`  const timer = setInterval(async () => {` to `}, ORIENT_SAMPLE_MS);`, and `test/orient-replay.mjs`
+(the harness `orient-engine` §1 replays) runs `const ORIENT_SAMPLE_MS` through the end of
+`function createOrientationWatcher() {`.
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.
@@ -261,6 +311,289 @@ consecutive frames through a turn and fails on `frozen-feed` (two identical fram
 are restoring `?swap_hold=1` / `?still_covers=1` for an A/B, expect those findings: they
 are the gate correctly reporting what those flags do.
 
+### 2.10 The server serves an allowlist, never the repo
+`server.js` used to run `express.static(__dirname)`, which handed the repository to anyone
+who asked: `/server.js`, `/CLAUDE.md`, `/package.json`, `/scanner/…`, `/test/…` and even
+`/node_modules/…` answered 200. Public files now come only from `PUBLIC_DIRS`
+(`fitting-room`, `widget`) and `PUBLIC_FILES` (`pear-logo.png`,
+`Commercial_video_for_a_tech_fa.mp4`); everything else is a 404 by construction. If an
+asset 404s, add its directory or file to those lists — never widen back to the root.
+`test/static-allowlist.test.mjs` asserts the absence, the presence, and that `../` cannot
+climb out of a public directory.
+
+**There is no admin in this project.** The admin dashboard (`admin/`), `requireAdminAuth`,
+`ADMIN_EMAILS`/`ADMIN_PASSWORDS`, every `/api/admin*` route, `/api/test-sheets` and the
+GET/DELETE on `/api/sessions` were removed on 2026-09-26. The session log is ingest-only
+(POST); the rows live in Supabase and are read there. `static-allowlist` §4.5/§4.6 assert
+the absence, so re-adding an admin surface here is a deliberate act, not a drive-by.
+
+### 2.11 Shoppers download the BUILD, not the source
+Production serves `dist/` (`scripts/build.mjs`, run on Vercel by the `vercel-build` script):
+minified, every comment and log line stripped, the mock harness and debug hooks folded
+away, and the vendor SDK bundled same-origin as `rt.<hash>.js` instead of imported from a
+CDN URL that names it. The source stays the source — tests, `trace:prompt` and `qa:visual`
+run on the unbuilt files. Rules that keep the build honest:
+
+- **Any new debug hook or mock seam is guarded** with the inline expression
+  `(typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && …` (never a module-scope
+  const — §2.6/§2.7). The build defines it `false`, the branch folds away, and the mock
+  block tree-shakes out. An unguarded `window.__pearDebugX = …` fails the build.
+- **Shipped strings are vendor-neutral.** `console.error` messages, thrown errors and
+  anything a shopper can see survive minification; write "render engine", not the vendor's
+  name. Developer-only hints go behind the same guard. The build's `FORBIDDEN` list fails on
+  comment blocks, vendor CDN URLs, `createDecartClient`, `DECART_API_KEY`, the mock and
+  debug-hook registrations.
+- **The `[PEAR]` console contract (§6) lives in the support view.** With
+  `PEAR_DEBUG_TOKEN` set (≥16 chars), `/fitting-room/?pear_debug=<token>` serves the source
+  room — every log line and `window.__pearDebug*` hook — through `/__src/<token>/<dir>/`.
+  Each support mount is rooted at its own public directory: a repo-rooted one served
+  `server.js` through `fitting-room/../` (static-allowlist §5.18).
+- **A missing `dist/` degrades to source, loudly** (`[PEAR] ✖ dist/ is missing`) rather
+  than taking the room down. If that line shows up in Vercel logs, the build did not run.
+- After a change to anything the build touches, `npm run qa:visual:dist` drives the same
+  360 against the minified room (build `--qa` keeps the mock so the agent can run it).
+- **The bundled SDK must carry the dependency versions the CDN would.** rt.js is built from
+  node_modules; the source room's CDN import resolves the SDK's own ranges to their newest
+  release. The first bundle shipped livekit-client 2.19.1 where production (3a9b55d, CDN) ran
+  2.22.3 - the one runtime difference found when the room was reported to work better on
+  3a9b55d (2026-09-27). `package.json` pins them (`overrides["@decartai/sdk"]`) and the build
+  refuses a node_modules that disagrees. Neither `qa:visual` nor the unit suite can see this:
+  the mock replaces the SDK. The build also silences the SDK's and livekit's console loggers
+  (they print the vendor's hosts) - see `SDK_ENTRY` and `connectRealtime()`.
+
+### 2.12 The size fit is server-side
+Since 2026-09-26 every size chart (FOX's bands and their derivations), `coreHwPenalty()`, the
+store-chart decode/overlay and the fit itself live in `lib/sizing.js`, served by
+`POST /api/size` - and so do the **product** rules that pick a chart (`isKidsProduct()`,
+`isAdultProduct()`, `isPantsProduct()` and its tiers, `isAlphaSizeRun()`'s veto,
+`pantsChartKindForSizes()`, the Hebrew/English pants vocabulary), moved the same day into
+`productVerdict()`, and so does the storefront's own size-chart READER (which header is
+chest or waist, word sizes, range/inch cells, clamps, monotonicity, which table wins —
+`readStoreSizeChart()`): the widget only collects the page's tables and sends them raw
+(`encodeRawSizeChart()`, 1,506 pages proven identical to the old in-widget reader, both
+transports). An old widget's v1 string still decodes. `calculateSize()` in `app.js` is a shell: it sends the measurements and
+the product's RAW evidence (`sizeProductEvidence()`: size list, title, age group, cached
+category and size-run type, the item's type fields, and its own `isBottomsGarment()` verdict
+as `item.bottoms` - true/false, or null for "no verdict"), and `applySizeVerdict()` paints the
+answer in the old order. Garment-title classification (`classifyGarmentTitle`,
+`categoryFromSizeRun`) and image selection stay in the browser.
+
+- **The browser reads back only what it acts on:** `verdict.product` = `{chart, kidsOnly,
+  adultOnly, adultNumericPants}` on EVERY status, including `"empty"` - a product-only request
+  (`loadProductVerdict()`) is how the in-room ladder (`activeSizeLadder()`) and the kids/adult
+  card (`hasSizeCategoryMismatch()`) learn about a garment swapped in after the last size. They
+  read it synchronously through `productVerdictNow()`, which is `null` until it lands (§2.5);
+  the late answer repaints the card by itself. `lowerBody` stays server-side.
+- **The product move was proven the same way:** the old in-browser rules vs the new
+  evidence → JSON → sanitiser → `productVerdict()` path over 1,092,000 product situations, zero
+  differences, with four mutations each caught (kids ladder, the `bottoms` tri-state, EU-before-
+  waist, the geresh fold); the 1,458,028-case fit grid re-ran identical. `size-fit-pin` §2 pins
+  92,695 of those situations against a hash computed from the pre-move code.
+
+- **Behaviour was proven identical**, not assumed: the old in-browser `calculateSize()` and
+  the new shell + server were run over the same 1,458,028 cases (26 garment situations × the
+  height/weight grid × the optional-measurement grid) and matched byte for byte; a 1cm edit to
+  one band showed up in 18,182 of them. Re-run that comparison for any change to the fit.
+- **Synchronous when it can be.** Missing/out-of-range input is answered locally; every verdict
+  is memoised by its evidence, so re-runs on known inputs paint in the same tick. Only new
+  evidence waits on the network - Continue is locked until it lands, and the newest call wins.
+- **It never rejects, and a failure keeps the last answer.** A failed request paints
+  `resultLabelServiceError`/`sizeResultServiceError` but leaves the size STATE alone, so
+  `goLive()`'s re-check can never turn a network blip into a false block (§2.5).
+- **`goLive()` awaits the re-check BEFORE claiming `busy`** (adult-pants-sizing §7: a recompute
+  never holds billing state) and guards that one await with `goLiveResolvingSize`;
+  `stream-continuity` asserts it is the only await ahead of the claim.
+- **No chart may come back to the browser.** `scripts/build.mjs` fails if the room bundle
+  carries a body-measurement band key (`minChest`, `maxHeight`, …). The visual harness runs the
+  real `lib/sizing.js` for `/api/size` - it is shipped logic, not a stub target (§8.6).
+
+
+### 2.13 The prompt engine is server-side
+Since 2026-09-26 every prompt word — the category/back/plain-tee anchors, the closure lock, the
+identity/colour/print sentence, the fit ladder, `fitPrompt()`'s priorities and budget, and the
+whole restore seam (`DENSE`, the composite contract, side-profile/lateral-seam clauses) — lives
+in `lib/prompts.js`, moved verbatim, behind `POST /api/prompt`. RULE 0 applies there now.
+
+- **What the browser sends:** `promptFactsOf(item)` — plain fields only (`name`, `title`,
+  `type`, `category`, `subType`, `garmentType`, `colorHex`, `textOcr`, `fabric`,
+  `backIsPlain`, `_backLooksPrinted`, `custom`) plus its own `isBottomsGarment()` verdict as
+  `__bottoms` — and the angle, the frozen pose (`inProfile`) and `getSizeDelta()`. A field a
+  builder starts reading must be added to BOTH lists (`prompt-engine` §3 asserts they match).
+- **`isBottomsGarment()` has two copies** — the browser's (sizing, go-live and the presence gate
+  read it synchronously) and the server's, which honours the browser's verdict first and only
+  runs its own body for callers that send none. `prompt-engine` §2 asserts identical bodies.
+- **Behaviour was proven identical:** 351,779 prompts from the old in-browser engine vs the new
+  browser→server path matched byte for byte (a dropped field changed 87,885 of them), and
+  `trace:prompt --json` is identical. `prompt-engine` §1 pins ~162k of them to a hash computed
+  from the pre-move engine.
+- **Dispatch discipline is unchanged:** `applyGarment()` requests its prompt right after freezing
+  `angleAtStart`/`profileAtStart` and before the first await (§2.8), in parallel with the
+  reference resolve; the session start prefetches the other angle/pose variants so a turn never
+  waits on the network. Prompts are memoised per request for the session.
+- **The browser carries no wording:** `scripts/build.mjs` fails on engine phrases in the room
+  bundle; `prompt-engine` §5 asserts the absence over `app.js`. The pre-commit hook traces
+  `lib/prompts.js` (falling back to HEAD's `app.js` only for the commit that moved it).
+
+### 2.14 The orientation decision is server-side
+Since 2026-09-26 the half of Layer C that DECIDES — the vote streaks, `makeTurnYawWindow`,
+`orientFlipDecision`, the early-turn handshake, `orientPredictBack`, when the turn hold rises and
+falls, `orientTurnMark`, the profile ladder (`profileNext`), which swap goes out and when, and every
+`ORIENT_*` threshold and `?early_turn=`/`?pose_pass=`… knob — lives in `lib/orient-engine.js`, moved
+verbatim. In production it runs in a Cloudflare Worker (`cloudflare/orient/`) over one WebSocket per
+page (`lib/orient-protocol.js`); locally `server.js` and the visual harness serve the same protocol
+at `/orient` (`lib/orient-server.js`). The browser MEASURES (`classify()`, the pose loop, MediaPipe,
+skin/face) and EXECUTES (`maybeSwap`, the hold, `turnMark`, the profile/re-anchor dispatch).
+
+- **The contract:** `createOrientEngine(knobs, {debug}) → step(sample) → actions`. The sample is
+  plain measurements (`t, vote, faceSeen, poseVoted, profileScore, yawAbs, yawAt, lostAt, lock,
+  profile, dualView`); the actions run IN ORDER in the tick exactly where the old code ran them,
+  `swap` last and awaited. **Time comes from the browser's sample**, never the server's clock, so a
+  decision is independent of network latency — that is what made it provable.
+- **Behaviour was proven identical:** 4,116 scripted sessions (turn trajectories × speeds × dropouts
+  × noise × every knob combination) replayed through the old in-browser watcher and the new
+  browser→engine path produced the same action sequence byte for byte (239,223 events); four
+  mutated thresholds were each caught (a 1° early-turn change moved 185 sessions). `orient-engine` §1 pins 504 of them to a hash computed from
+  the pre-move code.
+- **Latency, measured (6,174 sessions, the harness's random busy-wire off so only the link moves):**
+  at 10 and 50 ms every decision lands on the same sample, shifted by the latency alone — 6
+  sessions differ, each a reply still in flight when the session ended. At 200 ms the round trip
+  plus the measurement overruns the 250 ms tick, `sampling` skips every other sample, and later
+  swaps change in 122 sessions (34 more, 88 fewer; the first back view never moves). Tel Aviv
+  measured ~7 ms. With the busy-wire noise ON, even 50 ms reshuffles ~100 sessions each way (back lost 47 / gained 52) —
+  that is the harness keying its randomness on execution time, not the link; compare outcomes,
+  not byte logs, when you re-measure.
+- **The fallback is the front view, never a local copy.** If the link is down, dead (§2.16) or
+  unset, a tick decides nothing: no swap, the lock stays PENDING, the front renders —
+  the same safe path as a product with no back photo. Only `maybeReanchorPrompt()` keeps its
+  cadence. One `[PEAR] AI Auto - the orientation link is unavailable …` warning says so. Do not
+  "fix" an outage by putting a copy of the decision back in the browser: that is the thing this
+  section exists to keep out.
+- **Where the room connects:** `PEAR_ORIENT_URL` (a `wss://` URL, injected by `scripts/build.mjs`,
+  set in Vercel) or, when empty, the page's own origin at `/orient` — which Vercel cannot serve, so
+  a production build without it warns. The link opens at `enterRoom()` (`orientLinkKeepAlive()`),
+  not at go-live, and is proven alive before every go-live (§2.16).
+- **Knobs travel as data.** The browser forwards only `ORIENT_KNOB_KEYS` from its URL at channel
+  open; the engine sanitises them (`sanitizeOrientKnobs`) and every sample (`sanitizeOrientSample`).
+  The protocol is bounded (16 channels, 16 KB per message) because the body is shopper-controlled.
+- **Debug is gated.** The engine's per-tick trace prints every threshold, so a channel gets it only
+  when `allowDebug(dk)` passes — in the Worker, `dk` must equal `PEAR_DEBUG_TOKEN` (the support
+  view's `?pear_debug=` token, §2.11); the local server always allows it.
+- **The Worker fails closed** (`cloudflare/orient/`, deploy steps in its README): `/orient` only,
+  an Origin allowlist (`ALLOWED_ORIGINS`; empty refuses everyone, `*` is one `[a-z0-9-]` run), a
+  per-connection message rate cap, no `workers.dev` hostname and no logs. The Origin gate is a
+  fence, not a lock — a scripted client can forge it and use the engine as an oracle; what it
+  never gets is the thresholds. It was checked against `wrangler dev` byte for byte (33,122 steps)
+  and drove the minified room through the visual gate. **A change to `lib/orient-engine.js` needs
+  a `wrangler deploy` too**, or production keeps deciding with the old engine. Since 2026-09-27 it
+  also answers POST `/size` and `/prompt` (§2.15) - so a change to `lib/sizing.js` or
+  `lib/prompts.js` needs the same redeploy, or the edge and the origin answer differently.
+- **The browser carries no decision:** `scripts/build.mjs` fails on the engine's reason codes in
+  the room bundle (it fired on the pre-move room); `orient-engine` §4 asserts the thresholds and
+  decision functions are absent from `app.js`. The action names and knob keys ARE in the room —
+  they are the protocol.
+- **A decision is never lost between the engine and the wire (§2.16).**
+
+### 2.15 The room must not wait where main did not
+Reported 2026-09-27: "the whole interface is laggy… main is excellent - it should be the same
+version, only with the code hidden." Measured against origin/main on the same machine
+(scratch perf harness: the real room, the render engine mocked, real CDNs), and fixed at the cause:
+
+- **A second pose model on the GPU** (the reference crop, 479cdfd - reverted): go-live 12.8s vs
+  4.0s, GPU work 34.6s vs 12.6s. It fixed a real bug (a model-worn store photo's jeans/back bled into
+  the render) but main has that bug too; if it comes back, the garment box must come from the server
+  (e.g. the classifier that already sees every photo), never from a second MediaPipe in the browser.
+- **Server round trips on the critical path**: every /api/size and /api/prompt went to Vercel iad1
+  (~350ms from Israel, 620ms cold) where the in-browser original took 0ms - Continue locked for two
+  (+~720ms), go-live waited on two (+~750ms). The Worker behind the orientation link answers POST
+  `/size` and `/prompt` from the SAME modules (`handleApi`, `orient-engine` §6) at ~10-20ms;
+  `postPearApi()` asks it first and falls back to `/api/<route>` on anything but a 200, backing off
+  for `EDGE_API_RETRY_MS`. `prewarmOrientationAssets()` prefetches the four wire prompts, so go-live
+  reads the memo. Measured after: room entry 1.11s, live 4.18s - main's 1.05s / 4.0s.
+- ~~The recorder drew only on a presented frame~~ - **reverted 2026-09-28** (§2.17): `startRecording()`
+  is main's again, byte for byte.
+- The Worker change needs a `wrangler deploy`; until then the room falls back to the origin and is
+  exactly as slow as before, never broken. `room-latency` pins both.
+
+### 2.16 A decision the engine made reaches the room - and a TEST session records why
+Reported 2026-09-27, a first measurement read frame by frame: no back print through the whole back
+view, then the rear reference landing as the shopper faced front again; a second one showed the
+print arriving late. The engine's early turn fires ONCE per turn (~40°) and resets the vote
+streaks, so any path that loses that one "send BACK" leaves the FRONT on a turned-away body until a
+back-of-head vote at ~150°+. On main the decision was a function call and could not go missing;
+over a socket it could. The link is what closes that:
+
+- **The link watchdog proves the link, it does not race the reply.** A step that missed its timer
+  (800 ms, on a busy main thread) was DROPPED while the engine had already acted on it. Now a slow
+  reply (`ORIENT_LINK_STEP_TIMEOUT_MS`, 1200) triggers a ping; only a link that cannot answer is
+  dropped (`orientLinkDrop()`: pending steps resolve null, every channel re-opens on the next socket
+  with a fresh engine that starts from the room's real lock, no retry back-off);
+  `ORIENT_LINK_STEP_HARD_MS` (4000) caps it. The room also pings every `ORIENT_LINK_PING_MS` while it
+  is open (`orientLinkKeepAlive()`) and checks the link at go-live (`orientLinkEnsureFresh()`), so a
+  socket that died quietly is replaced before a turn needs it. The ping is `{k:"ping",q}` →
+  `{k:"pong",q}` in `lib/orient-protocol.js` - **the Worker must be deployed with it BEFORE a room
+  that pings ships**, or the room reads a healthy link as dead. `orient-link` §1-§3.
+- ~~`maybeSwap()` waits out a busy `applying`~~ - **reverted 2026-09-28** (§2.17). It changed WHEN
+  swaps land (2,737 of 4,116 replayed sessions) and was reported as worse than main on a real body.
+  `maybeSwap()` drops on `applying` exactly as main does; `orient-engine` §1 is back on main's pin.
+- **The FLIGHT RECORDER** (`fitting-room/app.js`, after the orientation link). A TEST session -
+  store key `TEST` (the preview script's `data-pear-key="TEST"`) or `?pear_trace=1` - keeps every
+  orientation tick (the sample, the engine's reply, its round trip), every swap from `swap-req` to
+  `swap-render` or the reason it was dropped, pose/re-anchor applies with their duration, output
+  stalls (`out-stall`/`out-resume`/`out-stats`) and link events, and posts it once when the session
+  ends to the Worker's `POST /trace` (KV binding `TRACES`, 7 days). Read it back with
+  `cd cloudflare/orient && npx wrangler kv key list --binding TRACES --remote` and
+  `... kv key get <key> --binding TRACES --remote`. A shopper's session records nothing and sends
+  nothing; the record holds numbers, decisions and timings only. In the source room
+  `window.__pearDebugTrace()` returns it, and `PEAR_VISUAL_TRACE=1 npm run test:visual` saves the
+  harness's as `test-results/visual/flight.json`. `orient-link` §4, `orient-engine` §6.
+
+### 2.17 The branch behaves as main, one to one - only the code is hidden (2026-09-28)
+Reported after the rule changes of 2026-09-27: "I measured again - the same result, it works
+very badly… copy exactly how main works, one to one, and only keep the code hiding." Every
+BEHAVIOURAL change made after the verbatim moves was reverted:
+
+| Reverted | What it had changed |
+|---|---|
+| `5835270`, `99387d2`, `43ef549` | engine rules: side-view send scheduling, return default 50 → 0, FRONT-only return |
+| `8d27676`, `5835270` (prompts) | the back anchors' lower-body lock; the plain-tee anchor wording |
+| `126650a` | the render-lag probe (per-frame grids over the input and output) |
+| `eafe242` (part) | `maybeSwap()`'s wait on a busy `applying` |
+| `744de6d` (part) | the recorder's frame gating |
+| `05d1e99` | LIVE CONTINUITY drawn from the throttle's clone instead of `#webcam` |
+
+What stays is hiding and its plumbing: the server-side engines (§2.12-§2.14), the minified build
+(§2.11), the edge API and prompt prefetch (§2.15), the link watchdog (§2.16) and the TEST-session
+recorder (passive: it records, it decides nothing).
+
+**Proven, not assumed:** `lib/orient-engine.js` is the 854d629 verbatim move again and
+`orient-engine` §1 replays 504 sessions to main's pre-move hash (`4b2ead79…`); `lib/prompts.js` is the
+897ab44 move and `prompt-engine` pins main's hash (`221a5b58…`); `trace:prompt --json` is byte
+identical to a run on `3a9b55d`; `startRecording()` and the continuity layer are main's text.
+
+**Before changing behaviour here again**: the fix goes to main's code FIRST, measured on a real body
+against main, and only then through the move. A rule tuned on this branch alone is what this
+section undoes.
+
+**Changes tried on top of main on 2026-09-28 - ALL REVERTED 2026-09-29** ("take main and copy it
+one to one, keep only the hiding"). Recorded so they are not re-tried blind:
+- **`LIVE_INFERENCE_FPS` 10 -> 20.** The output did double (TEST records: 12-19 fps out against ~10),
+  but the uplink could not carry it. A record with the media connection's stats read the camera at
+  1.1-1.4 Mbps against a 1.2-1.45 Mbps send estimate, the browser's send queue growing from 2.5s to
+  57s of cumulative packet delay across the turn, and the output falling to 8-12 fps. The reference
+  images ride the same uplink on the engine's signalling socket: at 20 fps two of five back
+  references were acknowledged 1.35s and 2.9s late (130-500ms in twelve sessions at 10), so the back
+  landed as the shopper was already facing front again - "the back on the front", "lots of delay".
+  Raising it again needs a way to keep the uplink clear for a reference upload - measured first.
+- **The back tops anchors' "shirt" -> "top" and "back contour/volume" -> "body contour/volume".**
+  Each answered one real frame-by-frame failure (an open button-up at the side view; a chest left
+  bare), but the sessions they were judged in ran at 20 fps as well, so neither was ever measured on
+  main's transport. `lib/prompts.js` is main's move again and `prompt-engine` main's pin.
+- **A TEST record sampling the media connection every 500ms** (`rtc`). It found the above; it is
+  recurring work main does not do, so it went too. The record's other events are passive and stay.
+Not changed on this branch, and why: the reveal wait (~5s from connect - recorded fixes in
+`config.js`); uploading references in advance (`client.files`, swap by id) - it would land every
+swap earlier on the body.
+
 ---
 
 ## 3. Cross-file lockstep
@@ -280,20 +613,33 @@ same commit. Whichever is wrong is the one that wins.
 | `srcset` parsing (split on whitespace, never on `,`) | `pear-widget.js: largestFromSrcset` ↔ `scan-store.js: largestFromSrcset` |
 | Decorative-image keyword list | `pear-widget.js: EXCLUDE_SRC` ↔ `scan-store.js: EXCLUDE_IMG_SRC` |
 | Trust-tiered exclusion + name corroboration | `isExcludedSrc` / `nameEchoesProduct` in `pear-widget.js` ↔ `scan-store.js` |
-| Size-chart wire format (`<unit>;<source>;SIZE:chest:waist:hips:legs\|…`) | `pear-widget.js: encodeSizeChart` ↔ `app.js: parseStoreSizeChart` |
-| Size-chart sanity clamps (cm) | `pear-widget.js: SIZE_CHART_CLAMPS` ↔ `app.js: STORE_CHART_CLAMPS` ↔ `lib/store-size-charts.js: STORE_CHART_CLAMPS` — **three** copies |
+| Raw size-chart wire (`raw;` + candidate tables, U+001C–U+001F separators) | `pear-widget.js: encodeRawSizeChart` ↔ `lib/sizing.js: decodeRawSizeChart` (`size-chart-overlay` §4 round-trips it) |
+| Size-chart sanity clamps (cm) | `lib/sizing.js: SIZE_CHART_CLAMPS` (the reader, per column) ↔ `lib/sizing.js: STORE_CHART_CLAMPS` (the overlay) ↔ `lib/store-size-charts.js: STORE_CHART_CLAMPS` (stored charts, re-applied per read) ↔ `scanner/size-chart-reader.src.js: SIZE_CHART_CLAMPS` (the scanner's reader) |
+| Size-token plausibility (`isPlausibleSizeToken`, `SIZE_TOKEN_ALPHA_RE`) | `pear-widget.js` (the size-list scrape; copied into the generated scanner parser) ↔ `lib/sizing.js` (the chart reader) |
 | Store host key (`store_size_charts.store_domain`) | `canonicalStoreHost` in `pear-widget.js` ↔ `app.js` ↔ `lib/store-size-charts.js` ↔ `scanner/size-charts.js` — **four** copies |
-| Size-guide parser | `pear-widget.js` `@pear-shared:size-token` + `@pear-shared:size-chart-parser` blocks → **generated** `scanner/size-chart-parser.js` (`npm run sync:size-chart-parser`) |
+| Size-guide reader, two runtimes | `lib/sizing.js`'s grid reader (the live widget chart) ↔ `scanner/size-chart-reader.src.js` → **generated** `scanner/size-chart-parser.js` (stored charts; `npm run sync:size-chart-parser`) - `size-chart-parser-sync` §3 runs one fixture set through both |
+| Centimetre unit regex (`SIZE_CHART_CM_RE`) | `pear-widget.js` (caption tier, `sizeChartTableUnit`) ↔ `lib/sizing.js` (cell/header tier) |
+| Garment region classifier (`isBottomsGarment`, `BOTTOMS_TOKENS`, `TOPS_TOKENS`) | `app.js` ↔ `lib/prompts.js` (server copy honours the browser's verdict; asserted identical by `prompt-engine` §2) |
+| Orientation knobs the browser forwards vs the knobs the engine reads | `app.js: ORIENT_KNOB_KEYS` ↔ `lib/orient-engine.js: ORIENT_KNOB_KEYS` (`orient-engine` §2) |
+| Orientation values both halves need | `ORIENT_YAW_FRESH_MS`, `PRESENCE_PROMPT_YAW_SUPPRESS_DEG`, `ORIENT_EARLY_TURN_DEFAULT_SPEED` and the `?early_turn_speed` parse (`ORIENT_EARLY_TURN_MIN_SPEED`) in `app.js` (the pose loop, the presence prompt) ↔ `lib/orient-engine.js` (`orient-engine` §2) |
+| Prompt facts the browser sends vs the fields the engine accepts | `app.js: PROMPT_FACT_STRINGS / PROMPT_FACT_BOOLS` ↔ `lib/prompts.js: PROMPT_ITEM_STRINGS / PROMPT_ITEM_BOOLS` (`prompt-engine` §3) |
+| Apostrophe/geresh fold | `pear-widget.js: normApos` ↔ `app.js: _normApos` ↔ `lib/sizing.js: _normApos` — **three** copies (`numeric-pants-sizing` §7 runs all three) |
+| Size tokens (`parseSizeList`, `ADULT_ALPHA_SIZES`) | `app.js` (ladders, `categoryFromSizeRun`) ↔ `lib/sizing.js` (the product rules) |
+| Lower-body vocabulary | `lib/sizing.js: PANTS_TITLE_STEMS_HE / PANTS_TITLE_WORDS_EN / PANTS_EXPLICIT_TYPES` ↔ `app.js: GARMENT_CATEGORY_KEYWORDS.bottom / BOTTOMS_TOKENS / EXPLICIT_BOTTOM_TYPES` — a word added to one side only is a miss on the other path |
+| Size product evidence the browser sends vs the fields the rules accept | `app.js: sizeProductEvidence` ↔ `lib/sizing.js: sanitizeProductEvidence` (`size-fit-pin` §3) |
+| Size ladders (labels only) vs the charts they index | `app.js: CHILD_SIZE_SCALE / ADULT_PANTS_NUMERIC_SIZES / ADULT_JEANS_WAIST_SIZES` ↔ `lib/sizing.js: CHILD_SIZE_CHART / ADULT_PANTS_SIZE_CHART / ADULT_JEANS_WAIST_CHART` (asserted by `numeric-pants-sizing` §5) |
 
 The widget's category verdict is **explicit** and therefore outranks the room's
 own classifier. A widget-side category bug cannot be fixed room-side.
 
 **The size-guide parser is the one lockstep pair that is generated, not hand-kept.**
-Edit the widget's `@pear-shared:*` blocks, then run `npm run sync:size-chart-parser`;
-never edit `scanner/size-chart-parser.js` by hand. `test/size-chart-parser-sync.test.mjs`
-fails on a single-byte difference and runs one fixture set through both runtimes. The
-blocks must stay self-contained (only `d` and `console` are free) — the §2.6 rule, since
-the scanner copy runs with nothing from the widget around it. The three clamp copies and
+Edit the widget's `@pear-shared:size-token` block or `scanner/size-chart-reader.src.js`
+(the reader left the widget with the code hiding, §2.12 - the widget only collects tables
+now), then run `npm run sync:size-chart-parser`; never edit `scanner/size-chart-parser.js`
+by hand. `test/size-chart-parser-sync.test.mjs` fails on a single-byte difference and runs
+one fixture set through the live path (the real widget + `lib/sizing.js`) and the scanner's.
+The blocks must stay self-contained (only `d` and `console` are free) — the §2.6 rule, since
+the scanner copy runs with nothing around it. The three clamp copies and
 the four `canonicalStoreHost` copies are compared by value in
 `test/store-size-chart-api.test.mjs`.
 
@@ -306,6 +652,10 @@ token the product's own name explains **and** whose filename echoes that name is
 forgiven. A bare one-argument call is the old blanket behaviour and is correct only for
 genuinely untrusted URLs. Never widen `EXCLUDE_SRC` to "fix" a false positive — that is
 what refused adidas's "Icon" line and every `logo-tee.jpg` in the industry.
+It also stays IN THE WIDGET: moving it server-side was measured on 2026-09-26 and opened
+the room on a badge / logo / banner with the real photo never sent — several widget paths
+choose a single image, and the server cannot repair a choice it never sees (see the note
+above `isExcludedSrc` in `pear-widget.js`).
 
 **`canonicalImageUrl` has FOUR copies, not two** — `app.js`, `server.js`,
 `scanner/scan-store.js` and (as `canonicalPhoto`) `pear-widget.js`. They are the
@@ -323,7 +673,7 @@ live — but if you ever re-run that backfill, port the current rules first.
 
 ```bash
 npm run test:unit        # .test.mjs suite  — the regression guardrail (alias: npm test)
-npm run trace:prompt     # prints every string that actually reaches Decart
+npm run trace:prompt     # prints every string that actually reaches Decart (traces lib/prompts.js)
 npm start                # the server (node server.js); npm run dev for --watch
 npm run scan             # scanner/scan-store.js over a storefront
 
@@ -332,7 +682,11 @@ npm run test:visual      #   …just the agent  (npx playwright test test/e2e/vi
 npm run inspect:visuals  #   …just the scoring (node scripts/inspect-visuals.mjs)
 npm run fixtures         # regenerate test/fixtures/ (generated, gitignored, --force to rebuild)
 
-npm run sync:size-chart-parser            # regenerate scanner/size-chart-parser.js from the widget
+npm run build            # dist/ — the minified client production serves (§2.11)
+npm run qa:visual:dist   # the visual gate against the MINIFIED room (build --qa → dist-qa/)
+PEAR_SERVE_DIST=1 npm start   # run the server the way production does, after npm run build
+(cd cloudflare/orient && npx wrangler dev)   # the orientation Worker locally (README there; §2.14)
+npm run sync:size-chart-parser            # regenerate scanner/size-chart-parser.js (widget token block + scanner/size-chart-reader.src.js)
 npm run scan:size-charts -- <store-url>   # size-guide DRY RUN: coverage report, no keys, writes nothing
 node scanner/scan-store.js --size-charts --save <store-url>   # capture into store_size_charts (needs v15 + Supabase env)
 ```
@@ -375,7 +729,8 @@ byte-identical, the edit changed nothing on the wire — say so.
 - Prefer abstaining over guessing. An unconfident verdict must not outrank a
   downstream classifier.
 - `console.log("[PEAR] ...")` is the debugging contract with live merchants; keep
-  the prefix and keep messages findable.
+  the prefix and keep messages findable. The production build strips log/warn/group
+  lines, so on a live store that contract is served by the support view (§2.11).
 - Never log a raw `data:` URL — use `abbrevImg()` / `abbrevUrl()`.
 
 ---

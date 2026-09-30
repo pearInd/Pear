@@ -16,6 +16,12 @@ import { readFileSync } from "node:fs";
 
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const HTML = readFileSync(new URL("../fitting-room/index.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The kids/adult rules are server-side since 2026-09-26 (lib/sizing.js). The card is the
+   browser's; it is driven here against the REAL rules through the sanitiser and a JSON
+   round trip, exactly as POST /api/size answers it. */
+const SIZING = await import("../lib/sizing.js");
+const requestSizeVerdict = (ev) =>
+  Promise.resolve(SIZING.computeSizeVerdict(SIZING.sanitizeSizeEvidence(JSON.parse(JSON.stringify(ev)))));
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -36,8 +42,15 @@ console.log("── §1 updateSizeMismatchUI(): real DOM state, real message, re
 {
   const code = extract("function resolvedGarmentAgeGroup(", "function calculateSize()");
 
-  function harness({ activeItem = null, pendingAgeGroup = undefined, pendingSizes = undefined,
-                      currentBodyCategory = null, localStream = null, missingView = false } = {}) {
+  /* Resolved: the product verdict has landed (see kids-adult-size-guard §1 for the window
+     before it does). */
+  async function harness(opts = {}) {
+    const h = rawHarness(opts);
+    await h.api.loadProductVerdict();
+    return h;
+  }
+  function rawHarness({ activeItem = null, pendingAgeGroup = undefined, pendingSizes = undefined,
+                        currentBodyCategory = null, localStream = null, missingView = false } = {}) {
     const view = { hidden: true };
     const textEl = { textContent: "" };
     const captureBtn = { disabled: false };
@@ -53,15 +66,16 @@ console.log("── §1 updateSizeMismatchUI(): real DOM state, real message, re
     };
     const $ = (id) => els[id] ?? null;
     const fn = new Function("activeItem", "pendingAgeGroup", "pendingSizes",
-      "currentBodyCategory", "localStream", "$",
-      code + "\nreturn { updateSizeMismatchUI };");
-    const api = fn(activeItem, pendingAgeGroup, pendingSizes, currentBodyCategory, localStream, $);
+      "currentBodyCategory", "localStream", "$", "requestSizeVerdict",
+      code + "\nreturn { updateSizeMismatchUI, loadProductVerdict };");
+    const api = fn(activeItem, pendingAgeGroup, pendingSizes, currentBodyCategory, localStream, $,
+                   requestSizeVerdict);
     return { api, view, textEl, captureBtn, cardClasses, selectorRemoved: () => selectorRemoved };
   }
 
   /* The REPORTED product: kids-only numeric sizes, and a classifier that abstained -
      the combination that previously sailed through. */
-  const blocked = harness({
+  const blocked = await harness({
     activeItem: { ageGroup: "uncertain", sizes: ["8", "10", "12", "14", "16"] },
     currentBodyCategory: "adult", localStream: {},
   });
@@ -81,7 +95,7 @@ console.log("── §1 updateSizeMismatchUI(): real DOM state, real message, re
     blocked.textEl.textContent.includes("This item is not within your size range (Kids item)"),
     blocked.textEl.textContent);
 
-  const okAdult = harness({
+  const okAdult = await harness({
     activeItem: { ageGroup: "uncertain", sizes: ["S", "M", "L", "XL"] },
     currentBodyCategory: "adult", localStream: {},
   });
@@ -90,7 +104,7 @@ console.log("── §1 updateSizeMismatchUI(): real DOM state, real message, re
   check("...Start Fitting is enabled (camera already running)", okAdult.captureBtn.disabled === false);
   check("...and the live stage is NOT suppressed", !okAdult.cardClasses.has("size-mismatched"));
 
-  const noCamera = harness({
+  const noCamera = await harness({
     activeItem: { ageGroup: "adult" }, currentBodyCategory: "adult", localStream: null,
   });
   noCamera.api.updateSizeMismatchUI();
@@ -98,13 +112,27 @@ console.log("── §1 updateSizeMismatchUI(): real DOM state, real message, re
         "        (this function must not fight the existing !localStream gate)",
     noCamera.view.hidden === true && noCamera.captureBtn.disabled === true);
 
-  const noView = harness({
+  const noView = await harness({
     activeItem: { ageGroup: "kids" }, currentBodyCategory: "adult", missingView: true,
   });
   let threw = false;
   try { noView.api.updateSizeMismatchUI(); } catch (_) { threw = true; }
   check("missing #sizeMismatchView (older cached DOM/markup) - degrades safely, never throws",
     threw === false);
+
+  /* THE LATE VERDICT REPAINTS THE CARD BY ITSELF. A garment swap reads the card before the
+     server has answered for the new product, and paints "no mismatch" (never block on
+     ambiguity). The answer must then correct it without waiting for another event. */
+  const late = rawHarness({
+    activeItem: { ageGroup: "uncertain", sizes: ["8", "10", "12", "14", "16"] },
+    currentBodyCategory: "adult", localStream: {},
+  });
+  late.api.updateSizeMismatchUI();
+  check("before the product verdict lands: the card is hidden and Start Fitting enabled",
+    late.view.hidden === true && late.captureBtn.disabled === false);
+  await late.api.loadProductVerdict();
+  check("...and when it lands the card is shown and Start Fitting disabled, with no further call",
+    late.view.hidden === false && late.captureBtn.disabled === true && late.selectorRemoved() === true);
 }
 
 console.log("\n── §2 WIRING: every point the mismatch inputs can change re-checks the card ──");

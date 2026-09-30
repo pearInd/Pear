@@ -21,6 +21,12 @@
 import { readFileSync } from "node:fs";
 
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The orientation DECISION moved to lib/orient-engine.js on 2026-09-26 (CLAUDE.md §2.14): the
+   window, the corroboration and their constants are read from there - dedented, so the
+   "^const X =" reader below matches either file. The pose loop and the mirror policy stay in app.js. */
+const ENGINE = readFileSync(new URL("../lib/orient-engine.js", import.meta.url), "utf8").replace(/\r\n/g, "\n")
+  .split("\n").map((l) => (l.startsWith("  ") ? l.slice(2) : l)).join("\n");
+const BOTH = APP + "\n" + ENGINE;
 const CSS = readFileSync(new URL("../fitting-room/style.css", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 let fails = 0;
@@ -30,8 +36,8 @@ function check(label, cond, detail) {
   if (!cond && detail !== undefined) console.log(`        ${detail}`);
 }
 const num = (name) => {
-  const m = new RegExp(`^const ${name}\\s*=\\s*(-?\\d+(?:\\.\\d+)?)`, "m").exec(APP);
-  if (!m) throw new Error(`const ${name} not found in app.js`);
+  const m = new RegExp(`^const ${name}\\s*=\\s*(-?\\d+(?:\\.\\d+)?)`, "m").exec(BOTH);
+  if (!m) throw new Error(`const ${name} not found in app.js or lib/orient-engine.js`);
   return Number(m[1]);
 };
 
@@ -68,28 +74,28 @@ console.log("\n── §2 ORIENT_LOCK_FRAMES IS UNTOUCHED, AND IS STILL THE FALL
      light can swap the reference again, which is the regression that threshold exists to
      prevent and the reason lowering it was refused in the first place. */
   check("the flip bar falls back to ORIENT_LOCK_FRAMES without corroboration",
-    /const flipBar = yawCorroborates\s*\n?\s*\? Math\.min\(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES\)\s*\n?\s*: ORIENT_LOCK_FRAMES;/.test(APP),
+    /const flipBar = yawCorroborates\s*\n?\s*\? Math\.min\(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES\)\s*\n?\s*: ORIENT_LOCK_FRAMES;/.test(BOTH),
     "the uncorroborated path must be the original bar, byte for byte");
   /* Math.min, not a bare swap: if ORIENT_CORROBORATED_FRAMES were ever set ABOVE
      ORIENT_LOCK_FRAMES, corroboration must not RAISE the bar and make a real, measured
      turn slower to confirm than an unmeasured one. */
   check("...and corroboration can only ever lower the bar, never raise it",
-    /Math\.min\(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES\)/.test(APP),
+    /Math\.min\(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES\)/.test(BOTH),
     "a bare swap would let a misconfigured constant make corroborated turns SLOWER");
   /* 2026-09-22 (ORIENT_POST_PEAK): both bars now read the streak and the held time CAPPED at the
      evidence cast after the turn's peak. A cap is Math.min over an input that defaults to Infinity,
      so it can only ever RAISE the bar, never lower it - which is the property this section exists
      to protect, now pinned directly rather than through the old variable names. */
   check("the time-based path (ORIENT_LOCK_MS) is unchanged and still ORs in",
-    /votes >= flipBar \|\| dwell >= ORIENT_LOCK_MS/.test(APP) &&
-    /const votes = Math\.min\(streak, postPeakVotes\);/.test(APP) &&
-    /const dwell = Math\.min\(held, postPeakHeld\);/.test(APP) &&
-    /postPeakVotes = Infinity, postPeakHeld = Infinity \}\)/.test(APP),
+    /votes >= flipBar \|\| dwell >= ORIENT_LOCK_MS/.test(BOTH) &&
+    /const votes = Math\.min\(streak, postPeakVotes\);/.test(BOTH) &&
+    /const dwell = Math\.min\(held, postPeakHeld\);/.test(BOTH) &&
+    /postPeakVotes = Infinity, postPeakHeld = Infinity \}\)/.test(BOTH),
     "the post-peak caps must be Math.min over Infinity defaults - a cap that could add evidence would lower the anti-flap bar");
   /* Acquiring has no locked side to protect and already settles on two samples; pulling
      corroboration into it would be pure risk for no latency win. */
   check("acquiring is untouched - it never consults yaw",
-    /acquiring\s*\n?\s*\? streak >= ORIENT_ACQUIRE_FRAMES/.test(APP));
+    /acquiring\s*\n?\s*\? streak >= ORIENT_ACQUIRE_FRAMES/.test(BOTH));
 }
 
 console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
@@ -98,10 +104,10 @@ console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
      camera and facing away are indistinguishable to it. Code deriving front/back from yaw
      would be reading a signal that cannot carry that information - and would bypass the
      vote, which is the only thing that can. */
-  const idx = APP.indexOf("const yawCorroborates");
-  const region = APP.slice(Math.max(0, idx - 2400), idx + 200);
-  const w0 = APP.indexOf("function makeTurnYawWindow(");
-  const windowSrc = APP.slice(w0, APP.indexOf("/* ── THE BEST FRONT-FACING FRAME", w0));
+  const idx = ENGINE.indexOf("const yawCorroborates");
+  const region = ENGINE.slice(Math.max(0, idx - 2400), idx + 200);
+  const w0 = ENGINE.indexOf("function makeTurnYawWindow(");
+  const windowSrc = ENGINE.slice(w0, ENGINE.indexOf("/* Edge-on detection thresholds.", w0));
   /* The swing is measured DOWN from the turn's edge-on peak rather than from where the vote
      streak began - a streak-start baseline is always taken after that peak, so the return
      leg of a 360 could never corroborate (turn-yaw-window.test.mjs). The reference is that
@@ -109,20 +115,20 @@ console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
      already reads as turning. Either way it is a difference of published MAGNITUDES, taken
      against a real fresh reading. */
   check("corroboration is computed from a MAGNITUDE swing only",
-    /yawWindow\.observe\(vote, autoOrientation, yawFresh \? _torsoYawAbs : null,/.test(region) &&
+    /yawWindow\.observe\(vote, s\.lock, yawFresh \? s\.yawAbs : null,/.test(region) &&
     /const reference = edgeLost \? 90 : peak;/.test(windowSrc) &&
     /const swing = usable \? Math\.max\(0, reference - yawAbs\) : 0;/.test(windowSrc), region.slice(-400));
   check("no branch derives front/back from yaw",
-    !/_torsoYawAbs[^\n]*\?[^\n]*("front"|"back")/.test(APP) &&
-    !/yaw[A-Za-z]*\s*[<>]=?[^\n]*\?\s*"(front|back)"/.test(APP),
+    !/(?:_torsoYawAbs|s\.yawAbs)[^\n]*\?[^\n]*("front"|"back")/.test(BOTH) &&
+    !/yaw[A-Za-z]*\s*[<>]=?[^\n]*\?\s*"(front|back)"/.test(BOTH),
     "yaw cannot express facing direction - the asin form caps at +/-90");
   /* Every missing piece must abstain to the original bar rather than accelerate on
      incomplete evidence: no detector, an occluded torso, or a streak that began before
      any reading existed. */
   check("a missing or stale reading abstains rather than corroborating",
-    /_torsoYawAbs !== null && Date\.now\(\) - _torsoYawAt <= ORIENT_YAW_FRESH_MS/.test(APP) &&
+    /s\.yawAbs !== null && s\.t - s\.yawAt <= ORIENT_YAW_FRESH_MS/.test(ENGINE) &&
     /const usable = fresh && reference !== null;/.test(windowSrc) &&
-    /const yawUsable = turnYaw\.usable;/.test(APP),
+    /const yawUsable = turnYaw\.usable;/.test(ENGINE),
     "an absent peak must not read as a zero swing that later clears the threshold");
   /* The reference point must not creep along with the shopper, or a slow turn never
      accumulates a swing. A running MAX cannot follow the body back down, and it restarts
@@ -138,9 +144,9 @@ console.log("\n── §3 YAW ATTESTS A TURN; IT NEVER PICKS A SIDE ──");
     /edgeLossDeg = PRESENCE_PROMPT_YAW_SUPPRESS_DEG/.test(windowSrc));
   /* Per-watcher, like the streak it belongs to - an item swap must not inherit a pose. */
   check("the window is per-watcher state, not module scope",
-    /const yawWindow = makeTurnYawWindow\(\);/.test(APP) &&
-    APP.indexOf("const yawWindow = makeTurnYawWindow();") > APP.indexOf("function createOrientationWatcher") &&
-    !/^let peak\b/m.test(APP),
+    /const yawWindow = makeTurnYawWindow\(\);/.test(ENGINE) &&
+    ENGINE.indexOf("const yawWindow = makeTurnYawWindow();") > ENGINE.indexOf("export function createOrientEngine") &&
+    !/^let peak\b/m.test(APP) && !/^let peak\b/m.test(readFileSync(new URL("../lib/orient-engine.js", import.meta.url), "utf8")),
     "module scope would carry a stale pose across item swaps");
   /* One MediaPipe inference per tick is the entire point of the shared sampler. */
   check("yaw is published from the EXISTING pose signature, not a second inference",

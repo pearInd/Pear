@@ -576,19 +576,7 @@ const SUBTYPE_LABEL_HE = {
   sleeveless: "גופייה", short_sleeve: "שרוול קצר", long_sleeve: "שרוול ארוך",
   slim: "גזרה צמודה", regular: "גזרה רגילה", wide: "גזרה רחבה",
 };
-/* RETIRED FROM THE PROMPT PATH, and now read by nothing - kept for the record.
-   These two built the garment description every builder used to open with ("white
-   short-sleeve t-shirt"). The image-first refactor deleted that sentence: a text
-   description is something a diffusion model can satisfy out of its own prior instead
-   of out of the reference pixels, which is how a Spider-Man tee came back as a tuxedo.
-   See garmentAnchor(). Left in place because a subType→English map is the obvious thing
-   to reach for the next time something needs to NAME a garment (a share caption, an alt
-   attribute, an analytics label) - just never a VTON prompt. */
-const SUBTYPE_PROMPT = {
-  sleeveless: "sleeveless", short_sleeve: "short-sleeve", long_sleeve: "long-sleeve",
-  slim: "slim-fit", regular: "regular-fit", wide: "wide-leg",
-};
-const SHIRT_NOUN = { sleeveless: "tank top", short_sleeve: "t-shirt", long_sleeve: "long-sleeve shirt" };
+/* SUBTYPE_PROMPT / SHIRT_NOUN - moved to lib/prompts.js (server-side prompt engine, 2026-09-26). */
 
 const $ = (s) => document.getElementById(s);
 
@@ -653,7 +641,7 @@ let pendingTitle = undefined;                // string | undefined (none arrived
 
    THE BUG THIS CLOSES: sweatpants sold S/M/L matched isPantsProduct() on the TITLE
    tier ("sweatpants" names a bottoms garment) with no numeric evidence of its own,
-   and pantsChartForSizes()'s "no confidently-numeric run" default landed on
+   and pantsChartKindForSizes()'s "no confidently-numeric run" default landed on
    ADULT_JEANS_WAIST_CHART - the waist-inch ladder meant for 28/30/32 jeans whose
    picker scrapes to nothing. A shopper was quoted a bare waist-inch number ("32")
    for a product whose own picker only ever offers S/M/L. */
@@ -1156,7 +1144,7 @@ function usableImageRef(ref) {
     usable: false,
     kind: "sdk-fallthrough",
     detail: `"${ref.slice(0, 60)}" is neither a Blob, a data: URL, nor an ABSOLUTE http(s) URL - ` +
-      "imageToBase64() would return it verbatim in place of image bytes and Decart would render an arbitrary garment",
+      "imageToBase64() would return it verbatim in place of image bytes and the render engine would draw an arbitrary garment",
   };
 }
 
@@ -1249,7 +1237,7 @@ async function debugReinjectGarment(opts = {}) {
     return false;
   }
 }
-if (typeof window !== "undefined") window.__pearDebugReinjectGarment = debugReinjectGarment;
+if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") window.__pearDebugReinjectGarment = debugReinjectGarment;
 
 /** @returns {boolean} true while a billable realtime session is active. */
 const isLive = () => connState === "connected" || connState === "generating";
@@ -1263,134 +1251,34 @@ const sessionElapsedMs = () => (billingStartedAt ? Date.now() - billingStartedAt
 /* =============================================================================
    SCREEN 1 - Size / measurement calculator
    ============================================================================= */
-/* FOX MEN'S TOPS STANDARD (updated 2026-09-14). The chest-cm bands below are FOX's own
-   published ladder: S 90-95, M 96-101, L 102-107, XL 108-113, XXL 114-119. FOX gives no
-   height/weight bands - the form's MANDATORY inputs are height+weight, chest is only an
-   optional fine-tune field - so those columns are derived, not copied from FOX.
+/* ══ SIZING - THE CLIENT HALF ═════════════════════════════════════════════════
+   The size charts and the fit itself moved to lib/sizing.js on 2026-09-26 and are served
+   by POST /api/size (see requestSizeVerdict() below onMeasurementKeydown()). Every
+   table this region's comments name - ZARA_SIZE_CHART, WOMEN_TOPS_EU_SIZE_CHART,
+   CHILD_SIZE_CHART, ADULT_PANTS_SIZE_CHART, ADULT_JEANS_WAIST_CHART - and the derivation of
+   each band now lives there, along with coreHwPenalty(), the store-chart decode/overlay
+   and the adult/child/overflow/fine-tune logic. Read that file's header before editing
+   any of it.
 
-   HOW THEY WERE DERIVED. The chart already had a working, shipped chest<->BMI
-   relationship (this is what let a 185cm/82kg shopper land on the pre-FOX "L" row) - the
-   four old center points (chest 91/98/106/114 -> BMI 21.8/23.0/24.4/25.8) fit a line
-   BMI = 0.174*chest + 5.96 (R^2 > 0.999). That fitted line, not the waist-inch formula
-   ADULT_JEANS_WAIST_CHART uses (chest and waist scale differently at the same BMI - do
-   not reuse that formula here, it was tried and put a lean 90cm chest at BMI 26), maps
-   each new FOX chest band to a BMI band. Height ranges reuse the old chart's own ladder
-   (real "sold into" ranges, not re-derived) with a new XXL tier extending the existing
-   step pattern. Weight bounds are the corner of each row's box: BMI_min at minHeight,
-   BMI_max at maxHeight - so a row's weight band is exactly what its own chest band
-   implies at its own height extremes.
-     S:   BMI 21.6-22.5 over 160-172cm -> weight 55-67
-     M:   BMI 22.7-23.5 over 170-180cm -> weight 65-76
-     L:   BMI 23.7-24.6 over 178-186cm -> weight 75-85
-     XL:  BMI 24.8-25.6 over 184-195cm -> weight 84-97
-     XXL: BMI 25.8-26.7 over 190-205cm -> weight 93-112 (new tier - FOX's ladder had no
-          XXL row to restore; this is the first time this chart has had one)
-   Benchmark this must hold (see CLAUDE.md §1 Layer D): 185cm/82kg -> BMI 23.96, inside
-   L's 23.71-24.58 band, and neither S nor M's height band reaches 185cm - so L wins as
-   the first (and only) genuine match in chart order, same as before this update.
+   The PRODUCT rules followed the same day: which chart a garment belongs on - kids-only,
+   adult-only, lower-body, EU- or waist-numbered - is decided there too (productVerdict()),
+   from raw evidence this region gathers (sizeProductEvidence()). What stays HERE is the
+   size LADDERS the override selector and the stock fallbacks walk (labels only - no
+   bands), stock, labels and every DOM effect. calculateSize() gathers the evidence, asks
+   the server, and applySizeVerdict() paints the answer exactly as the old in-browser
+   function did.
 
-   waist/legs columns have no FOX spec at all (FOX publishes chest only for tops) and are
-   not covered by any test assertion (test/numeric-pants-sizing.test.mjs and
-   test/adult-pants-sizing.test.mjs only check these are finite numbers) - waist keeps
-   the old chart's own chest-14cm offset (91->77, 98->84, 106->92, 114->101, i.e. a
-   near-constant 14cm gap), legs keeps the old chart's own ~0.575x-height ratio.
-
-   THE CONSTANT NAME IS UNCHANGED ON PURPOSE. "ZARA_SIZE_CHART" is a load-bearing extract
-   marker (CLAUDE.md §2.6) matched as a literal opening-line string by
-   test/numeric-pants-sizing.test.mjs, test/adult-pants-sizing.test.mjs and
-   test/kids-product-sizes.test.mjs. Renaming it to something FOX-flavored would steal
-   every one of those matches for no behavioral gain - the data is FOX's, the identifier
-   is legacy plumbing. */
-const ZARA_SIZE_CHART = [
-  { size: "S",   minHeight: 160, maxHeight: 172, minWeight: 55, maxWeight: 67,  minChest: 90,  maxChest: 95,  minWaist: 76,  maxWaist: 81,  minLegs: 92,  maxLegs: 99  },
-  { size: "M",   minHeight: 170, maxHeight: 180, minWeight: 65, maxWeight: 76,  minChest: 96,  maxChest: 101, minWaist: 82,  maxWaist: 87,  minLegs: 98,  maxLegs: 104 },
-  { size: "L",   minHeight: 178, maxHeight: 186, minWeight: 75, maxWeight: 85,  minChest: 102, maxChest: 107, minWaist: 88,  maxWaist: 93,  minLegs: 102, maxLegs: 107 },
-  { size: "XL",  minHeight: 184, maxHeight: 195, minWeight: 84, maxWeight: 97,  minChest: 108, maxChest: 113, minWaist: 94,  maxWaist: 99,  minLegs: 106, maxLegs: 112 },
-  { size: "XXL", minHeight: 190, maxHeight: 205, minWeight: 93, maxWeight: 112, minChest: 114, maxChest: 119, minWaist: 100, maxWaist: 105, minLegs: 109, maxLegs: 118 },
-];
-
-/* FOX WOMEN'S TOPS STANDARD - data received 2026-09-14.
-   WIRED 2026-09-15: a gender selector now exists on Screen 1 (#genderToggle in
-   index.html -> currentUserGender in app.js) and calculateSize() reads it, via
-   currentSizeIsWomensTops (see that flag's own comment) and formatSizeLabel().
-
-   FOX's women's ladder is a EU dress-size token (XS 34 / S 36 / M 38 / L 40 / XL 42 /
-   XXL 44), not a chest-cm band, so it does NOT replace ZARA_SIZE_CHART's rows as the
-   fit-matching chart - it never grew height/weight columns and coreHwPenalty() cannot
-   score a row that has none. What actually happens: EVERY shopper, regardless of
-   gender, is still fitted against ZARA_SIZE_CHART's vetted height/weight/chest bands
-   (a garment fits the same body no matter which token is printed on the label) - this
-   chart is consulted AFTER that match, purely to relabel the resolved letter with its
-   EU dress-size token for a shopper who selected "women". Same reason
-   ADULT_JEANS_WAIST_CHART is a second chart rather than an edit to ADULT_PANTS_SIZE_CHART
-   (see that chart's own comment): a different convention for the same body, not a
-   replacement. Letters here are intentionally identical to ZARA_SIZE_CHART's (minus
-   3XL, which FOX did not publish a women's token for - see currentSizeIsWomensTops's
-   euRow-miss fallback in formatSizeLabel(), which keeps the plain letter rather than
-   guessing one). */
-const WOMEN_TOPS_EU_SIZE_CHART = [
-  { size: "XS",  euSize: 34 },
-  { size: "S",   euSize: 36 },
-  { size: "M",   euSize: 38 },
-  { size: "L",   euSize: 40 },
-  { size: "XL",  euSize: 42 },
-  { size: "XXL", euSize: 44 },
-];
-
-/* Children's numeric sizing (EU/IL kids convention, sizes 8-18).
-   Height/weight bands only - unlike ZARA_SIZE_CHART there are no chest/waist/legs
-   columns, so the optional fine-tune inputs contribute no penalty against these
-   rows - calculateSize() skips them outright on the child path.
-
-   Size 20+ is deliberately absent: the ladder connects into the adult chart on its
-   own, since adult S starts at 160cm/55kg and already overlaps size 18's upper end
-   (170-176cm / 54-60kg). */
-const CHILD_SIZE_CHART = [
-  { size: "8",  minHeight: 122, maxHeight: 135, minWeight: 22, maxWeight: 27 },
-  { size: "10", minHeight: 135, maxHeight: 145, minWeight: 27, maxWeight: 32 },
-  { size: "12", minHeight: 145, maxHeight: 155, minWeight: 32, maxWeight: 38 },
-  { size: "14", minHeight: 155, maxHeight: 163, minWeight: 38, maxWeight: 46 },
-  { size: "16", minHeight: 163, maxHeight: 170, minWeight: 46, maxWeight: 54 },
-  { size: "18", minHeight: 170, maxHeight: 176, minWeight: 54, maxWeight: 60 },
-];
-
-/* Ordered child scale, derived from the chart so the two can never drift apart.
-   → ["8","10","12","14","16","18"] */
-const CHILD_SIZE_SCALE = CHILD_SIZE_CHART.map((r) => r.size);
+   The three literal size lists below mirror the sizes of lib/sizing.js's charts;
+   numeric-pants-sizing asserts they match, since a ladder that drifted from its chart
+   would offer a size the fit can never return. */
+const CHILD_SIZE_SCALE = ["8", "10", "12", "14", "16", "18"];
 
 /* Ordered size scale - full range used by the override selector and delta math. */
 const SIZE_SCALE = ["XS", "S", "M", "L", "XL", "XXL", "3XL"];
 
-/* Adult PANTS numeric sizing (EU convention: 36-46 even sizes). A bottoms garment is
-   fitted on waist and hip, not chest - so this chart swaps ZARA_SIZE_CHART's
-   minChest/maxChest and minLegs/maxLegs columns for minHips/maxHips, and keeps
-   waist. calculateSize() only has a "waist" optional input today (no separate hip
-   measurement field), so the fine-tune pass below scores waist alone; minHips/
-   maxHips still ride on each row for a standards-comparable chart and for any
-   future hip input, they just contribute no penalty yet.
-   Ceiling matches ZARA_SIZE_CHART's XL row (195cm/100kg → here 195cm/102kg) so the
-   "genuinely out of catalog" overflow guard in calculateSize() means the same thing
-   on either chart - see isAdultPantsProduct() below for when this chart is chosen
-   over ZARA_SIZE_CHART. */
-const ADULT_PANTS_SIZE_CHART = [
-  { size: "36", minHeight: 155, maxHeight: 165, minWeight: 48, maxWeight: 58,  minWaist: 64, maxWaist: 70,  minHips: 88,  maxHips: 94  },
-  { size: "38", minHeight: 160, maxHeight: 170, minWeight: 55, maxWeight: 65,  minWaist: 68, maxWaist: 74,  minHips: 92,  maxHips: 98  },
-  { size: "40", minHeight: 165, maxHeight: 175, minWeight: 62, maxWeight: 73,  minWaist: 72, maxWaist: 79,  minHips: 96,  maxHips: 103 },
-  { size: "42", minHeight: 170, maxHeight: 180, minWeight: 70, maxWeight: 82,  minWaist: 77, maxWaist: 85,  minHips: 101, maxHips: 109 },
-  { size: "44", minHeight: 175, maxHeight: 186, minWeight: 78, maxWeight: 92,  minWaist: 83, maxWaist: 92,  minHips: 107, maxHips: 116 },
-  { size: "46", minHeight: 180, maxHeight: 195, minWeight: 87, maxWeight: 102, minWaist: 90, maxWaist: 100, minHips: 114, maxHips: 124 },
-];
-
-/* The EU adult pants ladder, derived from ADULT_PANTS_SIZE_CHART so the two can never
-   drift apart - same convention as CHILD_SIZE_SCALE above. → ["36","38","40","42","44","46"]
-   Defined HERE, immediately beside its chart, rather than beside isAdultPantsProduct()
-   below (which is where it's actually used) - some test harnesses extract a narrower
-   slice of this file that starts AFTER this point but still before that function, and an
-   eager `.map()` over a chart those harnesses never included would throw ReferenceError
-   at import time. isAdultPantsProduct() itself is a plain function body (deferred, not
-   eagerly evaluated), so it can safely read this from a slice that doesn't include the
-   chart, as long as the Set itself was already built here. */
-const ADULT_PANTS_NUMERIC_SIZES = new Set(ADULT_PANTS_SIZE_CHART.map((r) => r.size));
+/* The EU adult pants ladder - the sizes of lib/sizing.js's ADULT_PANTS_SIZE_CHART, in
+   chart order. pantsLadderFor("eu") walks it. */
+const ADULT_PANTS_NUMERIC_SIZES = new Set(["36", "38", "40", "42", "44", "46"]);
 /* ── APOSTROPHE NORMALISATION - one Hebrew word, four codepoints ─────────────────
    THE BUG THIS CLOSES: a jeans product titled "ג'ינס סקיני" was fitted against the
    adult LETTER chart, because the keyword lists in this file spell the geresh two
@@ -1409,9 +1297,10 @@ const ADULT_PANTS_NUMERIC_SIZES = new Set(ADULT_PANTS_SIZE_CHART.map((r) => r.si
    U+05F4 / U+201C-D (the double geresh/gershayim, as in דגמ"ח) are folded too, for
    exactly the same reason and by the same editors.
 
-   Kept in lockstep with normApos() in widget/pear-widget.js - see CLAUDE.md §3.
-   Whichever copy is wrong is the one that wins, because the widget's category
-   verdict is explicit and therefore outranks this file's own classifier.
+   Kept in lockstep with normApos() in widget/pear-widget.js and _normApos() in
+   lib/sizing.js (the pants title rules) - see CLAUDE.md §3. Whichever copy is wrong is
+   the one that wins, because the widget's category verdict is explicit and therefore
+   outranks this file's own classifier.
  * @param {unknown} s
  * @returns {string} the same text with every apostrophe/quote variant folded to
  *   ASCII ' and ", lower-cased. Never throws; non-strings become "".
@@ -1423,84 +1312,9 @@ function _normApos(s) {
     .toLowerCase();
 }
 
-/* ── ADULT_JEANS_WAIST_CHART - the FOX WAIST-CM ladder (28-38, updated 2026-09-14) ──
-   THE BUG THIS CLOSES (history - keep reading past the FOX update below): "the
-   calculator says L for a pair of jeans." A 185cm/82kg shopper on a product sold
-   28/30/32/34/36 was sized against ZARA_SIZE_CHART - the adult LETTER chart, which
-   bands on CHEST - and handed back "L", a value that does not appear anywhere in
-   that product's size picker and cannot be selected.
-
-   WHY THIS IS A SECOND CHART AND NOT AN EDIT TO ADULT_PANTS_SIZE_CHART.
-   ────────────────────────────────────────────────────────────────────
-   ADULT_PANTS_SIZE_CHART above is the EU ladder (36-46). This is the WAIST ladder.
-   They are two different measurement systems that happen to share the tokens 36-46,
-   and a store lists one or the other, never both. Collapsing them into one chart
-   would have to pick a single meaning for "38" - either a 97cm EU hip size or a
-   38-size waist - and would be wrong for every store on the other convention.
-   adult-pants-sizing.test.mjs pins the EU behaviour precisely because it was itself
-   a fix for a real report; this chart is additive and leaves every one of those
-   assertions untouched.
-
-   WHICH CHART A PRODUCT GETS is decided in calculateSize() from the product's OWN
-   size run, EU first (see pantsChartForSizes below) - never from a guess.
-
-   THE 2026-09-14 FOX UPDATE - ROW LIST REPLACED, METHOD KEPT. FOX's own men's waist
-   ladder is exactly 8 sizes - 28 (71-73cm), 30 (76-78cm), 31 (79-81cm), 32 (81-83cm),
-   33 (84-86cm), 34 (86-88cm), 36 (91-93cm), 38 (96-98cm) - narrower bands than the
-   old 24-48-even chart this replaces, and it does NOT cover 24, 26, 40, 42, 44, 46,
-   48. Those bodies now genuinely fall outside every row (the overflow/no-match guard
-   below handles that the same way it already handles any out-of-catalog body -
-   CLAUDE.md §2.5, never a guess) rather than getting an old chart's extrapolated
-   size. This was a deliberate scope call, not an oversight - see the PR description
-   for the decision to replace rather than merge/extend.
-
-   HOW THE BANDS WERE DERIVED (method unchanged from the original fix, only the input
-   waist values changed). Waist circumference tracks BMI far more closely than it
-   tracks weight alone, which is the whole reason the original reported case was
-   wrong in the first place: at 82kg the shopper reads as "large" on a weight-only
-   view, and as a lean 24.0 BMI once height is accounted for. Each row's centre is
-   BMI = (waist_cm + 14) / 4, the same male waist/BMI regression the original fix
-   used (waist_in * 2.54 IS waist_cm, so this chart plugs FOX's cm values in
-   directly - do not re-multiply by 2.54, that was only ever a units conversion for
-   an inch input). Height/weight bounds are the corner of each row's box: BMI at
-   minWaist paired with minHeight, BMI at maxWaist paired with maxHeight - so a row's
-   weight band is exactly what its own FOX waist band implies at its own height
-   extremes. Height ranges below 32 reuse the old chart's ladder for those same
-   numeric sizes (already a real "sold into" range, not re-derived); 31 and 33 are
-   new rows and interpolate their height range from the neighbours either side.
-   Benchmark this must hold (CLAUDE.md §1 Layer D): 185cm/82kg -> BMI 23.96, which
-   sits in row 32's 23.75-24.25 band (82cm waist center = BMI 24.0 almost exactly) -
-   row 31 also reaches height 185 but its weight band tops out at 81kg, so 32 is the
-   first genuine match in chart order, same "32" this benchmark got before the
-   FOX update.
-
-   ROW ORDER IS LOAD-BEARING. calculateSize() keeps the FIRST genuinely-fitting row
-   when no optional waist measurement narrows it (every candidate scores penalty 0,
-   and the first 0 wins), so rows run smallest-first. A shopper on a boundary is
-   offered the SMALLER size, matching how denim is actually bought - jeans stretch
-   out, they do not shrink in.
-
-   Columns mirror ADULT_PANTS_SIZE_CHART exactly (waist + hips, no chest/legs) so
-   coreHwPenalty() and calculateSize()'s fine-tune pass work against it unmodified.
-   minHips/maxHips ride along for a standards-comparable chart and for a future hip
-   input; there is no hips field on the form today, so they contribute no penalty -
-   FOX did not publish a hip figure either, so these keep the old chart's own
-   waist+21cm offset, same as every prior row here. */
-const ADULT_JEANS_WAIST_CHART = [
-  { size: "28", minHeight: 155, maxHeight: 178, minWeight: 51, maxWeight: 69,  minWaist: 71, maxWaist: 73, minHips: 92,  maxHips: 94  },
-  { size: "30", minHeight: 160, maxHeight: 180, minWeight: 58, maxWeight: 75,  minWaist: 76, maxWaist: 78, minHips: 97,  maxHips: 99  },
-  { size: "31", minHeight: 163, maxHeight: 185, minWeight: 62, maxWeight: 81,  minWaist: 79, maxWaist: 81, minHips: 100, maxHips: 102 },
-  { size: "32", minHeight: 165, maxHeight: 190, minWeight: 65, maxWeight: 88,  minWaist: 81, maxWaist: 83, minHips: 102, maxHips: 104 },
-  { size: "33", minHeight: 168, maxHeight: 193, minWeight: 69, maxWeight: 93,  minWaist: 84, maxWaist: 86, minHips: 105, maxHips: 107 },
-  { size: "34", minHeight: 170, maxHeight: 195, minWeight: 72, maxWeight: 97,  minWaist: 86, maxWaist: 88, minHips: 107, maxHips: 109 },
-  { size: "36", minHeight: 172, maxHeight: 198, minWeight: 78, maxWeight: 105, minWaist: 91, maxWaist: 93, minHips: 112, maxHips: 114 },
-  { size: "38", minHeight: 174, maxHeight: 200, minWeight: 83, maxWeight: 112, minWaist: 96, maxWaist: 98, minHips: 117, maxHips: 119 },
-];
-
-/* The waist-inch ladder, derived from the chart so the two can never drift apart -
-   same convention as CHILD_SIZE_SCALE / ADULT_PANTS_NUMERIC_SIZES above, and defined
-   HERE beside its chart for the same load-order reason those record. */
-const ADULT_JEANS_WAIST_SIZES = new Set(ADULT_JEANS_WAIST_CHART.map((r) => r.size));
+/* The FOX waist ladder - the sizes of lib/sizing.js's ADULT_JEANS_WAIST_CHART, in chart
+   order (smallest first; see that chart's "ROW ORDER IS LOAD-BEARING"). */
+const ADULT_JEANS_WAIST_SIZES = new Set(["28", "30", "31", "32", "33", "34", "36", "38"]);
 
 /* True while the resolved chart is one of the two NUMERIC pants ladders. Read only by
    formatSizeLabel(), which must never decorate a numeric pants size: the kids suffix
@@ -1509,6 +1323,12 @@ const ADULT_JEANS_WAIST_SIZES = new Set(ADULT_JEANS_WAIST_CHART.map((r) => r.siz
    run - including the early-return paths, which reset it - so it can never describe a
    PREVIOUS garment's chart. */
 let currentSizeIsNumericPants = false;
+
+/* WHICH numeric pants chart the last size verdict used - "eu" or "waist" while
+   currentSizeIsNumericPants is true, null otherwise, and reset alongside it. Read only by
+   pantsLadderFor(), so a numeric-pants product that listed no sizes of its own is offered
+   the ladder of the chart that actually produced currentUserSize. */
+let currentPantsChart = null;
 
 /* True while the recommended size should be shown with its FOX WOMEN'S TOPS EU
    dress-size token (WOMEN_TOPS_EU_SIZE_CHART) alongside the letter - "M (EU 38)"
@@ -1532,27 +1352,16 @@ let currentSizeIsNumericPants = false;
    chart": a letter-sized sweatpants pair alpha-vetoed onto ZARA_SIZE_CHART for FIT still
    answers true here, so it is never decorated with a TOPS EU token that would collide
    with ADULT_PANTS_SIZE_CHART's own, differently-scaled EU numbers - see
-   calculateSize()'s own comment on isConfidentlyPants), and the body landed on the ADULT
+   productVerdict()'s comment on isConfidentlyPants in lib/sizing.js), and the body landed
+   on the ADULT
    chart (currentSizeCategory === "adult" - WOMEN_TOPS_EU_SIZE_CHART has no child rows,
    same reason the kids suffix below is also adult-only). */
 let currentSizeIsWomensTops = false;
 
-/**
- * Height/weight penalty for one chart row - the scoring kernel behind
- * calculateSize()'s match pass, shared by every chart (ZARA_SIZE_CHART,
- * CHILD_SIZE_CHART, and ADULT_PANTS_SIZE_CHART all carry the same four
- * min/maxHeight/min/maxWeight fields). Same ×2 per-cm/kg weighting as the
- * original adult matcher.
- * @returns {number}
- */
-function coreHwPenalty(row, height, weight) {
-  let pen = 0;
-  if (height < row.minHeight) pen += (row.minHeight - height) * 2;
-  if (height > row.maxHeight) pen += (height - row.maxHeight) * 2;
-  if (weight < row.minWeight) pen += (row.minWeight - weight) * 2;
-  if (weight > row.maxWeight) pen += (weight - row.maxWeight) * 2;
-  return pen;
-}
+/* The FOX women's letter -> EU token map for formatSizeLabel(), delivered with the size
+   verdict only while currentSizeIsWomensTops is true, and reset alongside it. */
+let currentEuTokens = null;
+
 
 /* CHILD_AGE_MAX / pickSizeCategory() lived here and are GONE - see the "AGE -
    REMOVED" note further down. Both were already unreachable: nothing called
@@ -1566,7 +1375,7 @@ function coreHwPenalty(row, height, weight) {
    (an older cached correction from before this feature existed).
 
    ⚠️ This is the WEAKER of the two category signals and is consulted only as a
-   fallback - see isKidsProduct() below for why the product's own size list outranks
+   fallback - see isKidsProduct() in lib/sizing.js for why the product's own size list outranks
    it, and what shipped to production when it didn't.
  * @returns {"kids"|"adult"|"uncertain"}
  */
@@ -1575,35 +1384,12 @@ function resolvedGarmentAgeGroup() {
   return (ag === "kids" || ag === "adult") ? ag : "uncertain";
 }
 
-/* KIDS/ADULT SIZE-CATEGORY GUARD.
-
-   ── WHY THIS READS THE PRODUCT'S REAL SIZE LIST, AND NOT JUST THE CLASSIFIER ──────
-   The first version of this guard keyed entirely on resolvedGarmentAgeGroup() - the
-   per-product kids/adult verdict from Gemini's image classification - and it FAILED IN
-   PRODUCTION on a FOX Spiderman tee sold only in kids 8/10/12/14/16: an adult
-   180cm/80kg profile sailed straight into the fitting room, with an adult XS-3XL size
-   selector rendered over a product that has no adult size at all.
-
-   That failure was not a coding slip, it was the wrong source of truth. server.js's own
-   classifier prompt INSTRUCTS the model to abstain on exactly this kind of item:
-     · "Flat-lay / packshot with NO model and NO visible size label ... answer
-        'uncertain' - do not guess from styling alone."
-     · "Do NOT infer age group from color, PRINT STYLE, or price positioning alone"
-     · "below 0.7 you must answer 'uncertain'"
-   A character-print packshot hits all three, so "uncertain" is the CORRECT answer from
-   that model - and "uncertain" can never block. Meanwhile the storefront was displaying
-   8/10/12/14/16 the entire time: deterministic ground truth, sitting unread.
-
-   So the ordering below is deliberate and load-bearing: when the host page gives us a
-   real size list, THAT decides, in both directions (it can also clear a wrong "kids"
-   verdict). The classifier is consulted only when no size list reached us at all - a
-   probabilistic signal designed to abstain must never outrank a deterministic one. */
-
-/* The kids numeric ladder, per the retail convention this codebase already encodes in
-   CHILD_SIZE_CHART (which runs 8-18; 2-6 are included here because a product can list
-   them even though we don't size-match against those rows). Adult numeric systems -
-   waist/chest 28-44 - deliberately fall OUTSIDE this set, so "32" never reads as kids. */
-const KIDS_NUMERIC_SIZES = new Set(["2", "4", "6", "8", "10", "12", "14", "16", "18"]);
+/* KIDS/ADULT SIZE-CATEGORY GUARD - the rules (isKidsProduct(), isAdultProduct(),
+   KIDS_NUMERIC_SIZES) live in lib/sizing.js since 2026-09-26, with the FOX kids-tee
+   production failure that ordered them: the product's own size list outranks the
+   classifier's age group, in both directions. This region forwards both as evidence
+   (sizeProductEvidence()) and reads back kidsOnly / adultOnly - see
+   isCompatibleSizeCategory() below. */
 /* Adult letter scales, incl. the 2XL/3XL spellings storefronts use interchangeably
    with XXL/XXXL. Presence of ANY of these is proof the product is not kids-only. */
 const ADULT_ALPHA_SIZES = new Set([
@@ -1619,195 +1405,13 @@ function parseSizeList(raw) {
   return list.map((s) => String(s == null ? "" : s).trim().toUpperCase()).filter(Boolean);
 }
 
-/* ══ THE STORE'S OWN SIZE CHART - decode, then overlay ══════════════════════════════
-   WHAT ARRIVES: pear-widget.js reads the "Size guide" / "מדריך מידות" table off the PDP
-   the shopper is standing on (extractSizeChart there) and encodes it compactly
-   (encodeSizeChart there). It reaches us on ?garment_size_chart= at open and again on
-   the PEAR_UPDATE_GARMENT correction.
+/* ══ THE STORE'S OWN SIZE CHART ══════════════════════════════════════════════
+   Decoded and laid over our charts server-side now - see parseStoreSizeChart() and
+   applyStoreChartOverlay() in lib/sizing.js, and CLAUDE.md §2.5b for the bound that makes
+   parsing a merchant's HTML an acceptable input (fine-tune columns only, never the
+   height/weight kernel). The browser forwards the raw string the widget encoded
+   (resolvedStoreSizeChart() below) and never parses it. */
 
-   ── WHAT IT IS ALLOWED TO DO, AND THE LINE IT MUST NOT CROSS ─────────────────────────
-   calculateSize() computes in two stages. The KERNEL is height + weight, scored by
-   coreHwPenalty(), and it decides three things that all matter enormously:
-     · which rows are candidates at all (the genuine-fit filter, penalty === 0),
-     · currentBodyCategory / currentSizeCategory, and so the kids/adult go-live guard,
-     · the overflow ceiling behind the "no size available" copy.
-   The FINE-TUNE is the ×0.5 chest/waist/legs pass that only ever breaks a tie BETWEEN
-   rows that already passed the kernel.
-
-   A merchant's chart publishes body circumferences. It never publishes a height or a
-   weight band. So applyStoreChartOverlay() writes the fine-tune columns and NOTHING
-   ELSE - it does not even name minHeight/maxHeight/minWeight/maxWeight - and the blast
-   radius of a bad scrape is bounded to "which of two adjacent sizes that both genuinely
-   fit this body is shown", and only for a shopper who filled in an optional
-   measurement. It cannot invent a candidate, remove one, flip adult↔child, or turn a
-   match into a no-match. That bound is the entire reason reading merchant HTML is an
-   acceptable input to this file at all. Do not widen it to the kernel "so the store's
-   chart really counts" - the store's chart is evidence about CLOTH, ours is vetted
-   evidence about BODIES, and the kernel is the half we vetted.
-
-   Spec: docs/superpowers/specs/2026-09-17-storefront-size-chart-scraper.md */
-
-/* Mirrors SIZE_CHART_CLAMPS in pear-widget.js (CLAUDE.md §3 - edit together). Re-checked
-   HERE rather than trusted from the wire because this is the last gate before a number
-   from a stranger's HTML becomes a band the calculator scores against, and the widget is
-   not the only possible sender (the message listener accepts a correction, and a
-   server-side chart cache is an obvious next step). Centimetres, post-conversion. */
-const STORE_CHART_CLAMPS = {
-  chest: [50, 200], waist: [40, 200], hips: [50, 200], legs: [40, 140],
-};
-
-/* The wire format, decoded:
-       <unit>;<source>;SIZE:chest:waist:hips:legs|SIZE:...
-       each measurement ::= "min-max", or "" when the chart doesn't publish it
-   e.g. cm;shopify;S:90-95:76-81::|M:96-101:82-87::|L:102-107:88-93::
-
-   ⚠️ CROSS-FILE LOCKSTEP (CLAUDE.md §3): the encoder is encodeSizeChart() in
-   pear-widget.js. One format, two files, same commit - test/size-chart-overlay.test.mjs
-   round-trips the widget's own encoder output through this decoder for that reason.
-
-   REFUSES A NON-"cm" UNIT OUTRIGHT rather than converting. The widget converts to
-   centimetres before encoding, so "in" on the wire means one of the two sides has
-   drifted - and a chart converted twice (or not at all) is the one failure mode here
-   that produces plausible, confident, WRONG bands instead of a visible absence.
-   @param {string|Array|null|undefined} raw
-   @returns {Array<object>} rows, or [] for anything unreadable */
-function parseStoreSizeChart(raw) {
-  try {
-    /* An already-parsed array is accepted so a future sender (a server-side cache, a
-       test) can hand rows straight over without a round trip through the string. */
-    if (Array.isArray(raw)) return raw.filter((r) => r && typeof r === "object" && r.size);
-    if (typeof raw !== "string") return [];
-    const s = raw.trim();
-    if (!s) return [];
-    const head = s.split(";");
-    if (head.length < 3) return [];
-    if (head[0].trim().toLowerCase() !== "cm") return [];
-    const body = head.slice(2).join(";");
-
-    const band = (tok) => {
-      const m = /^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$/.exec(String(tok || "").trim());
-      if (!m) return null;
-      const lo = parseFloat(m[1]), hi = parseFloat(m[2]);
-      if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return null;
-      return { min: lo, max: hi };
-    };
-
-    const out = [], seen = new Set();
-    for (const chunk of body.split("|")) {
-      const cells = chunk.split(":");
-      /* parseSizeList() normalises exactly as every other size reader in this file does
-         (trim + uppercase) - CLAUDE.md §2.2's discipline applied to size tokens: "l",
-         " L " and "L" are one size, and a raw compare would silently overlay nothing. */
-      const size = parseSizeList([cells[0]])[0];
-      if (!size || seen.has(size)) continue;
-      const row = { size };
-      const keys = ["Chest", "Waist", "Hips", "Legs"];
-      let any = false;
-      for (let i = 0; i < keys.length; i++) {
-        const b = band(cells[i + 1]);
-        if (!b) continue;
-        row["min" + keys[i]] = b.min;
-        row["max" + keys[i]] = b.max;
-        any = true;
-      }
-      if (!any) continue;          // a size with no measurement overlays nothing
-      seen.add(size);
-      out.push(row);
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-/* THE OVERLAY. Returns a NEW array with the store's fine-tune bands written over the
-   matching rows of `baseChart`; `baseChart` itself is never mutated, and is returned
-   BY REFERENCE (not a copy) whenever there is nothing to apply.
-
-   FOUR RULES, each of which is a refusal:
-     1. Rows are matched by CANONICAL size token (canonicalSizeToken: "2XL" is "XXL"),
-        or by an EU/US alias the store's own chart declared for that row
-        (storeChartTokenMap - letters always, an EU number only onto an EU chart). A
-        store row that answers to no size the base chart has is ignored - bestSize can
-        only ever be one of the base chart's own rows, so a row nothing can select is
-        not worth carrying. THE BUG THE ALIASES CLOSE: a store printing "2XL" or
-        "EU 48 | M" had those rows silently dropped, because the raw token was compared
-        and matched nothing - the overlay looked applied and did nothing.
-     2. A column is written only when the store supplied BOTH bounds, both are finite,
-        min <= max, and both survive STORE_CHART_CLAMPS. A partial chart (chest only)
-        leaves waist and legs on ours.
-     3. A column is written only when the BASE ROW ALREADY HAS IT. This is "refine",
-        not "extend": the store may not introduce a measurement dimension the vetted
-        chart deliberately does not score. ZARA_SIZE_CHART has chest/waist/legs and no
-        hips; ADULT_PANTS_SIZE_CHART has waist/hips and no chest - each keeps its own
-        shape, and the overlay can only ever CHANGE a band, never add or remove one.
-     4. Height and weight are not writable. They are not read, not copied field by
-        field, not named anywhere below - the row is spread wholesale and only the four
-        fine-tune keys are overwritten, so there is no path by which a future edit
-        "accidentally" reaches the kernel.
-   Anything unexpected - a non-array, an empty match, a throw - returns `baseChart`.
-   @param {Array<object>} baseChart   ZARA_SIZE_CHART / a pants chart, untouched
-   @param {Array<object>} storeRows   parseStoreSizeChart() output
-   @returns {Array<object>} */
-function applyStoreChartOverlay(baseChart, storeRows) {
-  try {
-    if (!Array.isArray(baseChart) || !baseChart.length) return baseChart;
-    if (!Array.isArray(storeRows) || !storeRows.length) return baseChart;
-
-    const numericBase = baseChart.every((row) => /^\d+$/.test(String(row && row.size)));
-    const byToken = storeChartTokenMap(storeRows, numericBase);
-    if (!byToken.size) return baseChart;
-
-    let touched = 0;
-    const out = baseChart.map((row) => {
-      const token = canonicalSizeToken(row && row.size);
-      const store = token ? byToken.get(token) : undefined;
-      if (!store) return row;                        // pass through BY REFERENCE
-      let next = null;
-      for (const cap of ["Chest", "Waist", "Hips", "Legs"]) {
-        if (typeof row["min" + cap] !== "number" || typeof row["max" + cap] !== "number") continue;
-        const lo = store["min" + cap], hi = store["max" + cap];
-        if (typeof lo !== "number" || typeof hi !== "number") continue;
-        if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) continue;
-        const clamp = STORE_CHART_CLAMPS[cap.toLowerCase()];
-        if (!clamp || lo < clamp[0] || hi > clamp[1]) continue;
-        if (!next) next = { ...row };
-        next["min" + cap] = lo;
-        next["max" + cap] = hi;
-      }
-      if (next) touched++;
-      return next || row;
-    });
-    if (!touched) return baseChart;
-    console.log("[PEAR] store size chart overlaid on", touched, "of", baseChart.length,
-      "chart row(s) - fine-tune bands only, height/weight kernel untouched");
-    return out;
-  } catch (e) {
-    /* CLAUDE.md §2.5 - the default global matrix is the documented safe state, and it
-       is exactly what shipped before this feature existed. */
-    console.warn("[PEAR] store size-chart overlay failed, keeping the default matrix:",
-      e?.message || e);
-    return baseChart;
-  }
-}
-
-/**
- * @param {string[]|string|null} sizes - the host product's OWN size list, when known
- * @param {"kids"|"adult"|"uncertain"|undefined} garmentAgeGroup - classifier fallback only
- * @returns {boolean} true only when the product is CONFIDENTLY kids-only.
- */
-function isKidsProduct(sizes, garmentAgeGroup) {
-  const list = parseSizeList(sizes);
-  if (list.length) {
-    // Any adult letter size present -> the product serves adults, whatever else it lists.
-    if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
-    // Otherwise: kids only if EVERY token is a kids numeric. A mixed or unrecognised
-    // list (an adult 28-44 waist run, a one-size product, a store's own odd labels)
-    // is NOT confidently kids - and an unconfident verdict must never block a sale.
-    return list.every((s) => KIDS_NUMERIC_SIZES.has(s));
-  }
-  return garmentAgeGroup === "kids";
-}
 
 /* ── THE SIZE RUN AS EVIDENCE - "STRAIGHT BASIC" and "LOOSE" ─────────────────────
    REPORTED: long trousers ran through the tops pipeline while the size selector
@@ -1819,8 +1423,8 @@ function isKidsProduct(sizes, garmentAgeGroup) {
 
    But the shopper was looking at the right answer the whole time. A size run of 26-38 is
    a WAIST measurement - it is the product telling us its own region, in the one field
-   that was never ambiguous. This file already reasons about exactly this vocabulary one
-   screen up, where KIDS_NUMERIC_SIZES documents that "adult numeric systems - waist/chest
+   that was never ambiguous. The size rules reason about exactly this vocabulary in
+   lib/sizing.js, where KIDS_NUMERIC_SIZES documents that "adult numeric systems - waist/chest
    28-44 - deliberately fall OUTSIDE this set".
 
    IT ABSTAINS UNLESS THE RUN IS UNAMBIGUOUSLY A WAIST, which is what makes it safe to
@@ -1845,222 +1449,14 @@ function categoryFromSizeRun(sizes) {
   return Math.min(...nums) <= WAIST_RUN_OPENS_BY ? "bottom" : null;
 }
 
-/**
- * Mirror of isKidsProduct - true only when the product is CONFIDENTLY adult.
- * Needed because the childFits guard was zeroing only on garmentAgeGroup ===
- * "adult" (the classifier verdict), never on the real size list - so an adult
- * product with a real S/M/L list but an "uncertain" classifier read (common:
- * the classifier is instructed to abstain on packshots with no model) let a
- * child-bodied shopper through to a genuine CHILD_SIZE_CHART match instead of
- * being blocked, same class of bug isKidsProduct itself was written to fix.
- * @param {string[]|string|null} sizes
- * @param {"kids"|"adult"|"uncertain"|undefined} garmentAgeGroup
- * @returns {boolean}
- */
-function isAdultProduct(sizes, garmentAgeGroup) {
-  const list = parseSizeList(sizes);
-  if (list.length) {
-    if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return true;
-    // Not every token kids-numeric -> an adult numeric run (e.g. 28-44 waist)
-    // or unrecognised labels, treated as adult, mirroring isKidsProduct's
-    // "not confidently kids" default for a deterministic size list.
-    return !list.every((s) => KIDS_NUMERIC_SIZES.has(s));
-  }
-  return garmentAgeGroup === "adult";
-}
 
-/**
- * Whether the product's OWN size list is confidently the EU pants ladder
- * (ADULT_PANTS_SIZE_CHART's own six values: 36/38/40/42/44/46) - same "every token or
- * abstain" confidence rule isKidsProduct()/isAdultProduct() use for their own charts.
- * A letter scale, a kids numeric run, anything outside those six values, or no list at
- * all is NOT confidently EU-numeric, and defers to pantsChartForSizes()'s waist-inch
- * branch (or ZARA_SIZE_CHART, if the run isn't pants-numeric at all) - never a guess,
- * matching this file's "an unconfident verdict must not outrank" rule (CLAUDE.md §2.5).
- *
- * NARROWED BACK TO EXACT EU MEMBERSHIP - it was briefly widened to accept ANY plausible
- * all-numeric adult-bottoms run (24-48), which is what "THE 26-40 REPORT" below used to
- * describe. That widening shipped its own real bug once ADULT_JEANS_WAIST_CHART
- * (pantsChartForSizes()'s other branch) existed: a genuine US/UK waist-inch run like
- * 28-36 also sits inside 24-48, so the widened check claimed it for the EU chart too -
- * and pantsChartForSizes()'s own EU-first precedence then handed a real FOX waist-inch
- * product a chest-banded EU size (a 185cm/82kg shopper got EU "36" off a snap-to-list
- * guess instead of the FOX chart's genuine "32"). isWaistInchSizeRun() below already
- * covers the SAME 24-48 window this function used to - narrowing this one back to exact
- * EU membership is what lets pantsChartForSizes()'s "EU claims its own run, waist-inch
- * takes everything else" precedence actually mean something. THE 26-40 REPORT ITSELF
- * STAYS FIXED: that run no longer falls back to letters, it now resolves through
- * isWaistInchSizeRun() to the waist-inch chart instead of being force-fit to EU - see
- * test/numeric-pants-sizing.test.mjs for the current, chart-precise coverage of that
- * exact scenario.
- * @param {string[]|string|null} sizes
- * @returns {boolean}
- */
-function isAdultPantsProduct(sizes) {
-  const list = parseSizeList(sizes);
-  if (!list.length) return false;
-  // A letter size proves the product ships in the alpha scale - never treat it as
-  // numeric-pants no matter what else the list contains (same precedent
-  // isKidsProduct()/isAdultProduct() use for ADULT_ALPHA_SIZES).
-  if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
-  return list.every((s) => ADULT_PANTS_NUMERIC_SIZES.has(s));
-}
-
-/**
- * THE VETO that stops a letter-sized garment being pulled onto a numeric pants
- * chart - the counterpart to isAdultPantsProduct()/isWaistInchSizeRun() above, which
- * establish POSITIVE numeric evidence. This establishes positive ALPHA evidence, and
- * outranks it: isPantsProduct() correctly calls a pair of sweatpants sold S/M/L a
- * lower-body garment from its TITLE alone (no numeric evidence needed), and without
- * this veto that verdict fed straight into pantsChartForSizes()'s "no confidently-
- * numeric run" default - ADULT_JEANS_WAIST_CHART, the ladder written for 28/30/32
- * jeans whose picker scrapes to nothing. A sports-pants shopper was quoted a bare
- * waist-inch number for a product whose picker only ever offers S/M/L.
- *
- * TWO TIERS, SAME "every token or abstain" confidence rule as isAdultPantsProduct():
- *   1. the product's OWN size run   free, synchronous, THIS visit's own scrape -
- *                                    checked first because live evidence always
- *                                    outranks a remembered one.
- *   2. the cached size-run-type     a PREVIOUS visit's scrape of the SAME product,
- *                                    consulted only when this visit's list is empty
- *                                    (a JS-rendered picker that hasn't hydrated yet) -
- *                                    see pendingSizeRunType's own comment for the
- *                                    full round trip.
- *
- * NEVER GUESSES: an empty/mixed size list with no cached hint returns false, which
- * simply leaves the existing numeric-chart default in place for products this can't
- * yet speak to (CLAUDE.md §2.5).
- * @param {string[]|string|null} sizes - the host product's OWN size list, THIS visit
- * @param {"numeric"|"alpha"|"unknown"|undefined} sizeRunType - cached fallback
- * @returns {boolean}
- */
-function isAlphaSizeRun(sizes, sizeRunType) {
-  const list = parseSizeList(sizes);
-  if (list.length) return list.every((s) => ADULT_ALPHA_SIZES.has(s));
-  return sizeRunType === "alpha";
-}
-
-/**
- * The chart-selection gate calculateSize() reads: true only when the product is
- * confidently adult-pants-numeric AND (whenever a real item is already known) it is
- * confidently a bottoms garment. The `item` check only ever narrows a numeric match
- * that turns out to belong to a known non-bottoms item (e.g. an EU-numbered top run -
- * see categoryFromSizeRun()'s own note that an EU run opening at 34/36 is genuinely
- * ambiguous with tops) - it can never widen a list that isn't pants-numeric in the
- * first place. `item` is usually unavailable here (calculateSize() runs on Screen 1,
- * before activeItem exists - see resolvedGarmentSizes()'s comment), so the sizing
- * evidence alone decides in the common case, exactly like isKidsProduct()/
- * isAdultProduct() already do with no item at all.
- * @param {string[]|string|null} sizes
- * @param {object|null|undefined} item - activeItem, when it already exists
- * @returns {boolean}
- */
-function isAdultNumericPantsGarment(sizes, item) {
-  if (!isAdultPantsProduct(sizes)) return false;
-  if (item && typeof isBottomsGarment === "function" && !isBottomsGarment(item)) return false;
-  return true;
-}
-/* ── TIER 1 of isPantsProduct(): the size run as a WAIST measurement ─────────────
-   A run of plain integers in 24-48 is a waist in inches. Nothing else in apparel is
-   numbered that way: a kids run is 2-18, a shirt NECK run is 14-18, and both fall
-   below the floor; a shoe run and an EU dress run overshoot or carry letters.
-
-   SEPARATE FROM categoryFromSizeRun() ABOVE, DELIBERATELY, and they are not
-   interchangeable. That one answers "can this run PROVE a bottom?" for the prompt
-   pipeline and therefore also demands the run OPEN at 32 or lower, because an EU
-   women's top run opening at 34/36 is genuinely ambiguous with tops. This one
-   answers the narrower question "which adult CHART does this run belong to?", and
-   it is reached only after the EU ladder has already claimed its own runs
-   (pantsChartForSizes below), so the ambiguous 34/36-opening case has been taken
-   off the table before this ever sees it. Folding the two together would either
-   re-open that ambiguity or reject legitimate large-waist runs (34/36/38).
-
-   ABSTAINS RATHER THAN GUESSES, on the same "every token or nothing" rule
-   isKidsProduct()/isAdultPantsProduct() use: any adult letter, any non-integer
-   token (one-size, "36R", a store's own labels) or any token outside the ladder
-   and the whole run yields nothing, which simply leaves the letter chart in place.
-   @param {string[]|string|null|undefined} sizes
-   @returns {boolean} */
-const WAIST_INCH_FLOOR = 24, WAIST_INCH_CEIL = 48;
-function isWaistInchSizeRun(sizes) {
-  const list = parseSizeList(sizes);
-  if (!list.length) return false;
-  if (list.some((s) => ADULT_ALPHA_SIZES.has(s))) return false;
-  if (!list.every((s) => /^\d{1,2}$/.test(s))) return false;
-  return list.every((s) => {
-    const n = Number(s);
-    return n >= WAIST_INCH_FLOOR && n <= WAIST_INCH_CEIL;
-  });
-}
-
-/* ── TIER 2 vocabulary: the garment noun, in both languages ──────────────────────
-   Kept in step with GARMENT_CATEGORY_KEYWORDS.bottom and BOTTOMS_TOKENS further down
-   this file - three separate mechanisms over one vocabulary, which is the convention
-   this file already records for the other two ("a word added to only one of them is a
-   miss on whichever path the item happens to take").
-
-   IT IS A SEPARATE COPY ON PURPOSE, not an oversight. GARMENT_CATEGORY_KEYWORDS lives
-   in the garment-category region ~700 lines below, and several test harnesses execute
-   THIS region as a standalone slice that stops before it (see CLAUDE.md §2.6/§2.7).
-   A reference across that boundary is a ReferenceError at import time, not a lint nit.
-
-   Hebrew entries are STEMS (Hebrew inflects by suffix - מכנס covers מכנסי/מכנסיים);
-   English entries are word-bounded, because English compounds the other way and a
-   stem match on "short" swallows "short sleeve" and turns every tee into shorts.
-
-   ALREADY APOSTROPHE-NORMALISED: every entry here is matched only against _normApos()
-   output, so each Hebrew word carries ONE spelling of its geresh (ASCII U+0027) and
-   the U+05F3/U+2018/U+2019 variants fold onto it at the door. */
-const PANTS_TITLE_STEMS_HE = [
-  "מכנס", "ג'ינס", "ברמודה", "שורטס", "שורט", "חצאי", "טייץ", "טייצ", "לגינ", "סווטפנט",
-];
-const PANTS_TITLE_WORDS_EN = [
-  "pants", "pant", "jeans", "jean", "denim", "trouser", "trousers", "shorts", "skirt", "skirts",
-  "leggings", "chino", "chinos", "jogger", "joggers", "sweatpant", "sweatpants", "slacks",
-  "culottes", "bermuda", "bermudas", "capri", "capris", "palazzo", "bottoms",
-];
-/* "ג'ינס"/"denim" name a lower-body garment AND a material, so "ז'קט ג'ינס" (a denim
-   JACKET) matches the pants list on the fabric alone - and a denim jacket fitted on a
-   waist ladder is not a near miss, it is the wrong chart entirely. Mirrors
-   FABRIC_AMBIGUOUS / classifyGarmentTitle()'s strip-and-rescan pass below. */
-const PANTS_FABRIC_WORDS = ["ג'ינס", "jeans", "jean", "denim"];
-const PANTS_TOP_STEMS_HE = [
-  "חולצ", "טישרט", "טי-שירט", "סווטשירט", "סוודר", "גופי", "ז'קט", "מעיל", "קפוצ'ון",
-  "בלייזר", "קרדיגן", "טופ", "שמלה",
-];
-const PANTS_TOP_WORDS_EN = [
-  "shirt", "tshirt", "t-shirt", "tee", "top", "tops", "hoodie", "jacket", "blazer", "sweater",
-  "sweatshirt", "cardigan", "blouse", "polo", "tank", "pullover", "coat", "dress",
-];
-const _stemHit = (text, stems) => stems.some((s) => text.includes(s));
-/* Word-boundary match, mirroring hasEnglishWord() in the garment-category region (see
-   PANTS_TITLE_STEMS_HE on why that is a separate copy rather than a shared reference).
-   String.raw so the two backslashes of a \\b are unmistakable in review - this pair
-   has been silently collapsed to a backspace escape by a shell heredoc once already, and
-   /\bjeans\b/ quietly becoming /\u0008jeans\u0008/ matches NOTHING while still compiling. */
-const _RE_WORD_BOUND = String.raw`\b`;
-const _wordHit = (text, words) =>
-  words.some((w) => new RegExp(_RE_WORD_BOUND + w + _RE_WORD_BOUND, "i").test(text));
-
-/* TIER 2 proper. True only when the title names a lower-body garment AND that evidence
-   survives the fabric strip.
-   @param {string|null|undefined} title
-   @returns {boolean} */
-function titleNamesPants(title) {
-  const text = _normApos(title);
-  if (!text.trim()) return false;
-  const bottom = _stemHit(text, PANTS_TITLE_STEMS_HE) || _wordHit(text, PANTS_TITLE_WORDS_EN);
-  if (!bottom) return false;
-  const top = _stemHit(text, PANTS_TOP_STEMS_HE) || _wordHit(text, PANTS_TOP_WORDS_EN);
-  if (!top) return true;
-  /* Both sides matched. Strip the fabric words and re-test: if the lower-body evidence
-     was ONLY the fabric ("ז'קט ג'ינס" → "ז'קט "), the top noun stands alone and this is
-     NOT pants. If real lower-body evidence survives ("מכנס ג'ינס" → "מכנס "), it is. */
-  const stripped = PANTS_FABRIC_WORDS.reduce((s, w) => s.split(w).join(" "), text);
-  const reBottom = _stemHit(stripped, PANTS_TITLE_STEMS_HE) || _wordHit(stripped, PANTS_TITLE_WORDS_EN);
-  const reTop = _stemHit(stripped, PANTS_TOP_STEMS_HE) || _wordHit(stripped, PANTS_TOP_WORDS_EN);
-  return reBottom && !reTop;
-}
+/* THE PANTS RULES - which chart a lower-body garment is fitted against - live in
+   lib/sizing.js since 2026-09-26 (POST /api/size; CLAUDE.md §2.12): isPantsProduct() and
+   its four tiers, isWaistInchSizeRun(), isAdultPantsProduct(), isAlphaSizeRun()'s veto,
+   isAdultNumericPantsGarment(), titleNamesPants() with its Hebrew/English word lists, and
+   pantsChartKindForSizes()'s EU-before-waist precedence - each with the report that shaped
+   it. This region gathers the evidence they read (sizeProductEvidence() below) and
+   receives the chart KIND with the size verdict (currentPantsChart). */
 
 /* The Gemini Vision verdict cached in garment_cache.garment_category (see
    archive/supabase_setup_v13.sql and GET /api/garment-category in server.js), fetched
@@ -2083,136 +1479,30 @@ function resolvedGarmentTitle() {
   return "";
 }
 
-/* Explicit lower-body type markers for tier 4. Deliberately the same vocabulary as
-   EXPLICIT_BOTTOM_TYPES further down (another §2.6 slice-boundary copy - see
-   PANTS_TITLE_STEMS_HE's note). "dress" is absent for the reason that set records: a
-   dress covers both regions and has no correct answer on a waist-vs-chest question. */
-const PANTS_EXPLICIT_TYPES = new Set([
-  "pants", "bottoms", "bottom", "shorts", "skirt", "lower_body", "jeans", "trousers",
-]);
 
-/**
- * IS THIS PRODUCT WORN ON THE LOWER BODY? - the gate that routes a shopper onto a
- * WAIST chart instead of the chest-banded letter chart.
- *
- * THE BUG THIS CLOSES: a 185cm/82kg shopper on a pair of jeans sold 28/30/32/34/36 was
- * recommended "L" - a value that appears nowhere in that product's size picker, because
- * ZARA_SIZE_CHART bands on CHEST and the product is sold by WAIST.
- *
- * FOUR TIERS, STRONGEST EVIDENCE FIRST, each consulted only when every tier above it
- * abstained. The ordering is the same principle isKidsProduct() established and had to
- * learn the hard way: a DETERMINISTIC signal the storefront actually rendered outranks a
- * PROBABILISTIC one a model produced, because the model is explicitly instructed to
- * abstain on the flat-lay packshots this catalog is full of.
- *
- *   1. the product's own size run   free, synchronous and unambiguous - 24-48 integers
- *                                   can only be a waist (isWaistInchSizeRun), and the EU
- *                                   ladder is claimed here too (isAdultPantsProduct).
- *   2. the title                    free and synchronous, and the tier that answers a
- *                                   store whose size picker is rendered in JS and
- *                                   scrapes to nothing. Fabric ambiguity resolved
- *                                   (titleNamesPants) so a denim JACKET is not pants.
- *   3. the cached Gemini verdict    a network round trip, already cached per photo - the
- *                                   tier that answers "STRAIGHT BASIC" and "LOOSE",
- *                                   titles that name a CUT and a FIT with no garment
- *                                   noun for tier 2 to find.
- *   4. the catalog/handoff type     last, NOT first: the widget forwards "unknown" for a
- *                                   product it could not classify, and an older widget
- *                                   forwards nothing at all. Treating a marker that weak
- *                                   as a verdict is the documented shape of the bug in
- *                                   parseHandoff()'s "HARDCODED DEFAULT" note.
- *
- * NEVER BLOCKS, NEVER GUESSES. Every tier abstains rather than defaulting, and false
- * simply leaves ZARA_SIZE_CHART in place - the behaviour that shipped before this
- * existed. Per CLAUDE.md §2.5 a wrong confident answer here costs a paying shopper a
- * size they cannot select; an abstention costs nothing.
- *
- * @param {string[]|string|null|undefined} sizes - the host product's OWN size list
- * @param {string|null|undefined} title - the product title (tier 2)
- * @param {string|null|undefined} cachedCategory - garment_cache.garment_category (tier 3)
- * @param {object|null|undefined} item - activeItem, when one already exists (tier 4)
- * @returns {boolean}
- */
-function isPantsProduct(sizes, title, cachedCategory, item) {
-  // TIER 1 - the size run.
-  if (isWaistInchSizeRun(sizes)) return true;
-  if (isAdultPantsProduct(sizes)) return true;
-
-  // TIER 2 - the title.
-  if (titleNamesPants(title)) return true;
-
-  // TIER 3 - the cached Gemini Vision verdict. Only an explicit "pants" counts:
-  // "unknown" is the model declining, and null is nobody ever having asked.
-  if (String(cachedCategory == null ? "" : cachedCategory).toLowerCase().trim() === "pants") return true;
-
-  // TIER 4 - the catalog/handoff type marker.
-  const type = String(item?.garmentType ?? item?.type ?? item?.category ?? "").toLowerCase().trim();
-  if (PANTS_EXPLICIT_TYPES.has(type)) return true;
-  if (type && typeof isBottomsGarment === "function" && isBottomsGarment(item)) return true;
-
-  return false;
-}
-
-/**
- * WHICH adult chart a confidently-pants product is fitted against.
- *
- * EU IS TESTED FIRST AND THAT ORDER IS LOAD-BEARING. The two ladders share the tokens
- * 36-46, so ["36","38","40","42","44","46"] is a valid reading on either convention. It
- * has meant EU since ADULT_PANTS_SIZE_CHART shipped, adult-pants-sizing.test.mjs pins
- * that, and a store on one convention never lists the other - so the EU ladder keeps
- * first claim on its own run and the waist-inch chart takes everything else. Reversing
- * these two lines silently re-sizes every EU store in the catalog.
- *
- * @param {string[]|string|null|undefined} sizes
- * @returns {Array<object>} ADULT_PANTS_SIZE_CHART (EU) or ADULT_JEANS_WAIST_CHART
- *   (waist inches). Never null: callers reach this only once isPantsProduct() has
- *   confirmed a lower-body garment, and a pants product whose size list scraped to
- *   nothing still belongs on a waist ladder rather than back on a chest-banded chart.
- */
-function pantsChartForSizes(sizes) {
-  if (isAdultPantsProduct(sizes)) return ADULT_PANTS_SIZE_CHART;
-  return ADULT_JEANS_WAIST_CHART;
+/** The size ladder (labels only, smallest first) of a numeric pants chart - what the
+ *  override selector and the stock fallbacks walk when a numeric-pants product listed no
+ *  sizes of its own. `kind` is the chart the last size verdict used (currentPantsChart),
+ *  so the ladder always matches the chart that produced currentUserSize.
+ *  @param {"eu"|"waist"|null} kind */
+function pantsLadderFor(kind) {
+  return [...(kind === "eu" ? ADULT_PANTS_NUMERIC_SIZES : ADULT_JEANS_WAIST_SIZES)];
 }
 
 
 /**
- * The shopper's OWN scale, derived with NO garment constraint applied.
- *
- * WHY THIS IS NOT currentSizeCategory. calculateSize() deliberately forces
- * `adultFits = []` once the garment resolves to kids, so a kids garment can never
- * recommend an adult size. For the 180cm/80kg shopper in the bug report that leaves no
- * candidate in EITHER chart (the child chart ends at 176cm/60kg), so currentSizeCategory
- * lands on null - meaning a guard keyed on `currentSizeCategory === "adult"` would go
- * quiet again the moment the product-size fix made the garment resolve correctly. The
- * guard has to read a category that the garment cannot influence. This is that value.
- *
- * NOTE ON THE METHOD: chart-fit, never a raw height/weight threshold. pickSizeCategory()
- * previously recorded why - a threshold guess "routed petite adults (150cm/50kg -> kids
- * 14) and slim tall adults (174cm/56kg -> kids 18) into children's sizing with no way
- * for them to correct it". The mirror of that mistake here would block a 13-year-old
- * off the kids items they actually need. Adult wins genuine ties, matching the same
- * convention calculateSize() already uses for the overlap zone.
- * @returns {"adult"|"child"|null}
- */
-function userBodyCategory(height, weight) {
-  if (!height || !weight) return null;
-  if (ZARA_SIZE_CHART.some((row) => coreHwPenalty(row, height, weight) === 0)) return "adult";
-  if (CHILD_SIZE_CHART.some((row) => coreHwPenalty(row, height, weight) === 0)) return "child";
-  return null;
-}
-
-/**
- * @param {"child"|"adult"|null} userCategory - userBodyCategory()'s garment-independent verdict
- * @param {string[]|string|null} sizes - the host product's own size list, when known
- * @param {"kids"|"adult"|"uncertain"|undefined} garmentAgeGroup - classifier fallback only
+ * @param {"child"|"adult"|null} userCategory - the garment-independent body category the
+ *   last size verdict carried (currentBodyCategory)
+ * @param {{kidsOnly: boolean, adultOnly: boolean}|null} product - lib/sizing.js's verdict on
+ *   the active product (productVerdictNow()), or null while it is not known yet
  * @returns {boolean} false for a confidently-kids product against a confidently-adult
  *   body, OR a confidently-adult product against a child body; every other combination
- *   (unknown product category, no measurements yet) passes - never block on ambiguity,
- *   matching liveBlockReason()/livePendingReason().
+ *   (unknown product category, a verdict still in flight, no measurements yet) passes -
+ *   never block on ambiguity, matching liveBlockReason()/livePendingReason().
  */
-function isCompatibleSizeCategory(userCategory, sizes, garmentAgeGroup) {
-  if (isKidsProduct(sizes, garmentAgeGroup) && userCategory === "adult") return false;
-  if (isAdultProduct(sizes, garmentAgeGroup) && userCategory === "child") return false;
+function isCompatibleSizeCategory(userCategory, product) {
+  if (product && product.kidsOnly && userCategory === "adult") return false;
+  if (product && product.adultOnly && userCategory === "child") return false;
   return true;
 }
 
@@ -2263,32 +1553,15 @@ function resolvedSoldOutSizes() {
   return parseSizeList(pending);
 }
 
-/* ══ THE STORE'S STORED SIZE GUIDES - Phase 1 fallback, Phase 0 measurement ════════
+/* ══ THE STORE'S STORED SIZE GUIDES - the browser half (main bd766b2) ════════════════
    The widget reads a chart off the PDP only when one is in the DOM at click time; most
-   stores keep their guide on a separate page or behind a click. The scanner now
-   captures those once per store (scanner/size-charts.js -> store_size_charts ->
-   GET /api/store-size-chart). This region decides WHICH stored chart, if any, belongs
-   to the garment in front of the shopper.
-
-   WHAT DOES NOT CHANGE (CLAUDE.md §2.5b, verbatim in force): whatever is picked here
-   reaches calculateSize() through resolvedStoreSizeChart() and applyStoreChartOverlay()
-   exactly like a widget chart does - fine-tune columns only, on rows the height/weight
-   kernel already admitted. A stored chart is used ONLY when the widget sent none: the
-   product page's own table is more specific evidence than a store-wide guide.
-
-   EVERY AMBIGUITY ABSTAINS (CLAUDE.md §2.5), and abstaining is free - it is the vetted
-   default matrix, i.e. the behaviour before this existed:
-     · kids product            -> none (CHILD_SIZE_CHART takes no overlay at all)
-     · garment type            -> the same isPantsProduct() verdict calculateSize()
-                                  routes on; tops charts for everything else
-     · garment gender known    -> that gender's chart, else a unisex one, else an
-                                  unlabelled one ONLY if the store has no gendered chart
-                                  of that type at all
-     · garment gender unknown  -> unisex / unlabelled only; a store that publishes men's
-                                  AND women's charts is never guessed between
-     · size overlap            -> the chart must share >= 2 sizes with the product's own
-                                  list (when the list is known) - the check that catches
-                                  the right store, wrong chart. */
+   stores keep their guide on a separate page or behind a click. The scanner captures
+   those once per store (scanner/size-charts.js -> store_size_charts ->
+   GET /api/store-size-chart). The browser FETCHES that list for its store, exactly as
+   main does, and forwards the adult charts raw in the size evidence
+   (storedSizeChartsEvidence()). WHICH stored chart belongs to the garment, the aliases,
+   the overlay and main's Phase 0 comparison are lib/sizing.js's (pickStoredSizeChart(),
+   storeChartComparison()) - with the rest of the fit (CLAUDE.md §2.12, §2.5b). */
 
 /* Mirrors canonicalStoreHost() in pear-widget.js, lib/store-size-charts.js and
    scanner/size-charts.js - CLAUDE.md §3 lockstep; the store_size_charts key. */
@@ -2313,124 +1586,6 @@ function resolvedGarmentGender() {
   const item = typeof activeItem !== "undefined" ? activeItem : null;
   if (item && item.gender) return normalizeGarmentGender(item.gender);
   return normalizeGarmentGender(typeof pendingGarmentGender !== "undefined" ? pendingGarmentGender : undefined);
-}
-
-/* ONE SIZE, ONE SPELLING. "2XL" and "XXL", "3XS" and "XXXS" are the same size spelled
-   two ways by two stores (adidas's JSON-LD says 2XS...3XL; our ladder says XXL); a raw
-   compare silently overlays nothing - CLAUDE.md §2.2's discipline, applied to sizes.
-   Trim + uppercase first (parseSizeList's own normalisation), then the numeric-X
-   prefix is expanded. Never maps a NUMBER to a letter - that is a convention, not a
-   spelling, and conventions only arrive through a chart's own aliases. */
-function canonicalSizeToken(raw) {
-  const t = parseSizeList([raw])[0] || "";
-  const m = /^([2-5])X([SL])$/.exec(t);
-  return m ? "X".repeat(Number(m[1])) + m[2] : t;
-}
-
-/* EU/US ALIASES - which OTHER tokens a store row may answer to.
-   A store chart printed "Size | EU | US | Chest" carries its own conversion; the
-   scanner stores it as row.aliases ({eu, us, uk, it, fr, int, alt}). Two rules keep
-   that from ever mis-matching:
-     · a LETTER alias is always usable - letters are one system everywhere;
-     · a NUMBER alias is usable only when it is labelled "eu" AND the chart it is being
-       laid over is itself numeric (ADULT_PANTS_SIZE_CHART's EU ladder). A US 8, a UK
-       10, an IT 42 or an unlabelled "38" each mean different bodies per brand and per
-       gender, so they never match a letter or an EU row.
-   The map is built in two passes: every row's OWN size claims its token first, then
-   aliases claim only what nobody's own size holds - so an "S/M" row's alias can never
-   take M from a real M row. First claim wins throughout.
-   @returns {Map<string, object>} canonical token -> store row */
-function storeChartTokenMap(storeRows, numericBase) {
-  const byToken = new Map();
-  for (const r of storeRows) {
-    const token = canonicalSizeToken(r && r.size);
-    if (!token || byToken.has(token)) continue;   // first spelling of a size wins
-    byToken.set(token, r);
-  }
-  for (const r of storeRows) {
-    const aliases = r && r.aliases && typeof r.aliases === "object" ? r.aliases : null;
-    if (!aliases) continue;
-    for (const key of Object.keys(aliases)) {
-      const token = canonicalSizeToken(aliases[key]);
-      if (!token || byToken.has(token)) continue;
-      const numeric = /^\d+$/.test(token);
-      if (numeric && !(numericBase && key === "eu")) continue;
-      if (!numeric && numericBase) continue;      // a letter never lands on an EU/waist row
-      byToken.set(token, r);
-    }
-  }
-  return byToken;
-}
-
-/* The garment's chart TYPE preference, from the same verdicts calculateSize() routes
-   on - so a stored chart can never be chosen for a different garment region than the
-   base chart it will be laid over. */
-function storedChartTypePrefs(sizes, item) {
-  const title = typeof resolvedGarmentTitle === "function" ? resolvedGarmentTitle() : "";
-  const cat = typeof currentGarmentCategory !== "undefined" ? currentGarmentCategory : null;
-  const pants = typeof isPantsProduct === "function" && isPantsProduct(sizes, title, cat, item);
-  if (!pants) return ["tops"];
-  const jeansish = /jean|denim|ג'ינס|גינס/.test(_normApos(title || ""));
-  return jeansish ? ["jeans", "bottoms"] : ["bottoms", "jeans"];
-}
-
-/**
- * The stored chart for the active garment, or none - see the region comment above for
- * every rule. Pure over module state (all typeof-guarded, CLAUDE.md §2.7).
- * @returns {{rows: Array<object>, chart: object|null, reason: string}}
- */
-function pickStoredSizeChart() {
-  const none = (reason) => ({ rows: [], chart: null, reason });
-  try {
-    const charts = typeof storedSizeCharts !== "undefined" ? storedSizeCharts : undefined;
-    if (!Array.isArray(charts) || !charts.length) return none("no stored chart for this store");
-    const item = typeof activeItem !== "undefined" ? activeItem : null;
-    const sizes = typeof resolvedGarmentSizes === "function" ? resolvedGarmentSizes() : [];
-    if (isKidsProduct(sizes, resolvedGarmentAgeGroup())) return none("kids product - the child chart takes no overlay");
-    const gender = resolvedGarmentGender();
-    for (const type of storedChartTypePrefs(sizes, item)) {
-      const pool = charts.filter((c) => c && c.age_group === "adult" && c.garment_type === type &&
-        Array.isArray(c.rows) && c.rows.length);
-      if (!pool.length) continue;
-      const gendered = pool.some((c) => c.gender === "men" || c.gender === "women");
-      let pick = null;
-      if (gender === "men" || gender === "women") pick = pool.find((c) => c.gender === gender);
-      if (!pick) pick = pool.find((c) => c.gender === "unisex");
-      if (!pick && !gendered) pick = pool.find((c) => c.gender === "unknown");
-      if (!pick) {
-        return none(gendered
-          ? `store has gendered ${type} charts, garment gender is ${gender} - not guessing`
-          : `no usable ${type} chart`);
-      }
-      let rows = pick.rows.map((r) => ({ ...r, aliases: r && r.aliases ? { ...r.aliases } : undefined }));
-      /* The ONE numeric convention this file already vets: FOX's women's tops ladder
-         (WOMEN_TOPS_EU_SIZE_CHART, EU 34-44 -> XS-XXL). Applied only to a chart the
-         store itself labelled women's tops, and only as an alias beside the store's
-         own token - never to a men's, unlabelled or bottoms chart, where the same
-         number means another body. */
-      if (pick.gender === "women" && type === "tops") {
-        rows = rows.map((r) => {
-          const eu = WOMEN_TOPS_EU_SIZE_CHART.find((w) => String(w.euSize) === canonicalSizeToken(r.size));
-          if (!eu || (r.aliases && r.aliases.int)) return r;
-          return { ...r, aliases: { ...(r.aliases || {}), int: eu.size } };
-        });
-      }
-      if (sizes.length >= 2) {
-        const own = new Set(sizes.map(canonicalSizeToken));
-        const tokens = new Set();
-        for (const r of rows) {
-          tokens.add(canonicalSizeToken(r.size));
-          for (const v of Object.values(r.aliases || {})) tokens.add(canonicalSizeToken(v));
-        }
-        const overlap = [...own].filter((t) => tokens.has(t)).length;
-        if (overlap < 2) return none(`stored ${pick.gender}/${type} chart shares ${overlap} size(s) with this product - not its chart`);
-      }
-      return { rows, chart: pick, reason: `stored ${pick.gender}/${pick.age_group}/${type} chart (${pick.source || "scanner"})` };
-    }
-    return none("no stored chart of this garment's type");
-  } catch (e) {
-    return none("stored-chart pick failed: " + (e && e.message ? e.message : e));
-  }
 }
 
 /* The one GET this session makes for the store's guides - de-duped by host, since
@@ -2460,83 +1615,30 @@ function loadStoredSizeCharts(host) {
     });
 }
 
-/* ── PHASE 0: STORE CHART vs DEFAULT, measured and logged, never acted on ─────────
-   MIRRORS the ×0.5 tie-break loop inside calculateSize() (the block that starts at the
-   `const candidates = ...` extract marker, CLAUDE.md §2.6). It exists so the
-   comparison below can score the SAME candidates against BOTH charts without editing
-   that marked block; test/stored-size-chart.test.mjs runs both on the same inputs and
-   fails if they ever disagree. */
-function fineTunePickForDiagnostics(candidates, numericPants, chest, waist, legs) {
-  if (!candidates || !candidates.length) return null;
-  const outside = (v, lo, hi) => (!v ? 0 : v < lo ? (lo - v) * 0.5 : v > hi ? (v - hi) * 0.5 : 0);
-  let best = candidates[0].size, min = Infinity;
-  for (const row of candidates) {
-    const pen = numericPants
-      ? outside(waist, row.minWaist, row.maxWaist)
-      : outside(chest, row.minChest, row.maxChest) + outside(waist, row.minWaist, row.maxWaist) +
-        outside(legs, row.minLegs, row.maxLegs);
-    if (pen < min) { min = pen; best = row.size; }
-  }
-  return best;
+/* The stored charts as size evidence: the adult ones only (the pick never reads any other -
+   lib/sizing.js: pickStoredSizeChart()) with the fields the pick and the overlay read, in
+   the order the route returned them (the pick takes the FIRST match). null until they
+   land, and when there are none - so a session without stored charts sends the evidence
+   it always sent. */
+function storedSizeChartsEvidence() {
+  const charts = typeof storedSizeCharts !== "undefined" ? storedSizeCharts : undefined;
+  if (!Array.isArray(charts) || !charts.length) return null;
+  const adult = charts.filter((c) => c && c.age_group === "adult")
+    .map((c) => ({ gender: c.gender, age_group: c.age_group, garment_type: c.garment_type,
+                   source: c.source, rows: c.rows }));
+  return adult.length ? adult : null;
 }
 
+/* Main's Phase 0 log line - "[PEAR] store chart vs default:" once per distinct outcome.
+   The summary is computed server-side (lib/sizing.js: storeChartComparison()) and comes
+   back only to the support view, so a shopper's session logs and receives nothing. */
 let _storeChartDiagKey = "";
-/* Logs, once per distinct outcome (not per keystroke), how the store's chart differs
-   from ours and whether it moved the recommendation. Pure logging - it returns the
-   summary for tests and changes nothing the calculator decided. */
-function logStoreChartComparison({ source, baseChart, overlaidChart, storeRows, height, weight,
-  chest, waist, legs, numericPants, recommended }) {
-  try {
-    if (!Array.isArray(storeRows) || !storeRows.length) return null;
-    const numericBase = baseChart.every((r) => /^\d+$/.test(String(r.size)));
-    const tokenMap = storeChartTokenMap(storeRows, numericBase);
-    const matchedStoreRows = new Set();
-    const bandDeltas = [];
-    baseChart.forEach((b) => {
-      const s = tokenMap.get(canonicalSizeToken(b.size));
-      if (s) matchedStoreRows.add(s);
-      const o = overlaidChart.find((r) => r.size === b.size);
-      if (!o || o === b) return;
-      for (const cap of ["Chest", "Waist", "Hips", "Legs"]) {
-        if (typeof b["min" + cap] !== "number" || o["min" + cap] === b["min" + cap] && o["max" + cap] === b["max" + cap]) continue;
-        const d = ((o["min" + cap] + o["max" + cap]) - (b["min" + cap] + b["max" + cap])) / 2;
-        bandDeltas.push(`${b.size} ${cap.toLowerCase()} ${d >= 0 ? "+" : ""}${Math.round(d * 10) / 10}cm`);
-      }
-    });
-    const unmatched = storeRows.filter((r) => !matchedStoreRows.has(r)).map((r) => String(r && r.size));
-    const fits = (chart) => chart.filter((r) => coreHwPenalty(r, height, weight) === 0);
-    const defaultPick = fineTunePickForDiagnostics(fits(baseChart), numericPants, chest, waist, legs);
-    const storePick = fineTunePickForDiagnostics(fits(overlaidChart), numericPants, chest, waist, legs);
-    const idle = numericPants ? !waist : !chest && !waist && !legs;
-    const summary = {
-      source,
-      matchedRows: `${matchedStoreRows.size}/${storeRows.length} store rows matched our ${baseChart.length}`,
-      unmatchedStoreSizes: unmatched.length ? unmatched.join("/") : "(none)",
-      bandDeltas: bandDeltas.length ? bandDeltas.join(", ") : "(identical bands)",
-      defaultPick, storePick,
-      disagree: defaultPick !== storePick,
-      tieBreak: idle ? "idle - no optional measurement entered, so the chart cannot move the size" : "active",
-      recommended,
-    };
-    const key = JSON.stringify(summary);
-    if (key !== _storeChartDiagKey) {
-      _storeChartDiagKey = key;
-      console.log("[PEAR] store chart vs default:", summary);
-    }
-    return summary;
-  } catch (e) {
-    return null;   // measurement only - it may never cost the shopper anything
-  }
-}
-
-/* Where the chart calculateSize() is about to overlay came from - for the Phase 0 log. */
-function resolvedStoreSizeChartSource() {
-  const item = typeof activeItem !== "undefined" ? activeItem : null;
-  const widget = item && item.sizeChart != null ? item.sizeChart
-    : (typeof pendingSizeChart !== "undefined" ? pendingSizeChart : undefined);
-  if (widget !== undefined && parseStoreSizeChart(widget).length) return "widget (product page)";
-  const stored = pickStoredSizeChart();
-  return stored.rows.length ? stored.reason : "none - " + stored.reason;
+function logStoreChartDiag(summary) {
+  if (!summary || typeof summary !== "object") return;
+  const key = JSON.stringify(summary);
+  if (key === _storeChartDiagKey) return;
+  _storeChartDiagKey = key;
+  console.log("[PEAR] store chart vs default:", summary);
 }
 
 /* The active product's own published size chart, wherever it currently lives -
@@ -2546,22 +1648,18 @@ function resolvedStoreSizeChartSource() {
    harnesses with no module scope around it, so a bare reference to either binding is a
    ReferenceError there rather than a lint nit.
 
-   THE WIDGET'S CHART WINS; THE STORE'S STORED GUIDE IS THE FALLBACK. A chart read off
-   this very product page is more specific than a store-wide guide, so a stored chart
-   (pickStoredSizeChart) is consulted only when the widget's reading decodes to nothing
-   - never sent, or re-checked and sent as "" ("this page publishes no chart we can
-   read"). Both reach calculateSize() the same way and both are tie-break only.
-   @returns {Array<object>} decoded rows, or [] when no readable chart exists */
+   THE WIDGET'S CHART WINS; THE STORE'S STORED GUIDE IS THE FALLBACK (main bd766b2) -
+   decided server-side now (lib/sizing.js: resolvedStoreSizeChart()), with both in the
+   evidence: this raw chart, and storedSizeChartsEvidence().
+   @returns {string|Array|null} the raw chart, or null when none arrived */
 function resolvedStoreSizeChart() {
+  /* RAW since 2026-09-26 - the widget's encoded string (or its row array), forwarded
+     as-is in the size evidence; lib/sizing.js decodes and bounds it. null = no chart. */
   const item = typeof activeItem !== "undefined" ? activeItem : null;
-  let rows = [];
-  if (item && item.sizeChart != null) rows = parseStoreSizeChart(item.sizeChart);
-  else {
-    const pending = typeof pendingSizeChart !== "undefined" ? pendingSizeChart : undefined;
-    if (pending !== undefined) rows = parseStoreSizeChart(pending);
-  }
-  if (rows.length) return rows;
-  return typeof pickStoredSizeChart === "function" ? pickStoredSizeChart().rows : [];
+  if (item && item.sizeChart != null) return item.sizeChart;
+  const pending = typeof pendingSizeChart !== "undefined" ? pendingSizeChart : undefined;
+  if (pending === undefined) return null;
+  return pending;
 }
 
 /** @param {string|null|undefined} size @returns {boolean} true only for a size POSITIVELY known gone. */
@@ -2590,7 +1688,7 @@ function purchasableLadder() {
   const own = resolvedGarmentSizes();
   if (!own.length) {
     return currentSizeCategory === "child" ? [...CHILD_SIZE_SCALE]
-      : currentSizeIsNumericPants ? pantsChartForSizes(own).map((r) => r.size)
+      : currentSizeIsNumericPants ? pantsLadderFor(currentPantsChart)
       : [...SIZE_SCALE];
   }
   const unique = [...new Set(own)];
@@ -2715,6 +1813,82 @@ function resolvedSizeRunType() {
   return typeof pendingSizeRunType !== "undefined" ? pendingSizeRunType : undefined;
 }
 
+/* ══ THE PRODUCT VERDICT - asked of the server, remembered for the session ══════════
+   Which chart this garment belongs on, and whether it is kids-only or adult-only, is
+   lib/sizing.js's to decide (see "THE PANTS RULES" above). Every size verdict carries it
+   for the evidence it was asked about; a product-only request (no measurements) fetches
+   it when a surface needs it before any size was asked for this product - the in-room
+   size ladder, the kids/adult card after a garment swap.
+
+   NEUTRAL UNTIL KNOWN. While the verdict for the CURRENT evidence is in flight,
+   productVerdictNow() answers null, which every reader treats as "no product evidence":
+   no mismatch, the letter ladder. That is the CLAUDE.md §2.5 direction (never block on
+   ambiguity), and goLive() - the enforcement point - awaits calculateSize() first, which
+   brings the verdict for exactly the evidence it then checks. When a background verdict
+   lands, updateSizeMismatchUI() repaints the card. A request that FAILS leaves the
+   product unknown, so the kids/adult guard passes rather than blocking on a network
+   blip - the same trade calculateSize()'s own failure path makes. */
+const _productVerdicts = new Map();
+
+/* The raw product evidence lib/sizing.js reads (sanitizeProductEvidence() there). Plain
+   values only: the size list, title, classifier age group and category and cached
+   size-run type as this region resolves them, and the active item's three type fields
+   plus this file's isBottomsGarment() verdict - null where that function does not exist
+   (a standalone test slice), which the rules read as "no verdict", exactly as the old
+   typeof guard did. */
+function sizeProductEvidence() {
+  const item = typeof activeItem !== "undefined" ? activeItem : null;
+  const str = (v) => (v == null ? null : String(v));
+  const runType = resolvedSizeRunType();
+  return {
+    sizes: resolvedGarmentSizes(),
+    ageGroup: resolvedGarmentAgeGroup(),
+    title: resolvedGarmentTitle(),
+    cachedCategory: str(currentGarmentCategory),
+    sizeRunType: typeof runType === "string" ? runType : null,
+    item: item ? {
+      garmentType: str(item.garmentType), type: str(item.type), category: str(item.category),
+      bottoms: typeof isBottomsGarment === "function" ? !!isBottomsGarment(item) : null,
+    } : null,
+  };
+}
+
+/** The product verdict for the CURRENT evidence, or null while it is unknown - in which
+ *  case the request is started (once; concurrent readers share it). Synchronous on
+ *  purpose: every reader is a synchronous gate or ladder. */
+function productVerdictNow() {
+  const known = _productVerdicts.get(JSON.stringify(sizeProductEvidence()));
+  if (known && typeof known.then !== "function") return known;
+  if (!known) loadProductVerdict();
+  return null;
+}
+
+/** Resolves the product verdict for the current evidence - from memory, or by asking.
+ *  Never rejects: a failed request resolves null and is forgotten, so the next reader
+ *  asks again. */
+function loadProductVerdict() {
+  const product = sizeProductEvidence();
+  const key = JSON.stringify(product);
+  const known = _productVerdicts.get(key);
+  if (known) return Promise.resolve(known);
+  if (typeof requestSizeVerdict !== "function") return Promise.resolve(null);
+  const pending = requestSizeVerdict({ product }).then((verdict) => {
+    if (!verdict || !verdict.product) throw new Error("the size verdict carried no product verdict");
+    _productVerdicts.set(key, verdict.product);
+    /* A surface that read null while this was in flight painted "no mismatch". */
+    if (typeof updateSizeMismatchUI === "function") {
+      try { updateSizeMismatchUI(); } catch (e) { console.warn("[PEAR] size mismatch repaint failed:", e?.message || e); }
+    }
+    return verdict.product;
+  }).catch((err) => {
+    if (_productVerdicts.get(key) === pending) _productVerdicts.delete(key);
+    console.warn("[PEAR] product size verdict unavailable:", err?.message || err);
+    return null;
+  });
+  _productVerdicts.set(key, pending);
+  return pending;
+}
+
 /* The ONE mismatch predicate every surface reads - the go-live gate, the modal card,
    and the size selector alike - so they can never disagree about what is blocked.
    Reads currentBodyCategory as-is, whatever calculateSize() last computed - it does
@@ -2724,7 +1898,9 @@ function resolvedSizeRunType() {
    goLive()'s own comment for the two production bugs a STALE currentBodyCategory
    shipped before that refresh existed, in two different directions. */
 function hasSizeCategoryMismatch() {
-  return !isCompatibleSizeCategory(currentBodyCategory, resolvedGarmentSizes(), resolvedGarmentAgeGroup());
+  /* No body category, nothing to compare - answered without asking about the product. */
+  if (currentBodyCategory !== "adult" && currentBodyCategory !== "child") return false;
+  return !isCompatibleSizeCategory(currentBodyCategory, productVerdictNow());
 }
 
 const SIZE_MISMATCH_MESSAGE =
@@ -2825,8 +2001,10 @@ function formatSizeLabel(size) {
   // mean a chart edit desynced the two lists - falling back to the plain letter
   // rather than throwing, same "abstain, don't guess" rule as everywhere else.
   if (currentSizeIsWomensTops) {
-    const euRow = WOMEN_TOPS_EU_SIZE_CHART.find((r) => r.size === size);
-    if (euRow) return `${size} (EU ${euRow.euSize})`;
+    /* The letter -> EU token map arrives with the size verdict (lib/sizing.js,
+       WOMEN_TOPS_EU_SIZE_CHART) and only when this flag is set. */
+    const eu = currentEuTokens && currentEuTokens[size];
+    if (eu) return `${size} (EU ${eu})`;
   }
   return size;
 }
@@ -2850,6 +2028,44 @@ function setOptionalVisible(show) {
   }
 }
 
+/* THE RESET every calculateSize() outcome starts from - moved out of calculateSize()
+   verbatim when the fit went server-side, so the synchronous early returns and
+   applySizeVerdict() start from the identical state. */
+function resetSizeResult() {
+  const resultBox = $("resultBox"), resultLabel = $("resultLabel");
+  const nextBtn = $("btn-next-screen");
+  const resultActions = $("resultActions");
+
+  resultBox.classList.remove("show", "error-result", "no-match-result");
+  // Cleared HERE, before both early returns below, for the same reason
+  // currentSizeIsNumericPants is: an invalid or unmatched measurement must never leave
+  // the PREVIOUS garment's "your size is sold out" sentence sitting under a result box
+  // that no longer shows that size.
+  renderStockNotice(null);
+  if (resultActions) resultActions.classList.remove("is-ready");   // collapse the tray
+  resultLabel.innerText = t("resultLabelDefault");
+  nextBtn.disabled = true;
+  currentUserSize = null;
+  // Cleared alongside the size so the two never disagree; both early-return paths in
+  // calculateSize() (missing input / out of range) therefore leave the category null.
+  currentSizeCategory = null;
+  currentBodyCategory = null;   // ...and the garment-independent one with it
+  // Reset here, BEFORE either early return, so a missing/out-of-range measurement can
+  // never leave a PREVIOUS garment chart description behind for formatSizeLabel().
+  currentSizeIsNumericPants = false;
+  currentPantsChart = null;
+  currentSizeIsWomensTops = false;
+  currentEuTokens = null;
+  updateProgress();
+}
+
+/* Size verdicts by evidence, for the session - see calculateSize()'s "SYNCHRONOUS WHEN IT
+   CAN BE". A value is either a verdict or the in-flight Promise for one, so two runs on
+   the same new evidence share a single request. _sizeSeq numbers the runs; only the
+   newest may paint. */
+const _sizeVerdicts = new Map();
+let _sizeSeq = 0;
+
 /**
  * Recompute the recommended size from height+weight ALONE - a genuine-fit
  * lookup against both charts, not a closest-match guess. A chart row only
@@ -2872,8 +2088,27 @@ function setOptionalVisible(show) {
  *
  * Drives the result box and the "continue" button enabled-state, and - via
  * setOptionalVisible - the conditional reveal of the optional measurement
- * fields. Re-run on every input event. Pure UI/state; no network.
- * @returns {void}
+ * fields. Re-run on every input event.
+ *
+ * ASKS THE SERVER SINCE 2026-09-26. The charts, the fit and the product rules moved to
+ * lib/sizing.js (POST /api/size); this function gathers the product's raw evidence
+ * (sizeProductEvidence()), sends it with the measurements, and applySizeVerdict() paints
+ * the answer exactly as the old in-browser computation did (proven over 1,458,028 cases;
+ * see lib/sizing.js's header).
+ *
+ * SYNCHRONOUS WHEN IT CAN BE. Missing and out-of-range input are answered here with no
+ * request, and every verdict is memoised by its evidence for the session, so a re-run on
+ * inputs already seen - goLive()'s fresh re-check, a gender toggle back, a late widget
+ * correction that changed nothing the fit reads - paints in the same tick, as it always
+ * did. Only genuinely new evidence waits on the network; until it lands, Continue is
+ * locked and the previous answer stays on screen (clearing it would flicker on every
+ * keystroke). The newest call always wins: an older answer arriving late is ignored.
+ *
+ * NEVER REJECTS. A failed request paints a "couldn't calculate" result (Continue stays
+ * locked, exactly like a no-match) and resolves null; the next input retries. Callers
+ * that must read the result - goLive(), routeUser()'s instant skip, Enter on the form -
+ * await it.
+ * @returns {Promise<object|null>} the verdict applied, or null
  */
 function calculateSize() {
   const num = (id) => ($(id).value ? parseFloat($(id).value) : null);
@@ -2887,35 +2122,104 @@ function calculateSize() {
   setOptionalVisible(mandatoryReady);
 
   const chest = num("chest"), waist = num("waist"), legs = num("legs");
+  const seq = ++_sizeSeq;
 
+  if (!height || !weight) { resetSizeResult(); return Promise.resolve(null); }
+
+  if (height > 240 || height < 110 || weight > 220 || weight < 18) {
+    resetSizeResult();
+    const resultBox = $("resultBox"), sizeResult = $("sizeResult"), resultLabel = $("resultLabel");
+    const resultActions = $("resultActions");
+    resultLabel.innerText = t("resultLabelError");
+    sizeResult.innerText = t("sizeResultInvalid");
+    resultBox.classList.add("show", "error-result");
+    if (resultActions) resultActions.classList.add("is-ready");
+    return Promise.resolve(null);
+  }
+
+  /* THE EVIDENCE: the measurements, and the PRODUCT as this region sees it - raw facts,
+     not verdicts. Which chart it belongs on, kids-only / adult-only and lower-body are
+     lib/sizing.js's to decide (productVerdict(), with the reasoning that shaped each
+     rule) and come back as verdict.product. `storeChart` rides raw for the overlay
+     (decoded and bounded server-side - CLAUDE.md §2.5b). */
+  const product = sizeProductEvidence();
+  const evidence = {
+    height, weight, chest, waist, legs,
+    gender: currentUserGender || null,
+    storeChart: resolvedStoreSizeChart(),
+    product,
+  };
+  /* The store's stored guides (main bd766b2) - only when some landed, so a session
+     without them sends exactly the evidence it always sent. lib/sizing.js picks one only
+     when the widget's chart reads as nothing. */
+  const storedCharts = typeof storedSizeChartsEvidence === "function" ? storedSizeChartsEvidence() : null;
+  if (storedCharts) {
+    evidence.storedCharts = storedCharts;
+    evidence.garmentGender = resolvedGarmentGender();
+  }
+  /* The support view (§2.11) asks for main's Phase 0 store-chart comparison; the
+     production build folds this away, so a shopper never sends a key. */
+  if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof location !== "undefined") {
+    try {
+      const dk = new URLSearchParams(location.search).get("pear_debug");
+      if (dk) evidence.dk = dk;
+    } catch (_) { /* no key, no comparison */ }
+  }
+  const key = JSON.stringify(evidence);
+  const known = _sizeVerdicts.get(key);
+  if (known && typeof known.then !== "function") {
+    if (known.product) _productVerdicts.set(JSON.stringify(product), known.product);
+    applySizeVerdict(known);
+    return Promise.resolve(known);
+  }
+
+  const nextBtn = $("btn-next-screen");
+  if (nextBtn) nextBtn.disabled = true;   // no Continue on an answer to the PREVIOUS inputs
+  const pending = known || requestSizeVerdict(evidence);
+  _sizeVerdicts.set(key, pending);
+  return pending.then((verdict) => {
+    _sizeVerdicts.set(key, verdict);
+    if (verdict.product) _productVerdicts.set(JSON.stringify(product), verdict.product);
+    if (seq === _sizeSeq) {
+      applySizeVerdict(verdict);
+      /* Callers that re-render the room's selector right after calling this (the
+         widget's late size/stock corrections) did so before the answer existed. */
+      if ($("pearSizeSelector") && typeof injectSizeSelector === "function") {
+        try { injectSizeSelector(); } catch {}
+      }
+    }
+    return verdict;
+  }, (err) => {
+    _sizeVerdicts.delete(key);
+    console.error("[PEAR] size verdict request failed:", err?.message || err);
+    if (seq === _sizeSeq) {
+      /* DISPLAY ONLY - the size STATE is deliberately left as the last answer that did
+         land. Continue is already locked (above), so Screen 1 cannot advance on it; and
+         goLive(), which awaits this, keeps a size and category to gate on instead of a
+         network blip nulling them into a false block (CLAUDE.md §2.5). */
+      const resultBox = $("resultBox"), sizeResult = $("sizeResult"), resultLabel = $("resultLabel");
+      const resultActions = $("resultActions");
+      resultBox.classList.remove("show", "error-result", "no-match-result");
+      renderStockNotice(null);
+      resultLabel.innerText = t("resultLabelServiceError");
+      sizeResult.innerText = t("sizeResultServiceError");
+      resultBox.classList.add("show", "error-result");
+      if (resultActions) resultActions.classList.add("is-ready");
+    }
+    return null;
+  });
+}
+
+/* Paints one verdict from lib/sizing.js - the DOM half of the old calculateSize(), in
+   the same order it ran there. */
+function applySizeVerdict(verdict) {
   const resultBox = $("resultBox"), sizeResult = $("sizeResult"), resultLabel = $("resultLabel");
   const nextBtn = $("btn-next-screen");
   const resultActions = $("resultActions");
 
-  resultBox.classList.remove("show", "error-result", "no-match-result");
-  // Cleared HERE, before both early returns below, for the same reason
-  // currentSizeIsNumericPants is: an invalid or unmatched measurement must never leave
-  // the PREVIOUS garment's "your size is sold out" sentence sitting under a result box
-  // that no longer shows that size.
-  renderStockNotice(null);
-  if (resultActions) resultActions.classList.remove("is-ready");   // collapse the tray
-  resultLabel.innerText = t("resultLabelDefault");
-  nextBtn.disabled = true;
-  currentUserSize = null;
-  // Cleared alongside the size so the two never disagree; both early-return paths
-  // below (missing input / out of range) therefore leave the category null.
-  currentSizeCategory = null;
-  currentBodyCategory = null;   // ...and the garment-independent one with it
-  // Reset here, BEFORE the two early returns below, so a missing/out-of-range
-  // measurement can never leave a PREVIOUS garment chart description behind for
-  // formatSizeLabel() to read.
-  currentSizeIsNumericPants = false;
-  currentSizeIsWomensTops = false;
-  updateProgress();
-
-  if (!height || !weight) return;
-
-  if (height > 240 || height < 110 || weight > 220 || weight < 18) {
+  resetSizeResult();
+  if (verdict.status === "empty") return;   // the browser answers these itself; defensive
+  if (verdict.status === "invalid") {
     resultLabel.innerText = t("resultLabelError");
     sizeResult.innerText = t("sizeResultInvalid");
     resultBox.classList.add("show", "error-result");
@@ -2923,231 +2227,33 @@ function calculateSize() {
     return;
   }
 
-  // "Genuine fit" candidates per chart: rows where BOTH height AND weight land
-  // inside the band. coreHwPenalty() is exactly 0 in that case (it only ever
-  // adds penalty for being OUTSIDE a bound), so filtering on that gives exactly
-  // the genuine-fit set - a chart with no such row contributes NOTHING below,
-  // rather than still "winning" via whichever row happened to score lowest.
-  //
-  // A CONFIDENT garment classification restricts the search to a single
-  // chart from the start - the other chart's array is left empty rather than
-  // filtered, so it can never contribute a candidate below, even if the body
-  // would technically fit a row there.
-  const garmentAgeGroup = resolvedGarmentAgeGroup();
-  const garmentSizes = resolvedGarmentSizes();
-  /* WHICH ADULT CHART APPLIES TO THIS GARMENT. Three of them now, resolved
-     strongest-evidence-first:
-
-       EU numeric   isAdultNumericPantsGarment() - the product's own size list IS the EU
-                    ladder (36-46). Unchanged and tested FIRST, so every store already on
-                    that convention keeps the behaviour adult-pants-sizing.test.mjs pins.
-       waist inch   isPantsProduct() - a confidently lower-body garment by any of its four
-                    tiers. THE FIX for "the calculator recommends L for a pair of jeans":
-                    185cm/82kg now resolves to "32" instead of a letter that appears
-                    nowhere in that product's own size picker.
-       letters      everything else - including every garment we are NOT confident about,
-                    which is the whole point (CLAUDE.md §2.5: never block, never guess).
-
-     THE ITEM NARROWS, IT NEVER WIDENS, mirroring isAdultNumericPantsGarment()'s own
-     rule: a known non-bottoms item vetoes the waist chart (an EU-numbered TOP run must
-     not be pulled onto a waist ladder), but no item marker can put a letter-sized
-     product onto one. activeItem is usually unavailable here anyway - calculateSize()
-     runs on Screen 1, before it exists - so the sizing/title evidence decides in the
-     common case, exactly as the kids/adult guard already does with no item at all.
-
-     ALPHA EVIDENCE VETOES THE WAIST CHART TOO, same as the item check above - see
-     isAlphaSizeRun()'s own comment for the bug this closes (sweatpants sold S/M/L,
-     confidently pants by title, quoted a waist-inch number that appears on no picker
-     anywhere). Checked ALONGSIDE itemContradictsPants rather than folded into
-     isPantsProduct() itself: isPantsProduct() answers "is this worn on the lower
-     body", which a letter-sized pair of sweatpants still genuinely is - the veto
-     belongs at the CHART-selection step, not at the body-region step. */
-  const useAdultPantsChart = isAdultNumericPantsGarment(garmentSizes, activeItem);
-  const itemContradictsPants =
-    !!activeItem && typeof isBottomsGarment === "function" && !isBottomsGarment(activeItem);
-  /* Named separately from useWaistInchChart below - per THAT flag's own comment,
-     isPantsProduct() answers "is this worn on the lower body" independently of which
-     literal CHART ends up handling the fit (a letter-sized sweatpants pair still
-     answers true here even though isAlphaSizeRun() vetoes it off the waist chart).
-     Read a second time below, by currentSizeIsWomensTops, for exactly that
-     independence: WOMEN_TOPS_EU_SIZE_CHART must never decorate a bottoms
-     recommendation just because it happens to share ZARA_SIZE_CHART's letters. */
-  const isConfidentlyPants =
-    isPantsProduct(garmentSizes, resolvedGarmentTitle(), currentGarmentCategory, activeItem);
-  const useWaistInchChart = !useAdultPantsChart && !itemContradictsPants &&
-    !isAlphaSizeRun(garmentSizes, resolvedSizeRunType()) &&
-    isConfidentlyPants;
-  /* Both numeric branches route through pantsChartForSizes() rather than naming a chart
-     here, so the EU-before-waist precedence lives in exactly ONE place - see that
-     function on why reversing those two lines re-sizes every EU store in the catalog. */
-  const useNumericPantsChart = useAdultPantsChart || useWaistInchChart;
-  /* ── THE STORE'S OWN CHART, LAID OVER THE VETTED ONE ──────────────────────────
-     Applied AFTER chart selection and BEFORE the genuine-fit filter below, and that
-     position is safe precisely because applyStoreChartOverlay() cannot write a height
-     or weight column: bodyAdultFits, currentBodyCategory, currentSizeCategory, the
-     kids/adult guard and the overflow ceiling all still compute off OUR bands, byte
-     for byte. The only consumer of what this changes is the ×0.5 fine-tune tie-break
-     further down. See applyStoreChartOverlay()'s own comment for the full argument,
-     and do not move this below the filter "for clarity" - the filter would then be
-     reading a chart the overlay had not seen, which is a difference nobody would
-     notice until a store published a chart we disagreed with.
-
-     CHILD_SIZE_CHART is deliberately NOT overlaid: it carries no measurement columns
-     at all and the fine-tune pass is skipped outright on the child path, so an overlay
-     there would be a clause that cannot reach the wire (CLAUDE.md RULE 0's spirit). */
-  const baseAdultChart = useNumericPantsChart ? pantsChartForSizes(garmentSizes) : ZARA_SIZE_CHART;
-  const adultChart = applyStoreChartOverlay(baseAdultChart, resolvedStoreSizeChart());
-  /* Read by formatSizeLabel(), which must never decorate a numeric pants size. */
-  currentSizeIsNumericPants = useNumericPantsChart;
-  /* Computed BEFORE the garment constraint below, and kept: this is the shopper's own
-     scale, which the mismatch guard needs precisely because the constrained result
-     cannot express "an adult body looking at a kids-only product" (it collapses to
-     null). See userBodyCategory()'s comment.
-
-     DELIBERATELY SIMPLE: judged against `adultChart` - the SINGLE chart THIS garment
-     resolved to - and nothing cleverer. Two earlier versions of this line tried to make
-     the CACHED value itself correct for every garment the shopper might view for the
-     rest of the session (checking both adult charts unconditionally, then only when
-     garmentSizes was empty) and each shipped a real, reproduced false block in a
-     different direction - see goLive()'s own big comment for both incidents and why the
-     fix belongs THERE instead: calculateSize() is re-run fresh, right before the
-     authoritative gate checks, so this simple per-garment answer is always being asked
-     about the garment that is ACTUALLY active, never a stale one. Do not reintroduce a
-     multi-chart union here - it solves nothing goLive()'s freshness doesn't already
-     solve, and both times it was tried, it broke a real shopper. */
-  const bodyChildFits = CHILD_SIZE_CHART.filter((row) => coreHwPenalty(row, height, weight) === 0);
-  const bodyAdultFits = adultChart.filter((row) => coreHwPenalty(row, height, weight) === 0);
-  currentBodyCategory = bodyAdultFits.length ? "adult" : (bodyChildFits.length ? "child" : null);
-
-  const childFits = isAdultProduct(garmentSizes, garmentAgeGroup) ? [] : bodyChildFits;
-  const adultFits = isKidsProduct(garmentSizes, garmentAgeGroup) ? [] : bodyAdultFits;
-
-  // Overlap zone (genuinely fits BOTH charts, e.g. ~170-172cm/54-60kg) defaults
-  // to adult - same tie-break convention used elsewhere in this codebase
-  // (userBodyCategory's adult-first rule, resolveAgeGroup's server-side tie rule).
-  // Adult winning whenever it has ANY candidate covers "adult-only" and
-  // "fits both" in the same branch. This only actually applies in the
-  // "uncertain" case above - a confident garment already has the other
-  // chart's array forced empty, so there's nothing left for it to tie with.
-  currentSizeCategory = adultFits.length ? "adult" : (childFits.length ? "child" : null);
-
-  /* GENDER ROUTING - see currentSizeIsWomensTops's own comment for why this only ever
-     swaps the DISPLAYED token, never the fit chart itself. Gated on !isConfidentlyPants
-     rather than !useNumericPantsChart - deliberately the STRICTER of the two: a
-     letter-sized bottoms garment (a sweatpants pair sold S/M/L, alpha-vetoed off the
-     waist chart per isAlphaSizeRun()) still resolves onto ZARA_SIZE_CHART for FIT
-     purposes, but must not be decorated with a TOPS dress-size token - "M (EU 38)" on
-     a pair of sweatpants reads as an EU PANTS size (this app already has one, on
-     ADULT_PANTS_SIZE_CHART, numbered 36-46 - a colliding, wrong-scale range) even
-     though the FOX women's tops ladder means something else entirely. isConfidentlyPants
-     is the same "is this worn on the lower body" verdict isPantsProduct() already
-     gives independent of which chart the fit math landed on - see that const's own
-     comment. Gated on "adult" because the chart has no child rows. */
-  currentSizeIsWomensTops =
-    currentUserGender === "women" && !isConfidentlyPants && currentSizeCategory === "adult";
+  /* Read by formatSizeLabel(), which must never decorate a numeric pants size; the kind
+     picks the ladder a list-less numeric product walks (pantsLadderFor()). */
+  const pantsChart = verdict.product ? verdict.product.chart : null;
+  currentSizeIsNumericPants = pantsChart === "eu" || pantsChart === "waist";
+  currentPantsChart = currentSizeIsNumericPants ? pantsChart : null;
+  currentBodyCategory = verdict.bodyCategory || null;
+  currentSizeCategory = verdict.sizeCategory || null;
+  currentSizeIsWomensTops = !!verdict.womensTops;
+  currentEuTokens = verdict.euTokens || null;
 
   if (!currentSizeCategory) {
-    // Fits NEITHER chart - no closest-match guess. A real gap between the two
-    // charts, or genuinely out-of-catalog proportions, is now a visible "no
-    // size found" result instead of a silently wrong recommendation.
-    // Blocking, same severity as the sane-range validation error above -
-    // Continue stays disabled until the visitor's measurements resolve to a
-    // real chart match.
-    //
-    // A body ABOVE the resolved adult chart's own ceiling (currently 195cm/100kg on
-    // ZARA_SIZE_CHART, 195cm/102kg on ADULT_PANTS_SIZE_CHART) can never match any row
-    // in either chart - unlike a gap between the two charts, there is no bigger size
-    // to suggest. That case gets its own explicit "no size available" copy instead of
-    // the generic no-match text, so it doesn't read as a fixable input mistake.
-    // Column-wise max, NOT the chart's last row - the charts happen to be ordered
-    // smallest..largest today so the two coincide, but height's ceiling and weight's
-    // ceiling aren't guaranteed to live on the same row, so each bound is taken
-    // independently. Read off adultChart (whichever one this garment resolved to),
-    // so a numeric-pants product is judged against ITS OWN ceiling, not the letter
-    // chart's.
-    const maxAdultHeight = Math.max(...adultChart.map((row) => row.maxHeight));
-    const maxAdultWeight = Math.max(...adultChart.map((row) => row.maxWeight));
-    const overflowsMaxSize = height > maxAdultHeight || weight > maxAdultWeight;
-
+    // Fits NEITHER chart - no closest-match guess (see lib/sizing.js for the full
+    // reasoning, and for the overflow ceiling behind the distinct "no size available").
     resultLabel.innerText = t("resultLabelNoMatch");
-    sizeResult.innerText = overflowsMaxSize ? t("sizeResultOverflow") : t("sizeResultNoMatch");
+    sizeResult.innerText = verdict.status === "overflow" ? t("sizeResultOverflow") : t("sizeResultNoMatch");
     resultBox.classList.add("show", "no-match-result");
     if (resultActions) resultActions.classList.add("is-ready");
-    // nextBtn/currentUserSize were already reset to disabled/null at the top of this
-    // function and neither is touched again below - Continue (and everything gated on
-    // currentUserSize, including goLive()'s token mint) stays locked on this path.
+    // nextBtn/currentUserSize were already reset to disabled/null by resetSizeResult() and
+    // neither is touched again below - Continue (and everything gated on currentUserSize,
+    // including goLive()'s token mint) stays locked on this path.
     updateProgress();
     return;
   }
 
-  // Among the genuinely-fitting rows only, chest/waist/legs still refine WHICH
-  // one is shown when more than one qualifies (adjacent adult sizes' bands
-  // really do overlap, e.g. S and M both fit 170-172cm/64-65kg) - same scoring
-  // as before, just scoped to candidates that already passed the height/weight
-  // gate, never to a row that didn't.
-  const candidates = currentSizeCategory === "child" ? childFits : adultFits;
-  let bestSize = candidates[0].size, minPenalty = Infinity;
-  candidates.forEach((row) => {
-    let pen = 0;   // height/weight are already an exact fit for every candidate here
-    if (currentSizeCategory === "adult" && useNumericPantsChart) {
-      // Pants rows carry minWaist/maxWaist same as ZARA_SIZE_CHART, but chest/legs
-      // are swapped for minHips/maxHips (see ADULT_PANTS_SIZE_CHART's comment) -
-      // there is no "hips" optional input on the form yet, so only waist fine-tunes.
-      if (waist) { if (waist < row.minWaist) pen += (row.minWaist - waist) * 0.5; if (waist > row.maxWaist) pen += (waist - row.maxWaist) * 0.5; }
-    } else if (currentSizeCategory === "adult") {
-      if (chest) { if (chest < row.minChest) pen += (row.minChest - chest) * 0.5; if (chest > row.maxChest) pen += (chest - row.maxChest) * 0.5; }
-      if (waist) { if (waist < row.minWaist) pen += (row.minWaist - waist) * 0.5; if (waist > row.maxWaist) pen += (waist - row.maxWaist) * 0.5; }
-      if (legs)  { if (legs  < row.minLegs)  pen += (row.minLegs  - legs)  * 0.5; if (legs  > row.maxLegs)  pen += (legs  - row.maxLegs)  * 0.5; }
-    }
-    if (pen < minPenalty) { minPenalty = pen; bestSize = row.size; }
-  });
-
-  // SNAP TO THE PRODUCT'S OWN LIST. isAdultPantsProduct() now recognizes numeric runs
-  // that don't literally match ADULT_PANTS_SIZE_CHART's own six EU rows (e.g. a real
-  // US/UK jeans run of 26-40 - see that chart's "THE 26-40 REPORT" comment). bestSize
-  // above is still only ever one of those six chart values, since it comes from a
-  // genuine height/weight fit against the one chart with VERIFIED bands. When the
-  // product doesn't actually sell that exact number, recommending it anyway would be a
-  // real SKU the shopper can't buy - so snap to whichever size the product's OWN list
-  // actually has that sits closest to it. Pure numeric distance, never a fabricated
-  // cm/kg claim about the sizes this chart has no data for, and always a size that
-  // exists on this specific product - never a letter, matching this file's "the
-  // product's own list wins" precedent (see isKidsProduct()'s comment).
-  //
-  // TIE-BREAK IS AN EXPLICIT "prefer smaller" RULE, NOT ARRAY ORDER. A bare
-  // `reduce((closest, n) => dist(n) < dist(closest) ? n : closest)` looks like it picks
-  // the closest value, but on an exact tie its strict `<` keeps whichever candidate the
-  // reduce happened to visit first - which for a no-initial-value reduce is
-  // ownNumericSizes[0], i.e. WHICHEVER SIZE THE STORE HAPPENED TO SCRAPE FIRST. Every
-  // list in this file's own tests is written in ascending order, so that accidentally
-  // read as "prefers the lower size" - but nothing about a store's DOM guarantees
-  // ascending order, and a differently-ordered size list would have silently flipped
-  // which of two equidistant sizes got recommended. The `n < closest` clause below
-  // makes "prefer the smaller size" a real, order-independent rule instead of an
-  // artifact of whatever order the product happened to list its sizes in.
-  if (currentSizeCategory === "adult" && useAdultPantsChart && garmentSizes.length) {
-    const ownNumericSizes = garmentSizes.map(Number).filter(Number.isFinite);
-    if (ownNumericSizes.length && !garmentSizes.includes(bestSize)) {
-      const target = Number(bestSize);
-      bestSize = String(ownNumericSizes.reduce((closest, n) => {
-        const dn = Math.abs(n - target), dc = Math.abs(closest - target);
-        return dn < dc || (dn === dc && n < closest) ? n : closest;
-      }));
-    }
-  }
-
-  /* PHASE 0 - MEASURED, NEVER ACTED ON. When a store chart (the widget's, or a stored
-     guide) was in play, log how its bands differ from ours and whether the tie-break
-     would land differently on each - the evidence a later decision about store charts
-     needs. It reads bestSize and returns; it cannot change what was computed above. */
-  if (currentSizeCategory === "adult" && typeof logStoreChartComparison === "function") {
-    logStoreChartComparison({
-      source: typeof resolvedStoreSizeChartSource === "function" ? resolvedStoreSizeChartSource() : "unknown",
-      baseChart: baseAdultChart, overlaidChart: adultChart, storeRows: resolvedStoreSizeChart(),
-      height, weight, chest, waist, legs, numericPants: useNumericPantsChart, recommended: bestSize,
-    });
-  }
-
+  const bestSize = verdict.size;
+  /* Main's Phase 0 line, where main logged it (after the recommendation is final). */
+  if (verdict.storeChartDiag && typeof logStoreChartDiag === "function") logStoreChartDiag(verdict.storeChartDiag);
   sizeResult.innerText = formatSizeLabel(bestSize);
   resultBox.classList.add("show");
   if (resultActions) resultActions.classList.add("is-ready");
@@ -3330,8 +2436,11 @@ function updateProgress() {
 function onMeasurementKeydown(e) {
   if (e.key !== "Enter") return;
   e.preventDefault();
-  calculateSize();
-
+  /* The size may be a server round-trip away now (calculateSize()'s doc) - Continue's
+     [disabled] is only meaningful once THIS input's answer has been painted. */
+  calculateSize().then(() => onMeasurementEnterResolved(e));
+}
+function onMeasurementEnterResolved(e) {
   const nextBtn = $("btn-next-screen");
   if (nextBtn && !nextBtn.disabled) { onSizeFormContinue(); return; }
 
@@ -3345,6 +2454,81 @@ function onMeasurementKeydown(e) {
   const next = inputs.slice(idx + 1).find((el) => !el.value) || inputs[idx + 1];
   if (next) next.focus();
   else e.target.blur();
+}
+
+/* ── THE SIZE SERVICE ─────────────────────────────────────────────────────────
+   POST /api/size - lib/sizing.js behind server.js. The only network call calculateSize()
+   makes, and deliberately defined OUTSIDE the Screen 1 region the sizing suites slice:
+   they inject a stand-in that runs the real lib/sizing.js in-process, so the tests keep
+   exercising the real fit through the real client shell.
+   One retry on a transport or 5xx/429 failure (a Vercel cold start is the usual cause);
+   a 4xx is a malformed request and is not retried. Throws on failure - calculateSize()
+   turns that into its "couldn't calculate" result. */
+/* ── THE SIZE FIT AND THE WIRE PROMPT ARE ASKED AT THE EDGE FIRST (2026-09-27) ──────────────────
+   REPORTED: "the whole interface is laggy" once the fit and the prompt moved server-side. Measured
+   against origin/main on the same machine: every /api/size and /api/prompt went to Vercel's iad1 -
+   ~350ms a round trip from Israel (620ms cold) for work the in-browser original did in 0ms - and
+   Continue sat locked for two of them in a row (+~720ms), go-live waited on two more (+~750ms).
+   The Cloudflare Worker behind the orientation link (PEAR_ORIENT_URL, wss://<host>/orient) answers
+   POST /size and /prompt from the SAME modules and sanitisers, at the edge nearest the shopper
+   (~10-20ms). It is asked first; ANY non-OK answer, transport error or EDGE_API_TIMEOUT_MS falls
+   back to this origin's /api/<route> - so an answer never depends on which one gave it - and a
+   failed edge is skipped for EDGE_API_RETRY_MS rather than taxing every later call. No
+   PEAR_ORIENT_URL (local servers, the visual harness) means the origin, exactly as before. */
+const EDGE_API_TIMEOUT_MS = 1500;
+const EDGE_API_RETRY_MS = 60000;
+let _edgeApiDownAt = 0;
+
+function edgeApiUrl(route) {
+  const ws = typeof PEAR_ORIENT_URL === "string" ? PEAR_ORIENT_URL : "";
+  const m = /^wss:\/\/([^/?#\s]+)/.exec(ws);
+  if (m) return `https://${m[1]}/${route}`;
+  /* A local `wrangler dev` (only a --qa build or the support view can carry one) is plain ws://. */
+  const local = /^ws:\/\/((?:localhost|127\.0\.0\.1)(?::\d+)?)\//.exec(ws);
+  return local ? `http://${local[1]}/${route}` : null;
+}
+
+/** POST a JSON body to the edge's /<route>, falling back to /api/<route>. Resolves a Response. */
+async function postPearApi(route, bodyText) {
+  const init = { method: "POST", headers: { "Content-Type": "application/json" }, body: bodyText, cache: "no-store" };
+  const edge = edgeApiUrl(route);
+  if (edge && Date.now() - _edgeApiDownAt > EDGE_API_RETRY_MS) {
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), EDGE_API_TIMEOUT_MS) : null;
+    try {
+      const resp = await fetch(edge, ctl ? { ...init, signal: ctl.signal } : init);
+      if (resp.ok) return resp;
+      _edgeApiDownAt = Date.now();
+    } catch (_) {
+      _edgeApiDownAt = Date.now();
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  return fetch(`/api/${route}`, init);
+}
+
+async function requestSizeVerdict(evidence) {
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 700));
+    try {
+      const resp = await postPearApi("size", JSON.stringify(evidence));
+      if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
+        const err = new Error(`HTTP ${resp.status}`);
+        err.permanent = true;
+        throw err;
+      }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const verdict = await resp.json();
+      if (!verdict || typeof verdict.status !== "string") throw new Error("malformed size verdict");
+      return verdict;
+    } catch (e) {
+      lastErr = e;
+      if (e && e.permanent) break;
+    }
+  }
+  throw lastErr;
 }
 
 /* =============================================================================
@@ -3878,8 +3062,8 @@ async function classifyGarmentViaLLM(title) {
   return verdict;
 }
 
-/* ── TIER 3 of isPantsProduct(): the cached Gemini VISION verdict ────────────────
-   The tiers above it read the storefront's own text - the size run and the title. Both
+/* ── TIER 3 of isPantsProduct() (lib/sizing.js): the cached Gemini VISION verdict ─
+   The tiers above it (there) read the storefront's own text - the size run and the title. Both
    abstain on a real catalog more often than they should: a store that renders its size
    picker in JavaScript scrapes to nothing, and a title like "STRAIGHT BASIC" or "LOOSE"
    names a CUT and a FIT with no garment noun in it at all. When the text says nothing,
@@ -4241,6 +3425,9 @@ function backToCalculator() {
    ============================================================================= */
 function enterRoom() {
   const handoff = parseHandoff();
+  /* Warm the orientation link now, so the first orientation sample after go-live does not
+     wait on a fresh TLS handshake. typeof-guarded: enterRoom() runs in sandboxes without it. */
+  if (typeof orientLinkKeepAlive === "function") orientLinkKeepAlive();
 
   if (handoff) {
     focusMode = true;
@@ -4618,10 +3805,9 @@ window.addEventListener("message", (e) => {
   if (typeof incomingChart === "string" || Array.isArray(incomingChart)) {
     pendingSizeChart = incomingChart;
     if (activeItem) activeItem.sizeChart = incomingChart;
-    const rows = parseStoreSizeChart(incomingChart);
-    console.log("[PEAR] store size-chart correction:",
-      rows.length ? rows.length + " row(s): " + rows.map((r) => r.size).join("/")
-                  : "(none readable - the vetted default matrix applies)");
+    console.log("[PEAR] store size-chart correction received",
+      "(" + (Array.isArray(incomingChart) ? incomingChart.length + " row(s)" : String(incomingChart).length + " chars") +
+      ") - decoded and bounded server-side with the next size verdict");
     const sizeFormEl5 = $("sizeForm");
     if (sizeFormEl5 && !sizeFormEl5.hidden) { try { calculateSize(); } catch {} }
   }
@@ -4827,10 +4013,10 @@ window.addEventListener("message", (e) => {
     "| back:", abbrevImg(activeItem.imgBack) || "(none)",
     "| back source:", activeItem.backSource, "| mode:", currentAngle,
     /* The one verdict in this message that silently changes what a BACK dispatch asserts, and
-       it can land after go-live - see describeRearConstruction(). typeof-guarded: this listener
-       body runs standalone in composite-handoff.test.mjs (CLAUDE.md 2.7). */
-    "| rear:", typeof describeRearConstruction === "function"
-      ? describeRearConstruction(activeItem) : "(not resolvable here)");
+       it can land after go-live. The sentence it selects is built server-side now
+       (describeRearConstruction() in lib/prompts.js); the raw flags that select it are what
+       this log can still show. */
+    "| rear: backIsPlain=" + activeItem.backIsPlain + " looksPrinted=" + activeItem._backLooksPrinted);
 
   /* Race guard (FIX 4). The widget opens this room immediately on a DOM-order guess
      and only posts the classifier's real front/back 1-7s later, so the corrected back
@@ -5580,6 +4766,19 @@ function resetToLive() {
    COST: zero. Nothing in this block opens a socket or issues a network request.
    ============================================================================= */
 
+/* PEAR_DEBUG_BUILD - WHY EVERY MOCK SEAM AND DEBUG HOOK CARRIES A typeof GUARD.
+   scripts/build.mjs ships this file minified, and defines PEAR_DEBUG_BUILD=false for the
+   production bundle. Each seam into this block, and each window.__pearDebug* registration,
+   is written as
+       (typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && …
+   which esbuild folds to `false` there - so the call site disappears, nothing references the
+   mock any more, and the whole block below is tree-shaken out of what a shopper downloads
+   (and ?mock_decart=1 stops being a switch anyone can flip on the live site).
+   Everywhere else the name is UNDEFINED, the guard is true, and nothing changes: the source
+   the tests extract, the visual harness (?mock_decart=1), and the ?pear_debug=<token> view
+   that server.js serves from source for merchant support. Written inline rather than as a
+   module-scope const because extracted blocks run standalone (CLAUDE.md §2.6/§2.7). */
+
 /** @returns {boolean} true only with ?mock_decart=1 - the realtime session is served by a
  *  local canvas loop instead of Decart. Read per call (never cached at module scope) to
  *  match the other URL flags in this file and to stay safe under test extraction. */
@@ -5619,7 +4818,7 @@ function mockAckMs() {
    visible mock artifact, left visible rather than papered over: rescaling it would mean
    touching a second real path for the harness's convenience. */
 function liveWindowMs() {
-  if (!mockDecartEnabled()) return LIVE_DURATION_MS;
+  if (!(typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) || !mockDecartEnabled()) return LIVE_DURATION_MS;
   let raw = null;
   try { raw = new URLSearchParams(location.search).get("mock_live_ms"); } catch (_) { return LIVE_DURATION_MS; }
   const n = Number(raw);
@@ -5945,7 +5144,7 @@ async function mockRealtimeConnect(inputStream, opts) {
   return session;
 }
 
-if (typeof window !== "undefined") window.__pearMockDecart = MOCK_DECART_STATE;
+if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") window.__pearMockDecart = MOCK_DECART_STATE;
 
 /* ── MOCK POSE SENSOR (?mock_decart=1) ────────────────────────────────────────
    The turn is the thing this repo keeps regressing on, and the turn is decided by
@@ -6082,7 +5281,7 @@ function mockPoseAdvanceSweep() {
   MOCK_POSE.angle = s.from + Math.sign(s.to - s.from) * travelled;
 }
 
-if (typeof window !== "undefined") {
+if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
   window.__pearMockPose = {
     get angle() { return MOCK_POSE.angle; },
     get frames() { return MOCK_POSE.frames; },
@@ -6119,9 +5318,9 @@ if (typeof window !== "undefined") {
 async function loadSDK() {
   /* MOCK SEAM 1 of 2 (?mock_decart=1). Returning here means no CDN import, no SDK, and
      no real client - everything below this line is the production path, untouched. */
-  if (mockDecartEnabled()) {
+  if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && mockDecartEnabled()) {
     console.log("[PEAR][MOCK] loadSDK() - ?mock_decart=1: serving the LOCAL mock client (no CDN import, no Decart session)");
-    return { createDecartClient: createMockDecartClient };
+    return { createClient: createMockDecartClient };
   }
   let lastErr;
   for (const url of SDK_URLS) {
@@ -6129,7 +5328,11 @@ async function loadSDK() {
     try {
       const mod = await import(/* @vite-ignore */ url);
       console.log("[PEAR] loadSDK() - loaded OK from", url);
-      return mod;
+      /* ONE NEUTRAL NAME for the factory, whichever build loaded it: the CDN module exports
+         the vendor's createDecartClient, the production same-origin bundle (rt.js, see
+         scripts/build.mjs) re-exports it as createClient - and PEAR_SDK_BUNDLE folds this to
+         the second branch there, so the vendor's export name never ships in app.js. */
+      return { createClient: typeof PEAR_SDK_BUNDLE === "string" ? mod.createClient : mod.createDecartClient };
     }
     catch (e) { lastErr = e; console.warn("SDK load failed from", url, e?.message || e); }
   }
@@ -6184,7 +5387,7 @@ async function mintEphemeralToken() {
      the harness free. A test asserting zero /api/realtime-token requests is asserting
      exactly this line. The stub is never sent anywhere: createMockDecartClient()
      ignores its argument. */
-  if (mockDecartEnabled()) {
+  if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && mockDecartEnabled()) {
     MOCK_DECART_STATE.tokenMints++;
     console.log("[PEAR][MOCK] mintEphemeralToken() - ?mock_decart=1: stub token, TOKEN_ENDPOINT not contacted");
     return "ek_mock_local_only";
@@ -6229,7 +5432,8 @@ async function mintEphemeralToken() {
     const detail = data.message || data.error || `HTTP ${resp.status}`;
     console.error("[PEAR] mintEphemeralToken() - token mint failed:", detail,
       "\n  Full server response:", data,
-      resp.status !== 405
+      !(typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) ? ""
+        : resp.status !== 405
         ? "\n  → Check that DECART_API_KEY in .env is set to a valid dct_… key from platform.decart.ai"
         : "\n  → Open the fitting room via http://localhost:3000/fitting-room/ (the Express server)");
     throw new Error("מינטינג טוקן נכשל: " + detail);
@@ -6531,7 +5735,7 @@ function createThrottledInputStream(srcStream, {
         settleTimer = null;
         if (disposed || gateOpen || held) return;
         gateOpen = true;
-        console.log(`[PEAR] input gate released (${why}) - streaming to Decart now;`,
+        console.log(`[PEAR] input gate released (${why}) - streaming to the render engine now;`,
           "its first frame is conditioned on the real reference");
       };
       /* THE CEILING HAS DONE ITS JOB HERE. It exists for a caller that never reports success
@@ -6591,7 +5795,7 @@ function createThrottledInputStream(srcStream, {
          keeps Decart from rendering the blank shirt while the reference uploads (see hold()). */
       const now = timer !== null && clock() - lastFrameAt >= frameMs;
       if (now) { clearInterval(timer); timer = null; tick(); start(); }
-      console.log(`[PEAR] input gate unheld (${why}) - streaming to Decart on the new reference` +
+      console.log(`[PEAR] input gate unheld (${why}) - streaming to the render engine on the new reference` +
         (now ? " (first frame sent at the ACK)" : ""));
       return true;
     },
@@ -6712,6 +5916,14 @@ async function resolveInitialConditioning(item) {
     return e;
   };
   if (!item) throw refuse("no garment is selected");
+  /* The prompt is a server answer now (wirePrompt(), lib/prompts.js) - asked for here so it
+     travels in parallel with the garment bytes below, and awaited only when the state is
+     assembled. The back is warmed too: the first turn should not wait on the network. */
+  const promptText = wirePrompt(item, "front", "initialConditioning");
+  promptText.catch(() => {});
+  for (const [angle, inProfile] of [["back", false], ["front", true], ["back", true]]) {
+    wirePrompt(item, angle, "prefetch", { inProfile }).catch(() => {});
+  }
   const g = galleryOf(item) || {};
   /* FRONT ONLY - never `|| g.back`. The floor is what a shopper FACING the camera is
      conditioned on until go-live's own apply lands, and what every SDK reconnect replays.
@@ -6736,7 +5948,7 @@ async function resolveInitialConditioning(item) {
     throw refuse(`the image for "${item.name}" is not readable as image bytes`);
   }
   return {
-    prompt: { text: clampPromptForWire(imageOnlyPrompt(item), "initialConditioning"), enhance: false },
+    prompt: { text: await promptText, enhance: false },
     image,
   };
 }
@@ -6789,9 +6001,9 @@ async function primeInitialConditioning() {
     try {
       floor = await resolveInitialConditioning(item);
     } catch (e) {
-      console.error(`[VTO Pipeline] REFUSING to initialize the Decart session - Garment ID: ${garmentIdOf(item)}`,
+      console.error(`[VTO Pipeline] REFUSING to initialize the render session - Garment ID: ${garmentIdOf(item)}`,
         `| ${e?.message || e}`, "\n  → no session is opened and no token is minted: a session with no",
-        "acknowledged garment renders Decart's own default garment until one arrives.");
+        "acknowledged garment renders the engine's own default garment until one arrives.");
       throw e;
     }
     const nowLook = resolveLook();
@@ -7141,7 +6353,7 @@ async function connectRealtime({ force = false } = {}) {
   console.log("[PEAR] connectRealtime() - stage 1/4: loading SDK from CDN…");
   try {
     /* ── load SDK ─────────────────────────────────────────────────────────── */
-    const { createDecartClient } = await loadSDK();
+    const { createClient } = await loadSDK();
 
     /* ── mint token → create client → build the throttled input, WITH ONE RETRY ──
        THE FAILURE THIS COVERS: "WebSocket is not open" thrown from the SDK's
@@ -7182,7 +6394,20 @@ async function connectRealtime({ force = false } = {}) {
       console.log("[PEAR] connectRealtime() - stage 3/4: token OK. Creating Decart client…");
 
       /* ── create client with the ephemeral token ───────────────────────────── */
-      const client = createDecartClient({ apiKey: ekToken });
+      /* telemetry:false - the SDK otherwise reports to the vendor's telemetry host from the
+         shopper's browser, which names the vendor in the Network tab and adds a request
+         that nothing in this product reads. Option verified in @decartai/sdk@0.1.5.
+         logger - REPORTED 2026-09-26 ("it showed Decart in the console"): the SDK's default
+         logger prints its own warnings under the vendor's name ("[DecartSDK] …"), and the
+         SDK bundle is shipped as-is (scripts/build.mjs skips it), so no build step removes
+         them. The shopper's room gets a silent logger; the support view keeps the warnings
+         and errors - they are diagnostic evidence - under the neutral [PEAR][rt] prefix. */
+      const rtLogger = (typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD)
+        ? { debug() {}, info() {},
+            warn: (m, d) => console.warn("[PEAR][rt]", m, d ?? ""),
+            error: (m, d) => console.error("[PEAR][rt]", m, d ?? "") }
+        : { debug() {}, info() {}, warn() {}, error() {} };
+      const client = createClient({ apiKey: ekToken, telemetry: false, logger: rtLogger });
       console.log("[PEAR] connectRealtime() - stage 4/4: opening WebRTC session (waiting for 'connected')…");
 
       /* Bug 3 fix: work off a CLONE of the camera tracks so disconnect/teardown never
@@ -7237,8 +6462,8 @@ async function connectRealtime({ force = false } = {}) {
     }
 
     rtClient.on("error", (err) => {
-      console.error("[session] Decart error:", err?.message || String(err));
-      showCamError("שגיאת Decart: " + (err?.message || err));
+      console.error("[session] render engine error:", err?.message || String(err));
+      showCamError("שגיאת חיבור: " + (err?.message || err));
     });
 
     connState = (rtClient.getConnectionState && rtClient.getConnectionState()) || "connected";
@@ -7309,6 +6534,8 @@ function teardown() {
   stopFrameFreezeWatch();
   // The live-camera bridge belongs to the live session - every exit path retires it here.
   if (typeof stopStreamContinuity === "function") stopStreamContinuity();
+  // ...and so does a TEST session's flight record (a no-op when the clip already closed it).
+  if (typeof traceSessionEnd === "function") traceSessionEnd("teardown");
 
   // Feature 2 - flush the recorder while the edited tracks are still live, so the
   // download clip is finalized before disconnect ends the stream.
@@ -7972,6 +7199,17 @@ function garmentBlobIfWarm(url) {
    next action (or the WebRTC handshake) instead of serialising into the first swap. */
 function prewarmOrientationAssets() {
   const look = resolveLook();
+  /* The wire prompts too, while the shopper is still on their way to go-live: go-live's own
+     request (resolveInitialConditioning) and every turn then read the session memo instead of
+     waiting on a round trip - measured at +~750ms on go-live before this (see postPearApi()).
+     Fire-and-forget; a failure here only means go-live asks again. typeof-guarded (§2.7). */
+  if (look) {
+    if (typeof wireLookPrompt === "function") wireLookPrompt("prefetch").catch(() => {});
+  } else if (activeItem && typeof wirePrompt === "function") {
+    for (const [angle, inProfile] of [["front", false], ["back", false], ["front", true], ["back", true]]) {
+      wirePrompt(activeItem, angle, "prefetch", { inProfile }).catch(() => {});
+    }
+  }
   for (const it of (look ? [look.top, look.bottom] : [activeItem])) {
     if (!it) continue;
     const g = galleryOf(it);
@@ -8556,529 +7794,24 @@ async function preloadGarmentAssets() {
    The watcher never touches the camera track (shared with the preview); stop() only
    detaches its own <video> sampler. Lifecycle is owned by syncOrientationWatcher(). */
 const ORIENT_SAMPLE_MS      = 250;   // ~4 analyses/s - cheap on a 96px canvas
-const ORIENT_LOCK_FRAMES    = 10;    // consecutive agreeing samples to unlock (~2.5s @ 250ms/sample)
-const ORIENT_LOCK_MS        = 2500;  // OR this much sustained agreement - whichever comes first (see note above)
-/* FIRST acquisition only - see PENDING_MODE below. Deliberately far lower than
-   ORIENT_LOCK_FRAMES: that threshold's job is to stop a CONFIRMED state from
-   flapping, and until the first reading lands there is no confirmed state to
-   protect. Two agreeing confident samples (~500ms) is enough to establish one, and
-   paying the full 2.5s anti-flap cost for it is what made a shopper who was already
-   turned around watch the FRONT render on their back for the first few seconds. */
-const ORIENT_ACQUIRE_FRAMES = 2;
+/* ══ THE ORIENTATION DECISION IS SERVER-SIDE (since 2026-09-26) ══════════════════
+   Everything that DECIDES front or back and when to swap - the lock and its streaks
+   (ORIENT_LOCK_FRAMES / ORIENT_LOCK_MS / ORIENT_ACQUIRE_FRAMES), the yaw corroboration,
+   the face return and pose flip, the side-view pass, post-peak evidence, the fold
+   handshake (the early turn trigger and its ?early_turn= family), predictive BACK,
+   makeTurnYawWindow(), orientFlipDecision() and the profile axis's enter/exit rule -
+   lives in lib/orient-engine.js, with the clips and reports that tuned each one, and
+   runs in a Cloudflare Worker (CLAUDE.md §2.14). This file keeps what it takes to
+   MEASURE (classify(), the pose loop) and to EXECUTE (maybeSwap(), the hold, the turn
+   flag, the pose and re-anchor dispatches); createOrientationWatcher()'s tick sends one
+   sample per tick and carries out the actions that come back. */
 const ORIENT_CONFIDENCE_MIN = 0.85;  // per-frame vote must clear this confidence or it abstains (see skinConfidence())
 const ORIENT_COOLDOWN_MS    = 1500;  // min gap between live reference swaps (anti-flap, secondary to the lock)
 
-/* ── YAW CORROBORATION - the same 2.5s, seen from three sides ──────────────────────
-   ────────────────────────────────────────────────────────────────────────────────
-   THREE REPORTS, ONE CAUSE. "The real shirt bleeds through when I turn", "the back
-   graphic pops in late", and "the feed freezes during a turn" are the same
-   ORIENT_LOCK_FRAMES x ORIENT_SAMPLE_MS = 2.5 seconds of confirmation latency wearing
-   different faces. Hold ON and you get the freeze; hold OFF and the model re-renders a
-   half-turned shopper in their own shirt; swap late and the graphic arrives after the
-   turn. Each "fix" in isolation just moves the symptom to one of the other two.
+/* Yaw corroboration, the pose flip, the side-view pass, post-peak evidence and the fold
+   handshake (early turn) moved to lib/orient-engine.js. */
 
-   The only lever that shrinks all three at once is CONFIRMING FASTER - and the reason
-   that was never done is the one written above ORIENT_LOCK_FRAMES: lowering it swaps the
-   reference on a head-turn and reintroduces flapping, which is worse than any of the
-   three.
-
-   SO CONFIRM FASTER ON MORE EVIDENCE, NOT ON A LOWER BAR. The shared pose loop already
-   computes bodyYawDegrees() every BODY_TOPOLOGY_SAMPLE_MS for the topology monitor, and
-   nothing in the orientation path has ever consumed it. It is a genuinely 3D measurement
-   off MediaPipe's torso landmarks - a different instrument entirely from the 96px
-   skin-ratio canvas and the face detector that produce the vote.
-
-   TWO INDEPENDENT SIGNALS, BOTH REQUIRED. The vote decides WHICH side; the yaw swing
-   only attests THAT a real torso rotation happened. Neither can stand in for the other:
-     · Yaw cannot pick a side. bodyYawDegrees() is asin(out-of-plane / length), capped at
-       +/-90, so a shopper facing the camera and one facing away read the same. It is
-       never consulted for direction - only to shorten a decision the vote already made.
-     · The vote cannot see a torso turn. That is exactly why a head-turn under a flickering
-       light could ever have raced it, which is what ORIENT_LOCK_FRAMES defends against -
-       and a head-turn moves the head, not the shoulders, so it produces almost no torso
-       yaw and earns no corroboration. The defence is intact where it was needed.
-
-   ORIENT_LOCK_FRAMES IS UNTOUCHED and remains the bar whenever yaw is unavailable, stale
-   or small: no pose detector, an occluded torso, a phone that never loaded the WASM
-   runtime, or simply a shopper who has not actually turned. Corroboration can only ever
-   ADD a faster path alongside it; it can never raise the bar and never lower it below
-   ORIENT_CORROBORATED_FRAMES.
-
-   THE NUMBERS. 45 degrees is a half-turn of the shoulder line - well past anything a
-   head-turn, a lean or a shrug produces. It is measured DOWN from the turn's edge-on peak
-   (see makeTurnYawWindow - measuring it from the start of the new vote streak meant the
-   return leg could never reach it). 4 frames is ~1s at ORIENT_SAMPLE_MS, still 4 agreeing
-   votes rather than a hair trigger. FRESH_MS is ~2.5 pose ticks (yaw is published on every
-   POSE_SAMPLE_MS * 2 tick - see startPresenceWatcher): a yaw reading older than that
-   describes a body position the shopper has already left, and stale evidence must not
-   accelerate anything.
-
-   THE FACE RETURN - the one direction that may confirm on fewer votes. This file already
-   records that the two vote directions are not equally reliable: a face DETECTED is strong
-   evidence (false positives on hair or a shoulder are rare), a face NOT detected is what
-   every dim room and motion blur also looks like. So a return to FRONT that has BOTH a
-   FaceDetector detection streak AND a torso turn corroborated by yaw - two different
-   instruments agreeing - confirms at ORIENT_FACE_RETURN_FRAMES. Neither alone does: a face
-   with no torso rotation is the shopper facing away and glancing over their shoulder at the
-   screen, which keeps the full ORIENT_LOCK_FRAMES bar. Geometry backs the pairing: the
-   corroborated swing needs the torso back within ~45 degrees of square, and a head cannot
-   turn far enough past that to put a frontal face in front of a body still facing away.
-   Two, not one: a single detection is the hair trigger the corroborated bar refuses. The
-   BACK flip keeps ORIENT_CORROBORATED_FRAMES - its evidence is an absence. */
-const ORIENT_CORROBORATED_FRAMES = 4;    // agreeing votes needed WITH a corroborating yaw swing
-const ORIENT_FACE_RETURN_FRAMES  = 2;    // face DETECTIONS needed for a corroborated return to FRONT
-/* THE POSE FLIP - the face return's symmetric sibling. The pose model's shoulder order (see
-   poseShoulderFacing()) is not an absence in either direction: it reads FRONT and BACK with the same
-   standing, measured +0.76 / -0.68. So two consecutive shoulder votes for the other side, with the
-   turn corroborated by yaw, confirm the flip BOTH ways - which is what makes FRONT -> BACK -> FRONT
-   move on one bar instead of a fast return and a slow departure. Corroboration is still required:
-   the shoulder order is a torso signal, and a head turned over the shoulder must not flip anything
-   before ORIENT_LOCK_FRAMES. */
-const ORIENT_POSE_FLIP_FRAMES    = 2;    // shoulder-order votes needed for a corroborated flip, either way
-/* ── THE SIDE-VIEW PASS - "the back graphic comes a second late, and after the 360 the front never
-   comes back" (build 129) ─────────────────────────────────────────────────────────────────────
-   THE CAUSE IS THE GAP THE SHOULDER VOTE READS ACROSS. MediaPipe loses the far shoulder near
-   edge-on (see makeTurnYawWindow's EDGE-ON GAP), and the pose loop publishes a shoulder order and a
-   yaw only from a readable torso - so through that band both keep their LAST readable value, and
-   both count as fresh for ORIENT_YAW_FRESH_MS (600ms). A turn crosses the band faster than that.
-   Every tick in it the stale shoulder order votes for the side ALREADY locked, which closes the
-   window and pins its peak at the last readable |yaw|; the stale yaw is "fresh", so the edge-on
-   loss is never inferred either. The peak then sits under ORIENT_YAW_TURN_DEG + the 45-degree
-   swing the pose flip needs, predictive BACK never reaches ORIENT_EDGE_ON_DEG, and the flip waits
-   for ORIENT_LOCK_FRAMES - or, on a fast turn, never happens at all. turn-yaw-window §2/§9 modelled
-   the shoulder vote with the torso readable straight through edge-on, which is why it passed.
-   MODELLED (turn-yaw-window §10, the real window and decision, shoulder readings stale across an
-   unreadable band): 22 of 48 full-360 profiles (60-150 deg/s, depth 0.6-1, torso readable to 50-90
-   degrees) never swapped at all - the back never rendered. With the pass all 48 send BACK and come
-   back to FRONT; of the 26 that already did, 10 dispatch earlier and none later.
-   THE PASS. Yaw magnitude cannot tell "parked edge-on with a dropped frame" from "went through
-   edge-on during the gap" - treating any dropout as edge-on puts BACK on a held profile check. What
-   separates them is DESCENT: after a real pass |yaw| falls away from the peak; parked, it does not.
-   So a shoulder vote for the other side is also corroborated when the window saw a real turn - a
-   readable peak past ORIENT_YAW_TURN_DEG, or the torso reported unreadable since the reading that
-   last agreed with the lock - AND |yaw| has since fallen ORIENT_PREDICT_DESCENT_DEG from that
-   readable peak (never from an assumed 90). Two shoulder votes are still required
-   (ORIENT_POSE_FLIP_FRAMES), a head over the shoulder still moves no torso, and the FaceDetector and
-   skin engines never reach it (it only corroborates the pose flip).
-   A BACK confirmed on the pass alone goes out at the stage of the turn a predictive BACK does, so it
-   is withdrawable the same way (maybeSwap's `withdrawing`) - without that, a glance to 120 degrees
-   left BACK on the chest for the full ORIENT_COOLDOWN_MS. THE RESIDUAL COST, stated: under the
-   model's harshest noise (30% dropped frames, +/-0.6 edge-on label noise) one 120-degree glance sent
-   an early BACK that predictive BACK did not, on the chest 250ms longer than build 129's worst.
-   Held and brief profile checks, 100-degree glances, posing twists and a side check of the back put
-   nothing on the wire at any noise level.
-   Still a model: the band's width on a real webcam is what ?orient_debug=1 prints (`torso lost`,
-   `passed`). ?pose_pass=0 turns it off for an A/B. */
-const ORIENT_POSE_PASS = (() => {
-  try { return new URLSearchParams(location.search).get("pose_pass") !== "0"; } catch (_) { return true; }
-})();
-/* ── POST-PEAK EVIDENCE - "the prints bleed across and the view chatters at the side" (2026-09-22) ──────────────
-   REPORTED: on a 360 the back graphic leaks onto the chest or the front graphic onto the back panel mid-turn, and
-   near the side view the reference toggles front/back/front. No clip came with it, so it was taken to the model.
-   COUNTED (turn-yaw-window, the §13 grid plus 20-35 deg/s turns, dispatches per 360, not only where they end):
-   most 360s send exactly BACK then FRONT, but some send 4-6. At 30 deg/s 56 of 216 modelled turns flapped, at 20
-   deg/s 140 - a clean 20 deg/s turn with no noise at all sent B@40 F@100 B@130 F@235 B@290 F@305. Each extra FRONT
-   on the way OUT (and BACK on the way back) goes out with the body already past the side view: FRONT on a back
-   panel, then BACK again - the reported bleed and the reported chatter, from one cause.
-   THE CAUSE: EVIDENCE CAST ON THE WAY INTO THE TURN WAS COUNTED AS A RETURN FROM IT. Every bar that un-does the
-   lock assumed the new side's votes begin after the turn's edge-on peak, and until the early trigger that was
-   true - the lock only moved once the body had come round. The early trigger (and predictive BACK) move the lock
-   AHEAD of the body: BACK goes out at ~35 degrees while the chest still faces the lens, and the shoulders
-   correctly keep voting FRONT until ~69. Against a BACK lock those votes disagree, so they build a FRONT streak.
-   Abstains never reset a streak, and the shoulder vote abstains from ~69 to ~111. Then, on the far side:
-     · the side-view pass (|yaw| 15 down from the peak) corroborated that pre-peak FRONT streak - FRONT at 117;
-     · or ORIENT_LOCK_MS counted one pre-peak FRONT vote plus 2.5s of edge-on abstains as "sustained agreement" -
-       FRONT at 100 on a slow turn;
-     · and the same on the return leg, with the roles swapped - BACK at 290.
-   THE RULE: a vote cast while |yaw| was still RISING toward the turn's peak is evidence of LEAVING that side, not
-   of returning to it. So every bar that un-does a lock - the vote bar, the corroborated bar, the held time, the
-   face return and the pose flip - counts only the votes, and the time, since |yaw| last climbed
-   ORIENT_POST_PEAK_RISE_DEG or the torso was first lost to edge-on (makeTurnYawWindow's postPeakVotes /
-   postPeakSince; orientFlipDecision caps each bar at them with Math.min, so a cap can only raise a bar).
-   TWO CUTS WERE MEASURED AND BACKED OUT FIRST - do not re-run them:
-     · restarting the count on EVERY new maximum: +/-4 degrees of jitter on a body standing square sets a new
-       maximum every few readings, so BACK left on the chest after a fast 360 kept losing the FRONT votes that
-       should undo it - 52 more modelled fast 360s under dropped frames never swapped and 12 ended on BACK;
-     · also refusing the vote cast from the reading that restarted the count: after a torso unreadable straight
-       through edge-on, that reading is the first one PAST the fold, and 16 fast 360s lost their only BACK.
-   MEASURED (turn-yaw-window §14; 20-180 deg/s, k 0.6-1, torso readable to 50-90, 100ms on screen):
-     20-35 deg/s, clean + jitter        flapping 360s 64 -> 1    a side sent past the side view, wrong side 62 -> 0
-     20-35 deg/s, 15-30% dropped+noise  flapping 360s 127 -> 97                                               53 -> 2
-     45-180 deg/s, either               unchanged; §13's fold ledger is byte-identical
-   No turn swaps less, ends anywhere but FRONT, or sends more wrong-side swaps than before, and no pose §13
-   prices shows the other side for longer. Wobbling 70-110 at the side view: at most 4 dispatches -> 2.
-   WHAT IT DOES NOT CHANGE. The normal 360 already met the assumption - the new side's votes come after the peak -
-   so it sends exactly what it sent. With no pose reading at all nothing ever restarts the count, which is the bar
-   exactly as before. Acquisition is exempt: with no lock there is nothing stale to un-do.
-   WHAT IS LEFT, stated: the 97 noisy slow flaps are the early trigger's fold-by-loss firing on a dropped frame at
-   |yaw| 20-40 and withdrawing itself ~10 degrees later - the cost ?early_turn_loss's comment already prices, and a
-   threshold decision, not this bug. And it is a model: ?orient_debug=1 prints `after peak Nv` on every tick of a
-   pending switch - the live check. ?post_peak=0 turns this rule off for an A/B.
-   Paired with a fix in makeEarlyTurnTrigger (the rise it fires on is measured from a fresh arm) - the second,
-   independent route to FRONT on a back panel the same count found. */
-const ORIENT_POST_PEAK = (() => {
-  try { return new URLSearchParams(location.search).get("post_peak") !== "0"; } catch (_) { return true; }
-})();
-/* ── THE FOLD HANDSHAKE - the swap goes out at the SIDE VIEW, not as the turn starts (2026-09-15) ─────────────
-   REPORTED, with two clips (pear-tryon-...-FOX-20260915-164257 and -165625, v142): "the front print unmounts too early
-   while the front is still partly visible, leaving a plain T-shirt before the back locks on - and the same on the way
-   back". Asked for: keep FRONT until past 90 degrees, keep BACK until the chest comes round, never a plain shirt.
-   READ FRAME BY FRAME (decoded with per-frame media times; the export repaints a ~10fps render at 30fps):
-     · 164257 OUT: PEAK on the chest at 1.738s with the body ~15 degrees round; the very next Decart frame, 1.773s,
-       is the same body with a plain chest. Plain through the three-quarter and the side until the back print shows
-       at ~2.2s, ~100 degrees. RETURN: back print at 3.304s (~150 degrees), plain at 3.338s with the back still to
-       the lens, PEAK back at ~3.74s (~70 degrees). About 400ms of plain shirt on each leg.
-     · 165625 OUT: PEAK gone at ~2.15s, body ~35 degrees round; back print at ~2.55s.
-     · NOT A STALL, NOT A COVER, NOT A CLEARED REFERENCE. Decart's output kept its ~100ms cadence straight through
-       every gap (no repeated frame, so LIVE CONTINUITY never engaged), nothing of ours is drawn over it, and no path
-       sends image:null. Each gap is the NEW reference rendered on the OLD side: a back photo has no chest print to
-       draw, a front photo has no back print. It begins on the frame the swap lands.
-   WHAT THAT MEASURES. The swap appears on screen with the body at about the angle it was SENT at - Decart's output
-   trails the camera by about as long as a swap takes, so the two cancel. This trigger was tuned (below) against a
-   modelled 700-1000ms dispatch-to-render: under that premise a 20-degree send lands near the side view. In these clips
-   it landed at 20, and every degree of lead was plain shirt.
-   WHAT THE REQUEST CANNOT MEAN HERE, and was not built. Decart holds ONE reference: GARMENT_BACK cannot "arrive" and be
-   verified while GARMENT_FRONT keeps rendering - the swap IS its arrival - and two views cannot be blended across the
-   profile: a stitched FRONT|BACK reference is the double-logo bug (COMPOSITE_DEFAULT), two live sessions would double
-   the bill and ghost. |yaw| folds at 90 and is depth-compressed, so "110" and "70" are not readings either. The one
-   thing the client controls is WHEN the single swap goes out - so it goes out where a real shirt shows neither print.
-   THE FOLD, both legs (makeEarlyTurnTrigger): ORIENT_EARLY_TURN_DEFAULT_DEG and _RETURN_DEG at 50, a depth-compressed
-   reading near the real side view; the slow path at the same 50; and ORIENT_EARLY_TURN_LOSS_DEG, because MediaPipe
-   loses the far shoulder right there and many turns never publish a reading that high - a torso lost while |yaw| was
-   still rising past 20 is the fold too. The 45 deg/s gate, the withdrawal, the cooldown rules and every other path
-   are unchanged.
-   MODELLED (turn-yaw-window §13: the real window, decision, predictive BACK and trigger; 216 full 360s at 45-180
-   deg/s, k 0.6-1, torso readable to 50-90; on-screen latency 0/100/250ms - the clips - and 700 for the old premise):
-     plain shirt while the side being left still faces the lens   663/539/361ms (v142)  ->  337/244/146ms
-     plain shirt on either side of the fold, per 360               1074/995/917ms        ->  519/500/581ms  (700ms: 1267 -> 1217)
-     median landing, out / back (90 = the side view)               50-76 / 72-104        ->  80-105 / 70-95
-   THE COST, stated: the plain that remains sits just past the side view instead of before it (the back panel comes
-   round plain for a beat before its print lands: at 0-250ms, 63-170ms on the way out, 120-266ms on the way back, where
-   v142 showed 116-137 / 295-419ms of it on top of its early gap); one modelled 180 deg/s,
-   k 0.6 turn gives the fold no reading at all and never swaps (6 of 216 vs 5); and a small pose that rises past 20
-   fast and drops a frame reads as the fold - a quick reach, a look back over the shoulder, a slow look to 30 swap up
-   to 10 times in 60 under 15-30% dropped frames, withdrawn. In exchange a twist to 38 swaps 4/60 instead of 46/60 and
-   a mirror check at 45 11/60 instead of 58/60. A held profile check still swaps - it IS the side view.
-   OVERRIDES: ?early_turn=20&early_turn_return=35&early_turn_slow=35&early_turn_loss=0 is v142 exactly.
-   STILL A MODEL: one ?orient_debug=1 360 prints `fold handshake:` with the path that fired and the swap timeline -
-   the live check on where the swap lands.
-   ── WHAT FOLLOWS IS THE 20-DEGREE DEFAULT THIS REPLACED (v134-v142), kept as the record of why it was taken ──
-   THE EARLY TURN TRIGGER - ON BY DEFAULT at 20 degrees, gated at 45 deg/s (60 until 2026-09-15).
-   WHY IT EXISTS. Traced client side, a swap costs ~nothing: the Blobs are pinned in memory, the
-   catalog's rear pair is 43KB/38KB, @decartai/sdk sends it as one set_image message on the signaling
-   WebSocket, and the reference is pre-encoded (preEncodeReference). What remains is Decart switching its
-   render once it has the reference (~1s by this file's own figure - COND_TRACE_SETTLE_MS). The only
-   client lever against a server cycle is sending sooner.
-   WHY IT IS ON, AND WHAT IT COSTS - a PRODUCT DECISION (2026-09-14), taken on these modelled numbers
-   (turn-yaw-window §11, the build-130 tick, 700-1000ms dispatch-to-render; not yet measured live):
-   at 15-45 degrees a posing twist and the start of a 360 are the same reading, so no setting removes the
-   trade - it only chooses it. With the trigger off, a full 360 shows the wrong garment 2.5s (700ms
-   latency) to 3.0s (1000ms); at 20 degrees gated at 60 deg/s, 0.8s to 1.25s. A slow sway or a held
-   weight shift never fires, jitter or not. A FAST pose - a quick twist, a reach, a look at the side view in the mirror, a held profile
-   check - starts exactly like a turn and shows the other side's graphic for ~0.75-1.75s until the
-   withdrawal lands. The choice offered was: 20 ungated (turns ~0.3s, slow weight shifts past 20 fire
-   too), 20 gated (this), or off. ?orient_debug=1 prints DISPATCH_SENT / SERVER_CONFIRMED /
-   RENDER_APPLIED and the trigger's live |yaw| speed to re-tune from a real turn.
-   OVERRIDES: ?early_turn=0 turns it off (the build-130 behaviour, exactly); ?early_turn=<deg> moves the
-   threshold, clamped to [ORIENT_EARLY_TURN_MIN_DEG, ORIENT_EARLY_TURN_MAX_DEG] - under 10 is sway, past
-   60 predictive BACK is already earlier; unparseable keeps the default.
-   MEASURED AND DECLINED (same model): 12 or 15 (a 14-degree sway fires at 12; an 18-degree weight shift
-   shows the back 1.75s at 15, for 0-125ms gained over 20 on a 360); an acceleration gate (sampled at
-   240ms, a 12-degree sway reads HIGHER alpha in the 8-12 degree band - 116-351 deg/s2 - than a 360's start
-   - 43-208 - and a 90 deg/s turn skips that band between two readings); evaluating the crossing on every
-   pose reading instead of the tick (BACK leaves ~60ms sooner and lands in the front hemisphere - more
-   wrong-garment time, 367 -> 667ms); firing on predicted time-to-edge-on (worse than a plain 20 even
-   with the latency known exactly). No undo beats Decart's own switch: a reach that returns inside 300ms
-   still shows the back for the whole render latency.
-   BEHAVIOUR (see makeEarlyTurnTrigger): dual-view only; armed by settling square on the locked side;
-   fires the other side on the first fresh |yaw| past the threshold while it rises at least the gate's
-   speed, BACK sent withdrawable like a predictive BACK; withdrawn the moment the old side's votes return
-   under the threshold, before any vote has confirmed the turn. Symmetric: armed facing away, it sends
-   FRONT the same way. */
-/* ── THE MIDDLE GROUND - 50 -> 35 outbound, 45 on the return (2026-09-16) ────────────────────
-   DIRECTED as a product decision, and the honest label matters: this is the FIRST threshold in
-   this block that was NOT set from a measurement. The fold handshake's 50 came from two clips
-   read frame by frame plus 216 modelled 360s; v142's 20/35 came from §11's grid. 35/45 came
-   from a judgement that the handshake over-corrected - which the numbers below may well
-   support, but nobody has yet replayed a ?orient_debug=1 360 against it.
-
-   THE REPORT IT ANSWERS: on a turn the back panel comes round PLAIN for a beat before its print
-   lands, and the graphic pops in late. That is the fold handshake's own stated cost, written
-   into its comment above ("the plain that remains sits just past the side view instead of
-   before it", 63-170ms out / 120-266ms back at 0-250ms latency). Sending earlier moves the
-   swap back toward the side view, where a real shirt shows neither print.
-
-   WHAT IT RISKS, and this is the half to read before tuning it again. The handshake exists
-   because the swap lands on screen at ABOUT THE ANGLE IT WAS SENT AT - Decart's output trails
-   the camera by roughly one swap, so the two cancel. At 35 the swap therefore lands near 35,
-   which is still the FRONT hemisphere: the chest is in view, and a back reference rendered on a
-   visible chest draws no chest print. That IS the 2026-09-15 report ("the front print unmounts
-   too early while the front is still partly visible, leaving a plain T-shirt"), bought back in
-   part. The trade is deliberate: less plain time late on the turn, some plain time early.
-
-   THE RETURN LEG KEEPS A 10-DEGREE HYSTERESIS (45, not 35) and it is not symmetry for its own
-   sake. The return is the leg with a MEASURED failure: at 20 a live clip caught FRONT landing
-   on a back-facing body (see ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG below), and §11 found 35 the
-   lowest setting that never does so at any latency. Dropping the return to the outbound's 35
-   would sit exactly on that floor with no margin, so it keeps a margin. Asymmetric legs are
-   also the v136-v142 design this partially restores, not a new idea.
-
-   TO RESTORE THE FOLD HANDSHAKE EXACTLY, no deploy needed:
-     ?early_turn=50&early_turn_return=50&early_turn_slow=50
-   TO GO BACK TO v142:  ?early_turn=20&early_turn_return=35&early_turn_slow=35&early_turn_loss=0
-   ONE ?orient_debug=1 360 prints `fold handshake:` with the path that fired and the swap
-   timeline - if DISPATCH_SENT -> RENDER_APPLIED is well under the 700-1000ms these were tuned
-   against, 35 is right and 50 was overshooting; if it is at or above it, 50 was correct and
-   this change is re-opening the plain-front report. That log is what settles it.
-   ── the fold handshake's own record follows, unchanged, and is still the reason 50 was set ── */
-/* ── 35 -> 40 (2026-09-22, evening), DIRECTED INTO 38-42 AND CALIBRATED THERE ──────────
-   REPORTED again: the back graphic bleeds onto the front chest during the outbound turn, and the
-   request named a 38-42 degree outbound bound. At 35 the swap lands in the front hemisphere -
-   the stated cost of the middle ground, above - and the fold ledger scores exactly that as
-   outPlain (BACK on the wire while the chest still faces the lens).
-   SWEPT (turn-yaw-window §13's grid; return 50, slow path tracking the outbound leg as always;
-   total wrong-side ms per 360 and outPlain at 0/100/250 | 700ms on screen):
-       35   total 635 580 596 | 1107   outPlain 318 245 152   never swapped 5 of 216
-       38         595 549 582 | 1133            276 207 123                 5
-       40         580 540 582 | 1152            258 192 112                 5
-       42         556 522 575 | 1169            232 169  95                 5
-       50         519 500 581 | 1217            180 125  65                 6
-   Every step up buys the reported symptom down at every MEASURED (clip) latency and pays in late
-   pop-in (outLate 30/42/90 -> 36/55/116 at 40) and at the unmeasured 700ms column - the same
-   trade, in the same direction, the 45->50 return calibration took. The 25-degree landing bar
-   does not bind anywhere in 35-58; 40 lands NEARER the side view than 35, whose 0ms median sat
-   exactly on the bar's edge (65 -> 71, 77 -> 81, 90 -> 99). Poses: fired 205 -> 197 of the §13
-   set, mean wrong-side 280 -> 263ms.
-   THE COST UNDER NOISE, found by §14's grid (15-30% dropped frames, edge-on label noise) and not by
-   the clean sweep above - smooth in the threshold, stated rather than hidden:
-       outbound                         35    38    40    42
-       slow noisy 360s that flap        97    99   104   109   (of 288 - fold-by-loss fire + withdraw)
-       fast noisy 360s never swapped    16    18    18    18   (of 432)
-       clean 360s, wrong side past 90    1     2     2     3   (the 180 deg/s k 0.6 sampling limit)
-   40 WITHIN THE DIRECTED RANGE because it keeps the 10-degree hysteresis to the return leg's 50
-   that the middle ground argued for - RETURN >= OUTBOUND still holds, with margin.
-   ON THE HARNESS (the dispatch-angle instrument, same scripted 360, n=4 each), the true body
-   angle BACK goes out at:  35 -> 49.0 54.7 43.9 36.6 (mean 46.1)   40 -> 62.8 50.5 40.4 59.4
-   (mean 53.3). Two side changes per 360 in all eight runs; zero token mints.
-   NOT TAKEN from the same request, measured: an EWMA on |yaw| (see SMOOTHING THIS SIGNAL below -
-   re-run on this build, alpha 0.25 still leaves 84 of 216 turns never swapping), and holding BACK
-   "until front chest visibility is restored" on the return (?early_turn_return=0 - see the 45->50
-   record: it lands the return past front-square, the back print on a chest facing the camera).
-   ?early_turn=35&early_turn_slow=35 restores the middle ground exactly. */
-const ORIENT_EARLY_TURN_DEFAULT_DEG = 40;   // 20 until the fold handshake (50); 35 at the middle ground; 40 since the 2026-09-22 calibration - see above
-/* ?early_turn_return=<deg> - THE RETURN LEG, BACK -> FRONT. SUPERSEDED as a default by the fold handshake (above): both legs now
-   send at the side view, 50. What follows is why the return leg was first split from the outbound one - still true of any
-   threshold short of the fold, which is the point the handshake takes to its end.
-   (v136-v142: the return leg fired later than the way out.)
-   LIVE EVIDENCE (the first in this series): pear-tryon-...-FOX-20260914-225423.mp4, a v134-era 360 at ~140 deg/s,
-   read frame by frame. Out: "PEAK" holds to ~60 degrees, the side is plain (as a side is), the back graphic
-   arrives with the back (2.8s) and holds while facing away. Back: between 3.40s and 3.47s the body jumps
-   ~50 degrees and the shirt turns plain brown while the back and back-profile are still to the lens, until
-   the chest comes round (~4.2s). A reference replaced while the back was visible - FRONT, and only the early
-   trigger sends FRONT that close to facing away (20 degrees past it). The same clip timed Decart's output
-   stalls around the swaps at 234-333ms, so this session's swaps were far faster than the 700-1000ms the
-   default was first tuned for, and at that speed 20 degrees of lead lands FRONT on the back.
-   MODELLED per leg (turn-yaw-window §11, 90-140 deg/s, 250-1000ms dispatch-to-render): the return leg at
-   35 is the only setting that puts FRONT on a back-facing body for 0ms at every latency; its cost is the
-   back graphic staying on a turning-front chest ~100-190ms longer. Raising BOTH legs is worse overall and
-   leaves a plain gap anyway. The outbound leg keeps 20. ?early_turn_return=0 turns the early FRONT off
-   (the vote path carries the return); clamped like ?early_turn. Which path sent FRONT in that clip is
-   what one ?orient_debug=1 log of a turn would confirm. */
-/* 45 SINCE THE MIDDLE GROUND (2026-09-16): the outbound leg went to 35 and this one keeps a
-   10-degree margin over it. Everything above is why the return must never be the LOWER of the
-   two - it is the leg that was caught putting FRONT on a back-facing body at 20, and 35 is the
-   measured floor rather than a comfortable setting. See ORIENT_EARLY_TURN_DEFAULT_DEG. */
-/* ── 45 -> 50 (2026-09-22), CALIBRATED AGAINST THE MODEL, NOT CHOSEN ──────────────────
-   REPORTED, across several rotation videos: on the return arc the back print drops off
-   while the rear/side torso is still facing the lens, leaving a plain-shirt window before
-   the front print engages.
-
-   THE REPORT IS CORRECT AND THE MODEL AGREES. turn-yaw-window's back-leg ledger splits the
-   plain window into EARLY (the side being left has lost its print while it still faces the
-   lens - the reported symptom) and LATE (the arriving side's print has not landed yet).
-   At 45 the early half was 190/145/96/65ms at 0/100/250/700ms latency. At 50 it is
-   155/116/75/57ms - down 12-22% at every latency. The "plain while the side being left
-   faces the lens" figure the fold handshake is scored on improves on both legs together:
-   508->474, 390->361, 248->227, 89->81ms.
-
-   WHAT IT COSTS, and it is a genuine trade, not a free win. The late half grows -
-   105/145/238/610 -> 131/177/278/663ms - so TOTAL plain is slightly better at 0ms
-   (644->635) and slightly worse at the long end (250ms 575->596, 700ms 1063->1107). This
-   buys the reported symptom down and pays for it in late pop-in, which is the opposite
-   report and is not the one open.
-
-   50 IS NOT A GUESS AND NOT THE MAXIMUM. Sweeping the return threshold against
-   turn-yaw-window's "both swaps land within 25 degrees of the side view" bar - the
-   overshoot guard, and the reason the front print cannot bleed onto a chest already facing
-   the camera:
-       48 PASS   50 PASS   52 PASS   53 PASS   54 PASS   55 FAIL   58 FAIL   60 FAIL
-   The failure edge is between 54 and 55 (at 55 the return's median landing is 60 degrees at
-   250ms, 30 off the side view). 50 keeps four degrees of margin rather than sitting on that
-   edge, and it is not a novel number: the fold handshake shipped 50/50. Back-leg median
-   landing stays inside the bar at every clip latency (95/84/70 against 90).
-
-   THE OUTBOUND LEG IS UNTOUCHED at 35, and RETURN >= OUTBOUND still holds - see the
-   invariant below, which is the thing that must never break.
-
-   TWO SETTINGS WERE TRIED FIRST AND BOTH WERE BACKED OUT; do not re-run them.
-     · 60 - dispatches later but overshoots the fold: the swap comes down the FAR side of 90
-       rather than arriving later, median landing 60 at 250ms, 30 off the bar.
-     · 0 (hold until the vote path carries it, i.e. "until the torso is nearly square") -
-       total plain grows 10/22/44/53% at 0/100/250/700ms and the return lands at -20 degrees,
-       PAST front-square: the back print on a chest facing the camera. Measured, not modelled
-       away; the harness put the dispatch at body angle 316.7 on average.
-
-   THE UNDERLYING UNCERTAINTY IS UNCHANGED. Two latency models live in this file - the CLIP
-   latencies (0-250ms) this bar is built on, and the 700-1000ms the older comments assume -
-   and at 700ms this change is a small net loss rather than a win. One ?orient_debug=1 360
-   (DISPATCH_SENT -> RENDER_APPLIED) settles which column to optimise; until then 50 is
-   calibrated for the clip latencies, because those are the ones that were measured.
-   Everything below is why the return leg must never be the LOWER of the two. */
-const ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG = 50;   // 35 in v142, 50 at the fold handshake, 45 at the middle ground, 50 again since the calibration
-const ORIENT_EARLY_TURN_DEFAULT_SPEED = 45;
-/* ?early_turn_speed=<deg/s> - THE SPEED GATE (see makeEarlyTurnTrigger). A crossing fires only while |yaw| is
-   rising at least this fast. Default ORIENT_EARLY_TURN_DEFAULT_SPEED; ?early_turn_speed=0 removes the gate;
-   unparseable keeps the default; capped at 1000.
-   MODELLED (turn-yaw-window §11, 1000ms render latency, with and without +/-4 degrees of yaw jitter): at 15
-   degrees ungated an 18-degree weight shift held fires (and, with jitter, a 14-degree sway); gated at 60
-   neither ever fires. The cost of the gate is turn benefit: a slow turn does not clear it either. A gate
-   high enough to stop fast poses (80) stops slow turns from benefiting at all, and jitter lets some fast
-   poses back through. The gate reads the pose loop's own yaw and reading time; no vote or engine changes.
-   ── LOWERED 60 -> 45 (2026-09-15), a PRODUCT DECISION on the numbers below ──────────────────────────────
-   REPORTED, from a live clip: on the way out the back graphic popped in only once the back was already
-   square to the lens; on the way back it seemed to leave early. Not yet confirmed with ?orient_debug=1.
-   WHAT THE MODEL SAYS WAS HAPPENING (turn-yaw-window §11). The gate is in the pose model's |yaw| units,
-   and MediaPipe compresses depth: at k=0.75 a real 60 deg/s turn RISES at ~45. Gated at 60 the early
-   trigger never fired on that turn - BACK came from the vote path at ~135-150 degrees of body rotation and
-   rendered after the back faced the lens: 783ms of plain back at 700ms latency, 1053ms at 1000ms.
-   At 45 that turn fires early: 0ms / 120ms. Full 360s (§11's grid): wrong garment 979 -> 563ms at 700ms,
-   1438 -> 938ms at 1000ms. Turns at 90-120 deg/s already cleared 60 and are unchanged.
-   THE COST, and why 45 and not lower. Every gate under 60 loses the guarantee that a held weight shift
-   never swaps: with +/-4 degrees of yaw jitter an 18-degree shift held 1.5s now fires ~1 time in 10
-   (~100ms of the back print, withdrawn), and a slow look to 30 degrees held 1s ~2 in 10 (~350ms). At 40
-   those were 2/10 (~175ms) and 5/10 (~800ms) for a better full-360 mean (354 / 729ms); 50 kept the
-   weight-shift miss and gave back the slow-turn fix. Standing still and swaying still never fire.
-   COUPLED, deliberately: ORIENT_TURN_START_SPEED follows this gate, so body re-drapes now also defer on a
-   torso rising at 45 deg/s - the wire has to be clear at exactly the speed the trigger can now fire at.
-   CONSIDERED AND DECLINED in the same pass: an outbound threshold of 15 (only fast turns gain, ~95-125ms;
-   a quick twist to 25 fires 10/10 instead of 5/10), and holding BACK on the return until ~30-35 degrees
-   from the lens (the back print on a front-facing chest 63-516ms longer, and no plain-back time removed -
-   past side-on a real shirt shows no back print). ?early_turn_speed=60 restores the old gate live. */
-const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
-  let raw = null;
-  try { raw = new URLSearchParams(location.search).get("early_turn_speed"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_SPEED; }
-  const v = Number(raw);
-  if (raw === null || raw === "" || !Number.isFinite(v)) return ORIENT_EARLY_TURN_DEFAULT_SPEED;
-  return v <= 0 ? 0 : Math.min(v, 1000);
-})();
-/* ── THE SLOW PATH - "a slow, deliberate 360 gets the back graphic only once the back is square" ─────
-   (Since the fold handshake it sits AT the fold, 50, with the fast path - it adds the slow rise there and never sends
-   earlier. The numbers below were taken at 35, on the 20-degree default.)
-   REPORTED after the gate came down to 45 (6899d9f): a slow turn still misses the early trigger. It is
-   the gate doing it, and lowering it further is not the answer - the gate is what keeps ordinary posing
-   off the wire, and a pose and the start of a turn are the same reading at 20-30 degrees.
-   WHAT SEPARATES THEM IS WHERE THEY STOP. A weight shift or a look to the side settles by ~30 degrees; a
-   turn keeps going. So the slow path sits ABOVE that, at ORIENT_EARLY_TURN_SLOW_DEG, and asks for a RISE
-   of ORIENT_EARLY_TURN_SLOW_RISE_DEG across ORIENT_EARLY_TURN_SLOW_WINDOW_MS rather than a speed between
-   two readings - a longer baseline averages out the jitter that makes a two-reading speed unusable at
-   these rates, and a pose that has settled reads a rise of ~0.
-   MODELLED (turn-yaw-window §11, 700ms dispatch-to-render, +/-4 degrees of yaw jitter, 10 seeds):
-   a 30 deg/s turn sends BACK at 45-53 degrees instead of 128-143 (wrong garment 3875 -> 1250ms), 45 deg/s
-   2125 -> 625ms, 60 deg/s 750 -> 125ms; 90 and 120 deg/s are unchanged. Every pose is unchanged too -
-   sway 0/10, an 18-degree weight shift 1/10, 25 degrees held 5/10, a slow look to 30 held 6/10, exactly
-   as the gate alone. The request's own shape (22 degrees held 150ms at any speed) fires on ALL of those
-   10/10, because "held" is what a pose does; it is the rise, not the dwell, that says turn.
-   ?early_turn_slow=<deg> moves it, 0 turns the slow path off. */
-/* 35 SINCE THE MIDDLE GROUND (2026-09-16), tracking the outbound leg as it always has: the slow
-   path's job is to add the SLOW rise at the same angle the fast path fires at, never earlier.
-   Its own floor logic is unchanged - a weight shift or a look to the side settles by ~30, so 35
-   still sits above where a pose stops. See ORIENT_EARLY_TURN_DEFAULT_DEG.
-   40 SINCE THE 2026-09-22 CALIBRATION, for the same reason - it tracks the outbound leg; the
-   sweep in ORIENT_EARLY_TURN_DEFAULT_DEG's comment moved both together. */
-const ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG = 40;   // 35 in v142, 50 at the fold handshake, 35 at the middle ground, 40 since the calibration
-const ORIENT_EARLY_TURN_SLOW_RISE_DEG = 10;
-const ORIENT_EARLY_TURN_SLOW_WINDOW_MS = [450, 960];   // [min, max] age of the reading the rise is measured from
-/* Declared ABOVE the ?early_turn_* parsers that clamp to them. They used to sit below the slow-path parser,
-   so ?early_turn_slow=<deg> read them in their temporal dead zone and app.js threw a ReferenceError at load. */
-const ORIENT_EARLY_TURN_MIN_DEG = 10;
-const ORIENT_EARLY_TURN_MAX_DEG = 60;
-const ORIENT_EARLY_TURN_SLOW_DEG = (() => {
-  let raw = null;
-  try { raw = new URLSearchParams(location.search).get("early_turn_slow"); } catch (_) { return ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG; }
-  const deg = Number(raw);
-  if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_SLOW_DEFAULT_DEG;
-  if (deg <= 0) return 0;
-  return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
-})();
-const ORIENT_EARLY_TURN_RETURN_DEG = (() => {
-  let raw = null;
-  try { raw = new URLSearchParams(location.search).get("early_turn_return"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG; }
-  const deg = Number(raw);
-  if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_DEFAULT_RETURN_DEG;
-  if (deg <= 0) return 0;
-  return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
-})();
-const ORIENT_EARLY_TURN_DEG = (() => {
-  let raw = null;
-  try { raw = new URLSearchParams(location.search).get("early_turn"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_DEG; }
-  const deg = Number(raw);
-  if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_DEFAULT_DEG;
-  if (deg <= 0) return 0;
-  return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
-})();
-/* ?early_turn_loss=<deg> - THE FOLD BY LOSS (see makeEarlyTurnTrigger's lossDeg). MediaPipe loses the far
-   shoulder at the side view, so on many turns no |yaw| reading ever reaches ORIENT_EARLY_TURN_DEFAULT_DEG: the
-   torso simply goes unreadable. A torso lost while |yaw| was still rising past this is read as the fold and swaps
-   there. MODELLED (the §13 grid at 100ms): with no loss path the fold never swaps 12 of 216 full 360s and shows
-   1348ms of plain per 360 (worse than v142's 995); at 20, 6 and ~500ms. 25 - PRESENCE_PROMPT_YAW_SUPPRESS_DEG, the
-   file's other "lost to edge-on" bar - ~100ms more plain and 2 more turns lost; 30 ~250ms more and 3 lost. 20's cost
-   is a small pose that rises past 20 fast AND drops a frame near its top - see THE COST above. 0 turns the path off;
-   clamped like ?early_turn. */
-const ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG = 20;
-const ORIENT_EARLY_TURN_LOSS_DEG = (() => {
-  let raw = null;
-  try { raw = new URLSearchParams(location.search).get("early_turn_loss"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG; }
-  const deg = Number(raw);
-  if (raw === null || raw === "" || !Number.isFinite(deg)) return ORIENT_EARLY_TURN_DEFAULT_LOSS_DEG;
-  if (deg <= 0) return 0;
-  return Math.min(ORIENT_EARLY_TURN_MAX_DEG, Math.max(ORIENT_EARLY_TURN_MIN_DEG, deg));
-})();
-
-/* ── PREDICTIVE BACK - "the back artwork rendered over PEAK for a second" ─────────────
-   REPORTED, from the exported clip: on FRONT -> BACK the back artwork appears over the front's
-   "PEAK" text for about a second before the back settles.
-   THE CLIP IS DECART'S OWN OUTPUT. The recorder paints #aiVideo directly (startRecording), so
-   no cover of ours is in it. What it shows is timing: BACK was dispatched only after
-   ORIENT_CORROBORATED_FRAMES back votes, and a back vote needs the back of the head (~150
-   degrees) - the back was already facing the lens, Decart was still rendering the FRONT
-   reference onto it, and a switch then takes Decart the better part of a second (see
-   COND_TRACE_SETTLE_MS), blending from the one render into the other.
-   THERE IS NO LATENT FLUSH TO CALL. @decartai/sdk@0.1.5's realtime surface is set({ prompt,
-   enhance, image }) and setPrompt(); image:null clears the reference, which renders the
-   model's generic prior - strictly worse. So the lever is WHEN the back reference arrives: while
-   the torso is still passing through the side view, where neither print is on show.
-   WHY NOT AT 45 DEGREES. The face detector loses a frontal face around there, but 45 is the
-   FRONT hemisphere: the chest and its print are still in view, so a back reference sent then is
-   the same ghost on the other side of the shirt - and it would fire on every look at a profile.
-   |yaw| folds at 90 and cannot say which side of edge-on the shopper is on, so the earliest
-   honest evidence is having PASSED it: the window reached ORIENT_EDGE_ON_DEG (or lost the torso
-   there), |yaw| has since fallen ORIENT_PREDICT_DESCENT_DEG, no vote has agreed with FRONT since
-   the turn began (so no face), and all of it inside ORIENT_PREDICT_DWELL_MS. The dwell is what
-   separates a turn passing through from a profile being HELD - lingering at the side view and
-   coming back is the one motion yaw cannot tell from finishing the turn.
-   THE RESIDUAL COST, stated: a glance to the side that reverses at once looks exactly like a
-   turn until the face returns. When that predicts, maybeSwap() lets the face return withdraw it
-   inside ORIENT_COOLDOWN_MS (see `withdrawing`), on the fast face-return bar.
-   UNMEASURED THRESHOLDS. 60 is set so a depth-compressed reading still reaches it near a real
-   90; the ORIENT_DEBUG tick line prints the peak, the descent and the dwell to tune them from
-   a real turn. ?predict_back=0 turns the whole path off for an A/B. */
-const ORIENT_EDGE_ON_DEG         = 60;   // a |yaw| reading at or past this counts as reaching the side view
-const ORIENT_PREDICT_DESCENT_DEG = 15;   // fall from that peak that shows the torso kept rotating
-const ORIENT_PREDICT_DWELL_MS    = 900;  // longer than this at the side view is a pose being held
-const ORIENT_PREDICTIVE_BACK = (() => {
-  try { return new URLSearchParams(location.search).get("predict_back") !== "0"; } catch (_) { return true; }
-})();
-const ORIENT_YAW_TURN_DEG        = 45;   // |yaw| swing that counts as a real torso rotation
+/* Predictive BACK and ORIENT_YAW_TURN_DEG moved to lib/orient-engine.js. */
 const ORIENT_YAW_FRESH_MS        = 600;  // a yaw reading older than this cannot corroborate
 /* Above this, an unreadable torso is explained by the shopper TURNING rather than by their
    having left - so the "step into the frame" prompt is withheld (the presence verdict
@@ -9162,6 +7895,17 @@ let _torsoYawAt  = 0;
    beside _torsoYawAbs on every pose reading - see orientTurnStarting(). */
 let _torsoYawRise = 0;
 
+/* The early turn trigger's speed gate, which the pose loop's re-drape gate follows (see below).
+   A COPY of lib/orient-engine.js's ORIENT_EARLY_TURN_DEFAULT_SPEED / ORIENT_EARLY_TURN_MIN_SPEED -
+   CLAUDE.md §3, asserted equal by orient-engine.test.mjs. */
+const ORIENT_EARLY_TURN_DEFAULT_SPEED = 45;
+const ORIENT_EARLY_TURN_MIN_SPEED = (() => {
+  let raw = null;
+  try { raw = new URLSearchParams(location.search).get("early_turn_speed"); } catch (_) { return ORIENT_EARLY_TURN_DEFAULT_SPEED; }
+  const v = Number(raw);
+  if (raw === null || raw === "" || !Number.isFinite(v)) return ORIENT_EARLY_TURN_DEFAULT_SPEED;
+  return v <= 0 ? 0 : Math.min(v, 1000);
+})();
 /* ── A TURN THAT IS STARTING OWNS THE WIRE TOO - "the back came out plain, then COVE popped in" ──
    LIVE EVIDENCE: pear-tryon-...-FOX-20260915-072153.mp4 (v137), read frame by frame. OUT: the chest
    logo holds through the front three-quarter, the side is plain (as a side is), and then the BACK PANEL
@@ -9261,355 +8005,8 @@ function poseFacingVote({ enabled = ORIENT_POSE_FACING, sep, at, now }) {
   return sep >= ORIENT_POSE_FACING_MARGIN ? "front" : sep <= -ORIENT_POSE_FACING_MARGIN ? "back" : null;
 }
 
-/* ── THE TURN'S YAW WINDOW - "after a full 360 the back stays on my front" ─────────
-   ────────────────────────────────────────────────────────────────────────────────
-   REPORTED: turn to the back and the rear asset lands; keep turning to face the camera
-   and GARMENT_BACK stays rendered on the shopper's FRONT for a long beat before the front
-   returns. Filed next to "there is a visible gap while it swaps sides".
-
-   NOT A FETCH AND NOT A LATCH. Both Blobs are pinned in RAM before connect, and the return
-   leg's set() is never skipped (a back Blob and a front Blob are different objects, so
-   applyGarment()'s no-op test cannot match). The time was spent CONFIRMING the flip.
-
-   THE ROOT CAUSE. The corroborated path (ORIENT_CORROBORATED_FRAMES, ~1s) used to measure
-   its swing from the |yaw| captured when the NEW vote streak began. |yaw| folds at edge-on:
-   it climbs to ~90 and falls back to ~0 whether the shopper ends up facing the lens or
-   facing away. The edge-on peak - the one thing a head-turn cannot produce - happens in the
-   ABSTAIN window between the last vote for the old side and the first vote for the new
-   one, so a baseline taken at streak start is always taken AFTER it. On the return leg the
-   first "front" vote is FaceDetector re-acquiring a face, which a frontal detector does
-   inside ~30-40 degrees of square, leaving at most that much swing to measure - under
-   ORIENT_YAW_TURN_DEG. The return leg therefore always paid the full ORIENT_LOCK_FRAMES bar
-   (~2.5s) with the back reference on screen. turn-yaw-window.test.mjs replays the numbers.
-
-   THE WINDOW. The swing is now measured DOWN from the peak |yaw| seen since the last vote
-   that AGREED with the lock. An agreeing vote means no turn is in progress, so it restarts
-   the window at the current reading; every other tick (abstain, or a vote for the other
-   side) folds a fresh reading into the peak. A real turn passes through edge-on and comes
-   back down, so the swing is there by the first vote for the new side. A head-turn never
-   raises the torso's yaw, so ORIENT_LOCK_FRAMES remains the only bar for it. Holding
-   edge-on is not a turn either: the swing is peak minus NOW, which is ~0 while still side-on.
-
-   THE ONE CASE IT ACCELERATES THAT THE OLD BASELINE DID NOT: an edge-on excursion that
-   returns to the locked side while the vote MISREADS the other side on the way back. That
-   flip would still have happened on ORIENT_LOCK_FRAMES of the same misread; it now needs
-   ORIENT_CORROBORATED_FRAMES of it. A misread that systematic is a vote problem, not a
-   hysteresis one.
-
-   MAGNITUDE ONLY and it never picks a side - the result carries no direction. A stale or
-   missing reading is not usable and cannot corroborate; the peak banked before a gap still
-   counts once a fresh reading returns.
-
-   ── THE EDGE-ON GAP - "it still falls back to 2.5s sometimes" ────────────────────────
-   MediaPipe loses the far shoulder near edge-on: torsoReadable() fails and no yaw is
-   published for exactly the band the peak lives in. With depth compressed, the last
-   readable reading can sit well under ORIENT_YAW_TURN_DEG, so the swing never clears the bar
-   and the flip waits the full ORIENT_LOCK_FRAMES.
-   The gap is not treated as "no information". A torso that goes unreadable while the window
-   is open and its last reading was already past edgeLossDeg was lost BECAUSE it rotated -
-   the same inference startPresenceWatcher() already makes at PRESENCE_PROMPT_YAW_SUPPRESS_DEG
-   to withhold "step into the frame" from a turning shopper. That loss is recorded as having
-   reached edge-on, and the swing is then measured from 90 - the ceiling of the asin form,
-   which is what an occluded shoulder line physically is. NOT extrapolated momentum: no
-   angle is invented across the gap, the swing is still computed from a real fresh reading on
-   the far side, and yaw still cannot say WHICH side that is - the vote does.
-   A torso lost while nearly square (a step toward the lens, a hand across the body) is under
-   edgeLossDeg and reads as nothing. An agreeing vote clears the evidence with the rest of the
-   window.
-
-   `open` / `turning` are what the mid-turn wire guard reads (see orientTurnMark): open from
-   the first vote that does not agree with the lock until one does, turning while open AND the
-   torso has visibly rotated - past ORIENT_YAW_TURN_DEG or lost to edge-on.
-   `edgeAt` is when this turn reached the side view - the first reading at or past edgeOnDeg,
-   or, for a torso lost to edge-on, when its last reading was taken - on the clock `at` is
-   given in (the pose loop's reading time). orientPredictBack() measures dwell from it.
-   `passed` is the side-view pass (see ORIENT_POSE_PASS): open, a fresh reading, a real turn behind it -
-   the readable peak past turnDeg, or `lostAt` (the pose loop's last unreadable inference) later than
-   the reading that last agreed with the lock - and |yaw| fallen descentDeg from the readable peak.
-   `postPeakVotes` / `postPeakSince` are the votes for the other side since |yaw| last climbed
-   peakRiseDeg (or the torso was first lost to edge-on), and when the first of them was taken - see
-   ORIENT_POST_PEAK for why a flip may count nothing else.
-   @param {number} [turnDeg] the swing that counts as a real torso rotation
-   @param {number} [edgeLossDeg] a torso lost past this |yaw| mid-turn was lost to edge-on
-   @param {number} [edgeOnDeg] a reading at or past this has reached the side view
-   @param {number} [descentDeg] the fall from the readable peak that shows the torso went through
-   @returns {{ readonly peak: number|null, readonly edgeLost: boolean, readonly open: boolean,
-               readonly turning: boolean, readonly edgeAt: number|null, readonly lostInTurn: boolean,
-               readonly postPeakVotes: number,
-               observe(vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number, lostAt?: number):
-                 { usable: boolean, swing: number, corroborates: boolean, passed: boolean,
-                   postPeakVotes: number, postPeakSince: number|null } }} */
-function makeTurnYawWindow(turnDeg = ORIENT_YAW_TURN_DEG, edgeLossDeg = PRESENCE_PROMPT_YAW_SUPPRESS_DEG,
-                           edgeOnDeg = ORIENT_EDGE_ON_DEG, descentDeg = ORIENT_PREDICT_DESCENT_DEG,
-                           peakRiseDeg = ORIENT_POST_PEAK_RISE_DEG) {
-  let peak = null;        // highest fresh |yaw| since the last vote that agreed with the lock
-  let lastFresh = null;   // the most recent fresh |yaw|, to read a gap against
-  let lastFreshAt = 0;    // ...and when it was taken
-  let edgeLost = false;   // the torso went unreadable mid-turn past edgeLossDeg
-  let edgeAt = null;      // when this turn reached the side view
-  let open = false;       // a vote has not agreed with the lock since this turn began
-  let agreedAt = 0;       // the reading time of the last vote that agreed with the lock
-  let lostInTurn = false; // the pose loop could not read the torso after that reading
-  let peakMark = null;    // |yaw| when the post-peak count last restarted - the next rise is measured from it
-  let postVotes = 0;      // votes for the other side since then (see ORIENT_POST_PEAK)
-  let postSince = null;   // ...and the reading time of the first of them
-  return {
-    get peak() { return peak; },
-    get edgeLost() { return edgeLost; },
-    get edgeAt() { return edgeAt; },
-    get open() { return open; },
-    get lostInTurn() { return lostInTurn; },
-    get postPeakVotes() { return postVotes; },
-    get turning() { return open && (edgeLost || (peak !== null && peak >= turnDeg)); },
-    observe(vote, lock, yawAbs, at = Date.now(), lostAt = 0) {
-      const fresh = yawAbs !== null && Number.isFinite(yawAbs);
-      const edgeLostBefore = edgeLost;
-      if (vote && vote === lock) {
-        peak = fresh ? yawAbs : null;
-        edgeLost = false;
-        edgeAt = null;
-        open = false;
-        agreedAt = at;
-      } else {
-        open = true;
-        if (fresh) {
-          peak = peak === null ? yawAbs : Math.max(peak, yawAbs);
-          if (edgeAt === null && yawAbs >= edgeOnDeg) edgeAt = at;
-        } else if (lastFresh !== null && lastFresh >= edgeLossDeg) {
-          edgeLost = true;
-          if (edgeAt === null) edgeAt = lastFreshAt;
-        }
-      }
-      /* POST-PEAK EVIDENCE (see ORIENT_POST_PEAK), kept out of the branches above so they read as they
-         always have. The count restarts while the body is still turning AWAY: |yaw| has risen peakRiseDeg
-         past where it was last marked (a rotation, not the jitter of a pose held still), or the torso is
-         first lost to edge-on. The vote on that very tick counts - a reading that moves the mark can be
-         the first one past the fold, after the torso went unreadable straight through edge-on; if the body
-         is in fact still rising, the next 10 degrees clears it. */
-      if (!open) { peakMark = fresh ? yawAbs : null; postVotes = 0; postSince = null; }
-      else {
-        const rising = fresh && (peakMark === null || yawAbs >= peakMark + peakRiseDeg);
-        if (rising) peakMark = yawAbs;
-        if (rising || (edgeLost && !edgeLostBefore)) { postVotes = 0; postSince = null; }
-        if (vote) { postVotes++; if (postSince === null) postSince = at; }
-      }
-      if (fresh) { lastFresh = yawAbs; lastFreshAt = at; }
-      /* Sticky until the next agreeing vote - which is what clears it - so a dropped frame during a
-         pose the shoulders keep voting for (a twist) is erased by the very next readable reading. */
-      lostInTurn = open && lostAt > agreedAt;
-      const reference = edgeLost ? 90 : peak;
-      const usable = fresh && reference !== null;
-      const swing = usable ? Math.max(0, reference - yawAbs) : 0;
-      /* Measured from the READABLE peak, never from edgeLost's 90: a compressed edge-on reading is
-         already well under 90, so descent from 90 is what a parked profile with one dropped frame
-         would show. */
-      const passed = open && fresh && peak !== null && (peak >= turnDeg || lostInTurn) && peak - yawAbs >= descentDeg;
-      return { usable, swing, corroborates: swing >= turnDeg, passed, postPeakVotes: postVotes, postPeakSince: postSince };
-    },
-  };
-}
-/* How far |yaw| must rise past its last mark for the post-peak count to restart (ORIENT_POST_PEAK). Measured
-   as a cumulative rise, not per reading - a slow turn climbs 3-5 degrees a reading. 10 sits above the +/-4
-   degrees of yaw jitter the turn model assumes: the first cut restarted the count on every new jitter
-   maximum, so a shopper standing square with BACK still on the wire kept losing the FRONT votes that should
-   undo it - 52 more modelled fast 360s under dropped frames never swapped, and 12 ended on BACK. The same 10
-   the slow path takes for "a rise, not jitter" (ORIENT_EARLY_TURN_SLOW_RISE_DEG). Declared inside the block
-   the tests extract, so it stays self-contained (CLAUDE.md 2.6). */
-const ORIENT_POST_PEAK_RISE_DEG = 10;
-
-/* The flip decision the sampler acts on, lifted out of the tick so it is real code under test
-   rather than arithmetic buried in a closure. Every bar is the one documented beside its
-   constant: acquisition on ORIENT_ACQUIRE_FRAMES; a flip on ORIENT_LOCK_FRAMES, lowered to
-   ORIENT_CORROBORATED_FRAMES by a corroborated turn, OR ORIENT_LOCK_MS of agreement; and the
-   face return (see ORIENT_FACE_RETURN_FRAMES) - toward FRONT only, only on FaceDetector
-   detections, only with the turn corroborated.
-   `turnPassed` (the window's side-view pass - see ORIENT_POSE_PASS) corroborates the pose flip ONLY:
-   the corroborated bar and the face return keep the 45-degree swing. `early` is a flip confirmed on
-   the pass alone, which the tick sends as withdrawable.
-   `postPeakVotes` / `postPeakHeld` cap every UN-DOING bar at the evidence cast after the turn's peak -
-   the vote count and the held time alike, all four routes - see ORIENT_POST_PEAK. Acquisition is
-   exempt: there is no lock yet for stale evidence to un-do. Both default to Infinity, which is the
-   decision exactly as it was before them (and what ?post_peak=0 passes).
-   @returns {{ flipBar: number, faceReturn: boolean, poseFlip: boolean, early: boolean, confirmed: boolean }} */
-function orientFlipDecision({ acquiring, needsSwitch, streak, held, yawCorroborates, lock, lastVote, faceStreak, poseStreak = 0, turnPassed = false,
-                              postPeakVotes = Infinity, postPeakHeld = Infinity }) {
-  const flipBar = yawCorroborates
-    ? Math.min(ORIENT_LOCK_FRAMES, ORIENT_CORROBORATED_FRAMES)
-    : ORIENT_LOCK_FRAMES;
-  const votes = Math.min(streak, postPeakVotes);
-  const dwell = Math.min(held, postPeakHeld);
-  const faceReturn = !acquiring && lock === "back" && lastVote === "front" &&
-    yawCorroborates && Math.min(faceStreak, postPeakVotes) >= ORIENT_FACE_RETURN_FRAMES;
-  /* Either direction - see ORIENT_POSE_FLIP_FRAMES. */
-  const poseFlip = !acquiring && !!lock && (lastVote === "front" || lastVote === "back") && lastVote !== lock &&
-    (yawCorroborates || turnPassed) && Math.min(poseStreak, postPeakVotes) >= ORIENT_POSE_FLIP_FRAMES;
-  const confirmed = needsSwitch && (acquiring
-    ? streak >= ORIENT_ACQUIRE_FRAMES
-    : (votes >= flipBar || dwell >= ORIENT_LOCK_MS || faceReturn || poseFlip));
-  const early = confirmed && !acquiring && poseFlip && !yawCorroborates && !(votes >= flipBar || dwell >= ORIENT_LOCK_MS);
-  return { flipBar, faceReturn, poseFlip, early, confirmed };
-}
-
-/* Should BACK go on the wire NOW, ahead of any back vote? See ORIENT_PREDICTIVE_BACK for the
-   report and the argument. Only from a FRONT lock; only while the window is open (no vote has
-   agreed with FRONT since the turn began, so no face) and turning; only once the torso has
-   passed the side view - reached it, then fallen ORIENT_PREDICT_DESCENT_DEG on a fresh reading -
-   and only if that took no longer than ORIENT_PREDICT_DWELL_MS, which a held profile does.
-   Yaw still never picks a side on its own: the absence of every front vote across a full pass
-   through edge-on is what does, and a face returning withdraws it.
-   @returns {boolean} */
-function orientPredictBack(args) {
-  return orientPredictBackReason(args) === "fire";
-}
-
-/* The same gate, answering WHY - "fire", or the first condition that held it back, with the
-   numbers the thresholds are tuned from. orientPredictBack() is defined as this returning
-   "fire", so the decision and its explanation cannot drift apart. It exists because a report of
-   "PEAK on the back, the back graphic a second late" is exactly what a turn looks like when the
-   prediction did NOT engage and the vote path carried the flip; the ORIENT_DEBUG tick line
-   prints this on every tick of an open turn from a FRONT lock, so one logged turn settles which.
-   @returns {string} */
-function orientPredictBackReason({ enabled = ORIENT_PREDICTIVE_BACK, acquiring, lock, win, yawAbs, now }) {
-  if (!enabled) return "disabled (?predict_back=0)";
-  if (acquiring || lock !== "front") return `no FRONT lock (${lock === null ? "acquiring" : lock})`;
-  if (!win || !win.open) return "window closed (a vote agrees with FRONT - face in view)";
-  if (!win.turning || win.edgeAt === null) {
-    const peak = win.peak === null ? "n/a" : `${win.peak.toFixed(0)}°`;
-    return `edge-on not reached (peak ${peak} < ${ORIENT_EDGE_ON_DEG}°, torso ${win.edgeLost ? "lost" : "tracked"})`;
-  }
-  if (yawAbs === null || !Number.isFinite(yawAbs)) return "no fresh yaw reading";
-  const reference = win.edgeLost ? 90 : win.peak;
-  const fell = reference - yawAbs;
-  if (fell < ORIENT_PREDICT_DESCENT_DEG) {
-    return `no descent yet (${yawAbs.toFixed(0)}° is ${fell.toFixed(0)}° below ${win.edgeLost ? "edge-on" : "peak " + reference.toFixed(0) + "°"}, need ${ORIENT_PREDICT_DESCENT_DEG}°)`;
-  }
-  const dwell = now - win.edgeAt;
-  if (dwell > ORIENT_PREDICT_DWELL_MS) return `dwell ${dwell}ms > ${ORIENT_PREDICT_DWELL_MS}ms (a held pose)`;
-  return "fire";
-}
-
-/* The opt-in early turn trigger (?early_turn=<deg> - see ORIENT_EARLY_TURN_DEG). Pure state, fed one
-   observation per sampler tick; the tick does the dispatching.
-   ARMED only by a vote that AGREES with the lock while |yaw| is under `deg` - the shopper settled
-   square on that side. FIRES once, on the first fresh |yaw| at or past `deg`, for the other side, and
-   disarms: without that, the abstain stretch through edge-on (|yaw| still past `deg`, against the NEW
-   lock) would fire straight back. Re-arms only on the new side, square again.
-   WITHDRAWS its own swap when the turn does not happen: while the early side is on the lock and no
-   vote has agreed with it yet, a vote for the side it left with |yaw| back under `deg` is a pose
-   that came back - a twist, a look at the side view. Any vote for the early side confirms the turn
-   and ends the watch. A lock that moved some other way (the swap never went out, or a vote-confirmed
-   flip) ends it too.
-   THE SPEED GATE (`minSpeed`, ?early_turn_speed=<deg/s>): the crossing only fires while |yaw| is RISING at
-   least that fast, measured between consecutive pose readings (`at`, the reading's own time). A slow
-   drift past the threshold - a sway, a weight shift - keeps the trigger armed without firing; if the
-   motion then speeds up while still past the threshold, it fires then. Rising only: a fast return
-   from past the threshold is never read as a turn starting. Units are the pose model's |yaw| per
-   second, not true body degrees - MediaPipe compresses depth. See ORIENT_EARLY_TURN_MIN_SPEED.
-   THE RETURN LEG HAS ITS OWN THRESHOLD (`returnDeg`, used while the lock is BACK). Sending FRONT early swaps
-   the back graphic out while the back is still turned to the lens, and FRONT on a back-facing body renders a
-   plain back - see ORIENT_EARLY_TURN_RETURN_DEG for the live clip that showed it and the numbers that set it.
-   @param {number} deg  |yaw| threshold from a FRONT lock (and from BACK unless returnDeg is given); 0 or less is off
-   @param {number} [minSpeed]  rising |yaw| deg/s a crossing needs; 0 or less is no gate
-   @param {number} [returnDeg]  |yaw| threshold from a BACK lock; 0 or less never fires FRONT early
-   @param {number} [slowDeg]  the slow path's |yaw| threshold (see ORIENT_EARLY_TURN_SLOW_DEG); 0 or less is off
-   @param {number} [slowRise]  |yaw| the slow path must have gained across its window
-   @param {number[]} [slowWindow]  [min, max] age in ms of the reading that rise is measured from
-   THE FOLD BY LOSS (`lossDeg`, ?early_turn_loss - the fold handshake, see ORIENT_EARLY_TURN_DEFAULT_DEG). With the
-   threshold at the side view, many turns never publish a reading that high: MediaPipe loses the far shoulder right
-   there and the pose loop records the inference as unreadable (`lostAt`, _poseTorsoLostAt) instead. So, while armed,
-   a torso lost AFTER the last readable reading - that reading at or past `lossDeg` and still rising (the speed gate,
-   or the slow path's rise) - fires too. Evaluated AHEAD of the arming test on purpose: through that gap the shoulder
-   order stays fresh for ORIENT_YAW_FRESH_MS and keeps voting for the locked side, and an agreeing vote under the
-   threshold would otherwise swallow the tick. A pose that settled (no rise) or a dropped frame while square (under
-   `lossDeg`) fires nothing, and any fire is withdrawn exactly like the other two paths.
-   @param {number} [lossDeg]  |yaw| the last readable reading needs for a torso loss to count as the fold; 0 or less is off
-   @returns {{ readonly armed: "front"|"back"|null, readonly pending: {from: string, to: string}|null,
-               readonly speed: number,
-               observe(o: { vote: "front"|"back"|null, lock: "front"|"back"|null, yawAbs: number|null, at?: number|null, lostAt?: number }):
-                 { fire: "front"|"back"|null, withdraw: "front"|"back"|null, via?: "fast"|"slow"|"lost" } }} */
-function makeEarlyTurnTrigger(deg, minSpeed = 0, returnDeg = deg, slowDeg = 0, slowRise = 10, slowWindow = [450, 960], lossDeg = 0) {
-  const thresholdFor = (side) => (side === "back" ? returnDeg : deg);
-  /* THE SLOW PATH's own window of readings - see ORIENT_EARLY_TURN_SLOW_DEG. Bounded; readings are the
-     pose loop's, ~240ms apart, so eight covers well past the window below. */
-  const hist = [];
-  /* How far |yaw| climbed to reading (y, t) from the one the slow window reaches back to; 0 without one. */
-  const riseTo = (y, t) => {
-    if (!Number.isFinite(t)) return 0;
-    const from = hist.find((h) => t - h.at >= slowWindow[0] && t - h.at <= slowWindow[1]);
-    return from ? y - from.y : 0;
-  };
-  const LOSS_MIN_RISE = 10;   // deg/s the last two readings must still climb for a slow-path rise to count toward a loss
-  let armed = null;     // the lock this trigger was armed on
-  let pending = null;   // { from, to, via, at } - an early swap that no vote has confirmed yet
-  let lastYaw = null, lastAt = null, speed = 0;   // rising |yaw| deg/s between the last two readings
-  const none = { fire: null, withdraw: null };
-  return {
-    get armed() { return armed; },
-    get pending() { return pending; },
-    get speed() { return speed; },
-    observe({ vote, lock, yawAbs, at = null, lostAt = 0 }) {
-      if (!(deg > 0) || (lock !== "front" && lock !== "back")) { armed = null; pending = null; return none; }
-      const fresh = yawAbs !== null && Number.isFinite(yawAbs);
-      /* One reading counted once: a tick that sees the same reading again leaves the speed alone. */
-      if (fresh && Number.isFinite(at)) {
-        if (lastAt !== null && at > lastAt) speed = (yawAbs - lastYaw) / ((at - lastAt) / 1000);
-        if (lastAt === null || at > lastAt) { lastYaw = yawAbs; lastAt = at; hist.push({ y: yawAbs, at }); if (hist.length > 8) hist.shift(); }
-      }
-      if (pending) {
-        /* Ended by the lock leaving the early side (the withdrawal landed, or the swap never went
-           out) or by a vote for the early side (the turn is real). Otherwise the withdrawal is
-           asked for on EVERY tick its condition holds, not once: maybeSwap() can refuse a tick
-           (a swap still applying), and a withdrawal asked for once and refused would be lost. */
-        if (lock !== pending.to || vote === pending.to) pending = null;
-        /* A fold-by-loss fire went out on NO new reading, so the last one - under the threshold, which is why the
-           loss path was needed - and its shoulder vote for the side being left both stay fresh for
-           ORIENT_YAW_FRESH_MS. Read as "the pose came back" they withdraw the swap on the very next tick, and
-           the side the shopper is turning away from goes straight back on. Only a reading taken after the fire
-           can say the pose came back. The other two paths fire ON a reading past the threshold, so a reading
-           under it is necessarily newer - this changes nothing for them. */
-        else if (pending.via === "lost" && !(Number.isFinite(at) && at > pending.at)) return none;
-        else if (vote === pending.from && fresh && yawAbs < thresholdFor(pending.from)) return { fire: null, withdraw: pending.from };
-        else return none;
-      }
-      if (armed !== lock) armed = null;
-      const threshold = thresholdFor(lock);
-      if (!(threshold > 0)) { armed = null; return none; }
-      /* THE FOLD BY LOSS - see lossDeg above. Ahead of the arming test, which a stale agreeing vote would pass.
-         "Still rising" is the gate's speed, or the slow path's rise AND the last two readings still climbing: the slow
-         window reaches back ~1s, so on its own it also reads a twist that rose and has been HELD for most of a second.
-         MODELLED (turn-yaw-window §13): the last-pair clause costs no full 360 anything, and cuts the fires on a twist to
-         30 held 0.7s, a slow look to 30 and a 45-degree mirror check by about a third under dropped frames. */
-      const lost = lossDeg > 0 && lastAt !== null && Number.isFinite(lostAt) && lostAt > lastAt && lastYaw >= lossDeg &&
-        ((minSpeed > 0 ? speed >= minSpeed : speed > 0) || (riseTo(lastYaw, lastAt) >= slowRise && speed >= LOSS_MIN_RISE));
-      if (!lost && vote === lock && fresh && yawAbs < threshold) {
-        /* A FRESH ARM IS WHERE THIS LEG'S READINGS BEGIN (2026-09-22). Every rise this trigger fires on - the
-           fast path's speed, the slow path's window, the loss path's "still rising" - is measured AWAY from the
-           side it is armed on, so it may only be measured from readings taken since it was armed there. Kept
-           across the arm, the history reached back past the edge-on fold the lock just moved across: |yaw| folds
-           at 90, so a reading of ~30 on the way INTO a turn and one of ~40 on the way OUT of it, with the torso
-           unreadable between them, read as a +11 deg/s, +10.8-degree rise while the body was de-rotating toward
-           back-square. One dropped frame after that fired FRONT at a body angle of 158 degrees (the loss path),
-           withdrawn at 180 - modelled, turn-yaw-window §14. The arming reading itself stays as the baseline. */
-        if (armed !== lock) { hist.length = 0; if (Number.isFinite(at)) hist.push({ y: yawAbs, at }); speed = 0; }
-        armed = lock; return none;
-      }
-      /* THE FAST PATH: past the threshold, rising at the gate's speed between two readings. */
-      const fast = yawAbs >= threshold && (!(minSpeed > 0) || speed >= minSpeed);
-      /* THE SLOW PATH: a deliberate slow turn never clears the gate between two readings, but it keeps
-         RISING - measured across ORIENT_EARLY_TURN_SLOW_WINDOW_MS, which averages the jitter a
-         two-reading speed cannot. Above ORIENT_EARLY_TURN_SLOW_DEG, where poses have stopped. */
-      const rise = slowDeg > 0 && fresh ? riseTo(yawAbs, at) : 0;
-      const slow = slowDeg > 0 && yawAbs >= Math.max(threshold, slowDeg) && rise >= slowRise;
-      const via = fresh && fast ? "fast" : fresh && slow ? "slow" : lost ? "lost" : null;
-      if (armed === lock && via) {
-        const to = lock === "front" ? "back" : "front";
-        armed = null; pending = { from: lock, to, via, at: lastAt };
-        return { fire: to, withdraw: null, via };
-      }
-      return none;
-    },
-  };
-}
+/* makeTurnYawWindow(), orientFlipDecision(), orientPredictBack(), makeEarlyTurnTrigger() - moved to
+   lib/orient-engine.js (see THE ORIENTATION DECISION IS SERVER-SIDE above). */
 
 /* ── THE BEST FRONT-FACING FRAME - "it froze me side-on" ──────────────────────────
    ────────────────────────────────────────────────────────────────────────────────
@@ -9671,52 +8068,7 @@ function maybeCaptureBestFrontFrame(yawAbs) {
     if (ORIENT_DEBUG) console.log(`[PEAR] best-frame buffer updated at |yaw|=${yawAbs.toFixed(0)}°`);
   } catch (_) { /* a capture hiccup must never disturb the live session */ }
 }
-/* Edge-on detection thresholds. Deliberately FAR looser than the orientation lock's,
-   because the two protect different things and carry different costs when wrong. A wrong
-   orientation flip swaps the garment reference and shows the wrong side of the shirt on a
-   shopper's body - expensive, hence ORIENT_LOCK_FRAMES/ORIENT_LOCK_MS at ~2.5s. A wrong
-   profile reading only softens a pose sentence and adds a "preserve their real body
-   volume" instruction, which is a true statement at every angle; the worst case is a few
-   hundred wasted prompt characters. The asymmetry is the whole reason this can react in
-   ~500ms while the lock still takes seconds - and it matters, because a 90-degree turn
-   passes through the window this is trying to catch. */
-const ORIENT_PROFILE_ENTER  = 2;     // min samples in the buffer before it may assert anything (~500ms)
-/* ROLLING WINDOW. The per-frame edge-on score is noisy by nature - it is read off a 96px
-   canvas with no model behind it - so the decision is made on the MEAN of the last N
-   scores rather than on any single frame. This is the anti-jitter mechanism: a shopper
-   parked near the threshold angle produces scores that straddle it, and averaging turns
-   that into one stable answer instead of a toggle every 250ms. Five samples is ~1.25s of
-   evidence, short enough to still catch a turn in progress. */
-const ORIENT_PROFILE_WINDOW = 5;
-/* Mean score over that window required to ASSERT edge-on. Calibrated against the weights
-   in profileScore() so that no single weak signal can reach it alone - see that
-   function's table. */
-const ORIENT_PROFILE_ENTER_SCORE = 0.55;
-/* FAST PATH, and it is not redundant with the mean above. Averaging over five samples is
-   the right answer for a shopper hovering near the threshold angle, but it is the wrong
-   one for a decisive turn: the window still holds the square-on scores from before the
-   rotation started, so a shopper who is unambiguously side-on has to wait for those to
-   age out. Measured on the modelled spin in side-profile.test.mjs §5d, that cost a full
-   sample - EDGE-ON landed at ~110° instead of at 90°.
-   Two consecutive samples this high mean several independent signals agree at once
-   (ambiguous skin AND a foreshortened silhouette - see profileScore's table), which is a
-   turn, not noise. Borderline oscillation cannot reach it, so the jitter protection the
-   mean provides is untouched: the two paths cover disjoint cases. */
-const ORIENT_PROFILE_FAST_SCORE  = 0.85;
-const ORIENT_PROFILE_FAST_FRAMES = 2;
-/* Consecutive square-on samples required to LEAVE edge-on. The previous build exited on
-   the first one; two sustained windows (~500ms) is the anti-jitter half of the same
-   asymmetry, and stops a single well-lit frame mid-turn from dropping the depth clause
-   and snapping the pose back for one message. Still deliberately short - a stale
-   "they are side-on" claim is the same class of false pose assertion this feature exists
-   to remove, so it must not outlive the evidence by much. */
-const ORIENT_PROFILE_EXIT   = 2;
-/* Floor below which a per-frame score counts as "no meaningful profile evidence" - used
-   both by the squareStreak count above and, as the earliest possible signal, by the turn
-   hold below (see orientHoldBegin's "profile-turn-detected" reason): the same asymmetry
-   that makes ENTER slow and deliberate but EXIT/abandon fast applies to freezing the last
-   dressed frame - a hold that outlives real evidence by much is a stuck still, not a fix. */
-const ORIENT_PROFILE_EXIT_SCORE = 0.25;
+/* The profile axis's enter/exit thresholds (ORIENT_PROFILE_*) moved to lib/orient-engine.js. */
 /* Min gap between profile-driven prompt re-issues. These ride setPrompt() - a small
    control message, no image bytes (see applyGarment()'s flicker-fix comment) - so this
    guards against pointless chatter on a shopper who is oscillating around the threshold,
@@ -10042,10 +8394,11 @@ function startStreamContinuity() {
     if (stopped) return;
     const live = isLive() && cardEl.classList.contains("show-live");
     const { alpha, event } = model.step(now, live);
+    if (event && typeof traceOrient === "function") traceOrient("out-" + event.type, event);
     if (event && event.type === "stall") {
-      console.log(`[PEAR] stream continuity: Decart output silent for ${event.gapMs}ms - cross-fading the live camera in so the view keeps moving`);
+      console.log(`[PEAR] stream continuity: render output silent for ${event.gapMs}ms - cross-fading the live camera in so the view keeps moving`);
     } else if (event && event.type === "resume") {
-      console.log(`[PEAR] stream continuity: Decart output back after ${event.stalledMs}ms - cross-fading to the render`);
+      console.log(`[PEAR] stream continuity: render output back after ${event.stalledMs}ms - cross-fading to the render`);
     }
     /* Draw BEFORE the opacity rises, so the first visible camera frame is a current one. */
     const drawn = alpha > 0 ? drawContinuityFrame(c, cam, ai) : true;
@@ -10064,6 +8417,10 @@ function startStreamContinuity() {
       liveContinuityAlpha = 0;
       c.style.opacity = "0";
       const secs = Math.max(0.001, (performance.now() - t0) / 1000);
+      if (typeof traceOrient === "function") {
+        traceOrient("out-stats", { camFps: camTimed ? Math.round(camFrames / secs) : null, outFps: Math.round(aiFrames / secs),
+          longestGap: Math.round(model.stats.longestGapMs), stalls: model.stats.stalls, camMs: Math.round(model.stats.cameraMs) });
+      }
       console.log(`[PEAR] stream continuity: session - local camera ${camTimed ? (camFrames / secs).toFixed(0) + " fps" : "fps n/a"},` +
         ` Decart output ${(aiFrames / secs).toFixed(0)} fps, longest output gap ${Math.round(model.stats.longestGapMs)}ms,` +
         ` ${model.stats.stalls} stall(s) bridged with the live camera (${Math.round(model.stats.cameraMs)}ms on screen)`);
@@ -10591,7 +8948,10 @@ function makeRenderResumeDetector({ held, stallMinMs = SWAP_RENDER_STALL_MIN_MS,
 }
 
 function traceSwapTimeline(next, predictive, held, refUrl) {
-  if (!ORIENT_DEBUG) return null;
+  /* On for ?orient_debug=1, and for a recorded (TEST) session - see FLIGHT RECORDER. */
+  const record = typeof traceOrient === "function" && typeof _trace !== "undefined" && _trace !== null
+    ? (type, data) => traceOrient(type, data) : null;
+  if (!ORIENT_DEBUG && !record) return null;
   const t0 = Date.now();
   const clock = () => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now());
   const p0 = clock();
@@ -10610,6 +8970,7 @@ function traceSwapTimeline(next, predictive, held, refUrl) {
 
   const mark = (label) => {
     sentAt = clock();
+    if (record) record("swap-sent", { next, ms: Math.round(sentAt - p0) });
     console.log(`[PEAR][ORIENT] DISPATCH_SENT → ${tag}: ${label} set() handed to the SDK for the signaling WebSocket, ` +
       `+${ms(sentAt - p0)} after the swap began (pre-flight + wire wait) · local |yaw| ${yaw()} · reference ${refSize} · ` +
       `${intoTurn} · build v=${PEAR_BUILD}`);
@@ -10621,8 +8982,9 @@ function traceSwapTimeline(next, predictive, held, refUrl) {
     if (finished) return;
     finished = true;
     dropMark();
+    if (record) record("swap-render", { next, ms: hit ? Math.round(hit.at - p0) : null, held, why: hit ? null : why });
     if (hit) {
-      marks.push(`first Decart frame presented after the ack +${Math.round(hit.at - p0)}ms (local |yaw| ${yaw()})`);
+      marks.push(`first rendered frame presented after the ack +${Math.round(hit.at - p0)}ms (local |yaw| ${yaw()})`);
       console.log(`[PEAR][ORIENT] RENDER_APPLIED → ${tag}: +${ms(hit.at - ackAt)} after SERVER_CONFIRMED · ${hit.how} · local |yaw| ${yaw()}`);
     }
     const clientToAck = ackAt !== null && sentAt !== null ? ms(ackAt - sentAt) : "n/a";
@@ -10646,17 +9008,19 @@ function traceSwapTimeline(next, predictive, held, refUrl) {
   return {
     acknowledged() {
       ackAt = clock();
+      if (record) record("swap-acked", { next, ms: Math.round(ackAt - p0), kb: blob ? Math.round(blob.size / 1024) : null });
       detector.ack(ackAt);
       dropMark();   // unused means no reference write reached the wire for this swap - never let a later one take it
       marks.push(`set() acked +${Date.now() - t0}ms (local |yaw| ${yaw()})`);
       console.log(`[PEAR][ORIENT] SERVER_CONFIRMED → ${tag}: set_image_ack received, ` +
         `+${sentAt === null ? "n/a (no reference write was marked)" : ms(ackAt - sentAt)} after DISPATCH_SENT ` +
-        `(upload + Decart accepting the reference) · local |yaw| ${yaw()} · the view toast follows in ${ORIENT_FADE_HOLD_MS}ms`);
+        `(upload + the engine accepting the reference) · local |yaw| ${yaw()} · the view toast follows in ${ORIENT_FADE_HOLD_MS}ms`);
       if (!watchable) { finish(null, "output frame time not measurable here (no requestVideoFrameCallback)"); return; }
-      setTimeout(() => finish(null, `no Decart output frame presented within ${SWAP_RENDER_TRACE_MAX_MS}ms of the ACK`),
+      setTimeout(() => finish(null, `no rendered output frame presented within ${SWAP_RENDER_TRACE_MAX_MS}ms of the ACK`),
         SWAP_RENDER_TRACE_MAX_MS + 250);
     },
     failed(e) {
+      if (record) record("swap-fail", { next, ms: Math.round(clock() - p0), err: String(e?.message || e).slice(0, 120) });
       console.log(`[PEAR][ORIENT] SERVER_CONFIRMED → ${tag}: set() FAILED ` +
         `+${ms(clock() - (sentAt ?? p0))} after ${sentAt === null ? "the swap began" : "DISPATCH_SENT"}: ${e?.message || e}`);
       finish(null, `set() FAILED +${Date.now() - t0}ms: ${e?.message || e}`);
@@ -10845,43 +9209,28 @@ function createOrientationWatcher() {
       (state === PENDING_MODE ? " (provisional - awaiting first orientation sample)" : "") +
       /* On the BACK lock only, and only here (a lock change, not a dispatch), so this cannot
          spam the ~625ms re-anchor cadence. See describeRearConstruction(). */
-      (autoOrientation === "back" && typeof describeRearConstruction === "function"
-        ? ` | rear: ${describeRearConstruction(activeItem)}` : ""));
+      (autoOrientation === "back" && typeof activeItem !== "undefined" && activeItem
+        ? ` | rear: backIsPlain=${activeItem.backIsPlain} looksPrinted=${activeItem._backLooksPrinted}` : ""));
   }
   /* Initial state is PENDING, not FRONT: both assets are already fetched, decoded and
      validated (preloadGarmentAssets() gates go-live on it), so the watcher can apply
      either side the moment it has a reading - no front-biased warm-up. */
   logVtonState();
 
-  let lastVote = null, streak = 0, streakSince = 0, sampling = false, applying = false, lastSwapAt = 0, disposed = false;
-  /* The turn's yaw window - the peak |yaw| since the last vote that agreed with the lock.
-     PER-WATCHER, like the streak it corroborates: a new watcher (item swap, mode change)
-     starts from a clean window rather than inheriting a pose from whatever session
-     preceded it - the same reason autoProfile is reset per instance. It replaced a
-     streak-start baseline that the return leg could never corroborate against; see
-     makeTurnYawWindow() for why. */
-  const yawWindow = makeTurnYawWindow();
-  /* The early turn trigger - on by default, null (and every use of it inert) with ?early_turn=0 (see
-     ORIENT_EARLY_TURN_DEG). */
-  const earlyTurn = ORIENT_EARLY_TURN_DEG > 0
-    ? makeEarlyTurnTrigger(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,
-        ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS, ORIENT_EARLY_TURN_LOSS_DEG) : null;
-  if (earlyTurn) {
-    console.log(`[PEAR] AI Auto - FOLD HANDSHAKE (early turn trigger) ON at ${ORIENT_EARLY_TURN_DEG}° (?early_turn), ` +
-      `${ORIENT_EARLY_TURN_RETURN_DEG > 0 ? ORIENT_EARLY_TURN_RETURN_DEG + "° on the return to FRONT (?early_turn_return)" : "no early FRONT on the return (?early_turn_return=0)"}` +
-      `${ORIENT_EARLY_TURN_SLOW_DEG > 0 ? `, or ${ORIENT_EARLY_TURN_SLOW_DEG}° with |yaw| still rising ${ORIENT_EARLY_TURN_SLOW_RISE_DEG}° across ${ORIENT_EARLY_TURN_SLOW_WINDOW_MS[0]}-${ORIENT_EARLY_TURN_SLOW_WINDOW_MS[1]}ms for a slow turn (?early_turn_slow)` : ""}` +
-      `${ORIENT_EARLY_TURN_LOSS_DEG > 0 ? `, or the torso lost at the side view after rising past ${ORIENT_EARLY_TURN_LOSS_DEG}° (?early_turn_loss)` : ""}` +
-      (ORIENT_EARLY_TURN_MIN_SPEED > 0 ? `, only while |yaw| rises at ${ORIENT_EARLY_TURN_MIN_SPEED}°/s or faster (?early_turn_speed)` : "") + " - ?early_turn=0 turns it off:",
-      "keeps the side on screen until the torso reaches the side view, then sends the other one; withdrawn if the pose comes back (dual-view items only)");
-  }
-  let faceStreak = 0;   // consecutive FaceDetector detections - see the tick and ORIENT_FACE_RETURN_FRAMES
-  let poseStreak = 0, poseSide = null;   // consecutive shoulder-order votes for poseSide - see ORIENT_POSE_FLIP_FRAMES
+  let sampling = false, applying = false, lastSwapAt = 0, disposed = false;
+  /* THE DECISION, over the orientation link (see openOrientChannel()). One channel per
+     watcher, like the state it carries: an item swap rebuilds the watcher and so starts a
+     clean engine, exactly as the per-watcher yaw window and streaks always did. null
+     (no link in this runtime) leaves every tick without a decision - the lock stays
+     PENDING and the front renders, the same front-only degradation a single-view item gets. */
+  const decide = typeof openOrientChannel === "function" ? openOrientChannel() : null;
+  if (typeof traceOrient === "function") traceOrient("watch", { back: !!GARMENT_BACK, dual: currentAngle === AUTO_ANGLE, link: !!decide });
   let lastSwapPredictive = false;   // the last committed swap was a predictive BACK - see maybeSwap()
   /* Edge-on axis - its own rolling buffer, exit streak and cooldown, sharing only the
      `applying` mutex so a pose update and an asset swap can never be in flight at once.
      profileBuf holds the last ORIENT_PROFILE_WINDOW per-frame scores; squareStreak counts
      consecutive samples that look square-on, and is what the exit threshold reads. */
-  let profileBuf = [], squareStreak = 0, strongStreak = 0, lastProfileAt = 0, lastReanchorAt = 0;
+  let lastProfileAt = 0, lastReanchorAt = 0;
 
   /* Numeric confidence (0..1) for a skin-ratio vote: 0 right AT the classification
      threshold, saturating to 1 by double the threshold's margin into "obviously this
@@ -11230,8 +9579,15 @@ function createOrientationWatcher() {
        reference is sitting on their front. Only that direction and only that kind of swap -
        see ORIENT_PREDICTIVE_BACK. */
     const withdrawing = next === "front" && lastSwapPredictive;
-    if (applying || (Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing)) return;
-    if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) return;
+    if (typeof traceOrient === "function") traceOrient("swap-req", { next, predictive, applying, cooldown: Math.max(0, ORIENT_COOLDOWN_MS - (Date.now() - lastSwapAt)) });
+    if (applying || (Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing)) {
+      if (typeof traceOrient === "function") traceOrient("swap-drop", { next, why: applying ? "applying" : "cooldown" });
+      return;
+    }
+    if (disposed || !isLive() || currentAngle !== AUTO_ANGLE) {
+      if (typeof traceOrient === "function") traceOrient("swap-drop", { next, why: disposed ? "disposed" : !isLive() ? "not-live" : "not-auto" });
+      return;
+    }
 
     /* ACQUIRING the side that is ALREADY on the wire is a state record, not a swap.
        PENDING renders the front (effectiveAngle() resolves null → "front") and
@@ -11258,6 +9614,7 @@ function createOrientationWatcher() {
     }
     if (autoOrientation === null && next === "front" && !backOnWire) {
       autoOrientation = "front";
+      if (typeof traceOrient === "function") traceOrient("swap-acquire", { next });
       console.log("[PEAR] AI Auto - orientation ACQUIRED → FRONT (already rendered; no swap issued)");
       logVtonState();
       renderPerspectiveSelector();
@@ -11277,6 +9634,7 @@ function createOrientationWatcher() {
        and the shopper gets a toast every cooldown. Front-only is the documented
        graceful degradation - make it the confirmed state and stop re-litigating it. */
     const settleFrontOnBackFailure = () => {
+      if (typeof traceOrient === "function") traceOrient("swap-drop", { next, why: "back-unusable" });
       lastSwapAt = Date.now();            // throttle repeat toasts while turned away
       if (autoOrientation === null) {
         autoOrientation = "front";
@@ -11372,6 +9730,7 @@ function createOrientationWatcher() {
     applying = true;
     lastSwapAt = Date.now();
     lastSwapPredictive = predictive;
+    if (typeof traceOrient === "function") traceOrient("swap-go", { next, predictive, from: autoOrientation });
     /* THE LOCK IS A CLAIM ABOUT WHAT IS ON THE WIRE, so it is advanced here but ROLLED BACK
        if the dispatch below fails - see the catch. Kept as an advance-then-revert rather
        than a commit-after-success because renderPerspectiveSelector() and the prompt
@@ -11497,31 +9856,10 @@ function createOrientationWatcher() {
      the SAME cross-fade hold used for a front/back flip the instant `score` clears
      ORIENT_PROFILE_EXIT_SCORE - see "profile-turn-detected" in the timer callback below -
      so that window is covered by the hold rather than by prompt text alone. */
-  async function maybeUpdateProfile(score) {
-    profileBuf.push(score);
-    if (profileBuf.length > ORIENT_PROFILE_WINDOW) profileBuf.shift();
-    const mean = profileBuf.reduce((a, b) => a + b, 0) / profileBuf.length;
-    // "Square-on" for the EXIT test is the absence of meaningful evidence, not merely a
-    // score below the enter threshold - otherwise the two thresholds would sit on top of
-    // each other and the shopper would oscillate across the single boundary between them.
-    squareStreak = score <= ORIENT_PROFILE_EXIT_SCORE ? squareStreak + 1 : 0;
-    strongStreak = score >= ORIENT_PROFILE_FAST_SCORE ? strongStreak + 1 : 0;
-
-    /* ASYMMETRIC BY DESIGN, and the two directions read different statistics.
-
-       ENTER on the windowed MEAN: entering is the decision that must not be made on one
-       noisy frame, and averaging is what stops a shopper parked near the threshold angle
-       from toggling the pose every 250ms.
-
-       LEAVE on a CONSECUTIVE run of square-on samples: the mean is deliberately slow to
-       fall (an old high score lingers in the window for over a second), which would keep
-       asserting "side-on" well after the shopper came back around - the same class of
-       false pose assertion, pointing the other way. A short consecutive run answers "are
-       they square-on NOW?" without waiting for history to decay out. */
-    const next = autoProfile
-      ? !(squareStreak >= ORIENT_PROFILE_EXIT)
-      : (strongStreak >= ORIENT_PROFILE_FAST_FRAMES ||
-         (profileBuf.length >= ORIENT_PROFILE_ENTER && mean >= ORIENT_PROFILE_ENTER_SCORE));
+  /* APPLYING A POSE TRANSITION - the second half of what was maybeUpdateProfile(); the
+     buffer, streaks and the enter/exit rule that produce `next` are the engine's
+     profileNext() now (lib/orient-engine.js). The guards and the dispatch are unchanged. */
+  async function maybeApplyProfile(next) {
     if (next === autoProfile) return;
     if (applying || Date.now() - lastProfileAt < ORIENT_PROFILE_COOLDOWN_MS) return;
     /* ── THE GO-LIVE RACE, closed here ────────────────────────────────────────
@@ -11549,6 +9887,7 @@ function createOrientationWatcher() {
 
     applying = true;                    // shared with maybeSwap - one in-flight apply at a time
     lastProfileAt = Date.now();
+    if (typeof traceOrient === "function") traceOrient("profile-go", { next });
     // Also counts as a fresh re-anchor - this update IS the prompt landing with the
     // current pose baked in, so maybeReanchorPrompt() firing again immediately
     // afterward in this same tick would be pure redundancy (same argument as skipping
@@ -11572,6 +9911,7 @@ function createOrientationWatcher() {
       console.warn("[PEAR] AI Auto profile prompt update:", e?.message || e);
     } finally {
       applying = false;
+      if (typeof traceOrient === "function") traceOrient("profile-done", { ms: Date.now() - lastProfileAt });
     }
   }
 
@@ -11604,6 +9944,7 @@ function createOrientationWatcher() {
     if (!isGarmentApplied) return;
     applying = true;
     lastReanchorAt = Date.now();
+    if (typeof traceOrient === "function") traceOrient("reanchor-go");
     try {
       await applyActive();
       /* Session-relative, because that is the only form that is actually useful for the
@@ -11620,7 +9961,23 @@ function createOrientationWatcher() {
       console.warn("[PEAR] AI Auto prompt re-anchor:", e?.message || e);
     } finally {
       applying = false;
+      if (typeof traceOrient === "function") traceOrient("reanchor-done", { ms: Date.now() - lastReanchorAt });
     }
+  }
+
+  /* What only the browser measured, for the engine's per-tick debug line (printed only when
+     the link allows debugging - see lib/orient-engine.js). */
+  function orientDebugFacts(vote) {
+    return {
+      state: vtonState(),
+      confidence: faceDetector && !fdBroken
+        ? `face:${vote ?? "none"}(${(lastConfidence * 100).toFixed(0)}%)`
+        : lastPoseVoted && _poseFacingSep !== null
+          ? `shoulders:${vote}(sep ${_poseFacingSep.toFixed(2)}, ±${ORIENT_POSE_FACING_MARGIN} to vote)`
+          : `skin:${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}(${(lastConfidence * 100).toFixed(0)}% conf)`,
+      ratio: lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : undefined,
+      narrow: lastNarrow === null ? undefined : lastNarrow.toFixed(2),
+    };
   }
 
   const timer = setInterval(async () => {
@@ -11628,343 +9985,35 @@ function createOrientationWatcher() {
     sampling = true;
     try {
       const vote = await classify();
-      if (vote) {
-        if (vote === lastVote) streak++;
-        else { lastVote = vote; streak = 1; streakSince = Date.now(); }
-        /* Consecutive FaceDetector DETECTIONS within the current front streak. An abstention
-           leaves it alone, like `streak`; a skin-heuristic "front" or any "back" vote breaks
-           it - only a detection is the strong direction ORIENT_FACE_RETURN_FRAMES trusts. */
-        faceStreak = vote === "front" && lastFaceSeen ? faceStreak + 1 : 0;
-        /* Consecutive shoulder-order votes for ONE side (see ORIENT_POSE_FLIP_FRAMES). A skin vote
-           breaks it, and so does a shoulder vote for the other side. */
-        if (lastPoseVoted) { poseStreak = vote === poseSide ? poseStreak + 1 : 1; poseSide = vote; }
-        else { poseStreak = 0; poseSide = null; }
-      }
-      const held = lastVote ? Date.now() - streakSince : 0;
-
-      /* ── DID THE TORSO ACTUALLY ROTATE? ────────────────────────────────────────────
-         Independent, 3D corroboration for the vote - see ORIENT_CORROBORATED_FRAMES for
-         the full argument. Three things must all hold, and each rules out a specific way
-         of being wrong:
-           · a fresh reading exists          - stale yaw describes a pose already left;
-           · a peak was banked this turn     - without one there is no swing to measure;
-           · the swing clears the threshold  - a head-turn moves the head, not the
-                                               shoulders, and earns nothing here.
-         Abstains to false on every missing piece, which lands on ORIENT_LOCK_FRAMES -
-         exactly the behaviour that shipped before this existed.
-         The swing is measured DOWN from the peak since the last vote that agreed with the
-         lock, NOT from where this vote streak began - see makeTurnYawWindow() for why the
-         streak-start baseline could never corroborate the return leg of a 360.
-         Observed EVERY tick, abstentions included: the edge-on peak lives in exactly the
-         ticks where the vote abstains. `autoOrientation` is read before this tick's
-         maybeSwap(), so an agreeing vote is measured against the side actually on the wire. */
-      const yawFresh = _torsoYawAbs !== null && Date.now() - _torsoYawAt <= ORIENT_YAW_FRESH_MS;
-      /* The reading's own timestamp, not the tick's: the side-view dwell orientPredictBack()
-         measures is a property of the pose loop's clock, which runs independently of this one. */
-      const turnYaw = yawWindow.observe(vote, autoOrientation, yawFresh ? _torsoYawAbs : null, yawFresh ? _torsoYawAt : Date.now(), _poseTorsoLostAt);
-      const yawSwing = turnYaw.swing;
-      const yawCorroborates = turnYaw.corroborates;
-      /* Two DIFFERENT transitions, with deliberately different bars:
-
-         ACQUIRING (autoOrientation === null, PENDING_MODE) - establishing the first
-         reading of the session. There is no confirmed state to protect, so the full
-         anti-flap threshold buys nothing and costs the shopper 2.5s of the wrong side
-         rendered on their body. Two agreeing confident samples settle it.
-
-         FLIPPING (a side is already locked) - un-doing a confirmed reading, which is
-         exactly what the hysteresis exists for. Unchanged: ORIENT_LOCK_FRAMES
-         consecutive agreeing votes OR ORIENT_LOCK_MS of sustained agreement.
-
-         Note `acquiring` also makes needsSwitch true when the first vote happens to be
-         "front": the lock still has to MOVE (null → "front") for the state to become
-         confirmed, and that transition must be recorded rather than silently skipped. */
-      const acquiring = autoOrientation === null;
-      const needsSwitch = !!lastVote && (acquiring || lastVote !== autoOrientation);
-      /* THE FLIP BAR IS THE MINIMUM OF TWO PATHS, NEVER A LOWERED SINGLE ONE.
-         ORIENT_LOCK_FRAMES / ORIENT_LOCK_MS are byte-for-byte the bar they always were and
-         still carry every flip on their own. The corroborated path is an ADDITIONAL route
-         that requires MORE total evidence than the original - 4 agreeing votes AND a
-         45-degree torso rotation measured on a different instrument - in exchange for
-         reaching the decision in ~1s instead of ~2.5s. A flip can still only happen on a
-         vote streak; yaw never picks a side. Acquiring is untouched: there is no locked
-         side to protect, so it already settles on two samples.
-         The arithmetic lives in orientFlipDecision(), which adds exactly one path: the face
-         return (ORIENT_FACE_RETURN_FRAMES) - FRONT only, detections only, corroborated only. */
-      const { flipBar, faceReturn, poseFlip, early, confirmed } = orientFlipDecision({
-        acquiring, needsSwitch, streak, held, yawCorroborates, lock: autoOrientation, lastVote, faceStreak, poseStreak,
-        turnPassed: ORIENT_POSE_PASS && turnYaw.passed,
-        /* Only evidence from after the turn's peak may un-do the lock - see ORIENT_POST_PEAK. */
-        postPeakVotes: ORIENT_POST_PEAK ? turnYaw.postPeakVotes : Infinity,
-        postPeakHeld: !ORIENT_POST_PEAK ? Infinity : turnYaw.postPeakSince === null ? 0 : Date.now() - turnYaw.postPeakSince,
-      });
-
-      if (ORIENT_DEBUG) {
-        const confidence = faceDetector && !fdBroken
-          ? `face:${vote ?? "none"}(${(lastConfidence * 100).toFixed(0)}%)`
-          : lastPoseVoted
-            ? `shoulders:${vote}(sep ${_poseFacingSep.toFixed(2)}, ±${ORIENT_POSE_FACING_MARGIN} to vote, pose ${poseStreak}/${ORIENT_POSE_FLIP_FRAMES})`
-            : `skin:${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}(${(lastConfidence * 100).toFixed(0)}% conf)` +
-              ` shoulders abstain (sep ${_poseFacingSep === null ? "n/a" : _poseFacingSep.toFixed(2)})`;
-        // Status reflects the LOCK, not the raw per-frame vote: "locked" covers both a
-        // clean agreeing vote AND a disagreeing one that hasn't cleared the threshold
-        // yet - i.e. exactly the case that used to flip the reference frame-by-frame.
-        const status = confirmed ? (acquiring ? "ACQUIRING" : "SWITCHING")
-          : needsSwitch ? (acquiring ? "waiting-to-acquire" : "waiting-to-switch") : "locked";
-        // Progress is reported against whichever threshold actually applies, so the
-        // debug line never shows a pending state counting toward a bar it isn't using.
-        /* The flip bar is reported as the bar ACTUALLY IN FORCE this tick, plus the yaw
-           swing that set it - otherwise a corroborated flip looks like the hysteresis
-           silently failing, which is precisely the thing a tuner must be able to tell
-           apart from a real regression. */
-        const progress = acquiring
-          ? ` (${streak}/${ORIENT_ACQUIRE_FRAMES}f)`
-          : ` (${streak}/${flipBar}f${yawCorroborates ? "+yaw" : ""}, ${held}/${ORIENT_LOCK_MS}ms` +
-            `, yawΔ${yawSwing.toFixed(0)}° from ${yawWindow.edgeLost ? "edge-on (torso lost)" : "peak " + (yawWindow.peak === null ? "n/a" : yawWindow.peak.toFixed(0) + "°")}` +
-            `, face ${faceStreak}/${ORIENT_FACE_RETURN_FRAMES}${faceReturn ? " FACE-RETURN" : ""}${poseFlip ? (early ? " POSE-FLIP(pass)" : " POSE-FLIP") : ""}` +
-            `, torso lost ${yawWindow.lostInTurn ? "yes" : "no"}, passed ${turnYaw.passed ? (ORIENT_POSE_PASS ? "yes" : "yes (off: ?pose_pass=0)") : "no"}` +
-            `, after peak ${turnYaw.postPeakVotes}v${ORIENT_POST_PEAK ? "" : " (off: ?post_peak=0)"})`;
-        /* Pose is reported separately from the lock, because it IS separate - reading them
-           on one line is what makes "locked FRONT, but edge-on right now" legible while
-           tuning. ratio/score/width are the three numbers the thresholds are set from, so
-           a live session can be diagnosed from the console without a debugger: `ratio` is
-           the raw skin share, `score` the fused per-frame evidence against
-           ORIENT_PROFILE_ENTER_SCORE, and `w` the silhouette width relative to this
-           shopper's own square-on baseline (n/a until the baseline is learned, or when the
-           backdrop is too busy to measure). */
-        const mean = profileBuf.length
-          ? profileBuf.reduce((a, b) => a + b, 0) / profileBuf.length : 0;
-        const pose = `pose=${autoProfile ? "EDGE-ON" : "square-on"}` +
-          ` | ratio=${lastSkinRatio != null ? (lastSkinRatio * 100).toFixed(1) + "%" : "n/a"}` +
-          ` | score=${lastProfileScore.toFixed(2)}(avg ${mean.toFixed(2)}/${ORIENT_PROFILE_ENTER_SCORE})` +
-          ` | w=${lastNarrow === null ? "n/a" : lastNarrow.toFixed(2)}`;
-        /* The prediction's own verdict, on every tick of an open turn from a FRONT lock - the
-           abstain stretch where `progress` above prints nothing because no vote disagrees yet,
-           and exactly where orientPredictBack() is evaluated. See orientPredictBackReason(). */
-        const predict = currentAngle === AUTO_ANGLE && autoOrientation === "front" && yawWindow.open
-          ? ` | predict: ${orientPredictBackReason({ acquiring, lock: autoOrientation, win: yawWindow,
-              yawAbs: yawFresh ? _torsoYawAbs : null, now: Date.now() })}`
-          : "";
-        const earlyState = earlyTurn
-          ? ` | early ${ORIENT_EARLY_TURN_DEG}°: ${earlyTurn.pending ? `${earlyTurn.pending.to.toUpperCase()} sent early, unconfirmed` : earlyTurn.armed ? `armed on ${earlyTurn.armed.toUpperCase()}` : "not armed"}` +
-            ` (|yaw| rising ${earlyTurn.speed.toFixed(0)}°/s${ORIENT_EARLY_TURN_MIN_SPEED > 0 ? `, gate ${ORIENT_EARLY_TURN_MIN_SPEED}°/s` : ""})`
-          : "";
-        console.log(`[PEAR][ORIENT] state=${vtonState()} | ${pose} | confidence=${confidence} | ${status}` +
-          (needsSwitch ? progress : "") + predict + earlyState);
-      }
-
-      /* Raise the hold the INSTANT a turn looks like it is starting - one disagreeing
-         vote against a locked side, OR early evidence the shopper is turning edge-on - so
-         the frame we freeze is still a good dressed one. Waiting for `confirmed` (front/
-         back) or the ENTER threshold (profile, ~500ms of corroboration by design - see
-         ORIENT_PROFILE_ENTER's comment) is too late for the same reason either way.
-         THE GAP THIS CLOSES: maybeUpdateProfile() never re-uploads the reference image, so
-         the ASSET can never be wrong while turning edge-on - but that says nothing about
-         the PIXELS in the meantime. Until its prompt update actually lands, Lucy is still
-         regenerating a foreshortened, mid-turn person against a prompt that has not caught
-         up - per ROTATION_CONTINUITY's own comment, the exact condition under which the
-         most probable completion is the shopper's real shirt. SIDE_PROFILE_DEPTH is a
-         probabilistic bias on that frame, not a guarantee (see COMPOSITE_TEMPORAL's
-         comment) - this is the deterministic backstop the front/back axis already had and
-         the profile axis never got when it was added.
-         Excluded while ACQUIRING (dual-view) / before anything has ever been dressed
-         (single-view): there is no confirmed side, or no rendered frame at all, to
-         protect yet, and freezing the very first frames of a session would just stall
-         the reveal.
-
-         TWO TIERS, mirroring syncOrientationWatcher()'s split. `dualView` sessions have a
-         front/back LOCK to protect, so frontBackTurn uses it exactly as before (`acquiring`
-         is meaningless without a lock - autoOrientation never leaves PENDING for a
-         single-view item, since maybeSwap() never runs for one). `holdReady` is the
-         readiness gate for the profile axis specifically, and it needs its OWN readiness
-         signal for single-view sessions, where there is no lock to be "acquiring": once
-         the very first frame has ever been dressed (isGarmentApplied), a profile reading
-         is worth protecting the same way a dual-view one is. */
-      /* ╔════════════════════════════════════════════════════════════════════════╗
-         ║  THE 90-DEGREE FREEZE. This block WAS the bug. Read before restoring.  ║
-         ╚════════════════════════════════════════════════════════════════════════╝
-         REPORTED: "the feed freezes for a second or two, but ONLY when I turn sideways,
-         and ONLY live - the recording of the same session is smooth."
-
-         That asymmetry is the whole diagnosis, and it rules out WebRTC entirely. The
-         recorder's paint loop draws #aiVideo directly (see startRecording); the freeze
-         was #orientFadeCanvas - an opaque still snapshot, z-index 6, pinned over #aiVideo
-         inside #cameraCard - which the recorder cannot see. Live: frozen. Replay: smooth.
-         Nothing was ever wrong with the stream.
-
-         WHAT RAISED IT, and why it lasted so long. `enteringProfile` fired at
-         lastProfileScore > ORIENT_PROFILE_EXIT_SCORE - the EXIT threshold, 0.25, which is
-         deliberately low because its job is hysteresis on the way OUT. Used as an entry
-         trigger it fires the instant a shopper starts to turn. Release then required
-         autoProfile to actually flip, which needs ORIENT_PROFILE_ENTER samples at >= 0.55
-         (~500ms at best), plus a tick to notice. So even a clean 90-degree turn froze the
-         view for ~750ms - and a shopper who lingered anywhere between 0.25 and 0.55, which
-         is most of a real rotation, held it raised until the 4s ceiling. That is the
-         "1-2 second freeze".
-
-         WHY IT IS RETIRED RATHER THAN RETUNED. Its stated purpose was to cover the window
-         "until its prompt update actually lands" - the pose sentence catching up. There is
-         no pose sentence any more. Under strict image-only conditioning the prompt is one
-         frozen string, so maybeUpdateProfile()'s applyActive() finds the image AND the
-         prompt unchanged and dispatches nothing at all (see applyGarment's no-op skip).
-         The hold was freezing the live view for up to four seconds to hide a transition
-         that no longer transitions anything. Retuning the threshold would only shorten a
-         freeze that has no remaining purpose.
-
-         THE FRONT/BACK HOLD STAYS, and the difference is not cosmetic: that one covers a
-         real ASSET swap - with COMPOSITE_DEFAULT off, a confirmed flip changes the
-         reference image and re-uploads it - so there genuinely is a window in which the
-         model is between garments. It ends when the swap completes, not on a guess.
-
-         TO RESTORE THE PROFILE HOLD you would first have to give it something to cover:
-         restore a pose clause to the prompt (see IMAGE_ONLY_PROMPT's restore list) so the
-         profile transition dispatches again. Then raise it on ORIENT_PROFILE_ENTER_SCORE,
-         never on the EXIT threshold. */
-      const dualView = currentAngle === AUTO_ANGLE;
-      /* PREDICTIVE BACK - see ORIENT_PREDICTIVE_BACK. Evaluated only when no vote-confirmed
-         switch is due this tick; dispatched at the bottom of the tick, beside it. */
-      const predictBack = dualView && !confirmed && orientPredictBack({
-        acquiring, lock: autoOrientation, win: yawWindow, yawAbs: yawFresh ? _torsoYawAbs : null, now: Date.now(),
-      });
-      /* THE TURN OWNS THE WIRE from here until a vote agrees with the lock again - see
-         orientTurnMark(). Spans the abstain stretch through edge-on that the hold below does
-         not, which is where a body re-drape used to start and then hold the wire against the
-         swap. Includes a confirmed switch (needsSwitch), so it is still up while maybeSwap()
-         below is dispatching. */
-      orientTurnMark(dualView && !acquiring && (needsSwitch || yawWindow.turning));
-      const frontBackTurn = dualView && !acquiring && needsSwitch && !confirmed;
-      if (frontBackTurn) {
-        /* Bank the frame on the FIRST disagreeing vote, exactly as before - this is the
-           last instant the render is reliably a good dressed one. */
-        orientHoldBegin("turn-detected");
-        /* ── BUT ONLY COVER THE FEED ON EVIDENCE OF A REAL TORSO ROTATION ──────────
-           REPORTED: "the live view freezes whenever I move." It did, and for up to the
-           4s ceiling, because showing was fused to banking: any single disagreeing vote
-           - a head-turn, a shrug, a flickering light moving the skin ratio - stopped the
-           shopper's video even though no flip was coming. The MP4 export was smooth
-           throughout, which is the tell: the recorder samples #aiVideo UNDERNEATH this
-           overlay, so the stream was never the problem, only what was drawn over it.
-
-           yawCorroborates is the same 45-degree torso swing ORIENT_CORROBORATED_FRAMES
-           already trusts to shorten the flip bar - a genuinely 3D reading off MediaPipe's
-           shoulder landmarks, on a different instrument from the vote. A head-turn moves
-           the head, not the shoulders, and earns nothing here. Note this only gates the
-           DISPLAY: the flip bar, the hysteresis and the banked frame are all untouched.
-
-           ABSTAINS TOWARD THE OLD BEHAVIOUR, which is what keeps this from being a
-           regression on the devices that need the cover most. `yawUsable` is false with no
-           pose detector, an occluded torso, a phone that never loaded the WASM runtime, or
-           no peak banked yet this turn - and in every one of those cases we
-           cannot tell a real turn from a head-turn, so we cover exactly as before. The
-           freeze is only skipped where yaw is present AND positively says no torso
-           rotation is happening. And a swap that confirms anyway still promotes at its own
-           call site below, so the reference-replacement window is never left uncovered. */
-        const yawUsable = turnYaw.usable;
-        if (!yawUsable) orientHoldPromote("no-yaw-signal");
-        else if (yawCorroborates) orientHoldPromote("turn-corroborated");
-      }
-      /* The shopper turned back / straightened up before the flip confirmed: no swap is
-         coming, so drop the hold now rather than sitting on a still until the ceiling. */
-      else if (_orientHoldActive) orientHoldEnd("turn-abandoned");
-
-      /* THE EARLY TURN TRIGGER (on by default, see ORIENT_EARLY_TURN_DEG) - `earlyTurn` is null with
-         ?early_turn=0 and this block does nothing. Only when no vote-confirmed or predictive swap is due.
-         HANDLED HERE AND IT ENDS THE TICK, ahead of the pose/re-anchor updates below: they take the
-         `applying` mutex in this very tick, and maybeSwap() would find it held and drop the dispatch -
-         the reason predictive BACK stands aside from them too. */
-      const earlyAct = earlyTurn && dualView && !acquiring && !confirmed && !predictBack
-        ? earlyTurn.observe({ vote, lock: autoOrientation, yawAbs: yawFresh ? _torsoYawAbs : null, at: yawFresh ? _torsoYawAt : null,
-            lostAt: _poseTorsoLostAt })
-        : null;
-      if (earlyAct && earlyAct.fire) {
-        /* The pre-turn streak must not count against the early side - predictive BACK's reason. */
-        lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;
-        if (ORIENT_DEBUG) {
-          const yawTxt = _torsoYawAbs === null ? "n/a" : `${_torsoYawAbs.toFixed(0)}°`;
-          const how = earlyAct.via === "lost"
-            ? `torso lost at the side view after |yaw| ${yawTxt} rising at ${earlyTurn.speed.toFixed(0)}°/s (?early_turn_loss=${ORIENT_EARLY_TURN_LOSS_DEG})`
-            : `|yaw| ${yawTxt} crossed ${autoOrientation === "back" ? "?early_turn_return=" + ORIENT_EARLY_TURN_RETURN_DEG : "?early_turn=" + ORIENT_EARLY_TURN_DEG}° ` +
-              `${earlyAct.via === "slow" ? "on the slow path" : `rising at ${earlyTurn.speed.toFixed(0)}°/s`}`;
-          console.log(`[PEAR][ORIENT] fold handshake: ${how} from a settled ${String(autoOrientation).toUpperCase()} - ` +
-            `sending ${earlyAct.fire.toUpperCase()} at the side view, ahead of any vote`);
-        }
-        await maybeSwap(earlyAct.fire, earlyAct.fire === "back");   // an early BACK is withdrawable like a predictive one
-        return;
-      }
-      if (earlyAct && earlyAct.withdraw) {
-        if (ORIENT_DEBUG) {
-          console.log(`[PEAR][ORIENT] early turn WITHDRAWN: ${earlyAct.withdraw.toUpperCase()} votes came back under ` +
-            `${ORIENT_EARLY_TURN_DEG}° before any vote confirmed the turn - restoring ${earlyAct.withdraw.toUpperCase()}`);
-        }
-        /* The cooldown is anti-flap. Withdrawing an early swap no vote ever confirmed is the one flap that
-           must not wait for it - the FRONT direction already skips it (lastSwapPredictive); this gives
-           BACK the same. Bounded: the trigger has to re-arm square on this side, and its next fire still
-           meets the cooldown this withdrawal starts. */
-        if (earlyAct.withdraw === "back") lastSwapAt = 0;
-        await maybeSwap(earlyAct.withdraw);
-        return;
-      }
-
-      /* The pose axis, updated every tick. Skipped when a DUAL-VIEW swap is confirmed and
-         about to run: maybeSwap() re-applies the entire payload, which picks up whatever
-         autoProfile is by then anyway, so firing a second set() alongside it would be pure
-         redundancy inside the exact window the flicker fix works to keep quiet.
-
-         `confirmed` alone is NOT that signal for a single-view item: `acquiring` is
-         `autoOrientation === null`, and for single-view sessions autoOrientation never
-         leaves null (maybeSwap - the only place that ever sets it - is a no-op for them),
-         so `confirmed` can go permanently true the moment the front/back vote settles,
-         with no swap ever actually pending behind it. Gating on `dualView` too is what
-         keeps this axis running for the entire life of a single-view session instead of
-         going silent the moment the shopper is first read as "front". */
-      /* NOT AWAITED - these run in the background, and the tick moves on. Both end in
-         applyActive(), which can take a network round-trip; awaiting them here held
-         `sampling` true for that whole time, so the NEXT orientation sample was skipped
-         and the watcher's effective rate dropped from 250ms to however long Decart took
-         to answer. That never froze #aiVideo (the video is composited independently of
-         this timer), but it did make the orientation signal go stale during exactly the
-         movement it is meant to be tracking - the turn - which is a slower, quieter
-         version of the same complaint.
-
-         Safe without the await because the mutex is INSIDE them, not here:
-         maybeUpdateProfile() and maybeReanchorPrompt() both check and set the shared
-         `applying` flag before doing anything, so two overlapping ticks still cannot
-         produce two concurrent applies. What is lost is only the tick's knowledge of when
-         they finished, which nothing below uses. maybeSwap() stays awaited - it owns the
-         hold's lifecycle and the tick must not run ahead of it.
-         A PREDICTIVE swap stands in exactly the same place: the re-anchor would otherwise take
-         the `applying` mutex first in this very tick, and maybeSwap() would find it held and
-         drop the prediction. */
-      if (!(dualView && (confirmed || predictBack))) {
-        maybeUpdateProfile(lastProfileScore).catch(() => {});
-        /* Same redundancy argument as maybeUpdateProfile()'s skip above: a pending
-           dual-view swap is about to re-apply the whole payload anyway. Called AFTER
-           maybeUpdateProfile(), not instead of it - a fresh transition this very tick
-           already stamps lastReanchorAt itself (see that function's comment), so
-           back-to-back calls here never double-fire for the same transition.
-           NOT gated on pose: the drift this counters is pose-independent, so a shopper
-           standing still square-on needs it exactly as much as one holding a profile -
-           see REANCHOR_MS's comment. */
-        maybeReanchorPrompt().catch(() => {});
-      }
-
-      /* A BACK confirmed on the side-view pass alone (see ORIENT_POSE_PASS) goes out at the stage of the
-         turn a predictive BACK does, so it is sent as one: a return to FRONT withdraws it inside the
-         cooldown instead of leaving it on the chest. Every other confirmed flip is sent as before. */
-      if (dualView && confirmed && early && lastVote === "back") await maybeSwap("back", true);
-      else if (dualView && confirmed) await maybeSwap(lastVote);
-      else if (predictBack) {
-        /* THE PRE-TURN STREAK MUST NOT OUTLIVE THE PREDICTION. lastVote is still the "front"
-           the shopper was voting before they turned (abstentions never clear it), and faceStreak
-           may already sit past ORIENT_FACE_RETURN_FRAMES - against a BACK lock that is a
-           ready-made face return, and the very next tick would withdraw the prediction on
-           evidence that predates it. Cleared first, so only votes cast AFTER the dispatch count. */
-        lastVote = null; streak = 0; faceStreak = 0; poseStreak = 0; poseSide = null;
-        if (ORIENT_DEBUG) {
-          console.log(`[PEAR][ORIENT] predictive BACK: passed the side view ` +
-            `(${yawWindow.edgeLost ? "torso lost at edge-on" : "peak " + yawWindow.peak.toFixed(0) + "°"}, ` +
-            `now ${_torsoYawAbs.toFixed(0)}°, ${Date.now() - yawWindow.edgeAt}ms since edge-on, no face since the turn began)`);
-        }
-        await maybeSwap("back", true);
+      /* THE DECISION IS REMOTE (lib/orient-engine.js - see THE ORIENTATION DECISION IS
+         SERVER-SIDE). Every clock reading travels with the sample, so the engine decides
+         on the browser's own times whatever the round trip took; the actions come back in
+         the order this tick used to take them, the swap last. */
+      const acts = decide ? await decide.step({
+        t: Date.now(), vote, faceSeen: lastFaceSeen, poseVoted: lastPoseVoted, profileScore: lastProfileScore,
+        yawAbs: _torsoYawAbs, yawAt: _torsoYawAt, lostAt: _poseTorsoLostAt,
+        lock: autoOrientation, profile: autoProfile, dualView: currentAngle === AUTO_ANGLE,
+        dbg: ORIENT_DEBUG ? orientDebugFacts(vote) : undefined,
+      }) : null;
+      /* A reply that lands after stop() is dropped: the hold and the turn flag it could
+         raise would have no watcher left to release them. */
+      if (disposed) return;
+      /* NO DECISION - no link in this runtime, or no reply in time. Nothing swaps (the
+         lock stays where it is, PENDING renders the front), and only the re-anchor keeps its
+         cadence: it is pose-independent - the render's defence against drifting back to
+         the shopper's own shirt - and this tick would have called it with nothing to swap. */
+      if (!acts) { maybeReanchorPrompt().catch(() => {}); return; }
+      for (const a of acts) {
+        if (a.do === "log") console.log(a.line);
+        else if (a.do === "turnMark") orientTurnMark(a.on);
+        else if (a.do === "holdBegin") orientHoldBegin(a.reason);
+        else if (a.do === "holdPromote") orientHoldPromote(a.reason);
+        else if (a.do === "holdEndIfActive") { if (_orientHoldActive) orientHoldEnd(a.reason); }
+        else if (a.do === "resetSwapCooldown") lastSwapAt = 0;
+        /* NOT AWAITED, exactly as before - see maybeApplyProfile()/maybeReanchorPrompt(). */
+        else if (a.do === "profile") maybeApplyProfile(a.next).catch(() => {});
+        else if (a.do === "reanchor") maybeReanchorPrompt().catch(() => {});
+        else if (a.do === "swap") await maybeSwap(a.next, a.predictive === true);
       }
     } catch (_) {} finally { sampling = false; }
   }, ORIENT_SAMPLE_MS);
@@ -11980,11 +10029,329 @@ function createOrientationWatcher() {
       /* Same reason: the sampler that would clear it is gone, and a flag left up would keep
          deferring body re-drapes until its ceiling for a turn nobody is tracking. */
       orientTurnMark(false);
+      if (decide) decide.close();
+      if (typeof traceOrient === "function") traceOrient("watch-stop", { lock: autoOrientation });
       try { video.pause(); } catch (_) {}
       video.srcObject = null;                    // detach only - the track is the preview's
     },
   };
 }
+
+/* ══ THE ORIENTATION LINK - the browser's half ═════════════════════════════════════
+   One WebSocket per page to the decision engine (lib/orient-engine.js behind
+   lib/orient-protocol.js): the Cloudflare Worker in production (PEAR_ORIENT_URL, built in
+   by scripts/build.mjs), the page's own origin at /orient otherwise (npm start and the
+   visual harness serve it - lib/orient-server.js). Each watcher opens its own channel -
+   a fresh engine, as the per-watcher state always was - and closes it on stop().
+
+   NEVER BLOCKS, NEVER GUESSES. A tick waits at most ORIENT_LINK_STEP_TIMEOUT_MS for its
+   actions; no link, a dropped socket or a late reply all resolve null, and the tick then
+   swaps nothing (see the watcher's "NO DECISION"). The shopper keeps the front view - the
+   documented degradation of a single-view item - and it is said once, on the console.
+   A socket that FAILS is retried at most every ORIENT_LINK_RETRY_MS; a channel re-opened on
+   a new socket starts a clean engine (the lock itself lives here, in autoOrientation).
+
+   A DECISION MAY NEVER BE LOST WHILE THE ENGINE BELIEVES IT WAS SENT (2026-09-27). REPORTED,
+   first measurement, read frame by frame: no back print through the whole back view, then
+   the rear reference landing as the shopper faced front again (an "open" shirt on the chest)
+   - and a milder version on the second: the print arriving at ~160 degrees. In the browser
+   the decision was a function call and could not go missing; over a socket it could. A reply
+   that missed the timeout was DROPPED while the engine had already acted on it: the early
+   turn fires ONCE per turn and resets the vote streaks, so a lost "send BACK at 40 degrees"
+   left the room on FRONT with nothing left to fire until the back of the head was seen. Now:
+     · a slow reply PROVES the link with a ping instead of being dropped (a busy main thread can
+       fire a timer ahead of a reply that arrived in time); only a link that cannot answer is
+       DROPPED (orientLinkDrop), and every channel re-opens on the next one with a FRESH engine
+       that starts from the room's real lock - never an engine whose idea of what was sent
+       differs from what the room did;
+     · the room PINGS its link every ORIENT_LINK_PING_MS while it is open (orientLinkKeepAlive)
+       and replaces one that does not answer - a socket that died quietly while the shopper
+       stood in front of the camera is found then, not by the first turn;
+     · go-live checks it answers (orientLinkEnsureFresh) and replaces it before the session,
+       in parallel with the connect - the first measurement is the one that waited longest.
+
+   ORIENT_KNOB_KEYS mirrors lib/orient-engine.js's own list (CLAUDE.md §3): these URL
+   parameters, and no others, are forwarded - the tuning knobs, never the garment, the
+   store key or anything else on the page URL. */
+const ORIENT_KNOB_KEYS = ["pose_pass", "post_peak", "early_turn", "early_turn_return", "early_turn_slow",
+  "early_turn_speed", "early_turn_loss", "predict_back"];
+const ORIENT_LINK_STEP_TIMEOUT_MS = 1200;   // a healthy link answers in ~10ms; past this, prove it with a ping
+const ORIENT_LINK_STEP_HARD_MS = 4000;      // past this a reply is abandoned and the link replaced regardless
+const ORIENT_LINK_RETRY_MS = 3000;
+const ORIENT_LINK_PING_MS = 15000;          // keepalive cadence while the room is open and visible
+const ORIENT_LINK_PONG_TIMEOUT_MS = 2000;
+const ORIENT_LINK_FRESH_TIMEOUT_MS = 1000;  // go-live's check
+let _orientWs = null, _orientWsReady = null, _orientWsFailedAt = 0, _orientChanSeq = 0, _orientLinkNoted = false;
+let _orientPingSeq = 0, _orientKeepAliveTimer = null;
+const _orientPending = new Map();   // "c:q" -> resolve
+const _orientPongs = new Map();     // ping q -> resolve(bool)
+const _orientOpenChans = new Set();
+
+function orientLinkUrl() {
+  if (typeof PEAR_ORIENT_URL === "string" && PEAR_ORIENT_URL) return PEAR_ORIENT_URL;
+  try { return (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/orient"; } catch (_) { return null; }
+}
+
+function orientKnobs() {
+  const out = {};
+  try {
+    const q = new URLSearchParams(location.search);
+    for (const k of ORIENT_KNOB_KEYS) { const v = q.get(k); if (v !== null) out[k] = v; }
+  } catch (_) { /* no location - defaults */ }
+  return out;
+}
+
+/** Open (or reuse) the socket. Resolves the open WebSocket, or null. Never rejects. */
+function orientLinkConnect() {
+  if (_orientWsReady) return _orientWsReady;
+  if (Date.now() - _orientWsFailedAt < ORIENT_LINK_RETRY_MS) return Promise.resolve(null);
+  const url = orientLinkUrl();
+  if (!url || typeof WebSocket !== "function") return Promise.resolve(null);
+  _orientWsReady = new Promise((resolve) => {
+    let ws, settled = false;
+    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const fail = () => {
+      traceOrient("link-fail", { open: _orientWs === ws });
+      if (_orientWs === ws) _orientWs = null;
+      _orientWsReady = null;
+      _orientWsFailedAt = Date.now();
+      _orientOpenChans.clear();
+      for (const [key, r] of _orientPending) { _orientPending.delete(key); r(null); }
+      for (const [key, p] of _orientPongs) { _orientPongs.delete(key); p(false); }
+      finish(null);
+    };
+    try { ws = new WebSocket(url); } catch (_) { fail(); return; }
+    ws.onopen = () => { _orientWs = ws; traceOrient("link-open"); finish(ws); };
+    ws.onmessage = (e) => {
+      let m;
+      try { m = JSON.parse(e.data); } catch (_) { return; }
+      if (m && m.k === "pong") {
+        const p = _orientPongs.get(m.q);
+        if (p) { _orientPongs.delete(m.q); p(true); }
+        return;
+      }
+      const r = m && _orientPending.get(m.c + ":" + m.q);
+      if (!r) return;
+      _orientPending.delete(m.c + ":" + m.q);
+      r(Array.isArray(m.a) ? m.a : null);
+    };
+    ws.onerror = () => {};
+    ws.onclose = fail;
+  });
+  return _orientWsReady;
+}
+
+/* Drop the socket ON PURPOSE - a step timed out, a ping went unanswered. Every channel
+   re-opens on the next socket with a fresh engine; pending steps resolve null now. Unlike a
+   connection FAILURE this starts no retry back-off: the next connect goes out at once. */
+function orientLinkDrop(why) {
+  const ws = _orientWs;
+  _orientWs = null;
+  _orientWsReady = null;
+  _orientOpenChans.clear();
+  for (const [key, r] of _orientPending) { _orientPending.delete(key); r(null); }
+  for (const [key, p] of _orientPongs) { _orientPongs.delete(key); p(false); }
+  if (ws) {
+    ws.onclose = null;          // this is not a failure - do not start the back-off
+    ws.onmessage = null;
+    try { ws.close(4000, "drop"); } catch (_) { /* already closed */ }
+  }
+  traceOrient("link-drop", { why });
+  console.warn("[PEAR] AI Auto - orientation link dropped (" + why + ") - reconnecting with a fresh engine");
+}
+
+/** Resolves true if the open socket answers a ping within timeoutMs. Never rejects. */
+function orientLinkPing(timeoutMs) {
+  const ws = _orientWs;
+  if (!ws || ws.readyState !== 1) return Promise.resolve(false);
+  const q = ++_orientPingSeq;
+  const t0 = Date.now();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { if (_orientPongs.delete(q)) { traceOrient("link-ping", { ok: false, ms: Date.now() - t0 }); resolve(false); } }, timeoutMs);
+    _orientPongs.set(q, (ok) => { clearTimeout(timer); traceOrient("link-ping", { ok, ms: Date.now() - t0 }); resolve(ok); });
+    try { ws.send(JSON.stringify({ k: "ping", q })); } catch (_) { _orientPongs.delete(q); clearTimeout(timer); resolve(false); }
+  });
+}
+
+/** The socket must answer NOW, or be replaced - called at go-live, never awaited there. */
+async function orientLinkEnsureFresh() {
+  if (!_orientWs || _orientWs.readyState !== 1) { await orientLinkConnect(); return; }
+  if (!(await orientLinkPing(ORIENT_LINK_FRESH_TIMEOUT_MS))) {
+    orientLinkDrop("no answer before go-live");
+    await orientLinkConnect();
+  }
+}
+
+/** Open the link and keep it proven alive while the room is open (idempotent). */
+function orientLinkKeepAlive() {
+  orientLinkConnect();
+  if (_orientKeepAliveTimer || typeof setInterval !== "function") return;
+  _orientKeepAliveTimer = setInterval(async () => {
+    if (typeof document !== "undefined" && document.hidden) return;   // no session runs hidden
+    if (!_orientWs || _orientWs.readyState !== 1) { orientLinkConnect(); return; }
+    if (!(await orientLinkPing(ORIENT_LINK_PONG_TIMEOUT_MS))) {
+      orientLinkDrop("keepalive unanswered");
+      orientLinkConnect();
+    }
+  }, ORIENT_LINK_PING_MS);
+}
+
+/** One watcher's channel: step(sample) -> Promise<actions|null>, close(). */
+function openOrientChannel() {
+  const c = ++_orientChanSeq;
+  const knobs = orientKnobs();
+  /* The support view's token, so the engine may print its tuning line there (and only there). */
+  let dk;
+  try { dk = new URLSearchParams(location.search).get("pear_debug") || undefined; } catch (_) { dk = undefined; }
+  let q = 0, closed = false;
+  orientLinkConnect();   // warm the socket while the first sample is being measured
+  /* A recorded (TEST) session keeps every tick: what was measured, what came back, how long it
+     took - null when no decision came (the link events say why). See FLIGHT RECORDER. */
+  const traceStep = (s, acts, rtt) => traceOrient("s", {
+    c, v: s.vote ?? null, f: s.faceSeen ? 1 : 0, pv: s.poseVoted ? 1 : 0,
+    ps: typeof s.profileScore === "number" ? Math.round(s.profileScore * 100) / 100 : null,
+    y: typeof s.yawAbs === "number" ? Math.round(s.yawAbs) : null,
+    ya: s.yawAt ? s.t - s.yawAt : null, la: s.lostAt ? s.t - s.lostAt : null,
+    l: s.lock ?? null, p: s.profile ? 1 : 0, d: s.dualView ? 1 : 0, rtt,
+    a: Array.isArray(acts) ? acts.filter((x) => x && x.do !== "log") : null,
+  });
+  return {
+    async step(sample) {
+      if (!_trace) return stepOnLink(sample);
+      const t0 = Date.now();
+      const acts = await stepOnLink(sample);
+      traceStep(sample, acts, Date.now() - t0);
+      return acts;
+    },
+    close() {
+      closed = true;
+      if (_orientOpenChans.delete(c) && _orientWs && _orientWs.readyState === 1) {
+        try { _orientWs.send(JSON.stringify({ c, k: "close" })); } catch (_) { /* closing */ }
+      }
+    },
+  };
+
+  async function stepOnLink(sample) {
+    if (closed) return null;
+    const ws = await orientLinkConnect();
+    if (!ws || ws.readyState !== 1) {
+      if (!_orientLinkNoted) {
+        _orientLinkNoted = true;
+        console.warn("[PEAR] AI Auto - the orientation link is unavailable; the front view stays on",
+          "and the reference will not swap on a turn (the link is retried every", ORIENT_LINK_RETRY_MS + "ms)");
+      }
+      return null;
+    }
+    try {
+      if (!_orientOpenChans.has(c)) {
+        ws.send(JSON.stringify({ c, k: "open", knobs, dk }));
+        _orientOpenChans.add(c);
+      }
+      const id = ++q;
+      return await new Promise((resolve) => {
+        const key = c + ":" + id;
+        /* THE WATCHDOG PROVES THE LINK, IT DOES NOT RACE THE REPLY. The timer and the reply both
+           run on the main thread, and a session's first seconds are its busiest - a long task
+           there can fire this timer ahead of a reply that arrived in time. Dropping on the timer
+           threw such a reply away while the engine had acted on it (the early turn fires once):
+           the lost "send BACK" of the first measurement. So a slow reply triggers a PING; only a
+           link that cannot answer one is dropped (and its engine with it, see orientLinkDrop).
+           On a live link the tick keeps waiting and applies the reply - exactly as the in-browser
+           decision was simply delayed by the same busy thread. ORIENT_LINK_STEP_HARD_MS caps it. */
+        let settled = false;
+        const done = (a) => { if (settled) return; settled = true; clearTimeout(soft); clearTimeout(hard); resolve(a); };
+        const soft = setTimeout(async () => {
+          if (settled || !_orientPending.has(key)) return;
+          traceOrient("link-slow", { c, q: id });
+          if (!(await orientLinkPing(ORIENT_LINK_PONG_TIMEOUT_MS)) && !settled && _orientWs === ws) orientLinkDrop("a step went unanswered and so did a ping");
+        }, ORIENT_LINK_STEP_TIMEOUT_MS);
+        const hard = setTimeout(() => {
+          if (settled || !_orientPending.delete(key)) return;
+          if (_orientWs === ws) orientLinkDrop("a step went unanswered for " + ORIENT_LINK_STEP_HARD_MS + "ms");
+          done(null);
+        }, ORIENT_LINK_STEP_HARD_MS);
+        _orientPending.set(key, done);
+        ws.send(JSON.stringify({ c, k: "step", q: id, s: sample }));
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+}
+/* ── end orientation link ── */
+
+/* ── FLIGHT RECORDER - a TEST session's turn, as data (2026-09-27) ─────────────────────────
+   WHY IT EXISTS. A turn is measured here, decided at the edge and rendered by the engine, and
+   the reports that matter - "no back print on the first measurement", "the print was missing
+   for a few frames" - come from real sessions on real stores, where the production build strips
+   every log line. A clip read frame by frame shows WHAT the shopper saw, never WHY. This keeps
+   the why: every orientation tick's measurements and the engine's reply with its round trip,
+   every swap from request to its first rendered frame (or the reason it was dropped), the
+   output stalls the live camera bridged, and every orientation-link drop - and posts it once,
+   when the session ends, to the edge (POST /trace, kept 7 days, read back with wrangler).
+
+   ONLY A TEST SESSION IS RECORDED: the store key TEST (data-pear-key="TEST", the preview
+   script) or ?pear_trace=1. A shopper's session records nothing and sends nothing. The record
+   holds numbers, decisions and timings - no image, no body measurement, nothing typed.
+   Bounded (TRACE_MAX_EVENTS), never awaited, and a failed post is simply lost. */
+const TRACE_MAX_EVENTS = 1600;
+let _trace = null;
+let _traceSessions = 0;
+
+function traceEnabled() {
+  try {
+    const q = new URLSearchParams(location.search);
+    return q.get("pear_key") === "TEST" || q.get("pear_trace") === "1";
+  } catch (_) { return false; }
+}
+
+/** Open a record for the session go-live just claimed (closing any the last one left open). */
+function traceSessionBegin(ctx) {
+  if (_trace) traceSessionEnd("superseded");
+  if (!traceEnabled()) return;
+  _traceSessions++;
+  let ua = "";
+  try { ua = String(navigator.userAgent || "").slice(0, 200); } catch (_) { /* no navigator */ }
+  _trace = {
+    v: 1, id: Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8),
+    n: _traceSessions, build: typeof PEAR_BUILD !== "undefined" ? PEAR_BUILD : null,
+    at: new Date().toISOString(), t0: Date.now(), ua, ctx: ctx || null, ev: [], over: 0,
+  };
+}
+
+/** One event, stamped in ms since go-live. A no-op outside a recorded session. */
+function traceOrient(type, data) {
+  const tr = _trace;
+  if (!tr) return;
+  if (tr.ev.length >= TRACE_MAX_EVENTS) { tr.over++; return; }
+  tr.ev.push(data === undefined ? [Date.now() - tr.t0, type] : [Date.now() - tr.t0, type, data]);
+}
+
+/** Close the record and post it to the edge. Idempotent: the first caller wins. */
+function traceSessionEnd(why) {
+  const tr = _trace;
+  if (!tr) return;
+  _trace = null;
+  tr.end = why;
+  tr.dur = Date.now() - tr.t0;
+  /* The source room (tests, the visual harness, the support view) keeps the last record in reach. */
+  if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") window.__pearDebugLastTrace = tr;
+  const url = edgeApiUrl("trace");
+  if (!url || typeof fetch !== "function") return;
+  let body;
+  try { body = JSON.stringify(tr); } catch (_) { return; }
+  /* text/plain keeps it a simple request (no preflight), so it can also leave with a closing page. */
+  try {
+    fetch(url, { method: "POST", headers: { "Content-Type": "text/plain" }, body, cache: "no-store",
+      keepalive: body.length < 60000 }).catch(() => {});
+  } catch (_) { /* never let the recorder break a teardown */ }
+}
+/* The source room's read-out: the record in progress, else the last one closed (tests, the visual
+   harness's PEAR_VISUAL_TRACE=1, the support view). Folded away in the production build. */
+if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
+  window.__pearDebugTrace = () => _trace || window.__pearDebugLastTrace || null;
+}
+/* ── end flight recorder ── */
 
 /* Decode a garment URL into an ImageBitmap without tainting the canvas: http(s) CDN
    URLs go through the same-origin proxy (exactly like the live reference path); data:
@@ -13148,1340 +11515,19 @@ function hasDedicatedAngle(item) {
    Angle-oriented prompt clauses. Switching the image alone isn't enough - Lucy
    regenerates every frame, so the prompt must ALSO name the viewing angle or the
    model keeps rendering a front. Front needs no clause. */
-/* The rear POSE sentence, factored out of the three back clauses below for the same
-   reason COMPOSITE_POSE is split from COMPOSITE_APPLY: all three opened with this exact
-   sentence, and it is the one part of them that stops being true mid-turn. The garment
-   instructions that follow it (reproduce the back print / infer a plain rear / the custom
-   variant) stay correct at every angle, because the orientation lock that selected them
-   has not moved. Concatenation below is byte-identical to the previous strings. */
-const REAR_POSE =
-  " The person is seen from BEHIND - rear view, turned around, the back of the body facing the camera.";
-/* Its edge-on replacement. Same locked side, truthful rotation, plus the explicit ban on
-   de-rotating - see COMPOSITE_POSE's comment for why asserting a square rear view while
-   the shopper is side-on is what flattens their real profile volume. */
-const REAR_POSE_PROFILE =
-  " The person is TURNED TO THEIR SIDE and is seen EDGE-ON, in side profile, at roughly a right" +
-  " angle to the camera - part-way through turning away, so the back of the garment faces off to" +
-  " one side rather than squarely toward you. Render them at the exact rotation shown in the live" +
-  " frame: do NOT rotate, straighten or re-pose them back to a square rear view.";
-/* The garment half of each back clause, kept separate so either pose above can lead it. */
-const BACK_TAIL = {
-  real:
-    " This reference photo shows the BACK of the garment: reproduce it faithfully - its back panel, rear yoke, back collar, rear hemline and especially any back graphics, prints, logos or lettering - keeping each element at the SAME size, height and horizontal position on the garment as in the reference, wrapping naturally around the body. Do not move, rescale, re-center or omit the back print, and do NOT render the front of the garment.",
-  inferred:
-    " Render the BACK of the garment: its back panel, rear yoke, back collar, rear hemline and the seams the cut implies, wrapping naturally around the body from the rear. This reference photo shows the FRONT of the garment, so you must INFER the corresponding rear from it. The back is a clean, plain expression of the same fabric, colour and texture: do NOT copy, mirror, repeat or relocate the front chest print, front logo, front lettering, buttons, placket, zipper or front pockets onto the back. Unless the garment's cut clearly implies a back panel print, the back carries NO graphic at all. Do NOT render the front of the garment.",
-  custom:
-    " Render the BACK of this custom garment. The back of the garment must be a clean, plain version of the" +
-    " front's fabric and color, strictly without the front graphics or logos. Maintain the same seams," +
-    " material texture, and drape as the front view. Do not mirror front-specific details to the back." +
-    " Negative constraint - avoid printing, logos, or graphic motifs on the back side.",
-};
+/* ══ THE PROMPT ENGINE LIVES SERVER-SIDE (lib/prompts.js) ══════════════════════
+   Since 2026-09-26 every prompt word - the anchors, the closure lock, the identity and
+   fit sentences, the clause priorities and the budget, and the whole restore seam
+   (DENSE, the composite contract, the side-profile/lateral-seam clauses) - lives in
+   lib/prompts.js behind POST /api/prompt, and `npm run trace:prompt` traces THAT file.
+   RULE 0 (CLAUDE.md §0) applies there now: edit a clause in lib/prompts.js, never here.
+
+   What stayed is what the browser has to decide itself: isBottomsGarment() below (the
+   size chart and the go-live gate read it synchronously - the server honours its
+   verdict, so the prompt and the chart always agree), the size delta (getSizeDelta(),
+   the shopper's ladder), and the garment's plain facts. wirePrompt() sends those and
+   returns the one wire-ready string a dispatch needs. */
 
-const ANGLE_CLAUSE = {
-  front: "",
-  // Back, REAL rear reference: the active image IS a dedicated back photo. Tell Lucy to
-  // REPRODUCE it - and pin the print's size/position to the reference so the graphic
-  // doesn't drift, rescale or re-center between frames (the back-alignment ask).
-  backReal: REAR_POSE + BACK_TAIL.real,
-  /* Back, INFERRED rear: no dedicated back photo - the active image IS the front, so
-     Lucy must infer a plausible rear from it (graceful fallback; placement can't be
-     pinned). THE PRINT-DUPLICATION FIX: the previous wording asked for "any back
-     graphics, prints or seams" while the only graphic in view was the FRONT chest
-     print - so the model dutifully reproduced that print on the back. The reference
-     is now named as the front explicitly, front-only elements are enumerated as
-     forbidden (the model cannot avoid what it hasn't been told to avoid), and the
-     default rear is stated as PLAIN. Mirrors CUSTOM_BACK_INFERRED, which already
-     carried this constraint and did not exhibit the bug. */
-  backInferred: REAR_POSE + BACK_TAIL.inferred,
-  side:  " The person is viewed from the SIDE in profile: render the garment's side profile - shoulder line, sleeve, side seam and the way the fabric drapes along the flank - in an accurate three-quarter/profile perspective.",
-  // AI Auto, facing camera: the reference is ONE clean front asset (no composite), so the
-  // clause pins it explicitly as the front and forbids inventing rear details - the
-  // orientation contract that makes Context-Aware Asset Switching bleed-proof.
-  autoFront:
-    " This reference photo shows the FRONT of the garment. The person is facing the camera:" +
-    " reproduce the garment's front faithfully - its front panel, collar, closure, hemline and" +
-    " any front graphics, prints, logos or lettering - keeping each element at the SAME size," +
-    " height and horizontal position as in the reference. Do NOT render the back of the garment.",
-  /* Single-asset counterpart of COMPOSITE_POSE.profileFront - same reasoning, same fix,
-     for the path where the reference is one photo rather than a stitched pair. autoFront
-     above opens by asserting "The person is facing the camera", which is the sentence
-     that has to go when they are edge-on; the garment side it names is still correct,
-     because the orientation lock did not move. */
-  autoProfile:
-    " This reference photo shows the FRONT of the garment. The person is TURNED TO THEIR SIDE," +
-    " seen EDGE-ON in side profile at roughly a right angle to the camera, so the garment's front" +
-    " faces off to one side rather than toward you: render the garment in that true side-on" +
-    " perspective - the shoulder line, sleeve, side seam and the way the fabric drapes along the" +
-    " flank - keeping its colour, texture and any visible front graphics faithful to the reference." +
-    " Do NOT rotate, straighten or re-pose the person back toward the camera, and do NOT re-render" +
-    " this as a front-facing shot.",
-};
-
-/* ── Side-profile depth fidelity - the volume that only exists edge-on ────────
-   THE BUG THIS EXISTS FOR: a shopper with real torso depth (the test case was a pillow
-   under a shirt) turns 90 degrees and the rendered body comes back flat - the garment
-   drapes over a generic torso instead of over their actual projection.
-
-   The mechanism is a blind spot in the prompt, not in the detector. Head-on, the body's
-   width carries its shape and STRICT_INPAINT's "do not slim, flatten or idealize" is
-   phrased for exactly that: it enumerates waist circumference and torso WIDTH. Edge-on,
-   width is foreshortened to nearly nothing and the entire silhouette is DEPTH - how far
-   the chest and stomach project forward, how the back curves behind. No clause in the
-   prompt named that axis, so nothing defended it, and a diffusion model with a strong
-   prior toward flat profiles had no instruction standing against that prior at precisely
-   the angle where it is most exposed. This names the axis and pins it to the live frame's
-   own silhouette edge, which is the only ground truth available in a pipeline with no
-   depth sensor and no mesh.
-
-   Complements rather than repeats its neighbours: PROFILE_ANOMALY_GUARD scopes out what
-   is NOT body (held objects, lens distortion) while turned; this asserts what IS body and
-   must survive. STRICT_INPAINT's ABSOLUTE BODY FIDELITY still governs at every angle -
-   this is its profile-axis form, not a replacement. */
-/* Structured as four numbered directives rather than one paragraph. Position and framing
-   both matter for this model: the clause leads with WHERE THE BODY IS, because every
-   instruction after it is relative to that, and the numbering keeps the four asks
-   individually addressable instead of dissolving into a wall of qualifiers. */
-const SIDE_PROFILE_DEPTH =
-  " SIDE-PROFILE DEPTH FIDELITY - four requirements for this frame." +
-  " (1) ORIENTATION: the person is positioned EDGE-ON, IN SIDE PROFILE, facing LATERALLY" +
-  " relative to the camera frame - turned roughly a right angle away from the lens, so you" +
-  " see the side of their body rather than its front or its back." +
-  " (2) GROUND TRUTH: the lateral silhouette edge in the live frame - including any abdominal" +
-  " curve, stomach or belly projection, chest depth, curve of the lower back and seat, and the" +
-  " bulk of the clothing itself - is ABSOLUTE GROUND TRUTH and overrides any assumption you" +
-  " hold about how a body is shaped. Because they are edge-on, that outline is their real" +
-  " FRONT-TO-BACK DEPTH, not their width. Trace it exactly as it is. Any protrusion, bulge," +
-  " overhang, rounding or expansion along that edge is REAL BODY VOLUME and must be preserved" +
-  " at its exact depth, height and position, however far it extends." +
-  " (3) FORESHORTENING: maintain the full side-view foreshortening exactly as captured. Do NOT" +
-  " rotate, turn or twist the person's chest, waist, hips or shoulders back toward the front" +
-  " camera view, and do NOT widen the torso back toward a front-facing silhouette. Do NOT" +
-  " substitute a typical, average, slimmer, athletic or idealized profile; do NOT flatten," +
-  " straighten, compress or pull the stomach, chest, belly or back edge inward toward the" +
-  " spine; do NOT reduce the torso's front-to-back thickness." +
-  " (4) DRAPE: wrap and drape the selected garment fabric seamlessly over those exact profile" +
-  " contours, preserving their true physical depth - the side seam following their real side" +
-  " contour, the fabric projecting outward wherever their body does, falling from the point of" +
-  " greatest protrusion with natural tension, creases and fold shadows beneath it." +
-  " Fit the garment to the body's true volume; never the body to the garment.";
-
-/* ── Lateral seam synthesis - the band that NO reference view depicts ─────────
-   THE GAP THIS FILLS, and why it is not the same gap SIDE_PROFILE_DEPTH fills. That
-   clause is about the BODY: it pins the silhouette edge as ground truth so the shopper's
-   real front-to-back volume survives. This one is about the GARMENT covering that edge.
-
-   At 90 degrees the camera sees a band of the garment that neither reference view
-   contains - the flank, the side seam, the underarm, the outer face of the sleeve. The
-   composite holds a FRONT panel and a BACK panel; the side is the hinge between them and
-   is photographed by neither. With nothing in the prompt naming that band, the model is
-   inpainting a region it has no reference for, and the cheapest completion available to
-   it is the pixels already there: the shopper's own real shirt. That is the "it drops the
-   garment when I turn" report, and it is a DIFFERENT mechanism from the reversion
-   ROTATION_CONTINUITY covers (that one is about the turn as a temporal event; this is
-   about a spatial region being unreferenced at the moment of peak exposure).
-
-   WHY THIS DOES NOT SAY "BLEND THE TWO PANELS", which is the obvious phrasing and the
-   wrong one. COMPOSITE_PANEL_CONTRACT opens the prompt by calling the boundary between
-   the panels an impassable wall, and COMPOSITE_APPLY then retires the unselected panel
-   outright ("does not exist for this frame"). Instructing a blend here would contradict
-   the two strongest, earliest instructions in the prompt, and the way that contradiction
-   resolves in practice is already on the record: rendering both panels' designs on one
-   surface is the double-print regression that got the previous stitcher removed in
-   23f5953. So the synthesis is specified GEOMETRICALLY - the garment wraps, the side seam
-   is where the wrap turns - while the locked panel remains the only texture source and
-   the unreferenced band is filled by EXTRAPOLATING its cloth, never by dragging the
-   opposite panel's graphics around the body. Continuity of fabric, not of print.
-
-   Prompt-only, so it costs nothing at runtime: it rides the same assembly path every
-   other clause does and is re-asserted by the existing re-anchor cadence. */
-const LATERAL_SEAM_SYNTHESIS =
-  " LATERAL SEAM SYNTHESIS - the side of the garment must be PREDICTED, not skipped." +
-  " No reference view depicts the narrow lateral band now facing the camera: the flank," +
-  " the side seam, the underarm and the outer face of the sleeve. Synthesize it." +
-  " (1) CONTINUITY MANDATE: hold 100% garment replacement coverage across the entire" +
-  " visible torso for every frame of the turn. There must be no frame, and no region of" +
-  " any frame, in which the target garment thins, breaks, fades, turns transparent or lets" +
-  " the person's own original shirt - its colour, collar, sleeves or hem - show through" +
-  " anywhere, least of all along the flank, the shoulder line or the underarm." +
-  " (2) WRAP: render how this garment continues around the torso's lateral depth - the" +
-  " side seam running down their real side contour, the shoulder seam and sleeve head" +
-  " turning with the shoulder, the hem closing unbroken around the flank, and the fabric" +
-  " folding and gathering where the arm meets the body." +
-  " (3) EXTRAPOLATE, NEVER RELOCATE: carry the colour, weave, sheen, material thickness" +
-  " and fold behaviour of the reference view named above outward across that band, so the" +
-  " side reads as the same garment in the same cloth and the transition into it is smooth" +
-  " and gradual, with no hard edge, colour step, seam artifact or texture break. Where the" +
-  " reference depicts no lateral detail, infer PLAIN fabric in that same colour and" +
-  " texture. Do NOT drag, mirror, wrap or repeat the reference's graphics, prints, logos" +
-  " or lettering around onto the side to fill it, and do NOT invent new ones there.";
-
-/* ── Stitched Garment Composite - orientation clauses ────────────────────────────
-   Deliberately modelled on LOOK_CLAUSE below, which is the in-repo proof that a
-   labelled two-panel reference works with this model: name the panels, forbid
-   cross-panel sampling in absolute terms, and state that the markers are guides that
-   must never be painted onto the garment.
-
-   The critical difference from the composite that was removed in 23f5953: that one
-   left the model to decide which half applied. Here the OrientationWatcher has
-   already resolved that, so exactly ONE panel is ever named as the source, and the
-   other is explicitly excluded. The model is never asked to choose. */
-/* The panel contract. States WHAT the reference image is, before anything else in the
-   prompt describes the garment or the body. Everything downstream (COMPOSITE_SELECT,
-   buildCompositePrompt) assumes this has already been said. */
-const COMPOSITE_PANEL_CONTRACT =
-  "High-quality, realistic virtual try-on." +
-  " The garment reference is a SPLIT COMPOSITE IMAGE containing two views of the SAME garment," +
-  " side by side: the LEFT HALF is the FRONT view, the RIGHT HALF is the BACK view." +
-  " Treat the boundary between them as an impassable wall - never blend, mirror or copy any" +
-  " detail from one half into the other, and never render both halves' designs on the same" +
-  " surface of the garment." +
-  /* The artifact clause. Everything that is not garment in this reference - the gap between
-     the panels, the studio backdrop, the canvas edges, the marker band along the bottom -
-     is layout, and Lucy has no way to know that unless it is said. It samples texture from
-     the whole reference, which is how a divider became a seam painted down a shirt. The
-     canvas fix (seamless sampled gutter, markers moved off the garment) removes most of
-     the opportunity; this removes the rest. */
-  " IGNORE ALL CANVAS FURNITURE. The gap between the two halves, the background field, the" +
-  " outer canvas edges and the 'FRONT'/'BACK' text markers below the panels are layout" +
-  " scaffolding, NOT part of the garment. Never reproduce a boundary, divider, seam, border," +
-  " frame, band or letterform from this reference onto the clothing, the body or the scene." +
-  " The only lines you may render on the garment are its own real seams, stitching and hems.";
-
-/* Temporal contract. Appended LAST so it is the final instruction in the prompt, and
-   carried on BOTH orientations - flicker is not a back-view-only problem.
-
-   Read the honest limits here before tuning it. Lucy regenerates every frame independently;
-   there is no cross-frame state, no seed and no motion-guidance parameter exposed by
-   @decartai/sdk@0.1.5 (realtime connect takes model/fps/width/height/mirror/resolution/
-   codec, and set() takes exactly { prompt, enhance, image } - see connectRealtime()). So
-   this wording is a per-frame bias toward the same result, not a temporal filter, and it
-   cannot be one. The mechanical half of the flicker fix is in applyGarment(): a confirmed
-   turn now re-issues the PROMPT alone instead of re-uploading the reference image, so the
-   model is never briefly without a garment reference at the exact moment the shopper
-   turns. That is what actually stops the print vanishing mid-rotation. */
-/* Trimmed once ROTATION_CONTINUITY landed: that clause now carries the "garment stays on
-   through the turn" half, so repeating it here only spent tokens against the panel
-   contract. What is left is the part specific to a two-panel reference - the PRINT's
-   stability, frame to frame. */
-const COMPOSITE_TEMPORAL =
-  " Render with smooth, temporally consistent frame-to-frame output: the garment keeps the" +
-  " same colour, print placement and scale in every frame, with ZERO flickering, popping," +
-  " strobing or drifting. The print must never vanish, fade or re-position between frames.";
-
-/* Orientation selector. The OrientationWatcher has ALREADY resolved which way the shopper
-   is facing, so exactly one panel is ever named as the source and the other is excluded in
-   absolute terms ("does not exist for this frame") rather than merely deprioritised - the
-   model is never asked to choose. The back clause is phrased as an EXTRACT-and-APPLY
-   instruction, not a "reproduce the reference" one: the task is a texture transfer from a
-   named region of the reference onto a named region of the body, and naming both ends of
-   that transfer is what the previous wording left implicit. */
-/* Split into POSE + APPLY so the two can vary independently.
-
-   They answer different questions and only one of them depends on how far the shopper
-   has turned. APPLY is a texture-transfer instruction - WHICH panel of the reference is
-   the legal source - and it stays correct at every rotation, because the orientation
-   lock that picked the panel is unchanged. POSE is a claim about the body in the live
-   frame, and it is the half that goes WRONG the moment the shopper is edge-on: see
-   COMPOSITE_POSE.profileFront for the failure it caused. The concatenation below
-   reproduces the previous strings byte for byte - this is a refactor to create a seam,
-   not a rewording. */
-const COMPOSITE_APPLY = {
-  front:
-    " Apply the LEFT PANEL (FRONT view) design to the FRONT of their body: extract that panel's" +
-    " exact texture, print, graphic, logo, lettering and colour and render it on the front of the" +
-    " garment they are wearing - its front panel, collar, closure and hemline - keeping every element" +
-    " at the SAME size, height and horizontal position it has in that panel." +
-    " The RIGHT PANEL does not exist for this frame: none of its content may appear anywhere in the output.",
-  back:
-    " Accurately EXTRACT the exact garment texture and print from the RIGHT PANEL (BACK view) and RENDER" +
-    " IT ONTO THE BACK of the person: its back print, graphic, logo, lettering, colour blocking, rear yoke," +
-    " back collar and rear hemline, each kept at the SAME size, height and horizontal position it has in" +
-    " that panel, wrapping naturally around the torso and following the fabric as they move." +
-    " The LEFT PANEL (FRONT view) does not exist for this frame: its chest print, front logo, front" +
-    " lettering, buttons, placket, zipper and front pockets must NOT appear anywhere on the back you render.",
-};
-
-/* THE 90-DEGREE POSE LIE, and why the profile variants exist.
-
-   The orientation lock is BINARY (front | back) and, by design, it holds through a turn:
-   skinRatioVote()'s dead band abstains on an ambiguous frame rather than voting, so at a
-   true side-on pose the lock simply stays wherever it last was. Everything about that is
-   correct for choosing an ASSET - a profile frame genuinely does not justify flipping the
-   reference.
-
-   What was not correct is that the pose sentence rode along with it. At 90 degrees the
-   prompt asserted "The person is FACING FORWARD, the front of their body toward the
-   camera" (or, from the other lock, "has TURNED AROUND ... no face visible") while the
-   pixels showed the shopper edge-on. Lucy regenerates every frame from the prompt plus
-   that frame, so a categorical pose claim that contradicts the input is not a harmless
-   inaccuracy: reconciling it means rotating the torso back to the asserted view, and a
-   torso rendered as front-on has no profile depth left in it. The shopper's real
-   front-to-back volume - which is ONLY visible edge-on, and is exactly what a pillow
-   under a shirt is testing - is what gets normalised away. That is the "it falls back to
-   a default body" report.
-
-   So the profile poses do two things the front/back poses cannot: they describe the
-   rotation truthfully instead of asserting a facing, and they explicitly forbid the
-   de-rotation. They still name the locked side, because which half of the garment is
-   toward the camera is still known and still steers the panel that APPLY selects. */
-const COMPOSITE_POSE = {
-  front: " The person is FACING FORWARD, the front of their body toward the camera.",
-  back:
-    " The person has TURNED AROUND and is presenting their BACK to the camera - rear view, the back of" +
-    " their body toward you, no face visible.",
-  profileFront:
-    " The person is TURNED TO THEIR SIDE and is seen EDGE-ON, in side profile, at roughly a right angle" +
-    " to the camera - you are seeing the side of their body, with the front of the garment facing off to" +
-    " one side rather than toward you. Render them at the exact rotation shown in the live frame:" +
-    " do NOT rotate, straighten or re-pose them back toward the camera, and do NOT re-render this as a" +
-    " front-facing shot.",
-  profileBack:
-    " The person is TURNED TO THEIR SIDE and is seen EDGE-ON, in side profile, at roughly a right angle" +
-    " to the camera - you are seeing the side of their body, part-way through turning away, with the back" +
-    " of the garment facing off to one side rather than squarely away from you. Render them at the exact" +
-    " rotation shown in the live frame: do NOT rotate, straighten or re-pose them, and do NOT re-render" +
-    " this as a square rear shot.",
-};
-
-const COMPOSITE_SELECT = {
-  front: COMPOSITE_POSE.front + COMPOSITE_APPLY.front,
-  back:  COMPOSITE_POSE.back  + COMPOSITE_APPLY.back,
-};
-
-/* Same panel contract, same texture source, truthful pose - selected when the watcher
-   reports the shopper is edge-on. Pairs with SIDE_PROFILE_DEPTH, which supplies the
-   positive instruction about what the silhouette edge means; this one only stops the
-   prompt from asserting a facing that is not there. */
-const COMPOSITE_SELECT_PROFILE = {
-  front: COMPOSITE_POSE.profileFront + COMPOSITE_APPLY.front,
-  back:  COMPOSITE_POSE.profileBack  + COMPOSITE_APPLY.back,
-};
-
-/* Trimmed photorealism tail for composite mode, replacing QUALITY_SUFFIX + HEM_DETAIL.
-   Two reasons, both specific to a two-panel reference:
-     • LENGTH. Those two constants alone run ~660 characters of boilerplate that competes
-       with the panel contract for the model's attention (see buildCompositePrompt).
-     • CONTRADICTION. HEM_DETAIL says "preserve the garment's printed graphics, logos and
-       text at their original scale, proportion and relative position" without naming a
-       panel. Against a reference holding TWO sets of graphics that reads as "render both"
-       - the double-logo symptom that got the previous stitcher removed in 23f5953. The
-       per-panel form of that same instruction already lives inside COMPOSITE_SELECT,
-       scoped to the one panel actually in play. */
-const COMPOSITE_QUALITY =
-  ", photorealistic real-world fabric texture with visible seams and stitching, natural" +
-  " lighting matching the user's room, and natural material physics - no glitching, banding," +
-  " tearing or unnatural structural folds";
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   TOKEN BUDGET - why every clause above this line was rewritten into a phrase
-   ───────────────────────────────────────────────────────────────────────────
-   Decart rejects an over-long prompt outright:
-
-     "Prompt is too long: 1376 tokens (maximum 226, including the end-of-sequence
-      token). Please shorten the prompt."
-
-   That is not a soft quality signal - set() fails and the shopper gets NO garment.
-   Measured against that 226-token ceiling (~904 characters at English prose's ~4
-   chars/token), what this file had been assembling was:
-
-       composite square-on   6,718 chars  ~1,680 tok    7.4x over
-       composite edge-on    10,077 chars  ~2,520 tok   11.2x over
-
-   SIDE_PROFILE_DEPTH alone was 454 tokens - twice the entire budget for a single
-   clause. So this could not be a trim. Every long constant this file spent its
-   history growing (each one written against a real, reproduced regression) had to
-   collapse into one short directive, and several had to go entirely.
-
-   WHAT WAS KEPT, and the order is the triage. The budget buys roughly a dozen short
-   directives, so they are ranked by what breaks without them and dropped from the
-   bottom when a particular garment's description runs long:
-
-     CORE  panel contract, panel selection, pose, the substitution itself, and -
-           edge-on only - body depth. Without any of these the render is simply
-           wrong (wrong half of the garment, wrong rotation, flattened body).
-     HIGH  body fidelity and model-agnostic extraction: the two most-reported
-           failures ("it slimmed me", "it gave me the model's shoulders").
-     MED   opposite-layer lock, background/person lock, lateral wrap.
-     LOW   rotation continuity, fit modifier.
-     TRIM  temporal stability and photorealism - the model's own priors already
-           favour both, so these are the cheapest to lose.
-
-   WHAT WAS LOST, stated plainly because it is real: the enumerated negatives are
-   gone. STRICT_INPAINT's per-item list, BACK_TAIL's explicit "do not copy the front
-   print onto the back", IGNORE_SOURCE_ARTIFACTS' watermark/badge list, and
-   PROFILE_ANOMALY_GUARD entirely. Each was written because naming a failure
-   explicitly is what stopped it. At 226 tokens there is no room to name them, so
-   these prompts are a weaker instrument than what they replace - they are simply the
-   strongest instrument that FITS. If a specific regression returns, the fix is to buy
-   its directive back by dropping something in TRIM, not to grow the prompt.
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-/* Drop order. CORE is never shed - if a prompt cannot fit with CORE alone, it is
-   truncated instead (see fitPrompt), because a slightly clipped prompt still renders
-   while a rejected one renders nothing. */
-const P = Object.freeze({ CORE: 0, HIGH: 1, MED: 2, LOW: 3, TRIM: 4 });
-
-/* ╔══════════════════════════════════════════════════════════════════════════╗
-   ║  STRICT IMAGE-ONLY CONDITIONING - one static string, for every dispatch.  ║
-   ╚══════════════════════════════════════════════════════════════════════════╝
-   THE REPORTED FAILURE: a Spider-Man graphic tee, selected in the catalog and
-   correctly delivered to the wire, rendering as a tuxedo with a bowtie. Twice - the
-   first fix (an image-first anchor, with the garment description removed but the
-   structural clauses kept) did not stop it.
-
-   THE MECHANISM. Decart's realtime set() takes { prompt, image, enhance } and NOTHING
-   else - no negative_prompt, no image-strength, no ControlNet weight (verified against
-   @decartai/sdk@0.1.5 setInputSchema). The ONLY lever this app has over how hard the
-   reference image is weighed against the text is HOW MUCH TEXT THERE IS. Every
-   remaining clause, however structural, is another token competing with the pixels for
-   the model's attention, and the first fix left roughly a dozen of them.
-
-   THE MODE THIS IMPLEMENTS: the prompt stops being generated at all. It is one frozen
-   string, byte-identical on every dispatch, for every garment, every angle, every pose
-   and every shopper. It cannot contradict the reference because it says nothing the
-   reference could contradict, and it cannot dilute it because there is nothing left to
-   shed. The SDK requires a non-empty prompt, so this is the smallest thing that
-   satisfies that requirement while pointing at the asset.
-
-   WORDING IS PRODUCT-SPECIFIED - do not paraphrase, do not interpolate, do not append.
-   `${...}` inside this string is how a description gets back in, one field at a time.
-
-   ── REVISION 5: VOLUME PERSISTENCE, AND THE HEAD-ON CASE ─────────────────────
-   TWO REPORTS, from video rather than stills, which is why they are new:
-
-     · A session that starts side-on with correct stomach volume LOSES it part-way
-       through a 360-degree turn, ending flat and slim.
-     · A session that starts head-on renders flat from the first frame - no frontal
-       convexity at all, the garment sized off shoulder width alone.
-
-   ── READ THIS BEFORE TUNING THE PERSISTENCE SENTENCE ─────────────────────────
-   The reported root cause is "Decart's model state is resetting its 3D depth memory
-   across frames". That is close, but it is not a reset: THERE IS NO MEMORY TO RESET.
-   Lucy regenerates every frame independently. There is no cross-frame state, no seed and
-   no motion-guidance parameter exposed by @decartai/sdk@0.1.5 - realtime connect takes
-   model/fps/width/height/mirror/resolution/codec, and set() takes exactly
-   { prompt, enhance, image }. This file has that written down already, in
-   COMPOSITE_TEMPORAL's comment, and it is the single most important limit to hold in mind
-   here: NO PROMPT CAN CREATE PERSISTENCE THIS PIPELINE DOES NOT HAVE.
-
-   What the sentence CAN do, and does, is bias each independently-generated frame toward
-   the same interpretation - which is exactly why the failure looks progressive. Every
-   frame re-derives the body from the live pixels; a square-on frame carries strong volume
-   evidence, and a mid-turn frame is foreshortened and partly occluded, so the evidence
-   weakens and the model falls toward its prior, which is slim. Naming the quantities that
-   must not change (abdomen depth, waist volume, torso thickness) and the transition they
-   must survive (360-degree rotation, mid-stream) raises the floor on those weak-evidence
-   frames. It is a per-frame bias, not a temporal filter, and it cannot be one - so if
-   volume still decays mid-turn, the answer is NOT stronger persistence language. It is
-   that the weak-evidence frames need better evidence, which is a pipeline change (the
-   reference, the crop, the input resolution), not a prompt change.
-
-   THE HEAD-ON SENTENCE is the more tractable of the two, and it fills a real gap. Every
-   revision since the abdomen reports began has described volume in terms a PROFILE makes
-   visible - depth, contour, silhouette. Head-on, none of those are measurable from the
-   frame: the stomach's projection is toward the camera, along the axis with no extent in
-   a 2D image, so a model with nothing else to go on sizes the garment off shoulder width
-   and renders flat. That is not the model failing to follow an instruction; it is the
-   instruction not applying. The fix names what frontal volume actually looks like -
-   convexity, forward hem extension, lighting falloff - which are the 2D cues a viewer
-   reads as depth, and the only ones available at 0 degrees.
-
-   ── WHAT THIS REVISION REINTRODUCES, and it is a knowing risk ────────────────
-   "Natural fabric drape" and "forward hem extension" are the vocabulary revision 4
-   removed, because drape-and-hem language is also how a designer describes a knotted or
-   gathered hem - and that produced the front-knot artifact. They are back because the
-   head-on case cannot be described without them: convexity has to be rendered as
-   something, and drape and hem projection are what it is rendered as.
-   Two things make this less exposed than revision 3 was: the language is SCOPED to
-   front-facing views rather than stated as a general physics goal, and the structural
-   boundary ("a closed back and normal un-knotted hem") is still on the wire immediately
-   after it. If the knot returns, that scoping is the first thing to tighten - not the
-   boundary, which is already as explicit as it can be.
-
-   NOTE ALSO: revision 4's four-artifact enumeration ("do NOT generate front knots, tied
-   fabric, open slits, or floating back flaps") is gone, leaving only the positive
-   boundary. That is exactly the step revision 4's own risk note said to take if the named
-   negatives proved counterproductive, and it happens to be the right shape for a prompt
-   that has otherwise grown - the boundary sentence still states the correct structure
-   completely on its own, which is why it was written to lead its own enumeration.
-
-   ── REVISION 4: THE PHYSICS LANGUAGE STARTED STYLING THE GARMENT ─────────────
-   THREE REPORTS, and the first two are the same mechanism seen from two sides.
-
-     · A KNOT tied into the front hem, over the abdomen.
-     · The BACK flaring open into loose floating fabric on a turn.
-
-   Revision 3's third sentence asked for "realistic textile drape, natural tension lines,
-   and proper 3D volume wrapping". Every one of those words is also the vocabulary of
-   GARMENT STYLING - drape, gathering, tension are what a designer says about a knotted
-   hem or an open-backed cut - and a diffusion model has no way to know we meant physics
-   rather than construction. Asked for drape over a protruding stomach with no statement
-   of what the garment's STRUCTURE is, the most probable way to produce visible drape is
-   to give the garment somewhere to drape FROM: a knot, a gather, an open back. It was
-   doing exactly what it was told, and what it was told was ambiguous.
-
-   So this revision states the STRUCTURE first and asks for the physics only as a smooth
-   wrap. "Standard, continuous t-shirt" is the frame; "normal, flat, un-knotted hem and a
-   completely closed back" is the boundary; the four named artifacts are the enumeration.
-   The physics vocabulary that invited the styling reading is gone entirely - what
-   survives is "smoothly wrap ... around the subject's true body volume and stomach",
-   which asks for the same outcome without ever naming a construction technique.
-
-     · THE THIRD REPORT: the fit only came out right when the session STARTED at 90
-       degrees; face-on it flattened. Revision 3 said "from all angles", which is true and
-       useless - a model has no reason to treat an unenumerated range as including the
-       case it is currently getting wrong. Both angles are now named explicitly, 0-degree
-       front alongside 90-degree side, so neither is the default the other is measured
-       against.
-
-   ── TWO THINGS THIS REVISION TRADES AWAY, recorded because they are real ──────
-     1. THE EXPLICIT BODY-DISCARD IS GONE. Revision 3 led with "completely ignoring the
-        original model's body size, chest, and waist dimensions" - DENSE.modelAgnostic,
-        stated outright. What replaces it is "Preserve ONLY the reference image's graphics,
-        fabric texture, and color", which implies the same thing by exhaustion but never
-        says it. That is a weaker instrument against the "it gave me the e-commerce
-        model's shoulders" report, and it is the FIRST thing to restore if that returns:
-        DENSE.modelAgnostic is still on file, and appending its sentence is a one-line
-        edit. Recorded here rather than discovered later.
-     2. THE EXTRACTION DIRECTIVE NO LONGER LEADS. Revision 3 moved it to the front
-        deliberately, on this file's oldest lesson - leading tokens dominate - and it is
-        now the closing sentence. The lead is still a reference-bound instruction ("a
-        standard, continuous t-shirt FROM the reference image"), so the asset is anchored
-        in the first clause either way; what moved is the isolation half. If the garment
-        itself starts drifting again (wrong colour, wrong print), this ordering is the
-        first thing to look at, before adding any words.
-
-   ONE MORE, AND IT IS THE RISKIEST PART OF THIS STRING: "knots", "tied fabric", "open
-   slits" and "floating back flaps" are NAMED NEGATIVES. This file's record is that naming
-   a rendering FAULT is safe (a stretch, a float - there is no object to steer toward)
-   while naming a GARMENT is not (the tuxedo outlived two prompts that banned it by name).
-   These sit between: a knot is not a garment type, but it is more object-like than any
-   negative shipped since the tuxedo list. They are named because the artifacts are already
-   appearing and naming the failure is what has historically stopped it - but if knots
-   persist or spread, deleting the enumeration and keeping only the positive boundary
-   ("Maintain a normal, flat, un-knotted hem and a completely closed back") is the next
-   thing to try, NOT a longer list.
-
-   ── REVISION 3: THE REFERENCE IS A 2D MATERIAL, NOT A DRESSED PERSON ─────────
-   THE SYMPTOM THAT SEPARATES THIS FROM THE REVISION BELOW: the previous wording asked
-   the garment to conform to the shopper's real abdomen and it did - by STRETCHING. A
-   flat 2D projection pulled forward over a torso that was still rendered thin, rather
-   than cloth wrapping a volume. The shirt looked painted onto a protrusion, or floating
-   in front of one.
-
-   WHY THE PREVIOUS WORDING PERMITTED IT. It said "conform to the user's abdomen depth"
-   without ever saying what the reference IS, so the model kept reading the packshot as a
-   photograph of a dressed person - complete with that person's 3D geometry - and then
-   deformed the whole assembly to fit. Deforming a thin body to cover a wide one is a
-   stretch. There was no instruction to discard the source geometry and treat what remains
-   as material, so the strongest available reading was the literal one.
-
-   THE FIX IS AN ORDERING CHANGE AS MUCH AS A WORDING ONE. The extraction sentence now
-   LEADS, and this file's whole record says leading tokens dominate: the first thing the
-   model is told is that the reference is fabric texture, colour and pattern - a 2D
-   material sample - and that the original model's size, chest and waist are to be ignored
-   outright. Only once that is established does the drape instruction follow, so what gets
-   draped is cloth rather than a re-proportioned photograph.
-
-   THE THIRD SENTENCE IS NEW and is the physics the first two only imply: textile drape,
-   natural tension lines, 3D volume wrapping, "whether large or small" (which removes the
-   assumption rather than arguing with it), and the two reported artifacts named directly -
-   2D stretching and floating. Naming the specific wrong output is this file's oldest
-   working mechanism and it is safe here for the same reason "flat torso" was: these are
-   RENDERING FAULTS, not garments, so there is no object for the sampler to steer toward.
-
-   ── REVISION 2: BODY CONFORMATION FOLDED IN ──────────────────────────────────
-   The first version of this string said only "render the provided asset, invent nothing".
-   That fixed the garment but exposed the BODY: a shopper with a real waistline (the test
-   case is a pillow under a shirt) got the slim proportions of the e-commerce model
-   wearing the shirt in the catalog photo, and the fabric hovered off their actual
-   silhouette instead of draping over it. The cause is the same unstated-region mechanism
-   this file documents everywhere - a catalog reference is almost always model-worn, so
-   there are TWO bodies in the conditioning and nothing said which one to fit.
-
-   The three directives that used to cover this were separate, shed-able clauses -
-   DENSE.bodyFidelity, DENSE.modelAgnostic and DENSE.profileLateral - and all three were
-   retired when the prompt froze. They are back, but INSIDE the frozen string rather than
-   beside it, which is the whole point: they cannot be shed, cannot be reordered, and
-   cannot be separated from the instruction they qualify.
-
-   ── THE FIVE SENTENCES ON THE WIRE TODAY ──────────────────────────────
-     1. STRUCTURE + THE VOLUME CLAIM: "a standard t-shirt from the reference image ... with
-        strictly persistent 3D body volume". Structure still leads (revision 4's fix for
-        the knot and the open back), and the persistence claim is attached to it rather
-        than left for a later sentence, so the very first thing stated about this render is
-        that it has a body with volume in it.
-        THE ONE COMPROMISE, unchanged from revision 4: "t-shirt" is a garment NOUN, of
-        exactly the kind SHIRT_NOUN/SUBTYPE_PROMPT were retired for naming. Correct for the
-        upper-body catalog and every case reported so far; WRONG for lower_body items
-        (Nimbus) and long-sleeve tops, where it asserts what the reference contradicts. If
-        trousers render as a shirt, this noun is the cause and "garment" is the one-word
-        fix - see SUBTYPE_PROMPT's retired-noun note for the mechanism.
-     2. PERSISTENCE: the exact same abdomen/stomach depth, waist volume and torso thickness
-        through all 360-degree rotations, never flattening or resetting mid-stream. Three
-        quantities named individually because "volume" alone is satisfiable by any one of
-        them, and the transition named explicitly because the failure is progressive rather
-        than static. Read the limit above before touching this: it is a per-frame bias, not
-        a state lock, and it cannot be made into one from here.
-     3. FRONTAL CONVEXITY: at 0 degrees, render the stomach's forward volume through fabric
-        drape, forward hem extension and lighting falloff. The gap every previous revision
-        left - depth, contour and silhouette are all profile-visible quantities, and none of
-        them is measurable head-on, where the projection points at the camera. These three
-        are the 2D cues that read as depth, and the only ones available at that angle.
-     4. BOUNDARY: a closed back and a normal un-knotted hem. Revision 4's four-artifact
-        enumeration is gone; this is the positive half it was deliberately written to lead,
-        and it states the correct structure completely on its own.
-     5. EXTRACTION: use ONLY the reference's graphics, fabric texture and colour. The
-        provenance split, still reduced to its positive half - it implies the body-discard
-        by exhaustion but does not state it. See "two things this revision trades away"
-        under revision 4; that trade is unchanged and DENSE.modelAgnostic is still the
-        one-line restore.
-
-   NOTE WHAT LEFT, across revisions: the enumerated "without inventing any tuxedos, suits,
-   or unrequested garments" tail, revision 2's "do NOT copy the source model's body frame or
-   force a flat torso", and revision 3's physics vocabulary ("realistic textile drape,
-   natural tension lines") - the last because it was read as STYLING and produced the knot.
-   The tuxedo tail is deliberate and is this file's own recorded next step: with no
-   negative_prompt field a named garment ships in the POSITIVE prompt where the sampler can
-   steer toward it, and the tuxedo outlived two versions that named it. If invented garments
-   return, do not re-add that noun list; re-read the DENSE table's assetLock comment for why
-   it made things worse.
-
-   ── WHAT WENT WITH IT, and how to get any of it back ─────────────────────────
-   Every clause the builders assembled is retired from the prompt path. They are all
-   still on file (see the DENSE table below, and the RETIRED block above it) with the
-   reasoning that produced them, because each one is a reproduced regression:
-
-     · the garment description  colour word + subtype noun, interpolated from catalog
-                                metadata. The original tuxedo cause - a text
-                                description is something a diffusion model can satisfy
-                                from its own prior instead of from the reference.
-     · assetLock                the enumerated ban ("never invent a ... suit, TUXEDO,
-                                tie, BOWTIE"). With no negative_prompt field those
-                                nouns shipped in the POSITIVE prompt, where a named
-                                garment is a token the sampler can steer toward.
-     · contract + select        the FRONT|BACK panel contract. Retiring this is what
-                                forces COMPOSITE_DEFAULT to false - see its comment; a
-                                split reference is unreadable without the text that
-                                explains it, and shipping one anyway is how the
-                                23f5953 double-print bug comes back.
-     · pose / poseProfile       front/back/edge-on. The reference asset itself now
-                                carries the orientation (the watcher swaps the photo),
-                                so the pose sentence is the model's job to read off
-                                the live frame, which is where it always came from.
-     · profileLateral           the 90-degree flank/depth directive. SUPERSEDED, not
-                                simply lost: the frozen string's "from all angles,
-                                including 0-degree front and 90-degree side views" states
-                                the same coverage with no pose flag to gate it - which
-                                matters more than it reads, since nothing dispatches on a
-                                profile transition any more. Same for bodyFidelity
-                                ("the subject's true body volume and stomach"). NOT the
-                                same for modelAgnostic - revision 4 reduced that one to an
-                                IMPLICATION ("Preserve only ... graphics, fabric texture,
-                                and color"), which is the weakest it has been. See the
-                                revision notes above; it is first on the restore list.
-     · inpaintLock              face/skin/hands/background passthrough. THE LARGEST
-                                LOSS and the one to restore first if the model starts
-                                repainting the shopper's room or face: nothing else
-                                stands between this prompt and a regenerated scene.
-     · keepTop / keepBottoms    the opposite-layer lock.
-     · ignoreFurniture          the "don't paint the panel divider onto the shirt" ban.
-     · fitSentence              RESTORED - see imageOnlyPrompt()'s SIZE-OVERRIDE RESTORE
-                                comment. Was the size-override selector's only route into
-                                the render; the chosen size now reaches Decart again, at
-                                P.MED, via getFitModifier()'s garment/fabric-only wording.
-
-   TO RESTORE ONE: it is a two-line change - reinstate fitPrompt() in the builder that
-   needs it and add [P.CORE, DENSE.<clause>] beside IMAGE_ONLY_PROMPT. fitPrompt(),
-   clampPromptForWire() and the whole DENSE table are deliberately left intact for
-   exactly that. Restore ONE at a time and re-test: the entire premise of this mode is
-   that clause count is what was drowning the image. */
-/* ── THE CATEGORY BRANCH - "I tried on jeans and it put the model's shirt on me" ──
-   The frozen string above was ONE anchor for the whole catalog, and it opened by naming
-   a t-shirt. On a trouser product that first sentence is a direct contradiction: the
-   prompt says t-shirt, the reference photographs a model wearing a shirt AND trousers,
-   and NOTHING told the model which half of that reference was the product. Lucy took the
-   whole visual, so the source model's shirt replaced the shirt the shopper was still
-   wearing on camera. run.mjs's suite index already named this gap before it was closed
-   ("an 'upper garment' anchor on a trouser reference is the same contradiction").
-
-   WHY THE ANCHOR AND NOT A RESTORED CLAUSE. KEEP_TOP/KEEP_BOTTOMS still exist in the
-   DENSE table and would say much of this - but they were retired because clause COUNT was
-   drowning the image, and adding one back re-enters that competition. Folding the
-   opposite-layer lock INTO the anchor costs no extra clause: the sentence that has to
-   name the target garment anyway is the same sentence that names what not to touch. It
-   also cannot be shed, because it is the anchor.
-
-   THE PROVENANCE HALF IS LOAD-BEARING, not a restatement. "Preserve the live upper
-   garment" alone still leaves the reference's shirt as unclaimed territory, and an
-   unstated region is precisely what this file's history keeps recording as the thing that
-   gets reinterpreted (see STRICT_INPAINT's comment). So the bottoms branch names the
-   REFERENCE as the thing not to copy an upper garment from, not just the live frame as
-   the thing to keep.
-
-   READ THE LAST BLOCK IN THIS RUN FOR THE CURRENT WORDING. The paragraph above is the
-   record of WHY the lock lives inside the anchor rather than beside it, and that
-   reasoning still holds. The sentences it describes do not - two revisions have rewritten
-   both anchors since. What bottoms carries today is region naming inside its lead ("the
-   live subject's CURRENT lower-body contour"); the explicit pin on the opposite layer
-   came off with the dynamic-drape revision and is retired as KEEP_OPPOSITE_LAYER. */
-/* ── REVISION: STRICT 1:1, BOTH BRANCHES (SUPERSEDED - see DYNAMIC BODY below) ────
-   HISTORY, NOT THE LIVE WORDING. This block is the record of the three reports that
-   collapsed both anchors to a 1:1 reference lock, and of the fourth that put the
-   lower-body scoping back on bottoms. The dynamic-drape revision further down replaced
-   both strings; what survives from here is the scoping (folded into the new bottoms lead)
-   and the retirement list below, which is still accurate about what is off the wire.
-   THE THIRD REPORT IN THIS SEQUENCE, and a different failure from the first two. The
-   first was the WRONG REGION (a t-shirt anchor on a trouser reference). The second was
-   the WRONG GARMENT (generic black shorts instead of the photographed white ones). This
-   one is the RIGHT garment with INVENTED DETAIL - textures and design elements the
-   reference never contained.
-
-   So the clamp changed shape. "without inventing new shorts" only forbade SUBSTITUTION;
-   it said nothing about embellishing the correct garment. The replacement bans all three
-   operations explicitly - invent, add, alter - because adding a stripe and altering a
-   stripe are different edits and only the first was previously excluded.
-
-   BOTH BRANCHES ARE COLLAPSED, AND THE CLAMP IS SYMMETRIC. The previous revision cut
-   bottoms only, on the principle of one branch at a time on evidence; tops kept its
-   seven-sentence assembly. This finishes the job at the product owner's direction: every
-   word either string says about the GARMENT is now the same word.
-
-   THE SCOPING IS NOT SYMMETRIC, and that is the one asymmetry left. The collapse also
-   took the opposite-layer lock, which re-opened the shirt-replacement report through the
-   bottoms branch - the one it was filed against - so 69 characters of lower-body scoping
-   went back on THERE and nowhere else. Same rule as every revision before it: one branch
-   at a time, on evidence. Full detail in the first bullet below.
-
-   ── WHAT THIS REMOVES, AND WHY IT IS WRITTEN DOWN HERE ──────────────────────────
-   Every clause below is a reproduced regression, and all of them came off the wire in
-   this revision. ONE OF THEM IS BACK - read the first bullet before the rest:
-
-     · the OPPOSITE-LAYER LOCK - SPLIT IN TWO by the revisions since. Its job was the fix
-       for the FIRST report in this sequence: trying on trousers putting the catalog
-       model's shirt on the shopper. Collapsing it away left the scoping implicit - "the
-       EXACT shorts/pants ... onto the subject" names a garment but no region - and the
-       bottoms branch is the exact configuration that report was filed against, so the
-       scoping went back on there and nowhere else.
-       WHERE EACH HALF LIVES TODAY: the REGION NAMING survives, folded into the new
-       bottoms lead ("the live subject's CURRENT lower-body contour"). The explicit PIN on
-       the opposite layer does not - it came off with the dynamic-drape revision and is
-       retired as KEEP_OPPOSITE_LAYER, one line from being back.
-       THE TOPS BRANCH IS STILL IMPLICITLY SCOPED. No shirt-replacement report has been
-       filed through it - the reported failure is a trouser try-on repainting the top,
-       not the inverse - so tops keeps the shorter string on the same one-branch-at-a-
-       time-on-evidence principle the bottoms collapse itself was made under.
-       IF SHIRT-REPLACEMENT RETURNS, THIS IS THE CLAUSE TO RESTORE FIRST - it is the only
-       loss here that re-opens a previously fixed report rather than degrading fidelity,
-       and on tops the restore is the bottoms sentence with the two regions swapped
-       (or KEEP_TOP, declared further down this file).
-     · VOLUME_PERSISTENCE / FRONTAL_VOLUME - "it slimmed me down", and the head-on
-       stomach-projection gap.
-     · TEMPORAL_PERSISTENCE - the prompt's half of the late-entry presence fix. The gate
-       and the watcher still run for both categories, so the mechanism survives.
-     · CLOSED_BACK_HEM - the knotted-hem and open-back-flap artifacts. Still assembled on
-       the full-look path, which was never collapsed; off the wire on both single-garment
-       branches.
-     · REFERENCE_EXTRACTION - superseded rather than lost: the anchor's own fidelity
-       sentence states the same provenance rule ("Strictly preserve the original ...
-       texture, pattern, and color" today; "Exactly match color, pattern, logos, and cut"
-       under the 1:1 revision this block was written for).
-
-   THE RESTORE PATHS ARE NOW UNIFORM, which they were not when this block was written.
-   VOLUME_PERSISTENCE, FRONTAL_VOLUME, TEMPORAL_PERSISTENCE, CLOSED_BACK_HEM,
-   REFERENCE_EXTRACTION and - since the dynamic-drape revision named it - KEEP_OPPOSITE_
-   LAYER are each on file as a constant, so every restore here is one line in
-   imageOnlyPrompt(). The budget is not the constraint: tops runs 338 characters and
-   bottoms 320 against a 650 ceiling. Anything bought back is a deliberate choice about
-   TEXT VOLUME COMPETING WITH THE REFERENCE, which is the mechanism every fidelity report
-   in this sequence shares. Add one at a time, and re-test against a live session. */
-
-/* The strict lock. STILL LIVE - lookAnchorPrompt() carries it - but no longer on the two
-   single-garment branches, which the dynamic-drape revision below rewrote around a
-   different fidelity sentence. Kept in one constant because more than one anchor uses it
-   and two copies of a product-specified sentence are two places for it to drift. The
-   first sentence supersedes REFERENCE_EXTRACTION (same provenance rule, and it names
-   logos and cut); the second is the hallucination clamp, banning all three edits -
-   invent, add, alter - because adding a stripe and altering a stripe are different
-   operations. Leading space: it is appended to an anchor, never used alone. */
-const STRICT_REFERENCE_LOCK =
-  " Exactly match color, pattern, logos, and cut." +
-  " Do NOT invent, add, or alter any details.";
-
-/* ── REVISION: DYNAMIC BODY, STATIC GARMENT ──────────────────────────────────────
-   THE REPORT: a shopper who is fitted at 0 degrees and then turns 90, or who adds real
-   profile volume (a cushion under the shirt, a belly the front view does not show), gets
-   the ORIGINAL drape stretched and warped over the new shape instead of a garment
-   re-draped over it. The fabric smears; the cut distorts.
-
-   THE DIAGNOSIS IS A SPLIT THIS FILE HAD NEVER STATED. Two things are being fused every
-   frame, and they have opposite requirements:
-     · THE GARMENT is STATIC and INVARIANT. One reference image, one cut, one colour, one
-       print, for the whole session. Nothing about the shopper may change it.
-     · THE BODY is DYNAMIC and VARIABLE. Its contour, depth, volume and orientation are
-       different in every single frame, and the frame is the only place they exist.
-   Every previous revision of these anchors said "overlay and fit ... onto the subject" -
-   a subject with no tense. A model reading that has no instruction to re-derive anything
-   per frame, so the cheapest completion is to keep the drape it already produced and
-   deform it to the new outline. That is the reported artifact, restated.
-
-   WHAT THE NEW WORDING DOES, sentence by sentence, on both branches:
-     1. binds to the EXACT STATIC garment from the reference (the invariant half), and
-        names the target as the subject's CURRENT contour IN THIS FRAME (the variable
-        half). "Static" and "current" in one sentence is the whole split;
-     2. instructs an ADAPTATION rather than a transform - silhouette, angle, depth and
-        volume - and names the two failure modes it must not use to get there
-        (stretching, warping / distorting);
-     3. re-asserts the invariant on the attributes a re-drape is most likely to smear.
-
-   IT IS PAIRED WITH RUNTIME MACHINERY, and neither half works alone. Text cannot make a
-   model re-read a body it is never re-conditioned on: under strict image-only prompting
-   the payload is byte-identical from one dispatch to the next, so applyGarment()'s no-op
-   skip means a re-anchor sends nothing at all. The CONTINUOUS BODY TOPOLOGY monitor -
-   makeBodyTopologyTracker(), sampled by startPresenceWatcher(), dispatched by
-   reconditionForTopology() - is what makes this sentence true: it watches the live
-   skeleton and forces a real re-conditioning dispatch when the body has actually moved
-   away from the shape the current render was drawn against. Read the two together;
-   deleting either leaves the other lying.
-
-   ── WHAT THE NEW WORDING GAVE UP, both branches ─────────────────────────────────
-   Written down because both are reproduced regressions and this is the file that has to
-   admit it if either returns:
-     · THE HALLUCINATION CLAMP ("Do NOT invent, add, or alter any details.") is off the
-       single-garment branches. What replaces it is weaker by construction: "Strictly
-       preserve the original texture, pattern, and color" forbids CHANGING the garment
-       but does not forbid ADDING to it. If invented detail comes back, the restore is one
-       line - append STRICT_REFERENCE_LOCK to the anchor - and the constant is right above
-       so it never has to be rewritten from memory.
-     · THE OPPOSITE-LAYER PIN on bottoms ("Keep the subject's upper body and background
-       unmodified.") is off with it. The primary half of that fix SURVIVES - the bottoms
-       lead still names the region ("the live subject's CURRENT lower-body contour"), and
-       an unscoped anchor was the actual configuration the shirt-replacement report was
-       filed against - but the explicit pin on the opposite layer is gone. Retired as
-       KEEP_OPPOSITE_LAYER below rather than deleted, so that restore is one line too.
-   Budget is not the constraint for either: tops runs 338 characters and bottoms 320
-   against a 650 ceiling. The constraint is the one every report in this sequence shares -
-   TEXT VOLUME COMPETING WITH THE REFERENCE IMAGE. Add one at a time, re-tested live. */
-
-/* Retired with the dynamic-drape revision, kept verbatim so its restore is genuinely one
-   line (`[P.HIGH, KEEP_OPPOSITE_LAYER]` in imageOnlyPrompt's bottoms branch) rather than
-   a re-derivation. Bottoms only: no report has ever been filed of a TOP try-on repainting
-   the shopper's live trousers, so there has never been a tops equivalent to retire. */
-const KEEP_OPPOSITE_LAYER = "Keep the subject's upper body and background unmodified.";
-
-/* ── FRONT CLOSURE - "the button-down rendered wide open" ────────────────────────
-   REPORTED: a closed button-down shirt rendered hanging open, exposing the shopper's
-   chest. This is the invented-detail class, not the tuxedo class - the right garment,
-   rendered in a state the reference never showed - so it is the class the anchor's own
-   restore note says a clause may be bought back for. Bought back per the procedure that
-   note prescribes: ONE part, added at P.HIGH, re-tested live.
-
-   STATED POSITIVELY, AND THAT IS NOT A STYLE CHOICE. The obvious wording - "do not
-   render open or unbuttoned" - is the exact shape that produced the tuxedo: Decart's
-   set() has no negative_prompt field (only { prompt, image, enhance }), so a negation
-   ships inside the POSITIVE prompt, where "open" and "unbuttoned" are tokens the sampler
-   can steer toward. image-first.test.mjs's header records DENSE.assetLock failing this
-   way when it spelled out "never invent a ... TUXEDO, BOWTIE". Naming the state we WANT
-   costs the same budget and cannot be sampled backwards.
-
-   PRODUCT-NEUTRAL, so it does not open a third prompt axis. It says nothing about
-   whether this garment HAS buttons: on a tee there is no closure and the sentence asks
-   for nothing, while on a button-down or a zip-through it pins the fastening. Wording it
-   per-product would need a has-buttons axis, which would break the frozen-anchor design
-   the category/angle axes are pinned to - and an "unbutton the placket" instruction on a
-   t-shirt reference is the same contradiction as an "upper garment" anchor on a trouser
-   reference, which this file already carries a bug report for.
-
-   TOPS + FRONT ONLY. A closure is a front-of-garment feature, so it is not spent on the
-   bottoms branch, and not on the back anchor where it is not in view. Both remain fully
-   determined by (category, angle) - no new axis. */
-const FRONT_CLOSURE_LOCK =
-  "Reproduce the reference's front closure exactly: any buttons, zip or placket stay" +
-  " fully fastened, sitting flat and closed across the chest as shown.";
-
-/* ── PLAIN KNIT TEE - "a plain white crewneck rendered as a button-down" ─────────
-   REPORTED: a plain white crewneck/V-neck t-shirt came back as a short-sleeve white
-   WOVEN BUTTON-DOWN - pointed collar, front placket, breast pocket. Not a garment from
-   another category (the tuxedo class) and not a wrong state of the right garment (the
-   open-placket class): the right garment in the WRONG CONSTRUCTION. Knit read as woven.
-
-   THE CAUSE IS THE CLAUSE DIRECTLY ABOVE, and this is the correction to its own comment.
-   FRONT_CLOSURE_LOCK calls itself PRODUCT-NEUTRAL - "on a tee there is no closure and the
-   sentence asks for nothing" - and that is the one assumption this file's whole history
-   says you may not make. set() has no negative_prompt, so everything ships in the POSITIVE
-   prompt, where "buttons", "zip", "placket" and "closed across the chest" are tokens the
-   sampler steers TOWARD. On a button-down they describe a garment the reference already
-   shows. On a plain tee they were, until this revision, the ONLY construction words on the
-   wire - so the model reconciled them the one way it could, by rendering a garment that
-   HAS a placket. The collar and the breast pocket are not in the sentence; they arrive
-   with the concept once it has been summoned, which is exactly how the tuxedo arrived
-   wearing a bowtie nobody asked for.
-
-   THE ANCHOR NOUN IS THE SECOND HALF OF IT. CATEGORY_ANCHOR.top says "the EXACT static
-   SHIRT", and in English an unqualified "shirt" leans woven-and-buttoned. That was
-   survivable while it was the only signal; paired with four closure tokens it stops being
-   survivable. The tee branch names a t-shirt instead, in both the bind sentence and the
-   preserve sentence.
-
-   WHY THIS IS NOT THE has-buttons AXIS FRONT_CLOSURE_LOCK REFUSED TO OPEN. That note
-   rejected WORDING THE CLAUSE PER PRODUCT - interpolating a garment's features into a
-   string, which is how a per-item DESCRIPTION creeps back one field at a time. This adds
-   no interpolation and no new text shape: it is a THIRD SELECTOR over frozen literals,
-   the same move the angle axis already makes. The prompt remains a pure function of
-   (category, angle, construction) onto a fixed set of constant strings, and exactly one
-   anchor plus at most one clause ever ships.
-
-   IT SPENDS NO BUDGET - IT RETURNS SOME. A tee ships ~431 characters where it used to ship
-   ~493, because dropping the closure clause buys more than the neckline sentence costs.
-   Every fidelity report in this file shares one mechanism - text volume competing with the
-   reference image - so a fidelity fix that GREW the prompt would be that mechanism applied
-   again. plain-tee-fidelity.test.mjs §4 pins the direction.
-
-   STATED POSITIVELY, for the reason FRONT_CLOSURE_LOCK states and this revision takes
-   further: the obvious patch here is "do NOT render buttons, collars, plackets, or chest
-   pockets", and that is the DENSE.assetLock shape that produced the tuxedo - a negation
-   that ships inside the positive prompt and names four more garment features on its way
-   through. Naming the construction we WANT costs the same budget and cannot be sampled
-   backwards.
-
-   FRONT + TOPS ONLY, like the clause it displaces. The summoning tokens were never on the
-   back branch, and no back-view report exists, so BACK_CATEGORY_ANCHOR is left byte-
-   identical on this file's one-branch-at-a-time-on-evidence rule. If a tee ever renders a
-   woven BACK YOKE, the restore is the same shape as this one: a tee entry in the back
-   pair, selected by the same predicate. */
-/* ── THE LOWER-BODY ISOLATION LOCK - "it repainted my green trousers" ──────────────
-   REPORTED: fitting a TOP altered the shopper's shorts/trousers - colour, shape and
-   texture - along with shoes and background, on a branch that only ever asked for the
-   torso garment to change.
-
-   THIS IS keepTop, RESTORED - the clause IMAGE_ONLY_PROMPT's restore list names as
-   "the opposite-layer lock, TOPS ONLY".
-
-   ⚠ THE RESTORE NOTE THAT SENT YOU HERE WAS WRONG ON A FACT, AND IT IS NOW CORRECTED
-   IN PLACE (see IMAGE_ONLY_PROMPT's keepTop bullet). It said: "The bottoms half of it
-   is back on the wire - written INTO CATEGORY_ANCHOR.bottom ('Keep the subject's upper
-   body and background unmodified.')". It is NOT. Read CATEGORY_ANCHOR.bottom: it ends
-   at "Strictly preserve original pattern and color." and contains no opposite-layer
-   sentence at all. KEEP_OPPOSITE_LAYER still sits above as a retired constant with no
-   call site, exactly as the dynamic-drape revision left it, and `npm run trace:prompt`
-   prints the bottoms branch without it. So there was never a shipping mirror to copy;
-   this clause is the FIRST time either branch has carried an explicit opposite-layer
-   lock since that revision retired the bottoms one.
-
-   That does not change the shape chosen here - a region-named sentence inside the
-   anchor literal is still right, for the reasons below - but it does mean the bottoms
-   branch is STILL UNPROTECTED, and nothing here fixes that. Restoring it there is a
-   separate one-line change ([P.HIGH, KEEP_OPPOSITE_LAYER] on the bottoms branch, or
-   the same sentence written into the anchor) and a separate decision: no report has
-   been filed against bottoms, the bottoms branch has 100+ free chars at every rung, and
-   this file's rule is one clause at a time on evidence.
-
-   INSIDE THE ANCHOR LITERAL, NOT A NEW PART, for two independent reasons.
-   (a) Inside the anchor it CANNOT SHED. This clause exists to survive budget pressure -
-   a lock that disappears exactly when the prompt gets long is not a lock - and P.CORE
-   is the only tier that guarantees that. (b) conditioning-trace §4 asserts
-   imageOnlyPrompt() contains EXACTLY ONE P.CORE and EXACTLY ONE P.HIGH
-   (FRONT_CLOSURE_LOCK), so a second undroppable part is not structurally available even
-   if it were preferable.
-
-   A REGION, NOT GARMENT NOUNS - the single most important wording decision here, and
-   the reason this says "lower body" where the report said "pants/shorts/green trousers".
-   set() has no negative_prompt: every noun in this string ships in the POSITIVE prompt
-   as a token the sampler steers TOWARD. "Strictly preserve the subject's pants/shorts/
-   trousers" therefore hands a trouser token to a session whose shopper is wearing a
-   skirt, a dress or a kilt, and the documented consequence of naming a garment this way
-   is the tuxedo: CATEGORY_ANCHOR.top's own note records dropping the word "shirt" for
-   precisely this reason ("NOT A NEGATION, for the reason this file keeps re-learning").
-   A body REGION cannot be sampled into a garment. "shoes" is kept because it is a
-   distinct object rather than alternative leg-wear.
-
-   64 CHARACTERS, AND THE LENGTH WAS CHOSEN BY MEASUREMENT, NOT BY TASTE.
-   Do not lengthen this sentence without re-running `npm run trace:prompt` and reading
-   the size ladder. The first draft also named the waistline, at 75 chars, and those
-   extra 11 characters put tops+front+closure at 651 against a 650 budget - one
-   character over, which shed fitSentence() on ALL FIVE rungs of that branch and
-   effectively un-did the 2026-09-03 size restore for every button-front top. At 64 the
-   same branch lands on 640 and keeps its fit clause. The shed pattern is IDENTICAL at
-   64 and at the 56-char exact mirror of the bottoms sentence, so "shoes" is free and
-   "waistline" costs a whole ladder; that is the entire reason for this wording.
-
-   THE COST THAT REMAINS, measured - trace:prompt's size ladder is the record:
-     · plain tee, sizing DOWN 1-2 -> fitSentence sheds (663 and 709 needed vs 650).
-     · structured + closure, sizing UP 2 -> fitSentence sheds (699 vs 650).
-     · every other branch and rung keeps it, including all of bottoms and back.
-   That is the same trade CLAUDE.md §0 already documents for the closure branch,
-   widened by two rungs. It is the right way round - a lower body repainted on every
-   frame is a worse failure than a missing tension phrase at one end of the ladder -
-   but it IS a partial regression of the size feature restored on 2026-09-03, and it is
-   not free. To buy those rungs back, the text to reclaim is getFitModifier()'s
-   delta<=-2 phrasings (213 and 219 chars, the longest strings in the builder), NOT
-   this lock's priority: dropping it below P.CORE would let it shed under exactly the
-   budget pressure it exists to survive.
-
-   FRONT TOPS ONLY, on this file's one-branch-at-a-time-on-evidence rule.
-   BACK_CATEGORY_ANCHOR.top is deliberately left byte-identical (plain-tee-fidelity
-   §7.4 pins it), so a shopper who turns around loses this lock for as long as the rear
-   asset is on the wire. That is a KNOWN GAP, not an oversight - the report is against
-   the front view, the back branch has 25 free chars at its tightest rung, and adding
-   it there would shed the back branch's fit clause. If a rear-view lower-body leak is
-   ever reported, that is the moment to spend those characters. */
-const PLAIN_TEE_ANCHOR =
-  "Drape and fit the EXACT static t-shirt from the reference image onto the live" +
-  " subject's CURRENT body contour and volume in this frame. Keep the reference's plain" +
-  " knit neckline and smooth unbroken front exactly as shown. Dynamically adapt the" +
-  " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
-  " without stretching or warping the fabric. Strictly preserve the original t-shirt" +
-  " texture, pattern, and color. Keep the subject's lower body, shoes, and background" +
-  " unmodified.";
-
-/* The tee vocabulary. Hebrew first, both geresh spellings, for the reason BOTTOMS_TOKENS
-   spells out: a Hebrew-only product title is the storefront's COMMON case, not an edge
-   case. English is \b-anchored and carries the bare singular as well as the plural,
-   because a storefront writes whichever reads better in its own layout.
-
-   SLEEVELESS IS DELIBERATELY ABSENT - no גופי, no tank, no singlet. A tank top has no
-   closure either, so it looks like it belongs here, but the anchor this predicate selects
-   NAMES A T-SHIRT, and handing a model the word "t-shirt" over a sleeveless reference
-   invites it to grow sleeves the reference never had. That trades a reported failure for
-   an unreported one. Tanks keep today's behaviour until either a report or a third anchor
-   justifies moving them. */
-const PLAIN_TEE_TOKENS =
-  /(טי[- ]?שירט|טישרט|חולצת טי|\bt-?shirts?\b|\btees?\b|\bcrew ?necks?\b|\bv-?necks?\b)/i;
-
-/* The tops that DO fasten, and therefore must keep FRONT_CLOSURE_LOCK. This list outranks
-   the tee list above, exactly as TOPS_TOKENS outranks BOTTOMS_TOKENS in isBottomsGarment()
-   and for the same reason: when a title names both, the STRUCTURED noun is the garment and
-   the other word is a modifier of it ("Tee Shirt Cardigan" is a cardigan).
-
-   A BARE "shirt" IS NOT IN THIS LIST, AND THAT IS THE LOAD-BEARING OMISSION. Every top in
-   this catalog ships with `type: "shirt"` (see the ITEMS table), and isPlainKnitTop() reads
-   the type field. A \bshirts?\b here would match every tee that ever reaches this function,
-   the predicate would return false for the entire catalog, and the fix above would be dead
-   code that still passes a unit test written against `name` alone. Only nouns that
-   genuinely imply a placket, a zip or an outer layer belong here.
-
-   POLO AND HENLEY ARE ON THE LIST ON PURPOSE: both are knitwear, both read as "basically a
-   tee" to a shopper, and both have a buttoned placket that daabb47's report is about. */
-const STRUCTURED_TOP_TOKENS =
-  /(מכופתר|כפתור|פולו|קרדיגן|בלייזר|ז['׳]קט|מעיל|קפוצ|\bbutton|\bzip|\bplackets?\b|\bpolos?\b|\bhenley\b|\boxford\b|\bchambray\b|\bflannels?\b|\bcardigans?\b|\bblazers?\b|\bjackets?\b|\bcoats?\b|\bhoodies?\b|\bshacket\b|\bblouses?\b)/i;
-
-/**
- * Whether this garment is a PLAIN KNIT TOP - a tee with no closure and no collar.
- *
- * THE DEFAULT IS FALSE, and that is the whole safety property. An item we cannot classify
- * keeps the behaviour that shipped before this predicate existed (the "shirt" anchor plus
- * the closure lock), so an unrecognised title degrades to the OLD render rather than to a
- * new one - the same reasoning isBottomsGarment() defaults to tops on.
- *
- * ORDER: bottoms first (a trouser title carrying a tee token must never reach the tops
- * branch at all), then structured nouns, then the tee vocabulary. Reads the same metadata
- * fields isBottomsGarment() reads, so one catalog shape feeds both predicates.
- *
- * subType "short_sleeve" IS NOT EVIDENCE, and the report is the proof: the hallucinated
- * garment was itself a SHORT-SLEEVE button-down. Sleeve length says nothing about
- * construction, so only an explicit garment noun counts here.
- *
- * @param {{garmentType?:string, type?:string, category?:string, subType?:string,
- *          name?:string, title?:string}|null|undefined} item
- * @returns {boolean} true only for a top whose construction has no front closure.
- */
-function isPlainKnitTop(item) {
-  if (!item || isBottomsGarment(item)) return false;
-  const fields = [item.type, item.category, item.subType, item.name, item.title]
-    .filter(Boolean).join(" ");
-  if (STRUCTURED_TOP_TOKENS.test(fields)) return false;
-  return PLAIN_TEE_TOKENS.test(fields);
-}
-
-/* ── THE BURDEN OF PROOF, INVERTED - "the tee still has a slit down the front" ────
-   THE SECOND REPORT, after the tee anchor above supposedly fixed the first: a plain
-   crewneck rendering with a vertical centre-front seam, split as though it buttoned.
-
-   WHY THE FIRST FIX MISSED IT. isPlainKnitTop() demands POSITIVE PROOF of a tee - an
-   explicit tee noun in the title - before it will withhold the closure clause. Real
-   storefronts do not oblige. "PEAK", "PEAK Oversized", "חולצה אוברסייז" and a bare widget
-   handover with no title at all are all plain jersey tees, and every one of them fell to
-   the default branch and was handed "buttons, zip or placket" anyway. The fix only ever
-   worked for products whose titles already said what they were, which is the minority.
-
-   SO THE DEFAULT WAS THE BUG, not the vocabulary. FRONT_CLOSURE_LOCK exists for garments
-   that HAVE a front closure; on anything else its four nouns are free-floating tokens in a
-   positive prompt, which is the whole mechanism this file keeps re-learning. Asking "can I
-   prove this is a tee?" puts the cost of every unrecognised title on the wrong side.
-   Asking "can I prove this FASTENS?" puts it on the side where being wrong is cheap.
-
-   THE TRADE, STATED PLAINLY BECAUSE IT IS A REAL ONE. A button-down whose title names no
-   closure now loses the lock and could render open again - daabb47's report. That is the
-   INVENTED-DETAIL class: the right garment in a wrong state. What it buys is the
-   WRONG-GARMENT class, on a catalog where tees vastly outnumber button-downs. This file
-   has ranked those twice already and both times the answer was the same - a garment fitted
-   with an unstated closure is a worse render, a garment fitted as a different garment is a
-   different garment.
-
-   IT SPENDS NO BUDGET. This removes a clause from most tops and adds nothing, which is the
-   direction every fidelity report in this file has wanted.
-
-   @param {object|null|undefined} item
-   @returns {boolean} true only when the title gives positive evidence of a front closure. */
-function hasFrontClosure(item) {
-  if (!item || isBottomsGarment(item)) return false;
-  const fields = [item.type, item.category, item.subType, item.name, item.title]
-    .filter(Boolean).join(" ");
-  return STRUCTURED_TOP_TOKENS.test(fields);
-}
-
-const CATEGORY_ANCHOR = Object.freeze({
-  /* The two strings share one spine - bind the static garment, adapt to the current
-     contour, preserve the original - and differ in exactly two places: the garment noun,
-     and WHICH contour is named (whole-body on tops, lower-body on bottoms). The
-     lower-body naming is what keeps the shirt-replacement fix alive on the branch it was
-     reported against; see the bullet list above for the half of it that came off. */
-  /* ── THE ANCHOR NOUN - "every casual top still renders with a collar and buttons" ──
-     THE THIRD REPORT in this sequence, after FRONT_CLOSURE_LOCK was gated (8d89805) and
-     the tee branch was split off (734b4b3). Casual tops and graphic tees were STILL
-     coming back as button-downs, and neither earlier fix was wrong - by then a plain top
-     reached the wire with zero closure TOKENS. The remaining lean was this noun.
-
-     PLAIN_TEE_ANCHOR's comment diagnosed it and fixed only half: "CATEGORY_ANCHOR.top
-     says 'the EXACT static SHIRT', and in English an unqualified 'shirt' leans
-     woven-and-buttoned. That was survivable while it was the only signal." It judged the
-     noun survivable alone and moved only the PROVEN tees off it. But this is the DEFAULT
-     branch, and isPlainKnitTop() demands positive proof - so every brand-named,
-     Hebrew-titled and untitled casual top in a real storefront (the majority) stayed on
-     the one word this file had already named as leaning toward a placket.
-
-     "top" IS CONSTRUCTION-NEUTRAL. It still commits to the upper body - the one thing
-     this anchor must keep saying, and the half that keeps the shirt-replacement fix alive
-     on the bottoms branch below - while saying nothing about weave, collar or closure in
-     either direction. A garment that genuinely fastens is now described by
-     FRONT_CLOSURE_LOCK, which states its closure explicitly and has evidence behind it,
-     rather than by a default noun that never did.
-
-     NOT A NEGATION, for the reason this file keeps re-learning. The obvious patch is "no
-     buttons, no collar, no placket"; set() has no negative_prompt, so those nouns would
-     ship in the POSITIVE prompt as tokens the sampler steers toward - the shape that
-     produced the tuxedo and daabb47's button-down. Removing the leaning word costs
-     nothing, cannot be sampled backwards, and RETURNS budget: 342 -> 338 chars.
-
-     FRONT + TOPS ONLY, on the one-branch-at-a-time-on-evidence rule. The report names
-     collars, plackets and buttons - all front features. BACK_CATEGORY_ANCHOR keeps
-     "shirt" byte-identical, exactly as PLAIN_TEE_ANCHOR left it; plain-tee-fidelity §7.4
-     pins that, and §7.1-§7.8 pin the rest of this note. */
-  /* ── THE LOWER-BODY ISOLATION LOCK ──
-     keepTop, restored, after the "it repainted my green trousers" report. The last
-     sentence is the region-flipped counterpart of the retired KEEP_OPPOSITE_LAYER
-     constant above - NOT a copy of a clause the bottoms anchor ships, because it does
-     not ship one (that claim in the old restore note was false and is corrected at both
-     ends; bottoms remains unprotected). Full rationale - including why it names a REGION
-     rather than "pants/shorts/trousers" (those are positive tokens a sampler steers
-     toward; see this anchor's NOT A NEGATION note above), why it lives inside the anchor
-     literal, and the measured cost to fitSentence() on the tightest size rungs - is in
-     the comment block above PLAIN_TEE_ANCHOR, which carries the identical sentence. */
-  top:
-    "Drape and fit the EXACT static top from the reference image onto the live" +
-    " subject's CURRENT body contour and volume in this frame. Dynamically adapt the" +
-    " garment drape to the subject's exact silhouette, angle, depth, and belly volume" +
-    " without stretching or warping the fabric. Strictly preserve the original top" +
-    " texture, pattern, and color. Keep the subject's lower body, shoes, and" +
-    " background unmodified.",
-  bottom:
-    "Drape and fit the EXACT static pants/shorts from the reference image onto the live" +
-    " subject's CURRENT lower-body contour and volume in this frame. Dynamically adapt" +
-    " the fit to the subject's exact waistline, leg profile, depth, and angle without" +
-    " distorting the garment design. Strictly preserve original pattern and color.",
-});
-
-/* THE BACK COUNTERPART - the single-asset rear render.
-   ────────────────────────────────────────────────────────────────────────────────
-   WHY THIS EXISTS AT ALL. applyGarment() resolves the orientation, freezes it as
-   `angleAtStart`, and used to hand it to buildPrompt() - which discarded it. Every
-   single-asset render therefore shipped the FRONT anchor no matter which way the shopper
-   was facing, so turning around re-rendered the chest print on their back. COMPOSITE mode
-   never had this bug (buildCompositePrompt() takes the angle and names the panel), which
-   is why it only ever reproduced with a front-only reference.
-
-   WHY A SECOND FROZEN ANCHOR AND NOT A CLAUSE APPENDED TO THE FIRST. This is the whole
-   constraint, and image-first.test.mjs's header is the record of it: the tuxedo regression
-   was reported TWICE, and the fix that finally held was reducing the TOTAL VOLUME of text
-   competing with the reference image - not removing text of any particular kind. FIX ONE
-   kept the structural clauses (panel contract, pose, passthrough locks) on the theory that
-   a clause describing no garment cannot summon one; the tuxedo survived it. So appending
-   angleClause()'s output here - contract + pose + selector + depth, the shape the call site
-   used to build - would re-open that failure through the front door. SELECTING between two
-   frozen strings holds volume flat instead: one anchor ships, exactly as before, and only
-   which one changes.
-
-   The front anchor above is deliberately left BYTE-IDENTICAL. Nothing about the
-   front-facing render changes with this pair; the only new behaviour is on the back. */
-const BACK_CATEGORY_ANCHOR = Object.freeze({
-  /* Same spine as the front anchors - bind the static garment, adapt to the current
-     contour, preserve the original - with the region re-pointed at the back and ONE
-     clause added. That clause's WORDING was the bug below; its PURPOSE stands.
-
-     ── "IT DREW 'PEAK PEAK', BLANK WHITE BOXES AND GENERIC LINES ON MY BACK" ─────────
-     The clause used to read: "Precisely lock the rear print, logos, and back seams."
-     It was meant to stop a back render reproducing the front graphic. What it actually
-     did, once the printed-back path started shipping, is visible in the report item by
-     item - each hallucination maps onto one noun in that single sentence:
-         "logos"       -> "PEAK PEAK"         the garment's brand text, drawn repeatedly
-         "print"       -> blank white boxes   a print-shaped placeholder with nothing in it
-         "back seams"  -> generic lines       seam strokes the reference never had
-     Decart's set() has no negative_prompt, so every noun in this string is a POSITIVE
-     token the sampler steers toward. Telling the model to "lock the logos" does not
-     make it copy the reference's logos; it makes it produce logos. This is the tuxedo
-     mechanism again - CATEGORY_ANCHOR.top, PLAIN_TEE_ANCHOR and PLAIN_BACK_ANCHOR each
-     record a version of it - reached through the one back sentence nobody had touched.
-
-     It surfaced only now because this anchor only recently started shipping for this
-     garment: while the classifier mislabelled the rear photo the product got a synthetic
-     back and PLAIN_BACK_ANCHOR instead. Fixing that exposed this.
-
-     THE REPLACEMENT NAMES NO GRAPHIC AT ALL. It points at the reference image and says
-     to reproduce the rear panel as shown - which is the original intent, expressed as
-     grounding rather than as a list of things to draw. Whatever artwork is on the
-     reference (a photograph, lettering, nothing) is what "as shown" means, so the same
-     sentence is correct for every garment and asserts nothing the pixels do not.
-     plain-back-anchor.test.mjs now pins the ABSENCE of graphic nouns on this anchor
-     too, not only on the plain one. */
-  top:
-    "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
-    " the live subject's CURRENT back contour and volume in this frame. Reproduce the rear" +
-    " panel exactly as shown in the reference. Dynamically adapt the garment drape to the" +
-    " subject's exact silhouette, angle, depth, and back volume without stretching or" +
-    " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.",
-  bottom:
-    "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
-    " onto the live subject's CURRENT lower-body contour and volume in this frame." +
-    " Reproduce the rear panel exactly as shown in the reference. Dynamically adapt the fit to" +
-    " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
-    " garment design. Strictly preserve original pattern and color.",
-});
-
-/* ── THE PLAIN-BACK ANCHOR - "it drew scrambled black graphics on my back" ─────────
-   ────────────────────────────────────────────────────────────────────────────────
-   REPORTED against a white tee whose front carries "BE YOUR OWN Healer WORLDWIDE" and
-   whose rear reference is 100% blank white fabric. Turning around produced scrambled
-   black graphics across the shopper's back. The reference was correct; the PROMPT asked
-   for it.
-
-   THE ROOT CAUSE IS ONE SENTENCE IN THE PAIR ABOVE: "Precisely lock the rear print,
-   logos, and back seams." It ships on EVERY back render, and on a blank back it asserts
-   a print and logos that do not exist. Decart's set() has no negative_prompt, so "print"
-   and "logos" reach the sampler as POSITIVE tokens to steer toward - the prompt is
-   instructing the model to invent rear graphics, and it obliges. Nothing about the
-   reference image was wrong and no amount of reference fidelity could have overridden a
-   direct instruction.
-
-   THIS IS THE SAME BUG PLAIN_TEE_ANCHOR ALREADY FIXED ON THE FRONT, and the fix is the
-   same shape. That anchor exists because CATEGORY_ANCHOR.top's word "shirt" kept
-   summoning collars and plackets onto plain tees, and its note records the resolution in
-   full: the fix was NOT a negation ("no buttons, no collar, no placket"), because those
-   nouns would ship in the positive prompt as tokens the sampler steers toward - "the
-   shape that produced the tuxedo". The fix was to DESCRIBE THE PLAINNESS POSITIVELY
-   ("Keep the reference's plain knit neckline and smooth unbroken front exactly as
-   shown") and to SELECT that anchor on positive evidence. This does exactly that, on the
-   back.
-
-   SO IT NAMES NO GRAPHIC NOUNS AT ALL. The obvious patch - and the one specified when
-   this was reported - is "the rear fabric is 100% PLAIN WHITE with ZERO text, zero
-   logos, and zero black chest graphics; strictly forbid carrying over front chest text".
-   Every one of those phrases puts a graphic noun on the wire: text, logos, black chest
-   graphics, front chest text. With no negative_prompt to attach them to, that wording is
-   a RICHER instruction to draw graphics than the sentence it replaces. It would make the
-   reported bug worse, and it is 290 characters against 135 free on this branch, so it
-   would also hard-slice. "Smooth unbroken fabric" cannot be sampled into a logo.
-
-   IT SHRINKS THE WIRE: 41 characters replacing 52, so the back anchor drops 412 -> 401.
-   Every fidelity fix in this file has to shrink it (plain-tee-fidelity §7.3) for the same
-   text-volume reason, and this one does.
-
-   SELECTED ON POSITIVE EVIDENCE ONLY, never assumed - the §2.1 discipline, applied to a
-   different question. `item.backIsPlain === true` means the server positively established
-   a blank rear: either it GENERATED the rear (synthesizeBackView explicitly reconstructs
-   unbroken fabric and forbids carrying the front graphic over), or the classifier
-   transcribed the real rear photo and found no lettering. Undefined or false keeps the
-   pair above byte-identical. Guessing "plain" on a garment with a genuine back print
-   would suppress the one graphic the shopper turned around to see - the print-less-back
-   bug, inverted - so abstention is the safe direction here too. */
-const PLAIN_BACK_ANCHOR = Object.freeze({
-  /* Byte-identical to BACK_CATEGORY_ANCHOR except for the one clause. Kept as a full
-     frozen literal rather than assembled from the pair above, because the angle/
-     construction axes in this file SELECT between frozen strings and never concatenate -
-     see BACK_CATEGORY_ANCHOR's own note on why appending re-opens the tuxedo. */
-  top:
-    "Drape and fit the EXACT static shirt's REAR/BACK side from the reference image onto" +
-    " the live subject's CURRENT back contour and volume in this frame. The rear panel is" +
-    " smooth unbroken fabric. Dynamically adapt the garment drape to the" +
-    " subject's exact silhouette, angle, depth, and back volume without stretching or" +
-    " warping the fabric. Strictly preserve the original shirt texture, pattern, and color.",
-  bottom:
-    "Drape and fit the EXACT static pants/shorts REAR/BACK side from the reference image" +
-    " onto the live subject's CURRENT lower-body contour and volume in this frame." +
-    " The rear panel is smooth unbroken fabric. Dynamically adapt the fit to" +
-    " the subject's exact waistline, leg profile, depth, and angle without distorting the" +
-    " garment design. Strictly preserve original pattern and color.",
-});
-
-/* The surviving halves of the old frozen string, split into individually priority-taggable
-   parts. Every one of these is a reproduced regression and the wording is deliberately
-   unchanged from the string it came out of - only the t-shirt ANCHOR was replaced.
-
-   WHAT IS STILL ASSEMBLED, so nothing here reads as dead code by accident:
-   VOLUME_PERSISTENCE and CLOSED_BACK_HEM ship on the FULL-LOOK path (lookAnchorPrompt),
-   which was never collapsed. FRONTAL_VOLUME and REFERENCE_EXTRACTION are referenced by no
-   builder at all - retired, not deleted, and kept verbatim because a restore that starts
-   by rewriting the clause is not a restore. REFERENCE_EXTRACTION is the newer of the two
-   retirements: STRICT_REFERENCE_LOCK's first sentence states the same provenance rule and
-   also names logos and cut, so shipping both would spend budget restating one
-   instruction. Deleting either constant breaks image-first.test.mjs §1 on purpose. */
-const VOLUME_PERSISTENCE =
-  "Maintain the exact same abdomen/stomach depth, waist volume, and torso thickness" +
-  " continuously through all 360-degree rotations—never flatten or reset body size" +
-  " mid-stream.";
-const FRONTAL_VOLUME =
-  "In front-facing (0-degree) views, realistically render the stomach's forward volume and" +
-  " convexity using natural fabric drape, forward hem extension, and subtle lighting falloff.";
-/* Both of these describe a SHIRT's construction - the knotted hem and the open back flap
-   were top-specific failures - so they are simply not part of a trousers prompt rather
-   than being reworded into a lower-body equivalent nobody has reproduced a bug for. */
-const CLOSED_BACK_HEM = "Preserve a closed back and normal un-knotted hem.";
-const REFERENCE_EXTRACTION = "Use only the reference image's graphics, fabric texture, and color.";
-
-/* ── Temporal persistence - the prompt half of the presence fix ───────────────────
-   The presence GATE stops a session opening on an empty frame. This covers what the gate
-   cannot: the shopper who is briefly occluded, half out of shot, or steps back in
-   mid-window. Every previous revision of this prompt described a subject who was assumed
-   to be THERE, so a frame where they are not yet visible had no language attached to it
-   at all - and an unstated state is what this file's history keeps recording as the thing
-   the model reinterprets.
-
-   "AS SOON AS VISIBLE" IS THE LOAD-BEARING PHRASE, not filler. It tells the model the
-   subject may be absent RIGHT NOW and that the correct response is to wait and then fit -
-   rather than to fit something to whatever is currently in frame, which is exactly how a
-   garment ends up rendered onto a wall or a chair.
-
-   The second sentence is scoped to the OPPOSITE region plus the background, so it
-   reinforces the anchor's own isolation rule rather than competing with it. */
-const TEMPORAL_PERSISTENCE = Object.freeze({
-  top:
-    "Continuously track and strictly fit the reference top to the subject's torso as soon" +
-    " as visible. Keep lower body and background natural and unmodified.",
-  bottom:
-    "Continuously track and strictly fit the reference shorts/pants to the subject's lower" +
-    " body as soon as visible. Keep upper body and background natural and unmodified.",
-});
-
-/* Lower-body tokens. Hebrew FIRST because it is the storefront's primary language, so a
-   Hebrew-only product title is the common case here rather than an edge case; both geresh
-   spellings are listed (U+05F3 ׳ and a plain ASCII apostrophe) because storefronts use
-   them interchangeably. "מכנס" is left unanchored on purpose - Hebrew inflects by suffix
-   (מכנסיים/מכנסי) and a prefix match covers the whole family.
-
-   THE ENGLISH SIDE IS \b-ANCHORED AND USES "shorts" PLURAL, DELIBERATELY. A bare /short/
-   matches "short_sleeve" - the subType this very file sets on tees - which would classify
-   a t-shirt as trousers and repaint the shopper's real jeans: the reported bug, inverted.
-   Same reason "sweatpants"/"tracksuit" are listed in full rather than relying on \bpants\b
-   to find them inside a compound. */
 /* SINGULARS ARE NOT OPTIONAL HERE. "Wool Trousers" matched and "Wide Leg Trouser" did
    not; "Chinos" matched and "Chino" did not. A storefront writes whichever reads better
    in its own layout, and a miss falls through to the tops default silently - the same
@@ -14552,818 +11598,92 @@ function isBottomsGarment(item) {
   return BOTTOMS_TOKENS.test(fields);
 }
 
-/**
- * The image-only prompt, resolved for THIS garment's category.
- *
- * ONE P.CORE PART, ON BOTH BRANCHES. There is no assembly left here: the function SELECTS
- * a frozen anchor (338 chars on tops, 320 on bottoms) and hands it to fitPrompt() as a
- * single part. The seven-clause assembly this used to run - and the priority tags that
- * decided what shed out of it - is described in CATEGORY_ANCHOR's comment above, together
- * with what came off the wire and how to put any of it back.
- *
- * FROZEN PER CATEGORY, NOT PER FRAME - and that is deliberate even though the anchor now
- * talks about "this frame". The per-frame half of the fix is not text: it is
- * the topology monitor (see reconditionForTopology) forcing a genuine re-conditioning
- * dispatch when the live body has moved, so the model re-reads a CURRENT frame rather
- * than being handed a description of one. Interpolating live measurements into the prompt would put this
- * function straight back into the text-volume competition every report in this sequence
- * was caused by, and would make the string non-constant for no gain.
- *
- * STILL ROUTED THROUGH fitPrompt() rather than returned raw, and that is not ceremony at
- * this length: it normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit
- * that lengthens an anchor - or adds the second part the restore notes describe - is
- * clamped HERE instead of over-running into clampPromptForWire()'s hard slice, which cuts
- * at the END and would take the fidelity sentence with it. The budget itself is
- * Decart's and app.js:5862 explicitly forbids raising it ("the ceiling is the API's, not
- * ours").
- *
- * @param {object|null} item - the garment being fitted; null resolves to the tops branch.
- * @returns {string}
- */
-function imageOnlyPrompt(item, angle = "front") {
-  /* ONE PART, BOTH BRANCHES. There is no assembly left on either side - see
-     CATEGORY_ANCHOR above for the reports that drove it there, for the full list of what
-     came off the wire, and for why bottoms names the lower body where tops names the
-     whole contour.
+/* The garment facts the prompt engine reads - plain fields only. Checked against the
+   engine itself: the moved builders read exactly these off an item, and nothing else
+   (a corpus of 351,779 prompts matched the in-browser engine byte for byte with only
+   these sent). A field added to a builder in lib/prompts.js must be added here AND to
+   sanitizePromptRequest() there, or the server will never see it. */
+const PROMPT_FACT_STRINGS = ["name", "title", "type", "category", "subType", "garmentType", "colorHex", "textOcr", "fabric"];
+const PROMPT_FACT_BOOLS = ["backIsPlain", "_backLooksPrinted", "custom"];
 
-     STILL ROUTED THROUGH fitPrompt() rather than returned raw, even at 338/320 chars:
-     it normalises whitespace and enforces PROMPT_MAX_CHARS, so a future edit that
-     lengthens an anchor is clamped here instead of over-running into
-     clampPromptForWire()'s hard slice, which cuts at the END and would take the
-     fidelity sentence with it.
-
-     TO BUY A CLAUSE BACK, add it as a second part here - `[P.HIGH, STRICT_REFERENCE_LOCK]`
-     for the hallucination clamp, `[P.HIGH, KEEP_OPPOSITE_LAYER]` on the bottoms branch for
-     the opposite-layer pin; both are the retirements this revision made. The budget is not
-     the constraint - 308 characters are free on tops and 330 on bottoms - so the only
-     question is whether that text is worth the weight it takes away from the reference
-     image, which is the mechanism every report in this sequence shares. One at a time,
-     re-tested live. */
-  /* `angle` SELECTS a frozen anchor, and only that - it is never interpolated, appended to,
-     or used to build a string. Anything other than the literal "back" resolves to FRONT:
-     an unrecognised value must land on the side every caller rendered before this parameter
-     existed, not on a silent back-render nobody asked for.
-
-     It is a PARAMETER rather than a live effectiveAngle() read for the TOCTOU reason
-     applyGarment() documents at length: the prompt and the reference image must be resolved
-     against the SAME orientation reading. A prompt built from a fresh read while the image
-     was resolved from the frozen one is the mixing bug that comment records. */
-  /* ── THE FOURTH FROZEN AXIS: rear construction ────────────────────────────────────
-     A back render on a garment PROVEN to have a blank rear selects PLAIN_BACK_ANCHOR,
-     which is byte-identical to BACK_CATEGORY_ANCHOR except that it does not claim a
-     "rear print, logos" the garment does not have. That claim is what drew scrambled
-     graphics on a blank back: with no negative_prompt, those nouns are positive tokens.
-     See PLAIN_BACK_ANCHOR for the report and for why the fix is a positive description
-     rather than the specified "ZERO text, zero logos" negation.
-
-     STILL A SELECTOR, so the volume-flatness this file guards stays intact: exactly one
-     anchor ships, nothing is concatenated, and the plain variant is SHORTER than the one
-     it replaces. `=== true` and not a truthy test - undefined (nobody looked) and false
-     (a real rear print) must both keep the existing wording. */
-  /* ── AND THE PIXELS GET A VETO ────────────────────────────────────────────────────
-     The verdict above is a claim ABOUT the rear photo, so a measurement OF that photo can refuse
-     it: `_backLooksPrinted` is set once, at pre-load, when the rear measurably carries a graphic
-     (blobLooksPrinted - measured at 6.6x plain fabric on the garment this was reported against).
-     A rear that measures flat is untouched, so the scrambled-graphics fix PLAIN_BACK_ANCHOR
-     exists for is intact; a rear that measurably has a print can no longer be described as
-     smooth unbroken fabric by a classifier that got it wrong. `!== true` keeps the veto itself on
-     positive evidence: unprobed (undefined) changes nothing. */
-  const plainBack = angle === "back" && item && item.backIsPlain === true && item._backLooksPrinted !== true;
-  const anchors = angle === "back"
-    ? (plainBack ? PLAIN_BACK_ANCHOR : BACK_CATEGORY_ANCHOR)
-    : CATEGORY_ANCHOR;
-  const bottoms = isBottomsGarment(item);
-  /* THE SECOND PART the restore notes describe, and the first one actually bought back.
-     P.HIGH, not P.CORE: under budget pressure fitPrompt() sheds it before it will touch
-     the anchor, which is the correct order - a garment fitted with an unstated closure is
-     a worse render, but a garment fitted with no anchor at all is a different garment.
-     Tops + front only; see FRONT_CLOSURE_LOCK for why it is not spent elsewhere. */
-  /* THE THIRD SELECTOR - construction. Scoped to the FRONT TOPS branch, which is the only
-     place FRONT_CLOSURE_LOCK ever shipped and therefore the only place the button-down
-     hallucination could be summoned from; see PLAIN_TEE_ANCHOR for the report and for why
-     the back pair is deliberately left alone. It SELECTS between frozen literals like the
-     other two axes - still exactly one anchor on the wire, still nothing concatenated. */
-  const plainTee = !bottoms && angle !== "back" && isPlainKnitTop(item);
-  /* POSITIVE EVIDENCE ONLY - see hasFrontClosure(). This used to be `!plainTee`, i.e. every
-     top we could not prove was a tee, which handed placket tokens to every brand-named,
-     Hebrew-titled and untitled tee in the catalog. The two predicates are mutually
-     exclusive by construction (isPlainKnitTop bails on the same structured tokens this
-     one requires), so a prompt can never name a seamless front and a fastened placket
-     together. */
-  const closure = !bottoms && angle !== "back" && hasFrontClosure(item);
-  /* ── SIZE-OVERRIDE RESTORE - "I tried on a size down and it fit exactly like true-to-size" ──
-     REPORTED: shoppers who deliberately size up or down see no difference in how the
-     garment drapes - the size picker still works and still re-applies (setSizeOverride()),
-     but nothing about that choice ever reached Decart. This was the retirement
-     IMAGE_ONLY_PROMPT's comment names as fitSentence - "the size-override selector's only
-     route into the render" - cut along with everything else when this file went strict
-     image-only. It is being bought back alone, per that comment's restore procedure.
-
-     WHY THIS ONE IS SAFE TO BUY BACK: getFitModifier() (below) was rewritten after the
-     "it compressed me into a thinner frame" report specifically so every string attributes
-     tightness to the GARMENT and the FABRIC over a body whose dimensions are fixed, never
-     to the body's outline - see that function's header comment. Restoring it does not
-     reintroduce the mechanism that produced that bug; it only reconnects a clause that was
-     already rewritten to be safe.
-
-     P.MED, one tier BELOW the closure lock, ON PURPOSE - NOT AN OVERSIGHT TO "FIX" LATER.
-     A garment rendered at the wrong tension is a worse fit, but a button-down rendered
-     hanging open (FRONT_CLOSURE_LOCK's own report) is the worse failure, so under budget
-     pressure this sheds first. delta === 0 (no size override) returns a short "true-to-size"
-     phrase, so the common case costs little.
-
-     THE CONCRETE COST: on tops + front + closure (487/650 base, 163 free), the size-down
-     phrasings run 167 chars (delta -1) and 213 chars (delta -2) - both over the 163 free,
-     so fitPrompt() sheds them and a shopper who sizes DOWN on a button-front top sees no
-     tension text at all. True-to-size and sizing UP (88/89/147 chars) always fit. Every
-     other branch (plain tee, structured-no-closure, back, bottoms) has 219-330 free chars
-     and the fit sentence always survives, worst case ~230 chars (lower_body delta -2).
-
-     DO NOT "FIX" THIS BY RAISING TO P.HIGH. Priority ties are broken by array position in
-     fitPrompt(), not by severity - FRONT_CLOSURE_LOCK is added before this clause, so an
-     equal-priority tie is not guaranteed to protect it, and a shirt rendered wide open
-     (the report FRONT_CLOSURE_LOCK exists for) is worse than missing tension text. If the
-     size-down-on-a-closure-top gap ever gets its own report, the fix is to shrink something
-     ELSE on that branch to free the 4-50 chars needed, not to reorder these two tiers.
-     Documented in CLAUDE.md §0 as a known, deliberate limitation.
-
-     image-first.test.mjs's "size-override modifier no longer reaches the wire" check is
-     updated in the same commit - this clause is what it now asserts IS wired. */
-  /* ── THE GARMENT IDENTITY LOCK - P.CORE, and PROMOTED FROM P.LOW ON PURPOSE ──────
-     "Decart rendered a random t-shirt instead of the garment Gemini prepared."
-
-     Names the garment's MEASURED colour and its transcribed print - the two facts the
-     prompt could not state before, because they are per-product measurements rather than
-     anything an anchor could hold. Threaded server -> widget -> item, never baked into a
-     constant, so one product's identity cannot leak into another's prompt.
-
-     THE PROMOTION IS THE CHANGE, and it reverses a deliberate earlier decision, so the
-     earlier reasoning is worth stating: at P.LOW this clause sheds FIRST, which made it
-     purely additive and guaranteed it could never displace fitSentence. That was the
-     right call while it was a colour HINT. It is the wrong call for an identity LOCK -
-     a clause whose entire job is to stop the model substituting a different garment
-     cannot be the first thing dropped when the prompt gets long, because a long prompt is
-     exactly when the reference image is losing the argument. So it moves to P.CORE, where
-     fitPrompt() cannot shed it.
-
-     THE COST, measured (trace:prompt size ladder): on tops + front + closure the base is
-     552 of 650, so after fit(0)'s 88 chars only 9 remain - ANY lock larger than that
-     evicts fitSentence (P.MED) on that one branch. Accepted, and specified: a garment
-     rendered as the WRONG GARMENT is a worse failure than one rendered at the wrong
-     tension. Every other branch keeps both clauses.
-
-     A SECOND P.CORE PART, which conditioning-trace §4 previously pinned as impossible
-     ("exactly ONE anchor ships"). That assertion is updated in the same commit rather
-     than loosened: the invariant it protected - volume stays FLAT across the ANGLE axis,
-     because the angle SELECTS a frozen anchor rather than appending to one - is still
-     true and still asserted. This part is not an angle variant; it is per-product data,
-     it is length-capped at IDENTITY_LOCK_MAX_CHARS, and it is angle-AWARE only in that
-     the print half is withheld on the back (see identityLockSentence: asserting front
-     lettering over a back reference is the double-print bug through the prompt). */
-  return fitPrompt([
-    [P.CORE, plainTee ? PLAIN_TEE_ANCHOR : bottoms ? anchors.bottom : anchors.top],
-    [P.CORE, identityLockSentence(item, angle)],
-    ...(closure ? [[P.HIGH, FRONT_CLOSURE_LOCK]] : []),
-    [P.MED, fitSentence(bottoms ? "lower_body" : "upper_body")],
-  ]);
+function promptFactsOf(item) {
+  const f = {};
+  if (!item) return f;
+  for (const k of PROMPT_FACT_STRINGS) if (typeof item[k] === "string") f[k] = item[k];
+  for (const k of PROMPT_FACT_BOOLS) if (typeof item[k] === "boolean") f[k] = item[k];
+  f.__bottoms = isBottomsGarment(item);
+  return f;
 }
 
-const LOOK_ANCHOR =
-  "Fit and replace BOTH the subject's upper garment and lower garment using the exact" +
-  " garments from the reference image, which shows the top above the bottom as two" +
-  " separate products. Render both simultaneously on the subject.";
+/* Wire prompts by request, for the session. A prompt is a pure function of the garment's
+   facts, the angle and the size delta, so a turn back to an angle already sent - the
+   common case: front -> back -> front - is answered without a request. Values are the
+   text or the in-flight Promise for it, so concurrent asks share one request. */
+const _wirePrompts = new Map();
 
 /**
- * The full-look prompt - the THIRD case, and the one that must claim both layers rather
- * than isolate one. See buildLookPrompt() for why it cannot route through
- * imageOnlyPrompt(). Assembled the same way so it inherits the same budget guarantee.
- *
- * IT CARRIES THE STRICT LOCK TOO, and that is what this revision added here. The 1:1
- * collapse rewrote both category anchors around STRICT_REFERENCE_LOCK and left this path
- * on its old four-clause assembly, so the INVENTED-DETAIL report - the right garment
- * rendered with textures the reference never had - stayed reproducible through Full Look
- * while being fixed everywhere else. Nothing about that failure is specific to how many
- * garments are being replaced, so the clamp belongs on every path that reaches Decart.
- *
- * REFERENCE_EXTRACTION CAME OFF IN THE SAME EDIT rather than sitting beside it: the lock's
- * first sentence IS the provenance rule ("Exactly match color, pattern, logos, and cut"),
- * which this file already documents as superseding it, and shipping both would spend ~67
- * characters restating one instruction - the text-volume-against-the-reference mechanism
- * every report in this sequence shares. Net change: +20 characters, 533 of 650.
- *
- * VOLUME_PERSISTENCE and CLOSED_BACK_HEM STAY, unlike on the single-garment branches. This
- * path was never collapsed, no full-look report has been filed against clause count, and
- * removing them here would be a change made on no evidence. They are also the two clauses
- * a full-look render needs most, since it replaces the torso garment and the hem with it.
- *
- * A FUNCTION, not a module constant, and deliberately so: a `const X = fitPrompt(...)` at
- * module scope runs at LOAD time, which makes PROMPT_MAX_CHARS a load-order dependency for
- * every consumer - including the test harnesses that slice this file into a sandbox and
- * only stub the globals their own section needs. One of them (angle-race) does not, and a
- * load-time call turns that into a ReferenceError before a single assertion runs. Resolved
- * on demand it costs nothing measurable and cannot fail at import.
- * @returns {string}
+ * The single-garment prompt for one dispatch - what imageOnlyPrompt(item, angle) returned
+ * when it ran in the browser, clamped for the wire. Rejects if the service cannot be
+ * reached (after one retry); the dispatch sites treat that like any failed apply.
+ * `opts.inProfile` threads the watcher's frozen edge-on reading through to the server-side
+ * builder (buildCompositePrompt(item, angle, inProfile)) - the restore seam applyGarment()
+ * always kept. It does not change today's text; it is part of the cache key so that a
+ * restored pose clause would reach the wire without another edit here.
+ * @param {object} item @param {"front"|"back"} angle @param {string} where - log label
+ * @param {{inProfile?: boolean}} [opts]
+ * @returns {Promise<string>}
  */
-function lookAnchorPrompt() {
-  return fitPrompt([
-    [P.CORE, LOOK_ANCHOR + STRICT_REFERENCE_LOCK],
-    [P.HIGH, VOLUME_PERSISTENCE],
-    [P.MED,  CLOSED_BACK_HEM],
-  ]);
+function wirePrompt(item, angle, where, opts = {}) {
+  return requestWirePrompt({
+    kind: "single",
+    item: promptFactsOf(item),
+    angle: angle === "back" ? "back" : "front",
+    inProfile: opts.inProfile === true,
+    delta: typeof getSizeDelta === "function" ? getSizeDelta() : 0,
+  }, where);
 }
 
-/* The dense clause table. Deliberately lower-case and lightly punctuated wherever the
-   meaning survives it: ALL-CAPS and heavy punctuation both tokenize worse than prose,
-   so the few capitals left (EDGE-ON, LEFT/RIGHT) are spent only where the emphasis is
-   doing real steering work.
-
-   ── NOTHING HERE IS ASSEMBLED ANY MORE ───────────────────────────────────────
-   Under strict image-only conditioning every builder returns IMAGE_ONLY_PROMPT, so this
-   table is a RESTORE LIBRARY, not an assembly source. It is kept whole - and kept next
-   to fitPrompt() and the P tiers, which are also intact - because a mode this aggressive
-   is a starting point: each clause is a real, reproduced regression, and getting one
-   back must be a two-line edit rather than an archaeology exercise. Restore ONE at a
-   time and re-test; the premise of the mode is that clause COUNT was drowning the image.
-
-   THREE OF THEM ARE SUPERSEDED rather than merely retired - the frozen string now
-   carries their instruction inline, where it cannot be shed or reordered. Restoring
-   these would DUPLICATE what is already on the wire, which is the one thing this mode
-   is least able to afford:
-     · assetLock      its directive is the frozen string's "the EXACT garment FROM the
-                      reference image"; its enumerated noun list is deliberately NOT
-                      reproduced (see this table's own assetLock comment).
-     · bodyFidelity   → "the subject's true body volume and stomach".
-     · profileLateral → "from all angles, including 0-degree front and 90-degree side
-                      views" - both angles enumerated, neither gated on a pose event.
-     · modelAgnostic  → ONLY IMPLIED, by "Preserve only the reference image's graphics,
-                      fabric texture, and color". Revision 3 stated the discard outright
-                      and revision 4 dropped that wording; the implication is weaker than
-                      the statement. This is the one clause on this list whose restore is
-                      an IMPROVEMENT rather than a duplication - append DENSE.modelAgnostic
-                      the moment "it gave me the model's shoulders" is reported again.
-
-   ── THE RESTORE BUDGET: BOTH BRANCHES NOW HAVE ROOM, AND THAT IS THE TRAP ────
-   The number has moved six times, so read the CURRENT row rather than remembering an
-   older one. Against PROMPT_MAX_CHARS = 650, one space per part as fitPrompt() joins:
-
-     TOPS FRONT (552 = 403 anchor + 148 closure lock)  BOTTOMS (320 chars - anchor, lower-body scoped)
-     + DENSE.bodyFidelity  (45) → 598  fits              → 366  fits
-     + DENSE.modelAgnostic (64) → 617  fits              → 385  fits
-     + both of them        (110)→ 663  OVER - sheds      → 431  fits
-
-   TOPS FRONT IS THE WORST CASE and the only row worth budgeting against: it is the one
-   branch carrying a second part (FRONT_CLOSURE_LOCK, the button-down closure report).
-   Tops BACK runs 412 - the back anchor is longer than the front one but carries no
-   closure lock, since a front placket is not in view - and bottoms carries one part on
-   both angles.
-
-   THE TOPS ANCHOR IS 403, NOT 338, since the lower-body isolation lock (64 chars) was
-   written into it - keepTop restored, after the green-trousers report. That is what put
-   the both-clauses row over budget on tops, so the last row above is no longer a free
-   choice.
-
-   ⚠ AND THE PARAGRAPH THAT USED TO SIT HERE WAS WRONG, in the way this file keeps
-   re-learning. It said: "NOTHING SHEDS ANY MORE, on either branch. 159 characters are
-   free on tops and 330 on bottoms." Both halves were computed from the ANCHOR ALONE, as
-   if the anchor were the whole dispatch. It has not been since 2026-09-03, when
-   fitSentence() was restored at P.MED - so the figures omitted a live clause worth up to
-   213 characters and the "nothing sheds" claim was false on the day it was written.
-   `npm run trace:prompt` had the identical bug in its branch table and printed the same
-   flattering numbers, which is why the two agreed with each other and not with reality.
-   Both are fixed; the tracer now prints a per-branch SIZE LADDER, and it is the source
-   of truth for anything below.
-
-   WHAT ACTUALLY SHEDS TODAY (trace:prompt, size ladder, worst rung per branch):
-     · tops front, plain tee, sizing DOWN 1-2      → fitSentence sheds
-     · tops front, structured + closure, UP 2      → fitSentence sheds
-     · tops front, structured + closure, DOWN 1-2  → fitSentence sheds (pre-existing)
-     · everything else, every rung                 → nothing sheds
-   Free space on the DEFAULT dispatch (delta 0, the shopper who never touches the
-   picker): 159 on tops structured, 10 on tops structured+closure, 246 on bottoms front.
-   The 10 is the number to budget against, and it is why the colour lock rides at P.LOW.
-
-   So the warning this note carries is now the ORIGINAL one again, not its inverse: a
-   restore on the tops+closure branch does not have room, and will silently take the
-   size feature with it unless it is priced against the ladder first.
-
-   HEADROOM IS NOT PERMISSION. Tops was collapsed from 634 characters and bottoms from
-   616 precisely BECAUSE text volume was outweighing the reference pixels - the tuxedo,
-   the generic black shorts and the invented stripe are one mechanism seen three times.
-   Two spends have been made since, both against REPRODUCED reports rather than to fill
-   space: the lower-body scoping on bottoms (the shirt-replacement report), and the
-   per-frame adaptation sentence on both branches (the stretched-garment report). The
-   second is why the two anchors are ~170 characters longer than the 1:1 collapse left
-   them, and it is also why the branches are now within 22 characters of each other
-   rather than 69 apart. Size every further restore the same way: evidence first, then
-   the character count.
-
-   IF A RESTORE EVER DOES OVERRUN, the cheapest text to reclaim, in order:
-     · CLOSED_BACK_HEM (49) - a P.MED, and now only on the full-look path.
-     · VOLUME_PERSISTENCE (171) - P.HIGH on the full-look path; read model-agnostic
-       .test.mjs first, it is the record of the body clauses.
-     · TEMPORAL_PERSISTENCE (~150 per branch) is already off both single-garment
-       branches - see the presence-gate suite before putting it back, not after.
-     · The anchors are product-specified wording - change them deliberately or not at all.
-   The order to restore in is below.
-
-   THE REST ARE GENUINELY GONE from the wire, and are the ones worth buying back first:
-     · inpaintLock    face/skin/hands/background passthrough. THE LARGEST LOSS.
-                      Restore: add [P.HIGH, DENSE.inpaintLock].
-     · contract, select, ignoreFurniture   the split-reference contract. Restore these
-                      TOGETHER with COMPOSITE_DEFAULT, never one without the other.
-     · lookPanels     the full-look TOP/BOTTOM layout. The only clause whose absence
-                      costs a whole feature. Restore: add [P.CORE, DENSE.lookPanels].
-     · pose, poseProfile, frontRef, backReal, backInferred, side
-                      orientation steering, now carried by the ASSET the watcher swaps
-                      to rather than by a sentence.
-     · keepTop         the opposite-layer lock. NOW RESTORED ON TOPS - written INTO
-                      CATEGORY_ANCHOR.top and PLAIN_TEE_ANCHOR as "Keep the subject's
-                      lower body, shoes, and background unmodified." after the
-                      "it repainted my green trousers" report. Inside the anchor because
-                      there it cannot shed and costs no extra clause; region-named, never
-                      "pants/shorts/trousers", because those would ship as positive
-                      tokens (the tuxedo mechanism). See PLAIN_TEE_ANCHOR's comment block
-                      for the measured cost - it is paid for by fitSentence shedding on
-                      three size rungs.
-                      ⚠ CORRECTION, and the reason this bullet is worth re-reading: it
-                      used to claim "the bottoms half of it is back on the wire - written
-                      INTO CATEGORY_ANCHOR.bottom". THAT WAS FALSE. CATEGORY_ANCHOR.bottom
-                      ends at "Strictly preserve original pattern and color."; it has no
-                      opposite-layer sentence, KEEP_OPPOSITE_LAYER has no call site, and
-                      trace:prompt has always printed the bottoms branch without it.
-                      Anyone who restored the tops half by "mirroring that sentence" was
-                      copying a clause that did not exist. BOTTOMS IS STILL UNPROTECTED:
-                      restoring it there is a separate one-line change on separate
-                      evidence (none filed yet, 100+ free chars available on that branch).
-     · rotation       "the garment dropped mid-turn". The mechanical half of that fix
-                      (the prompt-only flip in applyGarment, and the OrientationWatcher's
-                      turn hold) is code, not prompt, and is untouched by this.
-     · temporal, quality  the file's own TRIM tier - the model's priors already favour
-                      both, which is why they were always the first to shed. */
-const DENSE = Object.freeze({
-  /* NAMES THE REFERENCE AS A PHOTO OF THE GARMENT, in prose. The previous wording -
-     "Try-on. Reference: split image, LEFT = garment front, RIGHT = back." - was
-     telegraphic notation, and notation is a weak way to tell a diffusion model that an
-     attached image is the thing it must copy. Costs ~65 characters more and buys the
-     grounding back. */
-  /* The "Virtual try-on." preamble that used to open this was dropped by the image-first
-     refactor: garmentAnchor() now leads every prompt and states the task in its first six
-     words, so the label was pure duplication sitting between the anchor and the layout
-     fact it exists to state. What is left is only the layout fact. */
-  contract:      "The reference image is a split photo of one garment: LEFT half its front, RIGHT half its back.",
-  /* Split out of the contract so it can shed on its own. It guards a cosmetic artifact -
-     a panel divider painted onto the shirt - which must never outrank grounding. */
-  ignoreFurniture: "Ignore the gap, the background and any FRONT/BACK label.",
-  select: {
-    front:       "Use the LEFT half only; ignore the RIGHT.",
-    back:        "Use the RIGHT half only; ignore the LEFT.",
-  },
-  pose: {
-    front:       "They face the camera.",
-    back:        "They are turned around, back to camera.",
-  },
-  poseProfile: {
-    front:       "They are EDGE-ON in side profile; keep that rotation.",
-    back:        "They are EDGE-ON, part-way turned away; keep that rotation.",
-  },
-  /* THE ANTI-MUTATION NEGATIVE. Compression removed every enumerated "do not" from this
-     prompt, and this is the one that had to come back: with a weakly-bound reference and
-     nothing forbidding invention, a diffusion model falls to its own prior, which for
-     "shirt" is a plain mid-grey tee. Naming the failure is what suppresses it - the same
-     mechanism as backInferred's front-print ban. */
-  /* THE ANTI-INVENTION NEGATIVE. Widened twice against two separate reports of the same
-     mechanism producing different specific outputs - first a blue JACKET, then a full
-     TUXEDO with a bowtie and badge - which is the pattern that argues for naming the
-     CLASS (formalwear/outerwear/accessories) rather than chasing individual garment
-     words one report at a time; the next drift is not guaranteed to invent a jacket
-     either. The underlying failure is unchanged from the first widening: the model kept
-     a garment-shaped region and rendered something else into it - a layer, a type and
-     now an ACCESSORY change, none of which the previous wording forbade.
-
-     Naming the specific wrong output is deliberate and is the mechanism this file relies
-     on everywhere (the same reason backInferred names the front print it must not copy),
-     but the list cannot grow without bound inside a 226-token prompt - so it is pitched
-     at garment CLASSES wide enough to cover what has actually been observed (jacket/coat/
-     suit/tuxedo covers "outerwear or formalwear invented instead of a tee"; tie/bowtie/
-     badge covers "accessories invented that were never in the reference") rather than an
-     ever-growing enumeration of exact nouns. What is still NOT named is any particular
-     garment's print text - that belongs to one product, and hardcoding it would state a
-     falsehood about every other catalog item. The substitution sentence already binds the
-     print generically ("every graphic, logo and lettering on it"). */
-  /* RETIRED FROM ASSEMBLY - folded into garmentAnchor(). Kept verbatim because the
-     comment above is the record of two live reports, and because it is the enumeration
-     the anchor deliberately does NOT reproduce: with no negative_prompt field on
-     Decart's set(), every noun here ships inside the POSITIVE prompt, where "tuxedo"
-     is a token the sampler can steer toward rather than away from. See the anchor's
-     own reservation note. */
-  assetLock:     "Never invent a garment, jacket, coat, suit, tuxedo, tie, bowtie or badge, or change the garment type, and never leave their own top showing.",
-  /* Depth and lateral wrap MERGED. Separately they cost ~155 characters and the budget
-     could only afford one, so a 90-degree frame got the BODY clause and no GARMENT clause -
-     leaving the side of the garment unreferenced, which is exactly where the model
-     substitutes its own prior. One instruction about one region, ~175 chars. */
-  profileLateral: "EDGE-ON: keep their full front-to-back depth; build the side by continuing its front and back panels.",
-  bodyFidelity:  "Keep their real body volume; never slim them.",
-  modelAgnostic: "Ignore the reference model's body; fit the cloth to THIS person.",
-  keepBottoms:   "Bottoms unchanged.",
-  keepTop:       "Top unchanged.",
-  /* CONSIDERED AND REJECTED: adding "arms" here, after the tuxedo/blazer report - a
-     blazer's sleeve is structurally different from a t-shirt's, so naming the arm/sleeve
-     region alongside face/hands looked like a targeted fix. It is wrong for this shared
-     table: PEAR_CATALOG ships long-sleeve items (Strata, Nimbus, Echo), and for those a
-     correct render DOES cover the arm in sleeve fabric - "arms pass through untouched"
-     would contradict the substitution itself on every one of them, the exact class of
-     internal prompt contradiction this session has spent several commits removing, not
-     one to reintroduce. The noun already carries this signal correctly ("t-shirt" implies
-     short sleeves, "tank top" sleeveless, "long-sleeve shirt" full coverage) without a
-     separate, subType-blind passthrough clause fighting it. */
-  inpaintLock:   "Face, skin, hands and background pass through untouched.",
-  rotation:      "The garment stays on through any turn.",
-  temporal:      "Stable print, no flicker.",
-  quality:       "Photoreal fabric, natural light.",
-
-  /* Single-asset (non-composite) counterparts. The reference is ONE photo, so these say
-     which side of the garment it shows instead of which half of a split image. */
-  frontRef:      "The reference photo shows the garment's front; reproduce it, not the back.",
-  backReal:      "The reference photo shows the garment's BACK: reproduce its back print at the same size and position; do not render the front.",
-  /* The one enumerated negative the budget still pays for. With only a front photo the
-     model's likeliest completion for a back is the front print repeated - the documented
-     double-print bug - and nothing else in this compressed prompt forbids it. */
-  backInferred:  "No back photo exists: infer a plain back in the same fabric and colour. Never copy the front print, logo or buttons onto it.",
-  side:          "Show the garment's side: shoulder line, sleeve and side seam, draping along the flank.",
-  /* Full-look stitched reference: two garments stacked in one image. Same job the
-     composite contract does for front|back, for the top|bottom axis instead. */
-  lookPanels:    "The reference stacks two garments: the TOP panel is the upper-body garment, the BOTTOM panel the lower. Render both at once; never mix them or draw the panel frames.",
-});
-
-/**
- * Assemble a prompt from priority-tagged parts, guaranteeing it fits PROMPT_MAX_CHARS.
- *
- * THE GUARANTEE IS THE POINT. Writing short clauses is necessary but not sufficient:
- * the garment description is interpolated from catalog data (or a shopper's own upload),
- * so its length is not known at authoring time and a long one could push a
- * hand-tuned-to-fit prompt back over the ceiling - reintroducing exactly the crash this
- * exists to prevent, for one unlucky product. Clauses are therefore SHED, worst-priority
- * first, until the result fits.
- *
- * The final clamp is a hard slice. It only triggers if CORE alone exceeds the budget
- * (a pathologically long garment name), and it is deliberate: a clipped prompt still
- * produces a garment, while a rejected one produces a failed session.
- *
- * @param {Array<[number, string]>} parts  [priority, text]; empty text is skipped.
- * @param {number} [max]  budget override, for tests.
- * @returns {string}
- */
-/* getFitModifier() returns a bare noun phrase ("regular fit", "slightly oversized fit")
-   because every previous caller embedded it mid-sentence as "Render a ${fitMod}". The
-   dense builders join their parts as standalone sentences, where a bare phrase reads as
-   a fragment - so it gets its own sentence here rather than being reworded at three
-   separate call sites. */
-function fitSentence(garmentType) {
-  const mod = getFitModifier(getSizeDelta(), garmentType);
-  return mod ? `Fit: ${String(mod).trim()}.` : "";
+/** The full-look prompt (lookAnchorPrompt(), what buildLookPrompt() returned). */
+function wireLookPrompt(where) {
+  return requestWirePrompt({ kind: "look", item: {}, angle: "front", inProfile: false, delta: 0 }, where);
 }
 
-/* ── THE COLOUR LOCK - "the white tee rendered black" / "it came back yellow" ──────
-   ────────────────────────────────────────────────────────────────────────────────
-   THE BUG THIS CLOSES. The anchors end with "Strictly preserve the original <noun>
-   texture, pattern, and color" - a clause that tells the model to preserve a colour
-   without ever NAMING one. That is a pointer, not a value: it only works while the
-   model is actually reading the colour off the reference, which is precisely what
-   fails in the reported case. A garment whose colour drifts has nothing in the prompt
-   contradicting the drift.
-
-   This names the measured value. The hex is sampled from the FRONT product photo's own
-   main fabric by the same Gemini call that classifies front/back (server.js
-   primary_color_hex -> widget garment_color_hex -> activeItem.colorHex), so it is
-   per-product data threaded through the payload, NOT text baked into a global anchor -
-   the distinction that keeps one product's colour out of every other product's prompt.
-
-   A NAME, NOT THE HEX, and this is the whole reason the mapping below exists. Decart's
-   set() takes a natural-language prompt into a text encoder; "#f8f8f5" is three bytes of
-   hex trivia to a tokenizer, while "white" is a word it has strong priors for. Shipping
-   the raw hex would spend characters to say almost nothing.
-
-   IT ABSTAINS RATHER THAN GUESSES - §6, and it matters more here than usual. A WRONG
-   colour name is strictly worse than no colour name: the anchor's generic "preserve the
-   original color" at least defers to the pixels, whereas "The garment is yellow" states
-   a value with full authority and will actively repaint a cream garment. So:
-     · an unparseable / absent hex -> "" (nothing ships; today's behaviour exactly).
-     · a hex that is not confidently near any named colour -> "" as well. This is the
-       important one: a muddy mid-tone is what a MULTICOLOUR OR PATTERNED garment's
-       "dominant colour" averages out to, and naming that average would flatten the
-       pattern the anchor is simultaneously trying to preserve.
-
-   P.LOW, WHICH IS LOWER THAN THE FIT SENTENCE, AND THAT IS DELIBERATE.
-   fitPrompt() sheds the highest priority NUMBER first, so at P.LOW (3) this is the
-   FIRST thing off the wire under pressure - before fitSentence (P.MED, 2), before
-   FRONT_CLOSURE_LOCK (P.HIGH, 1), before the anchor (P.CORE, 0). That ordering is the
-   condition on which this clause was allowed to exist at all: the tops branches have
-   7-10 free characters at their tightest rungs after the lower-body isolation lock, so
-   anything at P.MED or above would have displaced an already-shipping feature. At P.LOW
-   it is purely additive - it ships where there is room and silently stands down where
-   there is not. Check `npm run trace:prompt`'s size ladder before promoting it.
-
-   NOT the OCR text. text_ocr is threaded as far as the server response and deliberately
-   stops there: a partial or mis-read transcription ("BE YOUR OWN Healer" for "BE YOUR
-   OWN Healer WORLDWIDE") would be asserted to Decart as the garment's lettering and
-   render wrong text confidently, which is worse than the anchor's generic "preserve the
-   pattern". Its job is the duplicate-panel veto (server.js validateBackCandidate), where
-   a wrong value costs a rejected back rather than a wrong render. */
-/* ⚠ NOT the same table as COLOR_NAMES further down this file, and the duplication is
-   deliberate rather than an oversight. That one backs colorName() and is a HUMAN-FACING
-   label palette ("royal blue", "off-white", "light grey", "tan") which falls back to
-   "neutral" and therefore always answers. This one backs a PROMPT clause and must be
-   able to answer NOTHING - see the three gates below. Reusing the label palette here
-   would import its no-abstention contract, which is the one property this clause cannot
-   have; naming these FABRIC_* keeps the two from colliding at module scope, which they
-   originally did (a duplicate `const COLOR_NAMES` is a load-time SyntaxError that the
-   sandbox-extracting test suites cannot see, because they slice fragments rather than
-   loading the file). */
-const FABRIC_COLOR_NAMES = Object.freeze([
-  ["white",  0xff, 0xff, 0xff], ["black",  0x14, 0x14, 0x14],
-  ["grey",   0x80, 0x80, 0x80], ["silver", 0xc0, 0xc0, 0xc0],
-  ["charcoal", 0x36, 0x36, 0x3a],
-  ["red",    0xd0, 0x21, 0x21], ["burgundy", 0x6d, 0x10, 0x28],
-  ["orange", 0xe8, 0x7d, 0x1e], ["yellow", 0xf2, 0xd0, 0x2c],
-  ["green",  0x2e, 0x8b, 0x3f], ["olive",  0x6b, 0x6b, 0x2a],
-  ["blue",   0x2a, 0x5c, 0xc8], ["navy",   0x1b, 0x25, 0x50],
-  ["teal",   0x1d, 0x8a, 0x8a],
-  ["purple", 0x6f, 0x36, 0xa5], ["pink",   0xe8, 0x8f, 0xb0],
-  ["brown",  0x7a, 0x4b, 0x28], ["beige",  0xd8, 0xc4, 0xa0],
-  ["cream",  0xf3, 0xea, 0xd6],
-]);
-
-/* ── THREE GATES, AND EACH ONE CLOSES A DIFFERENT WAY OF BEING WRONG ──────────────
-   A single nearest-neighbour lookup with one distance threshold was the first version of
-   this, and measurement killed it: with a palette dense enough to name ordinary garment
-   colours, almost every input lands within any threshold loose enough to be useful. The
-   gates below were each added against a specific mis-naming found by computing the actual
-   distances, not by intuition.
-
-   (1) ABSOLUTE DISTANCE - the backstop. A colour far from every name gets none.
-
-   (2) MARGIN over the runner-up - the "which of these two is it" case. #7a6a55 sits at
-       olive=46, grey=49, brown=55: three names inside 9 units, so the nearest is not a
-       verdict, it is a coin toss. Gated at 12.
-
-   (3) NEUTRAL CONSISTENCY - THE IMPORTANT ONE, and the one a distance metric cannot
-       express. RGB Euclidean distance collapses every DESATURATED colour onto the grey
-       axis, and grey then wins by a LARGE margin, so gates (1) and (2) both wave it
-       through. Measured examples: a sage green #6b8f7a reads grey=26 (margin 53), and a
-       dusty mauve #9b7fa8 reads grey=48 (margin 30). Both would have shipped "The garment
-       fabric is grey" for a garment that is plainly not grey - actively repainting it,
-       which is the exact failure this clause exists to prevent, caused by the clause
-       itself. So the colour's own chroma must AGREE with the matched name's: a chromatic
-       colour may not take a neutral name, and a neutral one may not take a chromatic name.
-       Where they disagree, abstain.
-
-   Net effect on the taupe case #8a7f6d (grey=21, margin 55, chroma 29): abstains, because
-   a warm taupe is not grey even though RGB says it nearly is. That is the correct answer
-   and it is only reachable through gate (3). */
-const FABRIC_COLOR_MAX_DIST = 96;
-const FABRIC_COLOR_MIN_MARGIN = 12;
-/* max(r,g,b) - min(r,g,b). 25/255 (~10%) is the neutral band: #f8f8f5 (chroma 3) is an
-   off-white and takes "white"; #8a7f6d (chroma 29) is a taupe and takes nothing. */
-const FABRIC_NEUTRAL_CHROMA_MAX = 25;
-const FABRIC_NEUTRAL_NAMES = new Set(["white", "black", "grey", "silver", "charcoal", "beige", "cream"]);
-
-function colorNameFromHex(hex) {
-  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
-  if (!m) return "";
-  const v = parseInt(m[1], 16);
-  const r = (v >> 16) & 0xff, g = (v >> 8) & 0xff, b = v & 0xff;
-
-  const ranked = FABRIC_COLOR_NAMES
-    .map(([name, nr, ng, nb]) => [name, Math.sqrt((r - nr) ** 2 + (g - ng) ** 2 + (b - nb) ** 2)])
-    .sort((a, z) => a[1] - z[1]);
-  const [best, bestD] = ranked[0];
-  const runnerUpD = ranked[1] ? ranked[1][1] : Infinity;
-
-  if (bestD > FABRIC_COLOR_MAX_DIST) return "";                          // (1)
-  if (runnerUpD - bestD < FABRIC_COLOR_MIN_MARGIN) return "";            // (2)
-  const chroma = Math.max(r, g, b) - Math.min(r, g, b);                  // (3)
-  if ((chroma <= FABRIC_NEUTRAL_CHROMA_MAX) !== FABRIC_NEUTRAL_NAMES.has(best)) return "";
-  return best;
+function requestWirePrompt(req, where) {
+  const key = JSON.stringify(req);
+  const known = _wirePrompts.get(key);
+  if (typeof known === "string") return Promise.resolve(known);
+  if (known) return known;
+  const pending = fetchWirePrompt({ ...req, where: where || "prompt" }).then(
+    (text) => { _wirePrompts.set(key, text); return text; },
+    (err) => { _wirePrompts.delete(key); throw err; });
+  _wirePrompts.set(key, pending);
+  return pending;
 }
 
-/* ── THE GARMENT IDENTITY LOCK - "Decart rendered a random t-shirt" ────────────────
-   ────────────────────────────────────────────────────────────────────────────────
-   Promoted from a P.LOW colour hint to a P.CORE identity lock, and widened to carry the
-   garment's transcribed lettering alongside its colour. Both values are MEASURED by the
-   same Gemini call that classifies front/back (server primary_color_hex / front_text_ocr
-   -> widget -> item.colorHex / item.textOcr), so this is per-product data threaded
-   through the payload and never text baked into an anchor.
-
-   WHY IT IS VALUES-ONLY, and not the 290-character "FIT LOCK" paragraph it was specified
-   as. The anchors already open with "Drape and fit the EXACT static <noun> from the
-   reference image" and close with "Strictly preserve the original <noun> texture,
-   pattern, and color". A lock that restates "fit the exact garment shown in the
-   reference, do not invent or substitute the design" spends ~230 characters repeating
-   instructions ALREADY ON THE WIRE, and text volume competing with the reference image is
-   the one mechanism every report in this file's history shares - it is how the tuxedo got
-   rendered. What the prompt genuinely could not say before is WHICH colour and WHICH
-   text, because those are per-product measurements. So this clause supplies exactly the
-   two values and nothing else; the imperative half is the anchor's job and already done.
-
-   ── THE BUDGET, WHICH IS THE HARD CONSTRAINT HERE ──
-   P.CORE cannot shed. Anything put here is spent on every dispatch, and if the CORE total
-   exceeds PROMPT_MAX_CHARS then fitPrompt() falls through to clampPromptForWire()'s hard
-   slice, which cuts at the END - mid-word, taking this clause's own quoted text with it
-   and asserting a garment print that reads half a slogan. So:
-
-     · The tightest REAL branch is tops + front + closure: 552 chars of anchor + closure
-       lock, 98 free. IDENTITY_LOCK_MAX_CHARS is therefore 96, and this function can never
-       return more than that - measured, not assumed (npm run trace:prompt prints it).
-     · The print half is included ONLY IF THE WHOLE TRANSCRIPTION FITS. It is never
-       truncated. Half a slogan asserted as the garment's text is worse than no text at
-       all - it is a confident wrong answer, the same failure mode colorNameFromHex()'s
-       three gates exist to avoid.
-     · IT COSTS THE FIT SENTENCE ON ONE BRANCH, and that is a deliberate, specified
-       trade: on tops + front + closure only 9 characters remain after fit(0)'s 88, so ANY
-       lock bigger than 9 chars evicts fitSentence (P.MED) there. The spec is explicit
-       that visual identity outranks tension under pressure, and a garment rendered as the
-       wrong garment is plainly worse than one rendered at the wrong tension. Every other
-       branch keeps both. See trace:prompt's size ladder for the per-rung truth.
-
-   ── FRONT-ONLY FOR THE PRINT HALF, and this is the correctness point, not a nicety ──
-   text_ocr is transcribed from the FRONT photograph. Asserting "the print reads X" while
-   the BACK asset is the reference tells the model to put the chest graphic on the
-   shopper's spine - which IS the print-less-back / double-print bug (23f5953), reached
-   through the prompt instead of through the reference image. The colour half is safe on
-   both angles because a garment is one colour from every side. So the angle SELECTS which
-   halves apply, in the same spirit as the frozen anchor pair. */
-const IDENTITY_LOCK_MAX_CHARS = 96;
-/* A transcription longer than this is not a chest graphic - it is a care label, a size
-   chart or a paragraph of marketing copy that happened to be in frame. Naming it as the
-   garment's print would be wrong even if it fit the budget. */
-const PRINT_TEXT_MAX_CHARS = 48;
-
-/* The garment's lettering, or "" to abstain. Abstains on absent (never transcribed),
-   empty (genuinely plain - nothing to assert), and over-long (see above). Quotes are
-   stripped because the value is about to be wrapped in them, and a nested quote would
-   read to the model as the end of the print text. */
-function garmentPrintText(item) {
-  const raw = item && item.textOcr;
-  if (typeof raw !== "string") return "";
-  const text = raw.replace(/["""'']/g, "").replace(/\s+/g, " ").trim();
-  if (!text || text.length > PRINT_TEXT_MAX_CHARS) return "";
-  return text;
-}
-
-/* ── THE REAR VERDICT, IN WORDS - the one way a BACK prompt stops asserting a print ──────
-   REPORTED 2026-09-16: "during the turn to the back the mountain print rendered for a split
-   second and then vanished, degrading into a plain brown shirt", filed as the prompt builder
-   dropping a graphic descriptor mid-turn. It cannot do that: `angle` SELECTS one frozen anchor
-   and nothing is ever assembled or stripped per frame (see imageOnlyPrompt's frozen-axis note),
-   and the back anchor is 521/650 chars with every size rung fitting, so it cannot shed either.
-
-   THERE IS EXACTLY ONE MECHANISM that changes what a BACK dispatch asserts about the rear, and
-   it is this verdict: `item.backIsPlain === true` selects PLAIN_BACK_ANCHOR, which says "The
-   rear panel is smooth unbroken fabric" in place of "Reproduce the rear panel exactly as shown
-   in the reference". On a garment whose rear IS blank that is the fix for invented graphics
-   (see PLAIN_BACK_ANCHOR). On a garment with a real rear print it would suppress the one
-   graphic the shopper turned around to see - which is exactly the reported shape.
-
-   IT ARRIVES SILENTLY AND CAN ARRIVE MID-SESSION. The widget opens the room on a DOM-order
-   guess and posts PEAR_UPDATE_GARMENT when the classifier resolves, seconds later, which is
-   after go-live. Until now the verdict was never logged anywhere: not when it landed, not when
-   it changed what the wire says. So the next report of this shape can be answered from one
-   console line instead of inferred from pixels. Pure diagnostics - nothing here selects
-   anything. */
-function describeRearConstruction(item) {
-  if (!item) return "no item";
-  if (item.backIsPlain === true) {
-    return 'PLAIN asserted (backIsPlain=true → "the rear panel is smooth unbroken fabric") -' +
-      " if this garment HAS a rear print, this is what suppresses it";
+/* POST /api/prompt, one retry on a transport/5xx/429 failure - the same policy as
+   requestSizeVerdict(). */
+async function fetchWirePrompt(body) {
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 500));
+    try {
+      const resp = await postPearApi("prompt", JSON.stringify(body));   // the edge first - see postPearApi()
+      if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
+        const err = new Error(`prompt service HTTP ${resp.status}`);
+        err.permanent = true;
+        throw err;
+      }
+      if (!resp.ok) throw new Error(`prompt service HTTP ${resp.status}`);
+      const data = await resp.json();
+      if (!data || typeof data.prompt !== "string" || !data.prompt) throw new Error("malformed prompt response");
+      return data.prompt;
+    } catch (e) {
+      lastErr = e;
+      if (e && e.permanent) break;
+    }
   }
-  if (item.backIsPlain === false) return 'rear print asserted (backIsPlain=false → "reproduce the rear panel exactly as shown")';
-  return 'rear print asserted (backIsPlain not established → "reproduce the rear panel exactly as shown")';
+  throw lastErr;
 }
-
-function identityLockSentence(item, angle = "front") {
-  /* THE WRAPPERS ARE TERSE BECAUSE EVERY CHARACTER HERE IS SPENT AT P.CORE, on every
-     dispatch, and is taken straight out of fitSentence's headroom. "Fabric: white."
-     rather than "The fabric color is white." costs 14 instead of 27 and says the same
-     thing to a text encoder; the 18 characters that buys back are two whole size rungs
-     on the plain-tee branch (measured - see the trace ladder). "Fabric:" and not
-     "Color:" is deliberate: an unqualified colour label could be read as the
-     background's, which the anchor is simultaneously telling the model to preserve. */
-  const parts = [];
-  const name = colorNameFromHex(item && item.colorHex);
-  if (name) parts.push(`Fabric: ${name}.`);
-  if (angle !== "back") {
-    const text = garmentPrintText(item);
-    if (text) parts.push(`Print: "${text}".`);
-  }
-  const out = parts.join(" ");
-  /* THE CEILING IS ENFORCED, not documented and hoped for. Dropping the whole clause is
-     the correct overflow behaviour: every part of it is an assertion about the garment,
-     and a partial assertion is a wrong one. Logged because a clause silently vanishing is
-     exactly the class of bug this file keeps a tracer for. */
-  if (out.length > IDENTITY_LOCK_MAX_CHARS) {
-    console.warn(`[PEAR] identityLockSentence() - ${out.length} chars exceeds the ` +
-      `${IDENTITY_LOCK_MAX_CHARS} budget; dropping it rather than shipping a truncated ` +
-      `garment assertion. Colour+print for this item cannot both be named.`);
-    return name && `Fabric: ${name}.`.length <= IDENTITY_LOCK_MAX_CHARS
-      ? `Fabric: ${name}.`   // keep the half that still fits, angle-safe
-      : "";
-  }
-  return out;
-}
-
-/* ── THE WIRE GUARD - last line of defence, and the one that generalises ──────
-   fitPrompt() budgets the prompts this file BUILDS. That is not the same guarantee as
-   "nothing over-long reaches Decart": a future builder, a hot-fix that concatenates one
-   more clause onto a returned string, or any path that skips the builders entirely would
-   sail straight past it and fail the session with the same opaque Hebrew banner.
-
-   This clamps at the wire instead, so the guarantee holds no matter who produced the
-   string. It should never fire - every builder already fits - so firing is itself the
-   signal, and it logs loudly with the offending prefix rather than silently truncating.
-   Truncation is the correct failure mode here: a clipped prompt still dresses the
-   shopper, while a rejected one ends the session before the first frame. */
-function clampPromptForWire(prompt, where) {
-  const s = String(prompt ?? "");
-  if (s.length <= PROMPT_MAX_CHARS) return s;
-  console.error(
-    `[PEAR] ${where}: prompt is ${s.length} chars, over the ${PROMPT_MAX_CHARS} budget ` +
-    `(Decart hard-rejects >226 tokens). Truncating to keep the session alive - a builder ` +
-    `is bypassing fitPrompt(). Prefix: ${s.slice(0, 120)}…`
-  );
-  return s.slice(0, PROMPT_MAX_CHARS).trim();
-}
-
-function fitPrompt(parts, max = PROMPT_MAX_CHARS) {
-  let keep = parts.filter(([, text]) => text && String(text).trim());
-  const render = (list) => list.map(([, t]) => String(t).trim()).join(" ").replace(/\s+/g, " ").trim();
-
-  let out = render(keep);
-  while (out.length > max) {
-    const worst = Math.max(...keep.map(([p]) => p));
-    if (worst === P.CORE) break;                       // nothing droppable left
-    keep.splice(keep.findIndex(([p]) => p === worst), 1);
-    out = render(keep);
-  }
-  if (out.length > max) {
-    console.warn(`[PEAR] fitPrompt() - CORE alone is ${out.length} chars (budget ${max}); clamping.`);
-    out = out.slice(0, max).trim();
-  }
-  return out;
-}
-
-/**
- * The prompt for a composite reference. Returns IMAGE_ONLY_PROMPT.
- *
- * ORDER USED TO BE THE POINT, and it moved twice before it stopped mattering. The
- * original shape was `buildPrompt(item) + angleClause(item)`: 1,403 characters of colour /
- * anatomy / fit / quality / hem / hard-negative boilerplate AHEAD of the panel contract,
- * pushing the single most important instruction in composite mode past the halfway mark of
- * a 2,636 character prompt. Lucy regenerates every frame from that prompt and the leading
- * tokens dominate, so that boilerplate was not merely wasteful - it was outranking the
- * contract. Fix one: put the panel contract first. Fix two (the tuxedo report): put the
- * image anchor first, because "which half of the reference to read" only matters once the
- * model is reading the reference at all.
- *
- * FIX THREE - the tuxedo survived both - IS THAT THERE IS NOTHING TO ORDER. Every clause
- * is a token competing with the pixels, and ordering them only chooses which competitor
- * goes first. See IMAGE_ONLY_PROMPT for the mechanism and the full list of what this gave
- * up. The composite path itself is standing down with it (COMPOSITE_DEFAULT = false): a
- * split FRONT|BACK reference is only legible alongside the panel contract that explains
- * it, and that contract is exactly the text this mode removes.
- *
- * THE PARAMETERS ARE RETAINED AND DELIBERATELY UNUSED. They are the seam: applyGarment()
- * still freezes `angleAtStart`/`profileAtStart` before its awaits and still threads them
- * here, so the TOCTOU plumbing that keeps the reference and the prompt describing the same
- * moment stays live and stays tested (angle-race, side-profile §6). Restoring any clause
- * is then a two-line edit here, not a re-derivation of that plumbing.
- *
- * @param {object} item   the active garment (catalog or custom upload)
- * @param {"front"|"back"} angle  retained; see above
- * @param {boolean} inProfile     retained; see above
- * @returns {string}
- */
-function buildCompositePrompt(item, angle, inProfile) {   // eslint-disable-line no-unused-vars
-  return imageOnlyPrompt(item, angle);
-}
-
-/* Full-Look composite clause, for stitchLookBlob() (TOP/BOTTOM, unrelated to front/back
-   orientation). The reference image is TWO stacked, isolated garment photos
-   (TOP over BOTTOM) rather than one image + a text-only description of the second
-   garment, so the model has an actual pixel reference for BOTH the shirt and the
-   pants and can render them together instead of favoring only the visually-referenced
-   one. */
-const LOOK_CLAUSE =
-  " This image is two completely separate garment photographs stacked vertically, each isolated inside its own black-framed panel and divided by a WIDE solid-black separator band that is a strict no-man's-land." +
-  " The two panels are distinct, mutually exclusive garment views. The panel marked 'TOP' is the ONLY valid source for the upper-body garment. The panel marked 'BOTTOM' is the ONLY valid source for the lower-body garment. Treat the black band and black frames as an impassable wall: you are strictly forbidden from sampling, blending, copying or bleeding ANY pixel from one panel into the other." +
-  " Reproduce EACH panel's garment with 100% fidelity to its color, fabric and graphics - rendering the 'TOP' panel's garment on the person's upper body AND the 'BOTTOM' panel's garment on the person's lower body AT THE SAME TIME, in a single photorealistic pass. Neither garment replaces the other; both must be visible simultaneously." +
-  " The 'TOP' and 'BOTTOM' text markers and the black frames/band are architectural guides only - never render that text, the frames or the band onto the clothing or the person.";
-
-/* Custom upload, BACK angle, NO back photo supplied → a stronger inferred-rear than the
-   generic backInferred. Product-approved wording: a clean, plain rear (front graphics
-   stripped) that keeps the front's fabric/colour/seams/drape. The "negative prompt" is
-   folded IN as an inline clause because Decart's realtime set() accepts only
-   { prompt, image, enhance } - there is NO separate negative_prompt field to pass. */
-const CUSTOM_BACK_INFERRED = REAR_POSE + BACK_TAIL.custom;
 /* A REAL rear reference = a back image that DIFFERS from the front. A mirrored front
    (catalog auto-fill at load, or the graceful front-fallback) has g.back === g.front and
    is NOT a true back photo - so it must NOT claim "reproduce the back" steering. Only a
@@ -15456,7 +11776,7 @@ function describeBackViewReadiness(item) {
 
 /* Answerable on a live session without a redeploy, which is the whole point: a shopper
    reporting a plain back is reporting one of five states and cannot tell you which. */
-if (typeof window !== "undefined") {
+if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
   window.__pearDebugBackView = () => {
     const r = describeBackViewReadiness(activeItem);
     /* ── PROVENANCE, BECAUSE "READY" WAS LYING ABOUT THE ONE CASE THAT MATTERED ──────
@@ -15530,70 +11850,7 @@ function compositeActiveFor(item) {
    panel that does not exist, so there is nothing for the back instruction to point at.
    applyGarment() therefore passes what it actually sent. Omitted elsewhere, where the
    inferred value is correct. */
-/* `inProfile` is the OrientationWatcher's edge-on reading, and it is a frozen snapshot for
-   exactly the same reason `angleOverride` is: the watcher samples on its own 250ms
-   interval and can change it during applyGarment()'s await, which would let the pose
-   sentence and the already-resolved reference describe different moments. applyGarment()
-   snapshots it beside angleAtStart and threads it through.
-
-   It is deliberately a SEPARATE axis from `angleOverride`, not a third value of it. The
-   angle decides WHICH GARMENT ASSET/panel is the source and is a hysteresis-protected
-   lock; profile decides only WHAT POSE THE PROMPT ASSERTS about the body. Collapsing them
-   would mean a side-on frame could change the reference image, which is precisely the
-   flapping the lock exists to prevent - a profile frame is not evidence the shopper's
-   other side is now showing. Keeping them independent is what lets this fix the pose
-   without touching any asset-selection behaviour. */
-function angleClause(item, angleOverride, useComposite, inProfile) {
-  /* Edge-on: append BOTH profile clauses on every branch below - the body's depth axis,
-     then the garment's lateral wrap over it. Both are orientation-independent (they
-     describe the frame, not which panel was locked), so they ride on front, back and side
-     alike. Order is deliberate and matches buildCompositePrompt(): what the body IS, then
-     how the garment covers it - the second only means anything given the first. */
-  /* One merged edge-on directive now, not two. Referencing the retired profileDepth /
-     lateralWrap here would interpolate the string "undefined" straight into a live
-     prompt - silent, and exactly the kind of thing the model would try to render. */
-  const depth = inProfile ? " " + DENSE.profileLateral : "";
-
-  // Composite mode: the reference carries BOTH views, so the clause names the panel
-  // matching the detected orientation and excludes the other outright. Only the pose
-  // sentence varies with profile; the panel contract and selection are unchanged.
-  if (useComposite === undefined ? compositeActiveFor(item) : useComposite) {
-    const a = (angleOverride || effectiveAngle()) === "back" ? "back" : "front";
-    const pose = inProfile ? DENSE.poseProfile[a] : DENSE.pose[a];
-    // depth rides DIRECTLY behind the pose, not at the tail - see buildCompositePrompt()'s
-    // placement comment for why position is load-bearing for this model.
-    return " " + DENSE.contract + " " + pose + " " + DENSE.select[a] + depth;
-  }
-  const angle = angleOverride || effectiveAngle();      // AI Auto resolves to the DETECTED orientation
-  if (angle === "back") {
-    // Which POSE leads the clause depends on whether they are square-on or mid-turn; which
-    // GARMENT TAIL follows it depends on what reference we actually hold. Independent
-    // choices, so they are resolved independently rather than as four hand-written strings.
-    const pose = " " + (inProfile ? DENSE.poseProfile.back : DENSE.pose.back);
-    // Dual asset (front + a REAL back photo, incl. a user's uploaded back) → reproduce it.
-    // AI Auto always lands here with a real back (canCombineViews gates the mode on one).
-    if (activeBackIsReal(item)) return pose + depth + " " + DENSE.backReal;
-    // Only a front reference → the rear must be INFERRED, and the front print must not be
-    // copied onto it. That negative is the one enumerated ban the budget still pays for:
-    // it is the difference between a plain back and the chest logo printed twice.
-    return pose + depth + " " + DENSE.backInferred;
-  }
-  // AI Auto: pin the reference explicitly as the garment FRONT - the mode's whole contract
-  // is one unambiguous side - but state the shopper's real rotation, not an assumed facing.
-  if (currentAngle === AUTO_ANGLE) {
-    return " " + (inProfile ? DENSE.poseProfile.front : DENSE.pose.front) + " " + DENSE.frontRef + depth;
-  }
-  /* Single-view items (see profileActive()'s comment - the watcher now runs for these
-     too): `angle` here is a GALLERY tab choice (which product photo to reference), not a
-     claim about how the shopper is physically standing, and ANGLE_CLAUSE.front is "" - it
-     never needed its own pose sentence because there used to be no live pose signal for
-     this mode at all. `inProfile` is that signal now. When it's true, reach for
-     DENSE.side - the garment-specific side-seam/flank wording - instead of whatever the
-     selected tab's (possibly empty) clause says, same as AUTO_ANGLE substituting the
-     profile pose for the square-on one above. */
-  if (inProfile) return " " + DENSE.side + depth;
-  return angle === "back" ? " " + DENSE.pose.back : "";
-}
+/* angleClause() (dead relative to the wire - see trace:prompt's audit) - moved to lib/prompts.js (server-side prompt engine, 2026-09-26). */
 
 /**
  * Resolve the reference image handed to rtClient.set({ image }) for the active view.
@@ -15698,6 +11955,12 @@ async function applyGarment(item) {
      moment than the reference resolved for. Cheaper to be one tick stale than internally
      inconsistent - and the next tick corrects it. */
   const profileAtStart = profileActive();
+  /* THE PROMPT, FROM THE SAME READING AS THE REFERENCE (CLAUDE.md §2.8). Requested right
+     after the angle is frozen and before the first await, so it is built for angleAtStart
+     and nothing else, and so the server round-trip runs in parallel with the reference
+     resolve below instead of after it. Awaited at the payload. */
+  const promptText = wirePrompt(item, angleAtStart, "applyGarment", { inProfile: profileAtStart });
+  promptText.catch(() => {});
   const activeImg = activeImageOf(item);
   const refInfo   = {};                                          // ← filled in by referenceImageFor
   let   imageRef  = await referenceImageFor(item, activeImg, refInfo);   // Blob for combined, URL otherwise
@@ -15863,10 +12126,9 @@ async function applyGarment(item) {
      is the substantive difference. Both branches are driven by `usingComposite`, so the
      prompt can never describe a reference other than the one on the next line. */
   const payload = {
-    prompt: clampPromptForWire(usingComposite
-      ? buildCompositePrompt(item, angleAtStart, profileAtStart)
-      : buildPrompt(item, angleAtStart),
-      "applyGarment"),
+    /* Both builders it used to choose between - buildCompositePrompt() and buildPrompt() -
+       return imageOnlyPrompt(item, angle) in strict image-only mode; lib/prompts.js has both. */
+    prompt: await promptText,
     enhance: false,
     /* Unconditional: the ladder above re-pins or throws, so no path reaches here without a
        usable reference. The old `...(imageRef ? { image } : {})` spread is what shipped the
@@ -16016,36 +12278,7 @@ async function applyGarment(item) {
   if (typeof traceConditioning === "function") traceConditioning(item, imageRef, condBefore);
 }
 
-/**
- * Reads the Screen 1 physical inputs and returns a forceful anatomical anchor
- * sentence. This pins the AI's body model to real measurements so it cannot
- * hallucinate a generic body shape.
- * @returns {string}
- */
-function getAnatomicalAnchor() {
-  const num = (id) => { const el = $(id); return el && el.value ? parseFloat(el.value) : null; };
-  const height = num("height"), weight = num("weight");
-  const chest  = num("chest"),  waist  = num("waist"),  legs = num("legs");
-
-  if (!height && !weight) {
-    return "Fit the garment to a realistic human body with accurate anatomical proportions and photorealistic fabric physics.";
-  }
-
-  let sentence = "The person has ";
-  if (height && weight) sentence += `an exact height of ${height}cm and weighs ${weight}kg`;
-  else if (height)      sentence += `an exact height of ${height}cm`;
-  else                  sentence += `a weight of ${weight}kg`;
-  sentence += ".";
-
-  const details = [];
-  if (chest) details.push(`chest ${chest}cm`);
-  if (waist) details.push(`waist ${waist}cm`);
-  if (legs)  details.push(`inseam ${legs}cm`);
-  if (details.length) sentence += ` Exact body measurements: ${details.join(", ")}.`;
-
-  sentence += " Fit the garment strictly to these specific anatomical proportions - zero generic guessing, maximum physical fidelity.";
-  return sentence;
-}
+/* getAnatomicalAnchor() (restore seam, dead relative to the wire) - moved to lib/prompts.js (server-side prompt engine, 2026-09-26). */
 
 /**
  * THE LADDER getSizeDelta()/setSizeOverride() actually measure a step against. Adult
@@ -16062,7 +12295,11 @@ function getAnatomicalAnchor() {
  */
 function activeSizeLadder() {
   const sizes = resolvedGarmentSizes();
-  if (!isAdultNumericPantsGarment(sizes, activeItem)) return SIZE_SCALE;
+  /* adultNumericPants is lib/sizing.js's isAdultNumericPantsGarment() verdict for the
+     active product. Unknown (still in flight) reads as SIZE_SCALE - the letter answer,
+     and the one every product this cannot yet speak to already got. */
+  const product = typeof productVerdictNow === "function" ? productVerdictNow() : null;
+  if (!product || !product.adultNumericPants) return SIZE_SCALE;
   return [...new Set(sizes.map(Number).filter(Number.isFinite))]
     .sort((a, b) => a - b)
     .map(String);
@@ -16100,280 +12337,7 @@ function getSizeDelta() {
  * @param {string} garmentType - "upper_body" | "lower_body"
  * @returns {string}
  */
-/* ── Why the size-down wording is phrased the way it is ──────────────────────────
-   These strings used to describe a SILHOUETTE - "sleek athletic compression fit,
-   form-fitting tailored silhouette", "high-compression slim silhouette". A silhouette
-   is the outline of the BODY, so on a shopper who sized down, the earliest and most
-   concrete instruction in the prompt was read as "make this person's outline slim",
-   and STRICT_INPAINT's "do not flatten, slim or reshape their physique" arrived ~1,200
-   characters later to contradict it. Leading tokens dominate a realtime diffusion
-   prompt (see buildCompositePrompt), so the contradiction resolved the wrong way -
-   which is the "it compressed me into a thinner frame" report.
-   Every clause below now attributes tightness to the GARMENT and to what the FABRIC
-   does over a body whose dimensions are fixed: a smaller size stretches, pulls and
-   tensions across the shopper's real contours rather than shrinking them. Same fit
-   information, no instruction the body-fidelity clause has to fight. */
-function getFitModifier(delta, garmentType) {
-  if (garmentType === "upper_body") {
-    if (delta <= -2) return "deliberately undersized garment stretched taut over the body's unchanged contours, fabric under visible tension with stretch lines radiating from the shoulders and chest, hem riding at the natural waistline";
-    if (delta === -1) return "snug garment cut close to the body, fabric pulled smooth and slightly tensioned across the torso, following the shopper's real contours without compressing them";
-    if (delta === 0)  return "perfectly tailored true-to-size fit, flawless natural drape with no excess fabric";
-    if (delta === 1)  return "relaxed fit, slightly loose drape, comfortable room across the shoulders and chest";
-    /* delta >= 2 */  return "oversized fashion-forward fit, generously dropped shoulders, easy relaxed volume through the torso, elongated hem with natural gravity drape";
-  }
-  /* lower_body */
-  if (delta <= -2) return "deliberately undersized trousers stretched taut over the legs and hips as they actually are, fabric under visible tension at the thigh and seat with stretch lines at the waistband, full-length inseam with a tight ankle cuff";
-  if (delta === -1) return "snug trousers cut close through the thigh and knee, fabric pulled smooth and slightly tensioned over the shopper's real leg shape, tapering to a narrow ankle opening";
-  if (delta === 0)  return "perfectly tailored true-to-size fit, clean break at the ankle with no pooling";
-  if (delta === 1)  return "relaxed wide fit, comfortable room through the thighs, natural break at the ankle";
-  /* delta >= 2 */  return "wide-leg garment with generous volume through the thigh and a sweeping leg that breaks softly over the shoe, clean continuous fabric geometry";
-}
-
-/* ── Fabric-Aware Tension & Physics Conditioning ──────────────────────────────
-   getFitModifier() above describes FIT - how loose or tight the cut is. This
-   describes MATERIAL - how that specific fabric physically behaves once fit is
-   accounted for: a dry-fit tee clings and shows compression lines under tension,
-   raw denim holds a stiff, angular shape almost independent of the body inside
-   it. The two compose (fit + material), they never overlap or contradict.
-   Keyed by item.fabric - catalog metadata (PEAR_CATALOG), a custom upload's
-   declared material, or a store handoff's fabric field - so the clause tracks
-   whatever garment/colour is ACTIVE rather than being fixed per garment type. */
-const FABRIC_PHYSICS = {
-  dry_fit:  "a synthetic athletic dry-fit stretch material: sleek, body-conforming tension with the fabric hugging the body's real contours, subtle athletic stretch lines radiating across the chest, shoulders and back where the material tensions over muscle and bone, and a smooth skin-tight elasticity - without artificially slimming, compressing or reshaping the body underneath",
-  cotton:   "medium-weight woven cotton: a natural, semi-structured drape with soft, rounded fold lines, moderate stiffness that holds its shape at the seams while relaxing over the body's contours, and a matte, breathable weave texture",
-  denim:    "rigid, heavyweight denim: a structured, semi-stiff drape that holds its own shape largely independent of the body, thick angular fold lines at the hips, knees and elbows, visible top-stitching, and rigid shape retention over the body's mass - the fabric resists the body rather than clinging to it",
-  silk:     "lightweight, fluid silk: a soft, liquid drape that skims the body with minimal resistance, fine cascading folds rather than sharp creases, and a subtle natural sheen that shifts with the fabric's movement",
-  knitwear: "a soft knit weave: visible ribbed knit texture lines, a close, slightly elastic cling that follows the body's contours with gentle stretch recovery, and soft rolled edges at the hem, cuffs and collar rather than crisp woven seams",
-};
-const DEFAULT_FABRIC = "cotton";   // legacy/custom items with no declared fabric read as this, never with no physics clause at all
-
-/**
- * Fabric-physics clause for one garment. `subject` lets a two-garment prompt
- * (buildLookPrompt) name which layer the clause is about; single-garment
- * builders leave it at the generic default.
- * @param {object} item - reads item.fabric; anything unset/unrecognized falls back to DEFAULT_FABRIC
- * @param {string} [subject]
- * @returns {string}
- */
-function getFabricModifier(item, subject = "This garment's fabric") {
-  const key = item && Object.prototype.hasOwnProperty.call(FABRIC_PHYSICS, item.fabric) ? item.fabric : DEFAULT_FABRIC;
-  return ` ${subject} is ${FABRIC_PHYSICS[key]}.`;
-}
-
-/* Appended to every VTON prompt to lock the engine into photorealistic output.
-   Kept as a module constant so changing it in one place affects all call sites. */
-const QUALITY_SUFFIX = ", photorealistic real-world fabric texture, visible seams and stitching, micro-detailed weave, natural environmental lighting matching the user's room, cinematic shading, ultra-realistic physical garment appearance, strictly maintain flawless fabric integrity, continuous realistic 3D mesh, and natural material physics without any glitching, strange horizontal bands, tearing, or unnatural structural folds";
-
-/* Bias the model toward keeping graphics/logos/text and the bottom-hem edge details in
-   their original scale, proportion and relative position, and to render the full hem in
-   frame. Lucy regenerates every frame, so this is a probabilistic bias, not a guarantee. */
-const HEM_DETAIL = " Preserve the garment's printed graphics, logos, and text, and its bottom-hem edge details (including any small corner monogram or brand mark), at their original scale, proportion, and relative position on the garment; render the complete hem in-frame without cropping, stretching, or drifting details toward the center.";
-
-/* Layer-isolation clauses. Lucy VTON regenerates the WHOLE frame every pass, so a
-   single-garment prompt that never mentions the opposite layer lets that layer
-   drift (e.g. trying a shirt silently restyles the user's real pants). These hard
-   "do not touch" instructions pin the untouched layer to the live camera so a
-   top swap edits ONLY the top, and a bottom swap edits ONLY the bottom. */
-const KEEP_BOTTOMS = " Keep the person's existing lower body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the trousers, shorts, skirt, shoes, belt, or anything below the waist, and do not add, invent or restyle any accessories that were not already present.";
-const KEEP_TOP     = " Keep the person's existing upper body exactly as it is in the live camera - do not change, recolor, restyle, or re-render the shirt, top, jacket, hat, scarf, jewelry, or anything above the waist, and do not add, invent or restyle any accessories that were not already present.";
-
-/* ── Model-agnostic extraction - the OTHER body in the pipeline ───────────────
-   THE GAP: every clause in this file that defends body shape defends it against the
-   model's own training prior (STRICT_INPAINT's "it slimmed me down", SIDE_PROFILE_DEPTH's
-   flattened profile). None of them account for the fact that the reference image usually
-   contains A SECOND HUMAN - the e-commerce model wearing the product - and that Lucy sees
-   that figure as part of its conditioning. IGNORE_SOURCE_ARTIFACTS is the nearest thing
-   and it is deliberately scoped to non-human noise: badges, watermarks, orientation
-   labels. A whole person in the reference asset was never named, so their shoulder line,
-   chest, build and posture sat in the conditioning with nothing marking them as
-   off-limits - and an unstated region is exactly what this file's history keeps recording
-   as the thing that gets reinterpreted. That is the "it gave me the model's shoulders"
-   report: not a detection failure, an unstated constraint, same class as every other bug
-   these constants exist for.
-
-   DELIBERATELY NOT A RESTATEMENT of ABSOLUTE BODY FIDELITY below. That clause already
-   says the live person's shape is 1:1 ground truth and that the garment fits the body
-   rather than the reverse; repeating it here would spend several hundred characters
-   re-asserting it ~200 characters before it actually appears, against a prompt this file
-   already argues is competing for the model's attention. What is genuinely new is the
-   PROVENANCE SPLIT - the reference is the only source of cloth, the live feed is the only
-   source of body - so that is what this carries, and it hands off to STRICT_INPAINT for
-   the positive fidelity language it is placed directly ahead of.
-
-   THE PRINT-PLACEMENT CARVE-OUT at the end is load-bearing, not padding. "Re-proportion
-   the garment to their body" and BACK_TAIL.real's "keep each element at the SAME size,
-   height and horizontal position, do not move, rescale or re-center the back print" are
-   one bad reading apart from contradicting each other, and that print alignment was its
-   own fix. Scaling the garment to a different body must not become licence to relocate
-   its artwork on the garment, so the boundary is stated rather than left to inference. */
-const MODEL_AGNOSTIC_EXTRACTION =
-  " GARMENT ISOLATION MANDATE: the reference image is a TEXTURE AND CLOTHING TEMPLATE and" +
-  " nothing more. Extract ONLY the garment from it - fabric, weave, colour, pattern, print," +
-  " logos, seams, cut, collar, closure and hemline. If a person, model or mannequin is" +
-  " wearing that garment in the reference, they are packaging: completely ignore their" +
-  " body, physique, height, build, skin tone, shoulder width, chest, waist, limb positions" +
-  " and posture." +
-  " ZERO MODEL BLEED: do NOT transfer, copy, blend, average or impose ANY of that reference" +
-  " figure's anatomy, proportions, pose or body structure onto the live person, and never" +
-  " reshape the live person toward them. The live camera feed is the ONLY source of BODY;" +
-  " the reference image is the ONLY source of CLOTH." +
-  " DYNAMIC USER FITTING: fit, stretch, drape and re-proportion the extracted garment onto" +
-  " the live person's own exact body shape and volume - their real torso, chest, stomach," +
-  " waist and hips - so it reads as cut for THEM, with fabric tension, creases and folds" +
-  " following their contours rather than the reference figure's. Re-proportioning the" +
-  " garment to their body is NOT licence to move its artwork: any print, graphic, logo or" +
-  " lettering keeps the size, height and position on the garment specified above.";
-
-/* ── Strict garment inpainting - the hallucination clamp ──────────────────────
-   KEEP_BOTTOMS/KEEP_TOP only ever pinned the OPPOSITE GARMENT layer. Everything else in
-   frame - face, hair, hands, skin, the room behind the shopper, AND the shopper's own
-   body shape/volume under the new garment - was simply never mentioned, and Lucy
-   regenerates the WHOLE frame on every pass. Anything the prompt does not pin is a
-   region the model is free to reinterpret, which is what "it changed my pants / my
-   background" - and separately, "it slimmed me down" - actually is: not a bug in the
-   model so much as an unstated constraint. The body-fidelity clause below exists
-   because the model's training prior skews toward idealized/slim proportions, so a
-   fuller torso, belly or wider waist gets quietly flattened toward that prior unless
-   the prompt explicitly forbids it every single frame.
-
-   READ THIS BEFORE REACHING FOR A MASK OR A CONDITIONING WEIGHT. There is no mask, ROI,
-   DensePose/depth input, ControlNet conditioning scale, or inpainting-region parameter on
-   Lucy realtime - set() takes exactly { prompt, enhance, image } (verified against
-   @decartai/sdk@0.1.5 setInputSchema, which strips everything else). The prompt text is
-   the ONLY channel this SDK exposes; there is no "mask config" or "conditioning scale" to
-   turn up. A true pixel-locked boundary would have to be enforced OUTSIDE the model:
-   segment the torso locally per frame (DensePose/SAM or similar) and composite Decart's
-   output over the untouched camera frame everywhere else. That is a real, separate
-   feature - a segmentation model in the hot path at LIVE_INFERENCE_FPS - not a parameter
-   this file can set, and it is deliberately NOT what this constant is. This is the
-   strongest available lever through the one channel the API actually exposes, and it is a
-   probabilistic bias on every generated frame, not a guarantee. */
-const STRICT_INPAINT =
-  " STRICT GARMENT INPAINTING MODE: edit ONLY the target garment(s) named above. Every" +
-  " other pixel is locked source footage that must pass through EXACTLY as it appears in" +
-  " the live video frame - the person's face, hair, head, neck, hands, arms and skin, and" +
-  " the entire background, room and lighting. Do NOT generate, replace, restyle, recolor" +
-  " or re-render the background, or any part of the person outside the target garment(s)." +
-  " ABSOLUTE BODY FIDELITY: 1:1 adherence to the person's exact detected body shape," +
-  " weight, volume and silhouette exactly as captured in the live frame, including their" +
-  " chest, stomach/belly shape, hips, waist circumference and torso width. Do NOT flatten," +
-  " slim, smooth, thin, reshape or idealize their physique in any way, and do NOT shrink" +
-  " the chest, torso, waist, hips or belly boundary inward toward a thinner baseline. If" +
-  " the person has a fuller figure, belly, wider hips or wider torso, drape and stretch the" +
-  " garment realistically OVER their actual chest, stomach, hips and body volume - with" +
-  " natural fabric tension, creases and shadow folds where it meets their real contours," +
-  " not a flat model-cut fit. Map the garment onto that exact physical volume: fit the" +
-  " garment to the body; never the body to the garment." +
-  " STRICT GARMENT ISOLATION: replace and fit only the target garment named above - this is" +
-  " a single-item substitution, not a full-outfit restyling. Preserve the shopper's" +
-  " existing pants, shorts, skirt, belt and every other accessory exactly as seen in the" +
-  " live camera frame: no added belts, no unrequested pants, no added accessories, and no" +
-  " invented clothing items of any kind outside the one garment specified.";
-
-/* ── Source-frame hygiene - camera/UI artifacts are not garment content ───────
-   STRICT_INPAINT above says the live frame outside the target garment is "locked
-   source footage" to pass through untouched - but it never said what to do with
-   pixels that were never real footage of the person or garment in the first
-   place: a product photo's price sticker or hangtag, a watermark, a capture
-   timestamp, or any app/browser chrome that leaks into a frame. Nothing upstream
-   filters these out before the prompt runs, and an unstated pixel is exactly the
-   kind of region the model is free to reinterpret (the same class of gap
-   STRICT_INPAINT's own comment documents for body shape) - so a stray badge or
-   label sitting on a reference image reads as "content on the garment" with
-   nothing telling the model otherwise, risking a rendered logo/print that never
-   belonged to the actual product. Named explicitly as noise to discard. */
-const IGNORE_SOURCE_ARTIFACTS =
-  " Ignore any incidental on-screen text, UI overlays, badges, orientation labels" +
-  " (e.g. \"FRONT\"/\"BACK\"), timestamps, watermarks or frame borders present in the" +
-  " source image or live video feed - these are capture artifacts, not part of the" +
-  " garment or the person, and must never be rendered, reproduced or interpreted as" +
-  " clothing design, print or texture.";
-
-/* ── Side-profile anomaly guard - what the garment drapes OVER while turned ───
-   Paired with ROTATION_CONTINUITY below, which keeps the garment ON through a
-   turn; this addresses a different failure in the same window. In profile the
-   body's silhouette foreshortens, and whatever the shopper happens to be
-   holding (a phone, a bag, any held object) or brief lens/motion distortion
-   during the turn can sit right where torso volume would otherwise read. With
-   nothing telling the model these aren't anatomy, they get treated as body the
-   garment must fit around - an anomalous bulge or shape at exactly the moment
-   the pose is already hardest to read.
-   NOT the same claim as, and does NOT relax, STRICT_INPAINT's ABSOLUTE BODY
-   FIDELITY guarantee above - that clause exists specifically because this
-   model's training prior skews toward slimming real bodies, and was written
-   after that exact complaint. This one is scoped ONLY to non-anatomical
-   objects and transient capture artifacts; the person's actual body, at any
-   angle including side-on, is still rendered with the same fidelity as head-on -
-   never thinned, flattened or idealized. */
-const PROFILE_ANOMALY_GUARD =
-  " While the person is side-on or turning, do not mistake held objects, props," +
-  " clothing caught by motion, or transient camera/lens distortion for part of" +
-  " their body - these must never distort the rendered garment's fit or shape." +
-  " Drape the garment following the person's actual, undistorted anatomical body" +
-  " contour only, at exactly the same body-shape fidelity required at every other" +
-  " angle - never as license to slim, smooth or idealize their real silhouette.";
-
-/* ── Rotation continuity - the "my real shirt came back" clamp ────────────────
-   Paired with the freeze-through-the-turn hold in the OrientationWatcher (see
-   ORIENT_TURN_HOLD_MS). The hold covers the window visually; this tells the model what
-   the window is FOR, so the frames it generates during the rotation are still dressed.
-
-   The failure it addresses: mid-turn the shopper is in profile, the torso is foreshortened
-   and the face is leaving frame. With nothing in the prompt about rotation, the most
-   probable continuation for a partially-occluded person is the person as photographed -
-   i.e. their real shirt. Naming the turn as an expected, continuous state makes staying
-   dressed the likelier completion. */
-const ROTATION_CONTINUITY =
-  " The person may rotate to any angle, including turning fully away from the camera." +
-  " Throughout the rotation the virtual garment stays ON the body, continuously fitted," +
-  " with no frame in which it is dropped, faded, or replaced by the person's own real" +
-  " clothing - even while they are side-on, partially occluded, or facing away with no" +
-  " face visible. Carry it through the turn and transition smoothly to the correct side" +
-  " of the reference as the body comes around.";
-
-/* Universal hard negative appended to EVERY prompt (per product spec). Bars the opposite
-   view's signature details from leaking in when the back is being rendered - a belt-and-
-   suspenders backstop alongside ANGLE_CLAUSE.backReal/backInferred's own "do NOT render
-   the front" instruction. */
-const HARD_NEGATIVE = " Strictly prevent the rendering of FRONT details (like logos or front-pockets) when the BACK view is requested.";
-
-/* THE MAIN ENTRY POINT for a single-garment dispatch, and the function the dynamic-drape
-   contract is stated through: it resolves to CATEGORY_ANCHOR.top or .bottom, which are the
-   two strings that tell the model the GARMENT is static and the BODY is per-frame. See
-   CATEGORY_ANCHOR for the wording, the failure it answers, and the two clamps it gave up.
-
-   `angleText` is angleClause()'s output, passed IN rather than concatenated on by the
-   caller. That is what makes the budget enforceable: the old shape was
-   `buildPrompt(item) + angleClause(...)`, two independently-sized strings glued together
-   downstream, so neither half could know the total and nothing could shed a clause when
-   the pair overran. Threaded through here, the orientation clause becomes one more
-   priority-tagged part in a single fitPrompt() call - and it ranks CORE, because a prompt
-   that has lost its orientation clause renders the wrong side of the garment. It is
-   retained-and-unused today (see buildCompositePrompt's note on the same seam). */
-function buildPrompt(item, angle = "front") {
-  return imageOnlyPrompt(item, angle);
-}
-
-/**
- * Prompt for a user-uploaded ("custom") garment. Returns IMAGE_ONLY_PROMPT.
- *
- * IDENTICAL TO buildPrompt(), and has been since the image-first refactor rather than by
- * oversight. These two diverged for exactly one reason: a catalog item had metadata to
- * describe ("white t-shirt") and an upload did not, so the custom path pointed at the
- * reference image while the catalog path recited catalog fields. Neither describes
- * anything now, so there is nothing left to differ about - a shopper's uploaded photo and
- * a catalog packshot are the same kind of asset and get the same treatment.
- *
- * Kept as its own function because it is the documented entry point for the upload flow
- * and because the dispatch is a seam worth keeping: if the two ever need to diverge again
- * (a crop-confidence hint, say), it is already here. buildPrompt() no longer branches to
- * it - a branch between two identical returns is a false signal that they differ.
- * @param {object} item - a custom item ({ custom:true, garmentType, img, color })
- * @returns {string}
- */
-function buildCustomPrompt(item, angle = "front") {
-  return imageOnlyPrompt(item, angle);
-}
+/* getFitModifier(), FABRIC_PHYSICS/getFabricModifier(), the legacy clauses, buildPrompt()/buildCustomPrompt() - moved to lib/prompts.js (server-side prompt engine, 2026-09-26). */
 
 const APPLY_ATTEMPTS = 2;    // set() tries per apply - see applyActive()
 const APPLY_RETRY_MS = 200;  // gap between them; must stay well under ORIENT_TURN_HOLD_MAX_MS
@@ -16480,10 +12444,9 @@ async function applyLook(top, bottom) {
      below is read live and would race. */
   const profileAtStart = profileActive();
   let primaryImage = canStitchLook ? await stitchLookBlob(topImg, bottomImg) : null;
-  const prompt = clampPromptForWire(primaryImage
-    ? buildLookPrompt(top, bottom, DENSE.lookPanels)
-    : buildLookPrompt(top, bottom, angleClause(undefined, undefined, undefined, profileAtStart)),
-    "applyLook");
+  /* Both branches were buildLookPrompt(), which returns lookAnchorPrompt() and ignores its
+     angle text - one server answer (lib/prompts.js) covers them. */
+  const prompt = await wireLookPrompt("applyLook");
 
   if (!primaryImage) {
     // Stitch unavailable (AI Auto angle) or failed to decode - fall back to the
@@ -16572,39 +12535,7 @@ async function applyLook(top, bottom) {
   }
 }
 
-/**
- * Build ONE prompt that instructs the model to overlay the shirt AND the pants
- * simultaneously (a single pass), so a full outfit is rendered together rather
- * than as two separate substitutions.
- */
-function buildLookPrompt(top, bottom, angleText = "") {   // eslint-disable-line no-unused-vars
-  /* THE ONE PLACE THIS MODE IS A REAL BET RATHER THAN A CLEAN WIN, recorded so it is not
-     discovered by surprise. A full look ships ONE stitched reference holding two garments
-     (TOP over BOTTOM), and DENSE.lookPanels is what told the model that image was two
-     garments to render simultaneously rather than one to choose between. Strict image-only
-     removes it, so the layout now has to carry that entirely on its own - which the
-     stitcher is built for (isolated panels, wide separator band; see stitchLookBlob) but
-     which was never tested without the sentence.
-
-     If a look starts rendering only the shirt, or blending the two, DENSE.lookPanels is
-     the first clause to buy back - and it is the one clause in this file whose absence
-     costs a whole FEATURE rather than a degree of fidelity. */
-  /* DELIBERATELY NOT imageOnlyPrompt(). The BOTTOMS branch there pins the opposite layer
-     to the live camera - "Keep the subject's upper body and background unmodified." -
-     which is exactly the instruction a full look must not carry: addToLook() ships a
-     two-garment payload precisely because the shopper asked for both layers to be
-     substituted, and telling the model to preserve the live top while handing it a
-     stitched TOP+BOTTOM reference is a contradiction that resolves however the sampler
-     feels like resolving it.
-
-     THE TOPS BRANCH IS NOT SAFE HERE EITHER, and it is worth saying why, because it no
-     longer carries that sentence: it still names ONE region ("the EXACT upper garment
-     ... onto the subject") against a reference holding two garments, which is the
-     wrong-region contradiction that opened this whole sequence. Neither branch is a
-     substitute for this one. This anchor claims both layers instead, and carries the same
-     STRICT_REFERENCE_LOCK the two single-garment branches do. */
-  return lookAnchorPrompt();
-}
+/* buildLookPrompt() (returns lookAnchorPrompt(); see wireLookPrompt()) - moved to lib/prompts.js (server-side prompt engine, 2026-09-26). */
 
 /* =============================================================================
    Size Override Selector - Screen 2 (Try-On room)
@@ -16817,11 +12748,12 @@ function injectSizeSelector() {
      tiers exist for - the fallback has to match whichever CHART produced currentUserSize,
      or the recommended size is not among the buttons at all: a jeans product resolved by
      title alone would recommend "32" and then render S/M/L/XL, with no ★ on anything and
-     nothing for the shopper to press. Routed through pantsChartForSizes() so the
-     EU-before-waist precedence is not spelled out a second time; productSizes is empty on
-     this branch by construction, so it yields the waist ladder. */
+     nothing for the shopper to press. The chart kind arrives with the size verdict
+     (currentPantsChart), so the EU-before-waist precedence is not spelled out a second
+     time; productSizes is empty on this branch by construction, so it is the waist
+     ladder. */
   const scale = productSizes.length ? productSizes
-    : currentSizeIsNumericPants ? pantsChartForSizes(productSizes).map((r) => r.size)
+    : currentSizeIsNumericPants ? pantsLadderFor(currentPantsChart)
     // Child results get the numeric kids ladder ONLY - no adult S/M/L/XL button is
     // rendered at all, so there is nothing for a child profile to cross over into.
     //
@@ -16968,10 +12900,10 @@ function logTryOnAnalytics(item, size) {
 }
 
 /* =============================================================================
-   Admin dashboard - anonymized session log
+   Anonymized session log
    One stable, anonymous id per browser session (NO name/email/PII). It lets the
-   admin dashboard group multiple try-ons by the same visitor without ever
-   identifying who they are.
+   session rows in Supabase group multiple try-ons by the same visitor without
+   ever identifying who they are.
    ============================================================================= */
 const PEAR_SESSION_ID = (() => {
   const rnd = () =>
@@ -17418,24 +13350,31 @@ function routeUser(user) {
     hideAllScreen1Forms();
     const setIf = (id, v) => { const el = $(id); if (el && v != null && v !== "") el.value = String(v); };
     setIf("height", user.height); setIf("weight", user.weight);
-    try { calculateSize(); } catch {}
-    // A stored height/weight that was valid when saved can still land in the
-    // "fits neither chart" gap calculateSize() now recognizes (it no longer
-    // forces a closest-match guess). Don't silently instant-skip into the
-    // fitting room with no resolved size - fall through to Screen 1 below,
-    // exactly the same blocking "no matching size" state a fresh visitor would
-    // hit, instead of bypassing it entirely via this fast path.
-    if (currentUserSize && hasTermsConsent()) {
-      // instant:true - this visitor never saw Screen 1 (pre-paint gate kept
-      // #screen-calculator hidden the whole time), so skip the branded transition
-      // and land directly on the camera with zero visible animation/delay.
-      goToFitting({ instant: true });
-      return;
-    }
-    if (currentUserSize) {
-      console.log("[PEAR] returning device, no terms consent on record for v" +
-        PEAR_TERMS_VERSION + " → size form (prefilled) instead of the instant skip");
-    }
+    /* The size is a server answer now (calculateSize()'s doc), so the skip decision waits
+       for it - the forms are already hidden, which is the same "checking…" state the
+       pear-returning-check class paints on load. calculateSize() never rejects; a failed
+       request lands on the prefilled form with its "couldn't calculate" result. */
+    calculateSize().then(() => {
+      // A stored height/weight that was valid when saved can still land in the
+      // "fits neither chart" gap calculateSize() now recognizes (it no longer
+      // forces a closest-match guess). Don't silently instant-skip into the
+      // fitting room with no resolved size - fall through to Screen 1 below,
+      // exactly the same blocking "no matching size" state a fresh visitor would
+      // hit, instead of bypassing it entirely via this fast path.
+      if (currentUserSize && hasTermsConsent()) {
+        // instant:true - this visitor never saw Screen 1 (pre-paint gate kept
+        // #screen-calculator hidden the whole time), so skip the branded transition
+        // and land directly on the camera with zero visible animation/delay.
+        goToFitting({ instant: true });
+        return;
+      }
+      if (currentUserSize) {
+        console.log("[PEAR] returning device, no terms consent on record for v" +
+          PEAR_TERMS_VERSION + " → size form (prefilled) instead of the instant skip");
+      }
+      showSizeForm({ refreshNotice: true });
+    });
+    return;
   }
 
   showSizeForm({ refreshNotice: !!hasProfile });
@@ -18396,6 +14335,7 @@ function startBillingWindow(gen) {
   if (gen !== sessionGen) return;        // stale first-frame from a torn-down session
   billingStarted = true;
   billingStartedAt = Date.now();         // diagnostics clock - see sessionElapsedMs()
+  if (typeof traceOrient === "function") traceOrient("reveal");
 
   // Start recording from the SAME event that starts billing (the first DRESSED frame)
   // so the encoded clip and the billed window cover exactly the same span - no gap
@@ -19066,12 +15006,15 @@ function createFrameFreezeWatcher(video, gen) {
            the SAME builder applyLook() uses: if the look prompt ever starts assembling
            again, recovery follows it without a second edit here. */
         const keepAliveLook = resolveLook();
-        const keepAlive = clampPromptForWire(
-          keepAliveLook ? buildLookPrompt(keepAliveLook.top, keepAliveLook.bottom)
-                        : imageOnlyPrompt(activeItem),
-          "freezeKeepAlive");
-        console.log("[DECART PROMPT DEBUG]", keepAlive, "(keep-alive ping - no image, no teardown)");
+        let keepAlive = "";
         try {
+          keepAlive = keepAliveLook ? await wireLookPrompt("freezeKeepAlive")
+                                    : await wirePrompt(activeItem, "front", "freezeKeepAlive");
+        } catch (e) {
+          console.warn("[PEAR] freeze keep-alive skipped - no prompt from the service:", e?.message || e);
+        }
+        if (keepAlive) console.log("[DECART PROMPT DEBUG]", keepAlive, "(keep-alive ping - no image, no teardown)");
+        if (keepAlive) try {
           /* SKIPPED rather than queued when the wire is busy: this ping exists to poke a
              session that appears to be doing NOTHING, so a write already in flight is
              itself the evidence that the poke is unnecessary. */
@@ -19293,7 +15236,7 @@ async function applyFallbackConditioning() {
   const primary = gallery.front || item.img;
   /* Warm bytes first (no server-side fetch before Decart can condition), the URL otherwise. */
   let image = (primary && garmentBlobIfWarm(primary)) || garmentImageRef(primary);
-  const prompt = clampPromptForWire(imageOnlyPrompt(item), "fallbackConditioning");
+  const prompt = await wirePrompt(item, "front", "fallbackConditioning");
 
   /* ALREADY ON THE WIRE - the common case now. This recovery runs right after
      connectRealtime({ force: true }), and that connect's own join carried this garment as its
@@ -19369,8 +15312,14 @@ async function applyFallbackConditioning() {
  * single release point for `busy` and the capture button.
  * @returns {Promise<void>}
  */
+/* True only while goLive() waits on its size re-check - the one await that sits BEFORE
+   `busy` is claimed (see the comment on that await). A second click in that window must
+   not start a second go-live; busy cannot guard it, because claiming busy there would
+   make a recompute able to hold billing state, which adult-pants-sizing §7 forbids. */
+let goLiveResolvingSize = false;
+
 async function goLive() {
-  if (busy || isLive()) return;
+  if (busy || isLive() || goLiveResolvingSize) return;
 
   /* THE STALE-currentBodyCategory RACE, CLOSED AT THE ENFORCEMENT POINT. calculateSize()
      is the only writer of currentUserSize/currentSizeCategory/currentBodyCategory, but it
@@ -19383,14 +15332,19 @@ async function goLive() {
      one garment and "adult" under another with the SAME height/weight (ADULT_PANTS_-
      SIZE_CHART and ZARA_SIZE_CHART cover different, only-partially-overlapping bands), so
      a value computed for garment A and never refreshed can wrongly block - or wrongly
-     admit - garment B. calculateSize() is pure UI/state with no network call (its own doc
-     comment says so), and Screen 1's inputs are still real, hidden (not removed) DOM
-     elements on Screen 2 - CSS class toggling, never a DOM detach - so re-running it here
-     is cheap and safe, and makes this gate correct for whichever garment is ACTUALLY
-     active right now, regardless of what any earlier call left cached. This is the
+     admit - garment B. calculateSize() reads Screen 1's inputs, which are still real,
+     hidden (not removed) DOM elements on Screen 2 - CSS class toggling, never a DOM detach -
+     so re-running it here makes this gate correct for whichever garment is ACTUALLY active
+     right now, regardless of what any earlier call left cached. This is the
      "authoritative backstop" updateSizeMismatchUI()'s own comment already claims this
-     function is - now actually true even when nothing upstream remembered to refresh. */
-  calculateSize();
+     function is - now actually true even when nothing upstream remembered to refresh.
+     AWAITED since the fit moved server-side (2026-09-26): usually a same-tick memo hit,
+     since the garment rarely changed since Screen 1; a server round-trip only when it did.
+     A failed request leaves the last-known answer in place (calculateSize()'s failure
+     branch never clears state), so a network blip cannot turn into a false block
+     (CLAUDE.md §2.5). goLiveResolvingSize holds the door shut for the duration. */
+  goLiveResolvingSize = true;
+  try { await calculateSize(); } finally { goLiveResolvingSize = false; }
 
   // Two-view gate - runs BEFORE any token mint / WebRTC connect / billing. Graceful
   // by default; only opt-in requireBothViews items (or a garment with no front) are
@@ -19413,11 +15367,22 @@ async function goLive() {
 
   busy = true;                         // Task 10 - claim the flow before ANY await
   resetTryOnSession();                 // retire anything a previous session left running - before the first await
+  /* A TEST session records its turn (see FLIGHT RECORDER); anything else records nothing. */
+  if (typeof traceSessionBegin === "function") {
+    traceSessionBegin({
+      item: String((activeItem && (activeItem.name || activeItem.title)) || "").slice(0, 80),
+      pageMs: typeof performance !== "undefined" ? Math.round(performance.now()) : null,
+      link: typeof _orientWs !== "undefined" && _orientWs ? _orientWs.readyState : null,
+    });
+  }
   $("captureBtn").disabled = true;
   $("camError").hidden = true;
   exitClipReplay();                    // clear any history clip before a real session takes #aiVideo
   clearRecording();                    // Feature 2 - drop any previous clip + button
   card().classList.remove("show-result");  // drop any frozen snapshot so the live feed isn't covered by #resultCanvas
+  /* The orientation link must answer before this session's first turn needs it - checked now,
+     in parallel with everything below, never awaited (see "A DECISION MAY NEVER BE LOST"). */
+  if (typeof orientLinkEnsureFresh === "function") orientLinkEnsureFresh().catch(() => {});
 
   try {
     // Health probe is a soft warning only - fire-and-forget so it never serialises
@@ -19787,6 +15752,7 @@ function captureHoldFrame() {
    frozen-hold tail can complete. Bumps sessionGen so any late SDK callback no-ops. */
 function stopBilling() {
   if (liveDurationTimer) { clearTimeout(liveDurationTimer); liveDurationTimer = null; }
+  if (typeof traceOrient === "function") traceOrient("billing-stop");
   sessionGen++;                         // neutralise in-flight onRemoteStream/onConnectionChange
   stopStatsMonitor();
   if (rtClient) { try { rtClient.disconnect(); } catch (_) {} rtClient = null; }
@@ -19838,6 +15804,7 @@ function finalizeVideoClip() {
      between sessions and a retry of the same garment reused its stale state (see
      resetTryOnSession()). stop() also ends any hold and the turn mark it owned. */
   if (orientWatcher) { try { orientWatcher.stop(); } catch (_) {} orientWatcher = null; orientWatcherItem = null; }
+  if (typeof traceSessionEnd === "function") traceSessionEnd("clip");
   setLiveControls(false);
   $("captureBtn").disabled = !localStream;
   toast("⏱ הסרטון בן " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות מוכן ✓");
@@ -20457,7 +16424,7 @@ function loadPoseLandmarker() {
        automated 360 has something to turn. Second, never first - an injected _testDetector is
        a sandbox saying exactly what it wants and must keep outranking this. typeof-guarded:
        body-presence-gate extracts this block and runs it with neither name in scope. */
-    if (typeof mockDecartEnabled === "function" && mockDecartEnabled()) return mockPoseDetector();
+    if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof mockDecartEnabled === "function" && mockDecartEnabled()) return mockPoseDetector();
     try {
       /* Dynamic import of a CDN ES module: the only way to add this without a bundler,
          and it keeps the bytes off the initial page load entirely. */
@@ -20774,7 +16741,7 @@ function startPresenceWatcher() {
          reading as edge-on. */
       const facingSep = poseShoulderFacing(result);
       if (facingSep !== null) { _poseFacingSep = facingSep; _poseFacingAt = now; }
-      else _poseTorsoLostAt = now;   // the turn window reads the gap from this - see ORIENT_POSE_PASS
+      else _poseTorsoLostAt = now;   // the turn window reads the gap from this - the side-view pass, lib/orient-engine.js
       if (sig && Number.isFinite(sig.yaw)) {
         _torsoYawRise = orientYawRise(_torsoYawAbs, _torsoYawAt, Math.abs(sig.yaw), now);   // before the publish overwrites the previous reading
         _torsoYawAbs = Math.abs(sig.yaw);

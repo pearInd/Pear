@@ -26,7 +26,11 @@
    would re-open it. Selecting holds volume flat. */
 import { readFileSync } from "node:fs";
 
-const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The prompt engine moved server-side on 2026-09-26 (lib/prompts.js, CLAUDE.md §2.13). This
+   reads it FIRST and app.js after it: the engine slices/checks find it where it lives now,
+   and every app.js marker used here exists only in the app.js half. */
+const APP = (readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8") + "\n" +
+  readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -156,9 +160,11 @@ console.log("\n── §3 THE ANGLE REACHES THE PROMPT ──");
   check("buildCompositePrompt forwards it as well",
     /function buildCompositePrompt\(item, angle, inProfile\)[^\n]*\n  return imageOnlyPrompt\(item, angle\);/.test(APP),
     "composite was angle-blind too - both single-asset and composite renders were affected");
+  /* Server-side since 2026-09-26: the frozen angle (and pose) ride the prompt request, and the
+     service hands them to buildCompositePrompt(). */
   check("the call site hands over the FROZEN snapshot, not a fresh orientation read",
-    APP.includes("buildPrompt(item, angleAtStart)") &&
-    APP.includes("buildCompositePrompt(item, angleAtStart, profileAtStart)"),
+    APP.includes('wirePrompt(item, angleAtStart, "applyGarment", { inProfile: profileAtStart })') &&
+    APP.includes("buildCompositePrompt(req.item, req.angle, req.inProfile)"),
     "a prompt built from a later read than the image is the mixing bug applyGarment documents");
   check("angleClause() is no longer wired into the single-asset prompt",
     !APP.includes("buildPrompt(item, angleClause("),

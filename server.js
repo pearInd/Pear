@@ -33,6 +33,10 @@ import { supabase } from "./lib/supabase.js";
    CLASSIFIER_PROMPT_VERSION, and widening it re-classifies the whole catalog). */
 import { classifyGarmentFull } from "./lib/garment-category.js";
 import { makeStoreSizeChartHandler } from "./lib/store-size-charts.js";
+/* The size charts and the fit - moved out of the browser 2026-09-26 (see lib/sizing.js). */
+import { computeSizeVerdict, sanitizeSizeEvidence } from "./lib/sizing.js";
+/* The prompt engine - moved out of the browser 2026-09-26 (see lib/prompts.js). */
+import { promptForRequest, sanitizePromptRequest } from "./lib/prompts.js";
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,14 +58,6 @@ const TOKEN_TTL   = Math.min(3600, Math.max(1, Number(process.env.DECART_TOKEN_T
 const ALLOWED_ORIGINS = (process.env.DECART_ALLOWED_ORIGINS || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
 
-/* Admin authorization allowlist. requireAdminAuth() only accepts a Supabase Auth
-   JWT whose verified email is in this list. Without it, ANY account that can sign
-   up against the public anon key would pass the auth check (authentication ≠
-   authorization). Set ADMIN_EMAILS in .env AND in your Vercel env vars:
-     ADMIN_EMAILS=you@example.com,partner@example.com                            */
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
-  .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-
 /* ── Express setup ───────────────────────────────────────────────────────── */
 const app = express();
 app.use(express.json({ limit: "8mb" }));
@@ -69,28 +65,23 @@ app.disable("x-powered-by");
 app.set("trust proxy", true);   // Vercel/edge sets X-Forwarded-For; needed for req.ip + rate limiting
 
 /* ── Security headers (all responses) ──────────────────────────────────────────
-   Applied globally so HTML pages (not just /api) carry hardening headers. The
-   admin dashboard additionally gets strict anti-framing + no-store to defeat
-   clickjacking and stop the (login-gated) page being cached on shared machines.
-   The rest of the site allows same-origin framing so the storefront can embed the
-   fitting room (its "back to store" link uses target="_top", implying embedding). */
+   Applied globally so HTML pages (not just /api) carry hardening headers. The rest
+   of the site allows same-origin framing so the storefront can embed the fitting
+   room (its "back to store" link uses target="_top", implying embedding). The admin
+   dashboard that used to get its own deny-framing branch here was removed from this
+   project on 2026-09-26, with every /api/admin* route. */
 app.use((req, res, next) => {
   res.header("X-Content-Type-Options", "nosniff");
   res.header("Referrer-Policy", "strict-origin-when-cross-origin");
   res.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  const isAdmin = /(^|\/)admin(\.html|\.js|\.css)?(\/|$)/i.test(req.path);
   // The fitting room is embedded cross-origin by the pear-widget.js modal on
   // third-party store pages, so it (and the widget assets) must be frameable
   // from anywhere. It is a public, unauthenticated surface - the clickjacking
-  // protections stay in force on the admin dashboard and the rest of the site.
+  // protections stay in force on the rest of the site.
   const isEmbeddable = /^\/(fitting-room|widget)(\/|$)/i.test(req.path);
-  if (isAdmin) {
-    res.header("X-Frame-Options", "DENY");
-    res.header("Content-Security-Policy", "frame-ancestors 'none'");
-    res.header("Cache-Control", "no-store, no-cache, must-revalidate");
-  } else if (isEmbeddable) {
+  if (isEmbeddable) {
     res.header("Content-Security-Policy", "frame-ancestors *");
-    // Same no-store guarantee as /admin above: the fitting-room HTML/JS/CSS iterate
+    // No-store: the fitting-room HTML/JS/CSS iterate
     // fast (active demo work) and are embedded via <iframe>/<script src> on third-party
     // pages we don't control the caching of, so nothing here should ever be served
     // from a browser/CDN/proxy cache - every load must hit the origin fresh. Query
@@ -136,9 +127,10 @@ const sessionLimiter  = rateLimit({ windowMs: 60_000, max: 40 });   // session-l
 const userLimiter     = rateLimit({ windowMs: 60_000, max: 20 });   // user registration
 const trackLimiter    = rateLimit({ windowMs: 60_000, max: 60 });   // analytics ping
 const proxyLimiter    = rateLimit({ windowMs: 60_000, max: 120 });  // image proxy
-const authLimiter     = rateLimit({ windowMs: 60_000, max: 10 });   // admin login - brake password guessing
 const classifyLimiter = rateLimit({ windowMs: 60_000, max: 200 });   // garment front/back classification - calls Gemini
 const storeCatalogLimiter = rateLimit({ windowMs: 60_000, max: 30 }); // "Complete the Look" store-scoped catalog reads
+const sizeLimiter     = rateLimit({ windowMs: 60_000, max: 120 });  // size verdicts - one per NEW measurement set, memoised client-side
+const promptLimiter   = rateLimit({ windowMs: 60_000, max: 240 });  // wire prompts - a few per garment (angle x size delta), memoised client-side
 
 /* ── CORS enforcement ────────────────────────────────────────────────────────
    The fitting room is PUBLICLY ACCESSIBLE to any anonymous visitor - no login
@@ -403,36 +395,13 @@ app.post("/api/track-tryon", trackLimiter, async (req, res) => {
   }
 });
 
-/* ── Debug: verify Sheets env vars and write a test row (admin-only) ──────────
-   Gated behind requireAdminAuth: it previously exposed the Google Sheet ID and the
-   service-account email to any anonymous caller and let anyone write test rows.
-   Env-var VALUES are no longer echoed - only presence - even to admins. */
-app.get("/api/test-sheets", requireAdminAuth, async (req, res) => {
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  const email   = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const key     = process.env.GOOGLE_PRIVATE_KEY;
-  const envCheck = {
-    GOOGLE_SHEET_ID:              sheetId ? "✓ present" : "✗ MISSING",
-    GOOGLE_SERVICE_ACCOUNT_EMAIL: email   ? "✓ present" : "✗ MISSING",
-    GOOGLE_PRIVATE_KEY:           key     ? "✓ present" : "✗ MISSING",
-  };
-  if (!sheetId || !email || !key) {
-    return res.json({ ok: false, envCheck, error: "Missing env vars - check Vercel settings" });
-  }
-  try {
-    await logTryOn({ garmentId: "test", garmentName: "TEST", garmentType: "test", subType: "test", size: "test", ip: req.ip });
-    res.json({ ok: true, envCheck, message: "Row written successfully - check the sheet!" });
-  } catch (err) {
-    res.json({ ok: false, envCheck, error: err?.message });
-  }
-});
-
 /* ═══════════════════════════════════════════════════════════════════════════
-   ADMIN DASHBOARD - session-log ingest + read API (OPEN ACCESS)
+   SESSION LOG - ingest only
    ---------------------------------------------------------------------------
-   The password/login gate has been removed: the admin endpoints below respond
-   directly with no auth header required. Session rows persist in Supabase
-   (lib/supabase.js), shared and durable across all server instances.
+   The fitting room POSTs one row per try-on; rows persist in Supabase
+   (lib/supabase.js). There is no read or delete API any more: the admin
+   dashboard and every /api/admin* route were removed from this project on
+   2026-09-26. The data itself is untouched - read it in Supabase directly.
    ══════════════════════════════════════════════════════════════════════════ */
 
 /* ── Session persistence ──────────────────────────────────────────────────────
@@ -458,76 +427,11 @@ function storageUnavailable(res) {
   return true;
 }
 
-/* ── Admin auth middleware - verifies Supabase Auth JWT + admin allowlist ───────
-   Two independent checks, both required:
-     1. AUTHENTICATION - the Bearer token is a valid, unexpired Supabase Auth JWT
-        (verified server-side via getUser()).
-     2. AUTHORIZATION  - the token's verified email is in ADMIN_EMAILS. This is the
-        critical second gate: the fitting room ships the PUBLIC anon key, so anyone
-        who signs up against it gets a valid JWT. Without the allowlist, "logged in"
-        would equal "admin" and any member of the public could read all PII and wipe
-        the sessions table.
-   On success the verified email is attached as req.adminEmail for audit logging. */
-async function requireAdminAuth(req, res, next) {
-  if (storageUnavailable(res)) return;   // no Supabase client → can't verify → fail closed
-  const auth  = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (!token) {
-    return res.status(401).json({ ok: false, error: "unauthorized", message: "Missing auth token." });
-  }
-  try {
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) {
-      return res.status(401).json({ ok: false, error: "unauthorized", message: "Invalid or expired token." });
-    }
-    const email = (user.email || "").toLowerCase();
-    if (ADMIN_EMAILS.length === 0) {
-      // FAIL CLOSED. This used to fail open "for backward compatibility", which
-      // was survivable only because /api/admin/check-auth separately required a
-      // password from ADMIN_PASSWORDS before anyone could obtain a session at
-      // all. Sign-in is now plain Supabase signInWithPassword against the public
-      // anon key, so that second gate is gone: failing open here would authorize
-      // ANY Supabase Auth user in the project as a full admin.
-      console.error(
-        "[admin-auth] ADMIN_EMAILS is empty - refusing all admin access. " +
-        "Set ADMIN_EMAILS (comma-separated) in .env and in the Vercel project."
-      );
-      return res.status(503).json({
-        ok: false, error: "admin_allowlist_unconfigured",
-        message: "Admin access is not configured on this deployment.",
-      });
-    } else if (!ADMIN_EMAILS.includes(email)) {
-      console.warn(`[admin-auth] blocked non-admin login: "${email}"`);
-      return res.status(403).json({ ok: false, error: "forbidden", message: "Not an admin account." });
-    }
-    req.adminEmail = email;
-    next();
-  } catch (err) {
-    console.error("[admin-auth] getUser failed:", err?.message);
-    return res.status(401).json({ ok: false, error: "unauthorized", message: "Auth check failed." });
-  }
-}
-
-async function readSessionLogs() {
-  const { data, error } = await supabase
-    .from("sessions")
-    .select("*")
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return data || [];
-}
-
 async function saveSessionLog(entry) {
   const { error } = await supabase.from("sessions").insert([entry]);
   if (error) throw new Error(error.message);
   // Return approximate total count without a separate COUNT query.
   return null;
-}
-
-async function clearSessionLogs() {
-  // Delete every row. Supabase requires a filter for safety; `neq` on id covers all rows.
-  const { error } = await supabase.from("sessions").delete().neq("id", 0);
-  if (error) throw new Error(error.message);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -894,73 +798,6 @@ async function relinkUserDevice(req, res) {
   }
 }
 
-/* GET /api/admin/users - open access. Returns every user with their total
-   measurement (session) count, newest user first. */
-async function getUsersWithCounts(_req, res) {
-  if (storageUnavailable(res)) return;
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
-  try {
-    const [{ data: users, error: uErr }, { data: rows, error: sErr }] = await Promise.all([
-      supabase.from("users").select("*").order("created_at", { ascending: false }),
-      supabase.from("sessions").select("user_id"),
-    ]);
-    if (uErr) throw new Error(uErr.message);
-    if (sErr) throw new Error(sErr.message);
-
-    // Tally sessions per user_id in one pass.
-    const counts = new Map();
-    for (const r of rows || []) {
-      if (!r.user_id) continue;
-      counts.set(r.user_id, (counts.get(r.user_id) || 0) + 1);
-    }
-
-    const withCounts = (users || []).map((u) => ({
-      ...u,
-      session_count: counts.get(u.id) || 0,
-    }));
-
-    res.json({ ok: true, count: withCounts.length, users: withCounts });
-  } catch (err) {
-    console.error("[admin/users] read failed:", err?.message);
-    res.status(500).json({ ok: false, error: err?.message, users: [], count: 0 });
-  }
-}
-
-/* GET /api/admin/stats/averages - admin-only. Average height/weight across all
-   users that have both measurements set (users.height/weight, not sessions -
-   see publicUser comment: those columns are the single current-measurement
-   source of truth per user). */
-async function getAverageMeasurements(_req, res) {
-  if (storageUnavailable(res)) return;
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
-  try {
-    const { data, error } = await supabase
-      .from("users")
-      .select("height, weight")
-      .not("height", "is", null)
-      .not("weight", "is", null);
-    if (error) throw new Error(error.message);
-
-    if (!data.length) {
-      return res.json({ avgHeight: null, avgWeight: null, count: 0 });
-    }
-
-    const avgHeight = Math.round(
-      data.reduce((sum, u) => sum + u.height, 0) / data.length
-    );
-    const avgWeight = Math.round(
-      data.reduce((sum, u) => sum + u.weight, 0) / data.length
-    );
-
-    res.json({ avgHeight, avgWeight, count: data.length });
-  } catch (err) {
-    console.error("[admin/stats/averages] read failed:", err?.message);
-    res.status(500).json({ ok: false, error: err?.message });
-  }
-}
-
-app.get("/api/admin/stats/averages", requireAdminAuth, getAverageMeasurements);
-
 /* ── POST: save a session → appends to sessions.json ─────────────────────── */
 async function saveSession(req, res) {
   if (storageUnavailable(res)) return;
@@ -997,49 +834,47 @@ async function saveSession(req, res) {
   }
 }
 
-/* ── GET: retrieve sessions (open access) → reads from Supabase ───────────── */
-async function getSessions(_req, res) {
-  if (storageUnavailable(res)) return;
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate");
+/* Session-log ingest: open but rate limited. POST only - nothing here reads the table
+   back or wipes it (see the SESSION LOG header above). /api/session-log is the older
+   spelling of the same route, kept for clients that still use it. */
+/* ── Size verdict - POST /api/size ──────────────────────────────────────────────
+   The fit the fitting room used to compute in the browser (lib/sizing.js). The body is
+   the shopper's measurements plus the product verdicts app.js resolves; it is sanitised
+   field by field before it reaches the fit, and the answer is the verdict
+   applySizeVerdict() paints. Pure computation - no storage, no third party - so it is
+   cheap enough to answer every new measurement set the shopper types. */
+app.post("/api/size", sizeLimiter, (req, res) => {
+  res.set("Cache-Control", "no-store");
   try {
-    const sessions = await readSessionLogs();   // already newest-first from Supabase ORDER BY
-    console.log(`[admin/sessions] Supabase → ${sessions.length} session(s) found`);
-    res.json({ ok: true, count: sessions.length, sessions });
+    /* Main's Phase 0 store-chart comparison comes back to the support view only - its
+       band deltas describe our chart (lib/sizing.js: storeChartComparison). */
+    res.json(computeSizeVerdict(sanitizeSizeEvidence(req.body), { diag: isDebugToken(req.body && req.body.dk) }));
   } catch (err) {
-    console.error("[admin/sessions] read failed:", err?.message);
-    res.status(500).json({ ok: false, error: err?.message, sessions: [], count: 0 });
+    console.error("[size] verdict failed:", err?.message || err);
+    res.status(500).json({ error: "size_failed" });
   }
-}
+});
 
-/* DELETE: wipe all sessions (admin-only). */
-async function clearSessions(req, res) {
-  if (storageUnavailable(res)) return;
+/* ── Wire prompt - POST /api/prompt ────────────────────────────────────────────
+   The one string a dispatch sends to Decart (lib/prompts.js): the browser posts the
+   garment's plain facts, the angle and the size delta, and gets the clamped prompt back.
+   The engine - anchors, clauses, priorities, budget, the restore seam - never leaves this
+   server; only the string Decart would see on the wire anyway does. */
+app.post("/api/prompt", promptLimiter, (req, res) => {
+  res.set("Cache-Control", "no-store");
   try {
-    await clearSessionLogs();
-    console.log(`[sessions] cleared all → Supabase (by admin: ${req.adminEmail || "unknown"})`);
-    res.json({ ok: true });
+    res.json({ prompt: promptForRequest(sanitizePromptRequest(req.body)) });
   } catch (err) {
-    console.error("[sessions] clear failed:", err?.message);
-    res.status(500).json({ ok: false, error: err?.message });
+    console.error("[prompt] build failed:", err?.message || err);
+    res.status(500).json({ error: "prompt_failed" });
   }
-}
+});
 
-/* Canonical routes the dashboard uses. POST (fitting-room ingest) is open but rate
-   limited; GET and DELETE are admin-only and require a valid Supabase Auth token. */
-app.post("/api/sessions", sessionLimiter, saveSession);
-app.get("/api/sessions", requireAdminAuth, getSessions);
-app.delete("/api/sessions", requireAdminAuth, clearSessions);
-
-/* Back-compat aliases (older clients / earlier code paths).
-   SECURITY: these MUST carry the same guards as the canonical routes above - the
-   GET/DELETE aliases previously had NO auth, which fully bypassed the admin gate
-   (unauthenticated read of all data + wipe of the entire table). */
-app.post("/api/session-log",      sessionLimiter, saveSession);
-app.get("/api/admin/sessions",    requireAdminAuth, getSessions);
-app.delete("/api/admin/sessions", requireAdminAuth, clearSessions);
+app.post("/api/sessions",    sessionLimiter, saveSession);
+app.post("/api/session-log", sessionLimiter, saveSession);
 
 /* User identity routes (returning-visitor recognition). POST is rate limited; the
-   public GET returns non-PII fields only; the admin list is auth-gated. */
+   public GET returns non-PII fields only. */
 app.post("/api/users",            userLimiter, createUser);
 // NOTE: /api/users/relink must be registered BEFORE the /:deviceId param
 // route below - otherwise Express would match "relink" as a deviceId value
@@ -1047,41 +882,6 @@ app.post("/api/users",            userLimiter, createUser);
 app.patch("/api/users/relink",    userLimiter, relinkUserDevice);
 app.get("/api/users/:deviceId",   getUserByDevice);
 app.patch("/api/users/:deviceId", userLimiter, updateUserMeasurements);
-app.get("/api/admin/users",       requireAdminAuth, getUsersWithCounts);
-
-/* Pre-login allowlist check: the admin login page calls this before requesting a
-   magic link so only ADMIN_EMAILS + ADMIN_PASSWORDS matches ever trigger a
-   Supabase email send. Returns only { allowed: true|false } - no PII, no
-   token, no session. POST with a JSON body (not GET query params) so the
-   password is never written into a URL - URLs land in server/proxy access
-   logs and browser history in plaintext, which a query-string password would
-   leak into. ADMIN_PASSWORDS must list one password per ADMIN_EMAILS entry,
-   in the SAME ORDER (index i pairs with index i). Rate limited - this is a
-   password-guessing target. */
-app.post("/api/admin/check-auth", authLimiter, (req, res) => {
-  const email    = (req.body?.email || "").toLowerCase().trim();
-  const password = req.body?.password || "";
-  const allowed = (process.env.ADMIN_EMAILS || "")
-    .split(",")
-    .map((e) => e.toLowerCase().trim());
-  console.log('[admin-auth] email received:', email);
-  console.log('[admin-auth] allowed emails:', allowed);
-  const emailIndex = allowed.indexOf(email);
-  if (emailIndex === -1) {
-    console.log('[admin-auth] match result:', false);
-    return res.json({ allowed: false });
-  }
-  const passwords = (process.env.ADMIN_PASSWORDS || "")
-    .split(",")
-    .map((p) => p.trim());
-  const correctPassword = passwords[emailIndex];
-  if (!correctPassword || password !== correctPassword) {
-    console.log('[admin-auth] match result:', false);
-    return res.json({ allowed: false });
-  }
-  console.log('[admin-auth] match result:', true);
-  res.json({ allowed: true });
-});
 
 /* ── In-memory image cache - avoids re-fetching the same CDN image within a warm
    Lambda container. Keyed by full URL; evicts oldest entry when the cap is hit.
@@ -3127,6 +2927,57 @@ app.all("/api/*", (req, res) => {
   res.status(404).json({ error: "not_found", message: `No API route for ${req.method} ${req.path}` });
 });
 
+/* ── Public roots: the shipped build, or the source ─────────────────────────
+   Everything from here to the "Start (local only" banner decides what a browser can
+   download, and test/static-allowlist.test.mjs runs it as one block with only
+   app/express/path/fs/crypto/__dirname/process in scope (CLAUDE.md §2.6, §2.10).
+
+   PRODUCTION SERVES dist/ (scripts/build.mjs): minified, comments and log narration
+   stripped, the mock harness and debug hooks folded away, the SDK same-origin. That
+   is the whole point of the build - the source spelled out every sizing rule, prompt
+   clause and heuristic, with the reasoning, to anyone with DevTools. On Vercel dist/
+   is produced by the vercel-build script; locally PEAR_SERVE_DIST=1 opts in after
+   `npm run build`, and PEAR_SERVE_DIST=0 forces source anywhere.
+
+   A MISSING dist/ WHERE ONE WAS EXPECTED SERVES SOURCE, LOUDLY. Refusing to serve would
+   take the fitting room down for every shopper over a build hiccup; serving source is the
+   pre-build behaviour and keeps them trying on. The error line is the tripwire.
+
+   SUPPORT VIEW: /fitting-room/?pear_debug=<PEAR_DEBUG_TOKEN> serves the SOURCE room -
+   every [PEAR] log line and window.__pearDebug* hook - so the "[PEAR] console is the
+   debugging contract with live merchants" rule (CLAUDE.md §6) survives the build. Off
+   unless PEAR_DEBUG_TOKEN is set, and set to at least 16 characters; compared in
+   constant time. Hand the link to whoever is debugging, never publish it. */
+const SRC_ROOT   = __dirname;
+const DIST_ROOT  = path.join(__dirname, "dist");
+const DIST_BUILT = fs.existsSync(path.join(DIST_ROOT, "fitting-room", "app.js"));
+const WANT_DIST  = process.env.PEAR_SERVE_DIST === "1" ||
+                   (!!process.env.VERCEL && process.env.PEAR_SERVE_DIST !== "0");
+const SERVE_DIST = WANT_DIST && DIST_BUILT;
+if (WANT_DIST && !DIST_BUILT) {
+  console.error("[PEAR] ✖ dist/ is missing - serving the unminified SOURCE to shoppers. " +
+    "Run `npm run build` (on Vercel: the vercel-build script) before deploying.");
+}
+const CODE_ROOT = SERVE_DIST ? DIST_ROOT : SRC_ROOT;
+
+/* The orientation link for the SUPPORT VIEW (CLAUDE.md §2.14). The built room has the Worker's
+   URL baked in by scripts/build.mjs; the source room the support view serves has no build
+   step, so without this it would look for /orient on its own origin - which Vercel cannot
+   serve - and every turn would stay on the front view in exactly the view used to debug
+   turns. Same env var, same wss://-only rule as the build, and nothing that could close the
+   <script> it is written into. */
+const PEAR_ORIENT_URL = (() => {
+  const u = String(process.env.PEAR_ORIENT_URL || "").trim();
+  return /^wss:\/\/[^\s/?#"'<>\\]+(\/[^\s?#"'<>\\]*)?$/.test(u) ? u : "";
+})();
+
+const PEAR_DEBUG_TOKEN = String(process.env.PEAR_DEBUG_TOKEN || "");
+function isDebugToken(candidate) {
+  if (PEAR_DEBUG_TOKEN.length < 16 || typeof candidate !== "string") return false;
+  const a = Buffer.from(candidate), b = Buffer.from(PEAR_DEBUG_TOKEN);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 /* ── Embeddable widget (pear-widget.js) ────────────────────────────────────
    Served with an explicit route so it carries CORS + cache headers - stores
    embed it with a plain <script src> from any origin. */
@@ -3134,12 +2985,12 @@ app.get("/widget/pear-widget.js", (req, res) => {
   res.setHeader("Content-Type", "application/javascript");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "public, max-age=3600");
-  res.sendFile(path.join(__dirname, "widget/pear-widget.js"));
+  res.sendFile(path.join(CODE_ROOT, "widget/pear-widget.js"));
 });
 
 /* Store-integration guide (widget/pear-widget-guide.html). */
 app.get("/widget/guide", (req, res) => {
-  res.sendFile(path.join(__dirname, "widget/pear-widget-guide.html"));
+  res.sendFile(path.join(CODE_ROOT, "widget/pear-widget-guide.html"));
 });
 
 /* Root redirect - index.html no longer exists, so send visitors straight to the
@@ -3167,13 +3018,23 @@ app.get("/", (req, res) => {
    path. */
 let fittingRoomHtmlCache = null;
 function getFittingRoomHtml() {
+  const file = path.join(CODE_ROOT, "fitting-room/index.html");
   if (!process.env.VERCEL) {
-    return fs.readFileSync(path.join(__dirname, "fitting-room/index.html"), "utf8");
+    return fs.readFileSync(file, "utf8");
   }
   if (fittingRoomHtmlCache === null) {
-    fittingRoomHtmlCache = fs.readFileSync(path.join(__dirname, "fitting-room/index.html"), "utf8");
+    fittingRoomHtmlCache = fs.readFileSync(file, "utf8");
   }
   return fittingRoomHtmlCache;
+}
+/* The support view's page: the SOURCE index.html, with every relative script/stylesheet
+   pointed at /__src/<token>/fitting-room/ so the whole room - and the modules app.js
+   imports relative to itself - load unbuilt. Attributes are rewritten rather than a
+   <base> injected, because <base> also re-targets in-page "#" links into navigations. */
+function debugFittingRoomHtml() {
+  const prefix = `/__src/${PEAR_DEBUG_TOKEN}/fitting-room/`;
+  return fs.readFileSync(path.join(SRC_ROOT, "fitting-room/index.html"), "utf8")
+    .replace(/\b(src|href)="(?![a-z]+:|\/|#)([^"]+\.(?:m?js|css)(?:\?[^"]*)?)"/gi, `$1="${prefix}$2"`);
 }
 app.get(["/fitting-room", "/fitting-room/", "/fitting-room/index.html"], (req, res) => {
   // x-vercel-ip-country is set by Vercel's edge network from the client's IP; it's
@@ -3181,45 +3042,115 @@ app.get(["/fitting-room", "/fitting-room/", "/fitting-room/index.html"], (req, r
   // every country other than Israel) defaults to English.
   const country = String(req.headers["x-vercel-ip-country"] || "").toUpperCase();
   const lang = country === "IL" ? "he" : "en";
-  const html = getFittingRoomHtml().replace(
+  const debug = isDebugToken(req.query.pear_debug);
+  const orient = debug && PEAR_ORIENT_URL ? `<script>window.PEAR_ORIENT_URL=${JSON.stringify(PEAR_ORIENT_URL)}</script>` : "";
+  const html = (debug ? debugFittingRoomHtml() : getFittingRoomHtml()).replace(
     "<head>",
-    `<head>\n    <script>window.__PEAR_DEFAULT_LANG__="${lang}"</script>`
+    `<head>\n    <script>window.__PEAR_DEFAULT_LANG__="${lang}"</script>${orient}`
   );
+  if (debug) console.log("[PEAR] support view: serving the SOURCE fitting room (?pear_debug)");
   res.setHeader("Content-Type", "text/html; charset=UTF-8");
   res.send(html);
 });
 
 /* ── Static hosting ──────────────────────────────────────────────────────── */
-const uiRoot = __dirname;
+/* PUBLIC ALLOWLIST - the ONLY paths this server hands to a browser.
 
-/* serve-static for all assets (JS, CSS, images, fonts…) */
-app.use(express.static(uiRoot, { extensions: ["html"], index: false }));
+   THE BUG THIS CLOSES: this block used to be `express.static(__dirname)` plus a page
+   router rooted at the repo, which served the REPOSITORY ITSELF to anyone who asked -
+   /server.js, /CLAUDE.md, /package.json, /scanner/scan-store.js, /test/run.mjs and
+   /docs/… all answered 200 (verified 2026-09-25 with a probe running that exact
+   config). .env was refused only because `send` ignores dot-paths by default, not
+   because anything here meant to refuse it. Every sizing table, prompt rule and
+   classifier heuristic was one GET away, comments included.
 
-/* Page router - resolves every URL to the right HTML file under ui/ */
-app.use((req, res) => {
-  const candidates = [
-    path.join(uiRoot, req.path),                     // exact file
-    path.join(uiRoot, req.path, "index.html"),        // directory index
-    path.join(uiRoot, req.path.replace(/\/$/, "") + ".html"), // extensionless → .html
-    path.join(uiRoot, "index.html"),                  // SPA fallback
-  ];
-  for (const file of candidates) {
-    try {
-      if (fs.statSync(file).isFile()) {
-        console.log(`[page-router] ${req.method} ${req.path} → ${path.relative(uiRoot, file) || "index.html"}`);
-        return res.sendFile(file);
-      }
-    } catch {}
+   Everything a shopper or a store page needs lives under two directories and two
+   root files. Anything else is a 404 BY CONSTRUCTION: a new file at the repo
+   root is private until someone adds it here, on purpose. Never go back to serving
+   __dirname "because an asset 404'd" - add that asset's directory or file instead.
+
+   test/static-allowlist.test.mjs slices from the "Public roots" banner above to the
+   "Start (local only" banner and asserts both halves: the private paths 404, the
+   public ones load - from source, and from dist/ when the build is live. Keep it
+   self-contained - it runs with only app/express/path/fs/crypto/__dirname/process in
+   scope (CLAUDE.md §2.6). */
+const PUBLIC_DIRS  = ["fitting-room", "widget"];   // lockstep: scripts/build.mjs
+const PUBLIC_FILES = ["pear-logo.png", "Commercial_video_for_a_tech_fa.mp4"];
+const STATIC_OPTS  = { extensions: ["html"], index: false };
+
+/* CODE_FILE is what the build rewrites. With dist/ live those come ONLY from dist/ - a
+   request the build did not produce (config.js and i18n.js, folded into app.js) is a 404,
+   never a fall-through to the readable source. Everything else (images, video, svg) is
+   not code and still comes from the source directory. */
+const CODE_FILE = /\.(m?js|css|html)$/i;
+/* The SDK bundle is content-hashed (rt.<12 hex>.js), so it is safe to cache for a year -
+   and it must be: it is ~800 KB and the room is otherwise no-store. s-maxage lets
+   Vercel's CDN hold it too, so it is not re-served by this function per visitor. */
+const SDK_BUNDLE_FILE = /(^|[\\/])rt\.[0-9a-f]{12}\.js$/;
+const DIST_OPTS = {
+  ...STATIC_OPTS,
+  setHeaders(res, filePath) {
+    if (SDK_BUNDLE_FILE.test(filePath)) {
+      res.setHeader("Cache-Control", "public, max-age=31536000, s-maxage=31536000, immutable");
+    }
+  },
+};
+
+/* Support view assets - source, behind the token, never cached. A wrong or absent token
+   is the same 404 as any unknown path, so the route does not advertise itself.
+   ONE STATIC ROOT PER PUBLIC DIRECTORY, never one at the repo: `send` only refuses a ".."
+   that climbs OUT of its root, so a repo-rooted mount served /__src/<t>/fitting-room/../
+   server.js - the source of this file - to anyone holding the token. Rooted at the
+   directory, the same "../" climbs out and is refused (static-allowlist §5.18). */
+const debugSources = Object.fromEntries(
+  PUBLIC_DIRS.map((dir) => [dir, express.static(path.join(SRC_ROOT, dir), STATIC_OPTS)]));
+app.use("/__src/:token/:dir", (req, res, next) => {
+  if (!isDebugToken(req.params.token) || !Object.hasOwn(debugSources, req.params.dir)) {
+    return res.status(404).json({ error: "not_found", path: req.path });
   }
-  // Unreachable in practice - candidate 4 (root index.html) always exists, so this
-  // route never actually 404s; logged anyway in case that ever changes.
-  console.warn(`[page-router] 404 - no file resolved for ${req.method} ${req.path}`);
+  res.setHeader("Cache-Control", "no-store");
+  return debugSources[req.params.dir](req, res, next);
+});
+
+/* serve-static per public directory - never the repo root */
+for (const dir of PUBLIC_DIRS) {
+  if (SERVE_DIST) app.use(`/${dir}`, express.static(path.join(DIST_ROOT, dir), DIST_OPTS));
+  const fromSource = express.static(path.join(SRC_ROOT, dir), STATIC_OPTS);
+  app.use(`/${dir}`, (req, res, next) =>
+    SERVE_DIST && CODE_FILE.test(req.path) ? next() : fromSource(req, res, next));
+}
+for (const file of PUBLIC_FILES) {
+  app.get(`/${file}`, (_req, res) => res.sendFile(path.join(SRC_ROOT, file)));
+}
+
+/* Page router - directory index and extensionless .html, INSIDE a public directory only.
+   path.join() normalises "..", so every candidate is re-checked against its directory
+   after joining: /widget/../server must never resolve to /server.html. */
+app.use((req, res) => {
+  const top = req.path.split("/")[1] || "";
+  if (PUBLIC_DIRS.includes(top)) {
+    const base = path.join(CODE_ROOT, top) + path.sep;
+    const candidates = [
+      path.join(CODE_ROOT, req.path, "index.html"),                // directory index
+      path.join(CODE_ROOT, req.path.replace(/\/$/, "") + ".html"), // extensionless → .html
+    ];
+    for (const file of candidates) {
+      if (!file.startsWith(base)) continue;
+      try {
+        if (fs.statSync(file).isFile()) {
+          console.log(`[page-router] ${req.method} ${req.path} → ${path.relative(SRC_ROOT, file)}`);
+          return res.sendFile(file);
+        }
+      } catch {}
+    }
+  }
+  console.warn(`[page-router] 404 - no public file for ${req.method} ${req.path}`);
   res.status(404).json({ error: "not_found", path: req.path });
 });
 
 /* ── Start (local only - Vercel manages its own listener) ────────────────── */
 if (!process.env.VERCEL) {
-  app.listen(PORT, () => {
+  const httpServer = app.listen(PORT, () => {
     console.log("\n────────────────────────────────────────────────────────");
     console.log(`  PEAR VTON server → http://localhost:${PORT}`);
     console.log(`  Storefront  : http://localhost:${PORT}/`);
@@ -3236,6 +3167,13 @@ if (!process.env.VERCEL) {
     }
     console.log("────────────────────────────────────────────────────────\n");
   });
+  /* THE ORIENTATION LINK, locally. Production runs the decision engine in a Cloudflare
+     Worker (PEAR_ORIENT_URL at build time - Vercel's functions cannot hold a WebSocket);
+     here the same engine answers on this origin's /orient, which is where the room connects
+     when no URL was built in. Loaded lazily so the Vercel bundle never needs `ws`. */
+  import("./lib/orient-server.js")
+    .then(({ attachOrientServer }) => { attachOrientServer(httpServer); console.log("  Orientation : ws://localhost:" + PORT + "/orient (local engine)"); })
+    .catch((e) => console.warn("  ⚠ orientation link not served locally:", e?.message || e));
 }
 
 export default app;

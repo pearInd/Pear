@@ -35,7 +35,14 @@
    Extracts the REAL builder, not a reimplementation. */
 import { readFileSync } from "node:fs";
 
-const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The prompt engine moved server-side on 2026-09-26 (lib/prompts.js, CLAUDE.md §2.13). SRC
+   reads it FIRST and app.js after it, so the prompt slice below and every check on the
+   engine's own text find it where it lives now, while the checks on the browser's dispatch
+   sites still read app.js. */
+const SRC = [
+  readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8"),
+  readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8"),
+].join("\n").replace(/\r\n/g, "\n");
 
 let fails = 0;
 function check(label, cond, detail) {

@@ -1,0 +1,14 @@
+/* PEAR probe - see src/worker.js. Deployed on its own to the free plan, measured, deleted.
+   PROBE_KEY is passed at deploy time (`--var PROBE_KEY:<key>`), never committed. */
+{
+  "name": "pear-probe",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "PROBE_ROOM", "class_name": "ProbeRoom" }]
+  },
+  /* Free-plan Durable Objects must be SQLite-backed. The probe stores nothing. */
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ProbeRoom"] }],
+  "observability": { "enabled": true }
+}

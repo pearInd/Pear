@@ -1,0 +1,22 @@
+/* PEAR orientation engine - see src/worker.js and CLAUDE.md §2.14.
+   Served ONLY on a custom domain of ours (routes, added at deploy), never on workers.dev,
+   so no Cloudflare/vendor hostname appears in the room. PEAR_DEBUG_TOKEN is a secret
+   (`npx wrangler secret put PEAR_DEBUG_TOKEN`), never committed. */
+{
+  "name": "pear-orient",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  /* rt.pear-ai.io - a Workers custom domain on our own zone (Cloudflare creates the DNS
+     record and the certificate). The room reaches it as PEAR_ORIENT_URL=wss://rt.pear-ai.io/orient. */
+  "routes": [{ "pattern": "rt.pear-ai.io", "custom_domain": true }],
+  /* The room's own origins: production, and every Vercel preview of the "pear" project in
+     the pear2 team (pear-<deployment id>-pear2 and pear-git-<branch>-pear2). Empty = every
+     connection is refused, so a deploy that loses this fails closed: the room goes front-only. */
+  "vars": { "ALLOWED_ORIGINS": "https://app.pear-ai.io,https://pear-*-pear2.vercel.app" },
+  /* POST /trace - a TEST session's flight record, kept 7 days (src/worker.js storeTrace, CLAUDE.md
+     §2.16). Remove the binding and the route stores nothing (404). */
+  "kv_namespaces": [{ "binding": "TRACES", "id": "16e6ef62ed4641acbb1cf21d801c91dd" }]
+}

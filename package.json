@@ -9,6 +9,8 @@
   },
   "scripts": {
     "start": "node server.js",
+    "build": "node scripts/build.mjs",
+    "vercel-build": "node scripts/build.mjs",
     "dev": "node --watch server.js",
     "test": "node test/run.mjs",
     "scan": "node scanner/scan-store.js",
@@ -18,22 +20,31 @@
     "test:visual": "playwright test test/e2e/visual-agent.spec.mjs",
     "inspect:visuals": "node scripts/inspect-visuals.mjs",
     "qa:visual": "npm run test:visual && npm run inspect:visuals",
-    "trace:prompt": "node scripts/trace-prompt.mjs fitting-room/app.js",
+    "qa:visual:dist": "node scripts/build.mjs --qa && PEAR_VISUAL_OVERLAY=dist-qa npm run qa:visual",
+    "trace:prompt": "node scripts/trace-prompt.mjs lib/prompts.js",
     "sync:size-chart-parser": "node scripts/sync-size-chart-parser.mjs",
     "scan:size-charts": "node scanner/scan-store.js --size-charts",
     "prepare": "husky"
   },
   "dependencies": {
-    "@decartai/sdk": "^0.1.5",
+    "@decartai/sdk": "0.1.5",
     "@google/genai": "^2.13.0",
     "@supabase/supabase-js": "^2.108.2",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
-    "googleapis": "^144.0.0"
+    "googleapis": "^144.0.0",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
+    "esbuild": "^0.25.12",
     "husky": "^9.1.7",
     "jsdom": "^24.1.3"
+  },
+  "overrides": {
+    "@decartai/sdk": {
+      "livekit-client": "2.22.3",
+      "zod": "4.6.5"
+    }
   }
 }

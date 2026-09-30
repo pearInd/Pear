@@ -1,9 +1,10 @@
 /* =============================================================================
    GENERATED FILE - DO NOT EDIT BY HAND.
-   Source: widget/pear-widget.js, the "@pear-shared:size-token" and
-   "@pear-shared:size-chart-parser" blocks. Regenerate with:
+   Source: widget/pear-widget.js's "@pear-shared:size-token" block and
+   scanner/size-chart-reader.src.js's "@pear-shared:size-chart-parser" block.
+   Regenerate with:
        npm run sync:size-chart-parser
-   test/size-chart-parser-sync.test.mjs fails the suite when this file and the widget
+   test/size-chart-parser-sync.test.mjs fails the suite when this file and its sources
    disagree by a single byte. Why it is a generated copy rather than a shared module:
    see scripts/sync-size-chart-parser.mjs.
    ============================================================================= */

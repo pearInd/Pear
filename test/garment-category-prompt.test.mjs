@@ -40,7 +40,14 @@
 import { readFileSync } from "node:fs";
 import { CONFIG } from "../fitting-room/config.js";
 
-const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The prompt engine moved server-side on 2026-09-26 (lib/prompts.js, CLAUDE.md §2.13). SRC
+   reads it FIRST and app.js after it, so the prompt slice below and every check on the
+   engine's own text find it where it lives now, while the checks on the browser's dispatch
+   sites still read app.js. */
+const SRC = [
+  readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8"),
+  readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8"),
+].join("\n").replace(/\r\n/g, "\n");
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -464,15 +471,19 @@ console.log("\n── §6 EVERY BUILDER BRANCHES - one constant left is the bug,
 
      Asserted on the shape of the ping itself rather than on one flat regex, so neither
      branch can be dropped without failing here. */
+  /* The builders are server-side since 2026-09-26 (lib/prompts.js): the ping asks
+     wireLookPrompt() for a look and wirePrompt() - imageOnlyPrompt() behind POST
+     /api/prompt - for a single garment, and the server clamps every answer for the wire. */
   const ping = (SRC.match(/const keepAliveLook = resolveLook\(\);[\s\S]{0,400}?"freezeKeepAlive"\);/) || [""])[0];
   check("the freeze keep-alive ping branches on resolveLook() like applyActive() does",
-    /buildLookPrompt\(keepAliveLook\.top, keepAliveLook\.bottom\)/.test(ping),
+    /keepAliveLook \? await wireLookPrompt\("freezeKeepAlive"\)/.test(ping),
     ping || "no resolveLook()-guarded keep-alive found - a look session gets a single-garment prompt");
   check("...and falls back to the category resolver for a single garment",
-    /imageOnlyPrompt\(activeItem\)/.test(ping),
+    /: await wirePrompt\(activeItem, "front", "freezeKeepAlive"\)/.test(ping),
     "recovery must not re-assert a t-shirt over a trouser session");
   check("...and both branches go through the wire clamp, not around it",
-    /clampPromptForWire\(/.test(ping) && ping.trim().endsWith('"freezeKeepAlive");'),
+    /return clampPromptForWire\(raw, req\.where\);/.test(SRC) &&
+    /const raw = req\.kind === "look" \? lookAnchorPrompt\(\) : buildCompositePrompt\(req\.item, req\.angle, req\.inProfile\);/.test(SRC),
     ping);
 }
 

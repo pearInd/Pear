@@ -124,6 +124,10 @@ function roomUrl(base) {
      standard gate still runs at the shipped defaults. */
   if (process.env.PEAR_VISUAL_EARLY_TURN) q.set("early_turn", process.env.PEAR_VISUAL_EARLY_TURN);
   if (process.env.PEAR_VISUAL_EARLY_TURN_RETURN) q.set("early_turn_return", process.env.PEAR_VISUAL_EARLY_TURN_RETURN);
+  /* THE FLIGHT RECORDER (fitting-room/app.js), switched on for this run and saved as flight.json
+     beside the frames: every orientation tick, swap and link event of the harness's 360. Off
+     unless asked, so the standard gate's URL is unchanged. */
+  if (process.env.PEAR_VISUAL_TRACE) q.set("pear_trace", "1");
   return `${base}/fitting-room/index.html?${q}`;
 }
 
@@ -368,6 +372,11 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
      at. Scored by the revealed-on-prior check in inspect-visuals.mjs. */
   const priorFrames = await page.evaluate(() => window.__pearMockDecart.priorFrames);
   const priorPaintedAt = await page.evaluate(() => window.__pearMockDecart.priorPaintedAt);
+
+  if (process.env.PEAR_VISUAL_TRACE) {
+    const flight = await page.evaluate(() => (window.__pearDebugTrace ? window.__pearDebugTrace() : null));
+    writeFileSync(join(OUT, "flight.json"), JSON.stringify(flight, null, 1));
+  }
 
   writeFileSync(join(OUT, "meta.json"), JSON.stringify({
     generatedAt: new Date().toISOString(),

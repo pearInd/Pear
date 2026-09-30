@@ -1,7 +1,13 @@
 /* THE ROOM'S STORED-CHART FALLBACK, EU/US ALIASES AND THE PHASE 0 COMPARISON
    ─────────────────────────────────────────────────────────────────────────────
-   Runs the real sizing slice of fitting-room/app.js (the same span every sizing suite
-   extracts - CLAUDE.md §2.6) with the module state set per case. Pins:
+   Main (bd766b2) ran this in the browser. With the code hiding (CLAUDE.md §2.12) the
+   pick, the aliases, the overlay and the comparison are lib/sizing.js's, and the browser
+   only fetches the store's charts and forwards them. So every case below runs the WHOLE
+   path: the real browser sizing slice of fitting-room/app.js (the same span every sizing
+   suite extracts - CLAUDE.md §2.6) with the module state set per case builds the
+   evidence exactly as calculateSize() does; it goes through JSON and
+   sanitizeSizeEvidence(); the real lib/sizing.js answers. Main's own checks, unchanged
+   in what they assert. Pins:
 
    §1 NOTHING STORED = TODAY. No stored charts (not fetched, fetched empty) -> the
       resolver returns [] and the overlay hands back the default matrix BY IDENTITY.
@@ -20,10 +26,14 @@
       on a grid of bodies, and logStoreChartComparison() reports disagreement, band
       deltas and the idle tie-break, once per distinct outcome.
    §7 loadStoredSizeCharts() - one GET per host, and every failure lands on [].
+   §8 THE WIRE - a chart as GET /api/store-size-chart serves it survives the sanitiser
+      unchanged; the Phase 0 summary reaches the support view only.
    ============================================================================= */
 import { readFileSync } from "node:fs";
+import * as SIZING from "../lib/sizing.js";
 
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const LIB = readFileSync(new URL("../lib/sizing.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -39,22 +49,58 @@ function extract(src, start, end) {
   return src.slice(a, b);
 }
 
-const SIZING = extract(APP, "const ZARA_SIZE_CHART", "\nfunction onMeasurementKeydown");
+/* The browser half: the Screen 1 sizing slice (CLAUDE.md §2.6), run with its module state
+   exposed. __evidence() is calculateSize()'s evidence block - §0 asserts it is, line for line. */
+const BROWSER = extract(APP, "const CHILD_SIZE_SCALE = [", "\nfunction onMeasurementKeydown");
 const STATE = ["activeItem", "pendingSizes", "pendingAgeGroup", "pendingTitle", "pendingSizeRunType",
   "pendingSizeChart", "pendingGarmentGender", "storedSizeCharts", "storedSizeChartsHost",
   "currentUserSize", "currentSizeCategory", "currentBodyCategory", "currentUserGender", "pendingSoldOutSizes",
-  "pendingSoldOutForImg"];
-const prefix = `let ${STATE.join(", ")};\nactiveItem = null; currentUserGender = null;\n`;
+  "pendingSoldOutForImg", "currentGarmentCategory"];
+/* currentGarmentCategory is declared inside the slice itself; the rest are the room's module state. */
+const prefix = `let ${STATE.filter((k) => k !== "currentGarmentCategory").join(", ")};\nactiveItem = null; currentUserGender = null;\n`;
 const setter = `function __set(o) {\n${STATE.map((k) => `  if ("${k}" in o) ${k} = o.${k};`).join("\n")}\n}\n` +
-  "function __get(k) { return ({ storedSizeCharts, storedSizeChartsHost })[k]; }\n";
-const EXPORTS = ["__set", "__get", "resolvedStoreSizeChart", "pickStoredSizeChart", "applyStoreChartOverlay",
-  "canonicalSizeToken", "storeChartTokenMap", "fineTunePickForDiagnostics", "logStoreChartComparison",
-  "loadStoredSizeCharts", "coreHwPenalty", "resolvedStoreSizeChartSource",
-  "ZARA_SIZE_CHART", "ADULT_PANTS_SIZE_CHART"];
+  "function __get(k) { return ({ storedSizeCharts, storedSizeChartsHost })[k]; }\n" +
+  `function __evidence(extra) {
+  const product = sizeProductEvidence();
+  const evidence = {
+    height: null, weight: null, chest: null, waist: null, legs: null,
+    gender: currentUserGender || null,
+    storeChart: resolvedStoreSizeChart(),
+    product,
+  };
+  const storedCharts = typeof storedSizeChartsEvidence === "function" ? storedSizeChartsEvidence() : null;
+  if (storedCharts) {
+    evidence.storedCharts = storedCharts;
+    evidence.garmentGender = resolvedGarmentGender();
+  }
+  return Object.assign(evidence, extra || {});
+}
+`;
+const EXPORTS = ["__set", "__get", "__evidence", "loadStoredSizeCharts", "logStoreChartDiag"];
 const room = await import("data:text/javascript," + encodeURIComponent(
-  prefix + SIZING + "\n" + setter + `export { ${EXPORTS.join(", ")} };`));
-const { __set, resolvedStoreSizeChart, pickStoredSizeChart, applyStoreChartOverlay, canonicalSizeToken,
-  fineTunePickForDiagnostics, logStoreChartComparison, coreHwPenalty, ZARA_SIZE_CHART, ADULT_PANTS_SIZE_CHART } = room;
+  prefix + BROWSER + "\n" + setter + `export { ${EXPORTS.join(", ")} };`));
+const { __set } = room;
+const { applyStoreChartOverlay, canonicalSizeToken, fineTunePickForDiagnostics, coreHwPenalty,
+  ZARA_SIZE_CHART, ADULT_PANTS_SIZE_CHART } = SIZING;
+/* The evidence as the server receives it - through JSON and the sanitiser, like the wire. */
+const wire = (extra) => SIZING.sanitizeSizeEvidence(JSON.parse(JSON.stringify(room.__evidence(extra))));
+const resolvedStoreSizeChart = () => SIZING.resolvedStoreSizeChart(wire());
+const pickStoredSizeChart = () => SIZING.pickStoredSizeChart(wire());
+const resolvedStoreSizeChartSource = () => SIZING.storeSizeChartSource(wire());
+/* Main compared the picked chart by identity; after the wire it is a copy, so by value. */
+const same = (a, b) => !!a && !!b && a.gender === b.gender && a.garment_type === b.garment_type &&
+  JSON.stringify(a.rows.map((r) => ({ ...r }))) === JSON.stringify(b.rows.map((r) => ({ ...r })));
+
+console.log("\n── §0 calculateSize() builds the evidence the harness builds ──");
+{
+  const calc = extract(APP, "function calculateSize() {", "\nfunction applySizeVerdict(");
+  check("§0.1 the widget chart rides as storeChart, raw", /storeChart: resolvedStoreSizeChart\(\),/.test(calc));
+  check("§0.2 stored charts + the garment's gender ride ONLY when some landed",
+    /const storedCharts = typeof storedSizeChartsEvidence === "function" \? storedSizeChartsEvidence\(\) : null;\s*if \(storedCharts\) \{\s*evidence\.storedCharts = storedCharts;\s*evidence\.garmentGender = resolvedGarmentGender\(\);\s*\}/.test(calc));
+  __set({ activeItem: null, storedSizeCharts: undefined });
+  check("§0.3 no stored charts -> the evidence carries neither field (what it always sent)",
+    !("storedCharts" in room.__evidence()) && !("garmentGender" in room.__evidence()));
+}
 
 const RESET = {
   activeItem: null, pendingSizes: undefined, pendingAgeGroup: undefined, pendingTitle: undefined,
@@ -104,7 +150,7 @@ console.log("\n── §2 the widget's chart wins ──");
     resolvedStoreSizeChart().find((r) => r.size === "M").minChest === 96);
   set({ storedSizeCharts: [MEN_TOPS], pendingGarmentGender: "men", pendingSizeChart: "" });
   check("§2.5 the Phase 0 source label names the stored chart",
-    /stored men\/adult\/tops/.test(room.resolvedStoreSizeChartSource()), room.resolvedStoreSizeChartSource());
+    /stored men\/adult\/tops/.test(resolvedStoreSizeChartSource()), resolvedStoreSizeChartSource());
 }
 
 console.log("\n── §3 which stored chart ──");
@@ -117,23 +163,23 @@ console.log("\n── §3 which stored chart ──");
   check("§3.2 garment gender unknown + store has men's AND women's charts -> none (never guessed)",
     resolvedStoreSizeChart().length === 0 && /not guessing/.test(pickStoredSizeChart().reason), pickStoredSizeChart().reason);
   set({ storedSizeCharts: [MEN_TOPS, WOMEN_TOPS_EU], pendingGarmentGender: "men" });
-  check("§3.3 men's garment -> the men's chart", pickStoredSizeChart().chart === MEN_TOPS);
+  check("§3.3 men's garment -> the men's chart", same(pickStoredSizeChart().chart, MEN_TOPS));
   set({ storedSizeCharts: [MEN_TOPS], pendingGarmentGender: "women" });
   check("§3.4 women's garment, only a men's chart -> none", resolvedStoreSizeChart().length === 0, pickStoredSizeChart().reason);
   const unisex = chart("unisex", "tops", MEN_TOPS.rows);
   set({ storedSizeCharts: [MEN_TOPS, unisex], pendingGarmentGender: "women" });
-  check("§3.5 ...but a unisex chart serves any garment", pickStoredSizeChart().chart === unisex);
+  check("§3.5 ...but a unisex chart serves any garment", same(pickStoredSizeChart().chart, unisex));
   const unlabelled = chart("unknown", "tops", MEN_TOPS.rows);
   set({ storedSizeCharts: [unlabelled] });
-  check("§3.6 an unlabelled chart is used when the store has no gendered one", pickStoredSizeChart().chart === unlabelled);
+  check("§3.6 an unlabelled chart is used when the store has no gendered one", same(pickStoredSizeChart().chart, unlabelled));
   set({ storedSizeCharts: [unlabelled, WOMEN_TOPS_EU] });
   check("§3.7 ...but NOT when the store also publishes gendered charts of that type",
     pickStoredSizeChart().chart === null, pickStoredSizeChart().reason);
 
   set({ storedSizeCharts: [MEN_TOPS, JEANS, BOTTOMS], pendingGarmentGender: "men", pendingTitle: "Slim Fit Jeans", pendingSizes: "30,32,34" });
-  check("§3.8 a jeans product picks the jeans chart", pickStoredSizeChart().chart === JEANS, pickStoredSizeChart().reason);
+  check("§3.8 a jeans product picks the jeans chart", same(pickStoredSizeChart().chart, JEANS), pickStoredSizeChart().reason);
   set({ storedSizeCharts: [MEN_TOPS, JEANS, BOTTOMS], pendingTitle: "Cargo Pants", pendingSizes: "S,M,L" });
-  check("§3.9 trousers pick the bottoms chart first", pickStoredSizeChart().chart === BOTTOMS, pickStoredSizeChart().reason);
+  check("§3.9 trousers pick the bottoms chart first", same(pickStoredSizeChart().chart, BOTTOMS), pickStoredSizeChart().reason);
   set({ storedSizeCharts: [JEANS, BOTTOMS], pendingGarmentGender: "men", pendingTitle: "Basic Tee", pendingSizes: "S,M,L" });
   check("§3.10 a top never takes a bottoms/jeans chart", pickStoredSizeChart().chart === null);
 
@@ -145,12 +191,12 @@ console.log("\n── §3 which stored chart ──");
   const menEuAliased = chart("men", "tops", menEuOnly.rows.map((r, i) => ({ ...r, aliases: { int: ["S", "M", "L"][i] } })));
   set({ storedSizeCharts: [menEuAliased], pendingGarmentGender: "men", pendingSizes: "S,M,L" });
   check("§3.12 ...the same chart with the store's own INT column overlaps via its aliases",
-    pickStoredSizeChart().chart === menEuAliased);
+    same(pickStoredSizeChart().chart, menEuAliased));
 
   set({ storedSizeCharts: [WOMEN_TOPS_EU], pendingGarmentGender: "women", pendingSizes: "XS,S,M,L" });
   const women = pickStoredSizeChart();
   check("§3.13 women's EU 36/38/40 answer to S/M/L (WOMEN_TOPS_EU_SIZE_CHART, the one vetted convention)",
-    women.chart === WOMEN_TOPS_EU && women.rows.map((r) => r.aliases?.int).join(",") === "S,M,L", JSON.stringify(women.rows));
+    same(women.chart, WOMEN_TOPS_EU) && women.rows.map((r) => r.aliases?.int).join(",") === "S,M,L", JSON.stringify(women.rows));
   check("§3.14 ...and the stored chart itself was not mutated", !WOMEN_TOPS_EU.rows[0].aliases);
   const overlaid = applyStoreChartOverlay(ZARA_SIZE_CHART, women.rows);
   check("§3.15 ...so the women's bands land on our S/M/L rows",
@@ -200,15 +246,15 @@ console.log("\n── §5 §2.5b holds on the new path ──");
   const pantsBefore = kernelOf(ADULT_PANTS_SIZE_CHART);
   check("§5.3 same on the pants chart via an EU alias",
     kernelOf(applyStoreChartOverlay(ADULT_PANTS_SIZE_CHART, [{ size: "M", aliases: { eu: "40" }, minWaist: 73, maxWaist: 79, minHeight: 1 }])) === pantsBefore);
-  const fn = extract(APP, "function applyStoreChartOverlay(baseChart, storeRows) {", "\n/**");
-  const helper = extract(APP, "function storeChartTokenMap(storeRows, numericBase) {", "\n}\n");
+  const fn = extract(LIB, "function applyStoreChartOverlay(baseChart, storeRows) {", "\n/*");
+  const helper = extract(LIB, "function storeChartTokenMap(storeRows, numericBase) {", "\n}\n");
   check("§5.4 neither the overlay nor its token map names a height or weight field",
     !/(?:min|max)(?:Height|Weight)/.test(fn + helper));
 }
 
 console.log("\n── §6 Phase 0 comparison ──");
 {
-  const loopSrc = extract(APP, 'const candidates = currentSizeCategory === "child" ? childFits : adultFits;',
+  const loopSrc = extract(LIB, 'const candidates = currentSizeCategory === "child" ? childFits : adultFits;',
     "// SNAP TO THE PRODUCT'S OWN LIST.");
   const realLoop = new Function("currentSizeCategory", "useNumericPantsChart", "childFits", "adultFits",
     "chest", "waist", "legs", loopSrc + "\nreturn bestSize;");
@@ -230,6 +276,12 @@ console.log("\n── §6 Phase 0 comparison ──");
   check(`§6.1 the diagnostic mirror agrees with the REAL tie-break loop on all ${total} cases`,
     total > 100 && agree === total, firstDiff);
 
+  /* Main's logStoreChartComparison() = the server's summary + the browser's once-per-outcome log. */
+  const logStoreChartComparison = (args) => {
+    const summary = SIZING.storeChartComparison(args);
+    room.logStoreChartDiag(summary);
+    return summary;
+  };
   const logs = [];
   const orig = console.log;
   console.log = (...a) => logs.push(a);
@@ -254,10 +306,13 @@ console.log("\n── §6 Phase 0 comparison ──");
   check("§6.9 a store size our chart lacks is surfaced, not silently dropped",
     unmatched && unmatched.unmatchedStoreSizes === "5XL", JSON.stringify(unmatched));
 
-  const calc = extract(APP, "function calculateSize() {", "\nfunction setGender(");
-  check("§6.10 calculateSize() calls the comparison AFTER the recommendation is final",
-    calc.indexOf("logStoreChartComparison(") > calc.indexOf("// SNAP TO THE PRODUCT'S OWN LIST.") &&
-    calc.indexOf("logStoreChartComparison(") < calc.indexOf("sizeResult.innerText = formatSizeLabel(bestSize);"));
+  const fit = extract(LIB, "export function computeSizeVerdict(ev", "\n/* ══ THE WIRE");
+  const paint = extract(APP, "function applySizeVerdict(verdict) {", "\nfunction ");
+  check("§6.10 the comparison runs AFTER the recommendation is final, and is logged before it is painted",
+    fit.indexOf("storeChartComparison(") > fit.indexOf("// SNAP TO THE PRODUCT'S OWN LIST.") &&
+    fit.indexOf("storeChartComparison(") < fit.lastIndexOf('return { status: "ok"') &&
+    paint.indexOf("logStoreChartDiag(verdict.storeChartDiag)") > 0 &&
+    paint.indexOf("logStoreChartDiag(verdict.storeChartDiag)") < paint.indexOf("sizeResult.innerText = formatSizeLabel(bestSize);"));
 }
 
 console.log("\n── §7 loadStoredSizeCharts ──");
@@ -297,6 +352,42 @@ console.log("\n── §7 loadStoredSizeCharts ──");
   check("§7.5 no usable host -> no request at all", calls.length === 0);
   console.log = quiet;
   delete globalThis.fetch;
+}
+
+console.log("\n── §8 the wire ──");
+{
+  /* A chart exactly as lib/store-size-charts.js's toRoomChart() serves it. */
+  const served = { gender: "women", age_group: "adult", garment_type: "tops", size_system: "eu", source: "linked_page",
+    confidence: 0.9, updated_at: "2026-09-27T00:00:00Z",
+    rows: [{ size: "36", minChest: 82, maxChest: 85, aliases: { int: "S", us: "4" } }, { size: "38", minChest: 86, maxChest: 89 }] };
+  __set({ activeItem: null, storedSizeCharts: [served, { ...served, age_group: "kids" }], pendingGarmentGender: "women" });
+  const ev = wire();
+  check("§8.1 only the adult charts travel (the pick never reads another)", ev.storedCharts.length === 1);
+  check("§8.2 every field the pick and the overlay read survives the sanitiser unchanged",
+    JSON.stringify(ev.storedCharts[0]) === JSON.stringify({ gender: "women", age_group: "adult", garment_type: "tops",
+      source: "linked_page", rows: served.rows.map((r) => ({ size: r.size, minChest: r.minChest, maxChest: r.maxChest,
+        ...(r.aliases ? { aliases: r.aliases } : {}) })) }), JSON.stringify(ev.storedCharts[0]));
+  check("§8.3 the garment gender rides with them", ev.garmentGender === "women");
+  const junk = SIZING.sanitizeStoredCharts(Array.from({ length: 90 }, () => ({ rows: Array.from({ length: 500 }, () => ({ size: "x".repeat(99), minChest: "9", aliases: { "EVIL KEY": "M", eu: { x: 1 } } })) })));
+  check("§8.4 a forged body is bounded: 50 charts, 60 rows, strings capped, non-numbers and odd keys dropped",
+    junk.length === 50 && junk[0].rows.length === 60 && junk[0].rows[0].size.length === 16 &&
+    !("minChest" in junk[0].rows[0]) && JSON.stringify(junk[0].rows[0].aliases) === "{}");
+  const body = { height: 171, weight: 66, chest: 97, waist: null, legs: null, gender: "men", storeChart: "",
+    product: { sizes: ["S", "M", "L"], ageGroup: "adult", title: "Tee" }, storedCharts: [MEN_TOPS], garmentGender: "men" };
+  const shopper = SIZING.computeSizeVerdict(SIZING.sanitizeSizeEvidence(body));
+  const support = SIZING.computeSizeVerdict(SIZING.sanitizeSizeEvidence(body), { diag: true });
+  check("§8.5 the stored chart moves the tie-break end to end (97cm chest at 171/66: S, not M)", shopper.size === "S", shopper.size);
+  check("§8.6 a shopper's verdict carries no comparison (its band deltas describe our chart)", !("storeChartDiag" in shopper));
+  check("§8.7 the support view's does - main's summary, the recommendation included",
+    support.storeChartDiag && support.storeChartDiag.recommended === "S" && support.storeChartDiag.defaultPick === "M" &&
+    /stored men\/adult\/tops/.test(support.storeChartDiag.source), JSON.stringify(support.storeChartDiag));
+  const SERVER = readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  const WORKER = readFileSync(new URL("../cloudflare/orient/src/worker.js", import.meta.url), "utf8");
+  check("§8.8 both answering ends gate it on the support token",
+    /computeSizeVerdict\(sanitizeSizeEvidence\(req\.body\), \{ diag: isDebugToken\(req\.body && req\.body\.dk\) \}\)/.test(SERVER) &&
+    /computeSizeVerdict\(sanitizeSizeEvidence\(body\), \{ diag: keyMatches\(body && body\.dk, env\.PEAR_DEBUG_TOKEN\) \}\)/.test(WORKER));
+  check("§8.9 ...and the browser sends the key only from a debug build",
+    /\(typeof PEAR_DEBUG_BUILD === "undefined" \|\| PEAR_DEBUG_BUILD\) && typeof location !== "undefined"\) \{\s*try \{\s*const dk = new URLSearchParams\(location\.search\)\.get\("pear_debug"\);/.test(APP));
 }
 
 console.log("");

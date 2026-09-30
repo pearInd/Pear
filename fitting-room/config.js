@@ -459,8 +459,14 @@ export const CONFIG = Object.freeze({
   TOKEN_ENDPOINT:  "/api/realtime-token",
   HEALTH_ENDPOINT: "/api/health",
 
-  /* ── Decart SDK CDN fallbacks (tried in order) ──────────────────────────── */
-  SDK_URLS: Object.freeze([
+  /* ── Decart SDK sources (tried in order) ─────────────────────────────────
+     Source / dev: the two CDN builds of the pinned version. The PRODUCTION bundle
+     (scripts/build.mjs) defines PEAR_SDK_BUNDLE as the path of the same pinned
+     version, bundled from node_modules and served from our own origin - so the
+     shipped page never names a third-party CDN URL that spells out the vendor, and
+     esbuild folds the CDN branch away entirely. Keep the version in lockstep with
+     package.json's @decartai/sdk (the build refuses to run when they differ). */
+  SDK_URLS: Object.freeze(typeof PEAR_SDK_BUNDLE === "string" ? [PEAR_SDK_BUNDLE] : [
     "https://esm.sh/@decartai/sdk@0.1.5",
     "https://cdn.jsdelivr.net/npm/@decartai/sdk@0.1.5/+esm",
   ]),
