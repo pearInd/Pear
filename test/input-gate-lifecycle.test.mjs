@@ -148,8 +148,10 @@ console.log("\n── §4 THE RECOVERY DISPOSES THE FIRST GATE, IT DOES NOT RACE
      those two statements is the whole guarantee. */
   const connect = extract("async function connectRealtime(", "\n/**");
   check("...and connectRealtime() disposes before it mints, so the two never coexist",
-    connect.indexOf("inputThrottle.dispose()") !== -1 &&
-    connect.indexOf("inputThrottle.dispose()") < connect.indexOf("inputThrottle = createThrottledInputStream("),
+    /* The mint may choose the ?exp=solo direct input first (createDirectInputStream, 2026-09-30) - one
+       statement either way, found by its assignment. */
+    connect.indexOf("inputThrottle.dispose()") !== -1 && connect.search(/inputThrottle = [^;]*createThrottledInputStream\(/) !== -1 &&
+    connect.indexOf("inputThrottle.dispose()") < connect.search(/inputThrottle = [^;]*createThrottledInputStream\(/),
     "a mint before the dispose would leave the old gate's ceiling armed against the new session");
   const second = makeGate(); await second.flush();
   second.tick(6);

@@ -68,36 +68,40 @@ console.log("\n── §2 with the flag ──");
 
 console.log("\n── §3 the prompt frame ──");
 {
-  /* v2 (2026-09-30): the first measurement drew a LARGE black block for a SMALL rear print - so the
-     description carries each print's size and place, and the back is the part that never gives way. */
+  /* v5 (2026-09-30): the engine drew the FRONT's oval logo on the back, and a plain back - so the
+     back sentence leads, points at the right half, and never gives way; the front is one clause at
+     most and the first thing dropped; the garment keeps its length clause. */
   const OASIS = {
-    garment: "oversized white cotton crew-neck t-shirt with dropped shoulders, short sleeves, boxy relaxed fit, hip-length hem",
-    front: "a vertical red and blue stripe running down the center front, a black-outlined oval \"Knebworth\" logo across the chest, a small boxed \"oasis\" logo above it, the rest of the front is plain",
-    back: "small print centered on the upper back, about a third of the width: \"10th & 11th Aug. 1996\" in black letters, below it a small black rectangular label with white \"oasis\" text, rest of the back plain",
+    garment: "White cotton crew neck t-shirt, oversized fit, hip-length with short sleeves",
+    front: "Centered graphic with vertical red and blue stripes, a small black box with white \"oasis\" text, and \"Knebworth\" in black text",
+    back: "Two lines, about a quarter of the back's width, centered on the upper back: black text \"10th & 11th Aug. 1996\"; below it a small black rectangular label with white \"oasis\"; rest of the back plain",
   };
   const p = soloPromptFrom(OASIS, "top");
   console.log(`        (${p.length} chars) ${p}`);
   check("the vendor's form: \"Substitute the upper body garment with <what the photos show>\"",
-    p.startsWith("Substitute the upper body garment with oversized white cotton crew-neck"));
+    p.startsWith("Substitute the upper body garment with White cotton crew neck t-shirt"));
   check("...the two halves are named: the front on the left, the back on the right",
-    /The reference shows it from two sides: front on the left, back on the right\./.test(p));
-  check("...and which side to show when",
-    /Facing the camera, show the front: a vertical red and blue stripe/.test(p) &&
-    /Back to the camera, show the back exactly as in the reference: small print centered on the upper back/.test(p));
-  check("...the BACK survives the budget whole - its size, its text and its closing 'plain' clause",
-    p.includes('small print centered on the upper back, about a third of the width: "10th & 11th Aug. 1996" in black letters, below it a small black rectangular label with white "oasis" text, rest of the back plain.'));
-  check("...the FRONT gave way first, by whole clauses - never a phrase cut mid-way",
-    /show the front: a vertical red and blue stripe running down the center front\. Back/.test(p));
+    /The reference shows this same garment from two sides: front on the left, back on the right\./.test(p));
+  check("...the BACK sentence comes before the front's, and points at the right half",
+    p.indexOf("show the back exactly as in the right half") !== -1 &&
+    p.indexOf("show the back exactly as in the right half") < p.indexOf("show the front exactly as in the left half"));
+  check("...the BACK survives the budget whole - its size, its lines, its label and its closing 'plain' clause",
+    p.includes('Two lines, about a quarter of the back\'s width, centered on the upper back: black text "10th & 11th Aug. 1996"; below it a small black rectangular label with white "oasis"; rest of the back plain.'));
+  check("...the garment keeps its LENGTH clause (the fit reads it)", /hip-length/.test(p));
+  check("...and the front's details gave way first - the left half of the image carries them",
+    /show the front exactly as in the left half\. Keep/.test(p) && !/Knebworth/.test(p));
   check("...the shopper's own lower body is kept", /Keep the person's own pants, legs and shoes\.$/.test(p));
   check("...within the wire cap (650), with no stray punctuation", p.length <= 640 && !/[,;:]\./.test(p), String(p.length));
+  const roomy = soloPromptFrom({ garment: "white tee, hip-length", front: "red stripes, a logo", back: "a small label, rest plain" }, "top");
+  check("with room to spare the front keeps ONE clause - never more", /show the front exactly as in the left half: red stripes\./.test(roomy));
   const plain = soloPromptFrom({ ...OASIS, back: "plain" }, "top");
-  check("a plain back is said as plain, not as a print", /show the back exactly as in the reference, plain\./.test(plain));
+  check("a plain back is said as plain, not as a print", /show the back exactly as in the right half, plain\./.test(plain));
   const pants = soloPromptFrom({ garment: "light blue wide-leg denim jeans, high waist, ankle-length", front: "plain", back: "two patch pockets" }, "bottom");
   check("bottoms: the lower body garment, and the shopper's own top is kept",
     pants.startsWith("Substitute the lower body garment with light blue") && /Keep the person's own top and shoes\.$/.test(pants));
-  const long = soloPromptFrom({ garment: "w ".repeat(40), front: "front detail, ".repeat(20), back: "back detail, ".repeat(20) + "rest plain" }, "top");
-  check("an over-long description is cut to fit - details give way, the frame and the back's 'plain' survive",
-    long.length <= 640 && /front on the left, back on the right/.test(long) && /rest plain\. Keep the person's own pants, legs and shoes\.$/.test(long), `${long.length} ${long}`);
+  const long = soloPromptFrom({ garment: "w, ".repeat(18) + "hip-length", front: "front detail, ".repeat(20), back: "back detail, ".repeat(20) + "rest plain" }, "top");
+  check("an over-long description is cut to fit - the frame, the length and the back's 'plain' survive",
+    long.length <= 640 && /front on the left, back on the right/.test(long) && /hip-length/.test(long) && /rest plain\. When the person faces/.test(long), `${long.length} ${long}`);
   const none = soloPromptFrom(null, "top");
   check("no description: the frame with a generic garment phrase",
     /Substitute the upper body garment with the garment exactly as shown in the reference image\./.test(none) && /front on the left/.test(none));
@@ -140,7 +144,7 @@ console.log("\n── §4 the description call ──");
     ["front_box", "back_box"].every((k) => sentSchema.required.includes(k)));
   check("...and the model is asked for each print's SIZE and PLACE, and for both garment boxes",
     /SIZE relative to the garment/.test(DESCRIBE_INSTRUCTION) && /PLACE/.test(DESCRIBE_INSTRUCTION) &&
-    /front_box/.test(DESCRIBE_INSTRUCTION) && /back_box/.test(DESCRIBE_INSTRUCTION) && /small label must never read as a large block/.test(DESCRIBE_INSTRUCTION) &&
+    /front_box/.test(DESCRIBE_INSTRUCTION) && /back_box/.test(DESCRIBE_INSTRUCTION) && /small label must\s+never read as a large block/.test(DESCRIBE_INSTRUCTION) &&
     /from TOP to BOTTOM/.test(DESCRIBE_INSTRUCTION) && /which text sits inside which shape/.test(DESCRIBE_INSTRUCTION));
   check("the FRONT photo is fetched first (over https), then the BACK", ok.seen[0].url === "https://cdn.example.com/1.jpg" && ok.seen[1].url === "https://cdn.example.com/3.jpg");
   const body = JSON.parse(ok.seen[2].init.body);
@@ -193,7 +197,7 @@ console.log("\n── §5 the wiring ──");
     /return requestWirePrompt\(\{ kind: "single"/.test(sp) && /catch \(e\) \{[\s\S]*?return null;/.test(sa));
   check("...a failure is re-asked at most every SOLO_PROMPT_RETRY_MS, never on every dispatch; v2 of the answer",
     /job\.fallbackAt = Date\.now\(\);/.test(sa) && /known\.fallbackAt && Date\.now\(\) - known\.fallbackAt > SOLO_PROMPT_RETRY_MS/.test(sa) &&
-    /&v=4`/.test(sa));
+    /&v=5`/.test(sa));
   const route = SERVER.slice(SERVER.indexOf('app.get("/api/solo-prompt"'), SERVER.indexOf("\n});\n", SERVER.indexOf('app.get("/api/solo-prompt"')));
   check("the endpoint takes public photos only and caches only a real description",
     /publicImageUrl\(front\)/.test(route) && /if \(out\.source === "gemini"\) \{[\s\S]*?s-maxage[\s\S]*?\} else \{\s*\n\s*res\.setHeader\("Cache-Control", "no-store"\);/.test(route));
@@ -201,6 +205,38 @@ console.log("\n── §5 the wiring ──");
     /var EXP = \/\^\[a-z0-9-\]\{1,24\}\$\/\.test\(EXP_RAW\) \? EXP_RAW : "";/.test(WIDGET) && /\(EXP \? "&exp=" \+ EXP : ""\)/.test(WIDGET));
   const re = /^[a-z0-9-]{1,24}$/;
   check("...so a crafted value cannot inject parameters", !re.test("solo&pear_key=x") && !re.test("SOLO") && re.test("solo"));
+}
+
+console.log("\n── §5b the direct camera input and the sharper image (v5) ──");
+{
+  /* REPORTED 2026-09-30: the FIRST fitting on a page sent the engine 4-8 fps while the camera ran at
+     24-25 - frames lost in the room's canvas pump. The experiment hands the camera over directly. */
+  const direct = fnSrc("function createDirectInputStream(srcStream, frame) {");
+  check("the experiment's input is a clone of the camera, sized and capped by the browser - no pump",
+    /track\.applyConstraints\(\{ width: \{ ideal: frame\.w \}, height: \{ ideal: frame\.h \}, frameRate: \{ max: frame\.fps \} \}\)/.test(direct) &&
+    /stream: new MediaStream\(\[track\]\)/.test(direct) && !/setInterval|drawImage|captureStream/.test(direct));
+  check("...with the pump's surface, so nothing downstream changes (release/hold/unhold/held/dispose)",
+    ["release:", "hold:", "unhold:", "held:", "dispose:"].every((k) => direct.includes(k)));
+  check("...chosen only for the experiment (the regular room keeps the pump), ?exp_pump=1 to go back",
+    /inputThrottle = typeof SOLO_DIRECT_INPUT !== "undefined" && SOLO_DIRECT_INPUT && typeof createDirectInputStream === "function"\s*\n\s*\? createDirectInputStream\(camClone, frame\)\s*\n\s*: createThrottledInputStream\(camClone,/.test(APP) &&
+    /const SOLO_DIRECT_INPUT = PEAR_EXP_SOLO && \(\(\) => \{/.test(APP) && /get\("exp_pump"\) !== "1"/.test(APP));
+  /* Run it on a fake camera. */
+  const constraints = [];
+  let stopped = 0;
+  const track = { kind: "video", contentHint: "", applyConstraints: (c) => { constraints.push(c); return Promise.resolve(); }, stop: () => { stopped++; } };
+  const src = { getVideoTracks: () => [track], getTracks: () => [track] };
+  const mk = new Function("MediaStream", "console", direct + "\nreturn createDirectInputStream;")(
+    class { constructor(t) { this.tracks = t; } }, { log() {} });
+  const input = mk(src, { w: 1280, h: 720, fps: 15 });
+  check("...the clone is asked for 1280x720 at up to 15 fps, marked as motion, and stopped on dispose",
+    constraints[0].frameRate.max === 15 && constraints[0].width.ideal === 1280 && track.contentHint === "motion" &&
+    input.stream.tracks[0] === track && (input.dispose(), input.dispose(), stopped === 1));
+  check("the front|back image is 1536 tall now (v5, 'a higher quality picture')",
+    /const SOLO_COMPOSITE_H = 1536;/.test(APP) && /quality: 0\.92/.test(fnSrc("function soloComposite(item) {")));
+  check("a SOLO record reads the camera at 1s and 3s and the main thread's long tasks",
+    /traceRtcSnapshot\("t1"\)/.test(APP) && /traceRtcSnapshot\("t3"\)/.test(APP) &&
+    /function traceLongTasksStart\(\)/.test(APP) && /observe\(\{ type: "longtask"/.test(APP) &&
+    /traceOrient\("longtasks", \{ n: _longTaskStats\.n/.test(APP));
 }
 
 console.log("\n── §6 the next SDK renders in the bundle, and a failure never repeats ──");

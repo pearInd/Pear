@@ -269,6 +269,12 @@ const SOLO_FRAME = (() => {
 const SOLO_NEXT_SDK = PEAR_EXP_SOLO && (() => {
   try { return new URLSearchParams(location.search).get("exp_sdk") !== "old"; } catch (_) { return true; }
 })();
+/* The experiment hands the engine the CAMERA ITSELF (a clone, capped at SOLO_FRAME in the browser's
+   own capture pipeline) instead of the room's canvas pump - see createDirectInputStream().
+   ?exp_pump=1 puts the pump back. */
+const SOLO_DIRECT_INPUT = PEAR_EXP_SOLO && (() => {
+  try { return new URLSearchParams(location.search).get("exp_pump") !== "1"; } catch (_) { return true; }
+})();
 /** The frame the engine is sent: the experiment's, or the room's own (LIVE_W x LIVE_H at LIVE_INFERENCE_FPS). */
 function liveFrameSpec() {
   return PEAR_EXP_SOLO ? SOLO_FRAME : { w: LIVE_W, h: LIVE_H, fps: LIVE_INFERENCE_FPS };
@@ -5764,6 +5770,42 @@ function inputGateHeld() {
   return !!(inputThrottle && inputThrottle.held);
 }
 
+/* ── THE SOLO EXPERIMENT'S DIRECT INPUT (2026-09-30) ─────────────────────────────────────────────
+   REPORTED: "the first measurement keeps messing it up". Three TEST records: the FIRST fitting on a
+   freshly loaded page sent the engine 4-8 frames a second (and got 4 back), the second one on the same
+   page sent 15 and got 11 - while #webcam itself ran at 24-25 fps and the encoder reported no
+   bandwidth or CPU limit. So the frames were lost BEFORE the encoder: in the room's pump
+   (createThrottledInputStream), which copies an off-DOM <video> into a canvas on a main-thread timer
+   and hands the engine the canvas - a design for the per-frame billing of June, run now at 1280x720.
+   The engine's vendor passes the camera track straight in; so does the experiment now: a clone of
+   the camera, sized and capped by applyConstraints() - the browser's own capture pipeline decimates
+   it, off the main thread (per track in Chrome, so the preview keeps its own rate). What the pump
+   also did, the ATOMIC CONDITIONING GATE, is not lost: the experiment's garment rides the join
+   itself (initialState), acknowledged before the first frame is published. Same surface as the pump
+   (stream / release / hold / unhold / held / dispose), so nothing downstream changes. */
+function createDirectInputStream(srcStream, frame) {
+  const track = srcStream.getVideoTracks()[0];
+  if (!track) return { stream: srcStream, dispose: () => {}, release: () => {}, hold: () => false, unhold: () => false, held: false };
+  try {
+    track.applyConstraints({ width: { ideal: frame.w }, height: { ideal: frame.h }, frameRate: { max: frame.fps } }).catch(() => {});
+  } catch (_) { /* the camera keeps its own size; the engine scales */ }
+  if ("contentHint" in track) track.contentHint = "motion";
+  console.log(`[PEAR] SOLO experiment - the camera goes to the engine directly (${frame.w}x${frame.h}, up to ${frame.fps} fps)`);
+  let disposed = false;
+  return {
+    stream: new MediaStream([track]),
+    held: false,
+    release: () => {},
+    hold: () => false,
+    unhold: () => false,
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      try { srcStream.getTracks().forEach((t) => t.stop()); } catch (_) { /* already stopped */ }
+    },
+  };
+}
+
 /**
  * Mint an ephemeral ek_ token and open ONE Decart Lucy VTON realtime session
  * over WebRTC. Any stale/dropped client is disconnected first so no orphaned
@@ -6336,9 +6378,11 @@ async function connectRealtime({ force = false } = {}) {
       /* The experiment's frame (?exp=solo, see SOLO EXPERIMENT) or the room's own; typeof-guarded
          - this block runs sandboxed in signaling-retry / reconnect. */
       const frame = typeof liveFrameSpec === "function" ? liveFrameSpec() : { w: LIVE_W, h: LIVE_H, fps: LIVE_INFERENCE_FPS };
-      inputThrottle = createThrottledInputStream(camClone, {
-        fps: frame.fps, width: frame.w, height: frame.h,
-      });
+      inputThrottle = typeof SOLO_DIRECT_INPUT !== "undefined" && SOLO_DIRECT_INPUT && typeof createDirectInputStream === "function"
+        ? createDirectInputStream(camClone, frame)
+        : createThrottledInputStream(camClone, {
+          fps: frame.fps, width: frame.w, height: frame.h,
+        });
       realtimeInput = inputThrottle.stream;
 
       try {
@@ -10306,6 +10350,31 @@ async function traceRtcSnapshot(tag) {
   if (_trace === tr) traceOrient("rtc", out);
 }
 
+/* MAIN-THREAD LONG TASKS during a SOLO EXPERIMENT fitting (2026-09-30: the first fitting on a page
+   sent 4-8 fps - is the main thread starved?). A PerformanceObserver on "longtask" from the reveal to
+   billing-stop, summarised once: how many, their total and the longest. Passive; a regular session
+   never runs it. */
+let _longTaskObs = null, _longTaskStats = null;
+function traceLongTasksStart() {
+  traceLongTasksStop(false);
+  if (!_trace || typeof PerformanceObserver === "undefined") return;
+  try {
+    const st = { n: 0, total: 0, max: 0 };
+    const obs = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) { st.n++; st.total += e.duration; if (e.duration > st.max) st.max = e.duration; }
+    });
+    obs.observe({ type: "longtask", buffered: false });
+    _longTaskObs = obs; _longTaskStats = st;
+  } catch (_) { _longTaskObs = null; _longTaskStats = null; }
+}
+function traceLongTasksStop(record = true) {
+  if (_longTaskObs) { try { _longTaskObs.disconnect(); } catch (_) { /* gone */ } }
+  if (record && _longTaskStats && _trace) {
+    traceOrient("longtasks", { n: _longTaskStats.n, totalMs: Math.round(_longTaskStats.total), maxMs: Math.round(_longTaskStats.max) });
+  }
+  _longTaskObs = null; _longTaskStats = null;
+}
+
 /* The source room's read-out: the record in progress, else the last one closed (tests, the visual
    harness's PEAR_VISUAL_TRACE=1, the support view). Folded away in the production build. */
 if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
@@ -11822,7 +11891,9 @@ function soloActiveFor(item) {
     !(typeof resolveLook === "function" && resolveLook()) && !!distinctBackOf(item);
 }
 
-const SOLO_COMPOSITE_H = 1024;   // each side scaled to this height; ~1.8k x 1k, ~150 KB - sent once
+/* Each side scaled to this height. 1024 in v1-v4; 1536 since v5 ("make the picture higher quality so
+   it understands better", 2026-09-30) - ~2.9k x 1.5k, ~250-300 KB, sent ONCE, in the join. */
+const SOLO_COMPOSITE_H = 1536;
 const SOLO_GAP = 24;             // plain white between the two halves; no line, no words
 const _soloComposites = new WeakMap();   // item -> Promise<Blob|null>
 const _soloAnswers = new WeakMap();      // item -> Promise<{prompt, crops, source}|null> (.fallbackAt on failure)
@@ -11873,8 +11944,8 @@ function soloComposite(item) {
       ctx.drawImage(front, rf.sx, rf.sy, rf.sw, rf.sh, 0, 0, wf, H);
       ctx.drawImage(back, rb.sx, rb.sy, rb.sw, rb.sh, wf + SOLO_GAP, 0, wb, H);
       const blob = cv.convertToBlob
-        ? await cv.convertToBlob({ type: "image/jpeg", quality: 0.9 })
-        : await new Promise((r) => cv.toBlob(r, "image/jpeg", 0.9));
+        ? await cv.convertToBlob({ type: "image/jpeg", quality: 0.92 })
+        : await new Promise((r) => cv.toBlob(r, "image/jpeg", 0.92));
       if (!blob || !blob.size) return null;
       if (typeof preEncodeReference === "function") preEncodeReference(blob);
       console.log(`[PEAR] SOLO experiment - front|back reference built: ${W}x${H}, ${Math.round(blob.size / 1024)} KB, cut: ${_soloCropped}`);
@@ -11901,7 +11972,7 @@ function soloAnswer(item) {
     try {
       const g = galleryOf(item) || {};
       const q = `front=${encodeURIComponent(g.front || item.img)}&back=${encodeURIComponent(distinctBackOf(item, g))}` +
-        `&region=${isBottomsGarment(item) ? "bottom" : "top"}&v=4`;
+        `&region=${isBottomsGarment(item) ? "bottom" : "top"}&v=5`;
       const r = await fetch(`${location.origin}/api/solo-prompt?${q}`,
         typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(9000) } : {});
       const j = r.ok ? await r.json() : null;
@@ -14879,10 +14950,13 @@ function startBillingWindow(gen) {
   billingStarted = true;
   billingStartedAt = Date.now();         // diagnostics clock - see sessionElapsedMs()
   if (typeof traceOrient === "function") traceOrient("reveal");
-  /* A SOLO EXPERIMENT record reads what left the camera once, 3s in - see traceRtcSnapshot(). */
+  /* A SOLO EXPERIMENT record reads what left the camera 1s and 3s in, and the main thread's long tasks
+     across the window - see traceRtcSnapshot() / traceLongTasksStart(). */
   if (typeof PEAR_EXP_SOLO !== "undefined" && PEAR_EXP_SOLO && typeof traceRtcSnapshot === "function" &&
       typeof _trace !== "undefined" && _trace) {
+    setTimeout(() => { if (gen === sessionGen) traceRtcSnapshot("t1").catch(() => {}); }, 1000);
     setTimeout(() => { if (gen === sessionGen) traceRtcSnapshot("t3").catch(() => {}); }, 3000);
+    if (typeof traceLongTasksStart === "function") traceLongTasksStart();
   }
 
   // Start recording from the SAME event that starts billing (the first DRESSED frame)
@@ -15933,7 +16007,8 @@ async function goLive() {
       /* The SOLO EXPERIMENT's settings, when it runs (see SOLO EXPERIMENT near LIVE_W). */
       exp: typeof PEAR_EXP_SOLO !== "undefined" && PEAR_EXP_SOLO && typeof soloActiveFor === "function" && soloActiveFor(activeItem)
         ? { mode: "solo", frame: SOLO_FRAME, sdk: typeof _sdkInUse !== "undefined" ? _sdkInUse : null, prompt: _soloPromptSource,
-            cut: typeof _soloCropped !== "undefined" ? _soloCropped : null }
+            cut: typeof _soloCropped !== "undefined" ? _soloCropped : null,
+            input: typeof SOLO_DIRECT_INPUT !== "undefined" && SOLO_DIRECT_INPUT ? "direct" : "pump" }
         : undefined,
     });
   }
@@ -16354,6 +16429,7 @@ function captureHoldFrame() {
 function stopBilling() {
   if (liveDurationTimer) { clearTimeout(liveDurationTimer); liveDurationTimer = null; }
   if (typeof traceOrient === "function") traceOrient("billing-stop");
+  if (typeof traceLongTasksStop === "function") traceLongTasksStop();
   sessionGen++;                         // neutralise in-flight onRemoteStream/onConnectionChange
   stopStatsMonitor();
   if (rtClient) { try { rtClient.disconnect(); } catch (_) {} rtClient = null; }

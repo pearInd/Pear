@@ -712,6 +712,18 @@ identical, the regular visual gate 40/40).
   stitching (~1970×1024, ~140 KB; the rear print about twice the size). Answer cached as `v=2`.
   The record now carries `ctx.exp.cut` and `stage` events (presence / preload / connect / connected):
   that session revealed 7.7s past the timer's zero and nothing said which stage took it.
+- **v5 (2026-09-30), after two more measurements** - "the back is still not the back, and the first
+  measurement keeps breaking": one back came out as a WIDE OVAL with scribbles (the front's "Knebworth"
+  logo drawn where the small rear label belongs), the other plain. The words now lean the other way:
+  the BACK sentence leads ("show the back exactly as in the right half: …", size as a fraction of the
+  width, how many lines, the label's shape), the front is one clause at most and the first thing the
+  budget drops (the left half carries it), and the garment keeps its length clause. The image is 1536
+  tall (~250-300 KB, once). And the FIRST fitting on a fresh page had sent 4-8 fps while the camera ran
+  at 24-25 and the encoder reported no limit - frames lost in the canvas pump
+  (`createThrottledInputStream`), so the experiment hands the engine a clone of the camera, sized and
+  capped by `applyConstraints()` (`createDirectInputStream`, `?exp_pump=1` for the pump; the garment
+  rides the join, so the pump's conditioning gate has nothing left to hold). A SOLO record reads the
+  camera at 1s and 3s (`rtc` t1/t3) and the main thread's long tasks across the window (`longtasks`).
 - **Known going in:** a stitched front|back reference rendered fragments of both sides in July on an
   older model (23f5953) and on 2026-09-16 held only with the room naming the half. Never measured on
   lucy-vton-3.5 or with the vendor's prompt form. `PEAR_VISUAL_EXP=solo npm run test:visual` smoke-runs
