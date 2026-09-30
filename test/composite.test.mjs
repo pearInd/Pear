@@ -369,8 +369,12 @@ console.log("\n── PROMPT BUDGET: every builder, every angle, under the 226-t
   const SEND = /(?:await |\(\) => )rtClient\.(?:set|setPrompt)\(/g;
   const CODE = SRC;
   const sends = (CODE.match(SEND) || []).length;
+  /* SEVEN since 2026-10-01: primeBackReference() sends the back once inside the hidden reveal hold
+     (back-prime.test.mjs). Its prompt is wirePrompt(item, "back", "primeBack") - the service's answer,
+     clamped server-side exactly like applyGarment()'s - and it goes through sendCondition() like the rest. */
   check(`all ${sends} rtClient send sites draw from a guarded prompt`,
-    sends === 6, `${sends} send sites found - if this changed, verify the new one is clamped`);
+    sends === 7 && /prompt = await wirePrompt\(item, "back", "primeBack", \{ inProfile: false \}\);[\s\S]{0,600}sendCondition\("primeBack", \(\) => rtClient\.set\(\{ image: blob, prompt, enhance: false \}\)\)/.test(CODE),
+    `${sends} send sites found - if this changed, verify the new one is clamped`);
   /* ── AND EVERY ONE OF THEM GOES THROUGH THE WIRE MUTEX ──────────────────────
      Asserted by PROXIMITY rather than by counting sendCondition() calls, because the two
      applyLook sends deliberately share ONE wire slot (the minimal payload is a fallback

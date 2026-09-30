@@ -8077,7 +8077,7 @@ function poseTorsoWidths(result) {
  *  @param {number|null} worldYawAbs  the world-landmark shoulder |yaw| of the same reading
  *  @returns {boolean} whether the torso reads as turned away over planted legs */
 function torsoTwistStep(s, w, worldYawAbs, now, enabled = TWIST_ENABLED) {
-  if (!enabled || !w) { s.streak = 0; s.active = false; return false; }
+  if (!w) { s.streak = 0; s.active = false; return false; }
   const ash = Math.abs(w.sh), ahip = Math.abs(w.hip);
   /* Learn the square-on widths from readings the shoulder ORDER already calls a side - facing or
      facing away, where both widths are at their full size - and a world yaw that agrees. */
@@ -8088,6 +8088,8 @@ function torsoTwistStep(s, w, worldYawAbs, now, enabled = TWIST_ENABLED) {
   }
   s.shR = s.sh0 ? ash / s.sh0 : null;
   s.hipR = s.hip0 ? ahip / s.hip0 : null;
+  /* The baseline above is learned either way - THE YAW GUARD reads it; ?twist=0 turns off only the rule. */
+  if (!enabled) { s.streak = 0; s.active = false; return false; }
   const usual = s.th0 > 0 && w.th >= s.th0 * TWIST_TORSO_BAND[0] && w.th <= s.th0 * TWIST_TORSO_BAND[1];
   const twisted = s.n >= TWIST_BASELINE_MIN && usual && s.shR !== null && s.hipR !== null &&
     s.shR <= TWIST_SHOULDER_MAX && s.hipR >= TWIST_HIP_MIN;
@@ -8096,12 +8098,36 @@ function torsoTwistStep(s, w, worldYawAbs, now, enabled = TWIST_ENABLED) {
   if (s.active) { s.at = now; s.yawDeg = Math.acos(Math.max(0, Math.min(1, s.shR))) * 180 / Math.PI; }
   return s.active;
 }
+/* ── THE YAW GUARD - a world-depth spike is not a turn (2026-10-01) ──────────────────────────────
+   REPORTED with a clip in a dim room: the BACK went out 0.7s before the shopper turned. Its TEST record:
+   the published |yaw| went 3 -> 14 -> 41 in two readings while the shoulder order still voted FRONT -
+   the early turn (40, rising) fired on it. The model's WORLD depth is the noisy half on a dim camera;
+   the IMAGE width of the shoulders is the other measure of the same rotation, and on a real turn the
+   two agree: on the twelve recorded 360s (test/torso-twist-poses.json, 696 readings) the world |yaw|
+   never exceeded acos(shoulder width / square-on width) by more than YAW_IMAGE_MARGIN - not once - and
+   the first 40-degree crossing of every one of those turns lands on the same reading with the guard.
+   So the published |yaw| is capped at the image angle + YAW_IMAGE_MARGIN once the square-on width is
+   learned (the torso-only turn's baseline), on a torso of its usual height. A spike with the shoulders
+   still at full width reads ~0-20 and fires nothing; a real turn is untouched. ?yaw_guard=0 turns it
+   off (main's measurement). Pure over (state, reading) - torso-twist drives it with literals. */
+const YAW_IMAGE_MARGIN = 20;
+const YAW_GUARD_ENABLED = (() => {
+  try { return new URLSearchParams(location.search).get("yaw_guard") !== "0"; } catch (_) { return true; }
+})();
+/** @returns {number|null} the |yaw| to publish: the world one, capped by the image angle when known */
+function torsoYawGuard(s, w, worldYawAbs, enabled = YAW_GUARD_ENABLED) {
+  if (!enabled || !w || !Number.isFinite(worldYawAbs) || s.n < TWIST_BASELINE_MIN || !(s.sh0 > 0)) return worldYawAbs;
+  if (!(s.th0 > 0) || w.th < s.th0 * TWIST_TORSO_BAND[0] || w.th > s.th0 * TWIST_TORSO_BAND[1]) return worldYawAbs;
+  const imageDeg = Math.acos(Math.max(0, Math.min(1, Math.abs(w.sh) / s.sh0))) * 180 / Math.PI;
+  return Math.min(worldYawAbs, imageDeg + YAW_IMAGE_MARGIN);
+}
 let _poseTwist = makeTwistState();
 /** The pose loop's hook: one inference in, the published |yaw| out (the world one unless a torso-only
  *  turn is being read). Logs and records the on/off edges. */
 function torsoTwistObserve(result, worldYawAbs, now) {
   const was = _poseTwist.active;
-  const on = torsoTwistStep(_poseTwist, poseTorsoWidths(result), worldYawAbs, now);
+  const widths = poseTorsoWidths(result);
+  const on = torsoTwistStep(_poseTwist, widths, worldYawAbs, now);
   if (on !== was) {
     const r2 = (x) => (x === null ? null : Math.round(x * 100) / 100);
     if (ORIENT_DEBUG) {
@@ -8110,7 +8136,14 @@ function torsoTwistObserve(result, worldYawAbs, now) {
     }
     if (typeof traceOrient === "function") traceOrient("twist", { on, shR: r2(_poseTwist.shR), hipR: r2(_poseTwist.hipR) });
   }
-  return on && Number.isFinite(worldYawAbs) ? Math.max(worldYawAbs, _poseTwist.yawDeg) : worldYawAbs;
+  if (on && Number.isFinite(worldYawAbs)) return Math.max(worldYawAbs, _poseTwist.yawDeg);
+  /* Otherwise the world |yaw|, unless the shoulders' own width says it is a spike (THE YAW GUARD). */
+  const guarded = torsoYawGuard(_poseTwist, widths, worldYawAbs);
+  if (guarded !== worldYawAbs && worldYawAbs >= 30) {
+    if (ORIENT_DEBUG) console.log(`[PEAR][ORIENT] yaw guard: world |yaw| ${Math.round(worldYawAbs)}° with the shoulders at image angle ${Math.round(guarded - YAW_IMAGE_MARGIN)}° - published ${Math.round(guarded)}°`);
+    if (typeof traceOrient === "function") traceOrient("yaw-guard", { world: Math.round(worldYawAbs), pub: Math.round(guarded) });
+  }
+  return guarded;
 }
 /** "back" while a fresh torso-only turn holds (the vote's freshness bar), else null. */
 function torsoTwistVote(now) {
@@ -10331,6 +10364,11 @@ function openOrientChannel() {
     y: typeof s.yawAbs === "number" ? Math.round(s.yawAbs) : null,
     ya: s.yawAt ? s.t - s.yawAt : null, la: s.lostAt ? s.t - s.lostAt : null,
     l: s.lock ?? null, p: s.profile ? 1 : 0, d: s.dualView ? 1 : 0, rtt,
+    /* The shoulder order and the widths the torso-only turn / yaw guard read (2026-10-01): a record
+       without them had to guess whether a 41-degree reading was a turn or a spike. typeof-guarded -
+       orient-link runs this block standalone. */
+    sep: typeof _poseFacingSep === "number" ? Math.round(_poseFacingSep * 100) / 100 : null,
+    shR: typeof _poseTwist !== "undefined" && _poseTwist && typeof _poseTwist.shR === "number" ? Math.round(_poseTwist.shR * 100) / 100 : null,
     a: Array.isArray(acts) ? acts.filter((x) => x && x.do !== "log") : null,
   });
   return {
@@ -15019,6 +15057,61 @@ function startBillingWindow(gen) {
 const MODEL_READY_STABLE_FRAMES = 3;     // minimum consecutive qualifying decodes
 const MODEL_READY_STABLE_MS     = 300;   // ...spanning at least this many ms
 
+/* ══ THE BACK IS SENT ONCE BEFORE THE REVEAL - "the back doesn't show / shows late" (2026-10-01) ══
+   REPORTED again with a clip: the back view came out plain and the print arrived as the shopper was
+   already facing front. Its TEST record: the BACK reference was acknowledged 2,058ms after it was
+   sent (84KB), and the orientation tick waits on that acknowledgement (main's `await maybeSwap`), so
+   nothing else was decided for 2.5s.
+   WHAT THE RECORDS SAY (64 swaps, every TEST record of this room): a FRONT swap - the image already
+   sent at connect - is acknowledged in 130-250ms almost every time; the BACK - the first time the
+   session sends that image - in 400-900ms typically and 1.3-2.9s in about one session in seven. And
+   the one session that sent the back twice: 912ms the first time, 141ms the second. The render engine
+   is slow on an image it has not seen in the session, not on the upload - a pre-uploaded file
+   reference measured 1,242ms on its first use (one real session, 2026-10-01), so uploading ahead of
+   time buys nothing; SEEING it once does.
+   SO: the cold-start re-assert - which already re-sends the front once inside the hidden reveal hold
+   (armFirstFrameBilling) - sends the BACK first, once per session, and then the front as before. The
+   scan overlay is still covering the card, the reveal gate's settle hold waits on the front's
+   acknowledgement as it always did, and the shopper first sees the front, settled. The cost is the
+   back's acknowledgement time on the loading screen instead of on the turn.
+   The back sent is byte for byte what the turn sends: the same garmentBlobCached() Blob (and its
+   pre-encoded form - withPreEncodedReferences()) and the same wire prompt. Only for an AI Auto garment
+   with a real back; not for a look. The orientation, the engine and every swap are untouched.
+   ?prime_back=0 turns it off (main's hold); a TEST record carries prime-sent / prime-acked. */
+let _primedBackGen = -1;
+async function primeBackReference(gen) {
+  if (_primedBackGen === gen) return false;
+  _primedBackGen = gen;
+  try { if (new URLSearchParams(location.search).get("prime_back") === "0") return false; } catch (_) { /* on */ }
+  const item = typeof activeItem !== "undefined" ? activeItem : null;
+  if (!item || currentAngle !== AUTO_ANGLE || (typeof resolveLook === "function" && resolveLook())) return false;
+  const back = typeof distinctBackOf === "function" ? distinctBackOf(item, galleryOf(item)) : null;
+  if (!back) return false;
+  const blob = await garmentBlobCached(back);
+  if (!blob || gen !== sessionGen || !rtClient || !isLive()) return false;
+  let prompt = null;
+  try { prompt = await wirePrompt(item, "back", "primeBack", { inProfile: false }); } catch (_) { prompt = null; }
+  if (!prompt || gen !== sessionGen || !rtClient) return false;
+  const t0 = Date.now();
+  if (typeof traceOrient === "function") traceOrient("prime-sent", { kb: Math.round((blob.size || 0) / 1024) });
+  try {
+    const sent = await sendCondition("primeBack", () => rtClient.set({ image: blob, prompt, enhance: false }));
+    if (!sent) return false;
+  } catch (e) {
+    console.warn("[PEAR] back prime failed - the turn will send it as before:", e?.message || e);
+    if (typeof traceOrient === "function") traceOrient("prime-fail", { ms: Date.now() - t0 });
+    return false;
+  }
+  /* The wire holds the back now: the re-assert that follows must re-upload the front (it clears the
+     no-op refs itself), and the settle hold counts this acknowledgement like any other upload. */
+  noteImageUploadAcked("primeBack");
+  lastSentImageRef = null;
+  lastSentPrompt = null;
+  console.log(`[PEAR] back reference primed before the reveal (${Date.now() - t0}ms) - the turn's swap is now a repeat`);
+  if (typeof traceOrient === "function") traceOrient("prime-acked", { ms: Date.now() - t0 });
+  return true;
+}
+
 function armFirstFrameBilling(video, gen) {
   if (!video || billingStarted || gen !== sessionGen) return;
   let done = false;
@@ -15171,11 +15264,24 @@ function armFirstFrameBilling(video, gen) {
        Fire-and-forget, like every other background re-condition in this file: the next
        decoded frame re-evaluates the gate, so there is nothing useful to await, and a
        rejection here must not take the session down. */
-    lastSentImageRef = null;
-    rtImageOnWire = false;
-    lastSentPrompt = null;
-    applyActive().catch((e) =>
-      console.warn("[PEAR] cold-start re-dispatch failed:", e?.message || e));
+    const reassert = () => {
+      lastSentImageRef = null;
+      rtImageOnWire = false;
+      lastSentPrompt = null;
+      return applyActive();
+    };
+    /* THE BACK GOES OUT FIRST, ONCE, INSIDE THIS HIDDEN HOLD (2026-10-01) - see primeBackReference().
+       The re-assert then re-sends the front as it always did, and the settle hold waits on it, so the
+       shopper still first sees the front, settled. typeof-guarded: cold-start-passthrough runs this
+       standalone, where there is no prime and the re-assert stays synchronous, exactly as before. */
+    const primed = why === "cold-start re-assert" && typeof primeBackReference === "function" ? primeBackReference(myGen) : null;
+    if (!primed) {
+      reassert().catch((e) => console.warn("[PEAR] cold-start re-dispatch failed:", e?.message || e));
+      return;
+    }
+    primed.catch(() => false)
+      .then(() => { if (myGen === sessionGen && isLive()) return reassert(); })
+      .catch((e) => console.warn("[PEAR] cold-start re-dispatch failed:", e?.message || e));
   };
 
   const fire = () => {
@@ -17199,7 +17305,16 @@ async function awaitBodyPresence(isBottoms) {
       let verdict = null;
       if (detector && video.videoWidth) {
         try {
-          verdict = presenceFromPoseResult(detectPoseFrame(detector, video), category);
+          const poseResult = detectPoseFrame(detector, video);
+          verdict = presenceFromPoseResult(poseResult, category);
+          /* The shopper stands square-on here, before the fitting: the torso-only turn and THE YAW
+             GUARD learn their square-on widths from these readings, so both are ready from the
+             fitting's first second (the live pose loop only starts at the reveal). Learning only -
+             nothing is published from the gate. typeof-guarded: body-presence-gate runs this alone. */
+          if (typeof torsoTwistObserve === "function" && typeof bodyContourSignature === "function") {
+            const sig = bodyContourSignature(poseResult);
+            if (sig && Number.isFinite(sig.yaw)) torsoTwistObserve(poseResult, Math.abs(sig.yaw), Date.now());
+          }
         } catch (e) {
           console.warn("[PEAR] pose detect failed, degrading:", e?.message || e);
           verdict = null;

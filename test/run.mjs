@@ -361,6 +361,10 @@
                       its landmarks mapped back to whole-frame coordinates, following the hips,
                       handing back after three empty windows; nothing changes while the whole
                       frame finds the body; one inference per call; the full model is loaded.
+     back-prime
+                      "The back doesn't show / shows late" (2026-10-01): the render engine is slow on
+                      an image the session has not sent (the back, first time) and fast on a repeat.
+                      The hidden cold-start re-assert now sends the back once, then the front.
      token-origin
                       "The live measurement failed: Origin not allowed" on a new preview: the
                       render token was scoped to DECART_ALLOWED_ORIGINS only. A page on this
@@ -484,6 +488,7 @@ const SUITES = [
   ["torso-twist", "torso-twist.test.mjs"],
   ["api-version", "api-version.test.mjs"],
   ["token-origin", "token-origin.test.mjs"],
+  ["back-prime", "back-prime.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

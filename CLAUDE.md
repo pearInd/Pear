@@ -256,7 +256,9 @@ with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (�
 `pose-focus` slices `app.js` from `let _lastPoseTimestamp = 0;` to
 `/* The loaded PoseLandmarker, as a memoized PROMISE` (the pose call and its focus window, §2.19).
 `torso-twist` slices `app.js` from `const TWIST_SHOULDER_MAX` to `let _poseTwist = makeTwistState();`
-(the torso-only turn rule, §2.20) and runs it standalone - keep the block self-contained.
+(the torso-only turn rule and the yaw guard, §2.20/§2.22) and runs it standalone - keep the block
+self-contained. `back-prime` slices `let _primedBackGen = -1;` to `function armFirstFrameBilling(video, gen) {`
+(the back sent before the reveal, §2.22).
 `reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
 guarded `window.__pearMockDecart = …` line that follows it — that line's exact text (with its
 `PEAR_DEBUG_BUILD` guard, §2.11) is its end marker.
@@ -724,6 +726,38 @@ improvements came from the approved f275ab4 WITHOUT its prompt edits; nothing of
   main's to the millisecond, its ~430ms first inference under the loading overlay as on main.
 - **The full pose model was measured the same way and taken out** (§2.19): it changed full-turn timing.
 - **prompts:** `trace:prompt --json` byte-identical to main's; `prompt-engine` on main's pin.
+
+### 2.22 The back is sent before the reveal; a depth spike is not a turn (2026-10-01)
+The first measurement of `hide/main-v2` (a clip + its TEST record): the back view came out plain and
+the print arrived as the shopper faced front again. The record: the early turn fired at 1.29s on a
+|yaw| of 41 while the shopper still faced the lens (14 -> 41 in two readings, the shoulder order still
+voting FRONT, a dim room), and the BACK reference was acknowledged **2,058ms** after it was sent - the
+tick awaits that acknowledgement (main's `await maybeSwap`), so nothing was decided for 2.5s.
+- **The render engine is slow on an image the session has not sent, not on the upload.** Every TEST
+  record (64 swaps): a FRONT swap - the image already sent at connect - 130-250ms almost always; the
+  BACK's first send 400-900ms typically and 1.3-2.9s about one session in seven; the one session that
+  sent the back twice, 912ms then 141ms. A pre-uploaded file reference (`client.files`, measured in one
+  real session within the 15 credits the user allowed) took 1,242ms on first use - uploading ahead buys
+  nothing. **`primeBackReference()`**: the cold-start re-assert (a hidden re-send inside the reveal hold,
+  main's) sends the BACK first, once per session, byte for byte what the turn will send, then the
+  front as before; the settle hold waits on the front, so the shopper first sees the front, settled. The
+  cost is the back's first acknowledgement on the loading screen instead of on the turn. AI Auto with a
+  real back only; `?prime_back=0` is main's hold; TEST records carry `prime-sent`/`prime-acked`.
+  `back-prime`; `composite` counts it as the 7th send site (prompt from `wirePrompt`, clamped).
+- **THE YAW GUARD** (`torsoYawGuard()`, in the torso-only block): the published |yaw| is capped at the
+  IMAGE angle of the shoulders (acos of their width over the learned square-on width) + 20. On the
+  twelve recorded 360s it changes no turn's first 40-degree crossing and, through main's real engine,
+  no clip's swap sequence (`torso-twist` §5.1b); the reported spike reads < 40 and fires nothing
+  (§5.10; without the guard it fires - §5.9). The square-on width is learned in the PRESENCE GATE too
+  (`awaitBodyPresence`), since the live pose loop only starts at the reveal - that session's spike came
+  four readings in. `?yaw_guard=0` is main's measurement; TEST records carry `yaw-guard`, and every tick
+  now records `sep` and `shR`.
+- **The render token names the page's own origin** (`ownPageOrigin()`, server.js; `token-origin`): a new
+  preview failed with "Origin not allowed" - the token was scoped to `DECART_ALLOWED_ORIGINS` alone.
+- **The edge answers with the room's own engines or not at all** (`lib/api-version.js`, `api-version`):
+  the deployed Worker had still been answering "top" where main's engine says "shirt".
+- Found in the same record and left as main's: the first seconds rendered the garment's text without
+  its graphic until a re-send completed it - the render engine's convergence, not a dispatch.
 
 ## 3. Cross-file lockstep
 
