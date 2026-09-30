@@ -16,6 +16,7 @@
  * @property {string}   TOKEN_ENDPOINT          Same-origin proxy route that mints the ephemeral ek_ token.
  * @property {string}   HEALTH_ENDPOINT         Same-origin proxy health route used by the pre-use check.
  * @property {string[]} SDK_URLS                Ordered Decart SDK CDN fallbacks.
+ * @property {string[]} SDK_NEXT_URLS           The same for the ?exp=solo experiment's newer SDK.
  * @property {number}   PROMPT_MAX_CHARS        Hard cap on any assembled prompt (Decart rejects >226 tokens).
  * @property {boolean}  INPUT_GATE_ENABLED      Withhold camera frames from Decart until the garment reference is acknowledged, so its first rendered frame can never be a generic default.
  * @property {number}   INPUT_GATE_MAX_MS       Self-release ceiling for that gate (ms) - a caller that never reports success costs a late start, never a dead session.
@@ -479,6 +480,14 @@ export const CONFIG = Object.freeze({
   SDK_URLS: Object.freeze(typeof PEAR_SDK_BUNDLE === "string" ? [PEAR_SDK_BUNDLE] : [
     "https://esm.sh/@decartai/sdk@0.1.5",
     "https://cdn.jsdelivr.net/npm/@decartai/sdk@0.1.5/+esm",
+  ]),
+  /* The SOLO EXPERIMENT's SDK (?exp=solo only - see "SOLO EXPERIMENT" in app.js): the vendor's
+     current release, which knows lucy-vton-3.5's 1280x720 and seeds the uplink estimate at
+     1.1 Mbps. Installed as the npm alias decart-sdk-next; the build bundles it as its own
+     rt.<hash>.js (PEAR_SDK_NEXT_BUNDLE) and refuses a node_modules that disagrees with this pin. */
+  SDK_NEXT_URLS: Object.freeze(typeof PEAR_SDK_NEXT_BUNDLE === "string" ? [PEAR_SDK_NEXT_BUNDLE] : [
+    "https://esm.sh/@decartai/sdk@0.2.3",
+    "https://cdn.jsdelivr.net/npm/@decartai/sdk@0.2.3/+esm",
   ]),
 
   /* ── prompt token budget - a HARD API limit, not a style preference ─────────

@@ -71,9 +71,23 @@ const rel = (p) => relative(ROOT, p);
    node_modules (production path). If they drift, dev and production run different SDKs
    and every "verified against @decartai/sdk@x" comment in app.js is wrong for one of them. */
 const installed = JSON.parse(readFileSync(join(ROOT, "node_modules/@decartai/sdk/package.json"), "utf8")).version;
-const pinned = [...readFileSync(join(ROOT, "fitting-room/config.js"), "utf8").matchAll(/@decartai\/sdk@(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
+/* TWO SDKs since 2026-09-30: SDK_URLS (the room every shopper gets) and SDK_NEXT_URLS (the
+   ?exp=solo experiment only - app.js, "SOLO EXPERIMENT"), installed as the npm alias
+   decart-sdk-next. Each CDN pin is checked against its own node_modules copy. */
+const CONFIG_SRC = readFileSync(join(ROOT, "fitting-room/config.js"), "utf8");
+const pinsIn = (key) => {
+  const at = CONFIG_SRC.indexOf(key + ":");
+  if (at === -1) return [];
+  const block = CONFIG_SRC.slice(at, CONFIG_SRC.indexOf("])", at));
+  return [...block.matchAll(/@decartai\/sdk@(\d+\.\d+\.\d+)/g)].map((m) => m[1]);
+};
+const pinned = pinsIn("SDK_URLS");
 if (!pinned.length) fail("could not find the @decartai/sdk@x.y.z pin in fitting-room/config.js");
 for (const v of pinned) if (v !== installed) fail(`config.js pins @decartai/sdk@${v} but node_modules has ${installed} - align them first`);
+const installedNext = JSON.parse(readFileSync(join(ROOT, "node_modules/decart-sdk-next/package.json"), "utf8")).version;
+const pinnedNext = pinsIn("SDK_NEXT_URLS");
+if (!pinnedNext.length) fail("could not find the SDK_NEXT_URLS @decartai/sdk@x.y.z pin in fitting-room/config.js");
+for (const v of pinnedNext) if (v !== installedNext) fail(`config.js pins the next SDK at ${v} but node_modules/decart-sdk-next has ${installedNext} - align them first`);
 
 /* ...and the SDK's OWN dependencies, which the pin above does not reach. The CDN build the
    source room imports (esm.sh) resolves the SDK's ranges - livekit-client ^2.0.0, zod ^4.0.17 -
@@ -84,17 +98,29 @@ for (const v of pinned) if (v !== installed) fail(`config.js pins @decartai/sdk@
    the orientation decision measured the same on both, swap for swap). package.json's
    overrides pin them to what the CDN served that day; this refuses a build whose
    node_modules disagrees. Moving them is a deliberate act: update both, test a real session. */
-const sdkDeps = (JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).overrides || {})["@decartai/sdk"] || {};
-if (!sdkDeps["livekit-client"]) fail('package.json must pin the SDK\'s livekit-client in overrides["@decartai/sdk"]');
-const depVersion = (dep) => {
-  for (const base of [join(ROOT, "node_modules/@decartai/sdk/node_modules", dep), join(ROOT, "node_modules", dep)]) {
+const OVERRIDES = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).overrides || {};
+/* Keyed by exact version ("@decartai/sdk@0.1.5") because both SDKs are the same package name. */
+const sdkDeps = OVERRIDES[`@decartai/sdk@${installed}`] || OVERRIDES["@decartai/sdk"] || {};
+if (!sdkDeps["livekit-client"]) fail(`package.json must pin the SDK's livekit-client in overrides["@decartai/sdk@${installed}"]`);
+const depVersionIn = (pkgDir) => (dep) => {
+  for (const base of [join(ROOT, pkgDir, "node_modules", dep), join(ROOT, "node_modules", dep)]) {
     try { return JSON.parse(readFileSync(join(base, "package.json"), "utf8")).version; } catch { /* not here */ }
   }
   return null;
 };
+const depVersion = depVersionIn("node_modules/@decartai/sdk");
 for (const [dep, want] of Object.entries(sdkDeps)) {
   const have = depVersion(dep);
   if (have !== want) fail(`the SDK bundle would carry ${dep}@${have} but package.json pins ${want} - run npm install`);
+}
+/* ...and the same for the next SDK: its CDN build (esm.sh) resolves livekit-client ~2.20.1 to
+   2.20.2, and the bundle must carry what the CDN would (§2.11). */
+const sdkNextDeps = OVERRIDES[`@decartai/sdk@${installedNext}`] || {};
+if (!sdkNextDeps["livekit-client"]) fail(`package.json must pin the next SDK's livekit-client in overrides["@decartai/sdk@${installedNext}"]`);
+const depVersionNext = depVersionIn("node_modules/decart-sdk-next");
+for (const [dep, want] of Object.entries(sdkNextDeps)) {
+  const have = depVersionNext(dep);
+  if (have !== want) fail(`the next SDK bundle would carry ${dep}@${have} but package.json pins ${want} - run npm install`);
 }
 
 rmSync(OUT, { recursive: true, force: true });
@@ -150,6 +176,30 @@ const SDK_OUT = `fitting-room/rt.${sdkHash}.js`;
 if (!SDK_NAME_RE.test(SDK_OUT.split("/").pop())) fail(`SDK file name ${SDK_OUT} does not match server.js's cache pattern`);
 write(SDK_OUT, sdkResult.outputFiles[0].text);
 
+/* ── 1b. the NEXT SDK (the ?exp=solo experiment), same treatment, its own hashed file ────────
+   Resolved from its own package directory, so "livekit-client" is ITS nested 2.20.2 - the copy
+   whose loggers must be silenced - not the room's 2.22.3. */
+const SDK_NEXT_ENTRY = [
+  'import { LoggerNames, getLogger } from "livekit-client";',
+  'for (const n of Object.values(LoggerNames)) getLogger(n).setLevel("silent", false);',
+  'export { createDecartClient as createClient } from "decart-sdk-next";',
+].join("\n");
+const sdkNextResult = await build({
+  stdin: { contents: SDK_NEXT_ENTRY, resolveDir: join(ROOT, "node_modules/decart-sdk-next"), loader: "js" },
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  minify: true,
+  legalComments: "none",
+  charset: "utf8",
+  write: false,
+  logLevel: "warning",
+});
+const sdkNextHash = createHash("sha256").update(sdkNextResult.outputFiles[0].contents).digest("hex").slice(0, 12);
+const SDK_NEXT_OUT = `fitting-room/rt.${sdkNextHash}.js`;
+if (!SDK_NAME_RE.test(SDK_NEXT_OUT.split("/").pop())) fail(`next SDK file name ${SDK_NEXT_OUT} does not match server.js's cache pattern`);
+write(SDK_NEXT_OUT, sdkNextResult.outputFiles[0].text);
+
 /* The orientation link (see PEAR_ORIENT_URL below). A production build without one still
    works - every AI Auto session then stays on the front view - so this warns rather than
    fails, loudly enough to be seen in the Vercel build log. A wss:// URL only - except that
@@ -176,6 +226,7 @@ const JS_OPTS = {
   define: {
     PEAR_DEBUG_BUILD: QA ? "true" : "false",
     PEAR_SDK_BUNDLE: JSON.stringify("./" + SDK_OUT.split("/").pop()),
+    PEAR_SDK_NEXT_BUNDLE: JSON.stringify("./" + SDK_NEXT_OUT.split("/").pop()),
     /* Where the room reaches the orientation engine (CLAUDE.md §2.14) - the Cloudflare
        Worker in production. Empty means the page's own origin at /orient, which is what
        local servers and the QA build's harness serve. */
@@ -201,6 +252,7 @@ report.push([APP_ENTRY, statSync(join(ROOT, APP_ENTRY)).size, appResult.outputFi
 const bundled = new Set(Object.keys(appResult.metafile.inputs).map((p) => resolve(ROOT, p)));
 
 report.push([`${SDK_OUT} (@decartai/sdk@${installed}, livekit-client@${depVersion("livekit-client")})`, 0, sdkResult.outputFiles[0].contents.length]);
+report.push([`${SDK_NEXT_OUT} (next: @decartai/sdk@${installedNext}, livekit-client@${depVersionNext("livekit-client")})`, 0, sdkNextResult.outputFiles[0].contents.length]);
 
 /* ── 3. every other public file that carries code or commentary ─────────────── */
 const INLINE_SCRIPT = /<script(\s[^>]*)?>([\s\S]*?)<\/script>/gi;
@@ -285,7 +337,7 @@ if (!QA) {
 }
 let violations = 0;
 for (const abs of walk(OUT)) {
-  if (relative(OUT, abs) === SDK_OUT) continue;   // third-party code, shipped as-is
+  if (relative(OUT, abs) === SDK_OUT || relative(OUT, abs) === SDK_NEXT_OUT) continue;   // third-party code, shipped as-is
   const text = readFileSync(abs, "utf8");
   for (const [what, re] of FORBIDDEN) {
     const m = text.match(re);
@@ -322,13 +374,17 @@ for (const [name, before, after] of report) {
     violations++;
     console.error(`✖ ${SDK_OUT} does not silence the media library's loggers - see SDK_ENTRY`);
   }
+  if (!/\.setLevel\("silent",!1\)/.test(sdkNextResult.outputFiles[0].text)) {
+    violations++;
+    console.error(`✖ ${SDK_NEXT_OUT} does not silence the media library's loggers - see SDK_NEXT_ENTRY`);
+  }
 }
 
 /* Reported, not enforced: the model id (see the FORBIDDEN note above). Anything else
    listed here in a production build is worth a look. */
 for (const abs of walk(OUT)) {
   const f = relative(OUT, abs);
-  if (f === SDK_OUT) continue;
+  if (f === SDK_OUT || f === SDK_NEXT_OUT) continue;
   const hits = readFileSync(abs, "utf8").match(/lucy[\w.-]*/gi) || [];
   if (hits.length) console.log(`   engine model id in ${f}: ${[...new Set(hits)].join(", ")} (goes on the wire regardless)`);
 }

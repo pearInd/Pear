@@ -128,6 +128,10 @@ function roomUrl(base) {
      beside the frames: every orientation tick, swap and link event of the harness's 360. Off
      unless asked, so the standard gate's URL is unchanged. */
   if (process.env.PEAR_VISUAL_TRACE) q.set("pear_trace", "1");
+  /* AN EXPERIMENT BY NAME (?exp=solo - the one-reference experiment, fitting-room/app.js "SOLO
+     EXPERIMENT"), for a smoke run of it through the real room. Off unless asked, so the standard
+     gate's URL is unchanged; its pixel checks assume the swapping room and will not all hold. */
+  if (process.env.PEAR_VISUAL_EXP) q.set("exp", process.env.PEAR_VISUAL_EXP);
   return `${base}/fitting-room/index.html?${q}`;
 }
 

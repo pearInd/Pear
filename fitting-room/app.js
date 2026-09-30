@@ -77,6 +77,7 @@ const {
   PREFER_LOW_LATENCY_CODEC,
   CODEC_PREFERENCE,
   VIDEO_TARGET_BITRATE_KBPS,
+  SDK_NEXT_URLS,
 } = CONFIG;
 
 /* The build this session is running - the ?v= index.html loads app.js with. Logged once at load
@@ -234,6 +235,44 @@ const CAMERA_BLACK_SAMPLE_MS  = 60;     // gap between samples - spans ~300ms of
    quality/upload/encode overhead per the cost trade. Tokens scale with FRAMES, not
    pixels, so this lowers visual quality + pipeline cost, not the token count itself. */
 const LIVE_W = 512, LIVE_H = 288;
+
+/* ── SOLO EXPERIMENT (?exp=solo, 2026-09-30) ─────────────────────────────────────────────────
+   Asked for by the shopper after reading the render engine's own guidance: "send ONE picture
+   with the front and the back, tell it which is which, and let it switch by itself when I turn".
+   Only with ?exp=solo (a store embed passes it with data-pear-exp="solo"); every other session is
+   byte-for-byte what it was. With the flag, for a garment with a real front AND back photo:
+     · the reference is ONE image, the front photo on the LEFT and the back photo on the RIGHT, no
+       words drawn on it (createSoloComposite) - sent once, at connect, and never swapped;
+     · the prompt is the engine's own recommended form, "Substitute the upper body garment with
+       <what the photos show>", naming the two halves and which to show when (GET /api/solo-prompt,
+       lib/solo-prompt.js - written from the store's photos by the classifier's vision model);
+     · NO orientation watcher: no front/back swap, no profile prompt, no re-anchor. The engine is
+       the only thing deciding which side the shopper sees - that is the experiment;
+     · the camera goes out at the engine's own spec, 1280x720 (?exp_hd=0 keeps 512x288), at 15
+       frames a second (?exp_fps=5..30), through the vendor's current SDK (0.2.3, SDK_NEXT_URLS;
+       ?exp_sdk=old keeps 0.1.5). With no mid-session reference uploads the uplink carries only the
+       camera - the thing that made 20fps unsafe in the swapping room (CLAUDE.md §2.17) is absent.
+   WHAT IS ALREADY KNOWN: a stitched front|back reference was tried in July on an older model and
+   rendered fragments of both sides (23f5953); on 2026-09-16 it held only with the room naming the
+   half in play. Never tried on lucy-vton-3.5, and never with the vendor's prompt form. */
+const PEAR_EXP_SOLO = (() => {
+  try { return new URLSearchParams(location.search).get("exp") === "solo"; } catch (_) { return false; }
+})();
+const SOLO_FRAME = (() => {
+  let q = null;
+  try { q = new URLSearchParams(location.search); } catch (_) { /* no URL - defaults */ }
+  const hd = !q || q.get("exp_hd") !== "0";
+  const fpsRaw = q ? Number(q.get("exp_fps")) : NaN;
+  const fps = Number.isFinite(fpsRaw) && fpsRaw >= 5 && fpsRaw <= 30 ? Math.round(fpsRaw) : (hd ? 15 : LIVE_INFERENCE_FPS);
+  return hd ? { w: 1280, h: 720, fps } : { w: LIVE_W, h: LIVE_H, fps };
+})();
+const SOLO_NEXT_SDK = PEAR_EXP_SOLO && (() => {
+  try { return new URLSearchParams(location.search).get("exp_sdk") !== "old"; } catch (_) { return true; }
+})();
+/** The frame the engine is sent: the experiment's, or the room's own (LIVE_W x LIVE_H at LIVE_INFERENCE_FPS). */
+function liveFrameSpec() {
+  return PEAR_EXP_SOLO ? SOLO_FRAME : { w: LIVE_W, h: LIVE_H, fps: LIVE_INFERENCE_FPS };
+}
 
 /* Mobile detection (Feature 2 / mobile download fix). Drives the SAVE PATH only:
    iOS Safari ignores <a download>, so on mobile we hand the clip to the native
@@ -4143,8 +4182,9 @@ function buildVideoConstraints(facing) {
   if (isPhone) {
     video.aspectRatio = { ideal: portrait ? 9 / 16 : 16 / 9 };
   } else {
-    video.width  = { ideal: LIVE_W };
-    video.height = { ideal: LIVE_H };
+    const frame = typeof liveFrameSpec === "function" ? liveFrameSpec() : { w: LIVE_W, h: LIVE_H };
+    video.width  = { ideal: frame.w };
+    video.height = { ideal: frame.h };
   }
   return video;
 }
@@ -5176,7 +5216,10 @@ async function loadSDK() {
     return { createClient: createMockDecartClient };
   }
   let lastErr;
-  for (const url of SDK_URLS) {
+  /* The SOLO EXPERIMENT loads the vendor's current SDK (SDK_NEXT_URLS); every other session the
+     pinned one. Same factory either way - the two are API-compatible (0.2.x only adds options). */
+  const sdkUrls = typeof SOLO_NEXT_SDK !== "undefined" && SOLO_NEXT_SDK && Array.isArray(SDK_NEXT_URLS) ? SDK_NEXT_URLS : SDK_URLS;
+  for (const url of sdkUrls) {
     console.log("[PEAR] loadSDK() - importing", url);
     try {
       const mod = await import(/* @vite-ignore */ url);
@@ -5784,9 +5827,11 @@ async function resolveInitialConditioning(item) {
      as it is live. A wrong-side floor is a wrong render. */
   const primary = g.front || item.img;
   if (!primary) throw refuse(`"${item.name}" has no front image`);
+  /* SOLO EXPERIMENT: the floor IS the front|back image - the one reference of the session. */
+  const soloJob = typeof soloActiveFor === "function" && soloActiveFor(item) ? soloComposite(item) : null;
   let timer = null;
   const bytes = await Promise.race([
-    Promise.resolve(garmentBlobCached(primary)).catch(() => null),
+    Promise.resolve(soloJob || garmentBlobCached(primary)).catch(() => null),
     new Promise((r) => { timer = setTimeout(() => r(null), FLOOR_ASSET_WAIT_MS); }),
   ]);
   clearTimeout(timer);
@@ -5910,9 +5955,10 @@ function buildRealtimeConnectOpts(gen) {
       // Chromium. The REAL cap is enforced upstream by createThrottledInputStream()
       // (canvas pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H). Kept in sync so any
       // SDK build that DOES honour them agrees with the throttle.
-      fps: { ideal: LIVE_INFERENCE_FPS, max: LIVE_INFERENCE_FPS },
-      width: LIVE_W,
-      height: LIVE_H,
+      fps: { ideal: typeof liveFrameSpec === "function" ? liveFrameSpec().fps : LIVE_INFERENCE_FPS,
+             max: typeof liveFrameSpec === "function" ? liveFrameSpec().fps : LIVE_INFERENCE_FPS },
+      width: typeof liveFrameSpec === "function" ? liveFrameSpec().w : LIVE_W,
+      height: typeof liveFrameSpec === "function" ? liveFrameSpec().h : LIVE_H,
     },
     /* ── mirror: false, EXPLICITLY - never "auto", never omitted ────────────────────
        THE MIRROR IS OWNED BY EXACTLY ONE LAYER NOW: CSS, via
@@ -6270,8 +6316,11 @@ async function connectRealtime({ force = false } = {}) {
          receives a canvas capture pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H - the
          SDK's own fps/resolution caps are no-ops on Chromium (see the throttler note). */
       const camClone = new MediaStream(localStream.getVideoTracks().map((t) => t.clone()));
+      /* The experiment's frame (?exp=solo, see SOLO EXPERIMENT) or the room's own; typeof-guarded
+         - this block runs sandboxed in signaling-retry / reconnect. */
+      const frame = typeof liveFrameSpec === "function" ? liveFrameSpec() : { w: LIVE_W, h: LIVE_H, fps: LIVE_INFERENCE_FPS };
       inputThrottle = createThrottledInputStream(camClone, {
-        fps: LIVE_INFERENCE_FPS, width: LIVE_W, height: LIVE_H,
+        fps: frame.fps, width: frame.w, height: frame.h,
       });
       realtimeInput = inputThrottle.stream;
 
@@ -7066,6 +7115,11 @@ function prewarmOrientationAssets() {
     for (const [angle, inProfile] of [["front", false], ["back", false], ["front", true], ["back", true]]) {
       wirePrompt(activeItem, angle, "prefetch", { inProfile }).catch(() => {});
     }
+  }
+  /* SOLO EXPERIMENT: build the front|back image and ask for its prompt while the shopper gets ready. */
+  if (!look && activeItem && typeof soloActiveFor === "function" && soloActiveFor(activeItem)) {
+    soloComposite(activeItem);
+    soloPrompt(activeItem);
   }
   for (const it of (look ? [look.top, look.bottom] : [activeItem])) {
     if (!it) continue;
@@ -8048,7 +8102,9 @@ let orientWatcherItem = null;     // the activeItem this instance's GARMENT_FRON
 function syncOrientationWatcher() {
   const dualView = currentAngle === AUTO_ANGLE && canCombineViews(activeItem);
   const singleView = currentAngle !== AUTO_ANGLE && !!activeItem;
-  const want = (dualView || singleView) && isLive() && !!localStream;
+  /* SOLO EXPERIMENT: no watcher at all - the engine alone decides which side the shopper sees. */
+  const solo = typeof soloActiveFor === "function" && soloActiveFor(activeItem);
+  const want = (dualView || singleView) && isLive() && !!localStream && !solo;
   /* A watcher armed for one item must never keep running against a DIFFERENT one - its
      GARMENT_FRONT/GARMENT_BACK (and, for single-view, the item its profile signal is
      meaningful for) are captured once at creation and go stale on a swap. `want` alone
@@ -10203,6 +10259,36 @@ function traceSessionEnd(why) {
       keepalive: body.length < 60000 }).catch(() => {});
   } catch (_) { /* never let the recorder break a teardown */ }
 }
+/* WHAT LEFT THE CAMERA, once, 3s into a SOLO EXPERIMENT fitting (see SOLO EXPERIMENT): the
+   experiment sends 1280x720 at 15fps, and an encoder short of bandwidth scales its own picture
+   down - neither the clip nor the record says whether it did. One getStats() call: every outgoing
+   video layer (size, fps, bytes, target, limitation) and the uplink estimate. A regular session
+   never runs it; nothing is decided from it. */
+async function traceRtcSnapshot(tag) {
+  if (!_trace || typeof window === "undefined" || !window.__pearPCs) return;
+  const tr = _trace;
+  const out = { tag, layers: [] };
+  try {
+    for (const pc of Array.from(window.__pearPCs)) {
+      if (!pc || typeof pc.getStats !== "function" || pc.connectionState === "closed") continue;
+      (await pc.getStats()).forEach((x) => {
+        if (x.type === "candidate-pair" && x.nominated && x.state === "succeeded" && x.availableOutgoingBitrate != null) {
+          out.avail = Math.round(x.availableOutgoingBitrate / 1000);
+          out.rtt = x.currentRoundTripTime != null ? Math.round(x.currentRoundTripTime * 1000) : null;
+        } else if (x.type === "outbound-rtp" && x.kind === "video") {
+          out.layers.push({ rid: x.rid || null, w: x.frameWidth || null, h: x.frameHeight || null,
+            fps: x.framesPerSecond != null ? Math.round(x.framesPerSecond) : null, kb: Math.round((x.bytesSent || 0) / 1024),
+            target: x.targetBitrate != null ? Math.round(x.targetBitrate / 1000) : null,
+            limit: x.qualityLimitationReason || null });
+        } else if (x.type === "inbound-rtp" && x.kind === "video") {
+          out.inW = x.frameWidth || null; out.inFps = x.framesPerSecond != null ? Math.round(x.framesPerSecond) : null;
+        }
+      });
+    }
+  } catch (_) { return; }
+  if (_trace === tr) traceOrient("rtc", out);
+}
+
 /* The source room's read-out: the record in progress, else the last one closed (tests, the visual
    harness's PEAR_VISUAL_TRACE=1, the support view). Folded away in the production build. */
 if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof window !== "undefined") {
@@ -11491,6 +11577,8 @@ const _wirePrompts = new Map();
  * @returns {Promise<string>}
  */
 function wirePrompt(item, angle, where, opts = {}) {
+  /* SOLO EXPERIMENT: one prompt for every angle and pose - the engine picks the side. */
+  if (typeof soloActiveFor === "function" && soloActiveFor(item)) return soloPrompt(item);
   return requestWirePrompt({
     kind: "single",
     item: promptFactsOf(item),
@@ -11709,6 +11797,96 @@ function compositeActiveFor(item) {
    inferred value is correct. */
 /* angleClause() (dead relative to the wire - see trace:prompt's audit) - moved to lib/prompts.js (server-side prompt engine, 2026-09-26). */
 
+/* ── SOLO EXPERIMENT: the one reference and the one prompt (see SOLO EXPERIMENT near LIVE_W) ──── */
+/** True when this session runs the experiment for this garment: the flag, a single garment (not a
+    full look), and a real distinct back - without one there is nothing for the engine to choose. */
+function soloActiveFor(item) {
+  return typeof PEAR_EXP_SOLO !== "undefined" && PEAR_EXP_SOLO && !!item &&
+    !(typeof resolveLook === "function" && resolveLook()) && !!distinctBackOf(item);
+}
+
+const SOLO_COMPOSITE_H = 1024;   // each photo scaled to this height; ~1.4k x 1k, ~150 KB - sent once
+const SOLO_GAP = 24;             // plain white between the two halves; no line, no words
+const _soloComposites = new WeakMap();   // item -> Promise<Blob|null>
+const _soloPrompts = new WeakMap();      // item -> Promise<string> (.fallbackAt when it fell back)
+const SOLO_PROMPT_RETRY_MS = 30000;
+let _soloPromptSource = null;            // what answered the last one (the TEST record reads it)
+
+/** ONE image: the front photo on the LEFT, the back photo on the RIGHT, white between, nothing
+    written on it (words drawn in a reference are copied onto the garment). Memoised per item, so
+    every dispatch sends the SAME Blob and applyGarment()'s prompt-only path keeps it on the wire. */
+function soloComposite(item) {
+  if (_soloComposites.has(item)) return _soloComposites.get(item);
+  const job = (async () => {
+    const g = galleryOf(item) || {};
+    const frontUrl = g.front || item.img, backUrl = distinctBackOf(item, g);
+    if (!frontUrl || !backUrl) return null;
+    let front = null, back = null;
+    try {
+      [front, back] = await Promise.all([loadGarmentBitmap(frontUrl), loadGarmentBitmap(backUrl)]);
+      const wf = Math.round(front.width * SOLO_COMPOSITE_H / front.height);
+      const wb = Math.round(back.width * SOLO_COMPOSITE_H / back.height);
+      const W = wf + SOLO_GAP + wb, H = SOLO_COMPOSITE_H;
+      const cv = typeof OffscreenCanvas !== "undefined"
+        ? new OffscreenCanvas(W, H)
+        : Object.assign(document.createElement("canvas"), { width: W, height: H });
+      const ctx = cv.getContext("2d", { alpha: false });
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, W, H);
+      ctx.drawImage(front, 0, 0, wf, H);
+      ctx.drawImage(back, wf + SOLO_GAP, 0, wb, H);
+      const blob = cv.convertToBlob
+        ? await cv.convertToBlob({ type: "image/jpeg", quality: 0.9 })
+        : await new Promise((r) => cv.toBlob(r, "image/jpeg", 0.9));
+      if (!blob || !blob.size) return null;
+      if (typeof preEncodeReference === "function") preEncodeReference(blob);
+      console.log(`[PEAR] SOLO experiment - front|back reference built: ${W}x${H}, ${Math.round(blob.size / 1024)} KB`);
+      return blob;
+    } catch (e) {
+      console.warn("[PEAR] SOLO experiment - could not build the front|back reference:", e?.message || e);
+      _soloComposites.delete(item);
+      return null;
+    } finally {
+      try { front && front.close && front.close(); back && back.close && back.close(); } catch (_) { /* closed */ }
+    }
+  })();
+  _soloComposites.set(item, job);
+  return job;
+}
+
+/** The experiment's prompt for this garment, from the server (lib/solo-prompt.js). Never rejects:
+    anything but an answer falls back to the room's own front prompt, so a session still runs. */
+function soloPrompt(item) {
+  /* A fallback is kept for SOLO_PROMPT_RETRY_MS, not re-asked on every dispatch: a failing or
+     hanging endpoint must cost the session one wait, never one per send. */
+  const known = _soloPrompts.get(item);
+  if (known && !(known.fallbackAt && Date.now() - known.fallbackAt > SOLO_PROMPT_RETRY_MS)) return known;
+  const job = (async () => {
+    try {
+      const g = galleryOf(item) || {};
+      const q = `front=${encodeURIComponent(g.front || item.img)}&back=${encodeURIComponent(distinctBackOf(item, g))}` +
+        `&region=${isBottomsGarment(item) ? "bottom" : "top"}&v=1`;
+      const r = await fetch(`${location.origin}/api/solo-prompt?${q}`,
+        typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(9000) } : {});
+      const j = r.ok ? await r.json() : null;
+      if (j && typeof j.prompt === "string" && j.prompt) {
+        _soloPromptSource = j.source || "server";
+        console.log(`[PEAR] SOLO experiment - prompt (${_soloPromptSource}, ${j.prompt.length} chars):`, j.prompt);
+        return j.prompt;
+      }
+      throw new Error(r.ok ? "malformed answer" : "HTTP " + r.status);
+    } catch (e) {
+      _soloPromptSource = "room-front";
+      job.fallbackAt = Date.now();
+      console.warn("[PEAR] SOLO experiment - no solo prompt, using the room's front prompt:", e?.message || e);
+      return requestWirePrompt({ kind: "single", item: promptFactsOf(item), angle: "front", inProfile: false,
+        delta: typeof getSizeDelta === "function" ? getSizeDelta() : 0 }, "solo-fallback");
+    }
+  })();
+  _soloPrompts.set(item, job);
+  return job;
+}
+
 /**
  * Resolve the reference image handed to rtClient.set({ image }) for the active view.
  * Normal angles → the proxied gallery URL (garmentImageRef, a string). AI Auto → the
@@ -11723,6 +11901,12 @@ async function referenceImageFor(item, activeImg = activeImageOf(item), out = {}
      single-view image leaves the whole back instruction pointing at a panel that isn't
      there. See angleClause()'s `useComposite` comment. */
   out.composite = false;
+
+  /* SOLO EXPERIMENT: the one front|back image for every dispatch of the session. */
+  if (typeof soloActiveFor === "function" && soloActiveFor(item)) {
+    const solo = await soloComposite(item);
+    if (solo) { out.solo = true; return solo; }
+  }
 
   /* Composite mode: ONE stitched FRONT|BACK reference for the whole session. Because
      the image is identical for both orientations, a confirmed turn re-issues set()
@@ -11846,7 +12030,9 @@ async function applyGarment(item) {
      for. A fresh read here is the TOCTOU pattern CLAUDE.md 2.8 bans - the watcher can flip
      during referenceImageFor()'s await, and a log naming a different side than the pixels
      sent would be worse than no log. */
-  if (usingComposite) {
+  if (refInfo.solo) {
+    console.log("[PEAR] reference on the wire: SOLO experiment - the front|back image (the engine picks the side)");
+  } else if (usingComposite) {
     console.warn(`[PEAR] ⚠ REFERENCE ON THE WIRE IS THE STITCHED FRONT|BACK COMPOSITE ` +
       `(angle=${angleAtStart}). This is only reachable with COMPOSITE_MODE on ` +
       `(?composite=1) - COMPOSITE_DEFAULT is false because a two-panel reference with no ` +
@@ -14650,6 +14836,11 @@ function startBillingWindow(gen) {
   billingStarted = true;
   billingStartedAt = Date.now();         // diagnostics clock - see sessionElapsedMs()
   if (typeof traceOrient === "function") traceOrient("reveal");
+  /* A SOLO EXPERIMENT record reads what left the camera once, 3s in - see traceRtcSnapshot(). */
+  if (typeof PEAR_EXP_SOLO !== "undefined" && PEAR_EXP_SOLO && typeof traceRtcSnapshot === "function" &&
+      typeof _trace !== "undefined" && _trace) {
+    setTimeout(() => { if (gen === sessionGen) traceRtcSnapshot("t3").catch(() => {}); }, 3000);
+  }
 
   // Start recording from the SAME event that starts billing (the first DRESSED frame)
   // so the encoded clip and the billed window cover exactly the same span - no gap
@@ -15554,6 +15745,11 @@ async function applyFallbackConditioning() {
   const primary = gallery.front || item.img;
   /* Warm bytes first (no server-side fetch before Decart can condition), the URL otherwise. */
   let image = (primary && garmentBlobIfWarm(primary)) || garmentImageRef(primary);
+  /* SOLO EXPERIMENT: the prompt below names two halves, so the image must be the front|back one. */
+  if (typeof soloActiveFor === "function" && soloActiveFor(item)) {
+    const solo = await soloComposite(item).catch(() => null);
+    if (solo) image = solo;
+  }
   const prompt = await wirePrompt(item, "front", "fallbackConditioning");
 
   /* ALREADY ON THE WIRE - the common case now. This recovery runs right after
@@ -15691,6 +15887,10 @@ async function goLive() {
       item: String((activeItem && (activeItem.name || activeItem.title)) || "").slice(0, 80),
       pageMs: typeof performance !== "undefined" ? Math.round(performance.now()) : null,
       link: typeof _orientWs !== "undefined" && _orientWs ? _orientWs.readyState : null,
+      /* The SOLO EXPERIMENT's settings, when it runs (see SOLO EXPERIMENT near LIVE_W). */
+      exp: typeof PEAR_EXP_SOLO !== "undefined" && PEAR_EXP_SOLO && typeof soloActiveFor === "function" && soloActiveFor(activeItem)
+        ? { mode: "solo", frame: SOLO_FRAME, sdk: SOLO_NEXT_SDK ? "next" : "pinned", prompt: _soloPromptSource }
+        : undefined,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the

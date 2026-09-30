@@ -361,6 +361,12 @@
                       its landmarks mapped back to whole-frame coordinates, following the hips,
                       handing back after three empty windows; nothing changes while the whole
                       frame finds the body; one inference per call; the full model is loaded.
+     solo-experiment
+                      ?exp=solo (2026-09-30): ONE front|back reference, the engine's own prompt
+                      form ("Substitute the ... garment with ...", both sides named), no
+                      orientation swaps, 1280x720 at 15fps through the vendor's current SDK.
+                      Pins that without the flag nothing changes, the knobs, the prompt frame
+                      and its cap, the description call, and every dispatch path's wiring.
      size-fit-pin
                       The size charts and the fit moved server-side (lib/sizing.js,
                       POST /api/size). The move was proven exact over 1,458,028 cases;
@@ -460,6 +466,7 @@ const SUITES = [
   ["room-latency", "room-latency.test.mjs"],
   ["live-timer", "live-timer.test.mjs"],
   ["pose-focus", "pose-focus.test.mjs"],
+  ["solo-experiment", "solo-experiment.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

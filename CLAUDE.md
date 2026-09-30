@@ -254,6 +254,8 @@ with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (�
 (the self-timer, §2.18) and runs it on a fake clock - keep the block self-contained.
 `pose-focus` slices `app.js` from `let _lastPoseTimestamp = 0;` to
 `/* The loaded PoseLandmarker, as a memoized PROMISE` (the pose call and its focus window, §2.19).
+`solo-experiment` runs `app.js` from `const PEAR_EXP_SOLO = (() => {` through `function liveFrameSpec()`
+against a fake URL (§2.20) - keep the flag block self-contained.
 `reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
 guarded `window.__pearMockDecart = …` line that follows it — that line's exact text (with its
 `PEAR_DEBUG_BUILD` guard, §2.11) is its end marker.
@@ -363,6 +365,10 @@ run on the unbuilt files. Rules that keep the build honest:
   refuses a node_modules that disagrees. Neither `qa:visual` nor the unit suite can see this:
   the mock replaces the SDK. The build also silences the SDK's and livekit's console loggers
   (they print the vendor's hosts) - see `SDK_ENTRY` and `connectRealtime()`.
+  **Two SDKs since 2026-09-30:** the pinned 0.1.5 (`SDK_URLS`, overrides `@decartai/sdk@0.1.5`) for
+  every session, and 0.2.3 for the `?exp=solo` experiment only (`SDK_NEXT_URLS`, npm alias
+  `decart-sdk-next`, overrides `@decartai/sdk@0.2.3` → livekit-client 2.20.2), each bundled to its own
+  `rt.<hash>.js` and each checked against its own pin (§2.20).
 
 ### 2.12 The size fit is server-side
 Since 2026-09-26 every size chart (FOX's bands and their derivations), `coreHwPenalty()`, the
@@ -659,6 +665,39 @@ the light - a full-length figure in a wide 16:9 frame is ~55px tall once the det
 - `pose-focus` pins it (a window whose x is not mapped back fails 4 checks). The engine, the prompts,
   the reference and the render input are untouched. The skin heuristic is still what votes when the
   pose abstains (edge-on) - main's.
+
+### 2.20 The SOLO EXPERIMENT - one front|back reference, the engine picks the side (2026-09-30)
+Asked for after reading the render engine's own docs ("clean garment images", "Substitute the
+[region] with [description]", match the model's 1280×720): "send ONE picture with the front and the
+back, say which is which, and let it switch by itself". **Only with `?exp=solo`** - a store embed
+passes it with `data-pear-exp="solo"` (the widget forwards a `[a-z0-9-]{1,24}` name as `&exp=`).
+Without the flag every session is byte-for-byte what it was (`solo-experiment` §1, `trace:prompt`
+identical, the regular visual gate 40/40).
+- **The reference** (`soloComposite`): the store's front photo LEFT, back photo RIGHT, white between,
+  nothing written on it (a drawn word is copied onto the garment); ~1390×1024, ~100 KB, memoised per
+  item, so every dispatch sends the same Blob and `applyGarment()`'s prompt-only path keeps it on the
+  wire. The models stay in the photos (the shopper's call: they carry the garment's length).
+- **The prompt** (`GET /api/solo-prompt`, `lib/solo-prompt.js`): the classifier's vision model
+  describes the garment from the two photos once per product (cached: memory + CDN, a real
+  description only); `soloPromptFrom()` frames it - "Substitute the upper body garment with <…>. The
+  reference image shows this same garment from two sides: its front on the left, its back on the
+  right. When the person faces the camera, show the front: <…>. When the person turns their back
+  to the camera, show the back: <…>. Keep the person's own pants, legs and shoes." ≤640 chars.
+  No answer → the room's own front prompt (re-asked at most every 30s).
+- **Hooks, all typeof-guarded:** `wirePrompt()` (every angle/pose → the one prompt),
+  `referenceImageFor()`, `resolveInitialConditioning()` (the connect/reconnect floor),
+  `applyFallbackConditioning()`, `prewarmOrientationAssets()`. `syncOrientationWatcher()` never arms
+  a watcher: no swap, no profile, no re-anchor - the engine alone decides the side.
+- **The input:** 1280×720 at 15fps (`SOLO_FRAME`; `?exp_hd=0` → 512×288@10, `?exp_fps=5..30`)
+  through the vendor's current SDK 0.2.3 (`SDK_NEXT_URLS`, npm alias `decart-sdk-next`, its own
+  `rt.<hash>.js` with livekit-client 2.20.2 - what its CDN build resolves; `?exp_sdk=old` → 0.1.5).
+  With no mid-session reference uploads, the 20fps lesson (§2.17) does not apply as it did.
+- **A TEST record** carries `ctx.exp` (frame, SDK, where the prompt came from) and one `rtc` event
+  3s in (every outgoing layer's size/fps/bytes/limit, the uplink estimate).
+- **Known going in:** a stitched front|back reference rendered fragments of both sides in July on an
+  older model (23f5953) and on 2026-09-16 held only with the room naming the half. Never measured on
+  lucy-vton-3.5 or with the vendor's prompt form. `PEAR_VISUAL_EXP=solo npm run test:visual` smoke-runs
+  it (goes live, one image, no swap - the gate's own back-swap wait then times out, by design).
 
 ---
 

@@ -32,6 +32,8 @@ import { supabase } from "./lib/supabase.js";
    field on classifyFrontBackDetailed() (short version: that one is stamped with
    CLASSIFIER_PROMPT_VERSION, and widening it re-classifies the whole catalog). */
 import { classifyGarmentFull } from "./lib/garment-category.js";
+/* The ?exp=solo experiment's prompt (2026-09-30) - see lib/solo-prompt.js and GET /api/solo-prompt. */
+import { soloPromptFor, soloPromptFrom, SOLO_PROMPT_VERSION } from "./lib/solo-prompt.js";
 /* The size charts and the fit - moved out of the browser 2026-09-26 (see lib/sizing.js). */
 import { computeSizeVerdict, sanitizeSizeEvidence } from "./lib/sizing.js";
 /* The prompt engine - moved out of the browser 2026-09-26 (see lib/prompts.js). */
@@ -2819,6 +2821,58 @@ app.get("/api/garment-category", classifyLimiter, async (req, res) => {
     source: verdict.source,
     cached: false,
   });
+});
+
+/* GET /api/solo-prompt?front=<url>&back=<url>&region=top|bottom&v=N
+     -> { prompt, source, v }
+
+   THE SOLO EXPERIMENT'S PROMPT (?exp=solo only, 2026-09-30 - see "SOLO EXPERIMENT" in app.js
+   and lib/solo-prompt.js). One vision-model call per product describes the garment from its
+   own front and back photos in the render engine's recommended form; the room sends the result
+   with a stitched front|back reference and never swaps. Cached like /api/garment-category's
+   verdicts: instance memory, and the CDN (s-maxage) for a real description only - a fallback
+   or a throttle is no-store, so the next visit asks again. A regular session never calls this. */
+const _soloPromptMemo = new Map();   // `${canonical front}|${canonical back}|${region}` -> { at, body }
+const SOLO_PROMPT_MEMO_MS = 24 * 60 * 60 * 1000;
+const SOLO_PROMPT_MEMO_MAX = 300;
+const publicImageUrl = (u) => {
+  if (typeof u !== "string" || !u || u.length > 2048 || !/^https?:\/\//i.test(u)) return false;
+  let host = "";
+  try { host = new URL(u).hostname.toLowerCase(); } catch (_) { return false; }
+  return !!host && host !== "localhost" && !/^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(host) &&
+    !/^172\.(1[6-9]|2\d|3[01])\./.test(host) && !host.endsWith(".internal") && !host.includes(":");
+};
+
+app.get("/api/solo-prompt", classifyLimiter, async (req, res) => {
+  const front = typeof req.query?.front === "string" ? req.query.front.trim() : "";
+  const back = typeof req.query?.back === "string" ? req.query.back.trim() : "";
+  const region = req.query?.region === "bottom" ? "bottom" : "top";
+  if (!publicImageUrl(front) || !publicImageUrl(back)) {
+    return res.status(400).json({ error: "bad_image_url", message: "front and back must be public http(s) image URLs." });
+  }
+  const key = `${canonicalImageUrl(front) || front}|${canonicalImageUrl(back) || back}|${region}`;
+  const hit = _soloPromptMemo.get(key);
+  if (hit && Date.now() - hit.at < SOLO_PROMPT_MEMO_MS) {
+    res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=2592000");
+    return res.json({ ...hit.body, cached: true });
+  }
+  let out;
+  try {
+    out = await soloPromptFor({ front, back, region }, GEMINI_API_KEY);
+  } catch (e) {
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({ prompt: soloPromptFrom(null, region), source: "rate_limited", v: SOLO_PROMPT_VERSION });
+  }
+  const body = { prompt: out.prompt, source: out.source, v: SOLO_PROMPT_VERSION };
+  if (out.source === "gemini") {
+    _soloPromptMemo.set(key, { at: Date.now(), body });
+    if (_soloPromptMemo.size > SOLO_PROMPT_MEMO_MAX) _soloPromptMemo.delete(_soloPromptMemo.keys().next().value);
+    res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=2592000");
+  } else {
+    res.setHeader("Cache-Control", "no-store");
+  }
+  console.log(`[solo-prompt] ${region} [${out.source}] ${out.prompt.length} chars: ${out.prompt}`);
+  return res.json(body);
 });
 
 app.post("/api/classify-garment", classifyLimiter, async (req, res) => {

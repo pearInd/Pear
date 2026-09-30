@@ -107,6 +107,12 @@
 
   var STORE_KEY = (script && script.getAttribute("data-pear-key")) || "";
 
+  /* AN EXPERIMENT, BY NAME (2026-09-30). data-pear-exp="solo" opens the room with ?exp=solo - the
+     one-reference experiment in fitting-room/app.js ("SOLO EXPERIMENT"). Only a short lowercase
+     name passes; an embed without the attribute gets exactly the room it always got. */
+  var EXP_RAW = (script && script.getAttribute("data-pear-exp")) || "";
+  var EXP = /^[a-z0-9-]{1,24}$/.test(EXP_RAW) ? EXP_RAW : "";
+
   /* SUPPORT VIEW FROM A STORE PAGE. data-pear-debug="<PEAR_DEBUG_TOKEN>" on the embed opens
      the room in the support view (CLAUDE.md §2.11: the source room, every [PEAR] log line)
      with the orientation trace on (orient_debug=1: the swap timeline - dispatch yaw, send,
@@ -2682,6 +2688,7 @@
       (REQUIRE_BOTH_VIEWS ? "&require_both_views=1" : "") +
       (DEMO_GATE ? "&demo_gate=1" : "") +
       (STORE_KEY ? "&pear_key=" + encodeURIComponent(STORE_KEY) : "") +
+      (EXP ? "&exp=" + EXP : "") +
       (DEBUG_TOKEN ? "&pear_debug=" + encodeURIComponent(DEBUG_TOKEN) + "&orient_debug=1" : "") +
       /* Tells the fitting room to skip registration + apply the one-time lock -
          see the "demo mode" block above. Only ever set for the marketing-site
