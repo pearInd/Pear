@@ -274,6 +274,10 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
 
   /* ── camera, then go live ───────────────────────────────────────────────── */
   await page.locator("#startCamBtn").click();
+  /* The camera guide sits between the button and the camera (once per room load) - clicked
+     through as a shopper would, never skipped: it is UI, not a gate the agent may bypass. */
+  await expect(page.locator("#camGuide")).toBeVisible({ timeout: 10_000 });
+  await page.locator("#camGuideGo").click();
   await expect(page.locator("#captureBtn")).toBeEnabled({ timeout: 30_000 });
   await page.locator("#captureBtn").click();
 

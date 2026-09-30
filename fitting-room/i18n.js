@@ -191,6 +191,32 @@ const I18N = {
      commonest miss is a shopper too close for the required landmarks (hips/knees
      cropped), and the overlay's step-back animation acts out the same instruction. */
   presencePrompt:            { he: "נא להתרחק כדי להציג גוף מלא", en: "Please step back to fit full body" },
+  /* The camera guide (#camGuide) - shown once per room load, between "open the camera" and
+     the camera itself, and the self-timer (#timerBtn / #goCountdown). See "CAMERA GUIDE +
+     SELF-TIMER" in app.js. Step 1 is the one that matters most: the render is only as
+     complete as the body it can see. */
+  camGuideTitle:             { he: "לפני שמתחילים", en: "Before you start" },
+  camGuideSub:               { he: "שלושה צעדים קטנים לתוצאה הכי מדויקת", en: "Three quick steps to the most accurate result" },
+  camGuideStep1Title:        { he: "כל הגוף בפריים", en: "Your whole body in frame" },
+  camGuideStep1:             { he: "התרחקו עד שרואים אתכם מהראש ועד כפות הרגליים. אם חלק מהגוף לא בתמונה, התוצאה לא תהיה מלאה ומדויקת.",
+                               en: "Step back until you're visible from head to feet. If part of your body is out of frame, the result won't be complete or accurate." },
+  camGuideStep2Title:        { he: "מכשיר יציב ואור מלפנים", en: "A steady device, light in front" },
+  camGuideStep2:             { he: "הניחו את המכשיר במקום יציב, ועמדו כשהאור מולכם ולא מאחוריכם.",
+                               en: "Set the device down somewhere steady and face the light, with none behind you." },
+  camGuideStep3Title:        { he: "טיימר להתמקמות", en: "A timer to get in place" },
+  camGuideStep3:             { he: "צריכים זמן להתרחק? לחצו על הטיימר בפינת המצלמה ובחרו 3, 5 או 10 שניות.",
+                               en: "Need time to step back? Tap the timer in the camera corner and pick 3, 5 or 10 seconds." },
+  camGuideGo:                { he: "הבנתי, פתחו מצלמה", en: "Got it, open the camera" },
+  timerAria:                 { he: "טיימר לפני המדידה", en: "Timer before the fitting" },
+  timerMenuTitle:            { he: "טיימר", en: "Timer" },
+  timerOff:                  { he: "כבוי", en: "Off" },
+  timerSecShort:             { he: "שנ׳", en: "s" },
+  timerValue:                { he: "{n} שנ׳", en: "{n}s" },
+  timerHelp:                 { he: "גררו או הקישו לבחירה", en: "Drag or tap to choose" },
+  otpVerifiedTitle:          { he: "אומתתם בהצלחה", en: "You're verified" },
+  countdownHint:             { he: "התרחקו עד שכל הגוף בפריים", en: "Step back until your whole body is in frame" },
+  countdownHintReady:        { he: "מתחילים", en: "Starting" },
+  countdownHintPrep:         { he: "מתכוננים - התרחקו עד שכל הגוף בפריים", en: "Getting ready - step back until your whole body is in frame" },
   /* Progressive loading-state guidance (#scanStepText) - cycled by
      startScanTimer()/updateScanTimer() in app.js while #scanOverlay is up,
      one step at a time, so the shopper always knows what's happening and how
