@@ -17,7 +17,7 @@
    What no test here can see: whether the engine actually picks the right side. That is the
    experiment, and only a real session answers it. */
 import { readFileSync } from "node:fs";
-import { soloPromptFrom, soloPromptFor, DESCRIBE_INSTRUCTION } from "../lib/solo-prompt.js";
+import { soloPromptFrom, soloPromptFor, garmentCropFrom, DESCRIBE_INSTRUCTION } from "../lib/solo-prompt.js";
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -68,33 +68,47 @@ console.log("\n── §2 with the flag ──");
 
 console.log("\n── §3 the prompt frame ──");
 {
+  /* v2 (2026-09-30): the first measurement drew a LARGE black block for a SMALL rear print - so the
+     description carries each print's size and place, and the back is the part that never gives way. */
   const OASIS = {
-    garment: "white oversized short-sleeve crew-neck cotton t-shirt with dropped shoulders, boxy fit, the hem reaching the upper thigh",
-    front: "vertical red and blue stripes with a 'Knebworth' oval logo and a small boxed 'oasis' logo",
-    back: "'10th & 11th Aug. 1996' printed above a boxed 'oasis' logo across the upper back",
+    garment: "oversized white cotton crew-neck t-shirt with dropped shoulders, short sleeves, boxy relaxed fit, hip-length hem",
+    front: "a vertical red and blue stripe running down the center front, a black-outlined oval \"Knebworth\" logo across the chest, a small boxed \"oasis\" logo above it, the rest of the front is plain",
+    back: "small print centered on the upper back, about a third of the width: \"10th & 11th Aug. 1996\" in black letters, below it a small black rectangular label with white \"oasis\" text, rest of the back plain",
   };
   const p = soloPromptFrom(OASIS, "top");
   console.log(`        (${p.length} chars) ${p}`);
   check("the vendor's form: \"Substitute the upper body garment with <what the photos show>\"",
-    p.startsWith("Substitute the upper body garment with white oversized short-sleeve"));
+    p.startsWith("Substitute the upper body garment with oversized white cotton crew-neck"));
   check("...the two halves are named: the front on the left, the back on the right",
-    /its front on the left, its back on the right/.test(p));
-  check("...and which side to show when, with each side's own print",
-    /When the person faces the camera, show the front: vertical red and blue stripes/.test(p) &&
-    /When the person turns their back to the camera, show the back: '10th & 11th Aug\. 1996'/.test(p));
+    /The reference shows it from two sides: front on the left, back on the right\./.test(p));
+  check("...and which side to show when",
+    /Facing the camera, show the front: a vertical red and blue stripe/.test(p) &&
+    /Back to the camera, show the back exactly as in the reference: small print centered on the upper back/.test(p));
+  check("...the BACK survives the budget whole - its size, its text and its closing 'plain' clause",
+    p.includes('small print centered on the upper back, about a third of the width: "10th & 11th Aug. 1996" in black letters, below it a small black rectangular label with white "oasis" text, rest of the back plain.'));
+  check("...the FRONT gave way first, by whole clauses - never a phrase cut mid-way",
+    /show the front: a vertical red and blue stripe running down the center front\. Back/.test(p));
   check("...the shopper's own lower body is kept", /Keep the person's own pants, legs and shoes\.$/.test(p));
-  check("...within the wire cap (650)", p.length <= 640, String(p.length));
+  check("...within the wire cap (650), with no stray punctuation", p.length <= 640 && !/[,;:]\./.test(p), String(p.length));
   const plain = soloPromptFrom({ ...OASIS, back: "plain" }, "top");
-  check("a plain back is said as plain, not as a print", /show the back, which is plain\./.test(plain));
+  check("a plain back is said as plain, not as a print", /show the back exactly as in the reference, plain\./.test(plain));
   const pants = soloPromptFrom({ garment: "light blue wide-leg denim jeans, high waist, ankle-length", front: "plain", back: "two patch pockets" }, "bottom");
   check("bottoms: the lower body garment, and the shopper's own top is kept",
     pants.startsWith("Substitute the lower body garment with light blue") && /Keep the person's own top and shoes\.$/.test(pants));
-  const long = soloPromptFrom({ garment: "w ".repeat(40), front: "front detail ".repeat(20), back: "back detail ".repeat(20) }, "top");
-  check("an over-long description is cut to fit - the details give way, the frame survives",
-    long.length <= 640 && /its front on the left, its back on the right/.test(long) && /Keep the person's own pants, legs and shoes\./.test(long), String(long.length));
+  const long = soloPromptFrom({ garment: "w ".repeat(40), front: "front detail, ".repeat(20), back: "back detail, ".repeat(20) + "rest plain" }, "top");
+  check("an over-long description is cut to fit - details give way, the frame and the back's 'plain' survive",
+    long.length <= 640 && /front on the left, back on the right/.test(long) && /rest plain\. Keep the person's own pants, legs and shoes\.$/.test(long), `${long.length} ${long}`);
   const none = soloPromptFrom(null, "top");
   check("no description: the frame with a generic garment phrase",
     /Substitute the upper body garment with the garment exactly as shown in the reference image\./.test(none) && /front on the left/.test(none));
+
+  /* The crop each side gets before stitching (v2): the OASIS rear photo's garment box. */
+  const c = garmentCropFrom([344, 167, 856, 817], "top");
+  check("a garment box becomes a crop: collar and hem in (thin margins), both sleeves in (wider)",
+    c && c.y0 < 0.344 && c.y0 > 0.33 && c.y1 > 0.856 && c.y1 < 0.87 && c.x0 < 0.167 && c.x1 > 0.817, JSON.stringify(c));
+  check("...an unusable box is no crop: malformed, tiny, or keeping nearly the whole photo",
+    garmentCropFrom(null, "top") === null && garmentCropFrom([1, 2, 3], "top") === null &&
+    garmentCropFrom([400, 400, 450, 450], "top") === null && garmentCropFrom([0, 0, 1000, 1000], "top") === null);
 }
 
 console.log("\n── §4 the description call ──");
@@ -113,6 +127,13 @@ console.log("\n── §4 the description call ──");
   const ok = mk();
   const r = await soloPromptFor({ front: "http://cdn.example.com/1.jpg", back: "https://cdn.example.com/3.jpg", region: "top" }, "k", { fetchImpl: ok.fetchImpl });
   check("a description comes back as a prompt, marked as the model's", r.source === "gemini" && /white tee, hip-length/.test(r.prompt));
+  const withBoxes = await soloPromptFor({ front: "https://a/1.jpg", back: "https://a/3.jpg", region: "top" }, "k",
+    { fetchImpl: mk({ answer: { garment: "white tee", front: "logo", back: "plain", front_box: [335, 170, 905, 850], back_box: [344, 167, 856, 817] } }).fetchImpl });
+  check("...with each photo's garment crop from the same call",
+    withBoxes.crops && withBoxes.crops.front && withBoxes.crops.back && withBoxes.crops.back.y1 > 0.856);
+  check("...and the model is asked for each print's SIZE and PLACE, and for both garment boxes",
+    /SIZE relative to the garment/.test(DESCRIBE_INSTRUCTION) && /PLACE/.test(DESCRIBE_INSTRUCTION) &&
+    /front_box/.test(DESCRIBE_INSTRUCTION) && /back_box/.test(DESCRIBE_INSTRUCTION) && /small label must never read as a large block/.test(DESCRIBE_INSTRUCTION));
   check("the FRONT photo is fetched first (over https), then the BACK", ok.seen[0].url === "https://cdn.example.com/1.jpg" && ok.seen[1].url === "https://cdn.example.com/3.jpg");
   const body = JSON.parse(ok.seen[2].init.body);
   check("the model is told image 1 is the front and image 2 the back, deterministically",
@@ -149,14 +170,19 @@ console.log("\n── §5 the wiring ──");
     /PEAR_EXP_SOLO/.test(active) && /resolveLook\(\)/.test(active) && /!!distinctBackOf\(item\)/.test(active));
   const comp = fnSrc("function soloComposite(item) {");
   check("the image: front LEFT, back RIGHT, white between, nothing written on it, memoised per item",
-    /ctx\.drawImage\(front, 0, 0, wf, H\);/.test(comp) && /ctx\.drawImage\(back, wf \+ SOLO_GAP, 0, wb, H\);/.test(comp) &&
+    /ctx\.drawImage\(front, rf\.sx, rf\.sy, rf\.sw, rf\.sh, 0, 0, wf, H\);/.test(comp) &&
+    /ctx\.drawImage\(back, rb\.sx, rb\.sy, rb\.sw, rb\.sh, wf \+ SOLO_GAP, 0, wb, H\);/.test(comp) &&
     !/fillText|strokeText/.test(comp) && /_soloComposites\.set\(item, job\)/.test(comp));
-  const sp = fnSrc("function soloPrompt(item) {");
+  check("...each side cut to its garment when the server sent a crop, whole when it did not",
+    /soloAnswer\(item\)/.test(comp) && /const crops = \(answer && answer\.crops\) \|\| \{\};/.test(comp) &&
+    /: \{ sx: 0, sy: 0, sw: bmp\.width, sh: bmp\.height, cut: false \}/.test(comp));
+  const sa = fnSrc("function soloAnswer(item) {");
+  const sp = fnSrc("async function soloPrompt(item) {");
   check("the prompt never rejects: no answer falls back to the room's own front prompt",
-    /catch \(e\) \{[\s\S]*?requestWirePrompt\(\{ kind: "single"/.test(sp));
-  check("...and a fallback is re-asked at most every SOLO_PROMPT_RETRY_MS, never on every dispatch",
-    /job\.fallbackAt = Date\.now\(\);/.test(sp) && /known\.fallbackAt && Date\.now\(\) - known\.fallbackAt > SOLO_PROMPT_RETRY_MS/.test(sp) &&
-    !/_soloPrompts\.delete\(item\)/.test(sp));
+    /return requestWirePrompt\(\{ kind: "single"/.test(sp) && /catch \(e\) \{[\s\S]*?return null;/.test(sa));
+  check("...a failure is re-asked at most every SOLO_PROMPT_RETRY_MS, never on every dispatch; v2 of the answer",
+    /job\.fallbackAt = Date\.now\(\);/.test(sa) && /known\.fallbackAt && Date\.now\(\) - known\.fallbackAt > SOLO_PROMPT_RETRY_MS/.test(sa) &&
+    /&v=2`/.test(sa));
   const route = SERVER.slice(SERVER.indexOf('app.get("/api/solo-prompt"'), SERVER.indexOf("\n});\n", SERVER.indexOf('app.get("/api/solo-prompt"')));
   check("the endpoint takes public photos only and caches only a real description",
     /publicImageUrl\(front\)/.test(route) && /if \(out\.source === "gemini"\) \{[\s\S]*?s-maxage[\s\S]*?\} else \{\s*\n\s*res\.setHeader\("Cache-Control", "no-store"\);/.test(route));

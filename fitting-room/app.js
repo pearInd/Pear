@@ -11822,16 +11822,20 @@ function soloActiveFor(item) {
     !(typeof resolveLook === "function" && resolveLook()) && !!distinctBackOf(item);
 }
 
-const SOLO_COMPOSITE_H = 1024;   // each photo scaled to this height; ~1.4k x 1k, ~150 KB - sent once
+const SOLO_COMPOSITE_H = 1024;   // each side scaled to this height; ~1.8k x 1k, ~150 KB - sent once
 const SOLO_GAP = 24;             // plain white between the two halves; no line, no words
 const _soloComposites = new WeakMap();   // item -> Promise<Blob|null>
-const _soloPrompts = new WeakMap();      // item -> Promise<string> (.fallbackAt when it fell back)
+const _soloAnswers = new WeakMap();      // item -> Promise<{prompt, crops, source}|null> (.fallbackAt on failure)
 const SOLO_PROMPT_RETRY_MS = 30000;
 let _soloPromptSource = null;            // what answered the last one (the TEST record reads it)
+let _soloCropped = null;                 // "both" / "front" / "back" / "none" - the TEST record reads it
 
 /** ONE image: the front photo on the LEFT, the back photo on the RIGHT, white between, nothing
-    written on it (words drawn in a reference are copied onto the garment). Memoised per item, so
-    every dispatch sends the SAME Blob and applyGarment()'s prompt-only path keeps it on the wire. */
+    written on it (words drawn in a reference are copied onto the garment). Each side is CUT to its
+    garment first when the server returned a crop (collar to hem, both sleeves, still on the body) -
+    v2, 2026-09-30: in the uncut v1 image the small rear print got so few pixels that the engine drew
+    a large black block for it. Memoised per item, so every dispatch sends the SAME Blob and
+    applyGarment()'s prompt-only path keeps it on the wire. */
 function soloComposite(item) {
   if (_soloComposites.has(item)) return _soloComposites.get(item);
   const job = (async () => {
@@ -11840,24 +11844,35 @@ function soloComposite(item) {
     if (!frontUrl || !backUrl) return null;
     let front = null, back = null;
     try {
-      [front, back] = await Promise.all([loadGarmentBitmap(frontUrl), loadGarmentBitmap(backUrl)]);
-      const wf = Math.round(front.width * SOLO_COMPOSITE_H / front.height);
-      const wb = Math.round(back.width * SOLO_COMPOSITE_H / back.height);
-      const W = wf + SOLO_GAP + wb, H = SOLO_COMPOSITE_H;
+      const [fb, bb, answer] = await Promise.all([loadGarmentBitmap(frontUrl), loadGarmentBitmap(backUrl),
+        typeof soloAnswer === "function" ? soloAnswer(item) : null]);
+      front = fb; back = bb;
+      const crops = (answer && answer.crops) || {};
+      const region = (bmp, c) => {
+        const ok = c && [c.x0, c.y0, c.x1, c.y1].every((v) => Number.isFinite(v) && v >= 0 && v <= 1) && c.x1 > c.x0 && c.y1 > c.y0;
+        return ok
+          ? { sx: c.x0 * bmp.width, sy: c.y0 * bmp.height, sw: (c.x1 - c.x0) * bmp.width, sh: (c.y1 - c.y0) * bmp.height, cut: true }
+          : { sx: 0, sy: 0, sw: bmp.width, sh: bmp.height, cut: false };
+      };
+      const rf = region(front, crops.front), rb = region(back, crops.back);
+      _soloCropped = rf.cut && rb.cut ? "both" : rf.cut ? "front" : rb.cut ? "back" : "none";
+      const H = SOLO_COMPOSITE_H;
+      const wf = Math.round(rf.sw * H / rf.sh), wb = Math.round(rb.sw * H / rb.sh);
+      const W = wf + SOLO_GAP + wb;
       const cv = typeof OffscreenCanvas !== "undefined"
         ? new OffscreenCanvas(W, H)
         : Object.assign(document.createElement("canvas"), { width: W, height: H });
       const ctx = cv.getContext("2d", { alpha: false });
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, W, H);
-      ctx.drawImage(front, 0, 0, wf, H);
-      ctx.drawImage(back, wf + SOLO_GAP, 0, wb, H);
+      ctx.drawImage(front, rf.sx, rf.sy, rf.sw, rf.sh, 0, 0, wf, H);
+      ctx.drawImage(back, rb.sx, rb.sy, rb.sw, rb.sh, wf + SOLO_GAP, 0, wb, H);
       const blob = cv.convertToBlob
         ? await cv.convertToBlob({ type: "image/jpeg", quality: 0.9 })
         : await new Promise((r) => cv.toBlob(r, "image/jpeg", 0.9));
       if (!blob || !blob.size) return null;
       if (typeof preEncodeReference === "function") preEncodeReference(blob);
-      console.log(`[PEAR] SOLO experiment - front|back reference built: ${W}x${H}, ${Math.round(blob.size / 1024)} KB`);
+      console.log(`[PEAR] SOLO experiment - front|back reference built: ${W}x${H}, ${Math.round(blob.size / 1024)} KB, cut: ${_soloCropped}`);
       return blob;
     } catch (e) {
       console.warn("[PEAR] SOLO experiment - could not build the front|back reference:", e?.message || e);
@@ -11871,37 +11886,43 @@ function soloComposite(item) {
   return job;
 }
 
-/** The experiment's prompt for this garment, from the server (lib/solo-prompt.js). Never rejects:
-    anything but an answer falls back to the room's own front prompt, so a session still runs. */
-function soloPrompt(item) {
-  /* A fallback is kept for SOLO_PROMPT_RETRY_MS, not re-asked on every dispatch: a failing or
-     hanging endpoint must cost the session one wait, never one per send. */
-  const known = _soloPrompts.get(item);
+/** The server's answer for this garment (lib/solo-prompt.js): the prompt and each photo's garment
+    crop. Never rejects - null when there is no answer. A failure is kept for SOLO_PROMPT_RETRY_MS,
+    not re-asked on every dispatch: a failing or hanging endpoint costs the session one wait. */
+function soloAnswer(item) {
+  const known = _soloAnswers.get(item);
   if (known && !(known.fallbackAt && Date.now() - known.fallbackAt > SOLO_PROMPT_RETRY_MS)) return known;
   const job = (async () => {
     try {
       const g = galleryOf(item) || {};
       const q = `front=${encodeURIComponent(g.front || item.img)}&back=${encodeURIComponent(distinctBackOf(item, g))}` +
-        `&region=${isBottomsGarment(item) ? "bottom" : "top"}&v=1`;
+        `&region=${isBottomsGarment(item) ? "bottom" : "top"}&v=2`;
       const r = await fetch(`${location.origin}/api/solo-prompt?${q}`,
         typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(9000) } : {});
       const j = r.ok ? await r.json() : null;
       if (j && typeof j.prompt === "string" && j.prompt) {
-        _soloPromptSource = j.source || "server";
-        console.log(`[PEAR] SOLO experiment - prompt (${_soloPromptSource}, ${j.prompt.length} chars):`, j.prompt);
-        return j.prompt;
+        console.log(`[PEAR] SOLO experiment - prompt (${j.source || "server"}, ${j.prompt.length} chars):`, j.prompt);
+        return { prompt: j.prompt, crops: j.crops || null, source: j.source || "server" };
       }
       throw new Error(r.ok ? "malformed answer" : "HTTP " + r.status);
     } catch (e) {
-      _soloPromptSource = "room-front";
       job.fallbackAt = Date.now();
-      console.warn("[PEAR] SOLO experiment - no solo prompt, using the room's front prompt:", e?.message || e);
-      return requestWirePrompt({ kind: "single", item: promptFactsOf(item), angle: "front", inProfile: false,
-        delta: typeof getSizeDelta === "function" ? getSizeDelta() : 0 }, "solo-fallback");
+      console.warn("[PEAR] SOLO experiment - no answer from the server:", e?.message || e);
+      return null;
     }
   })();
-  _soloPrompts.set(item, job);
+  _soloAnswers.set(item, job);
   return job;
+}
+
+/** The experiment's prompt for this garment. Never rejects: no answer falls back to the room's own
+    front prompt, so a session still runs. */
+async function soloPrompt(item) {
+  const a = await soloAnswer(item);
+  if (a && a.prompt) { _soloPromptSource = a.source; return a.prompt; }
+  _soloPromptSource = "room-front";
+  return requestWirePrompt({ kind: "single", item: promptFactsOf(item), angle: "front", inProfile: false,
+    delta: typeof getSizeDelta === "function" ? getSizeDelta() : 0 }, "solo-fallback");
 }
 
 /**
@@ -15906,7 +15927,8 @@ async function goLive() {
       link: typeof _orientWs !== "undefined" && _orientWs ? _orientWs.readyState : null,
       /* The SOLO EXPERIMENT's settings, when it runs (see SOLO EXPERIMENT near LIVE_W). */
       exp: typeof PEAR_EXP_SOLO !== "undefined" && PEAR_EXP_SOLO && typeof soloActiveFor === "function" && soloActiveFor(activeItem)
-        ? { mode: "solo", frame: SOLO_FRAME, sdk: typeof _sdkInUse !== "undefined" ? _sdkInUse : null, prompt: _soloPromptSource }
+        ? { mode: "solo", frame: SOLO_FRAME, sdk: typeof _sdkInUse !== "undefined" ? _sdkInUse : null, prompt: _soloPromptSource,
+            cut: typeof _soloCropped !== "undefined" ? _soloCropped : null }
         : undefined,
     });
   }
@@ -15988,6 +16010,9 @@ async function goLive() {
        see the whole body, exactly as main lets it. The countdown absorbs the later connect (it
        spreads its last numbers to the expected render); see "CAMERA GUIDE + SELF-TIMER". */
     const presence = await awaitBodyPresence(isBottomsGarment(activeItem));
+    /* THE GO-LIVE STAGES, for a TEST record (2026-09-30: a fitting that opened 7.7s past the timer's
+       zero could not say which stage took the time). No-ops outside a recorded session. */
+    if (typeof traceOrient === "function") traceOrient("stage", { s: "presence", v: presence });
     if (presence !== "present") {
       console.warn(`[go-live] presence gate did not confirm (${presence}) - continuing`);
     }
@@ -16038,6 +16063,7 @@ async function goLive() {
     const wantedAutoView = currentAngle === AUTO_ANGLE;
     $("scanOverlay").hidden = false;
     const preload = await preloadGarmentAssets();
+    if (typeof traceOrient === "function") traceOrient("stage", { s: "preload", ok: !!(preload && preload.ok) });
     if (!preload.ok) {
       $("scanOverlay").hidden = true;
       showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
@@ -16071,11 +16097,13 @@ async function goLive() {
     // 1) mint ek_ token + open the WebRTC session. NOTE: billing no longer starts here -
     //    the WebRTC session is open, but the billed 5s window is armed by the FIRST
     //    rendered Decart frame (onRemoteStream → armFirstFrameBilling), not at connect.
+    if (typeof traceOrient === "function") traceOrient("stage", { s: "connect" });
     await connectRealtime();
     await waitConnected(CONNECT_TIMEOUT_MS);
     console.log("[PEAR] Decart connected - waiting for first frame");
     /* A self-timer times zero to the render it now expects (see "CAMERA GUIDE + SELF-TIMER"). */
     if (typeof liveTimerConnected === "function") liveTimerConnected();
+    if (typeof traceOrient === "function") traceOrient("stage", { s: "connected" });
 
     /* Settle the try-on mode BEFORE the first reference is built, so exactly one
        rtClient.set() is issued for it. This is a SECOND, independent guard from the

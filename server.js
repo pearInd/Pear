@@ -2824,7 +2824,7 @@ app.get("/api/garment-category", classifyLimiter, async (req, res) => {
 });
 
 /* GET /api/solo-prompt?front=<url>&back=<url>&region=top|bottom&v=N
-     -> { prompt, source, v }
+     -> { prompt, crops: { front, back } | null, source, v }   (crops: each photo's garment crop, v2)
 
    THE SOLO EXPERIMENT'S PROMPT (?exp=solo only, 2026-09-30 - see "SOLO EXPERIMENT" in app.js
    and lib/solo-prompt.js). One vision-model call per product describes the garment from its
@@ -2863,7 +2863,7 @@ app.get("/api/solo-prompt", classifyLimiter, async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     return res.json({ prompt: soloPromptFrom(null, region), source: "rate_limited", v: SOLO_PROMPT_VERSION });
   }
-  const body = { prompt: out.prompt, source: out.source, v: SOLO_PROMPT_VERSION };
+  const body = { prompt: out.prompt, crops: out.crops || null, source: out.source, v: SOLO_PROMPT_VERSION };
   if (out.source === "gemini") {
     _soloPromptMemo.set(key, { at: Date.now(), body });
     if (_soloPromptMemo.size > SOLO_PROMPT_MEMO_MAX) _soloPromptMemo.delete(_soloPromptMemo.keys().next().value);

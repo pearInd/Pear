@@ -701,6 +701,17 @@ identical, the regular visual gate 40/40).
   patches the bundle to answer the same (`noFrameMetadataWorker`; the build fails if the patch stops
   applying). And if a next-SDK session still never renders, the first-frame guard sets
   `pear_solo_next_sdk_failed` (sessionStorage) and the retry runs on the pinned SDK (`sdk-fallback`).
+- **v2 of the reference and the words (2026-09-30), after the first real measurement** - "the smoothest
+  turn yet, the front perfect, but the back was not the right drawing": the engine understood which
+  side to show (no mixing), but drew a LARGE black block for the SMALL rear print ("10th & 11th Aug.
+  1996" over a small black "oasis" label). v1's back said "above a black box containing 'oasis'" with
+  no size, and the print had few pixels in a two-photo image. So the vision model now gives each
+  print's SIZE and PLACE and ends with what is plain, the back never gives way to the 640-char budget
+  (the front's clauses do first - `soloPromptFrom()`), and the same call returns each photo's garment
+  box: `garmentCropFrom()` → `soloComposite()` cuts each side collar-to-hem, still on the body, before
+  stitching (~1970×1024, ~140 KB; the rear print about twice the size). Answer cached as `v=2`.
+  The record now carries `ctx.exp.cut` and `stage` events (presence / preload / connect / connected):
+  that session revealed 7.7s past the timer's zero and nothing said which stage took it.
 - **Known going in:** a stitched front|back reference rendered fragments of both sides in July on an
   older model (23f5953) and on 2026-09-16 held only with the room naming the half. Never measured on
   lucy-vton-3.5 or with the vendor's prompt form. `PEAR_VISUAL_EXP=solo npm run test:visual` smoke-runs
