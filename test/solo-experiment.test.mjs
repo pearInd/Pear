@@ -140,7 +140,8 @@ console.log("\n── §4 the description call ──");
     ["front_box", "back_box"].every((k) => sentSchema.required.includes(k)));
   check("...and the model is asked for each print's SIZE and PLACE, and for both garment boxes",
     /SIZE relative to the garment/.test(DESCRIBE_INSTRUCTION) && /PLACE/.test(DESCRIBE_INSTRUCTION) &&
-    /front_box/.test(DESCRIBE_INSTRUCTION) && /back_box/.test(DESCRIBE_INSTRUCTION) && /small label must never read as a large block/.test(DESCRIBE_INSTRUCTION));
+    /front_box/.test(DESCRIBE_INSTRUCTION) && /back_box/.test(DESCRIBE_INSTRUCTION) && /small label must never read as a large block/.test(DESCRIBE_INSTRUCTION) &&
+    /from TOP to BOTTOM/.test(DESCRIBE_INSTRUCTION) && /which text sits inside which shape/.test(DESCRIBE_INSTRUCTION));
   check("the FRONT photo is fetched first (over https), then the BACK", ok.seen[0].url === "https://cdn.example.com/1.jpg" && ok.seen[1].url === "https://cdn.example.com/3.jpg");
   const body = JSON.parse(ok.seen[2].init.body);
   check("the model is told image 1 is the front and image 2 the back, deterministically",
@@ -192,7 +193,7 @@ console.log("\n── §5 the wiring ──");
     /return requestWirePrompt\(\{ kind: "single"/.test(sp) && /catch \(e\) \{[\s\S]*?return null;/.test(sa));
   check("...a failure is re-asked at most every SOLO_PROMPT_RETRY_MS, never on every dispatch; v2 of the answer",
     /job\.fallbackAt = Date\.now\(\);/.test(sa) && /known\.fallbackAt && Date\.now\(\) - known\.fallbackAt > SOLO_PROMPT_RETRY_MS/.test(sa) &&
-    /&v=3`/.test(sa));
+    /&v=4`/.test(sa));
   const route = SERVER.slice(SERVER.indexOf('app.get("/api/solo-prompt"'), SERVER.indexOf("\n});\n", SERVER.indexOf('app.get("/api/solo-prompt"')));
   check("the endpoint takes public photos only and caches only a real description",
     /publicImageUrl\(front\)/.test(route) && /if \(out\.source === "gemini"\) \{[\s\S]*?s-maxage[\s\S]*?\} else \{\s*\n\s*res\.setHeader\("Cache-Control", "no-store"\);/.test(route));
