@@ -92,8 +92,9 @@ console.log("\n── §3 the prompt frame ──");
     /show the front exactly as in the left half\. Keep/.test(p) && !/Knebworth/.test(p));
   check("...the shopper's own lower body is kept", /Keep the person's own pants, legs and shoes\.$/.test(p));
   check("...within the wire cap (650), with no stray punctuation", p.length <= 640 && !/[,;:]\./.test(p), String(p.length));
-  const roomy = soloPromptFrom({ garment: "white tee, hip-length", front: "red stripes, a logo", back: "a small label, rest plain" }, "top");
-  check("with room to spare the front keeps ONE clause - never more", /show the front exactly as in the left half: red stripes\./.test(roomy));
+  const roomy = soloPromptFrom({ garment: "white tee, hip-length", front: "A small black box with white \"oasis\" text", back: "a line of text; below it a small black box with white \"oasis\" text; rest plain" }, "top");
+  check("v6: the front is NEVER described - even with room to spare - so it cannot repeat the back's words",
+    /show the front exactly as in the left half\. Keep/.test(roomy) && (roomy.match(/small black box/g) || []).length === 1, roomy);
   const plain = soloPromptFrom({ ...OASIS, back: "plain" }, "top");
   check("a plain back is said as plain, not as a print", /show the back exactly as in the right half, plain\./.test(plain));
   const pants = soloPromptFrom({ garment: "light blue wide-leg denim jeans, high waist, ankle-length", front: "plain", back: "two patch pockets" }, "bottom");
@@ -197,7 +198,7 @@ console.log("\n── §5 the wiring ──");
     /return requestWirePrompt\(\{ kind: "single"/.test(sp) && /catch \(e\) \{[\s\S]*?return null;/.test(sa));
   check("...a failure is re-asked at most every SOLO_PROMPT_RETRY_MS, never on every dispatch; v2 of the answer",
     /job\.fallbackAt = Date\.now\(\);/.test(sa) && /known\.fallbackAt && Date\.now\(\) - known\.fallbackAt > SOLO_PROMPT_RETRY_MS/.test(sa) &&
-    /&v=5`/.test(sa));
+    /&v=6`/.test(sa));
   const route = SERVER.slice(SERVER.indexOf('app.get("/api/solo-prompt"'), SERVER.indexOf("\n});\n", SERVER.indexOf('app.get("/api/solo-prompt"')));
   check("the endpoint takes public photos only and caches only a real description",
     /publicImageUrl\(front\)/.test(route) && /if \(out\.source === "gemini"\) \{[\s\S]*?s-maxage[\s\S]*?\} else \{\s*\n\s*res\.setHeader\("Cache-Control", "no-store"\);/.test(route));

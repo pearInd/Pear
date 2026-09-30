@@ -724,6 +724,9 @@ identical, the regular visual gate 40/40).
   capped by `applyConstraints()` (`createDirectInputStream`, `?exp_pump=1` for the pump; the garment
   rides the join, so the pump's conditioning gate has nothing left to hold). A SOLO record reads the
   camera at 1s and 3s (`rtc` t1/t3) and the main thread's long tasks across the window (`longtasks`).
+  **v6 (same day):** read off the live v5 answer, the front's one clause was "A small black box with
+  white 'oasis' text" - its TOP part, and word for word a part of the back - so the front is not
+  described at all ("show the front exactly as in the left half"); the words are the back's alone.
 - **Known going in:** a stitched front|back reference rendered fragments of both sides in July on an
   older model (23f5953) and on 2026-09-16 held only with the room naming the half. Never measured on
   lucy-vton-3.5 or with the vendor's prompt form. `PEAR_VISUAL_EXP=solo npm run test:visual` smoke-runs

@@ -11972,7 +11972,7 @@ function soloAnswer(item) {
     try {
       const g = galleryOf(item) || {};
       const q = `front=${encodeURIComponent(g.front || item.img)}&back=${encodeURIComponent(distinctBackOf(item, g))}` +
-        `&region=${isBottomsGarment(item) ? "bottom" : "top"}&v=5`;
+        `&region=${isBottomsGarment(item) ? "bottom" : "top"}&v=6`;
       const r = await fetch(`${location.origin}/api/solo-prompt?${q}`,
         typeof AbortSignal !== "undefined" && AbortSignal.timeout ? { signal: AbortSignal.timeout(9000) } : {});
       const j = r.ok ? await r.json() : null;
