@@ -387,8 +387,15 @@ export function createSizeChartParser(d) {
      plausible, confident chart, which is the one failure mode this whole file is built
      to avoid. At this tier only an unambiguous WORD counts ("inch"/"inches"). A cell or
      a header is short and measurement-labelled, so the loose test stays correct there;
-     a paragraph is not. */
-  var SIZE_CHART_DECLARED_IN_RE = /inch(?:es)?/i;
+     a paragraph is not.
+
+     THE BUG THIS LINE CARRIED (fixed 2026-10-01): it was written /inch(?:es)?<U+0008>/i -
+     a literal backspace byte where \b was meant. It compiled and matched nothing a page
+     contains, so this whole tier was dead and every chart fell to magnitude inference -
+     which reads a plus-size chart (chest 62/64/66 INCHES, above the 60 cutoff) as
+     centimetres. test/size-chart-parser-sync.test.mjs §5 pins the fix and scans both
+     parser copies for control bytes. */
+  var SIZE_CHART_DECLARED_IN_RE = /inch(?:es)?\b/i;
   function sizeChartTableUnit(table) {
     var node = table, depth = 0;
     while (node && depth < 4) {
@@ -542,4 +549,4 @@ export function createSizeChartParser(d) {
   return { isPlausibleSizeToken, SIZE_CHART_CLAMPS, SIZE_CHART_MAX_TABLES, sizeChartUnitFromText, sizeChartMeasureKey, sizeChartSizeToken, sizeChartAliasKey, sizeChartCellAliases, parseMeasurementCell, sizeChartGrid, sizeChartOrient, sizeChartColumnToCm, sizeChartFromGrid, sizeChartTableUnit, SIZE_CHART_CONTAINERS, extractSizeChart, encodeSizeChart };
 }
 
-export const SHARED_BLOCK_HASH = "0d3e1948f8f0ad17";
+export const SHARED_BLOCK_HASH = "8f79cc18092d4396";

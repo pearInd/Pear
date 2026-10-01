@@ -124,6 +124,44 @@ console.log("\n── §4 alias columns ──");
     w && w.rows[0].minWaist === 70 && !w.rows[0].aliases, JSON.stringify(w && w.rows[0]));
 }
 
+console.log("\n── §5 a caption that says \"inches\" declares the unit (the backspace-byte bug) ──");
+{
+  /* THE BUG: SIZE_CHART_DECLARED_IN_RE was written /inch(?:es)?<BS>/i - a literal U+0008
+     where \b was meant. It compiled, and matched nothing a real page contains, so the
+     caption tier never declared inches and every chart fell through to magnitude
+     inference. Magnitude is right for most charts (a 38in chest is under the 60 cutoff),
+     so nothing visibly broke - until a plus-size chart: chest 62/64/66 INCHES is above
+     the cutoff and was read as 62/64/66 CENTIMETRES (a child's chest), clamp-legal and
+     monotonic, i.e. a confident, plausible, WRONG chart. Only the caption can say
+     otherwise, which makes this the one fixture that tells the two regexes apart. */
+  const CAPTION = `<div class="size-guide"><p>All measurements in inches</p><table>
+      <tr><th>Size</th><th>Chest</th></tr>
+      <tr><td>XXL</td><td>62</td></tr><tr><td>3XL</td><td>64</td></tr><tr><td>4XL</td><td>66</td></tr></table></div>`;
+  const doc = new JSDOM(PDP(CAPTION), { url: "https://shop.example.com/products/tee" }).window.document;
+  const scanner = createSizeChartParser(doc);
+  const chart = scanner.extractSizeChart();
+  const xxl = chart && chart.rows.find((r) => r.size === "XXL");
+  check("§5.1 the scanner reads a 62in chest as ~157cm, not 62cm",
+    xxl && Math.abs(xxl.minChest - (62 * 2.54 - 2)) < 0.11 && Math.abs(xxl.maxChest - (62 * 2.54 + 2)) < 0.11,
+    JSON.stringify(xxl));
+  const { params } = await openWidget(PDP(CAPTION));
+  const wire = params.get("garment_size_chart") || "";
+  check("§5.2 the widget sends the same converted band",
+    wire === scanner.encodeSizeChart(chart) && /XXL:155\.5-159\.5:/.test(wire), wire);
+  check("§5.3 the declared-unit regex itself matches the word, and the cm test still wins first",
+    scanner.sizeChartTableUnit(doc.querySelector("table")) === "in" &&
+    scanner.sizeChartTableUnit(new JSDOM(`<div>Size guide (cm) - measurements in inches below</div><table></table>`)
+      .window.document.querySelector("table")) === "cm");
+  const prose = new JSDOM(`<div><p>Made in Portugal. Shown in blue.</p><table></table></div>`).window.document;
+  check("§5.4 ...and free prose without the WORD still declares nothing",
+    scanner.sizeChartTableUnit(prose.querySelector("table")) === null);
+  /* A byte-level guard on both copies: no C0 control character (other than tab/CR/LF)
+     anywhere in the shared blocks - the class of bug, not just this instance. */
+  const ctrl = (s) => [...s].filter((c) => c.charCodeAt(0) < 32 && !"\t\r\n".includes(c)).length;
+  check("§5.5 no control bytes in the widget's shared blocks or the scanner copy",
+    ctrl(sharedBlock(PW, "size-token") + sharedBlock(PW, "size-chart-parser")) === 0 && ctrl(GENERATED) === 0);
+}
+
 console.log("");
 if (fails) { console.log(`${fails} check(s) FAILED`); process.exit(1); }
 console.log("size-chart-parser-sync: all checks passed.");
