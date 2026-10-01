@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-01 · main @ (see bottom)_
+_Last updated: 2026-10-01 · main @ `ef1d28d` + this status commit_
 
 ## At a glance
 
@@ -12,10 +12,10 @@ _Last updated: 2026-10-01 · main @ (see bottom)_
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
 | Store size guides (Phase 0 + 1) | in progress — Phase 1 shipped, data capture pending | main (also re-cut server-side on `hide/main-v2`) |
-| Ready-signal product signals fix | in progress (merging today) | `fix/ready-signal-product-signals` → main |
+| Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
-| Size-chart "inches" backspace-byte bug | in progress (today) | main |
-| garment_cache rows missing `age_group` | in progress (today) | main |
+| Size-chart "inches" backspace-byte bug | done | main `3345467` |
+| garment_cache rows missing `age_group` | code done — backfill pending on you | main `ef1d28d` |
 | `DECART_ALLOWED_ORIGINS` / token origin | in progress — fix on a branch only | `hide/main-v2` `f93ef87` |
 | Back-image orientation (front/back on a turn) | in progress — active on a branch | main `3a9b55d`; `hide/main-v2` |
 | Hebrew/English i18n | done (core) | main |
@@ -39,8 +39,12 @@ _Last updated: 2026-10-01 · main @ (see bottom)_
 - [ ] **`DECART_ALLOWED_ORIGINS` in Vercel** must list every production origin
       (e.g. `https://app.pear-ai.io`). Preview URLs are only covered once `f93ef87`
       (on `hide/main-v2`) reaches main.
-- [ ] **Decide the fate of `hide/main-v2`** (39 commits ahead of `bd766b2`; see below) —
-      it will now be behind main by today's commits and needs a merge.
+- [ ] **Deploy main, THEN re-run the age_group backfill** (`cd scanner && node backfill-age-group.js`,
+      `--dry-run` first if you like). Order matters: until `ef1d28d` is live, every try-on
+      re-wipes the rows the backfill fills (see the age_group entry).
+- [ ] **Decide the fate of `hide/main-v2`** — 39 commits ahead of `bd766b2` and now 5
+      behind main (`bf879b7`, `137188d`, `3345467`, `ef1d28d`, this status commit); it
+      needs main merged in before it can land.
 
 ---
 
@@ -70,22 +74,39 @@ _Last updated: 2026-10-01 · main @ (see bottom)_
   which shape is canonical once that branch lands.
 
 ## Ready-signal product signals fix
-- **Stage:** in progress — merged today (see bottom for hash).
-- **Done:** `3fb3c37` (branch): `productSignals()` builder used by all three
+- **Stage:** done — merged as `137188d`.
+- **Done:** `3fb3c37`: `productSignals()` builder used by all three
   `PEAR_UPDATE_GARMENT` messages, so the kids/adult verdict and a late size list reach
-  the room on the ready and failure signals too.
-- **Remaining:** none after the merge.
+  the room on the ready and failure signals too. The merge keeps `bd766b2`'s JSON-LD-aware
+  re-reads and the `store_host` / `garment_gender` URL params; `ready-signal-signals` §5
+  proves both on one page. §2's timing race (failed 1 run in 3 on the branch alone) was
+  fixed by anchoring the delay to the click.
+- **Remaining:** none.
 
 ## JSON-LD size list (proposal B)
 - **Stage:** done — `bd766b2`. Shopify variants → JSON-LD → DOM; 2XS/3XS tokens.
 
 ## Size-chart "inches" caption bug
-- **Stage:** in progress (today). `SIZE_CHART_DECLARED_IN_RE` carried a literal
-  backspace byte where `\b` was meant, so a caption saying "inches" never declared the
-  unit. Fix + scanner re-sync + test.
+- **Stage:** done — `3345467`. `SIZE_CHART_DECLARED_IN_RE` carried a literal backspace
+  byte where `\b` was meant, so a caption saying "inches" never declared the unit and a
+  plus-size chart (62/64/66 in) read as centimetres. Fixed in the widget, scanner copy
+  regenerated; `size-chart-parser-sync` §5 pins it and scans both copies for control bytes.
+- **Remaining:** none.
 
 ## garment_cache rows missing `age_group`
-- **Stage:** in progress (today) — see the final report of 2026-10-01 for the cause.
+- **Stage:** code done (`ef1d28d`); data repair pending on you.
+- **Cause** (on production's v9 + v11 table without v8):
+  1. writes fell back through a version-ordered ladder that dropped `age_group` (both
+     writers until `b730ef8`, 2026-09-15; the server's "no v8" retry since then);
+  2. the cached read selected v8 columns in every tier, so it returned `age_group: null`
+     even when the column held a value;
+  3. `GET /api/garment-category` (since 2026-09-14) re-saved that null over the real
+     value on every try-on, because the write sent `age_group` unconditionally.
+- **Done:** schema-adaptive read/write (drop exactly the missing column); `age_group`
+  written only with a verdict; same in the scanner; `garment-cache-age-group` test
+  (fails 8 checks on the pre-fix code).
+- **Remaining:** deploy, then re-run `scanner/backfill-age-group.js`. It targets every
+  `age_group IS NULL` row; the cache-first live path never re-classifies them itself.
 
 ## `DECART_ALLOWED_ORIGINS` / token origin
 - **Stage:** in progress.
