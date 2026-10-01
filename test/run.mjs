@@ -361,6 +361,11 @@
                       its landmarks mapped back to whole-frame coordinates, following the hips,
                       handing back after three empty windows; nothing changes while the whole
                       frame finds the body; one inference per call; the full model is loaded.
+     return-side
+                      "The back disappears too fast" (2026-10-01): a swap lands on about the body angle it
+                      was sent at, so main's 50-degree early return put the front on a back-facing body, and
+                      its predictive BACK then put the back on the chest. The return waits for the chest
+                      (the shoulder order past the side); predictive BACK stands aside when the order faces front.
      back-prime
                       "The back doesn't show / shows late" (2026-10-01): the render engine is slow on
                       an image the session has not sent (the back, first time) and fast on a repeat.
@@ -489,6 +494,7 @@ const SUITES = [
   ["api-version", "api-version.test.mjs"],
   ["token-origin", "token-origin.test.mjs"],
   ["back-prime", "back-prime.test.mjs"],
+  ["return-side", "return-side.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

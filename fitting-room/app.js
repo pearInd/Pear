@@ -6646,6 +6646,7 @@ function resetTryOnSession() {
   orientTurnMark(false);
   _torsoYawAbs = null; _torsoYawAt = 0; _torsoYawRise = 0;
   _poseFacingSep = null; _poseFacingAt = 0; _poseTorsoLostAt = 0;
+  _poseOrd = null; _poseOrdAt = 0;
   if (retired.length) {
     console.warn(`[PEAR] try-on reset: the previous session left ${retired.join(" + ")} running - retired before this one starts`);
   }
@@ -8098,6 +8099,16 @@ function torsoTwistStep(s, w, worldYawAbs, now, enabled = TWIST_ENABLED) {
   if (s.active) { s.at = now; s.yawDeg = Math.acos(Math.max(0, Math.min(1, s.shR))) * 180 / Math.PI; }
   return s.active;
 }
+/* ── THE SHOULDER ORDER AS A SHARE OF SQUARE-ON (2026-10-01) - what "the chest comes round" is read from ──
+   The signed image-space shoulder order (poseShoulderFacing's sign: + facing the lens, - facing away) over the
+   shopper's own learned square-on width: +1 square to the lens, -1 square away, 0 at the side view. MEASUREMENT only -
+   the engine's return leg decides on it (lib/orient-engine.js, THE CHEST COMES ROUND). null until the baseline is
+   learned, and on a torso of unusual height (a degenerate read, as for the yaw guard). */
+function torsoOrder(s, w) {
+  if (!w || s.n < TWIST_BASELINE_MIN || !(s.sh0 > 0) || !(s.th0 > 0)) return null;
+  if (w.th < s.th0 * TWIST_TORSO_BAND[0] || w.th > s.th0 * TWIST_TORSO_BAND[1]) return null;
+  return Math.max(-1.5, Math.min(1.5, w.sh / s.sh0));
+}
 /* ── THE YAW GUARD - a world-depth spike is not a turn (2026-10-01) ──────────────────────────────
    REPORTED with a clip in a dim room: the BACK went out 0.7s before the shopper turned. Its TEST record:
    the published |yaw| went 3 -> 14 -> 41 in two readings while the shoulder order still voted FRONT -
@@ -8122,12 +8133,16 @@ function torsoYawGuard(s, w, worldYawAbs, enabled = YAW_GUARD_ENABLED) {
   return Math.min(worldYawAbs, imageDeg + YAW_IMAGE_MARGIN);
 }
 let _poseTwist = makeTwistState();
+/* The latest shoulder order as a share of square-on (torsoOrder) and when it was read - the sample carries both. */
+let _poseOrd = null, _poseOrdAt = 0;
 /** The pose loop's hook: one inference in, the published |yaw| out (the world one unless a torso-only
  *  turn is being read). Logs and records the on/off edges. */
 function torsoTwistObserve(result, worldYawAbs, now) {
   const was = _poseTwist.active;
   const widths = poseTorsoWidths(result);
   const on = torsoTwistStep(_poseTwist, widths, worldYawAbs, now);
+  const ord = torsoOrder(_poseTwist, widths);
+  if (ord !== null) { _poseOrd = ord; _poseOrdAt = now; }
   if (on !== was) {
     const r2 = (x) => (x === null ? null : Math.round(x * 100) / 100);
     if (ORIENT_DEBUG) {
@@ -10143,6 +10158,9 @@ function createOrientationWatcher() {
       const acts = decide ? await decide.step({
         t: Date.now(), vote, faceSeen: lastFaceSeen, poseVoted: lastPoseVoted, profileScore: lastProfileScore,
         yawAbs: _torsoYawAbs, yawAt: _torsoYawAt, lostAt: _poseTorsoLostAt,
+        /* The shoulder order as a share of square-on - the engine's return leg waits for the chest (THE CHEST COMES
+           ROUND). typeof-guarded: the replay harnesses run this tick without the pose loop around it. */
+        ord: typeof _poseOrd === "number" ? _poseOrd : null, ordAt: typeof _poseOrdAt === "number" ? _poseOrdAt : 0,
         lock: autoOrientation, profile: autoProfile, dualView: currentAngle === AUTO_ANGLE,
         dbg: ORIENT_DEBUG ? orientDebugFacts(vote) : undefined,
       }) : null;
@@ -10225,7 +10243,7 @@ function createOrientationWatcher() {
    parameters, and no others, are forwarded - the tuning knobs, never the garment, the
    store key or anything else on the page URL. */
 const ORIENT_KNOB_KEYS = ["pose_pass", "post_peak", "early_turn", "early_turn_return", "early_turn_slow",
-  "early_turn_speed", "early_turn_loss", "predict_back"];
+  "early_turn_speed", "early_turn_loss", "predict_back", "return_side"];
 const ORIENT_LINK_STEP_TIMEOUT_MS = 1200;   // a healthy link answers in ~10ms; past this, prove it with a ping
 const ORIENT_LINK_STEP_HARD_MS = 4000;      // past this a reply is abandoned and the link replaced regardless
 const ORIENT_LINK_RETRY_MS = 3000;
@@ -10369,6 +10387,8 @@ function openOrientChannel() {
        orient-link runs this block standalone. */
     sep: typeof _poseFacingSep === "number" ? Math.round(_poseFacingSep * 100) / 100 : null,
     shR: typeof _poseTwist !== "undefined" && _poseTwist && typeof _poseTwist.shR === "number" ? Math.round(_poseTwist.shR * 100) / 100 : null,
+    /* The order the engine's return leg reads, with its age at this tick (THE CHEST COMES ROUND). */
+    o: typeof s.ord === "number" ? Math.round(s.ord * 100) / 100 : null, oa: typeof s.ord === "number" && s.ordAt ? s.t - s.ordAt : null,
     a: Array.isArray(acts) ? acts.filter((x) => x && x.do !== "log") : null,
   });
   return {

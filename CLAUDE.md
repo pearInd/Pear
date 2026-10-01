@@ -258,7 +258,8 @@ with only `app`/`express`/`path`/`fs`/`crypto`/`__dirname`/`process` in scope (�
 `torso-twist` slices `app.js` from `const TWIST_SHOULDER_MAX` to `let _poseTwist = makeTwistState();`
 (the torso-only turn rule and the yaw guard, §2.20/§2.22) and runs it standalone - keep the block
 self-contained. `back-prime` slices `let _primedBackGen = -1;` to `function armFirstFrameBilling(video, gen) {`
-(the back sent before the reveal, §2.22).
+(the back sent before the reveal, §2.22). `return-side` takes the same torso-twist slice (for `torsoOrder()`,
+§2.23) and pins the tick's `ord: typeof _poseOrd === …` line by text.
 `reveal-settle` §8 slices the mock client from `async function mockRealtimeConnect(` to the
 guarded `window.__pearMockDecart = …` line that follows it — that line's exact text (with its
 `PEAR_DEBUG_BUILD` guard, §2.11) is its end marker.
@@ -454,7 +455,7 @@ skin/face) and EXECUTES (`maybeSwap`, the hold, `turnMark`, the profile/re-ancho
 
 - **The contract:** `createOrientEngine(knobs, {debug}) → step(sample) → actions`. The sample is
   plain measurements (`t, vote, faceSeen, poseVoted, profileScore, yawAbs, yawAt, lostAt, lock,
-  profile, dualView`); the actions run IN ORDER in the tick exactly where the old code ran them,
+  profile, dualView`, and since 2026-10-01 `ord, ordAt` - §2.23); the actions run IN ORDER in the tick exactly where the old code ran them,
   `swap` last and awaited. **Time comes from the browser's sample**, never the server's clock, so a
   decision is independent of network latency — that is what made it provable.
 - **Behaviour was proven identical:** 4,116 scripted sessions (turn trajectories × speeds × dropouts
@@ -758,6 +759,40 @@ tick awaits that acknowledgement (main's `await maybeSwap`), so nothing was deci
   the deployed Worker had still been answering "top" where main's engine says "shirt".
 - Found in the same record and left as main's: the first seconds rendered the garment's text without
   its graphic until a re-send completed it - the render engine's convergence, not a dispatch.
+
+### 2.23 The return goes out when the chest comes round (2026-10-01)
+"Everything works well except the back disappears too fast - it keeps happening, fix it once and for all."
+The clip, frame by frame: the back print from ~2.47s to 3.304s, plain at 3.338s with the back still three-quarters
+to the lens (~210 degrees). The TEST record: FRONT went out on main's EARLY RETURN - |yaw| 59 rising on the back
+leg (shoulders at 51% of square-on, ~240 degrees: a real reading). A swap lands on about the body angle it was sent
+at (here ~28 degrees before it; the outbound BACK sent ~88 landed ~72), so a 50-degree return lands the front
+40-60 degrees before the side view on a body still showing its back: a FRONT reference there renders a plain back.
+Main does exactly this; how early depends on how much the pose model compresses that shopper's depth.
+- **THE CHEST COMES ROUND (`lib/orient-engine.js`, `makeEarlyTurnTrigger`'s `sideOrder`):** on the BACK leg, FRONT
+  goes out on the first new reading of the shoulder ORDER at or past `ORIENT_RETURN_SIDE` (0.2) on the FRONT side,
+  after the torso was seen turning toward the side since the trigger armed (an order in the side band, |yaw| 40+,
+  or a torso loss) - the last condition is what keeps a mirrored skeleton on a back-facing body from firing it. The
+  |yaw| fast/slow/loss paths stand down on that leg. The outbound leg is main's, untouched.
+- **The same order gates PREDICTIVE BACK:** a fresh order on the FRONT side (the chest round to the lens) never
+  predicts BACK - the |yaw| descent toward the lens after a return is what that path reads as a pass to the back.
+  Seen in the engine replay at the per-frame reading rate (BACK onto the chest after most returns, main's rules);
+  not seen in the whole room at its ~240ms reading rate (0 of 20 main runs) - stated, not claimed as a fix.
+- **The measurement (`app.js`, `torsoOrder()` in the torso-twist block):** the signed image shoulder width over
+  the shopper's learned square-on width (+1 facing the lens, -1 away, 0 the side); null until the baseline is
+  learned and on a degenerate torso; published from the twist state's inference as `_poseOrd`/`_poseOrdAt`, sent
+  as `ord`/`ordAt`, bounded by `sanitizeOrientSample`. The TEST record logs `o`/`oa` per tick.
+- **Compatible both ways:** a room that sends no order (older build, no baseline yet) and `?return_side=0` are
+  main's return exactly (`return-side` §1.3/§1.4/§4.1); an old Worker ignores the field. `orient-engine` §1 (main's
+  replay hash) is unchanged. **It needs a `wrangler deploy`** (the engine runs in the Worker), deployed before the
+  room that sends `ord`.
+- **Measured:** `return-side` §4 - 13 recorded 360s x 4 tick phases through the real measurement and engine: the
+  front lands median 238 degrees under main's rule, 287 with the chest (the outbound BACK on the same tick, no 360
+  swapping more). The whole-room A/B (the minified room, 10 of the user's 360s x 2 phases, landing read as the
+  clip's body angle 380ms before the dispatch - the room reads the pose every ~240ms, ~150-200ms old at the tick,
+  calibrated on the reported session): main median 229 [148..271], the chest 280 [227..309]; outbound 56 vs 58;
+  swaps per run 3.1 -> 2.5. The few under 255 are the pose model's own snaps (the order jumping 40-60 degrees between
+  two readings). Higher bars (0.3/0.4) moved the landing toward a chest facing the lens; 0.1 barely differs.
+- **Not measured live yet:** the first TEST sessions with it are the check - `o` per tick and where the FRONT went out.
 
 ## 3. Cross-file lockstep
 
