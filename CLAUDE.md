@@ -573,3 +573,24 @@ widening so far has moved the failure rather than removed it.
 - **The reveal wait is load-bearing.** The spec waits for `.show-live` + the scan
   overlay coming down before it captures. The first cut of it did not, photographed
   the loading scrim, and every pixel check passed on an animation. Never remove it.
+
+---
+
+## 9. Status tracking — at the end of EVERY task
+
+`docs/STATUS.md` is the living project status: one entry per workstream with its
+stage (not started / in progress / done / blocked), what is done (with commit hashes),
+what remains, open decisions, and the manual steps waiting on the owner (migrations,
+env vars, scanner runs).
+
+At the end of every task, without being asked:
+
+1. **Update `docs/STATUS.md`** — the stage and hashes of every workstream the task
+   touched, the "Waiting on you" checklist, and the branch table if branches moved.
+   Commit it with the task (or as the task's last commit).
+2. **End the final report with a short `Status` section:** where this workstream stands
+   (start / middle / end), what was done this time, what remains, and what is waiting on
+   the owner.
+
+A task that changed nothing still gets the `Status` section; a status file that lags the
+code is how a finished migration gets run twice or a pending one gets forgotten.
