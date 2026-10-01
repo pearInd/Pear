@@ -462,9 +462,17 @@ console.log("\n── §8 the vision tier: endpoint, classifier, migration, back
         "        the code deploys safely BEFORE the SQL runs",
     /v13 column absent - run archive\/supabase_setup_v13\.sql/.test(SRV) &&
     /const V13_ONLY = ", garment_category";/.test(SRV));
+  /* Was a COUNT of `garment_category: null` literals (one per read tier). The tiers are
+     gone (2026-10-01 - they read age_group back as null on production's v8-less table,
+     see server.js's SCHEMA-ADAPTIVE block): every return now spreads one defaults object,
+     so the property is asserted on that object and on every return path instead. */
+  const detailFn = SRV.slice(SRV.indexOf("async function getCachedClassificationDetailed("),
+    SRV.indexOf("\n}\n", SRV.indexOf("async function getCachedClassificationDetailed(")));
   check("...and every shallower shape reports garment_category: null, so a pre-v13\n" +
         "        database is 'never asked' rather than undefined",
-    (SRV.match(/garment_category: null/g) || []).length >= 3);
+    /const CACHED_ROW_DEFAULTS = \{[^}]*garment_category: null/.test(SRV) &&
+    (detailFn.match(/return [^;]*\{ \.\.\.CACHED_ROW_DEFAULTS/g) || []).length === 2 &&
+    !/return data \|\| null|return data;/.test(detailFn));
 
   check("CLASSIFIER_PROMPT_VERSION is NOT bumped - the category is its own call, so no\n" +
         "        catalog-wide front/back re-classification is triggered",

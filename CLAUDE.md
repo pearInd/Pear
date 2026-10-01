@@ -215,7 +215,11 @@ bodies — change one, the test tells you to change the other. The widget's
 `@pear-shared:size-token` / `@pear-shared:size-chart-parser` BEGIN/END comments are
 markers too (`sync-size-chart-parser.mjs` slices between them), as are
 `var SIZE_TOKEN_ALPHA_RE`, `var LD_OUT_OF_STOCK_RE` and `function canonicalStoreHost(raw) {`
-in the widget (`jsonld-sizes`, `store-size-chart-api`).
+in the widget (`jsonld-sizes`, `store-size-chart-api`). `garment-cache-age-group` slices
+`server.js` from `async function garmentCacheQuery(imageUrl, columns) {` to
+`/* Per-product view lookup` and `scanner/scan-store.js` from
+`async function saveClassification(` to `/* ── Gemini classification` — keep the
+garment_cache read/write helpers inside those spans.
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.

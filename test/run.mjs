@@ -414,6 +414,7 @@ const SUITES = [
   ["store-size-chart-api", "store-size-chart-api.test.mjs"],
   ["stored-size-chart", "stored-size-chart.test.mjs"],
   ["ready-signal-signals", "ready-signal-signals.test.mjs"],
+  ["garment-cache-age-group", "garment-cache-age-group.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

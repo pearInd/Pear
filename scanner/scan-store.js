@@ -530,37 +530,56 @@ async function saveClassification(imageUrl, classification, meta = {}) {
     cue: meta.cue || null,
     product_url: meta.productUrl || null,
   };
-  const v11Fields = {
-    age_group: meta.ageGroup || null,
-    age_group_confidence: Number.isFinite(meta.ageGroupConfidence) ? meta.ageGroupConfidence : null,
-  };
+  /* Only with a verdict - never `|| null`, which overwrites a real kids/adult value with
+     NULL on any write that did not ask (server.js saveClassification has the same rule). */
+  const v11Fields = ["kids", "adult", "uncertain"].includes(meta.ageGroup)
+    ? {
+        age_group: meta.ageGroup,
+        age_group_confidence: Number.isFinite(meta.ageGroupConfidence) ? meta.ageGroupConfidence : null,
+      }
+    : {};
 
-  let { error } = await supabase.from("garment_cache")
-    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields }], { onConflict: "canonical_url" });
-  /* THE BUG THIS CLOSES (2026-09): production ran V9 (canonical_url) and V11
-     (age_group/age_group_confidence) WITHOUT V8 (confidence/source/cue/product_url)
-     ever having been migrated onto garment_cache - see the commit that added
-     scanner/backfill-age-group.js, which had to hand-confirm the live column list
-     via information_schema because v8Fields kept getting every UPDATE rejected.
-     The old ladder dropped v11Fields FIRST and only tried dropping v8Fields as the
-     last resort before the bare `base` row - on a table missing ONLY v8, that order
-     means every tier fails and age_group is silently dropped from every scan write,
-     not just until the next migration runs. Try the v8-less shape first, since
-     that is production's actual state. */
-  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-    console.warn("  ⚠ garment_cache a column is absent - trying without v8 fields (confidence/source/cue/product_url)");
-    ({ error } = await supabase.from("garment_cache")
-      .upsert([{ ...base, ...canonical, ...v11Fields }], { onConflict: "canonical_url" }));
+  /* SCHEMA-ADAPTIVE: one write; on a missing-column error drop EXACTLY the column the
+     error names and retry. Self-contained on purpose (CLAUDE.md §2.6) -
+     test/garment-cache-age-group.test.mjs slices this function alone and runs it against
+     a fake table shaped like production. See server.js's SCHEMA-ADAPTIVE block for the
+     full history; the short version is below. */
+  const missingColumn = (err) => {
+    const msg = String((err && err.message) || "");
+    const m = /Could not find the '([A-Za-z0-9_]+)' column/.exec(msg) ||
+              /column "([A-Za-z0-9_]+)"(?: of relation "[^"]+")? does not exist/.exec(msg) ||
+              /column (?:[A-Za-z0-9_]+\.)?([A-Za-z0-9_]+) does not exist/.exec(msg);
+    return m ? m[1] : null;
+  };
+  // Unnamed-column fallback order: newest first, age_group LAST.
+  const DROP_ORDER = ["product_url", "cue", "source", "confidence", "age_group_confidence", "age_group"];
+  const payload = { ...base, ...canonical, ...v8Fields, ...v11Fields };
+  let onConflict = "canonical_url";
+  let error = null;
+  for (let attempt = 0; attempt < 16; attempt++) {
+    ({ error } = await supabase.from("garment_cache").upsert([payload], { onConflict }));
+    if (!error || !MISSING_COLUMN_RE.test(error.message || "")) break;
+    const optional = Object.keys(payload).filter((k) => k !== "image_url" && k !== "classification");
+    const named = missingColumn(error);
+    const col = named && optional.includes(named) ? named : (DROP_ORDER.find((c) => optional.includes(c)) ||
+      (optional.includes("canonical_url") ? "canonical_url" : null));
+    if (!col) break;
+    if (col === "canonical_url") onConflict = "image_url";
+    console.warn(`  ⚠ garment_cache column "${col}" absent - writing without it` +
+      (col === "age_group" || col === "age_group_confidence"
+        ? " (run archive/supabase_setup_v11.sql for kids/adult classification)"
+        : ["confidence", "source", "cue", "product_url"].includes(col) ? " (archive/supabase_setup_v8.sql)" : ""));
+    delete payload[col];
   }
-  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-    console.warn("  ⚠ garment_cache v11 columns absent - run archive/supabase_setup_v11.sql for kids/adult classification");
-    ({ error } = await supabase.from("garment_cache")
-      .upsert([{ ...base, ...canonical, ...v8Fields }], { onConflict: "canonical_url" }));
-    if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-      console.warn("  ⚠ garment_cache V8 columns absent - run archive/supabase_setup_v8.sql");
-      ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));
-    }
-  }
+  /* THE BUG THIS CLOSES (2026-09, completed 2026-10-01): production ran V9
+     (canonical_url) and V11 (age_group/age_group_confidence) WITHOUT V8
+     (confidence/source/cue/product_url) ever having been migrated onto garment_cache -
+     see the commit that added scanner/backfill-age-group.js, which had to hand-confirm
+     the live column list via information_schema because v8Fields kept getting every
+     UPDATE rejected. The original ladder dropped v11Fields FIRST, so every scan write
+     between the backfill and b730ef8 (2026-09-15) landed with age_group NULL; b730ef8
+     added a "no v8" retry, which fixed exactly that schema and no other. The loop above
+     drops only the column the error names, whatever subset of migrations ran. */
   if (error) console.warn(`  ⚠ garment_cache write failed: ${error.message}`);
 }
 
