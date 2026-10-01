@@ -323,6 +323,14 @@
                       their next visit. §5 pins the server half - verification is now
                       idempotent inside the code's own TTL, which consumption does not
                       extend, so a retry the client never chose cannot cost a code.
+     ready-signal-signals
+                      "The kids verdict never reached the room." Once the classify call
+                      settles the widget sends one of three PEAR_UPDATE_GARMENT messages,
+                      and only the full re-anchor one carried the product signals. The
+                      ready signal (classifier AGREED - the common path) and the failure
+                      signal carried nothing, so garment_age_group and any size list that
+                      resolved after the click were silently dropped. Runs the widget for
+                      real in jsdom and asserts the CONTENTS of all three messages.
      scanner-extraction
                       The store scanner's HTML-scrape path (non-Shopify stores): no
                       SVG, no header/nav/footer image, one entry per photo, JSON-LD
@@ -405,6 +413,7 @@ const SUITES = [
   ["scanner-size-charts", "scanner-size-charts.test.mjs"],
   ["store-size-chart-api", "store-size-chart-api.test.mjs"],
   ["stored-size-chart", "stored-size-chart.test.mjs"],
+  ["ready-signal-signals", "ready-signal-signals.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────
