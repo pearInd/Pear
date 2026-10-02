@@ -4,22 +4,22 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-02 · main @ `304c1f7` + this status commit_
+_Last updated: 2026-10-02 · main @ `8ce3de6` + this status commit_
 
 ## At a glance
 
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
-| Store size guides (Phase 0 + 1) | in progress — coverage measured 2026-10-02; fox captured (11 rows); next: castro Phase 1.x fix, then Phase 2 | main (also re-cut server-side on `hide/main-v2`) |
+| Store size guides (Phase 0 + 1) | in progress — Phase 1 data live for fox (5 served) + castro (2 served); next: Phase 2 (not started) | main (also re-cut server-side on `hide/main-v2`) |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
-| garment_cache rows missing `age_group` | code done — backfill pending on you | main `ef1d28d` |
-| `DECART_ALLOWED_ORIGINS` / token origin | in progress — fix on a branch only | `hide/main-v2` `f93ef87` |
+| garment_cache rows missing `age_group` | code done — full backfill **deferred by choice** (demo products only for now) | main `ef1d28d` |
+| `DECART_ALLOWED_ORIGINS` / token origin | done (Vercel env set + redeployed 2026-10-02); preview-origin fix still on a branch | main; `hide/main-v2` `f93ef87` |
 | Back-image orientation (front/back on a turn) | in progress — active on a branch | main `3a9b55d`; `hide/main-v2` |
 | Hebrew/English i18n | done (core) | main |
-| Security hardening + client-code hiding | in progress — on a branch | main `e523cc3`; `hide/main-v2`, `harden/hide-client-logic` |
+| Security hardening + client-code hiding | in progress — on a branch; **key rotation pending on you** | main `e523cc3`; `hide/main-v2`, `harden/hide-client-logic` |
 | Landing / brand video | done | main `e8d2c7f` |
 | Black-screen on reopen | done | main `3a533d6`, `af5f4d4` |
 | Visual QA gate | done, known flaky (§8.5) | main |
@@ -33,20 +33,44 @@ _Last updated: 2026-10-02 · main @ `304c1f7` + this status commit_
       `cd scanner && node scan-store.js --size-charts --max-products=12 https://www.adidas.co.il` —
       if the outcome is `captured`, send the report before `--save`; if `blocked_by_bot_protection`
       again, adidas is reachable only through Phase 2 (widget sightings).
-- [ ] **Decide the next phase** — recommendation: small Phase 1.x castro fix, then Phase 2 (see below).
+- [x] Next phase decided: castro fix (done, `8ce3de6`, 2 charts saved), then Phase 2 — separately, not started.
+- [ ] **SECURITY — rotate two keys** (both were exposed in plain text outside the repo).
+      Issue the new key, update every place listed, redeploy, THEN revoke the old one.
+      **Gemini API key** (`GEMINI_API_KEY`) — create a new key in Google AI Studio
+      (aistudio.google.com/apikey) and delete the old one there. Update:
+        1. Vercel → project env vars → `GEMINI_API_KEY` (Production, Preview, Development), then
+           redeploy (server-side garment classification, `lib/garment-category.js`);
+        2. `scanner/.env` (scanner + `scanner/backfill-age-group.js`);
+        3. a root `.env` on any machine that runs `scripts/batch-scan-clothes.js` or
+           `scripts/backfill-garment-categories.js` (none in this checkout);
+        4. the Railway scanner service's variables, if it is deployed (`scanner/README.md`, Deploy).
+      **Supabase service_role key** (`SUPABASE_SERVICE_ROLE_KEY`, project `jyhilack…`) — a legacy
+      JWT key; it cannot be rotated on its own. Either (a, preferred) Supabase → Project Settings →
+      API Keys: create a new **secret** key (`sb_secret_…`), switch every consumer below to it,
+      then **disable the legacy JWT-based keys**; or (b) rotate the JWT secret — which also
+      invalidates the anon key and every signed-in session. Update:
+        1. Vercel → `SUPABASE_SERVICE_ROLE_KEY` (all environments), then redeploy (`lib/supabase.js`:
+           sessions, users/OTP, garment_cache, `/api/store-size-chart`);
+        2. `scanner/.env` (scanner `--save`, `backfill-age-group.js`);
+        3. a root `.env` on any machine that runs the `scripts/` backfills (none in this checkout);
+        4. the Railway scanner service, if deployed.
+      Not affected: `admin/admin.js` ships a public **anon** key for a *different* project (`nhkaiucb…`).
+      Check afterwards: `GET /api/store-size-chart?host=fox.co.il` returns 5 charts with no `note`,
+      and a scanner `--size-charts --save` run still saves.
+- [ ] **Live test of the kids/adult guard** in a real session: a kids garment + adult measurements
+      must block going live, and an adult garment + child measurements must block too (the reverse).
+      Code-level coverage exists (`kids-adult-size-guard`); this is the end-to-end check.
 - [x] Migration **v15** (`store_size_charts`) — run (confirmed 2026-10-01).
 - [ ] **Confirm which `garment_cache` migrations production has** (v8, v12, v13, v14).
       Code comments record production as *v9 + v11 without v8*; the `age_group` fix
       below no longer depends on the answer, but the diagnostics in v8 do.
-- [ ] **`DECART_ALLOWED_ORIGINS` in Vercel** must list every production origin
-      (e.g. `https://app.pear-ai.io`). Preview URLs are only covered once `f93ef87`
-      (on `hide/main-v2`) reaches main.
-- [ ] **Deploy main, THEN re-run the age_group backfill** (`cd scanner && node backfill-age-group.js`,
-      `--dry-run` first if you like). Order matters: until `ef1d28d` is live, every try-on
-      re-wipes the rows the backfill fills (see the age_group entry).
-- [ ] **Decide the fate of `hide/main-v2`** — 39 commits ahead of `bd766b2` and now 5
-      behind main (`bf879b7`, `137188d`, `3345467`, `ef1d28d`, this status commit); it
-      needs main merged in before it can land.
+- [x] **`DECART_ALLOWED_ORIGINS` in Vercel** — done 2026-10-02: `https://app.pear-ai.io`,
+      `https://platform.pear-ai.io` and all 4 stores with and without `www`; redeployed.
+- [ ] **Full age_group backfill — DEFERRED by choice, not blocked.** Stopped partway on purpose;
+      only demo products need it for now. When wanted: `cd scanner && node backfill-age-group.js`
+      (`ef1d28d` must be deployed first, or try-ons re-wipe the rows it fills).
+- [ ] **Decide the fate of `hide/main-v2`** — 39 commits ahead and now 9 behind main
+      (as of this status commit); it needs main merged in before it can land.
 
 ---
 
@@ -73,15 +97,19 @@ _Last updated: 2026-10-02 · main @ `304c1f7` + this status commit_
   | Store | Outcome | Path that worked / what blocks it |
   |---|---|---|
   | fox.co.il (Shopify) | captured, 11 charts | linked_page 5/6 + inline_table 6/12. **Saved** (5 store-level + 6 product-scoped; only store-level is served in Phase 1). Spot-checked against the live tables |
-  | castro.com | reported js_app_detected (8 triggers) — **misdiagnosed** | Charts are plain server HTML at `/idus/staticblock/view?id=N`, linked by a `data_url` (underscore) attr and wrapped in `{"success":true,"html":…}`. The existing parser reads 4/6 blocks (adult); 2 kids blocks are age-only, correctly abstained. Also: `/size-guide` & `/size-chart` are soft-404s (return the home page). Endpoint 302s to an abuse page for a bare curl UA; the scanner UA is fine. Not saved — needs a scanner change first |
-  | terminalx.com (Magento SPA) | js_app_detected | PDP state carries only the CMS block id (`blocks.size_chart: "sizechart_terminal_x_1"`, 6 distinct ids incl. brand charts); content is behind `/graphql`, which answers 401 anonymously. Genuinely JS-only → Phase 2. 3/12 sampled "products" were category pages |
+  | castro.com | first run js_app_detected (misdiagnosed); **after `8ce3de6`: captured, 2 charts — saved, API verified** | Charts are plain server HTML at `/idus/staticblock/view?id=N`, linked by a `data_url` (underscore) attr and wrapped in `{"success":true,"html":…}`. The existing parser reads 4/6 blocks (adult); 2 kids blocks are age-only, correctly abstained. Also: `/size-guide` & `/size-chart` are soft-404s (return the home page). Endpoint 302s to an abuse page for a bare curl UA; the scanner UA is fine. Stored: women/adult/tops XS–XL (chest/waist/hips; gender from the `/נשים/` PDPs that link it) and men/adult/tops XS–XXXL (chest). Not stored: the blazers & suits table (untyped), the EU 32–46 women's table (same key; castro sells tops in alpha), 2 kids blocks (age-only). Castro's own "XSS" row (typo for XXS) is skipped by the parser. The home-echo paths now count as missing |
+  | terminalx.com (Magento SPA) | js_app_detected | PDP state carries only the CMS block id (`blocks.size_chart: "sizechart_terminal_x_1"`, 6 distinct ids incl. brand charts); content is behind `/graphql`, which answers 401 anonymously. Genuinely JS-only → Phase 2. Sampler fixed in `8ce3de6`: no category pages now (2/12 are dead sitemap 404s) |
   | adidas.co.il | blocked_by_bot_protection | home page challenged (curl: 403); retry at 3 s pace also challenged → Phase 2 or a local run |
 
   Image charts detected: **0 across all reachable stores.**
-- **Remaining / recommendation:** (1) Phase 1.x castro fix — follow `data_url`, unwrap a JSON
-  `{html}` envelope, reject soft-404 guide paths; (2) **Phase 2** (widget sightings) next — the
-  only route to terminalx and adidas. Phase 3 (vision) has zero measured demand; revisit if
-  Phase 2 sightings report image charts.
+- **Done 2026-10-02 (`8ce3de6`):** castro capture (`data_url`, JSON envelope, home-echo guide
+  paths, referrer-derived gender, suits/blazers untyped, alpha-for-tops tie-break); product
+  sampler by URL shape; product keys percent-encoded (fox's one raw-Hebrew row fixed in place).
+  `store_size_charts`: 13 rows — fox 11 (5 served), castro 2 (2 served).
+- **Remaining:** **Phase 2** (widget sightings) — next, approved, not started; the only route to
+  terminalx and adidas. Phase 3 (vision) has zero measured demand; revisit if Phase 2 reports
+  image charts. Known limit: the table key has no `size_system`, so a store with numeric AND
+  alpha charts for one audience/type keeps only one.
 - **Open decisions:** `hide/main-v2` moved this logic server-side (`b2ac5ad`, `dae0138`) —
   which shape is canonical once that branch lands.
 
@@ -106,7 +134,7 @@ _Last updated: 2026-10-02 · main @ `304c1f7` + this status commit_
 - **Remaining:** none.
 
 ## garment_cache rows missing `age_group`
-- **Stage:** code done (`ef1d28d`); data repair pending on you.
+- **Stage:** code done (`ef1d28d`); full data repair deferred by choice.
 - **Cause** (on production's v9 + v11 table without v8):
   1. writes fell back through a version-ordered ladder that dropped `age_group` (both
      writers until `b730ef8`, 2026-09-15; the server's "no v8" retry since then);
@@ -117,15 +145,19 @@ _Last updated: 2026-10-02 · main @ `304c1f7` + this status commit_
 - **Done:** schema-adaptive read/write (drop exactly the missing column); `age_group`
   written only with a verdict; same in the scanner; `garment-cache-age-group` test
   (fails 8 checks on the pre-fix code).
-- **Remaining:** deploy, then re-run `scanner/backfill-age-group.js`. It targets every
-  `age_group IS NULL` row; the cache-first live path never re-classifies them itself.
+- **Remaining:** the full backfill is **deferred by choice** (2026-10-02) — stopped partway
+  because only demo products need it now. Not blocked: re-run `scanner/backfill-age-group.js`
+  when wanted; it targets every `age_group IS NULL` row, and the cache-first live path never
+  re-classifies them itself.
 
 ## `DECART_ALLOWED_ORIGINS` / token origin
-- **Stage:** in progress.
+- **Stage:** done for production — Vercel `DECART_ALLOWED_ORIGINS` set 2026-10-02 (app, platform,
+  and the 4 stores with and without www) and redeployed.
 - **Done:** CORS allowlist + own-host auto-allow (main, `server.js`); tokens scoped to
   the allowlist (main). `f93ef87` (`hide/main-v2` only): the token also names the
   requesting page's own origin — fixes "Origin not allowed" on a fresh preview.
-- **Remaining:** `f93ef87` reaching main; the Vercel env var (manual, above).
+- **Remaining:** preview deployments only — a fresh preview URL is not in the list; it is
+  covered once `f93ef87` (on `hide/main-v2`) reaches main.
 
 ## Back-image orientation (front/back on a turn)
 - **Stage:** in progress — the most active stream.
@@ -165,8 +197,8 @@ _Last updated: 2026-10-02 · main @ `304c1f7` + this status commit_
 ## Other branches (not merged)
 | Branch | Ahead / behind main | Note |
 |---|---|---|
-| `hide/main-v2` | 39 / 0 at `bd766b2` | active — see above |
-| `harden/hide-client-logic` | 46 / 1 | experiments |
+| `hide/main-v2` | 39 / 9 | active — see above |
+| `harden/hide-client-logic` | 46 / 10 | experiments |
 | `fix/v142-angle-rollback` | 5 / 15 | camera AE/AWB pin — unmerged, decide |
 | `feat/back-view-pipeline` | 1 / 63 | stale |
 | `feat/vto-quality-gates-and-modularization` | 2 / 171 | stale |
