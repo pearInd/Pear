@@ -4,14 +4,14 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-01 · main @ `ef1d28d` + this status commit_
+_Last updated: 2026-10-02 · main @ `304c1f7` + this status commit_
 
 ## At a glance
 
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
-| Store size guides (Phase 0 + 1) | in progress — Phase 1 shipped, data capture pending | main (also re-cut server-side on `hide/main-v2`) |
+| Store size guides (Phase 0 + 1) | in progress — coverage measured 2026-10-02; fox captured (11 rows); next: castro Phase 1.x fix, then Phase 2 | main (also re-cut server-side on `hide/main-v2`) |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
@@ -27,11 +27,13 @@ _Last updated: 2026-10-01 · main @ `ef1d28d` + this status commit_
 
 ## Waiting on you (manual steps)
 
-- [ ] **Run the size-guide dry runs** and send back the `COVERAGE_JSON` lines
-      (fox.co.il, adidas.co.il, terminalx.com, castro.com):
-      `node scanner/scan-store.js --size-charts --max-products=12 <url>`
-- [ ] **Capture size guides** for stores worth it: `node scanner/scan-store.js --size-charts --save <url>`
-      (needs `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`). Nothing is served to the room until this runs.
+- [x] Size-guide dry runs for all 4 stores — done 2026-10-02 (results under *Store size guides*).
+- [x] fox.co.il captured with `--save` — 11 rows in `store_size_charts`, 5 store-level served by the API.
+- [ ] **adidas.co.il from your own machine** (bot-challenged from here twice, incl. a 3 s-paced retry):
+      `cd scanner && node scan-store.js --size-charts --max-products=12 https://www.adidas.co.il` —
+      if the outcome is `captured`, send the report before `--save`; if `blocked_by_bot_protection`
+      again, adidas is reachable only through Phase 2 (widget sightings).
+- [ ] **Decide the next phase** — recommendation: small Phase 1.x castro fix, then Phase 2 (see below).
 - [x] Migration **v15** (`store_size_charts`) — run (confirmed 2026-10-01).
 - [ ] **Confirm which `garment_cache` migrations production has** (v8, v12, v13, v14).
       Code comments record production as *v9 + v11 without v8*; the `age_group` fix
@@ -66,10 +68,20 @@ _Last updated: 2026-10-01 · main @ `ef1d28d` + this status commit_
   dry run + `--save` capture; `store_size_charts` (v15, run); `GET /api/store-size-chart`;
   room fallback with gender/type/overlap guards; EU/US aliases; `[PEAR] store chart vs
   default` log; generated scanner parser with a byte-identity test.
-- **Remaining:** your coverage runs → decide Phase 2 (widget sightings, gender/type
-  matching from live data) vs Phase 3 (vision for image/PDF charts). Smoke runs
-  (3 products) showed: fox.co.il captured; terminalx and castro chart content is
-  JS-loaded; adidas.co.il answers a plain client with a bot challenge / 403.
+- **Coverage, 2026-10-02** (12-product dry runs):
+
+  | Store | Outcome | Path that worked / what blocks it |
+  |---|---|---|
+  | fox.co.il (Shopify) | captured, 11 charts | linked_page 5/6 + inline_table 6/12. **Saved** (5 store-level + 6 product-scoped; only store-level is served in Phase 1). Spot-checked against the live tables |
+  | castro.com | reported js_app_detected (8 triggers) — **misdiagnosed** | Charts are plain server HTML at `/idus/staticblock/view?id=N`, linked by a `data_url` (underscore) attr and wrapped in `{"success":true,"html":…}`. The existing parser reads 4/6 blocks (adult); 2 kids blocks are age-only, correctly abstained. Also: `/size-guide` & `/size-chart` are soft-404s (return the home page). Endpoint 302s to an abuse page for a bare curl UA; the scanner UA is fine. Not saved — needs a scanner change first |
+  | terminalx.com (Magento SPA) | js_app_detected | PDP state carries only the CMS block id (`blocks.size_chart: "sizechart_terminal_x_1"`, 6 distinct ids incl. brand charts); content is behind `/graphql`, which answers 401 anonymously. Genuinely JS-only → Phase 2. 3/12 sampled "products" were category pages |
+  | adidas.co.il | blocked_by_bot_protection | home page challenged (curl: 403); retry at 3 s pace also challenged → Phase 2 or a local run |
+
+  Image charts detected: **0 across all reachable stores.**
+- **Remaining / recommendation:** (1) Phase 1.x castro fix — follow `data_url`, unwrap a JSON
+  `{html}` envelope, reject soft-404 guide paths; (2) **Phase 2** (widget sightings) next — the
+  only route to terminalx and adidas. Phase 3 (vision) has zero measured demand; revisit if
+  Phase 2 sightings report image charts.
 - **Open decisions:** `hide/main-v2` moved this logic server-side (`b2ac5ad`, `dae0138`) —
   which shape is canonical once that branch lands.
 
