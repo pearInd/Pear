@@ -110,6 +110,12 @@ const WORDS = {
     "sweatshirt", "sweatshirts", "knitwear", "polo", "polos", "outerwear", "חולצה", "חולצות",
     "עליון", "עליונים", "זקט", "זקטים", "מעיל", "מעילים", "סוודר", "סוודרים", "קפוצון", "קפוצונים", "טישרט"],
   dresses: ["dress", "dresses", "שמלה", "שמלות"],
+  /* Garments this table cannot be typed as. A suit is a jacket AND trousers, so a suit
+     chart is neither a tops nor a bottoms chart - and its columns lie about which:
+     castro.com's "בלייזרים וחליפות" (blazers & suits) table is EU 48-58 by waist only,
+     which the column fallback below read as men's BOTTOMS. Naming one of these in the
+     table's own caption leaves the type unset (not stored), never column-guessed. */
+  untyped: ["suit", "suits", "blazer", "blazers", "tuxedo", "חליפה", "חליפות", "בלייזר", "בלייזרים"],
 };
 
 export function contextTokens(text) {
@@ -139,7 +145,7 @@ export function classifyContextText(text) {
   let garmentType = null;
   if (types.length === 1) garmentType = types[0];
   else if (types.length === 2 && types.includes("jeans") && types.includes("bottoms")) garmentType = "jeans";
-  return { gender, kids: hasWord(tokens, WORDS.kids), garmentType };
+  return { gender, kids: hasWord(tokens, WORDS.kids), garmentType, untyped: hasWord(tokens, WORDS.untyped) };
 }
 
 const KIDS_NUMERIC = new Set(["2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "16", "18"]);
@@ -148,14 +154,23 @@ const ALPHA_RE = /^(?:XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL|[23]XS)$/i;
 /* Local context decides; page context only fills what local left open. The column
    shape is the last resort for the TYPE only (a chest column means the chart is for
    tops; waist/hips and no chest means bottoms) - never for gender, which has no
-   column-shaped evidence at all. */
-export function classifyChart(rows, localText, pageText) {
+   column-shaped evidence at all.
+
+   `referrer` is the LAST tier, for gender and kids only: what the product pages that
+   LINK to this guide say about who they are for ({gender, kids}, see
+   referrerAudience()). castro.com serves one guide block per department with no
+   audience word in it - the women's block says so only through Hebrew feminine verb
+   forms - while every PDP that opens it sits under /נשים/. It never fills the TYPE: the
+   men's polo that opens castro's men's block also opens its blazers table. */
+export function classifyChart(rows, localText, pageText, referrer = null) {
   const local = classifyContextText(localText);
   const page = classifyContextText(pageText);
-  let gender = local.gender || page.gender || "unknown";
-  let garmentType = local.garmentType || page.garmentType || null;
+  const ref = referrer || {};
+  let gender = local.gender || page.gender || ref.gender || "unknown";
+  const genderFrom = local.gender || page.gender ? "context" : ref.gender ? "referrer" : null;
+  let garmentType = local.untyped ? null : local.garmentType || page.garmentType || null;
   let typeFrom = garmentType ? (local.garmentType ? "context" : "page") : null;
-  if (!garmentType) {
+  if (!garmentType && !local.untyped) {
     const has = (k) => rows.some((r) => typeof r["min" + k] === "number");
     if (has("Chest")) garmentType = "tops";
     else if (has("Waist") || has("Hips")) garmentType = "bottoms";
@@ -163,7 +178,7 @@ export function classifyChart(rows, localText, pageText) {
   }
   const sizes = rows.map((r) => String(r.size));
   const allKidsNumeric = sizes.length > 0 && sizes.every((s) => KIDS_NUMERIC.has(s));
-  const kidsWords = local.kids || (!local.gender && page.kids);
+  const kidsWords = local.kids || (!local.gender && page.kids) || (!local.gender && !page.gender && !!ref.kids);
   const ageGroup = kidsWords || allKidsNumeric ? "kids" : "adult";
   /* boys/girls words land in both kids and men/women - that is intended: a "Boys"
      chart is a kids chart cut for boys. */
@@ -172,6 +187,7 @@ export function classifyChart(rows, localText, pageText) {
   const sizeSystem = allAlpha ? "alpha" : allNumeric ? "numeric" : "mixed";
   let confidence = 0.9;
   if (gender === "unknown") confidence -= 0.25;
+  else if (genderFrom === "referrer") confidence -= 0.1;
   if (typeFrom === "columns") confidence -= 0.15;
   if (typeFrom === "page") confidence -= 0.05;
   return { gender, ageGroup, garmentType, sizeSystem, typeFrom, confidence: Math.round(confidence * 100) / 100 };
@@ -242,7 +258,7 @@ function pageContextText(doc, url) {
 /* Every size table on a document, each with its own labels. The widget keeps only
    the best-scoring table on a PDP; a size-guide PAGE is usually several charts
    (men / women / kids tabs) and every one of them is a row here. */
-export function extractAllSizeCharts(doc, url) {
+export function extractAllSizeCharts(doc, url, referrer = null) {
   const parser = createSizeChartParser(doc);
   const pageText = pageContextText(doc, url);
   const out = [];
@@ -261,7 +277,7 @@ export function extractAllSizeCharts(doc, url) {
     out.push({
       rows: measured,
       localText,
-      classification: classifyChart(measured, localText, pageText),
+      classification: classifyChart(measured, localText, pageText, referrer),
       rawSnapshot: String(table.outerHTML || "").slice(0, RAW_SNAPSHOT_MAX),
     });
   }
@@ -303,6 +319,86 @@ export async function defaultFetchText(url) {
   return { ok: resp.ok, status: resp.status, url: resp.url || url, contentType, text: isText ? await resp.text() : "" };
 }
 
+/* A size-guide popup endpoint that answers JSON with the markup inside - castro.com's
+   /idus/staticblock/view?id=N returns {"success":true,"html":"<table>…"} (served as
+   text/html, so the content type cannot be trusted either way). Parsing the raw body
+   finds tables made of escaped strings and reads none of them. Returns the response
+   with `text` replaced by the html field; a {"success":false} envelope is not a page. */
+export function unwrapHtmlEnvelope(r) {
+  if (!r || !r.ok || typeof r.text !== "string") return r;
+  const t = r.text.trimStart();
+  if (t[0] !== "{") return r;
+  let j;
+  try { j = JSON.parse(t); } catch { return r; }
+  if (!j || typeof j !== "object" || typeof j.html !== "string") return r;
+  if (j.success === false) return { ...r, ok: false, text: "", error: "envelope success:false" };
+  return { ...r, text: j.html, contentType: "text/html", envelope: true };
+}
+
+/* A guide address that just answers with the HOME page - castro.com's /size-guide and
+   /size-chart are 200s carrying the 531 KB home page byte for byte. Fetching it is not
+   finding a guide: it is counted as missing, never as "guide page fetched, no chart". */
+function titleOf(html) {
+  const m = String(html || "").match(/<title[^>]*>([^<]*)<\/title>/i);
+  return m ? m[1].replace(/\s+/g, " ").trim() : "";
+}
+export function isHomeEcho(r, home, requestedUrl) {
+  if (!r || !home || !r.text || !home.text) return false;
+  try {
+    const req = new URL(requestedUrl), fin = new URL(r.url || requestedUrl);
+    if (req.pathname !== "/" && (fin.pathname === "/" || fin.pathname === "")) return true;
+  } catch { /* fall through to the content checks */ }
+  if (r.text === home.text) return true;
+  /* Same <title> and within 2% of the size: the home page with a rotating token in it. */
+  const ht = titleOf(home.text);
+  return !!ht && titleOf(r.text) === ht &&
+    Math.abs(r.text.length - home.text.length) <= 0.02 * home.text.length;
+}
+
+/* Who the product pages linking to one guide are for, when they ALL agree. Each
+   referrer's own page context is classified on its own; one dissenting audience (a
+   women's and a men's PDP opening the same guide) and the answer is no gender. */
+export function referrerAudience(contexts) {
+  const list = (contexts || []).filter(Boolean);
+  if (!list.length) return null;
+  const each = list.map((t) => classifyContextText(t));
+  const genders = new Set(each.map((c) => c.gender));
+  const gender = genders.size === 1 && (each[0].gender === "men" || each[0].gender === "women" || each[0].gender === "unisex")
+    ? each[0].gender : null;
+  const kids = each.every((c) => c.kids);
+  return gender || kids ? { gender, kids } : null;
+}
+
+/* One spelling per page URL. A Shopify handle comes back from products.json raw
+   (`/products/חולצת-ניקי-חלקה`) while every href the browser or a sitemap gives is
+   percent-encoded, so the same product could be stored under two keys. new URL()
+   encodes the raw form and leaves an encoded one as it is; the fragment is dropped. */
+export function normalizePageUrl(u) {
+  if (!u) return "";
+  try { const x = new URL(u); x.hash = ""; return x.href; } catch { return String(u); }
+}
+
+/* Is this URL a product page, by its SHAPE? The bare substring test let terminalx.com's
+   /sports/products/tops - a category - in as a product (3 of 12 sampled pages). A
+   pattern segment counts when:
+     · `products` is the first segment (or follows a locale, or /collections/<x>/), the
+       Shopify shape - a handle needs no digits there (/products/a is a product); or
+     · anything follows it whose last segment carries a 3+ digit run or a hyphenated
+       slug (/catalog/product/view/id/1246334, /product/blue-cotton-tee).
+   A single plain word after a nested pattern (/sports/products/tops) is a category. */
+const LOCALE_SEG_RE = /^[a-z]{2}(?:[-_][a-z]{2})?$/i;
+export function isProductPathUrl(u) {
+  let segs;
+  try { segs = new URL(u).pathname.split("/").filter(Boolean).map((s) => s.toLowerCase()); } catch { return false; }
+  const pats = PRODUCT_LINK_PATTERNS.map((p) => p.replace(/\//g, ""));
+  const i = segs.findIndex((s) => pats.includes(s));
+  if (i < 0 || i >= segs.length - 1) return false;
+  const last = segs[segs.length - 1];
+  if (segs[i] === "products" && (i === 0 || (i === 1 && LOCALE_SEG_RE.test(segs[0])) || segs[i - 2] === "collections")) return true;
+  return /\d{3,}/.test(last) || /[^-]-[^-]/.test(last);
+}
+const ID_SHAPED_URL_RE = /\/[^/]*\d{4,}[^/]*(?:\.html)?$/i;
+
 async function loadJsdom() {
   try {
     return (await import("jsdom")).JSDOM;
@@ -333,7 +429,7 @@ async function sampleProducts({ baseUrl, homeHtml, isShopify, fetchText, maxProd
         const data = JSON.parse(r.text);
         const products = (data.products || []).filter((p) => p && p.handle);
         return evenlySample(products, maxProducts).map((p) => ({
-          url: `${baseUrl}/products/${p.handle}`,
+          url: normalizePageUrl(`${baseUrl}/products/${p.handle}`),
           title: p.title || "",
           bodyHtml: p.body_html || "",
           context: [p.title, p.product_type, Array.isArray(p.tags) ? p.tags.join(" ") : p.tags].join(" | "),
@@ -371,18 +467,27 @@ async function sampleProducts({ baseUrl, homeHtml, isShopify, fetchText, maxProd
   } catch (e) {
     log(`  sitemap unreadable (${e.message})`);
   }
-  let candidates = urls.filter((u) => PRODUCT_LINK_PATTERNS.some((p) => u.toLowerCase().includes(p)));
-  if (!candidates.length) candidates = urls.filter((u) => /\/[^/]*\d{4,}[^/]*(?:\.html)?$/i.test(u));
+  /* Pattern-shaped product URLs first; when they are fewer than the sample, top up with
+     id-shaped ones (terminalx.com: 8 legacy /catalog/product/view/id/N pages against
+     ~23k /w414418263 SKU pages, which carry no pattern word at all). */
+  let candidates = urls.filter(isProductPathUrl);
+  if (candidates.length < maxProducts) {
+    const have = new Set(candidates);
+    const idShaped = urls.filter((u) => !have.has(u) && ID_SHAPED_URL_RE.test(u));
+    candidates = candidates.concat(evenlySample(idShaped, maxProducts - candidates.length));
+  }
   if (!candidates.length && homeHtml) {
     const hrefs = (homeHtml.match(/href\s*=\s*["']([^"']+)["']/gi) || [])
       .map((h) => h.replace(/^href\s*=\s*["']/i, "").replace(/["']$/, ""));
     const seen = new Set();
     for (const h of hrefs) {
-      if (!PRODUCT_LINK_PATTERNS.some((p) => h.toLowerCase().includes(p))) continue;
-      try { const abs = new URL(h, baseUrl).href; if (!seen.has(abs)) { seen.add(abs); candidates.push(abs); } } catch { /* skip */ }
+      let abs;
+      try { abs = new URL(h, baseUrl).href; } catch { continue; }
+      if (!isProductPathUrl(abs) || seen.has(abs)) continue;
+      seen.add(abs); candidates.push(abs);
     }
   }
-  candidates = candidates.filter((u) => sameStore(u, baseUrl));
+  candidates = candidates.filter((u) => sameStore(u, baseUrl)).map(normalizePageUrl);
   return evenlySample(Array.from(new Set(candidates)), maxProducts).map((url) => ({ url, title: "", bodyHtml: "", context: "" }));
 }
 
@@ -390,14 +495,22 @@ async function sampleProducts({ baseUrl, homeHtml, isShopify, fetchText, maxProd
 function scanPageSignals(doc, pageUrl, baseUrl, parser) {
   const links = new Set(), images = [], apps = new Set();
   let triggers = 0;
-  for (const el of doc.querySelectorAll("a,button,[data-href],[data-url],[role=button]")) {
+  /* `data_url` (underscore) is castro.com's popup trigger:
+       <a href="javascript: void(0)" title="טבלת מידות" data_url="…/idus/staticblock/view?id=63">
+     The first cut read only the hyphenated spellings AND took the first non-empty
+     attribute, so `href="javascript: void(0)"` won and the real address was never
+     looked at - 8 such triggers were reported as a JS app with no link. The first
+     attribute that is an actual address wins now, whichever spelling carries it. */
+  const LINK_ATTRS = ["href", "data-href", "data-url", "data_url"];
+  for (const el of doc.querySelectorAll("a,button,[data-href],[data-url],[data_url],[role=button]")) {
     const label = [el.textContent, el.getAttribute("aria-label"), el.getAttribute("title"),
-      el.getAttribute("href"), el.getAttribute("data-href"), el.getAttribute("data-url"),
+      ...LINK_ATTRS.map((a) => el.getAttribute(a)),
       el.getAttribute("class"), el.getAttribute("id")].filter(Boolean).join(" ").slice(0, 400);
     if (!SIZE_GUIDE_LINK_RE.test(label)) continue;
-    const href = el.getAttribute("href") || el.getAttribute("data-href") || el.getAttribute("data-url") || "";
+    const href = LINK_ATTRS.map((a) => (el.getAttribute(a) || "").trim())
+      .find((v) => v && !/^(?:#|javascript:|mailto:|tel:)/i.test(v)) || "";
     let abs = "";
-    if (href && !/^(?:#|javascript:|mailto:|tel:)/i.test(href)) {
+    if (href) {
       try { abs = new URL(href, pageUrl).href.split("#")[0]; } catch { abs = ""; }
     }
     if (abs && sameStore(abs, baseUrl) && abs !== pageUrl.split("#")[0]) links.add(abs);
@@ -449,7 +562,7 @@ export async function discoverSizeCharts(storeUrl, {
     paths: {
       inline_table: { pages_checked: 0, pages_with_chart: 0 },
       product_description: { products_checked: 0, products_with_chart: 0 },
-      linked_page: { links_found: 0, pages_fetched: 0, pages_with_chart: 0, urls: [] },
+      linked_page: { links_found: 0, pages_fetched: 0, pages_with_chart: 0, home_echo: 0, urls: [] },
       image_chart_detected: { count: 0, examples: [] },
       js_app_detected: { apps: [], triggers_without_link: 0 },
     },
@@ -485,7 +598,8 @@ export async function discoverSizeCharts(storeUrl, {
 
   const products = await sampleProducts({ baseUrl, homeHtml: home.text, isShopify, fetchText, maxProducts, log });
   report.sampled_products = products.length;
-  const guideLinks = new Set(), images = new Set(), apps = new Set();
+  /* guide URL -> the page context of every PDP that links to it (referrerAudience). */
+  const guideLinks = new Map(), images = new Set(), apps = new Set();
   let triggers = 0;
 
   for (const p of products) {
@@ -513,14 +627,18 @@ export async function discoverSizeCharts(storeUrl, {
     if (charts.length) report.paths.inline_table.pages_with_chart++;
     for (const c of charts) found.push({ chart: c, source: "inline_table", sourceUrl: p.url, productUrl: p.url });
     const sig = scanPageSignals(doc, r.url || p.url, baseUrl, createSizeChartParser(doc));
-    sig.links.forEach((l) => guideLinks.add(l));
+    const pdpContext = pageContextText(doc, r.url || p.url) + (p.context ? " | " + p.context : "");
+    for (const l of sig.links) {
+      if (!guideLinks.has(l)) guideLinks.set(l, []);
+      guideLinks.get(l).push(pdpContext);
+    }
     sig.images.forEach((i) => images.add(i));
     sig.apps.forEach((a) => apps.add(a));
     triggers += sig.triggers;
   }
 
   /* Linked guide pages first, then the well-known paths nobody linked. */
-  const guideUrls = [...guideLinks];
+  const guideUrls = [...guideLinks.keys()];
   report.paths.linked_page.links_found = guideUrls.length;
   if (isShopify || !guideUrls.length) {
     for (const path of WELL_KNOWN_GUIDE_PATHS) {
@@ -531,13 +649,14 @@ export async function discoverSizeCharts(storeUrl, {
   for (const gUrl of guideUrls.slice(0, MAX_GUIDE_PAGES + (guideLinks.size ? 0 : WELL_KNOWN_GUIDE_PATHS.length))) {
     if (/\.pdf(?:$|[?#])/i.test(gUrl)) { images.add(gUrl); continue; }
     await pause();
-    const r = await fetchText(gUrl).catch((e) => ({ ok: false, status: 0, text: "", error: e.message }));
+    const r = unwrapHtmlEnvelope(await fetchText(gUrl).catch((e) => ({ ok: false, status: 0, text: "", error: e.message })));
     if (!r.ok) continue;
     if (/pdf|image\//i.test(r.contentType || "")) { images.add(gUrl); continue; }
     if (!r.text) continue;
+    if (isHomeEcho(r, home, gUrl)) { report.paths.linked_page.home_echo++; continue; }
     report.paths.linked_page.pages_fetched++;
     const doc = new JSDOMCtor(r.text, { url: r.url || gUrl }).window.document;
-    const charts = extractAllSizeCharts(doc, gUrl);
+    const charts = extractAllSizeCharts(doc, gUrl, referrerAudience(guideLinks.get(gUrl)));
     if (charts.length) {
       report.paths.linked_page.pages_with_chart++;
       report.paths.linked_page.urls.push(gUrl);
@@ -590,7 +709,7 @@ export function buildRecords(found, storeDomain, report = { charts: [], conflict
   }
   const byKey = new Map();
   for (const e of byHash.values()) {
-    const productKey = e.f.source === "linked_page" || e.pages.length >= 2 ? "" : (e.pages[0] || "");
+    const productKey = e.f.source === "linked_page" || e.pages.length >= 2 ? "" : normalizePageUrl(e.pages[0] || "");
     const record = {
       store_domain: storeDomain,
       gender: e.cls.gender,
@@ -611,8 +730,16 @@ export function buildRecords(found, storeDomain, report = { charts: [], conflict
     const k = [record.gender, record.age_group, record.garment_type, record.product_key, record.source].join("|");
     const prev = byKey.get(k);
     if (!prev) { byKey.set(k, record); continue; }
+    /* Equal sightings: the size system the garment type is SOLD in wins before row
+       count. castro.com's women's guide is one block with two tables - EU 32-46 and
+       XS/0-XL - both women/adult/tops, and the table key has no size_system column.
+       Row count kept the numeric one, which castro's XXS-XL women's tops can never use
+       (the room's >= 2 shared-sizes gate abstains on it). Either table is the store's
+       own; this only picks the one the room can actually apply. */
+    const conventional = (r) => (r.garment_type === "tops" ? r.size_system === "alpha" : r.size_system === "numeric") ? 1 : 0;
     const better = record.sightings > prev.sightings ||
-      (record.sightings === prev.sightings && record.rows.length > prev.rows.length);
+      (record.sightings === prev.sightings && (conventional(record) > conventional(prev) ||
+        (conventional(record) === conventional(prev) && record.rows.length > prev.rows.length)));
     report.conflicts.push({
       reason: "two different charts for one key - kept the more-sighted", key: k,
       kept: (better ? record : prev).source_url, dropped: (better ? prev : record).source_url,
@@ -669,7 +796,7 @@ export function formatReport(report) {
     `sampled products: ${report.sampled_products} | pages fetched: ${report.pages_fetched} | failed: ${report.pages_failed}`,
     `inline_table:        ${p.inline_table.pages_with_chart}/${p.inline_table.pages_checked} product pages carry a readable chart`,
     `product_description: ${p.product_description.products_with_chart}/${p.product_description.products_checked} Shopify descriptions carry one`,
-    `linked_page:         ${p.linked_page.links_found} guide link(s) found, ${p.linked_page.pages_fetched} guide page(s) fetched, ${p.linked_page.pages_with_chart} with a chart`,
+    `linked_page:         ${p.linked_page.links_found} guide link(s) found, ${p.linked_page.pages_fetched} guide page(s) fetched, ${p.linked_page.pages_with_chart} with a chart${p.linked_page.home_echo ? `, ${p.linked_page.home_echo} answered with the home page (not counted)` : ""}`,
     `image_chart_detected: ${p.image_chart_detected.count}${p.image_chart_detected.examples.length ? " e.g. " + p.image_chart_detected.examples[0] : ""}`,
     `js_app_detected:     ${p.js_app_detected.apps.join(", ") || "(no known app)"}; ${p.js_app_detected.triggers_without_link} size-guide trigger(s) with no link`,
     `bot protection:      ${report.blocked.count ? report.blocked.count + " challenged request(s), e.g. " + report.blocked.examples[0] : "none seen"}`,
@@ -687,7 +814,7 @@ export function formatReport(report) {
     sampled: report.sampled_products, fetched: report.pages_fetched, failed: report.pages_failed,
     inline: `${p.inline_table.pages_with_chart}/${p.inline_table.pages_checked}`,
     description: `${p.product_description.products_with_chart}/${p.product_description.products_checked}`,
-    linked: { links: p.linked_page.links_found, fetched: p.linked_page.pages_fetched, with_chart: p.linked_page.pages_with_chart },
+    linked: { links: p.linked_page.links_found, fetched: p.linked_page.pages_fetched, with_chart: p.linked_page.pages_with_chart, home_echo: p.linked_page.home_echo || 0 },
     images: p.image_chart_detected.count, apps: p.js_app_detected.apps, triggers: p.js_app_detected.triggers_without_link,
     blocked: report.blocked.count,
     charts: report.charts.map((c) => `${c.gender}/${c.age_group}/${c.garment_type}:${c.sizes}`),
