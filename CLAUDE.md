@@ -862,6 +862,26 @@ and fired on the next one, 0.74 (~318 degrees, 3.96s); 505ms + the render switch
   TEST records - painting the very image the room sent; the camera carries the clip's clock (a barcode on the
   left edge - the top strip covered the head and blinded the pose model), so every output frame says which
   moment of the clip it shows and which reference was on it: where each swap lands, as the shopper sees it.
+- **The order confirms the early side (`ORDER_CONFIRMS`, 0.2):** |yaw| folds at 90, so on the way INTO the back it
+  falls under the threshold again, and a skin vote for FRONT there withdrew a real turn (the twin: FRONT on a body at
+  ~140 degrees for 1.4s). An order reading on the early side's own half blocks the withdrawal; a look that came back
+  reads the other half and withdraws as main does; a room that sends no order is main's exactly (`return-side` §1.14-§1.16).
+
+### 2.26 "It takes forever to load" - the go-live stages are recorded; the gate's wait is bounded (2026-10-04)
+Two TEST sessions of `hide/edge` sat 34s and 22s after the press and were closed: no `watch`, no prime - nothing
+before the connect is recorded, so the record could not say which stage held them (the Vercel log: the room, the
+token and the health probe answered; nothing after). A heavy twin run of ours was going on the same Mac at the time.
+- **A TEST record now carries every go-live stage:** `gate` {v, ms}, `preload` {ok, back, ms}, `rt-sdk`/`rt-floor`/
+  `rt-token`/`rt-open` (ms since the connect began), `rt-queue` (the engine's queue position - `connect()` waits
+  there with no timeout of its own), `rt-warn`/`rt-err` (the SDK's logger, silent in the shopper's console),
+  `rt-error`, `live-connected`, `live-fail`. Passive: a shopper's session records nothing.
+- **The presence gate's whole wait is bounded:** it awaited the pose detector with no limit and only then started
+  its `POSE_GATE_TIMEOUT_MS` clock. The hidden build loads the detector from our edge (§2.24) and compiles it per
+  room load, where main's came from a long-cached CDN; the clock now starts first and covers the load - a detector
+  not ready in time is one that failed (§2.5). Preloaded at room entry, as in every measured session, nothing changes.
+- **Measured in the twin (idle machine):** gate 0.8s, garment 0.03s, connect 0.85s, reveal 6.8s after the press.
+- **Run nothing heavy on the shopper's machine while they test** - the twin runs Chrome, the pose model and a media
+  server; it competed with the shopper's room during the reported sessions.
 
 ## 3. Cross-file lockstep
 

@@ -125,6 +125,27 @@ console.log("\n── §1 the trigger ──");
   ]);
   check("§1.11 square on the back again, the side must be seen afresh: a mirrored reading after it does not fire",
     back.every((o) => !o.fire), JSON.stringify(back));
+  /* THE FOLD, read by the order (2026-10-04): an early BACK, then on the way INTO the back |yaw| falls under 40 again and a
+     skin vote says FRONT - main's withdrawal sent FRONT onto a body at ~140 degrees (twin harness, n2 at 0.7x). */
+  const fold = trig(0.2);
+  const into = run(fold, [
+    { vote: "front", lock: "front", yawAbs: 5, at: 0, ord: 1, ordAt: 0 },
+    { vote: null, lock: "front", yawAbs: 49, at: 240, ord: 0.67, ordAt: 240 },            // the early BACK
+    { vote: "front", lock: "back", yawAbs: 36, at: 480, ord: -0.69, ordAt: 480 },        // folded |yaw|, a skin vote for FRONT
+  ]);
+  check("§1.14 an early BACK is NOT withdrawn while the order reads the back side (the fold), whatever the vote says",
+    into[1].fire === "back" && !into[2].withdraw, JSON.stringify(into));
+  const look = run(trig(0.2), [
+    { vote: "front", lock: "front", yawAbs: 5, at: 0, ord: 1, ordAt: 0 },
+    { vote: null, lock: "front", yawAbs: 49, at: 240, ord: 0.67, ordAt: 240 },
+    { vote: "front", lock: "back", yawAbs: 20, at: 480, ord: 0.93, ordAt: 480 },          // a look that came back
+  ]);
+  check("§1.15 ...and a look that really came back (the order back on the front) is withdrawn as before",
+    look[2].withdraw === "front", JSON.stringify(look));
+  const noOrdFold = run(trig(0.2), [
+    { vote: "front", lock: "front", yawAbs: 5, at: 0 }, { vote: null, lock: "front", yawAbs: 49, at: 240 },
+    { vote: "front", lock: "back", yawAbs: 36, at: 480 }]);
+  check("§1.16 a room that sends no order keeps main's withdrawal exactly", noOrdFold[2].withdraw === "front", JSON.stringify(noOrdFold));
   /* PREDICTIVE BACK, gated on the order: a FRONT lock whose |yaw| passed the side and is falling is either a body
      passing to the back (the order on the back side) or one coming round to the lens (the order on the front). */
   const I = E.createOrientEngine(E.sanitizeOrientKnobs({})).internals;

@@ -6123,6 +6123,11 @@ function buildRealtimeConnectOpts(gen) {
        globals that do not declare the `let` (hence the typeof guard too). */
     ...(typeof _sessionInitialState !== "undefined" && _sessionInitialState
       ? { initialState: _sessionInitialState } : {}),
+    /* The engine can hold a connect in its QUEUE (no free renderer), and connect() has no timeout of its own
+       while it waits. A TEST session records each position - passive, the connect is unchanged. */
+    onQueuePosition: (qp) => {
+      if (typeof traceOrient === "function") traceOrient("rt-queue", { p: qp && qp.position, n: qp && qp.queueSize });
+    },
     onRemoteStream: (editedStream) => {
       if (gen !== sessionGen) return;    // stale callback from a torn-down session
       // DEBUG WRAPPER: flag a stream rendering with no garment on the wire. typeof-guarded,
@@ -6386,7 +6391,9 @@ async function connectRealtime({ force = false } = {}) {
   console.log("[PEAR] connectRealtime() - stage 1/4: loading SDK from CDN…");
   try {
     /* ── load SDK ─────────────────────────────────────────────────────────── */
+    const connectAt = Date.now();
     const { createClient } = await loadSDK();
+    if (typeof traceOrient === "function") traceOrient("rt-sdk", { ms: Date.now() - connectAt });
 
     /* ── mint token → create client → build the throttled input, WITH ONE RETRY ──
        THE FAILURE THIS COVERS: "WebSocket is not open" thrown from the SDK's
@@ -6412,6 +6419,7 @@ async function connectRealtime({ force = false } = {}) {
        THROWS in that case, and the throw is the refusal: goLive()'s catch shows it.
        typeof-guarded because signaling-retry.test.mjs executes this function standalone. */
     if (typeof primeInitialConditioning === "function") await primeInitialConditioning();
+    if (typeof traceOrient === "function") traceOrient("rt-floor", { ms: Date.now() - connectAt });
     if (gen !== sessionGen) return;      // torn down while the garment bytes loaded
     let attempt = 0;
     for (;;) {
@@ -6421,6 +6429,7 @@ async function connectRealtime({ force = false } = {}) {
       /* ── mint a short-lived ek_ token from the secure proxy (only now, never on
             page load) - the permanent dct_ key stays server-side ─────────────── */
       const ekToken = await mintEphemeralToken();
+      if (typeof traceOrient === "function") traceOrient("rt-token", { ms: Date.now() - connectAt, attempt });
 
       // A teardown may have fired while we were awaiting the SDK/token - abort.
       if (gen !== sessionGen) return;
@@ -6440,11 +6449,19 @@ async function connectRealtime({ force = false } = {}) {
          SDK bundle is shipped as-is (scripts/build.mjs skips it), so no build step removes
          them. The shopper's room gets a silent logger; the support view keeps the warnings
          and errors - they are diagnostic evidence - under the neutral [PEAR][rt] prefix. */
+      /* ...and a TEST session's record keeps the SDK's warnings and errors (connect retries, a closed socket) -
+         the shopper's console still shows nothing. traceOrient is a no-op outside a recorded session. */
+      const rtNote = (type) => (m, d) => {
+        if (typeof traceOrient !== "function") return;
+        let x = "";
+        try { x = d === undefined ? "" : JSON.stringify(d).slice(0, 200); } catch (_) { /* unserialisable */ }
+        traceOrient(type, { m: String(m).slice(0, 120), d: x });
+      };
       const rtLogger = (typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD)
         ? { debug() {}, info() {},
-            warn: (m, d) => console.warn("[PEAR][rt]", m, d ?? ""),
-            error: (m, d) => console.error("[PEAR][rt]", m, d ?? "") }
-        : { debug() {}, info() {}, warn() {}, error() {} };
+            warn: (m, d) => { rtNote("rt-warn")(m, d); console.warn("[PEAR][rt]", m, d ?? ""); },
+            error: (m, d) => { rtNote("rt-err")(m, d); console.error("[PEAR][rt]", m, d ?? ""); } }
+        : { debug() {}, info() {}, warn: rtNote("rt-warn"), error: rtNote("rt-err") };
       /* realtimeBaseUrl - our edge, never the engine's host (rtEdgeUrl, 2026-10-03). typeof-guarded: signaling-retry
          runs this function standalone. */
       const client = createClient({ apiKey: ekToken, realtimeBaseUrl: typeof rtEdgeUrl === "function" ? rtEdgeUrl() : undefined, logger: rtLogger });
@@ -6468,6 +6485,7 @@ async function connectRealtime({ force = false } = {}) {
         rtClient = await client.realtime.connect(realtimeInput, buildRealtimeConnectOpts(gen));
         // set() sends pre-encoded references - see preEncodeReference(). typeof: this runs sandboxed in signaling-retry.
         if (typeof withPreEncodedReferences === "function") rtClient = withPreEncodedReferences(rtClient);
+        if (typeof traceOrient === "function") traceOrient("rt-open", { ms: Date.now() - connectAt });
         break;      // success - fall through to the post-connect code below
       } catch (e) {
         // Dispose THIS attempt's throttle/clone before either retrying (a fresh one is
@@ -6476,6 +6494,7 @@ async function connectRealtime({ force = false } = {}) {
         if (inputThrottle) { try { inputThrottle.dispose(); } catch (_) {} inputThrottle = null; }
         realtimeInput = null;
 
+        if (typeof traceOrient === "function") traceOrient("rt-error", { m: String(e?.message || e).slice(0, 160), attempt });
         const isSignalingRace = /WebSocket is not open/.test(e?.message || "");
         /* NO BARE RETRY. A handshake that failed while carrying the floor used to get one
            retry WITHOUT it - a session opened with no acknowledged garment, which renders
@@ -16201,7 +16220,12 @@ async function goLive() {
        store model's) and held on to them until the next reference write. The engine must first
        see the whole body, exactly as main lets it. The countdown absorbs the later connect (it
        spreads its last numbers to the expected render); see "CAMERA GUIDE + SELF-TIMER". */
+    /* A TEST session records how long each go-live stage took (gate, garment, connect) - passive; it decides
+       nothing. Added 2026-10-04: two reported "it loads forever" sessions recorded nothing before the
+       watcher started, so the record could not say which stage held them. */
+    const gateAt = Date.now();
     const presence = await awaitBodyPresence(isBottomsGarment(activeItem));
+    if (typeof traceOrient === "function") traceOrient("gate", { v: presence, ms: Date.now() - gateAt });
     if (presence !== "present") {
       console.warn(`[go-live] presence gate did not confirm (${presence}) - continuing`);
     }
@@ -16251,7 +16275,9 @@ async function goLive() {
        cache hit) and is the missing wait when it did not. */
     const wantedAutoView = currentAngle === AUTO_ANGLE;
     $("scanOverlay").hidden = false;
+    const preloadAt = Date.now();
     const preload = await preloadGarmentAssets();
+    if (typeof traceOrient === "function") traceOrient("preload", { ok: !!preload.ok, back: !!preload.hasBack, ms: Date.now() - preloadAt });
     if (!preload.ok) {
       $("scanOverlay").hidden = true;
       showCamError("לא ניתן לטעון את תמונת הבגד · Could not load the garment image.");
@@ -16287,6 +16313,7 @@ async function goLive() {
     //    rendered Decart frame (onRemoteStream → armFirstFrameBilling), not at connect.
     await connectRealtime();
     await waitConnected(CONNECT_TIMEOUT_MS);
+    if (typeof traceOrient === "function") traceOrient("live-connected");
     console.log("[PEAR] Decart connected - waiting for first frame");
     /* A self-timer times zero to the render it now expects (see "CAMERA GUIDE + SELF-TIMER"). */
     if (typeof liveTimerConnected === "function") liveTimerConnected();
@@ -16398,6 +16425,7 @@ async function goLive() {
 
     toast("✨ מדידה חיה · סרטון " + Math.round(VIDEO_LENGTH_MS / 1000) + " שניות");
   } catch (err) {
+    if (typeof traceOrient === "function") traceOrient("live-fail", { m: String(err?.message || err).slice(0, 160) });
     stopLive();                        // close any partial session - no idle billing
     console.error("[go-live] failed:", err?.message || String(err));
     if (DEMO_FLAG) {
@@ -17384,9 +17412,20 @@ async function awaitBodyPresence(isBottoms) {
   const video = $("webcam");
   if (!video) return "skipped";
   const category = isBottoms ? "bottom" : "top";
-  const detector = await loadPoseLandmarker();
-  const gate = makePresenceGate();
+  /* THE GATE'S WHOLE WAIT IS BOUNDED, the detector's load included (2026-10-04). The gate used to await the
+     detector with no limit and only then start its POSE_GATE_TIMEOUT_MS clock. On main the detector comes
+     from a CDN the browser has long cached; the hidden build fetches it from our edge (15 MB, scrambled,
+     CLAUDE.md §2.24) and compiles it on every room load, so on a slow line or a busy machine a go-live
+     pressed early could sit on the loading screen for as long as that took - reported as "it takes forever
+     to load". Now the clock starts first and covers the load: a detector that is not ready in time is
+     treated like one that failed (the native fallback, or proceed - §2.5, never block on ambiguity). When it
+     loads in time - every measured session, where it was preloaded at room entry - nothing changes. */
   const startedAt = Date.now();
+  const detector = await Promise.race([
+    loadPoseLandmarker(),
+    new Promise((resolve) => setTimeout(() => resolve(null), POSE_GATE_TIMEOUT_MS)),
+  ]);
+  const gate = makePresenceGate();
   let shownOverlay = false;
 
   try {
