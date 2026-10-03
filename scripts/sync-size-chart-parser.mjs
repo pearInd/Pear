@@ -54,6 +54,7 @@ export const EXPORTS = [
   "sizeChartAliasKey", "sizeChartCellAliases", "parseMeasurementCell",
   "sizeChartGrid", "sizeChartOrient", "sizeChartColumnToCm", "sizeChartFromGrid",
   "sizeChartTableUnit", "SIZE_CHART_CONTAINERS", "extractSizeChart", "encodeSizeChart",
+  "sizeChartIsGridEl", "sizeChartTables", "sizeChartContextClean", "sizeChartUnwrapEnvelope",
 ];
 
 export function renderScannerParser(widgetSrc) {

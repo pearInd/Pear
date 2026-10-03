@@ -49,9 +49,21 @@ export function createSizeChartParser(d) {
 
   /* Units. CM IS TESTED FIRST AND THAT ORDER IS LOAD-BEARING: the Hebrew ס"מ contains
      a double-quote, which is also the inch mark, so an inch-first test reads every
-     Hebrew centimetre chart as inches and divides the whole store by 2.54. */
-  var SIZE_CHART_CM_RE = /(?:\bcm\b|centimet|ס\s*["'״]?\s*מ|סנטימטר)/i;
-  var SIZE_CHART_IN_RE = /(?:inch(?:es)?|\bins?\b|["”″])/i;
+     Hebrew centimetre chart as inches and divides the whole store by 2.54.
+
+     THE NO-SPACE UNIT (fixed 2026-10-03, moved here from the scanner): "86cm" never
+     matched \bcm\b - a digit is a word character, so there is no boundary between the
+     "6" and the "c". adidas.co.il writes EVERY cm cell that way ("83 - 86cm"). The cell
+     then declared no unit and fell through to sizeChartTableUnit()'s ancestor text,
+     which beside an "Inches" toggle label reads "inch" and multiplies a correct
+     centimetre ladder by 2.54: a chest of 86 fails the clamp (a visible refusal), but
+     a women's waist ladder of 62/68/74 becomes 157.5/172.7/188 and passes it - a
+     silent, confident, wrong band, in the live widget as well as the scanner
+     (test/size-chart-shared-fixes.test.mjs §2 reproduces it against the old code).
+     `\dcm\b` / `\dins?\b` read the glued spelling; the boundary on the far side still
+     keeps "cms"/"inside" out. */
+  var SIZE_CHART_CM_RE = /(?:\bcm\b|\dcm\b|centimet|ס\s*["'״]?\s*מ|סנטימטר)/i;
+  var SIZE_CHART_IN_RE = /(?:inch(?:es)?|\bins?\b|\dins?\b|["”″])/i;
   function sizeChartUnitFromText(s) {
     var t = String(s == null ? "" : s);
     if (SIZE_CHART_CM_RE.test(t)) return "cm";
@@ -166,12 +178,34 @@ export function createSizeChartParser(d) {
   /* Reads a <table> into a capped grid of trimmed strings. Colspans are NOT expanded:
      a chart that needs colspan arithmetic to line its columns up is exactly the kind
      this refuses, and a wrong column alignment is the one failure mode that produces a
-     confident, plausible, WRONG chart. */
+     confident, plausible, WRONG chart.
+
+     ARIA DIV-GRIDS (moved here from the scanner 2026-10-03). adidas.co.il (Salesforce
+     Commerce Cloud) ships its charts as role="table"/"row"/"columnheader"/"cell" divs
+     with no <table> element anywhere. The cells carry the same text a <table> would,
+     so the grid is read the same way - rows by role="row", cells by their roles - and
+     everything downstream (orientation, units, clamps, monotonicity) is unchanged. A
+     role="table" element is only read this way when it is NOT itself a <table> (a
+     <table role="table"> is just a table) - see sizeChartIsGridEl(). */
+  var SIZE_CHART_TABLE_SEL = 'table,[role="table"]';
+  var SIZE_CHART_ARIA_CELL_SEL = '[role="columnheader"],[role="rowheader"],[role="cell"],[role="gridcell"]';
+  function sizeChartIsAriaGrid(el) {
+    return !!(el && el.tagName && String(el.tagName).toUpperCase() !== "TABLE" &&
+      el.getAttribute && el.getAttribute("role") === "table");
+  }
+  /* A <table>, or an ARIA grid with no real <table> inside it (that one is read as a
+     table in its own right, so the wrapper must not be read twice). */
+  function sizeChartIsGridEl(el) {
+    if (!el || !el.tagName) return false;
+    if (String(el.tagName).toUpperCase() === "TABLE") return true;
+    return sizeChartIsAriaGrid(el) && !(el.querySelector && el.querySelector("table"));
+  }
   function sizeChartGrid(table) {
-    var rows = table.querySelectorAll ? table.querySelectorAll("tr") : [];
+    var aria = sizeChartIsAriaGrid(table);
+    var rows = table.querySelectorAll ? table.querySelectorAll(aria ? '[role="row"]' : "tr") : [];
     var grid = [];
     for (var r = 0; r < rows.length && grid.length < SIZE_CHART_MAX_ROWS; r++) {
-      var cells = rows[r].querySelectorAll ? rows[r].querySelectorAll("th,td") : [];
+      var cells = rows[r].querySelectorAll ? rows[r].querySelectorAll(aria ? SIZE_CHART_ARIA_CELL_SEL : "th,td") : [];
       if (!cells.length) continue;
       var line = [];
       for (var c = 0; c < cells.length && c < SIZE_CHART_MAX_COLS; c++) {
@@ -407,6 +441,94 @@ export function createSizeChartParser(d) {
     return null;
   }
 
+  /* EVERY READABLE GRID ON A PAGE, with unit-toggle twins collapsed to the cm one.
+     @returns {Array<{el: Element, anchor: Element}>} in document order. `anchor` is
+     where the chart's surrounding labels should be read from (the scanner's
+     tableContextText) - for a collapsed pair, the FIRST-rendered member.
+
+     THE TWIN (moved here from the scanner 2026-10-03). adidas.co.il publishes each
+     chart twice behind an "Inches | cm" toggle: two grids with the same header row and
+     the same first column, one in inches, one in cm. Both parse, they disagree by
+     rounding (an inch-derived 82.55-86.36 vs the store's own 83-86), and the widget
+     kept whichever came first - the lossy inch one, because adidas renders it first.
+     Two grids are collapsed ONLY when they have an identical header row AND first
+     column AND one's own cells declare cm while the other's declare inches. Same-shaped
+     grids that are both cm (a men's and a women's chart with the same sizes and the
+     same measurement names) are two charts and are both kept - a looser key would
+     silently drop one audience's chart.
+     The cm twin is kept because a store's own centimetres are never a ×2.54 rounding
+     away from the real thing; the anchor is the first-rendered slot because that is
+     the one sitting under the section heading (the cm tab follows a caption paragraph
+     that a 4-sibling heading walk runs out of budget on). */
+  function sizeChartGridUnit(grid) {
+    var parts = [];
+    for (var i = 0; i < grid.length; i++) parts.push(grid[i].join(" "));
+    return sizeChartUnitFromText(parts.join(" "));
+  }
+  function sizeChartTwinKey(grid) {
+    if (!grid || grid.length < 3 || !grid[0].length) return null;
+    var first = [];
+    for (var i = 1; i < grid.length; i++) first.push(grid[i][0] || "");
+    return grid[0].join("\u0001") + "::" + first.join("\u0001");
+  }
+  function sizeChartTables(root) {
+    var all = root && root.querySelectorAll ? root.querySelectorAll(SIZE_CHART_TABLE_SEL) : [];
+    var items = [], i, j;
+    for (i = 0; i < all.length; i++) {
+      if (!sizeChartIsGridEl(all[i])) continue;
+      var grid = [];
+      try { grid = sizeChartGrid(all[i]); } catch (e) { grid = []; }
+      items.push({ el: all[i], anchor: all[i], key: sizeChartTwinKey(grid), unit: sizeChartGridUnit(grid), drop: false });
+    }
+    for (i = 0; i < items.length; i++) {
+      if (items[i].drop || !items[i].key) continue;
+      for (j = i + 1; j < items.length; j++) {
+        if (items[j].drop || items[j].key !== items[i].key) continue;
+        var a = items[i].unit, b = items[j].unit;
+        if (a === "cm" && b === "in") { items[j].drop = true; }
+        else if (a === "in" && b === "cm") { items[i].drop = true; items[j].anchor = items[i].anchor; break; }
+      }
+    }
+    var out = [];
+    for (i = 0; i < items.length; i++) if (!items[i].drop) out.push({ el: items[i].el, anchor: items[i].anchor });
+    return out;
+  }
+
+  /* CONTEXT TEXT FROM A class/id ATTRIBUTE, minus build-tool hashes (moved here from
+     the scanner 2026-10-03). A CSS-Modules / styled-components class carries a
+     `___<hash>` marker ("[name]__[local]___[hash]") and is a STYLING HOOK, not prose:
+     adidas.co.il's men's AND women's ADULT charts both sit in
+     "gl-table kids-table___1-YOY" - a reused table-skin component - and reading it as
+     a word labelled both as children's charts. A hand-authored semantic class
+     ("size-chart-women") never carries the marker, so dropping any token that does
+     costs nothing but opaque noise. Anything that words an audience from markup should
+     read class/id text through this. */
+  function sizeChartContextClean(s) {
+    var toks = String(s == null ? "" : s).split(/\s+/), out = [];
+    for (var i = 0; i < toks.length; i++) if (toks[i] && toks[i].indexOf("___") === -1) out.push(toks[i]);
+    return out.join(" ");
+  }
+
+  /* A SIZE-GUIDE ENDPOINT THAT ANSWERS JSON WITH THE MARKUP INSIDE (moved here from the
+     scanner 2026-10-03). castro.com's popup returns {"success":true,"html":"<table>…"};
+     adidas.co.il's Product-SizeChart returns {"action":…,"success":true,"content":"…"} -
+     same envelope, different field name, both served as text/html so the content type
+     proves nothing. Parsing the raw body finds markup made of escaped strings and reads
+     none of it. Pure over a string.
+     @returns {{html:string}|{failed:true}|null} null = not an envelope (use the text
+       as it is); failed = an envelope that says {"success":false} - not a page */
+  function sizeChartUnwrapEnvelope(text) {
+    var t = String(text == null ? "" : text).replace(/^\s+/, "");
+    if (t.charAt(0) !== "{") return null;
+    var j;
+    try { j = JSON.parse(t); } catch (e) { return null; }
+    if (!j || typeof j !== "object") return null;
+    var body = typeof j.html === "string" ? j.html : typeof j.content === "string" ? j.content : null;
+    if (body == null) return null;
+    if (j.success === false) return { failed: true };
+    return { html: body };
+  }
+
   /* ── WHERE THE CHART LIVES, per platform ─────────────────────────────────────────
      Tier 1. Every list is tried on EVERY page, whatever stack we think we are on: a
      Woo-flavoured theme on a headless Shopify is a real thing, and mis-detecting the
@@ -451,9 +573,13 @@ export function createSizeChartParser(d) {
   function extractSizeChart() {
     try {
       var candidates = [], nodes = [], i, j, k, m;
+      /* Every readable grid on the page (<table>s and ARIA div-grids), unit-toggle twins
+         already collapsed - a grid not in this list is never a candidate. */
+      var readable = sizeChartTables(d), readableEls = [];
+      for (i = 0; i < readable.length; i++) readableEls.push(readable[i].el);
 
       function consider(table, source, bonus) {
-        if (!table || nodes.indexOf(table) !== -1) return;
+        if (!table || nodes.indexOf(table) !== -1 || readableEls.indexOf(table) === -1) return;
         if (candidates.length >= SIZE_CHART_MAX_TABLES) return;
         nodes.push(table);
         candidates.push({ table: table, source: source, bonus: bonus });
@@ -467,9 +593,10 @@ export function createSizeChartParser(d) {
              not take the other twenty-nine with it. */
           try { hosts = d.querySelectorAll(sels[j]); } catch (e) { continue; }
           for (k = 0; k < hosts.length; k++) {
-            var inner = hosts[k].querySelectorAll ? hosts[k].querySelectorAll("table") : [];
-            /* A container that IS the chart, laid out without a <table> at all, is not
-               readable here and deliberately yields nothing rather than a guess. */
+            var inner = hosts[k].querySelectorAll ? hosts[k].querySelectorAll(SIZE_CHART_TABLE_SEL) : [];
+            /* A container that IS the chart, laid out with neither a <table> nor ARIA
+               table roles, is not readable here and deliberately yields nothing rather
+               than a guess. */
             for (m = 0; m < inner.length; m++) consider(inner[m], platform, 6);
           }
         }
@@ -477,8 +604,7 @@ export function createSizeChartParser(d) {
 
       /* Tier 2 - the universal fallback. Every remaining table on the page, judged
          purely on its own content by sizeChartFromGrid(). */
-      var all = d.querySelectorAll ? d.querySelectorAll("table") : [];
-      for (i = 0; i < all.length; i++) consider(all[i], "generic", 0);
+      for (i = 0; i < readableEls.length; i++) consider(readableEls[i], "generic", 0);
 
       var best = null, bestScore = 0;
       for (i = 0; i < candidates.length; i++) {
@@ -546,7 +672,7 @@ export function createSizeChartParser(d) {
     return (chart.unit || "cm") + ";" + (chart.source || "generic") + ";" + parts.join("|");
   }
 
-  return { isPlausibleSizeToken, SIZE_CHART_CLAMPS, SIZE_CHART_MAX_TABLES, sizeChartUnitFromText, sizeChartMeasureKey, sizeChartSizeToken, sizeChartAliasKey, sizeChartCellAliases, parseMeasurementCell, sizeChartGrid, sizeChartOrient, sizeChartColumnToCm, sizeChartFromGrid, sizeChartTableUnit, SIZE_CHART_CONTAINERS, extractSizeChart, encodeSizeChart };
+  return { isPlausibleSizeToken, SIZE_CHART_CLAMPS, SIZE_CHART_MAX_TABLES, sizeChartUnitFromText, sizeChartMeasureKey, sizeChartSizeToken, sizeChartAliasKey, sizeChartCellAliases, parseMeasurementCell, sizeChartGrid, sizeChartOrient, sizeChartColumnToCm, sizeChartFromGrid, sizeChartTableUnit, SIZE_CHART_CONTAINERS, extractSizeChart, encodeSizeChart, sizeChartIsGridEl, sizeChartTables, sizeChartContextClean, sizeChartUnwrapEnvelope };
 }
 
-export const SHARED_BLOCK_HASH = "8f79cc18092d4396";
+export const SHARED_BLOCK_HASH = "3c3a084ba20dcab5";

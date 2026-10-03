@@ -410,9 +410,11 @@ const SUITES = [
   ["size-chart-overlay", "size-chart-overlay.test.mjs"],
   ["jsonld-sizes", "jsonld-sizes.test.mjs"],
   ["size-chart-parser-sync", "size-chart-parser-sync.test.mjs"],
+  ["size-chart-shared-fixes", "size-chart-shared-fixes.test.mjs"],
   ["scanner-size-charts", "scanner-size-charts.test.mjs"],
   ["store-size-chart-api", "store-size-chart-api.test.mjs"],
   ["stored-size-chart", "stored-size-chart.test.mjs"],
+  ["store-chart-recommendation", "store-chart-recommendation.test.mjs"],
   ["ready-signal-signals", "ready-signal-signals.test.mjs"],
   ["garment-cache-age-group", "garment-cache-age-group.test.mjs"],
 ];

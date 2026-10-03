@@ -81,6 +81,11 @@ const FIXTURES = [
       <tr><th>INT</th><th>EU</th><th>US</th><th>Chest</th></tr>
       <tr><td>S</td><td>46</td><td>S</td><td>88-94</td></tr><tr><td>M / 38</td><td>48</td><td>40</td><td>95-101</td></tr>
       <tr><td>L (EU 50)</td><td>50</td><td>42</td><td>102-108</td></tr></table></div>`],
+  ["ARIA div-grid, glued cm, inch twin first (adidas)", `<div class="size-chart">
+      <div role="table"><div role="row"><div role="columnheader">Label</div><div role="columnheader">S</div><div role="columnheader">M</div></div>
+      <div role="row"><div role="rowheader">Waist</div><div role="cell">27 - 29"</div><div role="cell">29 - 31"</div></div></div>
+      <div role="table"><div role="row"><div role="columnheader">Label</div><div role="columnheader">S</div><div role="columnheader">M</div></div>
+      <div role="row"><div role="rowheader">Waist</div><div role="cell">69 - 74cm</div><div role="cell">75 - 79cm</div></div></div></div>`],
   ["SILENT: price table", `<table><tr><th>Size</th><th>Price</th></tr>
       <tr><td>S</td><td>89.90</td></tr><tr><td>M</td><td>89.90</td></tr></table>`],
   ["SILENT: garment-dimension header", `<table><tr><th>Size</th><th>Half Chest</th></tr>

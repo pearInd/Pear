@@ -3173,8 +3173,9 @@ app.post("/api/store-catalog", storeCatalogLimiter, async (req, res) => {
 
 /* The store's own size guides, captured once per store by the scanner
    (`--size-charts --save`, table from archive/supabase_setup_v15.sql). The room calls
-   this ONLY when the widget could not read a chart off the product page, and applies
-   the result ONLY as the fine-tune tie-break (CLAUDE.md §2.5b). Clamps are re-applied
+   this whenever it knows the store host; a matching chart decides the adult size when
+   the body places clearly on it, else it is the fine-tune overlay (CLAUDE.md §2.5b as
+   changed 2026-10-03). It never reaches the height/weight kernel. Clamps are re-applied
    on every read and every failure answers an empty list - see lib/store-size-charts.js. */
 app.get("/api/store-size-chart", storeCatalogLimiter, makeStoreSizeChartHandler(() => supabase));
 

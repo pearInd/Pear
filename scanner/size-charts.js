@@ -4,9 +4,11 @@
    Finds a storefront's own size guide once per store, instead of per shopper, and
    (with --save) writes it to Supabase's `store_size_charts` table
    (archive/supabase_setup_v15.sql). The fitting room reads it back through
-   GET /api/store-size-chart ONLY when the widget could not read a chart off the
-   product page itself, and ONLY as the fine-tune tie-break - CLAUDE.md §2.5b is
-   unchanged: a store chart never touches the height/weight kernel.
+   GET /api/store-size-chart; a chart matching the garment DECIDES the adult size when
+   the body places clearly on it (CLAUDE.md §2.5b as changed 2026-10-03) and is the
+   fine-tune overlay otherwise - it never touches the height/weight kernel. Since
+   archive/supabase_setup_v16.sql every chart a store publishes is kept (size_system is
+   in the key), so a letter AND a numeric chart for one audience/type are both rows.
 
    THE PARSER IS THE WIDGET'S. scanner/size-chart-parser.js is generated from
    widget/pear-widget.js (npm run sync:size-chart-parser) and pinned byte-identical by
@@ -222,17 +224,13 @@ function shortText(el) {
   const t = String(el && el.textContent || "").replace(/\s+/g, " ").trim();
   return t.length <= 120 ? t : "";
 }
-/* A build-tool-generated class/id carries a `___<hash>` marker (CSS Modules /
-   styled-components: `[name]__[local]___[hash]`) and is a STYLING HOOK, not prose -
-   adidas.co.il's own men's AND women's ADULT tops charts both sit in a div classed
-   "gl-table ... kids-table___1-YOY", which is just the name of a reused table-skin
-   component, not a claim about who the chart is for. Reading it as context word-matched
-   "kids" and mislabelled both as a children's chart. A hand-authored semantic class
-   (castro's "size_chart", a Shopify theme's ".size-chart-women") never carries this
-   marker, so dropping any token that does costs nothing but opaque noise. */
-function dropBundlerHashedTokens(s) {
-  return String(s == null ? "" : s).split(/\s+/).filter((tok) => tok.indexOf("___") === -1).join(" ");
-}
+/* A build-tool-generated class/id (`[name]__[local]___[hash]`) is a styling hook, not
+   prose - adidas.co.il's ADULT charts sit in "kids-table___1-YOY". The rule lives in the
+   SHARED parser now (sizeChartContextClean, widget/pear-widget.js) so the widget and the
+   scanner read class/id text the same way; PURE is the parser's document-free half. */
+const PURE = createSizeChartParser(null);
+const isGridMarkup = (el) => el.tagName === "TABLE" || (el.getAttribute && el.getAttribute("role") === "table") ||
+  !!(el.querySelector && el.querySelector('table,[role="table"]'));
 
 export function tableContextText(table) {
   const parts = [];
@@ -241,8 +239,8 @@ export function tableContextText(table) {
     if (cap) parts.push(shortText(cap));
     let node = table, depth = 0;
     while (node && node.nodeType === 1 && depth < 6) {
-      const id = node.getAttribute ? dropBundlerHashedTokens(node.getAttribute("id") || "") : "";
-      const cls = node.getAttribute ? dropBundlerHashedTokens(node.getAttribute("class") || "") : "";
+      const id = node.getAttribute ? PURE.sizeChartContextClean(node.getAttribute("id") || "") : "";
+      const cls = node.getAttribute ? PURE.sizeChartContextClean(node.getAttribute("class") || "") : "";
       const label = node.getAttribute && (node.getAttribute("aria-label") || node.getAttribute("data-title") || "");
       parts.push(id.replace(/[-_]/g, " "), cls.replace(/[-_]/g, " "), label);
       const labelledBy = node.getAttribute && node.getAttribute("aria-labelledby");
@@ -258,7 +256,7 @@ export function tableContextText(table) {
         /* The previous chart's territory: a sibling that IS or CONTAINS a table carries
            another chart's heading ("Men's tops" above the men's section must never label
            the women's table below it - the first cut of this walk did exactly that). */
-        if (sib.tagName === "TABLE" || (sib.querySelector && sib.querySelector("table"))) break;
+        if (isGridMarkup(sib)) break;
         if (sib.matches && sib.matches(HEADING_SEL)) parts.push(shortText(sib));
         else if (sib.querySelector) {
           const h = sib.querySelector("h1,h2,h3,h4,h5,h6");
@@ -292,129 +290,22 @@ function pageContextText(doc, url) {
 
 /* Every size table on a document, each with its own labels. The widget keeps only
    the best-scoring table on a PDP; a size-guide PAGE is usually several charts
-   (men / women / kids tabs) and every one of them is a row here. */
-/* adidas.co.il (Salesforce Commerce Cloud) ships its chart CONTENT as accessible
-   div-grids - role="table"/"row"/"columnheader"/"cell" - never a <table> element at
-   all; every fetched PDP has zero role="table" nodes (the chart is reachable only
-   through the separate guide endpoint a shopper's click loads, never inline), so this
-   is a GUIDE-PAGE-only shape, not something the live widget has ever needed to read
-   off a product page. The shared parser (widget/scanner's one copy, CLAUDE.md §0/§3)
-   reads only <tr>/<th>/<td>; teaching IT about ARIA grids would be a widget-wide
-   change for a format no PDP uses. So this stays scanner-local: convert each grid into
-   a REAL <table> with identical cell text and hand it to the SAME, unmodified
-   sizeChartGrid/sizeChartOrient/sizeChartFromGrid - which already auto-detects the
-   transposed layout adidas uses (sizes across the header, one row per measurement)
-   with no changes needed there either.
+   (men / women / kids tabs) and every one of them is a row here.
 
-   adidas publishes the SAME chart twice, once per unit, behind an "Inches"/"cm"
-   toggle - two grids with an IDENTICAL size-token header row. Synthesizing both would
-   hand extractAllSizeCharts two candidates for one real chart that disagree by
-   rounding (an inches-derived 82.55-86.36cm vs the store's own declared 83-86cm), and
-   nothing downstream dedupes on VALUE similarity - only on an exact content hash, or a
-   later conflict tie-break with no reason to prefer either (on these pages, document
-   order happens to put the LOSSY inches grid first, so the tie-break would keep it).
-   Grids sharing an identical header row AND an identical first-column label list (same
-   measurement names, same sizes) are the SAME chart in two units; only the one whose
-   own cells declare "cm" is kept, since a declared unit is always this file's
-   strongest evidence (sizeChartColumnToCm's own tier order) and a store's own cm
-   figures are never a lossy ×2.54 away from the real thing. */
-function ariaGridToStringRows(gridEl) {
-  const rows = [];
-  for (const r of gridEl.querySelectorAll('[role="row"]')) {
-    const cells = r.querySelectorAll('[role="columnheader"],[role="cell"],[role="rowheader"]');
-    if (!cells.length) continue;
-    rows.push([...cells].map((c) => normalizeAriaCellText(c.textContent)));
-  }
-  return rows;
-}
-
-/* A clean word boundary is this file's strongest unit tier (sizeChartUnitFromText's
-   own test for the word "cm"), read per cell by the shared, unmodified parser -
-   adidas.co.il writes every cm cell with NO space before the unit ("73 - 76cm"), so
-   the digit and the "c" are both word characters and that boundary never fires. The
-   cell then falls through the shared file's OWN table-level fallback
-   (sizeChartTableUnit, capped at the first 400 ancestor characters), which on this
-   exact markup reads the EARLIER "Inches" toggle label first and misreads the whole
-   table as inches - doubling every already-correct cm figure by 2.54 and failing the
-   plausibility clamp outright (a correct refusal of a WRONG chart, CLAUDE.md section
-   2 - just not of this one, which was right all along). Inserting the one missing
-   space is not a new rule; it hands the shared regex the SAME text, spelled the one
-   way it already knows how to read. */
-function normalizeAriaCellText(raw) {
-  return String(raw == null ? "" : raw)
-    .replace(/\u00a0/g, " ")
-    .replace(/(\d)(cm|mm)\b/gi, "$1 $2")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/* The shared parser's own unit sniff (sizeChartUnitFromText) requires \bcm\b, and a
-   digit is a \w character - so "76cm" (adidas.co.il writes every cm cell with no
-   space before the unit) never matches: there is no boundary between the "6" and the
-   "c". That non-match is harmless to the per-cell CONVERSION this file already does
-   (sizeChartColumnToCm falls back to magnitude - 76 is already past the inch cutoff,
-   so it reads as cm either way), but it broke the RANKING this function layers on
-   top: the "cm" candidate of a toggle pair silently scored the same as an
-   undetermined one, and with the inches candidate ranked above both, the lossy,
-   ×2.54-converted grid won every tie. A second, narrower, scanner-local-only check
-   (never pushed into the shared file - CLAUDE.md §0/§3, that regex's \b ordering is
-   load-bearing for a different reason, the Hebrew ס"מ/inch-mark collision) catches
-   exactly this one shape: a digit directly followed by "cm". */
-function sniffUnitForRanking(text, parser) {
-  const viaShared = parser.sizeChartUnitFromText(text);
-  return viaShared || (/\dcm\b/i.test(text) ? "cm" : null);
-}
-function synthesizeAriaGridCharts(doc, parser) {
-  const grids = Array.from(doc.querySelectorAll('[role="table"]'))
-    .filter((el) => !el.querySelector("table"));   // a real <table> inside needs no help
-  const groups = new Map();                        // pairing key -> candidate grids
-  for (const el of grids) {
-    const grid = ariaGridToStringRows(el);
-    if (grid.length < 3 || !grid[0].length) continue;   // sizeChartFromGrid's own floor
-    const key = grid[0].join("\u0001") + "::" + grid.slice(1).map((r) => r[0] || "").join("\u0001");
-    const unit = sniffUnitForRanking(grid.map((r) => r.join(" ")).join(" "), parser);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push({ el, grid, unit });
-  }
-  const UNIT_RANK = { cm: 0, in: 1 };
-  for (const candidates of groups.values()) {
-    let keep = candidates[0];
-    for (let i = 1; i < candidates.length; i++) {
-      const a = UNIT_RANK[keep.unit] != null ? UNIT_RANK[keep.unit] : 2;
-      const b = UNIT_RANK[candidates[i].unit] != null ? UNIT_RANK[candidates[i].unit] : 2;
-      if (b < a) keep = candidates[i];
-    }
-    const table = doc.createElement("table");
-    for (const row of keep.grid) {
-      const tr = doc.createElement("tr");
-      for (const cellText of row) {
-        const td = doc.createElement("td");
-        td.textContent = cellText;
-        tr.appendChild(td);
-      }
-      table.appendChild(tr);
-    }
-    /* Attach at the GROUP'S FIRST position, not the winning unit's own - adidas puts
-       the unit toggle's later tabs (the "cm" button, its own gl-table div) BEHIND a
-       caption paragraph ("Scroll horizontally…") that the existing sibling-heading
-       walk (tableContextText, 4-hop cap, unchanged here) counts against its budget,
-       so attaching to the cm candidate's OWN container lost the section heading ("MEN'S
-       SHIRTS & TOPS SIZING") entirely on the men's chart - gender fell back to
-       "unknown" though a labelled chart was sitting right there. The FIRST-rendered
-       slot of a toggle pair is, by construction, the one closest to the shared
-       heading; which slot's VALUES get kept is a separate decision already made
-       above. */
-    candidates[0].el.appendChild(table);
-  }
-}
-
+   WHICH ELEMENTS ARE TABLES is the SHARED parser's call (sizeChartTables in
+   widget/pear-widget.js, moved there 2026-10-03): real <table>s AND ARIA div-grids
+   (adidas.co.il's role="table"/"row"/"cell" charts, no <table> anywhere), with an
+   "Inches | cm" toggle pair collapsed to the cm grid. This file used to synthesize a
+   <table> per ARIA grid and normalize "86cm" to "86 cm" before handing it over - the
+   shared parser reads both natively now, so the widget gets the same fixes. Each
+   chart's labels are read from its `anchor` - for a collapsed toggle pair, the
+   first-rendered grid, the one directly under the section heading. */
 export function extractAllSizeCharts(doc, url, referrer = null) {
   const parser = createSizeChartParser(doc);
-  synthesizeAriaGridCharts(doc, parser);
   const pageText = pageContextText(doc, url);
   const out = [];
-  const tables = Array.from(doc.querySelectorAll("table")).slice(0, MAX_TABLES_PER_PAGE);
-  for (const table of tables) {
+  const tables = parser.sizeChartTables(doc).slice(0, MAX_TABLES_PER_PAGE);
+  for (const { el: table, anchor } of tables) {
     let rows = null;
     try {
       rows = parser.sizeChartFromGrid(parser.sizeChartOrient(parser.sizeChartGrid(table)),
@@ -424,7 +315,7 @@ export function extractAllSizeCharts(doc, url, referrer = null) {
     const measured = rows.filter((r) =>
       ["Chest", "Waist", "Hips", "Legs"].some((k) => typeof r["min" + k] === "number"));
     if (measured.length < 2) continue;
-    const localText = tableContextText(table);
+    const localText = tableContextText(anchor);
     out.push({
       rows: measured,
       localText,
@@ -481,15 +372,10 @@ export async function defaultFetchText(url) {
    {"success":false} envelope is not a page. */
 export function unwrapHtmlEnvelope(r) {
   if (!r || !r.ok || typeof r.text !== "string") return r;
-  const t = r.text.trimStart();
-  if (t[0] !== "{") return r;
-  let j;
-  try { j = JSON.parse(t); } catch { return r; }
-  if (!j || typeof j !== "object") return r;
-  const body = typeof j.html === "string" ? j.html : typeof j.content === "string" ? j.content : null;
-  if (body == null) return r;
-  if (j.success === false) return { ...r, ok: false, text: "", error: "envelope success:false" };
-  return { ...r, text: body, contentType: "text/html", envelope: true };
+  const env = PURE.sizeChartUnwrapEnvelope(r.text);   // shared with the widget
+  if (!env) return r;
+  if (env.failed) return { ...r, ok: false, text: "", error: "envelope success:false" };
+  return { ...r, text: env.html, contentType: "text/html", envelope: true };
 }
 
 /* A guide address that just answers with the HOME page - castro.com's /size-guide and
@@ -897,8 +783,9 @@ export async function discoverSizeCharts(storeUrl, {
   return { report, records };
 }
 
-/* Found charts -> store_size_charts rows, one per (gender, age, type, product_key,
-   source). An inline PDP chart seen on 2+ product pages is the store's general chart
+/* Found charts -> store_size_charts rows, one per (gender, age, type, size_system,
+   product_key, source) - archive/supabase_setup_v16.sql put size_system in the key, so a
+   store's letter and numeric charts for one audience/type are BOTH kept. An inline PDP chart seen on 2+ product pages is the store's general chart
    (product_key ""); seen once, it is kept product-scoped (product_key = that URL) -
    the room's Phase 1 lookup reads store-wide rows only. Two DIFFERENT charts claiming
    the same key keep the more-sighted one and are reported as a conflict, never merged. */
@@ -937,19 +824,19 @@ export function buildRecords(found, storeDomain, report = { charts: [], conflict
       parser_version: PARSER_VERSION,
       raw_snapshot: e.f.chart.rawSnapshot || null,
     };
-    const k = [record.gender, record.age_group, record.garment_type, record.product_key, record.source].join("|");
+    const k = [record.gender, record.age_group, record.garment_type, record.size_system, record.product_key, record.source].join("|");
     const prev = byKey.get(k);
     if (!prev) { byKey.set(k, record); continue; }
-    /* Equal sightings: the size system the garment type is SOLD in wins before row
-       count. castro.com's women's guide is one block with two tables - EU 32-46 and
-       XS/0-XL - both women/adult/tops, and the table key has no size_system column.
-       Row count kept the numeric one, which castro's XXS-XL women's tops can never use
-       (the room's >= 2 shared-sizes gate abstains on it). Either table is the store's
-       own; this only picks the one the room can actually apply. */
-    const conventional = (r) => (r.garment_type === "tops" ? r.size_system === "alpha" : r.size_system === "numeric") ? 1 : 0;
+    /* THE KEY USED TO LACK size_system, and this is where that cost a chart. castro.com's
+       women's guide is one block with two tables - EU 32-46 and XS/0-XL - both
+       women/adult/tops; under the v15 key they collided and a "conventional size system
+       for the garment type" tie-break kept the XS-XL one and DROPPED the EU one. Since
+       v16 they are two keys and both are stored; the room picks per product, by which
+       chart shares sizes with that product's own list. What still lands here is two
+       different charts in the SAME size system for one key - genuinely ambiguous, so the
+       more-sighted (then the longer) one is kept and the other is reported. */
     const better = record.sightings > prev.sightings ||
-      (record.sightings === prev.sightings && (conventional(record) > conventional(prev) ||
-        (conventional(record) === conventional(prev) && record.rows.length > prev.rows.length)));
+      (record.sightings === prev.sightings && record.rows.length > prev.rows.length);
     report.conflicts.push({
       reason: "two different charts for one key - kept the more-sighted", key: k,
       kept: (better ? record : prev).source_url, dropped: (better ? prev : record).source_url,
@@ -979,17 +866,32 @@ export function isMissingTableError(err) {
     /store_size_charts/.test(msg) && /does not exist|schema cache|not find/i.test(msg);
 }
 
+/* The upsert target - archive/supabase_setup_v16.sql's unique index, column for column.
+   Before v16 runs, Postgres has no constraint on these columns and answers 42P10; the
+   save then writes NOTHING rather than falling back to the v15 key, which would let the
+   letter and numeric charts of one audience overwrite each other again. */
+export const STORE_SIZE_CHARTS_KEY = "store_domain,gender,age_group,garment_type,size_system,product_key,source";
+export function isMissingKeyError(err) {
+  if (!err) return false;
+  return String(err.code || "") === "42P10" ||
+    /no unique or exclusion constraint matching the ON CONFLICT/i.test(String(err.message || err));
+}
+
 export async function saveSizeChartRecords(supabase, records, log = console.log) {
   if (!supabase) return { saved: 0, skipped: "no_supabase" };
   if (!records.length) return { saved: 0 };
   const now = new Date().toISOString();
   const payload = records.map((r) => ({ ...r, updated_at: now, captured_at: now }));
   const { error } = await supabase.from("store_size_charts")
-    .upsert(payload, { onConflict: "store_domain,gender,age_group,garment_type,product_key,source" });
+    .upsert(payload, { onConflict: STORE_SIZE_CHARTS_KEY });
   if (error) {
     if (isMissingTableError(error)) {
       log("  ⚠ store_size_charts does not exist - run archive/supabase_setup_v15.sql, then re-run with --save");
       return { saved: 0, skipped: "table_missing" };
+    }
+    if (isMissingKeyError(error)) {
+      log("  ⚠ store_size_charts still has the v15 key (no size_system) - run archive/supabase_setup_v16.sql, then re-run with --save. Nothing was written.");
+      return { saved: 0, skipped: "key_migration_missing" };
     }
     throw new Error("store_size_charts upsert failed: " + (error.message || error));
   }

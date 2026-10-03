@@ -2270,11 +2270,17 @@ function resolvedSoldOutSizes() {
    GET /api/store-size-chart). This region decides WHICH stored chart, if any, belongs
    to the garment in front of the shopper.
 
-   WHAT DOES NOT CHANGE (CLAUDE.md §2.5b, verbatim in force): whatever is picked here
-   reaches calculateSize() through resolvedStoreSizeChart() and applyStoreChartOverlay()
-   exactly like a widget chart does - fine-tune columns only, on rows the height/weight
-   kernel already admitted. A stored chart is used ONLY when the widget sent none: the
-   product page's own table is more specific evidence than a store-wide guide.
+   TWO WAYS A PICKED CHART IS USED (CLAUDE.md §2.5b, as changed 2026-10-03):
+     1. THE OVERLAY (unchanged): it reaches calculateSize() through
+        resolvedStoreSizeChart() and applyStoreChartOverlay() exactly like a widget chart
+        does - fine-tune columns only, on rows the height/weight kernel already admitted
+        - and ONLY when the widget sent none: the product page's own table is more
+        specific evidence than a store-wide guide for that tie-break.
+     2. THE DECISION (new): storeChartRecommendation() below lets the picked chart
+        DECIDE the adult size when the estimate is clear - after the kernel has fixed
+        adult/child and the no-match exit. This uses the stored chart whether or not the
+        widget sent one, because only a stored chart carries the gender/age/type labels
+        the decision has to match on.
 
    EVERY AMBIGUITY ABSTAINS (CLAUDE.md §2.5), and abstaining is free - it is the vetted
    default matrix, i.e. the behaviour before this existed:
@@ -2393,43 +2399,234 @@ function pickStoredSizeChart() {
         Array.isArray(c.rows) && c.rows.length);
       if (!pool.length) continue;
       const gendered = pool.some((c) => c.gender === "men" || c.gender === "women");
-      let pick = null;
-      if (gender === "men" || gender === "women") pick = pool.find((c) => c.gender === gender);
-      if (!pick) pick = pool.find((c) => c.gender === "unisex");
-      if (!pick && !gendered) pick = pool.find((c) => c.gender === "unknown");
-      if (!pick) {
+      /* ONE GENDER TIER, POSSIBLY SEVERAL CHARTS. Since archive/supabase_setup_v16.sql a
+         store keeps a chart per SIZE SYSTEM - castro.com's women's tops guide is an EU
+         32-46 table AND an XS-XL table, both women/adult/tops. Within the tier that
+         matches, the chart sharing the most sizes with THIS product's own list wins
+         (a letter product takes the letter chart, a 26-30 waist product the numeric
+         bottoms chart); on equal overlap the chart whose OWN labels match wins, then the
+         server's order (newest first). The tier order itself is
+         unchanged: the garment's own gender, then unisex, then unlabelled only when the
+         store has no gendered chart of this type. */
+      let tierCharts = [];
+      if (gender === "men" || gender === "women") tierCharts = pool.filter((c) => c.gender === gender);
+      if (!tierCharts.length) tierCharts = pool.filter((c) => c.gender === "unisex");
+      if (!tierCharts.length && !gendered) tierCharts = pool.filter((c) => c.gender === "unknown");
+      if (!tierCharts.length) {
         return none(gendered
           ? `store has gendered ${type} charts, garment gender is ${gender} - not guessing`
           : `no usable ${type} chart`);
       }
-      let rows = pick.rows.map((r) => ({ ...r, aliases: r && r.aliases ? { ...r.aliases } : undefined }));
-      /* The ONE numeric convention this file already vets: FOX's women's tops ladder
-         (WOMEN_TOPS_EU_SIZE_CHART, EU 34-44 -> XS-XXL). Applied only to a chart the
-         store itself labelled women's tops, and only as an alias beside the store's
-         own token - never to a men's, unlabelled or bottoms chart, where the same
-         number means another body. */
-      if (pick.gender === "women" && type === "tops") {
-        rows = rows.map((r) => {
-          const eu = WOMEN_TOPS_EU_SIZE_CHART.find((w) => String(w.euSize) === canonicalSizeToken(r.size));
-          if (!eu || (r.aliases && r.aliases.int)) return r;
-          return { ...r, aliases: { ...(r.aliases || {}), int: eu.size } };
-        });
-      }
-      if (sizes.length >= 2) {
-        const own = new Set(sizes.map(canonicalSizeToken));
+      const own = new Set(sizes.map(canonicalSizeToken));
+      /* Ties on overlap go to the chart whose OWN size labels match (not just its
+         aliases): castro's EU 32-46 women's chart answers to XS-XL through the vetted
+         EU->letter aliases, so on an XS-XL product it ties the store's own XS-XL chart -
+         and both rows share one updated_at, so "server order" would be arbitrary. */
+      let pick = null, rows = null, overlap = -1, direct = -1;
+      for (const cand of tierCharts) {
+        let candRows = cand.rows.map((r) => ({ ...r, aliases: r && r.aliases ? { ...r.aliases } : undefined }));
+        /* The ONE numeric convention this file already vets: FOX's women's tops ladder
+           (WOMEN_TOPS_EU_SIZE_CHART, EU 34-44 -> XS-XXL). Applied only to a chart the
+           store itself labelled women's tops, and only as an alias beside the store's
+           own token - never to a men's, unlabelled or bottoms chart, where the same
+           number means another body. */
+        if (cand.gender === "women" && type === "tops") {
+          candRows = candRows.map((r) => {
+            const eu = WOMEN_TOPS_EU_SIZE_CHART.find((w) => String(w.euSize) === canonicalSizeToken(r.size));
+            if (!eu || (r.aliases && r.aliases.int)) return r;
+            return { ...r, aliases: { ...(r.aliases || {}), int: eu.size } };
+          });
+        }
         const tokens = new Set();
-        for (const r of rows) {
+        for (const r of candRows) {
           tokens.add(canonicalSizeToken(r.size));
           for (const v of Object.values(r.aliases || {})) tokens.add(canonicalSizeToken(v));
         }
-        const overlap = [...own].filter((t) => tokens.has(t)).length;
-        if (overlap < 2) return none(`stored ${pick.gender}/${type} chart shares ${overlap} size(s) with this product - not its chart`);
+        const shared = [...own].filter((t) => tokens.has(t)).length;
+        const ownLabels = new Set(candRows.map((r) => canonicalSizeToken(r.size)));
+        const sharedDirect = [...own].filter((t) => ownLabels.has(t)).length;
+        if (shared > overlap || (shared === overlap && sharedDirect > direct)) {
+          pick = cand; rows = candRows; overlap = shared; direct = sharedDirect;
+        }
       }
-      return { rows, chart: pick, reason: `stored ${pick.gender}/${pick.age_group}/${type} chart (${pick.source || "scanner"})` };
+      if (sizes.length >= 2 && overlap < 2) {
+        return none(`stored ${pick.gender}/${type} chart shares ${overlap} size(s) with this product - not its chart`);
+      }
+      return { rows, chart: pick, overlap: sizes.length >= 2 ? overlap : null,
+        reason: `stored ${pick.gender}/${pick.age_group}/${type} chart (${pick.size_system || "unknown"}, ${pick.source || "scanner"})` };
     }
     return none("no stored chart of this garment's type");
   } catch (e) {
     return none("stored-chart pick failed: " + (e && e.message ? e.message : e));
+  }
+}
+
+/* ══ THE STORE'S CHART DECIDES THE SIZE - CLAUDE.md §2.5b, changed 2026-10-03 ══════
+   The owner's decision (2026-10-03): when a CONFIDENT store chart exists for this
+   garment, it decides the recommended size - not only the tie-break. "Confident" is
+   exactly what pickStoredSizeChart() already enforces, plus a hard requirement that the
+   product's own size list is known:
+     · the store's own stored chart (scanner capture, store_size_charts), never the
+       widget's PDP table - that one carries no gender/age/type labels, so none of the
+       matching below could be checked on it (it stays a tie-break overlay);
+     · adult chart, adult product (a kids product takes no stored chart at all);
+     · the garment type calculateSize() routes on (tops vs bottoms/jeans);
+     · the garment's gender, else unisex, else unlabelled-only-if-the-store-has-no-
+       gendered-chart - a store with men's AND women's charts and a garment of unknown
+       gender is NEVER guessed between: no chart, today's logic;
+     · >= 2 sizes shared with the product's own list (and the list must be known).
+
+   WHAT IT DOES NOT TOUCH - the kids/adult guard, byte for byte. calculateSize() calls
+   this only AFTER currentBodyCategory / currentSizeCategory are computed from OUR
+   height/weight kernel, only when currentSizeCategory === "adult", and only past the
+   "fits neither chart" early return - so isKidsProduct/isAdultProduct, the
+   genuine-fit-or-no-match rule, the blocked Continue and the overflow copy are all
+   decided exactly as before. The store chart only chooses WHICH adult size, among
+   the sizes this product actually sells.
+
+   THE BODY IT SCORES AGAINST (estimateBodyMeasurements below):
+     · a measurement the shopper TYPED is used as-is, with a ±1.5cm tape error;
+     · otherwise chest/waist/hips are ESTIMATED from height + weight (+ the shopper's
+       gender when they picked one on Screen 1).
+   Each size is scored by how much of that measurement's uncertainty range falls inside
+   the store's band (storeChartRecommendation). If the answer is not clear - nothing
+   comparable, the best size holds < 35% of the body's probability, or the runner-up is
+   within 10 points of it - this returns null and calculateSize() keeps today's answer.
+   Abstaining is free: it is exactly the behaviour before this existed (CLAUDE.md §2.5). */
+
+/* THE ESTIMATE. A torso modelled as a cylinder whose length scales with height and
+   whose volume scales with weight has a cross-section ∝ weight/height, so a
+   circumference ∝ sqrt(weight/height):  C = k · sqrt(weight_kg / height_cm).
+   One coefficient per gender and measurement:
+     men    calibrated on ZARA_SIZE_CHART's own row centres (FOX's vetted men's chart:
+            each row's mid height/weight against its mid chest/waist) - chest k≈155
+            (S 152.6, M 155.2, L 157.6, XL 159.9); waist k≈134 from the same rows' waist
+            columns - which are the old chart's chest-14cm offset, NOT FOX-published, so
+            the waist is the weakest of the three; hips have no column at all and use
+            the standard men's hip ≈ chest - 5cm (k≈146);
+     women  calibrated so a 165cm/60kg woman lands on the standard EU 38 / M body
+            (bust 88, waist ~73, hips 96) - bust k=146, waist k=121, hips k=159.
+   ERROR RANGE - one standard deviation, the residual a height+weight-only regression of
+   a circumference typically leaves (≈3-4cm chest/hips, ≈5-6cm waist, which varies most
+   with where a body carries its weight): men chest 4 / waist 6 / hips 4; women bust 5
+   (cup size is invisible to height and weight) / waist 6 / hips 4.5.
+   GENDER UNKNOWN: the two models are averaged and the spread WIDENED by half the gap
+   between them, so an unknown-gender estimate is honestly less certain and abstains
+   more often - which is the point. Plausibility: 180cm/80kg man -> chest 103 ±4,
+   waist 89 ±6; 165cm/60kg woman -> bust 88 ±5, waist 73 ±6, hips 96 ±4.5.
+   WHAT THE THRESHOLDS MEAN IN PRACTICE. With a ±4-5cm spread and the 5-6cm bands
+   stores publish, the most an estimate can put inside one band is ~45-55%, so an
+   ESTIMATED body decides only when it sits well inside a band; one near a band edge is
+   a coin flip (e.g. 46% vs 43%) and abstains on the 10-point margin. A TYPED
+   measurement (±1.5cm) decides almost everywhere. That asymmetry is intended: the
+   store chart only overrides our kernel when it is clearly saying something. */
+const BODY_ESTIMATE_K = {
+  men:   { chest: 155, waist: 134, hips: 146 },
+  women: { chest: 146, waist: 121, hips: 159 },
+};
+const BODY_ESTIMATE_SD = {
+  men:   { chest: 4, waist: 6, hips: 4 },
+  women: { chest: 5, waist: 6, hips: 4.5 },
+};
+const TYPED_MEASUREMENT_SD = 1.5;
+const STORE_DECIDE_MIN_SCORE = 0.35;   // the winning size must hold >= 35% of the body
+const STORE_DECIDE_MIN_MARGIN = 0.1;   // ...and beat the runner-up by >= 10 points
+
+/**
+ * @param {number} height cm  @param {number} weight kg
+ * @param {"men"|"women"|null} gender the SHOPPER's (currentUserGender), never the garment's
+ * @param {{chest?:number|null, waist?:number|null, legs?:number|null}} typed
+ * @returns {{chest:{mean,sd,typed}, waist:{mean,sd,typed}, hips:{mean,sd,typed}, legs?:{mean,sd,typed}, gender:string}}
+ */
+function estimateBodyMeasurements(height, weight, gender, typed = {}) {
+  const r = Math.sqrt(weight / height);
+  const out = { gender: gender === "men" || gender === "women" ? gender : "unknown" };
+  for (const m of ["chest", "waist", "hips"]) {
+    let mean, sd;
+    if (out.gender !== "unknown") {
+      mean = BODY_ESTIMATE_K[out.gender][m] * r;
+      sd = BODY_ESTIMATE_SD[out.gender][m];
+    } else {
+      const a = BODY_ESTIMATE_K.men[m] * r, b = BODY_ESTIMATE_K.women[m] * r;
+      mean = (a + b) / 2;
+      sd = Math.sqrt((BODY_ESTIMATE_SD.men[m] ** 2 + BODY_ESTIMATE_SD.women[m] ** 2) / 2 + ((a - b) / 2) ** 2);
+    }
+    out[m] = { mean: Math.round(mean * 10) / 10, sd: Math.round(sd * 10) / 10, typed: false };
+  }
+  for (const m of ["chest", "waist", "legs"]) {
+    const v = typed && typed[m];
+    if (typeof v === "number" && Number.isFinite(v) && v > 0) out[m] = { mean: v, sd: TYPED_MEASUREMENT_SD, typed: true };
+  }
+  return out;
+}
+
+/* Standard normal CDF (Abramowitz-Stegun 7.1.26 erf, |error| < 1.5e-7). */
+function normalCdf(z) {
+  const x = Math.abs(z) / Math.SQRT2, t = 1 / (1 + 0.3275911 * x);
+  const erf = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return z >= 0 ? (1 + erf) / 2 : (1 - erf) / 2;
+}
+
+/**
+ * The store chart's verdict for this body, or null to keep today's logic.
+ * Pure over its arguments + pickStoredSizeChart()'s module state (typeof-guarded).
+ * WHICH MEASUREMENTS COUNT, and how much: a top is decided on chest (weight 2), with
+ * waist (1) and hips (0.5) as supporting evidence when the store prints them; a bottom
+ * on waist (2), hips (1.5) and a typed outseam (1). A chart that shares none of the
+ * PRIMARY ones with the body (chest for a top; waist or hips for a bottom) abstains.
+ * Store bands are widened by 0.5cm each side so a body between two integer bands
+ * (86 | 87) is not "in neither".
+ * @returns {{size:string, score:number, runnerUp:number, chart:object, body:object, reason:string}|null}
+ */
+function storeChartRecommendation({ height, weight, chest, waist, legs, garmentSizes, baseChart, numericOnly, userGender }) {
+  try {
+    if (typeof pickStoredSizeChart !== "function") return null;
+    const sizes = parseSizeList(garmentSizes);
+    if (sizes.length < 2) return null;                    // overlap cannot be checked
+    const picked = pickStoredSizeChart();
+    if (!picked.chart || !picked.rows.length) return null;
+    const type = picked.chart.garment_type;
+    const weights = type === "tops" ? { chest: 2, waist: 1, hips: 0.5 } : { waist: 2, hips: 1.5, legs: 1 };
+    const primary = type === "tops" ? ["chest"] : ["waist", "hips"];
+    const body = estimateBodyMeasurements(height, weight, userGender, { chest, waist, legs });
+    const numericProduct = sizes.every((s) => /^\d+$/.test(s));
+    const byToken = storeChartTokenMap(picked.rows, numericProduct);
+    const scored = [], seenRows = new Set();
+    for (const own of sizes) {
+      const row = byToken.get(canonicalSizeToken(own));
+      if (!row || seenRows.has(row)) continue;
+      seenRows.add(row);
+      let num = 0, den = 0, hasPrimary = false;
+      for (const [m, w] of Object.entries(weights)) {
+        const cap = m === "legs" ? "Legs" : m.charAt(0).toUpperCase() + m.slice(1);
+        const lo = row["min" + cap], hi = row["max" + cap], est = body[m];
+        if (typeof lo !== "number" || typeof hi !== "number" || !est) continue;
+        const p = normalCdf((hi + 0.5 - est.mean) / est.sd) - normalCdf((lo - 0.5 - est.mean) / est.sd);
+        num += w * p; den += w;
+        if (primary.includes(m)) hasPrimary = true;
+      }
+      if (!den || !hasPrimary) continue;
+      scored.push({ own, score: num / den });
+    }
+    if (!scored.length) return null;
+    scored.sort((a, b) => b.score - a.score);
+    const best = scored[0], runnerUp = scored[1] ? scored[1].score : 0;
+    const why = `store ${picked.chart.gender}/${type} chart, body ${body.gender} ` +
+      ["chest", "waist", "hips"].map((m) => `${m} ${body[m].mean}±${body[m].sd}${body[m].typed ? " (typed)" : ""}`).join(", ");
+    if (best.score < STORE_DECIDE_MIN_SCORE || best.score - runnerUp < STORE_DECIDE_MIN_MARGIN) {
+      console.log(`[PEAR] store chart too uncertain to decide (best ${best.own} ${best.score.toFixed(2)} vs ${runnerUp.toFixed(2)}) - keeping the default logic; ${why}`);
+      return null;
+    }
+    /* The base chart's spelling of that size when it has one ("XXL", not the product's
+       "2XL"), so currentUserSize means exactly what it meant before for the ladder,
+       getSizeDelta() and the fit sentence; otherwise the product's own token. */
+    const baseRow = (baseChart || []).find((r) => canonicalSizeToken(r.size) === canonicalSizeToken(best.own));
+    const size = baseRow ? baseRow.size : best.own;
+    if (numericOnly && !/^\d+$/.test(size)) return null;  // formatSizeLabel would strip a letter to ""
+    return { size, score: best.score, runnerUp, chart: picked.chart, body, reason: why };
+  } catch (e) {
+    console.warn("[PEAR] store-chart decision failed, keeping the default logic:", e?.message || e);
+    return null;
   }
 }
 
@@ -3134,6 +3331,24 @@ function calculateSize() {
         return dn < dc || (dn === dc && n < closest) ? n : closest;
       }));
     }
+  }
+
+  /* THE STORE'S CHART DECIDES (CLAUDE.md §2.5b, changed 2026-10-03). Placed HERE - after
+     currentBodyCategory/currentSizeCategory, after the no-match early return, after the
+     kernel's own answer - so the kids/adult guard and the genuine-fit-or-no-match rule
+     are untouched: this can only replace one ADULT size with another adult size the
+     product actually sells. null (no confident chart, or too uncertain) keeps bestSize
+     exactly as computed above. See storeChartRecommendation() for every rule. */
+  if (currentSizeCategory === "adult" && typeof storeChartRecommendation === "function") {
+    const decided = storeChartRecommendation({
+      height, weight, chest, waist, legs, garmentSizes, baseChart: baseAdultChart,
+      numericOnly: useNumericPantsChart, userGender: currentUserGender,
+    });
+    if (decided && decided.size !== bestSize) {
+      console.log(`[PEAR] store chart decided the size: ${decided.size} (default logic said ${bestSize}; ` +
+        `score ${decided.score.toFixed(2)} vs ${decided.runnerUp.toFixed(2)}) - ${decided.reason}`);
+    }
+    if (decided) bestSize = decided.size;
   }
 
   /* PHASE 0 - MEASURED, NEVER ACTED ON. When a store chart (the widget's, or a stored

@@ -113,7 +113,7 @@ wrong"*, *"it slimmed me down"*, *"front and back aren't right"*.
 | **A. Prompt text** | what the model is told | `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` | mostly dead |
 | **B. Reference image** | what the model is shown | `referenceImageFor`, `galleryOf`, `distinctBackOf`, `createGarmentComposite` | **live** |
 | **C. Orientation** | which asset is on the wire when | `OrientationWatcher`, `effectiveAngle`, `autoOrientation` | **live** |
-| **D. Size ladder** | the recommended size in the UI | `calculateSize`, `SIZE_SCALE`, `*_SIZE_CHART`, `applyStoreChartOverlay` | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
+| **D. Size ladder** | the recommended size in the UI | `calculateSize`, `SIZE_SCALE`, `*_SIZE_CHART`, `applyStoreChartOverlay`, `storeChartRecommendation` (§2.5b) | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
 
 **Layer B is where most real fit/back-view problems actually live.** "The back
 came out plain" is almost never a prompt problem — it is `distinctBackOf()`
@@ -174,26 +174,50 @@ dimensions are fixed. Never the body's outline.
 `DEFAULT_CATEGORY = "unknown"`, never `"tops"` — a guess indistinguishable from
 a verdict outranks the room's own stronger classifier.
 
-### 2.5b A storefront's size chart may refine the fine-tune, never the kernel
+### 2.5b A confident STORED store chart decides the adult size; the kernel still gates
+*Changed 2026-10-03 by owner decision — before that, a store chart could only break ties.*
+
 `calculateSize()` has two stages. The **kernel** is height + weight, scored by
 `coreHwPenalty()`, and it decides which rows are candidates at all,
 `currentBodyCategory`/`currentSizeCategory` (and so the kids/adult go-live guard),
 and the overflow ceiling behind "no size available". The **fine-tune** is the
-`×0.5` chest/waist/legs pass that only breaks a tie *between* rows the kernel
-already admitted.
+`×0.5` chest/waist/legs pass that breaks a tie *between* rows the kernel admitted.
 
-`applyStoreChartOverlay()` writes fine-tune columns and nothing else — it does not
-name `min/maxHeight` or `min/maxWeight` anywhere, and it may only *change* a band
-the base row already carries, never add or remove one. That bound is the whole
-reason parsing a merchant's HTML is an acceptable input to the size calculator: a
-bad scrape can at worst move the recommendation between two sizes that already fit
-this body, and only for a shopper who filled in an optional measurement. It cannot
-invent a candidate, remove one, flip adult↔child, or turn a match into a no-match.
+Store charts now act in two places, and **neither reaches the kernel**:
 
-Do not widen it to the kernel "so the store's chart really counts". The store's
-chart is evidence about **cloth**; ours is vetted evidence about **bodies**, and
-the kernel is the half we vetted. `test/size-chart-overlay.test.mjs` §1 asserts
-this as an absence — the form that catches a new well-meant line being added.
+1. **The overlay (unchanged).** `applyStoreChartOverlay()` writes fine-tune columns
+   and nothing else — it does not name `min/maxHeight` or `min/maxWeight`, and it may
+   only *change* a band the base row already carries. Fed by the widget's PDP chart,
+   else the stored chart.
+2. **The decision (new).** `storeChartRecommendation()` lets the store's **stored**
+   chart (`store_size_charts`, via `pickStoredSizeChart()`) *decide* the adult size
+   when it is confident: matched by store, the garment's gender (else unisex, else
+   unlabelled only if the store has no gendered chart), adult, garment type, and
+   **≥ 2 sizes shared with the product's own list** (the list must be known). The
+   shopper's typed chest/waist/outseam are used when present (±1.5 cm); otherwise
+   chest/waist/hips are **estimated** from height + weight (+ the shopper's gender) by
+   `estimateBodyMeasurements()` — `C = k·sqrt(weight/height)`, documented
+   coefficients and ±4–6 cm error ranges in its comment. Each size is scored by the
+   share of that range inside the store's band. It **abstains → today's logic** when
+   the best size holds < 35 % or beats the runner-up by < 10 points, when nothing
+   comparable exists (chest for tops; waist/hips for bottoms), when the garment's
+   gender is unknown and the store has men's *and* women's charts, or when the answer
+   is a letter on a numeric-pants route. The widget's PDP chart never decides: it
+   carries no gender/age/type labels to match.
+
+What must NOT move: the decision runs **after** `currentBodyCategory` /
+`currentSizeCategory` are fixed and **after** the "fits neither chart" early return,
+only when `currentSizeCategory === "adult"`, and it only ever returns a size the
+product sells. So `isKidsProduct`/`isAdultProduct`, genuine-fit-or-no-match, the
+blocked Continue and the overflow copy are exactly as before — a store chart picks
+*which adult size*, it cannot admit a body the kernel refused or flip adult↔child.
+
+Do not widen either path to the kernel "so the store's chart really counts". The
+store's chart is evidence about **cloth**; ours is vetted evidence about **bodies**.
+`test/size-chart-overlay.test.mjs` §1 and §6 assert this as absences (no
+height/weight name in either function, decision placed after the guard);
+`test/store-chart-recommendation.test.mjs` drives the real `calculateSize()` through
+every decide/abstain case.
 
 ### 2.6 Extract markers are an interface
 Several tests slice a block out of `app.js` by matching its **opening line as a

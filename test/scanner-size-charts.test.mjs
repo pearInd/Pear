@@ -22,6 +22,7 @@
       riding an already-followed trigger, a reused 'kids-table' skin class, and a
       cm cell with no space before the unit.
    ============================================================================= */
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import {
   discoverSizeCharts, buildRecords, classifyContextText, classifyChart, canonicalStoreHost,
@@ -226,7 +227,19 @@ console.log("\n── §5 saving ──");
   const okClient = { from: (t) => ({ upsert: async (rows, o) => { upserted = { t, rows }; opts = o; return { error: null }; } }) };
   const res = await saveSizeChartRecords(okClient, records, () => {});
   check("§5.1 all records upserted into store_size_charts", res.saved === records.length && upserted.t === "store_size_charts");
-  check("§5.2 ...on the table's unique key", opts.onConflict === "store_domain,gender,age_group,garment_type,product_key,source");
+  check("§5.2 ...on the v16 unique key, size_system included",
+    opts.onConflict === "store_domain,gender,age_group,garment_type,size_system,product_key,source", opts.onConflict);
+  /* archive/supabase_setup_v16.sql must declare exactly that index, and drop the v15 one
+     (which would still reject a second chart per audience/type while it exists). */
+  const V16 = readFileSync(new URL("../archive/supabase_setup_v16.sql", import.meta.url), "utf8");
+  check("§5.2b v16 creates the same 7-column unique index and drops the v15 key",
+    /CREATE UNIQUE INDEX IF NOT EXISTS store_size_charts_key_v16_idx\s+ON store_size_charts \(store_domain, gender, age_group, garment_type, size_system, product_key, source\)/.test(V16) &&
+    /DROP INDEX IF EXISTS store_size_charts_key_idx;/.test(V16));
+  const keyLogs = [];
+  const oldKey = { from: () => ({ upsert: async () => ({ error: { code: "42P10", message: "there is no unique or exclusion constraint matching the ON CONFLICT specification" } }) }) };
+  const res42 = await saveSizeChartRecords(oldKey, records, (m) => keyLogs.push(m));
+  check("§5.2c v16 not run (42P10) -> nothing written, a pointer to v16, no throw, no fallback to the old key",
+    res42.saved === 0 && res42.skipped === "key_migration_missing" && keyLogs.some((l) => /supabase_setup_v16\.sql/.test(l)), JSON.stringify(res42));
   check("§5.3 ...with timestamps", upserted.rows.every((r) => r.updated_at && r.captured_at));
 
   const logs = [];
@@ -292,8 +305,16 @@ console.log("\n── §6 castro.com's shape ──");
   check("§6.4 the men's block takes 'men' from the /גברים/ PDP, type from its own caption",
     !!m && m.garment_type === "tops" && m.rows[0].size === "XS" && m.rows[0].aliases && m.rows[0].aliases.eu === "36", JSON.stringify(m));
   check("§6.5 a referrer-derived gender is less confident than a labelled one", w && m && w.confidence < 0.9 && m.confidence < 0.9);
-  check("§6.6 two women's tops tables, one key: the ALPHA one is kept for tops (the sold system)",
-    w && w.size_system === "alpha" && w.rows.map((r) => r.size).join("/") === "XS/S/M", JSON.stringify(w && w.rows.map((r) => r.size)));
+  /* Under the v15 key these two collided and the EU one was DROPPED. Since v16
+     size_system is in the key: both are records, nothing is reported as a conflict. */
+  const wAlpha = crec.find((r) => r.gender === "women" && r.size_system === "alpha");
+  const wNum = crec.find((r) => r.gender === "women" && r.size_system === "numeric");
+  check("§6.6 two women's tops tables (EU numeric + XS-XL): BOTH are kept, one row per size system",
+    wAlpha && wNum && wAlpha.rows.map((r) => r.size).join("/") === "XS/S/M" && wNum.rows[0].size === "32" &&
+    wAlpha.garment_type === "tops" && wNum.garment_type === "tops",
+    JSON.stringify(crec.map((r) => [r.gender, r.size_system, r.rows.map((x) => x.size).join("/")])));
+  check("§6.6b ...and neither is reported as a dropped conflict",
+    !cr.conflicts.some((c) => /two different charts/.test(c.reason)), JSON.stringify(cr.conflicts));
   check("§6.7 the blazers & suits table is NOT stored as bottoms (waist-only columns do not type it)",
     !crec.some((r) => r.garment_type === "bottoms") && cr.conflicts.some((c) => /no garment type/.test(c.reason)),
     JSON.stringify(crec.map((r) => [r.gender, r.garment_type, r.rows.map((x) => x.size).join("/")])));
