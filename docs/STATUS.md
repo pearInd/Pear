@@ -4,14 +4,14 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-02 · main @ `8ce3de6` + this status commit_
+_Last updated: 2026-10-03 · main @ `8ce3de6` + this status commit_
 
 ## At a glance
 
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
-| Store size guides (Phase 0 + 1) | in progress — Phase 1 data live for fox (5 served) + castro (2 served); next: Phase 2 (not started) | main (also re-cut server-side on `hide/main-v2`) |
+| Store size guides (Phase 0 + 1) | in progress — Phase 1 data live for fox (5), castro (2) + adidas (2); next: Phase 2 (not started) | main (also re-cut server-side on `hide/main-v2`) |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
@@ -29,11 +29,18 @@ _Last updated: 2026-10-02 · main @ `8ce3de6` + this status commit_
 
 - [x] Size-guide dry runs for all 4 stores — done 2026-10-02 (results under *Store size guides*).
 - [x] fox.co.il captured with `--save` — 11 rows in `store_size_charts`, 5 store-level served by the API.
-- [ ] **adidas.co.il from your own machine** (bot-challenged from here twice, incl. a 3 s-paced retry):
-      `cd scanner && node scan-store.js --size-charts --max-products=12 https://www.adidas.co.il` —
-      if the outcome is `captured`, send the report before `--save`; if `blocked_by_bot_protection`
-      again, adidas is reachable only through Phase 2 (widget sightings).
-- [x] Next phase decided: castro fix (done, `8ce3de6`, 2 charts saved), then Phase 2 — separately, not started.
+- [x] adidas.co.il captured from your machine 2026-10-03 (it was NOT blocked for you - the
+      bot protection seen from here was IP/fingerprint-specific). 2 charts saved, API verified
+      (results under *Store size guides*). One chart excluded as suspect, not saved - see below.
+- [ ] **Decide the fate of the excluded adidas "unknown/adult/tops" chart.** It came off the
+      `size-w_bottoms` guide (waist/hips only, no chest, yet typed "tops" from page context I
+      could not independently confirm - a follow-up fetch to inspect the raw page got
+      bot-challenged, so I stopped per your instruction rather than keep probing). It is
+      currently just not saved. If you want it investigated: `cd scanner && node -e` a fetch of
+      `https://www.adidas.co.il/on/demandware.store/Sites-adidas-IL-Site/en_IL/Product-SizeChart?cid=size-w_bottoms`
+      from your machine, saved to a file, and I'll read it.
+- [x] Next phase decided: castro fix (done, `8ce3de6`), adidas fix (done, this commit), then
+      Phase 2 — separately, not started.
 - [ ] **SECURITY — rotate two keys** (both were exposed in plain text outside the repo).
       Issue the new key, update every place listed, redeploy, THEN revoke the old one.
       **Gemini API key** (`GEMINI_API_KEY`) — create a new key in Google AI Studio
@@ -99,17 +106,21 @@ _Last updated: 2026-10-02 · main @ `8ce3de6` + this status commit_
   | fox.co.il (Shopify) | captured, 11 charts | linked_page 5/6 + inline_table 6/12. **Saved** (5 store-level + 6 product-scoped; only store-level is served in Phase 1). Spot-checked against the live tables |
   | castro.com | first run js_app_detected (misdiagnosed); **after `8ce3de6`: captured, 2 charts — saved, API verified** | Charts are plain server HTML at `/idus/staticblock/view?id=N`, linked by a `data_url` (underscore) attr and wrapped in `{"success":true,"html":…}`. The existing parser reads 4/6 blocks (adult); 2 kids blocks are age-only, correctly abstained. Also: `/size-guide` & `/size-chart` are soft-404s (return the home page). Endpoint 302s to an abuse page for a bare curl UA; the scanner UA is fine. Stored: women/adult/tops XS–XL (chest/waist/hips; gender from the `/נשים/` PDPs that link it) and men/adult/tops XS–XXXL (chest). Not stored: the blazers & suits table (untyped), the EU 32–46 women's table (same key; castro sells tops in alpha), 2 kids blocks (age-only). Castro's own "XSS" row (typo for XXS) is skipped by the parser. The home-echo paths now count as missing |
   | terminalx.com (Magento SPA) | js_app_detected | PDP state carries only the CMS block id (`blocks.size_chart: "sizechart_terminal_x_1"`, 6 distinct ids incl. brand charts); content is behind `/graphql`, which answers 401 anonymously. Genuinely JS-only → Phase 2. Sampler fixed in `8ce3de6`: no category pages now (2/12 are dead sitemap 404s) |
-  | adidas.co.il | blocked_by_bot_protection | home page challenged (curl: 403); retry at 3 s pace also challenged → Phase 2 or a local run |
+  | adidas.co.il (Salesforce Commerce Cloud) | blocked from here; **not blocked from your machine 2026-10-03 → captured, saved, API verified** | Platform was misreported "shopify" - a Global-e checkout config key literally named `UseShopifyCheckoutForPickUpDeliveryMethod` is the ONLY "shopify" mention on the whole homepage; real markers (`/on/demandware.static/`, `Sites-adidas-IL-Site`) now drive detection. Charts are ARIA div-grids (`role="table"/"row"/"cell"`, no `<table>` anywhere) behind `{action,content,success}` JSON (same shape as castro's, different field name) - inline on the PDP there is NOTHING, only a click-triggered AJAX endpoint (the 50+ "size-guide triggers with no link" per run are this). Stored: men/adult/tops XS–3XL (chest/waist/hips) and women/adult/bottoms 2XS–XXL (waist/hips). Excluded, not saved: an "unknown/adult/tops" chart off the bottoms guide with no chest column - couldn't confirm why before a follow-up fetch got bot-challenged, so investigation stopped (§"Waiting on you"). `Union.png`, a 16px icon riding the already-followed size-guide `<a>` (hidden via a `d-none` class, its OWN class text literally containing the word "sizeguide"), was being reported as a found IMAGE chart - fixed with a hidden-markup + small-dimension + "icon rides an already-followed trigger" exclusion. A reused `"kids-table___1-YOY"` CSS-Modules skin class sits on BOTH the men's and women's ADULT chart containers - a styling hook, not an audience claim; stripped from context text generally (any `___<hash>`-suffixed class/id token). Every cm cell is written with no space before the unit (`"83 - 86cm"`), which defeats the shared parser's own `\bcm\b` test and was silently doubling already-correct values by 2.54 via the ancestor-text unit fallback; fixed by normalizing the one missing space before handing text to the (otherwise untouched) shared parser |
 
-  Image charts detected: **0 across all reachable stores.**
-- **Done 2026-10-02 (`8ce3de6`):** castro capture (`data_url`, JSON envelope, home-echo guide
-  paths, referrer-derived gender, suits/blazers untyped, alpha-for-tops tie-break); product
-  sampler by URL shape; product keys percent-encoded (fox's one raw-Hebrew row fixed in place).
-  `store_size_charts`: 13 rows — fox 11 (5 served), castro 2 (2 served).
+  Image charts detected: **0 across all reachable stores** (Union.png was a false positive, not a real chart - see above).
+- **Done 2026-10-02/03 (`8ce3de6`, this commit):** castro capture (`data_url`, JSON envelope,
+  home-echo guide paths, referrer-derived gender, suits/blazers untyped, alpha-for-tops
+  tie-break); adidas capture (platform detection, ARIA div-grid→synthetic-table, JSON
+  `{content}` envelope, decorative-image exclusion, CSS-Modules-hash context stripping,
+  no-space-unit normalization, inches/cm toggle-pair dedup); product sampler by URL shape;
+  product keys percent-encoded (fox's one raw-Hebrew row fixed in place).
+  `store_size_charts`: 15 rows — fox 11 (5 served), castro 2 (2 served), adidas 2 (2 served).
 - **Remaining:** **Phase 2** (widget sightings) — next, approved, not started; the only route to
-  terminalx and adidas. Phase 3 (vision) has zero measured demand; revisit if Phase 2 reports
-  image charts. Known limit: the table key has no `size_system`, so a store with numeric AND
-  alpha charts for one audience/type keeps only one.
+  terminalx (adidas is now Phase 1). Phase 3 (vision) has zero measured demand; revisit if
+  Phase 2 reports image charts. Known limits: the table key has no `size_system`, so a store
+  with numeric AND alpha charts for one audience/type keeps only one; the adidas
+  "unknown/adult/tops" exclusion above is open.
 - **Open decisions:** `hide/main-v2` moved this logic server-side (`b2ac5ad`, `dae0138`) —
   which shape is canonical once that branch lands.
 
