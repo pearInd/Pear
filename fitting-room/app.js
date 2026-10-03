@@ -15132,6 +15132,24 @@ async function primeBackReference(gen) {
   return true;
 }
 
+/* THE BACK GOES OUT AT CONNECT (moved 2026-10-04). It was sent inside the reveal hold's re-assert: that put
+   the back's first acknowledgement (1.12s in the session that reported it) ahead of the reveal, and turned
+   main's re-assert - a re-send of the image already on the wire - into a back->front switch right before
+   the reveal; that session revealed on a front that had not taken (a sleeveless panel with the print) while
+   every session that re-asserted the front as main does had revealed on the full shirt. Now: right after the
+   garment is applied at connect, the back once and the front again - while the first frames are still on
+   their way, hidden - and the reveal hold's re-assert is main's again. */
+function primeAtConnect(gen) {
+  if (typeof primeBackReference !== "function") return Promise.resolve(false);
+  return primeBackReference(gen).then((primed) => {
+    if (!primed || gen !== sessionGen || !isLive()) return false;
+    lastSentImageRef = null;
+    rtImageOnWire = false;
+    lastSentPrompt = null;
+    return applyActive().then(() => true);
+  }).catch((e) => { console.warn("[PEAR] back prime at connect failed:", e?.message || e); return false; });
+}
+
 function armFirstFrameBilling(video, gen) {
   if (!video || billingStarted || gen !== sessionGen) return;
   let done = false;
@@ -15284,24 +15302,14 @@ function armFirstFrameBilling(video, gen) {
        Fire-and-forget, like every other background re-condition in this file: the next
        decoded frame re-evaluates the gate, so there is nothing useful to await, and a
        rejection here must not take the session down. */
-    const reassert = () => {
-      lastSentImageRef = null;
-      rtImageOnWire = false;
-      lastSentPrompt = null;
-      return applyActive();
-    };
-    /* THE BACK GOES OUT FIRST, ONCE, INSIDE THIS HIDDEN HOLD (2026-10-01) - see primeBackReference().
-       The re-assert then re-sends the front as it always did, and the settle hold waits on it, so the
-       shopper still first sees the front, settled. typeof-guarded: cold-start-passthrough runs this
-       standalone, where there is no prime and the re-assert stays synchronous, exactly as before. */
-    const primed = why === "cold-start re-assert" && typeof primeBackReference === "function" ? primeBackReference(myGen) : null;
-    if (!primed) {
-      reassert().catch((e) => console.warn("[PEAR] cold-start re-dispatch failed:", e?.message || e));
-      return;
-    }
-    primed.catch(() => false)
-      .then(() => { if (myGen === sessionGen && isLive()) return reassert(); })
-      .catch((e) => console.warn("[PEAR] cold-start re-dispatch failed:", e?.message || e));
+    /* MAIN'S RE-ASSERT, EXACTLY (restored 2026-10-04): the back's one-time send moved to the connect
+       (primeAtConnect), so this is again a re-send of the image already on the wire - the convergence
+       nudge it was written to be - and it no longer waits on the back's first acknowledgement. */
+    lastSentImageRef = null;
+    rtImageOnWire = false;
+    lastSentPrompt = null;
+    applyActive().catch((e) =>
+      console.warn("[PEAR] cold-start re-dispatch failed:", e?.message || e));
   };
 
   const fire = () => {
@@ -16315,6 +16323,8 @@ async function goLive() {
        shopper - a harsh outcome for the stage whose likeliest cause is a transport that
        had not finished settling. See applyConditioningWithRecovery(). */
     if (!await applyConditioningWithRecovery()) return;
+    /* The back's one-time send, now that the garment is on (primeAtConnect) - fire-and-forget, hidden. */
+    if (typeof primeAtConnect === "function") primeAtConnect(sessionGen);
     // Log every garment being worn - both top AND bottom when a full look is active.
     const _trackSize = activeTryOnSize || currentUserSize;
     const _look = resolveLook();

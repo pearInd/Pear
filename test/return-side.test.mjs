@@ -29,6 +29,7 @@ const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "ut
 const ENGINE_SRC = readFileSync(new URL("../lib/orient-engine.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const POSES = JSON.parse(readFileSync(new URL("./torso-twist-poses.json", import.meta.url), "utf8"));
 const S3 = JSON.parse(readFileSync(new URL("./return-side-s3.json", import.meta.url), "utf8"));
+const U1 = JSON.parse(readFileSync(new URL("./return-side-u1.json", import.meta.url), "utf8"));
 const E = await import("../lib/orient-engine.js");
 
 let fails = 0;
@@ -60,10 +61,17 @@ console.log("\n── §1 the trigger ──");
     { vote: null, lock: "back", yawAbs: 72, at: 1200, ord: 0.32, ordAt: 1200 },
   ];
   const out = run(trig(0.2), ret);
-  check("§1.1 the return waits for the chest: nothing at |yaw| 59 with the shoulders still on the back side",
-    !out[2].fire && !out[3].fire && !out[4].fire, JSON.stringify(out));
-  check("§1.2 ...and FRONT goes out on the first reading with the chest round (order 0.32 >= 0.2), via the order",
-    out[5].fire === "front" && out[5].via === "order", JSON.stringify(out[5]));
+  check("§1.1 the return waits for the side: nothing at |yaw| 59 with the shoulders still well on the back side (order -0.51)",
+    !out[0].fire && !out[1].fire && !out[2].fire, JSON.stringify(out));
+  check("§1.2 ...and FRONT goes out AT THE SIDE - the order -0.12, coming from the back - via the order (2026-10-04)",
+    out[3].fire === "front" && out[3].via === "order", JSON.stringify(out[3]));
+  const skip = run(trig(0.2), [
+    { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -1, ordAt: 0 },
+    { vote: null, lock: "back", yawAbs: 55, at: 240, ord: -0.62, ordAt: 240 },
+    { vote: null, lock: "back", yawAbs: 60, at: 480, ord: 0.48, ordAt: 480 },   // a fast pass: the side fell between readings
+  ]);
+  check("§1.2b a fast pass whose side fell between two readings fires on the chest instead",
+    !skip[1].fire && skip[2].fire === "front", JSON.stringify(skip));
   const noOrd = run(trig(0.2), ret.map(({ ord, ordAt, ...o }) => o));
   check("§1.3 a room that never sends an order keeps main's return exactly: FRONT at |yaw| 59",
     firstFire(noOrd) === 2 && noOrd[2].fire === "front" && noOrd[2].via === "fast", JSON.stringify(noOrd));
@@ -91,9 +99,9 @@ console.log("\n── §1 the trigger ──");
       { vote: "back", lock: "back", yawAbs: 5, at: 0 }, { vote: "back", lock: "back", yawAbs: 25, at: 240 },
       { vote: null, lock: "back", yawAbs: 25, at: 240, lostAt: 480 }])[2].fire === "front");
   const t = trig(0.2);
-  const w = run(t, [...ret, { vote: "back", lock: "front", yawAbs: 30, at: 1440, ord: -0.8, ordAt: 1440 }]);
+  const w = run(t, [...ret.slice(0, 4), { vote: "back", lock: "front", yawAbs: 30, at: 960, ord: -0.8, ordAt: 960 }]);
   check("§1.8 withdrawn like the other paths: the shopper turns back to face away before any FRONT vote",
-    w[6].withdraw === "back", JSON.stringify(w[6]));
+    w[4].withdraw === "back", JSON.stringify(w[4]));
   const outbound = [
     { vote: "front", lock: "front", yawAbs: 5, at: 0, ord: 1, ordAt: 0 },
     { vote: "front", lock: "front", yawAbs: 20, at: 240, ord: 0.93, ordAt: 240 },
@@ -220,6 +228,35 @@ console.log("\n── §3 the reported session, from its own record ──");
     chest[0].next === "back" && chest[0].t === main[0].t && (!early || early.sep > 0), JSON.stringify(chest));
 }
 
+console.log("\n── §3b the second report: the back stayed on the chest (2026-10-04), from its own record ──");
+{
+  /* The record's ticks, replayed with the lock following the engine's swaps. The session's acks were slow (back 723ms,
+     front 505ms) and the turn fast: the chest rule fired on the tick the order read 0.74 (3.96s) - the reading before
+     it was 0.12, just under 0.2 - and the front became visible after the 5s window ended. */
+  const replay = (knobs) => {
+    const engine = E.createOrientEngine(E.sanitizeOrientKnobs(knobs));
+    let l = U1.ticks[0].l; const sent = [];
+    for (const k of U1.ticks) {
+      const acts = engine.step(E.sanitizeOrientSample({ t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
+        yawAbs: k.y, yawAt: k.y === null ? 0 : k.t - k.ya, lostAt: k.la === null ? 0 : k.t - k.la,
+        ord: k.o, ordAt: k.o === null ? 0 : k.t - (k.oa ?? 0), lock: l, profile: !!k.p, dualView: !!k.d }));
+      for (const a of acts) if (a.do === "swap" && a.next !== l) { sent.push({ next: a.next, t: k.t - U1.reveal, o: k.o }); l = a.next; }
+    }
+    return sent;
+  };
+  const recorded = U1.ticks.filter((k) => k.sw.length).map((k) => [k.sw[0], k.t - U1.reveal]);
+  const side = replay({}), main = replay({ return_side: "0" });
+  const front = (sw) => sw.find((x) => x.next === "front" && x.t > 0);
+  const recFront = recorded.find(([n, t]) => n === "front" && t > 0), recBack = recorded.find(([n, t]) => n === "back" && t > 0);
+  check("§3b.1 the record's own decisions: BACK early on the turn, then FRONT on the order 0.74 ~4s in",
+    recBack && recFront && recFront[1] > 3800 && recFront[1] < 4100, JSON.stringify(recorded));
+  const sf = front(side);
+  check("§3b.2 the new rule sends FRONT AT THE SIDE - the order -0.19 coming from -0.89",
+    !!sf && sf.o >= -0.25 && sf.o < 0, JSON.stringify(side));
+  check("§3b.3 ...a tick ahead of where the session sent it (~480ms)", !!sf && recFront && recFront[1] - sf.t >= 400, JSON.stringify({ side, recorded }));
+  check("§3b.4 the outbound BACK is the same tick as the record's", side.find((x) => x.next === "back" && x.t > 0)?.t === recorded.find(([n, t]) => n === "back" && t > 0)?.[1], JSON.stringify(side));
+}
+
 console.log("\n── §4 thirteen real 360s, at four tick phases ──");
 {
   const clips = { ...POSES.clips, "s3.mp4 (reported)": S3.rows };
@@ -250,8 +287,11 @@ console.log("\n── §4 thirteen real 360s, at four tick phases ──");
   /* The few below 255 are the pose model's own snaps: the shoulder order jumps 40-60 degrees between two readings
      tens of ms apart (n2 at 3.39 -> 3.43s: -0.79 -> +0.17), so the angle 110ms before a decision reads a stale
      plateau. The bar is the distribution, not a clip-by-clip minimum the tracker itself does not keep. */
-  check("§4.3 the new rule lands it past the side view: median 275° or later, and 90% of runs at 255° or later",
-    med(chestF) >= 275 && chestF.filter((x) => x >= 255).length >= res.length * 0.9, chestF.join(","));
+  /* AT THE SIDE since 2026-10-04 (the chest rule alone landed the front on a chest already round - the second report):
+     this replay reads every frame, so it catches the side band at its first edge; the room, reading ~240ms apart and
+     ~150-200ms old, decides later than this (twin harness, CLAUDE.md §2.25). */
+  check("§4.3 the new rule lands it at the side view: median 255° or later, and 85% of runs at 245° or later",
+    med(chestF) >= 255 && chestF.filter((x) => x >= 245).length >= res.length * 0.85, chestF.join(","));
   check("§4.4 ...and never with the chest square to the lens (at most 335°)",
     res.every((r) => r.chest.front <= 335), chestF.join(","));
   check("§4.5 the return is never lost: every 360 still sends FRONT", res.every((r) => r.chest.front !== null));
