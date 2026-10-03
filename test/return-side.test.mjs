@@ -61,10 +61,10 @@ console.log("\n── §1 the trigger ──");
     { vote: null, lock: "back", yawAbs: 72, at: 1200, ord: 0.32, ordAt: 1200 },
   ];
   const out = run(trig(0.2), ret);
-  check("§1.1 the return waits for the side: nothing at |yaw| 59 with the shoulders still well on the back side (order -0.51)",
-    !out[0].fire && !out[1].fire && !out[2].fire, JSON.stringify(out));
-  check("§1.2 ...and FRONT goes out AT THE SIDE - the order -0.12, coming from the back - via the order (2026-10-04)",
-    out[3].fire === "front" && out[3].via === "order", JSON.stringify(out[3]));
+  check("§1.1 the return waits for the side: nothing at |yaw| 59 (order -0.51) or just before the side (-0.12)",
+    !out[0].fire && !out[1].fire && !out[2].fire && !out[3].fire, JSON.stringify(out));
+  check("§1.2 ...and FRONT goes out AT THE SIDE - the first reading past it (0.1), coming from the back - via the order",
+    out[4].fire === "front" && out[4].via === "order", JSON.stringify(out[4]));
   const skip = run(trig(0.2), [
     { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -1, ordAt: 0 },
     { vote: null, lock: "back", yawAbs: 55, at: 240, ord: -0.62, ordAt: 240 },
@@ -99,9 +99,9 @@ console.log("\n── §1 the trigger ──");
       { vote: "back", lock: "back", yawAbs: 5, at: 0 }, { vote: "back", lock: "back", yawAbs: 25, at: 240 },
       { vote: null, lock: "back", yawAbs: 25, at: 240, lostAt: 480 }])[2].fire === "front");
   const t = trig(0.2);
-  const w = run(t, [...ret.slice(0, 4), { vote: "back", lock: "front", yawAbs: 30, at: 960, ord: -0.8, ordAt: 960 }]);
+  const w = run(t, [...ret.slice(0, 5), { vote: "back", lock: "front", yawAbs: 30, at: 1200, ord: -0.8, ordAt: 1200 }]);
   check("§1.8 withdrawn like the other paths: the shopper turns back to face away before any FRONT vote",
-    w[4].withdraw === "back", JSON.stringify(w[4]));
+    w[5].withdraw === "back", JSON.stringify(w[5]));
   const outbound = [
     { vote: "front", lock: "front", yawAbs: 5, at: 0, ord: 1, ordAt: 0 },
     { vote: "front", lock: "front", yawAbs: 20, at: 240, ord: 0.93, ordAt: 240 },
@@ -251,9 +251,9 @@ console.log("\n── §3b the second report: the back stayed on the chest (2026
   check("§3b.1 the record's own decisions: BACK early on the turn, then FRONT on the order 0.74 ~4s in",
     recBack && recFront && recFront[1] > 3800 && recFront[1] < 4100, JSON.stringify(recorded));
   const sf = front(side);
-  check("§3b.2 the new rule sends FRONT AT THE SIDE - the order -0.19 coming from -0.89",
-    !!sf && sf.o >= -0.25 && sf.o < 0, JSON.stringify(side));
-  check("§3b.3 ...a tick ahead of where the session sent it (~480ms)", !!sf && recFront && recFront[1] - sf.t >= 400, JSON.stringify({ side, recorded }));
+  check("§3b.2 the new rule sends FRONT AT THE SIDE - the first reading past it (0.12), coming from the back",
+    !!sf && sf.o >= 0 && sf.o < 0.2, JSON.stringify(side));
+  check("§3b.3 ...a tick ahead of where the session sent it (~240ms)", !!sf && recFront && recFront[1] - sf.t >= 200, JSON.stringify({ side, recorded }));
   check("§3b.4 the outbound BACK is the same tick as the record's", side.find((x) => x.next === "back" && x.t > 0)?.t === recorded.find(([n, t]) => n === "back" && t > 0)?.[1], JSON.stringify(side));
 }
 
