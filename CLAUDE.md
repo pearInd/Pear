@@ -867,10 +867,20 @@ and fired on the next one, 0.74 (~318 degrees, 3.96s); 505ms + the render switch
   ~140 degrees for 1.4s). An order reading on the early side's own half blocks the withdrawal; a look that came back
   reads the other half and withdraws as main does; a room that sends no order is main's exactly (`return-side` §1.14-§1.16).
 
-### 2.26 "It takes forever to load" - the go-live stages are recorded; the gate's wait is bounded (2026-10-04)
-Two TEST sessions of `hide/edge` sat 34s and 22s after the press and were closed: no `watch`, no prime - nothing
-before the connect is recorded, so the record could not say which stage held them (the Vercel log: the room, the
-token and the health probe answered; nothing after). A heavy twin run of ours was going on the same Mac at the time.
+### 2.26 "It takes forever to load" - a credit refusal is final; the go-live stages are recorded (2026-10-04)
+Two TEST sessions of `hide/edge` sat 34s and 22s after the press: no `watch`, no prime - nothing before the connect
+was recorded. The third showed the cause on screen: the engine answered **"Insufficient credits"** (the account was
+empty), and the SDK retries every refusal not on its permanent list (`permanentErrorSubstrings`: "not allowed",
+"401", "invalid api key"…) five times, 1+2+4+8+10s apart - ~30s of loading screen, then the engine's raw text.
+- **The edge makes it final (`lib/rt-proxy.js` `roomErrorText`/`NO_CREDITS`):** an engine ERROR frame about credits
+  (insufficient/out of credits, quota exceeded, payment required) reaches the room as `NO_CREDITS`, which says "not
+  allowed" - the SDK stops at once; an upstream 402 closes the same way (`rt.js`). Any other error is only scrubbed
+  and retried as before (main's). `rt-proxy` §3.9-§3.12 check it against the bundled SDK's own list.
+- **The room's words (`goLive()`'s catch):** the shopper reads "the live try-on is unavailable right now"; a TEST
+  session reads that the render account is out of credits. Twin, an engine refusing as the real one did: the message
+  at 1.35s, one connect (was ~27s, six connects; "Server overloaded" still takes the retries).
+- **Credits are topped up by the account owner** on the engine's platform; the key is `DECART_API_KEY` in Vercel
+  (Production + Preview), and a changed key needs a new deployment.
 - **A TEST record now carries every go-live stage:** `gate` {v, ms}, `preload` {ok, back, ms}, `rt-sdk`/`rt-floor`/
   `rt-token`/`rt-open` (ms since the connect began), `rt-queue` (the engine's queue position - `connect()` waits
   there with no timeout of its own), `rt-warn`/`rt-err` (the SDK's logger, silent in the shopper's console),
@@ -881,7 +891,7 @@ token and the health probe answered; nothing after). A heavy twin run of ours wa
   not ready in time is one that failed (§2.5). Preloaded at room entry, as in every measured session, nothing changes.
 - **Measured in the twin (idle machine):** gate 0.8s, garment 0.03s, connect 0.85s, reveal 6.8s after the press.
 - **Run nothing heavy on the shopper's machine while they test** - the twin runs Chrome, the pose model and a media
-  server; it competed with the shopper's room during the reported sessions.
+  server (one ran during the first two reported sessions; it was not the cause, the credits were).
 
 ## 3. Cross-file lockstep
 

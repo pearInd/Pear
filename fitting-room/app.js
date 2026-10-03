@@ -16432,7 +16432,18 @@ async function goLive() {
       await renderMockDemo(activeItem);
       card().classList.add("show-result");
     } else {
-      showCamError("המדידה החיה נכשלה: " + (err?.message || err));
+      /* THE RENDER ACCOUNT IS OUT OF CREDITS (2026-10-04): the edge makes that refusal final (lib/rt-proxy.js
+         NO_CREDITS - it used to arrive after ~30s of the SDK's retries) and it is never the shopper's to read: they
+         get "not available right now"; a TEST session (the store owner) reads the real reason. */
+      const why = String(err?.message || err);
+      if (/out of credits|insufficient credits/i.test(why)) {
+        const testing = typeof traceEnabled === "function" && traceEnabled();
+        showCamError(testing
+          ? "המדידה החיה נכשלה: נגמר הקרדיט בחשבון מנוע הרינדור - יש לטעון קרדיט"
+          : "המדידה החיה אינה זמינה כרגע - נסו שוב מאוחר יותר · Live try-on is unavailable right now");
+      } else {
+        showCamError("המדידה החיה נכשלה: " + why);
+      }
       setConn("error");
     }
   } finally {

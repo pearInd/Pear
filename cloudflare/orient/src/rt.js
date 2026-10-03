@@ -17,9 +17,10 @@
    "not allowed" / "401" / "unauthorized" to stop retrying a permanent failure. A bare failed
    upgrade (1006, no reason) would make it retry five times with back-off before giving up.
    ============================================================================= */
-import { engineSignalUrl, frameToEngine, frameToRoom, engineMediaUrl, openBearer, telemetryToEngine } from "../../../lib/rt-proxy.js";
+import { engineSignalUrl, frameToEngine, frameToRoom, engineMediaUrl, openBearer, telemetryToEngine, roomErrorText, NO_CREDITS } from "../../../lib/rt-proxy.js";
 
-const scrubReason = (s) => String(s || "").replace(/decart/gi, "render engine").replace(/livekit/gi, "media").slice(0, 120);
+/* A close reason as the room reads it - scrubbed, and a credit refusal made final (rt-proxy roomErrorText). */
+const scrubReason = (s) => String(roomErrorText(String(s || ""))).slice(0, 120);
 /* close() accepts 1000 and 3000-4999 from script; everything else (1005/1006/1015…) becomes 1011 or 1000. */
 const closeCode = (c) => (c === 1000 || (c >= 3000 && c <= 4999) ? c : c === 1001 ? 1000 : 1011);
 
@@ -45,7 +46,9 @@ async function relay(upstreamUrl, headers, { toUp = (d) => d, toDown = (d) => d 
   if (!ws) {
     let text = "";
     try { text = (await up.text()).slice(0, 200); } catch { /* none */ }
-    return refused(up.status === 401 || up.status === 403 ? 4000 + up.status : 1011, `${up.status} ${scrubReason(text)}`);
+    /* 402 is "pay first": final, like a credit refusal in a frame (the SDK stops on "not allowed"). */
+    return refused(up.status === 401 || up.status === 402 || up.status === 403 ? 4000 + up.status : 1011,
+      `${up.status} ${up.status === 402 ? NO_CREDITS : scrubReason(text)}`);
   }
   ws.accept();
   const [client, server] = Object.values(new WebSocketPair());

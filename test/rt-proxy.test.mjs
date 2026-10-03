@@ -73,6 +73,21 @@ const cfg = { signalUrl: "https://engine.example/v1/stream", model: "real-model-
   check("§3.6 nothing the room receives names the engine", !VENDOR_WORDS.test(info) && !/media\.example|jwt/.test(info));
   const err = JSON.parse(P.frameToRoom('{"type":"error","error":"Decart: LiveKit room lucy-vton-3 not allowed"}', { edgeWs: "wss://e" }));
   check("§3.7 engine prose is scrubbed, its meaning kept", !VENDOR_WORDS.test(err.error) && /not allowed/.test(err.error), err.error);
+  /* THE CREDIT REFUSAL (2026-10-04): "Insufficient credits" was retried by the SDK for ~30s before the room heard it. */
+  /* The SDK's own list (the version the build bundles), so an upgrade that changes it fails here. */
+  const SDK_PERMANENT = (await import("../node_modules/@decartai/sdk/dist/realtime/config-realtime.js")).REALTIME_CONFIG.session.permanentErrorSubstrings;
+  const final = (m) => SDK_PERMANENT.some((w) => m.toLowerCase().includes(w));
+  const credits = JSON.parse(P.frameToRoom('{"type":"error","error":"Insufficient credits"}', { edgeWs: "wss://e" }));
+  check("§3.9 a credit refusal reaches the room as a FINAL answer the SDK does not retry, in the room's words",
+    credits.error === P.NO_CREDITS && final(credits.error) && !VENDOR_WORDS.test(credits.error) && !final("Insufficient credits"), credits.error);
+  check("§3.10 ...the other spellings of it too, and an ordinary error is only scrubbed, never made final",
+    ["insufficient_credits", "Quota exceeded for this key", "402 Payment Required", "Out of credits"].every((t) => P.roomErrorText(t) === P.NO_CREDITS) &&
+    P.roomErrorText("Decart: server busy") === "render engine: server busy" && !final(P.roomErrorText("server busy")));
+  const busy = JSON.parse(P.frameToRoom('{"type":"queue_position","position":2,"message":"insufficient credits soon"}', { edgeWs: "wss://e" }));
+  check("§3.11 only an ERROR frame is rewritten - prose in any other message is scrubbed as before", busy.message === "insufficient credits soon");
+  const app = read("../fitting-room/app.js");
+  check("§3.12 the room shows the shopper its own words for it, and the TEST session the reason",
+    /if \(\/out of credits\|insufficient credits\/i\.test\(why\)\)/.test(app) && /המדידה החיה אינה זמינה כרגע/.test(app) && P.NO_CREDITS.includes("out of credits"));
   const ack = '{"type":"set_image_ack","success":true}';
   check("§3.8 every other message passes as it came", P.frameToRoom(ack, { edgeWs: "wss://e" }) === ack);
 }
@@ -117,7 +132,9 @@ console.log("\n── §6 wiring ──");
   check("§6.4 the room builds its render client against the edge, with the neutral model",
     /realtimeBaseUrl: typeof rtEdgeUrl === "function" \? rtEdgeUrl\(\) : undefined/.test(app) && /name: "v",\s*\n\s*urlPath: "\/s",/.test(app));
   check("§6.5 a refused upstream is closed with its reason, so the SDK stops retrying a permanent failure",
-    /return refused\(up\.status === 401 \|\| up\.status === 403 \? 4000 \+ up\.status : 1011/.test(rt));
+    /return refused\(up\.status === 401 \|\| up\.status === 402 \|\| up\.status === 403 \? 4000 \+ up\.status : 1011/.test(rt) &&
+    /up\.status === 402 \? NO_CREDITS : scrubReason\(text\)/.test(rt) &&
+    /const scrubReason = \(s\) => String\(roomErrorText\(String\(s \|\| ""\)\)\)\.slice\(0, 120\);/.test(rt));
 }
 
 console.log(`\n${fails ? `✗ ${fails} failed` : "✓ all passed"}`);
