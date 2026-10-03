@@ -46,6 +46,8 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { apiFingerprint } from "./sync-api-version.mjs";
 import { API_VERSION } from "../lib/api-version.js";
+import { cloak, vendorHits, VENDOR_WORDS } from "./cloak.mjs";
+import { RT_WORDS, RT_UA } from "../lib/rt-proxy.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -63,7 +65,7 @@ const APP_ENTRY = "fitting-room/app.js";
    pattern with a one-year immutable Cache-Control (the room itself is no-store), so the
    ~800 KB SDK is fetched once per browser rather than on every visit. A new SDK version
    is a new hash, so a stale copy can never be served against new code. */
-const SDK_NAME_RE = /^rt\.[0-9a-f]{12}\.js$/;
+const SDK_NAME_RE = /^(rt|pv|pl|pn)\.[0-9a-f]{12}\.js$/;
 
 const fail = (msg) => { console.error(`✖ build: ${msg}`); process.exit(1); };
 const rel = (p) => relative(ROOT, p);
@@ -117,6 +119,34 @@ function write(relPath, code) {
   writeFileSync(dest, code);
 }
 
+/* The orientation link (see PEAR_ORIENT_URL below). A production build without one still
+   works - every AI Auto session then stays on the front view - so this warns rather than
+   fails, loudly enough to be seen in the Vercel build log. A wss:// URL only - except that
+   a QA build may point at a local `wrangler dev` (ws://localhost / 127.0.0.1) to drive the
+   Worker itself through the visual gate. */
+/* The API fingerprint must describe the modules being shipped - a stale one would make the room
+   reject every answer of a correctly deployed edge (or accept an old one). */
+if (API_VERSION !== apiFingerprint()) fail("lib/api-version.js is stale - run: npm run sync:api-version");
+const ORIENT_URL = String(process.env.PEAR_ORIENT_URL || "").trim();
+const ORIENT_URL_OK = /^wss:\/\/[^\s/?#]+(\/[^\s?#]*)?$/.test(ORIENT_URL) ||
+  (QA && /^ws:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/[^\s?#]*)?$/.test(ORIENT_URL));
+if (ORIENT_URL && !ORIENT_URL_OK) fail(`PEAR_ORIENT_URL must be a wss:// URL, got "${ORIENT_URL}"`);
+if (!ORIENT_URL && !QA) {
+  console.warn("   ⚠ PEAR_ORIENT_URL is not set - the room will look for the orientation link on its own origin (/orient),");
+  console.warn("     which Vercel cannot serve: AI Auto sessions will stay on the front view until it is set.");
+}
+
+/* ── THE EDGE (2026-10-03): the render engine, its media signalling, its telemetry and the pose model's
+   binaries all go through our own edge - the orientation Worker's host. PEAR_EDGE_HOST overrides it;
+   a local QA build pointed at `wrangler dev` (ws://127.0.0.1:8787) keeps plain ws/http. ───────────── */
+const EDGE = (() => {
+  const raw = String(process.env.PEAR_EDGE_HOST || "").trim();
+  if (raw) return { ws: `wss://${raw}`, http: `https://${raw}` };
+  const m = /^(wss?):\/\/([^\s/?#]+)/.exec(ORIENT_URL);
+  if (m) return { ws: `${m[1]}://${m[2]}`, http: `${m[1] === "wss" ? "https" : "http"}://${m[2]}` };
+  return { ws: "wss://rt.pear-ai.io", http: "https://rt.pear-ai.io" };
+})();
+
 const report = [];
 
 /* ── 1. the SDK, same-origin ──────────────────────────────────────────────────
@@ -147,27 +177,66 @@ const sdkResult = await build({
   write: false,
   logLevel: "warning",
 });
-const sdkHash = createHash("sha256").update(sdkResult.outputFiles[0].contents).digest("hex").slice(0, 12);
+/* THE ENGINE BEHIND OUR EDGE (2026-10-03, lib/rt-proxy.js): the SDK's own endpoints point at the edge,
+   its user agent and the protocol words that travel on the wire take the room's neutral dialect (the
+   edge translates them back), and everything else naming a vendor is cloaked (scripts/cloak.mjs) - the
+   same code, nothing readable. A substitution that no longer matches means the SDK changed under us. */
+let sdkText = sdkResult.outputFiles[0].text;
+for (const [from, to] of [
+  ["https://platform.decart.ai/api/v1/telemetry", `${EDGE.http}/m`],
+  ["wss://api3.decart.ai", `${EDGE.ws}/v`],
+  ["https://api.decart.ai", EDGE.http],
+  [`${RT_UA.engine}/`, `${RT_UA.room}/`],
+]) {
+  if (!sdkText.includes(from)) fail(`the SDK bundle no longer contains "${from}" - its endpoints changed; re-check lib/rt-proxy.js`);
+  sdkText = sdkText.split(from).join(to);
+}
+const RT_RENAME = Object.fromEntries(Object.entries(RT_WORDS).map(([room, engine]) => [engine, room]));
+const sdkCloaked = cloak(sdkText, { rename: RT_RENAME, seed: "rt" });
+if (sdkCloaked.unhandled.length) fail(`the SDK bundle names a vendor where it cannot be cloaked: ${sdkCloaked.unhandled.slice(0, 3).join(" | ")}`);
+if (sdkCloaked.renamed < Object.keys(RT_RENAME).length) fail(`only ${sdkCloaked.renamed} protocol words renamed in the SDK - lib/rt-proxy.js RT_WORDS no longer matches it`);
+const sdkHash = createHash("sha256").update(sdkCloaked.code).digest("hex").slice(0, 12);
 const SDK_OUT = `fitting-room/rt.${sdkHash}.js`;
 if (!SDK_NAME_RE.test(SDK_OUT.split("/").pop())) fail(`SDK file name ${SDK_OUT} does not match server.js's cache pattern`);
-write(SDK_OUT, sdkResult.outputFiles[0].text);
+write(SDK_OUT, sdkCloaked.code);
 
-/* The orientation link (see PEAR_ORIENT_URL below). A production build without one still
-   works - every AI Auto session then stays on the front view - so this warns rather than
-   fails, loudly enough to be seen in the Vercel build log. A wss:// URL only - except that
-   a QA build may point at a local `wrangler dev` (ws://localhost / 127.0.0.1) to drive the
-   Worker itself through the visual gate. */
-/* The API fingerprint must describe the modules being shipped - a stale one would make the room
-   reject every answer of a correctly deployed edge (or accept an old one). */
-if (API_VERSION !== apiFingerprint()) fail("lib/api-version.js is stale - run: npm run sync:api-version");
-const ORIENT_URL = String(process.env.PEAR_ORIENT_URL || "").trim();
-const ORIENT_URL_OK = /^wss:\/\/[^\s/?#]+(\/[^\s?#]*)?$/.test(ORIENT_URL) ||
-  (QA && /^ws:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/[^\s?#]*)?$/.test(ORIENT_URL));
-if (ORIENT_URL && !ORIENT_URL_OK) fail(`PEAR_ORIENT_URL must be a wss:// URL, got "${ORIENT_URL}"`);
-if (!ORIENT_URL && !QA) {
-  console.warn("   ⚠ PEAR_ORIENT_URL is not set - the room will look for the orientation link on its own origin (/orient),");
-  console.warn("     which Vercel cannot serve: AI Auto sessions will stay on the front view until it is set.");
+/* ── 1b. the pose library, same-origin and cloaked; its binaries on the edge, scrambled ──────────────
+   (2026-10-03) The source room loads it from a CDN by name; a production room loads pv.<hash>.js (the
+   library), pl/pn.<hash>.js (its runtime loaders, SIMD and not) from here, and the runtime and model
+   binaries from the edge (scripts/build-edge-assets.mjs - lib/edge-assets.json is its manifest, and it
+   must describe the runtime node_modules holds). app.js loadPoseLandmarker() reads PEAR_POSE_ASSETS. */
+const POSE_DIR = join(ROOT, "node_modules/@mediapipe/tasks-vision");
+const EDGE_ASSETS = JSON.parse(readFileSync(join(ROOT, "lib/edge-assets.json"), "utf8"));
+for (const [k, f] of [["wasm", "vision_wasm_internal.wasm"], ["wasmNosimd", "vision_wasm_nosimd_internal.wasm"]]) {
+  const have = createHash("sha256").update(readFileSync(join(POSE_DIR, "wasm", f))).digest("hex");
+  if (!EDGE_ASSETS.items?.[k] || EDGE_ASSETS.items[k].sha256 !== have) {
+    fail("lib/edge-assets.json describes another pose runtime than node_modules holds - run npm run build:edge-assets, commit it, and redeploy the Worker");
+  }
 }
+const hashed = (prefix, code) => `fitting-room/${prefix}.${createHash("sha256").update(code).digest("hex").slice(0, 12)}.js`;
+const poseBundle = await build({
+  entryPoints: [join(POSE_DIR, "vision_bundle.mjs")], bundle: true, format: "esm", platform: "browser",
+  minify: true, legalComments: "none", charset: "utf8", write: false, logLevel: "warning",
+});
+const poseCloaked = cloak(poseBundle.outputFiles[0].text, { seed: "pv" });
+if (poseCloaked.unhandled.length) fail(`the pose library names a vendor where it cannot be cloaked: ${poseCloaked.unhandled.slice(0, 3).join(" | ")}`);
+const POSE_OUT = hashed("pv", poseCloaked.code);
+write(POSE_OUT, poseCloaked.code);
+const poseLoaders = {};
+for (const [k, f] of [["loader", "vision_wasm_internal.js"], ["loaderNosimd", "vision_wasm_nosimd_internal.js"]]) {
+  const min = (await transform(readFileSync(join(POSE_DIR, "wasm", f), "utf8"), { minify: true, loader: "js", legalComments: "none", charset: "utf8" })).code;
+  const c = cloak(min, { sourceType: "script", seed: k });
+  if (c.unhandled.length) fail(`the pose runtime loader names a vendor where it cannot be cloaked: ${c.unhandled.slice(0, 3).join(" | ")}`);
+  if (!/\bModuleFactory\b/.test(c.code)) fail("the pose runtime loader no longer defines its global factory after minification");
+  poseLoaders[k] = hashed(k === "loader" ? "pl" : "pn", c.code);
+  write(poseLoaders[k], c.code);
+}
+const edgeAsset = (k) => ({ url: `${EDGE.http}/a/${EDGE_ASSETS.items[k].name}`, key: EDGE_ASSETS.items[k].key });
+const POSE_ASSETS = JSON.stringify({
+  module: "/" + POSE_OUT, loader: "/" + poseLoaders.loader, loaderNosimd: "/" + poseLoaders.loaderNosimd,
+  wasm: edgeAsset("wasm"), wasmNosimd: edgeAsset("wasmNosimd"), model: edgeAsset("model"),
+});
+
 
 const JS_OPTS = {
   minify: true,
@@ -188,6 +257,11 @@ const JS_OPTS = {
     /* The fingerprint of lib/prompts.js + lib/sizing.js this build was made with - postPearApi()
        takes an edge answer only when the Worker's X-Pear-Api matches it (scripts/sync-api-version.mjs). */
     PEAR_API_VERSION: JSON.stringify(API_VERSION),
+    /* The render engine's signalling, through our edge (app.js rtEdgeUrl(), lib/rt-proxy.js). */
+    PEAR_RT_URL: JSON.stringify(`${EDGE.ws}/v`),
+    /* The pose library and its binaries (1b above) - a JSON string app.js parses; its presence also folds
+       config.js's CDN paths away. */
+    PEAR_POSE_ASSETS: JSON.stringify(POSE_ASSETS),
   },
 };
 
@@ -208,7 +282,8 @@ report.push([APP_ENTRY, statSync(join(ROOT, APP_ENTRY)).size, appResult.outputFi
    404 in production instead of being served as readable side files. */
 const bundled = new Set(Object.keys(appResult.metafile.inputs).map((p) => resolve(ROOT, p)));
 
-report.push([`${SDK_OUT} (@decartai/sdk@${installed}, livekit-client@${depVersion("livekit-client")})`, 0, sdkResult.outputFiles[0].contents.length]);
+report.push([`${SDK_OUT} (the render SDK, cloaked)`, 0, Buffer.byteLength(sdkCloaked.code)]);
+report.push([`${POSE_OUT} (the pose library, cloaked)`, 0, Buffer.byteLength(poseCloaked.code)]);
 
 /* ── 3. every other public file that carries code or commentary ─────────────── */
 const INLINE_SCRIPT = /<script(\s[^>]*)?>([\s\S]*?)<\/script>/gi;
@@ -273,10 +348,13 @@ if (!QA) {
     ["a developer key hint", /DECART_API_KEY/],
     /* Which engines PEAR runs on is not public information - not in code, not in a log
        line, not in the merchant guide's marketing copy (which named both until
-       2026-09-26). The model id the SDK is handed ("lucy-…") is the one exception: it
-       travels to the engine on every connect regardless, so it is reported below
-       rather than refused here until the connection itself is proxied. */
-    ["a vendor or engine name", /decart|nano ?banana|gemini|livekit/i],
+       2026-09-26). Since 2026-10-03 that holds for EVERY shipped file, the third-party ones
+       included (cloaked, scripts/cloak.mjs), and for the model id too - the engine is
+       reached through our edge, which names it server-side (lib/rt-proxy.js). */
+    ["a vendor, engine or model name", VENDOR_WORDS],
+    /* A CDN as such is fine (the merchant guide animates with GSAP/three from one); an AI package on one is
+       caught by its name above. The model host is the one URL that names nothing - so it is listed. */
+    ["an AI model host", /storage\.googleapis\.com|esm\.sh\/@/i],
     /* The prompt engine is server-side (lib/prompts.js, since 2026-09-26): the room bundle
        must carry none of its wording - these are fragments of its anchors and of the
        restore seam that only the engine has. */
@@ -293,7 +371,6 @@ if (!QA) {
 }
 let violations = 0;
 for (const abs of walk(OUT)) {
-  if (relative(OUT, abs) === SDK_OUT) continue;   // third-party code, shipped as-is
   const text = readFileSync(abs, "utf8");
   for (const [what, re] of FORBIDDEN) {
     const m = text.match(re);
@@ -322,7 +399,7 @@ for (const [name, before, after] of report) {
      connectRealtime(): a logger. Drop it and the shopper's console names the vendor again
      (reported 2026-09-26). Telemetry stays main's default (on) - see that call's comment:
      turning it off also switched off the SDK's stats loop, a behaviour main does not have. */
-  if (!QA && !/\(\{apiKey:[\w$]+,logger:/.test(room)) {
+  if (!QA && !/\{apiKey:[\w$]+,realtimeBaseUrl:[^,]+,logger:/.test(room)) {
     violations++;
     console.error(`✖ ${APP_ENTRY} creates the render client without a logger - see connectRealtime()`);
   }
@@ -331,19 +408,11 @@ for (const [name, before, after] of report) {
     console.error(`✖ ${APP_ENTRY} turns the render SDK's telemetry off - main runs it on (its stats loop), see connectRealtime()`);
   }
   /* ...and the media library inside the SDK bundle has its own loggers (SDK_ENTRY, step 1). */
-  if (!/\.setLevel\("silent",!1\)/.test(sdkResult.outputFiles[0].text)) {
+  if (!/\.setLevel\("silent",!1\)/.test(sdkCloaked.code)) {
     violations++;
     console.error(`✖ ${SDK_OUT} does not silence the media library's loggers - see SDK_ENTRY`);
   }
 }
 
-/* Reported, not enforced: the model id (see the FORBIDDEN note above). Anything else
-   listed here in a production build is worth a look. */
-for (const abs of walk(OUT)) {
-  const f = relative(OUT, abs);
-  if (f === SDK_OUT) continue;
-  const hits = readFileSync(abs, "utf8").match(/lucy[\w.-]*/gi) || [];
-  if (hits.length) console.log(`   engine model id in ${f}: ${[...new Set(hits)].join(", ")} (goes on the wire regardless)`);
-}
 if (violations) fail(`${violations} forbidden string(s) in the output - see above`);
 console.log("   ✓ no forbidden strings in the output\n");

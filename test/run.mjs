@@ -361,6 +361,11 @@
                       its landmarks mapped back to whole-frame coordinates, following the hips,
                       handing back after three empty windows; nothing changes while the whole
                       frame finds the body; one inference per call; the full model is loaded.
+     cloak, rt-proxy
+                      "Nobody should see anything related to the render engine or any AI we use"
+                      (2026-10-03): every shipped file is cloaked (no vendor word survives, same
+                      behaviour), and the engine, its media signalling, its telemetry and the pose
+                      model's binaries are reached only through our edge, which translates.
      return-side
                       "The back disappears too fast" (2026-10-01): a swap lands on about the body angle it
                       was sent at, so main's 50-degree early return put the front on a back-facing body, and
@@ -495,6 +500,8 @@ const SUITES = [
   ["token-origin", "token-origin.test.mjs"],
   ["back-prime", "back-prime.test.mjs"],
   ["return-side", "return-side.test.mjs"],
+  ["cloak", "cloak.test.mjs"],
+  ["rt-proxy", "rt-proxy.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

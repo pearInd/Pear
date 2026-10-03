@@ -361,6 +361,8 @@ run on the unbuilt files. Rules that keep the build honest:
   than taking the room down. If that line shows up in Vercel logs, the build did not run.
 - After a change to anything the build touches, `npm run qa:visual:dist` drives the same
   360 against the minified room (build `--qa` keeps the mock so the agent can run it).
+- **Every shipped file is cloaked and the engine is reached through our edge (§2.24)** - the render
+  SDK and the pose library included; the build fails on any vendor, engine or model word in any file.
 - **The bundled SDK must carry the dependency versions the CDN would.** rt.js is built from
   node_modules; the source room's CDN import resolves the SDK's own ranges to their newest
   release. The first bundle shipped livekit-client 2.19.1 where production (3a9b55d, CDN) ran
@@ -794,6 +796,48 @@ Main does exactly this; how early depends on how much the pose model compresses 
   two readings). Higher bars (0.3/0.4) moved the landing toward a chest facing the lens; 0.1 barely differs.
 - **Not measured live yet:** the first TEST sessions with it are the check - `o` per tick and where the FRONT went out.
 
+### 2.24 Nothing the page loads names an AI we use - the engine behind our edge (2026-10-03)
+"Nobody should be able to see anything in the code related to Decart or any AI we use - put it on Cloudflare."
+Audited first: the room bundle carried the model id and the pose library's CDN/model URLs; the SDK bundle (shipped
+as-is) carried the engine's hosts, telemetry URL, user agent and every media-library name; the page opened the
+engine's signalling socket and media server by name and posted telemetry to the engine's host; the token route
+returned the engine's raw key format and model id; `/api/health` named the engine; two classifier answers named
+the classifier.
+- **The cloak (`scripts/cloak.mjs`, `cloak` test):** every syntax position a vendor word can occupy in a
+  third-party bundle (string, template, regex, member name, object/pattern/class key) becomes a runtime-decoded
+  expression with the same value - deterministic per build input, so hashed names stay cached. Words that
+  travel on the wire are RENAMED to the room's dialect instead (`RT_WORDS`), and the edge translates them back.
+  A free identifier it cannot rewrite fails the build. `VENDOR_WORDS` is the list; the build refuses any match
+  in ANY shipped file (GSAP/three on a CDN in the merchant guide are fine - an AI package is caught by name).
+- **The engine behind our edge (`lib/rt-proxy.js` pure, `cloudflare/orient/src/rt.js` the Worker, `rt-proxy`
+  test):** `wss://<edge>/v/s?api_key=<sealed ticket>&model=v` is relayed to the engine with the real key, model
+  (`RT_MODEL`), query words and user agent; the engine's room info comes back with the media URL and token
+  SEALED behind `/k/<sealed>`, which relays the media signalling (WebSocket + its HTTP checks) to the real host;
+  `/m` forwards the SDK's telemetry. A refused upstream is closed with its reason (the SDK stops retrying a
+  permanent failure). The media itself (WebRTC) is not relayed - only signalling - so the video path and its
+  latency are as before. Engine hosts and the model id are Worker vars (`wrangler.jsonc`), never shipped.
+- **The ticket (`sealTicket`/`openTicket`):** the token route (`server.js` mintToken) answers `{t, exp}` - the
+  engine's key sealed (XOR + check byte, base64url); only the edge opens it. Obfuscation of a name, not a new
+  credential: a ticket is exactly as usable through our edge as the key was directly.
+- **The pose library:** bundled same-origin and cloaked (`pv.<hash>.js`, loaders `pl/pn.<hash>.js`); its
+  runtime (.wasm, ~9 MB) and model (~6 MB) - binaries that carry the library's name hundreds of times and
+  exceed the Vercel function's ~4.5 MB response - are served from the edge's static assets XOR-scrambled under
+  content-hash names (`scripts/build-edge-assets.mjs`, manifest `lib/edge-assets.json`) and unscrambled in memory
+  by `loadPoseLandmarker()`. The build refuses a node_modules whose runtime the manifest does not describe.
+- **Server answers:** `/api/health` says only `ok` (details for the support token); the token route's errors
+  are neutral; the classifier's answers say `source: "ai"` / `classifier_unconfigured`. Logs keep the detail.
+- **Proven without the engine (scratch E2E, re-runnable):** the minified room (a QA build pointed at a local
+  `wrangler dev` of the edge with `RT_EDGE_WS`) went live through the edge to a stand-in signalling server and a
+  REAL LiveKit server (a participant playing the inference server): revealed at 4.3s, the output video played,
+  every WebSocket URL was the edge's, no frame carried a vendor word, the stand-in saw the real model/key/user
+  agent/origin, and the pose model loaded from the edge. Telemetry: real key/model/user agent at the engine, a
+  bad key not forwarded, a foreign Origin 403.
+- **Deploy order:** `npm run build:edge-assets` (when the pose runtime changes) -> `wrangler deploy` (routes +
+  assets; old rooms never call them) -> the room. A real engine session through the edge is the final check.
+- **Residual, stated:** a determined reverse-engineer can still run the cloaked code, read WebRTC internals (the
+  media server's IPs and TURN hosts) or decode the media library's binary join request; and **the GitHub
+  repository is public** - every source file, this one included, names everything. Hiding needs it private.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
@@ -885,6 +929,7 @@ npm run qa:visual:dist   # the visual gate against the MINIFIED room (build --qa
 PEAR_SERVE_DIST=1 npm start   # run the server the way production does, after npm run build
 (cd cloudflare/orient && npx wrangler dev)   # the orientation Worker locally (README there; §2.14)
 npm run sync:size-chart-parser            # regenerate scanner/size-chart-parser.js (widget token block + scanner/size-chart-reader.src.js)
+npm run build:edge-assets                 # the pose model's scrambled binaries for the edge + lib/edge-assets.json (§2.24); then wrangler deploy
 npm run scan:size-charts -- <store-url>   # size-guide DRY RUN: coverage report, no keys, writes nothing
 node scanner/scan-store.js --size-charts --save <store-url>   # capture into store_size_charts (needs v15 + Supabase env)
 ```

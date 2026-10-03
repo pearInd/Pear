@@ -44,6 +44,7 @@ const {
   POSE_WASM_BASE,
   POSE_MODEL_URL,
   POSE_TASKS_MODULE,
+  RT_EDGE_URL,
   INPUT_GATE_ENABLED,
   INPUT_GATE_MAX_MS,
   INPUT_GATE_SETTLE_MS,
@@ -5446,14 +5447,15 @@ async function mintEphemeralToken() {
         : "\n  → Open the fitting room via http://localhost:3000/fitting-room/ (the Express server)");
     throw new Error("מינטינג טוקן נכשל: " + detail);
   }
-  if (!data.apiKey) {
-    console.error("[PEAR] mintEphemeralToken() - response OK but no apiKey field:", data);
-    throw new Error("השרת לא החזיר טוקן ek_ תקין.");
+  /* `t` - a SEALED ticket the edge opens (server.js mintToken, lib/rt-proxy.js, 2026-10-03): the engine's key
+     and model never reach this page in readable form. */
+  if (!data.t) {
+    console.error("[PEAR] mintEphemeralToken() - response OK but no ticket:", data);
+    throw new Error("השרת לא החזיר כרטיס חיבור תקין.");
   }
-  const preview = data.apiKey.slice(0, 8);
-  console.log("[PEAR] mintEphemeralToken() - token received, starts with:", preview + "…",
-    "| model:", data.model || "(not in response)",
-    "| expiresAt:", data.expiresAt || "(not in response)");
+  data.apiKey = data.t;
+  data.expiresAt = data.exp;
+  console.log("[PEAR] mintEphemeralToken() - ticket received | expires:", data.expiresAt || "(not in response)");
 
   // Cache the fresh token for reuse within its TTL. parseExpiry handles ISO strings,
   // epoch-ms AND epoch-seconds (5-min fallback if expiresAt is absent/unparseable).
@@ -6056,11 +6058,34 @@ function adoptInitialStateAsWire(why) {
   return true;
 }
 
+/* ── THE RENDER ENGINE BEHIND OUR EDGE (2026-10-03) ──────────────────────────────────────────────
+   ASKED: "nobody should see anything related to the render engine or any AI we use - put it on
+   Cloudflare." The SDK no longer opens the engine's socket by name: realtimeBaseUrl points it at
+   our edge (the orientation Worker), which relays to the engine (cloudflare/orient/src/rt.js,
+   lib/rt-proxy.js). The model it names is the edge's neutral alias; the engine's real id lives in
+   the Worker's config only. The edge also seals the media server's URL and token, so the media
+   client connects to our host too. The video itself (WebRTC) still flows directly - only its
+   signalling is relayed - so the render path's latency is unchanged.
+   Production: PEAR_RT_URL (scripts/build.mjs, from PEAR_ORIENT_URL's host). The source room
+   (support view, local dev) uses CONFIG.RT_EDGE_URL; ?rt_edge= points a debug build at a local
+   `wrangler dev`. */
+function rtEdgeUrl() {
+  if (typeof PEAR_RT_URL === "string" && PEAR_RT_URL) return PEAR_RT_URL;
+  if (typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) {
+    try {
+      const o = new URLSearchParams(location.search).get("rt_edge");
+      if (o && /^wss?:\/\/[^\s?#]+$/.test(o)) return o;
+    } catch (_) { /* default */ }
+  }
+  return RT_EDGE_URL;
+}
+
 function buildRealtimeConnectOpts(gen) {
   return {
     model: {
-      name: "lucy-vton-3.5",
-      urlPath: "/v1/stream",
+      /* The edge's neutral alias (lib/rt-proxy.js RT_ROOM_MODEL) - the engine's model id is the Worker's. */
+      name: "v",
+      urlPath: "/s",
       // NOTE: these are advisory only - the SDK ignores model.fps/width/height on
       // Chromium. The REAL cap is enforced upstream by createThrottledInputStream()
       // (canvas pinned to LIVE_INFERENCE_FPS / LIVE_W×LIVE_H). Kept in sync so any
@@ -6420,7 +6445,9 @@ async function connectRealtime({ force = false } = {}) {
             warn: (m, d) => console.warn("[PEAR][rt]", m, d ?? ""),
             error: (m, d) => console.error("[PEAR][rt]", m, d ?? "") }
         : { debug() {}, info() {}, warn() {}, error() {} };
-      const client = createClient({ apiKey: ekToken, logger: rtLogger });
+      /* realtimeBaseUrl - our edge, never the engine's host (rtEdgeUrl, 2026-10-03). typeof-guarded: signaling-retry
+         runs this function standalone. */
+      const client = createClient({ apiKey: ekToken, realtimeBaseUrl: typeof rtEdgeUrl === "function" ? rtEdgeUrl() : undefined, logger: rtLogger });
       console.log("[PEAR] connectRealtime() - stage 4/4: opening WebRTC session (waiting for 'connected')…");
 
       /* Bug 3 fix: work off a CLONE of the camera tracks so disconnect/teardown never
@@ -17251,6 +17278,38 @@ function loadPoseLandmarker() {
        body-presence-gate extracts this block and runs it with neither name in scope. */
     if ((typeof PEAR_DEBUG_BUILD === "undefined" || PEAR_DEBUG_BUILD) && typeof mockDecartEnabled === "function" && mockDecartEnabled()) return mockPoseDetector();
     try {
+      /* THE PRODUCTION ROOM LOADS NOTHING BY THE LIBRARY'S NAME (2026-10-03). scripts/build.mjs bundles the
+         pose library same-origin, cloaked (scripts/cloak.mjs), and the model and runtime binaries live on
+         our edge SCRAMBLED (scripts/build-edge-assets.mjs): fetched, unscrambled here in memory, and handed
+         to the library as a Blob URL and a buffer - so neither DevTools nor a download names them.
+         PEAR_POSE_ASSETS is the build's manifest; the source room (no build) keeps the CDN path below.
+         typeof-guarded: body-presence-gate runs this block standalone. */
+      if (typeof PEAR_POSE_ASSETS === "string") {
+        const edge = JSON.parse(PEAR_POSE_ASSETS);
+        const vision = await import(/* webpackIgnore: true */ edge.module);
+        const simd = await vision.FilesetResolver.isSimdSupported();
+        const unscramble = async (a) => {
+          const r = await fetch(a.url, { mode: "cors", credentials: "omit" });
+          if (!r.ok) throw new Error("asset " + r.status);
+          const buf = await r.arrayBuffer();
+          const k = Uint8Array.from(atob(a.key), (c) => c.charCodeAt(0));
+          const k32 = new Uint32Array(k.buffer), n32 = buf.byteLength >>> 2, w = new Uint32Array(buf, 0, n32);
+          for (let i = 0; i < n32; i++) w[i] ^= k32[i % k32.length];   // 4 bytes at a time; the key is 64 bytes
+          const b = new Uint8Array(buf);
+          for (let i = n32 << 2; i < b.length; i++) b[i] ^= k[i % k.length];
+          return b;
+        };
+        const [bin, model] = await Promise.all([unscramble(simd ? edge.wasm : edge.wasmNosimd), unscramble(edge.model)]);
+        const fileset = {
+          wasmLoaderPath: new URL(simd ? edge.loader : edge.loaderNosimd, location.href).href,
+          wasmBinaryPath: URL.createObjectURL(new Blob([bin], { type: "application/wasm" })),
+        };
+        return await vision.PoseLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetBuffer: model, delegate: "GPU" },
+          runningMode: "VIDEO",
+          numPoses: 1,
+        });
+      }
       /* Dynamic import of a CDN ES module: the only way to add this without a bundler,
          and it keeps the bytes off the initial page load entirely. */
       const vision = await import(/* webpackIgnore: true */ POSE_TASKS_MODULE);

@@ -390,7 +390,10 @@ export const CONFIG = Object.freeze({
      download on the critical path of the feature meant to fix first-try reliability
      would defeat the feature. Every failure to load degrades to the native
      FaceDetector engine the orientation watcher already runs. */
-  POSE_WASM_BASE: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm",
+  /* The CDN paths are the SOURCE room's only (support view, local dev). A production build carries the
+     pose library same-origin and its binaries on our edge (PEAR_POSE_ASSETS, scripts/build.mjs), and
+     these strings fold away - the shipped room names no library and no CDN (2026-10-03). */
+  POSE_WASM_BASE: typeof PEAR_POSE_ASSETS === "string" ? "" : "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm",
   /* LITE - main's model, on purpose (2026-09-30). The full model was tried on 2026-09-29 for a
      backlit session (lite read that shopper's shoulders the wrong way round for the first second,
      full read them correctly), with good light claimed identical on four sessions. Measured again
@@ -402,9 +405,9 @@ export const CONFIG = Object.freeze({
      fixes the backlit / far-back shopper is detectPoseFrame()'s FOCUS WINDOW (it only opens
      when the whole frame finds no body - never in the good-light sessions above), and that
      stays. */
-  POSE_MODEL_URL: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/" +
+  POSE_MODEL_URL: typeof PEAR_POSE_ASSETS === "string" ? "" : "https://storage.googleapis.com/mediapipe-models/pose_landmarker/" +
                   "pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
-  POSE_TASKS_MODULE: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14",
+  POSE_TASKS_MODULE: typeof PEAR_POSE_ASSETS === "string" ? "" : "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14",
 
   /* ── Continuous body-topology monitor (see startBodyTopologyTracking in app.js) ──
      THE PRINCIPLE THIS ENFORCES: the GARMENT is static and invariant - one reference
@@ -468,6 +471,9 @@ export const CONFIG = Object.freeze({
 
   /* ── secure proxy endpoints (same-origin; see ../server.js) ─────────────── */
   TOKEN_ENDPOINT:  "/api/realtime-token",
+  /* Where the source room reaches the render engine: our edge (cloudflare/orient/src/rt.js). A production
+     build takes PEAR_RT_URL instead (app.js rtEdgeUrl()). */
+  RT_EDGE_URL:     "wss://rt.pear-ai.io/v",
   HEALTH_ENDPOINT: "/api/health",
 
   /* ── Decart SDK sources (tried in order) ─────────────────────────────────

@@ -1,0 +1,23 @@
+{
+  "v": 1,
+  "items": {
+    "wasm": {
+      "name": "2c7381fa1f440ab5c639",
+      "key": "w3Afz9u218Q082KuO6Klo8yJisIzRXPKZOillMSrwoDnjtN/LXi+jaB19v2lwPcmZ5vPR8jicKmxp+DvFXEP1A==",
+      "sha256": "f82a8e6c05e08a44cc9f9e7ec5f845935bcbb1b1500ebe8c2f4812fb4e2917dc",
+      "bytes": 9423986
+    },
+    "wasmNosimd": {
+      "name": "c8b51bc5ce33a06fd81f",
+      "key": "q3RGDMl5KOD8mel0fVMtXSJuEXS3djTDL9euqTx9GGnGsCJ3kZ6x16sKd3cH+662otjaKv5sAs7CY1vwpAY8Sw==",
+      "sha256": "38b61feab2fd7934e05cbe9f68baa308978a5e3b7f85c1913bb8ae89b8ef8b97",
+      "bytes": 9294247
+    },
+    "model": {
+      "name": "9d31252f5d5680186a29",
+      "key": "ALY7UtHpQtr6tXWJC/rpvkSockcPSnlLcAPZ5kLt+K6gchVNCoXXl5MdOrxEZNXnhGnwg/Oz0wV41PjTlHrBRg==",
+      "sha256": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+      "bytes": 5777746
+    }
+  }
+}

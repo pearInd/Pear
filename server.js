@@ -37,6 +37,9 @@ import { makeStoreSizeChartHandler } from "./lib/store-size-charts.js";
 import { computeSizeVerdict, sanitizeSizeEvidence } from "./lib/sizing.js";
 /* The prompt engine - moved out of the browser 2026-09-26 (see lib/prompts.js). */
 import { promptForRequest, sanitizePromptRequest } from "./lib/prompts.js";
+/* The render engine behind our edge (2026-10-03): the token route answers with a SEALED ticket the edge
+   opens (lib/rt-proxy.js) - the engine's key, its format and the model id never reach the page. */
+import { sealTicket } from "./lib/rt-proxy.js";
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -345,24 +348,23 @@ async function mintTokenWaterfall(extraOrigins = []) {
 /* ── Express handler ─────────────────────────────────────────────────────── */
 async function mintToken(req, res) {
   console.log(`[realtime-token] ${req.method} ${req.originalUrl} - request received`);
+  /* NOTHING IN THESE ANSWERS NAMES THE ENGINE (2026-10-03): the page reads `t` (a sealed ticket - only
+     the edge opens it, lib/rt-proxy.js) and `exp`. The engine's own error text stays in this log. */
   if (!API_KEY) {
-    return res.status(503).json({
-      error:   "decart_unconfigured",
-      message: "Server has no Decart API key (set DECART_API_KEY in .env).",
-    });
+    console.error("[mintToken] no render-engine key configured (DECART_API_KEY)");
+    return res.status(503).json({ error: "engine_unconfigured", message: "The render service is not configured." });
   }
 
   try {
     const own = ownPageOrigin(req);
     const token = await mintTokenWaterfall(own ? [own] : []);
-    return res.json({ ...token, model: VTON_MODEL });
+    return res.json({ t: sealTicket(token.apiKey), exp: token.expiresAt ?? null });
   } catch (err) {
-    console.error("[mintToken] all tiers failed:", err?.message || err);
+    console.error("[mintToken] all tiers failed:", err?.message || err, err?.decart_status ?? "", err?.decart_body ?? "");
     return res.status(502).json({
-      error:        "token_mint_failed",
-      message:      err?.message || "Could not mint a Decart client token.",
-      decart_status: err?.decart_status ?? null,
-      decart_body:   err?.decart_body   ?? null,
+      error:   "token_mint_failed",
+      message: "Could not start the render service.",
+      status:  err?.decart_status ?? null,
     });
   }
 }
@@ -384,8 +386,10 @@ function mountTokenRoute(p) {
 mountTokenRoute("/api/realtime-token");
 mountTokenRoute("/api/tryon");
 
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, decart: !!decart, model: VTON_MODEL, keySource: KEY_SOURCE, ttl: TOKEN_TTL });
+app.get("/api/health", (req, res) => {
+  /* Public: says it is up. The engine, model and key source only for the support token (CLAUDE.md §2.11). */
+  if (isDebugToken(req.query.dk)) return res.json({ ok: true, engine: !!decart, model: VTON_MODEL, keySource: KEY_SOURCE, ttl: TOKEN_TTL });
+  res.json({ ok: true });
 });
 
 app.get("/api/speed-probe", (_req, res) => {
@@ -2435,7 +2439,9 @@ app.post("/api/classify-images", classifyLimiter, async (req, res) => {
     return res.status(400).json({ error: "missing_images", message: "images: string[] is required." });
   }
   if (!GEMINI_API_KEY) {
-    return res.status(503).json({ error: "gemini_unconfigured", message: "GEMINI_API_KEY not set." });
+    /* Neutral to the page (2026-10-03): which classifier runs is not public; the log keeps the detail. */
+    console.error("[classify-images] no classifier key configured (GEMINI_API_KEY)");
+    return res.status(503).json({ error: "classifier_unconfigured", message: "The classification service is not configured." });
   }
 
   const scrapedFront = typeof req.body?.front_image_url === "string" ? req.body.front_image_url : "";
@@ -2891,7 +2897,7 @@ app.post("/api/classify-garment", classifyLimiter, async (req, res) => {
     const category = JSON.parse(raw)?.category;
     const ok = category === "top" || category === "bottom";
     console.log(`[classify-garment] "${title}" → ${ok ? category : "unknown"}`);
-    return res.json({ category: ok ? category : "unknown", source: "gemini" });
+    return res.json({ category: ok ? category : "unknown", source: "ai" });
   } catch (e) {
     console.warn("[classify-garment] failed:", e?.message || e);
     return res.json({ category: "unknown", source: "error" });
@@ -3102,7 +3108,8 @@ const CODE_FILE = /\.(m?js|css|html)$/i;
 /* The SDK bundle is content-hashed (rt.<12 hex>.js), so it is safe to cache for a year -
    and it must be: it is ~800 KB and the room is otherwise no-store. s-maxage lets
    Vercel's CDN hold it too, so it is not re-served by this function per visitor. */
-const SDK_BUNDLE_FILE = /(^|[\\/])rt\.[0-9a-f]{12}\.js$/;
+/* rt.<hash>.js - the render SDK; pv/pl/pn.<hash>.js - the pose library and its runtime loaders (scripts/build.mjs 1b). */
+const SDK_BUNDLE_FILE = /(^|[\\/])(rt|pv|pl|pn)\.[0-9a-f]{12}\.js$/;
 const DIST_OPTS = {
   ...STATIC_OPTS,
   setHeaders(res, filePath) {

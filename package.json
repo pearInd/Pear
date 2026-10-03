@@ -25,7 +25,8 @@
     "sync:size-chart-parser": "node scripts/sync-size-chart-parser.mjs",
     "sync:api-version": "node scripts/sync-api-version.mjs",
     "scan:size-charts": "node scanner/scan-store.js --size-charts",
-    "prepare": "husky"
+    "prepare": "husky",
+    "build:edge-assets": "node scripts/build-edge-assets.mjs"
   },
   "dependencies": {
     "@decartai/sdk": "0.1.5",
@@ -37,7 +38,9 @@
     "ws": "^8.21.1"
   },
   "devDependencies": {
+    "@mediapipe/tasks-vision": "^0.10.14",
     "@playwright/test": "^1.63.0",
+    "acorn": "^8.18.0",
     "esbuild": "^0.25.12",
     "husky": "^9.1.7",
     "jsdom": "^24.1.3"

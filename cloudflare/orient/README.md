@@ -54,3 +54,13 @@ npx wrangler kv key get "<key>" --binding TRACES --remote
 The ping (`{k:"ping"}` → `{k:"pong"}`, `lib/orient-protocol.js`) must be deployed here BEFORE a
 room that pings its link ships - an older Worker never answers it, and the room would replace a
 healthy link on every keepalive.
+
+## The render engine behind this edge (since 2026-10-03, CLAUDE.md §2.24)
+
+`src/rt.js` relays the render engine so the room never names it: `/v/s` (signalling, translated by
+`lib/rt-proxy.js`), `/k/<sealed>/…` (the media server's signalling), `/m` (telemetry) and `/a/<name>`
+(the pose model's scrambled binaries, static assets). The engine's URLs and model id are the `RT_*` vars
+in `wrangler.jsonc`. Before a deploy that changes the pose runtime: `npm run build:edge-assets` (writes
+`assets/a/` - git-ignored - and `lib/edge-assets.json`, which is committed). Local check:
+`npx wrangler dev --var RT_SIGNAL_URL:<stand-in> --var RT_EDGE_WS:ws://127.0.0.1:8787` (wrangler dev reports
+the production host in request.url, so the media URL needs the override).

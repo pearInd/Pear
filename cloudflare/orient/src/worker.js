@@ -35,6 +35,8 @@ import { promptForRequest, sanitizePromptRequest } from "../../../lib/prompts.js
 /* The fingerprint of the two modules above - stamped on every /size and /prompt answer so the room
    can tell an edge running an older deploy from one running its own code (scripts/sync-api-version.mjs). */
 import { API_VERSION } from "../../../lib/api-version.js";
+/* The render engine behind this edge (2026-10-03) - signalling, media, telemetry, pose assets. See rt.js. */
+import { handleRt } from "./rt.js";
 
 const MAX_MSGS_PER_SEC = 120;
 const MAX_BODY_CHARS = 65536;
@@ -130,6 +132,8 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/size" || url.pathname === "/prompt" || url.pathname === "/trace") return handleApi(request, env, url.pathname);
+    const rt = handleRt(request, env, url, originAllowed(request.headers.get("Origin"), env.ALLOWED_ORIGINS));
+    if (rt) return rt;
     if (url.pathname !== "/orient") return new Response("not found", { status: 404 });
     if (request.headers.get("Upgrade") !== "websocket") return new Response("expected a WebSocket upgrade", { status: 426 });
     if (!originAllowed(request.headers.get("Origin"), env.ALLOWED_ORIGINS)) return new Response("forbidden", { status: 403 });

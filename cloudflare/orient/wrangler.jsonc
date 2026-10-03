@@ -15,7 +15,18 @@
   /* The room's own origins: production, and every Vercel preview of the "pear" project in
      the pear2 team (pear-<deployment id>-pear2 and pear-git-<branch>-pear2). Empty = every
      connection is refused, so a deploy that loses this fails closed: the room goes front-only. */
-  "vars": { "ALLOWED_ORIGINS": "https://app.pear-ai.io,https://pear-*-pear2.vercel.app" },
+  "vars": {
+    "ALLOWED_ORIGINS": "https://app.pear-ai.io,https://pear-*-pear2.vercel.app",
+    /* THE RENDER ENGINE BEHIND THIS EDGE (src/rt.js, lib/rt-proxy.js, 2026-10-03): where the relayed
+       signalling and telemetry go, and the model the room's neutral alias stands for. Server-side
+       only - the room names none of it. */
+    "RT_SIGNAL_URL": "https://api3.decart.ai/v1/stream",
+    "RT_MODEL": "lucy-vton-3.5",
+    "RT_TELEMETRY_URL": "https://platform.decart.ai/api/v1/telemetry"
+  },
+  /* The pose model's binaries, scrambled (scripts/build-edge-assets.mjs - run it before a deploy; the
+     directory is generated and git-ignored). The Worker runs first so /a/ answers carry CORS. */
+  "assets": { "directory": "./assets", "binding": "ASSETS", "run_worker_first": true },
   /* POST /trace - a TEST session's flight record, kept 7 days (src/worker.js storeTrace, CLAUDE.md
      §2.16). Remove the binding and the route stores nothing (404). */
   "kv_namespaces": [{ "binding": "TRACES", "id": "16e6ef62ed4641acbb1cf21d801c91dd" }]
