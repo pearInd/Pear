@@ -746,7 +746,8 @@ tick awaits that acknowledgement (main's `await maybeSwap`), so nothing was deci
   front as before; the settle hold waits on the front, so the shopper first sees the front, settled. The
   cost is the back's first acknowledgement on the loading screen instead of on the turn. AI Auto with a
   real back only; `?prime_back=0` is main's hold; TEST records carry `prime-sent`/`prime-acked`.
-  `back-prime`; `composite` counts it as the 7th send site (prompt from `wirePrompt`, clamped).
+  `back-prime`; `composite` counts it as the 7th send site (prompt from `wirePrompt`, clamped). **Moved to the
+  connect on 2026-10-04 (§2.25)** - the reveal hold's re-assert is main's again.
 - **THE YAW GUARD** (`torsoYawGuard()`, in the torso-only block): the published |yaw| is capped at the
   IMAGE angle of the shoulders (acos of their width over the learned square-on width) + 20. On the
   twelve recorded 360s it changes no turn's first 40-degree crossing and, through main's real engine,
@@ -837,6 +838,30 @@ the classifier.
 - **Residual, stated:** a determined reverse-engineer can still run the cloaked code, read WebRTC internals (the
   media server's IPs and TURN hosts) or decode the media library's binary join request; and **the GitHub
   repository is public** - every source file, this one included, names everything. Hiding needs it private.
+
+### 2.25 The front goes out AT THE SIDE; the back is primed at connect (2026-10-04)
+"At the start it didn't put the shirt at all, then the back worked, then the back jumped onto the front."
+The clip: 0-2.4s a sleeveless panel with the print instead of the T-shirt; the back right from 3.2s; 4.6-5.0s
+the back print on a chest facing the lens to the end. Its TEST record (acks slow all session: prime 1120ms, back
+723ms, FRONT 505ms): the chest rule (§2.23) waited for the order to pass 0.2 - the tick at the side read 0.12 -
+and fired on the next one, 0.74 (~318 degrees, 3.96s); 505ms + the render switch put the front past the 5s window.
+- **AT THE SIDE (`makeEarlyTurnTrigger`, `SIDE_FIRE`/`BACK_SEEN`):** on the BACK leg, FRONT also goes out on the
+  first new order reading within `SIDE_FIRE` (-0.25) of overlapping, rising from a reading at or past `BACK_SEEN`
+  (-0.5) since the arm - the side view itself. A mirrored skeleton jumps past that band, never into it; the
+  chest condition (0.2, side seen) stays as the fallback for a side that fell between two readings. On the
+  reported record it fires on the order -0.19 at 3.48s - a tick (~480ms) sooner (`return-side` §3b). Replayed
+  on 13 recorded 360s x 4 phases (per-frame readings): median landing 263 (main 238, the chest rule 287).
+- **The back is primed at connect (`primeAtConnect`):** right after the garment is applied at connect - the back
+  once, the front again - while the first frames are still on their way. The reveal hold's re-assert is main's
+  exactly again (a re-send of the image on the wire); the prime no longer adds its first acknowledgement to the
+  reveal (twin: reveal 6.9s vs ~8.0s). The sleeveless start is NOT proven to be the prime: every pre-prime
+  session (7, OASIS) revealed on the full shirt, one post-prime one (s3) did too; this product (PEAK) had a
+  "tank" start on record before the prime existed (§2.9's reveal note). Its front photo is the next suspect.
+- **The engine twin (scratch harness, re-runnable):** a stand-in engine with the measured behaviour - output
+  ~0.95s behind the camera, a reference visible ~0.48s after its ack, first/repeat ack distributions from the
+  TEST records - painting the very image the room sent; the camera carries the clip's clock (a barcode on the
+  left edge - the top strip covered the head and blinded the pose model), so every output frame says which
+  moment of the clip it shows and which reference was on it: where each swap lands, as the shopper sees it.
 
 ## 3. Cross-file lockstep
 

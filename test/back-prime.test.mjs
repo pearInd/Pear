@@ -30,10 +30,11 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
     sendCondition: async (label, send) => { if (busySkip) return false; await send(); return true; },
     noteImageUploadAcked: (w) => acked.push(w), lastSentImageRef: "front-blob", lastSentPrompt: "front-prompt",
     traceOrient: () => {}, console: { log() {}, warn() {} },
+    rtImageOnWire: true, applied: [], applyActive: async () => { env.applied.push({ ref: api.state().lastSentImageRef }); },
   };
   const names = Object.keys(env);
-  const api = new Function(...names, `${SRC}\nreturn { primeBackReference, state: () => ({ lastSentImageRef, lastSentPrompt }) };`)(...names.map((k) => env[k]));
-  return { api, sent, acked, blobs };
+  const api = new Function(...names, `${SRC}\nreturn { primeBackReference, primeAtConnect, state: () => ({ lastSentImageRef, lastSentPrompt, rtImageOnWire }) };`)(...names.map((k) => env[k]));
+  return { api, sent, acked, blobs, env };
 }
 
 {
@@ -60,14 +61,21 @@ function world({ search = "", angle = "auto", look = null, back = "https://cdn.t
   check("§6 a wire that declines the write sends nothing and claims nothing", (await busy.api.primeBackReference(3)) === false && busy.acked.length === 0);
 }
 {
+  /* MOVED TO THE CONNECT (2026-10-04): the reveal hold's re-assert is main's again, and the back goes out right
+     after the garment is applied at connect, then the front again. */
+  const w = world();
+  const ok = await w.api.primeAtConnect(3);
+  check("§7 at connect: the back once, then the front re-applied with the no-op refs cleared",
+    ok === true && w.sent.length === 1 && w.env.applied.length === 1 && w.env.applied[0].ref === null && w.api.state().rtImageOnWire === false,
+    JSON.stringify({ ok, sent: w.sent.length, applied: w.env.applied }));
+  const none = world({ back: null });
+  check("§7b no back photo: no prime and no extra front send", (await none.api.primeAtConnect(3)) === false && none.env.applied.length === 0);
   const redispatch = between("const redispatchColdStart = (myGen, delta, why) => {", "\n  const fire = () => {");
-  check("§7 only the cold-start re-assert primes, and the front re-assert follows it",
-    /const primed = why === "cold-start re-assert" && typeof primeBackReference === "function" \? primeBackReference\(myGen\) : null;/.test(redispatch) &&
-    /primed\.catch\(\(\) => false\)\s*\.then\(\(\) => \{ if \(myGen === sessionGen && isLive\(\)\) return reassert\(\); \}\)/.test(redispatch));
-  check("§8 with no prime the re-assert is synchronous, exactly as before (cold-start-passthrough runs this standalone)",
-    /if \(!primed\) \{\s*reassert\(\)\.catch/.test(redispatch));
-  check("§9 the re-assert still clears all three no-op refs before applyActive()",
-    /const reassert = \(\) => \{\s*lastSentImageRef = null;\s*rtImageOnWire = false;\s*lastSentPrompt = null;\s*return applyActive\(\);/.test(redispatch));
+  check("§8 the reveal hold's re-assert is main's exactly again - no prime inside it",
+    !/primeBackReference/.test(redispatch.replace(/\/\*[\s\S]*?\*\//g, "")) &&
+    /lastSentImageRef = null;\s*rtImageOnWire = false;\s*lastSentPrompt = null;\s*applyActive\(\)\.catch\(\(e\) =>/.test(redispatch));
+  check("§9 goLive primes right after the garment is applied at connect, fire-and-forget",
+    /if \(!await applyConditioningWithRecovery\(\)\) return;\s*\n\s*\/\*[^*]*\*\/\s*\n\s*if \(typeof primeAtConnect === "function"\) primeAtConnect\(sessionGen\);/.test(APP));
 }
 console.log("");
 if (fails) { console.log(`${fails} check(s) FAILED`); process.exit(1); }
