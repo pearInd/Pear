@@ -4,14 +4,14 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-03 · main @ `8ce3de6` + this status commit_
+_Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
 
 ## At a glance
 
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
-| Store size guides (Phase 0 + 1) | in progress — Phase 1 data live for fox (5), castro (2) + adidas (2); next: Phase 2 (not started) | main (also re-cut server-side on `hide/main-v2`) |
+| Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16) and the store-chart decision shipped `0fccee8`; **v16 migration + 3 re-saves waiting on you**; next: Phase 2 (not started) | main (also re-cut server-side on `hide/main-v2`) |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
@@ -26,6 +26,20 @@ _Last updated: 2026-10-03 · main @ `8ce3de6` + this status commit_
 | Liquid Glass UI + consent gate | done | main `0827e51`, `89a5848` |
 
 ## Waiting on you (manual steps)
+
+- [ ] **Run `archive/supabase_setup_v16.sql`** in the Supabase SQL editor (adds `size_system` to
+      `store_size_charts`' unique key; safe to re-run, changes no row). Until it runs, every
+      `--save` writes NOTHING and prints "run archive/supabase_setup_v16.sql" (verified on castro
+      2026-10-03). Confirm with: `SELECT indexname FROM pg_indexes WHERE tablename = 'store_size_charts';`
+      → `store_size_charts_key_v16_idx` present, `store_size_charts_key_idx` gone.
+- [ ] **Then re-save the three stores** (from `scanner/`, where its `.env` lives):
+      `node scan-store.js --size-charts --save https://www.castro.com` — adds the women's EU 32–46
+      chart the old key dropped (dry run 2026-10-03: 3 charts, was 2);
+      `node scan-store.js --size-charts --save https://www.fox.co.il` — dry run shows the same 11
+      charts as before (no chart was lost to the old key there); re-save refreshes them;
+      `node scan-store.js --size-charts --save https://www.adidas.co.il` — **blocked from this
+      machine today** (home page HTTP 403, twice; not probed further). Run it when adidas answers you.
+      Verify: `GET /api/store-size-chart?host=castro.com` should list women/tops twice (alpha + numeric).
 
 - [x] Size-guide dry runs for all 4 stores — done 2026-10-02 (results under *Store size guides*).
 - [x] fox.co.il captured with `--save` — 11 rows in `store_size_charts`, 5 store-level served by the API.
@@ -76,7 +90,7 @@ _Last updated: 2026-10-03 · main @ `8ce3de6` + this status commit_
 - [ ] **Full age_group backfill — DEFERRED by choice, not blocked.** Stopped partway on purpose;
       only demo products need it for now. When wanted: `cd scanner && node backfill-age-group.js`
       (`ef1d28d` must be deployed first, or try-ons re-wipe the rows it fills).
-- [ ] **Decide the fate of `hide/main-v2`** — 39 commits ahead and now 9 behind main
+- [ ] **Decide the fate of `hide/main-v2`** — 39 commits ahead and now 12 behind main
       (as of this status commit); it needs main merged in before it can land.
 
 ---
@@ -93,8 +107,9 @@ _Last updated: 2026-10-03 · main @ `8ce3de6` + this status commit_
 - **Open decisions:** whether kids charts get a fine-tune pass at all.
 
 ## Store size guides
-- **Stage:** in progress. Phase 0 (measure) + Phase 1 (stored fallback, tie-break only,
-  §2.5b unchanged) shipped in `bd766b2`. Phases 2–6 not started.
+- **Stage:** in progress. Phase 0 (measure) + Phase 1 (stored fallback) shipped in `bd766b2`;
+  **§2.5b changed 2026-10-03 (`0fccee8`): a confident stored chart now DECIDES the adult size**.
+  Phases 2–6 not started.
 - **Done:** widget reads the PDP chart (`2026-09-17` spec); scanner `--size-charts`
   dry run + `--save` capture; `store_size_charts` (v15, run); `GET /api/store-size-chart`;
   room fallback with gender/type/overlap guards; EU/US aliases; `[PEAR] store chart vs
@@ -116,10 +131,30 @@ _Last updated: 2026-10-03 · main @ `8ce3de6` + this status commit_
   no-space-unit normalization, inches/cm toggle-pair dedup); product sampler by URL shape;
   product keys percent-encoded (fox's one raw-Hebrew row fixed in place).
   `store_size_charts`: 15 rows — fox 11 (5 served), castro 2 (2 served), adidas 2 (2 served).
-- **Remaining:** **Phase 2** (widget sightings) — next, approved, not started; the only route to
-  terminalx (adidas is now Phase 1). Phase 3 (vision) has zero measured demand; revisit if
-  Phase 2 reports image charts. Known limits: the table key has no `size_system`, so a store
-  with numeric AND alpha charts for one audience/type keeps only one; the adidas
+- **Done 2026-10-03 (`0fccee8`):**
+  1. *Shared parser* — the adidas fixes moved from the scanner into the widget's
+     `@pear-shared:size-chart-parser` block (scanner copy regenerated, sync test green): glued
+     units (`86cm`, `38in`), ARIA div-grids, Inches|cm twin collapse (only when one grid is cm and
+     the other inches — two same-shaped cm charts stay two), `___hash` class stripping, `{html}`/
+     `{content}` envelopes. The glued-unit bug was live in the widget: a women's 62/68/74cm waist
+     ladder beside an "Inches" label shipped as 155.5–190cm (reproduced on the old code in
+     `size-chart-shared-fixes` §2).
+  2. *All charts kept* — `archive/supabase_setup_v16.sql` (size_system in the key, **not run yet**);
+     scanner keys on it and refuses to save until it runs; the room picks between same-audience
+     charts by size overlap with the product, own labels breaking ties.
+  3. *Store chart decides* — `storeChartRecommendation()`: typed measurements, else a
+     `k·sqrt(weight/height)` estimate (±4–6cm); abstains below 35% / within a 10-point margin, on
+     unknown garment gender with gendered charts, or with nothing comparable. Runs after the
+     kernel's adult/child + no-match decisions (guard untouched). `trace:prompt` byte-identical.
+- **Remaining:** the v16 run + re-saves above. **Phase 2** (widget sightings) — approved, not
+  started; the only route to terminalx (out of scope for now). Phase 3 (vision) has zero
+  measured demand. Known limits: (a) a product sold in NUMERIC tops sizes (EU 34–46) is routed
+  to bottoms by `isPantsProduct()`'s size-run tier (pre-existing), so a numeric women's TOPS
+  chart (castro's EU table) is stored but today only usable through its letter aliases;
+  (b) with only height+weight, the estimate decides only when the body sits well inside a band
+  — near a band edge, or with the shopper's gender unset, it abstains (by design); (c) the
+  men's waist coefficient is calibrated on a derived column (weakest of the three); (d) the
+  widget's PDP chart never decides (no audience labels) — it stays a tie-break; (e) the adidas
   "unknown/adult/tops" exclusion above is open.
 - **Open decisions:** `hide/main-v2` moved this logic server-side (`b2ac5ad`, `dae0138`) —
   which shape is canonical once that branch lands.
@@ -208,7 +243,7 @@ _Last updated: 2026-10-03 · main @ `8ce3de6` + this status commit_
 ## Other branches (not merged)
 | Branch | Ahead / behind main | Note |
 |---|---|---|
-| `hide/main-v2` | 39 / 9 | active — see above |
+| `hide/main-v2` | 39 / 12 | active — see above |
 | `harden/hide-client-logic` | 46 / 10 | experiments |
 | `fix/v142-angle-rollback` | 5 / 15 | camera AE/AWB pin — unmerged, decide |
 | `feat/back-view-pipeline` | 1 / 63 | stale |
