@@ -403,6 +403,8 @@ for (const [name, before, after] of report) {
     violations++;
     console.error(`✖ ${APP_ENTRY} creates the render client without a logger - see connectRealtime()`);
   }
+  /* The one form allowed is the engine-speed experiment's TEST-only "notel" mode, `telemetry:!<EXP_NOTEL>` inside its
+     own guard (engine-exp §3.1b) - a literal off can only be a shopper's client. */
   if (/telemetry:!1/.test(room)) {
     violations++;
     console.error(`✖ ${APP_ENTRY} turns the render SDK's telemetry off - main runs it on (its stats loop), see connectRealtime()`);

@@ -6508,7 +6508,10 @@ async function connectRealtime({ force = false } = {}) {
          runs this function standalone. */
       const client = createClient({ apiKey: ekToken, realtimeBaseUrl: typeof rtEdgeUrl === "function" ? rtEdgeUrl() : undefined, logger: rtLogger,
         /* THE ENGINE-SPEED EXPERIMENT's "ref" mode only: the client's file uploads go to our edge, never the engine's host. */
-        ...(typeof EXP_REF !== "undefined" && EXP_REF && typeof expFilesBase === "function" && expFilesBase() ? { baseUrl: expFilesBase() } : {}) });
+        ...(typeof EXP_REF !== "undefined" && EXP_REF && typeof expFilesBase === "function" && expFilesBase() ? { baseUrl: expFilesBase() } : {}),
+        /* ...and its "notel" mode: the SDK's telemetry off (its 1s stats loop and 10s report) - the only change of ours on
+           the day the acks slowed (fbe85c1, 2026-09-30). A shopper's session never reads it; main's default stays on. */
+        ...(typeof EXP_NOTEL !== "undefined" && EXP_NOTEL ? { telemetry: !EXP_NOTEL } : {}) });
       if (typeof EXP_REF !== "undefined" && EXP_REF) _expFilesClient = client.files || null;
       console.log("[PEAR] connectRealtime() - stage 4/4: opening WebRTC session (waiting for 'connected')…");
 
@@ -7207,11 +7210,12 @@ const PEAR_EXP = (() => {
   try {
     if (!(typeof traceEnabled === "function" && traceEnabled())) return "";
     const v = new URLSearchParams(location.search).get("pear_exp") || "";
-    return v === "small" || v === "ref" || v === "small-ref" ? v : "";
+    return v === "small" || v === "ref" || v === "small-ref" || v === "notel" ? v : "";
   } catch (_) { return ""; }
 })();
 const EXP_SMALL = PEAR_EXP === "small" || PEAR_EXP === "small-ref";
 const EXP_REF = PEAR_EXP === "ref" || PEAR_EXP === "small-ref";
+const EXP_NOTEL = PEAR_EXP === "notel";
 const EXP_SMALL_W = 640;
 /** The "small" mode: a reference no wider than EXP_SMALL_W (JPEG 0.9). Never fails - the original on any error. */
 async function expDownscale(blob) {

@@ -33,10 +33,12 @@ const EXP = between(APP, "const PEAR_EXP = (() => {", "\n/** The \"small\" mode:
 
 console.log("\n── §1 only a TEST session ──");
 {
-  const mode = (search, test) => new Function("location", "traceEnabled", EXP + "\nreturn [PEAR_EXP, EXP_SMALL, EXP_REF];")(
+  const mode = (search, test) => new Function("location", "traceEnabled", EXP + "\nreturn [PEAR_EXP, EXP_SMALL, EXP_REF, EXP_NOTEL];")(
     { search }, () => test);
-  check("§1.1 a TEST session reads the mode", JSON.stringify(mode("?pear_exp=small-ref", true)) === JSON.stringify(["small-ref", true, true]));
-  check("§1.2 a shopper's session runs none of it, whatever the URL says", JSON.stringify(mode("?pear_exp=ref", false)) === JSON.stringify(["", false, false]));
+  check("§1.1 a TEST session reads the mode", JSON.stringify(mode("?pear_exp=small-ref", true)) === JSON.stringify(["small-ref", true, true, false]) &&
+    JSON.stringify(mode("?pear_exp=notel", true)) === JSON.stringify(["notel", false, false, true]));
+  check("§1.2 a shopper's session runs none of it, whatever the URL says", JSON.stringify(mode("?pear_exp=ref", false)) === JSON.stringify(["", false, false, false]) &&
+    JSON.stringify(mode("?pear_exp=notel", false)) === JSON.stringify(["", false, false, false]));
   check("§1.3 an unknown mode is no mode", mode("?pear_exp=fast", true)[0] === "");
   check("§1.4 ...and the TEST record carries it", /exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP \? PEAR_EXP : undefined,/.test(APP));
 }
@@ -60,6 +62,9 @@ console.log("\n── §3 the client ──");
 {
   check("§3.1 only the \"ref\" mode points the render client's REST base at our edge",
     /\.\.\.\(typeof EXP_REF !== "undefined" && EXP_REF && typeof expFilesBase === "function" && expFilesBase\(\) \? \{ baseUrl: expFilesBase\(\) \} : \{\}\)/.test(APP));
+  check("§3.1b only the \"notel\" mode turns the render SDK's telemetry off - a shopper's client is created as main's",
+    /\.\.\.\(typeof EXP_NOTEL !== "undefined" && EXP_NOTEL \? \{ telemetry: !EXP_NOTEL \} : \{\}\) \}\);/.test(APP) &&
+    (APP.match(/[{,]\s*telemetry:/g) || []).length === 1);
   const baseOf = (edge) => new Function("rtEdgeUrl", between(APP, "function expFilesBase() {", "\n/** Upload the session") + "\nreturn expFilesBase();")(() => edge);
   /* The built room's realtime URL carries its path (`${EDGE.ws}/v`, scripts/build.mjs) - the first real "ref" session
      posted to /v/f/... because this check only ever saw a bare origin. */
