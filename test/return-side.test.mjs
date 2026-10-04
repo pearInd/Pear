@@ -32,6 +32,7 @@ const ENGINE_SRC = readFileSync(new URL("../lib/orient-engine.js", import.meta.u
 const POSES = JSON.parse(readFileSync(new URL("./torso-twist-poses.json", import.meta.url), "utf8"));
 const S3 = JSON.parse(readFileSync(new URL("./return-side-s3.json", import.meta.url), "utf8"));
 const U1 = JSON.parse(readFileSync(new URL("./return-side-u1.json", import.meta.url), "utf8"));
+const PACE = JSON.parse(readFileSync(new URL("./return-side-pace.json", import.meta.url), "utf8"));
 const E = await import("../lib/orient-engine.js");
 
 let fails = 0;
@@ -152,11 +153,13 @@ console.log("\n── §1 the trigger ──");
      the turn's own order speed reaches the side within the extra ack time; a fast one, none, a snap or a floor never. */
   const paceTrig = (latLead = true) => E.createOrientEngine(E.sanitizeOrientKnobs({})).internals.makeEarlyTurnTrigger(
     40, 45, 50, 50, 10, [450, 960], 20, 0.2, latLead);
-  const paced = (lat, latLead, steps = ret) => run(paceTrig(latLead), steps.map((o) => ({ ...o, lat })));
+  /* Every case starts square to the lens 1.2s before - where the turn's average speed is measured from. */
+  const START = { vote: "front", lock: "front", yawAbs: 3, at: -1200, ord: 1, ordAt: -1200 };
+  const paced = (lat, latLead, steps = ret) => run(paceTrig(latLead), [START, ...steps].map((o) => ({ ...o, lat }))).slice(1);
   const slow = paced(750, true);
-  /* -0.86 -> -0.51 in 240ms: at that speed the side is ~350ms away, inside the 500ms the slow engine adds - so the
-     return goes out there, where it lands (decision + ~450ms on this engine) at about the side view. */
-  check("§1.17 a slow engine (750ms) fires the return when the order's speed reaches the side within its extra ack time - -0.51 here - via the lead",
+  /* The turn averaged ~142 deg/s from the front (0 at -1.2s) to -0.51 (239 degrees at 0.48s): the 550ms a 750ms engine adds
+     covers ~78 degrees, past the side - so the return goes out there. The reading before it (-0.86) is past the floor. */
+  check("§1.17 a slow engine (750ms) fires the return when the turn's average speed reaches the side within its extra ack time - -0.51 here - via the lead",
     firstFire(slow) === 2 && slow[2].fire === "front" && slow[2].via === "lead", JSON.stringify(slow));
   check("§1.18 a fast engine (200ms), no pace, or ?lat_lead=0 fires exactly where the side rule does",
     [paced(200, true), paced(null, true), paced(750, false)].every((o) => firstFire(o) === 4 && o[4].via === "order"));
@@ -169,13 +172,13 @@ console.log("\n── §1 the trigger ──");
   const deep = [
     { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -1, ordAt: 0 },
     { vote: "back", lock: "back", yawAbs: 20, at: 240, ord: -0.95, ordAt: 240 },
-    { vote: null, lock: "back", yawAbs: 30, at: 480, ord: -0.75, ordAt: 480 },   // fast, but still past the floor (-0.7)
+    { vote: null, lock: "back", yawAbs: 30, at: 480, ord: -0.88, ordAt: 480 },   // rising and fast, but past the floor (-0.85)
   ];
-  check("§1.20 ...and never from deeper than the floor (-0.7), however fast", !paced(750, true, deep).some((o) => o.fire));
+  check("§1.20 ...and never from deeper than the floor (-0.85), however fast", !paced(750, true, deep).some((o) => o.fire));
   const falling = [
     { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -0.55, ordAt: 0 },
-    { vote: null, lock: "back", yawAbs: 20, at: 240, ord: -0.45, ordAt: 240 },   // rising, too slowly to reach the side in time
-    { vote: null, lock: "back", yawAbs: 20, at: 480, ord: -0.6, ordAt: 480 },    // turning back toward the back
+    { vote: null, lock: "back", yawAbs: 20, at: 240, ord: -0.62, ordAt: 240 },   // turning back toward the back
+    { vote: null, lock: "back", yawAbs: 20, at: 480, ord: -0.7, ordAt: 480 },    // ...and further
   ];
   check("§1.21 an order falling back toward the back never fires", !paced(750, true, falling).some((o) => o.fire));
   /* PREDICTIVE BACK, gated on the order: a FRONT lock whose |yaw| passed the side and is falling is either a body
@@ -308,6 +311,36 @@ console.log("\n── §3b the second report: the back stayed on the chest (2026
     !!sf && sf.o >= 0 && sf.o < 0.2, JSON.stringify(side));
   check("§3b.3 ...a tick ahead of where the session sent it (~240ms)", !!sf && recFront && recFront[1] - sf.t >= 200, JSON.stringify({ side, recorded }));
   check("§3b.4 the outbound BACK is the same tick as the record's", side.find((x) => x.next === "back" && x.t > 0)?.t === recorded.find(([n, t]) => n === "back" && t > 0)?.[1], JSON.stringify(side));
+}
+
+console.log("\n── §3c the two PEAK sessions of 2026-10-04, from their own records: the back on the chest at the end ──");
+{
+  /* Both: a fast full turn (~2.5s) on a slow engine (acks 501-807ms). The first (04:55) predates `lat` in the record - its
+     room's estimate is taken from its own acks (734, 807: 770). The second (05:55) carries `lt` per tick. Each record's
+     FRONT went out on the first reading past the side; the clip showed the back print on the chest for ~0.3s after it. */
+  const replay = (rec, knobs, latFor) => {
+    const engine = E.createOrientEngine(E.sanitizeOrientKnobs(knobs));
+    let l = rec.ticks[0].l; const sent = [];
+    for (const k of rec.ticks) {
+      const acts = engine.step(E.sanitizeOrientSample({ t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
+        yawAbs: k.y, yawAt: k.y === null ? 0 : k.t - k.ya, lostAt: k.la === null ? 0 : k.t - k.la,
+        ord: k.o, ordAt: k.o === null ? 0 : k.t - (k.oa ?? 0), lat: latFor(k), lock: l, profile: !!k.p, dualView: !!k.d }));
+      for (const a of acts) if (a.do === "swap" && a.next !== l) { sent.push({ next: a.next, t: k.t - rec.reveal, o: k.o }); l = a.next; }
+    }
+    return sent;
+  };
+  for (const [name, rec, latFor] of [["04:55", PACE["m1-0455"], () => 770], ["05:55", PACE["m2-0555"], (k) => k.lt]]) {
+    const recorded = rec.ticks.filter((k) => k.sw.length).map((k) => ({ next: k.sw[0], t: k.t - rec.reveal, o: k.o }));
+    const off = replay(rec, { lat_lead: "0" }, latFor), on = replay(rec, {}, latFor);
+    const ret = (sw) => sw.find((x, i) => x.next === "front" && sw.slice(0, i).some((y) => y.next === "back"));
+    const recF = ret(recorded), offF = ret(off), onF = ret(on);
+    check(`§3c ${name}: the replay without the pace is the record's own decisions (the return on the side reading, o=${recF && recF.o})`,
+      !!recF && !!offF && offF.t === recF.t && offF.o === recF.o, JSON.stringify({ recorded, off }));
+    check(`§3c ${name}: with the pace the return goes out a reading earlier - ${onF && onF.o} instead of ${recF && recF.o}, ${recF && onF ? recF.t - onF.t : "?"}ms sooner`,
+      !!onF && !!recF && recF.t - onF.t >= 200 && onF.o < 0 && onF.o >= -0.85, JSON.stringify(on));
+    check(`§3c ${name}: the outbound BACK and every swap before the return are the record's`,
+      JSON.stringify(on.slice(0, on.indexOf(onF))) === JSON.stringify(off.slice(0, off.indexOf(offF))), JSON.stringify({ on, off }));
+  }
 }
 
 console.log("\n── §4 thirteen real 360s, at four tick phases ──");

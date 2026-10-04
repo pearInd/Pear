@@ -973,6 +973,15 @@ hands-on-the-hem in its first second (the product photo has the hands down - an 
   engine: the return landed at median 333 degrees without it, 307 with it (a fast engine 276) - not all the way, because
   the earliest fire is the first order reading after the turn's deepest back point and a fast turn crosses from the back
   to the side in one ~250ms reading. `return-side` §1.17-§1.21, §4b, §5.8-§5.12. **Needs a `wrangler deploy`.**
+- **Reworked the same day after the next session** ("the back works, then at the front the back appears on the front too"):
+  FRONT went out on the side reading (0.16), acked in 556ms, showed ~0.52s later on a chest coming round - the back print
+  on the chest for ~0.27s (3.63-3.85s of the clip). The first cut projected the last two readings' speed and fired
+  nothing: that turn ran ~90 deg/s from the back to 238 and ~220 deg/s after it. Now the speed is the TURN'S AVERAGE since
+  its last square-on front reading (ord >= 0.9 on the FRONT lock) - the recorded returns run a steady 100-180 deg/s - the
+  base is 200ms (a fast engine's repeat ack), the floor -0.85, and the decision is taken BEFORE the re-arm (a reading the
+  shoulders still vote back on, |yaw| under 50, re-armed and ended the tick: the 04:55 session's -0.74). Both sessions,
+  replayed from their own records (`test/return-side-pace.json`, `return-side` §3c): the return goes out a reading earlier
+  (-0.74 / -0.53, 237 / 206ms sooner), every swap before it the record's own. Replay median 333 -> 299 degrees.
 - **The camera bridge is off** (§2.9) - `stream-continuity` pins the default.
 
 ## 3. Cross-file lockstep
