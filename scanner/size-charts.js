@@ -4,9 +4,11 @@
    Finds a storefront's own size guide once per store, instead of per shopper, and
    (with --save) writes it to Supabase's `store_size_charts` table
    (archive/supabase_setup_v15.sql). The fitting room reads it back through
-   GET /api/store-size-chart ONLY when the widget could not read a chart off the
-   product page itself, and ONLY as the fine-tune tie-break - CLAUDE.md §2.5b is
-   unchanged: a store chart never touches the height/weight kernel.
+   GET /api/store-size-chart; a chart matching the garment DECIDES the adult size when
+   the body places clearly on it (CLAUDE.md §2.5b as changed 2026-10-03) and is the
+   fine-tune overlay otherwise - it never touches the height/weight kernel. Since
+   archive/supabase_setup_v16.sql every chart a store publishes is kept (size_system is
+   in the key), so a letter AND a numeric chart for one audience/type are both rows.
 
    THE PARSER IS THE WIDGET'S. scanner/size-chart-parser.js is generated from
    widget/pear-widget.js (npm run sync:size-chart-parser) and pinned byte-identical by
@@ -59,6 +61,29 @@ const JS_APP_RE =
    js_app_detected finding, not none_found. */
 const INLINE_STATE_CHART_RE = /["'](?:size_?chart|sizechart|size_?guide)(?:_id|_block|Id)?["']\s*:\s*["'][^"']{2,80}["']|\bsizechart_[a-z0-9_]{3,}/i;
 
+/* PLATFORM DETECTION decides which sampler path runs (Shopify's products.json vs a
+   sitemap crawl - sampleProducts()) and rides along as the chart's provenance; a false
+   positive here is not cosmetic. A bare /shopify/i substring match flips on ANY mention
+   anywhere in a multi-hundred-KB homepage - adidas.co.il carries exactly one, a
+   Global-e cross-border-checkout config key named
+   "UseShopifyCheckoutForPickUpDeliveryMethod" (a feature flag naming a CHECKOUT
+   PARTNER's product, not adidas's own platform), which was enough to report
+   "adidas.co.il (shopify)" and send it down the Shopify-only products.json path (an
+   always-404 request every run). Adidas runs Salesforce Commerce Cloud (Demandware),
+   unambiguous from its own asset and page paths - a substring check never looked for
+   those at all, so it fell through to whatever OTHER platform happened to be
+   name-dropped on the page. Each marker below names the PLATFORM ITSELF (its CDN, its
+   global object, its own URL shape), never a feature or integration that merely
+   mentions a platform by name. */
+const SHOPIFY_MARKER_RE = /cdn\.shopify\.com|Shopify\.theme|window\.Shopify\s*=|shopify-digital-wallet|shopify-section|\/cdn\/shop\//;
+const DEMANDWARE_MARKER_RE = /\/on\/demandware\.(?:static|store)\/|\bSites-[\w-]+-Site\b/;
+export function detectPlatform(homeText) {
+  const t = String(homeText || "");
+  if (DEMANDWARE_MARKER_RE.test(t)) return "demandware";
+  if (SHOPIFY_MARKER_RE.test(t)) return "shopify";
+  return "html";
+}
+
 /* A bot-protection interstitial (Akamai / Cloudflare / PerimeterX / Incapsula...)
    answers 200 with a small HTML page that is nothing but a challenge script. Parsing it
    finds no chart, and reporting that as "none_found" would be a false claim about the
@@ -110,6 +135,12 @@ const WORDS = {
     "sweatshirt", "sweatshirts", "knitwear", "polo", "polos", "outerwear", "חולצה", "חולצות",
     "עליון", "עליונים", "זקט", "זקטים", "מעיל", "מעילים", "סוודר", "סוודרים", "קפוצון", "קפוצונים", "טישרט"],
   dresses: ["dress", "dresses", "שמלה", "שמלות"],
+  /* Garments this table cannot be typed as. A suit is a jacket AND trousers, so a suit
+     chart is neither a tops nor a bottoms chart - and its columns lie about which:
+     castro.com's "בלייזרים וחליפות" (blazers & suits) table is EU 48-58 by waist only,
+     which the column fallback below read as men's BOTTOMS. Naming one of these in the
+     table's own caption leaves the type unset (not stored), never column-guessed. */
+  untyped: ["suit", "suits", "blazer", "blazers", "tuxedo", "חליפה", "חליפות", "בלייזר", "בלייזרים"],
 };
 
 export function contextTokens(text) {
@@ -139,7 +170,7 @@ export function classifyContextText(text) {
   let garmentType = null;
   if (types.length === 1) garmentType = types[0];
   else if (types.length === 2 && types.includes("jeans") && types.includes("bottoms")) garmentType = "jeans";
-  return { gender, kids: hasWord(tokens, WORDS.kids), garmentType };
+  return { gender, kids: hasWord(tokens, WORDS.kids), garmentType, untyped: hasWord(tokens, WORDS.untyped) };
 }
 
 const KIDS_NUMERIC = new Set(["2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "16", "18"]);
@@ -148,14 +179,23 @@ const ALPHA_RE = /^(?:XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL|[23]XS)$/i;
 /* Local context decides; page context only fills what local left open. The column
    shape is the last resort for the TYPE only (a chest column means the chart is for
    tops; waist/hips and no chest means bottoms) - never for gender, which has no
-   column-shaped evidence at all. */
-export function classifyChart(rows, localText, pageText) {
+   column-shaped evidence at all.
+
+   `referrer` is the LAST tier, for gender and kids only: what the product pages that
+   LINK to this guide say about who they are for ({gender, kids}, see
+   referrerAudience()). castro.com serves one guide block per department with no
+   audience word in it - the women's block says so only through Hebrew feminine verb
+   forms - while every PDP that opens it sits under /נשים/. It never fills the TYPE: the
+   men's polo that opens castro's men's block also opens its blazers table. */
+export function classifyChart(rows, localText, pageText, referrer = null) {
   const local = classifyContextText(localText);
   const page = classifyContextText(pageText);
-  let gender = local.gender || page.gender || "unknown";
-  let garmentType = local.garmentType || page.garmentType || null;
+  const ref = referrer || {};
+  let gender = local.gender || page.gender || ref.gender || "unknown";
+  const genderFrom = local.gender || page.gender ? "context" : ref.gender ? "referrer" : null;
+  let garmentType = local.untyped ? null : local.garmentType || page.garmentType || null;
   let typeFrom = garmentType ? (local.garmentType ? "context" : "page") : null;
-  if (!garmentType) {
+  if (!garmentType && !local.untyped) {
     const has = (k) => rows.some((r) => typeof r["min" + k] === "number");
     if (has("Chest")) garmentType = "tops";
     else if (has("Waist") || has("Hips")) garmentType = "bottoms";
@@ -163,7 +203,7 @@ export function classifyChart(rows, localText, pageText) {
   }
   const sizes = rows.map((r) => String(r.size));
   const allKidsNumeric = sizes.length > 0 && sizes.every((s) => KIDS_NUMERIC.has(s));
-  const kidsWords = local.kids || (!local.gender && page.kids);
+  const kidsWords = local.kids || (!local.gender && page.kids) || (!local.gender && !page.gender && !!ref.kids);
   const ageGroup = kidsWords || allKidsNumeric ? "kids" : "adult";
   /* boys/girls words land in both kids and men/women - that is intended: a "Boys"
      chart is a kids chart cut for boys. */
@@ -172,6 +212,7 @@ export function classifyChart(rows, localText, pageText) {
   const sizeSystem = allAlpha ? "alpha" : allNumeric ? "numeric" : "mixed";
   let confidence = 0.9;
   if (gender === "unknown") confidence -= 0.25;
+  else if (genderFrom === "referrer") confidence -= 0.1;
   if (typeFrom === "columns") confidence -= 0.15;
   if (typeFrom === "page") confidence -= 0.05;
   return { gender, ageGroup, garmentType, sizeSystem, typeFrom, confidence: Math.round(confidence * 100) / 100 };
@@ -183,6 +224,14 @@ function shortText(el) {
   const t = String(el && el.textContent || "").replace(/\s+/g, " ").trim();
   return t.length <= 120 ? t : "";
 }
+/* A build-tool-generated class/id (`[name]__[local]___[hash]`) is a styling hook, not
+   prose - adidas.co.il's ADULT charts sit in "kids-table___1-YOY". The rule lives in the
+   SHARED parser now (sizeChartContextClean, widget/pear-widget.js) so the widget and the
+   scanner read class/id text the same way; PURE is the parser's document-free half. */
+const PURE = createSizeChartParser(null);
+const isGridMarkup = (el) => el.tagName === "TABLE" || (el.getAttribute && el.getAttribute("role") === "table") ||
+  !!(el.querySelector && el.querySelector('table,[role="table"]'));
+
 export function tableContextText(table) {
   const parts = [];
   try {
@@ -190,8 +239,8 @@ export function tableContextText(table) {
     if (cap) parts.push(shortText(cap));
     let node = table, depth = 0;
     while (node && node.nodeType === 1 && depth < 6) {
-      const id = node.getAttribute && (node.getAttribute("id") || "");
-      const cls = node.getAttribute && (node.getAttribute("class") || "");
+      const id = node.getAttribute ? PURE.sizeChartContextClean(node.getAttribute("id") || "") : "";
+      const cls = node.getAttribute ? PURE.sizeChartContextClean(node.getAttribute("class") || "") : "";
       const label = node.getAttribute && (node.getAttribute("aria-label") || node.getAttribute("data-title") || "");
       parts.push(id.replace(/[-_]/g, " "), cls.replace(/[-_]/g, " "), label);
       const labelledBy = node.getAttribute && node.getAttribute("aria-labelledby");
@@ -207,7 +256,7 @@ export function tableContextText(table) {
         /* The previous chart's territory: a sibling that IS or CONTAINS a table carries
            another chart's heading ("Men's tops" above the men's section must never label
            the women's table below it - the first cut of this walk did exactly that). */
-        if (sib.tagName === "TABLE" || (sib.querySelector && sib.querySelector("table"))) break;
+        if (isGridMarkup(sib)) break;
         if (sib.matches && sib.matches(HEADING_SEL)) parts.push(shortText(sib));
         else if (sib.querySelector) {
           const h = sib.querySelector("h1,h2,h3,h4,h5,h6");
@@ -241,13 +290,22 @@ function pageContextText(doc, url) {
 
 /* Every size table on a document, each with its own labels. The widget keeps only
    the best-scoring table on a PDP; a size-guide PAGE is usually several charts
-   (men / women / kids tabs) and every one of them is a row here. */
-export function extractAllSizeCharts(doc, url) {
+   (men / women / kids tabs) and every one of them is a row here.
+
+   WHICH ELEMENTS ARE TABLES is the SHARED parser's call (sizeChartTables in
+   widget/pear-widget.js, moved there 2026-10-03): real <table>s AND ARIA div-grids
+   (adidas.co.il's role="table"/"row"/"cell" charts, no <table> anywhere), with an
+   "Inches | cm" toggle pair collapsed to the cm grid. This file used to synthesize a
+   <table> per ARIA grid and normalize "86cm" to "86 cm" before handing it over - the
+   shared parser reads both natively now, so the widget gets the same fixes. Each
+   chart's labels are read from its `anchor` - for a collapsed toggle pair, the
+   first-rendered grid, the one directly under the section heading. */
+export function extractAllSizeCharts(doc, url, referrer = null) {
   const parser = createSizeChartParser(doc);
   const pageText = pageContextText(doc, url);
   const out = [];
-  const tables = Array.from(doc.querySelectorAll("table")).slice(0, MAX_TABLES_PER_PAGE);
-  for (const table of tables) {
+  const tables = parser.sizeChartTables(doc).slice(0, MAX_TABLES_PER_PAGE);
+  for (const { el: table, anchor } of tables) {
     let rows = null;
     try {
       rows = parser.sizeChartFromGrid(parser.sizeChartOrient(parser.sizeChartGrid(table)),
@@ -257,11 +315,11 @@ export function extractAllSizeCharts(doc, url) {
     const measured = rows.filter((r) =>
       ["Chest", "Waist", "Hips", "Legs"].some((k) => typeof r["min" + k] === "number"));
     if (measured.length < 2) continue;
-    const localText = tableContextText(table);
+    const localText = tableContextText(anchor);
     out.push({
       rows: measured,
       localText,
-      classification: classifyChart(measured, localText, pageText),
+      classification: classifyChart(measured, localText, pageText, referrer),
       rawSnapshot: String(table.outerHTML || "").slice(0, RAW_SNAPSHOT_MAX),
     });
   }
@@ -303,6 +361,87 @@ export async function defaultFetchText(url) {
   return { ok: resp.ok, status: resp.status, url: resp.url || url, contentType, text: isText ? await resp.text() : "" };
 }
 
+/* A size-guide popup endpoint that answers JSON with the markup inside, not a page -
+   castro.com's /idus/staticblock/view?id=N returns {"success":true,"html":"<table>…"}
+   and adidas.co.il's (Salesforce Commerce Cloud) /on/demandware.store/.../
+   Product-SizeChart?cid=… returns {"action":"Product-SizeChart","success":true,
+   "content":"<div class=\"gl-table\"…"} - same shape, different field name. Both are
+   served as text/html, so the content type cannot be trusted either way. Parsing the
+   raw body finds markup made of escaped strings and reads none of it. Returns the
+   response with `text` replaced by whichever field carried the markup; a
+   {"success":false} envelope is not a page. */
+export function unwrapHtmlEnvelope(r) {
+  if (!r || !r.ok || typeof r.text !== "string") return r;
+  const env = PURE.sizeChartUnwrapEnvelope(r.text);   // shared with the widget
+  if (!env) return r;
+  if (env.failed) return { ...r, ok: false, text: "", error: "envelope success:false" };
+  return { ...r, text: env.html, contentType: "text/html", envelope: true };
+}
+
+/* A guide address that just answers with the HOME page - castro.com's /size-guide and
+   /size-chart are 200s carrying the 531 KB home page byte for byte. Fetching it is not
+   finding a guide: it is counted as missing, never as "guide page fetched, no chart". */
+function titleOf(html) {
+  const m = String(html || "").match(/<title[^>]*>([^<]*)<\/title>/i);
+  return m ? m[1].replace(/\s+/g, " ").trim() : "";
+}
+export function isHomeEcho(r, home, requestedUrl) {
+  if (!r || !home || !r.text || !home.text) return false;
+  try {
+    const req = new URL(requestedUrl), fin = new URL(r.url || requestedUrl);
+    if (req.pathname !== "/" && (fin.pathname === "/" || fin.pathname === "")) return true;
+  } catch { /* fall through to the content checks */ }
+  if (r.text === home.text) return true;
+  /* Same <title> and within 2% of the size: the home page with a rotating token in it. */
+  const ht = titleOf(home.text);
+  return !!ht && titleOf(r.text) === ht &&
+    Math.abs(r.text.length - home.text.length) <= 0.02 * home.text.length;
+}
+
+/* Who the product pages linking to one guide are for, when they ALL agree. Each
+   referrer's own page context is classified on its own; one dissenting audience (a
+   women's and a men's PDP opening the same guide) and the answer is no gender. */
+export function referrerAudience(contexts) {
+  const list = (contexts || []).filter(Boolean);
+  if (!list.length) return null;
+  const each = list.map((t) => classifyContextText(t));
+  const genders = new Set(each.map((c) => c.gender));
+  const gender = genders.size === 1 && (each[0].gender === "men" || each[0].gender === "women" || each[0].gender === "unisex")
+    ? each[0].gender : null;
+  const kids = each.every((c) => c.kids);
+  return gender || kids ? { gender, kids } : null;
+}
+
+/* One spelling per page URL. A Shopify handle comes back from products.json raw
+   (`/products/חולצת-ניקי-חלקה`) while every href the browser or a sitemap gives is
+   percent-encoded, so the same product could be stored under two keys. new URL()
+   encodes the raw form and leaves an encoded one as it is; the fragment is dropped. */
+export function normalizePageUrl(u) {
+  if (!u) return "";
+  try { const x = new URL(u); x.hash = ""; return x.href; } catch { return String(u); }
+}
+
+/* Is this URL a product page, by its SHAPE? The bare substring test let terminalx.com's
+   /sports/products/tops - a category - in as a product (3 of 12 sampled pages). A
+   pattern segment counts when:
+     · `products` is the first segment (or follows a locale, or /collections/<x>/), the
+       Shopify shape - a handle needs no digits there (/products/a is a product); or
+     · anything follows it whose last segment carries a 3+ digit run or a hyphenated
+       slug (/catalog/product/view/id/1246334, /product/blue-cotton-tee).
+   A single plain word after a nested pattern (/sports/products/tops) is a category. */
+const LOCALE_SEG_RE = /^[a-z]{2}(?:[-_][a-z]{2})?$/i;
+export function isProductPathUrl(u) {
+  let segs;
+  try { segs = new URL(u).pathname.split("/").filter(Boolean).map((s) => s.toLowerCase()); } catch { return false; }
+  const pats = PRODUCT_LINK_PATTERNS.map((p) => p.replace(/\//g, ""));
+  const i = segs.findIndex((s) => pats.includes(s));
+  if (i < 0 || i >= segs.length - 1) return false;
+  const last = segs[segs.length - 1];
+  if (segs[i] === "products" && (i === 0 || (i === 1 && LOCALE_SEG_RE.test(segs[0])) || segs[i - 2] === "collections")) return true;
+  return /\d{3,}/.test(last) || /[^-]-[^-]/.test(last);
+}
+const ID_SHAPED_URL_RE = /\/[^/]*\d{4,}[^/]*(?:\.html)?$/i;
+
 async function loadJsdom() {
   try {
     return (await import("jsdom")).JSDOM;
@@ -333,7 +472,7 @@ async function sampleProducts({ baseUrl, homeHtml, isShopify, fetchText, maxProd
         const data = JSON.parse(r.text);
         const products = (data.products || []).filter((p) => p && p.handle);
         return evenlySample(products, maxProducts).map((p) => ({
-          url: `${baseUrl}/products/${p.handle}`,
+          url: normalizePageUrl(`${baseUrl}/products/${p.handle}`),
           title: p.title || "",
           bodyHtml: p.body_html || "",
           context: [p.title, p.product_type, Array.isArray(p.tags) ? p.tags.join(" ") : p.tags].join(" | "),
@@ -371,33 +510,102 @@ async function sampleProducts({ baseUrl, homeHtml, isShopify, fetchText, maxProd
   } catch (e) {
     log(`  sitemap unreadable (${e.message})`);
   }
-  let candidates = urls.filter((u) => PRODUCT_LINK_PATTERNS.some((p) => u.toLowerCase().includes(p)));
-  if (!candidates.length) candidates = urls.filter((u) => /\/[^/]*\d{4,}[^/]*(?:\.html)?$/i.test(u));
+  /* Pattern-shaped product URLs first; when they are fewer than the sample, top up with
+     id-shaped ones (terminalx.com: 8 legacy /catalog/product/view/id/N pages against
+     ~23k /w414418263 SKU pages, which carry no pattern word at all). */
+  let candidates = urls.filter(isProductPathUrl);
+  if (candidates.length < maxProducts) {
+    const have = new Set(candidates);
+    const idShaped = urls.filter((u) => !have.has(u) && ID_SHAPED_URL_RE.test(u));
+    candidates = candidates.concat(evenlySample(idShaped, maxProducts - candidates.length));
+  }
   if (!candidates.length && homeHtml) {
     const hrefs = (homeHtml.match(/href\s*=\s*["']([^"']+)["']/gi) || [])
       .map((h) => h.replace(/^href\s*=\s*["']/i, "").replace(/["']$/, ""));
     const seen = new Set();
     for (const h of hrefs) {
-      if (!PRODUCT_LINK_PATTERNS.some((p) => h.toLowerCase().includes(p))) continue;
-      try { const abs = new URL(h, baseUrl).href; if (!seen.has(abs)) { seen.add(abs); candidates.push(abs); } } catch { /* skip */ }
+      let abs;
+      try { abs = new URL(h, baseUrl).href; } catch { continue; }
+      if (!isProductPathUrl(abs) || seen.has(abs)) continue;
+      seen.add(abs); candidates.push(abs);
     }
   }
-  candidates = candidates.filter((u) => sameStore(u, baseUrl));
+  candidates = candidates.filter((u) => sameStore(u, baseUrl)).map(normalizePageUrl);
   return evenlySample(Array.from(new Set(candidates)), maxProducts).map((url) => ({ url, title: "", bodyHtml: "", context: "" }));
 }
 
 /* Anything on a page that points at a size guide, and what kind of guide it is. */
+/* An image carrying a "size guide" word or sitting inside a `.size-chart` container is
+   not always the chart itself - adidas.co.il's PDPs all carry
+     <a class="sizechart" href=".../Product-SizeChart?cid=size-shoes" data-toggle="modal">
+       <img class="sizeguide d-none" src=".../Union.png">Size Chart</a>
+   a 16px glyph (its own class literally contains "sizeguide", one of IMAGE_CHART_RE's
+   own words) riding inside the exact <a> the loop above already follows as a LINK. The
+   first cut counted it as a found IMAGE CHART - reporting an icon as "the store's size
+   guide is an unreadable image" when the real guide is the AJAX page six lines above it
+   in the dry run. Two checks, both narrow on purpose:
+     1. HIDDEN markup (d-none / hidden / sr-only / display:none / visibility:hidden /
+        aria-hidden="true") is never a chart a shopper could read off the page.
+     2. An image inside an anchor/button that ITSELF matches SIZE_GUIDE_LINK_RE is that
+        trigger's own icon, not a second discovery - UNLESS the trigger's href is an
+        image file in its own right (a lightbox thumbnail linking to a full-size chart
+        photo), which is a real image chart and must still be counted. */
+function isHiddenMarkup(el) {
+  let n = el, hops = 0;
+  while (n && n.nodeType === 1 && hops < 4) {
+    const cls = (n.getAttribute && n.getAttribute("class")) || "";
+    const style = (n.getAttribute && n.getAttribute("style")) || "";
+    if (/\b(?:d-none|is-hidden|sr-only|visually-hidden|screen-reader-text|invisible)\b/i.test(cls)) return true;
+    if (n === el && (n.getAttribute("hidden") != null || n.getAttribute("aria-hidden") === "true")) return true;
+    if (/display\s*:\s*none|visibility\s*:\s*hidden/i.test(style)) return true;
+    n = n.parentElement; hops++;
+  }
+  return false;
+}
+const IMAGE_FILE_RE = /\.(?:jpe?g|png|webp|gif|avif|svg|bmp)(?:$|[?#])/i;
+/* Dimensions this small are an icon or a swatch on every storefront this file has seen
+   - a readable size-CHART photo is never under ~80px on either axis. Checked only when
+   the markup actually states a size (width/height attrs or inline style); most charts
+   state none, and absence is not evidence either way. */
+const ICON_MAX_PX = 48;
+function isSmallImage(img) {
+  const w = parseInt(img.getAttribute("width") || "", 10), h = parseInt(img.getAttribute("height") || "", 10);
+  if (Number.isFinite(w) && w > 0 && w <= ICON_MAX_PX) return true;
+  if (Number.isFinite(h) && h > 0 && h <= ICON_MAX_PX) return true;
+  const style = img.getAttribute("style") || "";
+  const m = style.match(/(?:^|;)\s*(width|height)\s*:\s*(\d+)px/i);
+  return !!(m && parseInt(m[2], 10) <= ICON_MAX_PX);
+}
+function isDecorativeChartImage(img) {
+  if (isHiddenMarkup(img) || isSmallImage(img)) return true;
+  const trigger = img.closest("a,button,[role=button]");
+  if (!trigger) return false;
+  const triggerHref = trigger.getAttribute("href") || trigger.getAttribute("data-href") || trigger.getAttribute("data-url") || "";
+  if (IMAGE_FILE_RE.test(triggerHref)) return false;   // a lightbox thumbnail - the link IS the chart
+  const label = [trigger.textContent, trigger.getAttribute("aria-label"), trigger.getAttribute("title"),
+    triggerHref, trigger.getAttribute("class")].filter(Boolean).join(" ").slice(0, 400);
+  return SIZE_GUIDE_LINK_RE.test(label);
+}
+
 function scanPageSignals(doc, pageUrl, baseUrl, parser) {
   const links = new Set(), images = [], apps = new Set();
   let triggers = 0;
-  for (const el of doc.querySelectorAll("a,button,[data-href],[data-url],[role=button]")) {
+  /* `data_url` (underscore) is castro.com's popup trigger:
+       <a href="javascript: void(0)" title="טבלת מידות" data_url="…/idus/staticblock/view?id=63">
+     The first cut read only the hyphenated spellings AND took the first non-empty
+     attribute, so `href="javascript: void(0)"` won and the real address was never
+     looked at - 8 such triggers were reported as a JS app with no link. The first
+     attribute that is an actual address wins now, whichever spelling carries it. */
+  const LINK_ATTRS = ["href", "data-href", "data-url", "data_url"];
+  for (const el of doc.querySelectorAll("a,button,[data-href],[data-url],[data_url],[role=button]")) {
     const label = [el.textContent, el.getAttribute("aria-label"), el.getAttribute("title"),
-      el.getAttribute("href"), el.getAttribute("data-href"), el.getAttribute("data-url"),
+      ...LINK_ATTRS.map((a) => el.getAttribute(a)),
       el.getAttribute("class"), el.getAttribute("id")].filter(Boolean).join(" ").slice(0, 400);
     if (!SIZE_GUIDE_LINK_RE.test(label)) continue;
-    const href = el.getAttribute("href") || el.getAttribute("data-href") || el.getAttribute("data-url") || "";
+    const href = LINK_ATTRS.map((a) => (el.getAttribute(a) || "").trim())
+      .find((v) => v && !/^(?:#|javascript:|mailto:|tel:)/i.test(v)) || "";
     let abs = "";
-    if (href && !/^(?:#|javascript:|mailto:|tel:)/i.test(href)) {
+    if (href) {
       try { abs = new URL(href, pageUrl).href.split("#")[0]; } catch { abs = ""; }
     }
     if (abs && sameStore(abs, baseUrl) && abs !== pageUrl.split("#")[0]) links.add(abs);
@@ -409,7 +617,7 @@ function scanPageSignals(doc, pageUrl, baseUrl, parser) {
     const src = img.getAttribute("src") || img.getAttribute("data-src") || "";
     const label = [src, img.getAttribute("alt"), img.getAttribute("class"), img.getAttribute("id"), img.getAttribute("title")]
       .filter(Boolean).join(" ");
-    if (IMAGE_CHART_RE.test(label) || inContainer(img)) {
+    if ((IMAGE_CHART_RE.test(label) || inContainer(img)) && !isDecorativeChartImage(img)) {
       try { images.push(new URL(src, pageUrl).href); } catch { if (src) images.push(src); }
     }
   }
@@ -449,7 +657,7 @@ export async function discoverSizeCharts(storeUrl, {
     paths: {
       inline_table: { pages_checked: 0, pages_with_chart: 0 },
       product_description: { products_checked: 0, products_with_chart: 0 },
-      linked_page: { links_found: 0, pages_fetched: 0, pages_with_chart: 0, urls: [] },
+      linked_page: { links_found: 0, pages_fetched: 0, pages_with_chart: 0, home_echo: 0, urls: [] },
       image_chart_detected: { count: 0, examples: [] },
       js_app_detected: { apps: [], triggers_without_link: 0 },
     },
@@ -480,12 +688,14 @@ export async function discoverSizeCharts(storeUrl, {
       ? "blocked_by_bot_protection" : "unreachable";
     return { report, records: [] };
   }
-  const isShopify = /shopify/i.test(home.text);
-  report.platform = isShopify ? "shopify" : "html";
+  const platform = detectPlatform(home.text);
+  const isShopify = platform === "shopify";
+  report.platform = platform;
 
   const products = await sampleProducts({ baseUrl, homeHtml: home.text, isShopify, fetchText, maxProducts, log });
   report.sampled_products = products.length;
-  const guideLinks = new Set(), images = new Set(), apps = new Set();
+  /* guide URL -> the page context of every PDP that links to it (referrerAudience). */
+  const guideLinks = new Map(), images = new Set(), apps = new Set();
   let triggers = 0;
 
   for (const p of products) {
@@ -513,14 +723,18 @@ export async function discoverSizeCharts(storeUrl, {
     if (charts.length) report.paths.inline_table.pages_with_chart++;
     for (const c of charts) found.push({ chart: c, source: "inline_table", sourceUrl: p.url, productUrl: p.url });
     const sig = scanPageSignals(doc, r.url || p.url, baseUrl, createSizeChartParser(doc));
-    sig.links.forEach((l) => guideLinks.add(l));
+    const pdpContext = pageContextText(doc, r.url || p.url) + (p.context ? " | " + p.context : "");
+    for (const l of sig.links) {
+      if (!guideLinks.has(l)) guideLinks.set(l, []);
+      guideLinks.get(l).push(pdpContext);
+    }
     sig.images.forEach((i) => images.add(i));
     sig.apps.forEach((a) => apps.add(a));
     triggers += sig.triggers;
   }
 
   /* Linked guide pages first, then the well-known paths nobody linked. */
-  const guideUrls = [...guideLinks];
+  const guideUrls = [...guideLinks.keys()];
   report.paths.linked_page.links_found = guideUrls.length;
   if (isShopify || !guideUrls.length) {
     for (const path of WELL_KNOWN_GUIDE_PATHS) {
@@ -531,13 +745,14 @@ export async function discoverSizeCharts(storeUrl, {
   for (const gUrl of guideUrls.slice(0, MAX_GUIDE_PAGES + (guideLinks.size ? 0 : WELL_KNOWN_GUIDE_PATHS.length))) {
     if (/\.pdf(?:$|[?#])/i.test(gUrl)) { images.add(gUrl); continue; }
     await pause();
-    const r = await fetchText(gUrl).catch((e) => ({ ok: false, status: 0, text: "", error: e.message }));
+    const r = unwrapHtmlEnvelope(await fetchText(gUrl).catch((e) => ({ ok: false, status: 0, text: "", error: e.message })));
     if (!r.ok) continue;
     if (/pdf|image\//i.test(r.contentType || "")) { images.add(gUrl); continue; }
     if (!r.text) continue;
+    if (isHomeEcho(r, home, gUrl)) { report.paths.linked_page.home_echo++; continue; }
     report.paths.linked_page.pages_fetched++;
     const doc = new JSDOMCtor(r.text, { url: r.url || gUrl }).window.document;
-    const charts = extractAllSizeCharts(doc, gUrl);
+    const charts = extractAllSizeCharts(doc, gUrl, referrerAudience(guideLinks.get(gUrl)));
     if (charts.length) {
       report.paths.linked_page.pages_with_chart++;
       report.paths.linked_page.urls.push(gUrl);
@@ -568,8 +783,9 @@ export async function discoverSizeCharts(storeUrl, {
   return { report, records };
 }
 
-/* Found charts -> store_size_charts rows, one per (gender, age, type, product_key,
-   source). An inline PDP chart seen on 2+ product pages is the store's general chart
+/* Found charts -> store_size_charts rows, one per (gender, age, type, size_system,
+   product_key, source) - archive/supabase_setup_v16.sql put size_system in the key, so a
+   store's letter and numeric charts for one audience/type are BOTH kept. An inline PDP chart seen on 2+ product pages is the store's general chart
    (product_key ""); seen once, it is kept product-scoped (product_key = that URL) -
    the room's Phase 1 lookup reads store-wide rows only. Two DIFFERENT charts claiming
    the same key keep the more-sighted one and are reported as a conflict, never merged. */
@@ -590,7 +806,7 @@ export function buildRecords(found, storeDomain, report = { charts: [], conflict
   }
   const byKey = new Map();
   for (const e of byHash.values()) {
-    const productKey = e.f.source === "linked_page" || e.pages.length >= 2 ? "" : (e.pages[0] || "");
+    const productKey = e.f.source === "linked_page" || e.pages.length >= 2 ? "" : normalizePageUrl(e.pages[0] || "");
     const record = {
       store_domain: storeDomain,
       gender: e.cls.gender,
@@ -608,9 +824,17 @@ export function buildRecords(found, storeDomain, report = { charts: [], conflict
       parser_version: PARSER_VERSION,
       raw_snapshot: e.f.chart.rawSnapshot || null,
     };
-    const k = [record.gender, record.age_group, record.garment_type, record.product_key, record.source].join("|");
+    const k = [record.gender, record.age_group, record.garment_type, record.size_system, record.product_key, record.source].join("|");
     const prev = byKey.get(k);
     if (!prev) { byKey.set(k, record); continue; }
+    /* THE KEY USED TO LACK size_system, and this is where that cost a chart. castro.com's
+       women's guide is one block with two tables - EU 32-46 and XS/0-XL - both
+       women/adult/tops; under the v15 key they collided and a "conventional size system
+       for the garment type" tie-break kept the XS-XL one and DROPPED the EU one. Since
+       v16 they are two keys and both are stored; the room picks per product, by which
+       chart shares sizes with that product's own list. What still lands here is two
+       different charts in the SAME size system for one key - genuinely ambiguous, so the
+       more-sighted (then the longer) one is kept and the other is reported. */
     const better = record.sightings > prev.sightings ||
       (record.sightings === prev.sightings && record.rows.length > prev.rows.length);
     report.conflicts.push({
@@ -642,17 +866,32 @@ export function isMissingTableError(err) {
     /store_size_charts/.test(msg) && /does not exist|schema cache|not find/i.test(msg);
 }
 
+/* The upsert target - archive/supabase_setup_v16.sql's unique index, column for column.
+   Before v16 runs, Postgres has no constraint on these columns and answers 42P10; the
+   save then writes NOTHING rather than falling back to the v15 key, which would let the
+   letter and numeric charts of one audience overwrite each other again. */
+export const STORE_SIZE_CHARTS_KEY = "store_domain,gender,age_group,garment_type,size_system,product_key,source";
+export function isMissingKeyError(err) {
+  if (!err) return false;
+  return String(err.code || "") === "42P10" ||
+    /no unique or exclusion constraint matching the ON CONFLICT/i.test(String(err.message || err));
+}
+
 export async function saveSizeChartRecords(supabase, records, log = console.log) {
   if (!supabase) return { saved: 0, skipped: "no_supabase" };
   if (!records.length) return { saved: 0 };
   const now = new Date().toISOString();
   const payload = records.map((r) => ({ ...r, updated_at: now, captured_at: now }));
   const { error } = await supabase.from("store_size_charts")
-    .upsert(payload, { onConflict: "store_domain,gender,age_group,garment_type,product_key,source" });
+    .upsert(payload, { onConflict: STORE_SIZE_CHARTS_KEY });
   if (error) {
     if (isMissingTableError(error)) {
       log("  ⚠ store_size_charts does not exist - run archive/supabase_setup_v15.sql, then re-run with --save");
       return { saved: 0, skipped: "table_missing" };
+    }
+    if (isMissingKeyError(error)) {
+      log("  ⚠ store_size_charts still has the v15 key (no size_system) - run archive/supabase_setup_v16.sql, then re-run with --save. Nothing was written.");
+      return { saved: 0, skipped: "key_migration_missing" };
     }
     throw new Error("store_size_charts upsert failed: " + (error.message || error));
   }
@@ -669,7 +908,7 @@ export function formatReport(report) {
     `sampled products: ${report.sampled_products} | pages fetched: ${report.pages_fetched} | failed: ${report.pages_failed}`,
     `inline_table:        ${p.inline_table.pages_with_chart}/${p.inline_table.pages_checked} product pages carry a readable chart`,
     `product_description: ${p.product_description.products_with_chart}/${p.product_description.products_checked} Shopify descriptions carry one`,
-    `linked_page:         ${p.linked_page.links_found} guide link(s) found, ${p.linked_page.pages_fetched} guide page(s) fetched, ${p.linked_page.pages_with_chart} with a chart`,
+    `linked_page:         ${p.linked_page.links_found} guide link(s) found, ${p.linked_page.pages_fetched} guide page(s) fetched, ${p.linked_page.pages_with_chart} with a chart${p.linked_page.home_echo ? `, ${p.linked_page.home_echo} answered with the home page (not counted)` : ""}`,
     `image_chart_detected: ${p.image_chart_detected.count}${p.image_chart_detected.examples.length ? " e.g. " + p.image_chart_detected.examples[0] : ""}`,
     `js_app_detected:     ${p.js_app_detected.apps.join(", ") || "(no known app)"}; ${p.js_app_detected.triggers_without_link} size-guide trigger(s) with no link`,
     `bot protection:      ${report.blocked.count ? report.blocked.count + " challenged request(s), e.g. " + report.blocked.examples[0] : "none seen"}`,
@@ -687,7 +926,7 @@ export function formatReport(report) {
     sampled: report.sampled_products, fetched: report.pages_fetched, failed: report.pages_failed,
     inline: `${p.inline_table.pages_with_chart}/${p.inline_table.pages_checked}`,
     description: `${p.product_description.products_with_chart}/${p.product_description.products_checked}`,
-    linked: { links: p.linked_page.links_found, fetched: p.linked_page.pages_fetched, with_chart: p.linked_page.pages_with_chart },
+    linked: { links: p.linked_page.links_found, fetched: p.linked_page.pages_fetched, with_chart: p.linked_page.pages_with_chart, home_echo: p.linked_page.home_echo || 0 },
     images: p.image_chart_detected.count, apps: p.js_app_detected.apps, triggers: p.js_app_detected.triggers_without_link,
     blocked: report.blocked.count,
     charts: report.charts.map((c) => `${c.gender}/${c.age_group}/${c.garment_type}:${c.sizes}`),

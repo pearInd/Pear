@@ -1561,8 +1561,10 @@ function resolvedSoldOutSizes() {
    GET /api/store-size-chart). The browser FETCHES that list for its store, exactly as
    main does, and forwards the adult charts raw in the size evidence
    (storedSizeChartsEvidence()). WHICH stored chart belongs to the garment, the aliases,
-   the overlay and main's Phase 0 comparison are lib/sizing.js's (pickStoredSizeChart(),
-   storeChartComparison()) - with the rest of the fit (CLAUDE.md §2.12, §2.5b). */
+   the overlay, main's Phase 0 comparison and - since main 0fccee8 (2026-10-03) - THE STORE'S
+   CHART DECIDING the adult size are lib/sizing.js's (pickStoredSizeChart(),
+   storeChartRecommendation(), storeChartComparison()) - with the rest of the fit (CLAUDE.md
+   §2.12, §2.5b). */
 
 /* Mirrors canonicalStoreHost() in pear-widget.js, lib/store-size-charts.js and
    scanner/size-charts.js - CLAUDE.md §3 lockstep; the store_size_charts key. */
@@ -1626,10 +1628,20 @@ function storedSizeChartsEvidence() {
   if (!Array.isArray(charts) || !charts.length) return null;
   const adult = charts.filter((c) => c && c.age_group === "adult")
     .map((c) => ({ gender: c.gender, age_group: c.age_group, garment_type: c.garment_type,
-                   source: c.source, rows: c.rows }));
+                   source: c.source, size_system: c.size_system, rows: c.rows }));
   return adult.length ? adult : null;
 }
 
+/* Main's "store chart decided the size" / "too uncertain" lines (0fccee8), returned by the server in the
+   support view only (lib/sizing.js storeChartRecommendation) - printed once per distinct verdict. */
+let _storeChartLogKey = "";
+function logStoreChartLines(lines) {
+  if (!Array.isArray(lines) || !lines.length) return;
+  const key = lines.join("\n");
+  if (key === _storeChartLogKey) return;
+  _storeChartLogKey = key;
+  for (const line of lines) console.log(String(line));
+}
 /* Main's Phase 0 log line - "[PEAR] store chart vs default:" once per distinct outcome.
    The summary is computed server-side (lib/sizing.js: storeChartComparison()) and comes
    back only to the support view, so a shopper's session logs and receives nothing. */
@@ -2254,6 +2266,7 @@ function applySizeVerdict(verdict) {
 
   const bestSize = verdict.size;
   /* Main's Phase 0 line, where main logged it (after the recommendation is final). */
+  if (verdict.storeChartLog && typeof logStoreChartLines === "function") logStoreChartLines(verdict.storeChartLog);
   if (verdict.storeChartDiag && typeof logStoreChartDiag === "function") logStoreChartDiag(verdict.storeChartDiag);
   sizeResult.innerText = formatSizeLabel(bestSize);
   resultBox.classList.add("show");

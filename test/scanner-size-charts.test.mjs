@@ -11,12 +11,23 @@
    §3 scope - an inline PDP chart seen on 2+ products is store-wide (product_key ""),
       seen once it stays product-scoped; a linked guide page is always store-wide;
    §4 labelling rules (Hebrew, "women" never "men", jeans vs bottoms, kids);
-   §5 saving - the upsert shape, and the missing-table case degrading to a warning.
+   §5 saving - the upsert shape, and the missing-table case degrading to a warning;
+   §6 castro.com's shape - a `data_url` popup trigger, a JSON {html} envelope, guide
+      blocks with no audience word (gender from the linking PDPs), a blazers table, and
+      well-known guide paths that answer with the home page;
+   §7 the product sampler - category URLs are not products (terminalx.com);
+   §8 one spelling per product key (fox.co.il's raw Hebrew Shopify handle);
+   §9 adidas.co.il's shape - Salesforce Commerce Cloud platform detection, an ARIA
+      div-grid chart with no <table> at all, a JSON {content} envelope, a hidden icon
+      riding an already-followed trigger, a reused 'kids-table' skin class, and a
+      cm cell with no space before the unit.
    ============================================================================= */
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import {
   discoverSizeCharts, buildRecords, classifyContextText, classifyChart, canonicalStoreHost,
   saveSizeChartRecords, isMissingTableError, formatReport, toStoredRows, looksLikeBotChallenge,
+  unwrapHtmlEnvelope, isHomeEcho, referrerAudience, normalizePageUrl, isProductPathUrl, detectPlatform,
 } from "../scanner/size-charts.js";
 
 let fails = 0;
@@ -216,7 +227,19 @@ console.log("\n── §5 saving ──");
   const okClient = { from: (t) => ({ upsert: async (rows, o) => { upserted = { t, rows }; opts = o; return { error: null }; } }) };
   const res = await saveSizeChartRecords(okClient, records, () => {});
   check("§5.1 all records upserted into store_size_charts", res.saved === records.length && upserted.t === "store_size_charts");
-  check("§5.2 ...on the table's unique key", opts.onConflict === "store_domain,gender,age_group,garment_type,product_key,source");
+  check("§5.2 ...on the v16 unique key, size_system included",
+    opts.onConflict === "store_domain,gender,age_group,garment_type,size_system,product_key,source", opts.onConflict);
+  /* archive/supabase_setup_v16.sql must declare exactly that index, and drop the v15 one
+     (which would still reject a second chart per audience/type while it exists). */
+  const V16 = readFileSync(new URL("../archive/supabase_setup_v16.sql", import.meta.url), "utf8");
+  check("§5.2b v16 creates the same 7-column unique index and drops the v15 key",
+    /CREATE UNIQUE INDEX IF NOT EXISTS store_size_charts_key_v16_idx\s+ON store_size_charts \(store_domain, gender, age_group, garment_type, size_system, product_key, source\)/.test(V16) &&
+    /DROP INDEX IF EXISTS store_size_charts_key_idx;/.test(V16));
+  const keyLogs = [];
+  const oldKey = { from: () => ({ upsert: async () => ({ error: { code: "42P10", message: "there is no unique or exclusion constraint matching the ON CONFLICT specification" } }) }) };
+  const res42 = await saveSizeChartRecords(oldKey, records, (m) => keyLogs.push(m));
+  check("§5.2c v16 not run (42P10) -> nothing written, a pointer to v16, no throw, no fallback to the old key",
+    res42.saved === 0 && res42.skipped === "key_migration_missing" && keyLogs.some((l) => /supabase_setup_v16\.sql/.test(l)), JSON.stringify(res42));
   check("§5.3 ...with timestamps", upserted.rows.every((r) => r.updated_at && r.captured_at));
 
   const logs = [];
@@ -230,6 +253,250 @@ console.log("\n── §5 saving ──");
   try { await saveSizeChartRecords(broken, records, () => {}); } catch { threw = true; }
   check("§5.6 any OTHER database error is loud (a real failure must not look like success)", threw);
   check("§5.7 no client -> nothing saved, no throw", (await saveSizeChartRecords(null, records)).skipped === "no_supabase");
+}
+
+console.log("\n── §6 castro.com's shape ──");
+{
+  /* What castro.com serves, trimmed: Hebrew department paths with no product pattern
+     word, a popup trigger whose href is javascript: and whose address sits in a
+     `data_url` attribute, and a static-block endpoint answering JSON with the markup in
+     an `html` field - served as text/html. */
+  const enc = (p) => encodeURI(p);
+  const WOMEN_PDP = enc("/נשים/סריגים/סריג-במפתח-4910123");
+  const WOMEN_PDP2 = enc("/נשים/חולצות/בגד-גוף-7b10281");
+  const MEN_PDP = enc("/גברים/חולצות/פולו-בייסיק-7770379");
+  const trigger = (id) => `<div class="size_chart"><a class="product_staticblock_popup_link" role="button"
+    title="טבלת מידות" data_url="${BASE}/idus/staticblock/view?id=${id}" href="javascript: void(0)" onclick="return false;"></a></div>`;
+  const WOMEN_BLOCK = `<p>טיפים למדידה</p><p>מצאי בקלות את מידת החזה, המותן והירכיים. התאימי את מידת הבגד לפי הטבלה.</p>
+    <table><caption>פרטי הלבשה</caption>
+      <tr><td>מידה</td><td>היקף חזה (ס"מ)</td><td>היקף מותן (ס"מ)</td><td>היקף ירכיים (ס"מ)</td></tr>
+      <tr><td>32</td><td>74-78</td><td>56-60</td><td>84-88</td></tr><tr><td>34</td><td>78-82</td><td>60-64</td><td>88-92</td></tr>
+      <tr><td>36</td><td>82-86</td><td>64-68</td><td>92-96</td></tr><tr><td>38</td><td>86-90</td><td>68-72</td><td>96-100</td></tr></table>
+    <table><caption>פרטי הלבשה</caption>
+      <tr><td>מידה</td><td>היקף חזה (ס"מ)</td><td>היקף מותן (ס"מ)</td><td>היקף ירכיים (ס"מ)</td></tr>
+      <tr><td>XS</td><td>84-88</td><td>65-69</td><td>88-92</td></tr><tr><td>S</td><td>89-93</td><td>70-74</td><td>93-97</td></tr>
+      <tr><td>M</td><td>94-98</td><td>75-79</td><td>98-102</td></tr></table>`;
+  const MEN_BLOCK = `<table><caption>חולצות / טישרטים / סריגים / מעילים</caption>
+      <tr><td>מידה</td><td>היקף חזה (ס"מ)</td><td>מידה אירופאית</td></tr>
+      <tr><td>XS</td><td>88-92</td><td>36</td></tr><tr><td>S</td><td>93-97</td><td>38</td></tr><tr><td>M</td><td>98-103</td><td>40</td></tr></table>
+    <table><caption>בלייזרים וחליפות</caption>
+      <tr><td>מידה</td><td>היקף מותניים (ס"מ)</td></tr>
+      <tr><td>48</td><td>96-100</td></tr><tr><td>50</td><td>100-104</td></tr><tr><td>52</td><td>104-108</td></tr></table>`;
+  const envelope = (html) => ({ contentType: "text/html; charset=utf-8", text: JSON.stringify({ success: true, html }) });
+  const HOME = pdp("<p>" + "castro home ".repeat(30) + "</p>", "קסטרו");
+  const castro = fakeStore({
+    "/": HOME,
+    "/sitemap.xml": `<urlset>${[WOMEN_PDP, WOMEN_PDP2, MEN_PDP].map((p) => `<url><loc>${BASE}${p}</loc></url>`).join("")}</urlset>`,
+    [WOMEN_PDP]: pdp(trigger(41), "סריג במפתח"),
+    [WOMEN_PDP2]: pdp(trigger(41), "בגד גוף"),
+    [MEN_PDP]: pdp(trigger(44), "פולו בייסיק"),
+    "/idus/staticblock/view?id=41": envelope(WOMEN_BLOCK),
+    "/idus/staticblock/view?id=44": envelope(MEN_BLOCK),
+  });
+  const { report: cr, records: crec } = await discoverSizeCharts(BASE, { fetchText: castro.fetchText, delayMs: 0, log: () => {}, JSDOM });
+  check("§6.1 the data_url (underscore) trigger is followed, not counted as a linkless JS trigger",
+    cr.paths.linked_page.links_found === 2 && cr.paths.js_app_detected.triggers_without_link === 0 &&
+    castro.calls.some((u) => /staticblock\/view\?id=41/.test(u)), JSON.stringify(cr.paths));
+  check("§6.2 the JSON {html} envelope is unwrapped and its tables read -> captured",
+    cr.outcome === "captured" && cr.paths.linked_page.pages_with_chart === 2, JSON.stringify([cr.outcome, cr.paths.linked_page]));
+  const w = crec.find((r) => r.gender === "women"), m = crec.find((r) => r.gender === "men");
+  check("§6.3 the women's block takes its gender from the /נשים/ PDPs that open it",
+    !!w && w.age_group === "adult" && w.garment_type === "tops" && w.product_key === "", JSON.stringify(crec.map((r) => [r.gender, r.garment_type])));
+  check("§6.4 the men's block takes 'men' from the /גברים/ PDP, type from its own caption",
+    !!m && m.garment_type === "tops" && m.rows[0].size === "XS" && m.rows[0].aliases && m.rows[0].aliases.eu === "36", JSON.stringify(m));
+  check("§6.5 a referrer-derived gender is less confident than a labelled one", w && m && w.confidence < 0.9 && m.confidence < 0.9);
+  /* Under the v15 key these two collided and the EU one was DROPPED. Since v16
+     size_system is in the key: both are records, nothing is reported as a conflict. */
+  const wAlpha = crec.find((r) => r.gender === "women" && r.size_system === "alpha");
+  const wNum = crec.find((r) => r.gender === "women" && r.size_system === "numeric");
+  check("§6.6 two women's tops tables (EU numeric + XS-XL): BOTH are kept, one row per size system",
+    wAlpha && wNum && wAlpha.rows.map((r) => r.size).join("/") === "XS/S/M" && wNum.rows[0].size === "32" &&
+    wAlpha.garment_type === "tops" && wNum.garment_type === "tops",
+    JSON.stringify(crec.map((r) => [r.gender, r.size_system, r.rows.map((x) => x.size).join("/")])));
+  check("§6.6b ...and neither is reported as a dropped conflict",
+    !cr.conflicts.some((c) => /two different charts/.test(c.reason)), JSON.stringify(cr.conflicts));
+  check("§6.7 the blazers & suits table is NOT stored as bottoms (waist-only columns do not type it)",
+    !crec.some((r) => r.garment_type === "bottoms") && cr.conflicts.some((c) => /no garment type/.test(c.reason)),
+    JSON.stringify(crec.map((r) => [r.gender, r.garment_type, r.rows.map((x) => x.size).join("/")])));
+  check("§6.8 no record carries a height or weight", !JSON.stringify(crec.map((r) => r.rows)).match(/height|weight/i));
+
+  /* A PDP opened by a women's AND a men's page is nobody's in particular. */
+  check("§6.9 referrerAudience: unanimous -> that gender", (referrerAudience(["/נשים/a", "/נשים/b"]) || {}).gender === "women");
+  check("§6.10 referrerAudience: a dissenting referrer -> no gender", !(referrerAudience(["/נשים/a", "/גברים/b"]) || {}).gender);
+  check("§6.11 referrerAudience: a labelled guide is never relabelled by its referrers",
+    classifyChart([{ size: "S", minChest: 90 }, { size: "M", minChest: 95 }], "Men's tops", "", { gender: "women", kids: false }).gender === "men");
+  const shared = fakeStore({
+    "/": HOME,
+    "/sitemap.xml": `<urlset>${[WOMEN_PDP, MEN_PDP].map((p) => `<url><loc>${BASE}${p}</loc></url>`).join("")}</urlset>`,
+    [WOMEN_PDP]: pdp(trigger(41), "סריג"), [MEN_PDP]: pdp(trigger(41), "פולו"),
+    "/idus/staticblock/view?id=41": envelope(WOMEN_BLOCK),
+  });
+  const sr = await discoverSizeCharts(BASE, { fetchText: shared.fetchText, delayMs: 0, log: () => {}, JSDOM });
+  check("§6.12 one block opened from men's AND women's PDPs stays gender unknown",
+    sr.records.length > 0 && sr.records.every((r) => r.gender === "unknown"), JSON.stringify(sr.records.map((r) => r.gender)));
+
+  check("§6.13 unwrapHtmlEnvelope: {success:false} is not a page",
+    unwrapHtmlEnvelope({ ok: true, text: '{"success":false,"html":""}' }).ok === false);
+  const plain = { ok: true, text: "<html><body>x</body></html>" };
+  check("§6.14 unwrapHtmlEnvelope: HTML and html-less JSON pass through untouched",
+    unwrapHtmlEnvelope(plain) === plain && unwrapHtmlEnvelope({ ok: true, text: '{"a":1}' }).text === '{"a":1}');
+
+  /* castro's /size-guide and /size-chart: 200s carrying the home page. */
+  const echo = fakeStore({
+    "/": HOME,
+    "/sitemap.xml": `<urlset><url><loc>${BASE}${WOMEN_PDP}</loc></url></urlset>`,
+    [WOMEN_PDP]: pdp("<p>no guide here</p>", "סריג"),
+    "/size-guide": HOME,
+    "/size-chart": HOME.replace("castro home", "castro hone"),
+  });
+  const er = await discoverSizeCharts(BASE, { fetchText: echo.fetchText, delayMs: 0, log: () => {}, JSDOM });
+  check("§6.15 guide paths answering with the home page are missing, not fetched",
+    er.report.paths.linked_page.home_echo === 2 && er.report.paths.linked_page.pages_fetched === 0 && er.report.outcome === "none_found",
+    JSON.stringify(er.report.paths.linked_page));
+  check("§6.16 ...and the report says so", /2 answered with the home page/.test(formatReport(er.report)) &&
+    /"home_echo":2/.test(formatReport(er.report)));
+  check("§6.17 isHomeEcho: a redirect to / is an echo", isHomeEcho({ text: "x", url: BASE + "/" }, { text: "y" }, BASE + "/size-guide"));
+  check("§6.18 isHomeEcho: a real guide page with its own title is not",
+    !isHomeEcho({ text: GUIDE, url: BASE + "/pages/size-guide" }, { text: HOME }, BASE + "/pages/size-guide"));
+}
+
+console.log("\n── §7 the product sampler ──");
+{
+  check("§7.1 /sports/products/tops is a category, not a product", !isProductPathUrl(BASE + "/sports/products/tops"));
+  check("§7.2 Shopify shapes are products (/products/a, /he/products/x, /collections/c/products/x)",
+    isProductPathUrl(BASE + "/products/a") && isProductPathUrl(BASE + "/he/products/x") && isProductPathUrl(BASE + "/collections/c/products/x"));
+  check("§7.3 an id or a slug after a nested pattern is a product",
+    isProductPathUrl(BASE + "/catalog/product/view/id/1246334") && isProductPathUrl(BASE + "/product/blue-cotton-tee"));
+  check("§7.4 a bare /products/ is not a product", !isProductPathUrl(BASE + "/products/"));
+  /* terminalx.com: 6 category URLs and 2 legacy product ids carry the pattern word; the
+     real catalog is /w414418263-style SKU pages with no pattern word at all. */
+  const cats = ["tops", "pants", "leggings", "accessories", "underwear", "swimwear"].map((c) => `${BASE}/sports/products/${c}`);
+  const skus = Array.from({ length: 40 }, (_, i) => `${BASE}/w${414418000 + i}`);
+  const tx = fakeStore({
+    "/": pdp(""),
+    "/sitemap.xml": `<urlset>${[...cats, `${BASE}/catalog/product/view/id/1246334`, `${BASE}/catalog/product/view/id/1858946`, ...skus]
+      .map((u) => `<url><loc>${u}</loc></url>`).join("")}</urlset>`,
+  });
+  const tr = await discoverSizeCharts(BASE, { fetchText: tx.fetchText, delayMs: 0, maxProducts: 12, log: () => {}, JSDOM });
+  const fetched = tx.calls.filter((u) => !/sitemap|robots|\/$|size-|sizing/.test(u));
+  check("§7.5 no category page is sampled", !fetched.some((u) => /\/sports\/products\//.test(u)), JSON.stringify(fetched));
+  check("§7.6 ...the sample is topped up with SKU pages to the full 12",
+    tr.report.sampled_products === 12 && fetched.filter((u) => /\/w\d+$/.test(u)).length === 10, JSON.stringify([tr.report.sampled_products, fetched.length]));
+}
+
+console.log("\n── §8 one spelling per product key ──");
+{
+  const raw = BASE + "/products/חולצת-ניקי-חלקה";
+  const encoded = BASE + "/products/" + encodeURIComponent("חולצת-ניקי-חלקה");
+  check("§8.1 normalizePageUrl percent-encodes a raw Hebrew handle", normalizePageUrl(raw) === encoded, normalizePageUrl(raw));
+  check("§8.2 ...and leaves an encoded one unchanged (idempotent)", normalizePageUrl(encoded) === encoded);
+  const chart = { rows: [{ size: "S", minChest: 88, maxChest: 92 }, { size: "M", minChest: 93, maxChest: 97 }],
+    classification: classifyChart([{ size: "S", minChest: 88 }], "", ""), rawSnapshot: "" };
+  const [rec] = buildRecords([{ chart, source: "inline_table", sourceUrl: raw, productUrl: raw }], "teststore.example");
+  check("§8.3 a product-scoped record is keyed by the encoded URL", rec && rec.product_key === encoded, rec && rec.product_key);
+}
+
+console.log("\n── §9 adidas.co.il's shape ──");
+{
+  /* What adidas.co.il (Salesforce Commerce Cloud) actually serves, trimmed:
+       - a homepage that namedrops "Shopify" only inside an unrelated Global-e
+         checkout-integration config key, and otherwise carries unambiguous SFCC/
+         Demandware markers;
+       - PDPs with NO inline chart at all - only a trigger <a> (already followed as a
+         LINK by the existing loop) whose icon is a hidden, decoratively-classed <img>
+         that must not be double-counted as an "image chart";
+       - the guide itself behind a JSON envelope ({action,content,success}, not
+         castro's {html}) whose content is an ARIA div-grid (role=table/row/
+         columnheader/cell), never a <table> element, with the size ladder ACROSS the
+         header and one row per measurement (chest/waist/hips DOWN the first column) -
+         the transposed layout;
+       - that same grid shipped TWICE, once per unit behind an Inches/cm toggle, with
+         every cm cell written with NO space before the unit ("83 - 86cm");
+       - a reused table-skin class, "kids-table___1-YOY", on BOTH the men's and
+         women's ADULT charts - a CSS-Modules styling hook, not an audience claim. */
+  const sizeChartJson = (content) => ({ contentType: "text/html; charset=utf-8",
+    text: JSON.stringify({ action: "Product-SizeChart", success: true, content }) });
+  const MENS_GRID = `<section class="size-guidance_container">
+    <h5 class="gl-heading">MEN'S SHIRTS &amp; TOPS SIZING</h5>
+    <div class="sizechart_header-links"><a href="#x">TALL/LONG &amp; SHORT SIZES</a></div>
+    <div class="sizechart-toggles___Ssf6W"><button title="Inches">Inches</button></div>
+    <div class="gl-table kids-table___1-YOY" role="table">
+      <div role="row"><div role="columnheader">Product label</div><div role="columnheader">XS</div><div role="columnheader">S</div><div role="columnheader">M</div></div>
+      <div role="row"><div role="rowheader">Chest</div><div role="cell">32 1/2 - 34"</div><div role="cell">34 1/2 - 36"</div><div role="cell">36 1/2 - 39"</div></div>
+      <div role="row"><div role="rowheader">Waist</div><div role="cell">27 1/2 - 29"</div><div role="cell">29 1/2 - 31 1/2"</div><div role="cell">32 - 34 1/2"</div></div>
+      <div role="row"><div role="rowheader">Hip</div><div role="cell">32 - 33 1/2"</div><div role="cell">34 - 36"</div><div role="cell">36 1/2 - 39"</div></div>
+    </div>
+    <p class="legend___3liGv">Scroll horizontally to see more.</p>
+    <div class="sizechart-toggles___Ssf6W"><button title="cm">cm</button></div>
+    <div class="gl-table kids-table___1-YOY" role="table">
+      <div role="row"><div role="columnheader">Product label</div><div role="columnheader">XS</div><div role="columnheader">S</div><div role="columnheader">M</div></div>
+      <div role="row"><div role="rowheader">Chest</div><div role="cell">83 - 86cm</div><div role="cell">87 - 92cm</div><div role="cell">93 - 100cm</div></div>
+      <div role="row"><div role="rowheader">Waist</div><div role="cell">71 - 74cm</div><div role="cell">75 - 80cm</div><div role="cell">81 - 88cm</div></div>
+      <div role="row"><div role="rowheader">Hip</div><div role="cell">82 - 85cm</div><div role="cell">86 - 91cm</div><div role="cell">92 - 99cm</div></div>
+    </div>
+  </section>`;
+  const TRIGGER = `<div class="size-chart"><a class="sizechart" href="${BASE}/on/demandware.store/Sites-adidas-IL-Site/en_IL/Product-SizeChart?cid=size-m_tops" data-toggle="modal">
+    <img class="sizeguide d-none" src="${BASE}/on/demandware.static/-/default/images/Union.png">Size Chart</a></div>`;
+  const HOME = pdp(`<p>${"adidas home copy ".repeat(10)}</p>
+    <script>var cfg={"UseShopifyCheckoutForPickUpDeliveryMethod":{"Value":"false"}};</script>
+    <img src="${BASE}/on/demandware.static/Sites-adidas-IL-Site/-/default/dw1/images/hero.jpg">
+    <a href="/on/demandware.store/Sites-adidas-IL-Site/en_IL">x</a>`, "adidas Israel");
+  const adidas = fakeStore({
+    "/": HOME,
+    "/sitemap.xml": `<urlset><url><loc>${BASE}/en/primelift-3-stripes-tee/JE8239.html</loc></url></urlset>`,
+    "/en/primelift-3-stripes-tee/JE8239.html": pdp(TRIGGER, "PRIMELIFT TEE"),
+    "/on/demandware.store/Sites-adidas-IL-Site/en_IL/Product-SizeChart?cid=size-m_tops": sizeChartJson(MENS_GRID),
+  });
+  const { report: ar, records: arec } = await discoverSizeCharts(BASE, { fetchText: adidas.fetchText, delayMs: 0, log: () => {}, JSDOM });
+
+  console.log("── §9.1 platform detection ──");
+  check("§9.1a a Global-e config key namedropping \"Shopify\" is NOT read as the platform",
+    detectPlatform(HOME) !== "shopify", detectPlatform(HOME));
+  check("§9.1b adidas's own demandware.static/.store paths ARE read as the platform",
+    detectPlatform(HOME) === "demandware", detectPlatform(HOME));
+  check("§9.1c ...so products.json (Shopify-only) was never requested",
+    !adidas.calls.some((u) => /products\.json/.test(u)), JSON.stringify(adidas.calls));
+  check("§9.1d ...and the dry run reports it", ar.platform === "demandware", ar.platform);
+
+  console.log("── §9.2-9.5 the captured chart ──");
+  check("§9.2 Union.png (hidden icon riding the already-followed trigger) is not an image chart",
+    ar.paths.image_chart_detected.count === 0, JSON.stringify(ar.paths.image_chart_detected));
+  check("§9.3 the JSON {content} envelope (adidas's field name, not castro's {html}) is unwrapped",
+    ar.outcome === "captured", ar.outcome);
+  const men = arec.find((r) => r.gender === "men");
+  check("§9.4 the ARIA div-grid (no <table> anywhere) is read, gender from the real heading - not 'kids-table'",
+    !!men && men.age_group === "adult" && men.garment_type === "tops", JSON.stringify(arec.map((r) => [r.gender, r.age_group])));
+  check("§9.5 the cm-declared grid wins the toggle pair - no space-before-unit means no silent ×2.54",
+    men && men.rows[0].size === "XS" && men.rows[0].body.chest[0] === 83 && men.rows[0].body.chest[1] === 86,
+    men && JSON.stringify(men.rows[0]));
+  check("§9.6 ...all three measurements survived (chest/waist/hips), not just one",
+    men && men.rows[0].body.waist && men.rows[0].body.hips, men && JSON.stringify(men.rows[0].body));
+}
+
+{
+  /* A real image-chart-in-a-lightbox must still be found: an <a> whose OWN href is an
+     image file (not a page/endpoint) is never an icon riding a followed link, even
+     when SIZE_GUIDE_LINK_RE also matches its label. */
+  const lightbox = fakeStore({
+    "/": pdp("<a href='/products/a'>A</a>", "Home"),
+    "/sitemap.xml": `<urlset><url><loc>${BASE}/products/a</loc></url></urlset>`,
+    "/products/a": pdp(`<a class="size-guide-link" href="/img/size-chart-full.jpg"><img src="/img/size-chart-thumb.jpg" alt="size chart"></a>`, "Tee"),
+  });
+  const r = await discoverSizeCharts(BASE, { fetchText: lightbox.fetchText, delayMs: 0, log: () => {}, JSDOM });
+  check("§9.7 an image chart linked from a real lightbox (href IS an image file) is still found",
+    r.report.paths.image_chart_detected.count >= 1, JSON.stringify(r.report.paths.image_chart_detected));
+}
+
+{
+  /* A small icon with no "d-none"-style class, only explicit pixel dimensions. */
+  const tiny = fakeStore({
+    "/": pdp("<a href='/products/a'>A</a>", "Home"),
+    "/sitemap.xml": `<urlset><url><loc>${BASE}/products/a</loc></url></urlset>`,
+    "/products/a": pdp(`<div class="size-chart"><img class="sizeguide" width="16" height="16" src="/icons/ruler.png"></div>`, "Tee"),
+  });
+  const r = await discoverSizeCharts(BASE, { fetchText: tiny.fetchText, delayMs: 0, log: () => {}, JSDOM });
+  check("§9.8 a bare 16x16 icon (no hidden class, just small dimensions) is not an image chart",
+    r.report.paths.image_chart_detected.count === 0, JSON.stringify(r.report.paths.image_chart_detected));
 }
 
 console.log("");

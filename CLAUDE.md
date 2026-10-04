@@ -118,7 +118,7 @@ wrong"*, *"it slimmed me down"*, *"front and back aren't right"*.
 | **A. Prompt text** | what the model is told | `lib/prompts.js` (server): `imageOnlyPrompt`, `*_ANCHOR`, `DENSE` — §2.13 | mostly dead |
 | **B. Reference image** | what the model is shown | `referenceImageFor`, `galleryOf`, `distinctBackOf`, `createGarmentComposite` | **live** |
 | **C. Orientation** | which asset is on the wire when | the DECISION in `lib/orient-engine.js` (server, §2.14): streaks, `makeTurnYawWindow`, `orientFlipDecision`, early turn, `orientPredictBack`, the hold; the browser's `OrientationWatcher` measures (`classify`, the pose loop) and executes (`maybeSwap`, `effectiveAngle`, `autoOrientation`) | **live** |
-| **D. Size ladder** | the recommended size in the UI | `calculateSize` (client shell, `app.js`) → `lib/sizing.js` (`productVerdict`, `*_SIZE_CHART`, `computeSizeVerdict`, `applyStoreChartOverlay`, §2.12) | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
+| **D. Size ladder** | the recommended size in the UI | `calculateSize` (client shell, `app.js`) → `lib/sizing.js` (`productVerdict`, `*_SIZE_CHART`, `computeSizeVerdict`, `applyStoreChartOverlay`, `storeChartRecommendation` (§2.5b), §2.12) | live in UI, **and live on the wire** (restored 2026-09-03, see §0) |
 
 **Layer B is where most real fit/back-view problems actually live.** "The back
 came out plain" is almost never a prompt problem — it is `distinctBackOf()`
@@ -183,26 +183,56 @@ That includes a product verdict still in flight or lost to the network:
 `DEFAULT_CATEGORY = "unknown"`, never `"tops"` — a guess indistinguishable from
 a verdict outranks the room's own stronger classifier.
 
-### 2.5b A storefront's size chart may refine the fine-tune, never the kernel
+### 2.5b A confident STORED store chart decides the adult size; the kernel still gates
+*Changed 2026-10-03 by owner decision — before that, a store chart could only break ties.*
+
 `calculateSize()` has two stages. The **kernel** is height + weight, scored by
 `coreHwPenalty()`, and it decides which rows are candidates at all,
 `currentBodyCategory`/`currentSizeCategory` (and so the kids/adult go-live guard),
 and the overflow ceiling behind "no size available". The **fine-tune** is the
-`×0.5` chest/waist/legs pass that only breaks a tie *between* rows the kernel
-already admitted.
+`×0.5` chest/waist/legs pass that breaks a tie *between* rows the kernel admitted.
 
-`applyStoreChartOverlay()` writes fine-tune columns and nothing else — it does not
-name `min/maxHeight` or `min/maxWeight` anywhere, and it may only *change* a band
-the base row already carries, never add or remove one. That bound is the whole
-reason parsing a merchant's HTML is an acceptable input to the size calculator: a
-bad scrape can at worst move the recommendation between two sizes that already fit
-this body, and only for a shopper who filled in an optional measurement. It cannot
-invent a candidate, remove one, flip adult↔child, or turn a match into a no-match.
+Store charts now act in two places, and **neither reaches the kernel**:
 
-Do not widen it to the kernel "so the store's chart really counts". The store's
-chart is evidence about **cloth**; ours is vetted evidence about **bodies**, and
-the kernel is the half we vetted. `test/size-chart-overlay.test.mjs` §1 asserts
-this as an absence — the form that catches a new well-meant line being added.
+1. **The overlay (unchanged).** `applyStoreChartOverlay()` writes fine-tune columns
+   and nothing else — it does not name `min/maxHeight` or `min/maxWeight`, and it may
+   only *change* a band the base row already carries. Fed by the widget's PDP chart,
+   else the stored chart.
+2. **The decision (new).** `storeChartRecommendation()` lets the store's **stored**
+   chart (`store_size_charts`, via `pickStoredSizeChart()`) *decide* the adult size
+   when it is confident: matched by store, the garment's gender (else unisex, else
+   unlabelled only if the store has no gendered chart), adult, garment type, and
+   **≥ 2 sizes shared with the product's own list** (the list must be known). The
+   shopper's typed chest/waist/outseam are used when present (±1.5 cm); otherwise
+   chest/waist/hips are **estimated** from height + weight (+ the shopper's gender) by
+   `estimateBodyMeasurements()` — `C = k·sqrt(weight/height)`, documented
+   coefficients and ±4–6 cm error ranges in its comment. Each size is scored by the
+   share of that range inside the store's band. It **abstains → today's logic** when
+   the best size holds < 35 % or beats the runner-up by < 10 points, when nothing
+   comparable exists (chest for tops; waist/hips for bottoms), when the garment's
+   gender is unknown and the store has men's *and* women's charts, or when the answer
+   is a letter on a numeric-pants route. The widget's PDP chart never decides: it
+   carries no gender/age/type labels to match.
+
+What must NOT move: the decision runs **after** `currentBodyCategory` /
+`currentSizeCategory` are fixed and **after** the "fits neither chart" early return,
+only when `currentSizeCategory === "adult"`, and it only ever returns a size the
+product sells. So `isKidsProduct`/`isAdultProduct`, genuine-fit-or-no-match, the
+blocked Continue and the overflow copy are exactly as before — a store chart picks
+*which adult size*, it cannot admit a body the kernel refused or flip adult↔child.
+
+Do not widen either path to the kernel "so the store's chart really counts". The
+store's chart is evidence about **cloth**; ours is vetted evidence about **bodies**.
+`test/size-chart-overlay.test.mjs` §1 and §6 assert this as absences (no
+height/weight name in either function, decision placed after the guard);
+`test/store-chart-recommendation.test.mjs` drives the real `calculateSize()` through
+every decide/abstain case.
+
+**Where it runs (2026-10-04, §2.27):** with the rest of the fit, server-side - `pickStoredSizeChart()`,
+`storeChartRecommendation()` and `estimateBodyMeasurements()` are in `lib/sizing.js`, called from
+`computeSizeVerdict()` at the same point main's `calculateSize()` called them; the shopper's gender is
+`ev.gender`, the charts `ev.storedCharts` (now with `size_system`). Main's console lines come back to the
+support view as `verdict.storeChartLog`. The tests above run the real room shell + the real module.
 
 ### 2.6 Extract markers are an interface
 Several tests slice a block out of `app.js` by matching its **opening line as a
@@ -274,7 +304,11 @@ the engine's `/* ── ONE WATCHER'S DECISION STATE` to `function armLine()` to
 `\n\n  /* What only the browser measured`, `orient-engine` §4 the tick from
 `  const timer = setInterval(async () => {` to `}, ORIENT_SAMPLE_MS);`, and `test/orient-replay.mjs`
 (the harness `orient-engine` §1 replays) runs `const ORIENT_SAMPLE_MS` through the end of
-`function createOrientationWatcher() {`.
+`function createOrientationWatcher() {`. `garment-cache-age-group` slices
+`server.js` from `async function garmentCacheQuery(imageUrl, columns) {` to
+`/* Per-product view lookup` and `scanner/scan-store.js` from
+`async function saveClassification(` to `/* ── Gemini classification` — keep the
+garment_cache read/write helpers inside those spans.
 
 - Do not introduce an identically-shaped statement **or a comment quoting the
   marker** above a marked block. Both steal the match.
@@ -893,6 +927,28 @@ empty), and the SDK retries every refusal not on its permanent list (`permanentE
 - **Run nothing heavy on the shopper's machine while they test** - the twin runs Chrome, the pose model and a media
   server (one ran during the first two reported sessions; it was not the cause, the credits were).
 
+### 2.27 Main (93e2c01) merged into the hidden build - main's size work carried through the hiding (2026-10-04)
+"What's in the screenshot (main's production deploy) I want in main, together with the new key and what we're doing
+now - not in a preview." Main had moved 12 commits past the hiding branch's base (bd766b2): the store's chart DECIDES
+the adult size (§2.5b), one stored chart per size system (v16), adidas/castro size-guide capture (ARIA div-grids, the
+glued "86cm", the inches/cm twin, JSON envelopes, CSS-Modules class tokens), the widget's product signals on every
+PEAR_UPDATE_GARMENT, garment_cache age_group. Merged into `hide/edge` and carried to where the hiding keeps each part:
+- **The fit (§2.12):** main's new `pickStoredSizeChart()` tier pick, `storeChartRecommendation()`,
+  `estimateBodyMeasurements()` and `normalCdf()` moved verbatim into `lib/sizing.js`; the room's `calculateSize()` stays
+  the shell. **Proven:** main's in-browser `calculateSize()` (93e2c01) vs the room shell + JSON + sanitiser + server over
+  146,440 cases (37 product situations incl. 18 with stored charts, the height/weight grid, the optional measurements):
+  0 differences in outcome, in main's Phase 0 lines and in its 31,733 decision lines; 15,576 cases where a stored
+  chart moved main's answer. Three mutations caught (a 1cm band: 18; the decision margin 0.1->0.12: 266; one body
+  coefficient: 28 outcomes / 25,208 log lines).
+- **The scanner:** `scanner/size-chart-reader.src.js`'s parser block was byte-identical to main's old widget block, so
+  it is main's new block now; the generated `scanner/size-chart-parser.js` equals main's in every line of code.
+- **The widget:** main's DOM half (ARIA grids, the twin collapse, the declared-inches fix) is in the collector; the
+  cell half (the glued unit) in `lib/sizing.js`; the correction message uses main's `productSignals()` with the raw chart.
+- **Tests:** main's new suites run against this architecture with main's assertions unchanged (`store-chart-
+  recommendation` through the real shell + module; `size-chart-shared-fixes` through the widget's raw wire and the
+  server's reader, plus §0 pinning the copies); `lib/api-version.js` re-synced - **so the Worker must be deployed
+  before the room that carries it**, or the room falls back to the origin for `/size` (correct, slower).
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
@@ -915,7 +971,8 @@ same commit. Whichever is wrong is the one that wins.
 | Size-token plausibility (`isPlausibleSizeToken`, `SIZE_TOKEN_ALPHA_RE`) | `pear-widget.js` (the size-list scrape; copied into the generated scanner parser) ↔ `lib/sizing.js` (the chart reader) |
 | Store host key (`store_size_charts.store_domain`) | `canonicalStoreHost` in `pear-widget.js` ↔ `app.js` ↔ `lib/store-size-charts.js` ↔ `scanner/size-charts.js` — **four** copies |
 | Size-guide reader, two runtimes | `lib/sizing.js`'s grid reader (the live widget chart) ↔ `scanner/size-chart-reader.src.js` → **generated** `scanner/size-chart-parser.js` (stored charts; `npm run sync:size-chart-parser`) - `size-chart-parser-sync` §3 runs one fixture set through both |
-| Centimetre unit regex (`SIZE_CHART_CM_RE`) | `pear-widget.js` (caption tier, `sizeChartTableUnit`) ↔ `lib/sizing.js` (cell/header tier) |
+| Centimetre/inch unit regexes (`SIZE_CHART_CM_RE`, `SIZE_CHART_IN_RE`, `SIZE_CHART_DECLARED_IN_RE`) | `pear-widget.js` (caption tier + the inches/cm twin) ↔ `scanner/size-chart-reader.src.js` ↔ `lib/sizing.js` (cell/header tier) - `size-chart-shared-fixes` §0 |
+| The page's grid finder (`sizeChartGrid` incl. ARIA div-grids, `sizeChartTables` twin collapse, `sizeChartIsGridEl`) | `pear-widget.js` (the live collector) ↔ `scanner/size-chart-reader.src.js` (the scanner) - `size-chart-shared-fixes` §0 asserts the same text |
 | Garment region classifier (`isBottomsGarment`, `BOTTOMS_TOKENS`, `TOPS_TOKENS`) | `app.js` ↔ `lib/prompts.js` (server copy honours the browser's verdict; asserted identical by `prompt-engine` §2) |
 | Orientation knobs the browser forwards vs the knobs the engine reads | `app.js: ORIENT_KNOB_KEYS` ↔ `lib/orient-engine.js: ORIENT_KNOB_KEYS` (`orient-engine` §2) |
 | Orientation values both halves need | `ORIENT_YAW_FRESH_MS`, `PRESENCE_PROMPT_YAW_SUPPRESS_DEG`, `ORIENT_EARLY_TURN_DEFAULT_SPEED` and the `?early_turn_speed` parse (`ORIENT_EARLY_TURN_MIN_SPEED`) in `app.js` (the pose loop, the presence prompt) ↔ `lib/orient-engine.js` (`orient-engine` §2) |
@@ -1226,3 +1283,24 @@ widening so far has moved the failure rather than removed it.
 - **The reveal wait is load-bearing.** The spec waits for `.show-live` + the scan
   overlay coming down before it captures. The first cut of it did not, photographed
   the loading scrim, and every pixel check passed on an animation. Never remove it.
+
+---
+
+## 9. Status tracking — at the end of EVERY task
+
+`docs/STATUS.md` is the living project status: one entry per workstream with its
+stage (not started / in progress / done / blocked), what is done (with commit hashes),
+what remains, open decisions, and the manual steps waiting on the owner (migrations,
+env vars, scanner runs).
+
+At the end of every task, without being asked:
+
+1. **Update `docs/STATUS.md`** — the stage and hashes of every workstream the task
+   touched, the "Waiting on you" checklist, and the branch table if branches moved.
+   Commit it with the task (or as the task's last commit).
+2. **End the final report with a short `Status` section:** where this workstream stands
+   (start / middle / end), what was done this time, what remains, and what is waiting on
+   the owner.
+
+A task that changed nothing still gets the `Status` section; a status file that lags the
+code is how a finished migration gets run twice or a pending one gets forgotten.

@@ -39,6 +39,18 @@
       the v1 grammar through the decoder, and the widget's own RAW encoder through the
       server's raw decoder, so a change to either side that the other did not receive
       fails here rather than in production.
+
+   §6 §2.5b AS CHANGED 2026-10-03 - A CONFIDENT STORED CHART DECIDES. The owner moved
+      the line: when the store's own captured chart matches the garment (store, gender,
+      adult, type, >= 2 shared sizes) it now DECIDES the adult size rather than only
+      breaking a tie (storeChartRecommendation(), behaviour pinned in
+      store-chart-recommendation.test.mjs). What did NOT move, and §6 holds it as
+      absences: no store chart path names a height/weight band, the overlay above still
+      writes fine-tune columns only, and the decision runs strictly AFTER the kernel has
+      fixed adult/child, the kids/adult guard and the no-match exit - so a store chart can
+      choose between adult sizes this product sells, never admit a body the kernel
+      refused or flip a shopper between charts. The widget's PDP chart stays tie-break
+      only: it carries no gender/age/type labels to match on.
    ============================================================================= */
 import { readFileSync } from "node:fs";
 
@@ -447,6 +459,35 @@ console.log("\n── §5 the chart reaches Screen 1, and a correction can retra
     /garment_size_chart: encodeRawSizeChart\(collectSizeChartCandidates\(\), 0\)/.test(PW));
   check("§5.11 ...emitting the param only when something was readable",
     /hostSizeChart \? "&garment_size_chart=" \+ encodeURIComponent\(hostSizeChart\) : ""/.test(openModalSrc));
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   §6 §2.5b AS CHANGED 2026-10-03 - the stored chart decides, the kernel still gates
+   ═════════════════════════════════════════════════════════════════════════════ */
+console.log("\n── §6 a confident stored chart decides - and still cannot reach the kernel ──");
+{
+  /* Server-side with the rest of the fit (lib/sizing.js, CLAUDE.md §2.12): main's calculateSize() is
+     computeSizeVerdict() there, and the guard state is its `const`s. */
+  const decideFn = extract(LIB, "function storeChartRecommendation(", "\n/* ── PHASE 0: STORE CHART vs DEFAULT");
+  check("§6.1 storeChartRecommendation() never names a height or weight band",
+    !/min(?:Height|Weight)|max(?:Height|Weight)/.test(decideFn),
+    (decideFn.match(/(?:min|max)(?:Height|Weight)/g) || []).join(", "));
+  check("§6.2 ...decides only from the STORED chart (pickStoredSizeChart), never the widget's unlabelled PDP table",
+    /pickStoredSizeChart\(ev\)/.test(decideFn) && !/resolvedStoreSizeChart\(|parseStoreSizeChart\(/.test(decideFn));
+  check("§6.3 ...and requires the product's own size list (>= 2 sizes) before it decides anything",
+    /if \(sizes\.length < 2\) return null;/.test(decideFn));
+  const calc = extract(LIB, "export function computeSizeVerdict(ev", "\n/* ══ THE WIRE");
+  const at = calc.indexOf("storeChartRecommendation({");
+  check("§6.4 the fit asks it only AFTER the guard state and the no-match exit are final",
+    at > calc.indexOf("const currentSizeCategory = adultFits.length") && at > calc.indexOf("if (!currentSizeCategory) {") &&
+    at > calc.indexOf("const bodyCategory = bodyAdultFits.length") && calc.indexOf("const bodyCategory = bodyAdultFits.length") > 0,
+    "decision at " + at);
+  check("§6.5 ...only for an ADULT size, and nothing after it writes the guard state",
+    /if \(currentSizeCategory === "adult" && typeof storeChartRecommendation === "function"\)/.test(calc) &&
+    !/currentSizeCategory\s*=[^=]|bodyCategory\s*=[^=]/.test(calc.slice(at)));
+  check("§6.6 the overlay (§1-§3) is still the ONLY store-chart path into the candidate filter",
+    (calc.match(/=\s*applyStoreChartOverlay\(/g) || []).length === 1 &&
+    calc.search(/=\s*applyStoreChartOverlay\(/) < calc.indexOf("const bodyAdultFits ="));
 }
 
 console.log("");

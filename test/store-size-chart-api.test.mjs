@@ -151,6 +151,18 @@ console.log("\n── §2 the handler ──");
   await makeStoreSizeChartHandler(() => client)({ query: { host: "fox.co.il" } }, res);
   check("§2.10 unusable rows are filtered, not fatal", res.body.charts.length === 1);
 
+  /* v16: a store may now hold an alpha AND a numeric chart for one audience/type. The
+     endpoint serves both, each labelled with its size_system - the room picks per
+     product (pickStoredSizeChart), so nothing here may collapse them. */
+  const numericTwin = { ...DB_ROW, size_system: "numeric",
+    rows: [{ size: "46", body: { chest: [88, 94] } }, { size: "48", body: { chest: [95, 101] } }] };
+  ({ client } = fakeClient({ data: [DB_ROW, numericTwin], error: null }));
+  res = fakeRes();
+  await makeStoreSizeChartHandler(() => client)({ query: { host: "fox.co.il" } }, res);
+  check("§2.10b men/adult/tops in BOTH size systems: both served, each with its size_system",
+    res.body.charts.length === 2 && res.body.charts.map((c) => c.size_system).sort().join(",") === "alpha,numeric",
+    JSON.stringify(res.body.charts.map((c) => [c.gender, c.garment_type, c.size_system])));
+
   check("§2.11 isMissingTableError: 42P01 and PGRST205, not other codes",
     isMissingTableError({ code: "42P01" }) && isMissingTableError({ code: "PGRST205" }) && !isMissingTableError({ code: "23505", message: "dup" }));
 }

@@ -2095,20 +2095,53 @@
      left out still arrives with the PEAR_UPDATE_GARMENT correction, which has no limit. */
   var SIZE_CHART_URL_BUDGET = 6000;
 
-  /* Units - the CAPTION tier only (sizeChartTableUnit() below); the cell and header tiers
-     read server-side with the rest of the chart. CM IS TESTED FIRST AND THAT ORDER IS
-     LOAD-BEARING: the Hebrew ס"מ contains a double-quote, which is also the inch mark. */
-  var SIZE_CHART_CM_RE = /(?:\bcm\b|centimet|ס\s*["'״]?\s*מ|סנטימטר)/i;
+  /* Units - the CAPTION tier (sizeChartTableUnit() below) and a grid's own unit for the inches/cm twin
+     check (sizeChartTables()); the cell and header tiers read server-side with the rest of the chart
+     (lib/sizing.js - the same two regexes, CLAUDE.md §3). CM IS TESTED FIRST AND THAT ORDER IS
+     LOAD-BEARING: the Hebrew ס"מ contains a double-quote, which is also the inch mark.
+     THE NO-SPACE UNIT (main 0fccee8, 2026-10-03): "86cm" never matched \bcm\b - a digit is a word
+     character. adidas.co.il writes every cm cell that way; `\dcm\b` / `\dins?\b` read the glued
+     spelling, and the boundary on the far side still keeps "cms"/"inside" out. */
+  var SIZE_CHART_CM_RE = /(?:\bcm\b|\dcm\b|centimet|ס\s*["'״]?\s*מ|סנטימטר)/i;
+  var SIZE_CHART_IN_RE = /(?:inch(?:es)?|\bins?\b|\dins?\b|["”″])/i;
+  function sizeChartUnitFromText(s) {
+    var t = String(s == null ? "" : s);
+    if (SIZE_CHART_CM_RE.test(t)) return "cm";
+    if (SIZE_CHART_IN_RE.test(t)) return "in";
+    return null;
+  }
 
   /* Reads a <table> into a capped grid of trimmed strings. Colspans are NOT expanded:
      a chart that needs colspan arithmetic to line its columns up is exactly the kind
      this refuses, and a wrong column alignment is the one failure mode that produces a
-     confident, plausible, WRONG chart. */
+     confident, plausible, WRONG chart.
+
+     ARIA DIV-GRIDS (moved here from the scanner 2026-10-03). adidas.co.il (Salesforce
+     Commerce Cloud) ships its charts as role="table"/"row"/"columnheader"/"cell" divs
+     with no <table> element anywhere. The cells carry the same text a <table> would,
+     so the grid is read the same way - rows by role="row", cells by their roles - and
+     everything downstream (orientation, units, clamps, monotonicity) is unchanged. A
+     role="table" element is only read this way when it is NOT itself a <table> (a
+     <table role="table"> is just a table) - see sizeChartIsGridEl(). */
+  var SIZE_CHART_TABLE_SEL = 'table,[role="table"]';
+  var SIZE_CHART_ARIA_CELL_SEL = '[role="columnheader"],[role="rowheader"],[role="cell"],[role="gridcell"]';
+  function sizeChartIsAriaGrid(el) {
+    return !!(el && el.tagName && String(el.tagName).toUpperCase() !== "TABLE" &&
+      el.getAttribute && el.getAttribute("role") === "table");
+  }
+  /* A <table>, or an ARIA grid with no real <table> inside it (that one is read as a
+     table in its own right, so the wrapper must not be read twice). */
+  function sizeChartIsGridEl(el) {
+    if (!el || !el.tagName) return false;
+    if (String(el.tagName).toUpperCase() === "TABLE") return true;
+    return sizeChartIsAriaGrid(el) && !(el.querySelector && el.querySelector("table"));
+  }
   function sizeChartGrid(table) {
-    var rows = table.querySelectorAll ? table.querySelectorAll("tr") : [];
+    var aria = sizeChartIsAriaGrid(table);
+    var rows = table.querySelectorAll ? table.querySelectorAll(aria ? '[role="row"]' : "tr") : [];
     var grid = [];
     for (var r = 0; r < rows.length && grid.length < SIZE_CHART_MAX_ROWS; r++) {
-      var cells = rows[r].querySelectorAll ? rows[r].querySelectorAll("th,td") : [];
+      var cells = rows[r].querySelectorAll ? rows[r].querySelectorAll(aria ? SIZE_CHART_ARIA_CELL_SEL : "th,td") : [];
       if (!cells.length) continue;
       var line = [];
       for (var c = 0; c < cells.length && c < SIZE_CHART_MAX_COLS; c++) {
@@ -2132,8 +2165,15 @@
      plausible, confident chart, which is the one failure mode this whole file is built
      to avoid. At this tier only an unambiguous WORD counts ("inch"/"inches"). A cell or
      a header is short and measurement-labelled, so the loose test stays correct there;
-     a paragraph is not. */
-  var SIZE_CHART_DECLARED_IN_RE = /inch(?:es)?/i;
+     a paragraph is not.
+
+     THE BUG THIS LINE CARRIED (fixed 2026-10-01): it was written /inch(?:es)?<U+0008>/i -
+     a literal backspace byte where \b was meant. It compiled and matched nothing a page
+     contains, so this whole tier was dead and every chart fell to magnitude inference -
+     which reads a plus-size chart (chest 62/64/66 INCHES, above the 60 cutoff) as
+     centimetres. test/size-chart-parser-sync.test.mjs §5 pins the fix and scans both
+     parser copies for control bytes. */
+  var SIZE_CHART_DECLARED_IN_RE = /inch(?:es)?\b/i;
   function sizeChartTableUnit(table) {
     var node = table, depth = 0;
     while (node && depth < 4) {
@@ -2143,6 +2183,59 @@
       node = node.parentNode; depth++;
     }
     return null;
+  }
+
+  /* EVERY READABLE GRID ON A PAGE, with unit-toggle twins collapsed to the cm one.
+     @returns {Array<{el: Element, anchor: Element}>} in document order. `anchor` is
+     where the chart's surrounding labels should be read from (the scanner's
+     tableContextText) - for a collapsed pair, the FIRST-rendered member.
+
+     THE TWIN (moved here from the scanner 2026-10-03). adidas.co.il publishes each
+     chart twice behind an "Inches | cm" toggle: two grids with the same header row and
+     the same first column, one in inches, one in cm. Both parse, they disagree by
+     rounding (an inch-derived 82.55-86.36 vs the store's own 83-86), and the widget
+     kept whichever came first - the lossy inch one, because adidas renders it first.
+     Two grids are collapsed ONLY when they have an identical header row AND first
+     column AND one's own cells declare cm while the other's declare inches. Same-shaped
+     grids that are both cm (a men's and a women's chart with the same sizes and the
+     same measurement names) are two charts and are both kept - a looser key would
+     silently drop one audience's chart.
+     The cm twin is kept because a store's own centimetres are never a ×2.54 rounding
+     away from the real thing; the anchor is the first-rendered slot because that is
+     the one sitting under the section heading (the cm tab follows a caption paragraph
+     that a 4-sibling heading walk runs out of budget on). */
+  function sizeChartGridUnit(grid) {
+    var parts = [];
+    for (var i = 0; i < grid.length; i++) parts.push(grid[i].join(" "));
+    return sizeChartUnitFromText(parts.join(" "));
+  }
+  function sizeChartTwinKey(grid) {
+    if (!grid || grid.length < 3 || !grid[0].length) return null;
+    var first = [];
+    for (var i = 1; i < grid.length; i++) first.push(grid[i][0] || "");
+    return grid[0].join("\u0001") + "::" + first.join("\u0001");
+  }
+  function sizeChartTables(root) {
+    var all = root && root.querySelectorAll ? root.querySelectorAll(SIZE_CHART_TABLE_SEL) : [];
+    var items = [], i, j;
+    for (i = 0; i < all.length; i++) {
+      if (!sizeChartIsGridEl(all[i])) continue;
+      var grid = [];
+      try { grid = sizeChartGrid(all[i]); } catch (e) { grid = []; }
+      items.push({ el: all[i], anchor: all[i], key: sizeChartTwinKey(grid), unit: sizeChartGridUnit(grid), drop: false });
+    }
+    for (i = 0; i < items.length; i++) {
+      if (items[i].drop || !items[i].key) continue;
+      for (j = i + 1; j < items.length; j++) {
+        if (items[j].drop || items[j].key !== items[i].key) continue;
+        var a = items[i].unit, b = items[j].unit;
+        if (a === "cm" && b === "in") { items[j].drop = true; }
+        else if (a === "in" && b === "cm") { items[i].drop = true; items[j].anchor = items[i].anchor; break; }
+      }
+    }
+    var out = [];
+    for (i = 0; i < items.length; i++) if (!items[i].drop) out.push({ el: items[i].el, anchor: items[i].anchor });
+    return out;
   }
 
   /* ── WHERE THE CHART LIVES, per platform ─────────────────────────────────────────
@@ -2193,9 +2286,13 @@
   function collectSizeChartCandidates() {
     try {
       var candidates = [], nodes = [], i, j, k, m;
+      /* Every readable grid on the page (<table>s and ARIA div-grids), unit-toggle twins
+         already collapsed - a grid not in this list is never a candidate. */
+      var readable = sizeChartTables(d), readableEls = [];
+      for (i = 0; i < readable.length; i++) readableEls.push(readable[i].el);
 
       function consider(table, source, bonus) {
-        if (!table || nodes.indexOf(table) !== -1) return;
+        if (!table || nodes.indexOf(table) !== -1 || readableEls.indexOf(table) === -1) return;
         if (candidates.length >= SIZE_CHART_MAX_TABLES) return;
         nodes.push(table);
         candidates.push({ table: table, source: source, bonus: bonus });
@@ -2209,18 +2306,19 @@
              not take the other twenty-nine with it. */
           try { hosts = d.querySelectorAll(sels[j]); } catch (e) { continue; }
           for (k = 0; k < hosts.length; k++) {
-            var inner = hosts[k].querySelectorAll ? hosts[k].querySelectorAll("table") : [];
-            /* A container that IS the chart, laid out without a <table> at all, is not
-               readable here and deliberately yields nothing rather than a guess. */
+            var inner = hosts[k].querySelectorAll ? hosts[k].querySelectorAll(SIZE_CHART_TABLE_SEL) : [];
+            /* A container that IS the chart, laid out with neither a <table> nor ARIA
+               table roles, is not readable here and deliberately yields nothing rather
+               than a guess. */
             for (m = 0; m < inner.length; m++) consider(inner[m], platform, 6);
           }
         }
       }
 
       /* Tier 2 - the universal fallback. Every remaining table on the page, judged
-         server-side purely on its own content. */
-      var all = d.querySelectorAll ? d.querySelectorAll("table") : [];
-      for (i = 0; i < all.length; i++) consider(all[i], "generic", 0);
+         server-side purely on its own content. Every readable grid (<table>s and ARIA
+         div-grids, unit-toggle twins collapsed) - main 0fccee8. */
+      for (i = 0; i < readableEls.length; i++) consider(readableEls[i], "generic", 0);
 
       var out = [];
       for (i = 0; i < candidates.length; i++) {
@@ -2663,6 +2761,76 @@
     toastTimer = w.setTimeout(function () { toastEl.classList.remove("show"); }, 2600);
   }
 
+  /* ── THE PRODUCT SIGNALS EVERY PEAR_UPDATE_GARMENT CARRIES ──────────────────────
+     THE BUG THIS CLOSES: these fields used to ride ONLY on the full re-anchor message.
+     The two other messages - the bare ready signal sent when the classifier AGREED with
+     the DOM-order guess (the COMMON path on a well-marked-up store) and the one sent when
+     the classify pipeline FAILED - carried nothing but garment_classify_done. So on
+     exactly those visits:
+       · the room never heard garment_age_group at all - resolvedGarmentAgeGroup() read
+         "uncertain" even when Gemini had said "kids" with high confidence, and the
+         kids/adult guard's classifier fallback was dead;
+       · a Shopify variant list that resolved AFTER the click (loadShopifyProductJSON()
+         is fire-and-forget at boot) and a size picker the theme's JS hydrated late were
+         never delivered - the room kept the open-time DOM reading, often [].
+     One builder, used by all three messages, so they cannot drift apart again.
+
+     RE-READ AT MESSAGE TIME, never reused from the open URL: the whole point is the
+     reading that became available after the click. The room already treats every field
+     here as a correction (see its PEAR_UPDATE_GARMENT listener), handles all of them
+     ABOVE its `!front` guard, and so applies them from a message with no garment_url.
+
+     `res` is the classifyImages() result, or null on the failure path - where there is
+     no verdict to relay, so only the page re-reads go out. garment_age_group is then
+     OMITTED rather than sent as "uncertain": "uncertain" means "the classifier looked
+     and could not tell", which is not what happened.
+
+     NEVER THROWS. The message it feeds is also the room's classification-gate release;
+     a scrape that threw here would strand the shopper behind that gate for its full
+     30s timeout. On any failure the signals are dropped and the message still goes. */
+  function productSignals(res) {
+    try {
+      var fresh = {
+        /* Re-read HERE and OUTRANKING the classifier in the room (isKidsProduct). The
+           Shopify product JSON is fetched at boot but can resolve after the modal
+           already opened, so this is the delivery for a size list that wasn't
+           readable yet at open time. */
+        garment_sizes: extractHostSizes(),
+        /* Stock for that same list. Sent as an ARRAY always, including the empty one:
+           unlike the URL param, an empty array here is a real message ("re-checked,
+           nothing is sold out") that must be able to CLEAR a stale strike-through from
+           the open-time scrape. */
+        garment_soldout: extractSoldOutSizes(),
+        /* The store's own size chart, re-read because a size-guide modal is routinely
+           rendered by the theme's JS after the click. Sent as a STRING ALWAYS, including
+           "" - "re-checked, this page publishes no chart we can read" must be able to
+           CLEAR a chart the open-time scrape got wrong. */
+        garment_size_chart: encodeRawSizeChart(collectSizeChartCandidates(), 0)
+      };
+      if (!res) return fresh;
+      return Object.assign(fresh, {
+        // Kids/adult verdict for this product, resolved server-side from the same
+        // classify call. "uncertain" is sent explicitly (not omitted) so the fitting
+        // room can tell "we checked and don't know" apart from "this correction
+        // predates the field existing".
+        garment_age_group: res.ageGroup,
+        garment_age_group_confidence: res.ageGroupConfidence,
+        /* Numeric-vs-alphabetic size-run verdict for this product (this page's own
+           scrape, or a cache hit from a previous visit - see classifyImages()). Sent as
+           "unknown" explicitly, not omitted, mirroring garment_age_group above. */
+        garment_size_type: res.sizeRunType,
+        /* The PDP heading can still be a skeleton placeholder at open on a JS-rendered
+           store, so this is the more accurate reading of the two and the room
+           overwrites pendingTitle with it - see its "A LATE TITLE" note. */
+        garment_title: getGarmentName()
+      });
+    } catch (e) {
+      console.warn("[PEAR widget] product-signal re-read failed, sending the message without it:",
+        e && e.message);
+      return {};
+    }
+  }
+
   /* ── front/back classification (Gemini, via the PEAR server) ──────────────────
      Called on every PEAR button click - even a single-image product - so every
      visit contributes to the Supabase cache (garment_cache), not just the ones
@@ -2947,8 +3115,9 @@
       (hostSizeChart ? "&garment_size_chart=" + encodeURIComponent(hostSizeChart) : "") +
       /* Which store this is, canonicalised (the store_size_charts key), and who the
          garment is cut for with the evidence tier that said so. The room falls back to
-         a STORED chart for this host only when no chart arrived above, and only as a
-         tie-break (CLAUDE.md §2.5b). "unknown" is sent explicitly so the room can tell
+         a STORED chart for this host - as the tie-break when no chart arrived above,
+         and as the deciding chart when it matches this garment's gender/type (CLAUDE.md
+         §2.5b as changed 2026-10-03). "unknown" is sent explicitly so the room can tell
          "we looked and could not tell" from "this widget build predates the field". */
       (storeHost ? "&store_host=" + encodeURIComponent(storeHost) : "") +
       "&garment_gender=" + encodeURIComponent(genderSignal.gender) +
@@ -3431,21 +3600,28 @@
                well-marked-up store "the classifier agreed" is the COMMON path - so
                returning here without a word left the gate to sit until its 30s timeout
                on exactly the products that were never at risk.
-               A bare ready signal carries no garment fields, so the room releases the
-               gate and returns without touching activeItem. Nothing is re-anchored. */
+               A ready signal carries no garment_url, so the room releases the gate and
+               returns before touching activeItem's reference. Nothing is re-anchored.
+               It DOES carry the product signals (productSignals() - see there for the
+               kids/adult bug their absence caused); the room applies those above its
+               `!front` guard, so they land without any re-anchor. */
             if (!composite && frontUrl === imgs[0] && backUrl === openBack) {
               console.log("[PEAR widget] classifier agreed with the DOM-order guess - " +
-                "sending a bare ready signal (no re-anchor)");
+                "sending a ready signal with product signals only (no re-anchor)");
               try {
-                openedIframe.contentWindow.postMessage(
-                  { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true }, PEAR_BASE);
+                openedIframe.contentWindow.postMessage(Object.assign(
+                  { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true },
+                  productSignals(res)), PEAR_BASE);
               } catch (e) {
                 console.warn("[PEAR widget] ready signal failed to post:", e && e.message);
               }
               return;
             }
             try {
-              openedIframe.contentWindow.postMessage({
+              /* The product signals (sizes, stock, chart, kids/adult, run type, title)
+                 come from productSignals() - the SAME builder the ready signal and the
+                 failure path use, so the three messages cannot drift apart again. */
+              openedIframe.contentWindow.postMessage(Object.assign({
                 type: "PEAR_UPDATE_GARMENT",
                 garment_url: frontUrl,
                 garment_back: backUrl || undefined,
@@ -3460,19 +3636,6 @@
                    than trusting that two separately-bundled stitchers still agree. */
                 garment_composite_layout: (composite && built.layout) || undefined,
                 garment_images: sorted,
-                // Kids/adult verdict for this product, resolved server-side from the
-                // same classify call. "uncertain" is sent explicitly (not omitted) so
-                // the fitting room can tell "we checked and don't know" apart from
-                // "this correction predates the field existing".
-                garment_age_group: res.ageGroup,
-                garment_age_group_confidence: res.ageGroupConfidence,
-                /* Numeric-vs-alphabetic size-run verdict for this product (this page's
-                   own scrape, or a cache hit from a previous visit - see classifyImages()).
-                   Sent as "unknown" explicitly, not omitted, mirroring garment_age_group
-                   above: the room tells "checked, no answer" apart from "correction
-                   predates this field". Re-sent alongside garment_sizes for the same
-                   reason - a size list that scrapes in late still needs its run type. */
-                garment_size_type: res.sizeRunType,
                 /* Sampled main-fabric colour for THIS product. Sent so the room can
                    name the colour in the prompt instead of relying on the anchor's
                    generic "preserve the original color" - the black/yellow
@@ -3487,37 +3650,8 @@
                 garment_text_ocr: typeof res.textOcr === "string" ? res.textOcr : undefined,
                 /* Whether the rear is positively known blank. Omitted (not false-d) when
                    unknown, so the room can abstain rather than assume. */
-                garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined,
-                /* Re-sent alongside the verdict above, and OUTRANKING it in the room.
-                   The Shopify product JSON is fetched at boot but can resolve after the
-                   modal already opened, so this is the delivery for a size list that
-                   wasn't readable yet at open time. */
-                garment_sizes: extractHostSizes(),
-                /* Stock for that same list, re-read HERE rather than reused from the
-                   open URL. The Shopify product JSON is fetched at boot and routinely
-                   resolves after the modal opened, so at open time the DOM tier may
-                   have been the only thing readable (or nothing was) - this is the
-                   delivery for the authoritative variant-level answer. Sent as an ARRAY
-                   always, including the empty one: unlike the URL param, an empty array
-                   here is a real message ("re-checked, nothing is sold out") that must
-                   be able to CLEAR a stale strike-through from the open-time scrape. */
-                garment_soldout: extractSoldOutSizes(),
-                /* The store's own size chart, RE-READ here rather than reused from the
-                   open URL. A size-guide modal is routinely rendered by the theme's JS
-                   (or fetched into a drawer) and can hydrate well after the shopper
-                   clicked, so this is the delivery for a chart that was not in the DOM
-                   at open time. Sent as a STRING ALWAYS, including "" - unlike the URL
-                   param, an empty string here is a real message ("re-checked, this page
-                   publishes no chart we can read") that must be able to CLEAR a chart
-                   the open-time scrape got wrong, the same argument garment_soldout's
-                   always-sent array makes one field up. */
-                garment_size_chart: encodeRawSizeChart(collectSizeChartCandidates(), 0),
-                /* Re-sent with the correction, not only on the open URL. The PDP heading
-                   can still be a skeleton placeholder at open on a JS-rendered store, so
-                   this is the more accurate reading of the two and the room overwrites
-                   pendingTitle with it - see its "A LATE TITLE" note. */
-                garment_title: getGarmentName()
-              }, PEAR_BASE);
+                garment_back_is_plain: typeof res.backIsPlain === "boolean" ? res.backIsPlain : undefined
+              }, productSignals(res)), PEAR_BASE);
             } catch (_) {}
           });
         }).catch(function (err) {
@@ -3534,8 +3668,12 @@
              a different product while the request was in flight. */
           if (activeIframe !== openedIframe) return;
           try {
-            openedIframe.contentWindow.postMessage(
-              { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true }, PEAR_BASE);
+            /* No verdict to relay (productSignals(null) omits garment_age_group), but the
+               page re-reads still go out - a Shopify list or a JS-built picker that
+               landed after the click is just as real when the classifier is down. */
+            openedIframe.contentWindow.postMessage(Object.assign(
+              { type: "PEAR_UPDATE_GARMENT", garment_classify_done: true },
+              productSignals(null)), PEAR_BASE);
           } catch (e) {
             console.warn("[PEAR widget] ready signal failed to post after error:", e && e.message);
           }

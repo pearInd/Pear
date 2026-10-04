@@ -1547,6 +1547,112 @@ async function getCachedClassification(imageUrl) {
 
 const MISSING_COLUMN_RE = /column .* does not exist|Could not find the/i;
 
+/* ── garment_cache: SCHEMA-ADAPTIVE READS AND WRITES ─────────────────────────────
+   THE BUG THIS CLOSES (2026-10-01, "rows created after the age_group backfill still
+   have age_group = NULL", production rows from 2026-08-23 on). Production's
+   garment_cache is NOT a clean migration prefix: it ran V9 (canonical_url) and V11
+   (age_group) without V8 (confidence/source/cue/product_url). Every fallback here used
+   to be a fixed LADDER that assumed columns arrive in version order, and every ladder
+   was wrong for that table in its own way:
+     · writes (until 2026-09-15): dropped the v11 fields BEFORE the v8 ones, so every
+       write fell to the bare v5 row - age_group never written on any new row;
+     · writes (since): the "no v8" retry still carried the v12/v13/v14 fields, so a
+       table missing any of those fell to the bare row all the same;
+     · reads: EVERY tier selected confidence/source/cue, so on a v8-less table every
+       tier failed and the row came back as { age_group: null } even when the column
+       held "kids" - and GET /api/garment-category re-saved exactly that null over the
+       real value on every try-on (the cached branch re-upserts what it read).
+   The fix is not a better ladder - it is no ladder. A missing-column error names the
+   column; drop THAT column and retry, so a write keeps every column the table actually
+   has, whatever subset of migrations ran. Combined with saveClassification() never
+   writing age_group without a verdict, a row can no longer lose the value either way.
+   test/garment-cache-age-group.test.mjs runs these against a fake table shaped like
+   production (and four other schemas), for both this file and the scanner. */
+const GARMENT_CACHE_MIGRATION_HINT = {
+  v8:  "v8 columns absent - run archive/supabase_setup_v8.sql for full diagnostics",
+  v9:  "v9 column absent - run archive/supabase_setup_v9.sql for one row per photograph",
+  v11: "v11 columns absent - run archive/supabase_setup_v11.sql for kids/adult classification",
+  v12: "v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation",
+  v13: "v13 column absent - run archive/supabase_setup_v13.sql for garment categories",
+  v14: "v14 column absent - run archive/supabase_setup_v14.sql for size-run-type caching",
+};
+const GARMENT_CACHE_COLUMN_VERSION = {
+  confidence: "v8", source: "v8", cue: "v8", product_url: "v8", canonical_url: "v9",
+  age_group: "v11", age_group_confidence: "v11",
+  text_ocr: "v12", is_true_back_view: "v12", has_graphic: "v12", classifier_version: "v12", primary_color_hex: "v12",
+  garment_category: "v13", size_run_type: "v14",
+};
+/* Used only when an error says "a column is missing" without naming it: newest first,
+   and age_group LAST - it is the column this whole block exists to keep. */
+const GARMENT_CACHE_DROP_ORDER = [
+  "size_run_type", "garment_category", "classifier_version", "has_graphic", "primary_color_hex",
+  "is_true_back_view", "text_ocr", "product_url", "cue", "source", "confidence",
+  "age_group_confidence", "age_group",
+];
+const _garmentCacheWarned = new Set();
+
+/* The column a missing-column error names, or null. Covers PostgREST's
+   "Could not find the 'x' column of 'garment_cache' in the schema cache" and Postgres's
+   'column "x" of relation "garment_cache" does not exist' / "column garment_cache.x does
+   not exist". */
+function missingGarmentCacheColumn(error) {
+  const msg = String((error && error.message) || error || "");
+  const m = /Could not find the '([A-Za-z0-9_]+)' column/.exec(msg) ||
+            /column "([A-Za-z0-9_]+)"(?: of relation "[^"]+")? does not exist/.exec(msg) ||
+            /column (?:[A-Za-z0-9_]+\.)?([A-Za-z0-9_]+) does not exist/.exec(msg);
+  return m ? m[1] : null;
+}
+
+/* Which column to give up next, given the error and what is still in play. */
+function nextColumnToDrop(error, present) {
+  const named = missingGarmentCacheColumn(error);
+  if (named && present.includes(named)) return named;
+  return GARMENT_CACHE_DROP_ORDER.find((c) => present.includes(c)) || null;
+}
+
+function warnGarmentCacheColumn(col) {
+  const version = GARMENT_CACHE_COLUMN_VERSION[col];
+  const key = version || col;
+  if (_garmentCacheWarned.has(key)) return;
+  _garmentCacheWarned.add(key);
+  console.warn("[garment_cache] " + (GARMENT_CACHE_MIGRATION_HINT[version] ||
+    `column "${col}" absent - writing without it`));
+}
+
+/* Upsert one row, keeping every column the table has. Returns the final error (null on
+   success) and the columns that had to be dropped. Never drops image_url/classification
+   (the v5 row itself); a missing canonical_url (pre-v9) switches the conflict target to
+   image_url, exactly as the old bare-row tier did. */
+async function upsertGarmentCacheRow(row) {
+  const payload = { ...row };
+  let onConflict = "canonical_url" in payload ? "canonical_url" : "image_url";
+  const dropped = [];
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const { error } = await supabase.from("garment_cache").upsert([payload], { onConflict });
+    if (!error) return { error: null, dropped };
+    if (!MISSING_COLUMN_RE.test(error.message || "")) return { error, dropped };
+    const optional = Object.keys(payload).filter((k) => k !== "image_url" && k !== "classification");
+    const col = nextColumnToDrop(error, optional);
+    if (!col) return { error, dropped };
+    if (col === "canonical_url") onConflict = "image_url";
+    warnGarmentCacheColumn(col);
+    delete payload[col];
+    dropped.push(col);
+  }
+  return { error: new Error("garment_cache upsert: too many missing columns"), dropped };
+}
+
+/* What a column the table does not have reads back as. null, not undefined, so
+   "never recorded" stays distinguishable from a value - with ONE deliberate exception:
+   classifier_version is left undefined when its column is absent, because
+   isStaleClassification() reads undefined as "pre-migration, not stale" and null as
+   "stale", and a pending migration must not trigger a catalog-wide re-classification. */
+const CACHED_ROW_DEFAULTS = {
+  confidence: null, source: "legacy", cue: "", age_group: null, age_group_confidence: null,
+  text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
+  garment_category: null, size_run_type: null,
+};
+
 /* Same row, but with the diagnostic columns added in supabase_setup_v8.sql
    (confidence / source / cue), the kids/adult verdict added in v11
    (age_group / age_group_confidence), and the panel-validation evidence added in
@@ -1572,48 +1678,25 @@ async function getCachedClassificationDetailed(imageUrl) {
   const V12_ONLY = ", text_ocr, is_true_back_view, primary_color_hex, has_graphic, classifier_version";
   const V13_ONLY = ", garment_category";
   const V14_ONLY = ", size_run_type";
-  let { data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY + V13_ONLY + V14_ONLY);
-  /* V14 is its own tier for the same reason V13 is below it: a deployment that has run
-     v13 but not yet v14 must keep its garment_category column rather than losing it
-     just because size_run_type doesn't exist yet. */
-  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-    console.warn("[garment_cache] v14 column absent - run archive/supabase_setup_v14.sql for size-run-type caching");
-    ({ data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY + V13_ONLY));
-    if (!error) return data ? { ...data, size_run_type: null } : null;
-  }
-  /* V13 is its own tier rather than being folded into the V12 fallback: a deployment
-     that has run v12 but not yet v13 must keep its text_ocr/colour columns, exactly
-     the way the v11 tier below keeps confidence/source/cue. Collapsing the two would
-     silently drop the duplicate-panel veto on every such deployment. */
-  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-    console.warn("[garment_cache] v13 column absent - run archive/supabase_setup_v13.sql for garment categories");
-    ({ data, error } = await garmentCacheQuery(imageUrl, V11 + V12_ONLY));
-    if (!error) return data ? { ...data, garment_category: null, size_run_type: null } : null;
-  }
-  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-    console.warn("[garment_cache] v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation");
-    ({ data, error } = await garmentCacheQuery(imageUrl, V11));
-    if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-      ({ data, error } = await garmentCacheQuery(imageUrl, "classification, confidence, source, cue"));
-      if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-        const classification = await getCachedClassification(imageUrl);
-        return classification
-          ? { classification, confidence: null, source: "legacy", cue: "", age_group: null, age_group_confidence: null,
-              text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
-              garment_category: null, size_run_type: null }
-          : null;
-      }
-      if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
-      return data ? { ...data, age_group: null, age_group_confidence: null,
-                      text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
-                      garment_category: null, size_run_type: null } : null;
+  /* Column-by-column, not tier-by-tier: see the SCHEMA-ADAPTIVE block above for why
+     the old tiers (each of which still selected the v8 columns) read age_group back as
+     null on production's v8-less table. Each missing column is dropped on its own, so
+     age_group comes back whenever its column exists. */
+  let cols = (V11 + V12_ONLY + V13_ONLY + V14_ONLY).split(",").map((c) => c.trim());
+  for (let attempt = 0; attempt < 24 && cols.length > 1; attempt++) {
+    const { data, error } = await garmentCacheQuery(imageUrl, cols.join(", "));
+    if (!error) return data ? { ...CACHED_ROW_DEFAULTS, ...data } : null;
+    if (!MISSING_COLUMN_RE.test(error.message || "")) {
+      console.warn("[garment_cache] read failed:", error.message);
+      return null;
     }
-    if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
-    return data ? { ...data, text_ocr: null, is_true_back_view: null, primary_color_hex: null, has_graphic: null,
-                    garment_category: null, size_run_type: null } : null;
+    const col = nextColumnToDrop(error, cols.filter((c) => c !== "classification"));
+    if (!col) break;
+    warnGarmentCacheColumn(col);
+    cols = cols.filter((c) => c !== col);
   }
-  if (error) { console.warn("[garment_cache] read failed:", error.message); return null; }
-  return data || null;
+  const classification = await getCachedClassification(imageUrl);
+  return classification ? { ...CACHED_ROW_DEFAULTS, classification } : null;
 }
 
 /* Persist a verdict WITH its provenance. `source` is the column that makes the
@@ -1639,10 +1722,17 @@ async function saveClassification(imageUrl, classification, meta = {}) {
     cue: meta.cue || null,
     ...(meta.productUrl ? { product_url: meta.productUrl } : {}),
   };
-  const v11Fields = {
-    age_group: meta.ageGroup || null,
-    age_group_confidence: Number.isFinite(meta.ageGroupConfidence) ? meta.ageGroupConfidence : null,
-  };
+  /* ONLY WITH A VERDICT. This used to be written unconditionally - `meta.ageGroup ||
+     null` - so any call that had no age verdict in hand (GET /api/garment-category
+     re-saving a row it had just read back as null, see the SCHEMA-ADAPTIVE block) wiped
+     a real "kids"/"adult" with NULL. Same NULL-vs-value rule as v13Fields/v14Fields
+     below: a call site that did not ask the question leaves the column alone. */
+  const v11Fields = ["kids", "adult", "uncertain"].includes(meta.ageGroup)
+    ? {
+        age_group: meta.ageGroup,
+        age_group_confidence: Number.isFinite(meta.ageGroupConfidence) ? meta.ageGroupConfidence : null,
+      }
+    : {};
   /* `textOcr === undefined` (this call site never looked) and `textOcr === ""` (the model
       looked and found no lettering) must NOT both become null, or a repeat visit cannot
       tell "unclassified" from "genuinely plain" - see getCachedClassificationDetailed. */
@@ -1674,49 +1764,17 @@ async function saveClassification(imageUrl, classification, meta = {}) {
     ? { size_run_type: meta.sizeRunType }
     : {};
 
-  let { error } = await supabase.from("garment_cache")
-    .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields, ...v13Fields, ...v14Fields }], { onConflict: "canonical_url" });
-  /* THE BUG THIS CLOSES (2026-09): production ran V9 (canonical_url) and V11
-     (age_group/age_group_confidence) WITHOUT V8 (confidence/source/cue/product_url)
-     ever having been migrated onto garment_cache - see the commit that added
-     scanner/backfill-age-group.js, which had to hand-confirm the live column list
-     via information_schema because v8Fields kept getting every UPDATE rejected.
-     Every tier below this one keeps v8Fields bundled with v11Fields and only drops
-     v8Fields as the SECOND-TO-LAST resort (mirroring the "columns arrived in strict
-     version order" assumption) - on a table missing ONLY v8, that bundling means
-     every tier down to the bare `base` upsert fails, and age_group is silently
-     dropped from EVERY live write forever, not just until the next migration. Try
-     the v8-less shape FIRST, since that is production's actual state, before
-     falling through the version-order ladder that assumes it isn't. */
-  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-    console.warn("[garment_cache] a column is absent - trying without v8 fields (confidence/source/cue/product_url)");
-    ({ error } = await supabase.from("garment_cache")
-      .upsert([{ ...base, ...canonical, ...v11Fields, ...v12Fields, ...v13Fields, ...v14Fields }], { onConflict: "canonical_url" }));
-  }
-  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-    console.warn("[garment_cache] v14 column absent - run archive/supabase_setup_v14.sql for size-run-type caching");
-    ({ error } = await supabase.from("garment_cache")
-      .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields, ...v13Fields }], { onConflict: "canonical_url" }));
-  }
-  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-    console.warn("[garment_cache] v13 column absent - run archive/supabase_setup_v13.sql for garment categories");
-    ({ error } = await supabase.from("garment_cache")
-      .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields }], { onConflict: "canonical_url" }));
-  }
-  if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-    console.warn("[garment_cache] v12 columns absent - run archive/supabase_setup_v12.sql for duplicate-panel validation");
-    ({ error } = await supabase.from("garment_cache")
-      .upsert([{ ...base, ...canonical, ...v8Fields, ...v11Fields }], { onConflict: "canonical_url" }));
-    if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-      console.warn("[garment_cache] v11 columns absent - run archive/supabase_setup_v11.sql for kids/adult classification");
-      ({ error } = await supabase.from("garment_cache")
-        .upsert([{ ...base, ...canonical, ...v8Fields }], { onConflict: "canonical_url" }));
-      if (error && MISSING_COLUMN_RE.test(error.message || "")) {
-        console.warn("[garment_cache] v8 columns absent - run archive/supabase_setup_v8.sql for full diagnostics");
-        ({ error } = await supabase.from("garment_cache").upsert([base], { onConflict: "image_url" }));
-      }
-    }
-  }
+  /* ONE write, schema-adaptive (upsertGarmentCacheRow). THE BUG THIS CLOSES (2026-09):
+     production ran V9 (canonical_url) and V11 (age_group/age_group_confidence) WITHOUT
+     V8 (confidence/source/cue/product_url) ever having been migrated onto garment_cache
+     - see the commit that added scanner/backfill-age-group.js, which had to hand-confirm
+     the live column list via information_schema because v8Fields kept getting every
+     UPDATE rejected. The first fix (b730ef8) tried "no v8" before the version ladder,
+     but that retry still carried v12/v13/v14 - so a table missing any of those fell to
+     the bare v5 row and age_group was still dropped from every live write. Dropping
+     exactly the column the error names keeps age_group whenever its column exists. */
+  const { error } = await upsertGarmentCacheRow(
+    { ...base, ...canonical, ...v8Fields, ...v11Fields, ...v12Fields, ...v13Fields, ...v14Fields });
   if (error) console.warn("[garment_cache] write failed:", error.message);
 }
 
@@ -2937,8 +2995,9 @@ app.post("/api/store-catalog", storeCatalogLimiter, async (req, res) => {
 
 /* The store's own size guides, captured once per store by the scanner
    (`--size-charts --save`, table from archive/supabase_setup_v15.sql). The room calls
-   this ONLY when the widget could not read a chart off the product page, and applies
-   the result ONLY as the fine-tune tie-break (CLAUDE.md §2.5b). Clamps are re-applied
+   this whenever it knows the store host; a matching chart decides the adult size when
+   the body places clearly on it, else it is the fine-tune overlay (CLAUDE.md §2.5b as
+   changed 2026-10-03). It never reaches the height/weight kernel. Clamps are re-applied
    on every read and every failure answers an empty list - see lib/store-size-charts.js. */
 app.get("/api/store-size-chart", storeCatalogLimiter, makeStoreSizeChartHandler(() => supabase));
 

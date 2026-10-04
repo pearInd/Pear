@@ -405,6 +405,14 @@
                       block onto a bare express app and asserts both halves - private paths
                       404 (an absence, so a new "just serve the root" line fails), public
                       ones still load, and ../ cannot climb out of a public directory.
+     ready-signal-signals
+                      "The kids verdict never reached the room." Once the classify call
+                      settles the widget sends one of three PEAR_UPDATE_GARMENT messages,
+                      and only the full re-anchor one carried the product signals. The
+                      ready signal (classifier AGREED - the common path) and the failure
+                      signal carried nothing, so garment_age_group and any size list that
+                      resolved after the click were silently dropped. Runs the widget for
+                      real in jsdom and asserts the CONTENTS of all three messages.
      scanner-extraction
                       The store scanner's HTML-scrape path (non-Shopify stores): no
                       SVG, no header/nav/footer image, one entry per photo, JSON-LD
@@ -484,6 +492,7 @@ const SUITES = [
   ["size-chart-overlay", "size-chart-overlay.test.mjs"],
   ["jsonld-sizes", "jsonld-sizes.test.mjs"],
   ["size-chart-parser-sync", "size-chart-parser-sync.test.mjs"],
+  ["size-chart-shared-fixes", "size-chart-shared-fixes.test.mjs"],
   ["scanner-size-charts", "scanner-size-charts.test.mjs"],
   ["store-size-chart-api", "store-size-chart-api.test.mjs"],
   ["stored-size-chart", "stored-size-chart.test.mjs"],
@@ -502,6 +511,9 @@ const SUITES = [
   ["return-side", "return-side.test.mjs"],
   ["cloak", "cloak.test.mjs"],
   ["rt-proxy", "rt-proxy.test.mjs"],
+  ["store-chart-recommendation", "store-chart-recommendation.test.mjs"],
+  ["ready-signal-signals", "ready-signal-signals.test.mjs"],
+  ["garment-cache-age-group", "garment-cache-age-group.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

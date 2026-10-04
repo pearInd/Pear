@@ -364,8 +364,9 @@ console.log("\n── §8 the wire ──");
   const ev = wire();
   check("§8.1 only the adult charts travel (the pick never reads another)", ev.storedCharts.length === 1);
   check("§8.2 every field the pick and the overlay read survives the sanitiser unchanged",
+    /* size_system since main 0fccee8: the pick names it, and a store keeps one chart per size system (v16). */
     JSON.stringify(ev.storedCharts[0]) === JSON.stringify({ gender: "women", age_group: "adult", garment_type: "tops",
-      source: "linked_page", rows: served.rows.map((r) => ({ size: r.size, minChest: r.minChest, maxChest: r.maxChest,
+      source: "linked_page", size_system: "eu", rows: served.rows.map((r) => ({ size: r.size, minChest: r.minChest, maxChest: r.maxChest,
         ...(r.aliases ? { aliases: r.aliases } : {}) })) }), JSON.stringify(ev.storedCharts[0]));
   check("§8.3 the garment gender rides with them", ev.garmentGender === "women");
   const junk = SIZING.sanitizeStoredCharts(Array.from({ length: 90 }, () => ({ rows: Array.from({ length: 500 }, () => ({ size: "x".repeat(99), minChest: "9", aliases: { "EVIL KEY": "M", eu: { x: 1 } } })) })));
