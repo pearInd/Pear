@@ -60,8 +60,12 @@ console.log("\n── §3 the client ──");
 {
   check("§3.1 only the \"ref\" mode points the render client's REST base at our edge",
     /\.\.\.\(typeof EXP_REF !== "undefined" && EXP_REF && typeof expFilesBase === "function" && expFilesBase\(\) \? \{ baseUrl: expFilesBase\(\) \} : \{\}\)/.test(APP));
-  const base = new Function("rtEdgeUrl", between(APP, "function expFilesBase() {", "\n/** Upload the session") + "\nreturn expFilesBase();")(() => "wss://rt.example.io");
-  check("§3.2 ...which is our host's https /f, never the engine's", base === "https://rt.example.io/f", base);
+  const baseOf = (edge) => new Function("rtEdgeUrl", between(APP, "function expFilesBase() {", "\n/** Upload the session") + "\nreturn expFilesBase();")(() => edge);
+  /* The built room's realtime URL carries its path (`${EDGE.ws}/v`, scripts/build.mjs) - the first real "ref" session
+     posted to /v/f/... because this check only ever saw a bare origin. */
+  const base = baseOf("wss://rt.example.io/v"), bare = baseOf("wss://rt.example.io"), local = baseOf("ws://127.0.0.1:8787/v");
+  check("§3.2 ...which is our host's https /f (the edge's ORIGIN, whatever path the realtime URL carries), never the engine's",
+    base === "https://rt.example.io/f" && bare === "https://rt.example.io/f" && local === "http://127.0.0.1:8787/f", `${base} ${bare} ${local}`);
   const expCode = between(APP, "/* ── THE ENGINE-SPEED EXPERIMENT (2026-10-04)", "\nfunction garmentBlobCached(url) {");
   check("§3.3 the experiment names no engine host - its uploads only ever go to our edge", !VENDOR_WORDS.test(expCode) && !/https?:\/\/[a-z]/i.test(expCode));
 }

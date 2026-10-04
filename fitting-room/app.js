@@ -7233,9 +7233,14 @@ async function expDownscale(blob) {
 /* The "ref" mode: Blob -> the engine's file id, once uploaded. withPreEncodedReferences() sends the id in its place. */
 const _expFileIds = new WeakMap();
 let _expFilesClient = null;
-/** The edge's file route for the render client (`baseUrl`) - our host, never the engine's. */
+/** The edge's file route for the render client (`baseUrl`) - our host, never the engine's. The edge's ORIGIN + /f:
+ *  the realtime URL carries its own path (`wss://<edge>/v`), and the first real "ref" session posted to /v/f/... - a
+ *  route the edge does not have (a 404 without CORS, "Failed to fetch"; 2026-10-04). */
 function expFilesBase() {
-  try { return String(typeof rtEdgeUrl === "function" ? rtEdgeUrl() : "").replace(/^ws/i, "http").replace(/\/+$/, "") + "/f"; } catch (_) { return ""; }
+  try {
+    const u = new URL(String(typeof rtEdgeUrl === "function" ? rtEdgeUrl() : "").replace(/^ws/i, "http"));
+    return u.origin + "/f";
+  } catch (_) { return ""; }
 }
 /** Upload the session's front and back once (the "ref" mode), before the back is primed. Resolves either way. */
 async function expUploadReferences(gen) {
