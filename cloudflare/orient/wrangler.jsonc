@@ -22,7 +22,9 @@
        only - the room names none of it. */
     "RT_SIGNAL_URL": "https://api3.decart.ai/v1/stream",
     "RT_MODEL": "lucy-vton-3.5",
-    "RT_TELEMETRY_URL": "https://platform.decart.ai/api/v1/telemetry"
+    "RT_TELEMETRY_URL": "https://platform.decart.ai/api/v1/telemetry",
+    /* The render client's file uploads (/f/v1/files - the engine-speed experiment, TEST sessions only). */
+    "RT_FILES_URL": "https://api.decart.ai/v1/files"
   },
   /* The pose model's binaries, scrambled (scripts/build-edge-assets.mjs - run it before a deploy; the
      directory is generated and git-ignored). The Worker runs first so /a/ answers carry CORS. */

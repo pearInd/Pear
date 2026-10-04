@@ -931,11 +931,13 @@ let _orientSendMark = null;
  * @returns {Promise<boolean>} false only when a skipIfBusy call declined to send
  */
 /* THE ENGINE'S PACE (2026-10-04) - how long the render engine takes to acknowledge an IMAGE this session (the full
-   reference writes: applyGarment, applyLook, primeBack - never a prompt-only write, which acks in ~50ms). The orientation
+   reference writes: applyGarment, applyLook - never a prompt-only write, which acks in ~50ms, nor the back's first send). The orientation
    engine times the return to the front by it (lib/orient-engine.js LEAD_BASE_MS): the PEAK tee's acks ran 323-743ms where
    a light product's ran 130-250ms, and a front sent at the side landed ~0.5s late on a fast turn. The median of the last
    three - one slow FIRST send of an image (the back's prime) does not move it. Reset with the wire, per session. */
-const ENGINE_PACE_LABELS = new Set(["applyGarment", "applyLook", "primeBack"]);
+/* Not "primeBack": the back's prime is its FIRST send, which this engine always takes longer over (0.7-2.2s) - the pace
+   that times a turn is the REPEAT swap's. Counted, it read a fast engine as slow and held every back (the twin, 2026-10-04). */
+const ENGINE_PACE_LABELS = new Set(["applyGarment", "applyLook"]);
 let _engineAckMs = [];
 function noteEngineAck(ms) {
   if (!Number.isFinite(ms) || ms < 0) return;
@@ -947,6 +949,11 @@ function engineAckEstimate() {
   if (!_engineAckMs.length) return null;
   const a = _engineAckMs.slice().sort((x, y) => x - y);
   return a[a.length >> 1];
+}
+/** @returns {number|null} the SLOWEST of those three - the engine the back gate must plan for (one slow ack is what
+ *  put the back print on the chest, 2026-10-04), or null before the first */
+function engineAckHigh() {
+  return _engineAckMs.length ? Math.max(..._engineAckMs) : null;
 }
 
 function sendCondition(label, send, { skipIfBusy = false } = {}) {
@@ -6499,7 +6506,10 @@ async function connectRealtime({ force = false } = {}) {
         : { debug() {}, info() {}, warn: rtNote("rt-warn"), error: rtNote("rt-err") };
       /* realtimeBaseUrl - our edge, never the engine's host (rtEdgeUrl, 2026-10-03). typeof-guarded: signaling-retry
          runs this function standalone. */
-      const client = createClient({ apiKey: ekToken, realtimeBaseUrl: typeof rtEdgeUrl === "function" ? rtEdgeUrl() : undefined, logger: rtLogger });
+      const client = createClient({ apiKey: ekToken, realtimeBaseUrl: typeof rtEdgeUrl === "function" ? rtEdgeUrl() : undefined, logger: rtLogger,
+        /* THE ENGINE-SPEED EXPERIMENT's "ref" mode only: the client's file uploads go to our edge, never the engine's host. */
+        ...(typeof EXP_REF !== "undefined" && EXP_REF && typeof expFilesBase === "function" && expFilesBase() ? { baseUrl: expFilesBase() } : {}) });
+      if (typeof EXP_REF !== "undefined" && EXP_REF) _expFilesClient = client.files || null;
       console.log("[PEAR] connectRealtime() - stage 4/4: opening WebRTC session (waiting for 'connected')…");
 
       /* Bug 3 fix: work off a CLONE of the camera tracks so disconnect/teardown never
@@ -7184,6 +7194,71 @@ function lruSet(map, key, value, max = BLOB_CACHE_MAX) {
 
 const _assetBlobCache = new Map();   // url → Promise<Blob|null>  (LRU-capped, see above)
 
+/* ── THE ENGINE-SPEED EXPERIMENT (2026-10-04) ──────────────────────────────────────────────────────────────────────
+   The PEAK tee's references are acknowledged in 323-1,582ms where the OASIS tee's took 130-250ms, and on a fast turn that is
+   the back print on the chest (CLAUDE.md §2.28). The owner approved 3-4 short real sessions to find out what makes the
+   engine accept a reference faster. TEST SESSIONS ONLY (traceEnabled - store key TEST or ?pear_trace=1), chosen by
+   ?pear_exp=:  "small"     - every reference downscaled to EXP_SMALL_W wide before it is sent;
+                "ref"       - both references uploaded ONCE at connect (through our edge, /f) and every later send is the
+                              file id the engine already holds;
+                "small-ref" - both.
+   A shopper's session, or no flag: nothing here runs. The TEST record carries the mode (ctx.exp) and each upload. */
+const PEAR_EXP = (() => {
+  try {
+    if (!(typeof traceEnabled === "function" && traceEnabled())) return "";
+    const v = new URLSearchParams(location.search).get("pear_exp") || "";
+    return v === "small" || v === "ref" || v === "small-ref" ? v : "";
+  } catch (_) { return ""; }
+})();
+const EXP_SMALL = PEAR_EXP === "small" || PEAR_EXP === "small-ref";
+const EXP_REF = PEAR_EXP === "ref" || PEAR_EXP === "small-ref";
+const EXP_SMALL_W = 640;
+/** The "small" mode: a reference no wider than EXP_SMALL_W (JPEG 0.9). Never fails - the original on any error. */
+async function expDownscale(blob) {
+  try {
+    if (!blob || typeof createImageBitmap !== "function") return blob;
+    const bmp = await createImageBitmap(blob);
+    if (bmp.width <= EXP_SMALL_W) { bmp.close?.(); return blob; }
+    const w = EXP_SMALL_W, h = Math.round((bmp.height * EXP_SMALL_W) / bmp.width);
+    const off = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(w, h)
+      : Object.assign(document.createElement("canvas"), { width: w, height: h });
+    off.getContext("2d", { alpha: false }).drawImage(bmp, 0, 0, w, h);
+    bmp.close?.();
+    const out = off.convertToBlob ? await off.convertToBlob({ type: "image/jpeg", quality: 0.9 })
+      : await new Promise((res) => off.toBlob(res, "image/jpeg", 0.9));
+    if (typeof traceOrient === "function") traceOrient("exp-small", { from: Math.round(blob.size / 1024), to: out ? Math.round(out.size / 1024) : null });
+    return out && out.size ? out : blob;
+  } catch (_) { return blob; }
+}
+/* The "ref" mode: Blob -> the engine's file id, once uploaded. withPreEncodedReferences() sends the id in its place. */
+const _expFileIds = new WeakMap();
+let _expFilesClient = null;
+/** The edge's file route for the render client (`baseUrl`) - our host, never the engine's. */
+function expFilesBase() {
+  try { return String(typeof rtEdgeUrl === "function" ? rtEdgeUrl() : "").replace(/^ws/i, "http").replace(/\/+$/, "") + "/f"; } catch (_) { return ""; }
+}
+/** Upload the session's front and back once (the "ref" mode), before the back is primed. Resolves either way. */
+async function expUploadReferences(gen) {
+  if (!EXP_REF || !_expFilesClient || typeof activeItem === "undefined" || !activeItem) return;
+  const item = activeItem;
+  const g = typeof galleryOf === "function" ? galleryOf(item) : {};
+  const urls = [["front", g.front || item.img || null], ["back", typeof distinctBackOf === "function" ? distinctBackOf(item, g) : null]];
+  await Promise.all(urls.map(async ([which, url]) => {
+    if (!url) return;
+    const blob = await garmentBlobCached(url);
+    if (!blob || gen !== sessionGen) return;
+    const t0 = Date.now();
+    try {
+      const r = await _expFilesClient.upload(blob, { ttlSeconds: 3600 });
+      const id = r && (r.id || r.file_id);
+      if (typeof id === "string" && id.startsWith("file_")) _expFileIds.set(blob, id);
+      if (typeof traceOrient === "function") traceOrient("exp-upload", { which, ms: Date.now() - t0, ok: !!id, kb: Math.round(blob.size / 1024) });
+    } catch (e) {
+      if (typeof traceOrient === "function") traceOrient("exp-upload", { which, ms: Date.now() - t0, ok: false, m: String(e?.message || e).slice(0, 120) });
+    }
+  }));
+}
+
 function garmentBlobCached(url) {
   console.log('[PEAR] garmentBlobCached url:', url);
   if (!url) { console.log('[PEAR] garmentBlobCached result:', 'miss'); return Promise.resolve(null); }
@@ -7203,7 +7278,9 @@ function garmentBlobCached(url) {
         : await fetchWithFallback(url);
       if (!raw) { _assetBlobCache.delete(url); return null; }   // never cache a failure - allow a retry
       // These bytes go straight to rtClient.set({ image }) in AI Auto mode.
-      const blob = await normalizeToSupportedImage(raw);
+      const normalized = await normalizeToSupportedImage(raw);
+      /* THE ENGINE-SPEED EXPERIMENT's "small" mode (TEST sessions only). typeof-guarded: suites run this standalone. */
+      const blob = typeof EXP_SMALL !== "undefined" && EXP_SMALL && typeof expDownscale === "function" ? await expDownscale(normalized) : normalized;
       /* Encoded NOW, while nothing is waiting on it, so a swap that sends this Blob later does no
          encoding at all - see preEncodeReference(). Fire-and-forget; a failure costs nothing. */
       if (blob && typeof preEncodeReference === "function") preEncodeReference(blob);
@@ -7279,6 +7356,9 @@ function withPreEncodedReferences(client) {
   const rawSet = client.set;
   client.set = (input) => {
     const image = input && input.image;
+    /* THE ENGINE-SPEED EXPERIMENT's "ref" mode (TEST sessions only): the id of a reference the engine already holds. */
+    const fileId = typeof _expFileIds !== "undefined" && typeof Blob !== "undefined" && image instanceof Blob ? _expFileIds.get(image) : null;
+    if (fileId) return rawSet({ ...input, image: fileId });
     const job = typeof Blob !== "undefined" && image instanceof Blob ? _preEncodedRefs.get(image) : null;
     const dataUrl = job ? job.settled : null;
     return rawSet(dataUrl ? { ...input, image: dataUrl } : input);
@@ -10265,6 +10345,7 @@ function createOrientationWatcher() {
         ord: typeof _poseOrd === "number" ? _poseOrd : null, ordAt: typeof _poseOrdAt === "number" ? _poseOrdAt : 0,
         /* The engine's pace (THE ENGINE'S PACE): the return to the front goes out earlier on a slow engine. */
         lat: typeof engineAckEstimate === "function" ? engineAckEstimate() : null,
+        latHi: typeof engineAckHigh === "function" ? engineAckHigh() : null,
         lock: autoOrientation, profile: autoProfile, dualView: currentAngle === AUTO_ANGLE,
         dbg: ORIENT_DEBUG ? orientDebugFacts(vote) : undefined,
       }) : null;
@@ -10347,7 +10428,7 @@ function createOrientationWatcher() {
    parameters, and no others, are forwarded - the tuning knobs, never the garment, the
    store key or anything else on the page URL. */
 const ORIENT_KNOB_KEYS = ["pose_pass", "post_peak", "early_turn", "early_turn_return", "early_turn_slow",
-  "early_turn_speed", "early_turn_loss", "predict_back", "return_side", "lat_lead"];
+  "early_turn_speed", "early_turn_loss", "predict_back", "return_side", "lat_lead", "back_gate"];
 const ORIENT_LINK_STEP_TIMEOUT_MS = 1200;   // a healthy link answers in ~10ms; past this, prove it with a ping
 const ORIENT_LINK_STEP_HARD_MS = 4000;      // past this a reply is abandoned and the link replaced regardless
 const ORIENT_LINK_RETRY_MS = 3000;
@@ -10493,7 +10574,7 @@ function openOrientChannel() {
     shR: typeof _poseTwist !== "undefined" && _poseTwist && typeof _poseTwist.shR === "number" ? Math.round(_poseTwist.shR * 100) / 100 : null,
     /* The order the engine's return leg reads, with its age at this tick (THE CHEST COMES ROUND). */
     o: typeof s.ord === "number" ? Math.round(s.ord * 100) / 100 : null, oa: typeof s.ord === "number" && s.ordAt ? s.t - s.ordAt : null,
-    lt: typeof s.lat === "number" ? s.lat : null,
+    lt: typeof s.lat === "number" ? s.lat : null, lh: typeof s.latHi === "number" ? s.latHi : null,
     a: Array.isArray(acts) ? acts.filter((x) => x && x.do !== "log") : null,
   });
   return {
@@ -16200,6 +16281,7 @@ async function goLive() {
       item: String((activeItem && (activeItem.name || activeItem.title)) || "").slice(0, 80),
       pageMs: typeof performance !== "undefined" ? Math.round(performance.now()) : null,
       link: typeof _orientWs !== "undefined" && _orientWs ? _orientWs.readyState : null,
+      exp: typeof PEAR_EXP !== "undefined" && PEAR_EXP ? PEAR_EXP : undefined,
     });
   }
   /* The SELF-TIMER is read ONCE, here, for this go-live (see "CAMERA GUIDE + SELF-TIMER"): the
@@ -16437,7 +16519,12 @@ async function goLive() {
        had not finished settling. See applyConditioningWithRecovery(). */
     if (!await applyConditioningWithRecovery()) return;
     /* The back's one-time send, now that the garment is on (primeAtConnect) - fire-and-forget, hidden. */
-    if (typeof primeAtConnect === "function") primeAtConnect(sessionGen);
+    /* THE ENGINE-SPEED EXPERIMENT's "ref" mode (TEST sessions only): the references uploaded first, so the prime and every
+       swap after it send an id. Hidden, like the prime. */
+    if (typeof EXP_REF !== "undefined" && EXP_REF && typeof expUploadReferences === "function") {
+      const g = sessionGen;
+      expUploadReferences(g).catch(() => {}).then(() => { if (typeof primeAtConnect === "function" && g === sessionGen) primeAtConnect(g); });
+    } else if (typeof primeAtConnect === "function") primeAtConnect(sessionGen);
     // Log every garment being worn - both top AND bottom when a full look is active.
     const _trackSize = activeTryOnSize || currentUserSize;
     const _look = resolveLook();

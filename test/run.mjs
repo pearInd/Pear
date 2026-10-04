@@ -514,6 +514,7 @@ const SUITES = [
   ["store-chart-recommendation", "store-chart-recommendation.test.mjs"],
   ["ready-signal-signals", "ready-signal-signals.test.mjs"],
   ["garment-cache-age-group", "garment-cache-age-group.test.mjs"],
+  ["engine-exp", "engine-exp.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

@@ -982,6 +982,22 @@ hands-on-the-hem in its first second (the product photo has the hands down - an 
   shoulders still vote back on, |yaw| under 50, re-armed and ended the tick: the 04:55 session's -0.74). Both sessions,
   replayed from their own records (`test/return-side-pace.json`, `return-side` §3c): the return goes out a reading earlier
   (-0.74 / -0.53, 237 / 206ms sooner), every swap before it the record's own. Replay median 333 -> 299 degrees.
+- **THE BACK WAITS FOR AN ENGINE THAT CAN KEEP UP (`gateBack()`, after `armLine()` - the suites slice `step()` by text):**
+  the third session ("in one frame the back's drawing is on the front and the back at once, and after the turn it's on the
+  front") fired its return as early as the readings allowed (~245 degrees) and the engine took **1,582ms** to accept it -
+  the back print on both sides in profile, then on the chest. On a ~2.5s 360 a BACK and a FRONT cannot both land. Asked,
+  the owner chose a guarantee now AND a faster engine next. A BACK is HELD (`backHeld`, the lock stays FRONT, a plain back)
+  when its return - firing at the earliest at ~240 degrees - would land past ~295 at the turn's average speed and a SLOW
+  ack (twice the median of the last three repeat acks, or their slowest: `lat`/`latHi`); a turn once held stays held until
+  the shopper is square to the lens again (without that latch a vote-confirmed BACK passed on the return leg and landed at
+  360 - the twin, m5). The back's first send (the prime) is not a pace sample - counted, it read a fast engine as slow.
+  Twin: a slow engine holds the back on every fast clip (back-on-front 0), a fast engine shows it (52-62 -> 269-276);
+  `return-side` §3d (the three sessions held, a fast engine and a 3x slower turn not, the latch, no engine = the rule).
+  **The cost, stated:** with this engine's pace on this tee, a 5-second measurement shows a plain back on almost any turn.
+- **THE ENGINE-SPEED EXPERIMENT (TEST sessions only, `?pear_exp=small|ref|small-ref`, `engine-exp`):** "small" sends each
+  reference downscaled to 640px; "ref" uploads both references once at connect through the edge (`/f/v1/files` ->
+  `RT_FILES_URL`, the sealed key opened) and sends the file id after that. The record carries `ctx.exp`, `exp-small` and
+  `exp-upload`. The owner approved 3-4 short real sessions to measure which (if any) brings the acks down.
 - **The camera bridge is off** (§2.9) - `stream-continuity` pins the default.
 
 ## 3. Cross-file lockstep

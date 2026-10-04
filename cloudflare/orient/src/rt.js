@@ -17,7 +17,8 @@
    "not allowed" / "401" / "unauthorized" to stop retrying a permanent failure. A bare failed
    upgrade (1006, no reason) would make it retry five times with back-off before giving up.
    ============================================================================= */
-import { engineSignalUrl, frameToEngine, frameToRoom, engineMediaUrl, openBearer, telemetryToEngine, roomErrorText, NO_CREDITS } from "../../../lib/rt-proxy.js";
+import { engineSignalUrl, frameToEngine, frameToRoom, engineMediaUrl, openBearer, telemetryToEngine, roomErrorText, NO_CREDITS,
+  openTicket, RT_UA } from "../../../lib/rt-proxy.js";
 
 /* A close reason as the room reads it - scrubbed, and a credit refusal made final (rt-proxy roomErrorText). */
 const scrubReason = (s) => String(roomErrorText(String(s || ""))).slice(0, 120);
@@ -72,7 +73,7 @@ function refused(code, reason) {
 /** @returns {Promise<Response>|null} null when the path is not the render engine's */
 export function handleRt(request, env, url, originOk) {
   const p = url.pathname;
-  if (!(p === "/v/s" || p.startsWith("/k/") || p === "/m" || p.startsWith("/a/"))) return null;
+  if (!(p === "/v/s" || p.startsWith("/k/") || p === "/m" || p.startsWith("/a/") || p.startsWith("/f/"))) return null;
   const origin = request.headers.get("Origin");
   if (p.startsWith("/a/")) return assets(request, env, origin, originOk);
   if (!originOk) return Promise.resolve(new Response("forbidden", { status: 403 }));
@@ -101,6 +102,27 @@ export function handleRt(request, env, url, originOk) {
       const r = await fetch(target, { method: request.method === "HEAD" ? "HEAD" : "GET", headers });
       const body = request.method === "HEAD" ? null : scrubReason(await r.text());
       return new Response(body, { status: r.status, headers: { ...cors(origin), "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
+    })();
+  }
+
+  /* /f/v1/files - the render client's file upload (THE ENGINE-SPEED EXPERIMENT's "ref" mode, app.js - TEST sessions only):
+     the multipart body passed as sent, the sealed key opened, the room's user agent mapped back; the answer (the file id)
+     comes back with the engine's name scrubbed. Nothing else under /f/ is forwarded. */
+  if (p.startsWith("/f/")) {
+    if (request.method === "OPTIONS") return Promise.resolve(new Response(null, { status: 204, headers: cors(origin, "POST, OPTIONS") }));
+    if (request.method !== "POST" || p !== "/f/v1/files" || !env.RT_FILES_URL) return Promise.resolve(new Response("not found", { status: 404, headers: cors(origin) }));
+    const key = openTicket(request.headers.get("X-API-KEY") || "");
+    if (!key) return Promise.resolve(new Response("unauthorized", { status: 401, headers: cors(origin) }));
+    return (async () => {
+      const headers = { "X-API-KEY": key, "User-Agent": String(request.headers.get("User-Agent") || "").split(RT_UA.room).join(RT_UA.engine) };
+      const ct = request.headers.get("Content-Type");
+      if (ct) headers["Content-Type"] = ct;
+      let r;
+      try { r = await fetch(env.RT_FILES_URL, { method: "POST", headers, body: request.body }); }
+      catch { return new Response("upstream unreachable", { status: 502, headers: cors(origin) }); }
+      const text = await r.text();
+      return new Response(text.replace(/decart/gi, "render engine").replace(/livekit/gi, "media"),
+        { status: r.status, headers: { ...cors(origin, "POST, OPTIONS"), "Content-Type": "application/json", "Cache-Control": "no-store" } });
     })();
   }
 

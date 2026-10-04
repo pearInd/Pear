@@ -331,7 +331,7 @@ console.log("\n── §3c the two PEAK sessions of 2026-10-04, from their own r
   };
   for (const [name, rec, latFor] of [["04:55", PACE["m1-0455"], () => 770], ["05:55", PACE["m2-0555"], (k) => k.lt]]) {
     const recorded = rec.ticks.filter((k) => k.sw.length).map((k) => ({ next: k.sw[0], t: k.t - rec.reveal, o: k.o }));
-    const off = replay(rec, { lat_lead: "0" }, latFor), on = replay(rec, {}, latFor);
+    const off = replay(rec, { lat_lead: "0", back_gate: "0" }, latFor), on = replay(rec, { back_gate: "0" }, latFor);
     const ret = (sw) => sw.find((x, i) => x.next === "front" && sw.slice(0, i).some((y) => y.next === "back"));
     const recF = ret(recorded), offF = ret(off), onF = ret(on);
     check(`§3c ${name}: the replay without the pace is the record's own decisions (the return on the side reading, o=${recF && recF.o})`,
@@ -341,6 +341,72 @@ console.log("\n── §3c the two PEAK sessions of 2026-10-04, from their own r
     check(`§3c ${name}: the outbound BACK and every swap before the return are the record's`,
       JSON.stringify(on.slice(0, on.indexOf(onF))) === JSON.stringify(off.slice(0, off.indexOf(offF))), JSON.stringify({ on, off }));
   }
+}
+
+console.log("\n── §3d THE BACK WAITS FOR AN ENGINE THAT CAN KEEP UP - the three PEAK sessions of 2026-10-04 ──");
+{
+  /* The 17:02 session: the return FRONT went out as early as the readings allowed (~245 degrees) and the engine took 1,582ms
+     to accept it - the back print on both sides in profile, then on the chest to the end. Each session's gate sees what its
+     room knew at the outbound BACK: the median (`lt`, or 734 for 04:55 before it was recorded) and the slowest ack so far. */
+  const run3 = (rec, knobs, lat, latHi, stretch = 1) => {
+    const engine = E.createOrientEngine(E.sanitizeOrientKnobs(knobs));
+    let l = rec.ticks[0].l; const sent = [], held = [];
+    const t0 = rec.ticks[0].t;
+    for (const k of rec.ticks) {
+      const t = t0 + (k.t - t0) * stretch, age = (x) => (x ?? 0) * stretch;
+      const acts = engine.step(E.sanitizeOrientSample({ t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
+        yawAbs: k.y, yawAt: k.y === null ? 0 : t - age(k.ya), lostAt: k.la === null ? 0 : t - age(k.la),
+        ord: k.o, ordAt: k.o === null ? 0 : t - age(k.oa), lat: lat(k), latHi, lock: l, profile: !!k.p, dualView: !!k.d }));
+      for (const a of acts) {
+        if (a.do === "backHeld") held.push(a);
+        if (a.do === "swap" && a.next !== l) { sent.push(a.next); l = a.next; }
+      }
+    }
+    return { sent: sent.slice(1), held };   // the first FRONT is the session's acquire
+  };
+  const SESS = [["04:55", PACE["m1-0455"], () => 734, 734], ["05:55", PACE["m2-0555"], (k) => k.lt, 521], ["17:02", PACE["m3-1702"], (k) => k.lt, 715]];
+  for (const [name, rec, lat, latHi] of SESS) {
+    const gated = run3(rec, {}, lat, latHi), open = run3(rec, { back_gate: "0" }, lat, latHi);
+    check(`§3d ${name}: without the gate the session sends BACK then FRONT (what the clip showed)`,
+      open.sent[0] === "back" && open.sent.includes("front"), JSON.stringify(open));
+    check(`§3d ${name}: with it the BACK is HELD - no back print on the wire for the chest to wear, the front stays on`,
+      !gated.sent.includes("back") && gated.held.length >= 1 && gated.held[0].lands > 295, JSON.stringify(gated));
+  }
+  const rec = PACE["m3-1702"];
+  const fast = run3(rec, {}, () => 150, 190);
+  check("§3d.1 a fast engine (acks ~150ms) sends the BACK on the same turn - the gate only holds what cannot land in time",
+    fast.sent[0] === "back" && fast.held.length === 0, JSON.stringify(fast));
+  const slowTurn = run3(rec, {}, (k) => k.lt, 715, 3);
+  check("§3d.2 the same turn three times slower (a ~7.5s 360) gets its BACK on the slow engine",
+    slowTurn.sent[0] === "back", JSON.stringify(slowTurn));
+  /* THE LATCH: a turn once held stays held until the shopper is square to the lens again - a later BACK on the way round
+     (a vote-confirmed one, its average speed decayed) must not land the back print on the chest. */
+  {
+    const engine = E.createOrientEngine(E.sanitizeOrientKnobs({}));
+    const tick = (t, o, vote, lock, yaw = 30) => engine.step(E.sanitizeOrientSample({ t, vote, faceSeen: false, poseVoted: !!vote, profileScore: 0,
+      yawAbs: yaw, yawAt: t, lostAt: 0, ord: o, ordAt: t, lat: 540, latHi: 680, lock, profile: false, dualView: true }));
+    const swapsOf = (acts) => acts.filter((a) => a.do === "swap").map((a) => a.next);
+    const heldOf = (acts) => acts.filter((a) => a.do === "backHeld");
+    tick(0, 1, "front", null, 3); tick(250, 1, "front", "front", 3);
+    let held = 0, backs = 0, t = 500;
+    for (const [o, v] of [[0.8, "front"], [0.4, null], [-0.3, "back"], [-0.8, "back"], [-1, "back"], [-1, "back"], [-1, "back"]]) {
+      const a = tick(t, o, v, "front", 60); held += heldOf(a).length; backs += swapsOf(a).filter((x) => x === "back").length; t += 250;
+    }
+    /* ...the shopper holds the back 3s (the average speed decays below the bar), then comes round */
+    for (let k = 0; k < 12; k++, t += 250) { const a = tick(t, -1, "back", "front", 5); held += heldOf(a).length; backs += swapsOf(a).filter((x) => x === "back").length; }
+    for (const o of [-0.5, 0, 0.5]) { const a = tick(t, o, null, "front", 70); held += heldOf(a).length; backs += swapsOf(a).filter((x) => x === "back").length; t += 250; }
+    check("§3d.4 a turn once held stays held to the end of the turn - no BACK reaches the wire on the way round", held >= 1 && backs === 0, JSON.stringify({ held, backs }));
+    tick(t, 1, "front", "front", 3); t += 250; tick(t, 1, "front", "front", 3); t += 6000;
+    /* square on the lens again: a fresh, SLOW turn (~0.7s a reading - a ~7s 360) gets its back on this engine */
+    let sent = false;
+    for (const [o, v, y] of [[1, "front", 3], [0.9, "front", 20], [0.7, "front", 40], [0.4, null, 60], [0.1, null, 80], [-0.3, "back", 70],
+      [-0.7, "back", 40], [-1, "back", 10], [-1, "back", 5], [-1, "back", 5]]) {
+      sent = sent || swapsOf(tick(t, o, v, "front", y)).includes("back"); t += 700;
+    }
+    check("§3d.5 ...and the next turn starts afresh: a slow one gets its BACK", sent);
+  }
+  const blind = run3(rec, {}, () => null, null);
+  check("§3d.3 a room that measures no engine is the rule exactly (the back as before)", JSON.stringify(blind) === JSON.stringify(run3(rec, { back_gate: "0" }, () => null, null)));
 }
 
 console.log("\n── §4 thirteen real 360s, at four tick phases ──");
@@ -414,8 +480,8 @@ console.log("\n── §4b the engine's pace: a slow engine's return goes out ea
         return { back: b ? b.t : null, front: f ? Math.round(th(f.t - landAt(ack))) : null, n: sw.length }; };
       const none = roomRun(rows, { phase });
       const fast = roomRun(rows, { phase, lat: FAST });
-      const slowOff = roomRun(rows, { phase, lat: SLOW, knobs: { lat_lead: "0" } });
-      const slowOn = roomRun(rows, { phase, lat: SLOW });
+      const slowOff = roomRun(rows, { phase, lat: SLOW, knobs: { lat_lead: "0", back_gate: "0" } });
+      const slowOn = roomRun(rows, { phase, lat: SLOW, knobs: { back_gate: "0" } });
       res.push({ name, phase, same: JSON.stringify(none) === JSON.stringify(fast), fast: ret(fast, FAST), off: ret(slowOff, SLOW), on: ret(slowOn, SLOW) });
     }
   }
@@ -458,8 +524,8 @@ console.log("\n── §5 the wiring ──");
   /* THE ENGINE'S PACE. */
   check("§5.8 the tick sends the engine's pace, typeof-guarded",
     /lat: typeof engineAckEstimate === "function" \? engineAckEstimate\(\) : null,/.test(APP));
-  check("§5.9 ...measured on every image write and only those (never a prompt-only write), reset with the wire",
-    /const ENGINE_PACE_LABELS = new Set\(\["applyGarment", "applyLook", "primeBack"\]\);/.test(APP) &&
+  check("§5.9 ...measured on every REPEAT image write (never a prompt-only write, nor the back's first send), reset with the wire",
+    /const ENGINE_PACE_LABELS = new Set\(\["applyGarment", "applyLook"\]\);/.test(APP) &&
     /await send\(\);\s*\n\s*if \(ENGINE_PACE_LABELS\.has\(label\)\) noteEngineAck\(Date\.now\(\) - sentAt\);/.test(APP) &&
     /function resetConditionWire\(\) \{\s*\n\s*wireEpoch\+\+;\s*\n\s*_engineAckMs = \[\];/.test(APP));
   {
@@ -474,6 +540,22 @@ console.log("\n── §5 the wiring ──");
   check("§5.11 the sanitiser bounds the pace (0-5000ms); junk is 'not measured'", lj.lat === null && lb.lat === 5000 && ln.lat === 0);
   check("§5.12 both knob lists carry lat_lead, and the TEST record logs the pace", E.ORIENT_KNOB_KEYS.includes("lat_lead") &&
     /const ORIENT_KNOB_KEYS = \[[^\]]*"lat_lead"/.test(APP) && /lt: typeof s\.lat === "number" \? s\.lat : null,/.test(APP));
+  /* THE BACK GATE. */
+  check("§5.13 the tick sends the slowest recent ack too, typeof-guarded, and the record logs it",
+    /latHi: typeof engineAckHigh === "function" \? engineAckHigh\(\) : null,/.test(APP) && /lh: typeof s\.latHi === "number" \? s\.latHi : null/.test(APP));
+  {
+    const ctx = new Function(between(APP, "const ENGINE_PACE_LABELS", "\nfunction sendCondition(") +
+      "\nreturn { noteEngineAck, engineAckHigh };")();
+    const a = ctx.engineAckHigh(); ctx.noteEngineAck(715); ctx.noteEngineAck(527); const b = ctx.engineAckHigh();
+    ctx.noteEngineAck(300); ctx.noteEngineAck(280); const c = ctx.engineAckHigh();
+    check("§5.14 engineAckHigh: null before any ack, the slowest of the last three", a === null && b === 715 && c === 527, JSON.stringify([a, b, c]));
+  }
+  const hj = E.sanitizeOrientSample({ latHi: "x" }), hb = E.sanitizeOrientSample({ latHi: 99999 });
+  check("§5.15 the sanitiser bounds latHi like lat; both knob lists carry back_gate", hj.latHi === null && hb.latHi === 5000 &&
+    E.ORIENT_KNOB_KEYS.includes("back_gate") && /const ORIENT_KNOB_KEYS = \[[^\]]*"back_gate"/.test(APP));
+  check("§5.16 the gate wraps step() from outside (the suites slice step() by text) and is what the engine exports",
+    /const gatedStep = \(s\) => gateBack\(s, step\(s\)\);/.test(ENGINE_SRC) && /return \{\s*\n\s*step: gatedStep,/.test(ENGINE_SRC) &&
+    ENGINE_SRC.indexOf("function gateBack(") > ENGINE_SRC.indexOf("function armLine()"));
 }
 
 console.log(`\n${fails ? `✗ ${fails} failed` : "✓ all passed"}`);
