@@ -930,6 +930,25 @@ let _orientSendMark = null;
  * @param {() => Promise<any>} send  performs the actual rtClient.set()/setPrompt()
  * @returns {Promise<boolean>} false only when a skipIfBusy call declined to send
  */
+/* THE ENGINE'S PACE (2026-10-04) - how long the render engine takes to acknowledge an IMAGE this session (the full
+   reference writes: applyGarment, applyLook, primeBack - never a prompt-only write, which acks in ~50ms). The orientation
+   engine times the return to the front by it (lib/orient-engine.js LEAD_BASE_MS): the PEAK tee's acks ran 323-743ms where
+   a light product's ran 130-250ms, and a front sent at the side landed ~0.5s late on a fast turn. The median of the last
+   three - one slow FIRST send of an image (the back's prime) does not move it. Reset with the wire, per session. */
+const ENGINE_PACE_LABELS = new Set(["applyGarment", "applyLook", "primeBack"]);
+let _engineAckMs = [];
+function noteEngineAck(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return;
+  _engineAckMs.push(Math.round(ms));
+  if (_engineAckMs.length > 3) _engineAckMs.shift();
+}
+/** @returns {number|null} the median of the session's last three image acks (ms), or null before the first */
+function engineAckEstimate() {
+  if (!_engineAckMs.length) return null;
+  const a = _engineAckMs.slice().sort((x, y) => x - y);
+  return a[a.length >> 1];
+}
+
 function sendCondition(label, send, { skipIfBusy = false } = {}) {
   if (skipIfBusy && wireBusy()) {
     console.log(`[PEAR] ${label}: a conditioning write is already in flight - skipped`,
@@ -954,8 +973,10 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
     /* Claimed HERE - after the stale-epoch bail above, immediately before the send reaches
        the SDK. A queued write that never gets this far never held the wire. */
     wireInFlight++;
+    const sentAt = Date.now();
     try {
       await send();
+      if (ENGINE_PACE_LABELS.has(label)) noteEngineAck(Date.now() - sentAt);
       return true;
     } finally {
       /* UNCONDITIONAL, unlike the epoch-scoped release beside it: the write was on the wire
@@ -980,6 +1001,7 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
    state; wireInFlight is transport state. */
 function resetConditionWire() {
   wireEpoch++;
+  _engineAckMs = [];   // the engine's pace is per session (THE ENGINE'S PACE)
   isSettingCondition = false;
   wireWrites = 0;
   wireQueue = Promise.resolve();
@@ -8458,6 +8480,16 @@ function syncOrientationWatcher() {
    garment, for the length of the stall. That is what a mirror shows when the render is
    late; a still of the garment was the alternative and was reported as unusable.
 
+   THE OWNER'S CALL, 2026-10-04 - THE CAMERA IS NO LONGER SHOWN (LIVE_CAMERA_BRIDGE, default off).
+   A measurement on the PEAK tee stalled three times in its 5s window (0.5-0.7s each, two of them at a
+   reference switch) and the bridge blended the shopper's own clothes in each time: "it kept going back
+   to the original camera and then to the video". Asked whether a held frame or the camera was better,
+   the answer was "make Decart live the whole measurement, from the moment it starts". So a stall now
+   holds the render's last frame (what #aiVideo does by itself when its stream pauses - nothing is laid
+   over it, §2.9's rule against still covers is untouched) and the layer only MEASURES: the stall and
+   resume events and out-stats are recorded exactly as before. ?live_camera=1 restores the bridge for
+   an A/B. The swap holds and still covers above stay off; they were the freezes this layer replaced.
+
    GEOMETRY IS BY CONSTRUCTION, NOT BY CSS LUCK. The canvas has #aiVideo's aspect and is
    filled with the SAME centre cover-crop createThrottledInputStream() sends Decart, and it
    carries #aiVideo's own CSS (object-fit:cover, the scaleX(-1) selfie flip) - so the body
@@ -8475,6 +8507,11 @@ const LIVE_STALL_REVEAL_MS    = 350;   // Decart output silent this long → bri
 const LIVE_CONTINUITY_FADE_MS = 220;   // cross-fade duration, both directions
 const LIVE_RESUME_FRAMES      = 2;     // consecutive output frames (each within the bar) before fading back
 const LIVE_CONTINUITY_MAX_W   = 960;   // canvas width cap - a bridge, not a capture surface
+
+/* The camera bridge itself - OFF since 2026-10-04 (the owner's call above); ?live_camera=1 restores it. */
+const LIVE_CAMERA_BRIDGE = (() => {
+  try { return new URLSearchParams(location.search).get("live_camera") === "1"; } catch (_) { return false; }
+})();
 
 /* Restore seams for the two freezes this replaced. Read once at load; both default OFF. */
 const SWAP_HOLDS_INPUT = (() => {
@@ -8615,13 +8652,15 @@ function startStreamContinuity() {
     const { alpha, event } = model.step(now, live);
     if (event && typeof traceOrient === "function") traceOrient("out-" + event.type, event);
     if (event && event.type === "stall") {
-      console.log(`[PEAR] stream continuity: render output silent for ${event.gapMs}ms - cross-fading the live camera in so the view keeps moving`);
+      console.log(`[PEAR] stream continuity: render output silent for ${event.gapMs}ms - ` +
+        (LIVE_CAMERA_BRIDGE ? "cross-fading the live camera in so the view keeps moving" : "holding the render's last frame"));
     } else if (event && event.type === "resume") {
-      console.log(`[PEAR] stream continuity: render output back after ${event.stalledMs}ms - cross-fading to the render`);
+      console.log(`[PEAR] stream continuity: render output back after ${event.stalledMs}ms` + (LIVE_CAMERA_BRIDGE ? " - cross-fading to the render" : ""));
     }
-    /* Draw BEFORE the opacity rises, so the first visible camera frame is a current one. */
-    const drawn = alpha > 0 ? drawContinuityFrame(c, cam, ai) : true;
-    const a = drawn ? alpha : 0;
+    /* Draw BEFORE the opacity rises, so the first visible camera frame is a current one. Without the
+       bridge (the default since 2026-10-04) nothing is drawn and the layer stays transparent. */
+    const drawn = LIVE_CAMERA_BRIDGE && alpha > 0 ? drawContinuityFrame(c, cam, ai) : true;
+    const a = LIVE_CAMERA_BRIDGE && drawn ? alpha : 0;
     if (a !== shownAlpha) { c.style.opacity = String(a); shownAlpha = a; }
     liveContinuityAlpha = a;
     raf = requestAnimationFrame(tick);
@@ -8637,12 +8676,16 @@ function startStreamContinuity() {
       c.style.opacity = "0";
       const secs = Math.max(0.001, (performance.now() - t0) / 1000);
       if (typeof traceOrient === "function") {
+        /* camMs: the camera on screen (0 without the bridge); stallMs: how long the output was silent past the bar. */
         traceOrient("out-stats", { camFps: camTimed ? Math.round(camFrames / secs) : null, outFps: Math.round(aiFrames / secs),
-          longestGap: Math.round(model.stats.longestGapMs), stalls: model.stats.stalls, camMs: Math.round(model.stats.cameraMs) });
+          longestGap: Math.round(model.stats.longestGapMs), stalls: model.stats.stalls,
+          camMs: LIVE_CAMERA_BRIDGE ? Math.round(model.stats.cameraMs) : 0, stallMs: Math.round(model.stats.cameraMs),
+          bridge: LIVE_CAMERA_BRIDGE });
       }
       console.log(`[PEAR] stream continuity: session - local camera ${camTimed ? (camFrames / secs).toFixed(0) + " fps" : "fps n/a"},` +
-        ` Decart output ${(aiFrames / secs).toFixed(0)} fps, longest output gap ${Math.round(model.stats.longestGapMs)}ms,` +
-        ` ${model.stats.stalls} stall(s) bridged with the live camera (${Math.round(model.stats.cameraMs)}ms on screen)`);
+        ` render output ${(aiFrames / secs).toFixed(0)} fps, longest output gap ${Math.round(model.stats.longestGapMs)}ms,` +
+        ` ${model.stats.stalls} stall(s) ` + (LIVE_CAMERA_BRIDGE ? `bridged with the live camera (${Math.round(model.stats.cameraMs)}ms on screen)`
+          : `held on the render's last frame (${Math.round(model.stats.cameraMs)}ms)`));
     },
   };
 }
@@ -10220,6 +10263,8 @@ function createOrientationWatcher() {
         /* The shoulder order as a share of square-on - the engine's return leg waits for the chest (THE CHEST COMES
            ROUND). typeof-guarded: the replay harnesses run this tick without the pose loop around it. */
         ord: typeof _poseOrd === "number" ? _poseOrd : null, ordAt: typeof _poseOrdAt === "number" ? _poseOrdAt : 0,
+        /* The engine's pace (THE ENGINE'S PACE): the return to the front goes out earlier on a slow engine. */
+        lat: typeof engineAckEstimate === "function" ? engineAckEstimate() : null,
         lock: autoOrientation, profile: autoProfile, dualView: currentAngle === AUTO_ANGLE,
         dbg: ORIENT_DEBUG ? orientDebugFacts(vote) : undefined,
       }) : null;
@@ -10302,7 +10347,7 @@ function createOrientationWatcher() {
    parameters, and no others, are forwarded - the tuning knobs, never the garment, the
    store key or anything else on the page URL. */
 const ORIENT_KNOB_KEYS = ["pose_pass", "post_peak", "early_turn", "early_turn_return", "early_turn_slow",
-  "early_turn_speed", "early_turn_loss", "predict_back", "return_side"];
+  "early_turn_speed", "early_turn_loss", "predict_back", "return_side", "lat_lead"];
 const ORIENT_LINK_STEP_TIMEOUT_MS = 1200;   // a healthy link answers in ~10ms; past this, prove it with a ping
 const ORIENT_LINK_STEP_HARD_MS = 4000;      // past this a reply is abandoned and the link replaced regardless
 const ORIENT_LINK_RETRY_MS = 3000;
@@ -10448,6 +10493,7 @@ function openOrientChannel() {
     shR: typeof _poseTwist !== "undefined" && _poseTwist && typeof _poseTwist.shR === "number" ? Math.round(_poseTwist.shR * 100) / 100 : null,
     /* The order the engine's return leg reads, with its age at this tick (THE CHEST COMES ROUND). */
     o: typeof s.ord === "number" ? Math.round(s.ord * 100) / 100 : null, oa: typeof s.ord === "number" && s.ordAt ? s.t - s.ordAt : null,
+    lt: typeof s.lat === "number" ? s.lat : null,
     a: Array.isArray(acts) ? acts.filter((x) => x && x.do !== "log") : null,
   });
   return {

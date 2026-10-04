@@ -1840,10 +1840,10 @@ console.log("\n── §11 THE EARLY TURN TRIGGER AND THE SWAP PROFILE - units a
   const w0 = SRC.indexOf("function createOrientationWatcher()");
   const watcher = WATCHER;
   check("the trigger is built from the parsed setting - and ?early_turn=0 makes it null, with every use inert",
-    /const earlyTurn = ORIENT_EARLY_TURN_DEG > 0\s*\n\s*\? makeEarlyTurnTrigger\(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,\s*\n\s*ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS, ORIENT_EARLY_TURN_LOSS_DEG,\s*\n\s*ORIENT_RETURN_SIDE\) : null;/.test(watcher) &&
+    /const earlyTurn = ORIENT_EARLY_TURN_DEG > 0\s*\n\s*\? makeEarlyTurnTrigger\(ORIENT_EARLY_TURN_DEG, ORIENT_EARLY_TURN_MIN_SPEED, ORIENT_EARLY_TURN_RETURN_DEG,\s*\n\s*ORIENT_EARLY_TURN_SLOW_DEG, ORIENT_EARLY_TURN_SLOW_RISE_DEG, ORIENT_EARLY_TURN_SLOW_WINDOW_MS, ORIENT_EARLY_TURN_LOSS_DEG,\s*\n\s*ORIENT_RETURN_SIDE, ORIENT_LAT_LEAD\) : null;/.test(watcher) &&
     /const earlyAct = earlyTurn && dualView && !acquiring && !confirmed && !predictBack\s*\n\s*\? earlyTurn\.observe\(/.test(watcher));
-  check("...and the tick hands it the pose loop's last unreadable inference (the fold-by-loss signal) and the fresh shoulder order (the return leg's)",
-    /earlyTurn\.observe\(\{ vote, lock: s\.lock, yawAbs: yawFresh \? s\.yawAbs : null, at: yawFresh \? s\.yawAt : null,\s*\n\s*lostAt: s\.lostAt, ord: ordFresh \? s\.ord : null, ordAt: ordFresh \? s\.ordAt : null \}\)/.test(watcher));
+  check("...and the tick hands it the pose loop's last unreadable inference (the fold-by-loss signal), the fresh shoulder order (the return leg's) and the engine's pace",
+    /earlyTurn\.observe\(\{ vote, lock: s\.lock, yawAbs: yawFresh \? s\.yawAbs : null, at: yawFresh \? s\.yawAt : null,\s*\n\s*lostAt: s\.lostAt, ord: ordFresh \? s\.ord : null, ordAt: ordFresh \? s\.ordAt : null, lat: s\.lat \}\)/.test(watcher));
   const skipAt = watcher.indexOf("if (!(dualView && (confirmed || predictBack))) {");
   const fireAt = watcher.indexOf('act({ do: "swap", next: earlyAct.fire, predictive: earlyAct.fire === "back" });');
   const withdrawAt = watcher.indexOf('act({ do: "swap", next: earlyAct.withdraw, predictive: false });');

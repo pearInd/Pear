@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-04 · main @ `93e2c01` + the merge of `hide/edge` (`1f5a4c2`) - the hidden build is main now_
+_Last updated: 2026-10-04 · main @ `c2c894a` (the merge of `hide/edge` into main) + the engine-pace / camera-bridge change_
 
 ## At a glance
 
@@ -17,7 +17,7 @@ _Last updated: 2026-10-04 · main @ `93e2c01` + the merge of `hide/edge` (`1f5a4
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
 | garment_cache rows missing `age_group` | code done — full backfill **deferred by choice** (demo products only for now) | main `ef1d28d` |
 | `DECART_ALLOWED_ORIGINS` / token origin | done (Vercel env set + redeployed 2026-10-02); the preview-origin fix is on main with the merge | main |
-| Back-image orientation (front/back on a turn) | in progress — the engine on Cloudflare, the front at the side (CLAUDE.md §2.23-§2.25); waiting on a real measurement | main (merged from `hide/edge`) |
+| Back-image orientation (front/back on a turn) | in progress — the engine on Cloudflare, the front at the side (§2.23-§2.25), timed by the engine's pace on a slow engine (§2.28); the live camera no longer shown on a render stall (§2.9); waiting on a real measurement | main |
 | Hebrew/English i18n | done (core) | main |
 | Security hardening + client-code hiding | done on main with the merge (engines server-side, minified/cloaked build, the render engine behind our edge - CLAUDE.md §2.11-§2.24); **the GitHub repo is still public** and **key rotation pending on you** | main |
 | Render engine account | the Decart key was replaced by you 2026-10-04 (Vercel Production + Preview); the old account had run out of credits ("Insufficient credits", now shown to a shopper as "unavailable right now" within ~1.5s) | Vercel env |

@@ -348,6 +348,11 @@ live camera cross-faded in over the silent output and back out - and the recorde
 same layer so the clip matches the screen. The recorder's timestamps were never the problem;
 a frozen clip means frozen *content*. Never pause, gate or hold `#webcam`/`localStream`.
 
+**The camera bridge is OFF by default since 2026-10-04 (the owner's call, §2.28):** "make Decart live the whole
+measurement". A stall now holds the render's last frame (the `<video>`'s own behaviour - nothing is laid over it, so the
+rule above stands); the layer still measures every stall (`out-stall`, `out-stats.stallMs`). `?live_camera=1` restores
+the bridge for an A/B.
+
 **This one is now checked automatically.** `npm run qa:visual` (§8) captures a burst of
 consecutive frames through a turn and fails on `frozen-feed` (two identical frames) or
 `white-flash` (a near-uniform bright frame — i.e. an overlay pinned over the feed). If you
@@ -948,6 +953,27 @@ PEAR_UPDATE_GARMENT, garment_cache age_group. Merged into `hide/edge` and carrie
   recommendation` through the real shell + module; `size-chart-shared-fixes` through the widget's raw wire and the
   server's reader, plus §0 pinning the copies); `lib/api-version.js` re-synced - **so the Worker must be deployed
   before the room that carries it**, or the room falls back to the origin for `/size` (correct, slower).
+
+### 2.28 A slow engine on a heavy product - the turn timed by the engine's pace; the camera never shown (2026-10-04)
+"Too many times it went back to the original camera and then to the video; the back's drawing showed on the front at the
+end; and it grabbed the shirt at the start though I didn't." The record (PEAK tee, the new key, production): output 7 fps
+with 3 stalls (0.5-0.7s, two at a reference switch) bridged by the camera; the return FRONT sent on time at the side but
+acknowledged in 743ms on a full turn of ~2.5s, so it landed on a chest facing the lens; the "grab" was the render's own
+hands-on-the-hem in its first second (the product photo has the hands down - an engine artifact, not a dispatch).
+- **NOT the edge (measured, so nobody re-treads it):** every TEST record tabulated - the OASIS tee acked a repeat image
+  in 127-325ms (33 sessions, direct), the PEAK tee in 323-743ms on the SAME direct path (09-30) and through the edge
+  alike; a relay identical to `rt.js` on a temporary Worker added nothing to 58-84 KB WebSocket round trips to Frankfurt
+  (259/279 vs 264/263ms) or Virginia (326/319 vs 310/354ms). The engine's host is GeoDNS (Route 53): from Israel a
+  CoreWeave address, from US/Cloudflare subnets AWS us-west-2 - the two answer `x-decart-rgn: coreweave` / `usw2`.
+- **THE ENGINE'S PACE (`lib/orient-engine.js` LEAD_BASE_MS/LEAD_MAX_MS/LEAD_FLOOR, `app.js` ENGINE_PACE_LABELS,
+  `engineAckEstimate()`):** the room times every IMAGE write (never prompt-only) and sends the median of the last three as
+  `lat`; above 250ms the return FRONT fires as soon as the order's own speed reaches the side within the extra ack time
+  (at most 700ms earlier, never from deeper than -0.7, never on a falling or snapping order). A fast engine, no `lat` or
+  `?lat_lead=0` is the side rule exactly (`return-side` §4b.1). Replayed on the 13 recorded 360s x 4 phases with a 750ms
+  engine: the return landed at median 333 degrees without it, 307 with it (a fast engine 276) - not all the way, because
+  the earliest fire is the first order reading after the turn's deepest back point and a fast turn crosses from the back
+  to the side in one ~250ms reading. `return-side` §1.17-§1.21, §4b, §5.8-§5.12. **Needs a `wrangler deploy`.**
+- **The camera bridge is off** (§2.9) - `stream-continuity` pins the default.
 
 ## 3. Cross-file lockstep
 

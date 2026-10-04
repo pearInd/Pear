@@ -20,6 +20,8 @@
       browser measurement and the real engine at four tick phases: the return FRONT never lands on a
       back-facing body (main's does), never lands with the chest square to the lens, is never lost, the
       outbound BACK goes out on the same tick as main's, and no 360 swaps more than main's.
+   §4b THE ENGINE'S PACE (2026-10-04): with a slow engine (the PEAK tee's ~750ms acks) the return lands ~57 degrees later;
+      the room's `lat` brings it ~26 degrees back without ever landing on a back-facing body; a fast engine is untouched.
    §5 THE WIRING: the sample carries the order (typeof-guarded), both knob lists carry return_side, the
       sanitiser bounds it, the TEST record logs it.
    ============================================================================= */
@@ -146,6 +148,36 @@ console.log("\n── §1 the trigger ──");
     { vote: "front", lock: "front", yawAbs: 5, at: 0 }, { vote: null, lock: "front", yawAbs: 49, at: 240 },
     { vote: "front", lock: "back", yawAbs: 36, at: 480 }]);
   check("§1.16 a room that sends no order keeps main's withdrawal exactly", noOrdFold[2].withdraw === "front", JSON.stringify(noOrdFold));
+  /* THE ENGINE'S PACE (2026-10-04): the room's median image ack (`lat`). A slow engine's return fires a reading early when
+     the turn's own order speed reaches the side within the extra ack time; a fast one, none, a snap or a floor never. */
+  const paceTrig = (latLead = true) => E.createOrientEngine(E.sanitizeOrientKnobs({})).internals.makeEarlyTurnTrigger(
+    40, 45, 50, 50, 10, [450, 960], 20, 0.2, latLead);
+  const paced = (lat, latLead, steps = ret) => run(paceTrig(latLead), steps.map((o) => ({ ...o, lat })));
+  const slow = paced(750, true);
+  /* -0.86 -> -0.51 in 240ms: at that speed the side is ~350ms away, inside the 500ms the slow engine adds - so the
+     return goes out there, where it lands (decision + ~450ms on this engine) at about the side view. */
+  check("§1.17 a slow engine (750ms) fires the return when the order's speed reaches the side within its extra ack time - -0.51 here - via the lead",
+    firstFire(slow) === 2 && slow[2].fire === "front" && slow[2].via === "lead", JSON.stringify(slow));
+  check("§1.18 a fast engine (200ms), no pace, or ?lat_lead=0 fires exactly where the side rule does",
+    [paced(200, true), paced(null, true), paced(750, false)].every((o) => firstFire(o) === 4 && o[4].via === "order"));
+  const snapSteps = [
+    { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -1, ordAt: 0 },
+    { vote: null, lock: "back", yawAbs: 30, at: 240, ord: -0.9, ordAt: 240 },
+    { vote: null, lock: "back", yawAbs: 40, at: 480, ord: -0.05, ordAt: 480 },   // +0.85 in one reading: a snap, not a speed
+  ];
+  check("§1.19 a snap (more than 0.8 in one reading) is not a speed: nothing fires early", !paced(750, true, snapSteps).some((o) => o.fire));
+  const deep = [
+    { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -1, ordAt: 0 },
+    { vote: "back", lock: "back", yawAbs: 20, at: 240, ord: -0.95, ordAt: 240 },
+    { vote: null, lock: "back", yawAbs: 30, at: 480, ord: -0.75, ordAt: 480 },   // fast, but still past the floor (-0.7)
+  ];
+  check("§1.20 ...and never from deeper than the floor (-0.7), however fast", !paced(750, true, deep).some((o) => o.fire));
+  const falling = [
+    { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -0.55, ordAt: 0 },
+    { vote: null, lock: "back", yawAbs: 20, at: 240, ord: -0.45, ordAt: 240 },   // rising, too slowly to reach the side in time
+    { vote: null, lock: "back", yawAbs: 20, at: 480, ord: -0.6, ordAt: 480 },    // turning back toward the back
+  ];
+  check("§1.21 an order falling back toward the back never fires", !paced(750, true, falling).some((o) => o.fire));
   /* PREDICTIVE BACK, gated on the order: a FRONT lock whose |yaw| passed the side and is falling is either a body
      passing to the back (the order on the back side) or one coming round to the lens (the order on the front). */
   const I = E.createOrientEngine(E.sanitizeOrientKnobs({})).internals;
@@ -177,7 +209,7 @@ const R = new Function("location", "ORIENT_POSE_FACING_MARGIN",
 
 /* The room, reduced to what the engine sees: the pose readings in order (the real learn, guard and order),
    the shoulder vote, and a tick every 250ms at a given phase. The lock moves as the room's maybeSwap does. */
-function roomRun(rows, { knobs = {}, sendOrd = true, phase = 0 } = {}) {
+function roomRun(rows, { knobs = {}, sendOrd = true, phase = 0, lat = null } = {}) {
   const engine = E.createOrientEngine(E.sanitizeOrientKnobs(knobs));
   const st = R.makeTwistState();
   let lock = null, i = 0, yawAbs = null, yawAt = 0, sep = null, sepAt = 0, ord = null, ordAt = 0, lostAt = 0;
@@ -196,7 +228,7 @@ function roomRun(rows, { knobs = {}, sendOrd = true, phase = 0 } = {}) {
     }
     const vote = sep !== null && t - sepAt <= 600 ? (sep >= 0.25 ? "front" : sep <= -0.25 ? "back" : null) : null;
     const acts = engine.step(E.sanitizeOrientSample({ t, vote, faceSeen: false, poseVoted: !!vote, profileScore: 0,
-      yawAbs, yawAt, lostAt, ord: sendOrd ? ord : null, ordAt: sendOrd ? ordAt : 0, lock, profile: false, dualView: true }));
+      yawAbs, yawAt, lostAt, ord: sendOrd ? ord : null, ordAt: sendOrd ? ordAt : 0, lat, lock, profile: false, dualView: true }));
     for (const a of acts) if (a.do === "swap") {
       if (lock === null && a.next === "front") { lock = "front"; continue; }
       if (a.next !== lock) { swaps.push({ next: a.next, t }); lock = a.next; }
@@ -331,6 +363,50 @@ console.log("\n── §4 thirteen real 360s, at four tick phases ──");
   console.log(`        median landing: main ${med(res.map((r) => r.main.front))}°, chest ${med(res.map((r) => r.chest.front))}° (270 = the side view)`);
 }
 
+console.log("\n── §4b the engine's pace: a slow engine's return goes out earlier, and lands where a fast one's does ──");
+{
+  /* THE LANDING MODEL, per engine. A swap shows on frames the engine renders after ack + switch, which the shopper sees an
+     output delay later - so it lands on the body angle at decision + ack - (output delay - switch). LAND_MS (110ms BEFORE
+     the decision) is the fast engine's (repeat ack ~190ms); a slower ack moves the landing later by its difference. The
+     PEAK tee's acks (TEST records 2026-10-01..04): 323, 505, 743ms - 750 is the slow case. */
+  const FAST = 190, SLOW = 750;
+  const landAt = (ack) => LAND_MS - (ack - FAST);   // ms BEFORE the decision the swap lands on
+  const clips = { ...POSES.clips, "s3.mp4 (reported)": S3.rows };
+  const res = [];
+  for (const [name, rows] of Object.entries(clips)) {
+    if (!rows.some((r) => r[1] !== null && r[1] <= -0.25)) continue;
+    const th = thetaOf(rows);
+    for (const phase of [0, 60, 125, 190]) {
+      const ret = (sw, ack) => { const b = sw.find((x) => x.next === "back"); const f = b && sw.find((x) => x.next === "front" && x.t > b.t);
+        return { back: b ? b.t : null, front: f ? Math.round(th(f.t - landAt(ack))) : null, n: sw.length }; };
+      const none = roomRun(rows, { phase });
+      const fast = roomRun(rows, { phase, lat: FAST });
+      const slowOff = roomRun(rows, { phase, lat: SLOW, knobs: { lat_lead: "0" } });
+      const slowOn = roomRun(rows, { phase, lat: SLOW });
+      res.push({ name, phase, same: JSON.stringify(none) === JSON.stringify(fast), fast: ret(fast, FAST), off: ret(slowOff, SLOW), on: ret(slowOn, SLOW) });
+    }
+  }
+  const med = (a) => a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)];
+  const F = res.map((r) => r.fast.front), OFF = res.map((r) => r.off.front), ON = res.map((r) => r.on.front);
+  console.log(`        landing medians: fast engine ${med(F)}°, slow engine ${med(OFF)}° without the lead, ${med(ON)}° with it (270 = the side)`);
+  console.log("        slow, without: " + OFF.join(",") + "\n        slow, with:    " + ON.join(","));
+  check("§4b.1 a fast engine (ack <= 250ms) is the rule exactly: swap for swap the same as a room that sends no pace",
+    res.every((r) => r.same), JSON.stringify(res.filter((r) => !r.same).map((r) => [r.name, r.phase])));
+  check("§4b.2 the problem, reproduced: a slow engine lands the return well past the side (median >= 15 degrees later)",
+    med(OFF) >= med(F) + 15, `${med(OFF)} vs ${med(F)}`);
+  /* Not all the way back to the fast engine's 276: the earliest a return can fire is the first order reading after the
+     turn's deepest back point, and on a fast turn the order jumps from the back to the side in one ~250ms reading
+     (m3: -0.87 -> -0.16 -> +0.34) - the lead fires on the middle one, a reading ahead of the side rule. Measured
+     2026-10-04: 333 -> 307 median. */
+  check("§4b.3 with the lead the slow engine's median lands at least 20 degrees back toward the side",
+    med(ON) <= med(OFF) - 20 && med(ON) > med(F) - 5, `${med(ON)} vs ${med(OFF)} without, ${med(F)} fast`);
+  check("§4b.4 ...never on a back-facing body: 85% of runs at 245 degrees or later, none before 225",
+    ON.filter((x) => x >= 245).length >= res.length * 0.85 && ON.every((x) => x >= 225), ON.join(","));
+  check("§4b.5 the return is never lost and no run swaps more", res.every((r) => r.on.front !== null && r.on.n <= r.off.n),
+    JSON.stringify(res.filter((r) => !(r.on.front !== null && r.on.n <= r.off.n)).map((r) => [r.name, r.phase])));
+  check("§4b.6 the outbound BACK is untouched (the same tick with and without the lead)", res.every((r) => r.on.back === r.off.back));
+}
+
 console.log("\n── §5 the wiring ──");
 {
   check("§5.1 the tick sends the order and its time, typeof-guarded (the replay harnesses run it standalone)",
@@ -346,6 +422,25 @@ console.log("\n── §5 the wiring ──");
   check("§5.6 the TEST record logs the order and its age every tick", /o: typeof s\.ord === "number" \? Math\.round\(s\.ord \* 100\) \/ 100 : null/.test(APP));
   check("§5.7 the engine's constants the trigger reads live inside it (turn-yaw-window runs it standalone)",
     /function makeEarlyTurnTrigger\([\s\S]*?const SIDE_BAND = -0\.7;[\s\S]*?const SIDE_YAW_DEG = 40;/.test(ENGINE_SRC));
+  /* THE ENGINE'S PACE. */
+  check("§5.8 the tick sends the engine's pace, typeof-guarded",
+    /lat: typeof engineAckEstimate === "function" \? engineAckEstimate\(\) : null,/.test(APP));
+  check("§5.9 ...measured on every image write and only those (never a prompt-only write), reset with the wire",
+    /const ENGINE_PACE_LABELS = new Set\(\["applyGarment", "applyLook", "primeBack"\]\);/.test(APP) &&
+    /await send\(\);\s*\n\s*if \(ENGINE_PACE_LABELS\.has\(label\)\) noteEngineAck\(Date\.now\(\) - sentAt\);/.test(APP) &&
+    /function resetConditionWire\(\) \{\s*\n\s*wireEpoch\+\+;\s*\n\s*_engineAckMs = \[\];/.test(APP));
+  {
+    const ctx = new Function(between(APP, "const ENGINE_PACE_LABELS", "\nfunction sendCondition(") +
+      "\nreturn { noteEngineAck, engineAckEstimate };")();
+    const a = ctx.engineAckEstimate(); ctx.noteEngineAck(2058); const b = ctx.engineAckEstimate();
+    ctx.noteEngineAck(160); ctx.noteEngineAck(150); const c = ctx.engineAckEstimate(); ctx.noteEngineAck(170); const d = ctx.engineAckEstimate();
+    check("§5.10 the estimate: null before any ack, the median of the last three - one slow first send does not hold it up",
+      a === null && b === 2058 && c === 160 && d === 160, JSON.stringify([a, b, c, d]));
+  }
+  const lj = E.sanitizeOrientSample({ lat: "x" }), lb = E.sanitizeOrientSample({ lat: 99999 }), ln = E.sanitizeOrientSample({ lat: -5 });
+  check("§5.11 the sanitiser bounds the pace (0-5000ms); junk is 'not measured'", lj.lat === null && lb.lat === 5000 && ln.lat === 0);
+  check("§5.12 both knob lists carry lat_lead, and the TEST record logs the pace", E.ORIENT_KNOB_KEYS.includes("lat_lead") &&
+    /const ORIENT_KNOB_KEYS = \[[^\]]*"lat_lead"/.test(APP) && /lt: typeof s\.lat === "number" \? s\.lat : null,/.test(APP));
 }
 
 console.log(`\n${fails ? `✗ ${fails} failed` : "✓ all passed"}`);

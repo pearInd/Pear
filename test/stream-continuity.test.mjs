@@ -195,6 +195,14 @@ console.log("\n── §5 WIRING ──");
 
   check("both restore seams are URL-only and default OFF",
     /get\("swap_hold"\) === "1"/.test(SRC) && /get\("still_covers"\) === "1"/.test(SRC));
+  /* THE OWNER'S CALL (2026-10-04): "make Decart live the whole measurement" - the camera is never shown
+     by default; a stall holds the render's last frame. The layer still measures (out-stall/out-stats). */
+  check("the camera bridge is OFF by default - only ?live_camera=1 brings it back",
+    /const LIVE_CAMERA_BRIDGE = \(\(\) => \{\s*try \{ return new URLSearchParams\(location\.search\)\.get\("live_camera"\) === "1"; \} catch \(_\) \{ return false; \}/.test(SRC));
+  check("...without it the layer never draws the camera and its opacity stays 0",
+    /const drawn = LIVE_CAMERA_BRIDGE && alpha > 0 \? drawContinuityFrame\(c, cam, ai\) : true;\s*\n\s*const a = LIVE_CAMERA_BRIDGE && drawn \? alpha : 0;/.test(layer));
+  check("...and still records every stall for the TEST record",
+    /traceOrient\("out-" \+ event\.type, event\)/.test(layer) && /stallMs: Math\.round\(model\.stats\.cameraMs\)/.test(layer));
 }
 
 console.log("\n── §6 A SECOND TRY-ON INHERITS NOTHING - the window that simply runs out ──");
