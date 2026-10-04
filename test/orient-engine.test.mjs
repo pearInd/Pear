@@ -60,6 +60,29 @@ console.log("── §1 every scripted turn behaves as it did before the move �
     [...r.perScenario.values()].some((v) => /holdBegin "swap"/.test(v)));
 }
 
+/* ── §1b THE SWAP FLOW (app.js, 2026-10-05) ─────────────────────────────────────── */
+console.log("\n── §1b the swap flow: the turn keeps being read while a swap is on the wire ──");
+{
+  /* §1 replays main's watcher (the knob rides on the location: ?swap_flow=0). Here the same 4,116-session corpus runs
+     with the flow ON, through the real engine. Measured when it shipped: a full 360 ended with the BACK reference
+     still on (the back print on a chest facing the lens) in 44 of 1,008 sessions on main, 12 with the flow; every
+     trajectory together 89 -> 34; never two applies on the wire at once. */
+  const quiet = [console.log, console.warn, console.error];
+  let main, flow;
+  console.log = console.warn = console.error = () => {};
+  try {
+    main = await runCorpus(APP, { seeds: [1, 2], engine: E, swapFlow: false });
+    flow = await runCorpus(APP, { seeds: [1, 2], engine: E, swapFlow: true });
+  } finally { [console.log, console.warn, console.error] = quiet; }
+  const endsBack = (r, pred) => [...r.perStats].filter(([k, st]) => pred(k) && !k.includes("single-view") && st.endLock === "back").length;
+  const full = (k) => k.startsWith("360@"), all = () => true;
+  const mFull = endsBack(main, full), fFull = endsBack(flow, full), mAll = endsBack(main, all), fAll = endsBack(flow, all);
+  check(`§1b.1 never two applies on the wire at once (${flow.scenarios} sessions)`,
+    [...flow.perStats.values()].every((st) => st.maxInFlight <= 1));
+  check(`§1b.2 a full 360 ends with the back still on the chest far less often: main ${mFull}, flow ${fFull}`, fFull * 2 <= mFull, `${mFull} -> ${fFull}`);
+  check(`§1b.3 ...and over every trajectory: main ${mAll}, flow ${fAll}`, fAll < mAll, `${mAll} -> ${fAll}`);
+}
+
 /* ── §2 the copies ─────────────────────────────────────────────────────────────── */
 console.log("\n── §2 the values both files need agree, and so do the knob lists ──");
 {
@@ -147,8 +170,9 @@ console.log("\n── §4 the decision is absent from the browser, and the tick 
   check("a reply after stop() is dropped", /if \(disposed\) return;/.test(tick));
   check("no decision means no swap - only the pose-independent re-anchor keeps its cadence",
     /if \(!acts\) \{ maybeReanchorPrompt\(\)\.catch\(\(\) => \{\}\); return; \}/.test(tick));
-  check("the swap is the only awaited action, as it was", (tick.match(/await /g) || []).length === 3 &&
-    /a\.do === "swap"\) await maybeSwap\(/.test(tick), (tick.match(/[^\n]*await [^\n]*/g) || []).join(" | "));
+  check("the swap is the only awaited action, and only without the swap flow (main's ?swap_flow=0)", (tick.match(/await /g) || []).length === 3 &&
+    /a\.do === "swap"\) \{ const sw = maybeSwap\(a\.next, a\.predictive === true\); if \(SWAP_FLOW\) sw\.catch\(\(\) => \{\}\); else await sw; \}/.test(tick),
+    (tick.match(/[^\n]*await [^\n]*/g) || []).join(" | "));
 }
 
 /* ── §5 the Worker ────────────────────────────────────────────────────────────── */

@@ -353,8 +353,11 @@ console.log("\n── wiring: single-view items get the SAME protection, with th
   check("...and runs in the background, so a slow apply cannot stall the next sample",
     /a\.do === "profile"\) maybeApplyProfile\(a\.next\)\.catch\(\(\) => \{\}\);/.test(watcher) &&
     !/await maybeApplyProfile\(/.test(watcher));
-  check("...while maybeSwap stays awaited - it owns the hold's lifecycle",
-    /a\.do === "swap"\) await maybeSwap\(a\.next, a\.predictive === true\);/.test(watcher));
+  /* THE SWAP FLOW (2026-10-05): the tick no longer awaits the swap - it keeps reading the turn while the reference is on
+     the wire, and a swap decided meanwhile waits in pendingSwap. Main's await is ?swap_flow=0. maybeSwap still owns the
+     hold's lifecycle; the hold covers nothing by default (§2.9), it only gates topology reconditioning. */
+  check("...while maybeSwap is awaited only without the swap flow (main's ?swap_flow=0) - it still owns the hold's lifecycle",
+    /a\.do === "swap"\) \{ const sw = maybeSwap\(a\.next, a\.predictive === true\); if \(SWAP_FLOW\) sw\.catch\(\(\) => \{\}\); else await sw; \}/.test(watcher));
   check("maybeSwap is only ever invoked for a dual-view session",
     /else if \(dualView && confirmed\) act\(\{ do: "swap", next: lastVote, predictive: false \}\);/.test(watcher));
 }

@@ -967,9 +967,13 @@ function sendCondition(label, send, { skipIfBusy = false } = {}) {
   }
   const epoch = wireEpoch;
   wireWrites++;
+  const queuedAt = Date.now();
   const run = async () => {
     if (epoch !== wireEpoch) return false;   // the session this write was for is gone
     isSettingCondition = true;
+    /* A TEST record names any write that waited behind another (THE SWAP FLOW's timing - the 23:57 swaps took 411-546ms
+       from the decision to the wire). typeof: runs standalone in suites. */
+    if (Date.now() - queuedAt > 30 && typeof traceOrient === "function") traceOrient("wire-wait", { label, ms: Date.now() - queuedAt });
     /* DISPATCH_SENT for an open ?orient_debug=1 swap trace - only a write that carries the reference.
        Null otherwise, so this costs one typeof check. See traceSwapTimeline. */
     if (typeof _orientSendMark === "function" && (label === "applyGarment" || label === "applyLook")) {
@@ -8229,7 +8233,7 @@ const TWIST_ENABLED = (() => {
 })();
 /** A fresh twist state - the pose loop keeps one per page (_poseTwist below). */
 function makeTwistState() {
-  return { sh0: 0, hip0: 0, th0: 0, n: 0, streak: 0, active: false, at: 0, yawDeg: 0, shR: null, hipR: null };
+  return { sh0: 0, hip0: 0, th0: 0, n: 0, shMax: 0, streak: 0, active: false, at: 0, yawDeg: 0, shR: null, hipR: null };
 }
 /** Image-space torso widths of the primary subject, normalised by torso height, or null. */
 function poseTorsoWidths(result) {
@@ -8255,6 +8259,7 @@ function torsoTwistStep(s, w, worldYawAbs, now, enabled = TWIST_ENABLED) {
   if (ash >= ORIENT_POSE_FACING_MARGIN && (worldYawAbs === null || worldYawAbs < 20)) {
     const a = s.n ? 0.2 : 1;
     s.sh0 = s.sh0 * (1 - a) + ash * a; s.hip0 = s.hip0 * (1 - a) + ahip * a; s.th0 = s.th0 * (1 - a) + w.th * a;
+    s.shMax = Math.max(s.shMax || 0, ash);   // the widest square-on reading - torsoOrder()'s scale before the baseline settles
     s.n++;
   }
   s.shR = s.sh0 ? ash / s.sh0 : null;
@@ -8274,10 +8279,18 @@ function torsoTwistStep(s, w, worldYawAbs, now, enabled = TWIST_ENABLED) {
    shopper's own learned square-on width: +1 square to the lens, -1 square away, 0 at the side view. MEASUREMENT only -
    the engine's return leg decides on it (lib/orient-engine.js, THE CHEST COMES ROUND). null until the baseline is
    learned, and on a torso of unusual height (a degenerate read, as for the yaw guard). */
+/* THE ORDER FROM THE SECOND READING (2026-10-05). The 23:57 TEST record had no order for the whole turn: the pose
+   loop starts at the reveal, the shopper turned 1.2s later, and only 4 of the 5 baseline readings were in - the side
+   rule never saw a reading, and FRONT went out on |yaw| 26 on the way back. Square-on is the WIDEST the shoulders read,
+   so until the baseline settles (TWIST_BASELINE_MIN) the order is scaled by the widest square-on reading so far, from
+   ORDER_BASELINE_MIN of them; after, by the learned width exactly as before. The twist rule still waits for its 5. */
+const ORDER_BASELINE_MIN = 2;
 function torsoOrder(s, w) {
-  if (!w || s.n < TWIST_BASELINE_MIN || !(s.sh0 > 0) || !(s.th0 > 0)) return null;
+  if (!w || !(s.th0 > 0)) return null;
+  const sq = s.n >= TWIST_BASELINE_MIN && s.sh0 > 0 ? s.sh0 : s.n >= ORDER_BASELINE_MIN && s.shMax > 0 ? s.shMax : 0;
+  if (!(sq > 0)) return null;
   if (w.th < s.th0 * TWIST_TORSO_BAND[0] || w.th > s.th0 * TWIST_TORSO_BAND[1]) return null;
-  return Math.max(-1.5, Math.min(1.5, w.sh / s.sh0));
+  return Math.max(-1.5, Math.min(1.5, w.sh / sq));
 }
 /* ── THE YAW GUARD - a world-depth spike is not a turn (2026-10-01) ──────────────────────────────
    REPORTED with a clip in a dim room: the BACK went out 0.7s before the shopper turned. Its TEST record:
@@ -9577,6 +9590,24 @@ function createOrientationWatcher() {
   const decide = typeof openOrientChannel === "function" ? openOrientChannel() : null;
   if (typeof traceOrient === "function") traceOrient("watch", { back: !!GARMENT_BACK, dual: currentAngle === AUTO_ANGLE, link: !!decide });
   let lastSwapPredictive = false;   // the last committed swap was a predictive BACK - see maybeSwap()
+  /* THE SWAP FLOW (2026-10-05) - "the back's drawing stays on my chest at the end of the turn". Main awaited every swap
+     inside the tick, so while a reference was on the wire NOTHING was measured or decided: the 23:57 TEST record has no
+     reading between 1.74s and 3.40s - the whole back view - and the FRONT went out at |yaw| 26 on the way back, its
+     print reaching the chest after the window closed. With the flow on, the tick keeps reading while a swap is in
+     flight (the engine sees the turn's back half, which its return rules read), and a swap decided meanwhile is KEPT
+     (the latest wins) and goes out the moment the wire is free - instead of being dropped on `applying` and waiting for
+     a later tick. Cooldown and every other pre-flight are unchanged. ?swap_flow=0 is main's (await, drop). */
+  const SWAP_FLOW = (() => {
+    try { return new URLSearchParams(location.search).get("swap_flow") !== "0"; } catch (_) { return true; }
+  })();
+  let pendingSwap = null;           // { next, predictive } - decided while the wire was busy (SWAP_FLOW)
+  /** The swap decided while another write held the wire, now that it is free - see SWAP_FLOW. */
+  function runPendingSwap() {
+    const p = pendingSwap;
+    pendingSwap = null;
+    if (!p || disposed || applying || p.next === autoOrientation) return;
+    maybeSwap(p.next, p.predictive).catch(() => {});
+  }
   /* Edge-on axis - its own rolling buffer, exit streak and cooldown, sharing only the
      `applying` mutex so a pose update and an asset swap can never be in flight at once.
      profileBuf holds the last ORIENT_PROFILE_WINDOW per-frame scores; squareStreak counts
@@ -9937,6 +9968,11 @@ function createOrientationWatcher() {
        see ORIENT_PREDICTIVE_BACK. */
     const withdrawing = next === "front" && lastSwapPredictive;
     if (typeof traceOrient === "function") traceOrient("swap-req", { next, predictive, applying, cooldown: Math.max(0, ORIENT_COOLDOWN_MS - (Date.now() - lastSwapAt)) });
+    if (applying && typeof SWAP_FLOW !== "undefined" && SWAP_FLOW) {
+      pendingSwap = { next, predictive };
+      if (typeof traceOrient === "function") traceOrient("swap-pend", { next });
+      return;
+    }
     if (applying || (Date.now() - lastSwapAt < ORIENT_COOLDOWN_MS && !withdrawing)) {
       if (typeof traceOrient === "function") traceOrient("swap-drop", { next, why: applying ? "applying" : "cooldown" });
       return;
@@ -10192,6 +10228,7 @@ function createOrientationWatcher() {
       /* Idempotent on the success path (already unheld above); the one that matters on a
          failed set() - the previous reference is still on the wire, so frames must flow. */
       if (heldGate) heldGate.unhold("swap settled");
+      if (typeof pendingSwap !== "undefined" && pendingSwap) runPendingSwap();   // typeof: maybeSwap runs standalone in suites
     }
   }
 
@@ -10269,6 +10306,7 @@ function createOrientationWatcher() {
     } finally {
       applying = false;
       if (typeof traceOrient === "function") traceOrient("profile-done", { ms: Date.now() - lastProfileAt });
+      if (typeof pendingSwap !== "undefined" && pendingSwap) runPendingSwap();   // typeof: maybeSwap runs standalone in suites
     }
   }
 
@@ -10319,6 +10357,7 @@ function createOrientationWatcher() {
     } finally {
       applying = false;
       if (typeof traceOrient === "function") traceOrient("reanchor-done", { ms: Date.now() - lastReanchorAt });
+      if (typeof pendingSwap !== "undefined" && pendingSwap) runPendingSwap();   // typeof: maybeSwap runs standalone in suites
     }
   }
 
@@ -10376,7 +10415,9 @@ function createOrientationWatcher() {
         /* NOT AWAITED, exactly as before - see maybeApplyProfile()/maybeReanchorPrompt(). */
         else if (a.do === "profile") maybeApplyProfile(a.next).catch(() => {});
         else if (a.do === "reanchor") maybeReanchorPrompt().catch(() => {});
-        else if (a.do === "swap") await maybeSwap(a.next, a.predictive === true);
+        /* THE SWAP FLOW: not awaited - the next tick keeps reading the turn while this one is on the wire (main awaited:
+           ?swap_flow=0). */
+        else if (a.do === "swap") { const sw = maybeSwap(a.next, a.predictive === true); if (SWAP_FLOW) sw.catch(() => {}); else await sw; }
       }
     } catch (_) {} finally { sampling = false; }
   }, ORIENT_SAMPLE_MS);
@@ -12019,6 +12060,27 @@ function wireLookPrompt(where) {
   return requestWirePrompt({ kind: "look", item: {}, angle: "front", inProfile: false, delta: 0 }, where);
 }
 
+/** A prompt for this angle that is ALREADY here, so a swap never waits on the network for its words (THE SWAP FLOW,
+ *  2026-10-05): the exact one if settled, else the closest settled one for the same garment and angle - the same facts
+ *  and pose first, then the same pose, then any delta. The angle always matches (CLAUDE.md §2.8); the next re-anchor
+ *  sends the exact words. null when nothing for that angle has arrived yet - then the caller waits, as before. */
+function wirePromptSettled(item, angle, opts = {}) {
+  const want = { item: JSON.stringify(promptFactsOf(item)), angle: angle === "back" ? "back" : "front",
+    inProfile: opts.inProfile === true, delta: typeof getSizeDelta === "function" ? getSizeDelta() : 0 };
+  const name = String((item && (item.name || item.title)) || "");
+  let best = null, bestScore = -1;
+  for (const [key, val] of _wirePrompts) {
+    if (typeof val !== "string") continue;
+    let r; try { r = JSON.parse(key); } catch (_) { continue; }
+    if (!r || r.kind !== "single" || r.angle !== want.angle) continue;
+    const sameFacts = JSON.stringify(r.item) === want.item;
+    if (!sameFacts && String((r.item && (r.item.name || r.item.title)) || "") !== name) continue;
+    const score = (sameFacts ? 4 : 0) + (r.inProfile === want.inProfile ? 2 : 0) + (r.delta === want.delta ? 1 : 0);
+    if (score > bestScore) { best = val; bestScore = score; }
+  }
+  return best;
+}
+
 function requestWirePrompt(req, where) {
   const key = JSON.stringify(req);
   const known = _wirePrompts.get(key);
@@ -12332,9 +12394,13 @@ async function applyGarment(item) {
      resolve below instead of after it. Awaited at the payload. */
   const promptText = wirePrompt(item, angleAtStart, "applyGarment", { inProfile: profileAtStart });
   promptText.catch(() => {});
+  /* The words already here for this angle - a swap must not wait on the network (THE SWAP FLOW). typeof: sandboxed. */
+  const promptNow = typeof wirePromptSettled === "function" ? wirePromptSettled(item, angleAtStart, { inProfile: profileAtStart }) : null;
+  const applyAt = Date.now();
   const activeImg = activeImageOf(item);
   const refInfo   = {};                                          // ← filled in by referenceImageFor
   let   imageRef  = await referenceImageFor(item, activeImg, refInfo);   // Blob for combined, URL otherwise
+  const refAt = Date.now();
   const usingComposite = refInfo.composite === true;             // what we ACTUALLY resolved
 
   /* ── SAY WHAT IS ACTUALLY ON THE WIRE - "Decart is receiving two people" ────────────
@@ -12499,7 +12565,7 @@ async function applyGarment(item) {
   const payload = {
     /* Both builders it used to choose between - buildCompositePrompt() and buildPrompt() -
        return imageOnlyPrompt(item, angle) in strict image-only mode; lib/prompts.js has both. */
-    prompt: await promptText,
+    prompt: promptNow !== null ? promptNow : await promptText,
     enhance: false,
     /* Unconditional: the ladder above re-pins or throws, so no path reaches here without a
        usable reference. The old `...(imageRef ? { image } : {})` spread is what shipped the
@@ -12507,6 +12573,10 @@ async function applyGarment(item) {
     image: imageRef,
   };
 
+  /* A TEST record names a slow build of the payload (the reference or the words) - typeof: sandboxed. */
+  if (Date.now() - applyAt > 30 && typeof traceOrient === "function") {
+    traceOrient("apply-wait", { ref: refAt - applyAt, prompt: Date.now() - refAt, settled: promptNow !== null });
+  }
   console.group("[PEAR] applyGarment() - VTON payload debug");
   console.log("garment  :", item.name, `(id=${item.id}, type=${item.garmentType}${item.custom ? ", custom upload" : ""})`);
   console.log("angle    :", currentAngle,

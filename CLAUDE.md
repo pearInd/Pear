@@ -1028,6 +1028,32 @@ hands-on-the-hem in its first second (the product photo has the hands down - an 
   2026-10-04: "keep the guarantee"): never the back print on the chest, a plain back on a normal turn with this engine.
 - **The camera bridge is off** (§2.9) - `stream-continuity` pins the default.
 
+### 2.29 THE SWAP FLOW - the turn is read while a swap is on the wire (2026-10-05)
+"The back's drawing stays on my chest at the end of the turn - make it work by what the real camera sees, learn the delay
+and fix it." Read from the 23:57 TEST record and clip (the back gate already off, §2.28): the BACK went out at |yaw| 74,
+and **nothing was measured or decided for 1.67s** - main awaited every swap inside the tick (`await maybeSwap`) - the whole
+back view; the next reading was |yaw| 26 on the way back, FRONT went out then, and its print reached the chest after the
+window closed (4.1-4.8s of the clip). Two more of ours in the same record: 411-546ms between the decision and the send
+(3-30ms in every earlier record), and no shoulder order the whole turn (4 of the 5 baseline readings in).
+- **THE SWAP FLOW (`app.js`, `SWAP_FLOW` / `pendingSwap` / `runPendingSwap()` in the watcher):** the tick no longer awaits the
+  swap, so the engine keeps receiving the turn's readings while a reference is on the wire (its return rules read the back
+  half - §2.23/§2.25), and a swap it decides meanwhile is KEPT (the latest wins) and goes out the moment the wire is free
+  (after a swap's ack, a profile or a re-anchor) instead of being dropped on `applying`. The cooldown and every other
+  pre-flight are unchanged. `?swap_flow=0` is main's (await, drop). Measured through the real engine on the replay corpus
+  (`orient-engine` §1b, 4,116 sessions): a full 360 ending with the BACK still on (the back print on a chest facing the
+  lens) 44 -> 12 of 1,008; every trajectory 98 -> 38; never two applies on the wire. `orient-engine` §1 still pins MAIN's
+  watcher - `test/orient-replay.mjs` puts `swap_flow=0` on the location only, so its keys, seeds and hash are unchanged.
+- **The whole room, measured (the engine twin, §2.25, with that day's engine: repeat acks 500-700ms, one in ten 1.0-1.6s;
+  the minified room, the real pose model, 11 of the user's recorded 360s x 2 seeds, production vs this):** the back print on
+  a chest facing the lens 7.3s in 15 of 22 runs -> 2.5s in 8; the front print on the back unchanged (5.9s in 13 -> 5.7s in
+  12). What is left is a BACK the engine acknowledged in 1.3-1.6s - it lands late whatever we do.
+- **THE ORDER FROM THE SECOND READING (`torsoOrder()`, `ORDER_BASELINE_MIN`):** until the baseline settles (5 readings) the
+  order is scaled by the widest square-on reading so far, from the 2nd; after, by the learned width as before.
+- **A swap never waits on the network for its words (`wirePromptSettled()`):** the exact memoised prompt, else the closest
+  settled one for the same garment and angle (same pose, then any size delta); the next re-anchor sends the exact words.
+- **The record names the waits:** `apply-wait` {ref, prompt, settled} when a payload took >30ms to build, `wire-wait`
+  {label, ms} when a write queued >30ms, `swap-pend` when a decision waited for the wire.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

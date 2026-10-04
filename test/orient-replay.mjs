@@ -157,7 +157,7 @@ export async function runScenario(factory, scen, engine) {
   const pendingApplies = [];
   const blob = { size: 1 };
   const api = factory(
-    { search: scen.search },                                   // location
+    { search: scen.locSearch ?? scen.search },                 // location (the swap flow's knob rides here - runCorpus)
     { createElement: () => ({ getContext: () => ({ drawImage() {}, getImageData: () => ({ data: new Uint8ClampedArray(4) }) }),
         play: () => Promise.resolve(), pause() {}, srcObject: null, width: 0, height: 0 }) },
     class { constructor() {} },                                 // MediaStream
@@ -172,7 +172,9 @@ export async function runScenario(factory, scen, engine) {
     new Map(),                                                   // _assetBlobCache
     () => {                                                      // applyActive: takes simulated time
       rec("apply", { o: env.autoOrientation, p: env.autoProfile });
-      return new Promise((res) => pendingApplies.push({ at: now + scen.applyMs, res }));
+      /* How many applies are on the wire at once - the swap flow must never stack two (the `applying` mutex). */
+      env.inFlight = (env.inFlight || 0) + 1; env.maxInFlight = Math.max(env.maxInFlight || 0, env.inFlight);
+      return new Promise((res) => pendingApplies.push({ at: now + scen.applyMs, res: () => { env.inFlight--; res(); } }));
     },
     (msg) => rec("toast", msg),
     () => rec("renderSelector"),
@@ -245,6 +247,7 @@ export async function runScenario(factory, scen, engine) {
   watcher && watcher.stop && watcher.stop();
   await flush();
   rec("stopped", `${env.autoOrientation}|${api.holdActive()}|${api.turnSince() > 0}`);
+  if (scen.stats) Object.assign(scen.stats, { maxInFlight: env.maxInFlight || 0, endLock: env.autoOrientation });
   return lines;
 }
 
@@ -267,20 +270,26 @@ export function* corpus({ seeds = [1, 2] } = {}) {
   }
 }
 
-export async function runCorpus(appSource, { extraSource = "", seeds, filter, engine, linkMs = 0 } = {}) {
+/* swapFlow: false replays main's watcher (the tick awaits each swap, a swap decided mid-flight is dropped) - what the
+   pins were computed on; true replays THE SWAP FLOW (app.js, 2026-10-05). The knob rides on the location only, so the
+   scenario keys and seeds - and the pinned hash - are the same either way. */
+export async function runCorpus(appSource, { extraSource = "", seeds, filter, engine, linkMs = 0, swapFlow = false } = {}) {
   const factories = new Map();
   const hash = createHash("sha256");
-  const perScenario = new Map();
+  const perScenario = new Map(), perStats = new Map();
   let n = 0, events = 0;
   for (const scen of corpus({ seeds })) {
     if (filter && !filter(scen)) continue;
     let f = factories.get(scen.search);
     if (!f) { f = makeWorld(appSource, extraSource); factories.set(scen.search, f); }
-    const lines = await runScenario(f, { ...scen, linkMs }, engine);
+    const stats = {};
+    const locSearch = swapFlow ? scen.search : scen.search + (scen.search ? "&" : "?") + "swap_flow=0";
+    const lines = await runScenario(f, { ...scen, linkMs, locSearch, stats }, engine);
     const text = lines.join("\n");
     perScenario.set(scen.key, text);
+    perStats.set(scen.key, stats);
     hash.update(scen.key + "\n" + text + "\n");
     n++; events += lines.length;
   }
-  return { hash: hash.digest("hex"), scenarios: n, events, perScenario };
+  return { hash: hash.digest("hex"), scenarios: n, events, perScenario, perStats };
 }

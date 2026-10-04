@@ -232,6 +232,12 @@ _Last updated: 2026-10-04 · main: the back gate OFF by default · Worker `bd0f1
   top (23:20) is the engine's reading of this product's photo - open.
 - **Open (yours):** ask the vendor for a closer region / why Israel moved ~09-30. When acks are
   back near 150-250ms the back print returns by itself (the gate measures every session).
+- **2026-10-05 - THE SWAP FLOW (CLAUDE.md §2.29):** the 23:57 record showed the cause of "the back
+  print stays on the chest": while a swap was on the wire nothing was measured for 1.67s (the whole
+  back view), so the FRONT went out on the way back. The turn is now read during a swap and the
+  decision waits for the wire instead of being dropped; the shoulder order is available from the
+  2nd reading; a swap never waits for its prompt. Replay corpus: a full 360 ending with the back
+  on the chest 44 -> 12 of 1,008. Whole-room twin A/B and a real session before it is called done.
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
