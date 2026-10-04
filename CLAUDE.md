@@ -1010,6 +1010,16 @@ hands-on-the-hem in its first second (the product photo has the hands down - an 
   it - the product, the date and `fbe85c1` (the render client created with telemetry ON, as main does: a stats loop and an
   HTTP report, no signalling traffic) change together. One OASIS session today separates the product from the rest.
   The experiment code stays TEST-only (a shopper's session never reads `pear_exp`); nothing became a default.
+  **Separated the same evening (two more approved sessions):** OASIS today acked its repeats in 592-769ms (its first back
+  1,258ms) where it acked 128-250ms on 09-27..29 - **not the product**; a PEAK session with the SDK's telemetry off
+  (`?pear_exp=notel`, 5d4ebfb) acked in 1,026-2,324ms with an 11s connect - **not the telemetry**. The driver timed every
+  signalling frame at the network: each `set_image` (104-116 KB) -> `set_image_ack` gap equals the room's own ack to the
+  millisecond - **nothing is lost on the page's thread**. The engine host (`RT_SIGNAL_URL`'s, GeoDNS, TTL 42s) resolves
+  from Israel - and for a German subnet - to one CoreWeave address in Michigan, US, answering `x-decart-rgn: usw2` (now and
+  then `coreweave`): a 220ms TCP round trip from here, against which a ~105 KB reference costs several round trips before
+  the engine even starts. The fast OASIS weeks were served from closer. That is the engine's routing, not a line of ours -
+  the owner's to raise with the vendor (an EU region, or why Israel moved ~09-30). Until it changes the gate stays (asked
+  2026-10-04: "keep the guarantee"): never the back print on the chest, a plain back on a normal turn with this engine.
 - **The camera bridge is off** (§2.9) - `stream-continuity` pins the default.
 
 ## 3. Cross-file lockstep

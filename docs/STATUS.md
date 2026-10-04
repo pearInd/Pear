@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-04 · main @ `923b788` (the back gate `e43952d` + the engine-speed experiment's fix) · Worker `49c3ca31`_
+_Last updated: 2026-10-04 · main @ `5d4ebfb` (+ docs) · Worker `49c3ca31`_
 
 ## At a glance
 
@@ -17,7 +17,7 @@ _Last updated: 2026-10-04 · main @ `923b788` (the back gate `e43952d` + the eng
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
 | garment_cache rows missing `age_group` | code done — full backfill **deferred by choice** (demo products only for now) | main `ef1d28d` |
 | `DECART_ALLOWED_ORIGINS` / token origin | done (Vercel env set + redeployed 2026-10-02); the preview-origin fix is on main with the merge | main |
-| Back-image orientation (front/back on a turn) | in progress — the back gate (§2.28) ends "back print on the chest", but on the PEAK tee the engine is too slow for a normal turn and the back print does not appear (4 real sessions 2026-10-04); neither a smaller image nor pre-uploading speeds the engine; **direction for the back on a slow engine waiting on you** | main |
+| Back-image orientation (front/back on a turn) | in progress — the back gate (§2.28) ends "back print on the chest", but on the PEAK tee the engine is too slow for a normal turn and the back print does not appear (4 real sessions 2026-10-04); neither a smaller image nor pre-uploading speeds the engine; the cause is the engine's region (Michigan, US since ~09-30); **raising it with the vendor is yours** | main |
 | Hebrew/English i18n | done (core) | main |
 | Security hardening + client-code hiding | done on main with the merge (engines server-side, minified/cloaked build, the render engine behind our edge - CLAUDE.md §2.11-§2.24); **the GitHub repo is still public** and **key rotation pending on you** | main |
 | Render engine account | the Decart key was replaced by you 2026-10-04 (Vercel Production + Preview); the old account had run out of credits ("Insufficient credits", now shown to a shopper as "unavailable right now" within ~1.5s) | Vercel env |
@@ -221,10 +221,14 @@ _Last updated: 2026-10-04 · main @ `923b788` (the back gate `e43952d` + the eng
   (`ref`) were no faster. In all four the gate held the back for the whole turn — **no back
   print appears** on a normal-speed turn with this tee. The experiment's upload path had a
   bug (`/v/f`), fixed `923b788` (TEST sessions only).
-- **Open:** (1) is the slow engine this product or the engine since 09-30? one OASIS session
-  today separates them (needs your OK — billed); (2) what to show on a slow engine: the plain
-  back (now), a "pause with your back to the camera" cue + a rule that sends the back on the
-  pause, or loosen the gate (the back-on-chest risk returns).
+- **Separated (2 more approved sessions, same evening):** OASIS is slow today too (repeats
+  592-769ms vs 128-250ms in late September) and the SDK's telemetry off is no faster
+  (1.0-2.3s) — not the product, not us. The network-level ack equals the room's. The engine
+  for Israel now answers from **Michigan, US** (CoreWeave, region `usw2`, ~220ms round trip).
+- **Decided (you, 2026-10-04):** keep the guarantee — never the back print on the chest; a plain
+  back on a normal turn while the engine is this far.
+- **Open (yours):** ask the vendor for a closer region / why Israel moved ~09-30. When acks are
+  back near 150-250ms the back print returns by itself (the gate measures every session).
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
