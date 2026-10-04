@@ -998,6 +998,18 @@ hands-on-the-hem in its first second (the product photo has the hands down - an 
   reference downscaled to 640px; "ref" uploads both references once at connect through the edge (`/f/v1/files` ->
   `RT_FILES_URL`, the sealed key opened) and sends the file id after that. The record carries `ctx.exp`, `exp-small` and
   `exp-upload`. The owner approved 3-4 short real sessions to measure which (if any) brings the acks down.
+  **Ran 2026-10-04 (production, PEAK tee, clip m1 as the camera, one session each) - NEITHER IS FASTER:** base - the back's
+  first send acked 557ms, repeats <= 557, no stall; ref - the uploads took 2.4s at connect and the back BY ID acked in
+  733ms, repeats 521; small (84 -> 61 KB) - 1,481ms, repeats 746-1,103 (that session's connect took 6.0s - the engine was
+  slow all round). A first ref session posted to `/v/f/...` (fixed, 923b788) and fell back to data URLs: 603ms, then
+  repeats 482 -> 1,125 -> **3,468ms** with 3.4s of output stall in the 5s window - nothing of ours on the wire changed.
+  Removing the upload (ref) or a quarter of the bytes (small) does not move the ack: the time is the engine's, and it
+  varies more between sessions than any lever of ours. In all four the gate held the back for the whole turn (110-158
+  deg/s; planned landing 333-565 degrees) - the stated cost above, now measured: the back print does not appear.
+  **Not separated yet:** every fast-ack record (OASIS, 127-325ms) predates 09-30 18:16 and every slow one (PEAK) follows
+  it - the product, the date and `fbe85c1` (the render client created with telemetry ON, as main does: a stats loop and an
+  HTTP report, no signalling traffic) change together. One OASIS session today separates the product from the rest.
+  The experiment code stays TEST-only (a shopper's session never reads `pear_exp`); nothing became a default.
 - **The camera bridge is off** (§2.9) - `stream-continuity` pins the default.
 
 ## 3. Cross-file lockstep

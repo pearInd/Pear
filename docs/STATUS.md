@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-04 · main @ `c2c894a` (the merge of `hide/edge` into main) + the engine-pace / camera-bridge change_
+_Last updated: 2026-10-04 · main @ `923b788` (the back gate `e43952d` + the engine-speed experiment's fix) · Worker `49c3ca31`_
 
 ## At a glance
 
@@ -17,7 +17,7 @@ _Last updated: 2026-10-04 · main @ `c2c894a` (the merge of `hide/edge` into mai
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
 | garment_cache rows missing `age_group` | code done — full backfill **deferred by choice** (demo products only for now) | main `ef1d28d` |
 | `DECART_ALLOWED_ORIGINS` / token origin | done (Vercel env set + redeployed 2026-10-02); the preview-origin fix is on main with the merge | main |
-| Back-image orientation (front/back on a turn) | in progress — the engine on Cloudflare, the front at the side (§2.23-§2.25), timed by the engine's pace on a slow engine (§2.28); the live camera no longer shown on a render stall (§2.9); waiting on a real measurement | main |
+| Back-image orientation (front/back on a turn) | in progress — the back gate (§2.28) ends "back print on the chest", but on the PEAK tee the engine is too slow for a normal turn and the back print does not appear (4 real sessions 2026-10-04); neither a smaller image nor pre-uploading speeds the engine; **direction for the back on a slow engine waiting on you** | main |
 | Hebrew/English i18n | done (core) | main |
 | Security hardening + client-code hiding | done on main with the merge (engines server-side, minified/cloaked build, the render engine behind our edge - CLAUDE.md §2.11-§2.24); **the GitHub repo is still public** and **key rotation pending on you** | main |
 | Render engine account | the Decart key was replaced by you 2026-10-04 (Vercel Production + Preview); the old account had run out of credits ("Insufficient credits", now shown to a shopper as "unavailable right now" within ~1.5s) | Vercel env |
@@ -212,12 +212,19 @@ _Last updated: 2026-10-04 · main @ `c2c894a` (the merge of `hide/edge` into mai
 
 ## Back-image orientation (front/back on a turn)
 - **Stage:** in progress — the most active stream.
-- **Done on main:** angle thresholds `3a9b55d`, post-peak lock `c75307a`, presence
-  `38cc621`, real back photo per orientation `8a4087f`, prompt orientation `0488167`.
-- **On `hide/main-v2` only:** orientation engine moved behind a WebSocket
-  (`854d629`), Cloudflare Worker (`155065b`, not deployed), return-leg timing
-  `e7fc1d2` ("the back disappears too fast"), back sent once before reveal `7f627aa`.
-- **Remaining:** land or retire that branch; deploy decision for the Worker.
+- **On main (production):** the orientation engine on Cloudflare (§2.14), the front at the side
+  (§2.23-§2.25), the return timed by the engine's pace (`0d0c087`), the back gate (`e43952d`:
+  a BACK whose return would land on the chest is held), the camera never shown during a
+  measurement (`af5b705`). Worker `49c3ca31`.
+- **Measured 2026-10-04 (4 approved real sessions, PEAK tee, CLAUDE.md §2.28):** the engine
+  acknowledged references in 482-3,468ms; a smaller image (`small`) and pre-uploaded files
+  (`ref`) were no faster. In all four the gate held the back for the whole turn — **no back
+  print appears** on a normal-speed turn with this tee. The experiment's upload path had a
+  bug (`/v/f`), fixed `923b788` (TEST sessions only).
+- **Open:** (1) is the slow engine this product or the engine since 09-30? one OASIS session
+  today separates them (needs your OK — billed); (2) what to show on a slow engine: the plain
+  back (now), a "pause with your back to the camera" cue + a rule that sends the back on the
+  pause, or loosen the gate (the back-on-chest risk returns).
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
