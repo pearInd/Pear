@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-04 · main: the back gate OFF by default · Worker `bd0f14a0`_
+_Last updated: 2026-10-05 · main @ `30d35e9` (THE SWAP FLOW) · Worker `bd0f14a0`_
 
 ## At a glance
 
@@ -237,7 +237,11 @@ _Last updated: 2026-10-04 · main: the back gate OFF by default · Worker `bd0f1
   back view), so the FRONT went out on the way back. The turn is now read during a swap and the
   decision waits for the wire instead of being dropped; the shoulder order is available from the
   2nd reading; a swap never waits for its prompt. Replay corpus: a full 360 ending with the back
-  on the chest 44 -> 12 of 1,008. Whole-room twin A/B and a real session before it is called done.
+  on the chest 44 -> 12 of 1,008. Whole-room twin A/B (that day's engine, 11 recorded 360s x 2):
+  back print on the chest 7.3s in 15/22 runs -> 2.5s in 8/22. Shipped `30d35e9` (room only, no
+  Worker change). One real production session (driver, clip m1, PEAK): readings every ~250ms
+  through both swaps, BACK sent 4ms after the decision (ack 597ms), FRONT at the side (order -0.22)
+  6ms after it (ack 542ms); the render showed the back print on the back. **Next: your measurement.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
