@@ -994,6 +994,12 @@ hands-on-the-hem in its first second (the product photo has the hands down - an 
   Twin: a slow engine holds the back on every fast clip (back-on-front 0), a fast engine shows it (52-62 -> 269-276);
   `return-side` §3d (the three sessions held, a fast engine and a 3x slower turn not, the latch, no engine = the rule).
   **The cost, stated:** with this engine's pace on this tee, a 5-second measurement shows a plain back on almost any turn.
+  **TURNED OFF BY DEFAULT the same night (`?back_gate=1` turns it on):** the first real-body sessions with it (PEAK, two
+  2.4s 360s, the back held both times - lands 389/350) did NOT show a plain back: the FRONT reference held through the
+  turn drew the FRONT print on the shopper's back (clip 23:19, 3.0-3.6s) - "it put the front's drawing on the back too".
+  Worse than the late return it was built to stop, so the default is the open path again (`return-side` §3d asserts it).
+  The second session (23:20) rendered a tank top from the first frame to the last - the engine's reading of this
+  product's photo, seen before the prime and the gate existed (§2.25); not a dispatch.
 - **THE ENGINE-SPEED EXPERIMENT (TEST sessions only, `?pear_exp=small|ref|small-ref`, `engine-exp`):** "small" sends each
   reference downscaled to 640px; "ref" uploads both references once at connect through the edge (`/f/v1/files` ->
   `RT_FILES_URL`, the sealed key opened) and sends the file id after that. The record carries `ctx.exp`, `exp-small` and

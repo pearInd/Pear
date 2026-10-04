@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-04 · main @ `5d4ebfb` (+ docs) · Worker `49c3ca31`_
+_Last updated: 2026-10-04 · main: the back gate OFF by default · Worker `bd0f14a0`_
 
 ## At a glance
 
@@ -226,7 +226,10 @@ _Last updated: 2026-10-04 · main @ `5d4ebfb` (+ docs) · Worker `49c3ca31`_
   (1.0-2.3s) — not the product, not us. The network-level ack equals the room's. The engine
   for Israel now answers from **Michigan, US** (CoreWeave, region `usw2`, ~220ms round trip).
 - **Decided (you, 2026-10-04):** keep the guarantee — never the back print on the chest; a plain
-  back on a normal turn while the engine is this far.
+  back on a normal turn while the engine is this far. **Reversed the same night after your two
+  sessions (23:19/23:20):** the held FRONT reference drew the front print on your back, not a plain
+  back - the gate is off by default again (`?back_gate=1` for an A/B), Worker `bd0f14a0`. The tank
+  top (23:20) is the engine's reading of this product's photo - open.
 - **Open (yours):** ask the vendor for a closer region / why Israel moved ~09-30. When acks are
   back near 150-250ms the back print returns by itself (the gate measures every session).
 

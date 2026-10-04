@@ -366,23 +366,25 @@ console.log("\n── §3d THE BACK WAITS FOR AN ENGINE THAT CAN KEEP UP - the t
   };
   const SESS = [["04:55", PACE["m1-0455"], () => 734, 734], ["05:55", PACE["m2-0555"], (k) => k.lt, 521], ["17:02", PACE["m3-1702"], (k) => k.lt, 715]];
   for (const [name, rec, lat, latHi] of SESS) {
-    const gated = run3(rec, {}, lat, latHi), open = run3(rec, { back_gate: "0" }, lat, latHi);
+    const gated = run3(rec, { back_gate: "1" }, lat, latHi), open = run3(rec, { back_gate: "0" }, lat, latHi);
+    check(`§3d ${name}: the gate is OFF by default (2026-10-04, the front print on the back) - the default is the open path`,
+      JSON.stringify(run3(rec, {}, lat, latHi)) === JSON.stringify(open));
     check(`§3d ${name}: without the gate the session sends BACK then FRONT (what the clip showed)`,
       open.sent[0] === "back" && open.sent.includes("front"), JSON.stringify(open));
     check(`§3d ${name}: with it the BACK is HELD - no back print on the wire for the chest to wear, the front stays on`,
       !gated.sent.includes("back") && gated.held.length >= 1 && gated.held[0].lands > 295, JSON.stringify(gated));
   }
   const rec = PACE["m3-1702"];
-  const fast = run3(rec, {}, () => 150, 190);
+  const fast = run3(rec, { back_gate: "1" }, () => 150, 190);
   check("§3d.1 a fast engine (acks ~150ms) sends the BACK on the same turn - the gate only holds what cannot land in time",
     fast.sent[0] === "back" && fast.held.length === 0, JSON.stringify(fast));
-  const slowTurn = run3(rec, {}, (k) => k.lt, 715, 3);
+  const slowTurn = run3(rec, { back_gate: "1" }, (k) => k.lt, 715, 3);
   check("§3d.2 the same turn three times slower (a ~7.5s 360) gets its BACK on the slow engine",
     slowTurn.sent[0] === "back", JSON.stringify(slowTurn));
   /* THE LATCH: a turn once held stays held until the shopper is square to the lens again - a later BACK on the way round
      (a vote-confirmed one, its average speed decayed) must not land the back print on the chest. */
   {
-    const engine = E.createOrientEngine(E.sanitizeOrientKnobs({}));
+    const engine = E.createOrientEngine(E.sanitizeOrientKnobs({ back_gate: "1" }));
     const tick = (t, o, vote, lock, yaw = 30) => engine.step(E.sanitizeOrientSample({ t, vote, faceSeen: false, poseVoted: !!vote, profileScore: 0,
       yawAbs: yaw, yawAt: t, lostAt: 0, ord: o, ordAt: t, lat: 540, latHi: 680, lock, profile: false, dualView: true }));
     const swapsOf = (acts) => acts.filter((a) => a.do === "swap").map((a) => a.next);
@@ -405,7 +407,7 @@ console.log("\n── §3d THE BACK WAITS FOR AN ENGINE THAT CAN KEEP UP - the t
     }
     check("§3d.5 ...and the next turn starts afresh: a slow one gets its BACK", sent);
   }
-  const blind = run3(rec, {}, () => null, null);
+  const blind = run3(rec, { back_gate: "1" }, () => null, null);
   check("§3d.3 a room that measures no engine is the rule exactly (the back as before)", JSON.stringify(blind) === JSON.stringify(run3(rec, { back_gate: "0" }, () => null, null)));
 }
 
