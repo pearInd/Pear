@@ -4,14 +4,15 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
+_Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · branch `claude/project-thread-cr4uyn`: size-guide capture Phase 2 (PR open)_
 
 ## At a glance
 
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
-| Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **v16 migration + 3 re-saves waiting on you**; next: Phase 2 (not started) | main |
+| Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16, run) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **adidas re-save waiting on you** | main |
+| Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done on the branch, **PR open - your review**; 11-store sweep run from your machine, nothing saved beyond fox/castro | `claude/project-thread-cr4uyn` |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
@@ -28,19 +29,18 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
 
 ## Waiting on you (manual steps)
 
-- [ ] **Run `archive/supabase_setup_v16.sql`** in the Supabase SQL editor (adds `size_system` to
-      `store_size_charts`' unique key; safe to re-run, changes no row). Until it runs, every
-      `--save` writes NOTHING and prints "run archive/supabase_setup_v16.sql" (verified on castro
-      2026-10-03). Confirm with: `SELECT indexname FROM pg_indexes WHERE tablename = 'store_size_charts';`
-      → `store_size_charts_key_v16_idx` present, `store_size_charts_key_idx` gone.
-- [ ] **Then re-save the three stores** (from `scanner/`, where its `.env` lives):
-      `node scan-store.js --size-charts --save https://www.castro.com` — adds the women's EU 32–46
-      chart the old key dropped (dry run 2026-10-03: 3 charts, was 2);
-      `node scan-store.js --size-charts --save https://www.fox.co.il` — dry run shows the same 11
-      charts as before (no chart was lost to the old key there); re-save refreshes them;
-      `node scan-store.js --size-charts --save https://www.adidas.co.il` — **blocked from this
-      machine today** (home page HTTP 403, twice; not probed further). Run it when adidas answers you.
-      Verify: `GET /api/store-size-chart?host=castro.com` should list women/tops twice (alpha + numeric).
+- [x] **`archive/supabase_setup_v16.sql` is in place** — castro's third chart (the women's EU 32–46
+      table the old key dropped) is live: `GET /api/store-size-chart?host=castro.com` answered 3 charts
+      on 2026-10-05. fox answers its 5 store-wide charts, as before.
+- [ ] **Re-save adidas** when it answers you: `node scan-store.js --size-charts --save https://www.adidas.co.il`
+      (from `scanner/`). It refused your machine in the 2026-10-03 sweep (HTTP 403 on the static and the
+      browser stage); its 2 charts from the 2026-10-03 capture are still live.
+- [ ] **Review the Phase 2 PR** (`claude/project-thread-cr4uyn` → main) — the capture CLI. Nothing merges
+      or saves without you.
+- [ ] **Decide which sweep charts to save** (none saved; dry runs only, see *Phase 2 coverage*): delta's 4
+      store-wide charts look ready; hoodies (men's tops with only L/XXL), twentyfourseven (bottoms
+      0/1/2/3/4) and terminalx's image chart (women/kids tops 92/98) look wrong - check before saving;
+      renuar, twentyfourseven and terminalx are product-scoped (the room does not serve those yet).
 
 - [x] Size-guide dry runs for all 4 stores — done 2026-10-02 (results under *Store size guides*).
 - [x] fox.co.il captured with `--save` — 11 rows in `store_size_charts`, 5 store-level served by the API.
@@ -114,7 +114,8 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
 ## Store size guides
 - **Stage:** in progress. Phase 0 (measure) + Phase 1 (stored fallback) shipped in `bd766b2`;
   **§2.5b changed 2026-10-03 (`0fccee8`): a confident stored chart now DECIDES the adult size**.
-  Phases 2–6 not started.
+  Phase 2 (capture any store) built on `claude/project-thread-cr4uyn`, PR open (below).
+  Phases 3–6 not started.
 - **Done:** widget reads the PDP chart (`2026-09-17` spec); scanner `--size-charts`
   dry run + `--save` capture; `store_size_charts` (v15, run); `GET /api/store-size-chart`;
   room fallback with gender/type/overlap guards; EU/US aliases; `[PEAR] store chart vs
@@ -151,9 +152,9 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
      `k·sqrt(weight/height)` estimate (±4–6cm); abstains below 35% / within a 10-point margin, on
      unknown garment gender with gendered charts, or with nothing comparable. Runs after the
      kernel's adult/child + no-match decisions (guard untouched). `trace:prompt` byte-identical.
-- **Remaining:** the v16 run + re-saves above. **Phase 2** (widget sightings) — approved, not
-  started; the only route to terminalx (out of scope for now). Phase 3 (vision) has zero
-  measured demand. Known limits: (a) a product sold in NUMERIC tops sizes (EU 34–46) is routed
+- **Remaining:** the adidas re-save above; Phase 2's review (below). Widget sightings (the earlier
+  Phase 2 idea) not started - the browser path now reaches terminalx without it. Phase 3 (vision)
+  has zero measured demand. Known limits: (a) a product sold in NUMERIC tops sizes (EU 34–46) is routed
   to bottoms by `isPantsProduct()`'s size-run tier (pre-existing), so a numeric women's TOPS
   chart (castro's EU table) is stored but today only usable through its letter aliases;
   (b) with only height+weight, the estimate decides only when the body sits well inside a band
@@ -161,8 +162,50 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
   men's waist coefficient is calibrated on a derived column (weakest of the three); (d) the
   widget's PDP chart never decides (no audience labels) — it stays a tie-break; (e) the adidas
   "unknown/adult/tops" exclusion above is open.
-- **Open decisions:** `hide/main-v2` moved this logic server-side (`b2ac5ad`, `dae0138`) —
-  which shape is canonical once that branch lands.
+- **Open decisions:** none on the code shape - server-side (`lib/sizing.js`) since the `hide/edge`
+  merge (CLAUDE.md §2.27).
+
+### Phase 2 — capture any store (branch `claude/project-thread-cr4uyn`, PR open)
+- **Stage:** done on the branch, waiting on your review. Not on main; nothing saved by it.
+- **Commands:** `npm run capture -- <store-url> [--dry-run]` (static → browser → image OCR,
+  summary, y/n, save, then reads `GET /api/store-size-chart` back); `npm run import:chart --
+  --host <h> (--url|--html|--image) <src> [--gender/--age/--type] [--only n]` (manual, store-wide);
+  `npm run mutation:capture`. How-to: `docs/ADDING-A-STORE.md`.
+- **Sources:** `browser_page` / `browser_modal` / `browser_network` (headless Chromium, clicks the
+  guide and its tabs), `image_ocr` (Gemini reads a chart image, confidence −0.2), `manual_url` /
+  `manual_html` / `manual_image` (−0.1 for an image). Every path goes through the same shared
+  parser, `buildRecords()` and `saveSizeChartRecords()` as Phase 1.
+- **Never worked around:** a store that refuses us (403/429/challenge) is reported BLOCKED with the
+  manual way in; the static stage stops after 3 refusals in a row and the browser is then never
+  started; the browser stops after 2. No stealth, no fingerprint tricks, no CAPTCHA, no proxies.
+- **Done:** WIP from the 2026-10-03 session `eee19e7`; main merged `0bb6c3d` and `71df521`
+  (main `528888a`); a 36-finding review fixed, then a verify pass found 5 more, all fixed with
+  tests in `ffce4a7`: a store that began refusing was re-asked by the browser; a theme's page
+  wrapper (Debut/Brooklyn) read as a guide dialog in a manual import; a chart's `--only` number
+  differed with flags and untyped tables (suits) had none; a guide hidden by CSS (Dawn) never
+  counted as opened; the mutation script restored same-file edits in the wrong order.
+- **Verified 2026-10-05:** unit suite green (4,004 checks, real Chromium for the browser tests);
+  `npm run mutation:capture` 17/17 killed with Chromium (16 + 1 skipped without);
+  `trace:prompt --json` byte-identical to main; `qa:visual` 40/40.
+- **Coverage — sweep from your machine, 2026-10-03, 11 stores, dry runs (all exit 0):**
+
+  | Store | Result |
+  |---|---|
+  | fox.co.il | 11 charts (6 inline product-scoped + 5 linked_page store-wide) - unchanged, no regression |
+  | castro.com | 3 linked_page (incl. the women's EU table) - unchanged, no regression |
+  | terminalx.com | browser_modal: women tops/bottoms XXS–XL (product-scoped) + image_ocr women/kids tops 92/98 (product-scoped, looks wrong) |
+  | delta | 4 linked_page, store-wide |
+  | renuar.co.il | 2 image_ocr bottoms, numeric 32–44 / 36–50 (Kiwi Sizing, product-scoped) |
+  | twentyfourseven | 1 image_ocr bottoms, numeric 0–4 (product-scoped, looks wrong) |
+  | hoodies | 1 men/adult/tops with only L/XXL (looks wrong) |
+  | factory54 | no body measurements (6 guides opened, all size-conversion tables) |
+  | yanga | no size-guide control found |
+  | adidas.co.il | BLOCKED (403, static and browser) |
+  | golfco | BLOCKED (403) |
+
+  The sweep predates the last 5 fixes; re-run a dry run before saving any of them.
+- **Remaining:** your review + merge; which sweep charts to save (Waiting on you). Product-scoped
+  charts are stored but not served (Phase 1 serves store-wide only).
 
 ## Ready-signal product signals fix
 - **Stage:** done — merged as `137188d`.
@@ -281,6 +324,8 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
 ## Other branches (not merged)
 | Branch | Ahead / behind main | Note |
 |---|---|---|
+| `claude/project-thread-cr4uyn` | Phase 2 capture | size-guide capture CLI - PR open, your review |
+| `size-capture-phase2-local` | — | the 2026-10-03 WIP as pushed from your machine; superseded by the branch above |
 | `hide/edge` | merged into main 2026-10-04 | the hidden build - main now |
 | `hide/main-v2` | superseded by `hide/edge` | not to be merged |
 | `harden/hide-client-logic` | 46 / 10 | experiments |
