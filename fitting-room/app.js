@@ -9601,6 +9601,21 @@ function createOrientationWatcher() {
     try { return new URLSearchParams(location.search).get("swap_flow") !== "0"; } catch (_) { return true; }
   })();
   let pendingSwap = null;           // { next, predictive } - decided while the wire was busy (SWAP_FLOW)
+  /* THE LANDING, PROJECTED (lib/orient-engine.js, 2026-10-05): the engine can ask for a swap a little later than now -
+     the moment its projection lands the reference at the side, when that falls between two ~250ms readings. One timer;
+     any newer swap the engine decides supersedes it, and stop() clears it. */
+  let delayedSwapTimer = null;
+  function delayedSwap(a) {
+    if (delayedSwapTimer) clearTimeout(delayedSwapTimer);
+    if (typeof traceOrient === "function") traceOrient("swap-delay", { next: a.next, ms: a.delay });
+    return new Promise((resolve) => {
+      delayedSwapTimer = setTimeout(() => {
+        delayedSwapTimer = null;
+        if (disposed) { resolve(); return; }
+        maybeSwap(a.next, a.predictive === true).then(resolve, resolve);
+      }, Math.max(0, Math.min(400, Number(a.delay) || 0)));
+    });
+  }
   /** The swap decided while another write held the wire, now that it is free - see SWAP_FLOW. */
   function runPendingSwap() {
     const p = pendingSwap;
@@ -10417,7 +10432,12 @@ function createOrientationWatcher() {
         else if (a.do === "reanchor") maybeReanchorPrompt().catch(() => {});
         /* THE SWAP FLOW: not awaited - the next tick keeps reading the turn while this one is on the wire (main awaited:
            ?swap_flow=0). */
-        else if (a.do === "swap") { const sw = maybeSwap(a.next, a.predictive === true); if (SWAP_FLOW) sw.catch(() => {}); else await sw; }
+        else if (a.do === "swap") {
+          /* A newer decision supersedes a delayed one (THE LANDING, PROJECTED); a delay is honoured only with the flow. */
+          if (delayedSwapTimer) { clearTimeout(delayedSwapTimer); delayedSwapTimer = null; }
+          const sw = SWAP_FLOW && a.delay > 0 ? delayedSwap(a) : maybeSwap(a.next, a.predictive === true);
+          if (SWAP_FLOW) sw.catch(() => {}); else await sw;
+        }
       }
     } catch (_) {} finally { sampling = false; }
   }, ORIENT_SAMPLE_MS);
@@ -10426,6 +10446,7 @@ function createOrientationWatcher() {
     stop() {
       disposed = true;
       clearInterval(timer);
+      if (delayedSwapTimer) { clearTimeout(delayedSwapTimer); delayedSwapTimer = null; }   // THE LANDING, PROJECTED
       /* A hold raised mid-turn outlives the watcher otherwise: the sampler that would
          have released it is gone, and the shopper is left staring at a frozen still with
          the live feed hidden underneath it forever. */
@@ -10478,7 +10499,7 @@ function createOrientationWatcher() {
    parameters, and no others, are forwarded - the tuning knobs, never the garment, the
    store key or anything else on the page URL. */
 const ORIENT_KNOB_KEYS = ["pose_pass", "post_peak", "early_turn", "early_turn_return", "early_turn_slow",
-  "early_turn_speed", "early_turn_loss", "predict_back", "return_side", "lat_lead", "back_gate"];
+  "early_turn_speed", "early_turn_loss", "predict_back", "return_side", "lat_lead", "back_gate", "lead_project"];
 const ORIENT_LINK_STEP_TIMEOUT_MS = 1200;   // a healthy link answers in ~10ms; past this, prove it with a ping
 const ORIENT_LINK_STEP_HARD_MS = 4000;      // past this a reply is abandoned and the link replaced regardless
 const ORIENT_LINK_RETRY_MS = 3000;

@@ -171,7 +171,7 @@ console.log("\n── §4 the decision is absent from the browser, and the tick 
   check("no decision means no swap - only the pose-independent re-anchor keeps its cadence",
     /if \(!acts\) \{ maybeReanchorPrompt\(\)\.catch\(\(\) => \{\}\); return; \}/.test(tick));
   check("the swap is the only awaited action, and only without the swap flow (main's ?swap_flow=0)", (tick.match(/await /g) || []).length === 3 &&
-    /a\.do === "swap"\) \{ const sw = maybeSwap\(a\.next, a\.predictive === true\); if \(SWAP_FLOW\) sw\.catch\(\(\) => \{\}\); else await sw; \}/.test(tick),
+    /a\.do === "swap"\) \{\s*\n(?:\s*\/\*[^\n]*\*\/\s*\n)?\s*if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n\s*const sw = SWAP_FLOW && a\.delay > 0 \? delayedSwap\(a\) : maybeSwap\(a\.next, a\.predictive === true\);\s*\n\s*if \(SWAP_FLOW\) sw\.catch\(\(\) => \{\}\); else await sw;\s*\n\s*\}/.test(tick),
     (tick.match(/[^\n]*await [^\n]*/g) || []).join(" | "));
 }
 

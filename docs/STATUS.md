@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-05 · main @ `30d35e9` (THE SWAP FLOW) · Worker `bd0f14a0`_
+_Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
 
 ## At a glance
 
@@ -241,7 +241,12 @@ _Last updated: 2026-10-05 · main @ `30d35e9` (THE SWAP FLOW) · Worker `bd0f14a
   back print on the chest 7.3s in 15/22 runs -> 2.5s in 8/22. Shipped `30d35e9` (room only, no
   Worker change). One real production session (driver, clip m1, PEAK): readings every ~250ms
   through both swaps, BACK sent 4ms after the decision (ack 597ms), FRONT at the side (order -0.22)
-  6ms after it (ack 542ms); the render showed the back print on the back. **Next: your measurement.**
+  6ms after it (ack 542ms); the render showed the back print on the back.
+- **2026-10-05 - THE LANDING, PROJECTED (CLAUDE.md §2.30):** "only fast turns fail". The 06:09
+  (fast) and 05:55 records: the return's right reading had arrived and the rule missed it (by
+  under 1 degree at 06:09) - it ignored the reading's age and used the turn's average speed. Now
+  it projects with both and schedules between readings: the two fast sessions replay 250-290ms
+  earlier, the slow one (06:11) within 64ms. Worker deploy after the room.
 
 ## Hebrew/English i18n
 - **Stage:** done (core).

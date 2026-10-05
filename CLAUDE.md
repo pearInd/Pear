@@ -1054,6 +1054,24 @@ window closed (4.1-4.8s of the clip). Two more of ours in the same record: 411-5
 - **The record names the waits:** `apply-wait` {ref, prompt, settled} when a payload took >30ms to build, `wire-wait`
   {label, ms} when a write queued >30ms, `swap-pend` when a decision waited for the wire.
 
+### 2.30 THE LANDING, PROJECTED - a fast return goes out on time (2026-10-05)
+"It only fails when I turn fast; turning slowly works. Make it react much faster, without the shirt jumping." Two fast 360s
+read frame by frame against their records (06:09 - a ~2.1s 360 - and 05:55): the front reached the body 0.25-0.35s after
+it passed the side - the back print on the chest - and in both the reading the return should have gone out on had already
+arrived. The 2026-10-04 lead rule (`angle + avg x (lat - 200) >= 270`) missed it at 06:09 by under one degree (269.x on
+the Worker; the next reading was 250ms - ~50 degrees - later). What it left out:
+- **the reading's age** - taken 120-160ms before the tick (`oa`), so the body was already 25-30 degrees further round;
+- **the speed now** - the return runs faster than the turn's average (179 vs 152 deg/s there): the last plausible step's
+  own speed (measured across the deepest point on each reading's own leg), the average only without one;
+- **the tick's grain** - a reading every ~250ms is 45-60 degrees of a fast turn.
+`makeEarlyTurnTrigger` (`LEAD_SCHEDULE_MS`, `?lead_project=0` is the 2026-10-04 rule) now fires when
+`angle + speed x (age + lat - 200) >= 270`, and when that landing is due before the next reading the fire carries a
+`delay` the room honours (`delayedSwap()`, THE SWAP FLOW only; a newer swap supersedes it; `stop()` clears it). An old room
+ignores the delay and sends at once - up to a tick early, never later than before. **Deploy the room first, then the Worker.**
+Replayed from the records (`return-side` §3e): 06:09 fires on its -0.72 reading at once (250ms sooner, with ~30 degrees of
+margin); 05:55 on its -0.82 (290ms before the 2026-10-04 rule, 500ms before the record); 06:11 (slow) within 64ms of before;
+every outbound BACK unchanged. The twin calibrated to the clips (the render switch 550-750ms after the ack, not 480).
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

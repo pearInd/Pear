@@ -357,7 +357,7 @@ console.log("\n── wiring: single-view items get the SAME protection, with th
      the wire, and a swap decided meanwhile waits in pendingSwap. Main's await is ?swap_flow=0. maybeSwap still owns the
      hold's lifecycle; the hold covers nothing by default (§2.9), it only gates topology reconditioning. */
   check("...while maybeSwap is awaited only without the swap flow (main's ?swap_flow=0) - it still owns the hold's lifecycle",
-    /a\.do === "swap"\) \{ const sw = maybeSwap\(a\.next, a\.predictive === true\); if \(SWAP_FLOW\) sw\.catch\(\(\) => \{\}\); else await sw; \}/.test(watcher));
+    /a\.do === "swap"\) \{\s*\n(?:\s*\/\*[^\n]*\*\/\s*\n)?\s*if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n\s*const sw = SWAP_FLOW && a\.delay > 0 \? delayedSwap\(a\) : maybeSwap\(a\.next, a\.predictive === true\);\s*\n\s*if \(SWAP_FLOW\) sw\.catch\(\(\) => \{\}\); else await sw;\s*\n\s*\}/.test(watcher));
   check("maybeSwap is only ever invoked for a dual-view session",
     /else if \(dualView && confirmed\) act\(\{ do: "swap", next: lastVote, predictive: false \}\);/.test(watcher));
 }

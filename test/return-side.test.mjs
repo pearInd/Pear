@@ -343,6 +343,66 @@ console.log("\n── §3c the two PEAK sessions of 2026-10-04, from their own r
   }
 }
 
+console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one of 2026-10-05, from their own records ──");
+{
+  /* "It only fails when I turn fast." 06:09 (a ~2.1s 360) and 05:55 (2026-10-04): the clips show the front reaching the
+     body 0.25-0.35s after it passed the side - the print on the chest - and the reading the return should have gone out on
+     had already arrived in both. 06:11 is the same shopper turning slowly, reported as working. Each replay feeds the
+     record's own samples (the browser's clock - t, the reading ages oa/ya, the engine's pace lt) to a fresh engine, the
+     lock following the replay's own swaps; `delay` is kept, as the room would honour it. */
+  const replay = (rec, knobs) => {
+    const engine = E.createOrientEngine(E.sanitizeOrientKnobs({ back_gate: "0", ...knobs }));
+    let l = rec.ticks[0].l; const sent = [];
+    for (const k of rec.ticks) {
+      const acts = engine.step(E.sanitizeOrientSample({ t: k.t, vote: k.v, faceSeen: !!k.f, poseVoted: !!k.pv, profileScore: k.ps || 0,
+        yawAbs: k.y, yawAt: k.y === null ? 0 : k.t - k.ya, lostAt: k.la === null ? 0 : k.t - k.la,
+        ord: k.o, ordAt: k.o === null ? 0 : k.t - (k.oa ?? 0), lat: k.lt, lock: l, profile: !!k.p, dualView: !!k.d }));
+      for (const a of acts) if (a.do === "swap" && a.next !== l) { sent.push({ next: a.next, t: k.t - rec.reveal + (a.delay || 0), at: k.t - rec.reveal, o: k.o, delay: a.delay || 0 }); l = a.next; }
+    }
+    return sent;
+  };
+  const ret = (sw) => sw.find((x, i) => x.next === "front" && sw.slice(0, i).some((y) => y.next === "back"));
+  const recorded = (rec) => ret(rec.ticks.filter((k) => k.sw.length).map((k) => ({ next: k.sw[0], t: k.t - rec.reveal, o: k.o })));
+  {
+    const rec = PACE["f-0609"], R = recorded(rec), on = ret(replay(rec, {})), off = ret(replay(rec, { lead_project: "0" }));
+    check(`§3e.1 06:09 (fast): the record's return went out on the side reading (o=${R && R.o}, ${R && R.t}ms)`, !!R && R.o === 0.04 && R.t === 2617, JSON.stringify(R));
+    check(`§3e.1 ...the projected rule sends it on the reading before, at once - o=${on && on.o}, ${R && on ? R.t - on.t : "?"}ms sooner`,
+      !!on && on.o === -0.72 && on.delay === 0 && R.t - on.t >= 240, JSON.stringify(on));
+    /* The 2026-10-04 rule sat ON the line there: 224 + 0.157 x 297 = 270.7 in this replay, 269.x on the Worker (the record's
+       ages are rounded) - it did not fire live. The projection clears it by ~30 degrees: with every reading 40ms younger it
+       still fires on that reading. */
+    const younger = { ...rec, ticks: rec.ticks.map((k) => ({ ...k, oa: k.oa === null ? null : Math.max(0, k.oa - 40) })) };
+    const y40 = ret(replay(younger, {}));
+    check("§3e.1 ...with a margin, not on the line: readings 40ms younger fire on the same one", !!y40 && y40.o === -0.72, JSON.stringify(y40));
+    check("§3e.1 ...and ?lead_project=0 is the 2026-10-04 rule (on its line: here or one reading later)", !!off && (off.o === -0.72 || off.o === 0.04), JSON.stringify(off));
+  }
+  {
+    const rec = PACE["m2-0555"], R = recorded(rec), on = ret(replay(rec, {})), off = ret(replay(rec, { lead_project: "0" }));
+    check(`§3e.2 05:55 (fast): the projection sends the return at ${on && on.t}ms (o=${on && on.o}) - the 2026-10-04 rule ${off && off.t}ms, the record ${R && R.t}ms`,
+      !!on && !!off && !!R && off.t - on.t >= 250 && R.t - on.t >= 450 && on.o >= -0.85, JSON.stringify({ on, off, R }));
+  }
+  {
+    const rec = PACE["s-0611"], on = ret(replay(rec, {})), off = ret(replay(rec, { lead_project: "0" }));
+    check(`§3e.3 06:11 (slow - reported as working): the return within 150ms of the 2026-10-04 rule (${on && on.t} vs ${off && off.t}ms)`,
+      !!on && !!off && Math.abs(on.t - off.t) <= 150, JSON.stringify({ on, off }));
+    check("§3e.3 ...where it falls between two readings it carries a delay, never longer than a tick", !!on && on.delay > 0 && on.delay <= 260, JSON.stringify(on));
+  }
+  {
+    /* Every outbound BACK is untouched: the projection only reads the BACK leg. */
+    for (const name of ["f-0609", "m2-0555", "s-0611", "m1-0455", "m3-1702"]) {
+      const on = replay(PACE[name], {}), off = replay(PACE[name], { lead_project: "0" });
+      const back = (sw) => JSON.stringify(sw.filter((x) => x.next === "back").slice(0, 1));
+      check(`§3e.4 ${name}: the outbound BACK is the same with the projection`, back(on) === back(off), JSON.stringify({ on, off }));
+    }
+  }
+  check("§3e.5 both knob lists carry lead_project", E.ORIENT_KNOB_KEYS.includes("lead_project") && /const ORIENT_KNOB_KEYS = \[[^\]]*"lead_project"/.test(APP));
+  check("§3e.6 the room honours a delay only with the swap flow; a newer swap supersedes it; stop() clears it",
+    /const sw = SWAP_FLOW && a\.delay > 0 \? delayedSwap\(a\) : maybeSwap\(a\.next, a\.predictive === true\);/.test(APP) &&
+    /if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n\s*const sw = /.test(APP) &&
+    /clearInterval\(timer\);\s*\n\s*if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}/.test(APP) &&
+    /Math\.max\(0, Math\.min\(400, Number\(a\.delay\) \|\| 0\)\)/.test(APP));
+}
+
 console.log("\n── §3d THE BACK WAITS FOR AN ENGINE THAT CAN KEEP UP - the three PEAK sessions of 2026-10-04 ──");
 {
   /* The 17:02 session: the return FRONT went out as early as the readings allowed (~245 degrees) and the engine took 1,582ms
