@@ -250,7 +250,14 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
   back-to-side jump in one reading counts as a step (`c781818`, Worker `32f73241`) - a real
   ~300 deg/s session had its return held for the chest by the snap filter. Real sessions this
   round: 3 (budget 50). One hit a congested uplink (image acks ~1.25s, the orientation link
-  1.1s) - nothing to read from it. **Next: your measurement, fast and slow.**
+  1.1s) - nothing to read from it.
+- **2026-10-05 - every decision on a fresh pose reading (`528888a`, §2.31)** and **the session
+  cap at the edge (`2839d9c`, Worker `83081607`, §2.32)**. Verified live: a fast real session
+  (1.2x) read every tick 2-4ms fresh (was 4-215ms), BACK at ~60 degrees, FRONT by the
+  projection at ~220 with a scheduled send - the render showed the back print on the back and
+  the front print back on the chest, no back on the chest; a normal session after the cap ran
+  15.6s end to end. One TEST session on a frozen machine stayed open ~5 minutes before the cap
+  existed. **Next: your measurement, fast and slow.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
