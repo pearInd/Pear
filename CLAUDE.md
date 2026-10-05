@@ -1078,6 +1078,16 @@ every outbound BACK unchanged. The twin calibrated to the clips (the render swit
   §1.19 (|yaw| 40) is still a snap. Even so, a return that fast lands ~0.25s late: the side comes one reading after the
   deepest back, and the deepest reading cannot yet say the shopper is coming round.
 
+### 2.31 THE POSE, READ FOR THE DECISION - every decision on a fresh reading (2026-10-05)
+"Make it react as fast as you can." The live pose loop (240ms, `startPresenceWatcher`) and the orientation tick (250ms)
+ran on two timers, so the reading a decision was taken on was 4-215ms old (`oa`/`ya` in every TEST record), wandering with
+their phase - and the outbound BACK, which fires on a reading (the early turn), went out that much later on the body; the
+return's projection (§2.30) corrects for the age, the BACK's rules do not. With `POSE_SYNC` the tick runs the session's
+inference itself before it samples (`_poseInferNow`, at most `POSE_SYNC_WAIT_MS` 120), and the loop's own timer only
+covers what the tick does not (no watcher, a single-view garment): the same ~4 inferences a second, one in flight at a
+time, always fresh. `?pose_sync=0` is the free-running loop. The replay harnesses run the tick without the pose loop
+(typeof-guarded), so `orient-engine` §1 is unchanged; §4 pins the step.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the
