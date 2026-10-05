@@ -1071,6 +1071,12 @@ ignores the delay and sends at once - up to a tick early, never later than befor
 Replayed from the records (`return-side` §3e): 06:09 fires on its -0.72 reading at once (250ms sooner, with ~30 degrees of
 margin); 05:55 on its -0.82 (290ms before the 2026-10-04 rule, 500ms before the record); 06:11 (slow) within 64ms of before;
 every outbound BACK unchanged. The twin calibrated to the clips (the render switch 550-750ms after the ack, not 480).
+- **A back-to-side jump is a step (`SIDE_JUMP_YAW`):** the first real session with it live (the user's 360 at 1.3x, a ~300
+  deg/s return) read -0.98 -> -0.04 between two readings; the 0.8 snap filter threw that away and the FRONT waited for the
+  chest (0.53) - the back print on it ~0.4s. On the BACK leg a jump from the back that lands short of the chest counts when
+  the same reading's world |yaw| says side-on (>= 60; 85 there) - `return-side` §3e.2b (267ms sooner); the synthetic snap of
+  §1.19 (|yaw| 40) is still a snap. Even so, a return that fast lands ~0.25s late: the side comes one reading after the
+  deepest back, and the deepest reading cannot yet say the shopper is coming round.
 
 ## 3. Cross-file lockstep
 

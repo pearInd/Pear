@@ -388,6 +388,14 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
     check("§3e.3 ...where it falls between two readings it carries a delay, never longer than a tick", !!on && on.delay > 0 && on.delay <= 260, JSON.stringify(on));
   }
   {
+    /* A ~300 deg/s return (a real production session, the user's recorded 360 at 1.3x, 2026-10-05 06:48): the order went
+       -0.98 -> -0.04 between two readings, and the 0.8 snap filter threw the step away - the FRONT waited for the chest
+       (0.53, 267ms later) and the back print rode it ~0.4s. A jump from the back that lands short of the chest is a turn. */
+    const rec = PACE["x-0648"], R = recorded(rec), on = ret(replay(rec, {}));
+    check(`§3e.2b a back-to-side jump in one reading is a step: the return on the side reading (${on && on.o}), ${R && on ? R.t - on.t : "?"}ms before the record's chest one (${R && R.o})`,
+      !!on && !!R && on.o === -0.04 && R.o === 0.53 && R.t - on.t >= 250, JSON.stringify({ on, R }));
+  }
+  {
     /* Every outbound BACK is untouched: the projection only reads the BACK leg. */
     for (const name of ["f-0609", "m2-0555", "s-0611", "m1-0455", "m3-1702"]) {
       const on = replay(PACE[name], {}), off = replay(PACE[name], { lead_project: "0" });
