@@ -257,7 +257,13 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
   projection at ~220 with a scheduled send - the render showed the back print on the back and
   the front print back on the chest, no back on the chest; a normal session after the cap ran
   15.6s end to end. One TEST session on a frozen machine stayed open ~5 minutes before the cap
-  existed. **Next: your measurement, fast and slow.**
+  existed.
+- **2026-10-05 - consistency (`300257f`, Worker `136acf18`, CLAUDE.md §2.30):** the landing model
+  (13 recorded 360s x 4 phases, slow/normal/fast, the real measurement and engine) is now a
+  test: the back print on a chest past 300 degrees 0ms / 20ms / 606ms (p90 42ms) over 48 turns at
+  0.8x / 1x / 1.3x (was 730 / 1,330 / 1,960ms), never a third swap. The projection fires from -0.9
+  (the order saturates near the back). A browser sweep in the twin could not run: the machine was
+  on battery at load 52. **Next: your measurement, fast and slow.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
