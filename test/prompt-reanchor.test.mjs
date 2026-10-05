@@ -42,7 +42,7 @@ function extract(startMarker, endMarker) {
   return SRC.slice(start, end);
 }
 
-const fnSrc = extract("async function maybeReanchorPrompt()", "\n\n  const timer = setInterval");
+const fnSrc = extract("async function maybeReanchorPrompt()", "\n\n  /* What only the browser measured");
 check("extracted maybeReanchorPrompt",
   /applyActive\(\)/.test(fnSrc) && /REANCHOR_MS/.test(fnSrc) && /lastReanchorAt/.test(fnSrc));
 
@@ -228,20 +228,28 @@ console.log("\n── §6 the diagnostics clock itself ──");
 
 console.log("\n── §7 wiring: called from the tick, clock shared with maybeUpdateProfile ──");
 {
-  const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);");
+  /* The tick's DECISION half - including WHEN the re-anchor is offered - is the orientation
+     engine's step() since 2026-09-26 (lib/orient-engine.js); the browser's tick executes it.
+     Both halves are read. */
+  const ENGINE = readFileSync(new URL("../lib/orient-engine.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const watcher = extract("const timer = setInterval", "}, ORIENT_SAMPLE_MS);") + "\n" +
+    ENGINE.slice(ENGINE.indexOf("function step(s) {"), ENGINE.indexOf("function armLine()"));
   /* Both calls are now fire-and-forget: awaiting them held the sampler's `sampling` flag
      across a network round-trip, dropping the orientation sample rate to whatever Decart's
      latency happened to be. The ORDER and the GATE are what this asserts, and both are
      unchanged; the mutex that makes it safe (`applying`) is inside the functions. */
-  check("called from the tick, after maybeUpdateProfile, gated the same way (no pending dual-view swap)",
-    /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{[\s\S]*?maybeUpdateProfile\(lastProfileScore\)\.catch[\s\S]*?maybeReanchorPrompt\(\)\.catch\(\(\) => \{\}\);/.test(watcher));
+  check("offered from the tick, after the pose update, gated the same way (no pending dual-view swap)",
+    /if \(!\(dualView && \(confirmed \|\| predictBack\)\)\) \{[\s\S]*?act\(\{ do: "profile"[\s\S]*?act\(\{ do: "reanchor" \}\);/.test(watcher) &&
+    /a\.do === "reanchor"\) maybeReanchorPrompt\(\)\.catch\(\(\) => \{\}\);/.test(watcher));
+  check("...and kept on its cadence when there is NO decision (no orientation link) - it is pose-independent",
+    /if \(!acts\) \{ maybeReanchorPrompt\(\)\.catch\(\(\) => \{\}\); return; \}/.test(watcher));
   check("...in the background, so a slow re-anchor cannot stall the next orientation sample",
     !/await maybeReanchorPrompt\(\);/.test(watcher));
   check("the call is NOT gated on pose - square-on sessions get it too",
     !/autoProfile[^\n]*maybeReanchorPrompt/.test(watcher));
 
-  const upd = extract("async function maybeUpdateProfile(score)", "\n  }\n\n  /* THE STEADY-STATE COUNTERPART");
-  check("maybeUpdateProfile() stamps lastReanchorAt too - a transition IS a fresh anchor",
+  const upd = extract("async function maybeApplyProfile(next)", "\n  }\n\n  /* THE STEADY-STATE COUNTERPART");
+  check("maybeApplyProfile() stamps lastReanchorAt too - a transition IS a fresh anchor",
     /lastProfileAt = Date\.now\(\);[\s\S]*?lastReanchorAt = Date\.now\(\);/.test(upd), upd.slice(0, 600));
 }
 

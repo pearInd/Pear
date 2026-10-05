@@ -21,6 +21,16 @@
    and the chart-aware overflow guard together. */
 import { readFileSync } from "node:fs";
 
+/* THE FIT RUNS SERVER-SIDE since 2026-09-26 (lib/sizing.js behind POST /api/size), and
+   so do the product rules that pick its chart (isAdultPantsProduct(), isWaistInchSizeRun(),
+   isAdultNumericPantsGarment()…) - both are imported from there. calculateSize() asks for
+   the fit through requestSizeVerdict(), defined just outside the Screen 1 slice - every
+   harness below injects this stand-in, which runs the REAL module in-process through the
+   same sanitiser and a JSON round trip. calculateSize() returns a Promise now; calls await it. */
+const SIZING_LIB = await import("../lib/sizing.js");
+const requestSizeVerdict = (evidence) =>
+  Promise.resolve(SIZING_LIB.computeSizeVerdict(SIZING_LIB.sanitizeSizeEvidence(JSON.parse(JSON.stringify(evidence)))));
+
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 let fails = 0;
@@ -40,11 +50,8 @@ function extract(src, startMarker, endMarker) {
 
 console.log("── §1 ADULT_PANTS_SIZE_CHART / isAdultPantsProduct(): the chart and its own confidence rule ──");
 {
-  const catCode = extract(APP, "const ZARA_SIZE_CHART", "function calculateSize()");
-  const cat = await import("data:text/javascript," + encodeURIComponent(
-    catCode + "\nexport { ADULT_PANTS_SIZE_CHART, isAdultPantsProduct, isWaistInchSizeRun, isAdultProduct, isKidsProduct, coreHwPenalty };"
-  ));
-  const { ADULT_PANTS_SIZE_CHART, isAdultPantsProduct, isWaistInchSizeRun, isAdultProduct, isKidsProduct, coreHwPenalty } = cat;
+  const { isAdultPantsProduct, isWaistInchSizeRun, isAdultProduct, isKidsProduct } = SIZING_LIB;
+  const { ADULT_PANTS_SIZE_CHART, coreHwPenalty } = SIZING_LIB;
 
   check("the chart carries the EU ladder 36-46, one row per even size",
     JSON.stringify(ADULT_PANTS_SIZE_CHART.map((r) => r.size)) ===
@@ -128,41 +135,31 @@ console.log("── §1 ADULT_PANTS_SIZE_CHART / isAdultPantsProduct(): the char
 
 console.log("\n── §2 isAdultNumericPantsGarment(): sizing evidence, narrowed by a known item ──");
 {
-  // Wide slice (from the chart definitions, not just resolvedGarmentAgeGroup()) so
-  // WAIST_RUN_FLOOR/WAIST_RUN_CEIL - the plausibility window isAdultPantsProduct()
-  // reuses from categoryFromSizeRun(), see that function's own comment - are actually
-  // in scope for isAdultPantsProduct() below.
-  const code = extract(APP, "const ZARA_SIZE_CHART", "function calculateSize()");
-  // isBottomsGarment lives much later in app.js (the garment-category-detection
-  // region) and is genuinely out of scope for this narrower slice - the real
-  // function guards its call with `typeof isBottomsGarment === "function"` for
-  // exactly this reason (see the comment above it). Injecting it here as an
-  // ordinary parameter gives the extracted code a real binding to call, the same
-  // way `$`/`t` are injected elsewhere in this suite - it does not change app.js.
-  function harness(isBottomsGarment) {
-    const fn = new Function("isBottomsGarment", code + "\nreturn { isAdultNumericPantsGarment };");
-    return fn(isBottomsGarment);
-  }
+  /* The REAL rule, server-side since 2026-09-26. isBottomsGarment() - the garment-region
+     classifier the browser shares with the prompt pipeline - stayed in app.js, so its
+     verdict now travels as item.bottoms: true, false, or null when the browser had none.
+     null keeps the old "typeof isBottomsGarment" guard's meaning - no verdict, no veto. */
+  const { isAdultNumericPantsGarment } = SIZING_LIB;
 
-  const noItemKnown = harness(undefined);
   check("Screen 1, no item known yet (the common case - see resolvedGarmentSizes()'s\n" +
         "        two-stage comment): sizing evidence alone decides",
-    noItemKnown.isAdultNumericPantsGarment(["36", "38", "40"], null) === true);
+    isAdultNumericPantsGarment(["36", "38", "40"], null) === true);
   check("...and a non-pants size list alone decides false, with no item either",
-    noItemKnown.isAdultNumericPantsGarment(["S", "M", "L"], null) === false);
+    isAdultNumericPantsGarment(["S", "M", "L"], null) === false);
 
-  const bottomsTrue = harness(() => true);
   check("a known BOTTOMS item does not override a genuine pants-numeric list",
-    bottomsTrue.isAdultNumericPantsGarment(["36", "38", "40"], { type: "pants" }) === true);
+    isAdultNumericPantsGarment(["36", "38", "40"], { type: "pants", bottoms: true }) === true);
 
-  const bottomsFalse = harness(() => false);
   check("THE NARROWING CASE: a numeric list that reads as pants-numeric, but the item\n" +
         "        is CONFIDENTLY NOT bottoms (e.g. an EU-numbered top run - see\n" +
         "        categoryFromSizeRun()'s own note that an EU run is genuinely ambiguous\n" +
         "        with tops) - the known category wins, ZARA_SIZE_CHART stays in play",
-    bottomsFalse.isAdultNumericPantsGarment(["36", "38", "40"], { type: "shirt" }) === false);
+    isAdultNumericPantsGarment(["36", "38", "40"], { type: "shirt", bottoms: false }) === false);
   check("...and a non-pants list with a known non-bottoms item is still false",
-    bottomsFalse.isAdultNumericPantsGarment(["S", "M", "L"], { type: "shirt" }) === false);
+    isAdultNumericPantsGarment(["S", "M", "L"], { type: "shirt", bottoms: false }) === false);
+  check("an item the browser had NO bottoms verdict for (null) vetoes nothing - the old\n" +
+        "        missing-classifier behaviour, not a silent 'false'",
+    isAdultNumericPantsGarment(["36", "38", "40"], { type: "shirt", bottoms: null }) === true);
 }
 
 console.log("\n── §3 calculateSize() END TO END: chart selection, numeric display, overflow ──");
@@ -198,13 +195,12 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
     const $ = (id) => els[id] ?? null;
     const t = (key) => key;   // identity - assertions below check the KEY, not localized copy
 
-    const code = extract(APP, "const ZARA_SIZE_CHART", "\nfunction onMeasurementKeydown");
-    const fn = new Function("$", "t", "activeItem", "pendingSizes", "pendingAgeGroup", "localStream",
+    const code = extract(APP, "const CHILD_SIZE_SCALE = [", "\nfunction onMeasurementKeydown");
+    const fn = new Function("$", "t", "activeItem", "pendingSizes", "pendingAgeGroup", "localStream", "requestSizeVerdict",
       // currentUserGender lives with the rest of the top-of-file state (declared
-      // well before "const ZARA_SIZE_CHART", this slice's start marker), same
+      // well before "const CHILD_SIZE_SCALE = [", this slice's start marker), same
       // reason currentUserSize/currentSizeCategory/currentBodyCategory are shadowed
-      // here rather than read off app.js's own declaration - see ADULT_PANTS_NUMERIC_SIZES's
-      // own comment in app.js for the general "some harnesses extract a narrower slice" rule.
+      // here rather than read off app.js's own declaration (CLAUDE.md §2.6/§2.7).
       "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null, currentUserGender = null;\n" +
       code +
       "\nreturn { calculateSize, isCompatibleSizeCategory, getUserSize: () => currentUserSize, " +
@@ -213,13 +209,13 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
     // updateSizeMismatchUI() (called at the end of calculateSize()) reads localStream
     // to gate captureBtn - a live camera stream is irrelevant to this suite's
     // assertions, so a truthy stand-in keeps that gate out of the way.
-    const api = fn($, t, activeItem, pendingSizes, pendingAgeGroup, {});
+    const api = fn($, t, activeItem, pendingSizes, pendingAgeGroup, {}, requestSizeVerdict);
     return { api, els };
   }
 
   /* THE CORE CASE: a product whose real size list is the EU pants ladder. */
   const pants = harness({ height: 170, weight: 78, waist: 79, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
-  pants.api.calculateSize();
+  await pants.api.calculateSize();
   check("a pants-numeric product recommends a NUMERIC EU size (42: 170-180cm/70-82kg)",
     pants.api.getUserSize() === "42", pants.api.getUserSize());
   check("...displayed CLEANLY - no letter code, no kids-style suffix",
@@ -233,7 +229,7 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
   /* Waist fine-tunes WHICH pants row wins, same overlap logic ZARA_SIZE_CHART uses -
      168cm/63kg genuinely fits BOTH 38 (160-170cm/55-65kg) and 40 (165-175cm/62-73kg). */
   const pantsWaistLow = harness({ height: 168, weight: 63, waist: 69, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
-  pantsWaistLow.api.calculateSize();
+  await pantsWaistLow.api.calculateSize();
   check("a low waist reading (69cm, inside 38's 68-74cm band but below 40's 72-79cm)\n" +
         "        pulls the recommendation to the smaller of two genuinely-fitting rows",
     pantsWaistLow.api.getUserSize() === "38", pantsWaistLow.api.getUserSize());
@@ -241,13 +237,13 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
   /* A plain letter-sized product is completely unaffected - 179cm/80kg genuinely
      fits ZARA_SIZE_CHART's L row (178-186cm/75-87kg) and no other. */
   const letters = harness({ height: 179, weight: 80, pendingSizes: ["S", "M", "L", "XL"] });
-  letters.api.calculateSize();
+  await letters.api.calculateSize();
   check("a letter-sized product still recommends a LETTER size, unaffected by the new chart",
     letters.api.getUserSize() === "L", letters.api.getUserSize());
 
   /* No product size list at all: never guess pants, ZARA_SIZE_CHART stays the default. */
   const noList = harness({ height: 179, weight: 80 });
-  noList.api.calculateSize();
+  await noList.api.calculateSize();
   check("no product size list at all: falls back to ZARA_SIZE_CHART's letters, never\n" +
         "        a numeric guess",
     /^(XS|S|M|L|XL|XXL|3XL)$/.test(noList.api.getUserSize()), noList.api.getUserSize());
@@ -260,7 +256,7 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
      RESOLVED chart's own ceiling, not a hardcoded one, so a body can overflow one
      chart while genuinely fitting the other depending on which garment it's on. */
   const overflowsLettersOnly = harness({ height: 198, weight: 105, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
-  overflowsLettersOnly.api.calculateSize();
+  await overflowsLettersOnly.api.calculateSize();
   check("198cm/105kg on a PANTS product: ABOVE the EU pants chart's own ceiling\n" +
         "        (195cm/102kg) - overflow, not a silent guess",
     overflowsLettersOnly.els.sizeResult.innerText === "sizeResultOverflow",
@@ -271,7 +267,7 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
     overflowsLettersOnly.api.getUserSize() === null);
 
   const overflowsLettersProduct = harness({ height: 198, weight: 105, pendingSizes: ["S", "M", "L", "XL"] });
-  overflowsLettersProduct.api.calculateSize();
+  await overflowsLettersProduct.api.calculateSize();
   check("THE SAME 198cm/105kg body on a LETTER product: within ZARA_SIZE_CHART's own\n" +
         "        (post-FOX, XXL-extended) ceiling - resolves to XXL, not an overflow",
     overflowsLettersProduct.api.getUserSize() === "XXL", overflowsLettersProduct.api.getUserSize());
@@ -280,7 +276,7 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
 
   /* Genuinely out of BOTH charts. */
   const overflowsBoth = harness({ height: 205, weight: 115, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
-  overflowsBoth.api.calculateSize();
+  await overflowsBoth.api.calculateSize();
   check("a body above EVERY chart's ceiling still gets the overflow copy on the pants\n" +
         "        chart too, and Continue stays locked",
     overflowsBoth.els.sizeResult.innerText === "sizeResultOverflow" &&
@@ -290,7 +286,7 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
      no-match copy, distinguishing "no bigger size exists" from "this body sits in
      neither chart's band". */
   const genuineGap = harness({ height: 176, weight: 62, pendingSizes: ["36", "38", "40", "42", "44", "46"] });
-  genuineGap.api.calculateSize();
+  await genuineGap.api.calculateSize();
   check("a body in the genuine gap between chart rows (not above the ceiling) gets the\n" +
         "        GENERIC no-match copy, not the overflow copy",
     genuineGap.els.sizeResult.innerText === "sizeResultNoMatch", genuineGap.els.sizeResult.innerText);
@@ -310,7 +306,7 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
      step must move the recommendation to 40, the closest EU size actually on the shelf,
      never inventing 42 and never falling back to a letter. */
   const snapDown = harness({ height: 170, weight: 78, waist: 79, pendingSizes: ["36", "38", "40"] });
-  snapDown.api.calculateSize();
+  await snapDown.api.calculateSize();
   check("THE FIX: a body whose genuine EU chart fit (42) isn't in the product's own\n" +
         "        list snaps to 40 - the closest EU size this product actually sells",
     snapDown.api.getUserSize() === "40", snapDown.api.getUserSize());
@@ -324,7 +320,7 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
      product's own EU list - no snap needed, and snapping must never move a
      recommendation that was already correct. */
   const noSnapNeeded = harness({ height: 162, weight: 60, pendingSizes: ["36", "38", "40"] });
-  noSnapNeeded.api.calculateSize();
+  await noSnapNeeded.api.calculateSize();
   check("a genuine chart fit that IS already in the product's own list is left alone\n" +
         "        (162cm/60kg fits EU 38: 160-170cm/55-65kg, and 38 is in this list)",
     noSnapNeeded.api.getUserSize() === "38", noSnapNeeded.api.getUserSize());
@@ -343,13 +339,13 @@ console.log("\n── §3 calculateSize() END TO END: chart selection, numeric d
      smaller VALUE, not merely the first-scraped one - see calculateSize()'s own
      "TIE-BREAK IS AN EXPLICIT 'prefer smaller' RULE" comment for the fix. */
   const snapTieAscending = harness({ height: 170, weight: 78, waist: 79, pendingSizes: ["38", "46"] });
-  snapTieAscending.api.calculateSize();
+  await snapTieAscending.api.calculateSize();
   check("TIE-BREAK (ascending list order): equidistant candidates (38 and 46, both 4\n" +
         "        away from the 42 anchor) resolve to the lower of the two",
     snapTieAscending.api.getUserSize() === "38", snapTieAscending.api.getUserSize());
 
   const snapTieDescending = harness({ height: 170, weight: 78, waist: 79, pendingSizes: ["46", "38"] });
-  snapTieDescending.api.calculateSize();
+  await snapTieDescending.api.calculateSize();
   check("TIE-BREAK (DESCENDING list order - the store scraped its sizes in the\n" +
         "        opposite order): the SAME two equidistant candidates still resolve to\n" +
         "        38, proving the rule is 'prefer the smaller value', not 'prefer\n" +
@@ -365,22 +361,27 @@ console.log("\n── §4 activeSizeLadder() / getSizeDelta(): THE 26-40 REPORT'
      size-up/down as "true to size". activeSizeLadder() is the fix: SIZE_SCALE for a
      letter product, the product's own ascending numeric list for an adult-pants one.
      Extracted narrowly with its real dependencies (resolvedGarmentSizes,
-     isAdultNumericPantsGarment, SIZE_SCALE, activeItem) INJECTED as parameters, same
-     technique §2 above uses for isBottomsGarment - this is the real function body,
-     not a re-implementation. */
-  const code = extract(APP, "function activeSizeLadder() {", "function getFitModifier(");
-  function harness({ sizes, currentSizeCategory = "adult", currentUserSize = null, activeTryOnSize = null } = {}) {
-    const isAdultNumericPantsGarment = (list) => {
+     productVerdictNow, SIZE_SCALE, activeItem) INJECTED as parameters - this is the real
+     function body, not a re-implementation. Since 2026-09-26 the "is this product's own
+     list a numeric pants ladder" answer is lib/sizing.js's (adultNumericPants on the
+     product verdict), read through productVerdictNow(); the stand-in below answers it
+     with a deliberately WIDE rule so the ladder mechanics are exercised on a 26-40 run. */
+  const code = extract(APP, "function activeSizeLadder() {", "/* getFitModifier(), FABRIC_PHYSICS");
+  function harness({ sizes, currentSizeCategory = "adult", currentUserSize = null, activeTryOnSize = null,
+                     verdictUnknown = false } = {}) {
+    const wideNumeric = (list) => {
       const l = (Array.isArray(list) ? list : []).map((s) => String(s).trim().toUpperCase());
       return l.length > 0 && l.every((s) => /^\d{1,2}$/.test(s) && Number(s) >= 24 && Number(s) <= 48);
     };
+    const productVerdictNow = verdictUnknown ? () => null
+      : () => ({ adultNumericPants: wideNumeric(sizes ?? []) });
     const fn = new Function(
-      "resolvedGarmentSizes", "isAdultNumericPantsGarment", "SIZE_SCALE", "activeItem",
+      "resolvedGarmentSizes", "productVerdictNow", "SIZE_SCALE", "activeItem",
       "currentSizeCategory", "currentUserSize", "activeTryOnSize",
       code + "\nreturn { activeSizeLadder, getSizeDelta };"
     );
     return fn(
-      () => sizes ?? [], isAdultNumericPantsGarment, ["XS", "S", "M", "L", "XL", "XXL", "3XL"], null,
+      () => sizes ?? [], productVerdictNow, ["XS", "S", "M", "L", "XL", "XXL", "3XL"], null,
       currentSizeCategory, currentUserSize, activeTryOnSize
     );
   }
@@ -414,6 +415,12 @@ console.log("\n── §4 activeSizeLadder() / getSizeDelta(): THE 26-40 REPORT'
   const missingApi = harness({ sizes: ["36", "38", "40"], currentUserSize: null, activeTryOnSize: "38" });
   check("no currentUserSize yet -> 0, not a throw",
     missingApi.getSizeDelta() === 0);
+
+  const unknownApi = harness({ sizes: ["36", "38", "40"], verdictUnknown: true, currentUserSize: "36", activeTryOnSize: "40" });
+  check("while the server's product verdict is still in flight, the ladder is SIZE_SCALE -\n" +
+        "        the letter answer, never a guess (and the delta abstains to 0, not a throw)",
+    JSON.stringify(unknownApi.activeSizeLadder()) === JSON.stringify(["XS", "S", "M", "L", "XL", "XXL", "3XL"]) &&
+    unknownApi.getSizeDelta() === 0);
 }
 
 console.log("\n── §5 setSizeOverride()'s onLadder check reads the same ladder ──");
@@ -507,7 +514,7 @@ console.log("\n── §6 init(): pendingSizes seeded from the SYNCHRONOUS URL h
     };
   }
   const input = (v) => ({ value: v == null ? "" : String(v) });
-  function endToEnd({ handoffSizes, height, weight }) {
+  async function endToEnd({ handoffSizes, height, weight }) {
     // Stage 1: the REAL init() seed snippet, fed a REAL widget-shaped handoff -
     // exactly the object parseHandoff() returns for a live ?garment_sizes= embed.
     const pendingSizes = runSeed({ name: "Jeans", sizes: handoffSizes });
@@ -534,14 +541,14 @@ console.log("\n── §6 init(): pendingSizes seeded from the SYNCHRONOUS URL h
     };
     const $ = (id) => els[id] ?? null;
     const t = (key) => key;
-    const code = extract(APP, "const ZARA_SIZE_CHART", "\nfunction onMeasurementKeydown");
-    const fn = new Function("$", "t", "activeItem", "pendingSizes", "pendingAgeGroup", "localStream",
+    const code = extract(APP, "const CHILD_SIZE_SCALE = [", "\nfunction onMeasurementKeydown");
+    const fn = new Function("$", "t", "activeItem", "pendingSizes", "pendingAgeGroup", "localStream", "requestSizeVerdict",
       "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null, currentUserGender = null;\n" +
       code +
       "\nreturn { calculateSize, getUserSize: () => currentUserSize };"
     );
-    const api = fn($, t, null, pendingSizes, undefined, {});
-    api.calculateSize();
+    const api = fn($, t, null, pendingSizes, undefined, {}, requestSizeVerdict);
+    await api.calculateSize();
     return { api, els };
   }
 
@@ -557,7 +564,7 @@ console.log("\n── §6 init(): pendingSizes seeded from the SYNCHRONOUS URL h
      because it's a REAL chart row, not an approximation. "32" is also what
      test/numeric-pants-sizing.test.mjs independently pins for this exact body. The
      headline claim this section exists to prove - a number, never "L" - is unchanged. */
-  const jeans = endToEnd({ handoffSizes: "26,28,30,32,34,36,38,40", height: 185, weight: 82 });
+  const jeans = await endToEnd({ handoffSizes: "26,28,30,32,34,36,38,40", height: 185, weight: 82 });
   check("THE FIX, END TO END: 185cm/82kg on a real jeans handoff recommends a NUMBER,\n" +
         "        never a letter like 'L'",
     /^\d+$/.test(jeans.api.getUserSize()), jeans.api.getUserSize());
@@ -570,12 +577,12 @@ console.log("\n── §6 init(): pendingSizes seeded from the SYNCHRONOUS URL h
   // Run it again, and once more with a different body/product pair, precisely because
   // the request asked this be verified "flawlessly multiple times" rather than once -
   // a `new Function` re-parse and re-execution each time, not a cached result.
-  const jeansRepeat = endToEnd({ handoffSizes: "26,28,30,32,34,36,38,40", height: 185, weight: 82 });
+  const jeansRepeat = await endToEnd({ handoffSizes: "26,28,30,32,34,36,38,40", height: 185, weight: 82 });
   check("REPEATED RUN (fresh parse + execution): identical result, no hidden state\n" +
         "        leaking between calls",
     jeansRepeat.api.getUserSize() === "32", jeansRepeat.api.getUserSize());
 
-  const secondBody = endToEnd({ handoffSizes: "36,38,40,42,44,46", height: 172, weight: 78 });
+  const secondBody = await endToEnd({ handoffSizes: "36,38,40,42,44,46", height: 172, weight: 78 });
   check("A DIFFERENT body/product pair (172cm/78kg, a genuinely EU-shaped run - all six\n" +
         "        of the chart's own values): still numeric, still correct (fits EU 42:\n" +
         "        170-180cm/70-82kg, already sold by this product)",
@@ -587,7 +594,7 @@ console.log("\n── §6 init(): pendingSizes seeded from the SYNCHRONOUS URL h
      bands of row 36 (172-198cm/78-105kg) and row 38 (174-200cm/83-112kg) with zero
      penalty and no waist measurement to break the tie, so the first of the two in chart
      order wins - "36", which this product happens to sell anyway. */
-  const thirdBody = endToEnd({ handoffSizes: "28,30,32,34,36", height: 195, weight: 100 });
+  const thirdBody = await endToEnd({ handoffSizes: "28,30,32,34,36", height: 195, weight: 100 });
   check("A THIRD body/product pair (195cm/100kg, a waist-inch run): still numeric,\n" +
         "        resolves to the waist-inch chart's own row 36 (172-198cm/78-105kg)",
     thirdBody.api.getUserSize() === "36", thirdBody.api.getUserSize());
@@ -668,8 +675,8 @@ console.log("\n── §7 THE STALE-currentBodyCategory RACE: closed at goLive()
     };
     const $ = (id) => els[id] ?? null;
     const t = (key) => key;
-    const code = extract(APP, "const ZARA_SIZE_CHART", "\nfunction onMeasurementKeydown");
-    const fn = new Function("$", "t", "localStream",
+    const code = extract(APP, "const CHILD_SIZE_SCALE = [", "\nfunction onMeasurementKeydown");
+    const fn = new Function("$", "t", "localStream", "requestSizeVerdict",
       "let currentUserSize = null, currentSizeCategory = null, currentBodyCategory = null, currentUserGender = null;\n" +
       "let activeItem = null, pendingSizes = undefined, pendingAgeGroup = undefined;\n" +
       code +
@@ -678,7 +685,7 @@ console.log("\n── §7 THE STALE-currentBodyCategory RACE: closed at goLive()
       "getBodyCategory: () => currentBodyCategory, " +
       "setGarment: (sizes, ageGroup) => { pendingSizes = sizes; pendingAgeGroup = ageGroup; } };"
     );
-    const api = fn($, t, {});
+    const api = fn($, t, {}, requestSizeVerdict);
     return { api, els };
   }
 
@@ -686,7 +693,7 @@ console.log("\n── §7 THE STALE-currentBodyCategory RACE: closed at goLive()
   {
     const h = harness(164, 50);
     h.api.setGarment(["8", "10", "12", "14", "16", "18"], "kids");
-    h.api.calculateSize();   // one call is enough here - no swap involved
+    await h.api.calculateSize();   // one call is enough here - no swap involved
     check("body category reads 'child' for a genuinely kids-numeric product",
       h.api.getBodyCategory() === "child", h.api.getBodyCategory());
     check("...the recommendation is a correct kids size (16)",
@@ -699,7 +706,7 @@ console.log("\n── §7 THE STALE-currentBodyCategory RACE: closed at goLive()
   {
     const h = harness(164, 50);
     h.api.setGarment(undefined, "uncertain");   // Screen 1: no product evidence has arrived yet
-    h.api.calculateSize();
+    await h.api.calculateSize();
     check("first pass (no evidence): resolves via ZARA alone, reads 'child'\n" +
           "        (this is the CACHE going stale, exactly as it did in production)",
       h.api.getBodyCategory() === "child", h.api.getBodyCategory());
@@ -713,7 +720,7 @@ console.log("\n── §7 THE STALE-currentBodyCategory RACE: closed at goLive()
       h.api.getBodyCategory() === "child");
 
     // goLive()'s fix: re-run calculateSize() right before checking. This is that call.
-    h.api.calculateSize();
+    await h.api.calculateSize();
     check("THE FIX: once calculateSize() re-runs (as goLive() now does) against the\n" +
           "        CORRECTED evidence, body category flips to the true 'adult'",
       h.api.getBodyCategory() === "adult", h.api.getBodyCategory());
@@ -726,7 +733,7 @@ console.log("\n── §7 THE STALE-currentBodyCategory RACE: closed at goLive()
   {
     const h = harness(172, 60);   // fits ZARA-S and CHILD-18, but NO ADULT_PANTS_SIZE_CHART row
     h.api.setGarment(["36", "38", "40", "42", "44", "46"], "uncertain");   // product A: pants, genuine gap for this body
-    h.api.calculateSize();
+    await h.api.calculateSize();
     check("product A (pants, genuine chart gap for 172/60): resolves 'child' and a\n" +
           "        real 'no match' on ITS OWN candidate search - not itself a bug",
       h.api.getBodyCategory() === "child" && h.api.getSizeCategory() === null,
@@ -740,7 +747,7 @@ console.log("\n── §7 THE STALE-currentBodyCategory RACE: closed at goLive()
       h.api.getBodyCategory() === "child");
 
     // goLive()'s fix, again: re-run calculateSize() right before checking.
-    h.api.calculateSize();
+    await h.api.calculateSize();
     check("THE FIX: re-running calculateSize() for product B alone correctly finds\n" +
           "        'adult' (172cm/60kg genuinely fits ZARA-S: 160-172cm/55-65kg)",
       h.api.getBodyCategory() === "adult", h.api.getBodyCategory());
@@ -753,7 +760,7 @@ console.log("\n── §7 THE STALE-currentBodyCategory RACE: closed at goLive()
   {
     const h = harness(179, 80);   // genuinely fits ZARA-L (178-186cm/75-87kg)
     h.api.setGarment(["8", "10", "12", "14", "16"], "kids");
-    h.api.calculateSize();
+    await h.api.calculateSize();
     check("a genuinely adult-only body (179cm/80kg, fits ZARA-L) against a genuinely\n" +
           "        kids-only product is correctly flagged incompatible",
       h.api.hasSizeCategoryMismatch() === true);

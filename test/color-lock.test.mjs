@@ -20,7 +20,10 @@
         purely additive. */
 import { readFileSync } from "node:fs";
 
-const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8");
+/* The prompt engine moved server-side on 2026-09-26 (lib/prompts.js, CLAUDE.md §2.13). This
+   reads it FIRST and app.js after it: the engine slices/checks find it where it lives now,
+   and every app.js marker used here exists only in the app.js half. */
+const SRC = readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8") + "\n" + readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8");
 
 /* Lifted by brace matching rather than imported: app.js is a 15k-line browser script with
    DOM-coupled module scope. Same technique the sibling suites use. */

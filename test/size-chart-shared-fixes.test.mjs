@@ -17,13 +17,23 @@
            not imported from the scanner copy) for the two pure helpers the widget's
            own PDP path has no live caller for yet.
    size-chart-parser-sync.test.mjs separately pins the scanner copy byte-identical.
+
+   ON THE HIDDEN BUILD (CLAUDE.md §2.12) the widget only COLLECTS the page's grids (the DOM half
+   of these fixes: ARIA div-grids, the inches/cm twin) and sends them raw; the server reads them
+   (lib/sizing.js - the cell half: the glued "86cm"). So §1-§3 read the widget's raw wire through
+   the server's own reader (storeChartWire(): decodeRawSizeChart -> readStoreSizeChart ->
+   encodeSizeChart), which is what reaches the fit, and main's assertions run on that unchanged.
+   The shared parser block lives in scanner/size-chart-reader.src.js now (the scanner's source);
+   §3.2-§5 evaluate it there, and §0 pins the widget's grid finder to it, function for function.
    ============================================================================= */
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { sharedBlock } from "../scripts/sync-size-chart-parser.mjs";
 import { openWidget, PDP } from "./helpers/widget-jsdom.mjs";
+import { storeChartWire } from "../lib/sizing.js";
 
 const PW = readFileSync(new URL("../widget/pear-widget.js", import.meta.url), "utf8");
+const READER = readFileSync(new URL("../scanner/size-chart-reader.src.js", import.meta.url), "utf8");
 
 let fails = 0;
 function check(label, cond, detail) {
@@ -31,7 +41,35 @@ function check(label, cond, detail) {
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}`);
   if (!cond && detail !== undefined) console.log(`        ${detail}`);
 }
-const chartOf = async (markup) => (await openWidget(PDP(markup))).params.get("garment_size_chart") || "";
+/* What the room's fit reads: the widget's raw grids through the server's reader. */
+const chartOf = async (markup) => storeChartWire((await openWidget(PDP(markup))).params.get("garment_size_chart") || "");
+
+console.log("\n── §0 the widget's grid finder IS the scanner reader's ──");
+{
+  /* A function's text from its declaration to the closing brace at its own indent. */
+  const fnText = (src, name) => {
+    const a = src.indexOf(`  function ${name}(`);
+    if (a === -1) return null;
+    const b = src.indexOf("\n  }\n", a);
+    return b === -1 ? null : src.slice(a, b + 4);
+  };
+  const varText = (src, name) => { const m = new RegExp(`\\n  var ${name} = [^\\n]*`).exec(src); return m ? m[0] : null; };
+  for (const name of ["sizeChartIsAriaGrid", "sizeChartIsGridEl", "sizeChartGrid", "sizeChartGridUnit", "sizeChartTwinKey",
+    "sizeChartTables", "sizeChartUnitFromText", "sizeChartTableUnit"]) {
+    const w = fnText(PW, name), r = fnText(READER, name);
+    check(`§0 ${name}() is the same text in the widget and the reader`, !!w && w === r, w ? "differs" : "missing");
+  }
+  for (const name of ["SIZE_CHART_TABLE_SEL", "SIZE_CHART_ARIA_CELL_SEL", "SIZE_CHART_CM_RE", "SIZE_CHART_IN_RE", "SIZE_CHART_DECLARED_IN_RE"]) {
+    const w = varText(PW, name), r = varText(READER, name);
+    check(`§0 ${name} is the same in the widget and the reader`, !!w && w === r, `${w} | ${r}`);
+  }
+  /* ...and the cell/header tier on the server reads units with the same two regexes (CLAUDE.md §3). */
+  const LIBSRC = readFileSync(new URL("../lib/sizing.js", import.meta.url), "utf8");
+  for (const name of ["SIZE_CHART_CM_RE", "SIZE_CHART_IN_RE"]) {
+    const l = (new RegExp(`\\nvar ${name} = [^\\n]*`).exec(LIBSRC) || [""])[0].trim(), w = (varText(PW, name) || "").trim();
+    check(`§0 ${name} is the same in lib/sizing.js (the server's cell tier)`, !!l && l === w, `${l} | ${w}`);
+  }
+}
 /* "cm;container;XS:83-86:71-74:82-85:|S:..." -> { XS: [chest, waist, hips, legs] } */
 const decode = (wire) => {
   const out = {};
@@ -105,7 +143,7 @@ console.log("\n── §3 an Inches | cm toggle pair keeps the cm grid ──");
   /* Same header, same first column, both cm: two audiences' charts, never twins. */
   const MEN = CM_GRID, WOMEN = CM_GRID.replace("83 - 86cm", "78 - 81cm");
   const W = new JSDOM(`<div>${MEN}</div><div>${WOMEN}</div>`).window.document;
-  const api = new Function("d", "console", sharedBlock(PW, "size-token") + sharedBlock(PW, "size-chart-parser") +
+  const api = new Function("d", "console", sharedBlock(PW, "size-token") + sharedBlock(READER, "size-chart-parser") +
     "return { sizeChartTables: sizeChartTables };")(W, { log() {} });
   check("§3.2 two same-shaped cm grids are BOTH kept (a looser twin key would drop an audience)",
     api.sizeChartTables(W).length === 2, api.sizeChartTables(W).length);
@@ -118,7 +156,7 @@ console.log("\n── §3 an Inches | cm toggle pair keeps the cm grid ──");
 
 /* The widget's own shared block, evaluated standalone - the same isolation the scanner
    copy runs in (only `d` and console free), but sliced from pear-widget.js itself. */
-const W = new Function("d", "console", sharedBlock(PW, "size-token") + sharedBlock(PW, "size-chart-parser") +
+const W = new Function("d", "console", sharedBlock(PW, "size-token") + sharedBlock(READER, "size-chart-parser") +
   "return { sizeChartContextClean: sizeChartContextClean, sizeChartUnwrapEnvelope: sizeChartUnwrapEnvelope };")(null, { log() {} });
 
 console.log("\n── §4 CSS-Modules ___hash class tokens are not audience words ──");

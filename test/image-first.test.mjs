@@ -52,7 +52,14 @@
    is the restore path, kept live); composite.test.mjs owns the stitch geometry. */
 import { readFileSync } from "node:fs";
 
-const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The prompt engine moved server-side on 2026-09-26 (lib/prompts.js, CLAUDE.md §2.13). SRC
+   reads it FIRST and app.js after it, so the prompt slice below and every check on the
+   engine's own text find it where it lives now, while the checks on the browser's dispatch
+   sites still read app.js. */
+const SRC = [
+  readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8"),
+  readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8"),
+].join("\n").replace(/\r\n/g, "\n");
 const CFG = readFileSync(new URL("../fitting-room/config.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 let fails = 0;
@@ -629,10 +636,15 @@ console.log("\n── §3 THE RETIREMENT IS REVERSIBLE (this mode will need piec
     "buildLookPrompt() must carry that warning - a look has no other layout signal");
 
   /* The builders keep their parameters so a restore is a two-line edit rather than a
-     re-derivation of applyGarment()'s TOCTOU freeze. */
+     re-derivation of applyGarment()'s TOCTOU freeze. Since the engine moved server-side
+     (2026-09-26) applyGarment() threads its frozen angle into the prompt REQUEST, and the
+     server-side builder still takes the pose parameter, and the frozen edge-on reading
+     rides the request to it (inProfile) - so a restore is still two lines, server-side. */
   check("the builders keep their angle/pose parameters as the restore seam",
     /function buildCompositePrompt\(item, angle, inProfile\)/.test(SRC) &&
-    /buildCompositePrompt\(item, angleAtStart, profileAtStart\)/.test(SRC),
+    /wirePrompt\(item, angleAtStart, "applyGarment", \{ inProfile: profileAtStart \}\)/.test(SRC) &&
+    /buildCompositePrompt\(req\.item, req\.angle, req\.inProfile\)/.test(SRC) &&
+    /const profileAtStart = profileActive\(\);/.test(SRC),
     "the frozen snapshots must stay threaded even while unused");
 }
 
@@ -665,7 +677,7 @@ console.log("\n── §5 AN IMAGE ON EVERY UPDATE AND EVERY RETRY ──");
      prior. This used to be survivable - the prompt still recited a catalog description,
      so SOMETHING garment-shaped rendered. That safety net is gone by design. */
   const apply = SRC.slice(SRC.indexOf("async function applyGarment(item) {"),
-                          SRC.indexOf("\n/**\n * Reads the Screen 1 physical inputs"));
+                          SRC.indexOf("\n/* getAnatomicalAnchor() (restore seam"));
   check("applyGarment sweeps the item's remaining assets when nothing resolved",
     /for \(const candidate of \[g\.front, g\.back, item\.img, item\.composite\]\)/.test(apply));
   check("...and a total failure is an ERROR, not a warning",
@@ -698,7 +710,7 @@ console.log("\n── §5 AN IMAGE ON EVERY UPDATE AND EVERY RETRY ──");
     "a stale 'already sent' belief across a session boundary skips the first real dispatch");
 
   const look = SRC.slice(SRC.indexOf("async function applyLook(top, bottom) {"),
-                         SRC.indexOf("function buildLookPrompt"));
+                         SRC.indexOf("/* buildLookPrompt() (returns lookAnchorPrompt()"));
   /* ── SUPERSEDED BY A STRONGER CONTRACT (2026-09-19, ported from 17d20c7) ─────────────
      This pair used to assert that the image key was OMITTED rather than set to null when
      nothing resolved - on the reasoning that `image: null` is an explicit empty value that

@@ -124,6 +124,10 @@ function roomUrl(base) {
      standard gate still runs at the shipped defaults. */
   if (process.env.PEAR_VISUAL_EARLY_TURN) q.set("early_turn", process.env.PEAR_VISUAL_EARLY_TURN);
   if (process.env.PEAR_VISUAL_EARLY_TURN_RETURN) q.set("early_turn_return", process.env.PEAR_VISUAL_EARLY_TURN_RETURN);
+  /* THE FLIGHT RECORDER (fitting-room/app.js), switched on for this run and saved as flight.json
+     beside the frames: every orientation tick, swap and link event of the harness's 360. Off
+     unless asked, so the standard gate's URL is unchanged. */
+  if (process.env.PEAR_VISUAL_TRACE) q.set("pear_trace", "1");
   return `${base}/fitting-room/index.html?${q}`;
 }
 
@@ -270,6 +274,10 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
 
   /* ── camera, then go live ───────────────────────────────────────────────── */
   await page.locator("#startCamBtn").click();
+  /* The camera guide sits between the button and the camera (once per room load) - clicked
+     through as a shopper would, never skipped: it is UI, not a gate the agent may bypass. */
+  await expect(page.locator("#camGuide")).toBeVisible({ timeout: 10_000 });
+  await page.locator("#camGuideGo").click();
   await expect(page.locator("#captureBtn")).toBeEnabled({ timeout: 30_000 });
   await page.locator("#captureBtn").click();
 
@@ -368,6 +376,11 @@ test("360 turn and re-fit render without gaps, flashes or freezes", async ({ pag
      at. Scored by the revealed-on-prior check in inspect-visuals.mjs. */
   const priorFrames = await page.evaluate(() => window.__pearMockDecart.priorFrames);
   const priorPaintedAt = await page.evaluate(() => window.__pearMockDecart.priorPaintedAt);
+
+  if (process.env.PEAR_VISUAL_TRACE) {
+    const flight = await page.evaluate(() => (window.__pearDebugTrace ? window.__pearDebugTrace() : null));
+    writeFileSync(join(OUT, "flight.json"), JSON.stringify(flight, null, 1));
+  }
 
   writeFileSync(join(OUT, "meta.json"), JSON.stringify({
     generatedAt: new Date().toISOString(),

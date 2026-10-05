@@ -323,6 +323,88 @@
                       their next visit. §5 pins the server half - verification is now
                       idempotent inside the code's own TTL, which consumption does not
                       extend, so a retry the client never chose cannot cost a code.
+     prompt-engine
+                      Every prompt word moved server-side (lib/prompts.js, POST /api/prompt).
+                      Proven exact over 351,779 prompts at the move; this keeps it: the real
+                      browser path (promptFactsOf -> JSON -> sanitiser -> engine) over ~162k
+                      prompts, hashed and compared with a value computed from the PRE-MOVE
+                      engine. Also pins the two isBottomsGarment() copies as identical, the
+                      browser's verdict winning, the facts list agreeing on both sides, and
+                      no prompt wording left in app.js.
+     orient-engine
+                      Layer C's DECISION - front or back, and when the reference swaps - moved
+                      to lib/orient-engine.js (a Cloudflare Worker in production). Proven exact
+                      by replaying 4,116 scripted sessions through the old watcher and the new
+                      shell + engine; this keeps it: 504 of them replayed through the REAL
+                      watcher with the REAL engine behind a JSON round trip, hashed against the
+                      PRE-MOVE watcher. Also pins the values both sides copy, the knob list the
+                      browser forwards, the protocol's bounds, debug gating, and the decision's
+                      absence from app.js. §6: the Worker's /size and /prompt answer exactly
+                      what the server's modules answer, only to the room's origins.
+     room-latency
+                      "The whole interface is laggy" (2026-09-27): the fit and the prompt are
+                      asked at the edge first with the origin as the fallback, the wire
+                      prompts are prefetched before go-live, and the recorder draws only a
+                      new picture. Pins the edge URL derivation, the fallback and its back-off,
+                      the prefetch keys, and the recorder's gate.
+     live-timer
+                      "If the camera doesn't see the whole body it isn't the best result"
+                      (2026-09-29): the camera guide and the 3/5/10s self-timer. The timer
+                      may only decide WHEN an already-verified reveal is shown - off is the
+                      old path, an early render waits for zero, 3s counts after the render,
+                      a torn-down session is never revealed, and nothing in it touches the
+                      session. Run on a fake clock, with two mutations proven to fail it.
+     pose-focus
+                      "It has to work whatever the lighting" (2026-09-29): a far-back shopper in
+                      a wide, backlit frame was never found by the pose model. When the whole
+                      frame finds no body twice, a square window around the shopper is used -
+                      its landmarks mapped back to whole-frame coordinates, following the hips,
+                      handing back after three empty windows; nothing changes while the whole
+                      frame finds the body; one inference per call; the full model is loaded.
+     cloak, rt-proxy
+                      "Nobody should see anything related to the render engine or any AI we use"
+                      (2026-10-03): every shipped file is cloaked (no vendor word survives, same
+                      behaviour), and the engine, its media signalling, its telemetry and the pose
+                      model's binaries are reached only through our edge, which translates.
+     return-side
+                      "The back disappears too fast" (2026-10-01): a swap lands on about the body angle it
+                      was sent at, so main's 50-degree early return put the front on a back-facing body, and
+                      its predictive BACK then put the back on the chest. The return waits for the chest
+                      (the shoulder order past the side); predictive BACK stands aside when the order faces front.
+     back-prime
+                      "The back doesn't show / shows late" (2026-10-01): the render engine is slow on
+                      an image the session has not sent (the back, first time) and fast on a repeat.
+                      The hidden cold-start re-assert now sends the back once, then the front.
+     token-origin
+                      "The live measurement failed: Origin not allowed" on a new preview: the
+                      render token was scoped to DECART_ALLOWED_ORIGINS only. A page on this
+                      server's own host now also names its origin in the token.
+     api-version
+                      The edge answers /size and /prompt from the last deployed copy of the
+                      engines; a stale deploy answered "top" where the room says "shirt"
+                      (2026-09-30). The Worker stamps its answers with the engines' fingerprint
+                      and a built room takes only a matching one - else its own origin.
+     torso-twist
+                      "Recognise it when only my back turns and my legs stay in place"
+                      (2026-09-30): a torso turned away over planted legs - shoulders narrow in
+                      the image, hips stay wide - votes BACK where the shoulder order abstains.
+                      Never on a whole-body turn: twelve recorded 360s replayed, zero activations
+                      (a loosened rule does fire on them); through the real engine the scripted
+                      torso-only turn shows the back and main's measurement does not.
+     size-fit-pin
+                      The size charts and the fit moved server-side (lib/sizing.js,
+                      POST /api/size). The move was proven exact over 1,458,028 cases;
+                      this keeps that conclusion: the real client shell + the real module
+                      over ~258k cases, hashed and compared with a value computed from
+                      the PRE-MOVE browser code. Any change to any recommendation, even
+                      1cm on one band, turns it red until re-pinned on purpose.
+     static-allowlist
+                      "The server was handing out its own source." express.static(__dirname)
+                      served the repo: /server.js, /CLAUDE.md, /package.json, the scanner and
+                      this test directory all answered 200. Slices server.js's real static
+                      block onto a bare express app and asserts both halves - private paths
+                      404 (an absence, so a new "just serve the root" line fails), public
+                      ones still load, and ../ cannot climb out of a public directory.
      ready-signal-signals
                       "The kids verdict never reached the room." Once the classify call
                       settles the widget sends one of three PEAR_UPDATE_GARMENT messages,
@@ -414,6 +496,21 @@ const SUITES = [
   ["scanner-size-charts", "scanner-size-charts.test.mjs"],
   ["store-size-chart-api", "store-size-chart-api.test.mjs"],
   ["stored-size-chart", "stored-size-chart.test.mjs"],
+  ["static-allowlist", "static-allowlist.test.mjs"],
+  ["size-fit-pin", "size-fit-pin.test.mjs"],
+  ["prompt-engine", "prompt-engine.test.mjs"],
+  ["orient-engine", "orient-engine.test.mjs"],
+  ["orient-link", "orient-link.test.mjs"],
+  ["room-latency", "room-latency.test.mjs"],
+  ["live-timer", "live-timer.test.mjs"],
+  ["pose-focus", "pose-focus.test.mjs"],
+  ["torso-twist", "torso-twist.test.mjs"],
+  ["api-version", "api-version.test.mjs"],
+  ["token-origin", "token-origin.test.mjs"],
+  ["back-prime", "back-prime.test.mjs"],
+  ["return-side", "return-side.test.mjs"],
+  ["cloak", "cloak.test.mjs"],
+  ["rt-proxy", "rt-proxy.test.mjs"],
   ["store-chart-recommendation", "store-chart-recommendation.test.mjs"],
   ["browser-capture", "browser-capture.test.mjs"],
   ["image-chart-ocr", "image-chart-ocr.test.mjs"],
@@ -421,6 +518,7 @@ const SUITES = [
   ["capture-flow", "capture-flow.test.mjs"],
   ["ready-signal-signals", "ready-signal-signals.test.mjs"],
   ["garment-cache-age-group", "garment-cache-age-group.test.mjs"],
+  ["engine-exp", "engine-exp.test.mjs"],
 ];
 
 /* ── PREFLIGHT: DOES THE SOURCE EVEN PARSE? ────────────────────────────────────────

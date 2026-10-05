@@ -142,8 +142,11 @@ console.log("\n── §2 THE HIDDEN DEFAULT, VERIFIED AGAINST THE INSTALLED SDK
      the floor puts on the wire. */
   const floor = APP.slice(APP.indexOf("async function resolveInitialConditioning(item)"),
                           APP.indexOf("let _sessionInitialState = null;"));
+  /* The text is built and clamped server-side since 2026-09-26 (wirePrompt(), lib/prompts.js);
+     this file still writes every field of the initial state itself. */
   check("...and this file writes it, rather than letting the SDK default anything",
-    /prompt: \{ text: clampPromptForWire\(/.test(floor) && /image,/.test(floor),
+    /wirePrompt\(item, "front", "initialConditioning"\)/.test(floor) &&
+    /prompt: \{ text: await promptText, enhance: false \}/.test(floor) && /image,/.test(floor),
     floor.slice(-400));
   check("...with enhance explicitly false, the same override every send site makes",
     /enhance: false \}/.test(floor),

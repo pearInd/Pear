@@ -20,6 +20,13 @@
    §5 THE REAL calculateSize(), end to end with a stubbed DOM: the decision lands in
       currentUserSize and the result box, and the guard state (currentSizeCategory,
       currentBodyCategory, the no-match path, Continue) is exactly what it was.
+
+   ON THE HIDDEN BUILD the fit is server-side (lib/sizing.js, CLAUDE.md §2.12): the decision
+   runs inside computeSizeVerdict(), the pick reads the size EVIDENCE the room sends. So the
+   harness runs the room's real sizing slice for the state and the evidence, and the real
+   module behind a JSON round trip and the sanitiser for every verdict - the checks are
+   main's, unchanged, except that a picked chart is compared by value (after the wire it is
+   a copy) and §5 awaits calculateSize() (it waits on the server).
    ============================================================================= */
 import { readFileSync } from "node:fs";
 
@@ -39,24 +46,46 @@ function extract(src, start, end) {
   return src.slice(a, b);
 }
 
-/* The sizing slice the other sizing suites use (CLAUDE.md §2.6 interface), with the
-   module state and the handful of DOM/i18n globals calculateSize() touches stubbed. */
-const SIZING = extract(APP, "const ZARA_SIZE_CHART", "\nfunction onMeasurementKeydown");
+const SIZING = await import("../lib/sizing.js");
+const LIB = readFileSync(new URL("../lib/sizing.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+
+/* The room's sizing slice (CLAUDE.md §2.6 interface) with its module state exposed, and the fit behind
+   requestSizeVerdict() - defined just outside the slice so a harness injects it: here the REAL module,
+   through JSON and the sanitiser, as the wire does. */
+const SLICE = extract(APP, "const CHILD_SIZE_SCALE = [", "\nfunction onMeasurementKeydown");
 const STATE = ["activeItem", "pendingSizes", "pendingAgeGroup", "pendingTitle", "pendingSizeRunType",
   "pendingSizeChart", "pendingGarmentGender", "storedSizeCharts", "storedSizeChartsHost",
   "currentUserSize", "currentSizeCategory", "currentBodyCategory", "currentUserGender", "pendingSoldOutSizes",
   "pendingSoldOutForImg", "__els"];
 const prefix = `let ${STATE.join(", ")};\nactiveItem = null; currentUserGender = null; __els = {};\n` +
   `const $ = (id) => __els[id] || null;\nconst t = (k) => k;\nconst tf = (k) => k;\n` +
-  `const console = { log() {}, warn() {} };\n`;
+  `const console = { log() {}, warn() {}, error() {} };\nconst localStream = {};\n` +
+  `const requestSizeVerdict = (evidence) => Promise.resolve(globalThis.__pearSizeLib.computeSizeVerdict(` +
+  `globalThis.__pearSizeLib.sanitizeSizeEvidence(JSON.parse(JSON.stringify(evidence)))));\n`;
+globalThis.__pearSizeLib = SIZING;
 const setter = `function __set(o) {\n${STATE.map((k) => `  if ("${k}" in o) ${k} = o.${k};`).join("\n")}\n}\n` +
-  "function __get() { return { currentUserSize, currentSizeCategory, currentBodyCategory }; }\n";
-const EXPORTS = ["__set", "__get", "calculateSize", "estimateBodyMeasurements", "storeChartRecommendation",
-  "pickStoredSizeChart", "ZARA_SIZE_CHART", "coreHwPenalty"];
+  "function __get() { return { currentUserSize, currentSizeCategory, currentBodyCategory }; }\n" +
+  /* calculateSize()'s own evidence block (stored-size-chart §0 pins it line for line). */
+  `function __evidence() {
+  const evidence = { height: null, weight: null, chest: null, waist: null, legs: null,
+    gender: currentUserGender || null, storeChart: resolvedStoreSizeChart(), product: sizeProductEvidence() };
+  const storedCharts = typeof storedSizeChartsEvidence === "function" ? storedSizeChartsEvidence() : null;
+  if (storedCharts) { evidence.storedCharts = storedCharts; evidence.garmentGender = resolvedGarmentGender(); }
+  return evidence;
+}
+`;
 const room = await import("data:text/javascript," + encodeURIComponent(
-  prefix + SIZING + "\n" + setter + `export { ${EXPORTS.join(", ")} };`));
-const { __set, __get, calculateSize, estimateBodyMeasurements, storeChartRecommendation,
-  pickStoredSizeChart, ZARA_SIZE_CHART, coreHwPenalty } = room;
+  prefix + SLICE + "\n" + setter + "export { __set, __get, __evidence, calculateSize };"));
+const { __set, __get, calculateSize } = room;
+const { estimateBodyMeasurements, ZARA_SIZE_CHART, coreHwPenalty } = SIZING;
+/* The evidence as the server receives it. */
+const wire = () => SIZING.sanitizeSizeEvidence(JSON.parse(JSON.stringify(room.__evidence())));
+const pickStoredSizeChart = () => SIZING.pickStoredSizeChart(wire());
+const storeChartRecommendation = (args) => SIZING.storeChartRecommendation({ ev: wire(), ...args });
+/* A picked chart after the wire is a copy - compared by value. */
+const same = (a, b) => !!a && !!b && a.gender === b.gender && a.garment_type === b.garment_type &&
+  (a.size_system || null) === (b.size_system || null) &&
+  JSON.stringify(a.rows.map((r) => ({ ...r }))) === JSON.stringify(b.rows.map((r) => ({ ...r })));
 
 const RESET = {
   activeItem: null, pendingSizes: undefined, pendingAgeGroup: undefined, pendingTitle: undefined,
@@ -164,7 +193,7 @@ console.log("\n── §4 an alpha AND a numeric chart for one audience: the pro
   set({ storedSizeCharts: [WOMEN_EU, WOMEN_TOPS], pendingGarmentGender: "women", pendingSizes: "XS,S,M,L" });
   /* The EU chart also answers to S/M/L (WOMEN_TOPS_EU_SIZE_CHART aliases) - 3 shared vs
      the alpha chart's 4, so the alpha chart wins on the letter product. */
-  check("§4.1 a product sold XS-L takes the ALPHA chart", pickStoredSizeChart().chart === WOMEN_TOPS, pickStoredSizeChart().reason);
+  check("§4.1 a product sold XS-L takes the ALPHA chart", same(pickStoredSizeChart().chart, WOMEN_TOPS), pickStoredSizeChart().reason);
   /* castro's real shape: EU 34-42 answers to XS-L via the vetted aliases - a 5-5 TIE on
      overlap with the store's own letter chart. The chart whose OWN labels match wins,
      whichever order the server listed them in. */
@@ -173,7 +202,7 @@ console.log("\n── §4 an alpha AND a numeric chart for one audience: the pro
   for (const order of [[EU_FULL, WOMEN_TOPS], [WOMEN_TOPS, EU_FULL]]) {
     set({ storedSizeCharts: order, pendingGarmentGender: "women", pendingSizes: "XS,S,M,L" });
     check(`§4.1b equal overlap (EU via aliases vs own letters), ${order[0] === EU_FULL ? "EU listed first" : "letters listed first"}: the letter chart wins`,
-      pickStoredSizeChart().chart === WOMEN_TOPS, pickStoredSizeChart().reason);
+      same(pickStoredSizeChart().chart, WOMEN_TOPS), pickStoredSizeChart().reason);
   }
   /* The numeric side is exercised on BOTTOMS: a numeric TOPS run (EU 34-46) is read as
      a waist/EU pants run by isPantsProduct()'s size-run tier (pre-existing room
@@ -187,10 +216,10 @@ console.log("\n── §4 an alpha AND a numeric chart for one audience: the pro
     { size_system: "numeric" });
   set({ storedSizeCharts: [W_BOTTOMS_ALPHA, W_BOTTOMS_NUM], pendingGarmentGender: "women", pendingSizes: "26,28,30" });
   check("§4.2 a product sold 26-30 takes the NUMERIC bottoms chart (listed second - order-independent)",
-    pickStoredSizeChart().chart === W_BOTTOMS_NUM, pickStoredSizeChart().reason);
+    same(pickStoredSizeChart().chart, W_BOTTOMS_NUM), pickStoredSizeChart().reason);
   check("§4.3 the reason names the size system", /numeric/.test(pickStoredSizeChart().reason), pickStoredSizeChart().reason);
   set({ storedSizeCharts: [W_BOTTOMS_NUM, W_BOTTOMS_ALPHA], pendingGarmentGender: "women", pendingSizes: "XS,S,M", pendingTitle: "Wide Leg Pants" });
-  check("§4.4 ...and the same store's letter pants take the ALPHA chart", pickStoredSizeChart().chart === W_BOTTOMS_ALPHA, pickStoredSizeChart().reason);
+  check("§4.4 ...and the same store's letter pants take the ALPHA chart", same(pickStoredSizeChart().chart, W_BOTTOMS_ALPHA), pickStoredSizeChart().reason);
 }
 
 console.log("\n── §5 the real calculateSize() ──");
@@ -198,54 +227,56 @@ console.log("\n── §5 the real calculateSize() ──");
   const el = () => ({ value: "", innerText: "", disabled: false, hidden: false,
     classList: { _s: new Set(), add(...c) { c.forEach((x) => this._s.add(x)); }, remove(...c) { c.forEach((x) => this._s.delete(x)); },
       contains(c) { return this._s.has(c); }, toggle() {} }, remove() {} });
-  const mount = (h, w, extra = {}) => {
+  const mount = async (h, w, extra = {}) => {
     const els = {};
     for (const id of ["height", "weight", "chest", "waist", "legs", "resultBox", "sizeResult", "resultLabel",
       "btn-next-screen", "resultActions", "optionalFields"]) els[id] = el();
     els.height.value = String(h); els.weight.value = String(w);
     for (const [k, v] of Object.entries(extra)) els[k].value = String(v);
+    for (const id of ["sizeMismatchView", "sizeMismatchText", "captureBtn", "cameraCard", "progressFill", "progressPercent"]) els[id] = el();
+    els.progressFill.style = {};
     __set({ __els: els });
-    calculateSize();
+    await calculateSize();
     return { els, ...__get() };
   };
   set({ storedSizeCharts: [], pendingGarmentGender: "men", pendingSizes: "S,M,L,XL", currentUserGender: "men" });
-  const before = mount(180, 80);
+  const before = await mount(180, 80);
   check("§5.1 no store chart: today's answer (L), Continue enabled", before.currentUserSize === "L" &&
     !before.els["btn-next-screen"].disabled, before.currentUserSize);
 
   set({ storedSizeCharts: [MEN_TOPS], pendingGarmentGender: "men", pendingSizes: "S,M,L,XL", currentUserGender: "men" });
-  const after = mount(180, 80);
+  const after = await mount(180, 80);
   check("§5.2 with the store's men's chart: M, in currentUserSize AND on screen",
     after.currentUserSize === "M" && after.els.sizeResult.innerText === "M", `${after.currentUserSize} / ${after.els.sizeResult.innerText}`);
   check("§5.3 the guard state is exactly today's (adult/adult), Continue enabled",
     after.currentSizeCategory === before.currentSizeCategory && after.currentBodyCategory === before.currentBodyCategory &&
     !after.els["btn-next-screen"].disabled, `${after.currentSizeCategory}/${after.currentBodyCategory}`);
-  const typed = mount(180, 80, { chest: 107 });
+  const typed = await mount(180, 80, { chest: 107 });
   check("§5.4 a typed chest reaches the decision through the real form", typed.currentUserSize === "L", typed.currentUserSize);
 
   set({ storedSizeCharts: [MEN_TOPS], pendingGarmentGender: "men", pendingSizes: "S,M,L,XL", currentUserGender: null });
-  check("§5.5 shopper gender unknown -> the estimate abstains -> today's L", mount(180, 80).currentUserSize === "L");
+  check("§5.5 shopper gender unknown -> the estimate abstains -> today's L", (await mount(180, 80)).currentUserSize === "L");
 
   set({ storedSizeCharts: [MEN_TOPS], pendingGarmentGender: "men", pendingSizes: "S,M,L,XL", currentUserGender: "men" });
-  const huge = mount(215, 150);
+  const huge = await mount(215, 150);
   check("§5.6 out of catalog stays NO MATCH with Continue blocked - the store chart cannot rescue it",
     huge.currentUserSize === null && huge.els["btn-next-screen"].disabled && huge.els.resultBox.classList.contains("no-match-result"),
     `${huge.currentUserSize} disabled=${huge.els["btn-next-screen"].disabled}`);
 
   set({ storedSizeCharts: [MEN_TOPS], pendingGarmentGender: "men", pendingSizes: "8,10,12,14,16", currentUserGender: "men" });
-  const kid = mount(180, 80);
+  const kid = await mount(180, 80);
   check("§5.7 adult body + kids-only product: still no adult size, still blocked (guard intact)",
     kid.currentUserSize === null && kid.els["btn-next-screen"].disabled && kid.currentBodyCategory === "adult",
     `${kid.currentUserSize} ${kid.currentSizeCategory}/${kid.currentBodyCategory}`);
 
-  const calc = extract(APP, "function calculateSize() {", "\nfunction setGender(");
+  const calc = extract(LIB, "export function computeSizeVerdict(ev", "\n/* ══ THE WIRE");
   const at = calc.indexOf("storeChartRecommendation({");
   check("§5.8 the decision runs AFTER the no-match early return and AFTER the kernel's own answer",
     at > calc.indexOf("if (!currentSizeCategory) {") && at > calc.indexOf("// SNAP TO THE PRODUCT'S OWN LIST."));
   check("§5.9 ...gated on an ADULT size category", /if \(currentSizeCategory === "adult" && typeof storeChartRecommendation === "function"\)/.test(calc));
   check("§5.10 ...and nothing after it re-assigns the guard state",
-    !/currentSizeCategory\s*=[^=]|currentBodyCategory\s*=[^=]/.test(calc.slice(at)));
-  const fn = extract(APP, "function storeChartRecommendation(", "\n/* The one GET this session makes");
+    !/currentSizeCategory\s*=[^=]|bodyCategory\s*=[^=]/.test(calc.slice(at)));
+  const fn = extract(LIB, "function storeChartRecommendation(", "\n/* ── PHASE 0: STORE CHART vs DEFAULT");
   check("§5.11 storeChartRecommendation() never names a height/weight BAND (it cannot reach the kernel)",
     !/(?:min|max)(?:Height|Weight)/.test(fn));
 }

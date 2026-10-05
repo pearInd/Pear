@@ -66,7 +66,7 @@ function makeHarness({ scriptedErrors = [], mintFails = false } = {}) {
     localStream: { getVideoTracks: () => [{ clone: () => ({ id: "clone" }) }] },
 
     loadSDK: async () => ({
-      createDecartClient: () => ({
+      createClient: () => ({
         realtime: {
           connect: async (_input, _opts) => {
             connectCallCount++;

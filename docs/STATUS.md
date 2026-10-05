@@ -4,22 +4,23 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
+_Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
 
 ## At a glance
 
 | Workstream | Stage | Where |
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
-| Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16) and the store-chart decision shipped `0fccee8`; **v16 migration + 3 re-saves waiting on you**; next: Phase 2 (not started) | main (also re-cut server-side on `hide/main-v2`) |
+| Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **v16 migration + 3 re-saves waiting on you**; next: Phase 2 (not started) | main |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
 | garment_cache rows missing `age_group` | code done — full backfill **deferred by choice** (demo products only for now) | main `ef1d28d` |
-| `DECART_ALLOWED_ORIGINS` / token origin | done (Vercel env set + redeployed 2026-10-02); preview-origin fix still on a branch | main; `hide/main-v2` `f93ef87` |
-| Back-image orientation (front/back on a turn) | in progress — active on a branch | main `3a9b55d`; `hide/main-v2` |
+| `DECART_ALLOWED_ORIGINS` / token origin | done (Vercel env set + redeployed 2026-10-02); the preview-origin fix is on main with the merge | main |
+| Back-image orientation (front/back on a turn) | in progress — the back gate (§2.28) ends "back print on the chest", but on the PEAK tee the engine is too slow for a normal turn and the back print does not appear (4 real sessions 2026-10-04); neither a smaller image nor pre-uploading speeds the engine; the cause is the engine's region (Michigan, US since ~09-30); **raising it with the vendor is yours** | main |
 | Hebrew/English i18n | done (core) | main |
-| Security hardening + client-code hiding | in progress — on a branch (`hide/main-v2`, intentionally separate; the owner merges it himself); key rotation deferred by the owner's choice | main `e523cc3`; `hide/main-v2`, `harden/hide-client-logic` |
+| Security hardening + client-code hiding | done on main with the merge (engines server-side, minified/cloaked build, the render engine behind our edge - CLAUDE.md §2.11-§2.24); **the GitHub repo is still public** and **key rotation pending on you** | main |
+| Render engine account | the Decart key was replaced by you 2026-10-04 (Vercel Production + Preview); the old account had run out of credits ("Insufficient credits", now shown to a shopper as "unavailable right now" within ~1.5s) | Vercel env |
 | Landing / brand video | done | main `e8d2c7f` |
 | Black-screen on reopen | done | main `3a533d6`, `af5f4d4` |
 | Visual QA gate | done, known flaky (§8.5) | main |
@@ -55,8 +56,29 @@ _Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
       from your machine, saved to a file, and I'll read it.
 - [x] Next phase decided: castro fix (done, `8ce3de6`), adidas fix (done, this commit), then
       Phase 2 — separately, not started.
-- [x] **Key rotation (`GEMINI_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) — deferred by the owner's choice.**
-      Not an open item; the full procedure is in git history (`93e2c01`) if it is ever wanted.
+- [ ] **SECURITY — rotate two keys** (both were exposed in plain text outside the repo).
+      Issue the new key, update every place listed, redeploy, THEN revoke the old one.
+      **Gemini API key** (`GEMINI_API_KEY`) — create a new key in Google AI Studio
+      (aistudio.google.com/apikey) and delete the old one there. Update:
+        1. Vercel → project env vars → `GEMINI_API_KEY` (Production, Preview, Development), then
+           redeploy (server-side garment classification, `lib/garment-category.js`);
+        2. `scanner/.env` (scanner + `scanner/backfill-age-group.js`);
+        3. a root `.env` on any machine that runs `scripts/batch-scan-clothes.js` or
+           `scripts/backfill-garment-categories.js` (none in this checkout);
+        4. the Railway scanner service's variables, if it is deployed (`scanner/README.md`, Deploy).
+      **Supabase service_role key** (`SUPABASE_SERVICE_ROLE_KEY`, project `jyhilack…`) — a legacy
+      JWT key; it cannot be rotated on its own. Either (a, preferred) Supabase → Project Settings →
+      API Keys: create a new **secret** key (`sb_secret_…`), switch every consumer below to it,
+      then **disable the legacy JWT-based keys**; or (b) rotate the JWT secret — which also
+      invalidates the anon key and every signed-in session. Update:
+        1. Vercel → `SUPABASE_SERVICE_ROLE_KEY` (all environments), then redeploy (`lib/supabase.js`:
+           sessions, users/OTP, garment_cache, `/api/store-size-chart`);
+        2. `scanner/.env` (scanner `--save`, `backfill-age-group.js`);
+        3. a root `.env` on any machine that runs the `scripts/` backfills (none in this checkout);
+        4. the Railway scanner service, if deployed.
+      Not affected: `admin/admin.js` ships a public **anon** key for a *different* project (`nhkaiucb…`).
+      Check afterwards: `GET /api/store-size-chart?host=fox.co.il` returns 5 charts with no `note`,
+      and a scanner `--size-charts --save` run still saves.
 - [ ] **Live test of the kids/adult guard** in a real session: a kids garment + adult measurements
       must block going live, and an adult garment + child measurements must block too (the reverse).
       Code-level coverage exists (`kids-adult-size-guard`); this is the end-to-end check.
@@ -69,8 +91,12 @@ _Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
 - [ ] **Full age_group backfill — DEFERRED by choice, not blocked.** Stopped partway on purpose;
       only demo products need it for now. When wanted: `cd scanner && node backfill-age-group.js`
       (`ef1d28d` must be deployed first, or try-ons re-wipe the rows it fills).
-- [x] **`hide/main-v2`** — intentionally kept separate; the owner will merge it himself when the
-      security work is done. Not an open decision here.
+- [x] **The fate of the hiding branches** — decided 2026-10-04: `hide/edge` (its successor) merged into main with
+      main's 12 newer commits carried through (CLAUDE.md §2.27). `hide/main-v2` is superseded.
+- [ ] **Make the GitHub repository private** (pearInd/Pear) - every source file names the engine and the
+      models; the shipped code no longer does, the repository still does (CLAUDE.md §2.24).
+- [ ] **Credit on the render engine account** behind the new key - a session needs it; without it the room says
+      "unavailable right now" (a TEST session says it is the credit).
 
 ---
 
@@ -186,12 +212,45 @@ _Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
 
 ## Back-image orientation (front/back on a turn)
 - **Stage:** in progress — the most active stream.
-- **Done on main:** angle thresholds `3a9b55d`, post-peak lock `c75307a`, presence
-  `38cc621`, real back photo per orientation `8a4087f`, prompt orientation `0488167`.
-- **On `hide/main-v2` only:** orientation engine moved behind a WebSocket
-  (`854d629`), Cloudflare Worker (`155065b`, not deployed), return-leg timing
-  `e7fc1d2` ("the back disappears too fast"), back sent once before reveal `7f627aa`.
-- **Remaining:** land or retire that branch; deploy decision for the Worker.
+- **On main (production):** the orientation engine on Cloudflare (§2.14), the front at the side
+  (§2.23-§2.25), the return timed by the engine's pace (`0d0c087`), the back gate (`e43952d`:
+  a BACK whose return would land on the chest is held), the camera never shown during a
+  measurement (`af5b705`). Worker `49c3ca31`.
+- **Measured 2026-10-04 (4 approved real sessions, PEAK tee, CLAUDE.md §2.28):** the engine
+  acknowledged references in 482-3,468ms; a smaller image (`small`) and pre-uploaded files
+  (`ref`) were no faster. In all four the gate held the back for the whole turn — **no back
+  print appears** on a normal-speed turn with this tee. The experiment's upload path had a
+  bug (`/v/f`), fixed `923b788` (TEST sessions only).
+- **Separated (2 more approved sessions, same evening):** OASIS is slow today too (repeats
+  592-769ms vs 128-250ms in late September) and the SDK's telemetry off is no faster
+  (1.0-2.3s) — not the product, not us. The network-level ack equals the room's. The engine
+  for Israel now answers from **Michigan, US** (CoreWeave, region `usw2`, ~220ms round trip).
+- **Decided (you, 2026-10-04):** keep the guarantee — never the back print on the chest; a plain
+  back on a normal turn while the engine is this far. **Reversed the same night after your two
+  sessions (23:19/23:20):** the held FRONT reference drew the front print on your back, not a plain
+  back - the gate is off by default again (`?back_gate=1` for an A/B), Worker `bd0f14a0`. The tank
+  top (23:20) is the engine's reading of this product's photo - open.
+- **Open (yours):** ask the vendor for a closer region / why Israel moved ~09-30. When acks are
+  back near 150-250ms the back print returns by itself (the gate measures every session).
+- **2026-10-05 - THE SWAP FLOW (CLAUDE.md §2.29):** the 23:57 record showed the cause of "the back
+  print stays on the chest": while a swap was on the wire nothing was measured for 1.67s (the whole
+  back view), so the FRONT went out on the way back. The turn is now read during a swap and the
+  decision waits for the wire instead of being dropped; the shoulder order is available from the
+  2nd reading; a swap never waits for its prompt. Replay corpus: a full 360 ending with the back
+  on the chest 44 -> 12 of 1,008. Whole-room twin A/B (that day's engine, 11 recorded 360s x 2):
+  back print on the chest 7.3s in 15/22 runs -> 2.5s in 8/22. Shipped `30d35e9` (room only, no
+  Worker change). One real production session (driver, clip m1, PEAK): readings every ~250ms
+  through both swaps, BACK sent 4ms after the decision (ack 597ms), FRONT at the side (order -0.22)
+  6ms after it (ack 542ms); the render showed the back print on the back.
+- **2026-10-05 - THE LANDING, PROJECTED (CLAUDE.md §2.30):** "only fast turns fail". The 06:09
+  (fast) and 05:55 records: the return's right reading had arrived and the rule missed it (by
+  under 1 degree at 06:09) - it ignored the reading's age and used the turn's average speed. Now
+  it projects with both and schedules between readings: the two fast sessions replay 250-290ms
+  earlier, the slow one (06:11) within 64ms. Live: room `d7d63d7`, Worker `dddfa41e`; then a
+  back-to-side jump in one reading counts as a step (`c781818`, Worker `32f73241`) - a real
+  ~300 deg/s session had its return held for the chest by the snap filter. Real sessions this
+  round: 3 (budget 50). One hit a congested uplink (image acks ~1.25s, the orientation link
+  1.1s) - nothing to read from it. **Next: your measurement, fast and slow.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
@@ -208,7 +267,7 @@ _Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
   rules server-side (`897ab44`, `0eb6e8f`, `5ae486a`), vendor names refused by the build.
 - **On `harden/hide-client-logic`:** the "solo" front|back experiment (v2–v6), pose
   in any light — experimental, not for main as-is.
-- **Remaining:** owner-driven — `hide/main-v2` stays separate until the owner merges it.
+- **Remaining:** review + merge plan for `hide/main-v2`.
 
 ## Landing / brand video
 - **Stage:** done. Identity-screen brand video `e8d2c7f`
@@ -222,7 +281,8 @@ _Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
 ## Other branches (not merged)
 | Branch | Ahead / behind main | Note |
 |---|---|---|
-| `hide/main-v2` | 39 / — | intentionally separate (owner merges) |
+| `hide/edge` | merged into main 2026-10-04 | the hidden build - main now |
+| `hide/main-v2` | superseded by `hide/edge` | not to be merged |
 | `harden/hide-client-logic` | 46 / 10 | experiments |
 | `fix/v142-angle-rollback` | 5 / 15 | camera AE/AWB pin — unmerged, decide |
 | `feat/back-view-pipeline` | 1 / 63 | stale |

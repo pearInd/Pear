@@ -8,8 +8,10 @@
       Supabase configured, the v15 migration not run, a query error, a throw - is a 200
       with an empty list, which the room reads as "use the vetted default matrix".
    §3 THE QUERY. Store-wide (product_key ''), active rows only, for the canonical host.
-   §4 LOCKSTEP (CLAUDE.md §3). STORE_CHART_CLAMPS agrees across widget / app.js / lib,
-      and canonicalStoreHost agrees across widget / app.js / lib / scanner, by value.
+   §4 LOCKSTEP (CLAUDE.md §3). STORE_CHART_CLAMPS agrees across lib/store-size-charts.js,
+      lib/sizing.js (the overlay's and the live reader's - the fit moved server-side with
+      the code hiding, §2.12) and the scanner's reader source, and canonicalStoreHost
+      agrees across widget / app.js / lib / scanner, by value.
    §5 WIRING. server.js registers the route, above the /api/* 404 catch-all.
    ============================================================================= */
 import { readFileSync } from "node:fs";
@@ -18,9 +20,11 @@ import {
   makeStoreSizeChartHandler, isMissingTableError,
 } from "../lib/store-size-charts.js";
 import { canonicalStoreHost as scannerHost } from "../scanner/size-charts.js";
+import { STORE_CHART_CLAMPS as FIT_CLAMPS, SIZE_CHART_CLAMPS as READER_CLAMPS } from "../lib/sizing.js";
 
 const APP = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const PW = readFileSync(new URL("../widget/pear-widget.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+const SCANNER_READER = readFileSync(new URL("../scanner/size-chart-reader.src.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const SERVER = readFileSync(new URL("../server.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 let fails = 0;
@@ -178,16 +182,16 @@ console.log("\n── §3 the query ──");
 
 console.log("\n── §4 lockstep across files ──");
 {
-  const appClamps = (await import("data:text/javascript," + encodeURIComponent(
-    slice(APP, "const STORE_CHART_CLAMPS = {", "};") + "};\nexport { STORE_CHART_CLAMPS };"))).STORE_CHART_CLAMPS;
-  const widgetClamps = (await import("data:text/javascript," + encodeURIComponent(
-    slice(PW, "var SIZE_CHART_CLAMPS = {", "};") + "};\nexport { SIZE_CHART_CLAMPS };"))).SIZE_CHART_CLAMPS;
+  const scannerClamps = (await import("data:text/javascript," + encodeURIComponent(
+    slice(SCANNER_READER, "var SIZE_CHART_CLAMPS = {", "};") + "};\nexport { SIZE_CHART_CLAMPS };"))).SIZE_CHART_CLAMPS;
   for (const k of ["chest", "waist", "hips", "legs"]) {
-    check(`§4 ${k} clamp: lib == app.js == widget`,
-      STORE_CHART_CLAMPS[k][0] === appClamps[k][0] && STORE_CHART_CLAMPS[k][1] === appClamps[k][1] &&
-      STORE_CHART_CLAMPS[k][0] === widgetClamps[k].min && STORE_CHART_CLAMPS[k][1] === widgetClamps[k].max,
-      `lib ${STORE_CHART_CLAMPS[k]} app ${appClamps[k]} widget ${JSON.stringify(widgetClamps[k])}`);
+    check(`§4 ${k} clamp: lib == the fit's overlay == the live reader == the scanner's reader`,
+      STORE_CHART_CLAMPS[k][0] === FIT_CLAMPS[k][0] && STORE_CHART_CLAMPS[k][1] === FIT_CLAMPS[k][1] &&
+      STORE_CHART_CLAMPS[k][0] === READER_CLAMPS[k].min && STORE_CHART_CLAMPS[k][1] === READER_CLAMPS[k].max &&
+      STORE_CHART_CLAMPS[k][0] === scannerClamps[k].min && STORE_CHART_CLAMPS[k][1] === scannerClamps[k].max,
+      `lib ${STORE_CHART_CLAMPS[k]} fit ${FIT_CLAMPS[k]} reader ${JSON.stringify(READER_CLAMPS[k])} scanner ${JSON.stringify(scannerClamps[k])}`);
   }
+  check("§4 the widget no longer carries a clamp table (it only collects tables)", !/SIZE_CHART_CLAMPS/.test(PW));
   const fnSrc = (src) => slice(src, "function canonicalStoreHost(raw) {", "\n}") + "\n}";
   const appHost = (await import("data:text/javascript," + encodeURIComponent(fnSrc(APP) + "\nexport { canonicalStoreHost };"))).canonicalStoreHost;
   const widgetHost = (await import("data:text/javascript," + encodeURIComponent(

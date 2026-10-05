@@ -18,7 +18,8 @@ function check(label, cond, detail) {
 /* opts.url        - the page URL (defaults to a Shopify-shaped PDP path)
    opts.setup      - (window) => void, runs BEFORE the widget boots - e.g. to stub the
                      decoded size of an <img>, which jsdom never loads
-   opts.clickIndex - which injected PEAR button to click (grid pages have several) */
+   opts.clickIndex - which injected PEAR button to click (grid pages have several)
+   opts.attrs      - extra attributes on the embed's <script> tag (e.g. data-pear-debug) */
 async function run(name, html, assertions, opts = {}) {
   const vc = new VirtualConsole();
   vc.on("jsdomError", (e) => console.error("!! JSDOM ERROR:", e.message, "\n", e.detail && e.detail.stack));
@@ -50,6 +51,7 @@ async function run(name, html, assertions, opts = {}) {
 
   const s = window.document.createElement("script");
   s.setAttribute("data-pear-key", "TEST_KEY");
+  for (const [k, v] of Object.entries(opts.attrs || {})) s.setAttribute(k, v);
   s.textContent = WIDGET;
   window.document.head.appendChild(s);
 
@@ -404,6 +406,23 @@ await run("M. SVG placeholder src, real photo in data-src, no cart button", `
   check("M1 fallback button injected", !!btn);
   check("M2 the data-src photo is the garment",
     params.get("garment_url") === "https://img.cdn-x.com/p/silk-dress.jpg", params.get("garment_url"));
+});
+
+/* ── N. the support view can be opened from a store page ──────────────────────────────
+   data-pear-debug forwards the token and the orientation trace; without it, neither
+   parameter exists on the room URL at all (the shopper's embed never asks for debug). */
+const SUPPORT_PAGE = `
+<html><head></head><body>
+  <h1>Tee</h1>
+  <div class="product-image"><img src="https://img.cdn-x.com/p/tee-front.jpg"></div>
+</body></html>`;
+await run("N. data-pear-debug opens the support view", SUPPORT_PAGE, ({ params }) => {
+  check("N1 the token is forwarded as pear_debug", params.get("pear_debug") === "0123456789abcdef-support", params.get("pear_debug"));
+  check("N2 ...with the orientation trace on", params.get("orient_debug") === "1", params.get("orient_debug"));
+}, { attrs: { "data-pear-debug": "0123456789abcdef-support" } });
+await run("N'. a normal embed asks for no debug", SUPPORT_PAGE, ({ params }) => {
+  check("N3 no pear_debug and no orient_debug on a normal embed",
+    params.has("garment_url") && !params.has("pear_debug") && !params.has("orient_debug"), [...params.keys()].join(","));
 });
 
 console.log("\n" + results.join("\n"));

@@ -37,7 +37,11 @@
 import { readFileSync } from "node:fs";
 import { CONFIG } from "../fitting-room/config.js";
 
-const SRC = readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+/* The prompt engine moved server-side on 2026-09-26 (lib/prompts.js, CLAUDE.md §2.13). This
+   reads it FIRST and app.js after it: the engine slices/checks find it where it lives now,
+   and every app.js marker used here exists only in the app.js half. */
+const SRC = (readFileSync(new URL("../lib/prompts.js", import.meta.url), "utf8") + "\n" +
+  readFileSync(new URL("../fitting-room/app.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const HTML = readFileSync(new URL("../fitting-room/index.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const CSS = readFileSync(new URL("../fitting-room/style.css", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 

@@ -3,7 +3,7 @@
 # PEAR pre-commit
 # ----------------------------------------------------------------------------
 # Ordered fastest-to-slowest so a broken commit fails in seconds, not minutes.
-# Stage 3 only runs when app.js is actually staged.
+# Stage 3 only runs when the prompt engine (lib/prompts.js) or its inputs are staged.
 # ============================================================================
 
 echo "🍐 PEAR pre-commit"
@@ -48,43 +48,44 @@ if [ "$touched_widget" -gt 0 ] && [ "$touched_room" -eq 0 ]; then
 fi
 echo "  ok"
 
-# ── 3. Prompt drift — only when app.js is staged ───────────────────────────
-if echo "$STAGED" | grep -q "app.js"; then
+# ── 3. Prompt drift — when the prompt engine (or what feeds it) is staged ────
+# The engine lives in lib/prompts.js since 2026-09-26 (server-side; CLAUDE.md §2.13).
+# app.js is still a trigger: it sends the facts the engine reads (promptFactsOf()),
+# and the verdict isBottomsGarment() it honours. config.js holds the budget.
+PROMPTS="lib/prompts.js"
+if echo "$STAGED" | grep -qE "(^|/)(prompts\.js|app\.js|config\.js)$"; then
   echo ""
-  echo "▸ prompt trace (app.js staged)"
+  echo "▸ prompt trace (prompt engine or its inputs staged)"
 
-  # trace-prompt.mjs resolves PROMPT_MAX_CHARS from config.js next to the
-  # app.js it's given (dirname(APP)/config.js) — it no longer falls back to a
-  # hardcoded default. So the HEAD-side snapshot must mirror the real layout:
-  # a bare /tmp/pear-app-head.js has no sibling config.js and the trace fails.
-  # Snapshot both files from HEAD into a scratch dir that preserves their
-  # relative directory, so dirname(head copy of APP)/config.js resolves.
-  APP_DIR=$(dirname "$APP")
-  CONFIG_REL="$APP_DIR/config.js"
+  # trace-prompt.mjs resolves PROMPT_MAX_CHARS from config.js - beside app.js in the old
+  # layout, or ../fitting-room/config.js beside lib/prompts.js. So the HEAD-side snapshot
+  # mirrors the real directory layout: a bare /tmp copy would have no config.js to find.
   HEAD_SNAPSHOT_DIR="/tmp/pear-head-snapshot"
-  HEAD_APP="$HEAD_SNAPSHOT_DIR/$APP"
-  HEAD_CONFIG="$HEAD_SNAPSHOT_DIR/$CONFIG_REL"
-
   rm -rf "$HEAD_SNAPSHOT_DIR" 2>/dev/null
-  mkdir -p "$HEAD_SNAPSHOT_DIR/$APP_DIR"
+  mkdir -p "$HEAD_SNAPSHOT_DIR/lib" "$HEAD_SNAPSHOT_DIR/fitting-room"
+  git show HEAD:fitting-room/config.js > "$HEAD_SNAPSHOT_DIR/fitting-room/config.js" 2>/dev/null || true
 
-  # What the wire looks like in HEAD vs. what is about to be committed.
-  # config.js may not exist at HEAD (e.g. the commit that introduces it) —
-  # let that git show fail silently, same as the app.js one below; the trace
-  # then fails to resolve PROMPT_MAX_CHARS and we treat it as unavailable.
-  git show HEAD:"$CONFIG_REL" > "$HEAD_CONFIG" 2>/dev/null || true
-
+  # What the wire looks like in HEAD vs. what is about to be committed. HEAD traces
+  # lib/prompts.js when it has one, else app.js - which is how the commit that MOVED the
+  # engine compares the old browser engine against the new server one.
   head_trace_ok=1
-  if git show HEAD:"$APP" > "$HEAD_APP" 2>/dev/null; then
-    if node scripts/trace-prompt.mjs "$HEAD_APP" --json > /tmp/pear-prompt-head.json 2>/dev/null; then
+  HEAD_TARGET=""
+  if git show HEAD:"$PROMPTS" > "$HEAD_SNAPSHOT_DIR/$PROMPTS" 2>/dev/null; then
+    HEAD_TARGET="$HEAD_SNAPSHOT_DIR/$PROMPTS"
+  elif git show HEAD:fitting-room/app.js > "$HEAD_SNAPSHOT_DIR/fitting-room/app.js" 2>/dev/null; then
+    HEAD_TARGET="$HEAD_SNAPSHOT_DIR/fitting-room/app.js"
+  fi
+  if [ -n "$HEAD_TARGET" ]; then
+    if node scripts/trace-prompt.mjs "$HEAD_TARGET" --json > /tmp/pear-prompt-head.json 2>/dev/null; then
       head_trace_ok=0
     else
       head_trace_ok=$?
     fi
   fi
 
-  node scripts/trace-prompt.mjs "$APP" --json > /tmp/pear-prompt-new.json || {
-    echo "  ✖ a prompt branch is OVER the Decart budget — the session would be rejected."
+  node scripts/trace-prompt.mjs "$PROMPTS" --json > /tmp/pear-prompt-new.json || {
+    echo "  ✖ the prompt trace failed - a branch is OVER the Decart budget, or $PROMPTS"
+    echo "    could not be traced. Run: npm run trace:prompt"
     exit 1
   }
 
@@ -96,7 +97,7 @@ if echo "$STAGED" | grep -q "app.js"; then
       echo "    Run: npm run trace:prompt"
     else
       echo "  ± wire strings CHANGED — verify this was intended:"
-      node scripts/trace-prompt.mjs "$APP" | sed -n '/reach Decart/,/REACHABILITY/p' | head -30
+      node scripts/trace-prompt.mjs "$PROMPTS" | sed -n '/reach Decart/,/REACHABILITY/p' | head -30
     fi
   else
     echo "  ⊘ HEAD-side trace unavailable, skipping wire-diff for this commit."

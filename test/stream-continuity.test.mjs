@@ -195,6 +195,14 @@ console.log("\n── §5 WIRING ──");
 
   check("both restore seams are URL-only and default OFF",
     /get\("swap_hold"\) === "1"/.test(SRC) && /get\("still_covers"\) === "1"/.test(SRC));
+  /* THE OWNER'S CALL (2026-10-04): "make Decart live the whole measurement" - the camera is never shown
+     by default; a stall holds the render's last frame. The layer still measures (out-stall/out-stats). */
+  check("the camera bridge is OFF by default - only ?live_camera=1 brings it back",
+    /const LIVE_CAMERA_BRIDGE = \(\(\) => \{\s*try \{ return new URLSearchParams\(location\.search\)\.get\("live_camera"\) === "1"; \} catch \(_\) \{ return false; \}/.test(SRC));
+  check("...without it the layer never draws the camera and its opacity stays 0",
+    /const drawn = LIVE_CAMERA_BRIDGE && alpha > 0 \? drawContinuityFrame\(c, cam, ai\) : true;\s*\n\s*const a = LIVE_CAMERA_BRIDGE && drawn \? alpha : 0;/.test(layer));
+  check("...and still records every stall for the TEST record",
+    /traceOrient\("out-" \+ event\.type, event\)/.test(layer) && /stallMs: Math\.round\(model\.stats\.cameraMs\)/.test(layer));
 }
 
 console.log("\n── §6 A SECOND TRY-ON INHERITS NOTHING - the window that simply runs out ──");
@@ -224,10 +232,25 @@ console.log("\n── §6 A SECOND TRY-ON INHERITS NOTHING - the window that sim
   const finalize = extract("function finalizeVideoClip()", "\n}\n");
   check("finalizeVideoClip() retires the orientation watcher once the frozen tail it was kept for is over",
     /orientWatcher\.stop\(\)/.test(finalize) && /orientWatcher = null;/.test(finalize) && /orientWatcherItem = null;/.test(finalize));
+  /* "Before its first await" means the first await of the NEW SESSION'S setup - everything
+     after `busy` is claimed. Since 2026-09-26 goLive() has one await BEFORE the claim: the
+     size re-check (calculateSize(), now a server verdict - usually a same-tick memo hit).
+     It cannot move below the claim - adult-pants-sizing §7 pins that a recompute never
+     holds busy/billing state, so a blocked go-live leaves the previous session (and its
+     clip) untouched - and it has its own re-entry guard (goLiveResolvingSize). Nothing
+     this suite retires is started by that wait; the page was idle before the click and
+     stays idle through it. So the invariant is measured from the claim, and the size
+     await is asserted separately to be the ONLY await ahead of it. */
   const live = extract("async function goLive()", "function stopLive()");
-  const resetIdx = live.indexOf("resetTryOnSession();"), awaitIdx = live.indexOf("await ");
-  check("goLive() runs resetTryOnSession() after claiming `busy` and before its first await",
-    resetIdx > live.indexOf("busy = true;") && resetIdx !== -1 && resetIdx < awaitIdx);
+  const busyIdx = live.indexOf("busy = true;");
+  const resetIdx = live.indexOf("resetTryOnSession();"), awaitIdx = live.indexOf("await ", busyIdx);
+  check("goLive() runs resetTryOnSession() after claiming `busy` and before the session's first await",
+    resetIdx > busyIdx && resetIdx !== -1 && resetIdx < awaitIdx);
+  const beforeClaim = live.slice(0, busyIdx).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  check("...and the only await ahead of the claim is the guarded size re-check",
+    (beforeClaim.match(/\bawait\b/g) || []).length === 1 &&
+    /goLiveResolvingSize = true;\s*\n\s*try \{ await calculateSize\(\); \} finally \{ goLiveResolvingSize = false; \}/.test(beforeClaim),
+    beforeClaim.slice(-400));
 
   /* THE BACKSTOP, executed: whatever it finds is retired, the pose readings are cleared, and
      it says so once - and it is silent when the previous session exited cleanly. */

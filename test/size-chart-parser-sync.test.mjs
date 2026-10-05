@@ -1,31 +1,37 @@
-/* ONE SIZE-GUIDE PARSER, TWO RUNTIMES - the widget and the store scanner
+/* ONE SIZE-GUIDE READING, TWO RUNTIMES - the live product page and the store scanner
    ─────────────────────────────────────────────────────────────────────────────
-   The scanner stores a store's size guide; the widget reads one live off a product
-   page. If the two parsed the same table differently, the room would get one answer
-   from a stored chart and another from the live one, for the same garment. So
-   scanner/size-chart-parser.js is GENERATED from the widget's
-   "@pear-shared:size-token" and "@pear-shared:size-chart-parser" blocks
-   (scripts/sync-size-chart-parser.mjs), and this suite is what makes that true:
+   The scanner stores a store's size guide; the live path reads one off a product page.
+   If the two parsed the same table differently, the room would get one answer from a
+   stored chart and another from the live one, for the same garment.
+   With the code hiding (CLAUDE.md §2.12) the live reading is server-side: the widget only
+   COLLECTS the tables and sends them raw, lib/sizing.js reads them. The scanner still
+   reads a DOM, so scanner/size-chart-parser.js is GENERATED from the widget's
+   "@pear-shared:size-token" block and scanner/size-chart-reader.src.js's
+   "@pear-shared:size-chart-parser" block (the reader that used to be the widget's, moved
+   byte for byte - scripts/sync-size-chart-parser.mjs), and this suite is what keeps the
+   two runtimes one:
 
-   §1 BYTE IDENTITY. Re-rendering the generated file from the current widget must
-      reproduce the committed file exactly. An edit to the widget's parser without
+   §1 BYTE IDENTITY. Re-rendering the generated file from its sources must reproduce the
+      committed file exactly. An edit to either source without
       `npm run sync:size-chart-parser` fails here, not in production.
    §2 SELF-CONTAINED. The shared blocks may reference nothing from the widget outside
       them (only `d` and console) - otherwise the scanner copy dies on a ReferenceError
       the widget never sees (the CLAUDE.md §2.6 "helper above the marker" failure).
    §3 SAME ANSWER, SAME FIXTURES. One set of size-guide pages goes through the REAL
-      widget (injected into jsdom, button clicked, iframe URL read) and through the
-      scanner's parser; the encoded charts must be identical, including the silent
-      pages where both must say nothing.
+      widget (injected into jsdom, button clicked, iframe URL read) + the REAL
+      lib/sizing.js reader, and through the scanner's parser; the encoded charts must be
+      identical, including the silent pages where both must say nothing.
    §4 ALIASES. The EU/US/INT columns the shared parser now captures, read identically.
    ============================================================================= */
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { renderScannerParser, sharedBlock, EXPORTS } from "../scripts/sync-size-chart-parser.mjs";
 import { createSizeChartParser } from "../scanner/size-chart-parser.js";
+import { storeChartWire, isPlausibleSizeToken as serverToken } from "../lib/sizing.js";
 import { openWidget, PDP } from "./helpers/widget-jsdom.mjs";
 
 const PW = readFileSync(new URL("../widget/pear-widget.js", import.meta.url), "utf8");
+const READER = readFileSync(new URL("../scanner/size-chart-reader.src.js", import.meta.url), "utf8");
 const GENERATED = readFileSync(new URL("../scanner/size-chart-parser.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 let fails = 0;
@@ -35,18 +41,27 @@ function check(label, cond, detail) {
   if (!cond && detail !== undefined) console.log(`        ${detail}`);
 }
 
-console.log("\n── §1 the scanner's copy is the widget's code, byte for byte ──");
+console.log("\n── §1 the scanner's copy is its sources' code, byte for byte ──");
 {
-  const expected = renderScannerParser(PW);
+  const expected = renderScannerParser(PW, READER);
   check("§1.1 scanner/size-chart-parser.js == render(widget) - run `npm run sync:size-chart-parser` if this fails",
     GENERATED === expected,
     `first difference at char ${[...expected].findIndex((c, i) => c !== GENERATED[i])}`);
-  const token = sharedBlock(PW, "size-token"), parser = sharedBlock(PW, "size-chart-parser");
+  const token = sharedBlock(PW, "size-token"), parser = sharedBlock(READER, "size-chart-parser");
   check("§1.2 both shared blocks appear verbatim in the generated file",
     GENERATED.includes(token) && GENERATED.includes(parser));
   check("§1.3 the parser block is the real thing (extractSizeChart + encodeSizeChart inside it)",
     /function extractSizeChart\(\)/.test(parser) && /function encodeSizeChart\(chart\)/.test(parser));
   check("§1.4 the token block carries isPlausibleSizeToken", /function isPlausibleSizeToken\(s\)/.test(token));
+  /* The reader is hidden now: the widget collects, the server reads (§2.12). */
+  check("§1.5 the widget carries no reader (no extractSizeChart / sizeChartFromGrid / encodeSizeChart)",
+    !/function (?:extractSizeChart|sizeChartFromGrid|encodeSizeChart|sizeChartMeasureKey)\(/.test(PW));
+  /* The server's copy of the token rule (CLAUDE.md §3) answers as the widget's does. */
+  const widgetToken = new Function(token + "\nreturn isPlausibleSizeToken;")();
+  const probes = ["XXXS", "3XS", "2XS", "XXS", "xs", "S", "M", "L", "XL", "2XL", "5XL", "6XL", "XXXL", "4XS",
+    "1", "12", "123", "", " M ", "one", "OS", "38", "M/L"];
+  check("§1.6 lib/sizing.js's isPlausibleSizeToken agrees with the widget's on every probe",
+    probes.every((t) => widgetToken(t) === serverToken(t)), probes.filter((t) => widgetToken(t) !== serverToken(t)).join(","));
 }
 
 console.log("\n── §2 the shared blocks are self-contained ──");
@@ -94,10 +109,12 @@ const FIXTURES = [
       <tr><td>S</td><td>96</td></tr><tr><td>M</td><td>90</td></tr><tr><td>L</td><td>104</td></tr></table>`],
 ];
 
-console.log("\n── §3 the widget and the scanner read the same page the same way ──");
+console.log("\n── §3 the live path and the scanner read the same page the same way ──");
 for (const [name, markup] of FIXTURES) {
   const { params } = await openWidget(PDP(markup));
-  const widgetChart = params.get("garment_size_chart") || "";
+  /* The widget sends raw tables; lib/sizing.js reads them into the v1 string the widget
+     used to send (storeChartWire - the one decode every sender shares). */
+  const widgetChart = storeChartWire(params.get("garment_size_chart") || "");
   const doc = new JSDOM(PDP(markup), { url: "https://shop.example.com/products/tee" }).window.document;
   const scanner = createSizeChartParser(doc);
   const scannerChart = scanner.encodeSizeChart(scanner.extractSizeChart());
@@ -121,7 +138,7 @@ console.log("\n── §4 alias columns ──");
   check("§4.2 an unlabelled second token in the size cell is kept as `alt`", m && m.aliases.alt === "38", JSON.stringify(m));
   const l = rows.find((r) => r.size === "L");
   check("§4.3 a LABELLED token in the size cell wins over the column", l && l.aliases.eu === "50", JSON.stringify(l));
-  check("§4.4 aliases never reach the widget's wire format (encodeSizeChart drops them)",
+  check("§4.4 aliases never reach the v1 wire format (encodeSizeChart drops them - the live path never carried them)",
     !/48|50/.test(createSizeChartParser(doc).encodeSizeChart({ unit: "cm", source: "x", rows })));
   const waist = new JSDOM(`<table><tr><th>Size</th><th>Waist (US)</th></tr><tr><td>S</td><td>70-76</td></tr><tr><td>M</td><td>77-83</td></tr></table>`).window.document;
   const w = createSizeChartParser(waist).extractSizeChart();
@@ -149,9 +166,10 @@ console.log("\n── §5 a caption that says \"inches\" declares the unit (the 
   check("§5.1 the scanner reads a 62in chest as ~157cm, not 62cm",
     xxl && Math.abs(xxl.minChest - (62 * 2.54 - 2)) < 0.11 && Math.abs(xxl.maxChest - (62 * 2.54 + 2)) < 0.11,
     JSON.stringify(xxl));
+  /* The widget sends the grid RAW with the caption's unit; the server's reader converts (CLAUDE.md §2.12). */
   const { params } = await openWidget(PDP(CAPTION));
-  const wire = params.get("garment_size_chart") || "";
-  check("§5.2 the widget sends the same converted band",
+  const wire = storeChartWire(params.get("garment_size_chart") || "");
+  check("§5.2 the widget sends the same converted band (as the server reads its raw grid)",
     wire === scanner.encodeSizeChart(chart) && /XXL:155\.5-159\.5:/.test(wire), wire);
   check("§5.3 the declared-unit regex itself matches the word, and the cm test still wins first",
     scanner.sizeChartTableUnit(doc.querySelector("table")) === "in" &&
@@ -163,8 +181,9 @@ console.log("\n── §5 a caption that says \"inches\" declares the unit (the 
   /* A byte-level guard on both copies: no C0 control character (other than tab/CR/LF)
      anywhere in the shared blocks - the class of bug, not just this instance. */
   const ctrl = (s) => [...s].filter((c) => c.charCodeAt(0) < 32 && !"\t\r\n".includes(c)).length;
-  check("§5.5 no control bytes in the widget's shared blocks or the scanner copy",
-    ctrl(sharedBlock(PW, "size-token") + sharedBlock(PW, "size-chart-parser")) === 0 && ctrl(GENERATED) === 0);
+  check("§5.5 no control bytes in the widget's token block, the reader's parser block, the scanner copy or the server reader",
+    ctrl(sharedBlock(PW, "size-token") + sharedBlock(READER, "size-chart-parser")) === 0 && ctrl(GENERATED) === 0 &&
+    ctrl(readFileSync(new URL("../lib/sizing.js", import.meta.url), "utf8")) === 0);
 }
 
 console.log("");
