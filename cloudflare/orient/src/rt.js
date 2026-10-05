@@ -35,8 +35,15 @@ function cors(origin, methods = "GET, POST, OPTIONS") {
   };
 }
 
+/** The longest an engine session may stay open through the edge (RT_MAX_SESSION_MS, default 90s; a real one takes 15-25s:
+ *  connect, the reveal hold, the 5s window - up to ~45s with a slow connect and a 10s self-timer). */
+export function rtMaxSessionMs(env) {
+  const v = Number(env && env.RT_MAX_SESSION_MS);
+  return Number.isFinite(v) && v >= 30000 && v <= 600000 ? v : 90000;
+}
+
 /** Accept the room's socket only once the upstream one is open; relay both ways, translating text. */
-async function relay(upstreamUrl, headers, { toUp = (d) => d, toDown = (d) => d } = {}) {
+async function relay(upstreamUrl, headers, { toUp = (d) => d, toDown = (d) => d, maxMs = 0 } = {}) {
   let up;
   try {
     up = await fetch(upstreamUrl, { headers: { ...headers, Upgrade: "websocket" } });
@@ -60,6 +67,15 @@ async function relay(upstreamUrl, headers, { toUp = (d) => d, toDown = (d) => d 
   ws.addEventListener("close", (e) => { try { server.close(closeCode(e.code), scrubReason(e.reason)); } catch { /* closed */ } });
   server.addEventListener("error", () => { try { ws.close(1011, "error"); } catch { /* closed */ } });
   ws.addEventListener("error", () => { try { server.close(1011, "error"); } catch { /* closed */ } });
+  /* THE SESSION CAP (2026-10-05): a page that cannot end its session - a frozen machine, a phone tab put away - left one
+     open ~5 minutes in a TEST run (the room's 5s kill clock is a timer in that page). Every engine session is closed here
+     after maxMs; "not allowed" is on the SDK's permanent list, so it does not reconnect into a second one. */
+  if (maxMs > 0) {
+    setTimeout(() => {
+      try { ws.close(1000, "session limit"); } catch { /* closed */ }
+      try { server.close(4003, "session limit - not allowed"); } catch { /* closed */ }
+    }, maxMs);
+  }
   return new Response(null, { status: 101, webSocket: client });
 }
 /* The room's socket opened and closed at once with the reason - what a direct refusal looked like. */
@@ -87,7 +103,8 @@ export function handleRt(request, env, url, originOk) {
     /* The edge as the room reached it - RT_EDGE_WS overrides it for a local `wrangler dev` (which reports the
        production host in request.url). */
     const edgeWs = env.RT_EDGE_WS || `wss://${url.host}`;
-    return relay(target, { Origin: origin }, { toUp: frameToEngine, toDown: (t) => frameToRoom(t, { edgeWs }) });
+    return relay(target, { Origin: origin }, { toUp: frameToEngine, toDown: (t) => frameToRoom(t, { edgeWs }),
+      maxMs: rtMaxSessionMs(env) });
   }
 
   if (p.startsWith("/k/")) {

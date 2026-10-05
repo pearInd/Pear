@@ -1088,6 +1088,14 @@ covers what the tick does not (no watcher, a single-view garment): the same ~4 i
 time, always fresh. `?pose_sync=0` is the free-running loop. The replay harnesses run the tick without the pose loop
 (typeof-guarded), so `orient-engine` §1 is unchanged; §4 pins the step.
 
+### 2.32 THE SESSION CAP - no engine session outlives 90s through the edge (2026-10-05)
+A TEST run on a machine that froze mid-session (load 19, the WiFi daemon at 65% CPU) left its engine session open ~5
+minutes: the room's 5s kill clock is a timer in that page, and a frozen page - or a phone tab put away - runs none. The
+edge's relay (`cloudflare/orient/src/rt.js` `relay()`, `rtMaxSessionMs()`) now closes every `/v/s` session after
+`RT_MAX_SESSION_MS` (default 90s, bounded 30s-10min; a real one takes 15-25s, ~45s with a slow connect and a 10s timer),
+the room's side with a reason on the SDK's permanent list ("not allowed") so it does not reconnect into a second one.
+`rt-proxy` §7. Worker deploy.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

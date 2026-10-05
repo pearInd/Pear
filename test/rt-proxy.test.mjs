@@ -137,5 +137,35 @@ console.log("\n── §6 wiring ──");
     /const scrubReason = \(s\) => String\(roomErrorText\(String\(s \|\| ""\)\)\)\.slice\(0, 120\);/.test(rt));
 }
 
+console.log("\n── §7 THE SESSION CAP: no engine session outlives RT_MAX_SESSION_MS through the edge ──");
+{
+  /* A frozen page cannot run its own 5s kill clock - a TEST run left a session open ~5 minutes (2026-10-05). The relay
+     closes both sockets at the cap; "not allowed" keeps the SDK from reconnecting into a second session. */
+  const { handleRt, rtMaxSessionMs } = await import("../cloudflare/orient/src/rt.js");
+  const sock = () => { const s = { closed: null, sent: [], ls: {}, accept() {}, send(d) { this.sent.push(d); },
+    close(code, reason) { this.closed = { code, reason }; }, addEventListener(t, f) { (this.ls[t] ||= []).push(f); } }; return s; };
+  const up = sock(), client = sock(), server = sock();
+  const saved = { fetch: globalThis.fetch, Pair: globalThis.WebSocketPair, Response: globalThis.Response, setTimeout: globalThis.setTimeout };
+  const timers = [];
+  try {
+    globalThis.fetch = async () => ({ webSocket: up, status: 101 });
+    globalThis.WebSocketPair = class { constructor() { return { 0: client, 1: server }; } };
+    globalThis.Response = class { constructor(body, init) { Object.assign(this, init || {}); } };
+    globalThis.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
+    const env = { RT_SIGNAL_URL: "https://engine.example/v1/stream", RT_MODEL: "m" };
+    const room = new URL(`wss://edge.example/v/s?api_key=${P.sealTicket("ek_real")}&model=v`);
+    const res = await handleRt(new Request(room.href.replace("wss:", "https:"), { headers: { Upgrade: "websocket", Origin: "https://app.example" } }), env, room, true);
+    const cap = timers.find((t) => t.ms === 90000);
+    check("§7.1 the engine relay arms a 90s cap by default", res && res.status === 101 && !!cap, JSON.stringify(timers.map((t) => t.ms)));
+    if (cap) cap.fn();
+    check("§7.2 ...which closes the engine's socket and the room's - the room's with a reason the SDK will not retry",
+      up.closed && up.closed.code === 1000 && server.closed && /not allowed/.test(server.closed.reason), JSON.stringify({ up: up.closed, room: server.closed }));
+    check("§7.3 RT_MAX_SESSION_MS tunes it, within 30s-10min", rtMaxSessionMs({ RT_MAX_SESSION_MS: "60000" }) === 60000 &&
+      rtMaxSessionMs({ RT_MAX_SESSION_MS: "5" }) === 90000 && rtMaxSessionMs({}) === 90000);
+  } finally {
+    globalThis.fetch = saved.fetch; globalThis.WebSocketPair = saved.Pair; globalThis.Response = saved.Response; globalThis.setTimeout = saved.setTimeout;
+  }
+}
+
 console.log(`\n${fails ? `✗ ${fails} failed` : "✓ all passed"}`);
 process.exit(fails ? 1 : 0);
