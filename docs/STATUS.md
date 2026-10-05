@@ -246,7 +246,11 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
   (fast) and 05:55 records: the return's right reading had arrived and the rule missed it (by
   under 1 degree at 06:09) - it ignored the reading's age and used the turn's average speed. Now
   it projects with both and schedules between readings: the two fast sessions replay 250-290ms
-  earlier, the slow one (06:11) within 64ms. Worker deploy after the room.
+  earlier, the slow one (06:11) within 64ms. Live: room `d7d63d7`, Worker `dddfa41e`; then a
+  back-to-side jump in one reading counts as a step (`c781818`, Worker `32f73241`) - a real
+  ~300 deg/s session had its return held for the chest by the snap filter. Real sessions this
+  round: 3 (budget 50). One hit a congested uplink (image acks ~1.25s, the orientation link
+  1.1s) - nothing to read from it. **Next: your measurement, fast and slow.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
