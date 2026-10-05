@@ -4,7 +4,7 @@ Living file. **Every task ends by updating it** (CLAUDE.md §9). Newest facts wi
 Hashes are on `main` unless a branch is named. Stages: *not started · in progress ·
 done · blocked*.
 
-_Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · branch `claude/project-thread-cr4uyn`: size-guide capture Phase 2 (PR open)_
+_Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · branch `claude/project-thread-cr4uyn`: size-guide capture Phase 2 (ready for your review)_
 
 ## At a glance
 
@@ -12,7 +12,7 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
 |---|---|---|
 | Children's sizing (kids/adult guard) | done (core); follow-ups open | main |
 | Store size guides (Phase 0 + 1 + store-chart decides) | in progress — shared-parser fixes, all-charts key (v16, run) and the store-chart decision shipped `0fccee8`, and run server-side since the merge (`lib/sizing.js`, proven identical over 146,440 cases - CLAUDE.md §2.27); **adidas re-save waiting on you** | main |
-| Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done on the branch, **PR open - your review**; 11-store sweep run from your machine, nothing saved beyond fox/castro | `claude/project-thread-cr4uyn` |
+| Store size guides — Phase 2: capture any store (browser, image OCR, manual import, one command) | done on the branch, **waiting on your review**; 11-store sweep run from your machine, nothing saved beyond fox/castro | `claude/project-thread-cr4uyn` |
 | Ready-signal product signals fix | done | main `137188d` (merge of `3fb3c37`) |
 | JSON-LD size list (proposal B) | done | main `bd766b2` |
 | Size-chart "inches" backspace-byte bug | done | main `3345467` |
@@ -114,7 +114,7 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
 ## Store size guides
 - **Stage:** in progress. Phase 0 (measure) + Phase 1 (stored fallback) shipped in `bd766b2`;
   **§2.5b changed 2026-10-03 (`0fccee8`): a confident stored chart now DECIDES the adult size**.
-  Phase 2 (capture any store) built on `claude/project-thread-cr4uyn`, PR open (below).
+  Phase 2 (capture any store) built on `claude/project-thread-cr4uyn`, waiting on your review (below).
   Phases 3–6 not started.
 - **Done:** widget reads the PDP chart (`2026-09-17` spec); scanner `--size-charts`
   dry run + `--save` capture; `store_size_charts` (v15, run); `GET /api/store-size-chart`;
@@ -165,7 +165,7 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
 - **Open decisions:** none on the code shape - server-side (`lib/sizing.js`) since the `hide/edge`
   merge (CLAUDE.md §2.27).
 
-### Phase 2 — capture any store (branch `claude/project-thread-cr4uyn`, PR open)
+### Phase 2 — capture any store (branch `claude/project-thread-cr4uyn`, waiting on your review)
 - **Stage:** done on the branch, waiting on your review. Not on main; nothing saved by it.
 - **Commands:** `npm run capture -- <store-url> [--dry-run]` (static → browser → image OCR,
   summary, y/n, save, then reads `GET /api/store-size-chart` back); `npm run import:chart --
@@ -176,17 +176,25 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
   `manual_html` / `manual_image` (−0.1 for an image). Every path goes through the same shared
   parser, `buildRecords()` and `saveSizeChartRecords()` as Phase 1.
 - **Never worked around:** a store that refuses us (403/429/challenge) is reported BLOCKED with the
-  manual way in; the static stage stops after 3 refusals in a row and the browser is then never
-  started; the browser stops after 2. No stealth, no fingerprint tricks, no CAPTCHA, no proxies.
+  manual way in; the static stage stops after 3 refusals in a row (or when every sampled product
+  page refused) and the browser is then never started, nor the store's own images fetched; the
+  browser stops after 2. A guessed guide path's 403 is not the store refusing. No stealth, no
+  fingerprint tricks, no CAPTCHA, no proxies.
 - **Done:** WIP from the 2026-10-03 session `eee19e7`; main merged `0bb6c3d` and `71df521`
   (main `528888a`); a 36-finding review fixed, then a verify pass found 5 more, all fixed with
   tests in `ffce4a7`: a store that began refusing was re-asked by the browser; a theme's page
   wrapper (Debut/Brooklyn) read as a guide dialog in a manual import; a chart's `--only` number
   differed with flags and untyped tables (suits) had none; a guide hidden by CSS (Dawn) never
-  counted as opened; the mutation script restored same-file edits in the wrong order.
-- **Verified 2026-10-05:** unit suite green (4,004 checks, real Chromium for the browser tests);
-  `npm run mutation:capture` 17/17 killed with Chromium (16 + 1 skipped without);
-  `trace:prompt --json` byte-identical to main; `qa:visual` 40/40.
+  counted as opened; the mutation script restored same-file edits in the wrong order. An
+  independent check of those 5 found 3 more, fixed with tests that failed first in `0630a23`: a
+  store that refused every sampled product page (under the 3 of a polite stop) was re-asked by the
+  browser; three guessed guide paths answering 403 marked a store that served every product page
+  BLOCKED; `--only=1` (the equals form) was ignored and imported every chart. Also: after a
+  refusal, images on the store's own host are no longer fetched.
+- **Verified 2026-10-05 (after `0630a23`):** unit suite green (4,014 checks, real Chromium for the
+  browser tests); `npm run mutation:capture` 21/21 killed with Chromium (without Chromium the
+  CSS-visibility one is reported SKIPPED); `trace:prompt --json` byte-identical to main (`528888a`);
+  `qa:visual` 40/40.
 - **Coverage — sweep from your machine, 2026-10-03, 11 stores, dry runs (all exit 0):**
 
   | Store | Result |
@@ -203,7 +211,7 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
   | adidas.co.il | BLOCKED (403, static and browser) |
   | golfco | BLOCKED (403) |
 
-  The sweep predates the last 5 fixes; re-run a dry run before saving any of them.
+  The sweep predates the last 8 fixes; re-run a dry run before saving any of them.
 - **Remaining:** your review + merge; which sweep charts to save (Waiting on you). Product-scoped
   charts are stored but not served (Phase 1 serves store-wide only).
 
@@ -324,7 +332,7 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED · bra
 ## Other branches (not merged)
 | Branch | Ahead / behind main | Note |
 |---|---|---|
-| `claude/project-thread-cr4uyn` | Phase 2 capture | size-guide capture CLI - PR open, your review |
+| `claude/project-thread-cr4uyn` | Phase 2 capture | size-guide capture CLI - your review |
 | `size-capture-phase2-local` | — | the 2026-10-03 WIP as pushed from your machine; superseded by the branch above |
 | `hide/edge` | merged into main 2026-10-04 | the hidden build - main now |
 | `hide/main-v2` | superseded by `hide/edge` | not to be merged |
