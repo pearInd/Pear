@@ -8264,7 +8264,10 @@ function torsoTwistStep(s, w, worldYawAbs, now, enabled = TWIST_ENABLED) {
        a square-on width 2x and 3-4x what the live loop then read (the presence gate learned it): the shoulder order read
        0.5 to the lens and -0.71 at the back, and the engine took a reading at the back for one coming round. Two square-on
        readings in a row outside BASELINE_OFF of it start the baseline afresh from the live ones. */
-    const off = s.n >= TWIST_BASELINE_MIN && s.sh0 > 0 && (ash < s.sh0 * BASELINE_OFF[0] || ash > s.sh0 * BASELINE_OFF[1]);
+    /* ...and the torso's HEIGHT (17:41 that day): the gate learned it with the shopper still walking back, ~2x the live one, so
+       every live reading fell outside TWIST_TORSO_BAND and the order went stale for 12s - through the whole turn. */
+    const off = s.n >= TWIST_BASELINE_MIN && s.sh0 > 0 && (ash < s.sh0 * BASELINE_OFF[0] || ash > s.sh0 * BASELINE_OFF[1] ||
+      (s.th0 > 0 && (w.th < s.th0 * TWIST_TORSO_BAND[0] || w.th > s.th0 * TWIST_TORSO_BAND[1])));
     s.offStreak = off ? (s.offStreak || 0) + 1 : 0;
     if (s.offStreak >= 2) { s.sh0 = 0; s.hip0 = 0; s.th0 = 0; s.n = 0; s.shMax = 0; s.offStreak = 0; s.relearned = (s.relearned || 0) + 1; }
     const a = s.n ? 0.2 : 1;
@@ -17818,8 +17821,11 @@ let presenceWatcherTimer = null;
    RUNS the session's inference itself, right before it samples (waiting at most POSE_SYNC_WAIT_MS), and the loop's own
    timer only covers what the tick does not (no watcher, a single-view garment) - the same ~4 inferences a second, now
    always fresh. ?pose_sync=0 is the free-running loop. */
+/* OFF BY DEFAULT since the evening it shipped ("it's laggy"): with the inference run inside the tick, the room's camera presented
+   24-26 fps in all three sessions of 2026-10-05 against 28-30 before it - one longer main-thread block per tick, a dropped frame
+   each, four times a second. ?pose_sync=1 turns it on for an A/B; the return's projection corrects the reading's age anyway. */
 const POSE_SYNC = (() => {
-  try { return new URLSearchParams(location.search).get("pose_sync") !== "0"; } catch (_) { return true; }
+  try { return new URLSearchParams(location.search).get("pose_sync") === "1"; } catch (_) { return false; }
 })();
 const POSE_SYNC_WAIT_MS = 120;
 let _poseInferNow = null;   // the live loop's inference, for the tick to run (startPresenceWatcher)

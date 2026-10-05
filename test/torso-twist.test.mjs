@@ -278,6 +278,18 @@ console.log("\n── §6 THE BASELINE RE-LEARNS (2026-10-05) - a square-on widt
   check(`§6.1 a width learned 2x too wide reads the live square-on as ${before && before.toFixed(2)}`, Math.abs(before - 0.5) < 0.01);
   check(`§6.2 one disagreeing reading is not enough (a glitch) - still ${afterOne && afterOne.toFixed(2)}`, afterOne !== null && afterOne < 0.7, afterOne);
   check(`§6.3 two in a row re-learn it from the live readings: square-on reads ${after && after.toFixed(2)} again`, Math.abs(after - 1) < 0.05 && s.relearned === 1, JSON.stringify({ after, relearned: s.relearned }));
+  /* 17:41 that day: the shoulders' scale was right but the torso HEIGHT was learned ~2x (the shopper still walking back in the
+     gate) - every live reading fell outside the height band and the order went stale through the whole turn. */
+  {
+    const t = X.makeTwistState();
+    const near = { sh: 1.06, hip: 0.6, th: 0.62 }, far = { sh: 1.06, hip: 0.6, th: 0.31 };
+    for (let i = 0; i < 6; i++) X.torsoTwistStep(t, near, 3, i * 240);
+    const stale = X.torsoOrder(t, far);
+    X.torsoTwistStep(t, far, 3, 2000); X.torsoTwistStep(t, far, 3, 2240); X.torsoTwistStep(t, far, 3, 2480);
+    const fresh = X.torsoOrder(t, far);
+    check(`§6.3b a torso height learned 2x reads no order (${stale}); two live readings re-learn it (${fresh && fresh.toFixed(2)})`,
+      stale === null && Math.abs(fresh - 1) < 0.05, JSON.stringify({ stale, fresh }));
+  }
   /* The recorded 360s - where the baseline was right all along - never re-learn, at the back or anywhere. */
   let relearns = 0;
   for (const rows of Object.values(DATA.clips)) {

@@ -268,7 +268,9 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
   shoulder scale (2x / 3-4x) made a reading at the back look like one coming round. The scale
   now re-learns from live readings and is aspect-proof; the projection needs a deep back.
   17:23 also had a mirrored skeleton through the whole back view - not fixed.
-  **Next: your measurement.**
+- **17:41 report - "the back on the front a little, and laggy":** the torso height learned in the
+  gate (~2x) kept the order stale through the turn - it re-learns now too; and the tick-driven
+  pose inference (§2.31) cost the camera 4-6 fps - off by default again. **Next: your measurement.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).

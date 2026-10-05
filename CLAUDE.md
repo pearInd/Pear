@@ -1093,8 +1093,10 @@ their phase - and the outbound BACK, which fires on a reading (the early turn), 
 return's projection (§2.30) corrects for the age, the BACK's rules do not. With `POSE_SYNC` the tick runs the session's
 inference itself before it samples (`_poseInferNow`, at most `POSE_SYNC_WAIT_MS` 120), and the loop's own timer only
 covers what the tick does not (no watcher, a single-view garment): the same ~4 inferences a second, one in flight at a
-time, always fresh. `?pose_sync=0` is the free-running loop. The replay harnesses run the tick without the pose loop
-(typeof-guarded), so `orient-engine` §1 is unchanged; §4 pins the step.
+time, always fresh. The replay harnesses run the tick without the pose loop (typeof-guarded), so `orient-engine` §1 is
+unchanged; §4 pins the step. **OFF BY DEFAULT the same evening (`?pose_sync=1` turns it on):** "it's laggy" - the room's
+camera presented 24-26 fps in all three of that day's sessions against 28-30 before it (one longer main-thread block per tick,
+a dropped frame each, four times a second). The return's projection corrects the reading's age without it.
 
 ### 2.32 THE SESSION CAP - no engine session outlives 90s through the edge (2026-10-05)
 A TEST run on a machine that froze mid-session (load 19, the WiFi daemon at 65% CPU) left its engine session open ~5
@@ -1113,6 +1115,9 @@ a mirrored skeleton for the whole back view (the shoulders read FRONT while the 
 - **THE BASELINE RE-LEARNS (`app.js`, the torso-twist block, `BASELINE_OFF`):** two live square-on readings in a row outside
   0.6-1.6x the learned width start the baseline afresh (a TEST record logs `baseline-relearn`). The twelve recorded 360s never
   re-learn (`torso-twist` §6).
+- **...and the torso's height (17:41):** the gate learned it ~2x (the shopper still walking back), every live reading fell
+  outside `TWIST_TORSO_BAND`, and the order went stale for 12s through the whole turn - the FRONT went out on a vote, late,
+  the back print on the chest. Two square-on readings out of the height band re-learn it too (`torso-twist` §6.3b).
 - **Pixel proportions:** `poseTorsoWidths(result, aspect)` multiplies by the frame's width over its height (`_poseAspect`,
   set at every inference; a change is logged as `pose-aspect`) - if the camera changes shape between the gate and the live
   loop, the width no longer changes with it. Ratios are unchanged at a constant aspect, so nothing else moves.
