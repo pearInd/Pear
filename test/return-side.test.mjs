@@ -165,8 +165,8 @@ console.log("\n── §1 the trigger ──");
     [paced(200, true), paced(null, true), paced(750, false)].every((o) => firstFire(o) === 4 && o[4].via === "order"));
   const snapSteps = [
     { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -1, ordAt: 0 },
-    { vote: null, lock: "back", yawAbs: 30, at: 240, ord: -0.9, ordAt: 240 },
-    { vote: null, lock: "back", yawAbs: 40, at: 480, ord: -0.05, ordAt: 480 },   // +0.85 in one reading: a snap, not a speed
+    { vote: "back", lock: "back", yawAbs: 6, at: 240, ord: -0.99, ordAt: 240 },   // still at the back
+    { vote: null, lock: "back", yawAbs: 40, at: 480, ord: -0.05, ordAt: 480 },   // +0.94 in one reading, |yaw| 40: a snap, not a speed
   ];
   check("§1.19 a snap (more than 0.8 in one reading) is not a speed: nothing fires early", !paced(750, true, snapSteps).some((o) => o.fire));
   const deep = [
@@ -174,7 +174,24 @@ console.log("\n── §1 the trigger ──");
     { vote: "back", lock: "back", yawAbs: 20, at: 240, ord: -0.95, ordAt: 240 },
     { vote: null, lock: "back", yawAbs: 30, at: 480, ord: -0.88, ordAt: 480 },   // rising and fast, but past the floor (-0.85)
   ];
-  check("§1.20 ...and never from deeper than the floor (-0.85), however fast", !paced(750, true, deep).some((o) => o.fire));
+  check("§1.20 ...and the 2026-10-04 rule never fires from deeper than its floor (-0.85), however fast", !paced(750, true, deep).some((o) => o.fire));
+  /* THE PROJECTION (its floor is -1.0): a shopper STANDING at the back - the order wobbling around -1 (the recorded 360s:
+     +-0.05-0.07) - is kept from firing by the projection's own step speed: a wobble projects nowhere near the side. */
+  const projTrig = () => E.createOrientEngine(E.sanitizeOrientKnobs({})).internals.makeEarlyTurnTrigger(
+    40, 45, 50, 50, 10, [450, 960], 20, 0.2, true, true);
+  const projected = (lat, steps) => run(projTrig(), [START, ...steps].map((o) => ({ ...o, lat }))).slice(1);
+  const still = [
+    { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -1.02, ordAt: 0 },
+    { vote: "back", lock: "back", yawAbs: 4, at: 250, ord: -0.97, ordAt: 250 },
+    { vote: "back", lock: "back", yawAbs: 6, at: 500, ord: -1.04, ordAt: 500 },
+    { vote: "back", lock: "back", yawAbs: 3, at: 750, ord: -0.96, ordAt: 750 },
+    { vote: "back", lock: "back", yawAbs: 5, at: 1000, ord: -0.99, ordAt: 1000 },
+    { vote: "back", lock: "back", yawAbs: 7, at: 1250, ord: -0.93, ordAt: 1250 },
+  ];
+  check("§1.20b the projection: a shopper standing at the back (the order wobbling at -1) never fires, however slow the engine",
+    !projected(750, still).some((o) => o.fire) && !projected(1200, still).some((o) => o.fire), JSON.stringify(projected(1200, still)));
+  check("§1.20c ...while a real return from the same depth does - and a reading earlier than the 2026-10-04 rule",
+    firstFire(projected(750, ret)) >= 0 && firstFire(projected(750, ret)) < firstFire(slow), JSON.stringify(projected(750, ret)));
   const falling = [
     { vote: "back", lock: "back", yawAbs: 5, at: 0, ord: -0.55, ordAt: 0 },
     { vote: null, lock: "back", yawAbs: 20, at: 240, ord: -0.62, ordAt: 240 },   // turning back toward the back
@@ -234,7 +251,7 @@ function roomRun(rows, { knobs = {}, sendOrd = true, phase = 0, lat = null } = {
       yawAbs, yawAt, lostAt, ord: sendOrd ? ord : null, ordAt: sendOrd ? ordAt : 0, lat, lock, profile: false, dualView: true }));
     for (const a of acts) if (a.do === "swap") {
       if (lock === null && a.next === "front") { lock = "front"; continue; }
-      if (a.next !== lock) { swaps.push({ next: a.next, t }); lock = a.next; }
+      if (a.next !== lock) { swaps.push({ next: a.next, t: t + (a.delay || 0) }); lock = a.next; }   // a scheduled send goes out then
     }
   }
   return swaps;
@@ -574,6 +591,48 @@ console.log("\n── §4b the engine's pace: a slow engine's return goes out ea
   check("§4b.5 the return is never lost and no run swaps more", res.every((r) => r.on.front !== null && r.on.n <= r.off.n),
     JSON.stringify(res.filter((r) => !(r.on.front !== null && r.on.n <= r.off.n)).map((r) => [r.name, r.phase])));
   check("§4b.6 the outbound BACK is untouched (the same tick with and without the lead)", res.every((r) => r.on.back === r.off.back));
+}
+
+console.log("\n── §4c THE LANDING MODEL - where the back and the front land, slow to fast (2026-10-05) ──");
+{
+  /* "Make it work well and consistently." The thirteen recorded 360s x 4 tick phases through the real measurement and
+     engine, each played at 0.8x, 1x and 1.3x (1.3x is the user's own fast turn: a ~2.1s 360), on today's engine (lat
+     520ms). A swap sent at t lands on the body at t + (lat - 250ms) - the user's 05:55 and 06:09 clips read frame by
+     frame. Counted per speed: how long the back print sat on a chest past 300 degrees, front landings before 235 (the
+     front print on the back), and any session with more than one BACK and one FRONT (the shirt jumping). */
+  const clips = { ...POSES.clips, "s3.mp4 (reported)": S3.rows };
+  const LAT = 520, L = LAT - 250;
+  const model = (knobs, speed) => {
+    const r = { n: 0, chestMs: [], early: 0, flaps: 0 };
+    for (const rows0 of Object.values(clips)) {
+      const rows = rows0.map((x) => [x[0] / speed, ...x.slice(1)]);
+      if (!rows.some((x) => x[1] !== null && x[1] <= -0.25)) continue;
+      const th = thetaOf(rows);
+      for (const phase of [0, 62, 125, 187]) {
+        const sw = roomRun(rows, { knobs, phase, lat: LAT });
+        r.n++;
+        const B = sw.find((x) => x.next === "back"), F = B && sw.find((x) => x.next === "front" && x.t > B.t);
+        if (sw.length > 2) r.flaps++;
+        if (!F) continue;
+        if (th(F.t + L) < 235) r.early++;
+        let t300 = null; for (let tt = B.t; tt <= F.t + L; tt += 10) if (th(tt) >= 300) { t300 = tt; break; }
+        r.chestMs.push(t300 === null ? 0 : Math.max(0, F.t + L - t300));
+      }
+    }
+    const sum = r.chestMs.reduce((x, y) => x + y, 0), sorted = [...r.chestMs].sort((x, y) => x - y);
+    return { n: r.n, chestTotal: sum, chestP90: sorted[Math.floor(sorted.length * 0.9)] || 0, early: r.early, flaps: r.flaps };
+  };
+  const now = { 0.8: model({}, 0.8), 1: model({}, 1), 1.3: model({}, 1.3) };
+  const was = { 1: model({ lead_project: "0" }, 1), 1.3: model({ lead_project: "0" }, 1.3) };
+  console.log(`        now:    0.8x ${JSON.stringify(now[0.8])}  1x ${JSON.stringify(now[1])}  1.3x ${JSON.stringify(now[1.3])}`);
+  console.log(`        before: 1x ${JSON.stringify(was[1])}  1.3x ${JSON.stringify(was[1.3])}`);
+  check(`§4c.1 slow and normal turns: the back print on a chest ~never (0.8x ${now[0.8].chestTotal}ms, 1x ${now[1].chestTotal}ms over ${now[1].n} turns)`,
+    now[0.8].chestTotal <= 60 && now[1].chestTotal <= 120);
+  check(`§4c.2 the user's fast turn (1.3x): rarely and briefly - p90 ${now[1.3].chestP90}ms, ${now[1.3].chestTotal}ms over ${now[1.3].n} turns (the 2026-10-04 rule: ${was[1.3].chestTotal}ms)`,
+    now[1.3].chestP90 <= 60 && now[1.3].chestTotal * 2 <= was[1.3].chestTotal);
+  check("§4c.3 never the front print on the back from it: a front landing before 235 at most once in 48, at any speed",
+    now[0.8].early <= 1 && now[1].early <= 1 && now[1.3].early <= 1, JSON.stringify(now));
+  check("§4c.4 the shirt never jumps: one BACK and one FRONT per turn, at every speed", now[0.8].flaps + now[1].flaps + now[1.3].flaps === 0, JSON.stringify(now));
 }
 
 console.log("\n── §5 the wiring ──");

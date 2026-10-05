@@ -1077,6 +1077,14 @@ every outbound BACK unchanged. The twin calibrated to the clips (the render swit
   the same reading's world |yaw| says side-on (>= 60; 85 there) - `return-side` §3e.2b (267ms sooner); the synthetic snap of
   §1.19 (|yaw| 40) is still a snap. Even so, a return that fast lands ~0.25s late: the side comes one reading after the
   deepest back, and the deepest reading cannot yet say the shopper is coming round.
+- **THE LANDING MODEL (`return-side` §4c) - the consistency bar, slow to fast:** the thirteen recorded 360s x 4 tick phases
+  at 0.8x / 1x / 1.3x (1.3x is the user's own fast turn, a ~2.1s 360), today's engine (lat 520ms), a swap landing on the
+  body at send + (lat - 250ms). Pinned: the back print on a chest past 300 degrees 0ms (0.8x) and 20ms (1x) over 48 turns,
+  at 1.3x p90 42ms / 606ms total (the 2026-10-04 rule 1,960ms); a front landing before 235 at most once in 48; never a
+  third swap in a turn. Near the back the order saturates (-0.98..-1.0 on bodies at 150-230 degrees), so the projection
+  fires from -0.9 (`LEAD_FLOOR_PROJECTED`; the 2026-10-04 rule keeps -0.85) - a shopper standing at the back wobbles
+  -0.93..-1.07 and never fires it (`return-side` §1.20b). At 1.6x (a ~1.3s 360) the model shows no gain over before: the
+  side comes one reading after the saturated back, and only a faster reading rate could see it sooner.
 
 ### 2.31 THE POSE, READ FOR THE DECISION - every decision on a fresh reading (2026-10-05)
 "Make it react as fast as you can." The live pose loop (240ms, `startPresenceWatcher`) and the orientation tick (250ms)
