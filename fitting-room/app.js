@@ -8270,10 +8270,14 @@ function torsoTwistStep(s, w, worldYawAbs, now, enabled = TWIST_ENABLED) {
       (s.th0 > 0 && (w.th < s.th0 * TWIST_TORSO_BAND[0] || w.th > s.th0 * TWIST_TORSO_BAND[1])));
     s.offStreak = off ? (s.offStreak || 0) + 1 : 0;
     if (s.offStreak >= 2) { s.sh0 = 0; s.hip0 = 0; s.th0 = 0; s.n = 0; s.shMax = 0; s.offStreak = 0; s.relearned = (s.relearned || 0) + 1; }
-    const a = s.n ? 0.2 : 1;
-    s.sh0 = s.sh0 * (1 - a) + ash * a; s.hip0 = s.hip0 * (1 - a) + ahip * a; s.th0 = s.th0 * (1 - a) + w.th * a;
-    s.shMax = Math.max(s.shMax || 0, ash);   // the widest square-on reading - torsoOrder()'s scale before the baseline settles
-    s.n++;
+    /* An off reading waits for its pair rather than averaging in: drawn toward it, the baseline made the next one look
+       "on" and the pair never formed (18:22 that day re-learned only mid-turn). */
+    if (s.offStreak === 0) {
+      const a = s.n ? 0.2 : 1;
+      s.sh0 = s.sh0 * (1 - a) + ash * a; s.hip0 = s.hip0 * (1 - a) + ahip * a; s.th0 = s.th0 * (1 - a) + w.th * a;
+      s.shMax = Math.max(s.shMax || 0, ash);   // the widest square-on reading - torsoOrder()'s scale before the baseline settles
+      s.n++;
+    }
   }
   s.shR = s.sh0 ? ash / s.sh0 : null;
   s.hipR = s.hip0 ? ahip / s.hip0 : null;
@@ -8334,9 +8338,20 @@ let _poseOrd = null, _poseOrdAt = 0;
 /** The pose loop's hook: one inference in, the published |yaw| out (the world one unless a torso-only
  *  turn is being read). Logs and records the on/off edges. */
 function torsoTwistObserve(result, worldYawAbs, now) {
+  const aspect = typeof _poseAspect === "number" && _poseAspect > 0 ? _poseAspect : 1;
+  /* A FRAME OF ANOTHER SHAPE IS ANOTHER PICTURE (2026-10-05, 18:22): in a portrait room the camera opened 9:16 and turned
+     512x288 at go-live (the input throttle's constraints reach the shared source), so the gate's square-on width and torso
+     height described a different picture - the order read 0.43-0.57 to the lens until a re-learn mid-turn. The baseline
+     starts afresh on the first reading of a new shape; the order is back from the second. */
+  if (_poseTwist.aspect && Math.abs(_poseTwist.aspect - aspect) / _poseTwist.aspect > 0.02) {
+    _poseTwist = makeTwistState();
+    _poseOrd = null; _poseOrdAt = 0;
+    if (typeof traceOrient === "function") traceOrient("baseline-relearn", { why: "aspect", to: Math.round(aspect * 100) / 100 });
+  }
+  _poseTwist.aspect = aspect;
   const was = _poseTwist.active;
   const relearnedBefore = _poseTwist.relearned || 0;
-  const widths = poseTorsoWidths(result, typeof _poseAspect === "number" && _poseAspect > 0 ? _poseAspect : 1);
+  const widths = poseTorsoWidths(result, aspect);
   const on = torsoTwistStep(_poseTwist, widths, worldYawAbs, now);
   if ((_poseTwist.relearned || 0) !== relearnedBefore && typeof traceOrient === "function") {
     traceOrient("baseline-relearn", { sh: widths ? Math.round(Math.abs(widths.sh) * 100) / 100 : null });
@@ -18120,6 +18135,16 @@ let topologyReconditionInFlight = false;
 async function reconditionForTopology(step) {
   if (topologyReconditionInFlight || !isLive() || !isGarmentApplied) return;
   if (_orientHoldActive) return;
+  /* A ROTATION IN AI AUTO IS THE TURN'S (2026-10-05). The 18:21 TEST record: the BACK waited 418ms on the wire behind a
+     write already in flight at the turn's first 15 degrees - this re-drape, a full FRONT re-upload fired by the rotation
+     the turn itself is made of - and the back print showed for a fraction of the back view. With both sides on the wire,
+     the front/back swap re-conditions the rotation anyway; a lean or a change of volume still re-drapes. typeof: the
+     orientation globals are not in every suite's sandbox. */
+  if (step && step.reason === "rotation" && typeof currentAngle !== "undefined" && typeof AUTO_ANGLE !== "undefined" && currentAngle === AUTO_ANGLE) {
+    if (typeof traceOrient === "function") traceOrient("redrape-skip", { reason: "rotation" });
+    return;
+  }
+  if (typeof traceOrient === "function") traceOrient("redrape", { reason: step && step.reason });
   /* THE SHARED MUTEX, and this is the send site that made hoisting it urgent: this one
      forces a full image re-upload, so stacking it on an in-flight write is the most
      expensive collision available.

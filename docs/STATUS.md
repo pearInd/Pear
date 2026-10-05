@@ -273,7 +273,11 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
   pose inference (§2.31) cost the camera 4-6 fps - off by default again.
 - **18:10 report - "the back disappears too fast" (§2.34):** the front landed 0-100ms after the
   send (fast acks that evening), so the projection's lead and aim were recalibrated: the model
-  lands the front median 270 at every speed, p10 251+. **Next: your measurement.**
+  lands the front median 270 at every speed, p10 251+.
+- **18:21 / 18:22 report - "make the perfect one consistent" (§2.35):** the bad one had a rotation
+  re-drape delaying the BACK 418ms, a phantom 63-degree step at the bottom of the back, and a
+  camera that changed shape at go-live - all three fixed; replayed, the bad one now sends the
+  front at the side and the good one keeps its timing. **Next: your measurement.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).

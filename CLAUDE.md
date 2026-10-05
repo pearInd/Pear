@@ -1138,6 +1138,25 @@ projection had assumed the front lands (ack - 200ms) after the send and aimed it
   median at 265-290 and p10 at 250+ at every speed. **Worker deploy.**
 - The 06:09 and 05:55 fast returns still fire on the same readings (now 5ms / 49ms later, `return-side` §3e).
 
+### 2.35 Making "the second measurement" the rule - 18:21 vs 18:22 (2026-10-05 evening)
+"The first time it vanished too fast, the second time it worked perfectly - make the second consistent." Read against
+their records, the first had three causes the second did not:
+- **A rotation re-drape held the wire (`reconditionForTopology`):** the turn's first 15 degrees fired a body-contour
+  re-drape - a full FRONT re-upload - and the BACK waited 418ms behind it. In AI Auto dual view a ROTATION-only shift
+  now stands aside (the front/back swap re-conditions the rotation); a lean or a volume change still re-drapes. TEST
+  records log `redrape` / `redrape-skip`.
+- **The phantom step at the bottom of the back (`lib/orient-engine.js`, THE DEEPEST IS THE BACK):** the back read -0.87 at
+  its deepest; on the order's own scale -0.87 (150 on the way in) -> -0.84 (213 on the way out) was a 63-degree step at
+  285 deg/s and the FRONT was scheduled at the back. The projection now measures both readings against the deepest the
+  leg has read (`deepest`, at least `DEEP_SEEN`). Replayed (`return-side` §3e.2d/e): 18:21 now goes out at the side
+  (-0.18); 18:22, the perfect one, keeps its reading (within 32ms); 18:10 within 5ms. **Worker deploy.**
+- **The camera changes shape at go-live:** in a portrait room the stream opens 9:16 and turns 512x288 when the input
+  throttle's constraints reach the shared source (`pose-aspect` 0.56 -> 1.78); the shoulder baseline now starts afresh on
+  the first reading of a new shape (`torsoTwistObserve`), and an "off" reading no longer averages into the baseline
+  before its pair forms (`torsoTwistStep`). `return-side` §4d.
+- Landing model (§4c, measured delay): the front lands median 268 / 270 / 276 degrees at 0.8x / 1x / 1.3x, p10
+  249 / 259 / 263; the back on a chest 0 / 0 / 239ms over 48 turns.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

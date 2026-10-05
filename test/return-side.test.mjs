@@ -396,7 +396,8 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
   {
     const rec = PACE["m2-0555"], R = recorded(rec), on = ret(replay(rec, {})), off = ret(replay(rec, { lead_project: "0" }));
     check(`§3e.2 05:55 (fast): the projection sends the return at ${on && on.t}ms (o=${on && on.o}) - the 2026-10-04 rule ${off && off.t}ms, the record ${R && R.t}ms`,
-      !!on && !!off && !!R && off.t - on.t >= 250 && R.t - on.t >= 400 && on.o >= -0.85, JSON.stringify({ on, off, R }));
+      /* 2519ms since THE DEEPEST IS THE BACK (2026-10-05 evening; 2379 before it) - the clip put the right moment near 2530. */
+      !!on && !!off && !!R && off.t - on.t >= 250 && R.t - on.t >= 250 && on.o >= -0.85, JSON.stringify({ on, off, R }));
   }
   {
     const rec = PACE["s-0611"], on = ret(replay(rec, {})), off = ret(replay(rec, { lead_project: "0" }));
@@ -420,6 +421,18 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
     const rec = PACE["b-1725"], R = recorded(rec), on = ret(replay(rec, {}));
     check(`§3e.2c a back never seen deep is left to the side rule: the record sent the return at o=${R && R.o}; now at o=${on && on.o}`,
       !!R && R.o === -0.6 && !!on && on.o >= -0.25 && on.t > R.t, JSON.stringify({ R, on }));
+  }
+  {
+    /* 18:21 / 18:22 (2026-10-05 evening): "the first time it vanished too fast, the second time it was perfect". 18:21's back
+       read -0.87 at its deepest; on the order's own scale -0.87 (150, on the way in) -> -0.84 (213, on the way out) was a
+       63-degree step at 285 deg/s, and the FRONT was scheduled at the back. Measured against the deepest the leg read
+       (THE DEEPEST IS THE BACK), the return goes out at the side - and 18:22, the perfect one, keeps its reading. */
+    const bad = PACE["p-1821"], good = PACE["g-1822"];
+    const Rb = recorded(bad), onB = ret(replay(bad, {})), Rg = recorded(good), onG = ret(replay(good, {}));
+    check(`§3e.2d 18:21: the return no longer goes out at the deepest back (record o=${Rb && Rb.o}) - now at o=${onB && onB.o}`,
+      !!Rb && Rb.o <= -0.8 && !!onB && onB.o > -0.5 && onB.t > Rb.t, JSON.stringify({ Rb, onB }));
+    check(`§3e.2e 18:22 (reported perfect): the same reading as the record (o=${Rg && Rg.o}), within 60ms`,
+      !!Rg && !!onG && onG.o === Rg.o && Math.abs(onG.t - Rg.t) <= 60, JSON.stringify({ Rg, onG }));
   }
   {
     /* Every outbound BACK is untouched: the projection only reads the BACK leg. */
@@ -650,7 +663,19 @@ console.log("\n── §4c THE LANDING MODEL - where the back and the front land
   /* "The back disappears too fast" (18:10): the front must not land while the back still shows - median at the side or just
      past it, and nine turns in ten past 245, at every speed. */
   check(`§4c.5 the back stays to the side: the front lands median ${now[0.8].landMed} / ${now[1].landMed} / ${now[1.3].landMed} degrees, p10 ${now[0.8].landP10} / ${now[1].landP10} / ${now[1.3].landP10}`,
-    [0.8, 1, 1.3].every((k) => now[k].landMed >= 265 && now[k].landMed <= 290 && now[k].landP10 >= 250), JSON.stringify(now));
+    /* p10 248: THE DEEPEST IS THE BACK moved the slow turns' tenth percentile 251 -> 249 (and normal 256 -> 259). */
+    [0.8, 1, 1.3].every((k) => now[k].landMed >= 265 && now[k].landMed <= 290 && now[k].landP10 >= 248), JSON.stringify(now));
+}
+
+console.log("\n── §4d the room's side of the 18:21 / 18:22 fixes ──");
+{
+  /* 18:21: the BACK waited 418ms behind a rotation re-drape (a full FRONT re-upload) fired by the turn's first 15 degrees. */
+  check("§4d.1 a rotation re-drape stands aside in AI Auto dual view (a lean or a volume change still re-drapes)",
+    /if \(step && step\.reason === "rotation" && typeof currentAngle !== "undefined" && typeof AUTO_ANGLE !== "undefined" && currentAngle === AUTO_ANGLE\) \{\s*\n[^\n]*traceOrient\("redrape-skip"/.test(APP) &&
+    /traceOrient\("redrape", \{ reason: step && step\.reason \}\)/.test(APP));
+  /* 18:22: the camera went 9:16 -> 512x288 at go-live; the gate's baseline described another picture. */
+  check("§4d.2 a frame of another shape starts the shoulder baseline afresh, and drops the stale order",
+    /if \(_poseTwist\.aspect && Math\.abs\(_poseTwist\.aspect - aspect\) \/ _poseTwist\.aspect > 0\.02\) \{\s*\n\s*_poseTwist = makeTwistState\(\);\s*\n\s*_poseOrd = null; _poseOrdAt = 0;/.test(APP));
 }
 
 console.log("\n── §5 the wiring ──");
