@@ -1126,6 +1126,18 @@ a mirrored skeleton for the whole back view (the shoulders read FRONT while the 
   the landing model (§4c) is unchanged. **Worker deploy.**
 - **Not fixed:** a mirrored skeleton for a whole back view (17:23) - the pose model's own front/back confusion.
 
+### 2.34 The landing recalibrated - the back stays to the side (2026-10-05 evening)
+"Now the back disappears too fast." The 18:10 clip, read against its record: the front reached the body 0-100ms after it was
+sent (acks 408-413ms that evening - 17:25 the same) and the panel went from a back at ~200 degrees to plain at ~230-240. The
+projection had assumed the front lands (ack - 200ms) after the send and aimed it at 270 - so it went out early.
+- `LEAD_BASE_MS` 200 -> 350: a reference reaches the body about (ack - 350ms) after the send; the lead still follows the
+  session's own pace (`lat`), so a slower engine gets more.
+- `RETURN_TARGET` 270 -> 280 (the order's own angle): in the landing model with the measured delay (`return-side` §4c, now
+  lat 430 / L 80ms) the front lands median 270 / 270 / 275 degrees at 0.8x / 1x / 1.3x, p10 251 / 256 / 263 - the 270 aim
+  landed it 262 / 265 / 273, p10 243 / 251 / 261 - and the back on a chest 0 / 0 / 244ms over 48 turns. §4c.5 pins the
+  median at 265-290 and p10 at 250+ at every speed. **Worker deploy.**
+- The 06:09 and 05:55 fast returns still fire on the same readings (now 5ms / 49ms later, `return-side` §3e).
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

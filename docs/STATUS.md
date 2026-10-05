@@ -270,7 +270,10 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
   17:23 also had a mirrored skeleton through the whole back view - not fixed.
 - **17:41 report - "the back on the front a little, and laggy":** the torso height learned in the
   gate (~2x) kept the order stale through the turn - it re-learns now too; and the tick-driven
-  pose inference (§2.31) cost the camera 4-6 fps - off by default again. **Next: your measurement.**
+  pose inference (§2.31) cost the camera 4-6 fps - off by default again.
+- **18:10 report - "the back disappears too fast" (§2.34):** the front landed 0-100ms after the
+  send (fast acks that evening), so the projection's lead and aim were recalibrated: the model
+  lands the front median 270 at every speed, p10 251+. **Next: your measurement.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).
