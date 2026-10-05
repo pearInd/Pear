@@ -10395,6 +10395,12 @@ function createOrientationWatcher() {
     if (disposed || sampling) return;
     sampling = true;
     try {
+      /* THE POSE, READ FOR THE DECISION: a fresh inference first, never waited on past POSE_SYNC_WAIT_MS. typeof-guarded:
+         the replay harnesses run this tick without the pose loop. */
+      if (typeof POSE_SYNC !== "undefined" && POSE_SYNC && typeof _poseInferNow === "function" && _poseInferNow) {
+        _poseSyncAt = Date.now();
+        await Promise.race([_poseInferNow().catch(() => {}), new Promise((r) => setTimeout(r, POSE_SYNC_WAIT_MS))]);
+      }
       const vote = await classify();
       /* THE DECISION IS REMOTE (lib/orient-engine.js - see THE ORIENTATION DECISION IS
          SERVER-SIDE). Every clock reading travels with the sample, so the engine decides
@@ -17782,6 +17788,19 @@ function hidePresenceOverlay() {
    It reuses applyActive() and the same `applying` mutex maybeReanchorPrompt() uses, for
    the same reason: a swap or a profile transition may already own the wire. */
 let presenceWatcherTimer = null;
+/* ── THE POSE, READ FOR THE DECISION (2026-10-05) - "make it react as fast as you can" ──────────────────────────
+   The live pose loop ran on its own 240ms timer and the orientation tick on its own 250ms one, so the reading a decision
+   was taken on was 4-215ms old depending on where the two timers' phases had drifted (the TEST records' `oa`/`ya`) - and
+   the outbound BACK, which fires on a reading, went out that much later on the body. With POSE_SYNC the orientation tick
+   RUNS the session's inference itself, right before it samples (waiting at most POSE_SYNC_WAIT_MS), and the loop's own
+   timer only covers what the tick does not (no watcher, a single-view garment) - the same ~4 inferences a second, now
+   always fresh. ?pose_sync=0 is the free-running loop. */
+const POSE_SYNC = (() => {
+  try { return new URLSearchParams(location.search).get("pose_sync") !== "0"; } catch (_) { return true; }
+})();
+const POSE_SYNC_WAIT_MS = 120;
+let _poseInferNow = null;   // the live loop's inference, for the tick to run (startPresenceWatcher)
+let _poseSyncAt = 0;        // when the tick last ran it
 /* The live tracker instance, kept at module scope only so teardown can drop it. Its state
    is per-session by construction: startPresenceWatcher() builds a new one each time. */
 let bodyTopology = null;
@@ -17830,7 +17849,16 @@ function startPresenceWatcher() {
      load is exactly what it was before the monitor existed. */
   const tickMs = POSE_SAMPLE_MS * 2;
 
-  presenceWatcherTimer = setInterval(async () => {
+  /* One inference at a time: a caller that finds one running gets that one (THE POSE, READ FOR THE DECISION). */
+  let inFlightRun = null;
+  const runInference = () => inFlightRun || (inFlightRun = poseLoopStep().finally(() => { inFlightRun = null; }));
+  _poseInferNow = runInference;
+  presenceWatcherTimer = setInterval(() => {
+    if (POSE_SYNC && Date.now() - _poseSyncAt < tickMs + 120) return;   // the orientation tick is driving it
+    runInference().catch(() => {});
+  }, tickMs);
+
+  async function poseLoopStep() {
     if (inFlight || !isLive()) return;
     /* ── NO INFERENCE THE SHOPPER CANNOT SEE THE RESULT OF ─────────────────────
        detectForVideo() is a WASM/GPU pass on the main thread - the same thread that
@@ -17986,11 +18014,12 @@ function startPresenceWatcher() {
     } finally {
       inFlight = false;
     }
-  }, tickMs);
+  }
 }
 
 function stopPresenceWatcher() {
   if (presenceWatcherTimer) { clearInterval(presenceWatcherTimer); presenceWatcherTimer = null; }
+  _poseInferNow = null;
   bodyTopology = null;        // a new session measures a new body from scratch
   hidePresenceOverlay();
 }

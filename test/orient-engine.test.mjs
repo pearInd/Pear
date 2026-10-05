@@ -170,7 +170,12 @@ console.log("\n── §4 the decision is absent from the browser, and the tick 
   check("a reply after stop() is dropped", /if \(disposed\) return;/.test(tick));
   check("no decision means no swap - only the pose-independent re-anchor keeps its cadence",
     /if \(!acts\) \{ maybeReanchorPrompt\(\)\.catch\(\(\) => \{\}\); return; \}/.test(tick));
-  check("the swap is the only awaited action, and only without the swap flow (main's ?swap_flow=0)", (tick.match(/await /g) || []).length === 3 &&
+  /* THE POSE, READ FOR THE DECISION (2026-10-05): the tick first runs the session's pose inference (bounded by
+     POSE_SYNC_WAIT_MS) - a fourth await, ahead of the sample; the swap is still the only awaited ACTION. */
+  check("a fresh pose inference first, bounded, typeof-guarded (?pose_sync=0 skips it)",
+    /if \(typeof POSE_SYNC !== "undefined" && POSE_SYNC && typeof _poseInferNow === "function" && _poseInferNow\) \{\s*\n\s*_poseSyncAt = Date\.now\(\);\s*\n\s*await Promise\.race\(\[_poseInferNow\(\)\.catch\(\(\) => \{\}\), new Promise\(\(r\) => setTimeout\(r, POSE_SYNC_WAIT_MS\)\)\]\);/.test(tick) &&
+    tick.indexOf("_poseInferNow()") < tick.indexOf("await classify()"));
+  check("the swap is the only awaited action, and only without the swap flow (main's ?swap_flow=0)", (tick.match(/await /g) || []).length === 4 &&
     /a\.do === "swap"\) \{\s*\n(?:\s*\/\*[^\n]*\*\/\s*\n)?\s*if \(delayedSwapTimer\) \{ clearTimeout\(delayedSwapTimer\); delayedSwapTimer = null; \}\s*\n\s*const sw = SWAP_FLOW && a\.delay > 0 \? delayedSwap\(a\) : maybeSwap\(a\.next, a\.predictive === true\);\s*\n\s*if \(SWAP_FLOW\) sw\.catch\(\(\) => \{\}\); else await sw;\s*\n\s*\}/.test(tick),
     (tick.match(/[^\n]*await [^\n]*/g) || []).join(" | "));
 }
