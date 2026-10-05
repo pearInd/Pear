@@ -30,14 +30,15 @@ const band = (rows, key) => {
 };
 
 /** One readable block per record - what a human needs to decide y/n. */
-export function formatChartSummary(records) {
+export function formatChartSummary(records, numbers = null) {
   if (!records.length) return "  (no charts)";
   return records.map((r, i) => {
+    const n = numbers && numbers[i] ? numbers[i] : i + 1;   // import-chart's own chart numbers, when given
     const sizes = r.rows.map((x) => x.size).join(" ");
     const measures = ["chest", "waist", "hips", "outseam"].map((k) => band(r.rows, k)).filter(Boolean).join(", ");
     const aliases = r.rows.some((x) => x.aliases) ? " +EU/US aliases" : "";
     return [
-      `  #${i + 1}  ${r.gender} / ${r.age_group} / ${r.garment_type}  [${r.size_system}]  ${r.product_key ? "this product only" : "store-wide"}`,
+      `  #${n}  ${r.gender} / ${r.age_group} / ${r.garment_type}  [${r.size_system}]  ${r.product_key ? "this product only" : "store-wide"}`,
       `       sizes: ${sizes}${aliases}`,
       `       measurements: ${measures || "(none)"}`,
       `       confidence ${r.confidence} · via ${r.source} · ${r.source_url || "(file)"}`,

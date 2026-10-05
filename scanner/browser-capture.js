@@ -43,12 +43,17 @@ export function isSizeGuideTriggerLabel(text) {
 }
 
 /* A response worth parsing: it names a size chart AND carries a measurement word AND at
-   least two size tokens or a table. Cheap pre-filter; the parser is the real judge. */
+   least two size tokens or a table. Cheap pre-filter; the parser is the real judge.
+   JSON \uXXXX escapes are decoded first: PHP's json_encode (WordPress's wp_send_json, every
+   WooCommerce admin-ajax guide) escapes all non-ASCII by default, so a Hebrew-only guide
+   arrived as "\u05d8\u05d1..." - no Hebrew word for the filter to see - and was dropped
+   before the parser, which reads it fine after JSON.parse. */
 const PAYLOAD_SIZE_WORD_RE = /size[\s_-]*(?:chart|guide|table)|sizechart|sizeguide|מדריך\s*מידות|טבלת\s*מידות|"size"\s*:|measurements?/i;
 const PAYLOAD_MEASURE_RE = /chest|bust|waist|hips?|חזה|מותן|מותניים|אגן|ירכיים/i;
 export function looksLikeSizePayload(text) {
-  const t = String(text || "");
+  let t = String(text || "");
   if (t.length < 40 || t.length > 2_000_000) return false;
+  if (t.includes("\\u")) t = t.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
   return PAYLOAD_SIZE_WORD_RE.test(t) && PAYLOAD_MEASURE_RE.test(t);
 }
 
@@ -145,17 +150,27 @@ const rowsHash = (rows) => createHash("sha256").update(JSON.stringify(rows)).dig
 
 /* In-page script: mark every visible element whose label is a size-guide trigger and
    return their labels. Runs in the browser, so it is plain JS with no imports - the
-   label test is re-done in Node with isSizeGuideTriggerLabel() before anything is
-   clicked. */
+   Node regexes are compiled into it, and the label test is re-done in Node with
+   isSizeGuideTriggerLabel() before anything is clicked.
+   THE BUG THIS CLOSES (review, 2026-10-05): the page kept anything merely size-ish
+   (size / מידות / מידה) and only THEN kept the innermost - so in
+   <button><span>Size</span> guide</button> the bare "Size" span evicted its button, Node
+   refused "Size", and the guide was never opened (likewise <span>טבלת</span> <span>מידות</span>,
+   or aria-label "Size chart" over a "Sizes" span). The full trigger test now runs BEFORE the
+   innermost-only filter, so a child that is not a trigger by itself cannot evict a parent
+   that is. */
 const MARK_TRIGGERS = `(() => {
+  const TRIG = [new RegExp(${JSON.stringify(SIZE_GUIDE_LINK_RE.source)}, ${JSON.stringify(SIZE_GUIDE_LINK_RE.flags)}),
+    new RegExp(${JSON.stringify(EXTRA_TRIGGER_RE.source)}, ${JSON.stringify(EXTRA_TRIGGER_RE.flags)})];
+  const NEVER = new RegExp(${JSON.stringify(NEVER_CLICK_RE.source)}, ${JSON.stringify(NEVER_CLICK_RE.flags)});
   const cands = [];
   const els = document.querySelectorAll('a,button,[role=button],[role=tab],summary,[data-toggle],[data-target],[onclick],span,div,li');
   for (const el of els) {
     if (cands.length >= 80) break;
     const label = [el.getAttribute('aria-label'), el.getAttribute('title'), (el.innerText || '').slice(0, 140)]
       .filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim();
-    if (!label || label.length > 140) continue;
-    if (!/size|sizing|מידות|גדלים|מידה/i.test(label)) continue;
+    if (!label || label.length > 120) continue;
+    if (NEVER.test(label) || !TRIG.some((re) => re.test(label))) continue;
     // the innermost labelled element wins: skip a container whose child carries the same label
     if (el.children.length > 3) continue;
     const r = el.getBoundingClientRect();
@@ -176,22 +191,60 @@ const MARK_TRIGGERS = `(() => {
   });
 })()`;
 
+/* In-page helper: is this element SHOWN to a shopper - a real box, and not hidden by CSS?
+   A box alone is not enough: Shopify Dawn's size-guide popup (.product-popup-modal) sits in
+   the DOM from page load under visibility:hidden + opacity:0 and keeps its full layout box,
+   so its table read as "visible before the click" (the guide that opened it never counted
+   as opened) and its tabs were clicked into 3 s timeouts while it was still hidden.
+   checkVisibility() covers display:none, visibility and an ancestor's opacity:0 (both the
+   current option names and the older ones Chromium still reads); without it, the computed
+   style of the element and its ancestors. */
+const SHOWN_FN = `((el, minW, minH) => {
+  const r = el.getBoundingClientRect();
+  if (r.width <= minW || r.height <= minH) return false;
+  if (typeof el.checkVisibility === 'function') {
+    return el.checkVisibility({ opacityProperty: true, visibilityProperty: true, checkOpacity: true, checkVisibilityCSS: true });
+  }
+  for (let a = el; a && a.nodeType === 1; a = a.parentElement) {
+    const st = getComputedStyle(a);
+    if (st.display === 'none' || st.visibility === 'hidden' || st.visibility === 'collapse' || parseFloat(st.opacity) === 0) return false;
+  }
+  return true;
+})`;
+
 /* In-page script: tabs inside an open guide (dialog/modal/drawer) or, failing one, inside
-   any visible container that holds a table / ARIA grid. */
+   any visible container that holds a table / ARIA grid.
+   THE BUGS THIS CLOSES (review, 2026-10-05):
+   · Bootstrap marks <body> "modal-open" and Kiwi Sizing marks <html>
+     "kiwi-sizing-modal-visible", so [class*=modal] took the WHOLE PAGE as a guide (the trap
+     COLLECT_CHART_IMAGES already guards) - first in document order, so page controls filled
+     the 10-tab cap before the guide's own men/women tabs, and an "add-to-cart hidden-tablet"
+     button was clicked (the cart POSTed). <html>/<body> are never a guide root, "table" /
+     "tablet" in a class name is not "tab", and Node holds every tab label to NEVER_CLICK_RE
+     exactly like a trigger.
+   · ids restarted at pb0 on every call and old marks stayed, so the SECOND guide's pb0
+     resolved to the first guide's hidden tab (3 s timeout, skipped) and its charts were
+     never read. Old marks are cleared first, and a tab already marked under an outer root
+     (.modal > .modal-dialog > .modal-content) is not marked again. */
 const MARK_TABS = `(() => {
+  const shown = ${SHOWN_FN};
+  for (const old of document.querySelectorAll('[data-pear-tab]')) old.removeAttribute('data-pear-tab');
   const roots = [...document.querySelectorAll('[role=dialog],[aria-modal=true],.modal.show,.modal.in,.modal[style*="block"],[class*=modal i],[class*=drawer i],[class*=popup i],[class*=size-guide i],[class*=sizeguide i],[class*=size-chart i]')]
-    .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 50 && r.height > 50; });
+    .filter((el) => {
+      if (el === document.documentElement || el === document.body) return false;
+      return shown(el, 50, 50);
+    });
   const out = [];
   let i = 0;
   for (const root of roots) {
     for (const el of root.querySelectorAll('[role=tab],button,a,li,label')) {
       if (out.length >= 10) break;
+      if (el.hasAttribute('data-pear-tab')) continue;
       const label = (el.innerText || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
       if (!label || label.length > 40) continue;
-      const tabby = el.getAttribute('role') === 'tab' || /tab/i.test(el.className || '') || /tab/i.test((el.parentElement && el.parentElement.className) || '');
+      const tabby = el.getAttribute('role') === 'tab' || /tab(?!le)/i.test(el.className || '') || /tab(?!le)/i.test((el.parentElement && el.parentElement.className) || '');
       if (!tabby) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width < 4 || r.height < 4) continue;
+      if (!shown(el, 3, 3)) continue;
       const id = 'pb' + (i++);
       el.setAttribute('data-pear-tab', id);
       out.push({ id, label });
@@ -207,26 +260,46 @@ const MARK_TABS = `(() => {
    element whose class contains modal" matched the whole page and four product photos
    went to Gemini as size charts. */
 const REMEMBER_VISIBLE_IMAGES = `(() => {
+  const shown = ${SHOWN_FN};
   window.__pearImgsBefore = new Set([...document.querySelectorAll('img')]
-    .filter((i) => { const r = i.getBoundingClientRect(); return r.width > 20 && r.height > 20; })
+    .filter((i) => shown(i, 20, 20))
     .map((i) => i.currentSrc || i.src));
   return window.__pearImgsBefore.size;
 })()`;
 const COLLECT_CHART_IMAGES = `(() => {
+  const shown = ${SHOWN_FN};
   const out = new Set();
   const before = window.__pearImgsBefore || new Set();
   for (const img of document.querySelectorAll('img')) {
     const src = img.currentSrc || img.src || '';
     if (!src || /\\.svg(?:$|[?#])/i.test(src) || src.startsWith('data:')) continue;
     if ((img.naturalWidth || 0) < 300 || (img.naturalHeight || 0) < 150) continue;
-    const r = img.getBoundingClientRect();
-    if (r.width < 120 || r.height < 60) continue;
+    if (!shown(img, 119, 59)) continue;
     const label = [src, img.alt, img.className, img.id].join(' ');
     const guide = img.closest('[role=dialog],[aria-modal=true],[class*=modal i],[class*=size-guide i],[class*=sizeguide i],[class*=size-chart i],[class*=sizechart i]');
     const newlyShown = !before.has(src) && !!guide && guide !== document.documentElement && guide !== document.body;
     if (newlyShown || /size[\\s_-]*(?:guide|chart|table)|sizing|sizechart|sizeguide|measurement|מידות/i.test(label)) out.add(src);
   }
   return [...out].slice(0, 6);
+})()`;
+
+/* In-page scripts: TABLES the click made visible. "A guide opened and holds only a table we
+   cannot read" (unmeasured_guides) used to count ANY table in the document after a click -
+   so a product-specs table (WooCommerce's "Material | Cotton") under a click that opened
+   nothing, or under a guide rendered in an iframe, read as a size-CONVERSION guide, and the
+   user was told the guide opened when it never had (no_measurements instead of
+   js_unreadable). Only a table that was not visible before the click counts now; a guide
+   pre-rendered hidden that the click shows still does (factory54) - also one hidden by CSS
+   that keeps its layout box (Dawn), since "visible" is SHOWN_FN, not a box. */
+const REMEMBER_VISIBLE_GRIDS = `(() => {
+  const shown = ${SHOWN_FN};
+  window.__pearGridsBefore = new Set([...document.querySelectorAll('table,[role=table]')].filter((t) => shown(t, 20, 20)));
+  return window.__pearGridsBefore.size;
+})()`;
+const NEW_VISIBLE_GRIDS = `(() => {
+  const shown = ${SHOWN_FN};
+  const before = window.__pearGridsBefore || new Set();
+  return [...document.querySelectorAll('table,[role=table]')].filter((t) => shown(t, 20, 20) && !before.has(t)).length;
 })()`;
 
 export async function loadPlaywright() {
@@ -243,23 +316,41 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Open product pages in headless Chromium and capture every size chart a shopper could
- * open there. Pure over `chromium` (injectable for tests).
+ * open there. Pure over `chromium` (injectable for tests, as is `loadChromium`, the
+ * loader used when no `chromium` is passed).
  * @param {string} storeUrl
  * @param {{productUrls?: string[], maxPages?: number, delayMs?: number, log?: Function,
- *          JSDOM: Function, chromium?: object, maxTriggers?: number}} opts
- * @returns {Promise<{found: Array<object>, images: Array<{url:string, productUrl:string}>,
- *          report: object}>}
+ *          JSDOM: Function, chromium?: object, loadChromium?: Function, maxTriggers?: number}} opts
+ * @returns {Promise<{found: Array<object>,
+ *          images: Array<{url:string, productUrl:string, pages:string[], context:string}>,
+ *          report: object}>}  images: one entry per chart image, `pages` = every product
+ *          page it was seen on (productUrl = the first), so buildRecords' "2+ pages =
+ *          the store's chart" rule can apply to an image too.
  */
 export async function captureWithBrowser(storeUrl, {
   productUrls = [], maxPages = 6, delayMs = 1500, log = console.log, JSDOM, chromium = null,
+  loadChromium = loadPlaywright,
   maxTriggers = 4, navTimeoutMs = 45000, verbose = !!process.env.PEAR_CAPTURE_VERBOSE,
 } = {}) {
   const vlog = (m) => { if (verbose) log("    · " + m); };
+  const errText = (e) => String((e && e.message) || e).split("\n")[0];
   const report = { status: "ok", pages_opened: 0, pages_failed: 0, triggers_clicked: 0, tabs_clicked: 0,
     unmeasured_guides: 0, unmeasured_examples: [],
     network_payloads: 0, blocked: { count: 0, examples: [] }, errors: [], methods: {} };
   const found = [], images = [];
-  const ch = chromium || await loadPlaywright();
+  /* A browser that cannot be had is BROWSER_UNAVAILABLE, never a throw - the caller already
+     holds the static stage's charts, and a throw discarded them with the whole run. That
+     covers the playwright package itself (scanner/package.json does not carry it; only the
+     repo root's @playwright/test does), Chromium not launching, and a context or page that
+     will not open (which also left the launched Chromium running). */
+  let ch;
+  try {
+    ch = chromium || await loadChromium();
+  } catch (e) {
+    report.status = "browser_unavailable";
+    report.errors.push(errText(e));
+    return { found, images, report };
+  }
   const base = new URL(storeUrl);
   const host = canonicalStoreHost(base.hostname);
   let browser;
@@ -267,18 +358,30 @@ export async function captureWithBrowser(storeUrl, {
     browser = await ch.launch({ headless: true });
   } catch (e) {
     report.status = "browser_unavailable";
-    report.errors.push("could not launch Chromium: " + e.message.split("\n")[0]);
+    report.errors.push("could not launch Chromium: " + errText(e));
     return { found, images, report };
   }
-  const context = await browser.newContext({ locale: "he-IL", viewport: { width: 1366, height: 900 } });
-  const page = await context.newPage();
+  let page;
+  try {
+    const context = await browser.newContext({ locale: "he-IL", viewport: { width: 1366, height: 900 } });
+    page = await context.newPage();
+  } catch (e) {
+    await browser.close().catch(() => {});
+    report.status = "browser_unavailable";
+    report.errors.push("could not open a page: " + errText(e));
+    return { found, images, report };
+  }
   const payloads = [];
   /* The label of the guide button clicked last. terminalx's reads "טבלת מידות / VARLEY /
      נשים" - the store naming the chart's audience on the control that opens it - so it
      rides with every reading taken after that click (modal, tabs, network, images) as
      referrer evidence for gender/kids, never for the garment type. */
   let lastTrigger = "";
+  /* Which product page a response belongs to: bumped before each navigation. The label and
+     the generation are read when the response ARRIVES, not after its body lands. */
+  let pageGen = 0;
   page.on("response", async (resp) => {
+    const gen = pageGen, trigger = lastTrigger;
     try {
       const type = resp.request().resourceType();
       if (type !== "xhr" && type !== "fetch" && type !== "document") return;
@@ -286,11 +389,13 @@ export async function captureWithBrowser(storeUrl, {
       if (!/json|html|text/.test(ct)) return;
       if (payloads.length >= 60) return;
       const text = await resp.text();
-      if (looksLikeSizePayload(text)) payloads.push({ url: resp.url(), text, pageUrl: page.url(), trigger: lastTrigger });
+      if (looksLikeSizePayload(text)) payloads.push({ url: resp.url(), text, pageUrl: page.url(), trigger, gen });
     } catch { /* a body we cannot read is not evidence */ }
   });
 
   const seen = new Map();   // key -> index in found
+  /* Returns how many readings the parser produced, BEFORE de-duplication: a guide re-opened
+     on a later trigger adds nothing new to `found` but did hold a chart. */
   const add = (entries, pageUrl) => {
     for (const f of entries) {
       /* Per page, one reading per chart CONTENT, whichever method saw it first (the
@@ -307,6 +412,7 @@ export async function captureWithBrowser(storeUrl, {
       found.push(f);
       report.methods[f.source] = (report.methods[f.source] || 0) + 1;
     }
+    return entries.length;
   };
   const isBlocked = async (resp) => {
     const status = resp ? resp.status() : 0;
@@ -338,8 +444,17 @@ export async function captureWithBrowser(storeUrl, {
     urls = urls.slice(0, maxPages).map(normalizePageUrl);
     if (!urls.length) report.errors.push("no product pages to open");
 
+    let refusedInARow = 0;
     for (const url of urls) {
       await sleep(delayMs);
+      /* THE BUG THIS CLOSES (review, 2026-10-05): the label and the payloads were reset only
+         AFTER the next page had loaded, so page B's own document response and every fetch it
+         made while loading carried page A's guide label - and A's "נשים" won B's unlabelled
+         inline chart (0.65 over 0.5): saved as women's. Reset before the navigation; a late
+         response from A (an older generation) is dropped, never credited to B. */
+      lastTrigger = "";
+      pageGen++;
+      payloads.length = 0;
       const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: navTimeoutMs })
         .catch((e) => { report.errors.push(url + ": " + e.message.split("\n")[0]); return null; });
       if (!resp) { report.pages_failed++; continue; }
@@ -347,14 +462,22 @@ export async function captureWithBrowser(storeUrl, {
       if (why) {
         report.blocked.count++; if (report.blocked.examples.length < 3) report.blocked.examples.push(url + " (" + why + ")");
         report.pages_failed++;
-        /* Two blocked pages in a row is the store saying no - stop, do not push on. */
-        if (report.blocked.count >= 2 && report.pages_opened === 0) { report.status = "blocked"; break; }
+        /* Two blocked pages in a row is the store saying no - stop, do not push on. Also
+           after a page opened: the stop used to need pages_opened === 0, so a store that
+           served one page and then answered 403/429 (bot management escalating - the adidas
+           pattern) was asked for every remaining page and reported "ok", not BLOCKED. */
+        if (++refusedInARow >= 2) { report.status = "blocked"; break; }
         continue;
       }
-      report.pages_opened++;
+      refusedInARow = 0;
       await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-      lastTrigger = "";
-      const pdpHtml = await page.content();
+      /* A page that navigates while it is read (a geo/locale redirect after load, a crashed
+         renderer: Playwright's "Unable to retrieve content because the page is navigating")
+         is a failed page, like a failed goto. It used to throw out of the whole run and take
+         the static stage's charts with it. */
+      const pdpHtml = await page.content().catch((e) => { report.errors.push(url + ": " + errText(e)); return null; });
+      if (pdpHtml == null) { report.pages_failed++; continue; }
+      report.pages_opened++;
       const pdpContext = pageContextText(new JSDOM(stripStyles(pdpHtml), { url }).window.document, url);
       add(chartsFromHtml(pdpHtml, url, JSDOM, { source: "browser_page", productUrl: url }), url);
 
@@ -364,35 +487,42 @@ export async function captureWithBrowser(storeUrl, {
       for (const t of triggers) {
         const before = page.url();
         await page.evaluate(REMEMBER_VISIBLE_IMAGES).catch(() => 0);
+        await page.evaluate(REMEMBER_VISIBLE_GRIDS).catch(() => 0);
         lastTrigger = t.label;
         const refText = pdpContext + " | " + t.label;
-        const foundBefore = found.length;
+        let readings = 0, imagesShown = 0;
         try {
           await page.locator(`[data-pear-trigger="${t.id}"]`).first().click({ timeout: 4000 });
           report.triggers_clicked++;
         } catch (e) { vlog("click failed: " + String(e.message).split("\n")[0]); continue; }
-        await page.waitForTimeout(1200);
+        await page.waitForTimeout(1200).catch(() => {});
         await page.waitForLoadState("networkidle", { timeout: 6000 }).catch(() => {});
-        add(chartsFromHtml(await page.content(), page.url(), JSDOM, { source: "browser_modal", productUrl: url, referrerText: refText }), url);
-        const tabs = await page.evaluate(MARK_TABS).catch(() => []);
+        const modalHtml = await page.content().catch(() => "");
+        if (modalHtml) readings += add(chartsFromHtml(modalHtml, page.url(), JSDOM, { source: "browser_modal", productUrl: url, referrerText: refText }), url);
+        const tabs = (await page.evaluate(MARK_TABS).catch(() => [])).filter((tab) => !NEVER_CLICK_RE.test(tab.label));
         for (const tab of tabs) {
           try {
             await page.locator(`[data-pear-tab="${tab.id}"]`).first().click({ timeout: 3000 });
             report.tabs_clicked++;
             await page.waitForTimeout(700);
-            add(chartsFromHtml(await page.content(), page.url(), JSDOM, { source: "browser_modal", productUrl: url, referrerText: refText }), url);
+            readings += add(chartsFromHtml(await page.content(), page.url(), JSDOM, { source: "browser_modal", productUrl: url, referrerText: refText }), url);
           } catch { /* a tab that will not click is skipped */ }
         }
-        const imagesBefore = images.length;
         for (const src of await page.evaluate(COLLECT_CHART_IMAGES).catch(() => [])) {
-          if (!images.some((i) => i.url === src)) images.push({ url: src, productUrl: url, context: refText });
+          imagesShown++;
+          /* Every product page an image was seen on is kept: a store's one guide image opened
+             from six PDPs used to be tagged with the FIRST page only - product-scoped forever,
+             so the room (which serves product_key '') never used it. */
+          const prev = images.find((i) => i.url === src);
+          if (prev) { if (!prev.pages.includes(url)) prev.pages.push(url); }
+          else images.push({ url: src, productUrl: url, pages: [url], context: refText });
         }
-        /* The guide OPENED, it holds a table, and the parser kept nothing from it and no
-           chart image appeared: a size-CONVERSION table (factory54: SIZE | FR | IT | UK |
-           US | JEANS) with no body measurement. Correctly not a chart - but it is a
-           different answer from "could not open the guide", so it is counted. */
-        if (found.length === foundBefore && images.length === imagesBefore) {
-          const grids = await page.evaluate(`document.querySelectorAll('table,[role=table]').length`).catch(() => 0);
+        /* The guide OPENED (a table the click made visible), the parser read nothing from
+           it and no chart image appeared: a size-CONVERSION table (factory54: SIZE | FR |
+           IT | UK | US | JEANS) with no body measurement. Correctly not a chart - but it is
+           a different answer from "could not open the guide", so it is counted. */
+        if (readings === 0 && imagesShown === 0) {
+          const grids = await page.evaluate(NEW_VISIBLE_GRIDS).catch(() => 0);
           if (grids > 0) {
             report.unmeasured_guides++;
             if (report.unmeasured_examples.length < 2) report.unmeasured_examples.push(url);
@@ -402,12 +532,13 @@ export async function captureWithBrowser(storeUrl, {
           await page.goBack({ timeout: navTimeoutMs }).catch(() => {});
         } else {
           await page.keyboard.press("Escape").catch(() => {});
-          await page.waitForTimeout(300);
+          await page.waitForTimeout(300).catch(() => {});
         }
       }
-      await page.waitForTimeout(500);   // let in-flight response bodies land
+      await page.waitForTimeout(500).catch(() => {});   // let in-flight response bodies land
       vlog(`${payloads.length} size payload(s): ${payloads.map((p) => p.url.slice(0, 80)).join(" | ")}`);
       for (const p of payloads.splice(0)) {
+        if (p.gen !== pageGen) continue;   // a late response from an earlier page
         report.network_payloads++;
         add(chartsFromNetworkBody(p.text, p.url, url, JSDOM, url, pdpContext + (p.trigger ? " | " + p.trigger : "")), url);
       }
@@ -415,6 +546,7 @@ export async function captureWithBrowser(storeUrl, {
   } finally {
     await browser.close().catch(() => {});
   }
+  /* One refusal with nothing opened (the in-a-row stop above needs two) is still BLOCKED. */
   if (report.status === "ok" && report.pages_opened === 0 && report.blocked.count) report.status = "blocked";
   log(`  browser: ${report.pages_opened} page(s) opened, ${report.triggers_clicked} trigger(s) + ${report.tabs_clicked} tab(s) clicked, ` +
     `${report.network_payloads} size payload(s), ${found.length} chart reading(s), ${images.length} chart image(s)` +

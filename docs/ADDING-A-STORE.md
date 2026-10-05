@@ -19,7 +19,10 @@ This runs three stages and stops before saving:
 2. **Browser** (headless Chromium): starts automatically when static capture found no
    chart, found size-guide buttons with no link, or detected a JS size app. It opens up to
    6 product pages, clicks the size-guide buttons and each tab inside the guide, and reads
-   the tables plus any size-chart JSON the page fetched.
+   the tables plus any size-chart JSON the page fetched. It never starts on a store that
+   refused us: if the static stage was blocked, or stopped politely after 3 refusals in a
+   row, the run reports `BLOCKED` instead (not even `--browser` overrides that). The browser
+   itself stops after 2 refusals in a row.
 3. **Images**: chart images that appeared when a guide was clicked are read by Gemini
    (up to 4). Static image hits are read only when nothing else was captured.
 
@@ -71,11 +74,18 @@ npm run import:chart -- --host example.co.il --html "C:\Users\me\Downloads\size-
 npm run import:chart -- --host example.co.il --image chart.png --gender women --type tops
 ```
 
+- Every table the parser accepted has one number (`#1`, `#2`, ...), the same with or
+  without flags. A table the source doesn't type (a suits or blazers table) is not in the
+  summary; a `!` line names it by its number and says how to import it.
+- `--only 1,3` imports only those charts, by those numbers.
 - `--gender men|women|unisex|unknown`, `--age adult|kids` and
-  `--type tops|bottoms|jeans|dresses|outerwear` label the charts when the source doesn't say.
-  They can't change a number or rescue a table the parser rejects.
-- `--only 1,3` keeps only those charts from the summary. `--dry-run` previews; `--yes`
-  saves without asking.
+  `--type tops|bottoms|jeans|dresses|outerwear` replace the labels of the charts `--only`
+  picked, or of every chart when there is no `--only`. So when a page holds several charts,
+  run it once without flags, then import each chart that needs a label on its own:
+  `--only 2 --gender women`. They can't change a number or rescue a table the parser rejects.
+- Two charts that end up with the same labels can't both be stored: the summary says which
+  one is saved and which isn't.
+- `--dry-run` previews; `--yes` saves without asking.
 - Manual charts are always store-wide.
 
 ## 4. What is never saved
@@ -84,7 +94,8 @@ npm run import:chart -- --host example.co.il --image chart.png --gender women --
   no body-measurement column (prices, stock, conversion tables), garment dimensions
   ("half chest", "length").
 - A chart with no garment type, when neither its own context, its columns nor `--type`
-  says what it is for. A heading naming suits or blazers leaves a chart untyped on purpose.
+  says what it is for. A heading naming suits or blazers leaves a chart untyped on purpose
+  (import it with `--only <n> --type ...` if you know what it is for).
 - Heights or weights: store charts never carry them.
 
 ## 5. Re-capturing later

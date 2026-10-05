@@ -34,7 +34,7 @@ const MUTATIONS = [
   ["the guide's context walk escapes the dialog", "scanner/size-charts.js",
     "let sib = atBoundary ? null : node.previousElementSibling", "let sib = node.previousElementSibling", "browser-capture"],
   ["the browser never stops on a 403 wall", "scanner/browser-capture.js",
-    "if (report.blocked.count >= 2 && report.pages_opened === 0) { report.status = \"blocked\"; break; }", "", "browser-capture"],
+    "if (++refusedInARow >= 2) {", "if (++refusedInARow >= 2000) {", "browser-capture"],
   ["the static stage never stops on a 403 wall", "scanner/size-charts.js",
     "if (refusedInARow >= 3) {", "if (refusedInARow >= 3000) {", "capture-flow"],
   ["a manual override accepts any value", "scanner/import-chart.js",
@@ -50,8 +50,23 @@ const MUTATIONS = [
     "    if (!cls.garmentType) {", "    if (false) {", "scanner-size-charts"],
   ["static banner hits are always OCR'd", "scanner/capture.js",
     "...(nothingYet || forceImages ? st.images", "...(true ? st.images", "capture-flow"],
+  ["a store that began refusing is re-asked by the browser", "scanner/capture.js",
+    "st.report.outcome === \"blocked_by_bot_protection\" || !!st.report.polite_stop;", "st.report.outcome === \"blocked_by_bot_protection\";", "capture-flow"],
   ["a conversion-only guide is reported as 'could not open'", "scanner/capture.js",
     "else if (browser && browser.report.unmeasured_guides) {", "else if (false) {", "capture-flow"],
+  ["an untyped table (suits) gets no number - it cannot be imported alone", "scanner/import-chart.js",
+    "n: twin ? twin.n : ++total,", "n: twin ? twin.n : (c.garmentType ? ++total : 0),", "manual-import"],
+  /* Either guard alone catches Debut/Brooklyn (each wraps <main> AND the page's only h1), so
+     one alone is an equivalent mutant: both go together - "any boundary match is a guide". */
+  ["a theme's page wrapper (drawer-page-content) is taken for a guide dialog", [
+    ["scanner/import-chart.js", "        !box.matches(\"main,[role=main]\") && !box.querySelector(\"main,[role=main]\") &&\n", ""],
+    ["scanner/import-chart.js", "\n        !(h1s.length && h1s.every((h) => box.contains(h)));", " true;"],
+  ], "manual-import"],
+  /* In-page JavaScript: only a real Chromium runs it (browser-capture §5). "@chromium" -
+     where none launches the suite SKIPs §5, and the mutation is reported SKIPPED, never
+     counted as killed. */
+  ["a guide hidden by CSS (it keeps its box) reads as already visible", "scanner/browser-capture.js",
+    "  if (r.width <= minW || r.height <= minH) return false;\n", "  if (r.width <= minW || r.height <= minH) return false;\n  return true;\n", "browser-capture@chromium"],
 ];
 
 rmSync(TMP, { recursive: true, force: true });
@@ -63,7 +78,8 @@ cpSync(join(ROOT, "package.json"), join(TMP, "package.json"));
 let survived = 0;
 const rows = [];
 for (const m of MUTATIONS) {
-  const [name, suite] = [m[0], m[m.length - 1]];
+  const [name, suiteSpec] = [m[0], m[m.length - 1]];
+  const [suite, needs] = suiteSpec.split("@");
   const edits = Array.isArray(m[1]) ? m[1] : [[m[1], m[2], m[3]]];
   const saved = [];
   let missing = false;
@@ -75,14 +91,23 @@ for (const m of MUTATIONS) {
     saved.push([path, orig]);
     writeFileSync(path, src.replace(from, to));
   }
-  if (missing) { for (const [p, o] of saved) writeFileSync(p, o); rows.push(["?? anchor missing", name]); survived++; continue; }
+  /* Restored last edit first: two edits may share a file, and each saved copy is the file
+     as it stood BEFORE that edit - forward order would leave the first edit in place. */
+  const restore = () => { for (const [p, o] of [...saved].reverse()) writeFileSync(p, o); };
+  if (missing) { restore(); rows.push(["?? anchor missing", name]); survived++; continue; }
   const r = spawnSync(process.execPath, [join(TMP, "test", suite + ".test.mjs")], { cwd: TMP, encoding: "utf8", timeout: 240000 });
-  for (const [p, o] of saved) writeFileSync(p, o);
+  restore();
   const killed = r.status !== 0;
+  if (!killed && needs === "chromium" && /SKIP\s+§5 Chromium unavailable/.test(r.stdout || "")) {
+    rows.push(["SKIPPED ", `${name}  (${suite} - needs Chromium: npx playwright install chromium)`]);
+    continue;
+  }
   if (!killed) survived++;
   rows.push([killed ? "KILLED  " : "SURVIVED", `${name}  (${suite})`]);
 }
 rmSync(TMP, { recursive: true, force: true });
 for (const [k, n] of rows) console.log(`${k}  ${n}`);
-console.log(survived ? `\n${survived} mutation(s) SURVIVED - a rule is not tested` : `\nall ${rows.length} mutations killed`);
+const skipped = rows.filter(([k]) => k.startsWith("SKIPPED")).length;
+console.log(survived ? `\n${survived} mutation(s) SURVIVED - a rule is not tested`
+  : `\nall ${rows.length - skipped} mutations killed` + (skipped ? ` (${skipped} skipped - no Chromium here)` : ""));
 process.exit(survived ? 1 : 0);

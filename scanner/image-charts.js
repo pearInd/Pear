@@ -58,15 +58,24 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": 
 
 /* A transcription -> markup the shared parser reads like any printed table. The unit
    goes into the CAPTION ("All measurements in cm"), which is exactly the table-level
-   tier sizeChartTableUnit() already reads - never stamped onto the cells. */
+   tier sizeChartTableUnit() already reads - never stamped onto the cells.
+   ONLY AN UNDRAWABLE TABLE IS SKIPPED HERE. The first cut also dropped a table with one
+   body row or an empty header - but a TRANSPOSED chest-only chart (header Size|S|M|L|XL,
+   one row Chest|88-92|...) is one body row, and the shared parser reads that exact table
+   printed in HTML as four sizes (sizeChartOrient turns it). It never reached the parser,
+   and the image path reported it as "the parser accepted none". With no header the first
+   transcribed row is the grid's first row, as in a printed table without <th>. Accepting
+   or refusing is the parser's call alone (3+ grid rows, 2+ sizes, a measurement column,
+   the clamps, a ladder) - so this cannot let through anything Phase 1 would refuse. */
 export function tablesToHtml(tables) {
   const parts = [];
   for (const t of Array.isArray(tables) ? tables : []) {
-    if (!t || !Array.isArray(t.header) || !Array.isArray(t.rows) || !t.header.length || t.rows.length < 2) continue;
+    if (!t || !Array.isArray(t.rows) || !t.rows.some(Array.isArray)) continue;
+    const header = Array.isArray(t.header) ? t.header : [];
     const unit = /^(?:cm|inch|inches|in)$/i.test(String(t.unit || "").trim())
       ? (/^cm$/i.test(t.unit.trim()) ? "All measurements in cm" : "All measurements in inches") : "";
     const caption = [t.title, unit].filter(Boolean).map(esc).join(" - ");
-    const head = `<tr>${t.header.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>`;
+    const head = header.length ? `<tr>${header.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>` : "";
     const body = t.rows.filter(Array.isArray).map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("");
     parts.push(`<section>${t.title ? `<h3>${esc(t.title)}</h3>` : ""}<table>${caption ? `<caption>${caption}</caption>` : ""}${head}${body}</table></section>`);
   }
@@ -82,33 +91,48 @@ export function sniffImageType(buf) {
   return null;
 }
 
+/* THE BYTES DECIDE THE TYPE SENT TO GEMINI, never the label. The first cut passed a
+   declared Content-Type through unchanged - and a CDN that serves its JPEG as "image/jpg"
+   (a common misconfiguration) reached Gemini as mime_type "image/jpg", which its exact
+   allow-list (png, jpeg, webp, heic, heif) answers with an HTTP 400 - reported as "IMAGE
+   UNREADABLE" for a perfectly readable chart, a Gemini call spent each try. GIF is not on
+   that list at all ("Unsupported MIME type: image/gif"), so it is refused HERE, before any
+   model call, with the way round it. Every source (file, URL, bytes) ends in sniffedType(). */
+const GIF_REFUSED = "GIF charts are not readable by the OCR model - save it as PNG (or screenshot it) and use --image";
+function sniffedType(buf, label) {
+  const t = sniffImageType(buf);
+  if (t === "image/gif") throw new Error(GIF_REFUSED);
+  if (!t) throw new Error(`not a raster image (${label}: bytes that are not png/jpeg/webp)`);
+  return t;
+}
+
 async function loadImage(src, fetchImpl) {
-  if (src.bytes) return { base64: Buffer.from(src.bytes).toString("base64"), mimeType: src.mimeType || "image/png" };
+  if (src.bytes) {
+    const buf = Buffer.from(src.bytes);
+    return { base64: buf.toString("base64"), mimeType: sniffedType(buf, src.mimeType || "bytes") };
+  }
   if (src.file) {
-    const buf = await readFile(src.file);
     const ext = String(src.file).toLowerCase().split(".").pop();
-    const mimeType = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" }[ext];
-    if (!mimeType) throw new Error("unsupported image type ." + ext + " (png, jpg, webp, gif)");
+    if (ext === "gif") throw new Error(GIF_REFUSED);
+    if (!["png", "jpg", "jpeg", "webp"].includes(ext)) throw new Error("unsupported image type ." + ext + " (png, jpg, webp)");
+    const buf = await readFile(src.file);
     if (buf.length > MAX_IMAGE_BYTES) throw new Error("image larger than 8 MB");
-    return { base64: buf.toString("base64"), mimeType };
+    return { base64: buf.toString("base64"), mimeType: sniffedType(buf, "." + ext + " file") };
   }
   const resp = await fetchImpl(src.url, { headers: { Accept: "image/*" }, signal: AbortSignal.timeout(20000) });
   if (!resp.ok) throw new Error("image HTTP " + resp.status);
-  let mimeType = (resp.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-  const declared = /^image\/(?:png|jpe?g|webp|gif)$/.test(mimeType);
+  const declared = (resp.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  if (declared === "image/gif") throw new Error(GIF_REFUSED);
   /* An UNTYPED download (cdn.kiwisizing.com serves its chart PNGs as
      application/octet-stream) is identified by its magic bytes; anything that declares
      another type (svg, html, json) is refused without a download. */
-  if (!declared && mimeType && !/^(?:application\/octet-stream|binary\/octet-stream)$/.test(mimeType)) {
-    throw new Error("not a raster image (" + mimeType + ")");
+  if (declared && !/^image\/(?:png|jpe?g|pjpeg|webp)$/.test(declared) &&
+    !/^(?:application\/octet-stream|binary\/octet-stream)$/.test(declared)) {
+    throw new Error("not a raster image (" + declared + ")");
   }
   const buf = Buffer.from(await resp.arrayBuffer());
   if (buf.length > MAX_IMAGE_BYTES) throw new Error("image larger than 8 MB");
-  if (!declared) {
-    mimeType = sniffImageType(buf);
-    if (!mimeType) throw new Error("not a raster image (untyped bytes that are not png/jpeg/webp/gif)");
-  }
-  return { base64: buf.toString("base64"), mimeType };
+  return { base64: buf.toString("base64"), mimeType: sniffedType(buf, declared || "untyped") };
 }
 
 /**
