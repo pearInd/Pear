@@ -263,7 +263,12 @@ _Last updated: 2026-10-05 · main: THE SWAP FLOW + THE LANDING, PROJECTED_
   test: the back print on a chest past 300 degrees 0ms / 20ms / 606ms (p90 42ms) over 48 turns at
   0.8x / 1x / 1.3x (was 730 / 1,330 / 1,960ms), never a third swap. The projection fires from -0.9
   (the order saturates near the back). A browser sweep in the twin could not run: the machine was
-  on battery at load 52. **Next: your measurement, fast and slow.**
+  on battery at load 52.
+- **2026-10-05 17:25 report - "front perfect, the back disappears too fast" (§2.33):** a wrong
+  shoulder scale (2x / 3-4x) made a reading at the back look like one coming round. The scale
+  now re-learns from live readings and is aspect-proof; the projection needs a deep back.
+  17:23 also had a mirrored skeleton through the whole back view - not fixed.
+  **Next: your measurement.**
 
 ## Hebrew/English i18n
 - **Stage:** done (core).

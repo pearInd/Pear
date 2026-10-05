@@ -1104,6 +1104,23 @@ edge's relay (`cloudflare/orient/src/rt.js` `relay()`, `rtMaxSessionMs()`) now c
 the room's side with a reason on the SDK's permanent list ("not allowed") so it does not reconnect into a second one.
 `rt-proxy` §7. Worker deploy.
 
+### 2.33 "The back disappears too fast, in the middle" - the shoulder scale re-learns; a projection needs a deep back (2026-10-05)
+After §2.30 the user reported the front perfect and the back vanishing mid-back. The 17:25 record: the shoulders read 0.46-0.56
+square to the lens and -0.71 at the deepest back - the square-on width the presence gate had learned was 2x the live one (the
+raw separation was symmetric, +0.35 / -0.35); the next back reading (-0.60) read as a crossing of the deepest point (135 ->
+233 degrees at ~380 deg/s) and the projection sent the FRONT on a body still at ~200. 17:23 carried a 3-4x scale and, worse,
+a mirrored skeleton for the whole back view (the shoulders read FRONT while the shopper faced away), which withdrew the BACK.
+- **THE BASELINE RE-LEARNS (`app.js`, the torso-twist block, `BASELINE_OFF`):** two live square-on readings in a row outside
+  0.6-1.6x the learned width start the baseline afresh (a TEST record logs `baseline-relearn`). The twelve recorded 360s never
+  re-learn (`torso-twist` §6).
+- **Pixel proportions:** `poseTorsoWidths(result, aspect)` multiplies by the frame's width over its height (`_poseAspect`,
+  set at every inference; a change is logged as `pose-aspect`) - if the camera changes shape between the gate and the live
+  loop, the width no longer changes with it. Ratios are unchanged at a constant aspect, so nothing else moves.
+- **The projection needs the back seen DEEP (`lib/orient-engine.js` `DEEP_SEEN` -0.85):** a turn that never reads past it is
+  left to the side rule; a re-arm on the same leg keeps it. `return-side` §3e.2c (17:25: now on the side reading, 0.14);
+  the landing model (§4c) is unchanged. **Worker deploy.**
+- **Not fixed:** a mirrored skeleton for a whole back view (17:23) - the pose model's own front/back confusion.
+
 ## 3. Cross-file lockstep
 
 These have **no shared module system**. Copies must be edited together, in the

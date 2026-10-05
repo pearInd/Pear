@@ -260,6 +260,37 @@ console.log("\n── §4 where it is wired ──");
     !/twist/i.test(readFileSync(new URL("../lib/orient-engine.js", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "")));
 }
 
+console.log("\n── §6 THE BASELINE RE-LEARNS (2026-10-05) - a square-on width learned wrong does not survive the live loop ──");
+{
+  /* Two sessions that day: the presence gate's square-on width was 2x and 3-4x the live loop's, so the order read 0.5 to the
+     lens and -0.71 at the back. Two live square-on readings outside BASELINE_OFF of it start it afresh. */
+  const X = new Function("location", "ORIENT_POSE_FACING_MARGIN",
+    BLOCK + "\nreturn { makeTwistState, torsoTwistStep, torsoOrder, poseTorsoWidths, BASELINE_OFF };")({ search: "" }, 0.25);
+  const s = X.makeTwistState();
+  const gate = { sh: 0.72, hip: 0.4, th: 0.31 }, live = { sh: 0.36, hip: 0.2, th: 0.31 };
+  for (let i = 0; i < 6; i++) X.torsoTwistStep(s, gate, 3, i * 240);
+  const before = X.torsoOrder(s, live);
+  X.torsoTwistStep(s, live, 3, 2000);
+  const afterOne = X.torsoOrder(s, live);
+  X.torsoTwistStep(s, live, 3, 2240);
+  X.torsoTwistStep(s, live, 3, 2480);
+  const after = X.torsoOrder(s, live);
+  check(`§6.1 a width learned 2x too wide reads the live square-on as ${before && before.toFixed(2)}`, Math.abs(before - 0.5) < 0.01);
+  check(`§6.2 one disagreeing reading is not enough (a glitch) - still ${afterOne && afterOne.toFixed(2)}`, afterOne !== null && afterOne < 0.7, afterOne);
+  check(`§6.3 two in a row re-learn it from the live readings: square-on reads ${after && after.toFixed(2)} again`, Math.abs(after - 1) < 0.05 && s.relearned === 1, JSON.stringify({ after, relearned: s.relearned }));
+  /* The recorded 360s - where the baseline was right all along - never re-learn, at the back or anywhere. */
+  let relearns = 0;
+  for (const rows of Object.values(DATA.clips)) {
+    const st = X.makeTwistState();
+    for (const [t, sh, hip, th, yaw] of rows) { if (sh === null) continue; X.torsoTwistStep(st, { sh, hip, th }, yaw === null ? null : Math.abs(yaw), t); }
+    relearns += st.relearned || 0;
+  }
+  check(`§6.4 the twelve recorded 360s never re-learn (${relearns})`, relearns === 0);
+  /* Pixel proportions: the same body in a 16:9 frame and in a 4:3 one reads one width once the frame's aspect is applied. */
+  check("§6.5 the widths scale with the frame's aspect (and default to the normalised ones)",
+    typeof X.poseTorsoWidths === "function" && /\(ls\.x - rs\.x\) \* k \/ th/.test(BLOCK) && /function poseTorsoWidths\(result, aspect = 1\)/.test(BLOCK));
+}
+
 console.log("");
 if (fails) { console.log(`${fails} check(s) FAILED`); process.exit(1); }
 console.log("torso-twist: all checks passed.");

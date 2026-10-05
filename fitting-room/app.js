@@ -8228,6 +8228,7 @@ const TWIST_HIP_MIN = 0.7;          // hip width that must remain, as a share of
 const TWIST_READINGS = 2;           // consecutive readings before it counts
 const TWIST_BASELINE_MIN = 5;       // square-on readings learned before the rule may fire
 const TWIST_TORSO_BAND = [0.7, 1.4];   // torso height vs the learned one - a degenerate read is not a pose
+const BASELINE_OFF = [0.6, 1.6];       // a square-on reading this far from the learned width (two in a row) re-learns it
 const TWIST_ENABLED = (() => {
   try { return new URLSearchParams(location.search).get("twist") !== "0"; } catch (_) { return true; }
 })();
@@ -8235,8 +8236,9 @@ const TWIST_ENABLED = (() => {
 function makeTwistState() {
   return { sh0: 0, hip0: 0, th0: 0, n: 0, shMax: 0, streak: 0, active: false, at: 0, yawDeg: 0, shR: null, hipR: null };
 }
-/** Image-space torso widths of the primary subject, normalised by torso height, or null. */
-function poseTorsoWidths(result) {
+/** Image-space torso widths of the primary subject, normalised by torso height, or null. `aspect` (the frame's width over
+ *  its height) puts them in pixel proportions, so a frame-shape change does not read as a change of width. */
+function poseTorsoWidths(result, aspect = 1) {
   const sets = result && Array.isArray(result.landmarks) ? result.landmarks : null;
   const subject = sets && sets.length && typeof primaryPoseIndex === "function" ? primaryPoseIndex(sets) : (sets && sets.length ? 0 : -1);
   const lm = subject >= 0 ? sets[subject] : null;
@@ -8245,7 +8247,8 @@ function poseTorsoWidths(result) {
   const lh = lm[POSE_LANDMARK.LEFT_HIP], rh = lm[POSE_LANDMARK.RIGHT_HIP];
   const th = Math.abs((lh.y + rh.y) / 2 - (ls.y + rs.y) / 2);
   if (!(th > 1e-3)) return null;
-  return { sh: (ls.x - rs.x) / th, hip: (lh.x - rh.x) / th, th };
+  const k = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
+  return { sh: (ls.x - rs.x) * k / th, hip: (lh.x - rh.x) * k / th, th };
 }
 /** One reading into the state. Pure over (state, reading) - torso-twist drives it with literals.
  *  @param {{sh:number, hip:number, th:number}|null} w  poseTorsoWidths()
@@ -8257,6 +8260,13 @@ function torsoTwistStep(s, w, worldYawAbs, now, enabled = TWIST_ENABLED) {
   /* Learn the square-on widths from readings the shoulder ORDER already calls a side - facing or
      facing away, where both widths are at their full size - and a world yaw that agrees. */
   if (ash >= ORIENT_POSE_FACING_MARGIN && (worldYawAbs === null || worldYawAbs < 20)) {
+    /* THE BASELINE RE-LEARNS (2026-10-05) - "the back disappears too fast, in the middle". Two sessions that day carried
+       a square-on width 2x and 3-4x what the live loop then read (the presence gate learned it): the shoulder order read
+       0.5 to the lens and -0.71 at the back, and the engine took a reading at the back for one coming round. Two square-on
+       readings in a row outside BASELINE_OFF of it start the baseline afresh from the live ones. */
+    const off = s.n >= TWIST_BASELINE_MIN && s.sh0 > 0 && (ash < s.sh0 * BASELINE_OFF[0] || ash > s.sh0 * BASELINE_OFF[1]);
+    s.offStreak = off ? (s.offStreak || 0) + 1 : 0;
+    if (s.offStreak >= 2) { s.sh0 = 0; s.hip0 = 0; s.th0 = 0; s.n = 0; s.shMax = 0; s.offStreak = 0; s.relearned = (s.relearned || 0) + 1; }
     const a = s.n ? 0.2 : 1;
     s.sh0 = s.sh0 * (1 - a) + ash * a; s.hip0 = s.hip0 * (1 - a) + ahip * a; s.th0 = s.th0 * (1 - a) + w.th * a;
     s.shMax = Math.max(s.shMax || 0, ash);   // the widest square-on reading - torsoOrder()'s scale before the baseline settles
@@ -8322,8 +8332,12 @@ let _poseOrd = null, _poseOrdAt = 0;
  *  turn is being read). Logs and records the on/off edges. */
 function torsoTwistObserve(result, worldYawAbs, now) {
   const was = _poseTwist.active;
-  const widths = poseTorsoWidths(result);
+  const relearnedBefore = _poseTwist.relearned || 0;
+  const widths = poseTorsoWidths(result, typeof _poseAspect === "number" && _poseAspect > 0 ? _poseAspect : 1);
   const on = torsoTwistStep(_poseTwist, widths, worldYawAbs, now);
+  if ((_poseTwist.relearned || 0) !== relearnedBefore && typeof traceOrient === "function") {
+    traceOrient("baseline-relearn", { sh: widths ? Math.round(Math.abs(widths.sh) * 100) / 100 : null });
+  }
   const ord = torsoOrder(_poseTwist, widths);
   if (ord !== null) { _poseOrd = ord; _poseOrdAt = now; }
   if (on !== was) {
@@ -17471,9 +17485,18 @@ function makeBodyTopologyTracker(opts = {}) {
    the same value - so every detectForVideo() in this file goes through here. It costs one
    comparison and removes an entire class of "Packet timestamp mismatch" session failure. */
 let _lastPoseTimestamp = 0;
+/* The frame's width over its height at the last inference - torsoTwistObserve() reads the shoulder widths in PIXEL proportions
+   with it (THE BASELINE RE-LEARNS), so a camera that changes its aspect between the presence gate and the live loop does not
+   change the shopper's square-on width. A TEST record names each change (`pose-aspect`). */
+let _poseAspect = null;
 function detectPoseFrame(detector, video) {
   const ts = Math.max(performance.now(), _lastPoseTimestamp + 1);
   _lastPoseTimestamp = ts;
+  const aspect = video && video.videoWidth > 0 && video.videoHeight > 0 ? video.videoWidth / video.videoHeight : null;
+  if (aspect && (!_poseAspect || Math.abs(aspect - _poseAspect) > 0.01)) {
+    if (_poseAspect && typeof traceOrient === "function") traceOrient("pose-aspect", { from: Math.round(_poseAspect * 100) / 100, to: Math.round(aspect * 100) / 100, w: video.videoWidth, h: video.videoHeight });
+    _poseAspect = aspect;
+  }
   /* The whole frame, exactly as always - unless the whole frame has stopped finding a body, in
      which case a window around the shopper (see POSE FOCUS WINDOW below). One call either way. */
   const win = typeof poseFocusWindow === "function" ? poseFocusWindow(video) : null;

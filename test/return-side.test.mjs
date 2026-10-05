@@ -413,6 +413,14 @@ console.log("\n── §3e THE LANDING, PROJECTED - two fast 360s and a slow one
       !!on && !!R && on.o === -0.04 && R.o === 0.53 && R.t - on.t >= 250, JSON.stringify({ on, R }));
   }
   {
+    /* 17:25 (2026-10-05, "the back disappears too fast, in the middle"): the shoulder scale was learned 2x too wide, the back
+       read -0.71 at its deepest, and the projection took the next reading (-0.60) for one coming round past the deepest
+       point - the FRONT went out on a body still at ~200 degrees. A projection now needs the back seen DEEP (-0.85). */
+    const rec = PACE["b-1725"], R = recorded(rec), on = ret(replay(rec, {}));
+    check(`§3e.2c a back never seen deep is left to the side rule: the record sent the return at o=${R && R.o}; now at o=${on && on.o}`,
+      !!R && R.o === -0.6 && !!on && on.o >= -0.25 && on.t > R.t, JSON.stringify({ R, on }));
+  }
+  {
     /* Every outbound BACK is untouched: the projection only reads the BACK leg. */
     for (const name of ["f-0609", "m2-0555", "s-0611", "m1-0455", "m3-1702"]) {
       const on = replay(PACE[name], {}), off = replay(PACE[name], { lead_project: "0" });
