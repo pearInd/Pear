@@ -19,7 +19,7 @@ _Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
 | `DECART_ALLOWED_ORIGINS` / token origin | done (Vercel env set + redeployed 2026-10-02); preview-origin fix still on a branch | main; `hide/main-v2` `f93ef87` |
 | Back-image orientation (front/back on a turn) | in progress — active on a branch | main `3a9b55d`; `hide/main-v2` |
 | Hebrew/English i18n | done (core) | main |
-| Security hardening + client-code hiding | in progress — on a branch; **key rotation pending on you** | main `e523cc3`; `hide/main-v2`, `harden/hide-client-logic` |
+| Security hardening + client-code hiding | in progress — on a branch (`hide/main-v2`, intentionally separate; the owner merges it himself); key rotation deferred by the owner's choice | main `e523cc3`; `hide/main-v2`, `harden/hide-client-logic` |
 | Landing / brand video | done | main `e8d2c7f` |
 | Black-screen on reopen | done | main `3a533d6`, `af5f4d4` |
 | Visual QA gate | done, known flaky (§8.5) | main |
@@ -55,29 +55,8 @@ _Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
       from your machine, saved to a file, and I'll read it.
 - [x] Next phase decided: castro fix (done, `8ce3de6`), adidas fix (done, this commit), then
       Phase 2 — separately, not started.
-- [ ] **SECURITY — rotate two keys** (both were exposed in plain text outside the repo).
-      Issue the new key, update every place listed, redeploy, THEN revoke the old one.
-      **Gemini API key** (`GEMINI_API_KEY`) — create a new key in Google AI Studio
-      (aistudio.google.com/apikey) and delete the old one there. Update:
-        1. Vercel → project env vars → `GEMINI_API_KEY` (Production, Preview, Development), then
-           redeploy (server-side garment classification, `lib/garment-category.js`);
-        2. `scanner/.env` (scanner + `scanner/backfill-age-group.js`);
-        3. a root `.env` on any machine that runs `scripts/batch-scan-clothes.js` or
-           `scripts/backfill-garment-categories.js` (none in this checkout);
-        4. the Railway scanner service's variables, if it is deployed (`scanner/README.md`, Deploy).
-      **Supabase service_role key** (`SUPABASE_SERVICE_ROLE_KEY`, project `jyhilack…`) — a legacy
-      JWT key; it cannot be rotated on its own. Either (a, preferred) Supabase → Project Settings →
-      API Keys: create a new **secret** key (`sb_secret_…`), switch every consumer below to it,
-      then **disable the legacy JWT-based keys**; or (b) rotate the JWT secret — which also
-      invalidates the anon key and every signed-in session. Update:
-        1. Vercel → `SUPABASE_SERVICE_ROLE_KEY` (all environments), then redeploy (`lib/supabase.js`:
-           sessions, users/OTP, garment_cache, `/api/store-size-chart`);
-        2. `scanner/.env` (scanner `--save`, `backfill-age-group.js`);
-        3. a root `.env` on any machine that runs the `scripts/` backfills (none in this checkout);
-        4. the Railway scanner service, if deployed.
-      Not affected: `admin/admin.js` ships a public **anon** key for a *different* project (`nhkaiucb…`).
-      Check afterwards: `GET /api/store-size-chart?host=fox.co.il` returns 5 charts with no `note`,
-      and a scanner `--size-charts --save` run still saves.
+- [x] **Key rotation (`GEMINI_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) — deferred by the owner's choice.**
+      Not an open item; the full procedure is in git history (`93e2c01`) if it is ever wanted.
 - [ ] **Live test of the kids/adult guard** in a real session: a kids garment + adult measurements
       must block going live, and an adult garment + child measurements must block too (the reverse).
       Code-level coverage exists (`kids-adult-size-guard`); this is the end-to-end check.
@@ -90,8 +69,8 @@ _Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
 - [ ] **Full age_group backfill — DEFERRED by choice, not blocked.** Stopped partway on purpose;
       only demo products need it for now. When wanted: `cd scanner && node backfill-age-group.js`
       (`ef1d28d` must be deployed first, or try-ons re-wipe the rows it fills).
-- [ ] **Decide the fate of `hide/main-v2`** — 39 commits ahead and now 12 behind main
-      (as of this status commit); it needs main merged in before it can land.
+- [x] **`hide/main-v2`** — intentionally kept separate; the owner will merge it himself when the
+      security work is done. Not an open decision here.
 
 ---
 
@@ -229,7 +208,7 @@ _Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
   rules server-side (`897ab44`, `0eb6e8f`, `5ae486a`), vendor names refused by the build.
 - **On `harden/hide-client-logic`:** the "solo" front|back experiment (v2–v6), pose
   in any light — experimental, not for main as-is.
-- **Remaining:** review + merge plan for `hide/main-v2`.
+- **Remaining:** owner-driven — `hide/main-v2` stays separate until the owner merges it.
 
 ## Landing / brand video
 - **Stage:** done. Identity-screen brand video `e8d2c7f`
@@ -243,7 +222,7 @@ _Last updated: 2026-10-03 · main @ `0fccee8` + this status commit_
 ## Other branches (not merged)
 | Branch | Ahead / behind main | Note |
 |---|---|---|
-| `hide/main-v2` | 39 / 12 | active — see above |
+| `hide/main-v2` | 39 / — | intentionally separate (owner merges) |
 | `harden/hide-client-logic` | 46 / 10 | experiments |
 | `fix/v142-angle-rollback` | 5 / 15 | camera AE/AWB pin — unmerged, decide |
 | `feat/back-view-pipeline` | 1 / 63 | stale |

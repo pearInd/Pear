@@ -76,6 +76,13 @@ single stubborn image never stalls the whole scan.
 
 ## Size guides (`--size-charts`)
 
+> **Phase 2 - use `npm run capture -- <store-url>` instead** (repo root). It runs this
+> static mode, then a headless-browser fallback (`browser-capture.js`) and image-chart OCR
+> (`image-charts.js`), shows every chart, asks y/n, saves through the same path and checks
+> the live API. Blocked or unreadable stores: `npm run import:chart` (`import-chart.js`).
+> Step by step: `docs/ADDING-A-STORE.md`. The static mode below is unchanged and is
+> stage 1 of that flow.
+
 A second, independent mode finds the store's OWN size guide - the chest/waist/hip
 table per size - so the fitting room can use it when the widget cannot read one off
 the product page. It never calls Gemini.

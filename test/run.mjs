@@ -415,6 +415,10 @@ const SUITES = [
   ["store-size-chart-api", "store-size-chart-api.test.mjs"],
   ["stored-size-chart", "stored-size-chart.test.mjs"],
   ["store-chart-recommendation", "store-chart-recommendation.test.mjs"],
+  ["browser-capture", "browser-capture.test.mjs"],
+  ["image-chart-ocr", "image-chart-ocr.test.mjs"],
+  ["manual-import", "manual-import.test.mjs"],
+  ["capture-flow", "capture-flow.test.mjs"],
   ["ready-signal-signals", "ready-signal-signals.test.mjs"],
   ["garment-cache-age-group", "garment-cache-age-group.test.mjs"],
 ];

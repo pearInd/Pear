@@ -39,6 +39,22 @@ import { createHash } from "node:crypto";
 import { createSizeChartParser, SHARED_BLOCK_HASH } from "./size-chart-parser.js";
 
 export const PARSER_VERSION = 1;
+
+/* CAPTURE METHODS (the `source` column). Phase 1: inline_table, product_description,
+   linked_page. Phase 2 (scanner/capture.js): browser_page (a chart in the RENDERED
+   product page), browser_modal (behind a clicked size-guide trigger or tab),
+   browser_network (inside a JSON/HTML response the page fetched), image_ocr (an image
+   chart read by Gemini), manual_url / manual_html / manual_image (scanner/import-chart.js).
+   Every one of them reaches buildRecords() as parser rows from extractAllSizeCharts() -
+   no method has its own parser or its own validation.
+
+   STORE-WIDE vs PRODUCT-SCOPED is unchanged: a chart seen on 2+ product pages, or found
+   on a guide page / handed over manually for the whole store, is the store's chart
+   (product_key ''); seen once on one PDP it stays product-scoped. */
+export const STORE_WIDE_SOURCES = new Set(["linked_page", "manual_url", "manual_html", "manual_image"]);
+/* A chart READ BY A MODEL is weaker evidence than one read off markup: an OCR digit
+   error inside the clamps is still plausible. */
+export const SOURCE_CONFIDENCE_PENALTY = { image_ocr: 0.2, manual_image: 0.1 };
 const FETCH_USER_AGENT = "Mozilla/5.0 (compatible; PEAR-StoreScanner/1.0)";
 const PRODUCT_LINK_PATTERNS = ["/products/", "/product/", "/item/", "/p/", "/shop/"];
 const MAX_GUIDE_PAGES = 6;
@@ -232,7 +248,12 @@ const PURE = createSizeChartParser(null);
 const isGridMarkup = (el) => el.tagName === "TABLE" || (el.getAttribute && el.getAttribute("role") === "table") ||
   !!(el.querySelector && el.querySelector('table,[role="table"]'));
 
-export function tableContextText(table) {
+/* `boundary` (optional, a CSS selector): stop climbing AFTER the first ancestor that
+   matches it. The browser fallback passes the modal selector - a size guide opened in a
+   dialog over a product page must not read the PAGE's <h1> ("Slim Fit Jeans") as its own
+   heading just because the dialog was appended next to it. Static callers pass none, so
+   Phase 1 is unchanged. */
+export function tableContextText(table, boundary = null) {
   const parts = [];
   try {
     const cap = table.querySelector("caption");
@@ -250,8 +271,10 @@ export function tableContextText(table) {
           if (el) parts.push(shortText(el));
         }
       }
+      /* At the boundary itself: its own labels count, its SIBLINGS are the page's. */
+      const atBoundary = !!(boundary && node.matches && node.matches(boundary));
       /* The nearest preceding heading-like siblings - "Women" above the women's table. */
-      let sib = node.previousElementSibling, seen = 0;
+      let sib = atBoundary ? null : node.previousElementSibling, seen = 0;
       while (sib && seen < 4) {
         /* The previous chart's territory: a sibling that IS or CONTAINS a table carries
            another chart's heading ("Men's tops" above the men's section must never label
@@ -264,13 +287,14 @@ export function tableContextText(table) {
         }
         sib = sib.previousElementSibling; seen++;
       }
+      if (atBoundary) break;
       node = node.parentElement; depth++;
     }
   } catch { /* context is best-effort; a missing label is "unknown", never a throw */ }
   return parts.filter(Boolean).join(" | ");
 }
 
-function pageContextText(doc, url) {
+export function pageContextText(doc, url) {
   const bits = [];
   try {
     bits.push(doc.title || "");
@@ -300,7 +324,7 @@ function pageContextText(doc, url) {
    shared parser reads both natively now, so the widget gets the same fixes. Each
    chart's labels are read from its `anchor` - for a collapsed toggle pair, the
    first-rendered grid, the one directly under the section heading. */
-export function extractAllSizeCharts(doc, url, referrer = null) {
+export function extractAllSizeCharts(doc, url, referrer = null, { contextBoundary = null } = {}) {
   const parser = createSizeChartParser(doc);
   const pageText = pageContextText(doc, url);
   const out = [];
@@ -315,7 +339,7 @@ export function extractAllSizeCharts(doc, url, referrer = null) {
     const measured = rows.filter((r) =>
       ["Chest", "Waist", "Hips", "Legs"].some((k) => typeof r["min" + k] === "number"));
     if (measured.length < 2) continue;
-    const localText = tableContextText(anchor);
+    const localText = tableContextText(anchor, contextBoundary);
     out.push({
       rows: measured,
       localText,
@@ -686,7 +710,7 @@ export async function discoverSizeCharts(storeUrl, {
        requests) - the store is up, we are refused. Anything else is unreachable. */
     report.outcome = report.blocked.count || home.status === 403 || home.status === 429
       ? "blocked_by_bot_protection" : "unreachable";
-    return { report, records: [] };
+    return { report, records: [], found: [], products: [], images: [] };
   }
   const platform = detectPlatform(home.text);
   const isShopify = platform === "shopify";
@@ -698,6 +722,7 @@ export async function discoverSizeCharts(storeUrl, {
   const guideLinks = new Map(), images = new Set(), apps = new Set();
   let triggers = 0;
 
+  let refusedInARow = 0;
   for (const p of products) {
     if (p.bodyHtml) {
       report.paths.product_description.products_checked++;
@@ -714,8 +739,25 @@ export async function discoverSizeCharts(storeUrl, {
     if (!r.ok || !r.text) {
       report.pages_failed++;
       if (report.errors.length < 10) report.errors.push(`${p.url}: ${r.error || "HTTP " + r.status}`);
+      /* POLITE STOP: three refusals in a row (403/429/a challenge) is the store saying
+         no. Asking the other nine product pages anyway is exactly the pattern bot
+         management escalates on, and cannot change the answer. */
+      const refused = /bot-protection/.test(r.error || "") || r.status === 403 || r.status === 429;
+      /* A flat 403/429 on a public product page is the same refusal as a challenge page
+         (which the fetch wrapper already counts) - count it, or a store that refuses
+         every PDP reads as "none_found", a false claim about the store. */
+      if (refused && !/bot-protection/.test(r.error || "")) {
+        report.blocked.count++;
+        if (report.blocked.examples.length < 3) report.blocked.examples.push(p.url + " (HTTP " + r.status + ")");
+      }
+      refusedInARow = refused ? refusedInARow + 1 : 0;
+      if (refusedInARow >= 3) {
+        report.errors.push(`stopped after ${refusedInARow} refusals in a row - not asking for more pages`);
+        break;
+      }
       continue;
     }
+    refusedInARow = 0;
     report.pages_fetched++;
     report.paths.inline_table.pages_checked++;
     const doc = new JSDOMCtor(r.text, { url: r.url || p.url }).window.document;
@@ -780,7 +822,10 @@ export async function discoverSizeCharts(storeUrl, {
   else if (apps.size || triggers) report.outcome = "js_app_detected";
   else if (blockedHidAnswer) report.outcome = "blocked_by_bot_protection";
   else report.outcome = "none_found";
-  return { report, records };
+  /* `found`, `products` and `images` are the raw evidence, for capture.js: the browser
+     and image stages add to the SAME found list and re-run buildRecords(), so every
+     capture method ends in one validation and one save path. */
+  return { report, records, found, products: products.map((p) => p.url), images: [...images] };
 }
 
 /* Found charts -> store_size_charts rows, one per (gender, age, type, size_system,
@@ -806,7 +851,7 @@ export function buildRecords(found, storeDomain, report = { charts: [], conflict
   }
   const byKey = new Map();
   for (const e of byHash.values()) {
-    const productKey = e.f.source === "linked_page" || e.pages.length >= 2 ? "" : normalizePageUrl(e.pages[0] || "");
+    const productKey = STORE_WIDE_SOURCES.has(e.f.source) || e.pages.length >= 2 ? "" : normalizePageUrl(e.pages[0] || "");
     const record = {
       store_domain: storeDomain,
       gender: e.cls.gender,
@@ -817,7 +862,7 @@ export function buildRecords(found, storeDomain, report = { charts: [], conflict
       rows: e.rows,
       source: e.f.source,
       source_url: e.f.sourceUrl,
-      confidence: e.cls.confidence,
+      confidence: Math.round(Math.max(0.05, e.cls.confidence - (SOURCE_CONFIDENCE_PENALTY[e.f.source] || 0)) * 100) / 100,
       status: "active",
       sightings: e.sightings,
       content_hash: e.hash,

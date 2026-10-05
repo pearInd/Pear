@@ -22,3 +22,6 @@ data/
 test/fixtures/
 test-results/
 playwright-report/
+
+# scripts/mutation-check-capture.mjs scratch copy
+.mutation-tmp/
