@@ -12,7 +12,7 @@
    ============================================================================= */
 import { JSDOM } from "jsdom";
 import { runCapture, browserFallbackReason } from "../scanner/capture.js";
-import { formatChartSummary, askYesNo, reasonLine, fetchLiveCharts, liveCoverage } from "../scanner/capture-cli.js";
+import { formatChartSummary, askYesNo, reasonLine, fetchLiveCharts, liveCoverage, parseCliArgs } from "../scanner/capture-cli.js";
 import { extractAllSizeCharts, discoverSizeCharts } from "../scanner/size-charts.js";
 
 let fails = 0;
@@ -86,6 +86,25 @@ console.log("\n── §1 when the browser runs ──");
   await runWith(partial, { opts: { browserCapture: async (_u, o) => { asked = o.productUrls; return { found: [], images: [], report: { status: "ok", pages_opened: 2, triggers_clicked: 0, tabs_clicked: 0, network_payloads: 0, methods: {}, blocked: { count: 0, examples: [] }, errors: [] } }; } } });
   check("§1.12 a URL that refused the static stage is not handed to the browser", JSON.stringify(asked) ===
     JSON.stringify(["https://shop.example.com/products/a", "https://shop.example.com/products/c"]), JSON.stringify(asked));
+  /* EVERY sampled product refused, but fewer than three (no polite stop). Filtered, the
+     browser's list was EMPTY - which captureWithBrowser reads as "no sample": it opened the
+     home page and found its way back to the very product pages that had refused. A store
+     that refused every page we asked for is refusing us. */
+  const allRefused = staticResult({ outcome: "image_chart_detected", images: [] });
+  allRefused.products = ["https://shop.example.com/products/a", "https://shop.example.com/products/b"];
+  allRefused.report.refused_urls = allRefused.products.slice();
+  const ar = await runWith(allRefused, { opts: { forceBrowser: true } });
+  check("§1.13 every sampled product refused (2, no polite stop) -> no browser, not even with --browser; nothing found reads BLOCKED",
+    ar.calls.browser === 0 && ar.reason && ar.reason.kind === "blocked", JSON.stringify({ browser: ar.calls.browser, reason: ar.reason }));
+  /* After a refusal the IMAGE stage does not ask the store either: an image on the store's
+     own host (or a subdomain) is skipped; one on a CDN is a different host and still read. */
+  const imgAsked = [];
+  const refusedImgs = staticResult({ outcome: "image_chart_detected",
+    images: ["https://www.shop.example.com/img/size-chart.png", "https://cdn.shop.example.com/s/chart.png", "https://cdn.example.net/files/size-chart.png"] });
+  refusedImgs.report.polite_stop = true;
+  await runWith(refusedImgs, { opts: { imageReader: async (src) => { imgAsked.push(src.url); return { found: [], outcome: "not_a_chart", detail: "x" }; } } });
+  check("§1.14 after a refusal, image charts on the store's own host are not fetched - only the CDN one is read",
+    JSON.stringify(imgAsked) === JSON.stringify(["https://cdn.example.net/files/size-chart.png"]), JSON.stringify(imgAsked));
 }
 
 console.log("\n── §2 one list, one buildRecords ──");
@@ -273,6 +292,18 @@ console.log("\n── §6 a browser stage that throws ──");
     !threw2 && bare.reason.kind === "browser_unavailable" && /browser fallback failed: Unable to retrieve content/.test(bare.reason.extra) &&
     !/\n/.test(bare.reason.extra) && bare.calls.images === 1,
     threw2 ? threw2.message : JSON.stringify([bare.reason, bare.calls]));
+}
+
+console.log("\n── §7 the command line ──");
+{
+  /* `--only=1` was once read as no `--only` at all, so every chart was imported. Both CLIs
+     read their flags through parseCliArgs(): the equals form is the spaced form. */
+  const a = parseCliArgs(["node", "capture.js", "https://shop.example.com/?a=b", "--max-products=20", "--dry-run", "--type=", "--x"]);
+  check("§7.1 --max-products=20 reads as --max-products 20; a URL with '=' is left whole",
+    a.val("--max-products") === "20" && a.flag("--dry-run") && a.args[0] === "https://shop.example.com/?a=b", JSON.stringify(a.args));
+  check("§7.2 an empty --type= is an empty value, not the next flag", a.val("--type") === "" && a.flag("--x"), JSON.stringify(a.args));
+  const b = parseCliArgs(["node", "import-chart.js", "--only", "2", "--host=shop.example.com"]);
+  check("§7.3 the spaced form is unchanged", b.val("--only") === "2" && b.val("--host") === "shop.example.com", JSON.stringify(b.args));
 }
 
 console.log("");

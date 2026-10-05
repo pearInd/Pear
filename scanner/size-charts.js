@@ -831,21 +831,36 @@ export async function discoverSizeCharts(storeUrl, {
   /* Linked guide pages first, then the well-known paths nobody linked. */
   const guideUrls = [...guideLinks.keys()];
   report.paths.linked_page.links_found = guideUrls.length;
+  const guessed = new Set();
   if (isShopify || !guideUrls.length) {
     for (const path of WELL_KNOWN_GUIDE_PATHS) {
       const u = baseUrl + path;
-      if (!guideUrls.includes(u)) guideUrls.push(u);
+      if (!guideUrls.includes(u)) { guideUrls.push(u); guessed.add(u); }
     }
   }
+  let guessRefusedInARow = 0, guessStop = false;
   for (const gUrl of guideUrls.slice(0, MAX_GUIDE_PAGES + (guideLinks.size ? 0 : WELL_KNOWN_GUIDE_PATHS.length))) {
     if (/\.pdf(?:$|[?#])/i.test(gUrl)) { noteImage(gUrl, ""); continue; }
-    /* The POLITE STOP holds here too, and three refused guide pages in a row trigger it
-       (a 404 on a well-known path is an answer, not a refusal - it resets the count). */
-    if (politeStop) continue;
+    /* The POLITE STOP holds here too, and three refused LINKED guide pages in a row - the
+       store's own URLs - trigger it (a 404 is an answer, not a refusal: it resets the count).
+       A GUESSED path (a well-known one nobody linked) refusing is not the store refusing us:
+       hosts and WAFs answer 403 to unknown paths on stores that served every product page.
+       Three refused guesses in a row stop the guessing, never the store - the first cut
+       counted them, and a store that had served every PDP was reported BLOCKED with the
+       browser never run. */
+    if (politeStop || (guessStop && guessed.has(gUrl))) continue;
     await pause();
     const r = unwrapHtmlEnvelope(await fetchText(gUrl).catch((e) => ({ ok: false, status: 0, text: "", error: e.message })));
-    if (!r.ok) { noteRefusal(isRefusal(r), gUrl); continue; }
-    refusedInARow = 0;
+    if (!r.ok) {
+      if (!guessed.has(gUrl)) { noteRefusal(isRefusal(r), gUrl); continue; }
+      guessRefusedInARow = isRefusal(r) ? guessRefusedInARow + 1 : 0;
+      if (guessRefusedInARow >= 3 && !guessStop) {
+        guessStop = true;
+        report.errors.push(`${guessRefusedInARow} guessed guide paths refused in a row - not guessing more (not counted as the store refusing)`);
+      }
+      continue;
+    }
+    refusedInARow = 0; guessRefusedInARow = 0;   // the store answered - neither count runs on
     if (/pdf|image\//i.test(r.contentType || "")) { noteImage(gUrl, ""); continue; }
     if (!r.text) continue;
     if (isHomeEcho(r, home, gUrl)) { report.paths.linked_page.home_echo++; continue; }

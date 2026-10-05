@@ -332,6 +332,25 @@ console.log("\n── §3 input errors are errors ──");
       r.status === 2 && /--only takes chart numbers/.test(r.stderr) && !/chart\(s\) to import/.test(r.stdout),
       JSON.stringify({ status: r.status, stderr: r.stderr.slice(0, 200), stdout: r.stdout.slice(0, 200) }));
   }
+  /* "--only=2" (the equals form) was not "--only": no filter, every chart summarised - and
+     with --yes saved unasked, the failure parseOnly exists to close. Every flag takes the
+     equals form now, and a bad value there is refused the same way. */
+  const T2 = (h, rows) => `<section><h2>${h}</h2><table><tr><th>Size</th><th>Chest</th></tr>${rows}</table></section>`;
+  const eqFile = join(dir, "eq.html");
+  writeFileSync(eqFile, `<html><head><title>Size guide</title></head><body>${T2("Women's tops", "<tr><td>XS</td><td>80-84</td></tr><tr><td>S</td><td>85-89</td></tr><tr><td>M</td><td>90-94</td></tr>")}` +
+    `${T2("Men's tops", "<tr><td>M</td><td>95-99</td></tr><tr><td>L</td><td>100-104</td></tr><tr><td>XL</td><td>105-109</td></tr>")}</body></html>`);
+  const eq = spawnSync(process.execPath, [cli, "--dry-run", "--host=shop.example.com", "--html", eqFile, "--only=2", "--type=outerwear"], { encoding: "utf8", timeout: 60000, env: noDb });
+  check("§3.10 --only=2 --type=outerwear (equals form) picks #2 alone and labels it",
+    eq.status === 0 && /1 chart\(s\) to import/.test(eq.stdout) && /#2 {2}men \/ adult \/ outerwear/.test(eq.stdout) && !/#1 /.test(eq.stdout),
+    JSON.stringify({ status: eq.status, stdout: eq.stdout.slice(0, 400), stderr: eq.stderr.slice(0, 200) }));
+  const eqBad = spawnSync(process.execPath, [cli, "--dry-run", "--host", "shop.example.com", "--html", eqFile, "--only=all", "--yes"], { encoding: "utf8", timeout: 60000, env: noDb });
+  check("§3.10b --only=all -> exit 2 naming --only, nothing summarised",
+    eqBad.status === 2 && /--only takes chart numbers/.test(eqBad.stderr) && !/chart\(s\) to import/.test(eqBad.stdout),
+    JSON.stringify({ status: eqBad.status, stderr: eqBad.stderr.slice(0, 200) }));
+  const eqEmpty = spawnSync(process.execPath, [cli, "--dry-run", "--host", "shop.example.com", "--html", eqFile, "--type="], { encoding: "utf8", timeout: 60000, env: noDb });
+  check("§3.10c an empty --type= -> exit 2 naming --type, never an unlabelled import",
+    eqEmpty.status === 2 && /--type needs a value/.test(eqEmpty.stderr) && !/chart\(s\) to import/.test(eqEmpty.stdout),
+    JSON.stringify({ status: eqEmpty.status, stderr: eqEmpty.stderr.slice(0, 200) }));
 }
 
 console.log("");

@@ -33,7 +33,7 @@ import { pathToFileURL } from "node:url";
 import { extractAllSizeCharts, buildRecords, saveSizeChartRecords, canonicalStoreHost, defaultFetchText, unwrapHtmlEnvelope,
   looksLikeBotChallenge, classifyChart, pageContextText, referrerAudience, toStoredRows, contentHash } from "./size-charts.js";
 import { GUIDE_BOUNDARY } from "./browser-capture.js";
-import { loadScannerEnv, formatChartSummary, askYesNo, saveAndVerify } from "./capture-cli.js";
+import { loadScannerEnv, parseCliArgs, formatChartSummary, askYesNo, saveAndVerify } from "./capture-cli.js";
 
 export const OVERRIDE_VALUES = {
   gender: ["men", "women", "unisex", "unknown"],
@@ -258,14 +258,20 @@ export async function importChart({ host, url = "", htmlFile = "", imageFile = "
 /* ── CLI ─────────────────────────────────────────────────────────────────────── */
 async function main(argv) {
   loadScannerEnv();
-  const args = argv.slice(2);
-  const val = (f) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined; };
-  const flag = (f) => args.includes(f);
+  const { val, flag } = parseCliArgs(argv);
+  /* A label flag given with nothing after it (`--type=`, or `--type` last) is a typo, not
+     "no label": silently importing unlabelled is the failure --only=1 once had. */
+  const label = (f) => {
+    if (!flag(f)) return undefined;
+    const v = val(f);
+    if (v == null || !String(v).trim()) throw new Error(`${f} needs a value`);
+    return v;
+  };
   let out;
   try {
     out = await importChart({
       host: val("--host"), url: val("--url") || "", htmlFile: val("--html") || "", imageFile: val("--image") || "",
-      overrides: { gender: val("--gender"), age_group: val("--age"), garment_type: val("--type") },
+      overrides: { gender: label("--gender"), age_group: label("--age"), garment_type: label("--type") },
       only: flag("--only") ? parseOnly(val("--only")) : null,
     });
   } catch (e) {

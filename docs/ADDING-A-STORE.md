@@ -20,11 +20,16 @@ This runs three stages and stops before saving:
    chart, found size-guide buttons with no link, or detected a JS size app. It opens up to
    6 product pages, clicks the size-guide buttons and each tab inside the guide, and reads
    the tables plus any size-chart JSON the page fetched. It never starts on a store that
-   refused us: if the static stage was blocked, or stopped politely after 3 refusals in a
-   row, the run reports `BLOCKED` instead (not even `--browser` overrides that). The browser
-   itself stops after 2 refusals in a row.
+   refused us: if the static stage was blocked, stopped politely after 3 refusals in a row,
+   or every sampled product page refused, the run reports `BLOCKED` instead (not even
+   `--browser` overrides that). The browser itself stops after 2 refusals in a row. A
+   guessed guide address (a well-known path like `/pages/size-guide` that the store never
+   linked) answering 403 is not the store refusing us: 3 of those in a row only stop the
+   guessing.
 3. **Images**: chart images that appeared when a guide was clicked are read by Gemini
-   (up to 4). Static image hits are read only when nothing else was captured.
+   (up to 4). Static image hits are read only when nothing else was captured. After the
+   store refused us, images on its own host are not fetched; images on a CDN or a size
+   app's servers still are.
 
 Read the summary. Each chart shows who it is for, the garment type, the size system,
 store-wide vs this-product-only, the sizes, the measurement ranges, the confidence and the
@@ -39,7 +44,8 @@ method (`source`). Check it against the store's real guide:
 
 Useful flags: `--browser` (force the browser), `--no-browser`, `--images` (also read
 static image hits), `--no-images`, `--max-products N`. Set `PEAR_CAPTURE_VERBOSE=1` to log
-every page, button and network response the browser looked at.
+every page, button and network response the browser looked at. In both commands a flag's
+value can follow a space or an `=` (`--max-products 20` and `--max-products=20` are the same).
 
 ## 2. Save
 
@@ -85,6 +91,8 @@ npm run import:chart -- --host example.co.il --image chart.png --gender women --
   `--only 2 --gender women`. They can't change a number or rescue a table the parser rejects.
 - Two charts that end up with the same labels can't both be stored: the summary says which
   one is saved and which isn't.
+- `--gender`, `--age` or `--type` with no value (`--type=`) stops with an error instead of
+  importing unlabelled.
 - `--dry-run` previews; `--yes` saves without asking.
 - Manual charts are always store-wide.
 

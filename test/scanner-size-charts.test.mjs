@@ -528,8 +528,12 @@ console.log("\n── §10 the polite stop ──");
     r.report.polite_stop === true && JSON.stringify(r.report.refused_urls) === JSON.stringify(pdpAsks),
     JSON.stringify([r.report.polite_stop, r.report.refused_urls]));
 
-  /* The guide loop applies the same rule: product pages answer, the well-known guide paths
-     refuse. A 404 is an answer and resets the count; three 403s in a row stop it. */
+  /* GUESSED guide paths (the well-known ones nobody linked) refusing is not the store
+     refusing us: a host or WAF that answers 403 to unknown paths served every product page
+     here. Three refused guesses in a row stop the GUESSING (a 404 is an answer and resets
+     the count) - but not the store: polite_stop stays false, so the browser still runs.
+     The first cut counted them toward the polite stop and reported a store that had served
+     every PDP as BLOCKED, the browser never run. */
   const gAsked = [];
   const guideRefusing = async (url) => {
     gAsked.push(url);
@@ -543,9 +547,31 @@ console.log("\n── §10 the polite stop ──");
   };
   const g = await discoverSizeCharts(BASE, { fetchText: guideRefusing, delayMs: 0, log: () => {}, JSDOM });
   const guideAsks = gAsked.filter((u) => /size-(?:guide|chart)|sizing/.test(u)).map((u) => u.replace(BASE, ""));
-  check("§10.3 guide pages: 403, 404 (resets), 403, 403, 403 -> stop; the sixth well-known path is never asked",
+  check("§10.3 guessed guide paths: 403, 404 (resets), 403, 403, 403 -> stop guessing; the sixth well-known path is never asked",
     JSON.stringify(guideAsks) === JSON.stringify(["/pages/size-guide", "/pages/size-chart", "/pages/sizing", "/pages/size-guide-1", "/size-guide"]) &&
-    g.report.errors.some((e) => /stopped after 3 refusals in a row/.test(e)), JSON.stringify([guideAsks, g.report.errors]));
+    g.report.errors.some((e) => /3 guessed guide paths refused in a row/.test(e)), JSON.stringify([guideAsks, g.report.errors]));
+  check("§10.3b ...and that is not the STORE refusing us: no polite stop, the product page that answered is not 'refused'",
+    g.report.polite_stop === false && g.report.outcome !== "blocked_by_bot_protection" && !g.report.refused_urls.some((u) => /products/.test(u)),
+    JSON.stringify([g.report.polite_stop, g.report.outcome, g.report.refused_urls]));
+  /* A LINKED guide page is the store's own URL: three of those refusing in a row (here the
+     product page links three guides) IS the store saying no - the polite stop. */
+  const lAsked = [];
+  const linkedRefusing = async (url) => {
+    lAsked.push(url);
+    const key = url.replace(BASE, "") || "/";
+    if (key === "/") return { ok: true, status: 200, url, contentType: "text/html", text: pdp("<p>home</p>", "Home") };
+    if (key === "/sitemap.xml") return { ok: true, status: 200, url, contentType: "application/xml",
+      text: `<urlset><url><loc>${BASE}/products/a</loc></url></urlset>` };
+    if (key === "/products/a") return { ok: true, status: 200, url, contentType: "text/html",
+      text: pdp(`<a href="/guides/tops-size-guide">Size guide</a><a href="/guides/pants-size-guide">Size chart</a><a href="/guides/kids-size-guide">Size guide</a>`, "Tee") };
+    if (key === "/robots.txt") return { ok: false, status: 404, url, contentType: "text/html", text: "" };
+    return { ok: false, status: 403, url, contentType: "text/html", text: "" };
+  };
+  const l = await discoverSizeCharts(BASE, { fetchText: linkedRefusing, delayMs: 0, log: () => {}, JSDOM });
+  check("§10.3c three LINKED guide pages refusing in a row is the store refusing: the polite stop, no guessed path asked after",
+    l.report.polite_stop === true && l.report.errors.some((e) => /stopped after 3 refusals in a row/.test(e)) &&
+    !lAsked.some((u) => /\/pages\/|\/size-guide$|\/size-chart$/.test(u.replace(BASE, ""))),
+    JSON.stringify([l.report.polite_stop, l.report.errors, lAsked.map((u) => u.replace(BASE, ""))]));
 
   /* The stop ends REQUESTS, not reading: a Shopify product's body_html arrived with the one
      products.json request. Every PDP answers 429; products 4 and 5 carry a size table in

@@ -23,7 +23,7 @@
    ============================================================================= */
 import { pathToFileURL } from "node:url";
 import { discoverSizeCharts, buildRecords, saveSizeChartRecords, formatReport, canonicalStoreHost } from "./size-charts.js";
-import { loadScannerEnv, formatChartSummary, askYesNo, reasonLine, saveAndVerify } from "./capture-cli.js";
+import { loadScannerEnv, parseCliArgs, formatChartSummary, askYesNo, reasonLine, saveAndVerify } from "./capture-cli.js";
 
 const MAX_IMAGES = 4;
 const IMAGE_DELAY_MS = 5000;   // Gemini free tier is 15 req/min
@@ -68,8 +68,14 @@ export async function runCapture(storeUrl, {
      when it saw a trigger first, and the browser used to receive every sampled URL - the
      ones that had just answered 429 included. A store that began refusing is not asked
      again by another client; isolated refusals only drop those URLs from the browser's list. */
-  const staticRefused = st.report.outcome === "blocked_by_bot_protection" || !!st.report.polite_stop;
   const refusedUrls = new Set(st.report.refused_urls || []);
+  /* EVERY sampled product refused (one or two - under the three that make a polite stop):
+     filtered, the browser's list was EMPTY, which captureWithBrowser reads as "no sample" -
+     it opened the home page and walked back to the product pages that had just refused. A
+     store that refused every page we asked for is refusing us. */
+  const browserProducts = st.products.filter((u) => !refusedUrls.has(u));
+  const everyProductRefused = st.products.length > 0 && !browserProducts.length;
+  const staticRefused = st.report.outcome === "blocked_by_bot_protection" || !!st.report.polite_stop || everyProductRefused;
   const why = staticRefused ? null : forceBrowser ? "forced with --browser" : noBrowser ? null : browserFallbackReason(st);
   if (why) {
     log(`\n── 2/3 browser fallback (${why})`);
@@ -80,7 +86,7 @@ export async function runCapture(storeUrl, {
        with its message; whatever static captured is still summarised and offered for save. */
     try {
       const run = browserCapture || (await import("./browser-capture.js")).captureWithBrowser;
-      browser = await run(storeUrl, { productUrls: st.products.filter((u) => !refusedUrls.has(u)), maxPages: Math.min(6, maxProducts), log, JSDOM: JSDOMCtor });
+      browser = await run(storeUrl, { productUrls: browserProducts, maxPages: Math.min(6, maxProducts), log, JSDOM: JSDOMCtor });
     } catch (e) {
       const msg = "browser fallback failed: " + String((e && e.message) || e).split("\n")[0];
       log(`  ✗ ${msg}`);
@@ -90,7 +96,7 @@ export async function runCapture(storeUrl, {
     }
     found.push(...browser.found);
   } else if (staticRefused) {
-    log(`\n── 2/3 browser fallback: not run - the store refused the static capture${st.report.polite_stop ? " (it began refusing mid-run)" : ""}${forceBrowser ? " (--browser ignored)" : ""}; ` +
+    log(`\n── 2/3 browser fallback: not run - the store refused the static capture${st.report.polite_stop ? " (it began refusing mid-run)" : everyProductRefused ? " (every sampled product page)" : ""}${forceBrowser ? " (--browser ignored)" : ""}; ` +
       "a refusal is reported as BLOCKED, never retried with a browser");
   } else {
     log(`\n── 2/3 browser fallback: not needed${noBrowser ? " (--no-browser)" : ""}`);
@@ -120,8 +126,16 @@ export async function runCapture(storeUrl, {
     return { url, productUrl, pages: [productUrl], static: true };
   };
   const imageUrls = [];
+  /* A store that refused us is not asked for its images either: a static hit on the store's
+     own host (or a subdomain of it) is skipped after a refusal; an image on another host (a
+     CDN, a size-app's servers) is not the store and is still read. */
+  const onStoreHost = (u) => {
+    try { const h = canonicalStoreHost(new URL(u).hostname); return h === host || h.endsWith("." + host); } catch { return false; }
+  };
+  const staticImages = staticRefused ? st.images.filter((u) => !onStoreHost(u)) : st.images;
+  if (staticImages.length < st.images.length) log(`  (${st.images.length - staticImages.length} image(s) on the store's own host not fetched - the store refused us)`);
   for (const img of [
-    ...(nothingYet || forceImages ? st.images.map(staticImg) : []),
+    ...(nothingYet || forceImages ? staticImages.map(staticImg) : []),
     ...(browser ? browser.images : []),
   ]) {
     const pages = img.pages && img.pages.length ? img.pages : [img.productUrl || ""];
@@ -190,9 +204,7 @@ export async function runCapture(storeUrl, {
 /* ── CLI ─────────────────────────────────────────────────────────────────────── */
 async function main(argv) {
   loadScannerEnv();
-  const args = argv.slice(2);
-  const flag = (f) => args.includes(f);
-  const val = (f) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined; };
+  const { args, flag, val } = parseCliArgs(argv);
   const storeUrl = args.find((a) => /^https?:\/\//i.test(a));
   if (!storeUrl) {
     console.error("Usage: npm run capture -- <store-url> [--browser|--no-browser] [--images|--no-images] [--max-products N] [--dry-run] [--yes]");

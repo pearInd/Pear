@@ -21,6 +21,18 @@ export function loadScannerEnv() {
   dotenv.config({ quiet: true });
 }
 
+/** The command line both CLIs read. `--only=1` and `--only 1` are the same flag: the
+    equals form was once silently ignored, so `--only=1` imported every chart. */
+export function parseCliArgs(argv) {
+  const args = argv.slice(2).flatMap((a) => {
+    const m = /^(--[\w-]+)=([\s\S]*)$/.exec(a);
+    return m ? [m[1], m[2]] : [a];
+  });
+  const flag = (f) => args.includes(f);
+  const val = (f) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined; };
+  return { args, flag, val };
+}
+
 export const DEFAULT_API_BASE = "https://app.pear-ai.io";
 
 const band = (rows, key) => {
